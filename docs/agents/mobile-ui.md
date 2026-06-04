@@ -13,6 +13,9 @@
 - Do not rely on `TextField` or `SecureField` placeholders as the only field
   label inside grouped forms.
 - Use Garyx's existing adaptive glass/material helpers for mobile chrome.
+- Bottom composers and attached trays should read as native iOS material:
+  layered glass, system tint, fine highlights, and subtle shadow, not flat gray
+  slabs.
 - Keep content readable, near-white, and integrated; reserve glass for
   navigation and transient controls rather than repeated content rows.
 - Mobile top-left controls and leading-edge gestures must share the same route

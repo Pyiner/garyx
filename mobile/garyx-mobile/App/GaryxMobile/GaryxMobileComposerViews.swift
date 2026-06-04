@@ -18,8 +18,14 @@ private enum GaryxComposerLayout {
     static let inputTopPadding: CGFloat = 15
     static let inputBottomPadding: CGFloat = 8
     static let inputMinHeight: CGFloat = 29
-    static let workspaceBaseFill = Color.primary.opacity(0.09)
+    static let composerMaterialTint = Color(.systemBackground).opacity(0.58)
+    static let composerMaterialStroke = Color.primary.opacity(0.09)
+    static let composerMaterialHighlight = Color.white.opacity(0.66)
+    static let composerShadow = Color.black.opacity(0.08)
+    static let workspaceBaseFill = Color(.systemFill).opacity(0.74)
     static let workspaceBaseForeground = Color.primary.opacity(0.78)
+    static let workspaceBaseStroke = Color.primary.opacity(0.055)
+    static let workspaceBaseHighlight = Color.white.opacity(0.32)
     static let workspaceBaseOverlap: CGFloat = 21
     static let workspaceBaseTopPadding: CGFloat = 31
     static let workspaceBaseBottomPadding: CGFloat = 7
@@ -175,20 +181,28 @@ struct GaryxComposer: View {
     private var newThreadComposerCard: some View {
         composerCard
             .zIndex(1)
-            .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 4)
+            .shadow(color: GaryxComposerLayout.composerShadow, radius: 18, x: 0, y: 10)
+            .shadow(color: Color.black.opacity(0.025), radius: 2, x: 0, y: 1)
     }
 
     private var composerCard: some View {
         composerCardContent
             .frame(maxWidth: .infinity, alignment: .leading)
-            .garyxAdaptiveGlass(
-                .regular,
-                in: RoundedRectangle(cornerRadius: GaryxComposerLayout.composerCornerRadius, style: .continuous)
-            )
+            .background(GaryxComposerLayout.composerMaterialTint, in: composerCardShape)
+            .garyxAdaptiveGlass(.regular, isInteractive: false, fallbackMaterial: .ultraThinMaterial, in: composerCardShape)
             .overlay {
-                RoundedRectangle(cornerRadius: GaryxComposerLayout.composerCornerRadius, style: .continuous)
-                    .stroke(GaryxTheme.hairline, lineWidth: 1)
+                composerCardShape
+                    .stroke(GaryxComposerLayout.composerMaterialHighlight, lineWidth: 0.7)
+                    .blendMode(.plusLighter)
             }
+            .overlay {
+                composerCardShape
+                    .stroke(GaryxComposerLayout.composerMaterialStroke, lineWidth: 0.7)
+            }
+    }
+
+    private var composerCardShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: GaryxComposerLayout.composerCornerRadius, style: .continuous)
     }
 
     private var composerCardContent: some View {
@@ -226,20 +240,31 @@ struct GaryxComposer: View {
             .frame(maxWidth: .infinity, minHeight: GaryxComposerLayout.workspaceStripHeight, alignment: .leading)
             .padding(.top, GaryxComposerLayout.workspaceBaseTopPadding)
             .padding(.bottom, GaryxComposerLayout.workspaceBaseBottomPadding)
-            .background(
-                GaryxComposerLayout.workspaceBaseFill,
-                in: UnevenRoundedRectangle(
-                    topLeadingRadius: 0,
-                    bottomLeadingRadius: GaryxComposerLayout.workspaceBaseCornerRadius,
-                    bottomTrailingRadius: GaryxComposerLayout.workspaceBaseCornerRadius,
-                    topTrailingRadius: 0,
-                    style: .continuous
-                )
-            )
+            .background(GaryxComposerLayout.workspaceBaseFill, in: workspaceBaseShape)
+            .background(.ultraThinMaterial, in: workspaceBaseShape)
+            .overlay {
+                workspaceBaseShape
+                    .stroke(GaryxComposerLayout.workspaceBaseHighlight, lineWidth: 0.6)
+                    .blendMode(.plusLighter)
+            }
+            .overlay {
+                workspaceBaseShape
+                    .stroke(GaryxComposerLayout.workspaceBaseStroke, lineWidth: 0.6)
+            }
         }
         .buttonStyle(.plain)
         .disabled(!canChangeWorkspaceMode)
         .accessibilityLabel("Workspace mode")
+    }
+
+    private var workspaceBaseShape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(
+            topLeadingRadius: 0,
+            bottomLeadingRadius: GaryxComposerLayout.workspaceBaseCornerRadius,
+            bottomTrailingRadius: GaryxComposerLayout.workspaceBaseCornerRadius,
+            topTrailingRadius: 0,
+            style: .continuous
+        )
     }
 
     private var workspaceModeTitle: String {
