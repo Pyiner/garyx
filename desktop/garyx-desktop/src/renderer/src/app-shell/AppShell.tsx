@@ -8113,7 +8113,9 @@ export function AppShell() {
     ignoreComposerSubmitUntilRef.current = performance.now() + durationMs;
   }
 
-  function handleComposerSubmit() {
+  function handleComposerSubmit(options?: {
+    useAlternateFollowUpBehavior?: boolean;
+  }) {
     if (composerSubmitLockRef.current) {
       return;
     }
@@ -8123,9 +8125,14 @@ export function AppShell() {
     });
 
     if (isActiveSendingThread && composerHasPayload) {
+      const followUpBehavior = options?.useAlternateFollowUpBehavior
+        ? settingsDraft.followUpBehavior === "steer"
+          ? "queue"
+          : "steer"
+        : settingsDraft.followUpBehavior;
       void handleQueueCurrentPrompt({
         steerImmediately:
-          settingsDraft.followUpBehavior === "steer" && canSteerQueuedPrompt,
+          followUpBehavior === "steer" && canSteerQueuedPrompt,
       });
       return;
     }

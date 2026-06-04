@@ -38,7 +38,8 @@ function desktopSettingsEqual(
     left.providerCodexApiKey === right.providerCodexApiKey &&
     left.providerGeminiEnv === right.providerGeminiEnv &&
     left.threadLogsPanelWidth === right.threadLogsPanelWidth &&
-    left.languagePreference === right.languagePreference
+    left.languagePreference === right.languagePreference &&
+    left.followUpBehavior === right.followUpBehavior
   );
 }
 

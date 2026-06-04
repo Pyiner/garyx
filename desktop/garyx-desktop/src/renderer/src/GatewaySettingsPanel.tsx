@@ -1895,7 +1895,7 @@ export function GatewaySettingsPanel({
               </ToggleGroupItem>
             </ToggleGroup>
           }
-          description={t('Choose whether follow-ups sent while Garyx is running are queued or sent into the active run.')}
+          description={t('Choose whether follow-ups sent while Garyx is running are queued or sent into the active run. Press Command+Enter to use the opposite behavior for one message.')}
           label={t('Follow-up behavior')}
         />
         <SettingsControlRow

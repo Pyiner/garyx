@@ -296,7 +296,9 @@ type ThreadPageProps = {
   onComposerCompositionEnd: (value: string) => void;
   onComposerCompositionStart: () => void;
   onComposerInterrupt: () => void;
-  onComposerSubmit: () => void;
+  onComposerSubmit: (options?: {
+    useAlternateFollowUpBehavior?: boolean;
+  }) => void;
   onJumpToLatestThreadLogs: () => void;
   onLocalWorkspaceFileLinkClick: (path: string) => void;
   onMessagesScroll: () => void;
@@ -920,7 +922,10 @@ export function ThreadPage({
                     return;
                   }
                   event.preventDefault();
-                  onComposerSubmit();
+                  onComposerSubmit({
+                    useAlternateFollowUpBehavior:
+                      event.metaKey || event.ctrlKey,
+                  });
                 }
               }}
               onComposerPasteFiles={onAppendComposerAttachments}

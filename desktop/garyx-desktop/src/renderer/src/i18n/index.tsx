@@ -410,7 +410,7 @@ const zhCN: Record<string, string> = {
   'Providers': '模型服务商',
   'Primary actions': '主要操作',
   'Queue': '排队',
-  'Choose whether follow-ups sent while Garyx is running are queued or sent into the active run.': '选择 Garyx 运行时发送的后续输入是加入队列，还是直接发给当前运行。',
+  'Choose whether follow-ups sent while Garyx is running are queued or sent into the active run. Press Command+Enter to use the opposite behavior for one message.': '选择 Garyx 运行时发送的后续输入是加入队列，还是直接发给当前运行。按下“⌘↩”可对单条消息执行相反操作。',
   'Refresh': '刷新',
   'Refreshing': '刷新中',
   'Refreshing latest remote config…': '正在刷新远端最新配置…',
