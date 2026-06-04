@@ -4572,7 +4572,8 @@ function mapWorkflowRun(value: unknown): DesktopWorkflowRun {
       null,
     meta: asRecordOrNull(record.meta),
     input: record.input ?? null,
-    summary: asString(record.summary) || null,
+    outputText:
+      asString(record.outputText) || asString(record.output_text) || null,
     error: asString(record.error) || null,
     workspaceDir:
       asString(record.workspaceDir) || asString(record.workspace_dir) || null,

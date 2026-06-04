@@ -145,6 +145,7 @@ const ReviewSchema = schema<ReviewResult>({
 await workflow({
   name: "Development Review Loop",
   description: "Plan, implement, and review a coding task with observable Garyx child agents.",
+  output: developmentOutputText,
   phases: [
     {
       id: "dry-run",
@@ -411,6 +412,40 @@ function surfaceGuidance(targetSurface: TargetSurface) {
 
 function hasBlockingFindings(review: ReviewResult) {
   return review.findings.some((finding) => finding.severity === "blocker" || finding.severity === "major");
+}
+
+function developmentOutputText(result: unknown): string | undefined {
+  const record = objectValue(result);
+  if (!record) {
+    return undefined;
+  }
+  const review = objectValue(record.review);
+  const reviewSummary = stringValue(review?.summary);
+  if (reviewSummary) {
+    const verdict = stringValue(review?.verdict) || stringValue(record.status) || "completed";
+    const requiredChanges = stringList(review?.requiredChanges);
+    return [
+      `### Review: ${verdict}`,
+      reviewSummary,
+      requiredChanges.length
+        ? `Required changes:\n${requiredChanges.map((item) => `- ${item}`).join("\n")}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+  }
+  const plan = objectValue(record.plan);
+  const planSummary = stringValue(plan?.summary);
+  if (planSummary) {
+    return ["### Plan", planSummary].join("\n\n");
+  }
+  return stringValue(record.outputText) || stringValue(record.status);
+}
+
+function objectValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 function stringValue(value: unknown): string | undefined {

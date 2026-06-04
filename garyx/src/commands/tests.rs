@@ -2344,7 +2344,7 @@ fn append_task_workflow_runs_renders_run_and_child_summary() {
                     "totalChildren": 2,
                     "completedChildren": 2,
                     "failedChildren": 0,
-                    "summary": "Done"
+                    "outputText": "Done"
                 },
                 "children": [
                     {
@@ -2365,7 +2365,7 @@ fn append_task_workflow_runs_renders_run_and_child_summary() {
     assert!(
         output.contains("- run-abc [succeeded] definition deep-research@2 children 2/2 failed 0")
     );
-    assert!(output.contains("Summary: Done"));
+    assert!(output.contains("Output: Done"));
     assert!(output.contains("- Search [succeeded] phase Search thread thread::child"));
 }
 

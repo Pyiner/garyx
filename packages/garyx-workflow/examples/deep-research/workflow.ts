@@ -207,6 +207,7 @@ await defineWorkflow({
   name: "Deep Research",
   description: "Fan out web searches, fetch sources, adversarially verify claims, and synthesize a cited report.",
   agent: defaultChildAgent(),
+  output: (result: { summary?: string }) => result.summary,
   phases: PHASES,
   async run(flow) {
     const input = normalizeInput(flow.ctx.input);

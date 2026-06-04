@@ -74,7 +74,7 @@ pub(super) fn workflow_run_json(record: &WorkflowRunRecord) -> Value {
         "scriptText": record.script_text,
         "meta": parse_json_field(&record.meta_json),
         "result": record.result_json.as_deref().map(parse_json_field),
-        "summary": record.summary,
+        "outputText": record.output_text,
         "error": record.error,
         "workspaceDir": record.workspace_dir,
         "createdBy": record.created_by,

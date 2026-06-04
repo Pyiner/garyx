@@ -115,7 +115,7 @@ pub struct WorkflowSdkFinishRequest {
     #[serde(default)]
     pub result: Option<Value>,
     #[serde(default)]
-    pub summary: Option<String>,
+    pub output_text: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
 }

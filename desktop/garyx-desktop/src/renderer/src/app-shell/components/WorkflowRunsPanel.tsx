@@ -1160,7 +1160,7 @@ function WorkflowTimelineView({
   );
   const visiblePhases = streamPhases.length ? streamPhases : phases.slice(0, 1);
   const showFinal =
-    workflow.status === 'succeeded' && Boolean(workflow.summary?.trim());
+    workflow.status === 'succeeded' && Boolean(workflow.outputText?.trim());
 
   const toggle = (key: string) => {
     setExpandedKeys((current) => {
@@ -1288,7 +1288,7 @@ function WorkflowTimelineView({
                 {t('Workflow result')}
               </div>
               <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
-                {workflow.summary || ''}
+                {workflow.outputText || ''}
               </ReactMarkdown>
             </section>
           ) : null}
@@ -1383,7 +1383,7 @@ function RunCard({
       (child) => child.workflowChildRunId === selectedChildId,
     ) ||
     selectedChildForPhase(activePhase);
-  const runOutcome = workflow.summary || '';
+  const runOutcome = workflow.outputText || '';
 
   useEffect(() => {
     const preferred = preferredPhaseKey(phases, workflow);
@@ -1523,9 +1523,11 @@ function RunCard({
         </div>
         )
       ) : runOutcome ? (
-        <section className="workflow-result-section workflow-run-result-fallback">
+        <section className="workflow-result-section workflow-run-result-fallback workflow-result-markdown">
           <h4>{t('Workflow result')}</h4>
-          <pre>{runOutcome}</pre>
+          <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
+            {runOutcome}
+          </ReactMarkdown>
         </section>
       ) : null}
 

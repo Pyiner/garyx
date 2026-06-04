@@ -25,6 +25,7 @@ await defineWorkflow({
   name: "Review change",
   agent: "claude",
   phases: ["Review"],
+  output: (result) => `Reviewed ${result.findings.length} surfaces.`,
   async run(flow) {
     await flow.log("review.started", { owner: "Test User" });
     const review = flow.phase("Review").start();
@@ -76,6 +77,13 @@ const reports = await flow.phase("Research").pipeline(
 Complex workflows are ordinary TypeScript that call these primitives. Garyx
 records the workflow run id, phase events, child threads, structured child
 results, and final output while your process owns the control flow.
+
+The workflow return value is stored as machine-readable `result`. The optional
+human-readable final text is stored separately as `outputText` and rendered as
+Markdown in Garyx. Provide it explicitly with `output: (result, ctx) => string`,
+return a string from the workflow, or return an object with `outputText`,
+`output`, or `markdown`. Do not rely on business fields such as `summary` to
+become the visible Workflow output.
 
 ## CLI Workflow Task Flow
 

@@ -97,6 +97,9 @@ Detailed UI rules: @docs/agents/mobile-ui.md and @docs/agents/desktop-ui.md.
 - Garyx workflows are SDK-first: user TypeScript owns control flow; the gateway
   provides observability, child-thread execution, and structured results. Do not
   add a workflow-script interpreter.
+- WorkflowRun exposes two result channels: `result` for machine-readable JSON
+  and `outputText` for the human-readable final Markdown. Do not use `summary`
+  as the WorkflowRun output contract.
 - Garyx-managed workflow packages use `garyx.workflow.json` for metadata and a
   fixed root `workflow.ts` source file. Do not add per-package entrypoint
   configuration.

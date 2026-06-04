@@ -3125,11 +3125,11 @@ fn print_workflow_summary(payload: &Value) {
         "Parent: {}",
         workflow["parentThreadId"].as_str().unwrap_or("-")
     );
-    if let Some(summary) = workflow["summary"]
+    if let Some(output_text) = workflow["outputText"]
         .as_str()
         .filter(|value| !value.is_empty())
     {
-        println!("Summary: {summary}");
+        println!("Output: {output_text}");
     }
     if let Some(error) = workflow["error"].as_str().filter(|value| !value.is_empty()) {
         println!("Error: {error}");
@@ -6548,13 +6548,13 @@ fn append_task_workflow_runs(output: &mut String, workflow_runs_payload: Option<
             output,
             "- {workflow_id} [{status}] definition {definition_id}@{definition_version} children {completed_children}/{total_children} failed {failed_children}"
         );
-        if let Some(summary) = workflow
-            .get("summary")
+        if let Some(output_text) = workflow
+            .get("outputText")
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
         {
-            let _ = writeln!(output, "  Summary: {summary}");
+            let _ = writeln!(output, "  Output: {output_text}");
         }
         if let Some(error) = workflow
             .get("error")

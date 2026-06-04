@@ -39,10 +39,16 @@ export interface WorkflowPhaseDefinition {
   readonly index: number;
 }
 
-export interface WorkflowRunOptions {
+export type WorkflowOutputSelector<T> = (
+  result: T,
+  ctx: WorkflowContext,
+) => string | null | undefined;
+
+export interface WorkflowRunOptions<T = unknown> {
   readonly name?: string;
   readonly description?: string;
   readonly phases?: readonly WorkflowPhaseInput[];
+  readonly output?: WorkflowOutputSelector<T>;
   readonly parentRunId?: string;
   readonly workspaceDir?: string;
   readonly input?: JsonValue;
@@ -70,6 +76,7 @@ export interface WorkflowProgram<T> {
   readonly name?: string;
   readonly description?: string;
   readonly phases?: readonly WorkflowPhaseInput[];
+  readonly output?: WorkflowOutputSelector<T>;
   run(ctx: WorkflowContext): Promise<T> | T;
 }
 
@@ -78,6 +85,7 @@ export interface WorkflowRunResult<T> {
   /** @deprecated Use workflowRunId. */
   readonly workflowId: string;
   readonly result: T;
+  readonly outputText?: string;
 }
 
 export interface WorkflowContext {
@@ -130,6 +138,7 @@ export interface WorkflowDefinition<T> {
   readonly description?: string;
   readonly phases?: readonly WorkflowPhaseInput[];
   readonly agent?: string;
+  readonly output?: WorkflowOutputSelector<T>;
   run(flow: WorkflowFlow): Promise<T> | T;
 }
 
@@ -168,18 +177,18 @@ export class GaryxWorkflowClient {
     this.gatewayToken = options.gatewayToken ?? env("GARYX_GATEWAY_TOKEN");
   }
 
-  async startWorkflow(options: WorkflowRunOptions & { name?: string; description?: string }) {
+  async startWorkflow(options: Omit<WorkflowRunOptions, "output"> & { name?: string; description?: string }) {
     const workflowThreadId = env("GARYX_WORKFLOW_THREAD_ID") ?? env("GARYX_WORKFLOW_RUN_ID");
     const taskId = env("GARYX_TASK_ID");
     const taskThreadId = env("GARYX_TASK_THREAD_ID");
+    const taskRef = taskId && taskThreadId ? { taskId, taskThreadId } : {};
     return this.request("/api/workflows/sdk", {
       method: "POST",
       signal: options.signal,
       body: {
         workflowRunId: workflowThreadId,
         workflowId: workflowThreadId,
-        taskId,
-        taskThreadId,
+        ...taskRef,
         workflowDefinitionId: options.workflowDefinitionId ?? env("GARYX_WORKFLOW_DEFINITION_ID"),
         workflowDefinitionVersion:
           options.workflowDefinitionVersion ?? numberEnv("GARYX_WORKFLOW_DEFINITION_VERSION"),
@@ -249,7 +258,7 @@ export class GaryxWorkflowClient {
 
   async finishWorkflow(
     workflowRunId: string,
-    input: { status?: "succeeded" | "failed" | "cancelled"; result?: JsonValue; summary?: string; error?: string },
+    input: { status?: "succeeded" | "failed" | "cancelled"; result?: JsonValue; outputText?: string; error?: string },
     signal?: AbortSignal,
   ) {
     return this.request(`/api/workflows/${encodeURIComponent(workflowRunId)}/finish`, {
@@ -335,7 +344,7 @@ export const s = {
 
 export async function defineWorkflow<T>(
   definition: WorkflowDefinition<T>,
-  options: WorkflowRunOptions = {},
+  options: WorkflowRunOptions<T> = {},
 ): Promise<WorkflowRunResult<T>> {
   return workflow(
     {
@@ -345,6 +354,7 @@ export async function defineWorkflow<T>(
       run(ctx) {
         return definition.run(createWorkflowFlow(ctx, definition.agent));
       },
+      output: definition.output,
     },
     options,
   );
@@ -352,16 +362,17 @@ export async function defineWorkflow<T>(
 
 export async function workflow<T>(
   definition: WorkflowProgram<T>,
-  options: WorkflowRunOptions = {},
+  options: WorkflowRunOptions<T> = {},
 ): Promise<WorkflowRunResult<T>> {
-  const client = new GaryxWorkflowClient(options);
-  const workflowInput = options.input ?? jsonEnv("GARYX_WORKFLOW_INPUT_JSON") ?? null;
-  const phasePlan = normalizePhaseDefinitions(options.phases ?? definition.phases);
+  const { output: optionOutput, ...runOptions } = options;
+  const client = new GaryxWorkflowClient(runOptions);
+  const workflowInput = runOptions.input ?? jsonEnv("GARYX_WORKFLOW_INPUT_JSON") ?? null;
+  const phasePlan = normalizePhaseDefinitions(runOptions.phases ?? definition.phases);
   const startPayload = await client.startWorkflow({
-    ...options,
+    ...runOptions,
     input: workflowInput,
-    name: options.name ?? definition.name,
-    description: options.description ?? definition.description,
+    name: runOptions.name ?? definition.name,
+    description: runOptions.description ?? definition.description,
     phases: phasePlan,
   });
   const workflowRunId = String(startPayload.workflow.workflowRunId ?? startPayload.workflow.workflowId);
@@ -386,11 +397,11 @@ export async function workflow<T>(
   const ctx: WorkflowContext = {
     workflowId,
     workflowRunId,
-    workspaceDir: startPayload.workflow.workspaceDir ?? options.workspaceDir,
+    workspaceDir: startPayload.workflow.workspaceDir ?? runOptions.workspaceDir,
     input: startPayload.workflow.input ?? workflowInput,
     phases: phasePlan,
     client,
-    signal: options.signal,
+    signal: runOptions.signal,
     log: (messageOrEventType, payload) => log(messageOrEventType, payload),
     agent: (prompt, agentOptions) => agent(prompt, agentOptions),
     phase: (title, detail) => phase(title, detail),
@@ -402,15 +413,21 @@ export async function workflow<T>(
   try {
     const result = await activeWorkflow.run(store, () => definition.run(ctx));
     const resultJson = toJsonValue(result);
+    const outputText = outputTextFromResult(
+      result,
+      resultJson,
+      ctx,
+      optionOutput ?? definition.output,
+    );
     await client.finishWorkflow(
       workflowRunId,
-      { result: resultJson, status: "succeeded", summary: summaryFromResult(resultJson) },
-      options.signal,
+      { result: resultJson, status: "succeeded", outputText },
+      runOptions.signal,
     );
-    return { workflowId, workflowRunId, result };
+    return { workflowId, workflowRunId, result, outputText };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await client.finishWorkflow(workflowRunId, { status: "failed", error: message }, options.signal).catch(() => {});
+    await client.finishWorkflow(workflowRunId, { status: "failed", error: message }, runOptions.signal).catch(() => {});
     throw error;
   } finally {
     restoreEnv(envSnapshot);
@@ -690,12 +707,33 @@ function toJsonValue(value: unknown): JsonValue {
   return JSON.parse(JSON.stringify(value)) as JsonValue;
 }
 
-function summaryFromResult(value: JsonValue): string | undefined {
+function outputTextFromResult<T>(
+  result: T,
+  value: JsonValue,
+  ctx: WorkflowContext,
+  selector?: WorkflowOutputSelector<T>,
+): string | undefined {
+  if (selector) {
+    return normalizeOutputText(selector(result, ctx));
+  }
+  if (typeof value === "string") {
+    return normalizeOutputText(value);
+  }
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
-  const summary = value.summary;
-  return typeof summary === "string" && summary.trim() ? summary : undefined;
+  for (const key of ["outputText", "output", "markdown"]) {
+    const candidate = value[key];
+    const normalized = normalizeOutputText(candidate);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return undefined;
+}
+
+function normalizeOutputText(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 function asObject(value: JsonValue | undefined): JsonObject | undefined {

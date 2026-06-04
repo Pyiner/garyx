@@ -255,7 +255,7 @@ impl WorkflowRuntime {
             script_text: "sdk".to_owned(),
             meta_json: meta.to_string(),
             result_json: None,
-            summary: None,
+            output_text: None,
             error: None,
             workspace_dir: request.workspace_dir,
             created_by: request.created_by.or_else(|| Some("sdk".to_owned())),
@@ -543,12 +543,12 @@ impl WorkflowRuntime {
         let store = WorkflowStore::new(self.state.ops.garyx_db.clone());
         let existing = store.get_run(workflow_run_id)?;
         let result_json = request.result.as_ref().map(Value::to_string);
-        let summary = request.summary;
+        let output_text = request.output_text;
         let updated = self.state.ops.garyx_db.update_workflow_run_status(
             workflow_run_id,
             status,
             result_json.as_deref(),
-            summary.as_deref(),
+            output_text.as_deref(),
             request.error.as_deref(),
         )?;
         if !updated {
@@ -586,7 +586,7 @@ impl WorkflowRuntime {
             thread_id: None,
             event_type: event_type.to_owned(),
             payload_json: json!({
-                "summary": summary,
+                "outputText": output_text,
                 "error": request.error,
                 "source": "sdk",
             })

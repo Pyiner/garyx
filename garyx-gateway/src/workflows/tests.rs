@@ -1136,7 +1136,7 @@ async fn task_workflow_runs_route_returns_runs_children_and_events() {
             script_text: "sdk".to_owned(),
             meta_json: "{}".to_owned(),
             result_json: None,
-            summary: Some("working".to_owned()),
+            output_text: Some("working".to_owned()),
             error: None,
             workspace_dir: None,
             created_by: Some("test".to_owned()),
@@ -1203,7 +1203,7 @@ async fn task_workflow_runs_route_returns_runs_children_and_events() {
             script_text: "sdk".to_owned(),
             meta_json: "{}".to_owned(),
             result_json: None,
-            summary: None,
+            output_text: None,
             error: None,
             workspace_dir: None,
             created_by: Some("test".to_owned()),
@@ -1231,7 +1231,7 @@ async fn task_workflow_runs_route_returns_runs_children_and_events() {
             script_text: "sdk".to_owned(),
             meta_json: "{}".to_owned(),
             result_json: None,
-            summary: None,
+            output_text: None,
             error: None,
             workspace_dir: None,
             created_by: Some("test".to_owned()),
@@ -1292,6 +1292,8 @@ async fn task_workflow_runs_route_returns_runs_children_and_events() {
     assert_eq!(drilldown["workflow"]["workflowRunId"], "task-drilldown");
     assert_eq!(drilldown["workflow"]["workflowId"], "task-drilldown");
     assert_eq!(drilldown["workflow"]["input"], "inspect task");
+    assert_eq!(drilldown["workflow"]["outputText"], "working");
+    assert!(drilldown["workflow"].get("summary").is_none());
     assert_eq!(drilldown["children"][0]["workflowRunId"], "task-drilldown");
     assert_eq!(drilldown["events"][0]["workflowRunId"], "task-drilldown");
     assert_eq!(
@@ -1346,7 +1348,7 @@ async fn sdk_finish_moves_linked_workflow_task_to_review() {
             WorkflowSdkFinishRequest {
                 status: Some("succeeded".to_owned()),
                 result: Some(json!({"ok": true})),
-                summary: None,
+                output_text: None,
                 error: None,
             },
         )
@@ -1859,7 +1861,7 @@ async fn sdk_workflow_routes_start_log_run_agent_and_finish() {
                 .body(Body::from(
                     json!({
                         "result": { "finding": agent_payload["result"].clone() },
-                        "summary": "SDK done",
+                        "outputText": "SDK done",
                     })
                     .to_string(),
                 ))
@@ -1878,6 +1880,7 @@ async fn sdk_workflow_routes_start_log_run_agent_and_finish() {
         final_payload["workflow"]["result"]["finding"],
         agent_payload["result"]
     );
+    assert_eq!(final_payload["workflow"]["outputText"], "SDK done");
 
     let events = WorkflowStore::new(state.ops.garyx_db.clone())
         .events_after(&workflow_id, 0, 20)

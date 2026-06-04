@@ -195,7 +195,7 @@ pub struct WorkflowRunRecord {
     pub script_text: String,
     pub meta_json: String,
     pub result_json: Option<String>,
-    pub summary: Option<String>,
+    pub output_text: Option<String>,
     pub error: Option<String>,
     pub workspace_dir: Option<String>,
     pub created_by: Option<String>,
@@ -230,7 +230,7 @@ pub struct WorkflowRunDraft {
     pub script_text: String,
     pub meta_json: String,
     pub result_json: Option<String>,
-    pub summary: Option<String>,
+    pub output_text: Option<String>,
     pub error: Option<String>,
     pub workspace_dir: Option<String>,
     pub created_by: Option<String>,
@@ -1365,7 +1365,7 @@ impl GaryxDbService {
                 workflow_id, task_id, task_thread_id, workflow_definition_id,
                 workflow_definition_version, workflow_definition_snapshot_json, input_json,
                 parent_thread_id, parent_run_id, name, description, status,
-                current_phase_index, script_text, meta_json, result_json, summary, error,
+                current_phase_index, script_text, meta_json, result_json, output_text, error,
                 workspace_dir, created_by, total_children, completed_children, failed_children,
                 total_input_tokens, total_output_tokens, total_tool_calls, total_cost_usd,
                 created_at, started_at, finished_at, updated_at
@@ -1393,7 +1393,7 @@ impl GaryxDbService {
                 script_text,
                 meta_json,
                 normalize_optional(draft.result_json.as_deref()),
-                normalize_optional(draft.summary.as_deref()),
+                normalize_optional(draft.output_text.as_deref()),
                 normalize_optional(draft.error.as_deref()),
                 normalize_optional(draft.workspace_dir.as_deref()),
                 normalize_optional(draft.created_by.as_deref()),
@@ -1429,7 +1429,7 @@ impl GaryxDbService {
             "SELECT workflow_id, task_id, task_thread_id, workflow_definition_id,
                     workflow_definition_version, workflow_definition_snapshot_json, input_json,
                     parent_thread_id, parent_run_id, name, description, status,
-                    current_phase_index, script_text, meta_json, result_json, summary, error,
+                    current_phase_index, script_text, meta_json, result_json, output_text, error,
                     workspace_dir, created_by, total_children, completed_children, failed_children,
                     total_input_tokens, total_output_tokens, total_tool_calls, total_cost_usd,
                     created_at, started_at, finished_at, updated_at
@@ -1441,7 +1441,7 @@ impl GaryxDbService {
             "SELECT workflow_id, task_id, task_thread_id, workflow_definition_id,
                     workflow_definition_version, workflow_definition_snapshot_json, input_json,
                     parent_thread_id, parent_run_id, name, description, status,
-                    current_phase_index, script_text, meta_json, result_json, summary, error,
+                    current_phase_index, script_text, meta_json, result_json, output_text, error,
                     workspace_dir, created_by, total_children, completed_children, failed_children,
                     total_input_tokens, total_output_tokens, total_tool_calls, total_cost_usd,
                     created_at, started_at, finished_at, updated_at
@@ -1482,7 +1482,7 @@ impl GaryxDbService {
             "SELECT workflow_id, task_id, task_thread_id, workflow_definition_id,
                     workflow_definition_version, workflow_definition_snapshot_json, input_json,
                     parent_thread_id, parent_run_id, name, description, status,
-                    current_phase_index, script_text, meta_json, result_json, summary, error,
+                    current_phase_index, script_text, meta_json, result_json, output_text, error,
                     workspace_dir, created_by, total_children, completed_children, failed_children,
                     total_input_tokens, total_output_tokens, total_tool_calls, total_cost_usd,
                     created_at, started_at, finished_at, updated_at
@@ -1504,7 +1504,7 @@ impl GaryxDbService {
         workflow_id: &str,
         status: &str,
         result_json: Option<&str>,
-        summary: Option<&str>,
+        output_text: Option<&str>,
         error: Option<&str>,
     ) -> GaryxDbResult<bool> {
         let workflow_id = normalize_required("workflow_id", workflow_id)?;
@@ -1520,7 +1520,7 @@ impl GaryxDbService {
             "UPDATE workflow_runs
              SET status = ?2,
                  result_json = COALESCE(?3, result_json),
-                 summary = COALESCE(?4, summary),
+                 output_text = COALESCE(?4, output_text),
                  error = ?5,
                  finished_at = COALESCE(?6, finished_at),
                  updated_at = ?7
@@ -1530,7 +1530,7 @@ impl GaryxDbService {
                 workflow_id,
                 status,
                 normalize_optional(result_json),
-                normalize_optional(summary),
+                normalize_optional(output_text),
                 normalize_optional(error),
                 finished_at,
                 now,
@@ -2943,7 +2943,7 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             script_text TEXT NOT NULL,
             meta_json TEXT NOT NULL,
             result_json TEXT,
-            summary TEXT,
+            output_text TEXT,
             error TEXT,
             workspace_dir TEXT,
             created_by TEXT,
@@ -3494,6 +3494,7 @@ fn ensure_workflow_runs_task_columns(conn: &Connection) -> GaryxDbResult<()> {
         ("workflow_definition_version", "INTEGER"),
         ("workflow_definition_snapshot_json", "TEXT"),
         ("input_json", "TEXT"),
+        ("output_text", "TEXT"),
     ] {
         if !columns.contains(name) {
             conn.execute(
@@ -3544,7 +3545,7 @@ fn workflow_run_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkflowRu
         script_text: row.get(13)?,
         meta_json: row.get(14)?,
         result_json: row.get(15)?,
-        summary: row.get(16)?,
+        output_text: row.get(16)?,
         error: row.get(17)?,
         workspace_dir: row.get(18)?,
         created_by: row.get(19)?,
@@ -3571,7 +3572,7 @@ fn workflow_run_by_id(
             "SELECT workflow_id, task_id, task_thread_id, workflow_definition_id,
                     workflow_definition_version, workflow_definition_snapshot_json, input_json,
                     parent_thread_id, parent_run_id, name, description, status,
-                    current_phase_index, script_text, meta_json, result_json, summary, error,
+                    current_phase_index, script_text, meta_json, result_json, output_text, error,
                     workspace_dir, created_by, total_children, completed_children, failed_children,
                     total_input_tokens, total_output_tokens, total_tool_calls, total_cost_usd,
                     created_at, started_at, finished_at, updated_at
@@ -3754,7 +3755,6 @@ mod tests {
                     script_text TEXT NOT NULL,
                     meta_json TEXT NOT NULL,
                     result_json TEXT,
-                    summary TEXT,
                     error TEXT,
                     workspace_dir TEXT,
                     created_by TEXT,
@@ -3898,7 +3898,7 @@ mod tests {
                 script_text: "export const meta = {}".to_owned(),
                 meta_json: r#"{"name":"Test Workflow"}"#.to_owned(),
                 result_json: None,
-                summary: None,
+                output_text: Some("Workflow output".to_owned()),
                 error: None,
                 workspace_dir: Some("/Users/test/project".to_owned()),
                 created_by: Some("test".to_owned()),
@@ -3917,6 +3917,7 @@ mod tests {
             workflow.input_json.as_deref(),
             Some(r#"{"query":"test input"}"#)
         );
+        assert_eq!(workflow.output_text.as_deref(), Some("Workflow output"));
 
         let child = db
             .upsert_workflow_child_run(WorkflowChildRunDraft {
@@ -3999,7 +4000,7 @@ mod tests {
             script_text: "sdk".to_owned(),
             meta_json: "{}".to_owned(),
             result_json: None,
-            summary: None,
+            output_text: None,
             error: None,
             workspace_dir: Some("/Users/test/project".to_owned()),
             created_by: Some("test".to_owned()),
@@ -4050,7 +4051,7 @@ mod tests {
             script_text: "return {}".to_owned(),
             meta_json: "{}".to_owned(),
             result_json: None,
-            summary: None,
+            output_text: None,
             error: None,
             workspace_dir: None,
             created_by: None,
@@ -4113,7 +4114,7 @@ mod tests {
             script_text: "return {}".to_owned(),
             meta_json: "{}".to_owned(),
             result_json: None,
-            summary: None,
+            output_text: None,
             error: None,
             workspace_dir: None,
             created_by: None,
@@ -4220,7 +4221,7 @@ mod tests {
             script_text: "return {}".to_owned(),
             meta_json: "{}".to_owned(),
             result_json: None,
-            summary: None,
+            output_text: None,
             error: None,
             workspace_dir: None,
             created_by: None,

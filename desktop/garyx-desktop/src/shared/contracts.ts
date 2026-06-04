@@ -389,7 +389,7 @@ export interface DesktopWorkflowRun {
   currentPhaseIndex?: number | null;
   meta?: Record<string, unknown> | null;
   input?: unknown | null;
-  summary?: string | null;
+  outputText?: string | null;
   error?: string | null;
   workspaceDir?: string | null;
   totalChildren: number;
