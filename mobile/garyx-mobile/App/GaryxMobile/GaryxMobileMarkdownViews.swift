@@ -2,6 +2,8 @@ import Foundation
 import SwiftUI
 import UIKit
 
+typealias GaryxMarkdownImagePreviewResolver = @MainActor (String) async -> GaryxWorkspaceFilePreview?
+
 enum GaryxClipboard {
     static func copyString(_ value: String) {
         UIPasteboard.general.string = value
@@ -22,6 +24,7 @@ struct GaryxMarkdownText: View {
     var fillsAvailableWidth = true
     var allowsRelativeFileLinks = false
     var onFileLinkTap: ((String) -> Void)?
+    var onImageFilePreview: GaryxMarkdownImagePreviewResolver?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -44,7 +47,12 @@ struct GaryxMarkdownText: View {
                         fillsAvailableWidth: fillsAvailableWidth
                     )
                 case .image(let alt, let source):
-                    GaryxMarkdownImageView(alt: alt, source: source)
+                    GaryxMarkdownImageView(
+                        alt: alt,
+                        source: source,
+                        allowsRelativeFileLinks: allowsRelativeFileLinks,
+                        filePreviewResolver: onImageFilePreview
+                    )
                 case .table(let table):
                     GaryxMarkdownTableView(
                         table: table,
@@ -170,6 +178,28 @@ private struct GaryxMarkdownParagraphView: View {
 }
 
 private enum GaryxMarkdownLinkTarget {
+    static func fileTarget(
+        fromRawSource rawSource: String,
+        allowsRelativeFileLinks: Bool
+    ) -> String {
+        let raw = rawSource.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return "" }
+        if let path = GaryxMobileFileLink.localFilePath(from: raw) {
+            return path
+        }
+        guard allowsRelativeFileLinks,
+              !raw.hasPrefix("#"),
+              !raw.hasPrefix("?") else {
+            return ""
+        }
+        if let url = URL(string: raw),
+           let scheme = url.scheme,
+           !scheme.isEmpty {
+            return ""
+        }
+        return raw
+    }
+
     static func fileTarget(
         from url: URL,
         allowsRelativeFileLinks: Bool
@@ -402,8 +432,11 @@ private struct GaryxMarkdownTableView: View {
 private struct GaryxMarkdownImageView: View {
     let alt: String
     let source: String
+    let allowsRelativeFileLinks: Bool
+    var filePreviewResolver: GaryxMarkdownImagePreviewResolver?
 
     @State private var localImage: UIImage?
+    @State private var gatewayPreviewDataUrl: String?
     @State private var loadFailed = false
     @State private var showsPreview = false
 
@@ -416,7 +449,7 @@ private struct GaryxMarkdownImageView: View {
     }
 
     private var resolvedURL: URL? {
-        let trimmed = source.trimmingCharacters(in: .whitespaces)
+        let trimmed = trimmedSource
         if let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(),
            ["http", "https"].contains(scheme) {
             return url
@@ -425,14 +458,20 @@ private struct GaryxMarkdownImageView: View {
     }
 
     private var localFilePath: String? {
-        let trimmed = source.trimmingCharacters(in: .whitespaces)
-        if trimmed.hasPrefix("file://") {
-            return URL(string: trimmed)?.path
+        GaryxMobileFileLink.localFilePath(from: trimmedSource)
+    }
+
+    private var gatewayFileTarget: String? {
+        guard filePreviewResolver != nil,
+              sourceDataUrl == nil,
+              resolvedURL == nil else {
+            return nil
         }
-        if trimmed.hasPrefix("/") {
-            return trimmed
-        }
-        return nil
+        let target = GaryxMarkdownLinkTarget.fileTarget(
+            fromRawSource: source,
+            allowsRelativeFileLinks: allowsRelativeFileLinks
+        )
+        return target.isEmpty ? nil : target
     }
 
     var body: some View {
@@ -493,9 +532,9 @@ private struct GaryxMarkdownImageView: View {
             GaryxFullscreenImagePreview(
                 source: GaryxImagePreviewSource(
                     title: alt.isEmpty ? "Image" : alt,
-                    dataUrl: sourceDataUrl,
+                    dataUrl: sourceDataUrl ?? gatewayPreviewDataUrl,
                     remoteUrl: resolvedURL?.absoluteString,
-                    filePath: localFilePath
+                    filePath: gatewayPreviewDataUrl == nil ? localFilePath : nil
                 )
             ) {
                 showsPreview = false
@@ -552,6 +591,7 @@ private struct GaryxMarkdownImageView: View {
     @MainActor
     private func loadImageIfPossible() async {
         localImage = nil
+        gatewayPreviewDataUrl = nil
         loadFailed = false
         if let sourceDataUrl {
             let image = await Task.detached(priority: .utility) {
@@ -559,6 +599,23 @@ private struct GaryxMarkdownImageView: View {
             }.value
             guard !Task.isCancelled else { return }
             if let image {
+                localImage = image
+            } else {
+                loadFailed = true
+            }
+            return
+        }
+        if let gatewayFileTarget,
+           let preview = await filePreviewResolver?(gatewayFileTarget),
+           preview.previewKind == "image",
+           let dataUrl = preview.dataBase64?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !dataUrl.isEmpty {
+            let image = await Task.detached(priority: .utility) {
+                GaryxImageDecoder.image(fromDataUrl: dataUrl, maxPixelSize: 720)
+            }.value
+            guard !Task.isCancelled else { return }
+            if let image {
+                gatewayPreviewDataUrl = dataUrl
                 localImage = image
             } else {
                 loadFailed = true
@@ -599,8 +656,11 @@ private struct GaryxMarkdownImageView: View {
     }
 
     private var sourceDataUrl: String? {
-        let trimmed = source.trimmingCharacters(in: .whitespaces)
-        return trimmed.hasPrefix("data:") ? trimmed : nil
+        trimmedSource.hasPrefix("data:") ? trimmedSource : nil
+    }
+
+    private var trimmedSource: String {
+        source.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

@@ -567,6 +567,101 @@ async fn test_send_telegram_image_content_uses_send_photo() {
     );
 }
 
+#[test]
+fn test_extract_telegram_markdown_image_refs_supports_local_image_links() {
+    let (text, refs) = extract_telegram_markdown_image_refs(
+        "改好了。\n[局部截图](/tmp/garyx-preview.png)\n![细节](file:///tmp/garyx-detail.jpg)",
+    );
+
+    assert!(!text.contains("/tmp/garyx-preview.png"));
+    assert!(!text.contains("/tmp/garyx-detail.jpg"));
+    assert_eq!(refs.len(), 2);
+    assert_eq!(refs[0].path, "/tmp/garyx-preview.png");
+    assert_eq!(refs[0].caption.as_deref(), Some("局部截图"));
+    assert_eq!(refs[1].path, "/tmp/garyx-detail.jpg");
+    assert_eq!(refs[1].caption.as_deref(), Some("细节"));
+}
+
+#[tokio::test]
+async fn test_send_telegram_text_markdown_image_link_sends_photo() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/sendMessage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": {
+                "message_id": 41,
+                "chat": { "id": 123, "type": "private" },
+                "date": 1
+            }
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/sendPhoto"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": {
+                "message_id": 42,
+                "chat": { "id": 123, "type": "private" },
+                "date": 1
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let temp = tempfile::tempdir().expect("temp dir");
+    let image_path = temp.path().join("preview.png");
+    std::fs::write(&image_path, b"png").expect("image");
+
+    let mut dispatcher = ChannelDispatcherImpl::new();
+    dispatcher.register_telegram(TelegramSender {
+        account_id: "main".to_string(),
+        token: "test-token".to_string(),
+        http: Client::new(),
+        api_base: server.uri(),
+        is_running: true,
+    });
+
+    let result = dispatcher
+        .send_message(OutboundMessage {
+            channel: "telegram".to_string(),
+            account_id: "main".to_string(),
+            chat_id: "123".to_string(),
+            delivery_target_type: DELIVERY_TARGET_TYPE_CHAT_ID.to_string(),
+            delivery_target_id: "123".to_string(),
+            content: ChannelOutboundContent::text(format!(
+                "改好了。\n[局部截图]({})",
+                image_path.display()
+            )),
+            reply_to: None,
+            thread_id: None,
+        })
+        .await
+        .expect("send markdown image link");
+
+    assert_eq!(result.message_ids, vec!["41".to_string(), "42".to_string()]);
+    let requests = server.received_requests().await.expect("received requests");
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.url.path() == "/bottest-token/sendPhoto")
+            .count(),
+        1
+    );
+    let text_request = requests
+        .iter()
+        .find(|request| request.url.path() == "/bottest-token/sendMessage")
+        .expect("sendMessage request");
+    let body: Value = serde_json::from_slice(&text_request.body).expect("sendMessage body");
+    assert!(
+        !body["text"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("preview.png")
+    );
+}
+
 #[tokio::test]
 async fn test_send_telegram_file_content_uses_send_document() {
     let server = MockServer::start().await;

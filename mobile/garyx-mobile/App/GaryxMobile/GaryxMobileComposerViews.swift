@@ -6,16 +6,32 @@ import UIKit
 import UniformTypeIdentifiers
 
 private enum GaryxComposerLayout {
-    static let composerCornerRadius: CGFloat = 26
+    static let composerCornerRadius: CGFloat = 22
     static let composerSpacing: CGFloat = 6
     static let bottomBarSpacing: CGFloat = 12
-    static let bottomBarHorizontalPadding: CGFloat = 8
+    static let bottomBarHorizontalPadding: CGFloat = 14
     static let bottomBarTopPadding: CGFloat = 2
-    static let bottomBarBottomPadding: CGFloat = 8
-    static let bottomBarIconSide: CGFloat = 22
+    static let bottomBarBottomPadding: CGFloat = 7
+    static let actionButtonSide: CGFloat = 32
+    static let actionButtonFill = Color.primary.opacity(0.06)
     static let inputHorizontalPadding: CGFloat = 16
-    static let inputTopPadding: CGFloat = 12
+    static let inputTopPadding: CGFloat = 15
     static let inputBottomPadding: CGFloat = 8
+    static let inputMinHeight: CGFloat = 29
+    static let composerMaterialTint = Color(.systemBackground).opacity(0.58)
+    static let composerMaterialStroke = Color.primary.opacity(0.09)
+    static let composerMaterialHighlight = Color.white.opacity(0.66)
+    static let composerShadow = Color.black.opacity(0.08)
+    static let workspaceBaseFill = Color(.systemFill).opacity(0.74)
+    static let workspaceBaseForeground = Color.primary.opacity(0.78)
+    static let workspaceBaseStroke = Color.primary.opacity(0.055)
+    static let workspaceBaseHighlight = Color.white.opacity(0.32)
+    static let workspaceBaseOverlap: CGFloat = 21
+    static let workspaceBaseTopPadding: CGFloat = 31
+    static let workspaceBaseBottomPadding: CGFloat = 7
+    static let workspaceBaseCornerRadius: CGFloat = 18
+    static let workspaceStripHeight: CGFloat = 28
+    static let workspaceSheetHeight: CGFloat = 228
     static let draftFieldIdentity = "garyx-composer-draft-field"
 }
 
@@ -28,6 +44,7 @@ struct GaryxComposer: View {
     @State private var isPickingAttachments = false
     @State private var isPickingPhotos = false
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
+    @State private var showsWorkspaceModeSheet = false
 
     private var hasLocalPayload: Bool {
         !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.composerAttachments.isEmpty
@@ -41,9 +58,20 @@ struct GaryxComposer: View {
         !model.isSelectedThreadSending || hasLocalPayload
     }
 
+    private var canChangeWorkspaceMode: Bool {
+        model.selectedThread == nil
+            && !model.isSending
+            && model.activeRunThreadId == nil
+            && model.newThreadWorkspaceCanUseWorktree
+    }
+
+    private var showsWorkspaceModeStrip: Bool {
+        canChangeWorkspaceMode
+    }
+
     var body: some View {
         GaryxAdaptiveGlassContainer(spacing: GaryxComposerLayout.composerSpacing) {
-            composerCard
+            composerStack
         }
         .padding(.horizontal, 12)
         .padding(.top, 10)
@@ -51,6 +79,16 @@ struct GaryxComposer: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.clear)
         .animation(.spring(response: 0.24, dampingFraction: 0.88), value: model.composerAttachments)
+        .sheet(isPresented: $showsWorkspaceModeSheet) {
+            GaryxComposerWorkspaceModeSheet(
+                selectedMode: model.newThreadUsesWorktree ? "worktree" : "local",
+                canUseWorktree: model.newThreadWorkspaceCanUseWorktree
+            ) { mode in
+                model.setNewThreadWorkspaceMode(mode)
+            }
+            .presentationDetents([.height(GaryxComposerLayout.workspaceSheetHeight)])
+            .presentationDragIndicator(.visible)
+        }
         .fileImporter(
             isPresented: $isPickingAttachments,
             allowedContentTypes: [.item],
@@ -88,6 +126,26 @@ struct GaryxComposer: View {
             guard newValue != draftText else { return }
             draftText = newValue
         }
+        .onChange(of: model.sidebarVisible) { _, visible in
+            if visible {
+                showsWorkspaceModeSheet = false
+            }
+        }
+        .onChange(of: model.selectedThread?.id) { _, threadId in
+            if threadId != nil {
+                showsWorkspaceModeSheet = false
+            }
+        }
+        .onChange(of: model.activePanel) { _, panel in
+            if panel != .chat {
+                showsWorkspaceModeSheet = false
+            }
+        }
+        .onChange(of: showsWorkspaceModeStrip) { _, visible in
+            if !visible {
+                showsWorkspaceModeSheet = false
+            }
+        }
         .onDisappear {
             guard draftContextVersion == model.composerContextVersion else { return }
             if model.draft != draftText {
@@ -96,7 +154,58 @@ struct GaryxComposer: View {
         }
     }
 
+    private var composerStack: some View {
+        Group {
+            if model.selectedThread == nil {
+                newThreadComposerDeck
+            } else {
+                composerCard
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var newThreadComposerDeck: some View {
+        if showsWorkspaceModeStrip {
+            VStack(spacing: -GaryxComposerLayout.workspaceBaseOverlap) {
+                newThreadComposerCard
+
+                workspaceModeStrip
+                    .zIndex(0)
+            }
+        } else {
+            newThreadComposerCard
+        }
+    }
+
+    private var newThreadComposerCard: some View {
+        composerCard
+            .zIndex(1)
+            .shadow(color: GaryxComposerLayout.composerShadow, radius: 18, x: 0, y: 10)
+            .shadow(color: Color.black.opacity(0.025), radius: 2, x: 0, y: 1)
+    }
+
     private var composerCard: some View {
+        composerCardContent
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(GaryxComposerLayout.composerMaterialTint, in: composerCardShape)
+            .garyxAdaptiveGlass(.regular, isInteractive: false, fallbackMaterial: .ultraThinMaterial, in: composerCardShape)
+            .overlay {
+                composerCardShape
+                    .stroke(GaryxComposerLayout.composerMaterialHighlight, lineWidth: 0.7)
+                    .blendMode(.plusLighter)
+            }
+            .overlay {
+                composerCardShape
+                    .stroke(GaryxComposerLayout.composerMaterialStroke, lineWidth: 0.7)
+            }
+    }
+
+    private var composerCardShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: GaryxComposerLayout.composerCornerRadius, style: .continuous)
+    }
+
+    private var composerCardContent: some View {
         VStack(spacing: 0) {
             if !model.composerAttachments.isEmpty {
                 composerAttachmentsPreview
@@ -105,15 +214,65 @@ struct GaryxComposer: View {
             composerInput
             composerBottomBar
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .garyxAdaptiveGlass(
-            .regular,
-            in: RoundedRectangle(cornerRadius: GaryxComposerLayout.composerCornerRadius, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: GaryxComposerLayout.composerCornerRadius, style: .continuous)
-                .stroke(GaryxTheme.hairline, lineWidth: 1)
+    }
+
+    private var workspaceModeStrip: some View {
+        Button {
+            guard canChangeWorkspaceMode else { return }
+            showsWorkspaceModeSheet = true
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: workspaceModeIcon)
+                    .font(GaryxFont.system(size: 14, weight: .regular))
+                    .frame(width: 19, height: 19)
+
+                Text(workspaceModeTitle)
+                    .font(GaryxFont.footnote(weight: .regular))
+                    .lineLimit(1)
+
+                Image(systemName: "chevron.down")
+                    .font(GaryxFont.system(size: 10, weight: .semibold))
+
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(GaryxComposerLayout.workspaceBaseForeground)
+            .padding(.horizontal, 14)
+            .frame(maxWidth: .infinity, minHeight: GaryxComposerLayout.workspaceStripHeight, alignment: .leading)
+            .padding(.top, GaryxComposerLayout.workspaceBaseTopPadding)
+            .padding(.bottom, GaryxComposerLayout.workspaceBaseBottomPadding)
+            .background(GaryxComposerLayout.workspaceBaseFill, in: workspaceBaseShape)
+            .background(.ultraThinMaterial, in: workspaceBaseShape)
+            .overlay {
+                workspaceBaseShape
+                    .stroke(GaryxComposerLayout.workspaceBaseHighlight, lineWidth: 0.6)
+                    .blendMode(.plusLighter)
+            }
+            .overlay {
+                workspaceBaseShape
+                    .stroke(GaryxComposerLayout.workspaceBaseStroke, lineWidth: 0.6)
+            }
         }
+        .buttonStyle(.plain)
+        .disabled(!canChangeWorkspaceMode)
+        .accessibilityLabel("Workspace mode")
+    }
+
+    private var workspaceBaseShape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(
+            topLeadingRadius: 0,
+            bottomLeadingRadius: GaryxComposerLayout.workspaceBaseCornerRadius,
+            bottomTrailingRadius: GaryxComposerLayout.workspaceBaseCornerRadius,
+            topTrailingRadius: 0,
+            style: .continuous
+        )
+    }
+
+    private var workspaceModeTitle: String {
+        model.newThreadUsesWorktree ? "WorkTree" : "Local"
+    }
+
+    private var workspaceModeIcon: String {
+        model.newThreadUsesWorktree ? "arrow.triangle.branch" : "laptopcomputer"
     }
 
     private var composerAttachmentsPreview: some View {
@@ -150,7 +309,7 @@ struct GaryxComposer: View {
                     Task { await sendLocalDraft() }
                 }
         }
-        .frame(maxWidth: .infinity, minHeight: 34, alignment: .topLeading)
+        .frame(maxWidth: .infinity, minHeight: GaryxComposerLayout.inputMinHeight, alignment: .topLeading)
         .padding(.horizontal, GaryxComposerLayout.inputHorizontalPadding)
         .padding(.top, model.composerAttachments.isEmpty ? GaryxComposerLayout.inputTopPadding : 6)
         .padding(.bottom, GaryxComposerLayout.inputBottomPadding)
@@ -218,31 +377,6 @@ struct GaryxComposer: View {
                 }
             }
 
-            if model.selectedThread == nil {
-                Section("New Thread") {
-                    Button {
-                        model.setNewThreadWorkspaceMode("local")
-                    } label: {
-                        GaryxMenuSelectionLabel(
-                            title: "Local workspace",
-                            selected: !model.newThreadUsesWorktree,
-                            fallbackSystemImage: "laptopcomputer"
-                        )
-                    }
-
-                    Button {
-                        model.setNewThreadWorkspaceMode("worktree")
-                    } label: {
-                        GaryxMenuSelectionLabel(
-                            title: "Worktree",
-                            selected: model.newThreadUsesWorktree,
-                            fallbackSystemImage: "arrow.triangle.branch"
-                        )
-                    }
-                    .disabled(!model.newThreadWorkspaceCanUseWorktree)
-                }
-            }
-
             Section("Attach") {
                 Button {
                     DispatchQueue.main.async {
@@ -262,14 +396,14 @@ struct GaryxComposer: View {
             }
 
         } label: {
-            Image(systemName: "plus")
-                .font(GaryxFont.system(size: 22, weight: .regular))
-                .foregroundStyle(.primary)
-                .frame(
-                    width: GaryxComposerLayout.bottomBarIconSide,
-                    height: GaryxComposerLayout.bottomBarIconSide
-                )
-                .contentShape(Capsule())
+            GaryxCircleBadge(
+                systemName: "plus",
+                foreground: .primary,
+                background: GaryxComposerLayout.actionButtonFill,
+                diameter: GaryxComposerLayout.actionButtonSide,
+                iconSize: 20,
+                iconWeight: .regular
+            )
         }
         .tint(.secondary)
         .buttonStyle(.plain)
@@ -403,6 +537,91 @@ struct GaryxComposer: View {
 
     nonisolated private static var maxPreparedPhotoBytes: Int {
         1_350_000
+    }
+}
+
+private struct GaryxComposerWorkspaceModeSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let selectedMode: String
+    let canUseWorktree: Bool
+    let onSelect: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Run Location")
+                .font(GaryxFont.title3(weight: .semibold))
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            VStack(spacing: 8) {
+                modeRow(
+                    mode: "local",
+                    title: "Local",
+                    systemImage: "laptopcomputer",
+                    isEnabled: true
+                )
+
+                modeRow(
+                    mode: "worktree",
+                    title: "WorkTree",
+                    systemImage: "arrow.triangle.branch",
+                    isEnabled: canUseWorktree
+                )
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 20)
+        .padding(.bottom, 18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(GaryxTheme.background)
+    }
+
+    private func modeRow(
+        mode: String,
+        title: String,
+        systemImage: String,
+        isEnabled: Bool
+    ) -> some View {
+        let selected = selectedMode == mode
+        return Button {
+            guard isEnabled else { return }
+            onSelect(mode)
+            dismiss()
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: systemImage)
+                    .font(GaryxFont.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 34, height: 34)
+                    .background(GaryxComposerLayout.actionButtonFill, in: Circle())
+
+                Text(title)
+                    .font(GaryxFont.callout(weight: .semibold))
+                    .foregroundStyle(.primary)
+
+                Spacer(minLength: 0)
+
+                if selected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(GaryxFont.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.primary)
+                }
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 54)
+            .background(
+                selected ? GaryxComposerLayout.workspaceBaseFill : Color.clear,
+                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(selected ? Color.primary.opacity(0.12) : GaryxTheme.hairline, lineWidth: 1)
+            }
+            .opacity(isEnabled ? 1 : 0.42)
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
     }
 }
 
