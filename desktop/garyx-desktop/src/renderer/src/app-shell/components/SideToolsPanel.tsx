@@ -776,7 +776,7 @@ export function ThreadSideToolsPanel({
   }
 
   return (
-    <aside className="thread-side-tools-panel">
+    <aside className={`thread-side-tools-panel is-${activeToolId}-active`}>
       <div className="side-tools-context">
         <div className="side-tools-context-title">{t("Environment Info")}</div>
         <div className="side-tools-context-row">

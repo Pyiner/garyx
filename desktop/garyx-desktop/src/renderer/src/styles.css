@@ -3693,6 +3693,10 @@ code {
   background: var(--color-token-bg-primary);
 }
 
+.conversation-body:has(.thread-side-tools-panel.is-browser-active) {
+  z-index: 42;
+}
+
 .conversation-body.settings-layout {
   display: block;
   overflow: auto;
@@ -3719,7 +3723,7 @@ code {
     minmax(0, 1fr)
     minmax(
       var(--workspace-directory-panel-min-width, 260px),
-      var(--workspace-directory-panel-width, 360px)
+      var(--workspace-directory-panel-width, 414px)
     );
   /* Match `.with-log-panel`'s 10px resizer column so the chat region has
      the same visible right gap whether the inspector or the log panel is
@@ -4034,6 +4038,21 @@ code {
   background: var(--color-token-bg-primary);
 }
 
+.thread-side-tools-panel.is-browser-active {
+  position: fixed;
+  z-index: 41;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: var(--workspace-directory-panel-width, 414px);
+  height: 100vh;
+  grid-template-rows: 46px minmax(0, 1fr);
+}
+
+.thread-side-tools-panel.is-browser-active .side-tools-context {
+  display: none;
+}
+
 .side-tools-context {
   display: grid;
   gap: 6px;
@@ -4236,10 +4255,11 @@ code {
   display: flex;
   align-items: center;
   gap: 6px;
+  height: 46px;
   min-width: 0;
-  padding: 7px 8px 6px 10px;
+  padding: 0 8px;
   border-bottom: 0.5px solid color-mix(in srgb, var(--color-token-border) 72%, transparent);
-  background: color-mix(in srgb, var(--color-token-bg-primary) 94%, #f4f3ef);
+  background: var(--color-token-bg-primary);
 }
 
 .side-tools-tab-track {
@@ -4262,13 +4282,13 @@ code {
   gap: 6px;
   flex: 0 0 auto;
   max-width: 145px;
-  height: 30px;
+  height: 28px;
   padding: 0 8px;
   border: 0;
   border-radius: 8px;
   background: transparent;
   color: var(--color-token-text-secondary);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
   transition:
     background-color var(--duration-fast) var(--ease-standard),
@@ -16682,34 +16702,40 @@ button.codex-list-row {
 }
 
 .browser-page-side-panel {
+  grid-template-rows: auto minmax(0, 1fr);
   background: var(--color-token-bg-primary);
 }
 
 .browser-page-side-panel .browser-toolbar {
-  background: color-mix(in srgb, var(--color-token-bg-primary) 94%, #f4f3ef);
+  background: var(--color-token-bg-primary);
 }
 
 .browser-page-side-panel .browser-toolbar-main {
-  gap: 4px;
-  padding: 6px 7px;
+  gap: 1px;
+  height: 40px;
+  padding: 5px 8px 7px;
   background: transparent;
+  border-bottom: 0.5px solid color-mix(in srgb, var(--color-token-border) 72%, transparent);
 }
 
 .browser-page-side-panel .browser-address-form {
   min-width: 0;
-  height: 30px;
+  height: 28px;
   padding: 0 8px;
-  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--color-token-border) 76%, transparent);
+  border-radius: 10px;
+  background: transparent;
 }
 
 .browser-page-side-panel .browser-address-input {
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .browser-page-side-panel .browser-toolbar-icon {
   width: 28px;
   height: 28px;
   border-radius: 8px;
+  color: var(--color-token-description-foreground);
 }
 
 .browser-page-side-panel .browser-toolbar-icon > svg {
@@ -16718,8 +16744,16 @@ button.codex-list-row {
 }
 
 .browser-page-side-panel .browser-toolbar-icon.is-active {
+  width: 32px;
+  overflow: hidden;
   background: color-mix(in srgb, #2d6cdf 12%, white);
   color: color-mix(in srgb, #2d6cdf 84%, var(--color-token-text-primary));
+}
+
+.browser-annotation-button-label {
+  width: 0;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 .browser-page-side-panel .browser-stage-shell {

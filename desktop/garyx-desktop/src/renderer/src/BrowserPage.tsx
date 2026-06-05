@@ -266,7 +266,6 @@ export function BrowserPage({
 
   function selectAnnotationElement(element: DesktopBrowserAnnotationElement) {
     setSelectedAnnotationId(element.id);
-    setBrowserStatus(formatAnnotationLabel(element));
   }
 
   return (
@@ -386,12 +385,13 @@ export function BrowserPage({
           <button
             className="codex-icon-button browser-toolbar-icon"
             disabled={!active}
+            aria-label={t('Open in external browser')}
             onClick={() => {
               if (active) {
                 void api.browserOpenExternal(active.id);
               }
             }}
-            title={t('Open in Browser')}
+            title={t('Open in external browser')}
             type="button"
           >
             <ExternalLinkIcon />
@@ -399,27 +399,29 @@ export function BrowserPage({
           {sidePanel ? (
             <>
               <button
+                aria-label={t('Screenshot')}
                 className="codex-icon-button browser-toolbar-icon"
                 disabled={!active}
                 onClick={() => {
                   void copyCurrentScreenshot();
                 }}
-                title={annotationMode ? t('Copy annotated screenshot') : t('Copy Screenshot')}
+                title={t('Screenshot')}
                 type="button"
               >
                 <Camera aria-hidden />
               </button>
               <button
+                aria-label={t('Annotate')}
                 aria-pressed={annotationMode}
                 className={`codex-icon-button browser-toolbar-icon ${annotationMode ? 'is-active' : ''}`}
                 disabled={!active}
                 onClick={() => {
                   void toggleAnnotationMode();
                 }}
-                title={t('Annotate')}
                 type="button"
               >
                 <MousePointer2 aria-hidden />
+                {annotationMode ? <span className="browser-annotation-button-label">{t('Annotating')}</span> : null}
               </button>
               <button
                 aria-haspopup="menu"
@@ -437,9 +439,11 @@ export function BrowserPage({
         </div>
       </div>
 
-      <div className={`browser-status-line ${browserStatus ? '' : 'is-empty'}`}>
-        {browserStatus}
-      </div>
+      {!sidePanel ? (
+        <div className={`browser-status-line ${browserStatus ? '' : 'is-empty'}`}>
+          {browserStatus}
+        </div>
+      ) : null}
 
       <div className="browser-stage">
         <div className="browser-stage-shell">
