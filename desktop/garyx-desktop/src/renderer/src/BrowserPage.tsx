@@ -1,6 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type MouseEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 
-import type { CaptureBrowserTabResult, DesktopBrowserState } from '@shared/contracts';
+import type {
+  DesktopBrowserAnnotationElement,
+  DesktopBrowserAnnotationSnapshot,
+  DesktopBrowserState,
+} from '@shared/contracts';
 
 import { Input } from '@/components/ui/input';
 import { getDesktopApi } from './platform/desktop-api';
@@ -16,12 +20,6 @@ function activeTab(state: DesktopBrowserState | null) {
   return state?.tabs.find((tab) => tab.isActive) ?? null;
 }
 
-interface AnnotationMark {
-  id: number;
-  x: number;
-  y: number;
-}
-
 function loadCanvasImage(dataUrl: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image();
@@ -31,9 +29,30 @@ function loadCanvasImage(dataUrl: string): Promise<HTMLImageElement> {
   });
 }
 
+function drawRoundedRect(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+) {
+  const nextRadius = Math.min(radius, width / 2, height / 2);
+  context.beginPath();
+  context.moveTo(x + nextRadius, y);
+  context.lineTo(x + width - nextRadius, y);
+  context.quadraticCurveTo(x + width, y, x + width, y + nextRadius);
+  context.lineTo(x + width, y + height - nextRadius);
+  context.quadraticCurveTo(x + width, y + height, x + width - nextRadius, y + height);
+  context.lineTo(x + nextRadius, y + height);
+  context.quadraticCurveTo(x, y + height, x, y + height - nextRadius);
+  context.lineTo(x, y + nextRadius);
+  context.quadraticCurveTo(x, y, x + nextRadius, y);
+  context.closePath();
+}
+
 async function renderAnnotatedSnapshot(
-  snapshot: CaptureBrowserTabResult,
-  marks: AnnotationMark[],
+  snapshot: DesktopBrowserAnnotationSnapshot,
 ): Promise<string> {
   const image = await loadCanvasImage(snapshot.dataUrl);
   const width = snapshot.width || image.naturalWidth;
@@ -47,26 +66,44 @@ async function renderAnnotatedSnapshot(
   }
   context.drawImage(image, 0, 0, width, height);
 
-  const radius = Math.max(16, Math.round(Math.min(width, height) * 0.022));
+  const scaleX = width / Math.max(1, snapshot.viewportWidth || width);
+  const scaleY = height / Math.max(1, snapshot.viewportHeight || height);
+  const markerHeight = Math.max(18, Math.round(Math.min(width, height) * 0.027));
   context.textAlign = 'center';
   context.textBaseline = 'middle';
-  context.font = `700 ${Math.max(13, Math.round(radius * 0.82))}px system-ui, sans-serif`;
+  context.font = `700 ${Math.max(11, Math.round(markerHeight * 0.62))}px system-ui, sans-serif`;
 
-  marks.forEach((mark) => {
-    const x = (mark.x / 100) * width;
-    const y = (mark.y / 100) * height;
-    context.beginPath();
-    context.arc(x, y, radius, 0, Math.PI * 2);
+  snapshot.elements.forEach((element) => {
+    const rectX = element.rect.x * scaleX;
+    const rectY = element.rect.y * scaleY;
+    const rectWidth = element.rect.width * scaleX;
+    const rectHeight = element.rect.height * scaleY;
+    context.fillStyle = 'rgba(239, 68, 68, 0.08)';
+    context.fillRect(rectX, rectY, rectWidth, rectHeight);
+    context.lineWidth = Math.max(2, Math.round(Math.min(width, height) * 0.003));
+    context.strokeStyle = '#ef4444';
+    context.strokeRect(rectX, rectY, rectWidth, rectHeight);
+
+    const text = String(element.id);
+    const markerWidth = Math.max(markerHeight, context.measureText(text).width + 12);
+    const markerX = Math.max(0, Math.min(width - markerWidth, rectX));
+    const markerY = Math.max(0, Math.min(height - markerHeight, rectY - markerHeight - 2));
+    drawRoundedRect(context, markerX, markerY, markerWidth, markerHeight, markerHeight / 2);
     context.fillStyle = '#ef4444';
     context.fill();
-    context.lineWidth = Math.max(2, Math.round(radius * 0.14));
+    context.lineWidth = Math.max(1, Math.round(markerHeight * 0.1));
     context.strokeStyle = '#ffffff';
     context.stroke();
     context.fillStyle = '#ffffff';
-    context.fillText(String(mark.id), x, y + 1);
+    context.fillText(text, markerX + markerWidth / 2, markerY + markerHeight / 2 + 1);
   });
 
   return canvas.toDataURL('image/png');
+}
+
+function formatAnnotationLabel(element: DesktopBrowserAnnotationElement) {
+  const label = element.label ? ` "${element.label}"` : '';
+  return `#${element.id} ${element.role}${label}`;
 }
 
 export function BrowserPage({
@@ -81,8 +118,8 @@ export function BrowserPage({
   const [browserState, setBrowserState] = useState<DesktopBrowserState | null>(null);
   const [addressValue, setAddressValue] = useState('');
   const [annotationMode, setAnnotationMode] = useState(false);
-  const [annotationSnapshot, setAnnotationSnapshot] = useState<CaptureBrowserTabResult | null>(null);
-  const [annotationMarks, setAnnotationMarks] = useState<AnnotationMark[]>([]);
+  const [annotationSnapshot, setAnnotationSnapshot] = useState<DesktopBrowserAnnotationSnapshot | null>(null);
+  const [selectedAnnotationId, setSelectedAnnotationId] = useState<number | null>(null);
   const [browserStatus, setBrowserStatus] = useState<string | null>(null);
   const active = activeTab(browserState);
   const sidePanel = variant === 'side-panel';
@@ -179,7 +216,7 @@ export function BrowserPage({
     if (annotationMode) {
       setAnnotationMode(false);
       setAnnotationSnapshot(null);
-      setAnnotationMarks([]);
+      setSelectedAnnotationId(null);
       setBrowserStatus(null);
       await api.setBrowserOverlayPaused(false);
       return;
@@ -187,14 +224,18 @@ export function BrowserPage({
     if (!active) {
       return;
     }
-    const snapshot = await api.captureBrowserTab({
+    const snapshot = await api.captureBrowserAnnotations({
       tabId: active.id,
       copyToClipboard: false,
     });
     setAnnotationSnapshot(snapshot);
-    setAnnotationMarks([]);
+    setSelectedAnnotationId(null);
     setAnnotationMode(true);
-    setBrowserStatus(t('Click the page to place annotation markers.'));
+    setBrowserStatus(
+      snapshot.elements.length
+        ? t('Annotated {count} elements.', { count: String(snapshot.elements.length) })
+        : t('No visible interactive elements found.'),
+    );
     await api.setBrowserOverlayPaused(true);
   }
 
@@ -204,7 +245,7 @@ export function BrowserPage({
     }
     try {
       if (annotationMode && annotationSnapshot) {
-        const dataUrl = await renderAnnotatedSnapshot(annotationSnapshot, annotationMarks);
+        const dataUrl = await renderAnnotatedSnapshot(annotationSnapshot);
         await api.copyImageToClipboard({ dataUrl });
         setBrowserStatus(t('Annotated screenshot copied.'));
         return;
@@ -223,22 +264,9 @@ export function BrowserPage({
     }
   }
 
-  function addAnnotationMark(event: MouseEvent<HTMLButtonElement>) {
-    const rect = event.currentTarget.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) {
-      return;
-    }
-    const x = ((event.clientX - rect.left) / rect.width) * 100;
-    const y = ((event.clientY - rect.top) / rect.height) * 100;
-    setAnnotationMarks((current) => [
-      ...current,
-      {
-        id: current.length + 1,
-        x: Math.max(0, Math.min(100, x)),
-        y: Math.max(0, Math.min(100, y)),
-      },
-    ]);
-    setBrowserStatus(t('Annotation marker added.'));
+  function selectAnnotationElement(element: DesktopBrowserAnnotationElement) {
+    setSelectedAnnotationId(element.id);
+    setBrowserStatus(formatAnnotationLabel(element));
   }
 
   return (
@@ -420,11 +448,10 @@ export function BrowserPage({
             ref={hostRef}
           />
           {annotationMode && annotationSnapshot ? (
-            <button
-              aria-label={t('Annotate')}
+            <div
+              aria-label={t('Annotated browser snapshot')}
               className="browser-annotation-layer"
-              onClick={addAnnotationMark}
-              type="button"
+              role="group"
             >
               <img
                 alt=""
@@ -432,19 +459,24 @@ export function BrowserPage({
                 draggable={false}
                 src={annotationSnapshot.dataUrl}
               />
-              {annotationMarks.map((mark) => (
-                <span
-                  className="browser-annotation-marker"
-                  key={mark.id}
+              {annotationSnapshot.elements.map((element) => (
+                <button
+                  aria-label={formatAnnotationLabel(element)}
+                  className={`browser-annotation-target ${selectedAnnotationId === element.id ? 'is-selected' : ''} ${element.rect.y < 28 ? 'is-near-top' : ''}`}
+                  key={element.id}
+                  onClick={() => selectAnnotationElement(element)}
                   style={{
-                    left: `${mark.x}%`,
-                    top: `${mark.y}%`,
+                    height: `${(element.rect.height / Math.max(1, annotationSnapshot.viewportHeight)) * 100}%`,
+                    left: `${(element.rect.x / Math.max(1, annotationSnapshot.viewportWidth)) * 100}%`,
+                    top: `${(element.rect.y / Math.max(1, annotationSnapshot.viewportHeight)) * 100}%`,
+                    width: `${(element.rect.width / Math.max(1, annotationSnapshot.viewportWidth)) * 100}%`,
                   }}
+                  type="button"
                 >
-                  {mark.id}
-                </span>
+                  <span className="browser-annotation-marker">{element.id}</span>
+                </button>
               ))}
-            </button>
+            </div>
           ) : null}
         </div>
       </div>

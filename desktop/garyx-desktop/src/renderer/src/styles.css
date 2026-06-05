@@ -16496,7 +16496,7 @@ button.codex-list-row {
   padding: 0;
   border: 0;
   background: #fff;
-  cursor: crosshair;
+  cursor: default;
 }
 
 .browser-annotation-image {
@@ -16509,12 +16509,33 @@ button.codex-list-row {
   pointer-events: none;
 }
 
+.browser-annotation-target {
+  position: absolute;
+  min-width: 8px;
+  min-height: 8px;
+  padding: 0;
+  border: 2px solid rgba(239, 68, 68, 0.92);
+  border-radius: 4px;
+  background: rgba(239, 68, 68, 0.08);
+  cursor: pointer;
+  outline: none;
+}
+
+.browser-annotation-target:hover,
+.browser-annotation-target.is-selected {
+  background: rgba(239, 68, 68, 0.15);
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.18);
+}
+
 .browser-annotation-marker {
   position: absolute;
+  left: -2px;
+  top: -26px;
   display: inline-grid;
   place-items: center;
-  width: 22px;
+  min-width: 22px;
   height: 22px;
+  padding: 0 6px;
   border: 2px solid #fff;
   border-radius: 999px;
   background: #ef4444;
@@ -16522,9 +16543,12 @@ button.codex-list-row {
   font-size: 11px;
   font-weight: 700;
   line-height: 1;
-  transform: translate(-50%, -50%);
   box-shadow: 0 5px 14px rgba(15, 23, 42, 0.24);
   pointer-events: none;
+}
+
+.browser-annotation-target.is-near-top .browser-annotation-marker {
+  top: -2px;
 }
 
 .browser-status-line {

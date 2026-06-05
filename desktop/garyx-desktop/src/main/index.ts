@@ -222,6 +222,7 @@ import {
   bindBrowserWindow,
   browserGoBack,
   browserGoForward,
+  captureBrowserAnnotations,
   captureBrowserTab,
   browserOpenExternal,
   browserReload,
@@ -1392,6 +1393,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle("garyx:browser-reload", browserReload);
   ipcMain.handle("garyx:browser-open-external", browserOpenExternal);
   ipcMain.handle("garyx:capture-browser-tab", captureBrowserTab);
+  ipcMain.handle("garyx:capture-browser-annotations", captureBrowserAnnotations);
   ipcMain.handle("garyx:copy-image-to-clipboard", copyImageToClipboard);
   ipcMain.handle("garyx:update-browser-bounds", updateBrowserBounds);
   ipcMain.handle("garyx:set-browser-overlay-paused", setBrowserOverlayPaused);

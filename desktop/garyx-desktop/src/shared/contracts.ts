@@ -1761,6 +1761,33 @@ export interface CaptureBrowserTabResult {
   width: number;
 }
 
+export interface DesktopBrowserAnnotationRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface DesktopBrowserAnnotationElement {
+  id: number;
+  nodeId: string;
+  tagName: string;
+  role: string;
+  label: string;
+  selector: string;
+  rect: DesktopBrowserAnnotationRect;
+}
+
+export interface DesktopBrowserAnnotationSnapshot
+  extends CaptureBrowserTabResult {
+  elements: DesktopBrowserAnnotationElement[];
+  scrollX: number;
+  scrollY: number;
+  url: string;
+  viewportHeight: number;
+  viewportWidth: number;
+}
+
 export interface CopyImageToClipboardInput {
   dataUrl: string;
 }
@@ -2086,6 +2113,9 @@ export interface GaryxDesktopApi {
   captureBrowserTab: (
     input: string | CaptureBrowserTabInput,
   ) => Promise<CaptureBrowserTabResult>;
+  captureBrowserAnnotations: (
+    input: CaptureBrowserTabInput,
+  ) => Promise<DesktopBrowserAnnotationSnapshot>;
   copyImageToClipboard: (input: CopyImageToClipboardInput) => Promise<void>;
   updateBrowserBounds: (input: BrowserBoundsInput) => Promise<void>;
   setBrowserOverlayPaused: (paused: boolean) => Promise<void>;
