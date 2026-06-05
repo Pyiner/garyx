@@ -434,6 +434,11 @@ function SideTerminalTool({ cwd }: { cwd?: string | null }) {
         setState(event.state);
         return;
       }
+      if (activeSessionRef.current?.id === event.sessionId) {
+        terminalRef.current?.write(event.data);
+        renderedSessionIdRef.current = event.sessionId;
+        renderedOutputRef.current = appendTerminalOutput(renderedOutputRef.current, event.data);
+      }
       setState((current) => {
         if (!current) {
           return current;

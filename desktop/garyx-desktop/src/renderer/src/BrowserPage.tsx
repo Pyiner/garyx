@@ -202,17 +202,25 @@ export function BrowserPage({
     if (!active) {
       return;
     }
-    if (annotationMode && annotationSnapshot) {
-      const dataUrl = await renderAnnotatedSnapshot(annotationSnapshot, annotationMarks);
-      await api.copyImageToClipboard({ dataUrl });
-      setBrowserStatus(t('Annotated screenshot copied.'));
-      return;
+    try {
+      if (annotationMode && annotationSnapshot) {
+        const dataUrl = await renderAnnotatedSnapshot(annotationSnapshot, annotationMarks);
+        await api.copyImageToClipboard({ dataUrl });
+        setBrowserStatus(t('Annotated screenshot copied.'));
+        return;
+      }
+      await api.captureBrowserTab({
+        tabId: active.id,
+        copyToClipboard: true,
+      });
+      setBrowserStatus(t('Screenshot copied.'));
+    } catch {
+      setBrowserStatus(
+        annotationMode
+          ? t('Failed to copy annotated screenshot.')
+          : t('Failed to copy screenshot.'),
+      );
     }
-    await api.captureBrowserTab({
-      tabId: active.id,
-      copyToClipboard: true,
-    });
-    setBrowserStatus(t('Screenshot copied.'));
   }
 
   function addAnnotationMark(event: MouseEvent<HTMLButtonElement>) {
