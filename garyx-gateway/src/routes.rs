@@ -940,6 +940,46 @@ async fn rebuild_thread_indexes(state: &Arc<AppState>) {
     router.rebuild_thread_indexes().await;
 }
 
+fn remove_deleted_thread_projection_records(state: &Arc<AppState>, thread_id: &str) -> bool {
+    let mut removed = false;
+    if let Ok(value) = state.ops.garyx_db.unpin_thread(thread_id) {
+        removed |= value;
+    }
+    if let Ok(value) = state.ops.garyx_db.remove_recent_thread(thread_id) {
+        removed |= value;
+    }
+    if let Ok(value) = state.ops.garyx_db.remove_thread_meta_projection(thread_id) {
+        removed |= value;
+    }
+    removed
+}
+
+async fn clear_deleted_thread_runtime_state(
+    state: &Arc<AppState>,
+    thread_id: &str,
+    provider_key: Option<&str>,
+) {
+    state
+        .integration
+        .bridge
+        .clear_thread_state(thread_id, provider_key)
+        .await;
+    state.integration.bridge.drop_thread_state(thread_id).await;
+    state
+        .threads
+        .router
+        .lock()
+        .await
+        .clear_thread_references(thread_id);
+    {
+        let mut router = state.threads.router.lock().await;
+        router.clear_last_delivery(thread_id);
+        router.message_routing_index_mut().clear_thread(thread_id);
+    }
+    let _ = state.threads.history.delete_thread_history(thread_id).await;
+    let _ = state.ops.thread_logs.delete_thread(thread_id).await;
+}
+
 fn binding_from_known_endpoint(endpoint: &KnownChannelEndpoint) -> ChannelBinding {
     ChannelBinding {
         channel: endpoint.channel.clone(),
@@ -1680,6 +1720,23 @@ pub async fn delete_thread(
     Path(key): Path<String>,
 ) -> impl IntoResponse {
     let Some(thread_id) = ensure_existing_thread_id(&state, &key).await else {
+        let trimmed = key.trim();
+        if !trimmed.is_empty()
+            && is_thread_key(trimmed)
+            && remove_deleted_thread_projection_records(&state, trimmed)
+        {
+            clear_deleted_thread_runtime_state(&state, trimmed, None).await;
+            rebuild_thread_indexes(&state).await;
+            state.invalidate_gateway_sync_caches().await;
+            return (
+                StatusCode::OK,
+                Json(json!({
+                    "deleted": true,
+                    "thread_id": trimmed,
+                    "stale_projection": true,
+                })),
+            );
+        }
         return (
             StatusCode::NOT_FOUND,
             Json(json!({"deleted": false, "error": "thread not found"})),
@@ -1733,31 +1790,8 @@ pub async fn delete_thread(
         );
     }
 
-    state
-        .integration
-        .bridge
-        .clear_thread_state(&thread_id, provider_key.as_deref())
-        .await;
-    state.integration.bridge.drop_thread_state(&thread_id).await;
-    state
-        .threads
-        .router
-        .lock()
-        .await
-        .clear_thread_references(&thread_id);
-    {
-        let mut router = state.threads.router.lock().await;
-        router.clear_last_delivery(&thread_id);
-        router.message_routing_index_mut().clear_thread(&thread_id);
-    }
-    let _ = state
-        .threads
-        .history
-        .delete_thread_history(&thread_id)
-        .await;
-    let _ = state.ops.thread_logs.delete_thread(&thread_id).await;
-    let _ = state.ops.garyx_db.unpin_thread(&thread_id);
-    let _ = state.ops.garyx_db.remove_recent_thread(&thread_id);
+    clear_deleted_thread_runtime_state(&state, &thread_id, provider_key.as_deref()).await;
+    remove_deleted_thread_projection_records(&state, &thread_id);
     rebuild_thread_indexes(&state).await;
     state.invalidate_gateway_sync_caches().await;
     (

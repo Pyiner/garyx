@@ -20,7 +20,10 @@ use std::process::Command;
 use tempfile::{TempDir, tempdir};
 use tower::ServiceExt;
 
-use crate::garyx_db::{DreamSpanDraft, DreamTopicDraft, WorkspaceDraft};
+use crate::garyx_db::{
+    DreamSpanDraft, DreamTopicDraft, RecentThreadDraft, ThreadMetaDraft, ThreadMetaProjectionDraft,
+    WorkspaceDraft,
+};
 use crate::route_graph::build_router;
 use crate::server::AppStateBuilder;
 use crate::thread_logs::ThreadFileLogger;
@@ -1112,6 +1115,106 @@ async fn delete_thread_removes_garyx_db_recent_thread() {
             .garyx_db
             .list_recent_threads(10, 0)
             .expect("list recent threads")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn delete_thread_cleans_stale_projected_workflow_thread() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::stale-workflow-route";
+    state
+        .ops
+        .garyx_db
+        .replace_thread_meta_projection(ThreadMetaProjectionDraft {
+            thread_id: thread_id.to_owned(),
+            thread_meta: ThreadMetaDraft {
+                thread_id: thread_id.to_owned(),
+                workspace_dir: Some("/Users/test/project".to_owned()),
+                thread_type: "workflow_run".to_owned(),
+                thread_label: Some("Workflow Run".to_owned()),
+                agent_id: Some("deep-research".to_owned()),
+                provider_type: Some("workflow".to_owned()),
+                created_at: Some("2026-06-05T08:00:00.000Z".to_owned()),
+                updated_at: Some("2026-06-05T08:10:00.000Z".to_owned()),
+                message_count: 1,
+                last_user_message: Some("start workflow".to_owned()),
+                last_assistant_message: None,
+                last_message_preview: Some("start workflow".to_owned()),
+                recent_run_id: None,
+                active_run_id: None,
+                worktree_json: None,
+                last_delivery_context_json: None,
+                last_delivery_updated_at: None,
+                default_list_hidden: false,
+            },
+            channel_endpoints: vec![],
+            message_routes: vec![],
+        })
+        .expect("seed stale workflow projection");
+    state
+        .ops
+        .garyx_db
+        .upsert_recent_thread(RecentThreadDraft {
+            thread_id: thread_id.to_owned(),
+            title: "Workflow Run".to_owned(),
+            workspace_dir: Some("/Users/test/project".to_owned()),
+            thread_type: "workflow_run".to_owned(),
+            provider_type: Some("workflow".to_owned()),
+            agent_id: Some("deep-research".to_owned()),
+            message_count: 1,
+            last_message_preview: "start workflow".to_owned(),
+            recent_run_id: None,
+            active_run_id: None,
+            run_state: "idle".to_owned(),
+            updated_at: Some("2026-06-05T08:10:00.000Z".to_owned()),
+            last_active_at: "2026-06-05T08:10:00.000Z".to_owned(),
+        })
+        .expect("seed stale recent workflow");
+    state
+        .ops
+        .garyx_db
+        .pin_thread(thread_id)
+        .expect("pin stale workflow thread");
+    assert!(state.threads.thread_store.get(thread_id).await.is_none());
+
+    let router = build_router(state.clone());
+    let request = authed_request()
+        .method("DELETE")
+        .uri(format!("/api/threads/{thread_id}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["deleted"], true);
+    assert_eq!(payload["thread_id"], thread_id);
+    assert_eq!(payload["stale_projection"], true);
+    assert!(
+        state
+            .ops
+            .garyx_db
+            .list_thread_meta()
+            .expect("list thread meta")
+            .is_empty()
+    );
+    assert!(
+        state
+            .ops
+            .garyx_db
+            .list_recent_threads(10, 0)
+            .expect("list recent threads")
+            .is_empty()
+    );
+    assert!(
+        state
+            .ops
+            .garyx_db
+            .list_pinned_threads()
+            .expect("list pinned threads")
             .is_empty()
     );
 }
