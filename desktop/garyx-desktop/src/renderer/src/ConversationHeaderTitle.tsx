@@ -1,4 +1,4 @@
-import { useMemo, type FormEvent, type RefObject } from 'react';
+import { useEffect, useMemo, useState, type FormEvent, type RefObject } from 'react';
 import { IconPin } from '@tabler/icons-react';
 import { Archive, MoreHorizontal, Pencil, X } from 'lucide-react';
 
@@ -66,6 +66,7 @@ export function ConversationHeaderTitle({
   titleInputRef,
 }: ConversationHeaderTitleProps) {
   const { t } = useI18n();
+  const [archiveConfirming, setArchiveConfirming] = useState(false);
   const { entries: pluginCatalog } = useChannelPluginCatalog();
   const iconDataUrlByChannel = useMemo(
     () =>
@@ -98,6 +99,22 @@ export function ConversationHeaderTitle({
     event.preventDefault();
     onSaveTitle();
   };
+
+  useEffect(() => {
+    if (!archiveConfirming) {
+      return;
+    }
+    const timer = globalThis.setTimeout(() => {
+      setArchiveConfirming(false);
+    }, 3000);
+    return () => {
+      globalThis.clearTimeout(timer);
+    };
+  }, [archiveConfirming]);
+
+  useEffect(() => {
+    setArchiveConfirming(false);
+  }, [activeThreadTitle, archiveThreadDisabled]);
 
   return (
     <div className="conversation-header-copy">
@@ -181,10 +198,19 @@ export function ConversationHeaderTitle({
                   <DropdownMenuItem
                     className="thread-title-menu-item"
                     disabled={archiveThreadDisabled}
-                    onSelect={onArchiveThread}
+                    onSelect={(event) => {
+                      if (!archiveConfirming) {
+                        event.preventDefault();
+                        setArchiveConfirming(true);
+                        return;
+                      }
+                      setArchiveConfirming(false);
+                      onArchiveThread();
+                    }}
+                    variant={archiveConfirming ? 'destructive' : 'default'}
                   >
                     <Archive aria-hidden />
-                    <span>{t('Archive conversation')}</span>
+                    <span>{archiveConfirming ? t('Confirm') : t('Archive conversation')}</span>
                     <span className="thread-title-menu-shortcut">⇧⌘A</span>
                   </DropdownMenuItem>
                 </DropdownMenuContent>

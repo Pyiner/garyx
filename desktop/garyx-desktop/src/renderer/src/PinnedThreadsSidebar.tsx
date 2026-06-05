@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import { IconPin } from '@tabler/icons-react';
 import { Archive } from 'lucide-react';
 
@@ -27,6 +28,22 @@ export function PinnedThreadsSidebar({
   onArchiveThread,
 }: PinnedThreadsSidebarProps) {
   const { t } = useI18n();
+  const [confirmThreadId, setConfirmThreadId] = useState<string | null>(null);
+  const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!confirmThreadId) {
+      return;
+    }
+    confirmTimerRef.current = setTimeout(() => {
+      setConfirmThreadId(null);
+    }, 3000);
+    return () => {
+      if (confirmTimerRef.current) {
+        clearTimeout(confirmTimerRef.current);
+      }
+    };
+  }, [confirmThreadId]);
 
   if (!rows.length) {
     return null;
@@ -41,10 +58,16 @@ export function PinnedThreadsSidebar({
       <div className="pinned-thread-list">
         {rows.map(({ thread, isActive, isBusy }) => {
           const timeLabel = formatThreadTimestamp(thread.updatedAt);
+          const isConfirming = confirmThreadId === thread.id;
           return (
             <div
               className={`pinned-thread-row-shell ${isActive ? 'active' : ''}`}
               key={thread.id}
+              onMouseLeave={() => {
+                if (confirmThreadId === thread.id) {
+                  setConfirmThreadId(null);
+                }
+              }}
             >
               <button
                 aria-label={t('Unpin {title}', { title: thread.title })}
@@ -75,16 +98,35 @@ export function PinnedThreadsSidebar({
                 )}
               </button>
               <button
-                aria-label={t('Archive {title}', { title: thread.title })}
-                className="pinned-thread-archive"
+                aria-label={
+                  isConfirming
+                    ? t('Confirm archive {name}', { name: thread.title })
+                    : t('Archive {title}', { title: thread.title })
+                }
+                className={`pinned-thread-archive ${isConfirming ? 'confirm thread-delete-button' : ''}`.trim()}
+                disabled={isBusy}
                 onClick={(event) => {
                   event.stopPropagation();
+                  if (!isConfirming) {
+                    setConfirmThreadId(thread.id);
+                    return;
+                  }
+                  setConfirmThreadId(null);
                   onArchiveThread(thread.id);
                 }}
-                title={t('Archive thread')}
+                style={
+                  isConfirming
+                    ? { opacity: 1, pointerEvents: 'auto' }
+                    : undefined
+                }
+                title={
+                  isConfirming
+                    ? t('Confirm archive {name}', { name: thread.title })
+                    : t('Archive thread')
+                }
                 type="button"
               >
-                <Archive aria-hidden size={13} strokeWidth={1.55} />
+                {isConfirming ? t('Confirm') : <Archive aria-hidden size={13} strokeWidth={1.55} />}
               </button>
             </div>
           );
