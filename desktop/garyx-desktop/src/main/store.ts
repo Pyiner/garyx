@@ -25,6 +25,7 @@ import {
   type StartWorkflowThreadInput,
   type StartWorkflowThreadResult,
 } from '@shared/contracts';
+import { desktopStateWithoutThread } from '@shared/desktop-state';
 import {
   createRemoteAutomation,
   createRemoteThread,
@@ -639,25 +640,6 @@ function withSortedEntities(
       : pickSelectedAutomationId(automations, state.selectedAutomationId),
     lastSeenRunAtByAutomation,
   };
-}
-
-function withoutThread(state: DesktopState, threadId: string): DesktopState {
-  const normalizedThreadId = threadId.trim();
-  if (!normalizedThreadId) {
-    return state;
-  }
-  return withSortedEntities({
-    ...state,
-    threads: state.threads.filter((thread) => thread.id !== normalizedThreadId),
-    sessions: state.sessions.filter((thread) => thread.id !== normalizedThreadId),
-    pinnedThreadIds: state.pinnedThreadIds.filter((id) => id !== normalizedThreadId),
-    endpoints: state.endpoints.filter((endpoint) => endpoint.threadId !== normalizedThreadId),
-    botMainThreads: Object.fromEntries(
-      Object.entries(state.botMainThreads || {}).filter(
-        ([, mappedThreadId]) => mappedThreadId !== normalizedThreadId,
-      ),
-    ),
-  });
 }
 
 function reconcileBotMainThreads(configuredBots: ConfiguredBot[]): Record<string, string> {
@@ -1384,7 +1366,7 @@ export async function renameDesktopThread(
 export async function deleteDesktopThread(threadId: string): Promise<DesktopState> {
   const current = await getDesktopState();
   await deleteRemoteThread(current.settings, threadId);
-  return withoutThread(await getDesktopState(), threadId);
+  return withSortedEntities(desktopStateWithoutThread(await getDesktopState(), threadId));
 }
 
 export async function recordOutgoingThreadPrompt(threadId: string, prompt: string): Promise<{

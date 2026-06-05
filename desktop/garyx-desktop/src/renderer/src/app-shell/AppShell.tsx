@@ -56,6 +56,7 @@ import {
   type UpsertMcpServerInput,
   type UpsertSlashCommandInput,
 } from "@shared/contracts";
+import { desktopStateWithoutThread } from "@shared/desktop-state";
 
 import {
   buildIntent,
@@ -141,7 +142,6 @@ import {
 } from "../thread-model";
 import {
   bindEndpointToThread,
-  deleteThread,
   detachEndpointFromThread,
   ensureWorkspaceForNewThread,
   ensureThread,
@@ -7048,48 +7048,24 @@ export function AppShell() {
     setTitleDraft(activeThread?.title || DEFAULT_SESSION_TITLE);
   }
 
-  async function handleDeleteThread(threadId?: string) {
-    const targetThreadId = threadId || activeThread?.id || null;
-    const targetRuntime = targetThreadId
-      ? selectThreadRuntime(messageStateRef.current, targetThreadId)
-      : null;
-    const targetIsBusy =
-      targetThreadId === activeThread?.id
-        ? isRuntimeBusy(activeRuntime?.state)
-        : isRuntimeBusy(targetRuntime?.state);
-    await deleteThread({
-      api: getDesktopApi(),
-      desktopState,
-      targetThreadId,
-      targetIsAutomationThread: Boolean(
-        targetThreadId &&
-        desktopState &&
-        automationForLatestThread(desktopState, targetThreadId),
-      ),
-      targetIsBusy,
-      selectedThreadId,
-      setError,
-      setDeletingThreadId,
-      setDesktopState,
-      setSelectedThreadId,
-      dispatchDelete: (nextThreadId) => {
-        dispatchMessageState({
-          type: "thread/delete",
-          threadId: nextThreadId,
-        });
-      },
-    });
+  function isArchiveAlreadyApplied(error: unknown): boolean {
+    if (!(error instanceof Error)) {
+      return false;
+    }
+    return error.message.toLowerCase().includes("thread not found");
   }
 
-  async function handleArchiveBotConversationEndpoint(endpoint: DesktopChannelEndpoint) {
-    const targetThreadId = endpoint.threadId || null;
+  async function archiveThreadOptimistically(input?: {
+    threadId?: string | null;
+    endpointKey?: string | null;
+  }) {
+    const targetThreadId = input?.threadId || activeThread?.id || null;
     if (!targetThreadId || !desktopState) {
       return;
     }
-    const targetRuntime = selectThreadRuntime(
-      messageStateRef.current,
-      targetThreadId,
-    );
+    const targetRuntime = targetThreadId
+      ? selectThreadRuntime(messageStateRef.current, targetThreadId)
+      : null;
     const targetIsBusy =
       targetThreadId === activeThread?.id
         ? isRuntimeBusy(activeRuntime?.state)
@@ -7108,46 +7084,72 @@ export function AppShell() {
         .map((candidate) => candidate.endpointKey)
         .filter((value): value is string => Boolean(value)),
     );
-    if (endpoint.endpointKey) {
-      endpointKeys.add(endpoint.endpointKey);
+    if (input?.endpointKey) {
+      endpointKeys.add(input.endpointKey);
     }
+
+    const deletingSelected = targetThreadId === selectedThreadId;
+    const optimisticState = desktopStateWithoutThread(
+      desktopState,
+      targetThreadId,
+    );
+    const fallbackThread = deletingSelected
+      ? optimisticState.threads[0] || optimisticState.sessions[0] || null
+      : null;
 
     setDeletingThreadId(targetThreadId);
     setError(null);
+    setDesktopState((current) =>
+      current ? desktopStateWithoutThread(current, targetThreadId) : current,
+    );
+    if (deletingSelected) {
+      setSelectedThreadId(fallbackThread?.id || null);
+      setThreadEntrySelectionSource(null);
+    }
+    dispatchMessageState({
+      type: "thread/delete",
+      threadId: targetThreadId,
+    });
+
     try {
       const api = getDesktopApi();
-      let nextState: DesktopState | null = null;
       for (const endpointKey of endpointKeys) {
-        nextState = await api.detachChannelEndpoint({ endpointKey });
-      }
-      if (nextState) {
-        setDesktopState(nextState);
+        try {
+          await api.detachChannelEndpoint({ endpointKey });
+        } catch {
+          // Deleting the thread is the source of truth for the archive. A stale
+          // endpoint should not make the row reappear after confirmation.
+        }
       }
 
       const deletedState = await api.deleteThread({ threadId: targetThreadId });
-      const deletingSelected = targetThreadId === selectedThreadId;
-      const fallbackThread = deletingSelected
-        ? deletedState.threads[0] || null
-        : null;
-      setDesktopState(deletedState);
-      if (deletingSelected) {
-        setSelectedThreadId(fallbackThread?.id || null);
-      }
-      dispatchMessageState({
-        type: "thread/delete",
-        threadId: targetThreadId,
-      });
+      setDesktopState(desktopStateWithoutThread(deletedState, targetThreadId));
     } catch (archiveError) {
+      if (isArchiveAlreadyApplied(archiveError)) {
+        return;
+      }
       setError(
         archiveError instanceof Error
           ? archiveError.message
           : "Failed to delete the thread",
       );
+      void refreshDesktopState().catch(() => null);
     } finally {
       setDeletingThreadId((current) =>
         current === targetThreadId ? null : current,
       );
     }
+  }
+
+  async function handleDeleteThread(threadId?: string) {
+    await archiveThreadOptimistically({ threadId: threadId || null });
+  }
+
+  async function handleArchiveBotConversationEndpoint(endpoint: DesktopChannelEndpoint) {
+    await archiveThreadOptimistically({
+      threadId: endpoint.threadId || null,
+      endpointKey: endpoint.endpointKey || null,
+    });
   }
 
   async function handleOpenThreadFromEndpoint(
@@ -8522,15 +8524,7 @@ export function AppShell() {
           togglePinnedThread(threadId);
         }}
         onArchivePinnedThread={(threadId) => {
-          // `handleArchiveBotConversationEndpoint` reads only `threadId` and
-          // (optionally) `endpointKey` off the argument; it then looks up every
-          // matching endpoint from `desktopState.endpoints` itself. Passing a
-          // minimal endpoint shape is enough to drive the archive path from a
-          // pinned-row context that doesn't carry a full endpoint.
-          void handleArchiveBotConversationEndpoint({
-            threadId,
-            endpointKey: '',
-          } as DesktopChannelEndpoint);
+          void handleDeleteThread(threadId);
         }}
         onToggleBotConversationGroup={(group) => {
           setRecentThreadsRailOpen(false);
@@ -8649,10 +8643,7 @@ export function AppShell() {
             setWorkspaceConversationPath(null);
           }}
           onArchiveThread={(threadId) => {
-            void handleArchiveBotConversationEndpoint({
-              threadId,
-              endpointKey: "",
-            } as DesktopChannelEndpoint);
+            void handleDeleteThread(threadId);
           }}
           onOpenThread={(threadId) => {
             void openExistingThread(threadId, "workspace-conversation");
@@ -8690,10 +8681,7 @@ export function AppShell() {
             onArchive: row.isBusy
               ? undefined
               : () => {
-                  void handleArchiveBotConversationEndpoint({
-                    threadId: row.thread.id,
-                    endpointKey: "",
-                  } as DesktopChannelEndpoint);
+                  void handleDeleteThread(row.thread.id);
                 },
           }))}
           title={t("Recent")}
