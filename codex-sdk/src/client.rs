@@ -183,6 +183,18 @@ impl CodexClient {
         turn_id: &str,
         input: Vec<InputItem>,
     ) -> Result<(), CodexError> {
+        self.steer_turn_with_timeout(thread_id, turn_id, input, self.config.request_timeout)
+            .await
+    }
+
+    /// Steer an active turn with additional input using a caller-provided timeout.
+    pub async fn steer_turn_with_timeout(
+        &self,
+        thread_id: &str,
+        turn_id: &str,
+        input: Vec<InputItem>,
+        timeout: Duration,
+    ) -> Result<(), CodexError> {
         self.require_initialized()?;
 
         let params = TurnSteerParams {
@@ -195,7 +207,7 @@ impl CodexClient {
             .map_err(|e| CodexError::Fatal(format!("serialize error: {e}")))?;
 
         self.transport
-            .send_request("turn/steer", Some(value))
+            .send_request_with_timeout("turn/steer", Some(value), timeout)
             .await?;
         Ok(())
     }

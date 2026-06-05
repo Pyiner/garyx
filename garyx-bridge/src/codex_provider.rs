@@ -32,12 +32,21 @@ use crate::native_slash::build_native_skill_prompt;
 use crate::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
 
 const CODEX_CLIENT_IDLE_TTL: Duration = Duration::from_secs(180);
+const CODEX_STREAMING_INPUT_STEER_TIMEOUT: Duration = Duration::from_secs(5);
 const CODEX_TIMEOUT_AUTO_CONTINUE_MESSAGE: &str = "continue";
 const CODEX_TIMEOUT_AUTO_CONTINUE_METADATA_KEY: &str = "codex_timeout_auto_continue";
 
 // ---------------------------------------------------------------------------
 // Helper functions (provider-level domain mapping)
 // ---------------------------------------------------------------------------
+
+fn configured_request_timeout(seconds: f64) -> Duration {
+    if seconds.is_finite() && seconds > 0.0 {
+        Duration::from_secs_f64(seconds)
+    } else {
+        Duration::from_secs(300)
+    }
+}
 
 fn normalize_thread_title(value: &str) -> String {
     let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -1785,9 +1794,11 @@ impl AgentLoopProvider for CodexAgentProvider {
             .await;
         let input = build_input_items_from_parts(&input.message, &input.images, &input.attachments);
 
+        let steer_timeout = configured_request_timeout(self.config.request_timeout_seconds)
+            .min(CODEX_STREAMING_INPUT_STEER_TIMEOUT);
         let client_guard = client_slot.client.lock().await;
         match client_guard
-            .steer_turn(&codex_thread_id, &turn_id, input)
+            .steer_turn_with_timeout(&codex_thread_id, &turn_id, input, steer_timeout)
             .await
         {
             Ok(()) => {
@@ -1795,6 +1806,7 @@ impl AgentLoopProvider for CodexAgentProvider {
                     garyx_thread_id = %garyx_thread_id,
                     codex_thread_id = %codex_thread_id,
                     run_id = %run_id,
+                    timeout_ms = steer_timeout.as_millis() as u64,
                     "steered codex turn with additional input; waiting for userMessage item ack"
                 );
                 true
@@ -1810,6 +1822,7 @@ impl AgentLoopProvider for CodexAgentProvider {
                     garyx_thread_id = %garyx_thread_id,
                     codex_thread_id = %codex_thread_id,
                     run_id = %run_id,
+                    timeout_ms = steer_timeout.as_millis() as u64,
                     error = %e,
                     "failed to steer codex turn"
                 );

@@ -304,6 +304,16 @@ impl CodexTransport {
             .await
     }
 
+    /// Send a JSON-RPC request with a caller-provided timeout.
+    pub async fn send_request_with_timeout(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        timeout: Duration,
+    ) -> Result<Value, CodexError> {
+        self.request_with_timeout(method, params, timeout).await
+    }
+
     /// Send a JSON-RPC request with overload retry.
     pub async fn send_request_with_retry(
         &self,
@@ -431,13 +441,13 @@ impl CodexTransport {
             return Err(e);
         }
 
-        let response = tokio::time::timeout(timeout, rx).await.map_err(|_| {
-            let pending = self.pending.clone();
-            tokio::spawn(async move {
-                pending.lock().await.remove(&id);
-            });
-            CodexError::RequestTimeout(timeout.as_secs())
-        })?;
+        let response = match tokio::time::timeout(timeout, rx).await {
+            Ok(response) => response,
+            Err(_) => {
+                self.pending.lock().await.remove(&id);
+                return Err(CodexError::RequestTimeout(timeout.as_secs()));
+            }
+        };
 
         let response =
             response.map_err(|_| CodexError::Fatal("response channel dropped".to_owned()))?;

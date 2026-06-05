@@ -400,6 +400,51 @@ async fn test_start_failure_cleans_up_process_state() {
     let _ = fs::remove_file(&script_path);
 }
 
+#[tokio::test]
+async fn test_request_timeout_clears_pending_request() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let script_path = std::env::temp_dir().join(format!(
+        "codex-sdk-timeout-{}-{}.sh",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+
+    fs::write(
+        &script_path,
+        "#!/bin/sh\nIFS= read -r line\necho '{\"id\":1,\"result\":{}}'\nwhile IFS= read -r line; do sleep 30; done\n",
+    )
+    .expect("failed to write mock codex script");
+    let mut perms = fs::metadata(&script_path)
+        .expect("failed to stat mock codex script")
+        .permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&script_path, perms).expect("failed to chmod mock codex script");
+
+    let transport = CodexTransport::new(script_path.to_str().unwrap(), &[])
+        .with_startup_timeout(Duration::from_secs(1))
+        .with_request_timeout(Duration::from_secs(1));
+
+    transport
+        .start(json!({"clientInfo": {"name": "test"}}))
+        .await
+        .expect("mock codex should initialize");
+
+    let error = transport
+        .send_request_with_timeout("slow/request", None, Duration::from_millis(20))
+        .await
+        .expect_err("slow request should time out");
+    assert!(matches!(error, CodexError::RequestTimeout(_)));
+    assert!(transport.pending.lock().await.is_empty());
+
+    transport.shutdown().await;
+    let _ = fs::remove_file(&script_path);
+}
+
 #[test]
 fn test_error_display() {
     let cases: Vec<(CodexError, &str)> = vec![
