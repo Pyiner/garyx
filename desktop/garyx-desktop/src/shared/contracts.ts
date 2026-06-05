@@ -1443,6 +1443,8 @@ export interface CreateThreadInput {
   sdkSessionId?: string | null;
   /** Optional provider hint for sdkSessionId. Supported values are claude, codex, and gemini. */
   sdkSessionProviderHint?: DesktopSessionProviderHint | null;
+  /** Optional Garyx thread id to fork from using the provider-native session fork. */
+  forkFromThreadId?: string | null;
 }
 
 export interface StartWorkflowThreadInput {

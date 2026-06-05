@@ -6,7 +6,8 @@ use garyx_models::routing::{
 use garyx_router::{
     KnownChannelEndpoint, ThreadStore, active_run_snapshot_messages, active_run_snapshot_run_id,
     agent_id_from_value, bindings_from_value, history_message_count, is_default_thread_list_hidden,
-    is_thread_key, label_from_value, thread_kind_from_value, workspace_dir_from_value,
+    is_thread_key, label_from_value, list_known_channel_endpoints, thread_kind_from_value,
+    workspace_dir_from_value,
 };
 use serde_json::Value;
 use tracing::warn;
@@ -59,12 +60,35 @@ pub(crate) async fn list_channel_endpoints_with_projection_backfill(
         let _ = backfill_thread_meta_projection(thread_ids, thread_store, garyx_db).await;
     }
     match garyx_db.list_thread_channel_endpoints() {
-        Ok(endpoints) => endpoints,
+        Ok(endpoints) => merge_projected_and_known_channel_endpoints(
+            endpoints,
+            list_known_channel_endpoints(thread_store).await,
+        ),
         Err(error) => {
             warn!(error = %error, "failed to list channel endpoint projection");
-            Vec::new()
+            list_known_channel_endpoints(thread_store).await
         }
     }
+}
+
+fn merge_projected_and_known_channel_endpoints(
+    mut projected: Vec<KnownChannelEndpoint>,
+    known: Vec<KnownChannelEndpoint>,
+) -> Vec<KnownChannelEndpoint> {
+    for endpoint in known {
+        match projected
+            .iter_mut()
+            .find(|candidate| candidate.endpoint_key == endpoint.endpoint_key)
+        {
+            Some(existing) if existing.thread_id.is_none() && endpoint.thread_id.is_some() => {
+                *existing = endpoint;
+            }
+            Some(_) => {}
+            None => projected.push(endpoint),
+        }
+    }
+    projected.sort_by(|left, right| left.endpoint_key.cmp(&right.endpoint_key));
+    projected
 }
 
 async fn backfill_thread_meta_projection(

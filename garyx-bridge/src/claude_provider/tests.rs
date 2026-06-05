@@ -503,6 +503,23 @@ fn test_build_sdk_options_with_session() {
 
     let sdk_opts = provider.build_sdk_options(&opts, Some("session-abc"), "run-1");
     assert_eq!(sdk_opts.resume, Some("session-abc".to_string()));
+    assert!(!sdk_opts.fork_session);
+}
+
+#[test]
+fn test_build_sdk_options_enables_fork_session_from_metadata() {
+    let provider = make_provider();
+    let opts = ProviderRunOptions {
+        thread_id: "test".to_owned(),
+        message: "hello".to_owned(),
+        workspace_dir: None,
+        images: None,
+        metadata: HashMap::from([(SDK_SESSION_FORK_METADATA_KEY.to_owned(), Value::Bool(true))]),
+    };
+
+    let sdk_opts = provider.build_sdk_options(&opts, Some("parent-session"), "run-1");
+    assert_eq!(sdk_opts.resume.as_deref(), Some("parent-session"));
+    assert!(sdk_opts.fork_session);
 }
 
 #[test]

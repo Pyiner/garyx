@@ -1519,6 +1519,7 @@ async fn test_resume_or_start_thread_falls_back_to_start_after_resume_error() {
 
     let thread_id = resume_or_start_thread(
         Some("stale-thread".to_owned()),
+        false,
         thread_params.clone(),
         {
             let resume_calls = resume_calls.clone();
@@ -1536,6 +1537,7 @@ async fn test_resume_or_start_thread_falls_back_to_start_after_resume_error() {
                 }
             }
         },
+        |_params| async move { Ok("unexpected-fork-thread".to_owned()) },
         {
             let start_calls = start_calls.clone();
             move |params| {
@@ -1564,6 +1566,7 @@ async fn test_resume_or_start_thread_uses_resumed_thread_without_starting_new_on
 
     let thread_id = resume_or_start_thread(
         Some("existing-thread".to_owned()),
+        false,
         ThreadStartParams::default(),
         {
             let resume_calls = resume_calls.clone();
@@ -1576,6 +1579,7 @@ async fn test_resume_or_start_thread_uses_resumed_thread_without_starting_new_on
                 }
             }
         },
+        |_params| async move { Ok("unexpected-fork-thread".to_owned()) },
         {
             let start_calls = start_calls.clone();
             move |_params| {
@@ -1593,6 +1597,86 @@ async fn test_resume_or_start_thread_uses_resumed_thread_without_starting_new_on
     assert_eq!(thread_id, "existing-thread");
     assert_eq!(resume_calls.load(Ordering::Relaxed), 1);
     assert_eq!(start_calls.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn test_resume_or_start_thread_forks_existing_thread_without_resume_or_start() {
+    let resume_calls = Arc::new(AtomicUsize::new(0));
+    let fork_calls = Arc::new(AtomicUsize::new(0));
+    let start_calls = Arc::new(AtomicUsize::new(0));
+
+    let thread_id = resume_or_start_thread(
+        Some("parent-thread".to_owned()),
+        true,
+        ThreadStartParams {
+            cwd: Some("/tmp/workspace".to_owned()),
+            config: Some(json!({"mcpServers": {}})),
+            model: Some("gpt-5".to_owned()),
+            model_reasoning_effort: Some("high".to_owned()),
+            approval_policy: Some("never".to_owned()),
+            sandbox: Some("off".to_owned()),
+        },
+        {
+            let resume_calls = resume_calls.clone();
+            move |_params| {
+                let resume_calls = resume_calls.clone();
+                async move {
+                    resume_calls.fetch_add(1, Ordering::Relaxed);
+                    Ok("unexpected-resume-thread".to_owned())
+                }
+            }
+        },
+        {
+            let fork_calls = fork_calls.clone();
+            move |params| {
+                let fork_calls = fork_calls.clone();
+                async move {
+                    fork_calls.fetch_add(1, Ordering::Relaxed);
+                    assert_eq!(params.thread_id, "parent-thread");
+                    assert_eq!(params.cwd.as_deref(), Some("/tmp/workspace"));
+                    assert_eq!(params.model.as_deref(), Some("gpt-5"));
+                    assert_eq!(params.model_reasoning_effort.as_deref(), Some("high"));
+                    assert_eq!(params.approval_policy.as_deref(), Some("never"));
+                    assert_eq!(params.sandbox.as_deref(), Some("off"));
+                    Ok("forked-child-thread".to_owned())
+                }
+            }
+        },
+        {
+            let start_calls = start_calls.clone();
+            move |_params| {
+                let start_calls = start_calls.clone();
+                async move {
+                    start_calls.fetch_add(1, Ordering::Relaxed);
+                    Ok("unexpected-new-thread".to_owned())
+                }
+            }
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(thread_id, "forked-child-thread");
+    assert_eq!(resume_calls.load(Ordering::Relaxed), 0);
+    assert_eq!(fork_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(start_calls.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn test_resume_or_start_thread_rejects_fork_without_parent_thread() {
+    let err = resume_or_start_thread(
+        None,
+        true,
+        ThreadStartParams::default(),
+        |_params| async move { Ok("unexpected-resume-thread".to_owned()) },
+        |_params| async move { Ok("unexpected-fork-thread".to_owned()) },
+        |_params| async move { Ok("unexpected-new-thread".to_owned()) },
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(err, BridgeError::SessionError(_)));
+    assert!(err.to_string().contains("without parent thread id"));
 }
 
 #[test]

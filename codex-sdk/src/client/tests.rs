@@ -31,6 +31,24 @@ async fn test_start_thread_before_init() {
 }
 
 #[tokio::test]
+async fn test_fork_thread_before_init() {
+    let client = CodexClient::new(CodexClientConfig::default());
+    let err = client
+        .fork_thread(ThreadForkParams {
+            thread_id: "th_parent".to_owned(),
+            cwd: None,
+            config: None,
+            model: None,
+            model_reasoning_effort: None,
+            approval_policy: None,
+            sandbox: None,
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CodexError::NotInitialized));
+}
+
+#[tokio::test]
 async fn test_start_turn_before_init() {
     let client = CodexClient::new(CodexClientConfig::default());
     let err = client

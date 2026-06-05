@@ -116,6 +116,65 @@ fn build_prompt_blocks_skips_agent_memory_for_builtin_gemini() {
 }
 
 #[test]
+fn rewrite_gemini_session_lines_for_fork_replaces_session_ids() {
+    let parent = r#"{"sessionId":"parent-session","role":"user","content":"hello"}
+{"sessionId":"parent-session","role":"model","content":"world"}
+"#;
+
+    let rewritten =
+        rewrite_gemini_session_lines_for_fork(parent, "child-session").expect("rewrite");
+
+    assert!(!rewritten.contains("parent-session"));
+    assert_eq!(
+        rewritten
+            .lines()
+            .filter(|line| serde_json::from_str::<Value>(line)
+                .ok()
+                .and_then(|value| value
+                    .get("sessionId")
+                    .and_then(Value::as_str)
+                    .map(|session_id| session_id == "child-session"))
+                .unwrap_or(false))
+            .count(),
+        2
+    );
+    assert!(rewritten.contains("\"content\":\"hello\""));
+    assert!(rewritten.contains("\"content\":\"world\""));
+}
+
+#[test]
+fn fork_gemini_session_file_copies_without_mutating_parent() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("session-parent.jsonl");
+    let parent = r#"{"sessionId":"parent-session","role":"user","content":"hello"}
+{"sessionId":"parent-session","role":"model","content":"world"}
+"#;
+    fs::write(&source, parent).expect("write source");
+
+    let child_session_id = fork_gemini_session_file(&source).expect("fork session file");
+
+    assert_ne!(child_session_id, "parent-session");
+    assert_eq!(fs::read_to_string(&source).expect("read source"), parent);
+
+    let mut children = fs::read_dir(temp.path())
+        .expect("read temp")
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            (path != source).then_some(path)
+        })
+        .collect::<Vec<_>>();
+    children.sort();
+    assert_eq!(children.len(), 1);
+    let child_contents = fs::read_to_string(&children[0]).expect("read child");
+    assert_eq!(
+        gemini_session_id_from_jsonl(&child_contents).as_deref(),
+        Some(child_session_id.as_str())
+    );
+    assert!(!child_contents.contains("parent-session"));
+}
+
+#[test]
 fn resolve_runtime_gemini_env_exports_task_cli_env() {
     let config = GeminiCliConfig::default();
     let metadata = HashMap::from([

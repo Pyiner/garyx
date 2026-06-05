@@ -17,7 +17,7 @@ pub use error::CodexError;
 pub use transport::CodexTransport;
 pub use types::{
     AgentMessageDelta, Capabilities, ClientInfo, CommandApprovalRequest, FileChangeApprovalRequest,
-    InitializeParams, InputItem, ItemEventParams, JsonRpcNotification, ThreadResumeParams,
-    ThreadStartParams, TurnCompletedParams, TurnInfo, TurnInterruptParams, TurnStartParams,
-    TurnSteerParams, UsageInfo,
+    InitializeParams, InputItem, ItemEventParams, JsonRpcNotification, ThreadForkParams,
+    ThreadResumeParams, ThreadStartParams, TurnCompletedParams, TurnInfo, TurnInterruptParams,
+    TurnStartParams, TurnSteerParams, UsageInfo,
 };

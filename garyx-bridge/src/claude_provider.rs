@@ -10,8 +10,9 @@ use claude_agent_sdk::{
 };
 use garyx_models::provider::{
     ClaudeCodeConfig, ImagePayload, PromptAttachment, ProviderMessage, ProviderRunOptions,
-    ProviderRunResult, ProviderType, QueuedUserInput, StreamBoundaryKind, StreamEvent,
-    attachments_from_metadata, build_prompt_message_with_attachments, default_claude_cli_mode,
+    ProviderRunResult, ProviderType, QueuedUserInput, SDK_SESSION_FORK_METADATA_KEY,
+    StreamBoundaryKind, StreamEvent, attachments_from_metadata,
+    build_prompt_message_with_attachments, default_claude_cli_mode,
 };
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -257,6 +258,10 @@ fn non_empty_session_id(value: Option<&str>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn metadata_bool(metadata: &HashMap<String, Value>, key: &str) -> bool {
+    metadata.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
 // ---------------------------------------------------------------------------
@@ -961,6 +966,7 @@ impl ClaudeCliProvider {
         // Extra args: replay-user-messages for UserMessage ACK
         let mut extra_args = HashMap::new();
         extra_args.insert("replay-user-messages".to_string(), None);
+        let fork_session = metadata_bool(&options.metadata, SDK_SESSION_FORK_METADATA_KEY);
 
         ClaudeAgentOptions {
             agent,
@@ -981,6 +987,7 @@ impl ClaudeCliProvider {
             max_buffer_size: Some(MAX_BUFFER_SIZE),
             setting_sources: (!self.config.setting_sources.is_empty())
                 .then(|| self.config.setting_sources.clone()),
+            fork_session,
             ..Default::default()
         }
     }

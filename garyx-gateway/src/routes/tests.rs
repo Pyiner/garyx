@@ -11,7 +11,9 @@ use garyx_models::config::{
     PluginAccountEntry,
 };
 use garyx_models::provider::{
-    ProviderMessage, ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent,
+    FORK_FROM_PROVIDER_TYPE_METADATA_KEY, FORK_FROM_SDK_SESSION_ID_METADATA_KEY,
+    FORK_FROM_THREAD_ID_METADATA_KEY, ProviderMessage, ProviderRunOptions, ProviderRunResult,
+    ProviderType, SDK_SESSION_FORK_METADATA_KEY, StreamEvent,
 };
 use garyx_models::thread_logs::{ThreadLogEvent, ThreadLogSink};
 use garyx_router::MessageRouter;
@@ -618,6 +620,162 @@ async fn create_thread_seeds_sdk_session_id() {
     assert_eq!(data["sdk_session_id"], session_id);
     assert_eq!(stored["provider_type"], "claude_code");
     assert_eq!(stored["sdk_session_id"], session_id);
+}
+
+#[tokio::test]
+async fn create_thread_forks_provider_session_without_importing_visible_history() {
+    let (state, _logger, _dir) = test_state().await;
+    let workspace = tempdir().unwrap();
+    let workspace_dir = workspace.path().to_string_lossy().to_string();
+    let parent_session_id = "parent-claude-session";
+    let (parent_thread_id, mut parent_data, _resolved) = create_thread_for_agent_reference(
+        state.threads.thread_store.clone(),
+        state.integration.bridge.clone(),
+        state.ops.custom_agents.clone(),
+        state.ops.agent_teams.clone(),
+        ThreadEnsureOptions {
+            label: Some("Main thread".to_owned()),
+            workspace_dir: Some(workspace_dir.clone()),
+            workspace_mode: Default::default(),
+            worktree_base_dir: None,
+            agent_id: Some("claude".to_owned()),
+            metadata: HashMap::new(),
+            provider_type: None,
+            sdk_session_id: Some(parent_session_id.to_owned()),
+            thread_kind: None,
+            origin_channel: None,
+            origin_account_id: None,
+            origin_from_id: None,
+            is_group: None,
+        },
+    )
+    .await
+    .expect("parent thread created");
+    parent_data["messages"] = json!([
+        {"role": "user", "content": "parent question"},
+        {"role": "assistant", "content": "parent answer"}
+    ]);
+    parent_data["history"]["message_count"] = json!(2);
+    state
+        .threads
+        .thread_store
+        .set(&parent_thread_id, parent_data)
+        .await;
+
+    let router = build_router(state.clone());
+    let request = authed_request()
+        .method("POST")
+        .uri("/api/threads")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "label": "Side chat",
+                "forkFromThreadId": parent_thread_id
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    let child_thread_id = payload["thread_id"].as_str().expect("child thread id");
+    let child_data = state
+        .threads
+        .thread_store
+        .get(child_thread_id)
+        .await
+        .expect("child thread stored");
+
+    assert_eq!(child_data["label"], "Side chat");
+    assert_eq!(child_data["workspace_dir"], workspace_dir);
+    assert_eq!(child_data["agent_id"], "claude");
+    assert_eq!(child_data["provider_type"], "claude_code");
+    assert!(child_data.get("sdk_session_id").is_none());
+    assert_eq!(
+        child_data["metadata"][FORK_FROM_THREAD_ID_METADATA_KEY],
+        parent_thread_id
+    );
+    assert_eq!(
+        child_data["metadata"][FORK_FROM_SDK_SESSION_ID_METADATA_KEY],
+        parent_session_id
+    );
+    assert_eq!(
+        child_data["metadata"][FORK_FROM_PROVIDER_TYPE_METADATA_KEY],
+        "claude_code"
+    );
+    assert_eq!(
+        child_data["metadata"][SDK_SESSION_FORK_METADATA_KEY]
+            .as_bool()
+            .unwrap_or(false),
+        true
+    );
+    assert_eq!(history_message_count(&child_data), 0);
+    assert!(
+        child_data
+            .get("messages")
+            .and_then(Value::as_array)
+            .is_none_or(Vec::is_empty),
+        "fork child should not import parent messages into visible transcript"
+    );
+}
+
+#[tokio::test]
+async fn create_thread_rejects_fork_source_without_provider_session_id() {
+    let (state, _logger, _dir) = test_state().await;
+    let workspace = tempdir().unwrap();
+    let workspace_dir = workspace.path().to_string_lossy().to_string();
+    let (parent_thread_id, _parent_data, _resolved) = create_thread_for_agent_reference(
+        state.threads.thread_store.clone(),
+        state.integration.bridge.clone(),
+        state.ops.custom_agents.clone(),
+        state.ops.agent_teams.clone(),
+        ThreadEnsureOptions {
+            label: Some("Main thread".to_owned()),
+            workspace_dir: Some(workspace_dir),
+            workspace_mode: Default::default(),
+            worktree_base_dir: None,
+            agent_id: Some("claude".to_owned()),
+            metadata: HashMap::new(),
+            provider_type: None,
+            sdk_session_id: None,
+            thread_kind: None,
+            origin_channel: None,
+            origin_account_id: None,
+            origin_from_id: None,
+            is_group: None,
+        },
+    )
+    .await
+    .expect("parent thread created");
+
+    let router = build_router(state);
+    let request = authed_request()
+        .method("POST")
+        .uri("/api/threads")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "label": "Side chat",
+                "forkFromThreadId": parent_thread_id
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        payload["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("fork source thread has no provider session id yet")
+    );
 }
 
 #[tokio::test]

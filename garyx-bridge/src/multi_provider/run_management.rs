@@ -4,10 +4,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use garyx_models::Principal;
 use garyx_models::provider::{
-    AgentRunRequest, FilePayload, ImagePayload, PromptAttachment, PromptAttachmentKind,
-    ProviderMessage, ProviderRunOptions, ProviderRunResult, ProviderType, QueuedUserInput,
-    StreamEvent, attachments_from_metadata, build_user_content_from_parts,
-    stage_file_payloads_for_prompt, stage_image_payloads_for_prompt,
+    AgentRunRequest, FORK_FROM_PROVIDER_TYPE_METADATA_KEY, FORK_FROM_SDK_SESSION_ID_METADATA_KEY,
+    FilePayload, ImagePayload, PromptAttachment, PromptAttachmentKind, ProviderMessage,
+    ProviderRunOptions, ProviderRunResult, ProviderType, QueuedUserInput,
+    SDK_SESSION_FORK_METADATA_KEY, SDK_SESSION_ID_METADATA_KEY, StreamEvent,
+    attachments_from_metadata, build_user_content_from_parts, stage_file_payloads_for_prompt,
+    stage_image_payloads_for_prompt,
 };
 use garyx_models::thread_logs::{ThreadLogEvent, ThreadLogSink, resolve_thread_log_thread_id};
 use garyx_router::{
@@ -168,7 +170,8 @@ fn scrub_subagent_runtime_metadata(metadata: &mut HashMap<String, Value>) {
         "model_reasoning_effort",
         "system_prompt",
         "requested_provider_type",
-        "sdk_session_id",
+        SDK_SESSION_ID_METADATA_KEY,
+        SDK_SESSION_FORK_METADATA_KEY,
         "agent_team_id",
         "group_transcript_snapshot",
         "bridge_run_id",
@@ -547,7 +550,7 @@ fn resolve_sdk_session_id_for_persistence(
         .map(ToOwned::to_owned)
         .or_else(|| {
             metadata
-                .get("sdk_session_id")
+                .get(SDK_SESSION_ID_METADATA_KEY)
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
@@ -616,6 +619,67 @@ fn resolve_persisted_sdk_session_id_for_provider(
     }
 
     non_empty_value_string(object.get("sdk_session_id"))
+}
+
+fn provider_type_from_metadata_value(value: Option<&Value>) -> Option<ProviderType> {
+    let raw = value?.clone();
+    serde_json::from_value(raw.clone())
+        .map_err(|e| tracing::debug!(raw = %raw, error = %e, "failed to parse fork provider_type"))
+        .ok()
+}
+
+fn resolve_fork_sdk_session_id_for_provider(
+    session_data: &Value,
+    provider_type: &ProviderType,
+) -> Option<String> {
+    let metadata = session_data.get("metadata").and_then(Value::as_object)?;
+    if metadata
+        .get(SDK_SESSION_FORK_METADATA_KEY)
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return None;
+    }
+    let fork_provider_type =
+        provider_type_from_metadata_value(metadata.get(FORK_FROM_PROVIDER_TYPE_METADATA_KEY))?;
+    if !provider_types_share_native_session(&fork_provider_type, provider_type) {
+        return None;
+    }
+    non_empty_value_string(metadata.get(FORK_FROM_SDK_SESSION_ID_METADATA_KEY))
+}
+
+fn attach_provider_sdk_session_metadata(
+    options: &mut ProviderRunOptions,
+    session_data: &Value,
+    provider_key: &str,
+    provider_type: &ProviderType,
+) {
+    // Thread metadata is copied into dispatch metadata before this point. Clear
+    // fork mode first so a child thread that has already bound its own provider
+    // session resumes normally instead of forking from the parent every turn.
+    options.metadata.remove(SDK_SESSION_FORK_METADATA_KEY);
+
+    if let Some(sid) = resolve_persisted_sdk_session_id_for_provider(
+        session_data,
+        provider_key,
+        Some(provider_type),
+    ) {
+        options
+            .metadata
+            .insert(SDK_SESSION_ID_METADATA_KEY.to_owned(), Value::String(sid));
+        return;
+    }
+
+    if let Some(parent_sid) = resolve_fork_sdk_session_id_for_provider(session_data, provider_type)
+    {
+        options.metadata.insert(
+            SDK_SESSION_ID_METADATA_KEY.to_owned(),
+            Value::String(parent_sid),
+        );
+        options
+            .metadata
+            .insert(SDK_SESSION_FORK_METADATA_KEY.to_owned(), Value::Bool(true));
+    }
 }
 
 fn persisted_provider_messages_from_thread(session_data: &Value) -> Vec<ProviderMessage> {
@@ -1207,15 +1271,12 @@ impl MultiProviderBridge {
         {
             let resolved_provider_type = provider.provider_type();
             attach_native_session_messages(&mut options, &session_data, &resolved_provider_type);
-            if let Some(sid) = resolve_persisted_sdk_session_id_for_provider(
+            attach_provider_sdk_session_metadata(
+                &mut options,
                 &session_data,
                 &provider_key_owned,
-                Some(&resolved_provider_type),
-            ) {
-                options
-                    .metadata
-                    .insert("sdk_session_id".to_owned(), Value::String(sid.to_owned()));
-            }
+                &resolved_provider_type,
+            );
         }
 
         let run_started_at = chrono::Utc::now().to_rfc3339();
@@ -1837,15 +1898,12 @@ impl MultiProviderBridge {
         {
             let resolved_provider_type = provider.provider_type();
             attach_native_session_messages(&mut options, &session_data, &resolved_provider_type);
-            if let Some(sid) = resolve_persisted_sdk_session_id_for_provider(
+            attach_provider_sdk_session_metadata(
+                &mut options,
                 &session_data,
                 &provider_key,
-                Some(&resolved_provider_type),
-            ) {
-                options
-                    .metadata
-                    .insert("sdk_session_id".to_owned(), Value::String(sid));
-            }
+                &resolved_provider_type,
+            );
         }
 
         let run_started_at = chrono::Utc::now().to_rfc3339();

@@ -5,9 +5,11 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use chrono::Utc;
 use garyx_models::config::{GaryxConfig, TelegramAccount, telegram_account_to_plugin_entry};
 use garyx_models::provider::{
-    ATTACHMENTS_METADATA_KEY, AgentRunRequest, ImagePayload, PromptAttachment,
-    PromptAttachmentKind, ProviderMessage, ProviderRunOptions, ProviderRunResult, ProviderType,
-    QueuedUserInput, StreamBoundaryKind, StreamEvent, attachments_to_metadata_value,
+    ATTACHMENTS_METADATA_KEY, AgentRunRequest, FORK_FROM_PROVIDER_TYPE_METADATA_KEY,
+    FORK_FROM_SDK_SESSION_ID_METADATA_KEY, ImagePayload, PromptAttachment, PromptAttachmentKind,
+    ProviderMessage, ProviderRunOptions, ProviderRunResult, ProviderType, QueuedUserInput,
+    SDK_SESSION_FORK_METADATA_KEY, SDK_SESSION_ID_METADATA_KEY, StreamBoundaryKind, StreamEvent,
+    attachments_to_metadata_value,
 };
 use garyx_models::{
     AgentTeamProfile, CustomAgentProfile, Principal, TaskStatus, ThreadTask,
@@ -52,6 +54,23 @@ fn active_or_committed_messages(data: &serde_json::Value) -> Vec<serde_json::Val
         .cloned()
         .or_else(|| data["messages"].as_array().cloned())
         .unwrap_or_default()
+}
+
+fn fork_thread_metadata(
+    provider_type: ProviderType,
+    parent_sdk_session_id: &str,
+) -> serde_json::Value {
+    let mut metadata = serde_json::Map::new();
+    metadata.insert(SDK_SESSION_FORK_METADATA_KEY.to_owned(), json!(true));
+    metadata.insert(
+        FORK_FROM_PROVIDER_TYPE_METADATA_KEY.to_owned(),
+        serde_json::to_value(provider_type).unwrap(),
+    );
+    metadata.insert(
+        FORK_FROM_SDK_SESSION_ID_METADATA_KEY.to_owned(),
+        json!(parent_sdk_session_id),
+    );
+    serde_json::Value::Object(metadata)
 }
 
 fn custom_agent(
@@ -3103,6 +3122,115 @@ async fn test_start_run_restores_thread_bound_sdk_session_id_by_provider_type() 
         Some(&serde_json::Value::String(
             "thread-bound-session".to_owned()
         ))
+    );
+}
+
+#[tokio::test]
+async fn test_start_run_uses_fork_parent_sdk_session_before_child_session_exists() {
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    store
+        .set(
+            "sess::side-fork",
+            serde_json::json!({
+                "provider_type": "claude_code",
+                "metadata": fork_thread_metadata(
+                    ProviderType::ClaudeCode,
+                    "parent-claude-session",
+                )
+            }),
+        )
+        .await;
+
+    let bridge = MultiProviderBridge::new();
+    let provider = Arc::new(MockProvider::new(ProviderType::ClaudeCode));
+    bridge
+        .register_provider("claude_code", provider.clone())
+        .await;
+    bridge.set_default_provider_key("claude_code").await;
+    bridge.set_thread_store(store).await;
+
+    bridge
+        .start_agent_run(
+            run_request(
+                "sess::side-fork",
+                "side question",
+                "run-side-fork",
+                "api",
+                "main",
+            ),
+            None,
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    let snapshots = provider.metadata_snapshots();
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(
+        snapshots[0].get(SDK_SESSION_ID_METADATA_KEY),
+        Some(&serde_json::Value::String(
+            "parent-claude-session".to_owned()
+        ))
+    );
+    assert_eq!(
+        snapshots[0]
+            .get(SDK_SESSION_FORK_METADATA_KEY)
+            .and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
+}
+
+#[tokio::test]
+async fn test_start_run_resumes_child_sdk_session_after_fork_child_is_bound() {
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    store
+        .set(
+            "sess::side-fork-child",
+            serde_json::json!({
+                "provider_type": "claude_code",
+                "sdk_session_id": "child-claude-session",
+                "metadata": fork_thread_metadata(
+                    ProviderType::ClaudeCode,
+                    "parent-claude-session",
+                )
+            }),
+        )
+        .await;
+
+    let bridge = MultiProviderBridge::new();
+    let provider = Arc::new(MockProvider::new(ProviderType::ClaudeCode));
+    bridge
+        .register_provider("claude_code", provider.clone())
+        .await;
+    bridge.set_default_provider_key("claude_code").await;
+    bridge.set_thread_store(store).await;
+
+    bridge
+        .start_agent_run(
+            run_request(
+                "sess::side-fork-child",
+                "follow up",
+                "run-side-fork-child",
+                "api",
+                "main",
+            ),
+            None,
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    let snapshots = provider.metadata_snapshots();
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(
+        snapshots[0].get(SDK_SESSION_ID_METADATA_KEY),
+        Some(&serde_json::Value::String(
+            "child-claude-session".to_owned()
+        ))
+    );
+    assert!(
+        !snapshots[0].contains_key(SDK_SESSION_FORK_METADATA_KEY),
+        "child session should resume normally instead of forking every turn"
     );
 }
 

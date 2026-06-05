@@ -6787,14 +6787,9 @@ export function AppShell() {
     if (!prompt) {
       throw new Error("Enter a message first.");
     }
-    const workspacePath =
-      activeWorkspacePath ||
-      pendingWorkspacePath ||
-      (preferredWorkspaceForNewThread?.available
-        ? preferredWorkspaceForNewThread.path
-        : null);
-    if (!workspacePath) {
-      throw new Error("Choose an available workspace before starting side chat.");
+    const sourceThreadId = activeThread?.id?.trim() || null;
+    if (!sourceThreadId) {
+      throw new Error("Open a thread before starting side chat.");
     }
 
     let sideThreadId = input.threadId?.trim() || "";
@@ -6802,9 +6797,8 @@ export function AppShell() {
     if (!sideThreadId) {
       const created = await window.garyxDesktop.createThread({
         title: "Side chat",
-        workspacePath,
-        workspaceMode: composerWorkspaceMode || "local",
         agentId: activeThread?.agentId || pendingAgentId || "claude",
+        forkFromThreadId: sourceThreadId,
       });
       sideThreadId = created.thread.id;
       sideThreadTitle = created.thread.title;

@@ -137,6 +137,27 @@ fn test_thread_resume_params_serialization() {
     assert_eq!(val["sandbox"], "off");
 }
 
+#[test]
+fn test_thread_fork_params_serialization() {
+    let params = ThreadForkParams {
+        thread_id: "th_parent".to_owned(),
+        cwd: Some("/tmp/workspace".to_owned()),
+        config: Some(json!({"mcpServers": {}})),
+        model: Some("gpt-5".to_owned()),
+        model_reasoning_effort: Some("high".to_owned()),
+        approval_policy: Some("never".to_owned()),
+        sandbox: Some("off".to_owned()),
+    };
+    let val = serde_json::to_value(&params).unwrap();
+    assert_eq!(val["threadId"], "th_parent");
+    assert_eq!(val["cwd"], "/tmp/workspace");
+    assert_eq!(val["config"]["mcpServers"], json!({}));
+    assert_eq!(val["model"], "gpt-5");
+    assert_eq!(val["modelReasoningEffort"], "high");
+    assert_eq!(val["approvalPolicy"], "never");
+    assert_eq!(val["sandbox"], "off");
+}
+
 // -- Input items --
 
 #[test]

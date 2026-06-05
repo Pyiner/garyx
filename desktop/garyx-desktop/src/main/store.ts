@@ -1086,20 +1086,23 @@ export async function createDesktopThread(input?: {
   agentId?: string | null;
   sdkSessionId?: string | null;
   sdkSessionProviderHint?: DesktopSessionProviderHint | null;
+  forkFromThreadId?: string | null;
 }): Promise<{ state: DesktopState; thread: DesktopThreadSummary; session?: DesktopThreadSummary }> {
   const current = await getDesktopState();
   const sdkSessionId = normalizeSdkSessionIdInput(input?.sdkSessionId);
   const sdkSessionProviderHint = sdkSessionId
     ? normalizeSdkSessionProviderHintInput(input?.sdkSessionProviderHint)
     : null;
-  const explicitWorkspacePath = sdkSessionId ? null : normalizeWorkspacePathInput(input?.workspacePath);
-  let targetWorkspacePath: string | null = sdkSessionId ? null : current.selectedWorkspacePath;
+  const forkFromThreadId = input?.forkFromThreadId?.trim() || null;
+  const providerBoundSource = Boolean(sdkSessionId || forkFromThreadId);
+  const explicitWorkspacePath = providerBoundSource ? null : normalizeWorkspacePathInput(input?.workspacePath);
+  let targetWorkspacePath: string | null = providerBoundSource ? null : current.selectedWorkspacePath;
   let workspacePath = explicitWorkspacePath;
   if (!workspacePath) {
     workspacePath = targetWorkspacePath?.trim() || null;
   }
   if (!workspacePath) {
-    if (!targetWorkspacePath && !sdkSessionId) {
+    if (!targetWorkspacePath && !providerBoundSource) {
       throw new Error('Choose an available folder before creating a new thread.');
     }
   }
@@ -1118,10 +1121,11 @@ export async function createDesktopThread(input?: {
   const created = await createRemoteThread(current.settings, {
     title: requestedTitle,
     workspacePath,
-    workspaceMode: sdkSessionId ? "local" : input?.workspaceMode,
+    workspaceMode: providerBoundSource ? "local" : input?.workspaceMode,
     agentId: input?.agentId,
     sdkSessionId,
     sdkSessionProviderHint,
+    forkFromThreadId,
   });
   let state = await getDesktopState();
   let thread = state.threads.find((entry) => entry.id === created.id) || created;

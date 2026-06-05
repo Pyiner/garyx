@@ -118,6 +118,11 @@ impl AgentRunRequest {
 }
 
 pub const ATTACHMENTS_METADATA_KEY: &str = "attachments";
+pub const SDK_SESSION_ID_METADATA_KEY: &str = "sdk_session_id";
+pub const SDK_SESSION_FORK_METADATA_KEY: &str = "sdk_session_fork";
+pub const FORK_FROM_THREAD_ID_METADATA_KEY: &str = "fork_from_thread_id";
+pub const FORK_FROM_SDK_SESSION_ID_METADATA_KEY: &str = "fork_from_sdk_session_id";
+pub const FORK_FROM_PROVIDER_TYPE_METADATA_KEY: &str = "fork_from_provider_type";
 
 /// Provider-to-channel streaming boundary markers.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]

@@ -1,13 +1,16 @@
 use std::collections::{HashMap, HashSet};
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use garyx_models::local_paths::home_dir;
 use garyx_models::provider::{
     GeminiCliConfig, PromptAttachment, ProviderMessage, ProviderMessageRole, ProviderRunOptions,
-    ProviderRunResult, ProviderType, StreamEvent, attachments_from_metadata,
-    build_prompt_message_with_attachments,
+    ProviderRunResult, ProviderType, SDK_SESSION_FORK_METADATA_KEY, StreamEvent,
+    attachments_from_metadata, build_prompt_message_with_attachments,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader, Lines};
@@ -98,6 +101,150 @@ fn normalize_non_empty(value: Option<&str>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn metadata_bool(metadata: &HashMap<String, Value>, key: &str) -> bool {
+    metadata.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+fn gemini_tmp_dir() -> Option<PathBuf> {
+    home_dir()
+        .map(|home| home.join(".gemini").join("tmp"))
+        .filter(|path| path.is_dir())
+}
+
+fn gemini_session_id_from_jsonl(contents: &str) -> Option<String> {
+    contents.lines().find_map(|line| {
+        serde_json::from_str::<Value>(line).ok().and_then(|value| {
+            value
+                .get("sessionId")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|session_id| !session_id.is_empty())
+                .map(ToOwned::to_owned)
+        })
+    })
+}
+
+fn read_gemini_session_id_from_file(path: &Path) -> Option<String> {
+    let contents = std::fs::read_to_string(path).ok()?;
+    gemini_session_id_from_jsonl(&contents)
+}
+
+fn find_gemini_session_file(session_id: &str) -> Option<PathBuf> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return None;
+    }
+    let tmp_dir = gemini_tmp_dir()?;
+    for project_entry in std::fs::read_dir(tmp_dir).ok()?.flatten() {
+        let chats_dir = project_entry.path().join("chats");
+        if !chats_dir.is_dir() {
+            continue;
+        }
+        for chat_entry in std::fs::read_dir(chats_dir).ok()?.flatten() {
+            let path = chat_entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
+                continue;
+            }
+            if read_gemini_session_id_from_file(&path).as_deref() == Some(session_id) {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+fn rewrite_gemini_session_lines_for_fork(
+    contents: &str,
+    new_session_id: &str,
+) -> Result<String, BridgeError> {
+    let new_session_id = new_session_id.trim();
+    if new_session_id.is_empty() {
+        return Err(BridgeError::Internal(
+            "gemini fork session id cannot be empty".to_owned(),
+        ));
+    }
+
+    let mut rewritten = String::new();
+    let mut saw_session_id = false;
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            rewritten.push_str(line);
+            rewritten.push('\n');
+            continue;
+        }
+
+        let mut value = serde_json::from_str::<Value>(trimmed).map_err(|error| {
+            BridgeError::SessionError(format!(
+                "gemini session file contains invalid JSONL: {error}"
+            ))
+        })?;
+        if let Some(object) = value.as_object_mut()
+            && object.contains_key("sessionId")
+        {
+            object.insert(
+                "sessionId".to_owned(),
+                Value::String(new_session_id.to_owned()),
+            );
+            saw_session_id = true;
+        }
+        let serialized = serde_json::to_string(&value).map_err(|error| {
+            BridgeError::Internal(format!("serialize forked gemini session failed: {error}"))
+        })?;
+        rewritten.push_str(&serialized);
+        rewritten.push('\n');
+    }
+
+    if !saw_session_id {
+        return Err(BridgeError::SessionError(
+            "gemini session file has no sessionId to fork".to_owned(),
+        ));
+    }
+    Ok(rewritten)
+}
+
+fn fork_gemini_session_file(source: &Path) -> Result<String, BridgeError> {
+    let source_contents = std::fs::read_to_string(&source).map_err(|error| {
+        BridgeError::SessionError(format!("read Gemini session file failed: {error}"))
+    })?;
+    let new_session_id = Uuid::new_v4().to_string();
+    let rewritten = rewrite_gemini_session_lines_for_fork(&source_contents, &new_session_id)?;
+    let short_id = new_session_id.chars().take(8).collect::<String>();
+    let destination = source
+        .parent()
+        .ok_or_else(|| {
+            BridgeError::SessionError("Gemini session file has no parent dir".to_owned())
+        })?
+        .join(format!("session-fork-{short_id}.jsonl"));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&destination)
+        .map_err(|error| {
+            BridgeError::SessionError(format!("create forked Gemini session file failed: {error}"))
+        })?;
+    file.write_all(rewritten.as_bytes()).map_err(|error| {
+        BridgeError::SessionError(format!("write forked Gemini session file failed: {error}"))
+    })?;
+    Ok(new_session_id)
+}
+
+fn fork_gemini_local_session(parent_session_id: &str) -> Result<String, BridgeError> {
+    let parent_session_id = parent_session_id.trim();
+    if parent_session_id.is_empty() {
+        return Err(BridgeError::SessionError(
+            "gemini fork requested without parent session id".to_owned(),
+        ));
+    }
+
+    let source = find_gemini_session_file(parent_session_id).ok_or_else(|| {
+        BridgeError::SessionError(format!(
+            "No local Gemini session file was found for fork source '{parent_session_id}'."
+        ))
+    })?;
+    fork_gemini_session_file(&source)
 }
 
 fn approval_mode(config: &GeminiCliConfig, metadata: &HashMap<String, Value>) -> String {
@@ -973,7 +1120,18 @@ impl GeminiCliProvider {
 
         let mcp_servers =
             build_mcp_servers(&self.config, &options.thread_id, run_id, &options.metadata);
-        let session_request = if let Some(session_id) = session_id {
+        let requested_session_id =
+            if metadata_bool(&options.metadata, SDK_SESSION_FORK_METADATA_KEY) {
+                let parent_session_id = session_id.ok_or_else(|| {
+                    BridgeError::SessionError(
+                        "gemini fork requested without parent session id".to_owned(),
+                    )
+                })?;
+                Some(fork_gemini_local_session(parent_session_id)?)
+            } else {
+                session_id.map(ToOwned::to_owned)
+            };
+        let session_request = if let Some(session_id) = requested_session_id.as_deref() {
             (
                 "session/load",
                 json!({
@@ -1015,7 +1173,8 @@ impl GeminiCliProvider {
             )));
         }
 
-        let resolved_session_id = resolve_session_id_from_response(&session_response, session_id)?;
+        let resolved_session_id =
+            resolve_session_id_from_response(&session_response, requested_session_id.as_deref())?;
         self.session_map
             .lock()
             .await
@@ -1081,7 +1240,8 @@ impl GeminiCliProvider {
             }
         }
 
-        let prompt_blocks = build_prompt_blocks(options, Some(cwd.as_path()), session_id.is_none());
+        let prompt_blocks =
+            build_prompt_blocks(options, Some(cwd.as_path()), requested_session_id.is_none());
         send_json_request(
             &mut stdin,
             next_request_id,
@@ -1305,6 +1465,7 @@ impl AgentLoopProvider for GeminiCliProvider {
         }
 
         let run_id = resolve_run_id(&options.metadata);
+        let fork_session = metadata_bool(&options.metadata, SDK_SESSION_FORK_METADATA_KEY);
         let session_id = {
             let map = self.session_map.lock().await;
             map.get(&options.thread_id).cloned()
@@ -1323,7 +1484,11 @@ impl AgentLoopProvider for GeminiCliProvider {
             .await;
         let mut result = match first_attempt {
             Ok(result) => result,
-            Err(error) if session_id.is_some() && is_invalid_session_error(&error.to_string()) => {
+            Err(error)
+                if !fork_session
+                    && session_id.is_some()
+                    && is_invalid_session_error(&error.to_string()) =>
+            {
                 self.session_map.lock().await.remove(&options.thread_id);
                 self.run_once(options, &run_id, None, &on_chunk).await?
             }
@@ -1332,6 +1497,7 @@ impl AgentLoopProvider for GeminiCliProvider {
 
         if !result.success
             && let Some(error) = result.error.as_deref()
+            && !fork_session
             && session_id.is_some()
             && is_invalid_session_error(error)
         {

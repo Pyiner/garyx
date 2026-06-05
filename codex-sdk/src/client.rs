@@ -8,9 +8,9 @@ use serde_json::Value;
 use crate::error::CodexError;
 use crate::transport::CodexTransport;
 use crate::types::{
-    Capabilities, ClientInfo, InitializeParams, InputItem, JsonRpcNotification, ThreadResumeParams,
-    ThreadStartParams, TurnInterruptParams, TurnStartParams, TurnSteerParams, extract_thread_id,
-    extract_turn_id,
+    Capabilities, ClientInfo, InitializeParams, InputItem, JsonRpcNotification, ThreadForkParams,
+    ThreadResumeParams, ThreadStartParams, TurnInterruptParams, TurnStartParams, TurnSteerParams,
+    extract_thread_id, extract_turn_id,
 };
 
 // ---------------------------------------------------------------------------
@@ -150,6 +150,22 @@ impl CodexClient {
             .await?;
 
         Ok(extract_thread_id(&result).unwrap_or(params.thread_id.clone()))
+    }
+
+    /// Fork an existing thread and return the new child thread ID.
+    pub async fn fork_thread(&self, params: ThreadForkParams) -> Result<String, CodexError> {
+        self.require_initialized()?;
+
+        let value = serde_json::to_value(&params)
+            .map_err(|e| CodexError::Fatal(format!("serialize error: {e}")))?;
+
+        let result = self
+            .transport
+            .send_request_with_retry("thread/fork", Some(value), self.config.max_overload_retries)
+            .await?;
+
+        extract_thread_id(&result)
+            .ok_or_else(|| CodexError::Fatal("thread/fork did not return thread id".to_owned()))
     }
 
     /// Start a turn on a thread with the given input items. Returns the turn ID.

@@ -14,13 +14,14 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use codex_sdk::types::{coerce_f64, coerce_i64};
 use codex_sdk::{
-    CodexClient, CodexClientConfig, CodexError, InputItem, JsonRpcNotification, ThreadResumeParams,
-    ThreadStartParams,
+    CodexClient, CodexClientConfig, CodexError, InputItem, JsonRpcNotification, ThreadForkParams,
+    ThreadResumeParams, ThreadStartParams,
 };
 use garyx_models::provider::{
     CodexAppServerConfig, ImagePayload, PromptAttachment, ProviderMessage, ProviderMessageRole,
-    ProviderRunOptions, ProviderRunResult, ProviderType, QueuedUserInput, StreamBoundaryKind,
-    StreamEvent, attachments_from_metadata, build_prompt_message_with_attachments,
+    ProviderRunOptions, ProviderRunResult, ProviderType, QueuedUserInput,
+    SDK_SESSION_FORK_METADATA_KEY, SDK_SESSION_ID_METADATA_KEY, StreamBoundaryKind, StreamEvent,
+    attachments_from_metadata, build_prompt_message_with_attachments,
 };
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -178,6 +179,10 @@ fn normalize_non_empty(value: Option<&str>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
+}
+
+fn metadata_bool(metadata: &HashMap<String, Value>, key: &str) -> bool {
+    metadata.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
 fn default_codex_config_path() -> Option<PathBuf> {
@@ -779,19 +784,46 @@ fn resolve_existing_thread_id(
         .or_else(|| sdk_session_id.map(ToOwned::to_owned))
 }
 
-async fn resume_or_start_thread<Resume, ResumeFut, Start, StartFut>(
+fn thread_fork_params_from_start(
+    parent_thread_id: String,
+    thread_params: &ThreadStartParams,
+) -> ThreadForkParams {
+    ThreadForkParams {
+        thread_id: parent_thread_id,
+        cwd: thread_params.cwd.clone(),
+        config: thread_params.config.clone(),
+        model: thread_params.model.clone(),
+        model_reasoning_effort: thread_params.model_reasoning_effort.clone(),
+        approval_policy: thread_params.approval_policy.clone(),
+        sandbox: thread_params.sandbox.clone(),
+    }
+}
+
+async fn resume_or_start_thread<Resume, ResumeFut, Fork, ForkFut, Start, StartFut>(
     existing_thread_id: Option<String>,
+    fork_session: bool,
     thread_params: ThreadStartParams,
     mut resume: Resume,
+    mut fork: Fork,
     mut start: Start,
 ) -> Result<String, BridgeError>
 where
     Resume: FnMut(ThreadResumeParams) -> ResumeFut,
     ResumeFut: Future<Output = Result<String, CodexError>>,
+    Fork: FnMut(ThreadForkParams) -> ForkFut,
+    ForkFut: Future<Output = Result<String, CodexError>>,
     Start: FnMut(ThreadStartParams) -> StartFut,
     StartFut: Future<Output = Result<String, CodexError>>,
 {
     if let Some(existing_thread_id) = existing_thread_id {
+        if fork_session {
+            let fork_params =
+                thread_fork_params_from_start(existing_thread_id.clone(), &thread_params);
+            return fork(fork_params)
+                .await
+                .map_err(|e| map_codex_error("thread/fork failed", e));
+        }
+
         let resume_params = ThreadResumeParams {
             thread_id: existing_thread_id.clone(),
             cwd: thread_params.cwd.clone(),
@@ -812,6 +844,12 @@ where
                 );
             }
         }
+    }
+
+    if fork_session {
+        return Err(BridgeError::SessionError(
+            "codex fork requested without parent thread id".to_owned(),
+        ));
     }
 
     start(thread_params)
@@ -1372,15 +1410,16 @@ impl CodexAgentProvider {
         // Resolve or create thread
         let sdk_session_id = options
             .metadata
-            .get("sdk_session_id")
+            .get(SDK_SESSION_ID_METADATA_KEY)
             .and_then(|v| v.as_str())
             .map(|s| s.to_owned());
+        let fork_session = metadata_bool(&options.metadata, SDK_SESSION_FORK_METADATA_KEY);
 
         let existing_thread_id = {
             let session_map = self.session_map.lock().await;
             resolve_existing_thread_id(&session_map, &options.thread_id, sdk_session_id.as_deref())
         };
-        let include_memory = existing_thread_id.is_none();
+        let include_memory = existing_thread_id.is_none() && !fork_session;
         let thread_params = build_thread_start_params(
             &self.config,
             options.workspace_dir.as_deref(),
@@ -1390,8 +1429,10 @@ impl CodexAgentProvider {
         );
         let thread_id = resume_or_start_thread(
             existing_thread_id,
+            fork_session,
             thread_params,
             |params| client.resume_thread(params),
+            |params| client.fork_thread(params),
             |params| client.start_thread(params),
         )
         .await?;

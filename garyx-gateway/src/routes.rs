@@ -9,7 +9,10 @@ use garyx_channels::plugin::{PluginAccountUi, PluginConversationEndpoint, Plugin
 use garyx_models::config::ChannelsConfig;
 #[cfg(test)]
 use garyx_models::config::TelegramAccount;
-use garyx_models::provider::ProviderType;
+use garyx_models::provider::{
+    FORK_FROM_PROVIDER_TYPE_METADATA_KEY, FORK_FROM_SDK_SESSION_ID_METADATA_KEY,
+    FORK_FROM_THREAD_ID_METADATA_KEY, ProviderType, SDK_SESSION_FORK_METADATA_KEY,
+};
 use garyx_models::routing::{DELIVERY_TARGET_TYPE_CHAT_ID, DELIVERY_TARGET_TYPE_OPEN_ID};
 use garyx_router::{
     ChannelBinding, KnownChannelEndpoint, ThreadEnsureOptions, WorkspaceMode,
@@ -697,6 +700,67 @@ fn is_resume_provider(value: &ProviderType) -> bool {
     )
 }
 
+fn provider_type_from_thread_value(thread_data: &Value) -> Option<ProviderType> {
+    thread_data
+        .get("provider_type")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<ProviderType>(value).ok())
+}
+
+fn provider_type_from_active_run_snapshot(thread_data: &Value) -> Option<ProviderType> {
+    thread_data
+        .get("history")
+        .and_then(|history| history.get("active_run_snapshot"))
+        .and_then(|snapshot| snapshot.get("provider_type"))
+        .cloned()
+        .and_then(|value| serde_json::from_value::<ProviderType>(value).ok())
+}
+
+fn non_empty_json_string(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn fork_source_sdk_session_id(thread_data: &Value, provider_type: &ProviderType) -> Option<String> {
+    let active_snapshot = thread_data
+        .get("history")
+        .and_then(|history| history.get("active_run_snapshot"));
+    if active_snapshot
+        .and_then(|snapshot| snapshot.get("provider_type"))
+        .cloned()
+        .and_then(|value| serde_json::from_value::<ProviderType>(value).ok())
+        .as_ref()
+        .is_some_and(|active_provider_type| active_provider_type == provider_type)
+        && let Some(session_id) = non_empty_json_string(
+            active_snapshot.and_then(|snapshot| snapshot.get("sdk_session_id")),
+        )
+    {
+        return Some(session_id);
+    }
+
+    if provider_type_from_thread_value(thread_data)
+        .as_ref()
+        .is_some_and(|persisted_provider_type| persisted_provider_type == provider_type)
+        && let Some(session_id) = non_empty_json_string(thread_data.get("sdk_session_id"))
+    {
+        return Some(session_id);
+    }
+
+    let provider_scoped_session_ids = thread_data
+        .get("provider_sdk_session_ids")
+        .and_then(Value::as_object)?;
+    if provider_scoped_session_ids.len() == 1 {
+        return provider_scoped_session_ids
+            .values()
+            .next()
+            .and_then(|value| non_empty_json_string(Some(value)));
+    }
+    None
+}
+
 const IMPORTED_SESSION_SNAPSHOT_LIMIT: usize = 100;
 
 async fn seed_imported_thread_history(
@@ -826,6 +890,9 @@ pub struct CreateThreadBody {
     /// Optional provider hint for sdkSessionId. Supported values: claude, codex, gemini.
     #[serde(default)]
     pub sdk_session_provider_hint: Option<String>,
+    /// Optional Garyx thread id to fork from using the provider-native session fork.
+    #[serde(default)]
+    pub fork_from_thread_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1550,11 +1617,32 @@ pub async fn create_thread(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
+    let requested_fork_thread_key = body
+        .fork_from_thread_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if requested_session_id.is_some() && requested_fork_thread_key.is_some() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "sdkSessionId resume cannot be combined with forkFromThreadId"
+            })),
+        );
+    }
     if requested_session_id.is_some() && body.workspace_mode.is_worktree() {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({
                 "error": "workspaceMode=worktree cannot be combined with sdkSessionId resume"
+            })),
+        );
+    }
+    if requested_fork_thread_key.is_some() && body.workspace_mode.is_worktree() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "workspaceMode=worktree cannot be combined with forkFromThreadId"
             })),
         );
     }
@@ -1592,22 +1680,116 @@ pub async fn create_thread(
         None => None,
     };
 
+    let fork_source = match requested_fork_thread_key {
+        Some(source_key) => {
+            let Some(source_thread_id) = ensure_existing_thread_id(&state, source_key).await else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": "fork source thread not found"})),
+                );
+            };
+            let Some(source_thread_data) = state.threads.thread_store.get(&source_thread_id).await
+            else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": "fork source thread not found"})),
+                );
+            };
+            let Some(provider_type) = provider_type_from_active_run_snapshot(&source_thread_data)
+                .or_else(|| provider_type_from_thread_value(&source_thread_data))
+            else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": "fork source thread has no provider type"})),
+                );
+            };
+            if !is_resume_provider(&provider_type) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "error": "forkFromThreadId is only supported for Claude, Codex, or Gemini provider sessions"
+                    })),
+                );
+            }
+            let Some(sdk_session_id) =
+                fork_source_sdk_session_id(&source_thread_data, &provider_type)
+            else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "error": "fork source thread has no provider session id yet"
+                    })),
+                );
+            };
+            Some((
+                source_thread_id,
+                source_thread_data,
+                provider_type,
+                sdk_session_id,
+            ))
+        }
+        None => None,
+    };
+
+    let mut metadata = body.metadata.clone();
+    if let Some((source_thread_id, _source_thread_data, provider_type, sdk_session_id)) =
+        fork_source.as_ref()
+    {
+        metadata.insert(
+            FORK_FROM_THREAD_ID_METADATA_KEY.to_owned(),
+            Value::String(source_thread_id.clone()),
+        );
+        metadata.insert(
+            FORK_FROM_SDK_SESSION_ID_METADATA_KEY.to_owned(),
+            Value::String(sdk_session_id.clone()),
+        );
+        metadata.insert(
+            FORK_FROM_PROVIDER_TYPE_METADATA_KEY.to_owned(),
+            serde_json::to_value(provider_type).unwrap_or(Value::Null),
+        );
+        metadata.insert(SDK_SESSION_FORK_METADATA_KEY.to_owned(), Value::Bool(true));
+    }
+
     let options = ThreadEnsureOptions {
         label: body.label.clone(),
         workspace_dir: recovered_session
             .as_ref()
             .map(|recovered| recovered.binding.workspace_dir.clone())
+            .or_else(|| {
+                fork_source
+                    .as_ref()
+                    .and_then(|(_, source_thread_data, _, _)| {
+                        workspace_dir_from_value(source_thread_data)
+                    })
+            })
             .or_else(|| body.workspace_dir.clone()),
         workspace_mode: body.workspace_mode,
         worktree_base_dir: Some(worktree_base_dir_for_config(&state.config_snapshot())),
         agent_id: recovered_session
             .as_ref()
             .map(|recovered| recovered.binding.agent_id.clone())
+            .or_else(|| {
+                fork_source
+                    .as_ref()
+                    .and_then(|(_, source_thread_data, _, _)| {
+                        source_thread_data
+                            .get("agent_id")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(ToOwned::to_owned)
+                    })
+            })
             .or_else(|| body.agent_id.clone()),
-        metadata: body.metadata.clone(),
+        metadata,
         provider_type: recovered_session
             .as_ref()
-            .map(|recovered| recovered.binding.provider_type.clone()),
+            .map(|recovered| recovered.binding.provider_type.clone())
+            .or_else(|| {
+                fork_source
+                    .as_ref()
+                    .map(|(_, _, provider_type, _)| provider_type.clone())
+            }),
         sdk_session_id: body.sdk_session_id.clone(),
         thread_kind: None,
         origin_channel: None,
