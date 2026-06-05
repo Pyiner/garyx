@@ -507,7 +507,7 @@ export function NewThreadEmptyState({
               onClick={() => void submitResume()}
               type="button"
             >
-              {resumeLoading ? t("Searching…") : t("Resume")}
+              {resumeLoading ? t("Resuming…") : t("Resume")}
             </Button>
           </DialogFooter>
         </DialogContent>

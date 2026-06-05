@@ -174,7 +174,7 @@ const zhCN: Record<string, string> = {
   'Resume existing session': '恢复已有 session',
   'Resume failed.': '恢复失败。',
   'Resume session': '恢复会话',
-  'Searching…': '正在搜索…',
+  'Resuming…': '正在恢复…',
   'Select a thread': '选择线程',
   'Select a workspace': '选择工作区',
   'Workspace mode': '工作区模式',
