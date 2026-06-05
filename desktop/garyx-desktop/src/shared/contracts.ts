@@ -1746,12 +1746,21 @@ export interface BrowserBoundsInput {
   visible: boolean;
 }
 
+export interface CaptureBrowserTabInput {
+  tabId: string;
+  copyToClipboard?: boolean;
+}
+
 export interface CaptureBrowserTabResult {
   dataUrl: string;
   height: number;
   mediaType: "image/png";
   title: string;
   width: number;
+}
+
+export interface CopyImageToClipboardInput {
+  dataUrl: string;
 }
 
 export interface ShowBrowserConnectionMenuInput {
@@ -1785,6 +1794,8 @@ export interface DesktopTerminalState {
 export interface CreateTerminalSessionInput {
   cwd?: string | null;
   title?: string | null;
+  cols?: number | null;
+  rows?: number | null;
 }
 
 export interface TerminalSessionInput {
@@ -1793,6 +1804,11 @@ export interface TerminalSessionInput {
 
 export interface TerminalWriteInput extends TerminalSessionInput {
   data: string;
+}
+
+export interface TerminalResizeInput extends TerminalSessionInput {
+  cols: number;
+  rows: number;
 }
 
 export type DesktopTerminalEvent =
@@ -2065,7 +2081,10 @@ export interface GaryxDesktopApi {
   browserGoForward: (tabId: string) => Promise<DesktopBrowserState>;
   browserReload: (tabId: string) => Promise<DesktopBrowserState>;
   browserOpenExternal: (tabId: string) => Promise<void>;
-  captureBrowserTab: (tabId: string) => Promise<CaptureBrowserTabResult>;
+  captureBrowserTab: (
+    input: string | CaptureBrowserTabInput,
+  ) => Promise<CaptureBrowserTabResult>;
+  copyImageToClipboard: (input: CopyImageToClipboardInput) => Promise<void>;
   updateBrowserBounds: (input: BrowserBoundsInput) => Promise<void>;
   setBrowserOverlayPaused: (paused: boolean) => Promise<void>;
   showBrowserConnectionMenu: (
@@ -2084,6 +2103,7 @@ export interface GaryxDesktopApi {
     input: TerminalSessionInput,
   ) => Promise<DesktopTerminalState>;
   writeTerminalInput: (input: TerminalWriteInput) => Promise<void>;
+  resizeTerminalSession: (input: TerminalResizeInput) => Promise<void>;
   subscribeTerminalEvents: (listener: DesktopTerminalEventListener) => void;
   unsubscribeTerminalEvents: (listener: DesktopTerminalEventListener) => void;
   getAppVersion: () => Promise<string>;

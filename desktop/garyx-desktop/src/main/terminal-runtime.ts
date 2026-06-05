@@ -1,32 +1,27 @@
 import { randomUUID } from "node:crypto";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { basename } from "node:path";
 import { homedir } from "node:os";
+import * as pty from "node-pty";
 
 import type {
   CreateTerminalSessionInput,
   DesktopTerminalEvent,
   DesktopTerminalSession,
   DesktopTerminalState,
+  TerminalResizeInput,
   TerminalSessionInput,
   TerminalWriteInput,
 } from "@shared/contracts";
 import type { IpcMainEvent, IpcMainInvokeEvent, WebContents } from "electron";
 
 const MAX_TERMINAL_OUTPUT_LENGTH = 160_000;
+const DEFAULT_TERMINAL_COLS = 100;
+const DEFAULT_TERMINAL_ROWS = 30;
 
 type TerminalRecord = DesktopTerminalSession & {
-  process: ChildProcessWithoutNullStreams;
+  process: pty.IPty;
 };
-
-const ansiPattern =
-  // eslint-disable-next-line no-control-regex
-  /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1B\\))/g;
-
-function stripAnsi(value: string): string {
-  return value.replace(ansiPattern, "");
-}
 
 function normalizeCwd(value?: string | null): string {
   const candidate = value?.trim();
@@ -89,7 +84,10 @@ class TerminalRuntime {
     const cwd = normalizeCwd(input?.cwd);
     const now = new Date().toISOString();
     const shell = process.env.SHELL || "/bin/zsh";
-    const child = spawn(shell, ["-il"], {
+    const cols = Math.max(20, Math.round(input?.cols || DEFAULT_TERMINAL_COLS));
+    const rows = Math.max(5, Math.round(input?.rows || DEFAULT_TERMINAL_ROWS));
+    const terminal = pty.spawn(shell, ["-il"], {
+      cols,
       cwd,
       env: {
         ...process.env,
@@ -97,9 +95,9 @@ class TerminalRuntime {
         FORCE_COLOR: process.env.FORCE_COLOR || "1",
         TERM: process.env.TERM || "xterm-256color",
       },
-      stdio: "pipe",
+      name: process.env.TERM || "xterm-256color",
+      rows,
     });
-    child.stdin.setDefaultEncoding("utf8");
 
     const record: TerminalRecord = {
       id: `terminal-${randomUUID()}`,
@@ -111,30 +109,26 @@ class TerminalRuntime {
       updatedAt: now,
       exitCode: null,
       exitSignal: null,
-      process: child,
+      process: terminal,
     };
     this.sessions.set(record.id, record);
     this.activeSessionId = record.id;
 
-    const handleData = (data: Buffer) => {
-      const chunk = stripAnsi(data.toString("utf8"));
+    terminal.onData((chunk) => {
       appendOutput(record, chunk);
       this.emit({
         type: "output",
         sessionId: record.id,
         data: chunk,
       });
-    };
-
-    child.stdout.on("data", handleData);
-    child.stderr.on("data", handleData);
-    child.on("exit", (code, signal) => {
+    });
+    terminal.onExit(({ exitCode, signal }) => {
       record.running = false;
-      record.exitCode = code;
-      record.exitSignal = signal;
+      record.exitCode = exitCode;
+      record.exitSignal = signal == null ? null : String(signal);
       appendOutput(
         record,
-        `\n[process exited${code == null ? "" : ` with code ${code}`}${
+        `\r\n[process exited${exitCode == null ? "" : ` with code ${exitCode}`}${
           signal ? ` (${signal})` : ""
         }]\n`,
       );
@@ -176,7 +170,17 @@ class TerminalRuntime {
     if (!record.running) {
       throw new Error("terminal session is not running");
     }
-    record.process.stdin.write(input.data);
+    record.process.write(input.data);
+  }
+
+  resize(input: TerminalResizeInput): void {
+    const record = this.sessions.get(input.sessionId);
+    if (!record || !record.running) {
+      return;
+    }
+    const cols = Math.max(20, Math.round(input.cols));
+    const rows = Math.max(5, Math.round(input.rows));
+    record.process.resize(cols, rows);
   }
 
   private snapshot(): DesktopTerminalState {
@@ -247,4 +251,11 @@ export function writeTerminalInput(
   input: TerminalWriteInput,
 ): void {
   terminalRuntime.write(input);
+}
+
+export function resizeTerminalSession(
+  _event: IpcMainInvokeEvent,
+  input: TerminalResizeInput,
+): void {
+  terminalRuntime.resize(input);
 }

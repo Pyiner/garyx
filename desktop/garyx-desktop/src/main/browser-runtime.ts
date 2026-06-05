@@ -4,6 +4,7 @@ import {
   WebContentsView,
   app,
   clipboard,
+  nativeImage,
   shell,
   type BrowserWindow,
   type IpcMainEvent,
@@ -14,7 +15,9 @@ import {
 
 import type {
   BrowserBoundsInput,
+  CaptureBrowserTabInput,
   CaptureBrowserTabResult,
+  CopyImageToClipboardInput,
   CreateBrowserTabInput,
   DesktopBrowserDebugEndpoint,
   DesktopBrowserState,
@@ -217,10 +220,13 @@ class BrowserRuntime {
     }
   }
 
-  async captureTab(tabId: string): Promise<CaptureBrowserTabResult> {
+  async captureTab(input: CaptureBrowserTabInput): Promise<CaptureBrowserTabResult> {
+    const tabId = input.tabId;
     const record = this.requireTab(tabId);
     const image = await record.view.webContents.capturePage();
-    clipboard.writeImage(image);
+    if (input.copyToClipboard !== false) {
+      clipboard.writeImage(image);
+    }
     const size = image.getSize();
     return {
       dataUrl: image.toDataURL(),
@@ -449,9 +455,27 @@ export async function browserOpenExternal(_event: IpcMainInvokeEvent, tabId: str
 
 export async function captureBrowserTab(
   _event: IpcMainInvokeEvent,
-  tabId: string,
+  input: string | CaptureBrowserTabInput,
 ): Promise<CaptureBrowserTabResult> {
-  return browserRuntime.captureTab(tabId);
+  const captureInput =
+    typeof input === 'string'
+      ? { tabId: input, copyToClipboard: true }
+      : {
+          ...input,
+          copyToClipboard: input.copyToClipboard !== false,
+        };
+  return browserRuntime.captureTab(captureInput);
+}
+
+export function copyImageToClipboard(
+  _event: IpcMainInvokeEvent,
+  input: CopyImageToClipboardInput,
+): void {
+  const image = nativeImage.createFromDataURL(input.dataUrl);
+  if (image.isEmpty()) {
+    throw new Error('Image is empty.');
+  }
+  clipboard.writeImage(image);
 }
 
 export function updateBrowserBounds(_event: IpcMainInvokeEvent, input: BrowserBoundsInput): void {

@@ -163,7 +163,25 @@ export async function pushWorkspaceBranch(
     throw new Error("Workspace is not a Git repository.");
   }
 
-  const push = await runGit(before.repoRoot, ["push"]);
+  let hasUpstream = false;
+  if (before.currentBranch) {
+    try {
+      const upstream = await runGit(before.repoRoot, [
+        "rev-parse",
+        "--abbrev-ref",
+        "--symbolic-full-name",
+        "@{u}",
+      ]);
+      hasUpstream = Boolean(upstream.stdout.trim());
+    } catch {
+      hasUpstream = false;
+    }
+  }
+
+  const push = await runGit(
+    before.repoRoot,
+    hasUpstream || !before.currentBranch ? ["push"] : ["push", "-u", "origin", "HEAD"],
+  );
   const status = await getWorkspaceGitDetailsForPath(input.workspacePath);
   return {
     output: `${push.stdout}${push.stderr}`.trim(),

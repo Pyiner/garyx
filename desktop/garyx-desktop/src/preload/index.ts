@@ -347,6 +347,8 @@ const api: GaryxDesktopApi = {
     ipcRenderer.invoke("garyx:browser-open-external", tabId),
   captureBrowserTab: (tabId) =>
     ipcRenderer.invoke("garyx:capture-browser-tab", tabId),
+  copyImageToClipboard: (input) =>
+    ipcRenderer.invoke("garyx:copy-image-to-clipboard", input),
   updateBrowserBounds: (input) =>
     ipcRenderer.invoke("garyx:update-browser-bounds", input),
   setBrowserOverlayPaused: (paused) =>
@@ -381,6 +383,8 @@ const api: GaryxDesktopApi = {
     ipcRenderer.invoke("garyx:close-terminal-session", input),
   writeTerminalInput: (input) =>
     ipcRenderer.invoke("garyx:write-terminal-input", input),
+  resizeTerminalSession: (input) =>
+    ipcRenderer.invoke("garyx:resize-terminal-session", input),
   subscribeTerminalEvents: (listener) => {
     const wrapped = (_event: Electron.IpcRendererEvent, payload: unknown) => {
       listener(payload as Parameters<typeof listener>[0]);

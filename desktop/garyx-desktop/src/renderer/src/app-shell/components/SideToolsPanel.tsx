@@ -16,16 +16,16 @@ import {
   GitBranch,
   Globe,
   MessageSquare,
-  Mic,
-  MoreHorizontal,
   Paperclip,
   Plus,
   RefreshCw,
   Send,
-  Terminal,
+  Terminal as TerminalIcon,
   X,
-  Zap,
 } from "lucide-react";
+import { FitAddon } from "@xterm/addon-fit";
+import { Terminal as XTermTerminal } from "@xterm/xterm";
+import "@xterm/xterm/css/xterm.css";
 
 import type {
   DesktopWorkspaceGitDetails,
@@ -148,6 +148,15 @@ function activeTerminalSession(state: DesktopTerminalState | null) {
     return null;
   }
   return state.sessions.find((session) => session.id === state.activeSessionId) || null;
+}
+
+const MAX_RENDERER_TERMINAL_OUTPUT_LENGTH = 160_000;
+
+function appendTerminalOutput(output: string, data: string): string {
+  const nextOutput = `${output}${data}`;
+  return nextOutput.length > MAX_RENDERER_TERMINAL_OUTPUT_LENGTH
+    ? nextOutput.slice(nextOutput.length - MAX_RENDERER_TERMINAL_OUTPUT_LENGTH)
+    : nextOutput;
 }
 
 function SideChatTool({
@@ -304,13 +313,6 @@ function SideChatTool({
           >
             <Paperclip aria-hidden />
           </button>
-          <button className="side-tool-chat-model" type="button">
-            <Zap aria-hidden size={13} strokeWidth={1.8} />
-            <span>5.5</span>
-          </button>
-          <button className="codex-icon-button" title={t("Dictate")} type="button">
-            <Mic aria-hidden />
-          </button>
           <button
             className="codex-icon-button side-tool-chat-send"
             disabled={!draft.trim() || sending}
@@ -328,10 +330,99 @@ function SideChatTool({
 function SideTerminalTool({ cwd }: { cwd?: string | null }) {
   const { t } = useI18n();
   const [state, setState] = useState<DesktopTerminalState | null>(null);
-  const [input, setInput] = useState("");
   const [creating, setCreating] = useState(false);
-  const outputRef = useRef<HTMLPreElement | null>(null);
+  const [terminalReady, setTerminalReady] = useState(false);
+  const terminalHostRef = useRef<HTMLDivElement | null>(null);
+  const terminalRef = useRef<XTermTerminal | null>(null);
+  const fitAddonRef = useRef<FitAddon | null>(null);
+  const renderedSessionIdRef = useRef<string | null>(null);
+  const renderedOutputRef = useRef("");
+  const activeSessionRef = useRef<ReturnType<typeof activeTerminalSession>>(null);
   const session = activeTerminalSession(state);
+
+  useEffect(() => {
+    activeSessionRef.current = session;
+  }, [session]);
+
+  useEffect(() => {
+    const node = terminalHostRef.current;
+    if (!node) {
+      return;
+    }
+    const terminal = new XTermTerminal({
+      allowProposedApi: false,
+      convertEol: true,
+      cursorBlink: true,
+      fontFamily: '"SFMono-Regular", "Cascadia Code", Menlo, Monaco, Consolas, monospace',
+      fontSize: 12,
+      lineHeight: 1.22,
+      scrollback: 3_000,
+      theme: {
+        background: "#111214",
+        foreground: "#e7e7e7",
+        cursor: "#f5f5f5",
+        selectionBackground: "#4b5563",
+      },
+    });
+    const fitAddon = new FitAddon();
+    terminal.loadAddon(fitAddon);
+    terminal.open(node);
+    terminalRef.current = terminal;
+    fitAddonRef.current = fitAddon;
+
+    const resizeToHost = () => {
+      try {
+        fitAddon.fit();
+        const active = activeSessionRef.current;
+        if (active?.running) {
+          void window.garyxDesktop.resizeTerminalSession({
+            sessionId: active.id,
+            cols: terminal.cols,
+            rows: terminal.rows,
+          });
+        }
+      } catch {
+        // The terminal can briefly report a zero-sized host while tabs switch.
+      }
+    };
+
+    const dataDisposable = terminal.onData((data) => {
+      const active = activeSessionRef.current;
+      if (!active?.running) {
+        return;
+      }
+      void window.garyxDesktop.writeTerminalInput({
+        sessionId: active.id,
+        data,
+      });
+    });
+    const resizeDisposable = terminal.onResize(({ cols, rows }) => {
+      const active = activeSessionRef.current;
+      if (active?.running) {
+        void window.garyxDesktop.resizeTerminalSession({
+          sessionId: active.id,
+          cols,
+          rows,
+        });
+      }
+    });
+    const observer = new ResizeObserver(resizeToHost);
+    observer.observe(node);
+    requestAnimationFrame(resizeToHost);
+    setTerminalReady(true);
+
+    return () => {
+      setTerminalReady(false);
+      observer.disconnect();
+      dataDisposable.dispose();
+      resizeDisposable.dispose();
+      terminal.dispose();
+      terminalRef.current = null;
+      fitAddonRef.current = null;
+      renderedSessionIdRef.current = null;
+      renderedOutputRef.current = "";
+    };
+  }, []);
 
   useEffect(() => {
     let disposed = false;
@@ -353,7 +444,7 @@ function SideTerminalTool({ cwd }: { cwd?: string | null }) {
             entry.id === event.sessionId
               ? {
                   ...entry,
-                  output: `${entry.output}${event.data}`,
+                  output: appendTerminalOutput(entry.output, event.data),
                   updatedAt: new Date().toISOString(),
                 }
               : entry,
@@ -373,35 +464,60 @@ function SideTerminalTool({ cwd }: { cwd?: string | null }) {
     };
   }, []);
 
-  useEffect(() => {
-    if (state === null || state.sessions.length > 0 || creating) {
+  async function createSession() {
+    if (creating) {
       return;
     }
     setCreating(true);
-    void window.garyxDesktop
-      .createTerminalSession({ cwd })
+    const terminal = terminalRef.current;
+    await window.garyxDesktop
+      .createTerminalSession({
+        cwd,
+        cols: terminal?.cols,
+        rows: terminal?.rows,
+      })
       .then(setState)
       .finally(() => setCreating(false));
-  }, [creating, cwd, state]);
+  }
 
   useEffect(() => {
-    const node = outputRef.current;
-    if (node) {
-      node.scrollTop = node.scrollHeight;
-    }
-  }, [session?.output]);
-
-  async function sendInput() {
-    const value = input;
-    if (!session || !session.running || !value.trim()) {
+    if (state === null || state.sessions.length > 0 || creating || !terminalReady) {
       return;
     }
-    setInput("");
-    await window.garyxDesktop.writeTerminalInput({
-      sessionId: session.id,
-      data: `${value}\n`,
-    });
-  }
+    void createSession();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [creating, state, terminalReady]);
+
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal || !terminalReady) {
+      return;
+    }
+    if (!session) {
+      terminal.clear();
+      renderedSessionIdRef.current = null;
+      renderedOutputRef.current = "";
+      return;
+    }
+    if (renderedSessionIdRef.current !== session.id) {
+      terminal.reset();
+      terminal.write(session.output);
+      renderedSessionIdRef.current = session.id;
+      renderedOutputRef.current = session.output;
+      return;
+    }
+    const rendered = renderedOutputRef.current;
+    if (session.output.startsWith(rendered)) {
+      const delta = session.output.slice(rendered.length);
+      if (delta) {
+        terminal.write(delta);
+      }
+    } else {
+      terminal.reset();
+      terminal.write(session.output);
+    }
+    renderedOutputRef.current = session.output;
+  }, [session?.id, session?.output, terminalReady]);
 
   return (
     <div className="side-tool-terminal">
@@ -443,7 +559,7 @@ function SideTerminalTool({ cwd }: { cwd?: string | null }) {
           <button
             className="codex-icon-button"
             onClick={() => {
-              void window.garyxDesktop.createTerminalSession({ cwd }).then(setState);
+              void createSession();
             }}
             title={t("New terminal")}
             type="button"
@@ -452,24 +568,15 @@ function SideTerminalTool({ cwd }: { cwd?: string | null }) {
           </button>
         </div>
       </div>
-      <pre className="side-tool-terminal-output" ref={outputRef}>
-        {session?.output || (creating ? t("Starting…") : "")}
-      </pre>
-      <textarea
+      <div
         aria-label={t("Terminal input")}
-        className="side-tool-terminal-input"
-        disabled={!session?.running}
-        onChange={(event) => setInput(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.shiftKey) {
-            event.preventDefault();
-            void sendInput();
-          }
-        }}
-        placeholder={session?.running ? t("Terminal input") : t("Terminal exited")}
-        rows={2}
-        value={input}
+        className="side-tool-terminal-output"
+        ref={terminalHostRef}
       />
+      {creating ? <div className="side-tool-terminal-status">{t("Starting…")}</div> : null}
+      {session && !session.running ? (
+        <div className="side-tool-terminal-status">{t("Terminal exited")}</div>
+      ) : null}
     </div>
   );
 }
@@ -493,7 +600,7 @@ export function ThreadSideToolsPanel({
       { id: "files", label: t("Files"), shortcut: "⌘P", icon: FileText },
       { id: "chat", label: t("Side Chat"), shortcut: "", icon: MessageSquare },
       { id: "browser", label: t("Browser"), shortcut: "⌘T", icon: Globe },
-      { id: "terminal", label: t("Terminal"), shortcut: "⌃`", icon: Terminal },
+      { id: "terminal", label: t("Terminal"), shortcut: "⌃`", icon: TerminalIcon },
     ],
     [t],
   );
@@ -842,9 +949,6 @@ export function ThreadSideToolsPanel({
           <div className="side-tool-files">
             <div className="side-tool-section-heading">
               <span>{t("Open file")}</span>
-              <button className="codex-icon-button" title={t("More")} type="button">
-                <MoreHorizontal aria-hidden />
-              </button>
             </div>
             <p className="side-tool-section-subtitle">
               {t("Choose from the workspace directory tree")}

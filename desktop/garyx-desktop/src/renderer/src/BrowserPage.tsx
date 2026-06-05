@@ -22,6 +22,53 @@ interface AnnotationMark {
   y: number;
 }
 
+function loadCanvasImage(dataUrl: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('Failed to load screenshot.'));
+    image.src = dataUrl;
+  });
+}
+
+async function renderAnnotatedSnapshot(
+  snapshot: CaptureBrowserTabResult,
+  marks: AnnotationMark[],
+): Promise<string> {
+  const image = await loadCanvasImage(snapshot.dataUrl);
+  const width = snapshot.width || image.naturalWidth;
+  const height = snapshot.height || image.naturalHeight;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d');
+  if (!context) {
+    throw new Error('Canvas is unavailable.');
+  }
+  context.drawImage(image, 0, 0, width, height);
+
+  const radius = Math.max(16, Math.round(Math.min(width, height) * 0.022));
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.font = `700 ${Math.max(13, Math.round(radius * 0.82))}px system-ui, sans-serif`;
+
+  marks.forEach((mark) => {
+    const x = (mark.x / 100) * width;
+    const y = (mark.y / 100) * height;
+    context.beginPath();
+    context.arc(x, y, radius, 0, Math.PI * 2);
+    context.fillStyle = '#ef4444';
+    context.fill();
+    context.lineWidth = Math.max(2, Math.round(radius * 0.14));
+    context.strokeStyle = '#ffffff';
+    context.stroke();
+    context.fillStyle = '#ffffff';
+    context.fillText(String(mark.id), x, y + 1);
+  });
+
+  return canvas.toDataURL('image/png');
+}
+
 export function BrowserPage({
   variant = 'page',
 }: {
@@ -36,6 +83,7 @@ export function BrowserPage({
   const [annotationMode, setAnnotationMode] = useState(false);
   const [annotationSnapshot, setAnnotationSnapshot] = useState<CaptureBrowserTabResult | null>(null);
   const [annotationMarks, setAnnotationMarks] = useState<AnnotationMark[]>([]);
+  const [browserStatus, setBrowserStatus] = useState<string | null>(null);
   const active = activeTab(browserState);
   const sidePanel = variant === 'side-panel';
 
@@ -132,17 +180,39 @@ export function BrowserPage({
       setAnnotationMode(false);
       setAnnotationSnapshot(null);
       setAnnotationMarks([]);
+      setBrowserStatus(null);
       await api.setBrowserOverlayPaused(false);
       return;
     }
     if (!active) {
       return;
     }
-    const snapshot = await api.captureBrowserTab(active.id);
+    const snapshot = await api.captureBrowserTab({
+      tabId: active.id,
+      copyToClipboard: false,
+    });
     setAnnotationSnapshot(snapshot);
     setAnnotationMarks([]);
     setAnnotationMode(true);
+    setBrowserStatus(t('Click the page to place annotation markers.'));
     await api.setBrowserOverlayPaused(true);
+  }
+
+  async function copyCurrentScreenshot() {
+    if (!active) {
+      return;
+    }
+    if (annotationMode && annotationSnapshot) {
+      const dataUrl = await renderAnnotatedSnapshot(annotationSnapshot, annotationMarks);
+      await api.copyImageToClipboard({ dataUrl });
+      setBrowserStatus(t('Annotated screenshot copied.'));
+      return;
+    }
+    await api.captureBrowserTab({
+      tabId: active.id,
+      copyToClipboard: true,
+    });
+    setBrowserStatus(t('Screenshot copied.'));
   }
 
   function addAnnotationMark(event: MouseEvent<HTMLButtonElement>) {
@@ -160,6 +230,7 @@ export function BrowserPage({
         y: Math.max(0, Math.min(100, y)),
       },
     ]);
+    setBrowserStatus(t('Annotation marker added.'));
   }
 
   return (
@@ -295,11 +366,9 @@ export function BrowserPage({
                 className="codex-icon-button browser-toolbar-icon"
                 disabled={!active}
                 onClick={() => {
-                  if (active) {
-                    void api.captureBrowserTab(active.id);
-                  }
+                  void copyCurrentScreenshot();
                 }}
-                title={t('Copy Screenshot')}
+                title={annotationMode ? t('Copy annotated screenshot') : t('Copy Screenshot')}
                 type="button"
               >
                 <Camera aria-hidden />
@@ -330,6 +399,10 @@ export function BrowserPage({
             </>
           ) : null}
         </div>
+      </div>
+
+      <div className={`browser-status-line ${browserStatus ? '' : 'is-empty'}`}>
+        {browserStatus}
       </div>
 
       <div className="browser-stage">

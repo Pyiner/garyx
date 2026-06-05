@@ -226,6 +226,7 @@ import {
   browserOpenExternal,
   browserReload,
   closeBrowserTab,
+  copyImageToClipboard,
   createBrowserTab,
   listBrowserState,
   navigateBrowserTab,
@@ -240,6 +241,7 @@ import {
   closeTerminalSession,
   createTerminalSession,
   listTerminalState,
+  resizeTerminalSession,
   subscribeTerminalState,
   unsubscribeTerminalState,
   writeTerminalInput,
@@ -1390,6 +1392,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle("garyx:browser-reload", browserReload);
   ipcMain.handle("garyx:browser-open-external", browserOpenExternal);
   ipcMain.handle("garyx:capture-browser-tab", captureBrowserTab);
+  ipcMain.handle("garyx:copy-image-to-clipboard", copyImageToClipboard);
   ipcMain.handle("garyx:update-browser-bounds", updateBrowserBounds);
   ipcMain.handle("garyx:set-browser-overlay-paused", setBrowserOverlayPaused);
   ipcMain.handle("garyx:show-browser-connection-menu", (_event, input: ShowBrowserConnectionMenuInput) => {
@@ -1409,6 +1412,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle("garyx:activate-terminal-session", activateTerminalSession);
   ipcMain.handle("garyx:close-terminal-session", closeTerminalSession);
   ipcMain.handle("garyx:write-terminal-input", writeTerminalInput);
+  ipcMain.handle("garyx:resize-terminal-session", resizeTerminalSession);
   ipcMain.on("garyx:terminal-event-subscribe", (event) => {
     const state = subscribeTerminalState(event);
     event.sender.send("garyx:terminal-event", {
