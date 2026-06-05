@@ -66,8 +66,13 @@ impl WorkflowRuntime {
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .unwrap_or(&definition.record.name)
-            .to_owned();
+            .map(ToOwned::to_owned)
+            .or_else(|| {
+                input
+                    .as_str()
+                    .and_then(crate::chat_application::prompt_derived_thread_label)
+            })
+            .unwrap_or_else(|| definition.record.name.clone());
         let workflow_thread_id = self
             .create_workflow_thread(
                 &name,

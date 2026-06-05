@@ -882,6 +882,7 @@ async fn start_workflow_definition_route_creates_workflow_thread() {
     let thread_id = payload["workflowRunId"].as_str().expect("workflow run id");
     assert_eq!(payload["thread"]["thread_id"], thread_id);
     assert_eq!(payload["thread"]["thread_type"], "workflow_run");
+    assert_eq!(payload["thread"]["label"], "ship the product");
     assert_eq!(payload["dispatch"]["workflowRunId"], thread_id);
 
     let workflow_thread = state
@@ -891,6 +892,7 @@ async fn start_workflow_definition_route_creates_workflow_thread() {
         .await
         .expect("workflow thread");
     assert_eq!(workflow_thread["thread_kind"], "workflow_run");
+    assert_eq!(workflow_thread["label"], "ship the product");
     assert_eq!(workflow_thread["workflow_run_id"], thread_id);
     assert_eq!(workflow_thread["workflow_definition_id"], "unit");
     assert_eq!(

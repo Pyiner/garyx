@@ -288,7 +288,7 @@ fn summarize_thread_label(value: &str, limit: usize) -> String {
     format!("{}…", truncated.trim_end())
 }
 
-fn prompt_derived_thread_label(message: &str) -> Option<String> {
+pub(crate) fn prompt_derived_thread_label(message: &str) -> Option<String> {
     let summary = summarize_thread_label(message, 40);
     (!summary.is_empty()).then_some(summary)
 }
