@@ -236,13 +236,15 @@ Task moves to `in_review`.
 `examples/deep-research/` mirrors Claude Code's deep-research workflow shape:
 
 1. Scope the question into 3-6 complementary search angles.
-2. Run parallel web-search agents.
-3. Deduplicate URLs, fetch up to 15 sources, and extract falsifiable claims with
-   direct quotes.
-4. Verify the highest-value claims with 3 independent adversarial votes; 2
-   refuting votes kill a claim.
-5. Synthesize surviving claims into a cited report with transparent refutations,
-   caveats, open questions, and stats.
+2. Run capped parallel web-search agents.
+3. Deduplicate URLs, fetch up to 10 sources by default, and extract falsifiable
+   claims with direct quotes.
+4. Verify up to 12 highest-value claims by default with 3 independent
+   adversarial votes; 2 refuting votes kill a claim. Verifier fan-out is capped
+   separately from the number of votes.
+5. Synthesize surviving claims into a Markdown report with a conclusion,
+   numbered citations, transparent refutations, caveats, open questions, and
+   stats.
 
 Install and run it:
 
@@ -263,6 +265,7 @@ with environment variables:
 GARYX_DEEP_RESEARCH_MAX_FETCH=2 \
 GARYX_DEEP_RESEARCH_MAX_VERIFY_CLAIMS=2 \
 GARYX_DEEP_RESEARCH_VOTES_PER_CLAIM=2 \
+GARYX_DEEP_RESEARCH_VOTE_CONCURRENCY=1 \
 garyx task create \
   --title "Smoke deep research" \
   --workflow deep-research \

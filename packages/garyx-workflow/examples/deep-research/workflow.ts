@@ -18,6 +18,7 @@ type ResearchLimits = {
   searchConcurrency: number;
   fetchConcurrency: number;
   verifyConcurrency: number;
+  voteConcurrency: number;
 };
 
 type ScopeResult = {
@@ -91,6 +92,47 @@ type Report = {
   openQuestions?: string[];
 };
 
+type SourceSummary = {
+  url: string;
+  title: string;
+  angle: string;
+  quality: SourceQuality;
+  publishDate?: string;
+  claimCount: number;
+};
+
+type RefutedSummary = {
+  claim: string;
+  source: string;
+  vote: string;
+  evidence?: string;
+};
+
+type ResearchStats = {
+  angles: number;
+  sourcesFetched: number;
+  claimsExtracted: number;
+  claimsVerified: number;
+  claimsSelected: number;
+  confirmed: number;
+  killed: number;
+  urlDupes: number;
+  budgetDropped: number;
+  afterSynthesis?: number;
+  agentCalls?: number;
+};
+
+type ResearchResult = {
+  question: string;
+  summary: string;
+  findings: Report["findings"];
+  refuted: RefutedSummary[];
+  sources: SourceSummary[];
+  caveats: string;
+  openQuestions?: string[];
+  stats: ResearchStats;
+};
+
 type SourceRecord = {
   url: string;
   title: string;
@@ -108,14 +150,26 @@ const PHASES: WorkflowPhaseInput[] = [
   { id: "synthesize", title: "Synthesize", detail: "Merge survivors, rank by confidence, and cite sources." },
 ];
 
+const LIMIT_CAPS: ResearchLimits = {
+  maxFetch: 20,
+  maxVerifyClaims: 20,
+  votesPerClaim: 3,
+  refutationsRequired: 3,
+  searchConcurrency: 3,
+  fetchConcurrency: 4,
+  verifyConcurrency: 3,
+  voteConcurrency: 2,
+};
+
 const DEFAULT_LIMITS: ResearchLimits = {
-  maxFetch: integerEnv("GARYX_DEEP_RESEARCH_MAX_FETCH", 15),
-  maxVerifyClaims: integerEnv("GARYX_DEEP_RESEARCH_MAX_VERIFY_CLAIMS", 25),
-  votesPerClaim: integerEnv("GARYX_DEEP_RESEARCH_VOTES_PER_CLAIM", 3),
-  refutationsRequired: integerEnv("GARYX_DEEP_RESEARCH_REFUTATIONS_REQUIRED", 2),
-  searchConcurrency: integerEnv("GARYX_DEEP_RESEARCH_SEARCH_CONCURRENCY", 5),
-  fetchConcurrency: integerEnv("GARYX_DEEP_RESEARCH_FETCH_CONCURRENCY", 5),
-  verifyConcurrency: integerEnv("GARYX_DEEP_RESEARCH_VERIFY_CONCURRENCY", 8),
+  maxFetch: integerEnv("GARYX_DEEP_RESEARCH_MAX_FETCH", 10, LIMIT_CAPS.maxFetch),
+  maxVerifyClaims: integerEnv("GARYX_DEEP_RESEARCH_MAX_VERIFY_CLAIMS", 12, LIMIT_CAPS.maxVerifyClaims),
+  votesPerClaim: integerEnv("GARYX_DEEP_RESEARCH_VOTES_PER_CLAIM", 3, LIMIT_CAPS.votesPerClaim),
+  refutationsRequired: integerEnv("GARYX_DEEP_RESEARCH_REFUTATIONS_REQUIRED", 2, LIMIT_CAPS.refutationsRequired),
+  searchConcurrency: integerEnv("GARYX_DEEP_RESEARCH_SEARCH_CONCURRENCY", 2, LIMIT_CAPS.searchConcurrency),
+  fetchConcurrency: integerEnv("GARYX_DEEP_RESEARCH_FETCH_CONCURRENCY", 3, LIMIT_CAPS.fetchConcurrency),
+  verifyConcurrency: integerEnv("GARYX_DEEP_RESEARCH_VERIFY_CONCURRENCY", 2, LIMIT_CAPS.verifyConcurrency),
+  voteConcurrency: integerEnv("GARYX_DEEP_RESEARCH_VOTE_CONCURRENCY", 1, LIMIT_CAPS.voteConcurrency),
 };
 
 const SMOKE_LIMITS: ResearchLimits = {
@@ -125,7 +179,8 @@ const SMOKE_LIMITS: ResearchLimits = {
   refutationsRequired: integerEnv("GARYX_DEEP_RESEARCH_SMOKE_REFUTATIONS_REQUIRED", 2),
   searchConcurrency: integerEnv("GARYX_DEEP_RESEARCH_SMOKE_SEARCH_CONCURRENCY", 2),
   fetchConcurrency: integerEnv("GARYX_DEEP_RESEARCH_SMOKE_FETCH_CONCURRENCY", 2),
-  verifyConcurrency: integerEnv("GARYX_DEEP_RESEARCH_SMOKE_VERIFY_CONCURRENCY", 4),
+  verifyConcurrency: integerEnv("GARYX_DEEP_RESEARCH_SMOKE_VERIFY_CONCURRENCY", 2),
+  voteConcurrency: integerEnv("GARYX_DEEP_RESEARCH_SMOKE_VOTE_CONCURRENCY", 1),
 };
 
 const ScopeSchema = s.object<ScopeResult>(
@@ -203,11 +258,11 @@ const ReportSchema = s.object<Report>(
   ["summary", "findings", "caveats"],
 );
 
-await defineWorkflow({
+await defineWorkflow<ResearchResult>({
   name: "Deep Research",
   description: "Fan out web searches, fetch sources, adversarially verify claims, and synthesize a cited report.",
   agent: defaultChildAgent(),
-  output: (result: { summary?: string }) => result.summary,
+  output: researchOutputMarkdown,
   phases: PHASES,
   async run(flow) {
     const input = normalizeInput(flow.ctx.input);
@@ -229,64 +284,67 @@ await defineWorkflow({
     );
 
     const dedupe = createSourceDedupe(input.limits.maxFetch);
-    const searchPhase = flow.phase("Search");
-    const fetchPhase = flow.phase("Fetch");
+    const searchPhase = flow.phase("Search").start();
+    const searchBatches = (
+      await searchPhase.parallel(
+        scope.angles.map((angle) => async () => {
+          const search = await searchPhase.agent<SearchResult>(`search:${angle.label}`, searchPrompt(input.question, angle), {
+            schema: SearchSchema,
+            optional: true,
+          });
+          if (!search) {
+            await flow.log("deep_research.search_empty", { angle: angle.label });
+            return null;
+          }
+          await flow.log("deep_research.search_results", {
+            angle: angle.label,
+            results: search.results.length,
+          });
+          return { angle, results: search.results };
+        }),
+        { concurrency: input.limits.searchConcurrency },
+      )
+    ).filter(isSearchBatch);
 
-    const sourceBatches = await searchPhase.pipeline(
-      scope.angles,
-      async (angle) => {
-        const search = await searchPhase.agent<SearchResult>(`search:${angle.label}`, searchPrompt(input.question, angle), {
-          schema: SearchSchema,
-          optional: true,
-        });
-        if (!search) {
-          await flow.log("deep_research.search_empty", { angle: angle.label });
-          return null;
-        }
-        await flow.log("deep_research.search_results", {
-          angle: angle.label,
-          results: search.results.length,
-        });
-        return { angle, results: search.results };
-      },
-      async (search) => {
-        if (!search) {
-          return [];
-        }
-        const novel = dedupe.claim(search.results, search.angle.label);
-        if (!novel.length) {
-          return [];
-        }
-        return fetchPhase.parallel(
-          novel.map((source) => async () => {
-            const host = hostName(source.url);
-            try {
-              const extracted = await fetchPhase.agent<ExtractResult>(
-                `fetch:${host}`,
-                fetchPrompt(input.question, source, search.angle),
-                {
-                  schema: ExtractSchema,
-                  optional: true,
-                },
-              );
-              if (!extracted) {
-                return unreliableSource(source, search.angle.label);
-              }
-              return toSourceRecord(source, search.angle.label, extracted);
-            } catch (error) {
-              await flow.log("deep_research.fetch_failed", {
-                url: source.url,
-                error: errorMessage(error),
-              });
-              return unreliableSource(source, search.angle.label);
-            }
-          }),
-          { concurrency: input.limits.fetchConcurrency },
-        );
-      },
+    const fetchInputs = searchBatches.flatMap((search) =>
+      dedupe.claim(search.results, search.angle.label).map((source) => ({ source, angle: search.angle })),
     );
 
-    const sources = sourceBatches.flat().filter(isSourceRecord);
+    await flow.log("deep_research.fetch_queue", {
+      sourcesQueued: fetchInputs.length,
+      duplicateUrls: dedupe.duplicates.length,
+      budgetDropped: dedupe.budgetDropped.length,
+    });
+
+    const fetchPhase = flow.phase("Fetch").start();
+    const sources = (
+      await fetchPhase.parallel(
+        fetchInputs.map(({ source, angle }) => async () => {
+          const host = hostName(source.url);
+          try {
+            const extracted = await fetchPhase.agent<ExtractResult>(
+              `fetch:${host}`,
+              fetchPrompt(input.question, source, angle),
+              {
+                schema: ExtractSchema,
+                optional: true,
+              },
+            );
+            if (!extracted) {
+              return unreliableSource(source, angle.label);
+            }
+            return toSourceRecord(source, angle.label, extracted);
+          } catch (error) {
+            await flow.log("deep_research.fetch_failed", {
+              url: source.url,
+              error: errorMessage(error),
+            });
+            return unreliableSource(source, angle.label);
+          }
+        }),
+        { concurrency: input.limits.fetchConcurrency },
+      )
+    ).filter(isSourceRecord);
     const claims = rankClaims(sources.flatMap((source) => source.claims)).slice(0, input.limits.maxVerifyClaims);
 
     await flow.log("deep_research.claim_pool", {
@@ -321,7 +379,7 @@ await defineWorkflow({
                 optional: true,
               }),
             ),
-            { concurrency: input.limits.votesPerClaim },
+            { concurrency: input.limits.voteConcurrency },
           );
           return adjudicateClaim(claim, verdicts.filter(Boolean) as Verdict[], input.limits);
         }),
@@ -489,7 +547,8 @@ function synthesizePrompt(question: string, confirmed: VotedClaim[], killed: Vot
     `${confirmed.length} claims survived adversarial verification.`,
     "Merge claims that say the same thing. Group related claims into findings that directly answer the research question.",
     "Assign confidence per finding: high for multiple strong sources and strong votes, medium for secondary sources or partial votes, low for single-source or weaker evidence.",
-    "Write a concise executive summary. Cite sources by URL. State caveats and open questions.",
+    "Write a concise executive summary, finding evidence, caveats, and open questions as structured fields.",
+    "For each finding, put exact source URLs from the confirmed claims into sources. Do not invent citations or return Markdown; the workflow will format the final cited Markdown output.",
     "",
     "## Confirmed claims",
     confirmed.map((claim, index) => confirmedClaimBlock(claim, index)).join("\n\n"),
@@ -517,6 +576,107 @@ function confirmedClaimBlock(claim: VotedClaim, index: number): string {
   ].join("\n");
 }
 
+function researchOutputMarkdown(result: ResearchResult): string {
+  const citations = citationsForResult(result);
+  const citationIds = new Map(citations.map((citation) => [normalizedUrl(citation.url), citation.index]));
+  return [
+    `# Deep Research: ${result.question}`,
+    ["## Conclusion", result.summary || "No conclusion was produced."].join("\n\n"),
+    findingsMarkdown(result, citationIds),
+    result.caveats ? ["## Caveats", result.caveats].join("\n\n") : "",
+    result.openQuestions?.length
+      ? ["## Open Questions", result.openQuestions.map((question) => `- ${question}`).join("\n")].join("\n\n")
+      : "",
+    citations.length ? ["## Citations", citations.map(formatCitation).join("\n")].join("\n\n") : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+type Citation = SourceSummary & { index: number };
+
+function findingsMarkdown(result: ResearchResult, citationIds: Map<string, number>): string {
+  if (!result.findings.length) {
+    return ["## Findings", "No verified findings survived adversarial verification."].join("\n\n");
+  }
+  return [
+    "## Findings",
+    result.findings
+      .map((finding) => {
+        const refs = citationRefs(finding.sources, citationIds);
+        return [
+          `### ${finding.claim}${refs ? ` ${refs}` : ""}`,
+          `- Confidence: ${finding.confidence}`,
+          finding.evidence ? `- Evidence: ${finding.evidence}` : "",
+          finding.vote ? `- Vote: ${finding.vote}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n");
+      })
+      .join("\n\n"),
+  ].join("\n\n");
+}
+
+function citationsForResult(result: ResearchResult): Citation[] {
+  const sourceByKey = new Map<string, SourceSummary>();
+  for (const source of result.sources) {
+    const key = normalizedUrl(source.url);
+    if (key && !sourceByKey.has(key)) {
+      sourceByKey.set(key, source);
+    }
+  }
+  const citedSources = uniqueStrings(result.findings.flatMap((finding) => finding.sources)).map((url) => {
+    const key = normalizedUrl(url);
+    return (
+      sourceByKey.get(key) ?? {
+        url,
+        title: url,
+        angle: "synthesis",
+        quality: "secondary" as SourceQuality,
+        claimCount: 0,
+      }
+    );
+  });
+  return (citedSources.length ? citedSources : result.sources).slice(0, 12).map((source, index) => ({
+    ...source,
+    index: index + 1,
+  }));
+}
+
+function citationRefs(sources: string[], citationIds: Map<string, number>): string {
+  const ids = uniqueNumbers(
+    uniqueStrings(sources)
+      .map((source) => citationIds.get(normalizedUrl(source)))
+      .filter((value): value is number => typeof value === "number"),
+  );
+  return ids.map((id) => `[${id}]`).join(" ");
+}
+
+function formatCitation(citation: Citation): string {
+  const details = [
+    citation.quality,
+    citation.angle ? `angle: ${citation.angle}` : "",
+    citation.publishDate ? `published: ${citation.publishDate}` : "",
+    `${citation.claimCount} claim${citation.claimCount === 1 ? "" : "s"}`,
+  ]
+    .filter(Boolean)
+    .join("; ");
+  return `[${citation.index}] ${markdownLink(citation.title, citation.url)}${details ? ` - ${details}` : ""}`;
+}
+
+function markdownLink(title: string, url: string): string {
+  const label = title.trim() || url;
+  return isHttpUrl(url) ? `[${escapeLinkLabel(label)}](${url})` : `${label} (${url})`;
+}
+
+function escapeLinkLabel(value: string): string {
+  return value.replace(/\[/g, "\\[").replace(/\]/g, "\\]");
+}
+
+function isHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value);
+}
+
 function normalizeInput(raw: JsonValue): ResearchInput {
   const input = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, JsonValue>) : {};
   const question =
@@ -528,16 +688,22 @@ function normalizeInput(raw: JsonValue): ResearchInput {
   }
   const mode = stringValue(input.mode) || process.env.GARYX_DEEP_RESEARCH_MODE || "full";
   const base = mode === "smoke" ? SMOKE_LIMITS : DEFAULT_LIMITS;
+  const votesPerClaim = positiveInteger(input.votesPerClaim, base.votesPerClaim, LIMIT_CAPS.votesPerClaim);
+  const refutationsRequired = Math.min(
+    votesPerClaim,
+    positiveInteger(input.refutationsRequired, base.refutationsRequired, LIMIT_CAPS.refutationsRequired),
+  );
   return {
     question,
     limits: {
-      maxFetch: positiveInteger(input.maxFetch, base.maxFetch),
-      maxVerifyClaims: positiveInteger(input.maxVerifyClaims, base.maxVerifyClaims),
-      votesPerClaim: positiveInteger(input.votesPerClaim, base.votesPerClaim),
-      refutationsRequired: positiveInteger(input.refutationsRequired, base.refutationsRequired),
-      searchConcurrency: positiveInteger(input.searchConcurrency, base.searchConcurrency),
-      fetchConcurrency: positiveInteger(input.fetchConcurrency, base.fetchConcurrency),
-      verifyConcurrency: positiveInteger(input.verifyConcurrency, base.verifyConcurrency),
+      maxFetch: positiveInteger(input.maxFetch, base.maxFetch, LIMIT_CAPS.maxFetch),
+      maxVerifyClaims: positiveInteger(input.maxVerifyClaims, base.maxVerifyClaims, LIMIT_CAPS.maxVerifyClaims),
+      votesPerClaim,
+      refutationsRequired,
+      searchConcurrency: positiveInteger(input.searchConcurrency, base.searchConcurrency, LIMIT_CAPS.searchConcurrency),
+      fetchConcurrency: positiveInteger(input.fetchConcurrency, base.fetchConcurrency, LIMIT_CAPS.fetchConcurrency),
+      verifyConcurrency: positiveInteger(input.verifyConcurrency, base.verifyConcurrency, LIMIT_CAPS.verifyConcurrency),
+      voteConcurrency: positiveInteger(input.voteConcurrency, base.voteConcurrency, LIMIT_CAPS.voteConcurrency),
     },
   };
 }
@@ -619,7 +785,7 @@ function adjudicateClaim(claim: SourcedClaim, verdicts: Verdict[], limits: Resea
   };
 }
 
-function failedReport(question: string, summary: string) {
+function failedReport(question: string, summary: string): ResearchResult {
   return {
     question,
     summary,
@@ -628,11 +794,21 @@ function failedReport(question: string, summary: string) {
     sources: [],
     caveats: summary,
     openQuestions: [],
-    stats: { angles: 0, sourcesFetched: 0, claimsExtracted: 0, claimsVerified: 0, confirmed: 0, killed: 0 },
+    stats: {
+      angles: 0,
+      sourcesFetched: 0,
+      claimsExtracted: 0,
+      claimsVerified: 0,
+      claimsSelected: 0,
+      confirmed: 0,
+      killed: 0,
+      urlDupes: 0,
+      budgetDropped: 0,
+    },
   };
 }
 
-function sourcesForResult(sources: SourceRecord[]) {
+function sourcesForResult(sources: SourceRecord[]): SourceSummary[] {
   return sources.map((source) => ({
     url: source.url,
     title: source.title,
@@ -643,7 +819,7 @@ function sourcesForResult(sources: SourceRecord[]) {
   }));
 }
 
-function refutedForResult(claims: VotedClaim[]) {
+function refutedForResult(claims: VotedClaim[]): RefutedSummary[] {
   return claims.map((claim) => ({
     claim: claim.claim,
     source: claim.sourceUrl,
@@ -660,7 +836,7 @@ function stats(
   confirmed: number,
   killed: number,
   dedupe: ReturnType<typeof createSourceDedupe>,
-) {
+): ResearchStats {
   return {
     angles: scope.angles.length,
     sourcesFetched: sources.length,
@@ -692,6 +868,10 @@ function defaultChildAgent(): string {
 
 function isSourceRecord(value: unknown): value is SourceRecord {
   return Boolean(value && typeof value === "object" && "url" in value && "sourceQuality" in value && "claims" in value);
+}
+
+function isSearchBatch(value: unknown): value is { angle: SearchAngle; results: SearchSource[] } {
+  return Boolean(value && typeof value === "object" && "angle" in value && "results" in value);
 }
 
 function normalizedUrl(value: string): string {
@@ -731,15 +911,44 @@ function stringValue(value: JsonValue | undefined): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function positiveInteger(value: JsonValue | undefined, fallback: number): number {
-  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
+function positiveInteger(value: JsonValue | undefined, fallback: number, max = Number.MAX_SAFE_INTEGER): number {
+  const candidate = typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
+  return Math.min(candidate, max);
 }
 
-function integerEnv(name: string, fallback: number): number {
+function integerEnv(name: string, fallback: number, max = Number.MAX_SAFE_INTEGER): number {
   const value = Number.parseInt(process.env[name] ?? "", 10);
-  return Number.isInteger(value) && value > 0 ? value : fallback;
+  const candidate = Number.isInteger(value) && value > 0 ? value : fallback;
+  return Math.min(candidate, max);
 }
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    unique.push(trimmed);
+  }
+  return unique;
+}
+
+function uniqueNumbers(values: number[]): number[] {
+  const seen = new Set<number>();
+  const unique: number[] = [];
+  for (const value of values) {
+    if (seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    unique.push(value);
+  }
+  return unique;
 }
