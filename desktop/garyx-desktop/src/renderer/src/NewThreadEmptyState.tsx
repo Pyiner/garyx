@@ -23,8 +23,6 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -215,7 +213,7 @@ export function NewThreadEmptyState({
   async function submitResume() {
     const selected = selectedRecentSession;
     const trimmed = resumeSessionId.trim();
-    if (!selected && !trimmed) {
+    if (!trimmed) {
       setResumeError(t("Paste a session ID to continue."));
       return;
     }
@@ -224,7 +222,7 @@ export function NewThreadEmptyState({
     try {
       if (selected) {
         await onResumeProviderSession(
-          selected.sessionId,
+          trimmed,
           selected.providerHint,
         );
       } else {
@@ -396,44 +394,22 @@ export function NewThreadEmptyState({
         open={resumeOpen}
       >
         <DialogContent
-          className="sm:max-w-[420px]"
+          className="new-thread-resume-picker"
           showCloseButton={!resumeLoading}
           size="compact"
         >
-          <DialogHeader>
-            <DialogTitle>{t("Resume session")}</DialogTitle>
-            <DialogDescription>
-              {t("Paste a session ID or choose one of the latest local sessions.")}
-            </DialogDescription>
-          </DialogHeader>
-
-          <Input
-            aria-label={t("Existing provider session ID")}
-            autoFocus
-            disabled={resumeLoading}
-            onChange={(event) => {
-              setResumeSessionId(event.target.value);
-              setSelectedRecentSession(null);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.nativeEvent.isComposing) {
-                event.preventDefault();
-                void submitResume();
-              }
-            }}
-            placeholder={t("Session ID")}
-            spellCheck={false}
-            value={resumeSessionId}
-          />
-
-          <section className="new-thread-resume-recent">
-            <div className="new-thread-resume-recent-header">
-              <span>{t("Choose recent")}</span>
+          <DialogHeader className="new-thread-resume-header">
+            <div className="new-thread-resume-title-row">
+              <DialogTitle>{t("Resume session")}</DialogTitle>
               <Button
                 aria-label={t("Refresh")}
+                className="new-thread-resume-refresh"
                 disabled={resumeLoading || recentSessionsLoading}
                 onClick={() => {
-                  setSelectedRecentSession(null);
+                  if (selectedRecentSession) {
+                    setSelectedRecentSession(null);
+                    setResumeSessionId("");
+                  }
                   void loadRecentSessions(resumeProviderTab, true);
                 }}
                 size="icon"
@@ -443,6 +419,9 @@ export function NewThreadEmptyState({
                 <IconRefresh aria-hidden size={13} stroke={1.8} />
               </Button>
             </div>
+          </DialogHeader>
+
+          <section className="new-thread-resume-recent">
             <div
               aria-label={t("Provider")}
               className="new-thread-resume-tabs"
@@ -455,8 +434,14 @@ export function NewThreadEmptyState({
                   disabled={resumeLoading}
                   key={provider.value}
                   onClick={() => {
+                    const providerChanged = resumeProviderTab !== provider.value;
                     setResumeProviderTab(provider.value);
-                    setSelectedRecentSession(null);
+                    if (providerChanged && selectedRecentSession) {
+                      setResumeSessionId("");
+                    }
+                    if (providerChanged) {
+                      setSelectedRecentSession(null);
+                    }
                   }}
                   role="tab"
                   type="button"
@@ -484,10 +469,17 @@ export function NewThreadEmptyState({
                       key={sessionKey}
                       onClick={() => {
                         setSelectedRecentSession(session);
+                        setResumeSessionId(session.sessionId);
                         setResumeError(null);
                       }}
                       type="button"
                     >
+                      <span
+                        aria-hidden
+                        className="new-thread-resume-session-indicator"
+                      >
+                        {isSelected ? "✓" : ""}
+                      </span>
                       <span className="new-thread-resume-session-main">
                         <strong>{session.title}</strong>
                         <span>{workspaceLabel(session.workspaceDir)}</span>
@@ -511,26 +503,34 @@ export function NewThreadEmptyState({
             <p className="new-thread-resume-error">{resumeError}</p>
           ) : null}
 
-          <DialogFooter>
-            <Button
-              variant="ghost"
+          <div className="new-thread-resume-target-row">
+            <Input
+              aria-label={t("Existing provider session ID")}
+              className="new-thread-resume-session-input"
               disabled={resumeLoading}
-              onClick={closeResume}
-              type="button"
-            >
-              {t("Cancel")}
-            </Button>
+              onChange={(event) => {
+                setResumeSessionId(event.target.value);
+                setSelectedRecentSession(null);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+                  event.preventDefault();
+                  void submitResume();
+                }
+              }}
+              placeholder={t("Session ID")}
+              spellCheck={false}
+              value={resumeSessionId}
+            />
             <Button
-              disabled={
-                resumeLoading ||
-                (!selectedRecentSession && !resumeSessionId.trim())
-              }
+              className="new-thread-resume-confirm"
+              disabled={resumeLoading || !resumeSessionId.trim()}
               onClick={() => void submitResume()}
               type="button"
             >
-              {resumeLoading ? t("Resuming…") : t("Confirm")}
+              {resumeLoading ? t("Resuming…") : t("Resume")}
             </Button>
-          </DialogFooter>
+          </div>
         </DialogContent>
       </Dialog>
     </>

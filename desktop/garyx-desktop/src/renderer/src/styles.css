@@ -5866,6 +5866,35 @@ button.new-thread-mode-trigger[data-state="open"] {
   line-height: 1.4;
 }
 
+.new-thread-resume-header[data-slot="dialog-header"] {
+  gap: 0;
+  padding-right: 38px;
+}
+
+.new-thread-resume-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.new-thread-resume-title-row [data-slot="dialog-title"] {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.new-thread-resume-refresh {
+  width: 28px;
+  height: 28px;
+  color: var(--color-token-description-foreground);
+}
+
+.new-thread-resume-refresh:hover {
+  background: rgba(26, 28, 31, 0.055);
+  color: var(--color-token-text-primary);
+}
+
 .new-thread-resume-recent {
   display: grid;
   gap: 10px;
@@ -5920,15 +5949,19 @@ button.new-thread-mode-trigger[data-state="open"] {
 .new-thread-resume-list {
   display: grid;
   gap: 4px;
-  max-height: 292px;
+  align-content: start;
+  height: 276px;
+  max-height: 276px;
   overflow-y: auto;
   padding-right: 2px;
+  scrollbar-color: rgba(26, 28, 31, 0.18) transparent;
+  scrollbar-width: thin;
 }
 
 .new-thread-resume-session-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 12px;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 10px;
   align-items: center;
   min-height: 52px;
   padding: 8px 10px;
@@ -5938,6 +5971,27 @@ button.new-thread-mode-trigger[data-state="open"] {
   color: var(--color-token-text-primary);
   text-align: left;
   cursor: pointer;
+}
+
+.new-thread-resume-session-indicator {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid rgba(26, 28, 31, 0.16);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  color: transparent;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.new-thread-resume-session-row.is-selected
+  .new-thread-resume-session-indicator {
+  border-color: rgba(26, 28, 31, 0.82);
+  background: var(--color-token-text-primary);
+  color: var(--color-token-bg-primary);
 }
 
 .new-thread-resume-session-row:hover {
@@ -5999,6 +6053,25 @@ button.new-thread-mode-trigger[data-state="open"] {
   color: var(--color-token-description-foreground);
   font-size: 12px;
   line-height: 1.4;
+}
+
+.new-thread-resume-target-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(26, 28, 31, 0.075);
+}
+
+.new-thread-resume-session-input[data-slot="input"] {
+  height: 40px;
+  font-size: 13px;
+}
+
+.new-thread-resume-confirm {
+  height: 40px;
+  min-width: 72px;
 }
 
 .new-thread-resume-dialog {
@@ -6221,6 +6294,46 @@ button.new-thread-mode-trigger[data-state="open"] {
 .app-dialog-content[data-scroll="content"] {
   grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
+}
+
+.new-thread-resume-picker[data-slot="dialog-content"] {
+  --app-dialog-card-width: min(548px, var(--app-dialog-available-width));
+  gap: 10px;
+  overflow: hidden;
+}
+
+.new-thread-resume-picker[data-slot="dialog-content"] [data-slot="dialog-close"] {
+  top: 14px;
+  right: 14px;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  color: var(--color-token-description-foreground);
+  opacity: 1;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.new-thread-resume-picker[data-slot="dialog-content"]
+  [data-slot="dialog-close"]:hover {
+  background: rgba(26, 28, 31, 0.055);
+  color: var(--color-token-text-primary);
+}
+
+.new-thread-resume-picker[data-slot="dialog-content"]
+  [data-slot="dialog-close"]:focus-visible {
+  outline: 2px solid rgba(26, 28, 31, 0.24);
+  outline-offset: 2px;
+}
+
+.new-thread-resume-picker[data-slot="dialog-content"]
+  [data-slot="dialog-close"]
+  svg {
+  width: 15px;
+  height: 15px;
 }
 
 .app-dialog-body {
