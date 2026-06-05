@@ -136,6 +136,7 @@ function browserAnnotationModeScript(enabled: boolean, commentMessagePrefix: str
     document.documentElement.style.cursor = COMMENT_CURSOR;
     let currentElement = null;
     let selectedElement = null;
+    let commentRequestEmitted = false;
 
     const isDisabled = (element) => {
       if (!(element instanceof Element)) {
@@ -307,6 +308,9 @@ function browserAnnotationModeScript(enabled: boolean, commentMessagePrefix: str
       const rect = visibleRect(element);
       if (!rect) {
         hide();
+        if (selectedElement === element) {
+          commentButton.style.display = 'none';
+        }
         return;
       }
       currentElement = element;
@@ -337,6 +341,11 @@ function browserAnnotationModeScript(enabled: boolean, commentMessagePrefix: str
       }
     };
     const handleClick = (event) => {
+      if (commentRequestEmitted) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       if (isAnnotationUi(event.target)) {
         return;
       }
@@ -347,10 +356,16 @@ function browserAnnotationModeScript(enabled: boolean, commentMessagePrefix: str
       event.preventDefault();
       event.stopPropagation();
       selectedElement = target;
+      commentRequestEmitted = false;
       update(target);
       positionCommentButton();
     };
     const handlePointerDown = (event) => {
+      if (commentRequestEmitted) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       if (isAnnotationUi(event.target)) {
         return;
       }
@@ -363,6 +378,11 @@ function browserAnnotationModeScript(enabled: boolean, commentMessagePrefix: str
     const handleCommentButtonClick = (event) => {
       event.preventDefault();
       event.stopPropagation();
+      if (commentRequestEmitted) {
+        return;
+      }
+      commentRequestEmitted = true;
+      commentButton.style.display = 'none';
       emitCommentRequest();
     };
     const stopCommentButtonEvent = (event) => {
@@ -709,8 +729,11 @@ class BrowserRuntime {
     webContents.on('did-navigate', sync);
     webContents.on('did-navigate-in-page', sync);
     webContents.on('did-fail-load', sync);
-    webContents.on('console-message', (_event, _level, message) => {
-      this.handleAnnotationConsoleMessage(record, String(message || ''));
+    webContents.on('console-message', (details) => {
+      if (details.frame !== webContents.mainFrame) {
+        return;
+      }
+      this.handleAnnotationConsoleMessage(record, String(details.message || ''));
     });
   }
 

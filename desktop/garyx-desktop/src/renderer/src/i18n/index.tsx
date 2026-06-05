@@ -160,7 +160,6 @@ const zhCN: Record<string, string> = {
   'Annotated screenshot copied.': '已复制带标注截图。',
   'Annotation marker added.': '已添加标注点。',
   'Browser comment target': '浏览器评论目标',
-  'Comment target selected.': '已选择评论目标。',
   'Element': '元素',
   'Hover over an element to highlight it.': '悬停到元素上以高亮。',
   'Hover an element, click it, then use the comment marker.': '悬停元素并点击选择，再使用评论标记。',

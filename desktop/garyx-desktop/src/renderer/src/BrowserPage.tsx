@@ -83,7 +83,7 @@ export function BrowserPage({
         enabled: false,
       });
     };
-  }, [active?.id, active?.url, annotationMode, api]);
+  }, [active?.id, active?.url, active?.isLoading, annotationMode, api]);
 
   useEffect(() => {
     if (!hasAnnotationCommentRequest) {
@@ -91,7 +91,6 @@ export function BrowserPage({
     }
     const handleAnnotationComment = (request: BrowserAnnotationCommentRequest) => {
       setAnnotationMode(false);
-      setBrowserStatus(t('Comment target selected.'));
       annotationCommentRequestRef.current?.(request);
     };
     api.subscribeBrowserAnnotationComments(handleAnnotationComment);
