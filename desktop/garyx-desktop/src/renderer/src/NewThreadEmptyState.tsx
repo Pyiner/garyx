@@ -92,6 +92,8 @@ export function NewThreadEmptyState({
   const [resumeLoading, setResumeLoading] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
   const [resumeSessionId, setResumeSessionId] = useState("");
+  const [selectedRecentSession, setSelectedRecentSession] =
+    useState<DesktopProviderRecentSession | null>(null);
   const [resumeProviderTab, setResumeProviderTab] =
     useState<DesktopSessionProviderHint>("codex");
   const [recentSessionsByProvider, setRecentSessionsByProvider] = useState<
@@ -169,6 +171,7 @@ export function NewThreadEmptyState({
   function closeResume() {
     setResumeOpen(false);
     setResumeSessionId("");
+    setSelectedRecentSession(null);
     setResumeError(null);
     setRecentSessionsError(null);
   }
@@ -210,30 +213,23 @@ export function NewThreadEmptyState({
   }, [loadRecentSessions, resumeOpen, resumeProviderTab]);
 
   async function submitResume() {
+    const selected = selectedRecentSession;
     const trimmed = resumeSessionId.trim();
-    if (!trimmed) {
+    if (!selected && !trimmed) {
       setResumeError(t("Paste a session ID to continue."));
       return;
     }
     setResumeLoading(true);
     setResumeError(null);
     try {
-      await onResumeProviderSession(trimmed);
-      closeResume();
-    } catch (error) {
-      setResumeError(
-        error instanceof Error ? error.message : t("Resume failed."),
-      );
-    } finally {
-      setResumeLoading(false);
-    }
-  }
-
-  async function resumeRecentSession(session: DesktopProviderRecentSession) {
-    setResumeLoading(true);
-    setResumeError(null);
-    try {
-      await onResumeProviderSession(session.sessionId, session.providerHint);
+      if (selected) {
+        await onResumeProviderSession(
+          selected.sessionId,
+          selected.providerHint,
+        );
+      } else {
+        await onResumeProviderSession(trimmed);
+      }
       closeResume();
     } catch (error) {
       setResumeError(
@@ -245,6 +241,9 @@ export function NewThreadEmptyState({
   }
 
   const recentSessions = recentSessionsByProvider[resumeProviderTab] ?? [];
+  const selectedRecentSessionKey = selectedRecentSession
+    ? recentSessionKey(selectedRecentSession)
+    : null;
 
   return (
     <>
@@ -412,7 +411,10 @@ export function NewThreadEmptyState({
             aria-label={t("Existing provider session ID")}
             autoFocus
             disabled={resumeLoading}
-            onChange={(event) => setResumeSessionId(event.target.value)}
+            onChange={(event) => {
+              setResumeSessionId(event.target.value);
+              setSelectedRecentSession(null);
+            }}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.nativeEvent.isComposing) {
                 event.preventDefault();
@@ -430,7 +432,10 @@ export function NewThreadEmptyState({
               <Button
                 aria-label={t("Refresh")}
                 disabled={resumeLoading || recentSessionsLoading}
-                onClick={() => void loadRecentSessions(resumeProviderTab, true)}
+                onClick={() => {
+                  setSelectedRecentSession(null);
+                  void loadRecentSessions(resumeProviderTab, true);
+                }}
                 size="icon"
                 type="button"
                 variant="ghost"
@@ -449,7 +454,10 @@ export function NewThreadEmptyState({
                   className="new-thread-resume-tab"
                   disabled={resumeLoading}
                   key={provider.value}
-                  onClick={() => setResumeProviderTab(provider.value)}
+                  onClick={() => {
+                    setResumeProviderTab(provider.value);
+                    setSelectedRecentSession(null);
+                  }}
                   role="tab"
                   type="button"
                 >
@@ -463,24 +471,34 @@ export function NewThreadEmptyState({
               ) : recentSessionsError ? (
                 <p className="new-thread-resume-error">{recentSessionsError}</p>
               ) : recentSessions.length ? (
-                recentSessions.map((session) => (
-                  <button
-                    className="new-thread-resume-session-row"
-                    disabled={resumeLoading}
-                    key={`${session.providerHint}:${session.sessionId}`}
-                    onClick={() => void resumeRecentSession(session)}
-                    type="button"
-                  >
-                    <span className="new-thread-resume-session-main">
-                      <strong>{session.title}</strong>
-                      <span>{workspaceLabel(session.workspaceDir)}</span>
-                    </span>
-                    <span className="new-thread-resume-session-meta">
-                      <span>{formatRelativeTime(session.updatedAt)}</span>
-                      <code>{shortSessionId(session.sessionId)}</code>
-                    </span>
-                  </button>
-                ))
+                recentSessions.map((session) => {
+                  const sessionKey = recentSessionKey(session);
+                  const isSelected = selectedRecentSessionKey === sessionKey;
+                  return (
+                    <button
+                      aria-pressed={isSelected}
+                      className={`new-thread-resume-session-row${
+                        isSelected ? " is-selected" : ""
+                      }`}
+                      disabled={resumeLoading}
+                      key={sessionKey}
+                      onClick={() => {
+                        setSelectedRecentSession(session);
+                        setResumeError(null);
+                      }}
+                      type="button"
+                    >
+                      <span className="new-thread-resume-session-main">
+                        <strong>{session.title}</strong>
+                        <span>{workspaceLabel(session.workspaceDir)}</span>
+                      </span>
+                      <span className="new-thread-resume-session-meta">
+                        <span>{formatRelativeTime(session.updatedAt)}</span>
+                        <code>{shortSessionId(session.sessionId)}</code>
+                      </span>
+                    </button>
+                  );
+                })
               ) : (
                 <p className="new-thread-resume-empty">
                   {t("No recent sessions found.")}
@@ -503,17 +521,24 @@ export function NewThreadEmptyState({
               {t("Cancel")}
             </Button>
             <Button
-              disabled={resumeLoading || !resumeSessionId.trim()}
+              disabled={
+                resumeLoading ||
+                (!selectedRecentSession && !resumeSessionId.trim())
+              }
               onClick={() => void submitResume()}
               type="button"
             >
-              {resumeLoading ? t("Resuming…") : t("Resume")}
+              {resumeLoading ? t("Resuming…") : t("Confirm")}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
     </>
   );
+}
+
+function recentSessionKey(session: DesktopProviderRecentSession): string {
+  return `${session.providerHint}:${session.sessionId}`;
 }
 
 function shortSessionId(sessionId: string): string {

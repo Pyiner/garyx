@@ -5944,6 +5944,15 @@ button.new-thread-mode-trigger[data-state="open"] {
   background: rgba(26, 28, 31, 0.055);
 }
 
+.new-thread-resume-session-row.is-selected {
+  background: rgba(26, 28, 31, 0.075);
+  box-shadow: inset 0 0 0 1px rgba(26, 28, 31, 0.1);
+}
+
+.new-thread-resume-session-row.is-selected:hover {
+  background: rgba(26, 28, 31, 0.085);
+}
+
 .new-thread-resume-session-main,
 .new-thread-resume-session-meta {
   display: grid;
