@@ -14,6 +14,7 @@ import {
 } from 'electron';
 
 import type {
+  BrowserAnnotationCommentRequest,
   BrowserAnnotationModeInput,
   BrowserBoundsInput,
   CaptureBrowserTabInput,
@@ -33,7 +34,7 @@ const configuredRemoteDebuggingPort =
   process.env.GARYX_DESKTOP_REMOTE_DEBUGGING_PORT?.trim() || DEFAULT_REMOTE_DEBUGGING_PORT;
 const disableFixedRemoteDebuggingPort = process.env.GARYX_DESKTOP_DISABLE_FIXED_CDP === '1';
 
-function browserAnnotationModeScript(enabled: boolean): string {
+function browserAnnotationModeScript(enabled: boolean, commentMessagePrefix: string): string {
   return `(() => {
     const KEY = '__garyxBrowserAnnotationMode';
     const existing = window[KEY];
@@ -44,6 +45,9 @@ function browserAnnotationModeScript(enabled: boolean): string {
       return { enabled: false };
     }
 
+    const COMMENT_MESSAGE_PREFIX = ${JSON.stringify(commentMessagePrefix)};
+    const COMMENT_ICON = 'data:image/svg+xml,%3Csvg%20xmlns%3D%22http://www.w3.org/2000/svg%22%20width%3D%2226%22%20height%3D%2225%22%20viewBox%3D%220%200%2026%2025%22%20fill%3D%22none%22%3E%3Cpath%20d%3D%22M12.65%20.82C6.21%20.82%201%205.48%201%2011.22c0%203.01%201.43%205.72%203.72%207.62l-.92%204.12c-.12.54.46.95.92.65l4.32-2.8c1.13.31%202.35.48%203.61.48%206.43%200%2011.65-4.66%2011.65-10.4S19.08.82%2012.65.82Z%22%20fill%3D%22%230285FF%22%20stroke%3D%22white%22%20stroke-width%3D%221.5%22/%3E%3Ccircle%20cx%3D%228.8%22%20cy%3D%2211.1%22%20r%3D%221.2%22%20fill%3D%22white%22/%3E%3Ccircle%20cx%3D%2212.8%22%20cy%3D%2211.1%22%20r%3D%221.2%22%20fill%3D%22white%22/%3E%3Ccircle%20cx%3D%2216.8%22%20cy%3D%2211.1%22%20r%3D%221.2%22%20fill%3D%22white%22/%3E%3C/svg%3E';
+    const COMMENT_CURSOR = 'url("' + COMMENT_ICON + '") 13 12, crosshair';
     const INTERACTIVE_SELECTOR = [
       'a[href]',
       'area[href]',
@@ -76,8 +80,17 @@ function browserAnnotationModeScript(enabled: boolean): string {
       '[aria-haspopup]',
     ].join(',');
 
+    const cursorStyle = document.createElement('style');
+    cursorStyle.setAttribute('data-garyx-browser-annotation-ui', 'true');
+    cursorStyle.setAttribute('data-garyx-browser-annotation-cursor-style', 'true');
+    cursorStyle.textContent =
+      'html, body, body * { cursor: ' + COMMENT_CURSOR + ' !important; -webkit-user-select: none !important; user-select: none !important; }' +
+      '[data-garyx-browser-annotation-comment-button="true"] { cursor: pointer !important; }';
+    (document.head || document.documentElement).appendChild(cursorStyle);
+
     const overlay = document.createElement('div');
     overlay.setAttribute('data-garyx-browser-annotation-hover', 'true');
+    overlay.setAttribute('data-garyx-browser-annotation-ui', 'true');
     Object.assign(overlay.style, {
       position: 'fixed',
       left: '0',
@@ -95,9 +108,34 @@ function browserAnnotationModeScript(enabled: boolean): string {
     });
     (document.body || document.documentElement).appendChild(overlay);
 
+    const commentButton = document.createElement('button');
+    commentButton.type = 'button';
+    commentButton.setAttribute('aria-label', 'Comment on selected element');
+    commentButton.setAttribute('title', 'Comment');
+    commentButton.setAttribute('data-garyx-browser-annotation-comment-button', 'true');
+    commentButton.setAttribute('data-garyx-browser-annotation-ui', 'true');
+    Object.assign(commentButton.style, {
+      position: 'fixed',
+      left: '0',
+      top: '0',
+      width: '28px',
+      height: '28px',
+      display: 'none',
+      padding: '0',
+      border: '0',
+      borderRadius: '0',
+      background: 'transparent url("' + COMMENT_ICON + '") center / 26px 25px no-repeat',
+      boxShadow: 'none',
+      outline: 'none',
+      pointerEvents: 'auto',
+      zIndex: '2147483647',
+    });
+    (document.body || document.documentElement).appendChild(commentButton);
+
     const previousCursor = document.documentElement.style.cursor;
-    document.documentElement.style.cursor = 'crosshair';
+    document.documentElement.style.cursor = COMMENT_CURSOR;
     let currentElement = null;
+    let selectedElement = null;
 
     const isDisabled = (element) => {
       if (!(element instanceof Element)) {
@@ -131,8 +169,16 @@ function browserAnnotationModeScript(enabled: boolean): string {
       return null;
     };
 
+    const isAnnotationUi = (node) => {
+      const element = node instanceof Element ? node : node?.parentElement || null;
+      return Boolean(element?.closest('[data-garyx-browser-annotation-ui="true"]'));
+    };
+
     const closestInteractive = (node) => {
       let element = node instanceof Element ? node : node?.parentElement || null;
+      if (element?.closest('[data-garyx-browser-annotation-ui="true"]')) {
+        return null;
+      }
       while (element && element !== document.documentElement) {
         if (element.matches(INTERACTIVE_SELECTOR) && !isDisabled(element)) {
           return element;
@@ -147,6 +193,116 @@ function browserAnnotationModeScript(enabled: boolean): string {
       overlay.style.display = 'none';
     };
 
+    const truncate = (value, maxLength) => {
+      const text = String(value || '').replace(/\\s+/g, ' ').trim();
+      if (text.length <= maxLength) {
+        return text;
+      }
+      return text.slice(0, maxLength - 1) + '…';
+    };
+
+    const escapeSelectorPart = (value) => {
+      if (window.CSS && typeof window.CSS.escape === 'function') {
+        return window.CSS.escape(value);
+      }
+      return String(value).replace(/[^a-zA-Z0-9_-]/g, (character) => '\\\\' + character);
+    };
+
+    const selectorFor = (element) => {
+      if (!(element instanceof Element)) {
+        return null;
+      }
+      if (element.id) {
+        return '#' + escapeSelectorPart(element.id);
+      }
+      const parts = [];
+      let node = element;
+      while (node && node instanceof Element && node !== document.documentElement && parts.length < 5) {
+        let part = node.localName || node.tagName.toLowerCase();
+        const classes = Array.from(node.classList || []).filter(Boolean).slice(0, 2);
+        if (classes.length) {
+          part += '.' + classes.map(escapeSelectorPart).join('.');
+        }
+        const parent = node.parentElement;
+        if (parent) {
+          const siblings = Array.from(parent.children).filter((sibling) => sibling.localName === node.localName);
+          if (siblings.length > 1) {
+            part += ':nth-of-type(' + (siblings.indexOf(node) + 1) + ')';
+          }
+        }
+        parts.unshift(part);
+        node = parent;
+      }
+      return parts.join(' > ') || null;
+    };
+
+    const labelFor = (element) => {
+      if (!(element instanceof Element)) {
+        return '';
+      }
+      const formValue =
+        element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement
+          ? element.value || element.placeholder
+          : '';
+      const imageAlt = element instanceof HTMLImageElement ? element.alt : '';
+      return truncate(
+        element.getAttribute('aria-label') ||
+          element.getAttribute('title') ||
+          imageAlt ||
+          formValue ||
+          element.textContent ||
+          element.tagName.toLowerCase(),
+        160,
+      );
+    };
+
+    const emitCommentRequest = () => {
+      if (!(selectedElement instanceof Element)) {
+        return;
+      }
+      const rect = visibleRect(selectedElement);
+      if (!rect) {
+        commentButton.style.display = 'none';
+        return;
+      }
+      const payload = {
+        tagName: selectedElement.tagName.toLowerCase(),
+        label: labelFor(selectedElement),
+        role: selectedElement.getAttribute('role'),
+        selector: selectorFor(selectedElement),
+        text: truncate(selectedElement.textContent || '', 240) || null,
+        rect: {
+          x: Math.round(rect.left),
+          y: Math.round(rect.top),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+        },
+      };
+      console.log(COMMENT_MESSAGE_PREFIX + JSON.stringify(payload));
+    };
+
+    const positionCommentButton = () => {
+      const rect = visibleRect(selectedElement);
+      if (!rect) {
+        commentButton.style.display = 'none';
+        return;
+      }
+      const size = 28;
+      const gap = 6;
+      const padding = 8;
+      let left = rect.left + rect.width + gap;
+      if (left + size > window.innerWidth - padding) {
+        left = Math.max(padding, rect.left - size - gap);
+      }
+      let top = Math.max(padding, rect.top - 10);
+      if (top + size > window.innerHeight - padding) {
+        top = Math.max(padding, window.innerHeight - size - padding);
+      }
+      commentButton.style.display = 'block';
+      commentButton.style.transform =
+        'translate(' + Math.round(left) + 'px, ' + Math.round(top) + 'px)';
+    };
+
     const update = (element) => {
       const rect = visibleRect(element);
       if (!rect) {
@@ -158,32 +314,72 @@ function browserAnnotationModeScript(enabled: boolean): string {
       overlay.style.transform = 'translate(' + rect.left + 'px, ' + rect.top + 'px)';
       overlay.style.width = rect.width + 'px';
       overlay.style.height = rect.height + 'px';
+      if (selectedElement === element) {
+        positionCommentButton();
+      }
     };
 
     const handlePointerMove = (event) => {
+      if (selectedElement || isAnnotationUi(event.target)) {
+        return;
+      }
       update(closestInteractive(event.target));
     };
-    const handlePointerLeave = () => hide();
+    const handlePointerLeave = () => {
+      if (!selectedElement) {
+        hide();
+      }
+    };
     const handleScrollOrResize = () => {
-      if (currentElement) {
-        update(currentElement);
+      const element = selectedElement || currentElement;
+      if (element) {
+        update(element);
       }
     };
     const handleClick = (event) => {
+      if (isAnnotationUi(event.target)) {
+        return;
+      }
       const target = closestInteractive(event.target);
       if (!target) {
         return;
       }
       event.preventDefault();
       event.stopPropagation();
+      selectedElement = target;
       update(target);
+      positionCommentButton();
+    };
+    const handlePointerDown = (event) => {
+      if (isAnnotationUi(event.target)) {
+        return;
+      }
+      if (!closestInteractive(event.target)) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    const handleCommentButtonClick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      emitCommentRequest();
+    };
+    const stopCommentButtonEvent = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
     };
 
     window.addEventListener('pointermove', handlePointerMove, true);
     window.addEventListener('pointerleave', handlePointerLeave, true);
     window.addEventListener('scroll', handleScrollOrResize, true);
     window.addEventListener('resize', handleScrollOrResize, true);
+    window.addEventListener('pointerdown', handlePointerDown, true);
+    window.addEventListener('mousedown', handlePointerDown, true);
     window.addEventListener('click', handleClick, true);
+    commentButton.addEventListener('click', handleCommentButtonClick, true);
+    commentButton.addEventListener('pointerdown', stopCommentButtonEvent, true);
+    commentButton.addEventListener('mousedown', stopCommentButtonEvent, true);
 
     window[KEY] = {
       dispose() {
@@ -191,9 +387,16 @@ function browserAnnotationModeScript(enabled: boolean): string {
         window.removeEventListener('pointerleave', handlePointerLeave, true);
         window.removeEventListener('scroll', handleScrollOrResize, true);
         window.removeEventListener('resize', handleScrollOrResize, true);
+        window.removeEventListener('pointerdown', handlePointerDown, true);
+        window.removeEventListener('mousedown', handlePointerDown, true);
         window.removeEventListener('click', handleClick, true);
+        commentButton.removeEventListener('click', handleCommentButtonClick, true);
+        commentButton.removeEventListener('pointerdown', stopCommentButtonEvent, true);
+        commentButton.removeEventListener('mousedown', stopCommentButtonEvent, true);
         document.documentElement.style.cursor = previousCursor;
+        cursorStyle.remove();
         overlay.remove();
+        commentButton.remove();
         delete window[KEY];
       },
     };
@@ -244,6 +447,10 @@ class BrowserRuntime {
 
   private readonly subscribers = new Set<WebContents>();
 
+  private readonly annotationSubscribers = new Set<WebContents>();
+
+  private readonly annotationMessagePrefix = `__GARYX_BROWSER_ANNOTATION_COMMENT__${randomUUID()}__`;
+
   private window: BrowserWindow | null = null;
 
   private activeTabId: string | null = null;
@@ -286,6 +493,17 @@ class BrowserRuntime {
 
   unsubscribe(event: IpcMainEvent): void {
     this.subscribers.delete(event.sender);
+  }
+
+  subscribeAnnotationComments(event: IpcMainEvent): void {
+    this.annotationSubscribers.add(event.sender);
+    event.sender.once('destroyed', () => {
+      this.annotationSubscribers.delete(event.sender);
+    });
+  }
+
+  unsubscribeAnnotationComments(event: IpcMainEvent): void {
+    this.annotationSubscribers.delete(event.sender);
   }
 
   listState(): DesktopBrowserState {
@@ -409,7 +627,10 @@ class BrowserRuntime {
   async setAnnotationMode(input: BrowserAnnotationModeInput): Promise<void> {
     const record = this.requireTab(input.tabId);
     await record.view.webContents
-      .executeJavaScript(browserAnnotationModeScript(Boolean(input.enabled)), true)
+      .executeJavaScript(
+        browserAnnotationModeScript(Boolean(input.enabled), this.annotationMessagePrefix),
+        true,
+      )
       .catch(() => null);
   }
 
@@ -488,6 +709,76 @@ class BrowserRuntime {
     webContents.on('did-navigate', sync);
     webContents.on('did-navigate-in-page', sync);
     webContents.on('did-fail-load', sync);
+    webContents.on('console-message', (_event, _level, message) => {
+      this.handleAnnotationConsoleMessage(record, String(message || ''));
+    });
+  }
+
+  private handleAnnotationConsoleMessage(record: BrowserTabRecord, message: string): void {
+    if (!message.startsWith(this.annotationMessagePrefix)) {
+      return;
+    }
+    const raw = message.slice(this.annotationMessagePrefix.length);
+    let payload: unknown;
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    const request = this.createAnnotationCommentRequest(record, payload);
+    if (!request) {
+      return;
+    }
+    this.emitAnnotationCommentRequest(request);
+  }
+
+  private createAnnotationCommentRequest(
+    record: BrowserTabRecord,
+    payload: unknown,
+  ): BrowserAnnotationCommentRequest | null {
+    if (!payload || typeof payload !== 'object') {
+      return null;
+    }
+    const input = payload as Record<string, unknown>;
+    const rect = input.rect;
+    if (!rect || typeof rect !== 'object') {
+      return null;
+    }
+    const rectInput = rect as Record<string, unknown>;
+    const x = Number(rectInput.x);
+    const y = Number(rectInput.y);
+    const width = Number(rectInput.width);
+    const height = Number(rectInput.height);
+    if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) {
+      return null;
+    }
+    const stringValue = (value: unknown): string | null => {
+      if (typeof value !== 'string') {
+        return null;
+      }
+      const trimmed = value.trim();
+      return trimmed || null;
+    };
+    const tagName = stringValue(input.tagName) || 'element';
+    const label = stringValue(input.label) || tagName;
+    const webContents = record.view.webContents;
+    return {
+      id: `browser-comment-${randomUUID()}`,
+      tabId: record.id,
+      url: webContents.getURL() || record.url,
+      title: safeTitle(webContents.getTitle() || record.title || webContents.getURL()),
+      tagName,
+      label,
+      role: stringValue(input.role),
+      selector: stringValue(input.selector),
+      text: stringValue(input.text),
+      rect: {
+        x: Math.round(x),
+        y: Math.round(y),
+        width: Math.round(width),
+        height: Math.round(height),
+      },
+    };
   }
 
   private requireTab(tabId: string): BrowserTabRecord {
@@ -528,6 +819,16 @@ class BrowserRuntime {
         continue;
       }
       subscriber.send('garyx:browser-state', state);
+    }
+  }
+
+  private emitAnnotationCommentRequest(request: BrowserAnnotationCommentRequest): void {
+    for (const subscriber of Array.from(this.annotationSubscribers)) {
+      if (subscriber.isDestroyed()) {
+        this.annotationSubscribers.delete(subscriber);
+        continue;
+      }
+      subscriber.send('garyx:browser-annotation-comment', request);
     }
   }
 
@@ -585,6 +886,14 @@ export function subscribeBrowserState(event: IpcMainEvent): DesktopBrowserState 
 
 export function unsubscribeBrowserState(event: IpcMainEvent): void {
   browserRuntime.unsubscribe(event);
+}
+
+export function subscribeBrowserAnnotationComments(event: IpcMainEvent): void {
+  browserRuntime.subscribeAnnotationComments(event);
+}
+
+export function unsubscribeBrowserAnnotationComments(event: IpcMainEvent): void {
+  browserRuntime.unsubscribeAnnotationComments(event);
 }
 
 export function listBrowserState(): DesktopBrowserState {

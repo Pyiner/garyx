@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 
 import type {
+  BrowserAnnotationCommentRequest,
   DesktopBrowserState,
 } from '@shared/contracts';
 
@@ -19,8 +20,10 @@ function activeTab(state: DesktopBrowserState | null) {
 }
 
 export function BrowserPage({
+  onAnnotationCommentRequest,
   variant = 'page',
 }: {
+  onAnnotationCommentRequest?: (request: BrowserAnnotationCommentRequest) => void;
   variant?: 'page' | 'side-panel';
 }) {
   const { t } = useI18n();
@@ -33,6 +36,12 @@ export function BrowserPage({
   const [browserStatus, setBrowserStatus] = useState<string | null>(null);
   const active = activeTab(browserState);
   const sidePanel = variant === 'side-panel';
+  const hasAnnotationCommentRequest = Boolean(onAnnotationCommentRequest);
+  const annotationCommentRequestRef = useRef(onAnnotationCommentRequest);
+
+  useEffect(() => {
+    annotationCommentRequestRef.current = onAnnotationCommentRequest;
+  }, [onAnnotationCommentRequest]);
 
   useEffect(() => {
     let disposed = false;
@@ -74,7 +83,22 @@ export function BrowserPage({
         enabled: false,
       });
     };
-  }, [active?.id, annotationMode, api]);
+  }, [active?.id, active?.url, annotationMode, api]);
+
+  useEffect(() => {
+    if (!hasAnnotationCommentRequest) {
+      return;
+    }
+    const handleAnnotationComment = (request: BrowserAnnotationCommentRequest) => {
+      setAnnotationMode(false);
+      setBrowserStatus(t('Comment target selected.'));
+      annotationCommentRequestRef.current?.(request);
+    };
+    api.subscribeBrowserAnnotationComments(handleAnnotationComment);
+    return () => {
+      api.unsubscribeBrowserAnnotationComments(handleAnnotationComment);
+    };
+  }, [api, hasAnnotationCommentRequest, t]);
 
   useLayoutEffect(() => {
     const node = hostRef.current;
@@ -148,7 +172,7 @@ export function BrowserPage({
       return;
     }
     setAnnotationMode(true);
-    setBrowserStatus(t('Hover over an element to highlight it.'));
+    setBrowserStatus(t('Hover an element, click it, then use the comment marker.'));
   }
 
   async function copyCurrentScreenshot() {

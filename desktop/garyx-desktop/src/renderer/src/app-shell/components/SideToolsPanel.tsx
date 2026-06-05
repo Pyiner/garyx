@@ -26,6 +26,7 @@ import { Terminal as XTermTerminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 
 import type {
+  BrowserAnnotationCommentRequest,
   DesktopTerminalEvent,
   DesktopTerminalState,
   DesktopWorkspaceMode,
@@ -33,7 +34,7 @@ import type {
   OpenChatStreamResult,
 } from "@shared/contracts";
 
-import { useI18n } from "../../i18n";
+import { useI18n, type Translate } from "../../i18n";
 
 const SidePanelBrowserPage = lazy(() =>
   import("../../BrowserPage").then((module) => ({ default: module.BrowserPage }))
@@ -131,6 +132,24 @@ function writeSideChatState(key: string, state: PersistedSideChatState) {
   } catch {
     // Ignore storage quota or privacy-mode failures; in-memory state still works.
   }
+}
+
+function formatBrowserAnnotationDraft(
+  request: BrowserAnnotationCommentRequest,
+  t: Translate,
+): string {
+  const lines = [
+    `${t("Browser comment target")}:`,
+    `${t("Page")}: ${request.title || request.url}`,
+    `${t("Element")}: ${request.label || request.tagName}`,
+  ];
+  if (request.selector) {
+    lines.push(`${t("Selector")}: ${request.selector}`);
+  }
+  if (request.text && request.text !== request.label) {
+    lines.push(`${t("Text")}: ${request.text}`);
+  }
+  return `${lines.join("\n")}\n\n`;
 }
 
 type ToolDescriptor = {
@@ -659,6 +678,15 @@ export function ThreadSideToolsPanel({
     openTool("chat");
   }
 
+  function handleBrowserAnnotationCommentRequest(request: BrowserAnnotationCommentRequest) {
+    const draft = formatBrowserAnnotationDraft(request, t);
+    setSideChatDraft((current) =>
+      current.trim() ? `${current.trimEnd()}\n\n${draft}` : draft,
+    );
+    setSideChatError(null);
+    openTool("chat");
+  }
+
   function openTool(toolId: ThreadSideToolId) {
     setOpenTools((current) =>
       current.includes(toolId) ? current : [...current, toolId],
@@ -815,7 +843,10 @@ export function ThreadSideToolsPanel({
           <Suspense
             fallback={<div className="browser-page browser-page-side-panel browser-side-panel-loading" />}
           >
-            <SidePanelBrowserPage variant="side-panel" />
+            <SidePanelBrowserPage
+              onAnnotationCommentRequest={handleBrowserAnnotationCommentRequest}
+              variant="side-panel"
+            />
           </Suspense>
         ) : null}
         {activeTool.id === "terminal" ? (

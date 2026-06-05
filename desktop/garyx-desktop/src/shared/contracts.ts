@@ -1766,6 +1766,24 @@ export interface BrowserAnnotationModeInput {
   enabled: boolean;
 }
 
+export interface BrowserAnnotationCommentRequest {
+  id: string;
+  tabId: string;
+  url: string;
+  title: string;
+  tagName: string;
+  label: string;
+  role?: string | null;
+  selector?: string | null;
+  text?: string | null;
+  rect: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+}
+
 export interface CopyImageToClipboardInput {
   dataUrl: string;
 }
@@ -1780,6 +1798,10 @@ export interface ShowBrowserConnectionMenuInput {
 }
 
 export type DesktopBrowserStateListener = (state: DesktopBrowserState) => void;
+
+export type DesktopBrowserAnnotationCommentListener = (
+  request: BrowserAnnotationCommentRequest,
+) => void;
 
 export interface DesktopTerminalSession {
   id: string;
@@ -2102,6 +2124,12 @@ export interface GaryxDesktopApi {
   ) => Promise<void>;
   subscribeBrowserState: (listener: DesktopBrowserStateListener) => void;
   unsubscribeBrowserState: (listener: DesktopBrowserStateListener) => void;
+  subscribeBrowserAnnotationComments: (
+    listener: DesktopBrowserAnnotationCommentListener,
+  ) => void;
+  unsubscribeBrowserAnnotationComments: (
+    listener: DesktopBrowserAnnotationCommentListener,
+  ) => void;
   listTerminalState: () => Promise<DesktopTerminalState>;
   createTerminalSession: (
     input?: CreateTerminalSessionInput,

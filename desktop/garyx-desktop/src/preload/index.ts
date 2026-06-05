@@ -99,6 +99,18 @@ const browserStateListeners = new Map<
   (_event: Electron.IpcRendererEvent, payload: unknown) => void
 >();
 
+const browserAnnotationCommentListeners = new Map<
+  Parameters<GaryxDesktopApi["subscribeBrowserAnnotationComments"]>[0],
+  (_event: Electron.IpcRendererEvent, payload: unknown) => void
+>();
+
+function clearBrowserAnnotationCommentListeners(): void {
+  for (const wrapped of browserAnnotationCommentListeners.values()) {
+    ipcRenderer.removeListener("garyx:browser-annotation-comment", wrapped);
+  }
+  browserAnnotationCommentListeners.clear();
+}
+
 const terminalEventListeners = new Map<
   Parameters<GaryxDesktopApi["subscribeTerminalEvents"]>[0],
   (_event: Electron.IpcRendererEvent, payload: unknown) => void
@@ -374,6 +386,28 @@ const api: GaryxDesktopApi = {
     browserStateListeners.delete(listener);
     if (browserStateListeners.size === 0) {
       ipcRenderer.send("garyx:browser-state-unsubscribe");
+    }
+  },
+  subscribeBrowserAnnotationComments: (listener) => {
+    clearBrowserAnnotationCommentListeners();
+    const wrapped = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+      listener(payload as Parameters<typeof listener>[0]);
+    };
+    browserAnnotationCommentListeners.set(listener, wrapped);
+    ipcRenderer.on("garyx:browser-annotation-comment", wrapped);
+    ipcRenderer.send("garyx:browser-annotation-comment-subscribe");
+  },
+  unsubscribeBrowserAnnotationComments: (listener) => {
+    const wrapped = browserAnnotationCommentListeners.get(listener);
+    if (!wrapped) {
+      clearBrowserAnnotationCommentListeners();
+      ipcRenderer.send("garyx:browser-annotation-comment-unsubscribe");
+      return;
+    }
+    ipcRenderer.removeListener("garyx:browser-annotation-comment", wrapped);
+    browserAnnotationCommentListeners.delete(listener);
+    if (browserAnnotationCommentListeners.size === 0) {
+      ipcRenderer.send("garyx:browser-annotation-comment-unsubscribe");
     }
   },
   listTerminalState: () => ipcRenderer.invoke("garyx:list-terminal-state"),
