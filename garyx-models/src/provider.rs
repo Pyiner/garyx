@@ -402,6 +402,13 @@ fn default_disallowed_tools() -> Vec<String> {
         "EnterPlanMode".to_owned(),
         "ExitPlanMode".to_owned(),
         "AskUserQuestion".to_owned(),
+        // The harness `ScheduleWakeup` tool has no firing mechanism when the
+        // Claude Code CLI is driven in single-turn (`claude -p`) mode: the
+        // schedule is accepted but the process exits at turn end and nothing
+        // wakes the agent back up. Agents should use the
+        // `mcp__garyx__schedule_followup` MCP tool instead, which goes through
+        // the gateway's cron-backed follow-up dispatch.
+        "ScheduleWakeup".to_owned(),
     ]
 }
 fn default_max_retries() -> u32 {
