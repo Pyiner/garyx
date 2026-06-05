@@ -7878,7 +7878,14 @@ export function AppShell() {
         workspacePath,
         workspaceMode: pendingWorkspaceMode,
       });
-      setDesktopState(started.state);
+      setDesktopState((current) => {
+        const baseState = current || started.state;
+        return {
+          ...baseState,
+          threads: mergeThread(baseState.threads, started.thread),
+          sessions: mergeThread(baseState.sessions, started.thread),
+        };
+      });
       setSelectedThreadId(started.thread.id);
       setThreadEntrySelectionSource(null);
       updateMessagesByThread((current) => ({
