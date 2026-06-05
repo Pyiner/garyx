@@ -80,7 +80,7 @@ struct GaryxComposer: View {
     }
 
     private var showsWorkspaceModeStrip: Bool {
-        canChangeWorkspaceMode
+        canChangeWorkspaceMode && model.newThreadWorkspaceCanUseWorktree
     }
 
     var body: some View {
