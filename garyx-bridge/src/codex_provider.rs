@@ -32,7 +32,11 @@ use crate::native_slash::build_native_skill_prompt;
 use crate::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
 
 const CODEX_CLIENT_IDLE_TTL: Duration = Duration::from_secs(180);
-const CODEX_STREAMING_INPUT_STEER_TIMEOUT: Duration = Duration::from_secs(5);
+// `turn/steer` only acknowledges that follow-up input was queued into the
+// active turn. It should not wait for the model response, but we keep this
+// timeout wide enough for transient local load before falling back to replacing
+// the stuck run.
+const CODEX_STREAMING_INPUT_STEER_TIMEOUT: Duration = Duration::from_secs(30);
 const CODEX_TIMEOUT_AUTO_CONTINUE_MESSAGE: &str = "continue";
 const CODEX_TIMEOUT_AUTO_CONTINUE_METADATA_KEY: &str = "codex_timeout_auto_continue";
 
