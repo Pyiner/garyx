@@ -309,6 +309,11 @@ fn test_build_sdk_options_defaults() {
             .disallowed_tools
             .contains(&"AskUserQuestion".to_string())
     );
+    assert!(
+        sdk_opts
+            .disallowed_tools
+            .contains(&"ScheduleWakeup".to_string())
+    );
 
     // MCP servers
     assert!(sdk_opts.mcp_servers.contains_key("garyx"));
