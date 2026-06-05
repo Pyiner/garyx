@@ -347,8 +347,8 @@ const api: GaryxDesktopApi = {
     ipcRenderer.invoke("garyx:browser-open-external", tabId),
   captureBrowserTab: (input) =>
     ipcRenderer.invoke("garyx:capture-browser-tab", input),
-  captureBrowserAnnotations: (input) =>
-    ipcRenderer.invoke("garyx:capture-browser-annotations", input),
+  setBrowserAnnotationMode: (input) =>
+    ipcRenderer.invoke("garyx:set-browser-annotation-mode", input),
   copyImageToClipboard: (input) =>
     ipcRenderer.invoke("garyx:copy-image-to-clipboard", input),
   updateBrowserBounds: (input) =>

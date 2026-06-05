@@ -159,6 +159,7 @@ const zhCN: Record<string, string> = {
   'Annotated {count} elements.': '已标注 {count} 个元素。',
   'Annotated screenshot copied.': '已复制带标注截图。',
   'Annotation marker added.': '已添加标注点。',
+  'Hover over an element to highlight it.': '悬停到元素上以高亮。',
   'Ask in side chat': '在侧聊中提问',
   'Add file': '添加文件',
   'Add tool': '添加工具',

@@ -1,8 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 
 import type {
-  DesktopBrowserAnnotationElement,
-  DesktopBrowserAnnotationSnapshot,
   DesktopBrowserState,
 } from '@shared/contracts';
 
@@ -20,92 +18,6 @@ function activeTab(state: DesktopBrowserState | null) {
   return state?.tabs.find((tab) => tab.isActive) ?? null;
 }
 
-function loadCanvasImage(dataUrl: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error('Failed to load screenshot.'));
-    image.src = dataUrl;
-  });
-}
-
-function drawRoundedRect(
-  context: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  radius: number,
-) {
-  const nextRadius = Math.min(radius, width / 2, height / 2);
-  context.beginPath();
-  context.moveTo(x + nextRadius, y);
-  context.lineTo(x + width - nextRadius, y);
-  context.quadraticCurveTo(x + width, y, x + width, y + nextRadius);
-  context.lineTo(x + width, y + height - nextRadius);
-  context.quadraticCurveTo(x + width, y + height, x + width - nextRadius, y + height);
-  context.lineTo(x + nextRadius, y + height);
-  context.quadraticCurveTo(x, y + height, x, y + height - nextRadius);
-  context.lineTo(x, y + nextRadius);
-  context.quadraticCurveTo(x, y, x + nextRadius, y);
-  context.closePath();
-}
-
-async function renderAnnotatedSnapshot(
-  snapshot: DesktopBrowserAnnotationSnapshot,
-): Promise<string> {
-  const image = await loadCanvasImage(snapshot.dataUrl);
-  const width = snapshot.width || image.naturalWidth;
-  const height = snapshot.height || image.naturalHeight;
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext('2d');
-  if (!context) {
-    throw new Error('Canvas is unavailable.');
-  }
-  context.drawImage(image, 0, 0, width, height);
-
-  const scaleX = width / Math.max(1, snapshot.viewportWidth || width);
-  const scaleY = height / Math.max(1, snapshot.viewportHeight || height);
-  const markerHeight = Math.max(18, Math.round(Math.min(width, height) * 0.027));
-  context.textAlign = 'center';
-  context.textBaseline = 'middle';
-  context.font = `700 ${Math.max(11, Math.round(markerHeight * 0.62))}px system-ui, sans-serif`;
-
-  snapshot.elements.forEach((element) => {
-    const rectX = element.rect.x * scaleX;
-    const rectY = element.rect.y * scaleY;
-    const rectWidth = element.rect.width * scaleX;
-    const rectHeight = element.rect.height * scaleY;
-    context.fillStyle = 'rgba(239, 68, 68, 0.08)';
-    context.fillRect(rectX, rectY, rectWidth, rectHeight);
-    context.lineWidth = Math.max(2, Math.round(Math.min(width, height) * 0.003));
-    context.strokeStyle = '#ef4444';
-    context.strokeRect(rectX, rectY, rectWidth, rectHeight);
-
-    const text = String(element.id);
-    const markerWidth = Math.max(markerHeight, context.measureText(text).width + 12);
-    const markerX = Math.max(0, Math.min(width - markerWidth, rectX));
-    const markerY = Math.max(0, Math.min(height - markerHeight, rectY - markerHeight - 2));
-    drawRoundedRect(context, markerX, markerY, markerWidth, markerHeight, markerHeight / 2);
-    context.fillStyle = '#ef4444';
-    context.fill();
-    context.lineWidth = Math.max(1, Math.round(markerHeight * 0.1));
-    context.strokeStyle = '#ffffff';
-    context.stroke();
-    context.fillStyle = '#ffffff';
-    context.fillText(text, markerX + markerWidth / 2, markerY + markerHeight / 2 + 1);
-  });
-
-  return canvas.toDataURL('image/png');
-}
-
-function formatAnnotationLabel(element: DesktopBrowserAnnotationElement) {
-  const label = element.label ? ` "${element.label}"` : '';
-  return `#${element.id} ${element.role}${label}`;
-}
-
 export function BrowserPage({
   variant = 'page',
 }: {
@@ -118,8 +30,6 @@ export function BrowserPage({
   const [browserState, setBrowserState] = useState<DesktopBrowserState | null>(null);
   const [addressValue, setAddressValue] = useState('');
   const [annotationMode, setAnnotationMode] = useState(false);
-  const [annotationSnapshot, setAnnotationSnapshot] = useState<DesktopBrowserAnnotationSnapshot | null>(null);
-  const [selectedAnnotationId, setSelectedAnnotationId] = useState<number | null>(null);
   const [browserStatus, setBrowserStatus] = useState<string | null>(null);
   const active = activeTab(browserState);
   const sidePanel = variant === 'side-panel';
@@ -139,7 +49,6 @@ export function BrowserPage({
     return () => {
       disposed = true;
       api.unsubscribeBrowserState(handleState);
-      void api.setBrowserOverlayPaused(false);
       void api.updateBrowserBounds({
         x: 0,
         y: 0,
@@ -149,6 +58,23 @@ export function BrowserPage({
       });
     };
   }, [api]);
+
+  useEffect(() => {
+    if (!annotationMode || !active?.id) {
+      return;
+    }
+    void api.setBrowserOverlayPaused(false);
+    void api.setBrowserAnnotationMode({
+      tabId: active.id,
+      enabled: true,
+    });
+    return () => {
+      void api.setBrowserAnnotationMode({
+        tabId: active.id,
+        enabled: false,
+      });
+    };
+  }, [active?.id, annotationMode, api]);
 
   useLayoutEffect(() => {
     const node = hostRef.current;
@@ -215,28 +141,14 @@ export function BrowserPage({
   async function toggleAnnotationMode() {
     if (annotationMode) {
       setAnnotationMode(false);
-      setAnnotationSnapshot(null);
-      setSelectedAnnotationId(null);
       setBrowserStatus(null);
-      await api.setBrowserOverlayPaused(false);
       return;
     }
     if (!active) {
       return;
     }
-    const snapshot = await api.captureBrowserAnnotations({
-      tabId: active.id,
-      copyToClipboard: false,
-    });
-    setAnnotationSnapshot(snapshot);
-    setSelectedAnnotationId(null);
     setAnnotationMode(true);
-    setBrowserStatus(
-      snapshot.elements.length
-        ? t('Annotated {count} elements.', { count: String(snapshot.elements.length) })
-        : t('No visible interactive elements found.'),
-    );
-    await api.setBrowserOverlayPaused(true);
+    setBrowserStatus(t('Hover over an element to highlight it.'));
   }
 
   async function copyCurrentScreenshot() {
@@ -244,12 +156,6 @@ export function BrowserPage({
       return;
     }
     try {
-      if (annotationMode && annotationSnapshot) {
-        const dataUrl = await renderAnnotatedSnapshot(annotationSnapshot);
-        await api.copyImageToClipboard({ dataUrl });
-        setBrowserStatus(t('Annotated screenshot copied.'));
-        return;
-      }
       await api.captureBrowserTab({
         tabId: active.id,
         copyToClipboard: true,
@@ -262,10 +168,6 @@ export function BrowserPage({
           : t('Failed to copy screenshot.'),
       );
     }
-  }
-
-  function selectAnnotationElement(element: DesktopBrowserAnnotationElement) {
-    setSelectedAnnotationId(element.id);
   }
 
   return (
@@ -451,37 +353,6 @@ export function BrowserPage({
             className={`browser-stage-host ${annotationMode ? 'browser-stage-host-annotating' : ''}`}
             ref={hostRef}
           />
-          {annotationMode && annotationSnapshot ? (
-            <div
-              aria-label={t('Annotated browser snapshot')}
-              className="browser-annotation-layer"
-              role="group"
-            >
-              <img
-                alt=""
-                className="browser-annotation-image"
-                draggable={false}
-                src={annotationSnapshot.dataUrl}
-              />
-              {annotationSnapshot.elements.map((element) => (
-                <button
-                  aria-label={formatAnnotationLabel(element)}
-                  className={`browser-annotation-target ${selectedAnnotationId === element.id ? 'is-selected' : ''} ${element.rect.y < 28 ? 'is-near-top' : ''}`}
-                  key={element.id}
-                  onClick={() => selectAnnotationElement(element)}
-                  style={{
-                    height: `${(element.rect.height / Math.max(1, annotationSnapshot.viewportHeight)) * 100}%`,
-                    left: `${(element.rect.x / Math.max(1, annotationSnapshot.viewportWidth)) * 100}%`,
-                    top: `${(element.rect.y / Math.max(1, annotationSnapshot.viewportHeight)) * 100}%`,
-                    width: `${(element.rect.width / Math.max(1, annotationSnapshot.viewportWidth)) * 100}%`,
-                  }}
-                  type="button"
-                >
-                  <span className="browser-annotation-marker">{element.id}</span>
-                </button>
-              ))}
-            </div>
-          ) : null}
         </div>
       </div>
     </div>

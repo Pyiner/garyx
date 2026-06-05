@@ -13,12 +13,10 @@ import {
 } from "react";
 import {
   FileText,
-  GitBranch,
   Globe,
   MessageSquare,
   Paperclip,
   Plus,
-  RefreshCw,
   Send,
   Terminal as TerminalIcon,
   X,
@@ -28,7 +26,6 @@ import { Terminal as XTermTerminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 
 import type {
-  DesktopWorkspaceGitDetails,
   DesktopTerminalEvent,
   DesktopTerminalState,
   DesktopWorkspaceMode,
@@ -587,14 +584,11 @@ function SideTerminalTool({ cwd }: { cwd?: string | null }) {
 }
 
 export function ThreadSideToolsPanel({
-  activeWorkspaceName,
   activeWorkspacePath,
   selectedWorkspaceFile,
   threadId,
-  workspaceBranch,
   workspaceDirectoryPanel,
   workspaceFileFilter,
-  workspaceMode,
   onRevealSelectedWorkspaceFile,
   onSubmitSideChat,
   onWorkspaceFileFilterChange,
@@ -617,13 +611,6 @@ export function ThreadSideToolsPanel({
   const [sideChatThreadId, setSideChatThreadId] = useState<string | null>(null);
   const [sideChatSending, setSideChatSending] = useState(false);
   const [sideChatError, setSideChatError] = useState<string | null>(null);
-  const [gitDetails, setGitDetails] = useState<DesktopWorkspaceGitDetails | null>(null);
-  const [gitLoading, setGitLoading] = useState(false);
-  const [gitBusy, setGitBusy] = useState(false);
-  const [gitPanelOpen, setGitPanelOpen] = useState(false);
-  const [gitMessage, setGitMessage] = useState("");
-  const [gitError, setGitError] = useState<string | null>(null);
-  const [gitOutput, setGitOutput] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const sideChatStorageKey = useMemo(() => {
     const ownerKey = threadId?.trim() || activeWorkspacePath?.trim() || "global";
@@ -634,34 +621,6 @@ export function ThreadSideToolsPanel({
   const openToolDescriptors = openTools
     .map((toolId) => tools.find((tool) => tool.id === toolId))
     .filter((tool): tool is ToolDescriptor => Boolean(tool));
-
-  async function refreshGitDetails() {
-    if (!activeWorkspacePath) {
-      setGitDetails(null);
-      return;
-    }
-    setGitLoading(true);
-    setGitError(null);
-    try {
-      const nextDetails = await window.garyxDesktop.getWorkspaceGitDetails({
-        workspacePath: activeWorkspacePath,
-      });
-      setGitDetails(nextDetails);
-    } catch (error) {
-      setGitError(error instanceof Error ? error.message : t("Failed to load changes."));
-      setGitDetails(null);
-    } finally {
-      setGitLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    setGitPanelOpen(false);
-    setGitMessage("");
-    setGitOutput(null);
-    void refreshGitDetails();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeWorkspacePath]);
 
   useEffect(() => {
     const persisted = readSideChatState(sideChatStorageKey);
@@ -684,16 +643,6 @@ export function ThreadSideToolsPanel({
     });
   }, [sideChatDraft, sideChatMessages, sideChatStorageKey, sideChatThreadId]);
 
-  const changeLabel = gitLoading
-    ? t("Loading…")
-    : gitDetails?.isGitRepo
-      ? gitDetails.changedCount > 0
-        ? t("{count} changed", { count: String(gitDetails.changedCount) })
-        : gitDetails.ahead > 0
-          ? t("{count} ahead", { count: String(gitDetails.ahead) })
-          : t("Clean")
-      : t("No Git repo");
-
   function attachSelectedWorkspaceFile() {
     if (!selectedWorkspaceFile) {
       return;
@@ -708,49 +657,6 @@ export function ThreadSideToolsPanel({
       current.some((entry) => entry.path === file.path) ? current : [...current, file],
     );
     openTool("chat");
-  }
-
-  async function commitChanges() {
-    const message = gitMessage.trim();
-    if (!activeWorkspacePath || !message || gitBusy) {
-      return;
-    }
-    setGitBusy(true);
-    setGitError(null);
-    setGitOutput(null);
-    try {
-      const result = await window.garyxDesktop.commitWorkspaceChanges({
-        workspacePath: activeWorkspacePath,
-        message,
-      });
-      setGitDetails(result.status);
-      setGitMessage("");
-      setGitOutput(result.output || t("Committed changes."));
-    } catch (error) {
-      setGitError(error instanceof Error ? error.message : t("Commit failed."));
-    } finally {
-      setGitBusy(false);
-    }
-  }
-
-  async function pushChanges() {
-    if (!activeWorkspacePath || gitBusy) {
-      return;
-    }
-    setGitBusy(true);
-    setGitError(null);
-    setGitOutput(null);
-    try {
-      const result = await window.garyxDesktop.pushWorkspaceBranch({
-        workspacePath: activeWorkspacePath,
-      });
-      setGitDetails(result.status);
-      setGitOutput(result.output || t("Pushed branch."));
-    } catch (error) {
-      setGitError(error instanceof Error ? error.message : t("Push failed."));
-    } finally {
-      setGitBusy(false);
-    }
   }
 
   function openTool(toolId: ThreadSideToolId) {
@@ -777,112 +683,6 @@ export function ThreadSideToolsPanel({
 
   return (
     <aside className={`thread-side-tools-panel is-${activeToolId}-active`}>
-      <div className="side-tools-context">
-        <div className="side-tools-context-title">{t("Environment Info")}</div>
-        <div className="side-tools-context-row">
-          <span>{t("Changes")}</span>
-          <span>{changeLabel}</span>
-        </div>
-        {gitDetails?.isGitRepo ? (
-          <div className="side-tools-context-row">
-            <span>{t("Branch")}</span>
-            <span>
-              {gitDetails.currentBranch || workspaceBranch?.trim() || t("Detached")}
-              {gitDetails.ahead || gitDetails.behind
-                ? ` +${gitDetails.ahead} / -${gitDetails.behind}`
-                : ""}
-            </span>
-          </div>
-        ) : null}
-        <div className="side-tools-context-row">
-          <span>{t("Workspace")}</span>
-          <span>{activeWorkspaceName || activeWorkspacePath || t("Local")}</span>
-        </div>
-        <div className="side-tools-context-row">
-          <span>{t("Mode")}</span>
-          <span>{workspaceMode === "local" ? t("Local") : workspaceMode || t("Local")}</span>
-        </div>
-        <div className="side-tools-context-actions">
-          <button
-            className="side-tools-context-action"
-            disabled={!gitDetails?.isGitRepo}
-            onClick={() => setGitPanelOpen((current) => !current)}
-            type="button"
-          >
-            {gitDetails?.ahead && !gitDetails.isDirty ? t("Push changes") : t("Commit or push")}
-          </button>
-          <button
-            className="codex-icon-button side-tools-refresh"
-            disabled={!activeWorkspacePath || gitLoading}
-            onClick={() => void refreshGitDetails()}
-            title={t("Refresh changes")}
-            type="button"
-          >
-            <RefreshCw aria-hidden />
-          </button>
-        </div>
-        {gitPanelOpen && gitDetails?.isGitRepo ? (
-          <div className="side-tools-git-panel">
-            <div className="side-tools-git-summary">
-              <GitBranch aria-hidden size={14} strokeWidth={1.8} />
-              <span>
-                {gitDetails.changedCount
-                  ? t("{count} changed files", { count: String(gitDetails.changedCount) })
-                  : t("Working tree clean")}
-              </span>
-            </div>
-            {gitDetails.files.length ? (
-              <div className="side-tools-git-files">
-                {gitDetails.files.slice(0, 6).map((file) => (
-                  <span key={`${file.status}:${file.path}`}>
-                    <code>{file.status}</code>
-                    <span>{file.path}</span>
-                  </span>
-                ))}
-                {gitDetails.files.length > 6 ? (
-                  <span>{t("{count} more", { count: String(gitDetails.files.length - 6) })}</span>
-                ) : null}
-              </div>
-            ) : null}
-            {gitDetails.isDirty ? (
-              <div className="side-tools-git-commit">
-                <input
-                  onChange={(event) => setGitMessage(event.target.value)}
-                  placeholder={t("Commit message")}
-                  value={gitMessage}
-                />
-                <button disabled={!gitMessage.trim() || gitBusy} onClick={() => void commitChanges()} type="button">
-                  {gitBusy ? t("Working…") : t("Commit")}
-                </button>
-              </div>
-            ) : null}
-            <button
-              className="side-tools-git-push"
-              disabled={gitBusy || gitDetails.isDirty}
-              onClick={() => void pushChanges()}
-              type="button"
-            >
-              {gitBusy ? t("Working…") : t("Push")}
-            </button>
-            {gitError ? <div className="side-tool-error">{gitError}</div> : null}
-            {gitOutput ? <pre className="side-tools-git-output">{gitOutput}</pre> : null}
-          </div>
-        ) : null}
-        {gitError && !gitPanelOpen ? <div className="side-tool-error">{gitError}</div> : null}
-        <div className="side-tools-context-title side-tools-context-title-secondary">
-          {t("Sources")}
-        </div>
-        {attachedFiles.length ? (
-          <div className="side-tools-sources">
-            {attachedFiles.map((file) => (
-              <span key={file.id} title={file.path}>{file.name}</span>
-            ))}
-          </div>
-        ) : (
-          <div className="side-tools-context-empty">{t("No sources")}</div>
-        )}
-      </div>
-
       <div className="side-tools-tabs">
         <div className="side-tools-tab-track" role="tablist">
           {openToolDescriptors.map((tool) => {

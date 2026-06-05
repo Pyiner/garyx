@@ -14,9 +14,8 @@ import {
 } from 'electron';
 
 import type {
+  BrowserAnnotationModeInput,
   BrowserBoundsInput,
-  DesktopBrowserAnnotationElement,
-  DesktopBrowserAnnotationSnapshot,
   CaptureBrowserTabInput,
   CaptureBrowserTabResult,
   CopyImageToClipboardInput,
@@ -33,258 +32,174 @@ const DEFAULT_REMOTE_DEBUGGING_PORT = '39222';
 const configuredRemoteDebuggingPort =
   process.env.GARYX_DESKTOP_REMOTE_DEBUGGING_PORT?.trim() || DEFAULT_REMOTE_DEBUGGING_PORT;
 const disableFixedRemoteDebuggingPort = process.env.GARYX_DESKTOP_DISABLE_FIXED_CDP === '1';
-const MAX_BROWSER_ANNOTATION_ELEMENTS = 140;
 
-const BROWSER_ANNOTATION_SCRIPT = `(() => {
-  const MAX_ELEMENTS = ${MAX_BROWSER_ANNOTATION_ELEMENTS};
-  const INTERACTIVE_SELECTOR = [
-    'a[href]',
-    'area[href]',
-    'button',
-    'input:not([type="hidden"])',
-    'select',
-    'textarea',
-    'summary',
-    'label',
-    '[contenteditable=""]',
-    '[contenteditable="true"]',
-    '[role="button"]',
-    '[role="checkbox"]',
-    '[role="combobox"]',
-    '[role="link"]',
-    '[role="listbox"]',
-    '[role="menuitem"]',
-    '[role="menuitemcheckbox"]',
-    '[role="menuitemradio"]',
-    '[role="option"]',
-    '[role="radio"]',
-    '[role="searchbox"]',
-    '[role="slider"]',
-    '[role="spinbutton"]',
-    '[role="switch"]',
-    '[role="tab"]',
-    '[role="textbox"]',
-    '[tabindex]:not([tabindex="-1"])',
-    '[onclick]',
-    '[aria-haspopup]',
-  ].join(',');
-
-  const cssEscape = (value) => {
-    if (window.CSS && typeof window.CSS.escape === 'function') {
-      return window.CSS.escape(String(value));
+function browserAnnotationModeScript(enabled: boolean): string {
+  return `(() => {
+    const KEY = '__garyxBrowserAnnotationMode';
+    const existing = window[KEY];
+    if (existing && typeof existing.dispose === 'function') {
+      existing.dispose();
     }
-    return String(value).replace(/[^a-zA-Z0-9_-]/g, (char) => {
-      const code = char.charCodeAt(0).toString(16);
-      return '\\\\' + code + ' ';
+    if (!${JSON.stringify(enabled)}) {
+      return { enabled: false };
+    }
+
+    const INTERACTIVE_SELECTOR = [
+      'a[href]',
+      'area[href]',
+      'button',
+      'input:not([type="hidden"])',
+      'select',
+      'textarea',
+      'summary',
+      'label',
+      '[contenteditable=""]',
+      '[contenteditable="true"]',
+      '[role="button"]',
+      '[role="checkbox"]',
+      '[role="combobox"]',
+      '[role="link"]',
+      '[role="listbox"]',
+      '[role="menuitem"]',
+      '[role="menuitemcheckbox"]',
+      '[role="menuitemradio"]',
+      '[role="option"]',
+      '[role="radio"]',
+      '[role="searchbox"]',
+      '[role="slider"]',
+      '[role="spinbutton"]',
+      '[role="switch"]',
+      '[role="tab"]',
+      '[role="textbox"]',
+      '[tabindex]:not([tabindex="-1"])',
+      '[onclick]',
+      '[aria-haspopup]',
+    ].join(',');
+
+    const overlay = document.createElement('div');
+    overlay.setAttribute('data-garyx-browser-annotation-hover', 'true');
+    Object.assign(overlay.style, {
+      position: 'fixed',
+      left: '0',
+      top: '0',
+      width: '0',
+      height: '0',
+      display: 'none',
+      boxSizing: 'border-box',
+      pointerEvents: 'none',
+      zIndex: '2147483647',
+      border: '2px solid #2563eb',
+      borderRadius: '4px',
+      background: 'rgba(37, 99, 235, 0.08)',
+      boxShadow: '0 0 0 1px rgba(255,255,255,0.9), 0 0 0 4px rgba(37,99,235,0.16)',
     });
-  };
-  const cssString = (value) => String(value).replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\"');
-  const normalize = (value, max = 96) => String(value || '').replace(/\\s+/g, ' ').trim().slice(0, max);
-  const attr = (element, name) => normalize(element.getAttribute(name));
-  const isDisabled = (element) => {
-    if (element.getAttribute('aria-disabled') === 'true') {
-      return true;
-    }
-    return 'disabled' in element && Boolean(element.disabled);
-  };
-  const inferRole = (element) => {
-    const explicit = attr(element, 'role');
-    if (explicit) {
-      return explicit;
-    }
-    const tag = element.tagName.toLowerCase();
-    if (tag === 'a' || tag === 'area') {
-      return 'link';
-    }
-    if (tag === 'button' || tag === 'summary') {
-      return 'button';
-    }
-    if (tag === 'select') {
-      return 'combobox';
-    }
-    if (tag === 'textarea') {
-      return 'textbox';
-    }
-    if (tag === 'label') {
-      return 'label';
-    }
-    if (element.isContentEditable) {
-      return 'textbox';
-    }
-    if (tag === 'input') {
-      const type = String(element.getAttribute('type') || 'text').toLowerCase();
-      if (type === 'button' || type === 'reset' || type === 'submit') {
-        return 'button';
+    (document.body || document.documentElement).appendChild(overlay);
+
+    const previousCursor = document.documentElement.style.cursor;
+    document.documentElement.style.cursor = 'crosshair';
+    let currentElement = null;
+
+    const isDisabled = (element) => {
+      if (!(element instanceof Element)) {
+        return true;
       }
-      if (type === 'checkbox') {
-        return 'checkbox';
+      if (element.getAttribute('aria-disabled') === 'true') {
+        return true;
       }
-      if (type === 'radio') {
-        return 'radio';
+      return 'disabled' in element && Boolean(element.disabled);
+    };
+
+    const visibleRect = (element) => {
+      if (!(element instanceof Element) || element === document.documentElement || element === document.body) {
+        return null;
       }
-      if (type === 'range') {
-        return 'slider';
+      const style = window.getComputedStyle(element);
+      if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) {
+        return null;
       }
-      if (type === 'search') {
-        return 'searchbox';
-      }
-      return 'textbox';
-    }
-    return tag;
-  };
-  const labelledByText = (element) => {
-    const ids = attr(element, 'aria-labelledby');
-    if (!ids) {
-      return '';
-    }
-    return normalize(ids.split(/\\s+/).map((id) => {
-      const target = document.getElementById(id);
-      return target ? target.innerText || target.textContent || '' : '';
-    }).join(' '));
-  };
-  const elementText = (element) => {
-    if (element instanceof HTMLInputElement) {
-      const type = String(element.type || 'text').toLowerCase();
-      if (type === 'button' || type === 'submit' || type === 'reset') {
-        return normalize(element.value);
-      }
-    }
-    return normalize(element.innerText || element.textContent || '');
-  };
-  const labelFor = (element) => {
-    return attr(element, 'aria-label') ||
-      labelledByText(element) ||
-      attr(element, 'alt') ||
-      attr(element, 'title') ||
-      attr(element, 'placeholder') ||
-      attr(element, 'value') ||
-      elementText(element) ||
-      inferRole(element);
-  };
-  const isUniqueSelector = (selector) => {
-    try {
-      return document.querySelectorAll(selector).length === 1;
-    } catch {
-      return false;
-    }
-  };
-  const selectorFor = (element) => {
-    const tag = element.tagName.toLowerCase();
-    if (element.id) {
-      const selector = '#' + cssEscape(element.id);
-      if (isUniqueSelector(selector)) {
-        return selector;
-      }
-    }
-    for (const name of ['data-testid', 'data-test', 'data-cy', 'name', 'aria-label', 'title', 'placeholder']) {
-      const value = element.getAttribute(name);
-      if (!value) {
-        continue;
-      }
-      const selector = tag + '[' + name + '="' + cssString(value) + '"]';
-      if (isUniqueSelector(selector)) {
-        return selector;
-      }
-    }
-    const parts = [];
-    let current = element;
-    while (current && current.nodeType === Node.ELEMENT_NODE && current !== document.documentElement) {
-      const currentTag = current.tagName.toLowerCase();
-      if (current.id) {
-        parts.unshift('#' + cssEscape(current.id));
-        break;
-      }
-      let index = 1;
-      let previous = current.previousElementSibling;
-      while (previous) {
-        if (previous.tagName === current.tagName) {
-          index += 1;
+      for (const rect of Array.from(element.getClientRects())) {
+        const left = Math.max(0, rect.left);
+        const top = Math.max(0, rect.top);
+        const right = Math.min(window.innerWidth, rect.right);
+        const bottom = Math.min(window.innerHeight, rect.bottom);
+        const width = right - left;
+        const height = bottom - top;
+        if (width >= 4 && height >= 4) {
+          return { left, top, width, height };
         }
-        previous = previous.previousElementSibling;
       }
-      parts.unshift(currentTag + ':nth-of-type(' + index + ')');
-      current = current.parentElement;
-    }
-    return parts.join(' > ');
-  };
-  const visibleRect = (element) => {
-    const style = window.getComputedStyle(element);
-    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0 || style.pointerEvents === 'none') {
       return null;
-    }
-    const rects = Array.from(element.getClientRects());
-    for (const rect of rects) {
-      const left = Math.max(0, rect.left);
-      const top = Math.max(0, rect.top);
-      const right = Math.min(window.innerWidth, rect.right);
-      const bottom = Math.min(window.innerHeight, rect.bottom);
-      const width = right - left;
-      const height = bottom - top;
-      if (width >= 4 && height >= 4) {
-        return { x: left, y: top, width, height };
+    };
+
+    const closestInteractive = (node) => {
+      let element = node instanceof Element ? node : node?.parentElement || null;
+      while (element && element !== document.documentElement) {
+        if (element.matches(INTERACTIVE_SELECTOR) && !isDisabled(element)) {
+          return element;
+        }
+        element = element.parentElement;
       }
-    }
-    return null;
-  };
-  const hitTestVisible = (element, rect) => {
-    const points = [
-      [rect.x + rect.width / 2, rect.y + rect.height / 2],
-      [rect.x + Math.min(rect.width - 1, 4), rect.y + Math.min(rect.height - 1, 4)],
-      [rect.x + Math.max(1, rect.width - 4), rect.y + Math.max(1, rect.height - 4)],
-    ];
-    return points.some(([x, y]) => {
-      if (x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight) {
-        return false;
+      return null;
+    };
+
+    const hide = () => {
+      currentElement = null;
+      overlay.style.display = 'none';
+    };
+
+    const update = (element) => {
+      const rect = visibleRect(element);
+      if (!rect) {
+        hide();
+        return;
       }
-      const hit = document.elementFromPoint(x, y);
-      return Boolean(hit && (hit === element || element.contains(hit) || hit.contains(element)));
-    });
-  };
-  const candidateElements = Array.from(document.querySelectorAll(INTERACTIVE_SELECTOR));
-  const seenRects = new Set();
-  const elements = [];
-  for (const element of candidateElements) {
-    if (!(element instanceof Element) || isDisabled(element)) {
-      continue;
-    }
-    const rect = visibleRect(element);
-    if (!rect || !hitTestVisible(element, rect)) {
-      continue;
-    }
-    const rectKey = [
-      Math.round(rect.x),
-      Math.round(rect.y),
-      Math.round(rect.width),
-      Math.round(rect.height),
-    ].join(':');
-    if (seenRects.has(rectKey)) {
-      continue;
-    }
-    seenRects.add(rectKey);
-    elements.push({
-      label: labelFor(element),
-      rect,
-      role: inferRole(element),
-      selector: selectorFor(element),
-      tagName: element.tagName.toLowerCase(),
-    });
-    if (elements.length >= MAX_ELEMENTS) {
-      break;
-    }
-  }
-  return {
-    elements: elements.map((element, index) => ({
-      ...element,
-      id: index + 1,
-      nodeId: String(index + 1),
-    })),
-    scrollX: window.scrollX,
-    scrollY: window.scrollY,
-    url: window.location.href,
-    viewportHeight: window.innerHeight,
-    viewportWidth: window.innerWidth,
-  };
-})()`;
+      currentElement = element;
+      overlay.style.display = 'block';
+      overlay.style.transform = 'translate(' + rect.left + 'px, ' + rect.top + 'px)';
+      overlay.style.width = rect.width + 'px';
+      overlay.style.height = rect.height + 'px';
+    };
+
+    const handlePointerMove = (event) => {
+      update(closestInteractive(event.target));
+    };
+    const handlePointerLeave = () => hide();
+    const handleScrollOrResize = () => {
+      if (currentElement) {
+        update(currentElement);
+      }
+    };
+    const handleClick = (event) => {
+      const target = closestInteractive(event.target);
+      if (!target) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      update(target);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove, true);
+    window.addEventListener('pointerleave', handlePointerLeave, true);
+    window.addEventListener('scroll', handleScrollOrResize, true);
+    window.addEventListener('resize', handleScrollOrResize, true);
+    window.addEventListener('click', handleClick, true);
+
+    window[KEY] = {
+      dispose() {
+        window.removeEventListener('pointermove', handlePointerMove, true);
+        window.removeEventListener('pointerleave', handlePointerLeave, true);
+        window.removeEventListener('scroll', handleScrollOrResize, true);
+        window.removeEventListener('resize', handleScrollOrResize, true);
+        window.removeEventListener('click', handleClick, true);
+        document.documentElement.style.cursor = previousCursor;
+        overlay.remove();
+        delete window[KEY];
+      },
+    };
+    return { enabled: true };
+  })()`;
+}
 
 if (!disableFixedRemoteDebuggingPort && !app.commandLine.hasSwitch('remote-debugging-port')) {
   app.commandLine.appendSwitch('remote-debugging-port', configuredRemoteDebuggingPort);
@@ -296,15 +211,6 @@ type BrowserTabRecord = {
   title: string;
   url: string;
   isLoading: boolean;
-};
-
-type BrowserAnnotationScriptResult = {
-  elements?: unknown[];
-  scrollX?: unknown;
-  scrollY?: unknown;
-  url?: unknown;
-  viewportHeight?: unknown;
-  viewportWidth?: unknown;
 };
 
 function normalizeUrl(value?: string): string {
@@ -321,56 +227,6 @@ function normalizeUrl(value?: string): string {
 function safeTitle(value: string): string {
   const trimmed = value.trim();
   return trimmed || 'New Tab';
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function finiteNumber(value: unknown, fallback = 0): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
-}
-
-function safeString(value: unknown, fallback = ''): string {
-  return typeof value === 'string' ? value : fallback;
-}
-
-function sanitizeAnnotationElements(value: unknown): DesktopBrowserAnnotationElement[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const elements: DesktopBrowserAnnotationElement[] = [];
-  for (const item of value.slice(0, MAX_BROWSER_ANNOTATION_ELEMENTS)) {
-    const record = asRecord(item);
-    const rect = asRecord(record?.rect);
-    if (!record || !rect) {
-      continue;
-    }
-    const x = finiteNumber(rect.x);
-    const y = finiteNumber(rect.y);
-    const width = finiteNumber(rect.width);
-    const height = finiteNumber(rect.height);
-    if (width <= 0 || height <= 0) {
-      continue;
-    }
-    elements.push({
-      id: elements.length + 1,
-      nodeId: safeString(record.nodeId, String(elements.length + 1)),
-      tagName: safeString(record.tagName, 'element'),
-      role: safeString(record.role, 'element'),
-      label: safeString(record.label, ''),
-      selector: safeString(record.selector, ''),
-      rect: {
-        x,
-        y,
-        width,
-        height,
-      },
-    });
-  }
-  return elements;
 }
 
 export function getBrowserDebugEndpoint(): DesktopBrowserDebugEndpoint {
@@ -550,30 +406,11 @@ class BrowserRuntime {
     };
   }
 
-  async captureAnnotations(input: CaptureBrowserTabInput): Promise<DesktopBrowserAnnotationSnapshot> {
+  async setAnnotationMode(input: BrowserAnnotationModeInput): Promise<void> {
     const record = this.requireTab(input.tabId);
-    const annotationResult = asRecord(
-      await record.view.webContents
-        .executeJavaScript(BROWSER_ANNOTATION_SCRIPT, true)
-        .catch(() => null),
-    ) as BrowserAnnotationScriptResult | null;
-    const image = await record.view.webContents.capturePage();
-    const size = image.getSize();
-    const viewportWidth = finiteNumber(annotationResult?.viewportWidth, size.width);
-    const viewportHeight = finiteNumber(annotationResult?.viewportHeight, size.height);
-    return {
-      dataUrl: image.toDataURL(),
-      elements: sanitizeAnnotationElements(annotationResult?.elements),
-      height: size.height,
-      mediaType: 'image/png',
-      scrollX: finiteNumber(annotationResult?.scrollX),
-      scrollY: finiteNumber(annotationResult?.scrollY),
-      title: safeTitle(record.title || record.view.webContents.getTitle()),
-      url: safeString(annotationResult?.url, record.view.webContents.getURL() || record.url),
-      viewportHeight,
-      viewportWidth,
-      width: size.width,
-    };
+    await record.view.webContents
+      .executeJavaScript(browserAnnotationModeScript(Boolean(input.enabled)), true)
+      .catch(() => null);
   }
 
   setHostBounds(input: BrowserBoundsInput): void {
@@ -806,11 +643,11 @@ export async function captureBrowserTab(
   return browserRuntime.captureTab(captureInput);
 }
 
-export async function captureBrowserAnnotations(
+export async function setBrowserAnnotationMode(
   _event: IpcMainInvokeEvent,
-  input: CaptureBrowserTabInput,
-): Promise<DesktopBrowserAnnotationSnapshot> {
-  return browserRuntime.captureAnnotations(input);
+  input: BrowserAnnotationModeInput,
+): Promise<void> {
+  await browserRuntime.setAnnotationMode(input);
 }
 
 export function copyImageToClipboard(
