@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import {
   WebContentsView,
   app,
+  clipboard,
   shell,
   type BrowserWindow,
   type IpcMainEvent,
@@ -13,6 +14,7 @@ import {
 
 import type {
   BrowserBoundsInput,
+  CaptureBrowserTabResult,
   CreateBrowserTabInput,
   DesktopBrowserDebugEndpoint,
   DesktopBrowserState,
@@ -213,6 +215,20 @@ class BrowserRuntime {
     if (url) {
       await shell.openExternal(url);
     }
+  }
+
+  async captureTab(tabId: string): Promise<CaptureBrowserTabResult> {
+    const record = this.requireTab(tabId);
+    const image = await record.view.webContents.capturePage();
+    clipboard.writeImage(image);
+    const size = image.getSize();
+    return {
+      dataUrl: image.toDataURL(),
+      height: size.height,
+      mediaType: 'image/png',
+      title: safeTitle(record.title || record.view.webContents.getTitle()),
+      width: size.width,
+    };
   }
 
   setHostBounds(input: BrowserBoundsInput): void {
@@ -429,6 +445,13 @@ export async function browserReload(_event: IpcMainInvokeEvent, tabId: string): 
 
 export async function browserOpenExternal(_event: IpcMainInvokeEvent, tabId: string): Promise<void> {
   return browserRuntime.openExternal(tabId);
+}
+
+export async function captureBrowserTab(
+  _event: IpcMainInvokeEvent,
+  tabId: string,
+): Promise<CaptureBrowserTabResult> {
+  return browserRuntime.captureTab(tabId);
 }
 
 export function updateBrowserBounds(_event: IpcMainInvokeEvent, input: BrowserBoundsInput): void {

@@ -78,6 +78,12 @@ import { Input } from "../components/ui/input";
 import { WorkspacePathPickerDialog } from "../components/WorkspacePathPicker";
 import { AddBotDialog } from "./components/AddBotDialog";
 import { DreamsPanel } from "./components/DreamsPanel";
+import {
+  ThreadSideToolsPanel,
+  type SideChatSubmitInput,
+  type SideChatSubmitResult,
+  type SideToolWorkspaceFile,
+} from "./components/SideToolsPanel";
 import { BotConversationSidebar } from "../BotConversationSidebar";
 import { WorkspaceConversationSidebar } from "../WorkspaceConversationSidebar";
 import { ThreadConversationSidebar } from "../ThreadConversationSidebar";
@@ -1682,6 +1688,7 @@ export function AppShell() {
   const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
   const [bindingMutation, setBindingMutation] = useState<string | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [workspaceFileFilter, setWorkspaceFileFilter] = useState("");
   const [threadLogsOpen, setThreadLogsOpen] = useState(false);
   const [threadLogsActiveTab, setThreadLogsActiveTab] =
     useState<ThreadLogTab>("client");
@@ -4694,9 +4701,11 @@ export function AppShell() {
   useEffect(() => {
     if (!activeWorkspacePath) {
       setInspectorOpen(false);
+      setWorkspaceFileFilter("");
       return;
     }
 
+    setWorkspaceFileFilter("");
     setExpandedWorkspaceDirectories((current) => ({
       ...current,
       [workspaceDirectoryKey(activeWorkspacePath, "")]: true,
@@ -6771,6 +6780,66 @@ export function AppShell() {
     }
   }
 
+  async function handleSubmitSideChat(
+    input: SideChatSubmitInput,
+  ): Promise<SideChatSubmitResult> {
+    const prompt = input.message.trim();
+    if (!prompt) {
+      throw new Error("Enter a message first.");
+    }
+    const workspacePath =
+      activeWorkspacePath ||
+      pendingWorkspacePath ||
+      (preferredWorkspaceForNewThread?.available
+        ? preferredWorkspaceForNewThread.path
+        : null);
+    if (!workspacePath) {
+      throw new Error("Choose an available workspace before starting side chat.");
+    }
+
+    let sideThreadId = input.threadId?.trim() || "";
+    let sideThreadTitle: string | null = null;
+    if (!sideThreadId) {
+      const created = await window.garyxDesktop.createThread({
+        title: "Side chat",
+        workspacePath,
+        workspaceMode: composerWorkspaceMode || "local",
+        agentId: activeThread?.agentId || pendingAgentId || "claude",
+      });
+      sideThreadId = created.thread.id;
+      sideThreadTitle = created.thread.title;
+      setDesktopState(created.state);
+      updateMessagesByThread((current) => ({
+        ...current,
+        [created.thread.id]: current[created.thread.id] || [],
+      }));
+    }
+
+    const result = await window.garyxDesktop.openChatStream({
+      threadId: sideThreadId,
+      message: prompt,
+      files: input.files,
+    });
+    const resultThreadId = result.threadId || result.sessionId || sideThreadId;
+    setDesktopState((current) => {
+      if (!current) {
+        return current;
+      }
+      return {
+        ...current,
+        threads: mergeThread(current.threads, result.thread),
+        sessions: mergeThread(current.sessions || current.threads, result.thread),
+      };
+    });
+    scheduleHistoryRefresh(resultThreadId, 4, 900, true);
+    return {
+      response: result.response,
+      status: result.status,
+      threadId: resultThreadId,
+      title: result.thread.title || sideThreadTitle,
+    };
+  }
+
   async function handleNewThread() {
     setBotConversationGroupId(null);
     setWorkspaceConversationPath(null);
@@ -8180,6 +8249,29 @@ export function AppShell() {
     void handleStartDispatch();
   }
 
+  const workspaceFileFilterQuery = workspaceFileFilter.trim().toLowerCase();
+
+  function workspaceEntryMatchesFilter(
+    workspacePath: string,
+    entry: DesktopWorkspaceFileEntry,
+  ): boolean {
+    if (!workspaceFileFilterQuery) {
+      return true;
+    }
+    const haystack = `${entry.name}\n${entry.path}`.toLowerCase();
+    if (haystack.includes(workspaceFileFilterQuery)) {
+      return true;
+    }
+    if (entry.entryType !== "directory") {
+      return false;
+    }
+    const childKey = workspaceDirectoryKey(workspacePath, entry.path);
+    const childEntries = workspaceDirectories[childKey]?.entries || [];
+    return childEntries.some((child) =>
+      workspaceEntryMatchesFilter(workspacePath, child),
+    );
+  }
+
   function renderWorkspaceFileNodes(
     workspacePath: string,
     directoryPath = "",
@@ -8219,8 +8311,14 @@ export function AppShell() {
 
     nodes.push(
       ...entries.map((entry) => {
+        if (!workspaceEntryMatchesFilter(workspacePath, entry)) {
+          return null;
+        }
         const childKey = workspaceDirectoryKey(workspacePath, entry.path);
         const isExpanded = expandedWorkspaceDirectories[childKey] === true;
+        const shouldShowChildren =
+          entry.entryType === "directory" &&
+          (isExpanded || Boolean(workspaceFileFilterQuery));
         const isSelected =
           selectedWorkspaceFile?.workspacePath === workspacePath &&
           selectedWorkspaceFile?.path === entry.path;
@@ -8244,7 +8342,7 @@ export function AppShell() {
                 <span className="workspace-file-node-name">{entry.name}</span>
               </span>
             </button>
-            {entry.entryType === "directory" && isExpanded ? (
+            {shouldShowChildren ? (
               <div className="workspace-file-children">
                 {renderWorkspaceFileNodes(workspacePath, entry.path, depth + 1)}
               </div>
@@ -8295,6 +8393,51 @@ export function AppShell() {
         {renderWorkspaceFileNodes(activeWorkspacePath)}
       </div>
     </>
+  ) : null;
+  const selectedSideToolWorkspaceFile: SideToolWorkspaceFile | null =
+    selectedWorkspaceFile &&
+    selectedWorkspaceFileEntry?.entryType === "file" &&
+    selectedWorkspaceFile.workspacePath === activeWorkspacePath
+      ? {
+          name: selectedWorkspaceFileEntry.name,
+          relativePath: selectedWorkspaceFile.path,
+          absolutePath: workspaceFileAbsolutePath(
+            selectedWorkspaceFile.workspacePath,
+            selectedWorkspaceFile.path,
+          ),
+          mediaType:
+            selectedWorkspaceFileEntry.mediaType ||
+            (workspaceFilePreview?.workspacePath === selectedWorkspaceFile.workspacePath &&
+            workspaceFilePreview.path === selectedWorkspaceFile.path
+              ? workspaceFilePreview.mediaType
+              : null),
+        }
+      : null;
+
+  async function handleRevealSelectedWorkspaceFile() {
+    if (!selectedWorkspaceFile) {
+      return;
+    }
+    await window.garyxDesktop.revealWorkspaceFile({
+      workspacePath: selectedWorkspaceFile.workspacePath,
+      filePath: selectedWorkspaceFile.path,
+    });
+  }
+
+  const sideToolsPanel = activeWorkspacePath ? (
+    <ThreadSideToolsPanel
+      activeWorkspaceName={activeWorkspace?.name || null}
+      activeWorkspacePath={activeWorkspacePath}
+      selectedWorkspaceFile={selectedSideToolWorkspaceFile}
+      threadId={selectedThreadId}
+      workspaceBranch={composerWorkspaceBranch}
+      workspaceDirectoryPanel={workspaceDirectoryPanel}
+      workspaceFileFilter={workspaceFileFilter}
+      workspaceMode={composerWorkspaceMode || "local"}
+      onRevealSelectedWorkspaceFile={handleRevealSelectedWorkspaceFile}
+      onSubmitSideChat={handleSubmitSideChat}
+      onWorkspaceFileFilterChange={setWorkspaceFileFilter}
+    />
   ) : null;
 
   if (loading) {
@@ -9253,6 +9396,7 @@ export function AppShell() {
                 showAutomationRunTailLoading={showAutomationRunTailLoading}
                 showHistoryLoadingPlaceholder={showHistoryLoadingPlaceholder}
                 showPendingAckLoading={showPendingAckLoading}
+                sideToolsPanel={sideToolsPanel}
                 threadLayoutRef={threadLayoutRef}
                 threadLayoutStyle={
                   threadLogsOpen
@@ -9287,7 +9431,6 @@ export function AppShell() {
                     />
                   ) : null
                 }
-                workspaceDirectoryPanel={workspaceDirectoryPanel}
                 workspaceMutation={workspaceMutation}
               />
             )}

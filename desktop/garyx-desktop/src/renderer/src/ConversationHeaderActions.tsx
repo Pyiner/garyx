@@ -1,10 +1,11 @@
-import { IconFolder, IconPlugConnected } from '@tabler/icons-react';
+import { IconPlugConnected } from '@tabler/icons-react';
 
 import {
   ConversationTeamMembers,
   type ConversationTeamSummary,
 } from './ConversationTeamMembers';
 import { ThreadInfoPopover } from './ThreadInfoPopover';
+import { PanelIcon } from './app-shell/icons';
 import type { ThreadRuntimeInfo } from '@shared/contracts';
 import { useI18n } from './i18n';
 
@@ -34,7 +35,7 @@ function QueueIcon({ className }: { className?: string }) {
 }
 
 function DirectoryIcon() {
-  return <IconFolder aria-hidden className="icon icon-tight" size={15} stroke={1.7} />;
+  return <PanelIcon />;
 }
 
 export function ConversationHeaderActions({
@@ -113,7 +114,7 @@ export function ConversationHeaderActions({
           {selectedThreadId ? (
             <button
               aria-expanded={inspectorOpen}
-              aria-label={inspectorOpen ? t('Hide file directory') : t('Show file directory')}
+              aria-label={inspectorOpen ? t('Hide side tools') : t('Show side tools')}
               className={`conversation-header-action-button conversation-header-action-icon ${inspectorOpen ? 'is-open' : ''}`}
               disabled={!hasWorkspaceDirectory}
               onClick={onToggleInspector}

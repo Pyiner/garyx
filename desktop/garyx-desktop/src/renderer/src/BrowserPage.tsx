@@ -1,11 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type MouseEvent } from 'react';
 
-import type { DesktopBrowserState } from '@shared/contracts';
+import type { CaptureBrowserTabResult, DesktopBrowserState } from '@shared/contracts';
 
 import { Input } from '@/components/ui/input';
 import { getDesktopApi } from './platform/desktop-api';
 import { BrowserBackIcon, BrowserForwardIcon, BrowserRefreshIcon, BrowserCloseTabIcon, ExternalLinkIcon, NewTabIcon, BrowserIcon, LockIcon, InfoIcon } from './app-shell/icons';
 import { useI18n } from './i18n';
+import { Camera, MousePointer2 } from 'lucide-react';
 
 function isHttpsUrl(url: string) {
   return url.startsWith('https://');
@@ -15,14 +16,28 @@ function activeTab(state: DesktopBrowserState | null) {
   return state?.tabs.find((tab) => tab.isActive) ?? null;
 }
 
-export function BrowserPage() {
+interface AnnotationMark {
+  id: number;
+  x: number;
+  y: number;
+}
+
+export function BrowserPage({
+  variant = 'page',
+}: {
+  variant?: 'page' | 'side-panel';
+}) {
   const { t } = useI18n();
   const api = getDesktopApi();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const browserInfoButtonRef = useRef<HTMLButtonElement | null>(null);
   const [browserState, setBrowserState] = useState<DesktopBrowserState | null>(null);
   const [addressValue, setAddressValue] = useState('');
+  const [annotationMode, setAnnotationMode] = useState(false);
+  const [annotationSnapshot, setAnnotationSnapshot] = useState<CaptureBrowserTabResult | null>(null);
+  const [annotationMarks, setAnnotationMarks] = useState<AnnotationMark[]>([]);
   const active = activeTab(browserState);
+  const sidePanel = variant === 'side-panel';
 
   useEffect(() => {
     let disposed = false;
@@ -39,6 +54,7 @@ export function BrowserPage() {
     return () => {
       disposed = true;
       api.unsubscribeBrowserState(handleState);
+      void api.setBrowserOverlayPaused(false);
       void api.updateBrowserBounds({
         x: 0,
         y: 0,
@@ -111,10 +127,46 @@ export function BrowserPage() {
     });
   }
 
+  async function toggleAnnotationMode() {
+    if (annotationMode) {
+      setAnnotationMode(false);
+      setAnnotationSnapshot(null);
+      setAnnotationMarks([]);
+      await api.setBrowserOverlayPaused(false);
+      return;
+    }
+    if (!active) {
+      return;
+    }
+    const snapshot = await api.captureBrowserTab(active.id);
+    setAnnotationSnapshot(snapshot);
+    setAnnotationMarks([]);
+    setAnnotationMode(true);
+    await api.setBrowserOverlayPaused(true);
+  }
+
+  function addAnnotationMark(event: MouseEvent<HTMLButtonElement>) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      return;
+    }
+    const x = ((event.clientX - rect.left) / rect.width) * 100;
+    const y = ((event.clientY - rect.top) / rect.height) * 100;
+    setAnnotationMarks((current) => [
+      ...current,
+      {
+        id: current.length + 1,
+        x: Math.max(0, Math.min(100, x)),
+        y: Math.max(0, Math.min(100, y)),
+      },
+    ]);
+  }
+
   return (
-    <div className="browser-page">
+    <div className={`browser-page ${sidePanel ? 'browser-page-side-panel' : ''}`}>
       <div className="browser-toolbar">
-        <div className="browser-tab-strip">
+        {!sidePanel ? (
+          <div className="browser-tab-strip">
           <div className="browser-tab-track" role="tablist">
             {(browserState?.tabs ?? []).map((tab) => (
               <div
@@ -169,6 +221,7 @@ export function BrowserPage() {
             </button>
           </div>
         </div>
+        ) : null}
 
         <div className="browser-toolbar-main">
           <button
@@ -219,7 +272,7 @@ export function BrowserPage() {
               onFocus={(event) => {
                 event.target.select();
               }}
-              placeholder={t('Search or enter address')}
+              placeholder={sidePanel ? t('Input URL') : t('Search or enter address')}
               value={addressValue}
             />
           </form>
@@ -236,12 +289,82 @@ export function BrowserPage() {
           >
             <ExternalLinkIcon />
           </button>
+          {sidePanel ? (
+            <>
+              <button
+                className="codex-icon-button browser-toolbar-icon"
+                disabled={!active}
+                onClick={() => {
+                  if (active) {
+                    void api.captureBrowserTab(active.id);
+                  }
+                }}
+                title={t('Copy Screenshot')}
+                type="button"
+              >
+                <Camera aria-hidden />
+              </button>
+              <button
+                aria-pressed={annotationMode}
+                className={`codex-icon-button browser-toolbar-icon ${annotationMode ? 'is-active' : ''}`}
+                disabled={!active}
+                onClick={() => {
+                  void toggleAnnotationMode();
+                }}
+                title={t('Annotate')}
+                type="button"
+              >
+                <MousePointer2 aria-hidden />
+              </button>
+              <button
+                aria-haspopup="menu"
+                className="codex-icon-button browser-toolbar-icon browser-info-button"
+                onClick={() => {
+                  showBrowserConnectionMenu();
+                }}
+                ref={browserInfoButtonRef}
+                type="button"
+              >
+                <InfoIcon />
+              </button>
+            </>
+          ) : null}
         </div>
       </div>
 
       <div className="browser-stage">
         <div className="browser-stage-shell">
-          <div className="browser-stage-host" ref={hostRef} />
+          <div
+            className={`browser-stage-host ${annotationMode ? 'browser-stage-host-annotating' : ''}`}
+            ref={hostRef}
+          />
+          {annotationMode && annotationSnapshot ? (
+            <button
+              aria-label={t('Annotate')}
+              className="browser-annotation-layer"
+              onClick={addAnnotationMark}
+              type="button"
+            >
+              <img
+                alt=""
+                className="browser-annotation-image"
+                draggable={false}
+                src={annotationSnapshot.dataUrl}
+              />
+              {annotationMarks.map((mark) => (
+                <span
+                  className="browser-annotation-marker"
+                  key={mark.id}
+                  style={{
+                    left: `${mark.x}%`,
+                    top: `${mark.y}%`,
+                  }}
+                >
+                  {mark.id}
+                </span>
+              ))}
+            </button>
+          ) : null}
         </div>
       </div>
     </div>

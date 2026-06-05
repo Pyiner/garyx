@@ -222,6 +222,7 @@ import {
   bindBrowserWindow,
   browserGoBack,
   browserGoForward,
+  captureBrowserTab,
   browserOpenExternal,
   browserReload,
   closeBrowserTab,
@@ -234,6 +235,20 @@ import {
   updateBrowserBounds,
   setBrowserOverlayPaused,
 } from "./browser-runtime";
+import {
+  activateTerminalSession,
+  closeTerminalSession,
+  createTerminalSession,
+  listTerminalState,
+  subscribeTerminalState,
+  unsubscribeTerminalState,
+  writeTerminalInput,
+} from "./terminal-runtime";
+import {
+  commitWorkspaceChanges,
+  getWorkspaceGitDetails,
+  pushWorkspaceBranch,
+} from "./workspace-git-runtime";
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -1363,6 +1378,9 @@ function registerIpcHandlers(): void {
   ipcMain.handle("garyx:list-browser-state", async () => {
     return listBrowserState();
   });
+  ipcMain.handle("garyx:get-workspace-git-details", getWorkspaceGitDetails);
+  ipcMain.handle("garyx:commit-workspace-changes", commitWorkspaceChanges);
+  ipcMain.handle("garyx:push-workspace-branch", pushWorkspaceBranch);
   ipcMain.handle("garyx:create-browser-tab", createBrowserTab);
   ipcMain.handle("garyx:activate-browser-tab", activateBrowserTab);
   ipcMain.handle("garyx:close-browser-tab", closeBrowserTab);
@@ -1371,6 +1389,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle("garyx:browser-go-forward", browserGoForward);
   ipcMain.handle("garyx:browser-reload", browserReload);
   ipcMain.handle("garyx:browser-open-external", browserOpenExternal);
+  ipcMain.handle("garyx:capture-browser-tab", captureBrowserTab);
   ipcMain.handle("garyx:update-browser-bounds", updateBrowserBounds);
   ipcMain.handle("garyx:set-browser-overlay-paused", setBrowserOverlayPaused);
   ipcMain.handle("garyx:show-browser-connection-menu", (_event, input: ShowBrowserConnectionMenuInput) => {
@@ -1382,6 +1401,23 @@ function registerIpcHandlers(): void {
   });
   ipcMain.on("garyx:browser-state-unsubscribe", (event) => {
     unsubscribeBrowserState(event);
+  });
+  ipcMain.handle("garyx:list-terminal-state", async () => {
+    return listTerminalState();
+  });
+  ipcMain.handle("garyx:create-terminal-session", createTerminalSession);
+  ipcMain.handle("garyx:activate-terminal-session", activateTerminalSession);
+  ipcMain.handle("garyx:close-terminal-session", closeTerminalSession);
+  ipcMain.handle("garyx:write-terminal-input", writeTerminalInput);
+  ipcMain.on("garyx:terminal-event-subscribe", (event) => {
+    const state = subscribeTerminalState(event);
+    event.sender.send("garyx:terminal-event", {
+      type: "state",
+      state,
+    });
+  });
+  ipcMain.on("garyx:terminal-event-unsubscribe", (event) => {
+    unsubscribeTerminalState(event);
   });
   writeBootstrapTrace("registerIpcHandlers:done");
 }

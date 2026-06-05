@@ -1472,6 +1472,35 @@ export interface DesktopWorkspaceGitStatus {
   isDirty: boolean;
 }
 
+export interface DesktopWorkspaceGitFile {
+  path: string;
+  status: string;
+}
+
+export interface DesktopWorkspaceGitDetails extends DesktopWorkspaceGitStatus {
+  ahead: number;
+  behind: number;
+  changedCount: number;
+  stagedCount: number;
+  unstagedCount: number;
+  untrackedCount: number;
+  files: DesktopWorkspaceGitFile[];
+}
+
+export interface CommitWorkspaceChangesInput {
+  workspacePath: string;
+  message: string;
+}
+
+export interface PushWorkspaceBranchInput {
+  workspacePath: string;
+}
+
+export interface WorkspaceGitMutationResult {
+  status: DesktopWorkspaceGitDetails;
+  output: string;
+}
+
 export interface RenameThreadInput {
   threadId: string;
   // Compatibility fallback for older callers. Prefer `threadId`.
@@ -1717,6 +1746,14 @@ export interface BrowserBoundsInput {
   visible: boolean;
 }
 
+export interface CaptureBrowserTabResult {
+  dataUrl: string;
+  height: number;
+  mediaType: "image/png";
+  title: string;
+  width: number;
+}
+
 export interface ShowBrowserConnectionMenuInput {
   x: number;
   y: number;
@@ -1727,6 +1764,49 @@ export interface ShowBrowserConnectionMenuInput {
 }
 
 export type DesktopBrowserStateListener = (state: DesktopBrowserState) => void;
+
+export interface DesktopTerminalSession {
+  id: string;
+  title: string;
+  cwd: string;
+  output: string;
+  running: boolean;
+  createdAt: string;
+  updatedAt: string;
+  exitCode: number | null;
+  exitSignal: string | null;
+}
+
+export interface DesktopTerminalState {
+  activeSessionId: string | null;
+  sessions: DesktopTerminalSession[];
+}
+
+export interface CreateTerminalSessionInput {
+  cwd?: string | null;
+  title?: string | null;
+}
+
+export interface TerminalSessionInput {
+  sessionId: string;
+}
+
+export interface TerminalWriteInput extends TerminalSessionInput {
+  data: string;
+}
+
+export type DesktopTerminalEvent =
+  | {
+      type: "state";
+      state: DesktopTerminalState;
+    }
+  | {
+      type: "output";
+      sessionId: string;
+      data: string;
+    };
+
+export type DesktopTerminalEventListener = (event: DesktopTerminalEvent) => void;
 
 export interface GaryxDesktopApi {
   getState: () => Promise<DesktopState>;
@@ -1805,6 +1885,15 @@ export interface GaryxDesktopApi {
   getWorkspaceGitStatus: (input: {
     workspacePath: string;
   }) => Promise<DesktopWorkspaceGitStatus>;
+  getWorkspaceGitDetails: (input: {
+    workspacePath: string;
+  }) => Promise<DesktopWorkspaceGitDetails>;
+  commitWorkspaceChanges: (
+    input: CommitWorkspaceChangesInput,
+  ) => Promise<WorkspaceGitMutationResult>;
+  pushWorkspaceBranch: (
+    input: PushWorkspaceBranchInput,
+  ) => Promise<WorkspaceGitMutationResult>;
   promoteThreadToTask: (input: PromoteTaskInput) => Promise<DesktopTaskSummary>;
   updateTaskStatus: (input: UpdateTaskStatusInput) => Promise<void>;
   assignTask: (input: AssignTaskInput) => Promise<void>;
@@ -1976,6 +2065,7 @@ export interface GaryxDesktopApi {
   browserGoForward: (tabId: string) => Promise<DesktopBrowserState>;
   browserReload: (tabId: string) => Promise<DesktopBrowserState>;
   browserOpenExternal: (tabId: string) => Promise<void>;
+  captureBrowserTab: (tabId: string) => Promise<CaptureBrowserTabResult>;
   updateBrowserBounds: (input: BrowserBoundsInput) => Promise<void>;
   setBrowserOverlayPaused: (paused: boolean) => Promise<void>;
   showBrowserConnectionMenu: (
@@ -1983,6 +2073,19 @@ export interface GaryxDesktopApi {
   ) => Promise<void>;
   subscribeBrowserState: (listener: DesktopBrowserStateListener) => void;
   unsubscribeBrowserState: (listener: DesktopBrowserStateListener) => void;
+  listTerminalState: () => Promise<DesktopTerminalState>;
+  createTerminalSession: (
+    input?: CreateTerminalSessionInput,
+  ) => Promise<DesktopTerminalState>;
+  activateTerminalSession: (
+    input: TerminalSessionInput,
+  ) => Promise<DesktopTerminalState>;
+  closeTerminalSession: (
+    input: TerminalSessionInput,
+  ) => Promise<DesktopTerminalState>;
+  writeTerminalInput: (input: TerminalWriteInput) => Promise<void>;
+  subscribeTerminalEvents: (listener: DesktopTerminalEventListener) => void;
+  unsubscribeTerminalEvents: (listener: DesktopTerminalEventListener) => void;
   getAppVersion: () => Promise<string>;
   getUpdateStatus: () => Promise<DesktopUpdateStatus>;
   checkForUpdatesNow: () => Promise<DesktopUpdateCheckResult>;

@@ -271,6 +271,7 @@ type ThreadPageProps = {
   showAutomationRunTailLoading: boolean;
   showHistoryLoadingPlaceholder: boolean;
   showPendingAckLoading: boolean;
+  sideToolsPanel: ReactNode;
   threadLayoutRef: RefObject<HTMLDivElement | null>;
   threadLayoutStyle?: CSSProperties;
   threadLogsActiveTab: ThreadLogTab;
@@ -285,7 +286,6 @@ type ThreadPageProps = {
   visibleRemoteAwaitingAckInputs: PendingThreadInput[];
   visibleRemotePendingInputs: PendingThreadInput[];
   workflowRunContent?: ReactNode;
-  workspaceDirectoryPanel: ReactNode;
   workspaceMutation: string | null;
   composerTextareaRef: RefObject<HTMLTextAreaElement | null>;
   isComposingRef: MutableRefObject<boolean>;
@@ -423,6 +423,7 @@ export function ThreadPage({
   showAutomationRunTailLoading,
   showHistoryLoadingPlaceholder,
   showPendingAckLoading,
+  sideToolsPanel,
   threadLayoutRef,
   threadLayoutStyle,
   threadLogsActiveTab,
@@ -437,7 +438,6 @@ export function ThreadPage({
   visibleRemoteAwaitingAckInputs,
   visibleRemotePendingInputs,
   workflowRunContent,
-  workspaceDirectoryPanel,
   workspaceMutation,
 }: ThreadPageProps) {
   const { t } = useI18n();
@@ -1000,11 +1000,7 @@ export function ThreadPage({
         ) : null}
       </div>
 
-      {inspectorOpen && workspaceDirectoryPanel ? (
-        <aside className="workspace-directory-panel">
-          {workspaceDirectoryPanel}
-        </aside>
-      ) : null}
+      {inspectorOpen && sideToolsPanel ? sideToolsPanel : null}
 
       {threadLogsOpen ? (
         <>

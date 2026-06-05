@@ -119,6 +119,11 @@ Detailed runtime, SDK, and workflow rules:
 Use the narrowest reliable validation for the touched area. Common commands and
 fallbacks live in @docs/agents/validation.md.
 
+For fast Mac app iteration, it is fine to run the desktop app in dev mode and
+attach with CDP while working through UI behavior. Before handoff, still do one
+packaged-app check when renderer resources, preload IPC, app bundling, or
+installed-app behavior changed.
+
 For real Mac app renderer checks after desktop changes, run
 `npm run dist:dir` in `desktop/garyx-desktop`, quit any stale `Garyx` process,
 open the installed app, then attach with

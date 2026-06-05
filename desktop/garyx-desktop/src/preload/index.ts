@@ -99,6 +99,11 @@ const browserStateListeners = new Map<
   (_event: Electron.IpcRendererEvent, payload: unknown) => void
 >();
 
+const terminalEventListeners = new Map<
+  Parameters<GaryxDesktopApi["subscribeTerminalEvents"]>[0],
+  (_event: Electron.IpcRendererEvent, payload: unknown) => void
+>();
+
 const deepLinkListeners = new Map<
   Parameters<GaryxDesktopApi["subscribeDeepLinks"]>[0],
   (_event: Electron.IpcRendererEvent, payload: unknown) => void
@@ -267,6 +272,12 @@ const api: GaryxDesktopApi = {
   createThread: (input) => ipcRenderer.invoke("garyx:create-thread", input),
   getWorkspaceGitStatus: (input) =>
     ipcRenderer.invoke("garyx:get-workspace-git-status", input),
+  getWorkspaceGitDetails: (input) =>
+    ipcRenderer.invoke("garyx:get-workspace-git-details", input),
+  commitWorkspaceChanges: (input) =>
+    ipcRenderer.invoke("garyx:commit-workspace-changes", input),
+  pushWorkspaceBranch: (input) =>
+    ipcRenderer.invoke("garyx:push-workspace-branch", input),
   renameThread: (input) => ipcRenderer.invoke("garyx:rename-thread", input),
   deleteThread: (input) => ipcRenderer.invoke("garyx:delete-thread", input),
   setThreadPinned: (input) =>
@@ -334,6 +345,8 @@ const api: GaryxDesktopApi = {
   browserReload: (tabId) => ipcRenderer.invoke("garyx:browser-reload", tabId),
   browserOpenExternal: (tabId) =>
     ipcRenderer.invoke("garyx:browser-open-external", tabId),
+  captureBrowserTab: (tabId) =>
+    ipcRenderer.invoke("garyx:capture-browser-tab", tabId),
   updateBrowserBounds: (input) =>
     ipcRenderer.invoke("garyx:update-browser-bounds", input),
   setBrowserOverlayPaused: (paused) =>
@@ -357,6 +370,37 @@ const api: GaryxDesktopApi = {
     browserStateListeners.delete(listener);
     if (browserStateListeners.size === 0) {
       ipcRenderer.send("garyx:browser-state-unsubscribe");
+    }
+  },
+  listTerminalState: () => ipcRenderer.invoke("garyx:list-terminal-state"),
+  createTerminalSession: (input) =>
+    ipcRenderer.invoke("garyx:create-terminal-session", input),
+  activateTerminalSession: (input) =>
+    ipcRenderer.invoke("garyx:activate-terminal-session", input),
+  closeTerminalSession: (input) =>
+    ipcRenderer.invoke("garyx:close-terminal-session", input),
+  writeTerminalInput: (input) =>
+    ipcRenderer.invoke("garyx:write-terminal-input", input),
+  subscribeTerminalEvents: (listener) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+      listener(payload as Parameters<typeof listener>[0]);
+    };
+    const hadListeners = terminalEventListeners.size > 0;
+    terminalEventListeners.set(listener, wrapped);
+    ipcRenderer.on("garyx:terminal-event", wrapped);
+    if (!hadListeners) {
+      ipcRenderer.send("garyx:terminal-event-subscribe");
+    }
+  },
+  unsubscribeTerminalEvents: (listener) => {
+    const wrapped = terminalEventListeners.get(listener);
+    if (!wrapped) {
+      return;
+    }
+    ipcRenderer.removeListener("garyx:terminal-event", wrapped);
+    terminalEventListeners.delete(listener);
+    if (terminalEventListeners.size === 0) {
+      ipcRenderer.send("garyx:terminal-event-unsubscribe");
     }
   },
   getAppVersion: () => ipcRenderer.invoke("garyx:get-app-version"),
