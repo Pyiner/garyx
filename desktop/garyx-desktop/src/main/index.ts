@@ -1474,10 +1474,10 @@ function showBrowserConnectionMenu(input: ShowBrowserConnectionMenuInput): void 
 function createTray(): void {
   writeBootstrapTrace("createTray:start");
   const trayIconPath = app.isPackaged
-    ? join(process.resourcesPath, "trayTemplate.png")
-    : join(__dirname, "../../resources/trayTemplate.png");
+    ? join(process.resourcesPath, "trayIcon.png")
+    : join(__dirname, "../../resources/trayIcon.png");
   const icon = nativeImage.createFromPath(trayIconPath);
-  icon.setTemplateImage(true);
+  icon.setTemplateImage(false);
   tray = new Tray(icon);
   tray.setToolTip("Garyx");
   tray.setContextMenu(buildTrayMenu());
