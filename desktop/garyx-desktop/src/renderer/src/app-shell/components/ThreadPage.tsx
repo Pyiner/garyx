@@ -12,6 +12,7 @@ import { IconGitBranch } from "@tabler/icons-react";
 
 import type {
   DesktopApiProviderType,
+  BrowserAnnotationCommentRequest,
   DesktopBotConsoleSummary,
   MessageFileAttachment,
   MessageImageAttachment,
@@ -234,6 +235,7 @@ type ThreadPageProps = {
   clientThreadLogEntries: ClientLogEntry[];
   composer: string;
   composerAttachmentInputRef: RefObject<HTMLInputElement | null>;
+  composerBrowserAnnotations: BrowserAnnotationCommentRequest[];
   composerFiles: MessageFileAttachment[];
   composerHasPayload: boolean;
   composerImages: MessageImageAttachment[];
@@ -307,6 +309,7 @@ type ThreadPageProps = {
   onQueueDropTargetChange: (target: QueueDropTarget) => void;
   onRemoveComposerFile: (fileId: string) => void;
   onRemoveComposerImage: (imageId: string) => void;
+  onRemoveComposerBrowserAnnotation: (annotationId: string) => void;
   onReorderQueuedIntent: (
     threadId: string,
     draggedIntentId: string,
@@ -352,6 +355,7 @@ export function ThreadPage({
   clientThreadLogEntries,
   composer,
   composerAttachmentInputRef,
+  composerBrowserAnnotations,
   composerFiles,
   composerHasPayload,
   composerImages,
@@ -399,6 +403,7 @@ export function ThreadPage({
   onQueueDropTargetChange,
   onRemoveComposerFile,
   onRemoveComposerImage,
+  onRemoveComposerBrowserAnnotation,
   onReorderQueuedIntent,
   onSelectNewThreadAgent,
   onSelectNewThreadWorkflow,
@@ -892,6 +897,7 @@ export function ThreadPage({
               activeQueueLength={activeQueue.length}
               composer={composer}
               composerAttachmentInputRef={composerAttachmentInputRef}
+              composerBrowserAnnotations={composerBrowserAnnotations}
               composerFiles={composerFiles}
               composerHasPayload={composerHasPayload}
               composerImages={composerImages}
@@ -944,6 +950,7 @@ export function ThreadPage({
               onInterrupt={onComposerInterrupt}
               onRemoveComposerFile={onRemoveComposerFile}
               onRemoveComposerImage={onRemoveComposerImage}
+              onRemoveComposerBrowserAnnotation={onRemoveComposerBrowserAnnotation}
               onSelectBotBinding={onSelectBotBinding}
               onSubmit={(event) => {
                 event.preventDefault();

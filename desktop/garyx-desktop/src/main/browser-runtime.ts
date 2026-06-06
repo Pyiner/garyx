@@ -230,6 +230,16 @@ function browserAnnotationModeScript(enabled: boolean, commentMessagePrefix: str
       currentElement = null;
       overlay.style.display = 'none';
     };
+    const resetSelectionAfterSubmit = () => {
+      selectedElement = null;
+      currentElement = null;
+      commentRequestEmitted = false;
+      commentInput.value = '';
+      commentInput.disabled = false;
+      commentSubmit.disabled = false;
+      commentForm.style.display = 'none';
+      overlay.style.display = 'none';
+    };
 
     const truncate = (value, maxLength) => {
       const text = String(value || '').replace(/\\s+/g, ' ').trim();
@@ -437,6 +447,7 @@ function browserAnnotationModeScript(enabled: boolean, commentMessagePrefix: str
       commentInput.disabled = true;
       commentSubmit.disabled = true;
       commentForm.style.display = 'none';
+      window.setTimeout(resetSelectionAfterSubmit, 180);
     };
     const handleCommentKeyDown = (event) => {
       event.stopPropagation();

@@ -34,7 +34,7 @@ import type {
   OpenChatStreamResult,
 } from "@shared/contracts";
 
-import { useI18n, type Translate } from "../../i18n";
+import { useI18n } from "../../i18n";
 
 const SidePanelBrowserPage = lazy(() =>
   import("../../BrowserPage").then((module) => ({ default: module.BrowserPage }))
@@ -72,7 +72,7 @@ type ThreadSideToolsPanelProps = {
   workspaceFileFilter: string;
   workspaceMode?: DesktopWorkspaceMode | null;
   onRevealSelectedWorkspaceFile?: () => Promise<void> | void;
-  onSubmitBrowserAnnotationComment: (message: string) => Promise<void> | void;
+  onAddBrowserAnnotationComment: (request: BrowserAnnotationCommentRequest) => void;
   onSubmitSideChat: (input: SideChatSubmitInput) => Promise<SideChatSubmitResult>;
   onWorkspaceFileFilterChange: (value: string) => void;
 };
@@ -133,26 +133,6 @@ function writeSideChatState(key: string, state: PersistedSideChatState) {
   } catch {
     // Ignore storage quota or privacy-mode failures; in-memory state still works.
   }
-}
-
-function formatBrowserAnnotationMessage(
-  request: BrowserAnnotationCommentRequest,
-  t: Translate,
-): string {
-  const lines = [
-    request.comment.trim(),
-    "",
-    `${t("Browser comment target")}:`,
-    `${t("Page")}: ${request.title || request.url}`,
-    `${t("Element")}: ${request.label || request.tagName}`,
-  ];
-  if (request.selector) {
-    lines.push(`${t("Selector")}: ${request.selector}`);
-  }
-  if (request.text && request.text !== request.label) {
-    lines.push(`${t("Text")}: ${request.text}`);
-  }
-  return lines.join("\n").trim();
 }
 
 type ToolDescriptor = {
@@ -612,7 +592,7 @@ export function ThreadSideToolsPanel({
   workspaceDirectoryPanel,
   workspaceFileFilter,
   onRevealSelectedWorkspaceFile,
-  onSubmitBrowserAnnotationComment,
+  onAddBrowserAnnotationComment,
   onSubmitSideChat,
   onWorkspaceFileFilterChange,
 }: ThreadSideToolsPanelProps) {
@@ -683,11 +663,10 @@ export function ThreadSideToolsPanel({
   }
 
   function handleBrowserAnnotationCommentRequest(request: BrowserAnnotationCommentRequest) {
-    const message = formatBrowserAnnotationMessage(request, t);
-    if (!message) {
+    if (!request.comment.trim()) {
       return;
     }
-    void Promise.resolve(onSubmitBrowserAnnotationComment(message)).catch(() => null);
+    onAddBrowserAnnotationComment(request);
   }
 
   function openTool(toolId: ThreadSideToolId) {

@@ -39,6 +39,7 @@ import {
 } from '@tabler/icons-react';
 
 import type {
+  BrowserAnnotationCommentRequest,
   DesktopBotConsoleSummary,
   DesktopApiProviderType,
   DesktopWorkflowDefinition,
@@ -83,6 +84,7 @@ type ComposerFormProps = {
   activeQueueLength: number;
   composer: string;
   composerAttachmentInputRef: RefObject<HTMLInputElement | null>;
+  composerBrowserAnnotations: BrowserAnnotationCommentRequest[];
   composerFiles: MessageFileAttachment[];
   composerHasPayload: boolean;
   composerImages: MessageImageAttachment[];
@@ -113,6 +115,7 @@ type ComposerFormProps = {
   onComposerKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   onComposerPasteFiles: (files: File[]) => void;
   onInterrupt: () => void;
+  onRemoveComposerBrowserAnnotation: (annotationId: string) => void;
   onRemoveComposerFile: (fileId: string) => void;
   onRemoveComposerImage: (imageId: string) => void;
   onSelectBotBinding?: (botId: string | null) => void;
@@ -338,6 +341,22 @@ function ComposerWorkflowOptionRow({ option }: { option: ComposerWorkflowOption 
       </span>
     </span>
   );
+}
+
+function browserAnnotationChipLabel(
+  annotation: BrowserAnnotationCommentRequest,
+  t: Translate,
+): string {
+  return annotation.comment.trim() || t('Browser comment');
+}
+
+function browserAnnotationChipMeta(annotation: BrowserAnnotationCommentRequest): string {
+  return [
+    annotation.label || annotation.tagName,
+    annotation.title || annotation.url,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 }
 
 function renderComposerProviderControl({
@@ -589,6 +608,7 @@ export function ComposerForm({
   activeQueueLength,
   composer,
   composerAttachmentInputRef,
+  composerBrowserAnnotations,
   composerFiles,
   composerHasPayload,
   composerImages,
@@ -617,6 +637,7 @@ export function ComposerForm({
   onComposerKeyDown,
   onComposerPasteFiles,
   onInterrupt,
+  onRemoveComposerBrowserAnnotation,
   onRemoveComposerFile,
   onRemoveComposerImage,
   onSelectBotBinding,
@@ -922,8 +943,44 @@ export function ComposerForm({
         tabIndex={-1}
         type="file"
       />
-      {composerImages.length || composerFiles.length ? (
+      {composerBrowserAnnotations.length || composerImages.length || composerFiles.length ? (
         <div className="composer-attachment-strip">
+          {composerBrowserAnnotations.map((annotation) => {
+            const label = browserAnnotationChipLabel(annotation, t);
+            const meta = browserAnnotationChipMeta(annotation);
+            return (
+              <div
+                key={annotation.id}
+                className="composer-attachment-chip composer-browser-annotation-chip"
+                title={[label, meta].filter(Boolean).join('\n')}
+              >
+                <span className="composer-file-chip-icon composer-browser-annotation-chip-icon">
+                  <IconMessageCircle aria-hidden size={14} stroke={1.8} />
+                </span>
+                <span className="composer-browser-annotation-chip-copy">
+                  <span className="composer-browser-annotation-chip-label">
+                    {label}
+                  </span>
+                  {meta ? (
+                    <span className="composer-browser-annotation-chip-meta">
+                      {meta}
+                    </span>
+                  ) : null}
+                </span>
+                <button
+                  aria-label={t("Remove browser comment")}
+                  className="composer-attachment-remove composer-browser-annotation-chip-remove"
+                  onClick={() => {
+                    onRemoveComposerBrowserAnnotation(annotation.id);
+                  }}
+                  type="button"
+                >
+                  <IconX aria-hidden size={12} stroke={2.2} />
+                  <span className="sr-only">{t("Remove browser comment")}</span>
+                </button>
+              </div>
+            );
+          })}
           {composerImages.map((image) => (
             <div
               key={image.id}

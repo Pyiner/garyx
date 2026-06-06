@@ -90,7 +90,6 @@ export function BrowserPage({
       return;
     }
     const handleAnnotationComment = (request: BrowserAnnotationCommentRequest) => {
-      setAnnotationMode(false);
       annotationCommentRequestRef.current?.(request);
     };
     api.subscribeBrowserAnnotationComments(handleAnnotationComment);
@@ -171,7 +170,7 @@ export function BrowserPage({
       return;
     }
     setAnnotationMode(true);
-    setBrowserStatus(t('Hover an element, click it, type a comment, then press Enter.'));
+    setBrowserStatus(t('Hover an element, click it, type a comment, then press Enter to add it.'));
   }
 
   async function copyCurrentScreenshot() {

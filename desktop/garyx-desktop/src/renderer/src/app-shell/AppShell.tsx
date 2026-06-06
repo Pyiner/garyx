@@ -15,6 +15,7 @@ import { startTransition } from "react";
 import {
   DEFAULT_DESKTOP_SETTINGS,
   DEFAULT_SESSION_TITLE,
+  type BrowserAnnotationCommentRequest,
   type CreateAutomationInput,
   type DesktopApiProviderType,
   type DesktopAutomationActivityEntry,
@@ -832,6 +833,50 @@ function displayTranscriptMessageText(message: UiTranscriptMessage): string {
     );
   }
   return message.text;
+}
+
+function formatBrowserAnnotationComposerReference(
+  request: BrowserAnnotationCommentRequest,
+  t: ReturnType<typeof createTranslator>,
+): string {
+  const lines = [
+    request.comment.trim(),
+    `${t("Browser comment target")}:`,
+    `${t("Page")}: ${request.title || request.url}`,
+    `${t("Element")}: ${request.label || request.tagName}`,
+  ];
+  if (request.selector) {
+    lines.push(`${t("Selector")}: ${request.selector}`);
+  }
+  if (request.text && request.text !== request.label) {
+    lines.push(`${t("Text")}: ${request.text}`);
+  }
+  return lines.join("\n").trim();
+}
+
+function formatBrowserAnnotationComposerReferences(
+  requests: BrowserAnnotationCommentRequest[],
+  t: ReturnType<typeof createTranslator>,
+): string {
+  const formatted = requests
+    .map((request, index) => {
+      const text = formatBrowserAnnotationComposerReference(request, t);
+      return text ? `${index + 1}. ${text}` : "";
+    })
+    .filter(Boolean);
+  if (!formatted.length) {
+    return "";
+  }
+  return [`${t("Browser comments")}:`, ...formatted].join("\n\n");
+}
+
+function composePromptWithBrowserAnnotations(
+  prompt: string,
+  requests: BrowserAnnotationCommentRequest[],
+  t: ReturnType<typeof createTranslator>,
+): string {
+  const annotationText = formatBrowserAnnotationComposerReferences(requests, t);
+  return [prompt.trim(), annotationText].filter(Boolean).join("\n\n").trim();
 }
 
 function seededUserBubble(intent: MessageIntent): UiTranscriptMessage {
@@ -1674,6 +1719,9 @@ export function AppShell() {
   const [composerFiles, setComposerFiles] = useState<MessageFileAttachment[]>(
     [],
   );
+  const [composerBrowserAnnotations, setComposerBrowserAnnotations] = useState<
+    BrowserAnnotationCommentRequest[]
+  >([]);
   const [composerAttachmentUploadPending, setComposerAttachmentUploadPending] =
     useState(false);
   const [titleDraft, setTitleDraft] = useState(DEFAULT_SESSION_TITLE);
@@ -2948,8 +2996,12 @@ export function AppShell() {
   const composerHasText = composerTextPresent;
   const composerHasImages = composerImages.length > 0;
   const composerHasFiles = composerFiles.length > 0;
+  const composerHasBrowserAnnotations = composerBrowserAnnotations.length > 0;
   const composerHasPayload =
-    composerHasText || composerHasImages || composerHasFiles;
+    composerHasText ||
+    composerHasImages ||
+    composerHasFiles ||
+    composerHasBrowserAnnotations;
 
   useEffect(() => {
     composerHasPayloadRef.current = composerHasPayload;
@@ -3586,6 +3638,7 @@ export function AppShell() {
     setComposerResetKey((current) => current + 1);
     setComposerImages([]);
     setComposerFiles([]);
+    setComposerBrowserAnnotations([]);
     resetComposerAttachmentPicker();
   }
 
@@ -3741,6 +3794,12 @@ export function AppShell() {
 
   function removeComposerFile(fileId: string) {
     setComposerFiles((current) => current.filter((file) => file.id !== fileId));
+  }
+
+  function removeComposerBrowserAnnotation(annotationId: string) {
+    setComposerBrowserAnnotations((current) =>
+      current.filter((annotation) => annotation.id !== annotationId),
+    );
   }
 
   async function appendComposerAttachments(files: File[]) {
@@ -4072,7 +4131,13 @@ export function AppShell() {
 
   useEffect(() => {
     syncComposerPhase(composer, isComposingRef.current);
-  }, [composer, composerFiles.length, composerImages.length, composerLocked]);
+  }, [
+    composer,
+    composerBrowserAnnotations.length,
+    composerFiles.length,
+    composerImages.length,
+    composerLocked,
+  ]);
 
   useEffect(() => {
     if (!/^\/[a-z0-9_]*$/i.test(composer)) {
@@ -4851,6 +4916,7 @@ export function AppShell() {
   ) {
     const hasText =
       nextText.trim().length > 0 ||
+      composerBrowserAnnotations.length > 0 ||
       composerImages.length > 0 ||
       composerFiles.length > 0;
     const syncKey = `${hasText}:${isComposing}:${composerLocked}`;
@@ -6834,56 +6900,19 @@ export function AppShell() {
     };
   }
 
-  async function handleSubmitBrowserAnnotationComment(message: string): Promise<void> {
-    const prompt = message.trim();
-    if (!prompt) {
+  function handleAddBrowserAnnotationComment(
+    request: BrowserAnnotationCommentRequest,
+  ): void {
+    if (!request.comment.trim()) {
       return;
     }
-    const threadId = await ensureSelectedThreadId();
-    if (!threadId) {
-      return;
-    }
-    if (!(await ensureThreadBotRouting(threadId))) {
-      return;
-    }
-
-    if (isActiveSendingThread) {
-      const intent = buildIntent({
-        threadId,
-        text: prompt,
-        images: [],
-        files: [],
-        source: "composer_queue",
-        state: "queued_local",
-      });
-      dispatchMessageState({
-        type: "intent/created",
-        intent,
-        enqueue: true,
-      });
-      deferredQueueDrainByThreadRef.current[threadId] = true;
-      setError(null);
-      if (settingsDraft.followUpBehavior === "steer" && canSteerQueuedPrompt) {
-        await steerQueuedIntent(intent);
-      }
-      return;
-    }
-
-    const intent = buildIntent({
-      threadId,
-      text: prompt,
-      images: [],
-      files: [],
-      source: "composer_send",
-      state: "dispatch_requested",
-      dispatchMode: "sync_send",
-    });
-    dispatchMessageState({
-      type: "intent/created",
-      intent,
-      enqueue: false,
-    });
-    void runQueuedBatch(threadId, intent.intentId);
+    setComposerBrowserAnnotations((current) =>
+      current.some((annotation) => annotation.id === request.id)
+        ? current
+        : [...current, request],
+    );
+    setError(null);
+    requestComposerFocus();
   }
 
   async function handleNewThread() {
@@ -7767,8 +7796,18 @@ export function AppShell() {
       setError("Attachments are still uploading to gateway.");
       return;
     }
-    const prompt = composerDraftRef.current.trim();
-    if (!prompt && !composerImages.length && !composerFiles.length) {
+    const promptBrowserAnnotations = [...composerBrowserAnnotations];
+    const prompt = composePromptWithBrowserAnnotations(
+      composerDraftRef.current,
+      promptBrowserAnnotations,
+      t,
+    );
+    if (
+      !prompt &&
+      !composerImages.length &&
+      !composerFiles.length &&
+      !promptBrowserAnnotations.length
+    ) {
       return;
     }
     const threadId = await ensureSelectedThreadId();
@@ -8032,11 +8071,19 @@ export function AppShell() {
 
   async function handleStartDispatch() {
     const startingNewThread = !selectedThreadId;
-    const prompt = composerDraftRef.current.trim();
+    const promptBrowserAnnotations = [...composerBrowserAnnotations];
+    const prompt = composePromptWithBrowserAnnotations(
+      composerDraftRef.current,
+      promptBrowserAnnotations,
+      t,
+    );
     const promptImages = [...composerImages];
     const promptFiles = [...composerFiles];
     const hasPromptPayload =
-      Boolean(prompt) || promptImages.length > 0 || promptFiles.length > 0;
+      Boolean(prompt) ||
+      promptImages.length > 0 ||
+      promptFiles.length > 0 ||
+      promptBrowserAnnotations.length > 0;
 
     if (
       isActiveSendingThread ||
@@ -8481,7 +8528,7 @@ export function AppShell() {
       workspaceFileFilter={workspaceFileFilter}
       workspaceMode={composerWorkspaceMode || "local"}
       onRevealSelectedWorkspaceFile={handleRevealSelectedWorkspaceFile}
-      onSubmitBrowserAnnotationComment={handleSubmitBrowserAnnotationComment}
+      onAddBrowserAnnotationComment={handleAddBrowserAnnotationComment}
       onSubmitSideChat={handleSubmitSideChat}
       onWorkspaceFileFilterChange={setWorkspaceFileFilter}
     />
@@ -9270,6 +9317,7 @@ export function AppShell() {
                 clientThreadLogEntries={clientThreadLogEntries}
                 composer={composer}
                 composerAttachmentInputRef={composerAttachmentInputRef}
+                composerBrowserAnnotations={composerBrowserAnnotations}
                 composerFiles={composerFiles}
                 composerHasPayload={composerHasPayload}
                 composerImages={composerImages}
@@ -9372,6 +9420,7 @@ export function AppShell() {
                 onQueueDropTargetChange={setQueueDropTarget}
                 onRemoveComposerFile={removeComposerFile}
                 onRemoveComposerImage={removeComposerImage}
+                onRemoveComposerBrowserAnnotation={removeComposerBrowserAnnotation}
                 onReorderQueuedIntent={reorderQueuedIntent}
                 onSelectNewThreadAgent={(agentId) => {
                   setPendingAgentId(agentId);
