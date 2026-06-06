@@ -294,7 +294,6 @@ struct GaryxShellView: View {
     @State private var sidebarDragAxis: GaryxSidebarDragAxis?
 
     private let sidebarWidth: CGFloat = 330
-    private let drawerMainPanelPeekWidth: CGFloat = 72
     private let drawerMainPanelCornerRadius: CGFloat = 36
     private let sidebarEdgeGestureWidth: CGFloat = 24
     private let sidebarAxisDecisionDistance: CGFloat = 14
@@ -333,7 +332,10 @@ struct GaryxShellView: View {
 
     private func drawerSidebarWidth(for containerSize: CGSize) -> CGFloat {
         if horizontalSizeClass == .compact {
-            return min(sidebarWidth, max(0, containerSize.width - drawerMainPanelPeekWidth))
+            // Final open state is a full-width sidebar (full-screen page swap).
+            // The rounded card / shadow / divider effects are intentionally only
+            // visible mid-drag as a transition, driven by drawerProgress.
+            return containerSize.width
         }
         return min(sidebarWidth, containerSize.width * 0.92)
     }
