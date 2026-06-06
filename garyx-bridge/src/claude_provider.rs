@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use claude_agent_sdk::{
     AssistantMessage, ClaudeAgentDefinition, ClaudeAgentOptions, ClaudeRun, ClaudeRunControl,
     ClaudeSDKError, ContentBlock, McpServerConfig, Message, OutboundUserMessage, PermissionMode,
-    TextBlock, UserInput, run_streaming as sdk_run_streaming,
+    SystemMessage, TextBlock, UserInput, run_streaming as sdk_run_streaming,
 };
 use garyx_models::provider::{
     ClaudeCodeConfig, ImagePayload, PromptAttachment, ProviderMessage, ProviderRunOptions,
@@ -90,6 +90,71 @@ fn result_usage_tokens(usage: Option<&HashMap<String, Value>>) -> (i64, i64) {
     );
 
     (input_tokens.max(0), output_tokens.max(0))
+}
+
+fn claude_background_task_key(data: &Value) -> Option<String> {
+    ["task_id", "taskId", "tool_use_id", "toolUseId"]
+        .iter()
+        .find_map(|key| {
+            data.get(*key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+}
+
+fn claude_background_task_status(data: &Value) -> Option<&str> {
+    data.get("status")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            data.get("patch")
+                .and_then(|patch| patch.get("status"))
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn is_terminal_claude_background_task_status(status: &str) -> bool {
+    matches!(
+        status,
+        "completed"
+            | "failed"
+            | "cancelled"
+            | "canceled"
+            | "errored"
+            | "error"
+            | "interrupted"
+            | "aborted"
+            | "stopped"
+    )
+}
+
+fn update_claude_background_tasks(
+    sys_msg: &SystemMessage,
+    active_background_tasks: &mut HashSet<String>,
+) {
+    let Some(task_key) = claude_background_task_key(&sys_msg.data) else {
+        return;
+    };
+
+    match sys_msg.subtype.as_str() {
+        "task_started" => {
+            active_background_tasks.insert(task_key);
+        }
+        "task_updated" | "task_notification" => {
+            if claude_background_task_status(&sys_msg.data)
+                .map(is_terminal_claude_background_task_status)
+                .unwrap_or(false)
+            {
+                active_background_tasks.remove(&task_key);
+            } else {
+                active_background_tasks.insert(task_key);
+            }
+        }
+        _ => {}
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1118,11 +1183,11 @@ impl ClaudeCliProvider {
         })
     }
 
-    /// Atomically check whether the pending-input queue is empty and, if so,
-    /// **remove** the queue entry so that subsequent [`enqueue_pending_input`]
-    /// calls for this `run_id` will fail.  This closes the race window where a
-    /// new input is enqueued between the emptiness check and the loop break in
-    /// [`process_messages_streaming`].
+    /// Atomically check whether the pending-input queue is empty after the
+    /// post-result drain window and, if so, **remove** the queue entry so that
+    /// subsequent [`enqueue_pending_input`] calls for this `run_id` will fail.
+    /// This closes the race window where a new input is enqueued between the
+    /// emptiness check and the loop break in [`process_messages_streaming`].
     ///
     /// Returns `true` when the queue was empty (or already absent) and the run
     /// should exit its message loop.
@@ -1321,20 +1386,27 @@ impl ClaudeCliProvider {
         let mut assistant_or_tool_activity_seen = false;
         let mut actual_model: Option<String> = None;
         let mut thread_title: Option<String> = None;
-        let mut finish_requested = false;
+        let mut result_seen = false;
+        let mut active_background_tasks = HashSet::new();
 
         let idle_timeout = Duration::from_secs(STREAM_IDLE_TIMEOUT_SECS);
         let post_result_drain_timeout = Duration::from_secs(POST_RESULT_DRAIN_TIMEOUT_SECS);
 
         loop {
-            let read_timeout = if finish_requested {
+            let waiting_for_post_result_idle = result_seen && active_background_tasks.is_empty();
+            let read_timeout = if waiting_for_post_result_idle {
                 post_result_drain_timeout
             } else {
                 idle_timeout
             };
             let msg = tokio::time::timeout(read_timeout, source.next_message()).await;
             match msg {
-                Err(_elapsed) if finish_requested => break,
+                Err(_elapsed) if waiting_for_post_result_idle => {
+                    if self.try_close_pending_inputs(run_id).await {
+                        break;
+                    }
+                    result_seen = false;
+                }
                 Err(_elapsed) => {
                     tracing::warn!(
                         run_id = %run_id,
@@ -1361,6 +1433,7 @@ impl ClaudeCliProvider {
                         }
                         // Keep Python parity: normal UserMessage echoes are ACKs that
                         // indicate one queued user input has been consumed.
+                        result_seen = false;
                         on_chunk(StreamEvent::Boundary {
                             kind: StreamBoundaryKind::UserAck,
                             pending_input_id: self
@@ -1380,6 +1453,7 @@ impl ClaudeCliProvider {
                             );
                             continue;
                         }
+                        result_seen = false;
                         assistant_or_tool_activity_seen = true;
                         if actual_model.is_none() {
                             actual_model = Some(assistant_msg.model.trim().to_owned())
@@ -1404,6 +1478,7 @@ impl ClaudeCliProvider {
                         );
                     }
                     Ok(Message::Result(result_msg)) => {
+                        result_seen = true;
                         let (input_tokens, output_tokens) =
                             result_usage_tokens(result_msg.usage.as_ref());
                         result_data = Some(ProcessedResult {
@@ -1416,24 +1491,12 @@ impl ClaudeCliProvider {
                             thread_title: thread_title.clone(),
                             session_messages: session_messages.clone(),
                         });
-                        // Atomically check-and-close: if no queued inputs remain,
-                        // remove the queue entry so that concurrent
-                        // add_streaming_input callers see the run as closed and
-                        // fall through to start a new run instead of queuing
-                        // into a dying session.
-                        if self.try_close_pending_inputs(run_id).await && !finish_requested {
-                            finish_requested = true;
-                            if let Err(error) = source.finish_input().await {
-                                tracing::warn!(
-                                    run_id = %run_id,
-                                    error = %error,
-                                    "failed to finish claude input after result"
-                                );
-                                break;
-                            }
-                        }
                     }
                     Ok(Message::System(sys_msg)) => {
+                        update_claude_background_tasks(&sys_msg, &mut active_background_tasks);
+                        if sys_msg.subtype == "task_notification" {
+                            result_seen = false;
+                        }
                         // Eagerly capture the session_id from the `init` system
                         // message so it is persisted even if the run is
                         // interrupted before a formal Result message arrives.
@@ -1454,7 +1517,9 @@ impl ClaudeCliProvider {
                             thread_title = extract_claude_thread_title(&sys_msg.data);
                         }
                     }
-                    Ok(Message::StreamEvent(_)) => {}
+                    Ok(Message::StreamEvent(_)) => {
+                        result_seen = false;
+                    }
                     Err(e) => {
                         let bridge_error = bridge_error_from_sdk_stream_error(e);
                         match &bridge_error {
@@ -1511,20 +1576,12 @@ struct SdkRunOutcome {
 #[async_trait]
 trait MessageSource {
     async fn next_message(&mut self) -> Option<claude_agent_sdk::Result<Message>>;
-
-    async fn finish_input(&mut self) -> claude_agent_sdk::Result<()> {
-        Ok(())
-    }
 }
 
 #[async_trait]
 impl MessageSource for ClaudeRun {
     async fn next_message(&mut self) -> Option<claude_agent_sdk::Result<Message>> {
         self.next_message().await
-    }
-
-    async fn finish_input(&mut self) -> claude_agent_sdk::Result<()> {
-        self.finish().await
     }
 }
 

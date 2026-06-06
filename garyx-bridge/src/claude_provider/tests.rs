@@ -2,8 +2,8 @@ use super::*;
 use crate::gary_prompt::GARY_BASE_INSTRUCTIONS;
 use crate::native_slash::build_native_skill_prompt;
 use claude_agent_sdk::{
-    AssistantMessage, ResultMessage, ToolResultBlock, ToolUseBlock, UserContent, UserInput,
-    UserMessage,
+    AssistantMessage, ResultMessage, SystemMessage, ToolResultBlock, ToolUseBlock, UserContent,
+    UserInput, UserMessage,
 };
 use garyx_models::provider::{ClaudeCodeConfig, QueuedUserInput};
 use serde_json::{Value, json};
@@ -1239,6 +1239,250 @@ async fn test_process_messages_streaming_requires_result_message_for_completion(
     assert!(
         result_data.is_none(),
         "Claude text/tool events alone must not be treated as a completed run"
+    );
+}
+
+#[tokio::test]
+async fn test_process_messages_streaming_keeps_input_queue_open_during_post_result_grace() {
+    let provider = Arc::new(make_provider());
+    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+
+    provider.set_pending_inputs("run-post-result", 1).await;
+
+    let provider_for_task = provider.clone();
+    let cb: StreamCallback = Box::new(|_| {});
+    let task = tokio::spawn(async move {
+        provider_for_task
+            .process_messages_streaming("run-post-result", "thread::test", &mut rx, &cb)
+            .await
+    });
+
+    tx.send(Ok(Message::User(UserMessage {
+        content: UserContent::Text("first user".to_owned()),
+        uuid: None,
+        parent_tool_use_id: None,
+        tool_use_result: None,
+    })))
+    .await
+    .unwrap();
+    tx.send(Ok(Message::Assistant(AssistantMessage {
+        content: vec![ContentBlock::Text(TextBlock {
+            text: "first".to_owned(),
+        })],
+        model: "claude-test".to_owned(),
+        parent_tool_use_id: None,
+        error: None,
+    })))
+    .await
+    .unwrap();
+    tx.send(Ok(Message::Result(ResultMessage {
+        subtype: "success".to_owned(),
+        duration_ms: 1,
+        duration_api_ms: 1,
+        is_error: false,
+        num_turns: 1,
+        session_id: "sdk-session-1".to_owned(),
+        total_cost_usd: Some(0.0),
+        usage: None,
+        result: None,
+        structured_output: None,
+    })))
+    .await
+    .unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        provider
+            .run_pending_inputs
+            .lock()
+            .await
+            .contains_key("run-post-result"),
+        "first result should not close the streaming input queue immediately"
+    );
+
+    provider
+        .run_pending_inputs
+        .lock()
+        .await
+        .get_mut("run-post-result")
+        .expect("pending queue should still exist")
+        .push_back(PendingAckMarker::QueuedInput("queued-1".to_owned()));
+    tx.send(Ok(Message::User(UserMessage {
+        content: UserContent::Text("queued user".to_owned()),
+        uuid: None,
+        parent_tool_use_id: None,
+        tool_use_result: None,
+    })))
+    .await
+    .unwrap();
+    tx.send(Ok(Message::Assistant(AssistantMessage {
+        content: vec![ContentBlock::Text(TextBlock {
+            text: "second".to_owned(),
+        })],
+        model: "claude-test".to_owned(),
+        parent_tool_use_id: None,
+        error: None,
+    })))
+    .await
+    .unwrap();
+    tx.send(Ok(Message::Result(ResultMessage {
+        subtype: "success".to_owned(),
+        duration_ms: 1,
+        duration_api_ms: 1,
+        is_error: false,
+        num_turns: 1,
+        session_id: "sdk-session-2".to_owned(),
+        total_cost_usd: Some(0.0),
+        usage: None,
+        result: None,
+        structured_output: None,
+    })))
+    .await
+    .unwrap();
+    drop(tx);
+
+    let (response_text, result_data) = task
+        .await
+        .expect("processing task should not panic")
+        .expect("stream should process");
+    assert_eq!(response_text, "first\n\nsecond");
+    assert_eq!(
+        result_data.expect("expected final result").session_id,
+        "sdk-session-2"
+    );
+}
+
+#[tokio::test]
+async fn test_process_messages_streaming_waits_for_background_task_notification_after_result() {
+    let provider = Arc::new(make_provider());
+    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+
+    provider.set_pending_inputs("run-background-task", 1).await;
+
+    let provider_for_task = provider.clone();
+    let cb: StreamCallback = Box::new(|_| {});
+    let task = tokio::spawn(async move {
+        provider_for_task
+            .process_messages_streaming("run-background-task", "thread::test", &mut rx, &cb)
+            .await
+    });
+
+    tx.send(Ok(Message::User(UserMessage {
+        content: UserContent::Text("start background task".to_owned()),
+        uuid: None,
+        parent_tool_use_id: None,
+        tool_use_result: None,
+    })))
+    .await
+    .unwrap();
+    tx.send(Ok(Message::System(SystemMessage {
+        subtype: "task_started".to_owned(),
+        data: json!({
+            "type": "system",
+            "subtype": "task_started",
+            "task_id": "task-1",
+            "tool_use_id": "toolu_1",
+            "task_type": "local_bash"
+        }),
+    })))
+    .await
+    .unwrap();
+    tx.send(Ok(Message::Assistant(AssistantMessage {
+        content: vec![ContentBlock::Text(TextBlock {
+            text: "started".to_owned(),
+        })],
+        model: "claude-test".to_owned(),
+        parent_tool_use_id: None,
+        error: None,
+    })))
+    .await
+    .unwrap();
+    tx.send(Ok(Message::Result(ResultMessage {
+        subtype: "success".to_owned(),
+        duration_ms: 1,
+        duration_api_ms: 1,
+        is_error: false,
+        num_turns: 1,
+        session_id: "sdk-session-1".to_owned(),
+        total_cost_usd: Some(0.0),
+        usage: None,
+        result: None,
+        structured_output: None,
+    })))
+    .await
+    .unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        provider
+            .run_pending_inputs
+            .lock()
+            .await
+            .contains_key("run-background-task"),
+        "active Claude background tasks should keep the stream input queue open after result"
+    );
+
+    tx.send(Ok(Message::System(SystemMessage {
+        subtype: "task_updated".to_owned(),
+        data: json!({
+            "type": "system",
+            "subtype": "task_updated",
+            "task_id": "task-1",
+            "tool_use_id": "toolu_1",
+            "patch": {
+                "status": "completed"
+            }
+        }),
+    })))
+    .await
+    .unwrap();
+    tx.send(Ok(Message::System(SystemMessage {
+        subtype: "task_notification".to_owned(),
+        data: json!({
+            "type": "system",
+            "subtype": "task_notification",
+            "task_id": "task-1",
+            "tool_use_id": "toolu_1",
+            "status": "completed",
+            "summary": "background task completed"
+        }),
+    })))
+    .await
+    .unwrap();
+    tx.send(Ok(Message::Assistant(AssistantMessage {
+        content: vec![ContentBlock::Text(TextBlock {
+            text: "completed".to_owned(),
+        })],
+        model: "claude-test".to_owned(),
+        parent_tool_use_id: None,
+        error: None,
+    })))
+    .await
+    .unwrap();
+    tx.send(Ok(Message::Result(ResultMessage {
+        subtype: "success".to_owned(),
+        duration_ms: 1,
+        duration_api_ms: 1,
+        is_error: false,
+        num_turns: 1,
+        session_id: "sdk-session-2".to_owned(),
+        total_cost_usd: Some(0.0),
+        usage: None,
+        result: None,
+        structured_output: None,
+    })))
+    .await
+    .unwrap();
+    drop(tx);
+
+    let (response_text, result_data) = task
+        .await
+        .expect("processing task should not panic")
+        .expect("stream should process");
+    assert_eq!(response_text, "started\n\ncompleted");
+    assert_eq!(
+        result_data.expect("expected final result").session_id,
+        "sdk-session-2"
     );
 }
 
