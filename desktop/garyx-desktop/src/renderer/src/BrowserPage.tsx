@@ -171,7 +171,7 @@ export function BrowserPage({
       return;
     }
     setAnnotationMode(true);
-    setBrowserStatus(t('Hover an element, click it, then use the comment marker.'));
+    setBrowserStatus(t('Hover an element, click it, type a comment, then press Enter.'));
   }
 
   async function copyCurrentScreenshot() {

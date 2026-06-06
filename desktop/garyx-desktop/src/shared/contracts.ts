@@ -1771,6 +1771,7 @@ export interface BrowserAnnotationCommentRequest {
   tabId: string;
   url: string;
   title: string;
+  comment: string;
   tagName: string;
   label: string;
   role?: string | null;

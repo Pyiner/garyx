@@ -162,7 +162,7 @@ const zhCN: Record<string, string> = {
   'Browser comment target': '浏览器评论目标',
   'Element': '元素',
   'Hover over an element to highlight it.': '悬停到元素上以高亮。',
-  'Hover an element, click it, then use the comment marker.': '悬停元素并点击选择，再使用评论标记。',
+  'Hover an element, click it, type a comment, then press Enter.': '悬停元素并点击选择，输入评论后按回车发送。',
   'Page': '页面',
   'Selector': '选择器',
   'Text': '文本',

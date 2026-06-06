@@ -72,6 +72,7 @@ type ThreadSideToolsPanelProps = {
   workspaceFileFilter: string;
   workspaceMode?: DesktopWorkspaceMode | null;
   onRevealSelectedWorkspaceFile?: () => Promise<void> | void;
+  onSubmitBrowserAnnotationComment: (message: string) => Promise<void> | void;
   onSubmitSideChat: (input: SideChatSubmitInput) => Promise<SideChatSubmitResult>;
   onWorkspaceFileFilterChange: (value: string) => void;
 };
@@ -134,11 +135,13 @@ function writeSideChatState(key: string, state: PersistedSideChatState) {
   }
 }
 
-function formatBrowserAnnotationDraft(
+function formatBrowserAnnotationMessage(
   request: BrowserAnnotationCommentRequest,
   t: Translate,
 ): string {
   const lines = [
+    request.comment.trim(),
+    "",
     `${t("Browser comment target")}:`,
     `${t("Page")}: ${request.title || request.url}`,
     `${t("Element")}: ${request.label || request.tagName}`,
@@ -149,7 +152,7 @@ function formatBrowserAnnotationDraft(
   if (request.text && request.text !== request.label) {
     lines.push(`${t("Text")}: ${request.text}`);
   }
-  return `${lines.join("\n")}\n\n`;
+  return lines.join("\n").trim();
 }
 
 type ToolDescriptor = {
@@ -609,6 +612,7 @@ export function ThreadSideToolsPanel({
   workspaceDirectoryPanel,
   workspaceFileFilter,
   onRevealSelectedWorkspaceFile,
+  onSubmitBrowserAnnotationComment,
   onSubmitSideChat,
   onWorkspaceFileFilterChange,
 }: ThreadSideToolsPanelProps) {
@@ -679,12 +683,11 @@ export function ThreadSideToolsPanel({
   }
 
   function handleBrowserAnnotationCommentRequest(request: BrowserAnnotationCommentRequest) {
-    const draft = formatBrowserAnnotationDraft(request, t);
-    setSideChatDraft((current) =>
-      current.trim() ? `${current.trimEnd()}\n\n${draft}` : draft,
-    );
-    setSideChatError(null);
-    openTool("chat");
+    const message = formatBrowserAnnotationMessage(request, t);
+    if (!message) {
+      return;
+    }
+    void Promise.resolve(onSubmitBrowserAnnotationComment(message)).catch(() => null);
   }
 
   function openTool(toolId: ThreadSideToolId) {

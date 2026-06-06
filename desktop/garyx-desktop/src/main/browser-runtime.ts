@@ -46,8 +46,7 @@ function browserAnnotationModeScript(enabled: boolean, commentMessagePrefix: str
     }
 
     const COMMENT_MESSAGE_PREFIX = ${JSON.stringify(commentMessagePrefix)};
-    const COMMENT_ICON = 'data:image/svg+xml,%3Csvg%20xmlns%3D%22http://www.w3.org/2000/svg%22%20width%3D%2226%22%20height%3D%2225%22%20viewBox%3D%220%200%2026%2025%22%20fill%3D%22none%22%3E%3Cpath%20d%3D%22M12.65%20.82C6.21%20.82%201%205.48%201%2011.22c0%203.01%201.43%205.72%203.72%207.62l-.92%204.12c-.12.54.46.95.92.65l4.32-2.8c1.13.31%202.35.48%203.61.48%206.43%200%2011.65-4.66%2011.65-10.4S19.08.82%2012.65.82Z%22%20fill%3D%22%230285FF%22%20stroke%3D%22white%22%20stroke-width%3D%221.5%22/%3E%3Ccircle%20cx%3D%228.8%22%20cy%3D%2211.1%22%20r%3D%221.2%22%20fill%3D%22white%22/%3E%3Ccircle%20cx%3D%2212.8%22%20cy%3D%2211.1%22%20r%3D%221.2%22%20fill%3D%22white%22/%3E%3Ccircle%20cx%3D%2216.8%22%20cy%3D%2211.1%22%20r%3D%221.2%22%20fill%3D%22white%22/%3E%3C/svg%3E';
-    const COMMENT_CURSOR = 'url("' + COMMENT_ICON + '") 13 12, crosshair';
+    const COMMENT_CURSOR = 'crosshair';
     const INTERACTIVE_SELECTOR = [
       'a[href]',
       'area[href]',
@@ -85,7 +84,9 @@ function browserAnnotationModeScript(enabled: boolean, commentMessagePrefix: str
     cursorStyle.setAttribute('data-garyx-browser-annotation-cursor-style', 'true');
     cursorStyle.textContent =
       'html, body, body * { cursor: ' + COMMENT_CURSOR + ' !important; -webkit-user-select: none !important; user-select: none !important; }' +
-      '[data-garyx-browser-annotation-comment-button="true"] { cursor: pointer !important; }';
+      '[data-garyx-browser-annotation-comment-form="true"], [data-garyx-browser-annotation-comment-form="true"] * { -webkit-user-select: text !important; user-select: text !important; }' +
+      '[data-garyx-browser-annotation-comment-input="true"] { cursor: text !important; }' +
+      '[data-garyx-browser-annotation-comment-submit="true"] { cursor: pointer !important; }';
     (document.head || document.documentElement).appendChild(cursorStyle);
 
     const overlay = document.createElement('div');
@@ -101,36 +102,72 @@ function browserAnnotationModeScript(enabled: boolean, commentMessagePrefix: str
       boxSizing: 'border-box',
       pointerEvents: 'none',
       zIndex: '2147483647',
-      border: '2px solid #2563eb',
+      border: '2px solid #16a34a',
       borderRadius: '4px',
-      background: 'rgba(37, 99, 235, 0.08)',
-      boxShadow: '0 0 0 1px rgba(255,255,255,0.9), 0 0 0 4px rgba(37,99,235,0.16)',
+      background: 'rgba(22, 163, 74, 0.08)',
+      boxShadow: '0 0 0 1px rgba(255,255,255,0.9), 0 0 0 4px rgba(22,163,74,0.16)',
     });
     (document.body || document.documentElement).appendChild(overlay);
 
-    const commentButton = document.createElement('button');
-    commentButton.type = 'button';
-    commentButton.setAttribute('aria-label', 'Comment on selected element');
-    commentButton.setAttribute('title', 'Comment');
-    commentButton.setAttribute('data-garyx-browser-annotation-comment-button', 'true');
-    commentButton.setAttribute('data-garyx-browser-annotation-ui', 'true');
-    Object.assign(commentButton.style, {
+    const commentForm = document.createElement('form');
+    commentForm.setAttribute('data-garyx-browser-annotation-comment-form', 'true');
+    commentForm.setAttribute('data-garyx-browser-annotation-ui', 'true');
+    Object.assign(commentForm.style, {
       position: 'fixed',
       left: '0',
       top: '0',
-      width: '28px',
-      height: '28px',
+      width: '240px',
       display: 'none',
-      padding: '0',
-      border: '0',
-      borderRadius: '0',
-      background: 'transparent url("' + COMMENT_ICON + '") center / 26px 25px no-repeat',
-      boxShadow: 'none',
+      alignItems: 'center',
+      gap: '6px',
+      padding: '6px',
+      border: '1px solid rgba(15,23,42,0.16)',
+      borderRadius: '8px',
+      background: '#ffffff',
+      boxShadow: '0 10px 30px rgba(15,23,42,0.18), 0 0 0 1px rgba(255,255,255,0.85)',
       outline: 'none',
       pointerEvents: 'auto',
       zIndex: '2147483647',
     });
-    (document.body || document.documentElement).appendChild(commentButton);
+
+    const commentInput = document.createElement('input');
+    commentInput.type = 'text';
+    commentInput.setAttribute('aria-label', 'Comment');
+    commentInput.setAttribute('data-garyx-browser-annotation-comment-input', 'true');
+    commentInput.placeholder = 'Comment';
+    Object.assign(commentInput.style, {
+      flex: '1 1 auto',
+      minWidth: '0',
+      height: '28px',
+      padding: '5px 7px',
+      border: '0',
+      outline: 'none',
+      background: 'transparent',
+      color: '#0f172a',
+      font: '13px/18px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+      boxSizing: 'border-box',
+    });
+
+    const commentSubmit = document.createElement('button');
+    commentSubmit.type = 'submit';
+    commentSubmit.setAttribute('aria-label', 'Send comment');
+    commentSubmit.setAttribute('data-garyx-browser-annotation-comment-submit', 'true');
+    commentSubmit.textContent = '↵';
+    Object.assign(commentSubmit.style, {
+      flex: '0 0 auto',
+      width: '26px',
+      height: '26px',
+      padding: '0',
+      border: '0',
+      borderRadius: '6px',
+      background: '#16a34a',
+      color: '#ffffff',
+      font: '14px/26px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+      textAlign: 'center',
+    });
+
+    commentForm.append(commentInput, commentSubmit);
+    (document.body || document.documentElement).appendChild(commentForm);
 
     const previousCursor = document.documentElement.style.cursor;
     document.documentElement.style.cursor = COMMENT_CURSOR;
@@ -257,16 +294,21 @@ function browserAnnotationModeScript(enabled: boolean, commentMessagePrefix: str
       );
     };
 
-    const emitCommentRequest = () => {
+    const emitCommentRequest = (comment) => {
+      const normalizedComment = truncate(comment, 1200);
+      if (!normalizedComment) {
+        return false;
+      }
       if (!(selectedElement instanceof Element)) {
-        return;
+        return false;
       }
       const rect = visibleRect(selectedElement);
       if (!rect) {
-        commentButton.style.display = 'none';
-        return;
+        commentForm.style.display = 'none';
+        return false;
       }
       const payload = {
+        comment: normalizedComment,
         tagName: selectedElement.tagName.toLowerCase(),
         label: labelFor(selectedElement),
         role: selectedElement.getAttribute('role'),
@@ -280,27 +322,29 @@ function browserAnnotationModeScript(enabled: boolean, commentMessagePrefix: str
         },
       };
       console.log(COMMENT_MESSAGE_PREFIX + JSON.stringify(payload));
+      return true;
     };
 
-    const positionCommentButton = () => {
+    const positionCommentForm = () => {
       const rect = visibleRect(selectedElement);
       if (!rect) {
-        commentButton.style.display = 'none';
+        commentForm.style.display = 'none';
         return;
       }
-      const size = 28;
+      const width = 240;
+      const height = 42;
       const gap = 6;
       const padding = 8;
-      let left = rect.left + rect.width + gap;
-      if (left + size > window.innerWidth - padding) {
-        left = Math.max(padding, rect.left - size - gap);
+      let left = Math.min(Math.max(padding, rect.left), window.innerWidth - width - padding);
+      if (left < padding) {
+        left = padding;
       }
-      let top = Math.max(padding, rect.top - 10);
-      if (top + size > window.innerHeight - padding) {
-        top = Math.max(padding, window.innerHeight - size - padding);
+      let top = rect.top + rect.height + gap;
+      if (top + height > window.innerHeight - padding) {
+        top = Math.max(padding, rect.top - height - gap);
       }
-      commentButton.style.display = 'block';
-      commentButton.style.transform =
+      commentForm.style.display = 'flex';
+      commentForm.style.transform =
         'translate(' + Math.round(left) + 'px, ' + Math.round(top) + 'px)';
     };
 
@@ -309,7 +353,7 @@ function browserAnnotationModeScript(enabled: boolean, commentMessagePrefix: str
       if (!rect) {
         hide();
         if (selectedElement === element) {
-          commentButton.style.display = 'none';
+          commentForm.style.display = 'none';
         }
         return;
       }
@@ -319,7 +363,7 @@ function browserAnnotationModeScript(enabled: boolean, commentMessagePrefix: str
       overlay.style.width = rect.width + 'px';
       overlay.style.height = rect.height + 'px';
       if (selectedElement === element) {
-        positionCommentButton();
+        positionCommentForm();
       }
     };
 
@@ -357,8 +401,12 @@ function browserAnnotationModeScript(enabled: boolean, commentMessagePrefix: str
       event.stopPropagation();
       selectedElement = target;
       commentRequestEmitted = false;
+      commentInput.value = '';
       update(target);
-      positionCommentButton();
+      positionCommentForm();
+      window.setTimeout(() => {
+        commentInput.focus();
+      }, 0);
     };
     const handlePointerDown = (event) => {
       if (commentRequestEmitted) {
@@ -375,18 +423,29 @@ function browserAnnotationModeScript(enabled: boolean, commentMessagePrefix: str
       event.preventDefault();
       event.stopPropagation();
     };
-    const handleCommentButtonClick = (event) => {
+    const submitComment = (event) => {
       event.preventDefault();
       event.stopPropagation();
       if (commentRequestEmitted) {
         return;
       }
+      const didEmit = emitCommentRequest(commentInput.value);
+      if (!didEmit) {
+        return;
+      }
       commentRequestEmitted = true;
-      commentButton.style.display = 'none';
-      emitCommentRequest();
+      commentInput.disabled = true;
+      commentSubmit.disabled = true;
+      commentForm.style.display = 'none';
     };
-    const stopCommentButtonEvent = (event) => {
-      event.preventDefault();
+    const handleCommentKeyDown = (event) => {
+      event.stopPropagation();
+      if (event.key !== 'Enter' || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey || event.isComposing) {
+        return;
+      }
+      submitComment(event);
+    };
+    const stopCommentFormEvent = (event) => {
       event.stopPropagation();
     };
 
@@ -397,9 +456,11 @@ function browserAnnotationModeScript(enabled: boolean, commentMessagePrefix: str
     window.addEventListener('pointerdown', handlePointerDown, true);
     window.addEventListener('mousedown', handlePointerDown, true);
     window.addEventListener('click', handleClick, true);
-    commentButton.addEventListener('click', handleCommentButtonClick, true);
-    commentButton.addEventListener('pointerdown', stopCommentButtonEvent, true);
-    commentButton.addEventListener('mousedown', stopCommentButtonEvent, true);
+    commentForm.addEventListener('submit', submitComment, true);
+    commentForm.addEventListener('click', stopCommentFormEvent, true);
+    commentForm.addEventListener('pointerdown', stopCommentFormEvent, true);
+    commentForm.addEventListener('mousedown', stopCommentFormEvent, true);
+    commentInput.addEventListener('keydown', handleCommentKeyDown, true);
 
     window[KEY] = {
       dispose() {
@@ -410,13 +471,15 @@ function browserAnnotationModeScript(enabled: boolean, commentMessagePrefix: str
         window.removeEventListener('pointerdown', handlePointerDown, true);
         window.removeEventListener('mousedown', handlePointerDown, true);
         window.removeEventListener('click', handleClick, true);
-        commentButton.removeEventListener('click', handleCommentButtonClick, true);
-        commentButton.removeEventListener('pointerdown', stopCommentButtonEvent, true);
-        commentButton.removeEventListener('mousedown', stopCommentButtonEvent, true);
+        commentForm.removeEventListener('submit', submitComment, true);
+        commentForm.removeEventListener('click', stopCommentFormEvent, true);
+        commentForm.removeEventListener('pointerdown', stopCommentFormEvent, true);
+        commentForm.removeEventListener('mousedown', stopCommentFormEvent, true);
+        commentInput.removeEventListener('keydown', handleCommentKeyDown, true);
         document.documentElement.style.cursor = previousCursor;
         cursorStyle.remove();
         overlay.remove();
-        commentButton.remove();
+        commentForm.remove();
         delete window[KEY];
       },
     };
@@ -784,12 +847,17 @@ class BrowserRuntime {
     };
     const tagName = stringValue(input.tagName) || 'element';
     const label = stringValue(input.label) || tagName;
+    const comment = stringValue(input.comment);
+    if (!comment) {
+      return null;
+    }
     const webContents = record.view.webContents;
     return {
       id: `browser-comment-${randomUUID()}`,
       tabId: record.id,
       url: webContents.getURL() || record.url,
       title: safeTitle(webContents.getTitle() || record.title || webContents.getURL()),
+      comment,
       tagName,
       label,
       role: stringValue(input.role),

@@ -6834,6 +6834,58 @@ export function AppShell() {
     };
   }
 
+  async function handleSubmitBrowserAnnotationComment(message: string): Promise<void> {
+    const prompt = message.trim();
+    if (!prompt) {
+      return;
+    }
+    const threadId = await ensureSelectedThreadId();
+    if (!threadId) {
+      return;
+    }
+    if (!(await ensureThreadBotRouting(threadId))) {
+      return;
+    }
+
+    if (isActiveSendingThread) {
+      const intent = buildIntent({
+        threadId,
+        text: prompt,
+        images: [],
+        files: [],
+        source: "composer_queue",
+        state: "queued_local",
+      });
+      dispatchMessageState({
+        type: "intent/created",
+        intent,
+        enqueue: true,
+      });
+      deferredQueueDrainByThreadRef.current[threadId] = true;
+      setError(null);
+      if (settingsDraft.followUpBehavior === "steer" && canSteerQueuedPrompt) {
+        await steerQueuedIntent(intent);
+      }
+      return;
+    }
+
+    const intent = buildIntent({
+      threadId,
+      text: prompt,
+      images: [],
+      files: [],
+      source: "composer_send",
+      state: "dispatch_requested",
+      dispatchMode: "sync_send",
+    });
+    dispatchMessageState({
+      type: "intent/created",
+      intent,
+      enqueue: false,
+    });
+    void runQueuedBatch(threadId, intent.intentId);
+  }
+
   async function handleNewThread() {
     setBotConversationGroupId(null);
     setWorkspaceConversationPath(null);
@@ -8429,6 +8481,7 @@ export function AppShell() {
       workspaceFileFilter={workspaceFileFilter}
       workspaceMode={composerWorkspaceMode || "local"}
       onRevealSelectedWorkspaceFile={handleRevealSelectedWorkspaceFile}
+      onSubmitBrowserAnnotationComment={handleSubmitBrowserAnnotationComment}
       onSubmitSideChat={handleSubmitSideChat}
       onWorkspaceFileFilterChange={setWorkspaceFileFilter}
     />
