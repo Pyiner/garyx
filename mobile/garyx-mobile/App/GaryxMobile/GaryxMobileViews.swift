@@ -542,14 +542,14 @@ private struct GaryxDrawerMainPanelStyle: ViewModifier {
 
         content
             .background(GaryxTheme.background)
-            .clipShape(shape)
             .overlay(alignment: .leading) {
                 Rectangle()
-                    .fill(Color.primary.opacity(0.16))
+                    .fill(Color.primary.opacity(0.10))
                     .frame(width: 1 / UIScreen.main.scale)
                     .opacity(clampedProgress)
                     .allowsHitTesting(false)
             }
+            .clipShape(shape)
             .shadow(
                 color: Color.black.opacity(0.18 * Double(clampedProgress)),
                 radius: 30 * clampedProgress,
