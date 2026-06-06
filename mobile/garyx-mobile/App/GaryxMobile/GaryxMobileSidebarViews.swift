@@ -1260,6 +1260,11 @@ struct GaryxSidebarBottomActionBar: View {
         .padding(.horizontal, 16)
         .padding(.top, 6)
         .padding(.bottom, 4)
+        .frame(maxWidth: .infinity)
+        // Absorb taps that land in the bar but miss the pills, so they do not
+        // fall through to the thread rows scrolling behind this overlay bar.
+        .contentShape(Rectangle())
+        .onTapGesture {}
     }
 }
 
