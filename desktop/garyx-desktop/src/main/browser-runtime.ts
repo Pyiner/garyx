@@ -102,10 +102,10 @@ function browserAnnotationModeScript(enabled: boolean, commentMessagePrefix: str
       boxSizing: 'border-box',
       pointerEvents: 'none',
       zIndex: '2147483647',
-      border: '2px solid #16a34a',
+      border: '2px solid #2563eb',
       borderRadius: '4px',
-      background: 'rgba(22, 163, 74, 0.08)',
-      boxShadow: '0 0 0 1px rgba(255,255,255,0.9), 0 0 0 4px rgba(22,163,74,0.16)',
+      background: 'rgba(37, 99, 235, 0.08)',
+      boxShadow: '0 0 0 1px rgba(255,255,255,0.9), 0 0 0 4px rgba(37,99,235,0.16)',
     });
     (document.body || document.documentElement).appendChild(overlay);
 
@@ -160,7 +160,7 @@ function browserAnnotationModeScript(enabled: boolean, commentMessagePrefix: str
       padding: '0',
       border: '0',
       borderRadius: '6px',
-      background: '#16a34a',
+      background: '#111111',
       color: '#ffffff',
       font: '14px/26px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
       textAlign: 'center',
