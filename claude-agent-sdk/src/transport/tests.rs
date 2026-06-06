@@ -3,6 +3,7 @@ use crate::types::ClaudeAgentOptions;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use uuid::Uuid;
 
 #[test]
@@ -128,6 +129,33 @@ fn test_resolve_cli_path_falls_back_to_first_candidate_without_required_flags() 
     assert_eq!(cli_path, fixture.absolute("only/bin/claude"));
 }
 
+#[tokio::test]
+async fn test_close_terminates_process_before_waiting_for_reader_lock() {
+    let fixture = CliFixture::new_raw(&[(
+        "bin/claude",
+        "#!/bin/sh\nIFS= read -r line || true\nexec sleep 600\n",
+    )]);
+    let opts = ClaudeAgentOptions {
+        cli_path: Some(fixture.root.join("bin/claude")),
+        ..ClaudeAgentOptions::default()
+    };
+    let transport = Arc::new(SubprocessTransport::new(opts, true));
+    transport.spawn(None).await.unwrap();
+
+    let reader_guard = transport.reader.lock().await;
+    let close_transport = Arc::clone(&transport);
+    let close_handle = tokio::spawn(async move { close_transport.close().await });
+
+    tokio::time::sleep(CLOSE_GRACE_TIMEOUT + Duration::from_millis(200)).await;
+    drop(reader_guard);
+
+    let result = tokio::time::timeout(Duration::from_secs(1), close_handle)
+        .await
+        .expect("close should have already killed the process before waiting for reader cleanup")
+        .expect("close task should not panic");
+    result.expect("close should succeed");
+}
+
 struct CliFixture {
     root: PathBuf,
 }
@@ -143,6 +171,21 @@ impl CliFixture {
                 fs::create_dir_all(parent).unwrap();
             }
             write_cli_script(&script_path, help_text);
+        }
+
+        Self { root }
+    }
+
+    fn new_raw(entries: &[(&str, &str)]) -> Self {
+        let root = std::env::temp_dir().join(format!("claude-cli-fixture-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+
+        for (relative_path, script) in entries {
+            let script_path = root.join(relative_path);
+            if let Some(parent) = script_path.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            write_raw_script(&script_path, script);
         }
 
         Self { root }
@@ -173,6 +216,17 @@ fn write_cli_script(path: &Path, help_text: &str) {
     let script = format!(
         "#!/bin/sh\nif [ \"$1\" = \"--help\" ]; then\ncat <<'EOF'\n{help_text}EOF\nexit 0\nfi\nprintf '%s\\n' \"$@\"\n"
     );
+    fs::write(path, script).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms).unwrap();
+    }
+}
+
+fn write_raw_script(path: &Path, script: &str) {
     fs::write(path, script).unwrap();
     #[cfg(unix)]
     {

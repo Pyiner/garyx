@@ -235,12 +235,6 @@ impl SubprocessTransport {
             *writer_guard = None;
         }
 
-        // Close reader
-        {
-            let mut reader_guard = self.reader.lock().await;
-            *reader_guard = None;
-        }
-
         // Give the CLI a short chance to exit after stdin closes before
         // falling back to a forced kill. This mirrors the TypeScript SDK's
         // close path closely enough for abort/error cleanup without racing
@@ -258,20 +252,56 @@ impl SubprocessTransport {
             }
         }
 
-        Ok(())
-    }
-
-    pub async fn wait_for_exit(&self) -> Result<()> {
-        self.ready.store(false, Ordering::SeqCst);
-
-        let mut proc_guard = self.process.lock().await;
-        if let Some(mut proc) = proc_guard.take() {
-            let _ = proc.wait().await.map_err(|e| {
-                ClaudeSDKError::Connection(format!("Failed waiting for Claude CLI to exit: {e}"))
-            })?;
+        {
+            let mut reader_guard = self.reader.lock().await;
+            *reader_guard = None;
         }
 
         Ok(())
+    }
+
+    pub async fn terminate(&self) -> Result<()> {
+        self.ready.store(false, Ordering::SeqCst);
+
+        {
+            let mut writer_guard = self.writer.lock().await;
+            *writer_guard = None;
+        }
+        {
+            let mut proc_guard = self.process.lock().await;
+            if let Some(mut proc) = proc_guard.take() {
+                let _ = proc.kill().await;
+                let _ = proc.wait().await;
+            }
+        }
+        {
+            let mut reader_guard = self.reader.lock().await;
+            *reader_guard = None;
+        }
+
+        Ok(())
+    }
+
+    pub async fn wait_for_exit_timeout(&self, timeout: Duration) -> Result<bool> {
+        self.ready.store(false, Ordering::SeqCst);
+
+        let mut proc_guard = self.process.lock().await;
+        let Some(proc) = proc_guard.as_mut() else {
+            return Ok(true);
+        };
+
+        match tokio::time::timeout(timeout, proc.wait()).await {
+            Ok(result) => {
+                let _ = result.map_err(|e| {
+                    ClaudeSDKError::Connection(format!(
+                        "Failed waiting for Claude CLI to exit: {e}"
+                    ))
+                })?;
+                proc_guard.take();
+                Ok(true)
+            }
+            Err(_) => Ok(false),
+        }
     }
 
     #[cfg(test)]

@@ -44,7 +44,7 @@ impl From<mpsc::Receiver<Value>> for Prompt {
 }
 
 type PendingMap = HashMap<String, oneshot::Sender<std::result::Result<Value, String>>>;
-const FINISH_PROCESS_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+const FINISH_PROCESS_GRACE_TIMEOUT: Duration = Duration::from_secs(2);
 const FINISH_READER_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Internal client for bidirectional conversations with Claude Code.
@@ -326,15 +326,14 @@ impl ClaudeSDKClient {
         Ok(())
     }
 
-    /// Finish a normal streaming run without killing the Claude process.
+    /// Finish a normal streaming run after the provider has stopped accepting
+    /// more input.
     ///
-    /// Claude Code may emit the `result` frame on stdout before it has flushed
-    /// the final assistant entry into its local transcript.  Closing stdin and
-    /// waiting for process exit matches the TypeScript SDK's normal query
-    /// cleanup path and avoids racing that transcript write.  We give Claude a
-    /// long grace period here because filesystem-backed tools can keep
-    /// teardown work alive after the result frame. On timeout the child is
-    /// dropped with `kill_on_drop(true)`, then remaining tasks are cleaned up.
+    /// Claude Code may emit a turn `result` before the process has flushed
+    /// trailing protocol frames or transcript writes. Closing stdin gives it a
+    /// short graceful shutdown window, matching the TypeScript SDK's EOF +
+    /// grace path. If it does not exit promptly after EOF, terminate it as
+    /// cleanup rather than keeping a no-longer-writable active run around.
     pub async fn finish(&mut self) -> Result<()> {
         let Some(transport) = self.transport.take() else {
             self.abort_background_tasks().await;
@@ -350,15 +349,16 @@ impl ClaudeSDKClient {
 
         transport.end_input().await?;
 
-        let wait_result =
-            tokio::time::timeout(FINISH_PROCESS_TIMEOUT, transport.wait_for_exit()).await;
-        let finish_result = match wait_result {
-            Ok(result) => result,
-            Err(_) => Err(ClaudeSDKError::Timeout(format!(
-                "Claude CLI did not exit within {}s after stdin closed",
-                FINISH_PROCESS_TIMEOUT.as_secs()
-            ))),
-        };
+        if !transport
+            .wait_for_exit_timeout(FINISH_PROCESS_GRACE_TIMEOUT)
+            .await?
+        {
+            tracing::warn!(
+                "Claude CLI did not exit within {}s after stdin closed; terminating",
+                FINISH_PROCESS_GRACE_TIMEOUT.as_secs()
+            );
+            transport.terminate().await?;
+        }
 
         self.wait_for_reader_shutdown().await;
 
@@ -366,7 +366,7 @@ impl ClaudeSDKClient {
         self.reset_message_channel();
         self.closed.store(false, Ordering::SeqCst);
 
-        finish_result
+        Ok(())
     }
 
     // -----------------------------------------------------------------------

@@ -1,5 +1,5 @@
 use super::{
-    ClaudeSDKClient, FINISH_PROCESS_TIMEOUT, Prompt, build_user_message_payload,
+    ClaudeSDKClient, FINISH_PROCESS_GRACE_TIMEOUT, Prompt, build_user_message_payload,
     incoming_control_response, unsupported_incoming_control_request_response,
 };
 use crate::control::IncomingControlRequest;
@@ -31,10 +31,10 @@ fn write_mock_claude_script(name: &str, body: &str) -> PathBuf {
 }
 
 #[test]
-fn test_finish_process_timeout_allows_long_post_result_teardown() {
+fn test_finish_process_grace_timeout_matches_official_shutdown_window() {
     assert_eq!(
-        FINISH_PROCESS_TIMEOUT,
-        std::time::Duration::from_secs(60 * 60)
+        FINISH_PROCESS_GRACE_TIMEOUT,
+        std::time::Duration::from_secs(2)
     );
 }
 
@@ -352,4 +352,46 @@ printf done > '{}'\n",
 
     let _ = fs::remove_file(script);
     let _ = fs::remove_file(marker);
+}
+
+#[tokio::test]
+async fn test_finish_terminates_process_after_grace_when_it_ignores_stdin_eof() {
+    let script = write_mock_claude_script(
+        "finish-ignores-eof",
+        "#!/bin/sh\n\
+IFS= read -r line || exit 1\n\
+request_id=$(printf '%s\\n' \"$line\" | sed -E 's/.*\"request_id\":\"([^\"]+)\".*/\\1/')\n\
+printf '%s\\n' \"{\\\"type\\\":\\\"control_response\\\",\\\"response\\\":{\\\"subtype\\\":\\\"success\\\",\\\"request_id\\\":\\\"$request_id\\\",\\\"response\\\":{}}}\"\n\
+exec sleep 600\n",
+    );
+    let options = ClaudeAgentOptions {
+        cli_path: Some(script.clone()),
+        ..ClaudeAgentOptions::default()
+    };
+
+    let mut client = ClaudeSDKClient::new(options);
+    client
+        .connect(None)
+        .await
+        .expect("streaming connect should succeed");
+
+    let started = std::time::Instant::now();
+    client
+        .finish()
+        .await
+        .expect("finish should terminate cleanup");
+
+    assert!(
+        started.elapsed() < FINISH_PROCESS_GRACE_TIMEOUT + std::time::Duration::from_secs(3),
+        "finish should not keep a completed run alive for a long process timeout"
+    );
+    assert!(client.transport.is_none());
+    assert!(client.reader_handle.is_none());
+    assert!(client.stream_handle.is_none());
+    assert!(client.pending.lock().await.is_empty());
+    assert!(client.msg_tx.is_some());
+    assert!(client.msg_rx.is_some());
+    assert!(!client.closed.load(Ordering::SeqCst));
+
+    let _ = fs::remove_file(script);
 }
