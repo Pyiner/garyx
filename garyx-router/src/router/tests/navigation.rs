@@ -435,6 +435,47 @@ async fn test_rebuild_thread_indexes_prefers_latest_updated_binding_for_duplicat
 }
 
 #[tokio::test]
+async fn test_resolve_endpoint_thread_id_lazy_rebuilds_from_thread_bindings() {
+    let store = Arc::new(InMemoryThreadStore::new());
+    store
+        .set(
+            "thread::bound",
+            json!({
+                "thread_id": "thread::bound",
+                "label": "Bound",
+                "updated_at": "2026-03-01T12:00:00Z",
+                "channel_bindings": [{
+                    "channel": "telegram",
+                    "account_id": "main",
+                    "binding_key": "user42",
+                    "chat_id": "user42",
+                    "display_label": "Test User"
+                }]
+            }),
+        )
+        .await;
+
+    let mut router = MessageRouter::new(store, GaryxConfig::default());
+
+    assert!(router.thread_nav.endpoint_thread_map.is_empty());
+    assert_eq!(
+        router
+            .resolve_endpoint_thread_id("telegram", "main", "user42")
+            .await
+            .as_deref(),
+        Some("thread::bound")
+    );
+    assert_eq!(
+        router
+            .thread_nav
+            .endpoint_thread_map
+            .get("telegram::main::user42")
+            .map(String::as_str),
+        Some("thread::bound")
+    );
+}
+
+#[tokio::test]
 async fn test_rebuild_thread_indexes_preserves_switched_thread_history() {
     let store = Arc::new(InMemoryThreadStore::new());
     store

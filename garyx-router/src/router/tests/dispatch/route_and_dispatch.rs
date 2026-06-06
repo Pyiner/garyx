@@ -1539,6 +1539,52 @@ async fn test_route_and_dispatch_auto_recovery_ignores_missing_target() {
 }
 
 #[tokio::test]
+async fn test_route_and_dispatch_uses_bound_thread_without_rebuilt_endpoint_map() {
+    let store = Arc::new(InMemoryThreadStore::new());
+    seed_bound_dm_thread(
+        &store,
+        "thread::user42-existing",
+        "bot1",
+        "user42",
+        json!({}),
+    )
+    .await;
+
+    let mut router = MessageRouter::new(store.clone(), GaryxConfig::default());
+    let dispatcher = MockDispatcher::new();
+    let request = InboundRequest {
+        channel: "telegram".to_owned(),
+        account_id: "bot1".to_owned(),
+        from_id: "user42".to_owned(),
+        is_group: false,
+        thread_binding_key: "user42".to_owned(),
+        message: "hello after restart".to_owned(),
+        run_id: "run-lazy-endpoint-binding".to_owned(),
+        reply_to_message_id: None,
+        images: vec![],
+        extra_metadata: HashMap::new(),
+        file_paths: vec![],
+    };
+
+    assert!(router.thread_nav.endpoint_thread_map.is_empty());
+    let result = router
+        .route_and_dispatch(request, &dispatcher, None)
+        .await
+        .unwrap();
+
+    assert_eq!(result.thread_id, "thread::user42-existing");
+    assert_eq!(
+        router
+            .resolve_endpoint_thread_id("telegram", "bot1", "user42")
+            .await
+            .as_deref(),
+        Some("thread::user42-existing")
+    );
+    let dispatched = dispatcher.dispatched.lock().await;
+    assert_eq!(dispatched[0].0, "thread::user42-existing");
+}
+
+#[tokio::test]
 async fn test_route_and_dispatch_reply_routing_falls_back_to_rebound_thread_when_old_thread_is_missing()
  {
     let store = Arc::new(InMemoryThreadStore::new());

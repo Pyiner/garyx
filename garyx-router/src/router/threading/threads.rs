@@ -447,6 +447,21 @@ impl MessageRouter {
         thread_binding_key: &str,
     ) -> Option<String> {
         let key = endpoint_key(channel, account_id, thread_binding_key);
-        self.thread_nav.endpoint_thread_map.get(&key).cloned()
+        if let Some(thread_id) = self.thread_nav.endpoint_thread_map.get(&key).cloned() {
+            if self.threads.exists(&thread_id).await {
+                return Some(thread_id);
+            }
+            self.thread_nav.endpoint_thread_map.remove(&key);
+        }
+
+        let endpoint = list_known_channel_endpoints(&self.threads)
+            .await
+            .into_iter()
+            .find(|candidate| candidate.endpoint_key == key)?;
+        let thread_id = endpoint.thread_id?;
+        self.thread_nav
+            .endpoint_thread_map
+            .insert(key, thread_id.clone());
+        Some(thread_id)
     }
 }

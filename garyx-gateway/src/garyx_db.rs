@@ -2879,12 +2879,6 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             projected_at TEXT NOT NULL
         ) STRICT;
 
-        CREATE INDEX IF NOT EXISTS idx_thread_channel_endpoints_thread
-            ON thread_channel_endpoints(thread_id);
-
-        CREATE INDEX IF NOT EXISTS idx_thread_channel_endpoints_channel_account
-            ON thread_channel_endpoints(channel, account_id);
-
         CREATE TABLE IF NOT EXISTS thread_message_routes (
             channel TEXT NOT NULL,
             account_id TEXT NOT NULL,
@@ -3070,9 +3064,16 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
         "#,
     )?;
     ensure_thread_meta_projection_columns(conn)?;
+    ensure_thread_channel_endpoint_columns(conn)?;
     ensure_workflow_runs_task_columns(conn)?;
     conn.execute_batch(
         r#"
+        CREATE INDEX IF NOT EXISTS idx_thread_channel_endpoints_thread
+            ON thread_channel_endpoints(thread_id);
+
+        CREATE INDEX IF NOT EXISTS idx_thread_channel_endpoints_channel_account
+            ON thread_channel_endpoints(channel, account_id);
+
         CREATE INDEX IF NOT EXISTS idx_thread_meta_visible_updated
             ON thread_meta(default_list_hidden, updated_at DESC, projected_at DESC);
 
@@ -3480,6 +3481,36 @@ fn ensure_thread_meta_projection_columns(conn: &Connection) -> GaryxDbResult<()>
     Ok(())
 }
 
+fn ensure_thread_channel_endpoint_columns(conn: &Connection) -> GaryxDbResult<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(thread_channel_endpoints)")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    let mut columns = BTreeSet::new();
+    for row in rows {
+        columns.insert(row?);
+    }
+    for (name, sql_type) in [
+        ("chat_id", "TEXT NOT NULL DEFAULT ''"),
+        ("delivery_target_type", "TEXT NOT NULL DEFAULT 'chat_id'"),
+        ("delivery_target_id", "TEXT NOT NULL DEFAULT ''"),
+        ("display_label", "TEXT NOT NULL DEFAULT ''"),
+        ("thread_id", "TEXT"),
+        ("thread_label", "TEXT"),
+        ("workspace_dir", "TEXT"),
+        ("thread_updated_at", "TEXT"),
+        ("last_inbound_at", "TEXT"),
+        ("last_delivery_at", "TEXT"),
+        ("projected_at", "TEXT NOT NULL DEFAULT ''"),
+    ] {
+        if !columns.contains(name) {
+            conn.execute(
+                &format!("ALTER TABLE thread_channel_endpoints ADD COLUMN {name} {sql_type}"),
+                [],
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn ensure_workflow_runs_task_columns(conn: &Connection) -> GaryxDbResult<()> {
     let mut stmt = conn.prepare("PRAGMA table_info(workflow_runs)")?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
@@ -3832,6 +3863,86 @@ mod tests {
         assert_eq!(rows[0].message_count, 0);
         assert_eq!(rows[0].last_message_preview, None);
         assert_eq!(rows[0].projection_version, 2);
+    }
+
+    #[test]
+    fn opening_legacy_thread_channel_endpoint_db_adds_thread_columns() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        {
+            let conn = Connection::open(&path).expect("legacy db");
+            conn.execute_batch(
+                r#"
+                CREATE TABLE thread_channel_endpoints (
+                    endpoint_key TEXT PRIMARY KEY,
+                    channel TEXT NOT NULL,
+                    account_id TEXT NOT NULL,
+                    binding_key TEXT NOT NULL,
+                    chat_id TEXT NOT NULL DEFAULT '',
+                    delivery_target_type TEXT NOT NULL DEFAULT 'chat_id',
+                    delivery_target_id TEXT NOT NULL DEFAULT '',
+                    display_label TEXT NOT NULL DEFAULT '',
+                    projected_at TEXT NOT NULL
+                ) STRICT;
+
+                INSERT INTO thread_channel_endpoints (
+                    endpoint_key, channel, account_id, binding_key, chat_id,
+                    delivery_target_type, delivery_target_id, display_label,
+                    projected_at
+                ) VALUES (
+                    'telegram::main::1000000001', 'telegram', 'main', '1000000001',
+                    '1000000001', 'chat_id', '1000000001', 'Test User',
+                    '2026-06-03T00:00:01.000Z'
+                );
+                "#,
+            )
+            .expect("legacy thread_channel_endpoints");
+        }
+
+        let db = GaryxDbService::open(&path).expect("open migrated db");
+        let endpoints = db
+            .list_thread_channel_endpoints()
+            .expect("list migrated endpoints");
+        assert_eq!(endpoints.len(), 1);
+        assert_eq!(endpoints[0].endpoint_key, "telegram::main::1000000001");
+        assert_eq!(endpoints[0].thread_id, None);
+
+        db.sync_thread_meta_projection_snapshot(ThreadMetaProjectionSnapshot {
+            thread_meta: vec![ThreadMetaDraft {
+                thread_id: "thread::bound".to_owned(),
+                thread_label: Some("Bound".to_owned()),
+                workspace_dir: Some("/Users/test/project".to_owned()),
+                ..Default::default()
+            }],
+            channel_endpoints: vec![KnownChannelEndpoint {
+                endpoint_key: "telegram::main::1000000001".to_owned(),
+                channel: "telegram".to_owned(),
+                account_id: "main".to_owned(),
+                binding_key: "1000000001".to_owned(),
+                chat_id: "1000000001".to_owned(),
+                delivery_target_type: "chat_id".to_owned(),
+                delivery_target_id: "1000000001".to_owned(),
+                display_label: "Test User".to_owned(),
+                thread_id: Some("thread::bound".to_owned()),
+                thread_label: Some("Bound".to_owned()),
+                workspace_dir: Some("/Users/test/project".to_owned()),
+                thread_updated_at: Some("2026-06-03T00:00:02.000Z".to_owned()),
+                last_inbound_at: None,
+                last_delivery_at: None,
+            }],
+            message_routes: Vec::new(),
+        })
+        .expect("write migrated endpoint projection");
+
+        let endpoints = db
+            .list_thread_channel_endpoints()
+            .expect("list updated endpoints");
+        assert_eq!(endpoints.len(), 1);
+        assert_eq!(endpoints[0].thread_id.as_deref(), Some("thread::bound"));
+        assert_eq!(
+            endpoints[0].workspace_dir.as_deref(),
+            Some("/Users/test/project")
+        );
     }
 
     #[test]
