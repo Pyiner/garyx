@@ -305,6 +305,7 @@ type ThreadPageProps = {
   onJumpToLatestThreadLogs: () => void;
   onLocalWorkspaceFileLinkClick: (path: string) => void;
   onMessagesScroll: () => void;
+  onMessagesUserScrollIntent: () => void;
   onMarkIgnoreComposerSubmitWindow: () => void;
   onQueueDropTargetChange: (target: QueueDropTarget) => void;
   onRemoveComposerFile: (fileId: string) => void;
@@ -399,6 +400,7 @@ export function ThreadPage({
   onJumpToLatestThreadLogs,
   onLocalWorkspaceFileLinkClick,
   onMessagesScroll,
+  onMessagesUserScrollIntent,
   onMarkIgnoreComposerSubmitWindow,
   onQueueDropTargetChange,
   onRemoveComposerFile,
@@ -555,7 +557,14 @@ export function ThreadPage({
         ) : null}
 
         {!hasWorkflowRunContent ? (
-          <div className="messages" onScroll={onMessagesScroll} ref={messagesRef}>
+          <div
+            className="messages"
+            onPointerDown={onMessagesUserScrollIntent}
+            onScroll={onMessagesScroll}
+            onTouchStart={onMessagesUserScrollIntent}
+            onWheel={onMessagesUserScrollIntent}
+            ref={messagesRef}
+          >
           {historyLoadingEarlier ? (
             <div
               aria-label={t("Loading earlier messages")}

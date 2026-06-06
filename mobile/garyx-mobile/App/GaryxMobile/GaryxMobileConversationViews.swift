@@ -82,6 +82,13 @@ private struct GaryxConversationViewportHeightKey: PreferenceKey {
     }
 }
 
+private enum GaryxConversationTailScrollRequestKind {
+    case openingThread
+    case tailUpdate
+    case manual
+    case repair
+}
+
 struct GaryxConversationView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @FocusState private var isComposerFocused: Bool
@@ -108,6 +115,7 @@ struct GaryxConversationView: View {
                                 scrollToConversationTail(proxy)
                             }
                             showsScrollToBottomButton = false
+                            scheduleScrollToConversationTail(proxy, animated: false, retryLayout: true, requestKind: .manual)
                         } label: {
                             Image(systemName: "arrow.down")
                                 .font(GaryxFont.system(size: 15, weight: .semibold))
@@ -136,7 +144,7 @@ struct GaryxConversationView: View {
                     isNearConversationBottom = true
                     hasMovedTowardOlderHistory = false
                     showsScrollToBottomButton = false
-                    scheduleScrollToConversationTail(proxy, animated: false, retryLayout: true)
+                    scheduleScrollToConversationTail(proxy, animated: false, retryLayout: true, requestKind: .openingThread)
                 }
                 .onChange(of: model.selectedThread?.id) { _, _ in
                     scrollPreservationThreadId = model.selectedThread?.id
@@ -146,7 +154,7 @@ struct GaryxConversationView: View {
                     isNearConversationBottom = true
                     hasMovedTowardOlderHistory = false
                     showsScrollToBottomButton = false
-                    scheduleScrollToConversationTail(proxy, animated: false, retryLayout: true)
+                    scheduleScrollToConversationTail(proxy, animated: false, retryLayout: true, requestKind: .openingThread)
                 }
                 .onChange(of: model.messages) { oldValue, newValue in
                     defer {
@@ -157,15 +165,24 @@ struct GaryxConversationView: View {
                     }
                     guard !newValue.isEmpty || model.showsTailThinkingIndicator else { return }
                     if oldValue.isEmpty || isNearConversationBottom {
-                        scheduleScrollToConversationTail(proxy, animated: !oldValue.isEmpty, retryLayout: true)
+                        scheduleScrollToConversationTail(
+                            proxy,
+                            animated: !oldValue.isEmpty,
+                            retryLayout: true,
+                            requestKind: oldValue.isEmpty ? .openingThread : .tailUpdate
+                        )
                         showsScrollToBottomButton = false
                     } else {
                         showsScrollToBottomButton = true
                     }
                 }
+                .onChange(of: model.showsTailThinkingIndicator) { _, visible in
+                    guard visible else { return }
+                    scheduleScrollToConversationTail(proxy, animated: false, retryLayout: true, requestKind: .tailUpdate)
+                }
                 .onChange(of: isComposerFocused) { _, isFocused in
                     guard isFocused else { return }
-                    scheduleScrollToConversationTail(proxy, animated: true, retryLayout: true)
+                    scheduleScrollToConversationTail(proxy, animated: true, retryLayout: true, requestKind: .manual)
                 }
         }
         .background(GaryxTheme.background)
@@ -226,21 +243,23 @@ struct GaryxConversationView: View {
                             .id(tailThinkingAnchorId)
                     }
                 }
-                Color.clear
-                    .frame(height: 1)
-                    .id(conversationBottomAnchorId)
-                    .background {
-                        GeometryReader { geometry in
-                            Color.clear.preference(
-                                key: GaryxConversationBottomOffsetKey.self,
-                                value: geometry.frame(in: .named("garyx-conversation-scroll")).maxY
-                            )
-                        }
-                    }
             }
             .padding(.horizontal, 16)
             .padding(.top, 18)
             .padding(.bottom, 24)
+
+            Color.clear
+                .frame(height: 1)
+                .id(conversationBottomAnchorId)
+                .accessibilityHidden(true)
+                .background {
+                    GeometryReader { geometry in
+                        Color.clear.preference(
+                            key: GaryxConversationBottomOffsetKey.self,
+                            value: geometry.frame(in: .named("garyx-conversation-scroll")).maxY
+                        )
+                    }
+                }
         }
         .id(conversationScrollIdentity)
         .coordinateSpace(name: "garyx-conversation-scroll")
@@ -295,19 +314,20 @@ struct GaryxConversationView: View {
     }
 
     private func scrollToConversationTail(_ proxy: ScrollViewProxy) {
-        if model.showsTailThinkingIndicator {
-            proxy.scrollTo(tailThinkingAnchorId, anchor: .bottom)
-        } else {
-            proxy.scrollTo(conversationBottomAnchorId, anchor: .bottom)
-        }
+        proxy.scrollTo(conversationBottomAnchorId, anchor: .bottom)
     }
 
-    private func scheduleScrollToConversationTail(_ proxy: ScrollViewProxy, animated: Bool, retryLayout: Bool = false) {
+    private func scheduleScrollToConversationTail(
+        _ proxy: ScrollViewProxy,
+        animated: Bool,
+        retryLayout: Bool = false,
+        requestKind: GaryxConversationTailScrollRequestKind = .tailUpdate
+    ) {
         tailScrollRequestGeneration += 1
         let generation = tailScrollRequestGeneration
         let identity = conversationScrollIdentity
         let delays: [DispatchTimeInterval] = retryLayout
-            ? [.milliseconds(0), .milliseconds(40), .milliseconds(140), .milliseconds(320)]
+            ? [.milliseconds(0), .milliseconds(16), .milliseconds(40), .milliseconds(140), .milliseconds(320)]
             : [.milliseconds(0)]
 
         for (index, delay) in delays.enumerated() {
@@ -315,7 +335,7 @@ struct GaryxConversationView: View {
                 DispatchQueue.main.async {
                     guard generation == tailScrollRequestGeneration,
                           identity == conversationScrollIdentity,
-                          index == 0 || isNearConversationBottom || shouldRepairVisibleTailGap else {
+                          shouldRunTailScrollAttempt(index: index, requestKind: requestKind) else {
                         return
                     }
                     let shouldAnimate = animated && index == 0
@@ -334,7 +354,19 @@ struct GaryxConversationView: View {
 
     private func repairVisibleTailGapIfNeeded(_ proxy: ScrollViewProxy) {
         guard shouldRepairVisibleTailGap else { return }
-        scheduleScrollToConversationTail(proxy, animated: false, retryLayout: true)
+        scheduleScrollToConversationTail(proxy, animated: false, retryLayout: true, requestKind: .repair)
+    }
+
+    private func shouldRunTailScrollAttempt(index: Int, requestKind: GaryxConversationTailScrollRequestKind) -> Bool {
+        if index == 0 {
+            return true
+        }
+        switch requestKind {
+        case .openingThread, .tailUpdate, .manual:
+            return true
+        case .repair:
+            return isNearConversationBottom || shouldRepairVisibleTailGap
+        }
     }
 
     private var shouldRepairVisibleTailGap: Bool {
