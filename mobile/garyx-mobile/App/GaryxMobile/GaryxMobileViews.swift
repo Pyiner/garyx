@@ -289,7 +289,6 @@ struct GaryxGatewaySetupView: View {
 struct GaryxShellView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @Environment(\.colorScheme) private var colorScheme
 
     @State private var sidebarDragOffset: CGFloat = 0
     @State private var sidebarDragAxis: GaryxSidebarDragAxis?
@@ -340,42 +339,43 @@ struct GaryxShellView: View {
     private func drawerBody(width: CGFloat, containerSize: CGSize) -> some View {
         let revealWidth = sidebarRevealWidth(for: width)
         let drawerOffset = revealWidth - width
-        let closeStripX = max(0, min(revealWidth, max(0, containerSize.width - 28)))
+        let closeCaptureWidth = max(0, containerSize.width - revealWidth)
 
         return ZStack(alignment: .topLeading) {
-            GaryxMainPanelView()
-                .frame(width: containerSize.width, height: containerSize.height)
-                .contentShape(Rectangle())
-                .simultaneousGesture(openingSidebarGesture(sidebarWidth: width))
-                .zIndex(0)
-
-            (colorScheme == .dark ? Color.white : Color.black)
-                .opacity(contentDimOpacity(for: width))
-                .frame(width: containerSize.width, height: containerSize.height)
-                .ignoresSafeArea()
-                .contentShape(Rectangle())
-                .allowsHitTesting(revealWidth > 1)
-                .onTapGesture { closeSidebar() }
-                .gesture(closingSidebarGesture(sidebarWidth: width))
-                .zIndex(1)
-
-            GaryxThreadSidebar(showsInlineCloseButton: true)
-                .frame(width: width)
-                .frame(maxHeight: .infinity)
-                .offset(x: drawerOffset)
-                .allowsHitTesting(revealWidth > width * 0.82)
-                .zIndex(2)
-
-            if revealWidth > 1 {
-                Color.clear
-                    .frame(width: 28, height: containerSize.height)
-                    .offset(x: closeStripX)
+            HStack(spacing: 0) {
+                GaryxThreadSidebar(showsInlineCloseButton: true)
+                    .frame(width: width)
+                    .frame(maxHeight: .infinity)
                     .contentShape(Rectangle())
+                    .allowsHitTesting(revealWidth > width * 0.82)
                     .simultaneousGesture(closingSidebarGesture(sidebarWidth: width))
-                    .zIndex(3)
+
+                GaryxMainPanelView()
+                    .frame(width: containerSize.width, height: containerSize.height)
+                    .contentShape(Rectangle())
+                    .simultaneousGesture(openingSidebarGesture(sidebarWidth: width))
+            }
+            .frame(
+                width: width + containerSize.width,
+                height: containerSize.height,
+                alignment: .topLeading
+            )
+            .offset(x: drawerOffset)
+            .zIndex(0)
+
+            if revealWidth > 1, closeCaptureWidth > 0 {
+                Color.clear
+                    .frame(width: closeCaptureWidth, height: containerSize.height)
+                    .offset(x: revealWidth)
+                    .contentShape(Rectangle())
+                    .onTapGesture { closeSidebar() }
+                    .simultaneousGesture(closingSidebarGesture(sidebarWidth: width))
+                    .zIndex(1)
                     .accessibilityHidden(true)
             }
         }
+        .frame(width: containerSize.width, height: containerSize.height, alignment: .topLeading)
+        .clipped()
         .background(GaryxTheme.background)
     }
 
@@ -384,11 +384,6 @@ struct GaryxShellView: View {
             return max(0, min(width, width + sidebarDragOffset))
         }
         return max(0, min(width, sidebarDragOffset))
-    }
-
-    private func contentDimOpacity(for width: CGFloat) -> Double {
-        guard width > 0 else { return 0 }
-        return 0.12 * min(1, sidebarRevealWidth(for: width) / width)
     }
 
     private func openingSidebarGesture(sidebarWidth: CGFloat) -> some Gesture {
