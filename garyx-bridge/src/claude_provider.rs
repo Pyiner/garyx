@@ -127,6 +127,7 @@ fn is_terminal_claude_background_task_status(status: &str) -> bool {
             | "error"
             | "interrupted"
             | "aborted"
+            | "killed"
             | "stopped"
     )
 }

@@ -68,6 +68,97 @@ fn test_result_usage_tokens_accepts_claude_sdk_snake_case_usage() {
     assert_eq!(result_usage_tokens(Some(&usage)), (20, 34));
 }
 
+#[test]
+fn test_claude_background_task_tracking_accepts_official_task_messages() {
+    let mut active_background_tasks = HashSet::new();
+
+    update_claude_background_tasks(
+        &SystemMessage {
+            subtype: "task_started".to_owned(),
+            data: json!({
+                "task_id": "task-1",
+                "tool_use_id": "toolu_1",
+            }),
+        },
+        &mut active_background_tasks,
+    );
+    assert!(active_background_tasks.contains("task-1"));
+
+    update_claude_background_tasks(
+        &SystemMessage {
+            subtype: "task_updated".to_owned(),
+            data: json!({
+                "task_id": "task-1",
+                "patch": {
+                    "status": "running"
+                }
+            }),
+        },
+        &mut active_background_tasks,
+    );
+    assert!(active_background_tasks.contains("task-1"));
+
+    update_claude_background_tasks(
+        &SystemMessage {
+            subtype: "task_updated".to_owned(),
+            data: json!({
+                "task_id": "task-1",
+                "patch": {
+                    "status": "killed"
+                }
+            }),
+        },
+        &mut active_background_tasks,
+    );
+    assert!(!active_background_tasks.contains("task-1"));
+
+    update_claude_background_tasks(
+        &SystemMessage {
+            subtype: "task_notification".to_owned(),
+            data: json!({
+                "task_id": "task-untracked",
+                "status": "completed",
+            }),
+        },
+        &mut active_background_tasks,
+    );
+    assert!(
+        active_background_tasks.is_empty(),
+        "terminal notifications for untracked tasks should remain a no-op"
+    );
+}
+
+#[test]
+fn test_claude_background_task_tracking_accepts_camel_case_fallbacks() {
+    let mut active_background_tasks = HashSet::new();
+
+    update_claude_background_tasks(
+        &SystemMessage {
+            subtype: "task_started".to_owned(),
+            data: json!({
+                "taskId": "task-camel",
+            }),
+        },
+        &mut active_background_tasks,
+    );
+    assert!(active_background_tasks.contains("task-camel"));
+
+    update_claude_background_tasks(
+        &SystemMessage {
+            subtype: "task_notification".to_owned(),
+            data: json!({
+                "toolUseId": "toolu-camel",
+                "status": "completed",
+            }),
+        },
+        &mut active_background_tasks,
+    );
+    assert!(
+        !active_background_tasks.contains("toolu-camel"),
+        "terminal camelCase fallback notifications should not create active tasks"
+    );
+}
+
 #[tokio::test]
 async fn test_is_ready_before_init() {
     let provider = make_provider();
