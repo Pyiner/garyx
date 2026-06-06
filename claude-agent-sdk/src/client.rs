@@ -44,7 +44,7 @@ impl From<mpsc::Receiver<Value>> for Prompt {
 }
 
 type PendingMap = HashMap<String, oneshot::Sender<std::result::Result<Value, String>>>;
-const FINISH_PROCESS_TIMEOUT: Duration = Duration::from_secs(10);
+const FINISH_PROCESS_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const FINISH_READER_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Internal client for bidirectional conversations with Claude Code.
@@ -331,9 +331,10 @@ impl ClaudeSDKClient {
     /// Claude Code may emit the `result` frame on stdout before it has flushed
     /// the final assistant entry into its local transcript.  Closing stdin and
     /// waiting for process exit matches the TypeScript SDK's normal query
-    /// cleanup path and avoids racing that transcript write.  On timeout the
-    /// child is dropped with `kill_on_drop(true)`, then remaining tasks are
-    /// cleaned up.
+    /// cleanup path and avoids racing that transcript write.  We give Claude a
+    /// long grace period here because filesystem-backed tools can keep
+    /// teardown work alive after the result frame. On timeout the child is
+    /// dropped with `kill_on_drop(true)`, then remaining tasks are cleaned up.
     pub async fn finish(&mut self) -> Result<()> {
         let Some(transport) = self.transport.take() else {
             self.abort_background_tasks().await;

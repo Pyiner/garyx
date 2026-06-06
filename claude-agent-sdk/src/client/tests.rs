@@ -1,6 +1,6 @@
 use super::{
-    ClaudeSDKClient, Prompt, build_user_message_payload, incoming_control_response,
-    unsupported_incoming_control_request_response,
+    ClaudeSDKClient, FINISH_PROCESS_TIMEOUT, Prompt, build_user_message_payload,
+    incoming_control_response, unsupported_incoming_control_request_response,
 };
 use crate::control::IncomingControlRequest;
 use crate::types::ClaudeAgentOptions;
@@ -28,6 +28,14 @@ fn write_mock_claude_script(name: &str, body: &str) -> PathBuf {
     perms.set_mode(0o755);
     fs::set_permissions(&path, perms).expect("failed to chmod mock claude script");
     path
+}
+
+#[test]
+fn test_finish_process_timeout_allows_long_post_result_teardown() {
+    assert_eq!(
+        FINISH_PROCESS_TIMEOUT,
+        std::time::Duration::from_secs(60 * 60)
+    );
 }
 
 #[test]
