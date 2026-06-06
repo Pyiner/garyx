@@ -294,6 +294,8 @@ struct GaryxShellView: View {
     @State private var sidebarDragAxis: GaryxSidebarDragAxis?
 
     private let sidebarWidth: CGFloat = 330
+    private let drawerMainPanelPeekWidth: CGFloat = 72
+    private let drawerMainPanelCornerRadius: CGFloat = 36
     private let sidebarEdgeGestureWidth: CGFloat = 24
     private let sidebarAxisDecisionDistance: CGFloat = 14
     private let sidebarAxisDecisionRatio: CGFloat = 1.5
@@ -331,13 +333,14 @@ struct GaryxShellView: View {
 
     private func drawerSidebarWidth(for containerSize: CGSize) -> CGFloat {
         if horizontalSizeClass == .compact {
-            return containerSize.width
+            return min(sidebarWidth, max(0, containerSize.width - drawerMainPanelPeekWidth))
         }
         return min(sidebarWidth, containerSize.width * 0.92)
     }
 
     private func drawerBody(width: CGFloat, containerSize: CGSize) -> some View {
         let revealWidth = sidebarRevealWidth(for: width)
+        let drawerProgress = drawerRevealProgress(revealWidth: revealWidth, width: width)
         let drawerOffset = revealWidth - width
         let closeCaptureWidth = max(0, containerSize.width - revealWidth)
 
@@ -352,6 +355,12 @@ struct GaryxShellView: View {
 
                 GaryxMainPanelView()
                     .frame(width: containerSize.width, height: containerSize.height)
+                    .modifier(
+                        GaryxDrawerMainPanelStyle(
+                            progress: drawerProgress,
+                            cornerRadius: drawerMainPanelCornerRadius
+                        )
+                    )
                     .contentShape(Rectangle())
                     .simultaneousGesture(openingSidebarGesture(sidebarWidth: width))
             }
@@ -373,10 +382,26 @@ struct GaryxShellView: View {
                     .zIndex(1)
                     .accessibilityHidden(true)
             }
+
+            if drawerProgress > 0.78, closeCaptureWidth >= 56 {
+                GaryxDrawerCloseHandle(progress: drawerProgress)
+                    .offset(
+                        x: containerSize.width - GaryxDrawerCloseHandle.width - 4,
+                        y: containerSize.height * 0.36
+                    )
+                    .onTapGesture { closeSidebar() }
+                    .simultaneousGesture(closingSidebarGesture(sidebarWidth: width))
+                    .zIndex(2)
+            }
         }
         .frame(width: containerSize.width, height: containerSize.height, alignment: .topLeading)
         .clipped()
         .background(GaryxTheme.background)
+    }
+
+    private func drawerRevealProgress(revealWidth: CGFloat, width: CGFloat) -> CGFloat {
+        guard width > 0 else { return 0 }
+        return max(0, min(1, revealWidth / width))
     }
 
     private func sidebarRevealWidth(for width: CGFloat) -> CGFloat {
@@ -508,5 +533,76 @@ struct GaryxShellView: View {
             from: nil,
             for: nil
         )
+    }
+}
+
+private struct GaryxDrawerMainPanelStyle: ViewModifier {
+    let progress: CGFloat
+    let cornerRadius: CGFloat
+
+    func body(content: Content) -> some View {
+        let clampedProgress = max(0, min(1, progress))
+        let resolvedCornerRadius = cornerRadius * clampedProgress
+        let shape = UnevenRoundedRectangle(
+            topLeadingRadius: resolvedCornerRadius,
+            bottomLeadingRadius: resolvedCornerRadius,
+            bottomTrailingRadius: 0,
+            topTrailingRadius: 0,
+            style: .continuous
+        )
+
+        content
+            .background(GaryxTheme.background)
+            .clipShape(shape)
+            .overlay(alignment: .leading) {
+                Rectangle()
+                    .fill(Color.primary.opacity(0.16))
+                    .frame(width: 1 / UIScreen.main.scale)
+                    .opacity(clampedProgress)
+                    .allowsHitTesting(false)
+            }
+            .shadow(
+                color: Color.black.opacity(0.18 * Double(clampedProgress)),
+                radius: 30 * clampedProgress,
+                x: -10 * clampedProgress,
+                y: 0
+            )
+            .shadow(
+                color: Color.black.opacity(0.06 * Double(clampedProgress)),
+                radius: 10 * clampedProgress,
+                x: -3 * clampedProgress,
+                y: 0
+            )
+    }
+}
+
+private struct GaryxDrawerCloseHandle: View {
+    static let width: CGFloat = 38
+    static let height: CGFloat = 88
+
+    let progress: CGFloat
+
+    var body: some View {
+        let clampedProgress = max(0, min(1, progress))
+
+        ZStack {
+            Capsule(style: .continuous)
+                .fill(Color(.systemGray2).opacity(0.86))
+
+            Image(systemName: "chevron.left")
+                .font(.system(size: 30, weight: .semibold))
+                .foregroundStyle(.white)
+        }
+        .frame(width: Self.width, height: Self.height)
+        .contentShape(Capsule(style: .continuous))
+        .opacity(clampedProgress)
+        .shadow(
+            color: Color.black.opacity(0.16 * Double(clampedProgress)),
+            radius: 16 * clampedProgress,
+            x: 0,
+            y: 4 * clampedProgress
+        )
+        .accessibilityLabel("Close sidebar")
+        .accessibilityAddTraits(.isButton)
     }
 }
