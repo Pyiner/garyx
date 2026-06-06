@@ -382,17 +382,6 @@ struct GaryxShellView: View {
                     .zIndex(1)
                     .accessibilityHidden(true)
             }
-
-            if drawerProgress > 0.78, closeCaptureWidth >= 56 {
-                GaryxDrawerCloseHandle(progress: drawerProgress)
-                    .offset(
-                        x: containerSize.width - GaryxDrawerCloseHandle.width - 4,
-                        y: containerSize.height * 0.36
-                    )
-                    .onTapGesture { closeSidebar() }
-                    .simultaneousGesture(closingSidebarGesture(sidebarWidth: width))
-                    .zIndex(2)
-            }
         }
         .frame(width: containerSize.width, height: containerSize.height, alignment: .topLeading)
         .clipped()
@@ -573,36 +562,5 @@ private struct GaryxDrawerMainPanelStyle: ViewModifier {
                 x: -3 * clampedProgress,
                 y: 0
             )
-    }
-}
-
-private struct GaryxDrawerCloseHandle: View {
-    static let width: CGFloat = 38
-    static let height: CGFloat = 88
-
-    let progress: CGFloat
-
-    var body: some View {
-        let clampedProgress = max(0, min(1, progress))
-
-        ZStack {
-            Capsule(style: .continuous)
-                .fill(Color(.systemGray2).opacity(0.86))
-
-            Image(systemName: "chevron.left")
-                .font(.system(size: 30, weight: .semibold))
-                .foregroundStyle(.white)
-        }
-        .frame(width: Self.width, height: Self.height)
-        .contentShape(Capsule(style: .continuous))
-        .opacity(clampedProgress)
-        .shadow(
-            color: Color.black.opacity(0.16 * Double(clampedProgress)),
-            radius: 16 * clampedProgress,
-            x: 0,
-            y: 4 * clampedProgress
-        )
-        .accessibilityLabel("Close sidebar")
-        .accessibilityAddTraits(.isButton)
     }
 }
