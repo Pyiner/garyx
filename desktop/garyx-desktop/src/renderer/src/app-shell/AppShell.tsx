@@ -68,6 +68,7 @@ import {
   selectGlobalActiveThreadId,
   selectQueueIntentIds,
   selectThreadRuntime,
+  shouldTrackProviderAckAfterStreamInputResponse,
   type MessageMachineAction,
   type MessageIntent,
   type ThreadRuntimeState,
@@ -2743,8 +2744,13 @@ export function AppShell() {
     ? liveStreamStateByThread[activeThreadMessageKey] || null
     : null;
   const activePendingAckIntents = (activeLiveStream?.pendingAckIntentIds || [])
+    .filter((intentId, index, intentIds) => {
+      return intentIds.indexOf(intentId) === index;
+    })
     .map((intentId) => messageState.intentsById[intentId])
-    .filter((intent): intent is MessageIntent => Boolean(intent));
+    .filter((intent): intent is MessageIntent => {
+      return Boolean(intent) && intent.state === "awaiting_provider_ack";
+    });
   const visiblePendingAckIntents = activePendingAckIntents.filter((intent) => {
     return !activeMessages.some((message) => {
       return (
@@ -2760,7 +2766,7 @@ export function AppShell() {
     ? pendingRemoteInputsByThread[selectedThreadId] || []
     : [];
   const visibleRemotePendingInputs =
-    activePendingAckIntents.length > 0
+    visiblePendingAckIntents.length > 0
       ? []
       : activeRemotePendingInputs.filter((input) => {
           if (input.status !== "awaiting_ack") {
@@ -2792,7 +2798,7 @@ export function AppShell() {
     threadInfo: activeThreadInfo,
     liveStream: activeLiveStream,
     runtimeBusy: Boolean(activeRuntime && isRuntimeBusy(activeRuntime.state)),
-    pendingAckIntentCount: activePendingAckIntents.length,
+    pendingAckIntentCount: visiblePendingAckIntents.length,
     remoteAwaitingAckInputCount: visibleRemoteAwaitingAckInputs.length,
     pendingHistoryIntent: activePendingHistoryIntent,
   });
@@ -6077,13 +6083,16 @@ export function AppShell() {
           } else {
             nextIntentId = undefined;
           }
+          const nextPendingAckIntentIds = nextIntentId
+            ? pendingAckIntentIds.filter((intentId) => intentId !== nextIntentId)
+            : pendingAckIntentIds;
           return current
             ? {
                 ...current,
                 runId: event.runId,
                 activeIntentId: nextIntentId || current.activeIntentId,
                 assistantEntryId: null,
-                pendingAckIntentIds,
+                pendingAckIntentIds: nextPendingAckIntentIds,
                 streamStatus: "streaming",
               }
             : null;
@@ -7978,6 +7987,9 @@ export function AppShell() {
           selectThreadRuntime(messageStateRef.current, resultThreadId)
             ?.remoteRunId ||
           `stream:${resultThreadId}`;
+        const intentBeforeAccept = intentForId(latestIntent.intentId);
+        const shouldTrackProviderAck =
+          shouldTrackProviderAckAfterStreamInputResponse(intentBeforeAccept);
         dispatchMessageState({
           type: "intent/remote-accepted",
           intentId: latestIntent.intentId,
@@ -7996,7 +8008,9 @@ export function AppShell() {
             current?.pendingAckIntentIds || []
           ).includes(latestIntent.intentId)
             ? current?.pendingAckIntentIds || []
-            : [...(current?.pendingAckIntentIds || []), latestIntent.intentId],
+            : shouldTrackProviderAck
+              ? [...(current?.pendingAckIntentIds || []), latestIntent.intentId]
+              : current?.pendingAckIntentIds || [],
           streamStatus: current?.streamStatus || "streaming",
         }));
         setThreadRuntimeState(resultThreadId, "running_remote", {

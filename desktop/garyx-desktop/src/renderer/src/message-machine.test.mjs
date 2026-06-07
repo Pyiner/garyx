@@ -5,6 +5,7 @@ import {
   findPendingAckIntentIndex,
   initialMessageMachineState,
   messageMachineReducer,
+  shouldTrackProviderAckAfterStreamInputResponse,
 } from './message-machine.ts';
 
 function intent(overrides) {
@@ -248,5 +249,32 @@ test('does not match unknown provider ack when all pending input ids are resolve
       intentsById,
     ),
     -1,
+  );
+});
+
+test('tracks provider ack only while the streamed input is not already acknowledged', () => {
+  assert.equal(
+    shouldTrackProviderAckAfterStreamInputResponse(intent({
+      state: 'dispatching',
+    })),
+    true,
+  );
+  assert.equal(
+    shouldTrackProviderAckAfterStreamInputResponse(intent({
+      state: 'awaiting_provider_ack',
+    })),
+    true,
+  );
+  assert.equal(
+    shouldTrackProviderAckAfterStreamInputResponse(intent({
+      state: 'awaiting_history',
+    })),
+    false,
+  );
+  assert.equal(
+    shouldTrackProviderAckAfterStreamInputResponse(intent({
+      state: 'completed',
+    })),
+    false,
   );
 });

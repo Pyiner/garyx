@@ -286,6 +286,21 @@ export function findPendingAckIntentIndex(
   return -1;
 }
 
+export function shouldTrackProviderAckAfterStreamInputResponse(
+  intent: Pick<MessageIntent, 'state'> | null | undefined,
+): boolean {
+  return Boolean(
+    intent &&
+      ![
+        'awaiting_history',
+        'completed',
+        'failed',
+        'interrupted',
+        'cancelled',
+      ].includes(intent.state),
+  );
+}
+
 function removeIntentFromQueue(queue: string[] | undefined, intentId: string): string[] {
   return (queue || []).filter((entry) => entry !== intentId);
 }
