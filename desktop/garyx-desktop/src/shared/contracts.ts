@@ -1680,7 +1680,7 @@ export interface OpenChatStreamResult {
   // Compatibility mirror for older responses. Prefer `threadId`.
   sessionId?: string;
   response: string;
-  status: "completed" | "disconnected";
+  status: "accepted" | "completed" | "disconnected";
   thread: DesktopThreadSummary;
   // Compatibility mirror for older responses. Prefer `thread`.
   session?: DesktopThreadSummary;

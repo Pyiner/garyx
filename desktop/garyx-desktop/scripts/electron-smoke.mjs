@@ -265,6 +265,8 @@ async function createMockGateway(workspaceDir) {
       [THREAD_ID]: [],
     },
     activeRuns: {},
+    streamClients: new Set(),
+    streamHistory: [],
     commands: [
       {
         name: SLASH_COMMAND_NAME,
@@ -296,6 +298,41 @@ async function createMockGateway(workspaceDir) {
       'content-type': 'application/json',
     });
     res.end(JSON.stringify(payload));
+  }
+
+  function rememberStreamEvent(payload) {
+    const raw = JSON.stringify(payload);
+    state.streamHistory.push(raw);
+    while (state.streamHistory.length > 256) {
+      state.streamHistory.shift();
+    }
+    return raw;
+  }
+
+  function writeStreamPayload(res, raw) {
+    res.write(`data: ${raw}\n\n`);
+  }
+
+  function broadcastGatewayStreamEvent(payload) {
+    const raw = rememberStreamEvent(payload);
+    for (const client of [...state.streamClients]) {
+      try {
+        writeStreamPayload(client, raw);
+      } catch {
+        state.streamClients.delete(client);
+      }
+    }
+  }
+
+  function closeStreamClients() {
+    for (const client of [...state.streamClients]) {
+      state.streamClients.delete(client);
+      try {
+        client.destroy();
+      } catch {
+        // no-op
+      }
+    }
   }
 
   function ensureSession(sessionId) {
@@ -472,6 +509,56 @@ async function createMockGateway(workspaceDir) {
     );
   }
 
+  async function streamRunToGateway(payload) {
+    state.activeRuns[payload.sessionId] = {
+      run_id: payload.runId,
+      provider_type: 'codex',
+      provider_label: 'Codex',
+      assistant_response: null,
+      updated_at: new Date().toISOString(),
+      pending_user_input_count: 0,
+    };
+    broadcastGatewayStreamEvent({
+      type: 'accepted',
+      run_id: payload.runId,
+      thread_id: payload.sessionId,
+    });
+    await sleep(120);
+    broadcastGatewayStreamEvent({
+      type: 'tool_use',
+      run_id: payload.runId,
+      thread_id: payload.sessionId,
+      message: payload.scenario.streamToolUseMessage,
+    });
+    await sleep(120);
+    broadcastGatewayStreamEvent({
+      type: 'tool_result',
+      run_id: payload.runId,
+      thread_id: payload.sessionId,
+      message: payload.scenario.streamToolResultMessage,
+    });
+    await sleep(800);
+    broadcastGatewayStreamEvent({
+      type: 'assistant_delta',
+      run_id: payload.runId,
+      thread_id: payload.sessionId,
+      delta: payload.assistantText,
+    });
+    if (state.nextStreamDisconnect) {
+      state.offlineUntil = Date.now() + state.nextStreamDisconnect.offlineMs;
+      state.nextStreamDisconnect = null;
+      closeStreamClients();
+      return;
+    }
+    await sleep(60);
+    broadcastGatewayStreamEvent({
+      type: 'done',
+      run_id: payload.runId,
+      thread_id: payload.sessionId,
+    });
+    delete state.activeRuns[payload.sessionId];
+  }
+
   const wsServer = new WebSocketServer({ noServer: true });
   wsServer.on('connection', (socket) => {
     socket.on('message', async (raw) => {
@@ -551,6 +638,40 @@ async function createMockGateway(workspaceDir) {
         uptime_seconds: 5,
         version: '0.1.0',
       });
+    }
+    if (req.method === 'GET' && pathname === '/api/stream') {
+      const historyLimit = Math.max(
+        0,
+        Math.min(Number(url.searchParams.get('history_limit') || 50) || 0, 200),
+      );
+      const historyEvents = state.streamHistory.slice(-historyLimit);
+      res.writeHead(200, {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+        connection: 'keep-alive',
+      });
+      writeStreamPayload(
+        res,
+        JSON.stringify({
+          type: 'snapshot',
+          status: 'running',
+          uptime_seconds: 5,
+          version: '0.1.0',
+        }),
+      );
+      writeStreamPayload(
+        res,
+        JSON.stringify({
+          type: 'history',
+          count: historyEvents.length,
+          events: historyEvents,
+        }),
+      );
+      state.streamClients.add(res);
+      req.on('close', () => {
+        state.streamClients.delete(res);
+      });
+      return;
     }
     if (req.method === 'GET' && pathname === '/api/commands/shortcuts') {
       return writeJson(res, 200, {
@@ -797,12 +918,41 @@ async function createMockGateway(workspaceDir) {
       res.end();
       return;
     }
+    if (req.method === 'POST' && pathname === '/api/chat/start') {
+      const body = await readJson(req);
+      const sessionId = body.threadId || body.sessionKey || THREAD_ID;
+      const session = ensureSession(sessionId);
+      if (!session) {
+        return writeJson(res, 404, { error: 'thread not found' });
+      }
+      const streamPayload = appendStreamHistory(sessionId, String(body.message || ''));
+      if (!streamPayload) {
+        return writeJson(res, 404, { error: 'thread not found' });
+      }
+      void streamRunToGateway(streamPayload);
+      return writeJson(res, 200, {
+        status: 'accepted',
+        runId: streamPayload.runId,
+        threadId: sessionId,
+      });
+    }
     if (req.method === 'POST' && pathname === '/api/chat/stream-input') {
       const body = await readJson(req);
       return writeJson(res, 200, {
         status: 'no_active_session',
         threadId: body.threadId || body.sessionKey || THREAD_ID,
         sessionKey: body.sessionKey || THREAD_ID,
+      });
+    }
+    if (req.method === 'POST' && pathname === '/api/chat/interrupt') {
+      const body = await readJson(req);
+      const sessionId = body.threadId || body.sessionKey || THREAD_ID;
+      delete state.activeRuns[sessionId];
+      return writeJson(res, 200, {
+        status: 'ok',
+        threadId: sessionId,
+        sessionKey: sessionId,
+        abortedRuns: [],
       });
     }
 
@@ -843,6 +993,7 @@ async function createMockGateway(workspaceDir) {
     },
     close: () =>
       new Promise((resolve, reject) => {
+        closeStreamClients();
         wsServer.close(() => {
           server.close((error) => {
             if (error) {

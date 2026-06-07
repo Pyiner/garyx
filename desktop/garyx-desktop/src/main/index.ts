@@ -291,6 +291,7 @@ function startGatewayEventForwarder(window: BrowserWindow): void {
   gatewayEventStreamAbortController = controller;
   void (async () => {
     let retryDelayMs = 1000;
+    let hasConnectedOnce = false;
     while (!controller.signal.aborted && !window.isDestroyed()) {
       try {
         const settings = await resolveSettings();
@@ -302,6 +303,12 @@ function startGatewayEventForwarder(window: BrowserWindow): void {
             }
           },
           controller.signal,
+          {
+            historyLimit: hasConnectedOnce ? 50 : 0,
+            onConnected: () => {
+              hasConnectedOnce = true;
+            },
+          },
         );
         retryDelayMs = 1000;
       } catch {

@@ -407,6 +407,7 @@ fn thread_routes() -> Router<Arc<AppState>> {
 
 fn chat_routes() -> Router<Arc<AppState>> {
     Router::new()
+        .route("/api/chat/start", axum::routing::post(chat::chat_start))
         .route("/api/chat/ws", axum::routing::get(chat::chat_ws))
         .route(
             "/api/chat/interrupt",

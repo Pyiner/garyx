@@ -7550,6 +7550,62 @@ export function AppShell() {
         files: intent.files,
       });
       const resultThreadId = result.threadId || result.sessionId || threadId;
+      if (result.status === "accepted") {
+        updateLiveStreamState(resultThreadId, (current) =>
+          current
+            ? {
+                ...current,
+                runId: result.runId,
+                streamStatus: "streaming",
+              }
+            : {
+                threadId: resultThreadId,
+                runId: result.runId,
+                activeIntentId: intent.intentId,
+                assistantEntryId,
+                pendingAckIntentIds: [],
+                streamStatus: "streaming",
+              },
+        );
+        const latestIntent = intentForId(intent.intentId);
+        if (
+          latestIntent &&
+          ![
+            "remote_accepted",
+            "awaiting_provider_ack",
+            "awaiting_history",
+            "completed",
+          ].includes(latestIntent.state)
+        ) {
+          dispatchMessageState({
+            type: "intent/remote-accepted",
+            intentId: intent.intentId,
+            runId: result.runId,
+            threadId: resultThreadId,
+            removeFromQueue: false,
+          });
+        }
+        setThreadRuntimeState(resultThreadId, "running_remote", {
+          activeIntentId: intent.intentId,
+          remoteRunId: result.runId,
+        });
+        setDesktopState((current) => {
+          if (!current) {
+            return current;
+          }
+          const titleOverride = threadTitleOverridesRef.current[resultThreadId];
+          const resultThread = titleOverride
+            ? { ...result.thread, title: titleOverride }
+            : result.thread;
+          return {
+            ...current,
+            threads: mergeThread(current.threads, resultThread),
+            sessions: mergeThread(current.threads, resultThread),
+          };
+        });
+        scheduleHistoryRefresh(resultThreadId, 2, 1200, false);
+        return true;
+      }
       const liveState = getLiveStreamState(resultThreadId);
       if (!liveState?.runId && result.runId) {
         updateLiveStreamState(resultThreadId, (current) =>
@@ -7833,6 +7889,10 @@ export function AppShell() {
               error: intentForId(nextIntentId)?.error,
             });
           }
+          break;
+        }
+        const runtime = selectThreadRuntime(messageStateRef.current, threadId);
+        if (runtime && isRuntimeBusy(runtime.state)) {
           break;
         }
         nextIntentId = "";

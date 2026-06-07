@@ -121,29 +121,6 @@ import type {
   StartWorkflowThreadResult,
 } from "@shared/contracts";
 
-interface StreamInputWaiter {
-  clientIntentId?: string;
-  resolve: (result: SendStreamingInputResult) => void;
-  reject: (error: Error) => void;
-}
-
-interface InterruptWaiter {
-  resolve: (result: InterruptResult) => void;
-  reject: (error: Error) => void;
-}
-
-interface ActiveChatSocket {
-  socket: WebSocket;
-  threadId: string;
-  runId: string;
-  responseText: string;
-  sawTerminal: boolean;
-  capturePrimaryResponse: boolean;
-  pendingInputWaiters: StreamInputWaiter[];
-  pendingInterruptWaiters: InterruptWaiter[];
-}
-
-const activeStreamRequests = new Map<string, ActiveChatSocket>();
 const DEFAULT_THREAD_HISTORY_PAGE_SIZE = 100;
 const DEFAULT_THREAD_HISTORY_USER_QUERY_LIMIT = 10;
 const MAX_THREAD_HISTORY_PAGE_SIZE = 500;
@@ -241,22 +218,8 @@ function serializeMessageAttachments(
 }
 
 export function closeActiveChatStreams(): void {
-  for (const [threadId, active] of activeStreamRequests.entries()) {
-    activeStreamRequests.delete(threadId);
-    const pendingInput = active.pendingInputWaiters.splice(0);
-    for (const waiter of pendingInput) {
-      waiter.reject(new Error("renderer reloaded"));
-    }
-    const pendingInterrupt = active.pendingInterruptWaiters.splice(0);
-    for (const waiter of pendingInterrupt) {
-      waiter.reject(new Error("renderer reloaded"));
-    }
-    try {
-      active.socket.close();
-    } catch {
-      activeStreamRequests.delete(threadId);
-    }
-  }
+  // Chat runs use HTTP commands plus the process-wide gateway event stream.
+  // Kept as a compatibility hook for renderer reload paths.
 }
 
 function formatLocalChatTimestamp(date = new Date()): string {
@@ -1101,20 +1064,6 @@ function applyGatewayAuthHeader(
   return headers;
 }
 
-function buildWebSocketUrl(settings: DesktopSettings, path: string): string {
-  const httpUrl = new URL(buildUrl(settings, path));
-  if (httpUrl.protocol === "https:") {
-    httpUrl.protocol = "wss:";
-  } else if (httpUrl.protocol === "http:") {
-    httpUrl.protocol = "ws:";
-  }
-  const token = settings.gatewayAuthToken.trim();
-  if (token) {
-    httpUrl.searchParams.set("token", token);
-  }
-  return httpUrl.toString();
-}
-
 function isLocalGatewayUrl(gatewayUrl: string): boolean {
   try {
     const parsed = new URL(normalizeGatewayUrl(gatewayUrl));
@@ -1157,40 +1106,205 @@ function mapThreadTitleUpdatedEvent(
   };
 }
 
-function mapGatewayEventPayload(raw: string): DesktopChatStreamEvent[] {
+function gatewayStreamEventIds(payload: Record<string, unknown>): {
+  runId: string;
+  threadId: string;
+} | null {
+  const threadId =
+    asString(payload.threadId) ||
+    asString(payload.thread_id) ||
+    asString(payload.sessionKey) ||
+    "";
+  if (!threadId) {
+    return null;
+  }
+  return {
+    runId: asString(payload.runId) || asString(payload.run_id) || "",
+    threadId,
+  };
+}
+
+function mapGatewayStreamEventPayload(
+  payload: Record<string, unknown>,
+): DesktopChatStreamEvent | null {
+  const type = asString(payload.type);
+  if (!type) {
+    return null;
+  }
+  if (type === "thread_title_updated") {
+    return mapThreadTitleUpdatedEvent(payload);
+  }
+  const ids = gatewayStreamEventIds(payload);
+  if (!ids) {
+    return null;
+  }
+  const base = {
+    runId: ids.runId,
+    threadId: ids.threadId,
+    sessionId: ids.threadId,
+  };
+
+  switch (type) {
+    case "accepted":
+      return {
+        type: "accepted",
+        ...base,
+      };
+    case "assistant_delta": {
+      const delta = asString(payload.delta) || "";
+      if (!delta) {
+        return null;
+      }
+      const metadata = parseRecord(payload.metadata);
+      return {
+        type: "assistant_delta",
+        ...base,
+        delta,
+        metadata: Object.keys(metadata).length ? metadata : null,
+      };
+    }
+    case "assistant_boundary":
+      return {
+        type: "assistant_boundary",
+        ...base,
+      };
+    case "tool_use":
+    case "tool_result":
+      if (payload.message === undefined) {
+        return null;
+      }
+      return {
+        type,
+        ...base,
+        message: mapStreamToolMessage(payload.message),
+      };
+    case "user_ack":
+      return {
+        type: "user_ack",
+        ...base,
+        pendingInputId:
+          asString(payload.pendingInputId) ||
+          asString(payload.pending_input_id) ||
+          undefined,
+      };
+    case "done":
+      return {
+        type: "done",
+        ...base,
+      };
+    case "error":
+      return {
+        type: "error",
+        ...base,
+        error: asString(payload.error) || "Gateway stream error",
+      };
+    default:
+      return null;
+  }
+}
+
+function mapGatewayEventPayloadInternal(
+  raw: string,
+  shouldForwardHistoryEntry?: (entry: string) => boolean,
+): DesktopChatStreamEvent[] {
   const payload = tryParseJson<Record<string, unknown>>(raw);
   if (!payload) {
     return [];
   }
   if (asString(payload.type) === "history") {
     const events = Array.isArray(payload.events) ? payload.events : [];
-    return events.flatMap((entry) =>
-      typeof entry === "string" ? mapGatewayEventPayload(entry) : [],
-    );
+    return events.flatMap((entry) => {
+      if (typeof entry === "string") {
+        if (shouldForwardHistoryEntry && !shouldForwardHistoryEntry(entry)) {
+          return [];
+        }
+        return mapGatewayEventPayloadInternal(entry, shouldForwardHistoryEntry);
+      }
+      const historyEntry = JSON.stringify(entry);
+      if (
+        shouldForwardHistoryEntry &&
+        !shouldForwardHistoryEntry(historyEntry)
+      ) {
+        return [];
+      }
+      const mapped = mapGatewayStreamEventPayload(parseRecord(entry));
+      return mapped ? [mapped] : [];
+    });
   }
-  const titleEvent = mapThreadTitleUpdatedEvent(payload);
-  return titleEvent ? [titleEvent] : [];
+  const event = mapGatewayStreamEventPayload(payload);
+  return event ? [event] : [];
+}
+
+export function mapGatewayEventPayload(raw: string): DesktopChatStreamEvent[] {
+  return mapGatewayEventPayloadInternal(raw);
+}
+
+function isGatewayHistoryPayload(raw: string): boolean {
+  const payload = tryParseJson<Record<string, unknown>>(raw);
+  return asString(payload?.type) === "history";
+}
+
+const MAX_SEEN_GATEWAY_STREAM_PAYLOADS = 512;
+const seenGatewayStreamPayloads = new Set<string>();
+const seenGatewayStreamPayloadOrder: string[] = [];
+
+function rememberGatewayStreamPayload(raw: string): void {
+  const payload = raw.trim();
+  if (!payload || seenGatewayStreamPayloads.has(payload)) {
+    return;
+  }
+  seenGatewayStreamPayloads.add(payload);
+  seenGatewayStreamPayloadOrder.push(payload);
+  while (seenGatewayStreamPayloadOrder.length > MAX_SEEN_GATEWAY_STREAM_PAYLOADS) {
+    const oldest = seenGatewayStreamPayloadOrder.shift();
+    if (oldest) {
+      seenGatewayStreamPayloads.delete(oldest);
+    }
+  }
+}
+
+function shouldForwardGatewayHistoryEntry(raw: string): boolean {
+  const payload = raw.trim();
+  if (!payload || seenGatewayStreamPayloads.has(payload)) {
+    return false;
+  }
+  rememberGatewayStreamPayload(payload);
+  return true;
+}
+
+interface StreamGatewayEventsOptions {
+  historyLimit?: number;
+  onConnected?: () => void;
 }
 
 export async function streamGatewayEvents(
   settings: DesktopSettings,
   onEvent: (event: DesktopChatStreamEvent) => void,
   signal?: AbortSignal,
+  options?: StreamGatewayEventsOptions,
 ): Promise<void> {
   const headers = applyGatewayAuthHeader(
     new Headers({ Accept: "text/event-stream" }),
     settings.gatewayAuthToken,
   );
-  const response = await fetch(buildUrl(settings, "/api/stream?history_limit=0"), {
-    headers,
-    signal,
-  });
+  const historyLimit = Math.max(
+    0,
+    Math.min(Math.trunc(options?.historyLimit ?? 0), 200),
+  );
+  const response = await fetch(
+    buildUrl(settings, `/api/stream?history_limit=${historyLimit}`),
+    {
+      headers,
+      signal,
+    },
+  );
   if (!response.ok) {
     throw new Error(`${response.status} ${response.statusText}`);
   }
   if (!response.body) {
     throw new Error("Gateway event stream returned no body");
   }
+  options?.onConnected?.();
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -1202,7 +1316,14 @@ export async function streamGatewayEvents(
     }
     const payload = dataLines.join("\n");
     dataLines = [];
-    for (const event of mapGatewayEventPayload(payload)) {
+    const events = mapGatewayEventPayloadInternal(
+      payload,
+      shouldForwardGatewayHistoryEntry,
+    );
+    if (events.length > 0 && !isGatewayHistoryPayload(payload)) {
+      rememberGatewayStreamPayload(payload);
+    }
+    for (const event of events) {
       onEvent(event);
     }
   };
@@ -1582,19 +1703,6 @@ function mapStreamToolMessage(value: unknown): ChatStreamToolMessage {
     isError: asBoolean(record.is_error) ?? asBoolean(record.isError),
     metadata: metadataRecord,
   };
-}
-
-function appendStreamResponseSeparator(responseText: string): string {
-  if (!responseText.trim()) {
-    return responseText;
-  }
-  if (responseText.endsWith("\n\n")) {
-    return responseText;
-  }
-  if (responseText.endsWith("\n")) {
-    return `${responseText}\n`;
-  }
-  return `${responseText}\n\n`;
 }
 
 function mapHistoryMessage(
@@ -5308,7 +5416,7 @@ export async function detachRemoteChannelEndpoint(
 export async function openChatStream(
   settings: DesktopSettings,
   input: SendMessageInput,
-  onEvent: (event: DesktopChatStreamEvent) => void,
+  _onEvent: (event: DesktopChatStreamEvent) => void,
   workspacePath?: string | null,
 ): Promise<{
   runId: string;
@@ -5318,321 +5426,48 @@ export async function openChatStream(
   status: OpenChatStreamResult["status"];
 }> {
   const threadId = resolveInputThreadId(input);
-  if (activeStreamRequests.has(threadId)) {
-    throw new Error("This thread already has an active stream");
-  }
-
   const providerMetadata = buildProviderMetadata(settings);
   const serializedAttachments = serializeMessageAttachments(
     input.images,
     input.files,
   );
-  const retryDelaysMs = [300, 700, 1400];
-  let lastError: Error | null = null;
-
-  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
-    let sawRemoteStreamEvent = false;
-    try {
-      return await new Promise((resolve, reject) => {
-        const socket = new WebSocket(
-          buildWebSocketUrl(settings, "/api/chat/ws"),
-        );
-        const active: ActiveChatSocket = {
-          socket,
-          threadId,
-          runId: "",
-          responseText: "",
-          sawTerminal: false,
-          capturePrimaryResponse: true,
-          pendingInputWaiters: [],
-          pendingInterruptWaiters: [],
-        };
-        activeStreamRequests.set(threadId, active);
-
-        let settled = false;
-        let closeReason: string | null = null;
-        let didOpen = false;
-        const settleError = (message: string) => {
-          if (settled) {
-            return;
-          }
-          settled = true;
-          closeReason = message;
-          try {
-            socket.close();
-          } catch {
-            // no-op
-          }
-          reject(new Error(message));
-        };
-        const settleSuccess = () => {
-          if (settled) {
-            return;
-          }
-          settled = true;
-          resolve({
-            runId: active.runId,
-            threadId: active.threadId,
-            sessionId: active.threadId,
-            response: active.responseText,
-            status: active.sawTerminal ? "completed" : "disconnected",
-          });
-        };
-
-        socket.addEventListener("open", () => {
-          didOpen = true;
-          socket.send(
-            JSON.stringify({
-              op: "start",
-              message: input.message,
-              attachments: serializedAttachments.attachments,
-              images: serializedAttachments.images,
-              files: serializedAttachments.files,
-              threadId,
-              accountId: settings.accountId,
-              fromId: settings.fromId,
-              waitForResponse: false,
-              timeoutSeconds: settings.timeoutSeconds,
-              workspacePath: workspacePath || undefined,
-              metadata: {
-                client_timestamp_local: formatLocalChatTimestamp(),
-                client_intent_id: input.clientIntentId,
-              },
-              providerMetadata,
-            }),
-          );
-        });
-
-        socket.addEventListener("message", (event) => {
-          const raw = typeof event.data === "string" ? event.data : "";
-          if (!raw.trim()) {
-            return;
-          }
-          let payload: Record<string, unknown>;
-          const parsedPayload = tryParseJson<Record<string, unknown>>(raw);
-          if (!parsedPayload) {
-            settleError("invalid websocket payload");
-            return;
-          }
-          payload = parsedPayload;
-          const type = asString(payload.type);
-          if (!type || type === "ping") {
-            return;
-          }
-
-          const payloadRunId = asString(payload.runId) || active.runId;
-          const payloadThreadId =
-            asString(payload.threadId) ||
-            asString(payload.sessionKey) ||
-            active.threadId;
-
-          active.runId = payloadRunId;
-          active.threadId = payloadThreadId;
-
-          switch (type) {
-            case "accepted":
-              sawRemoteStreamEvent = true;
-              onEvent({
-                type: "accepted",
-                runId: payloadRunId,
-                threadId: payloadThreadId,
-                sessionId: payloadThreadId,
-              });
-              return;
-            case "assistant_delta": {
-              const delta = asString(payload.delta) || "";
-              if (!delta) {
-                return;
-              }
-              const metadata = parseRecord(payload.metadata);
-              sawRemoteStreamEvent = true;
-              if (active.capturePrimaryResponse) {
-                active.responseText += delta;
-              }
-              onEvent({
-                type: "assistant_delta",
-                runId: payloadRunId,
-                threadId: payloadThreadId,
-                sessionId: payloadThreadId,
-                delta,
-                metadata: Object.keys(metadata).length ? metadata : null,
-              });
-              return;
-            }
-            case "assistant_boundary":
-              sawRemoteStreamEvent = true;
-              if (active.capturePrimaryResponse) {
-                active.responseText = appendStreamResponseSeparator(
-                  active.responseText,
-                );
-              }
-              onEvent({
-                type: "assistant_boundary",
-                runId: payloadRunId,
-                threadId: payloadThreadId,
-                sessionId: payloadThreadId,
-              });
-              return;
-            case "tool_use":
-            case "tool_result":
-              sawRemoteStreamEvent = true;
-              onEvent({
-                type,
-                runId: payloadRunId,
-                threadId: payloadThreadId,
-                sessionId: payloadThreadId,
-                message: mapStreamToolMessage(payload.message),
-              });
-              return;
-            case "user_ack":
-              sawRemoteStreamEvent = true;
-              active.capturePrimaryResponse = false;
-              onEvent({
-                type: "user_ack",
-                runId: payloadRunId,
-                threadId: payloadThreadId,
-                sessionId: payloadThreadId,
-                pendingInputId:
-                  asString(payload.pendingInputId) ||
-                  asString(payload.pending_input_id) ||
-                  undefined,
-              });
-              return;
-            case "thread_title_updated": {
-              const title = (asString(payload.title) || "").trim();
-              if (!title) {
-                return;
-              }
-              sawRemoteStreamEvent = true;
-              onEvent({
-                type: "thread_title_updated",
-                runId: payloadRunId,
-                threadId: payloadThreadId,
-                sessionId: payloadThreadId,
-                title,
-              });
-              return;
-            }
-            case "done":
-              sawRemoteStreamEvent = true;
-              active.sawTerminal = true;
-              onEvent({
-                type: "done",
-                runId: payloadRunId,
-                threadId: payloadThreadId,
-                sessionId: payloadThreadId,
-              });
-              socket.close();
-              return;
-            case "stream_input": {
-              const clientIntentId =
-                asString(payload.clientIntentId) ||
-                asString(payload.client_intent_id);
-              const waiterIndex = clientIntentId
-                ? active.pendingInputWaiters.findIndex(
-                    (entry) => entry.clientIntentId === clientIntentId,
-                  )
-                : -1;
-              const waiter =
-                waiterIndex >= 0
-                  ? active.pendingInputWaiters.splice(waiterIndex, 1)[0]
-                  : active.pendingInputWaiters.shift();
-              if (!waiter) {
-                return;
-              }
-              waiter.resolve({
-                status: asString(payload.status) || "no_active_session",
-                threadId: payloadThreadId,
-                sessionId: payloadThreadId,
-                clientIntentId,
-                pendingInputId:
-                  asString(payload.pendingInputId) ||
-                  asString(payload.pending_input_id),
-              });
-              return;
-            }
-            case "interrupt": {
-              const waiter = active.pendingInterruptWaiters.shift();
-              if (!waiter) {
-                return;
-              }
-              waiter.resolve({
-                status: asString(payload.status) || "ok",
-                threadId: payloadThreadId,
-                sessionId: payloadThreadId,
-                abortedRuns: Array.isArray(payload.abortedRuns)
-                  ? payload.abortedRuns.map((entry) => String(entry))
-                  : [],
-              });
-              socket.close();
-              return;
-            }
-            case "error": {
-              sawRemoteStreamEvent = true;
-              const error = asString(payload.error) || "agent run failed";
-              onEvent({
-                type: "error",
-                runId: payloadRunId,
-                threadId: payloadThreadId,
-                sessionId: payloadThreadId,
-                error,
-              });
-              const pendingInput = active.pendingInputWaiters.splice(0);
-              for (const waiter of pendingInput) {
-                waiter.reject(new Error(error));
-              }
-              const pendingInterrupt = active.pendingInterruptWaiters.splice(0);
-              for (const waiter of pendingInterrupt) {
-                waiter.reject(new Error(error));
-              }
-              settleError(error);
-              return;
-            }
-            default:
-              return;
-          }
-        });
-
-        socket.addEventListener("error", () => {
-          settleError(
-            didOpen ? "stream disconnected" : "websocket connect failed",
-          );
-        });
-
-        socket.addEventListener("close", () => {
-          const activeEntry = activeStreamRequests.get(threadId);
-          if (activeEntry?.socket === socket) {
-            activeStreamRequests.delete(threadId);
-          }
-          const pendingInput = active.pendingInputWaiters.splice(0);
-          for (const waiter of pendingInput) {
-            waiter.reject(new Error(closeReason || "stream disconnected"));
-          }
-          const pendingInterrupt = active.pendingInterruptWaiters.splice(0);
-          for (const waiter of pendingInterrupt) {
-            waiter.reject(new Error(closeReason || "stream disconnected"));
-          }
-          if (closeReason) {
-            return;
-          }
-          if (!didOpen && !sawRemoteStreamEvent) {
-            settleError("websocket connect failed");
-            return;
-          }
-          settleSuccess();
-        });
-      });
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      if (sawRemoteStreamEvent || attempt >= retryDelaysMs.length) {
-        throw lastError;
-      }
-      await new Promise((resolve) =>
-        setTimeout(resolve, retryDelaysMs[attempt]),
-      );
-    }
-  }
-  throw lastError || new Error("websocket connect failed");
+  const payload = await requestJson<{
+    status?: unknown;
+    runId?: unknown;
+    run_id?: unknown;
+    threadId?: unknown;
+    thread_id?: unknown;
+  }>(settings, "/api/chat/start", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      message: input.message,
+      attachments: serializedAttachments.attachments,
+      images: serializedAttachments.images,
+      files: serializedAttachments.files,
+      threadId,
+      accountId: settings.accountId,
+      fromId: settings.fromId,
+      waitForResponse: false,
+      timeoutSeconds: settings.timeoutSeconds,
+      workspacePath: workspacePath || undefined,
+      metadata: {
+        client_timestamp_local: formatLocalChatTimestamp(),
+        client_intent_id: input.clientIntentId,
+      },
+      providerMetadata,
+    }),
+    signal: AbortSignal.timeout(8000),
+  });
+  const responseThreadId =
+    asString(payload.threadId) || asString(payload.thread_id) || threadId;
+  return {
+    runId: asString(payload.runId) || asString(payload.run_id) || "",
+    threadId: responseThreadId,
+    sessionId: responseThreadId,
+    response: "",
+    status: asString(payload.status) === "accepted" ? "accepted" : "disconnected",
+  };
 }
 
 export async function sendStreamingInput(
@@ -5640,45 +5475,6 @@ export async function sendStreamingInput(
   input: SendMessageInput,
 ): Promise<SendStreamingInputResult> {
   const threadId = resolveInputThreadId(input);
-  const active = activeStreamRequests.get(threadId);
-  if (active && active.socket.readyState === WebSocket.OPEN) {
-    const serializedAttachments = serializeMessageAttachments(
-      input.images,
-      input.files,
-    );
-    return await new Promise((resolve, reject) => {
-      const waiter: StreamInputWaiter = {
-        clientIntentId: input.clientIntentId,
-        resolve: (result) => {
-          clearTimeout(timeout);
-          resolve(result);
-        },
-        reject: (error) => {
-          clearTimeout(timeout);
-          reject(error);
-        },
-      };
-      const timeout = setTimeout(() => {
-        const index = active.pendingInputWaiters.indexOf(waiter);
-        if (index >= 0) {
-          active.pendingInputWaiters.splice(index, 1);
-        }
-        reject(new Error("stream input timed out"));
-      }, 8000);
-      active.pendingInputWaiters.push(waiter);
-      active.socket.send(
-        JSON.stringify({
-          op: "input",
-          threadId,
-          clientIntentId: input.clientIntentId,
-          message: input.message,
-          attachments: serializedAttachments.attachments,
-          images: serializedAttachments.images,
-          files: serializedAttachments.files,
-        }),
-      );
-    });
-  }
   const serializedAttachments = serializeMessageAttachments(
     input.images,
     input.files,
@@ -5734,43 +5530,6 @@ export async function interruptThread(
   settings: DesktopSettings,
   threadId: string,
 ): Promise<InterruptResult> {
-  const active = activeStreamRequests.get(threadId);
-  if (active && active.socket.readyState === WebSocket.OPEN) {
-    try {
-      const result = await new Promise<InterruptResult>((resolve, reject) => {
-        const waiter: InterruptWaiter = {
-          resolve: (payload) => {
-            clearTimeout(timeout);
-            resolve(payload);
-          },
-          reject: (error) => {
-            clearTimeout(timeout);
-            reject(error);
-          },
-        };
-        const timeout = setTimeout(() => {
-          const index = active.pendingInterruptWaiters.indexOf(waiter);
-          if (index >= 0) {
-            active.pendingInterruptWaiters.splice(index, 1);
-          }
-          reject(new Error("interrupt timed out"));
-        }, 5000);
-        active.pendingInterruptWaiters.push(waiter);
-        active.socket.send(
-          JSON.stringify({
-            op: "interrupt",
-            threadId,
-          }),
-        );
-      });
-      active.socket.close();
-      activeStreamRequests.delete(threadId);
-      return result;
-    } catch {
-      active.socket.close();
-      activeStreamRequests.delete(threadId);
-    }
-  }
   try {
     const payload = await requestJson<{
       status?: unknown;

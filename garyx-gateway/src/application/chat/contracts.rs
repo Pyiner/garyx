@@ -91,6 +91,15 @@ pub struct StreamInputRequest {
     pub files: Vec<FilePayload>,
 }
 
+/// POST /api/chat/start response body.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartChatResponse {
+    pub status: String,
+    pub run_id: String,
+    pub thread_id: String,
+}
+
 /// POST /api/chat/stream-input response body.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]

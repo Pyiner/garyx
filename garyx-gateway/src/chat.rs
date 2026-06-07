@@ -6,7 +6,8 @@
 use std::sync::{Arc, Mutex};
 
 use crate::application::chat::contracts::{
-    ChatRequest, InterruptRequest, StreamInputRequest, resolve_existing_thread_key,
+    ChatRequest, InterruptRequest, StartChatResponse, StreamInputRequest,
+    resolve_existing_thread_key,
 };
 use crate::chat_application::{ChatPreparationError, prepare_chat_request};
 use crate::chat_control::{execute_chat_interrupt, execute_chat_stream_input};
@@ -14,6 +15,7 @@ use crate::chat_delivery::{BoundThreadDeliveryBuffer, message_tool_mirror_text};
 use axum::Json;
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use futures_util::{SinkExt, StreamExt};
 use garyx_models::MessageLifecycleStatus;
@@ -68,6 +70,17 @@ pub async fn chat_ws(
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_chat_socket(state, socket))
+}
+
+/// POST /api/chat/start - start a chat run via HTTP.
+pub async fn chat_start(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<ChatRequest>,
+) -> impl IntoResponse {
+    match start_chat_run(&state, request, None).await {
+        Ok(response) => Json(response).into_response(),
+        Err(payload) => payload.into_response(),
+    }
 }
 
 /// POST /api/chat/interrupt - interrupt an active run for a thread.
@@ -207,23 +220,66 @@ async fn handle_chat_ws_start(
             return;
         }
     };
-
-    let prepared = match prepare_chat_request(state, request).await {
-        Ok(prepared) => prepared,
-        Err(ChatPreparationError::InvalidRequest(_status, payload)) => {
+    let callback_state = state.clone();
+    let callback_out_tx = out_tx.clone();
+    let callback_builder = move |run_id: &str, thread_id: &str| {
+        build_chat_ws_stream_callback(
+            callback_out_tx.clone(),
+            &callback_state,
+            run_id,
+            thread_id,
+        )
+    };
+    match start_chat_run(state, request, Some(Box::new(callback_builder))).await {
+        Ok(response) => {
             let _ = out_tx.send(json!({
-                "type": "error",
-                "error": payload.0.get("error").and_then(serde_json::Value::as_str).unwrap_or("invalid request")
+                "type": "accepted",
+                "runId": response.run_id,
+                "threadId": response.thread_id
             }));
-            return;
         }
-        Err(ChatPreparationError::ThreadUpdateConflict { thread_id, error }) => {
+        Err((_status, payload)) => {
+            let body = payload.0;
+            let error = body
+                .get("error")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("agent run failed");
+            let run_id = body
+                .get("runId")
+                .or_else(|| body.get("run_id"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            let thread_id = body
+                .get("threadId")
+                .or_else(|| body.get("thread_id"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
             let _ = out_tx.send(json!({
                 "type": "error",
+                "runId": run_id,
                 "threadId": thread_id,
                 "error": error
             }));
-            return;
+        }
+    }
+}
+
+type ChatStreamCallbackBuilder =
+    Box<dyn Fn(&str, &str) -> Arc<dyn Fn(StreamEvent) + Send + Sync> + Send + Sync>;
+
+async fn start_chat_run(
+    state: &Arc<AppState>,
+    request: ChatRequest,
+    callback_builder: Option<ChatStreamCallbackBuilder>,
+) -> Result<StartChatResponse, (StatusCode, Json<Value>)> {
+    let prepared = match prepare_chat_request(state, request).await {
+        Ok(prepared) => prepared,
+        Err(ChatPreparationError::InvalidRequest(status, payload)) => return Err((status, payload)),
+        Err(ChatPreparationError::ThreadUpdateConflict { thread_id, error }) => {
+            return Err((StatusCode::CONFLICT, Json(json!({
+                "threadId": thread_id,
+                "error": error
+            }))));
         }
     };
 
@@ -240,8 +296,8 @@ async fn handle_chat_ws_start(
         &run_id,
     );
 
-    let callback = build_chat_ws_stream_callback(out_tx.clone(), state, &run_id, &thread_id);
-    state.sync_external_user_skills_before_run("api_chat_ws_start", &thread_id);
+    let callback = callback_builder.map(|builder| builder(&run_id, &thread_id));
+    state.sync_external_user_skills_before_run("api_chat_start", &thread_id);
     let start_result = state
         .integration
         .bridge
@@ -257,7 +313,7 @@ async fn handle_chat_ws_start(
             .with_images(Some(prepared.images))
             .with_workspace_dir(prepared.workspace_path)
             .with_requested_provider(prepared.provider_type),
-            Some(callback),
+            callback,
         )
         .await;
 
@@ -274,24 +330,21 @@ async fn handle_chat_ws_start(
                     from_id: Some(prepared.from_id.clone()),
                     text_excerpt: Some(prepared.effective_message.chars().take(200).collect()),
                     metadata: Some(json!({
-                        "source": "api_chat_ws_start",
+                        "source": "api_chat_start",
                     })),
                     ..Default::default()
                 },
             )
             .await;
-            let _ = out_tx.send(json!({
-                "type": "accepted",
-                "runId": run_id,
-                "threadId": thread_id
-            }));
+            let _ = state.ops.events.sender().send(
+                json!({
+                    "type": "accepted",
+                    "thread_id": thread_id,
+                    "run_id": run_id,
+                })
+                .to_string(),
+            );
             if let Some(title) = prepared.thread_title_update.as_deref() {
-                let _ = out_tx.send(json!({
-                    "type": "thread_title_updated",
-                    "runId": run_id,
-                    "threadId": thread_id,
-                    "title": title,
-                }));
                 crate::chat_shared::emit_thread_title_updated_event(
                     state,
                     &thread_id,
@@ -299,15 +352,17 @@ async fn handle_chat_ws_start(
                     title,
                 );
             }
+            Ok(StartChatResponse {
+                status: "accepted".to_owned(),
+                run_id,
+                thread_id,
+            })
         }
-        Err(error) => {
-            let _ = out_tx.send(json!({
-                "type": "error",
-                "runId": run_id,
-                "threadId": thread_id,
-                "error": error.to_string()
-            }));
-        }
+        Err(error) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
+            "runId": run_id,
+            "threadId": thread_id,
+            "error": error.to_string()
+        })))),
     }
 }
 

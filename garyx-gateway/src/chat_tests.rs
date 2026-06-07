@@ -16,7 +16,7 @@ use tower::ServiceExt;
 use crate::application::chat::contracts::{ChatRequest, InterruptRequest, StreamInputRequest};
 use crate::server::{AppState, AppStateBuilder};
 
-use super::{chat_health, chat_interrupt, chat_stream_input};
+use super::{chat_health, chat_interrupt, chat_start, chat_stream_input};
 
 struct ReadyProvider;
 struct SlowProvider {
@@ -172,12 +172,61 @@ fn test_state_no_bridge() -> Arc<AppState> {
 fn test_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/chat/health", axum::routing::get(chat_health))
+        .route("/api/chat/start", axum::routing::post(chat_start))
         .route("/api/chat/interrupt", axum::routing::post(chat_interrupt))
         .route(
             "/api/chat/stream-input",
             axum::routing::post(chat_stream_input),
         )
         .with_state(state)
+}
+
+#[tokio::test]
+async fn test_chat_start_http_returns_accepted_and_emits_stream_event() {
+    let state = test_state_with_provider().await;
+    let event_rx = state.ops.events.subscribe();
+    let router = test_router(state);
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/chat/start")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "threadId": "thread::chat-start-http",
+                "message": "hello",
+                "waitForResponse": false
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "accepted");
+    assert_eq!(json["threadId"], "thread::chat-start-http");
+    let run_id = json["runId"].as_str().expect("run id");
+    assert!(!run_id.is_empty());
+
+    let accepted = tokio::time::timeout(std::time::Duration::from_secs(1), async move {
+        let mut event_rx = event_rx;
+        loop {
+            let event = event_rx.recv().await.expect("event");
+            let payload: Value = serde_json::from_str(&event).expect("json event");
+            if payload["type"] == "accepted" {
+                break payload;
+            }
+        }
+    })
+    .await
+    .expect("accepted event");
+    assert_eq!(accepted["thread_id"], "thread::chat-start-http");
+    assert_eq!(accepted["run_id"], run_id);
 }
 
 #[tokio::test]

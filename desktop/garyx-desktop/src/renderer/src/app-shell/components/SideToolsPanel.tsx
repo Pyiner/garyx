@@ -231,9 +231,11 @@ function SideChatTool({
           role: "assistant",
           text:
             result.response.trim() ||
-            (result.status === "disconnected"
-              ? t("Stream disconnected before a final response.")
-              : t("Done.")),
+            (result.status === "accepted"
+              ? t("Started.")
+              : result.status === "disconnected"
+                ? t("Stream disconnected before a final response.")
+                : t("Done.")),
           threadId: result.threadId,
         },
       ]);
