@@ -663,6 +663,7 @@ fn update_history_state(
 
 fn build_run_messages(run: &PersistedRun<'_>) -> Vec<Value> {
     let mut messages = Vec::new();
+    let message_metadata = run_message_metadata(run);
     let user_timestamp = run
         .user_timestamp
         .map(str::trim)
@@ -674,7 +675,7 @@ fn build_run_messages(run: &PersistedRun<'_>) -> Vec<Value> {
         run.user_message,
         build_user_content(run.user_message, run.user_images, run.metadata),
         user_timestamp,
-        run.metadata,
+        &message_metadata,
         None,
     )));
 
@@ -700,7 +701,7 @@ fn build_run_messages(run: &PersistedRun<'_>) -> Vec<Value> {
                 Value::String(Utc::now().to_rfc3339()),
             );
         }
-        for (key, value) in run.metadata {
+        for (key, value) in &message_metadata {
             object.entry(key.clone()).or_insert_with(|| value.clone());
         }
         messages.push(Value::Object(object));
@@ -737,7 +738,7 @@ fn build_run_messages(run: &PersistedRun<'_>) -> Vec<Value> {
                 if let Some(text) = mirrored_text {
                     messages.push(Value::Object(build_assistant_object(
                         &text,
-                        run.metadata,
+                        &message_metadata,
                         true,
                     )));
                 }
@@ -749,12 +750,32 @@ fn build_run_messages(run: &PersistedRun<'_>) -> Vec<Value> {
     if !has_explicit_assistant_messages && !run.assistant_response.is_empty() {
         messages.push(Value::Object(build_assistant_object(
             run.assistant_response,
-            run.metadata,
+            &message_metadata,
             false,
         )));
     }
 
     messages
+}
+
+fn run_message_metadata(run: &PersistedRun<'_>) -> HashMap<String, Value> {
+    let mut metadata = run.metadata.clone();
+    match run
+        .sdk_session_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(sdk_session_id) => {
+            metadata.insert(
+                "sdk_session_id".to_owned(),
+                Value::String(sdk_session_id.to_owned()),
+            );
+        }
+        None => {
+            metadata.remove("sdk_session_id");
+        }
+    }
+    metadata
 }
 
 /// Save a partial streaming snapshot for the active run without clearing any

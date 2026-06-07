@@ -1822,6 +1822,58 @@ async fn create_thread_rejects_unknown_agent_id() {
 }
 
 #[tokio::test]
+async fn create_thread_without_workspace_uses_private_thread_workspace() {
+    let data_dir = tempdir().unwrap();
+    let mut config = test_config();
+    config.sessions.data_dir = Some(data_dir.path().join("data").to_string_lossy().to_string());
+    let state = AppStateBuilder::new(config)
+        .with_custom_agent_store(Arc::new(crate::custom_agents::CustomAgentStore::new()))
+        .with_agent_team_store(Arc::new(crate::agent_teams::AgentTeamStore::new()))
+        .build();
+    let router = build_router(state.clone());
+
+    let request = authed_request()
+        .method("POST")
+        .uri("/api/threads")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "label": "No workspace thread"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    let thread_id = payload["thread_id"].as_str().expect("thread id");
+    let workspace_dir = payload["workspace_dir"].as_str().expect("workspace dir");
+
+    assert!(
+        Path::new(workspace_dir).starts_with(data_dir.path().join("thread-workspaces")),
+        "workspace_dir should be inside private thread workspace root: {workspace_dir}"
+    );
+    assert!(Path::new(workspace_dir).exists());
+    let stored = state
+        .threads
+        .thread_store
+        .get(thread_id)
+        .await
+        .expect("stored thread");
+    assert_eq!(
+        workspace_dir_from_value(&stored).as_deref(),
+        Some(workspace_dir)
+    );
+    assert!(
+        state.ops.garyx_db.list_workspaces().unwrap().is_empty(),
+        "private thread workspace must not be registered as a user workspace"
+    );
+}
+
+#[tokio::test]
 async fn git_status_marks_only_git_root_as_worktree_capable() {
     let (state, _logger, _dir) = test_state().await;
     let repo = tempdir().unwrap();

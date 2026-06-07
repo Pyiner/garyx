@@ -138,6 +138,8 @@ struct GaryxConversationView: View {
                     GaryxComposer(isFocused: $isComposerFocused)
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
+                .background(Color.clear)
+                .ignoresSafeArea(.container, edges: .bottom)
             }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onAppear {

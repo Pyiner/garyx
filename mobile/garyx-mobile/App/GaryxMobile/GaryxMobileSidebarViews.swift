@@ -46,6 +46,7 @@ struct GaryxMainPanelView: View {
                 }
             }
         }
+        .background(GaryxTheme.background.ignoresSafeArea())
         .fullScreenCover(item: $model.selectedRouteNotFound) { state in
             GaryxFormSheet(title: state.title) {
                 GaryxRouteNotFoundCard(state: state)
@@ -87,7 +88,7 @@ struct GaryxThreadSidebar: View {
     var body: some View {
         threadListWithBottomBar
             .frame(maxHeight: .infinity)
-            .background(GaryxTheme.background)
+            .background(GaryxTheme.background.ignoresSafeArea())
             .garyxAdaptiveTopBar {
                 GaryxSidebarHeaderView(
                     drilldownContext: sidebarHeaderContext,
@@ -131,6 +132,8 @@ struct GaryxThreadSidebar: View {
                     startNewChat()
                 }
             )
+            .background(Color.clear)
+            .ignoresSafeArea(.container, edges: .bottom)
         }
     }
 

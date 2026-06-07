@@ -50,6 +50,9 @@ for personal data and remove it.
   projections must be updated at write time, not repaired by read routes.
 - Workspace identity is always the absolute directory path string. Do not add
   workspace IDs or infer root workspace rows from thread metadata.
+- `No workspace` means the user did not choose a workspace; runtime threads must
+  still get a private Garyx-managed thread workspace and provider cwd must match
+  the thread workspace.
 - Desktop and mobile root workspace lists come from gateway `/api/workspaces`
   application state.
 - Configured bot account `config` is ordinary application state; do not add

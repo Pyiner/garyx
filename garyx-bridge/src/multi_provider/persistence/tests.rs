@@ -121,6 +121,45 @@ async fn test_save_thread_messages_persists_user_images_as_blocks() {
     assert_eq!(content[1]["source"]["data"], "abc123==");
 }
 
+#[tokio::test]
+async fn test_save_thread_messages_overrides_stale_metadata_sdk_session_id() {
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let history = make_history(store.clone());
+    let session_messages = vec![ProviderMessage::assistant_text("new session answer")];
+    let mut metadata = HashMap::new();
+    metadata.insert("sdk_session_id".to_owned(), json!("old-session"));
+    metadata.insert("client_run_id".to_owned(), json!("run-1"));
+
+    save_thread_messages(
+        &store,
+        &history,
+        PersistedRun {
+            thread_id: "thread::sdk-session-message",
+            user_message: "hello",
+            user_timestamp: Some("2026-03-01T00:00:00Z"),
+            user_images: &[],
+            assistant_response: "new session answer",
+            sdk_session_id: Some("new-session"),
+            provider_key: "provider::sdk-session",
+            provider_type: ProviderType::ClaudeCode,
+            session_messages: &session_messages,
+            metadata: &metadata,
+        },
+    )
+    .await;
+
+    let stored = store
+        .get("thread::sdk-session-message")
+        .await
+        .expect("stored session should exist");
+    let messages = stored["messages"]
+        .as_array()
+        .expect("messages should be an array");
+    assert_eq!(messages[0]["metadata"]["sdk_session_id"], "new-session");
+    assert_eq!(messages[1]["sdk_session_id"], "new-session");
+    assert_eq!(stored["sdk_session_id"], "new-session");
+}
+
 #[test]
 fn test_streaming_run_snapshot_splits_assistant_segments() {
     let mut snapshot = StreamingRunSnapshot::default();

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use axum::Router;
@@ -11,6 +11,8 @@ use garyx_models::provider::{
     AgentRunRequest, ProviderRunOptions, ProviderRunResult, ProviderType,
 };
 use serde_json::{Value, json};
+use std::path::Path;
+use tempfile::tempdir;
 use tower::ServiceExt;
 
 use crate::application::chat::contracts::{ChatRequest, InterruptRequest, StreamInputRequest};
@@ -21,6 +23,9 @@ use super::{chat_health, chat_interrupt, chat_start, chat_stream_input};
 struct ReadyProvider;
 struct SlowProvider {
     delay_ms: u64,
+}
+struct WorkspaceRecordingProvider {
+    observed_workspace_dir: Arc<Mutex<Option<Option<String>>>>,
 }
 
 #[async_trait]
@@ -106,6 +111,52 @@ impl AgentLoopProvider for SlowProvider {
             output_tokens: 0,
             cost: 0.0,
             duration_ms: self.delay_ms as i64,
+        })
+    }
+
+    async fn get_or_create_session(&self, thread_id: &str) -> Result<String, BridgeError> {
+        Ok(format!("sdk-{thread_id}"))
+    }
+}
+
+#[async_trait]
+impl AgentLoopProvider for WorkspaceRecordingProvider {
+    fn provider_type(&self) -> ProviderType {
+        ProviderType::ClaudeCode
+    }
+
+    fn is_ready(&self) -> bool {
+        true
+    }
+
+    async fn initialize(&mut self) -> Result<(), BridgeError> {
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> Result<(), BridgeError> {
+        Ok(())
+    }
+
+    async fn run_streaming(
+        &self,
+        options: &ProviderRunOptions,
+        _on_chunk: StreamCallback,
+    ) -> Result<ProviderRunResult, BridgeError> {
+        *self.observed_workspace_dir.lock().unwrap() = Some(options.workspace_dir.clone());
+        Ok(ProviderRunResult {
+            run_id: "workspace-recording-provider".to_owned(),
+            thread_id: options.thread_id.clone(),
+            response: String::new(),
+            session_messages: Vec::new(),
+            sdk_session_id: None,
+            actual_model: None,
+            thread_title: None,
+            success: true,
+            error: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            cost: 0.0,
+            duration_ms: 1,
         })
     }
 
@@ -227,6 +278,99 @@ async fn test_chat_start_http_returns_accepted_and_emits_stream_event() {
     .expect("accepted event");
     assert_eq!(accepted["thread_id"], "thread::chat-start-http");
     assert_eq!(accepted["run_id"], run_id);
+}
+
+#[tokio::test]
+async fn test_chat_start_assigns_private_workspace_to_thread_without_workspace() {
+    let data_dir = tempdir().unwrap();
+    let observed_workspace_dir = Arc::new(Mutex::new(None));
+    let mut config = GaryxConfig::default();
+    config.sessions.data_dir = Some(data_dir.path().join("data").to_string_lossy().to_string());
+    config.channels.api.accounts.insert(
+        "main".to_owned(),
+        ApiAccount {
+            enabled: true,
+            name: None,
+            agent_id: "claude".to_owned(),
+            workspace_dir: None,
+            workspace_mode: None,
+        },
+    );
+
+    let bridge = Arc::new(MultiProviderBridge::new());
+    bridge
+        .register_provider(
+            "workspace-recording-provider",
+            Arc::new(WorkspaceRecordingProvider {
+                observed_workspace_dir: observed_workspace_dir.clone(),
+            }),
+        )
+        .await;
+    bridge
+        .set_route("api", "main", "workspace-recording-provider")
+        .await;
+    bridge
+        .set_default_provider_key("workspace-recording-provider")
+        .await;
+    let state = AppStateBuilder::new(config).with_bridge(bridge).build();
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::legacy-empty-workspace",
+            json!({
+                "thread_id": "thread::legacy-empty-workspace",
+                "workspace_dir": Value::Null
+            }),
+        )
+        .await;
+    let router = test_router(state.clone());
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/chat/start")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "threadId": "thread::legacy-empty-workspace",
+                "message": "hello",
+                "waitForResponse": false
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let observed = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if let Some(value) = observed_workspace_dir.lock().unwrap().clone() {
+                break value;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("provider observed workspace");
+    let stored = state
+        .threads
+        .thread_store
+        .get("thread::legacy-empty-workspace")
+        .await
+        .expect("stored thread");
+    let workspace_dir = stored["workspace_dir"]
+        .as_str()
+        .expect("persisted workspace");
+    assert!(
+        Path::new(workspace_dir).starts_with(data_dir.path().join("thread-workspaces")),
+        "workspace_dir should be inside private thread workspace root: {workspace_dir}"
+    );
+    let observed = observed.expect("provider workspace");
+    assert_eq!(
+        Path::new(&observed).canonicalize().unwrap(),
+        Path::new(workspace_dir).canonicalize().unwrap()
+    );
 }
 
 #[tokio::test]

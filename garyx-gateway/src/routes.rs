@@ -34,7 +34,9 @@ use crate::recent_thread_projection::backfill_recent_thread_projection_if_incomp
 use crate::server::AppState;
 use crate::skills::SkillStoreError;
 use crate::thread_meta_projection::backfill_thread_meta_projection_if_incomplete;
-use crate::workspace_mode::worktree_base_dir_for_config;
+use crate::workspace_mode::{
+    ensure_implicit_thread_workspace_for_config, worktree_base_dir_for_config,
+};
 #[cfg(test)]
 use garyx_router::create_thread_record;
 
@@ -1808,6 +1810,45 @@ pub async fn create_thread(
     .await
     {
         Ok((thread_id, mut data, _resolved)) => {
+            if workspace_dir_from_value(&data).is_none() {
+                let implicit_update = match ensure_implicit_thread_workspace_for_config(
+                    &state.config_snapshot(),
+                    &thread_id,
+                )
+                .await
+                {
+                    Ok(workspace_dir) => {
+                        update_thread_record(
+                            &state.threads.thread_store,
+                            &thread_id,
+                            None,
+                            Some(workspace_dir),
+                        )
+                        .await
+                    }
+                    Err(error) => Err(error),
+                };
+                match implicit_update {
+                    Ok(updated) => {
+                        data = updated;
+                        state
+                            .integration
+                            .bridge
+                            .set_thread_workspace_binding(
+                                &thread_id,
+                                workspace_dir_from_value(&data),
+                            )
+                            .await;
+                    }
+                    Err(error) => {
+                        state.threads.thread_store.delete(&thread_id).await;
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(json!({ "error": error })),
+                        );
+                    }
+                }
+            }
             if let Some(recovered) = recovered_session.as_ref()
                 && let Err(error) =
                     seed_imported_thread_history(&state, &thread_id, &mut data, &recovered.messages)

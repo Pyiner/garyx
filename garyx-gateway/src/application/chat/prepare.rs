@@ -10,7 +10,7 @@ use garyx_models::provider::{
 use garyx_models::thread_logs::ThreadLogEvent;
 use garyx_router::{
     NATIVE_COMMAND_TEXT_METADATA_KEY, build_runtime_context_metadata, is_thread_key,
-    update_thread_record, workspace_dir_from_value,
+    normalize_workspace_dir, update_thread_record, workspace_dir_from_value,
 };
 use serde_json::{Value, json};
 
@@ -21,6 +21,7 @@ use crate::application::chat::contracts::ChatRequest;
 use crate::chat_shared::record_api_thread_log;
 use crate::managed_mcp_metadata::inject_managed_mcp_servers;
 use crate::server::AppState;
+use crate::workspace_mode::ensure_implicit_thread_workspace_for_config;
 
 const LEGACY_DEFAULT_THREAD_LABEL: &str = "Fresh Thread";
 const PROMPT_THREAD_TITLE_SOURCE: &str = "garyx_prompt";
@@ -187,6 +188,11 @@ pub(crate) async fn prepare_chat_request(
         thread_cache_maybe_stale = true;
     }
 
+    let runtime_workspace =
+        resolve_runtime_workspace_dir(state, &thread_id, req.workspace_path.as_deref()).await?;
+    thread_cache_maybe_stale |= runtime_workspace.thread_cache_maybe_stale;
+    req.workspace_path = runtime_workspace.workspace_dir;
+
     record_api_thread_log(
         state,
         ThreadLogEvent::info(&thread_id, "api", "chat request prepared")
@@ -195,24 +201,10 @@ pub(crate) async fn prepare_chat_request(
     )
     .await;
 
-    thread_cache_maybe_stale |=
-        persist_thread_workspace_if_missing(state, &thread_id, req.workspace_path.as_deref())
-            .await?;
     if thread_cache_maybe_stale {
         state.invalidate_gateway_sync_caches().await;
     }
     let runtime_thread_data = state.threads.thread_store.get(&thread_id).await;
-    let runtime_workspace_dir = req
-        .workspace_path
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            runtime_thread_data
-                .as_ref()
-                .and_then(workspace_dir_from_value)
-        });
     let runtime_context = build_runtime_context_metadata(
         &thread_id,
         runtime_thread_data.as_ref(),
@@ -220,7 +212,7 @@ pub(crate) async fn prepare_chat_request(
         &channel,
         &req.account_id,
         &req.from_id,
-        runtime_workspace_dir.as_deref(),
+        req.workspace_path.as_deref(),
     );
     req.metadata
         .insert("runtime_context".to_owned(), runtime_context);
@@ -293,6 +285,77 @@ pub(crate) fn prompt_derived_thread_label(message: &str) -> Option<String> {
     (!summary.is_empty()).then_some(summary)
 }
 
+struct RuntimeWorkspaceResolution {
+    workspace_dir: Option<String>,
+    thread_cache_maybe_stale: bool,
+}
+
+async fn resolve_runtime_workspace_dir(
+    state: &Arc<AppState>,
+    thread_id: &str,
+    requested_workspace_path: Option<&str>,
+) -> Result<RuntimeWorkspaceResolution, ChatPreparationError> {
+    let requested_workspace_dir = normalize_workspace_dir(requested_workspace_path);
+    let existing_thread = state.threads.thread_store.get(thread_id).await;
+    let existing_workspace_dir = existing_thread.as_ref().and_then(workspace_dir_from_value);
+
+    if let (Some(existing), Some(requested)) = (
+        existing_workspace_dir.as_deref(),
+        requested_workspace_dir.as_deref(),
+    ) && existing != requested
+    {
+        return Err(ChatPreparationError::ThreadUpdateConflict {
+            thread_id: thread_id.to_owned(),
+            error: format!(
+                "thread workspace_dir is immutable; create a new thread to use {requested}"
+            ),
+        });
+    }
+
+    if let Some(existing) = existing_workspace_dir {
+        return Ok(RuntimeWorkspaceResolution {
+            workspace_dir: Some(existing),
+            thread_cache_maybe_stale: false,
+        });
+    }
+
+    let workspace_dir = match requested_workspace_dir {
+        Some(workspace_dir) => workspace_dir,
+        None => ensure_implicit_thread_workspace_for_config(&state.config_snapshot(), thread_id)
+            .await
+            .map_err(|error| ChatPreparationError::ThreadUpdateConflict {
+                thread_id: thread_id.to_owned(),
+                error,
+            })?,
+    };
+
+    let mut thread_cache_maybe_stale = false;
+    if is_thread_key(thread_id) && existing_thread.is_some() {
+        let updated = update_thread_record(
+            &state.threads.thread_store,
+            thread_id,
+            None,
+            Some(workspace_dir.clone()),
+        )
+        .await
+        .map_err(|error| ChatPreparationError::ThreadUpdateConflict {
+            thread_id: thread_id.to_owned(),
+            error,
+        })?;
+        state
+            .integration
+            .bridge
+            .set_thread_workspace_binding(thread_id, workspace_dir_from_value(&updated))
+            .await;
+        thread_cache_maybe_stale = true;
+    }
+
+    Ok(RuntimeWorkspaceResolution {
+        workspace_dir: Some(workspace_dir),
+        thread_cache_maybe_stale,
+    })
+}
+
 fn should_autoname_thread(existing: &Value) -> bool {
     let Some(label) = existing.get("label").and_then(Value::as_str) else {
         return true;
@@ -348,47 +411,6 @@ async fn persist_thread_label_if_missing(
     }
     state.threads.thread_store.set(thread_id, next).await;
     Ok(Some(next_label))
-}
-
-async fn persist_thread_workspace_if_missing(
-    state: &Arc<AppState>,
-    thread_id: &str,
-    workspace_path: Option<&str>,
-) -> Result<bool, ChatPreparationError> {
-    let Some(workspace_path) = workspace_path
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return Ok(false);
-    };
-    if !is_thread_key(thread_id) {
-        return Ok(false);
-    }
-
-    let Some(existing) = state.threads.thread_store.get(thread_id).await else {
-        return Ok(false);
-    };
-    if workspace_dir_from_value(&existing).is_some() {
-        return Ok(false);
-    }
-
-    let updated = update_thread_record(
-        &state.threads.thread_store,
-        thread_id,
-        None,
-        Some(workspace_path.to_owned()),
-    )
-    .await
-    .map_err(|error| ChatPreparationError::ThreadUpdateConflict {
-        thread_id: thread_id.to_owned(),
-        error,
-    })?;
-    state
-        .integration
-        .bridge
-        .set_thread_workspace_binding(thread_id, workspace_dir_from_value(&updated))
-        .await;
-    Ok(true)
 }
 
 async fn resolve_chat_target(

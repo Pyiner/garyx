@@ -446,7 +446,6 @@ fn resolve_claude_cwd(config: &ClaudeCodeConfig, options: &ProviderRunOptions) -
         .or(config.workspace_dir.as_ref())
         .map(|ws| PathBuf::from(shellexpand::tilde(ws).as_ref()))
         .filter(|path| path.exists())
-        .or_else(|| std::env::current_dir().ok())
 }
 
 async fn read_claude_ai_title_from_transcript_path(
