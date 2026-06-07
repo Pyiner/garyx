@@ -90,6 +90,13 @@ extension GaryxMobileModel {
         )
     }
 
+    var isSelectedThreadVisiblyRunning: Bool {
+        GaryxMobileThreadActivityModel.hasVisibleRunningActivity(
+            messages: messages,
+            runActive: isSelectedThreadSending
+        )
+    }
+
     func isThreadBusy(_ threadId: String) -> Bool {
         activeRunThreadId == threadId
             || remoteBusyThreadIds.contains(threadId)

@@ -160,6 +160,12 @@ final class GaryxMobileTurnRendererTests: XCTestCase {
 
         XCTAssertTrue(GaryxMobileThreadActivityModel.latestUserMessageAwaitsAssistant(messages))
         XCTAssertTrue(
+            GaryxMobileThreadActivityModel.hasVisibleRunningActivity(
+                messages: messages,
+                runActive: true
+            )
+        )
+        XCTAssertTrue(
             GaryxMobileThreadActivityModel.showsTailThinkingIndicator(
                 messages: messages,
                 runActive: true
@@ -188,25 +194,76 @@ final class GaryxMobileTurnRendererTests: XCTestCase {
         )
     }
 
-    func testActivityModelShowsThinkingForImageOnlyStreamingAssistant() {
-        XCTAssertTrue(
-            GaryxMobileThreadActivityModel.showsTailThinkingIndicator(
-                messages: [
-                    message("user-1", role: .user, text: "Make an image"),
-                    message(
-                        "assistant-1",
-                        role: .assistant,
-                        attachments: [
-                            GaryxMobileMessageAttachment(
-                                id: "image-1",
-                                kind: "image",
-                                name: "Image",
-                                mediaType: "image/png"
-                            ),
-                        ],
-                        isStreaming: true
+    func testActivityModelSuppressesTailThinkingWhenAssistantActivityExists() {
+        let messages = [
+            message("user-1", role: .user, text: "Make an image"),
+            message(
+                "assistant-1",
+                role: .assistant,
+                attachments: [
+                    GaryxMobileMessageAttachment(
+                        id: "image-1",
+                        kind: "image",
+                        name: "Image",
+                        mediaType: "image/png"
                     ),
                 ],
+                isStreaming: true
+            ),
+        ]
+
+        XCTAssertTrue(
+            GaryxMobileThreadActivityModel.hasVisibleRunningActivity(
+                messages: messages,
+                runActive: true
+            )
+        )
+        XCTAssertFalse(
+            GaryxMobileThreadActivityModel.showsTailThinkingIndicator(
+                messages: messages,
+                runActive: true
+            )
+        )
+    }
+
+    func testActivityModelSuppressesStaleThinkingAfterCompletedAssistant() {
+        let messages = [
+            message("user-1", role: .user, text: "Question"),
+            message("assistant-1", role: .assistant, text: "Done."),
+        ]
+
+        XCTAssertFalse(GaryxMobileThreadActivityModel.latestUserMessageAwaitsAssistant(messages))
+        XCTAssertFalse(
+            GaryxMobileThreadActivityModel.hasVisibleRunningActivity(
+                messages: messages,
+                runActive: true
+            )
+        )
+        XCTAssertFalse(
+            GaryxMobileThreadActivityModel.showsTailThinkingIndicator(
+                messages: messages,
+                runActive: true
+            )
+        )
+    }
+
+    func testActivityModelIgnoresStaleActivityBeforeLatestCompletedTurn() {
+        let messages = [
+            message("user-1", role: .user, text: "Old request"),
+            message("assistant-1", role: .assistant, text: "Old partial", isStreaming: true),
+            message("user-2", role: .user, text: "Current request"),
+            message("assistant-2", role: .assistant, text: "Current answer."),
+        ]
+
+        XCTAssertFalse(
+            GaryxMobileThreadActivityModel.hasVisibleRunningActivity(
+                messages: messages,
+                runActive: true
+            )
+        )
+        XCTAssertFalse(
+            GaryxMobileThreadActivityModel.showsTailThinkingIndicator(
+                messages: messages,
                 runActive: true
             )
         )

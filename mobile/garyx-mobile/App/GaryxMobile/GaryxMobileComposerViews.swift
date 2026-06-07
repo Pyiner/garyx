@@ -68,7 +68,7 @@ struct GaryxComposer: View {
     }
 
     private var showsSendButton: Bool {
-        !model.isSelectedThreadSending || hasLocalPayload
+        !model.isSelectedThreadVisiblyRunning || hasLocalPayload
     }
 
     private var canChangeWorkspaceMode: Bool {
@@ -219,15 +219,29 @@ struct GaryxComposer: View {
                 composerCardShape
                     .stroke(GaryxComposerLayout.composerMaterialHighlight, lineWidth: 0.7)
                     .blendMode(.plusLighter)
+                    .mask(composerTopEdgeMask)
             }
             .overlay {
                 composerCardShape
                     .stroke(GaryxComposerLayout.composerMaterialStroke, lineWidth: 0.7)
+                    .mask(composerTopEdgeMask)
             }
     }
 
     private var composerCardShape: RoundedRectangle {
         RoundedRectangle(cornerRadius: GaryxComposerLayout.composerCornerRadius, style: .continuous)
+    }
+
+    private var composerTopEdgeMask: some View {
+        LinearGradient(
+            stops: [
+                .init(color: .white, location: 0),
+                .init(color: .white, location: 0.45),
+                .init(color: .clear, location: 0.82),
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
     }
 
     private var composerCardContent: some View {
@@ -376,7 +390,7 @@ struct GaryxComposer: View {
 
             Spacer(minLength: 0)
 
-            if model.isSelectedThreadSending {
+            if model.isSelectedThreadVisiblyRunning {
                 Button {
                     Task { await model.interruptActiveRun() }
                 } label: {

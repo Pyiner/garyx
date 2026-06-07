@@ -255,6 +255,29 @@ enum GaryxMobileThreadActivityModel {
            last.toolTraceGroup?.isActive == true {
             return false
         }
-        return true
+        return latestUserMessageAwaitsAssistant(messages)
+    }
+
+    static func hasVisibleRunningActivity(
+        messages: [GaryxMobileMessage],
+        runActive: Bool
+    ) -> Bool {
+        guard runActive else { return false }
+        guard !messages.isEmpty else { return true }
+        if latestUserMessageAwaitsAssistant(messages) {
+            return true
+        }
+        let activityMessages: ArraySlice<GaryxMobileMessage>
+        if let latestUserIndex = messages.lastIndex(where: { $0.role == .user }) {
+            activityMessages = messages[messages.index(after: latestUserIndex)...]
+        } else {
+            activityMessages = messages[...]
+        }
+        return activityMessages.contains { message in
+            if message.isStreaming {
+                return true
+            }
+            return message.toolTraceGroup?.isActive == true
+        }
     }
 }

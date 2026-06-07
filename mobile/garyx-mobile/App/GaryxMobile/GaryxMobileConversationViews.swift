@@ -193,7 +193,7 @@ struct GaryxConversationView: View {
 
     private func messageScroll(proxy: ScrollViewProxy) -> some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 14) {
                 Color.clear
                     .frame(height: 1)
                     .background {
@@ -233,7 +233,7 @@ struct GaryxConversationView: View {
                     }
                     GaryxMobileTurnRowsView(
                         rows: model.selectedThreadTurnRows(),
-                        forceRunningLastTurn: model.isSelectedThreadSending,
+                        forceRunningLastTurn: model.isSelectedThreadVisiblyRunning,
                         prefetchBoundaryRowCount: garyxHistoryPrefetchBoundaryRows
                     ) {
                         prefetchOlderHistoryIfNeeded(ignoreDistance: true)
