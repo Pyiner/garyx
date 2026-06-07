@@ -5,6 +5,8 @@ import { readFile } from "node:fs/promises";
 const ASC_BASE_URL = "https://api.appstoreconnect.apple.com";
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_POLL_MS = 30 * 1000;
+const JWT_TTL_SECONDS = 20 * 60;
+const JWT_REFRESH_SKEW_MS = 60 * 1000;
 
 class AscRequestError extends Error {
   constructor({ method, path, status, body }) {
@@ -102,31 +104,54 @@ async function createJwt() {
   ]);
   const privateKey = createPrivateKey(await loadPrivateKey());
   const now = Math.floor(Date.now() / 1000);
+  const expiresAt = now + JWT_TTL_SECONDS;
   const header = { alg: "ES256", kid: keyId, typ: "JWT" };
   const payload = {
     aud: "appstoreconnect-v1",
-    exp: now + 20 * 60,
+    exp: expiresAt,
     iss: issuerId,
   };
   const signingInput = `${base64url(JSON.stringify(header))}.${base64url(
     JSON.stringify(payload),
   )}`;
   const derSignature = signBytes("sha256", Buffer.from(signingInput), privateKey);
-  return `${signingInput}.${derEcdsaSignatureToJose(derSignature)}`;
+  return {
+    expiresAtMs: expiresAt * 1000,
+    value: `${signingInput}.${derEcdsaSignatureToJose(derSignature)}`,
+  };
 }
 
 let token;
+let tokenExpiresAtMs = 0;
+
+async function appStoreConnectToken({ forceRefresh = false } = {}) {
+  if (
+    forceRefresh ||
+    !token ||
+    Date.now() >= tokenExpiresAtMs - JWT_REFRESH_SKEW_MS
+  ) {
+    const nextToken = await createJwt();
+    token = nextToken.value;
+    tokenExpiresAtMs = nextToken.expiresAtMs;
+  }
+  return token;
+}
 
 async function ascRequest(method, path, body, options = {}) {
-  token ??= await createJwt();
-  const response = await fetch(`${ASC_BASE_URL}${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  let response;
+  for (const forceRefresh of [false, true]) {
+    response = await fetch(`${ASC_BASE_URL}${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${await appStoreConnectToken({ forceRefresh })}`,
+        "Content-Type": "application/json",
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (response.status !== 401 || forceRefresh) {
+      break;
+    }
+  }
   if (options.allowStatuses?.includes(response.status)) {
     return null;
   }
