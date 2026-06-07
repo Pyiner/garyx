@@ -75,7 +75,6 @@ struct GaryxComposer: View {
         model.selectedThread == nil
             && !model.isSending
             && model.activeRunThreadId == nil
-            && model.activeTasksByThread.isEmpty
             && !model.newThreadWorkspace.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 

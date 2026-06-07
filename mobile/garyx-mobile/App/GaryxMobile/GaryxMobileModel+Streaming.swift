@@ -4,119 +4,6 @@ import UniformTypeIdentifiers
 import WidgetKit
 
 extension GaryxMobileModel {
-    func receiveEvents(from task: URLSessionWebSocketTask, threadId: String, assistantMessageId: String) async {
-        while !Task.isCancelled {
-            do {
-                let message = try await task.receive()
-                let text: String
-                switch message {
-                case .string(let value):
-                    text = value
-                case .data(let data):
-                    text = String(data: data, encoding: .utf8) ?? ""
-                @unknown default:
-                    text = ""
-                }
-                guard !text.isEmpty else { continue }
-                let event = try client().decodeStreamEvent(text)
-                let eventThreadId = Self.threadId(from: event)
-                let affectsActiveRun = eventThreadId == threadId
-                    || (eventThreadId.isEmpty && activeTasksByThread[threadId] === task)
-                if !affectsActiveRun {
-                    updateRemoteBusyState(from: event)
-                    continue
-                }
-                let isVisibleThread = selectedThread?.id == threadId
-                if !isVisibleThread {
-                    handle(event, threadId: threadId, assistantMessageId: assistantMessageId, affectsActiveRun: affectsActiveRun)
-                    if case .done = event {
-                        task.cancel(with: .normalClosure, reason: nil)
-                        clearActiveRun(task: task, threadId: threadId)
-                        await refreshThreads()
-                        return
-                    }
-                    if case .runComplete = event {
-                        task.cancel(with: .normalClosure, reason: nil)
-                        clearActiveRun(task: task, threadId: threadId)
-                        await refreshThreads()
-                        return
-                    }
-                    if case let .error(_, _, error) = event {
-                        if Self.isTransientGatewayErrorMessage(error) {
-                            remoteBusyThreadIds.insert(threadId)
-                            await refreshThreads()
-                        }
-                        task.cancel(with: .goingAway, reason: nil)
-                        clearActiveRun(task: task, threadId: threadId)
-                        return
-                    }
-                    if case .interrupt = event {
-                        clearActiveRun(task: task, threadId: threadId)
-                        return
-                    }
-                    continue
-                }
-                handle(event, threadId: threadId, assistantMessageId: assistantMessageId, affectsActiveRun: affectsActiveRun)
-                if case .done = event, affectsActiveRun {
-                    task.cancel(with: .normalClosure, reason: nil)
-                    clearActiveRun(task: task, threadId: threadId)
-                    await refreshThreads()
-                    if selectedThread?.id == threadId {
-                        await loadSelectedThreadHistory()
-                    }
-                    return
-                }
-                if case .runComplete = event, affectsActiveRun {
-                    task.cancel(with: .normalClosure, reason: nil)
-                    clearActiveRun(task: task, threadId: threadId)
-                    await refreshThreads()
-                    if selectedThread?.id == threadId {
-                        await loadSelectedThreadHistory()
-                    }
-                    return
-                }
-                if case let .error(_, _, error) = event, affectsActiveRun {
-                    task.cancel(with: .goingAway, reason: nil)
-                    clearActiveRun(task: task, threadId: threadId)
-                    if Self.isTransientGatewayErrorMessage(error), selectedThread?.id == threadId {
-                        await loadSelectedThreadHistory()
-                    }
-                    return
-                }
-                if case .interrupt = event, affectsActiveRun {
-                    task.cancel(with: .normalClosure, reason: nil)
-                    clearActiveRun(task: task, threadId: threadId)
-                    await refreshThreads()
-                    if selectedThread?.id == threadId {
-                        await loadSelectedThreadHistory()
-                    }
-                    return
-                }
-            } catch {
-                guard activeTasksByThread[threadId] === task else {
-                    return
-                }
-                let message = displayMessage(for: error)
-                let isTransient = Self.isTransientGatewayErrorMessage(message)
-                if isTransient {
-                    remoteBusyThreadIds.insert(threadId)
-                    gatewaySettingsStatus = "Waiting to sync with gateway"
-                } else if isSending {
-                    lastError = message
-                }
-                clearActiveRun(task: task, threadId: threadId)
-                if selectedThread?.id == threadId {
-                    if isTransient {
-                        await loadSelectedThreadHistory()
-                    } else {
-                        markStreamingAssistantComplete(for: threadId, removeEmpty: true)
-                    }
-                }
-                return
-            }
-        }
-    }
-
     func updateRemoteBusyState(from event: GaryxChatStreamEvent) {
         let threadId = Self.threadId(from: event)
         guard !threadId.isEmpty else { return }
@@ -128,19 +15,11 @@ extension GaryxMobileModel {
              .userAck,
              .toolUse,
              .toolResult:
-            if activeTasksByThread[threadId] == nil {
-                remoteBusyThreadIds.insert(threadId)
-            } else {
-                remoteBusyThreadIds.remove(threadId)
-            }
+            remoteBusyThreadIds.insert(threadId)
         case .streamInput(let status, _, _, _):
             if Self.isSuccessfulStreamInputStatus(status) {
-                if activeTasksByThread[threadId] == nil {
-                    remoteBusyThreadIds.insert(threadId)
-                } else {
-                    remoteBusyThreadIds.remove(threadId)
-                }
-            } else if activeTasksByThread[threadId] == nil {
+                remoteBusyThreadIds.insert(threadId)
+            } else {
                 remoteBusyThreadIds.remove(threadId)
             }
         case .done, .runComplete, .error, .interrupt:
@@ -175,8 +54,7 @@ extension GaryxMobileModel {
         case .userAck where affectsActiveRun:
             markActiveAssistantSegmentComplete(for: threadId)
             activeAssistantMessageIdsByThread[threadId] = nil
-            if selectedThread?.id == eventThreadId,
-               activeTasksByThread[eventThreadId] == nil {
+            if selectedThread?.id == eventThreadId {
                 Task { await loadSelectedThreadHistory() }
             }
         case .streamInput(let status, _, let clientIntentId, let pendingInputId):
@@ -207,13 +85,13 @@ extension GaryxMobileModel {
             if !eventThreadId.isEmpty {
                 remoteBusyThreadIds.remove(eventThreadId)
             }
-            clearActiveRun(task: nil, threadId: eventThreadId.isEmpty ? threadId : eventThreadId)
+            clearActiveRun(threadId: eventThreadId.isEmpty ? threadId : eventThreadId)
             markStreamingAssistantComplete(for: threadId, removeEmpty: true)
         case .runComplete where affectsActiveRun:
             if !eventThreadId.isEmpty {
                 remoteBusyThreadIds.remove(eventThreadId)
             }
-            clearActiveRun(task: nil, threadId: eventThreadId.isEmpty ? threadId : eventThreadId)
+            clearActiveRun(threadId: eventThreadId.isEmpty ? threadId : eventThreadId)
             markStreamingAssistantComplete(for: threadId, removeEmpty: true)
         case .error(_, _, let error) where affectsActiveRun:
             if Self.isTransientGatewayErrorMessage(error) {
@@ -230,12 +108,12 @@ extension GaryxMobileModel {
                 markLatestLocalUserFailed(for: threadId, message: error)
                 markStreamingAssistantComplete(for: threadId, removeEmpty: true)
             }
-            clearActiveRun(task: nil, threadId: eventThreadId.isEmpty ? threadId : eventThreadId)
+            clearActiveRun(threadId: eventThreadId.isEmpty ? threadId : eventThreadId)
         case .interrupt where affectsActiveRun:
             if !eventThreadId.isEmpty {
                 remoteBusyThreadIds.remove(eventThreadId)
             }
-            clearActiveRun(task: nil, threadId: eventThreadId.isEmpty ? threadId : eventThreadId)
+            clearActiveRun(threadId: eventThreadId.isEmpty ? threadId : eventThreadId)
             markStreamingAssistantComplete(for: threadId, removeEmpty: true)
         case .snapshot(let threadId, let payload):
             guard selectedThread?.id == threadId,
@@ -245,9 +123,6 @@ extension GaryxMobileModel {
             selectedThreadActivitySignatures[threadId] = GaryxThreadActivitySignature.make(from: transcript)
             updateThreadRuntimeState(threadId: threadId, transcript: transcript)
             scheduleSelectedThreadRecoveryIfNeeded(threadId: threadId)
-            if activeTasksByThread[threadId] != nil {
-                return
-            }
             let remoteMessages = mobileMessages(from: transcript, threadId: threadId, live: remoteBusyThreadIds.contains(threadId))
             setMessages(
                 mergedMessages(
@@ -1232,14 +1107,6 @@ extension GaryxMobileModel {
             return
         }
 
-        if activeTasksByThread[threadId] != nil {
-            updateRemoteBusyState(from: event)
-            if case .threadTitleUpdated(_, let eventThreadId, let title) = event {
-                applyThreadTitleUpdate(threadId: eventThreadId, title: title)
-            }
-            return
-        }
-
         let assistantMessageId = activeAssistantMessageIdsByThread[threadId]
             ?? "stream-assistant-\(threadId)-\(UUID().uuidString)"
         handle(event, threadId: threadId, assistantMessageId: assistantMessageId, affectsActiveRun: true)
@@ -1261,20 +1128,10 @@ extension GaryxMobileModel {
         }
     }
 
-    func cancelActiveSocket() {
+    func clearActiveRunState() {
         for threadId in Array(pendingAssistantDeltasByThread.keys) {
             flushPendingAssistantDelta(for: threadId)
         }
-        for task in activeReaderTasksByThread.values {
-            task.cancel()
-        }
-        for task in activeTasksByThread.values {
-            task.cancel(with: .goingAway, reason: nil)
-        }
-        activeReaderTasksByThread = [:]
-        activeTasksByThread = [:]
-        activeTask = nil
-        activeReaderTask = nil
         if let activeRunThreadId {
             activeAssistantMessageIdsByThread[activeRunThreadId] = nil
         }
@@ -1282,53 +1139,27 @@ extension GaryxMobileModel {
         isSending = false
     }
 
-    func cancelActiveSocket(for threadId: String) {
+    func clearActiveRunState(for threadId: String) {
         flushPendingAssistantDelta(for: threadId)
-        activeReaderTasksByThread[threadId]?.cancel()
-        activeReaderTasksByThread[threadId] = nil
-        activeTasksByThread[threadId]?.cancel(with: .goingAway, reason: nil)
-        activeTasksByThread[threadId] = nil
         activeAssistantMessageIdsByThread[threadId] = nil
         if activeRunThreadId == threadId {
-            activeRunThreadId = activeTasksByThread.keys.first
+            activeRunThreadId = nil
         }
-        activeTask = activeRunThreadId.flatMap { activeTasksByThread[$0] }
-        activeReaderTask = activeRunThreadId.flatMap { activeReaderTasksByThread[$0] }
-        isSending = !activeTasksByThread.isEmpty
+        isSending = activeRunThreadId != nil
     }
 
-    func clearActiveRun(task: URLSessionWebSocketTask?, threadId: String?) {
-        let resolvedThreadId: String?
-        if let threadId {
-            resolvedThreadId = threadId
-        } else if let task {
-            resolvedThreadId = activeTasksByThread.first(where: { $0.value === task })?.key
-        } else {
-            resolvedThreadId = nil
-        }
-
-        guard let resolvedThreadId else {
-            cancelActiveSocket()
-            return
-        }
-
-        if let task,
-           let current = activeTasksByThread[resolvedThreadId],
-           current !== task {
+    func clearActiveRun(threadId: String?) {
+        guard let resolvedThreadId = threadId else {
+            clearActiveRunState()
             return
         }
 
         flushPendingAssistantDelta(for: resolvedThreadId)
-        activeReaderTasksByThread[resolvedThreadId]?.cancel()
-        activeReaderTasksByThread[resolvedThreadId] = nil
-        activeTasksByThread[resolvedThreadId] = nil
         activeAssistantMessageIdsByThread[resolvedThreadId] = nil
         if activeRunThreadId == resolvedThreadId {
-            activeRunThreadId = activeTasksByThread.keys.first
+            activeRunThreadId = nil
         }
-        activeTask = activeRunThreadId.flatMap { activeTasksByThread[$0] }
-        activeReaderTask = activeRunThreadId.flatMap { activeReaderTasksByThread[$0] }
-        isSending = !activeTasksByThread.isEmpty
+        isSending = activeRunThreadId != nil
         cancelSelectedThreadRecoveryIfNeeded(threadId: resolvedThreadId)
     }
 

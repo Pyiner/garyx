@@ -12,8 +12,10 @@ desktop app.
 | Thread creation | `POST /api/threads` |
 | Thread metadata | `GET /api/threads/{thread_id}` |
 | Thread transcript | `GET /api/threads/history?thread_id=...` |
-| Streaming chat | `GET /api/chat/ws` WebSocket |
-| Stop active run | WebSocket `interrupt`, with `POST /api/chat/interrupt` as fallback |
+| Start chat run | `POST /api/chat/start` |
+| Queue follow-up input | `POST /api/chat/stream-input` |
+| Live chat events | `GET /api/stream` Server-Sent Events |
+| Stop active run | `POST /api/chat/interrupt` |
 | Agent/team selection | `GET /api/custom-agents`, `GET /api/teams` |
 | Skills visibility | `GET /api/skills` |
 | Task control | `GET /api/tasks`, `POST /api/tasks`, task status/stop/delete endpoints |
@@ -25,8 +27,8 @@ Remote mobile clients must include the gateway token. HTTP requests use:
 Authorization: Bearer ${GARYX_GATEWAY_TOKEN}
 ```
 
-WebSocket requests pass the same token as the `token` query parameter because
-`URLSessionWebSocketTask` does not give every callsite a convenient header path.
+Server-Sent Event requests use the same `Authorization` header as other HTTP
+requests.
 
 For physical devices, the gateway URL must be reachable from the phone, usually
 the Mac's LAN IP such as `http://192.168.1.20:31337`. `http://127.0.0.1:31337`
@@ -47,16 +49,21 @@ thread, task, automation, custom-agent, team, and Skill resources that the Mac
 app uses, but presents them as compact action panels instead of copying the Mac
 window one-to-one.
 
-The chat socket accepts JSON commands:
+Chat commands use HTTP request bodies:
 
-```json
-{ "op": "start", "threadId": "thread::<id>", "message": "hello", "waitForResponse": false }
-{ "op": "input", "threadId": "thread::<id>", "message": "more detail" }
-{ "op": "recover", "threadId": "thread::<id>", "limit": 200 }
-{ "op": "interrupt", "threadId": "thread::<id>" }
+```text
+POST /api/chat/start
+{ "threadId": "thread::<id>", "message": "hello", "waitForResponse": false }
+
+POST /api/chat/stream-input
+{ "threadId": "thread::<id>", "clientIntentId": "mobile-...", "message": "more detail" }
+
+POST /api/chat/interrupt
+{ "threadId": "thread::<id>" }
 ```
 
-The stream emits event objects with a `type` field such as `accepted`,
-`assistant_delta`, `tool_use`, `tool_result`, `user_ack`,
-`thread_title_updated`, `done`, `stream_input`, `interrupt`, `snapshot`,
-`error`, and `ping`.
+`GET /api/stream` emits live run events with a `type` field such as
+`accepted`, `assistant_delta`, `tool_use`, `tool_result`, `user_ack`,
+`thread_title_updated`, `done`, `snapshot`, `error`, and `ping`. Command
+statuses for `stream_input` and `interrupt` are returned by their HTTP
+endpoints; the mobile decoder still accepts those event shapes for compatibility.

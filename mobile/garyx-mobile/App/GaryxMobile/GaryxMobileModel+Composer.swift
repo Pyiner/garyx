@@ -117,10 +117,6 @@ extension GaryxMobileModel {
     }
 
     func send(_ text: String, attachments: [GaryxMobileComposerAttachment] = []) async {
-        if let selectedThread, activeTasksByThread[selectedThread.id] != nil {
-            await queueInput(text, attachments: attachments, in: selectedThread)
-            return
-        }
         if let selectedThread, isThreadBusy(selectedThread.id) {
             await queueRemoteInput(text, attachments: attachments, in: selectedThread)
             return
@@ -158,10 +154,6 @@ extension GaryxMobileModel {
                 setMessages(draftOptimisticMessages, for: thread.id)
                 activeAssistantMessageIdsByThread[thread.id] = assistantId
             }
-            if activeTasksByThread[thread.id] != nil {
-                await queueInput(text, attachments: attachments, in: thread)
-                return
-            }
             guard !remoteBusyThreadIds.contains(thread.id) else {
                 markLatestLocalUserFailed(for: thread.id, message: "Thread is busy")
                 markStreamingAssistantComplete(for: thread.id, removeEmpty: true)
@@ -176,30 +168,14 @@ extension GaryxMobileModel {
                 thread.workspacePath,
                 newThreadWorkspace.trimmingCharacters(in: .whitespacesAndNewlines)
             )
-            let command = try client().encodeWebSocketCommand(
-                .start(
-                    threadId: thread.id,
-                    message: text,
-                    fromId: "garyx-mobile",
-                    workspacePath: workspacePath,
-                    attachments: attachments.map(\.promptAttachment),
-                    metadata: [
-                        "client": "garyx-mobile",
-                        "client_intent_id": clientIntentId,
-                        "client_timestamp_local": Self.localChatTimestamp(),
-                    ]
-                )
+            try await startChatRunViaGateway(
+                threadId: thread.id,
+                message: text,
+                attachments: attachments,
+                clientIntentId: clientIntentId,
+                workspacePath: workspacePath,
+                assistantMessageId: assistantId
             )
-            let task = try await openChatWebSocketAndSend(command: command)
-            activeTask = task
-            activeTasksByThread[thread.id] = task
-            activeReaderTasksByThread[thread.id]?.cancel()
-            let readerTask = Task { [weak self, weak task] in
-                guard let self, let task else { return }
-                await self.receiveEvents(from: task, threadId: thread.id, assistantMessageId: assistantId)
-            }
-            activeReaderTasksByThread[thread.id] = readerTask
-            activeReaderTask = readerTask
         } catch {
             if let optimisticThreadId {
                 markLatestLocalUserFailed(for: optimisticThreadId, message: displayMessage(for: error))
@@ -211,60 +187,9 @@ extension GaryxMobileModel {
                 }
             }
             if let optimisticThreadId {
-                cancelActiveSocket(for: optimisticThreadId)
+                clearActiveRunState(for: optimisticThreadId)
             }
             lastError = displayMessage(for: error)
-        }
-    }
-
-    func queueInput(
-        _ text: String,
-        attachments: [GaryxMobileComposerAttachment],
-        in thread: GaryxThreadSummary
-    ) async {
-        guard let activeTask = activeTasksByThread[thread.id] else {
-            await queueRemoteInput(text, attachments: attachments, in: thread)
-            return
-        }
-        let clientIntentId = "mobile-\(UUID().uuidString)"
-        let visibleUserText = Self.visibleUserText(text: text, attachments: attachments)
-        let userMessage = GaryxMobileMessage(
-            id: "local-user-\(UUID().uuidString)",
-            role: .user,
-            text: visibleUserText,
-            attachments: Self.messageAttachments(from: attachments),
-            timestamp: nil,
-            isStreaming: false,
-            clientIntentId: clientIntentId
-        )
-        mutateMessages(for: thread.id) { messages in
-            messages.append(userMessage)
-        }
-        let queued = GaryxPendingQueuedInput(
-            threadId: thread.id,
-            text: text,
-            attachments: attachments,
-            clientIntentId: clientIntentId
-        )
-        pendingQueuedInputsByIntentId[clientIntentId] = queued
-        do {
-            let command = try client().encodeWebSocketCommand(
-                .input(
-                    threadId: thread.id,
-                    message: text,
-                    clientIntentId: clientIntentId,
-                    attachments: attachments.map(\.promptAttachment)
-                )
-            )
-            try await activeTask.send(.string(command))
-        } catch {
-            if let claimed = pendingQueuedInputsByIntentId.removeValue(forKey: clientIntentId) {
-                cancelActiveSocket(for: thread.id)
-                await submitQueuedInputViaGateway(claimed)
-            } else {
-                markLatestLocalUserFailed(for: thread.id, message: displayMessage(for: error))
-                lastError = displayMessage(for: error)
-            }
         }
     }
 
@@ -357,9 +282,6 @@ extension GaryxMobileModel {
             )
             return
         }
-        if activeTasksByThread[queued.threadId] != nil {
-            cancelActiveSocket(for: queued.threadId)
-        }
         remoteBusyThreadIds.remove(queued.threadId)
         clearLocalInputStatus(threadId: queued.threadId, clientIntentId: queued.clientIntentId)
 
@@ -390,30 +312,14 @@ extension GaryxMobileModel {
                 thread.workspacePath,
                 newThreadWorkspace.trimmingCharacters(in: .whitespacesAndNewlines)
             )
-            let command = try client().encodeWebSocketCommand(
-                .start(
-                    threadId: queued.threadId,
-                    message: queued.text,
-                    fromId: "garyx-mobile",
-                    workspacePath: workspacePath,
-                    attachments: queued.attachments.map(\.promptAttachment),
-                    metadata: [
-                        "client": "garyx-mobile",
-                        "client_intent_id": queued.clientIntentId,
-                        "client_timestamp_local": Self.localChatTimestamp(),
-                    ]
-                )
+            try await startChatRunViaGateway(
+                threadId: queued.threadId,
+                message: queued.text,
+                attachments: queued.attachments,
+                clientIntentId: queued.clientIntentId,
+                workspacePath: workspacePath,
+                assistantMessageId: assistantId
             )
-            let task = try await openChatWebSocketAndSend(command: command)
-            activeTask = task
-            activeTasksByThread[queued.threadId] = task
-            activeReaderTasksByThread[queued.threadId]?.cancel()
-            let readerTask = Task { [weak self, weak task] in
-                guard let self, let task else { return }
-                await self.receiveEvents(from: task, threadId: queued.threadId, assistantMessageId: assistantId)
-            }
-            activeReaderTasksByThread[queued.threadId] = readerTask
-            activeReaderTask = readerTask
         } catch {
             markLocalInputFailed(
                 threadId: queued.threadId,
@@ -422,57 +328,43 @@ extension GaryxMobileModel {
                 message: displayMessage(for: error)
             )
             markStreamingAssistantComplete(for: queued.threadId, removeEmpty: true)
-            cancelActiveSocket(for: queued.threadId)
+            clearActiveRunState(for: queued.threadId)
             lastError = displayMessage(for: error)
         }
     }
 
-    /// Dial the chat WebSocket and send the first command, retrying transient failures
-    /// with bounded backoff before bubbling the error up to the user.
-    func openChatWebSocketAndSend(command: String) async throws -> URLSessionWebSocketTask {
-        let gateway = try client()
-        let policy = gateway.retry
-        var attempt = 0
-        while true {
-            attempt += 1
-            try Task.checkCancellation()
-            let task = try gateway.makeWebSocketTask()
-            task.resume()
-            do {
-                try await task.send(.string(command))
-                return task
-            } catch {
-                task.cancel(with: .goingAway, reason: nil)
-                if Self.isCancellationError(error) {
-                    throw error
-                }
-                let canRetry = attempt < policy.maxAttempts
-                    && Self.isRetryableWebSocketSendError(error)
-                if !canRetry {
-                    throw error
-                }
-                let delay = policy.delay(forAttempt: attempt)
-                if delay > 0 {
-                    let nanoseconds = UInt64(delay * 1_000_000_000)
-                    try await Task.sleep(nanoseconds: nanoseconds)
-                }
-            }
+    func startChatRunViaGateway(
+        threadId: String,
+        message: String,
+        attachments: [GaryxMobileComposerAttachment],
+        clientIntentId: String,
+        workspacePath: String?,
+        assistantMessageId: String
+    ) async throws {
+        let result = try await client().startChat(
+            GaryxStartChatRequest(
+                threadId: threadId,
+                message: message,
+                attachments: attachments.map(\.promptAttachment),
+                workspacePath: workspacePath,
+                metadata: [
+                    "client": "garyx-mobile",
+                    "client_intent_id": clientIntentId,
+                    "client_timestamp_local": Self.localChatTimestamp(),
+                ]
+            )
+        )
+        guard Self.isSuccessfulStreamInputStatus(result.status) else {
+            throw GaryxGatewayError.encodingFailed(
+                result.status.isEmpty ? "Chat start was not accepted." : result.status
+            )
         }
-    }
-
-    static func isRetryableWebSocketSendError(_ error: Error) -> Bool {
-        if GaryxGatewayRetryClassifier.isConnectionEstablishmentError(error) {
-            return true
-        }
-        if GaryxGatewayRetryClassifier.isAmbiguousNetworkError(error) {
-            return true
-        }
-        let nsError = error as NSError
-        if nsError.domain == NSPOSIXErrorDomain {
-            // POSIX errors raised mid-handshake (ENOTCONN, EPIPE, etc.) — safe to retry.
-            return true
-        }
-        return false
+        let acceptedThreadId = result.threadId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? threadId
+            : result.threadId
+        activeRunThreadId = acceptedThreadId
+        remoteBusyThreadIds.insert(acceptedThreadId)
+        activeAssistantMessageIdsByThread[acceptedThreadId] = assistantMessageId
     }
 
     /// Re-send a user message that previously failed. Removes the failed user bubble +
@@ -521,34 +413,19 @@ extension GaryxMobileModel {
 
     func interruptActiveRun() async {
         guard let threadId = selectedThread?.id ?? activeRunThreadId else { return }
-        let hadLocalTask = activeTasksByThread[threadId] != nil
-        var sentLocalInterrupt = false
         var sentGatewayInterrupt = false
-        if let activeTask = activeTasksByThread[threadId] {
-            do {
-                let command = try client().encodeWebSocketCommand(.interrupt(threadId: threadId))
-                try await activeTask.send(.string(command))
-                sentLocalInterrupt = true
-            } catch {
-                // Continue to the gateway-backed interrupt below; the local socket may be stale.
-            }
-        }
         do {
             _ = try await client().interruptThread(threadId: threadId)
             sentGatewayInterrupt = true
         } catch {
-            if !sentLocalInterrupt {
-                lastError = displayMessage(for: error)
-            }
+            lastError = displayMessage(for: error)
         }
-        if hadLocalTask {
-            cancelActiveSocket(for: threadId)
-            markStreamingAssistantComplete(for: threadId, removeEmpty: true)
-        }
-        guard sentLocalInterrupt || sentGatewayInterrupt || hadLocalTask else {
+        guard sentGatewayInterrupt else {
             return
         }
         remoteBusyThreadIds.remove(threadId)
+        clearActiveRun(threadId: threadId)
+        markStreamingAssistantComplete(for: threadId, removeEmpty: true)
         await refreshThreads()
         if selectedThread?.id == threadId {
             await loadSelectedThreadHistory()

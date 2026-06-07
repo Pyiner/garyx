@@ -81,28 +81,6 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(payload.gatewayAuthToken, "test-token")
     }
 
-    func testWebSocketURLCarriesGatewayTokenInQuery() throws {
-        let client = GaryxGatewayClient(
-            configuration: GaryxGatewayConfiguration(
-                baseURL: try XCTUnwrap(URL(string: "https://gateway.example.test/")),
-                authToken: "test token"
-            )
-        )
-
-        let url = try client.chatWebSocketURL()
-
-        XCTAssertEqual(url.scheme, "wss")
-        XCTAssertEqual(url.host(), "gateway.example.test")
-        XCTAssertEqual(url.path(), "/api/chat/ws")
-        XCTAssertEqual(
-            URLComponents(url: url, resolvingAgainstBaseURL: false)?
-                .queryItems?
-                .first(where: { $0.name == "token" })?
-                .value,
-            "test token"
-        )
-    }
-
     func testEventStreamRequestUsesExistingGatewaySSEEndpoint() throws {
         let client = GaryxGatewayClient(
             configuration: GaryxGatewayConfiguration(
@@ -150,6 +128,57 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(attachments.first?["path"] as? String, "/workspace/project/note.md")
     }
 
+    func testStartChatRequestEncodesGatewayShape() throws {
+        let request = GaryxStartChatRequest(
+            threadId: "thread::test",
+            message: "hello",
+            attachments: [
+                GaryxPromptAttachment(
+                    kind: "image",
+                    path: "/workspace/project/image.png",
+                    name: "image.png",
+                    mediaType: "image/png"
+                ),
+            ],
+            workspacePath: "/workspace/project",
+            metadata: [
+                "client": "garyx-mobile",
+                "client_intent_id": "intent-test",
+            ]
+        )
+
+        let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any]
+
+        XCTAssertEqual(object?["threadId"] as? String, "thread::test")
+        XCTAssertEqual(object?["message"] as? String, "hello")
+        XCTAssertEqual(object?["fromId"] as? String, "garyx-mobile")
+        XCTAssertEqual(object?["accountId"] as? String, "main")
+        XCTAssertEqual(object?["waitForResponse"] as? Bool, false)
+        XCTAssertEqual(object?["workspacePath"] as? String, "/workspace/project")
+        XCTAssertEqual((object?["metadata"] as? [String: String])?["client"], "garyx-mobile")
+        let attachments = try XCTUnwrap(object?["attachments"] as? [[String: Any]])
+        XCTAssertEqual(attachments.first?["media_type"] as? String, "image/png")
+    }
+
+    func testStartChatResultDecodesGatewayShape() throws {
+        let result = try JSONDecoder().decode(
+            GaryxStartChatResult.self,
+            from: Data(
+                """
+                {
+                  "status": "accepted",
+                  "run_id": "run-test",
+                  "thread_id": "thread::test"
+                }
+                """.utf8
+            )
+        )
+
+        XCTAssertEqual(result.status, "accepted")
+        XCTAssertEqual(result.runId, "run-test")
+        XCTAssertEqual(result.threadId, "thread::test")
+    }
+
     func testStreamInputResultDecodesGatewayShape() throws {
         let result = try JSONDecoder().decode(
             GaryxStreamInputResult.self,
@@ -171,31 +200,6 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(result.clientIntentId, "intent-test")
         XCTAssertEqual(result.pendingInputId, "pending-test")
         XCTAssertEqual(result.threadId, "thread::test")
-    }
-
-    func testStartCommandEncodesGatewayChatOperation() throws {
-        let client = GaryxGatewayClient(
-            configuration: GaryxGatewayConfiguration(
-                baseURL: try XCTUnwrap(URL(string: "http://127.0.0.1:31337"))
-            )
-        )
-
-        let text = try client.encodeWebSocketCommand(
-            .start(
-                threadId: "thread::test",
-                message: "hello",
-                workspacePath: "/path/to/repo",
-                metadata: ["client": "garyx-mobile"]
-            )
-        )
-        let object = try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any]
-
-        XCTAssertEqual(object?["op"] as? String, "start")
-        XCTAssertEqual(object?["threadId"] as? String, "thread::test")
-        XCTAssertEqual(object?["message"] as? String, "hello")
-        XCTAssertEqual(object?["waitForResponse"] as? Bool, false)
-        XCTAssertEqual(object?["workspacePath"] as? String, "/path/to/repo")
-        XCTAssertEqual((object?["metadata"] as? [String: String])?["client"], "garyx-mobile")
     }
 
     func testThreadSummaryDecodesGatewaySnakeCase() throws {
@@ -1914,25 +1918,6 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(upload.files.first?.mediaType, "image/png")
         XCTAssertEqual(logs.cursor, 14)
         XCTAssertEqual(candidates.candidates.first?.verdict?.score, 8.5)
-
-        let command = GaryxChatWebSocketCommand.start(
-            threadId: "thread::test",
-            message: "Review this",
-            attachments: [
-                GaryxPromptAttachment(
-                    kind: "image",
-                    path: "/workspace/tmp/prompt-image.png",
-                    name: "prompt-image.png",
-                    mediaType: "image/png"
-                )
-            ]
-        )
-        let commandObject = try JSONSerialization.jsonObject(
-            with: JSONEncoder().encode(command)
-        ) as? [String: Any]
-        let attachments = commandObject?["attachments"] as? [[String: Any]]
-
-        XCTAssertEqual(attachments?.first?["media_type"] as? String, "image/png")
 
         let botRequest = GaryxBotBindingRequest(botId: "telegram:main", threadId: "thread::test")
         let botObject = try JSONSerialization.jsonObject(

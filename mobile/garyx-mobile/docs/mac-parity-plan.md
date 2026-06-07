@@ -13,8 +13,8 @@ implementation:
 
 - iOS shell: left drawer, conversation search, no bottom tab.
 - Chat: thread list, create/delete/rename thread, history, thread logs,
-  WebSocket streaming, HTTP interrupt fallback, gateway token connect links, and
-  uploaded prompt attachments.
+  HTTP chat commands, `/api/stream` live events, gateway token connect links,
+  and uploaded prompt attachments.
 - Tasks: list, create, status update, title edit, assign/unassign, stop,
   delete, and source-thread task filtering.
 - Automations: list, create, edit, pause/enable, delete, activity, and run now.

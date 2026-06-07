@@ -303,6 +303,11 @@ public final class GaryxGatewayClient {
         try await delete("/api/threads/\(threadId.urlPathEncoded)")
     }
 
+    public func startChat(_ request: GaryxStartChatRequest) async throws -> GaryxStartChatResult {
+        // Chat start is non-idempotent: only connection-establishment errors auto-retry.
+        try await post("/api/chat/start", body: request)
+    }
+
     public func interruptThread(threadId: String) async throws -> GaryxInterruptResult {
         // Interrupt is idempotent: repeating it for the same thread converges on the same state.
         try await post("/api/chat/interrupt", body: GaryxInterruptRequest(threadId: threadId), idempotent: true)
@@ -827,34 +832,6 @@ public final class GaryxGatewayClient {
         return url
     }
 
-    public func chatWebSocketURL() throws -> URL {
-        let httpURL = try url(for: "/api/chat/ws")
-        guard var components = URLComponents(url: httpURL, resolvingAgainstBaseURL: false) else {
-            throw GaryxGatewayError.invalidURL(httpURL.absoluteString)
-        }
-        switch components.scheme {
-        case "https":
-            components.scheme = "wss"
-        case "http":
-            components.scheme = "ws"
-        default:
-            throw GaryxGatewayError.invalidURL(httpURL.absoluteString)
-        }
-        if let token = configuration.authToken, !token.isEmpty {
-            var items = components.queryItems ?? []
-            items.append(URLQueryItem(name: "token", value: token))
-            components.queryItems = items
-        }
-        guard let url = components.url else {
-            throw GaryxGatewayError.invalidURL(httpURL.absoluteString)
-        }
-        return url
-    }
-
-    public func makeWebSocketTask() throws -> URLSessionWebSocketTask {
-        session.webSocketTask(with: try chatWebSocketURL())
-    }
-
     public func eventStreamRequest(historyLimit: Int = 50) throws -> URLRequest {
         var request = try makeRequest(
             path: "/api/stream",
@@ -865,20 +842,6 @@ public final class GaryxGatewayClient {
         )
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         return request
-    }
-
-    public func encodeWebSocketCommand(_ command: GaryxChatWebSocketCommand) throws -> String {
-        do {
-            let data = try encoder.encode(command)
-            guard let text = String(data: data, encoding: .utf8) else {
-                throw GaryxGatewayError.encodingFailed("Unable to encode chat command as UTF-8.")
-            }
-            return text
-        } catch let error as GaryxGatewayError {
-            throw error
-        } catch {
-            throw GaryxGatewayError.encodingFailed(error.localizedDescription)
-        }
     }
 
     public func decodeStreamEvent(_ text: String) throws -> GaryxChatStreamEvent {

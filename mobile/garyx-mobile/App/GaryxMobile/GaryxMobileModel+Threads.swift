@@ -347,12 +347,8 @@ extension GaryxMobileModel {
         var refreshedBusyIds = remoteBusyThreadIds
         for thread in threads {
             if !(thread.activeRunId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
-                if activeTasksByThread[thread.id] == nil {
-                    refreshedBusyIds.insert(thread.id)
-                } else {
-                    refreshedBusyIds.remove(thread.id)
-                }
-            } else if activeTasksByThread[thread.id] == nil {
+                refreshedBusyIds.insert(thread.id)
+            } else {
                 refreshedBusyIds.remove(thread.id)
             }
         }
@@ -392,7 +388,6 @@ extension GaryxMobileModel {
         let threadId = refreshedThread.id.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !threadId.isEmpty,
               selectedThread?.id != threadId,
-              activeTasksByThread[threadId] == nil,
               !isThreadSummaryRunning(refreshedThread) else {
             return false
         }
@@ -872,12 +867,8 @@ extension GaryxMobileModel {
             input.active && (input.status ?? "awaiting_ack").lowercased() != "abandoned"
         }
         if hasActiveRun || hasActivePendingInput {
-            if activeTasksByThread[threadId] == nil {
-                remoteBusyThreadIds.insert(threadId)
-            } else {
-                remoteBusyThreadIds.remove(threadId)
-            }
-        } else if activeTasksByThread[threadId] == nil {
+            remoteBusyThreadIds.insert(threadId)
+        } else {
             remoteBusyThreadIds.remove(threadId)
             markThreadSummaryRuntimeInactive(threadId)
         }
@@ -956,7 +947,6 @@ extension GaryxMobileModel {
     func scheduleSelectedThreadRecoveryIfNeeded(threadId: String) {
         guard selectedThread?.id == threadId,
               remoteBusyThreadIds.contains(threadId),
-              activeTasksByThread[threadId] == nil,
               selectedThreadRecoveryTask == nil else {
             return
         }
@@ -980,7 +970,6 @@ extension GaryxMobileModel {
     func shouldContinueRecoveringSelectedThread(threadId: String) -> Bool {
         selectedThread?.id == threadId
             && remoteBusyThreadIds.contains(threadId)
-            && activeTasksByThread[threadId] == nil
     }
 
     func clearSelectedThreadRecoveryTask(threadId: String) {
@@ -1068,9 +1057,6 @@ extension GaryxMobileModel {
               hasGatewaySettings,
               case .ready = connectionState,
               !isLoadingSelectedThreadHistory else {
-            return
-        }
-        if activeTasksByThread[threadId] != nil {
             return
         }
         let observedHistoryRequestId = selectedThreadHistoryRequestId

@@ -9,6 +9,66 @@ public struct GaryxInterruptRequest: Encodable, Equatable, Sendable {
 }
 
 
+public struct GaryxStartChatRequest: Encodable, Equatable, Sendable {
+    public var threadId: String
+    public var message: String
+    public var attachments: [GaryxPromptAttachment]
+    public var images: [GaryxInlineImagePayload]
+    public var files: [GaryxInlineFilePayload]
+    public var accountId: String
+    public var fromId: String
+    public var waitForResponse: Bool
+    public var workspacePath: String?
+    public var metadata: [String: String]
+
+    public init(
+        threadId: String,
+        message: String,
+        attachments: [GaryxPromptAttachment] = [],
+        images: [GaryxInlineImagePayload] = [],
+        files: [GaryxInlineFilePayload] = [],
+        accountId: String = "main",
+        fromId: String = "garyx-mobile",
+        waitForResponse: Bool = false,
+        workspacePath: String? = nil,
+        metadata: [String: String] = [:]
+    ) {
+        self.threadId = threadId
+        self.message = message
+        self.attachments = attachments
+        self.images = images
+        self.files = files
+        self.accountId = accountId
+        self.fromId = fromId
+        self.waitForResponse = waitForResponse
+        self.workspacePath = workspacePath
+        self.metadata = metadata
+    }
+}
+
+
+public struct GaryxStartChatResult: Decodable, Equatable, Sendable {
+    public var status: String
+    public var runId: String
+    public var threadId: String
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case runId
+        case runIdSnake = "run_id"
+        case threadId
+        case threadIdSnake = "thread_id"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        status = try container.garyxDecodeFirstString(.status) ?? ""
+        runId = try container.garyxDecodeFirstString(.runId, .runIdSnake) ?? ""
+        threadId = try container.garyxDecodeFirstString(.threadId, .threadIdSnake) ?? ""
+    }
+}
+
+
 public struct GaryxStreamInputRequest: Encodable, Equatable, Sendable {
     public var threadId: String
     public var clientIntentId: String?
@@ -79,87 +139,6 @@ public struct GaryxInterruptResult: Decodable, Equatable, Sendable {
         abortedRuns = try container.decodeIfPresent([String].self, forKey: .abortedRuns)
             ?? container.decodeIfPresent([String].self, forKey: .abortedRunsSnake)
             ?? []
-    }
-}
-
-
-public struct GaryxChatWebSocketCommand: Encodable, Equatable, Sendable {
-    public var op: String
-    public var threadId: String?
-    public var message: String?
-    public var clientIntentId: String?
-    public var attachments: [GaryxPromptAttachment]?
-    public var images: [GaryxInlineImagePayload]?
-    public var files: [GaryxInlineFilePayload]?
-    public var accountId: String?
-    public var fromId: String?
-    public var waitForResponse: Bool?
-    public var workspacePath: String?
-    public var limit: Int?
-    public var metadata: [String: String]
-
-    public static func start(
-        threadId: String,
-        message: String,
-        accountId: String = "main",
-        fromId: String = "mobile",
-        waitForResponse: Bool = false,
-        workspacePath: String? = nil,
-        attachments: [GaryxPromptAttachment] = [],
-        images: [GaryxInlineImagePayload] = [],
-        files: [GaryxInlineFilePayload] = [],
-        metadata: [String: String] = [:]
-    ) -> Self {
-        Self(
-            op: "start",
-            threadId: threadId,
-            message: message,
-            attachments: attachments.isEmpty ? nil : attachments,
-            images: images.isEmpty ? nil : images,
-            files: files.isEmpty ? nil : files,
-            accountId: accountId,
-            fromId: fromId,
-            waitForResponse: waitForResponse,
-            workspacePath: workspacePath,
-            metadata: metadata
-        )
-    }
-
-    public static func input(
-        threadId: String,
-        message: String,
-        clientIntentId: String? = nil,
-        attachments: [GaryxPromptAttachment] = [],
-        images: [GaryxInlineImagePayload] = [],
-        files: [GaryxInlineFilePayload] = []
-    ) -> Self {
-        Self(
-            op: "input",
-            threadId: threadId,
-            message: message,
-            clientIntentId: clientIntentId,
-            attachments: attachments.isEmpty ? nil : attachments,
-            images: images.isEmpty ? nil : images,
-            files: files.isEmpty ? nil : files,
-            metadata: [:]
-        )
-    }
-
-    public static func recover(threadId: String, limit: Int = 200) -> Self {
-        Self(
-            op: "recover",
-            threadId: threadId,
-            limit: limit,
-            metadata: [:]
-        )
-    }
-
-    public static func interrupt(threadId: String) -> Self {
-        Self(
-            op: "interrupt",
-            threadId: threadId,
-            metadata: [:]
-        )
     }
 }
 

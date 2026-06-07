@@ -70,8 +70,7 @@ extension GaryxMobileModel {
         guard let selectedThread else {
             return false
         }
-        return activeTasksByThread[selectedThread.id] != nil
-            || (isSending && activeRunThreadId == selectedThread.id)
+        return (isSending && activeRunThreadId == selectedThread.id)
             || remoteBusyThreadIds.contains(selectedThread.id)
             || threads.contains { thread in
                 thread.id == selectedThread.id
@@ -93,7 +92,6 @@ extension GaryxMobileModel {
 
     func isThreadBusy(_ threadId: String) -> Bool {
         activeRunThreadId == threadId
-            || activeTasksByThread[threadId] != nil
             || remoteBusyThreadIds.contains(threadId)
             || threads.contains { thread in
                 thread.id == threadId

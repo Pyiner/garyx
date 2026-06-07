@@ -90,7 +90,7 @@ extension GaryxMobileModel {
         cancelSelectedThreadReconcileLoop()
         selectedThreadActivitySignatures = [:]
         cancelGlobalEventStream()
-        cancelActiveSocket()
+        clearActiveRunState()
         isSending = false
         connectRefreshRequestId = nil
         remoteStateRefreshRequestId = nil
@@ -287,19 +287,6 @@ extension GaryxMobileModel {
             sceneRefreshTask = nil
             cancelSelectedThreadReconcileLoop()
             cancelGlobalEventStream()
-            let runningThreadIds = Array(activeTasksByThread.keys)
-            if !runningThreadIds.isEmpty {
-                for threadId in runningThreadIds {
-                    let activeAssistantMessageId = suspendStreamingAssistantForBackground(threadId: threadId)
-                    remoteBusyThreadIds.insert(threadId)
-                    cancelActiveSocket(for: threadId)
-                    if let activeAssistantMessageId,
-                       cachedMessages(for: threadId).contains(where: { $0.id == activeAssistantMessageId }) {
-                        activeAssistantMessageIdsByThread[threadId] = activeAssistantMessageId
-                    }
-                }
-                isSending = false
-            }
         default:
             break
         }

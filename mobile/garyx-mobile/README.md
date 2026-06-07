@@ -47,18 +47,18 @@ The package currently covers:
   helpers.
 - Channel plugin catalog/auth/validation helpers, channel endpoints,
   configured bots, bot status/bind/unbind, and bot console summaries.
-- `/api/chat/ws` WebSocket URL construction.
-- Chat WebSocket command encoding for `start`, `input`, `recover`, and
-  `interrupt`, including prompt attachments.
-- Chat WebSocket event decoding for the stream event types used by the Garyx
-  desktop client.
+- Chat command requests for `POST /api/chat/start`,
+  `POST /api/chat/stream-input`, and `POST /api/chat/interrupt`, including
+  prompt attachments.
+- Server-Sent Event decoding for `/api/stream` chat event types used by the
+  Garyx desktop client.
 
 The app shell uses an iOS drawer: chat stays as the primary surface, and the
 left sidebar owns conversation search plus entry points for tasks, automation
 runs, files, agents, skills, commands, MCP, research, bots, and settings.
 Provider credentials, model keys, local provider homes, and gateway-side runtime
 configuration remain gateway-owned; mobile reuses the LAN gateway token and
-sends the same REST/WebSocket operations the Mac app uses.
+sends the same HTTP command and Server-Sent Event operations the Mac app uses.
 
 See [docs/mac-parity-plan.md](docs/mac-parity-plan.md) for the mobile parity
 checklist and the current ownership split between iOS, the Mac app, and the

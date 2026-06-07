@@ -335,7 +335,7 @@ extension GaryxMobileModel {
     }
 
     func setNewThreadWorkspaceMode(_ mode: String) {
-        guard selectedThread == nil, !isSending, activeRunThreadId == nil, activeTasksByThread.isEmpty else { return }
+        guard selectedThread == nil, !isSending, activeRunThreadId == nil else { return }
         let normalized = Self.normalizedWorkspaceMode(mode)
         guard normalized != "worktree" || newThreadWorkspaceCanUseWorktree else { return }
         newThreadWorkspaceMode = normalized

@@ -432,7 +432,7 @@ extension GaryxMobileModel {
     func loadDebugSnapshot() {
         debugSnapshotActive = true
         cancelGlobalEventStream()
-        cancelActiveSocket()
+        clearActiveRunState()
 
         gatewayURL = "http://127.0.0.1:31337"
         gatewayAuthToken = "debug-token"
@@ -461,8 +461,6 @@ extension GaryxMobileModel {
         isSending = false
         activeRunThreadId = nil
         remoteBusyThreadIds = []
-        activeTasksByThread.values.forEach { $0.cancel(with: .goingAway, reason: nil) }
-        activeTasksByThread = [:]
         debugShowsWorkspaceModeSheet = false
         isLoadingThreads = false
         resetThreadListPagination()

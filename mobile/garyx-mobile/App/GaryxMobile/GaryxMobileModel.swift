@@ -181,10 +181,6 @@ final class GaryxMobileModel: ObservableObject {
 
     let defaults: UserDefaults
     let keychain: GaryxMobileKeychain
-    var activeTask: URLSessionWebSocketTask?
-    var activeReaderTask: Task<Void, Never>?
-    var activeTasksByThread: [String: URLSessionWebSocketTask] = [:]
-    var activeReaderTasksByThread: [String: Task<Void, Never>] = [:]
     var globalEventStreamTask: Task<Void, Never>?
     var globalEventStreamGeneration: UUID?
     var globalEventStreamActive = false
