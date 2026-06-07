@@ -5,6 +5,10 @@ struct GaryxMobileApp: App {
     @StateObject private var model = GaryxMobileModel()
     @Environment(\.scenePhase) private var scenePhase
 
+    init() {
+        GaryxSafeAreaChrome.installWindowDefaults()
+    }
+
     var body: some Scene {
         WindowGroup {
             GaryxRootView()
