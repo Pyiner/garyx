@@ -769,16 +769,20 @@ class BrowserRuntime {
   }
 
   setHostBounds(input: BrowserBoundsInput): void {
+    if (!input.visible) {
+      this.hostVisible = false;
+      this.hostBounds = null;
+      this.reconcileMountedView();
+      return;
+    }
     this.ensureInitialized();
-    this.hostVisible = input.visible;
-    this.hostBounds = input.visible
-      ? {
-          x: Math.max(0, Math.round(input.x)),
-          y: Math.max(0, Math.round(input.y)),
-          width: Math.max(0, Math.round(input.width)),
-          height: Math.max(0, Math.round(input.height)),
-        }
-      : null;
+    this.hostVisible = true;
+    this.hostBounds = {
+      x: Math.max(0, Math.round(input.x)),
+      y: Math.max(0, Math.round(input.y)),
+      width: Math.max(0, Math.round(input.width)),
+      height: Math.max(0, Math.round(input.height)),
+    };
     this.reconcileMountedView();
   }
 

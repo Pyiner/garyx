@@ -370,6 +370,20 @@ export function ThreadSideToolsPanel({
     .map((toolId) => tools.find((tool) => tool.id === toolId))
     .filter((tool): tool is ToolDescriptor => Boolean(tool));
 
+  useEffect(() => {
+    if (activeToolId === "browser") {
+      return;
+    }
+
+    void window.garyxDesktop.updateBrowserBounds({
+      x: 0,
+      y: 0,
+      width: 0,
+      height: 0,
+      visible: false,
+    });
+  }, [activeToolId]);
+
   function attachSelectedWorkspaceFile() {
     if (!selectedWorkspaceFile) {
       return;
