@@ -429,6 +429,7 @@ export function ThreadSideToolsPanel({
   const openToolDescriptors = openTools
     .map((toolId) => tools.find((tool) => tool.id === toolId))
     .filter((tool): tool is ToolDescriptor => Boolean(tool));
+  const browserBlockedByToolMenu = activeToolId === "browser" && menuOpen;
 
   useEffect(() => {
     return () => {
@@ -455,6 +456,16 @@ export function ThreadSideToolsPanel({
       visible: false,
     });
   }, [activeToolId]);
+
+  useEffect(() => {
+    if (activeToolId !== "browser") {
+      return;
+    }
+    void window.garyxDesktop.setBrowserOverlayPaused(menuOpen);
+    return () => {
+      void window.garyxDesktop.setBrowserOverlayPaused(false);
+    };
+  }, [activeToolId, menuOpen]);
 
   useEffect(() => {
     if (!shouldShowWorkspacePreview) {
@@ -741,14 +752,18 @@ export function ThreadSideToolsPanel({
           <div className="side-tool-chat-thread">{sideChatPanel}</div>
         ) : null}
         {activeTool.id === "browser" ? (
-          <Suspense
-            fallback={<div className="browser-page browser-page-side-panel browser-side-panel-loading" />}
-          >
-            <SidePanelBrowserPage
-              onAnnotationCommentRequest={handleBrowserAnnotationCommentRequest}
-              variant="side-panel"
-            />
-          </Suspense>
+          browserBlockedByToolMenu ? (
+            <div className="browser-page browser-page-side-panel browser-side-panel-loading" />
+          ) : (
+            <Suspense
+              fallback={<div className="browser-page browser-page-side-panel browser-side-panel-loading" />}
+            >
+              <SidePanelBrowserPage
+                onAnnotationCommentRequest={handleBrowserAnnotationCommentRequest}
+                variant="side-panel"
+              />
+            </Suspense>
+          )
         ) : null}
         {activeTool.id === "terminal" ? (
           <SideTerminalTool cwd={activeWorkspacePath} />
