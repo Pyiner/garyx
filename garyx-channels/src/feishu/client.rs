@@ -11,6 +11,7 @@ use tracing::debug;
 
 use garyx_models::config::{FeishuAccount, FeishuDomain};
 
+use super::cot::{FeishuCotEventRecord, FeishuCotSession};
 use super::message::build_streaming_card_body;
 use super::{
     DEFAULT_TOKEN_LIFETIME, FEISHU_API_BASE, FeishuError, LARK_API_BASE, TOKEN_REFRESH_MARGIN,
@@ -448,6 +449,162 @@ impl FeishuClient {
         let content = serde_json::json!({ "image_key": image_key }).to_string();
         self.reply_message_ext(message_id, &content, "image", reply_in_thread)
             .await
+    }
+
+    pub(super) async fn create_cot_run_start_message(
+        &self,
+        chat_id: &str,
+        thread_id: &str,
+        origin_message_id: Option<&str>,
+        run_started: FeishuCotEventRecord,
+    ) -> Result<FeishuCotSession, FeishuError> {
+        let url = format!(
+            "{}/im/v1/message_cot?receive_id_type=chat_id",
+            self.api_base()
+        );
+        let mut body = serde_json::json!({
+            "receive_id": chat_id,
+        });
+        if let Some(origin_message_id) = origin_message_id
+            && !origin_message_id.trim().is_empty()
+        {
+            body["origin_message_id"] = Value::String(origin_message_id.trim().to_owned());
+        }
+
+        let payload = self
+            .request_cot_json(reqwest::Method::POST, &url, body, "create COT run")
+            .await?;
+        let data = payload.get("data").and_then(Value::as_object);
+        let cot_id = data
+            .and_then(|value| {
+                value
+                    .get("cot_id")
+                    .or_else(|| value.get("cotId"))
+                    .and_then(Value::as_str)
+            })
+            .unwrap_or_default()
+            .trim()
+            .to_owned();
+        let message_id = data
+            .and_then(|value| {
+                value
+                    .get("message_id")
+                    .or_else(|| value.get("messageId"))
+                    .and_then(Value::as_str)
+            })
+            .unwrap_or_default()
+            .trim()
+            .to_owned();
+        if cot_id.is_empty() || message_id.is_empty() {
+            return Err(FeishuError::Api {
+                code: -1,
+                msg: format!("COT create returned empty cot_id/message_id for thread {thread_id}"),
+            });
+        }
+
+        let session = FeishuCotSession { cot_id, message_id };
+        self.update_cot_events(&session, &[run_started]).await?;
+        Ok(session)
+    }
+
+    pub(super) async fn update_cot_events(
+        &self,
+        session: &FeishuCotSession,
+        events: &[FeishuCotEventRecord],
+    ) -> Result<(), FeishuError> {
+        if events.is_empty() {
+            return Ok(());
+        }
+
+        for batch in events.chunks(50) {
+            let url = format!("{}/im/v1/message_cot", self.api_base());
+            self.request_cot_json(
+                reqwest::Method::PUT,
+                &url,
+                serde_json::json!({
+                    "cot_id": session.cot_id,
+                    "message_id": session.message_id,
+                    "events": batch.iter().map(FeishuCotEventRecord::to_openapi).collect::<Vec<_>>(),
+                }),
+                "update COT events",
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    pub(super) async fn complete_cot_run(
+        &self,
+        session: &FeishuCotSession,
+    ) -> Result<(), FeishuError> {
+        let url = format!(
+            "{}/im/v1/message_cot/complete/{}?message_id={}&reason=done",
+            self.api_base(),
+            urlencoding::encode(&session.cot_id),
+            urlencoding::encode(&session.message_id),
+        );
+        self.request_cot_json(
+            reqwest::Method::POST,
+            &url,
+            serde_json::json!({}),
+            "complete COT run",
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn request_cot_json(
+        &self,
+        method: reqwest::Method,
+        url: &str,
+        body: Value,
+        label: &str,
+    ) -> Result<Value, FeishuError> {
+        let token = self.get_access_token().await?;
+        let mut last_error = None;
+
+        for attempt in 1..=4 {
+            let response = self
+                .http
+                .request(method.clone(), url)
+                .header("Authorization", format!("Bearer {token}"))
+                .header("Content-Type", "application/json;charset=utf-8")
+                .json(&body)
+                .send()
+                .await;
+
+            match response {
+                Ok(resp) => {
+                    let status = resp.status();
+                    let log_id = resp
+                        .headers()
+                        .get("x-tt-logid")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default()
+                        .to_owned();
+                    let text = resp.text().await.unwrap_or_default();
+                    if is_retryable_cot_status(status) && attempt < 4 {
+                        sleep_cot_retry(attempt).await;
+                        continue;
+                    }
+                    return decode_cot_response(status, &text, label, &log_id);
+                }
+                Err(error) => {
+                    let retryable = error.is_timeout() || error.is_connect();
+                    last_error = Some(error.to_string());
+                    if retryable && attempt < 4 {
+                        sleep_cot_retry(attempt).await;
+                        continue;
+                    }
+                    break;
+                }
+            }
+        }
+
+        Err(FeishuError::Http(format!(
+            "Feishu COT {label} failed: {}",
+            last_error.unwrap_or_else(|| "unknown error".to_owned())
+        )))
     }
 
     /// Domain base without the `/open-apis` path suffix.
@@ -1060,6 +1217,67 @@ impl FeishuClient {
 
         Ok(())
     }
+}
+
+fn decode_cot_response(
+    status: reqwest::StatusCode,
+    body: &str,
+    label: &str,
+    log_id: &str,
+) -> Result<Value, FeishuError> {
+    if !status.is_success() {
+        return Err(FeishuError::Http(format!(
+            "Feishu COT {label} HTTP {status}{}: {body}",
+            format_log_id(log_id)
+        )));
+    }
+
+    let payload: Value = serde_json::from_str(body).map_err(|error| {
+        FeishuError::Http(format!(
+            "Feishu COT {label} parse failed{}: {error}; body={body}",
+            format_log_id(log_id)
+        ))
+    })?;
+    let code = payload.get("code").and_then(Value::as_i64).unwrap_or(0);
+    if code != 0 {
+        let msg = payload
+            .get("msg")
+            .or_else(|| payload.get("message"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        return Err(FeishuError::Api {
+            code,
+            msg: format!("COT {label} failed{}: {msg}", format_log_id(log_id)),
+        });
+    }
+    Ok(payload)
+}
+
+fn format_log_id(log_id: &str) -> String {
+    if log_id.trim().is_empty() {
+        String::new()
+    } else {
+        format!(" log_id={}", log_id.trim())
+    }
+}
+
+fn is_retryable_cot_status(status: reqwest::StatusCode) -> bool {
+    matches!(
+        status,
+        reqwest::StatusCode::REQUEST_TIMEOUT
+            | reqwest::StatusCode::TOO_MANY_REQUESTS
+            | reqwest::StatusCode::INTERNAL_SERVER_ERROR
+            | reqwest::StatusCode::BAD_GATEWAY
+            | reqwest::StatusCode::SERVICE_UNAVAILABLE
+            | reqwest::StatusCode::GATEWAY_TIMEOUT
+    )
+}
+
+async fn sleep_cot_retry(attempt: u32) {
+    let millis = 500_u64
+        .saturating_mul(1 << attempt.saturating_sub(1))
+        .min(5_000);
+    tokio::time::sleep(Duration::from_millis(millis)).await;
 }
 
 #[cfg(test)]

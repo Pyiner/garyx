@@ -7,8 +7,8 @@ use futures_util::{SinkExt, StreamExt};
 use garyx_bridge::MultiProviderBridge;
 use garyx_models::config::FeishuAccount;
 use garyx_models::provider::{
-    ATTACHMENTS_METADATA_KEY, PromptAttachment, PromptAttachmentKind, StreamBoundaryKind,
-    StreamEvent, attachments_to_metadata_value,
+    ATTACHMENTS_METADATA_KEY, PromptAttachment, PromptAttachmentKind, ProviderMessage,
+    StreamBoundaryKind, StreamEvent, attachments_to_metadata_value,
 };
 use garyx_models::{MessageLedgerEvent, MessageLifecycleStatus, MessageTerminalReason};
 use garyx_router::{InboundRequest, MessageRouter};
@@ -19,6 +19,7 @@ use tokio::time::Instant;
 use tracing::{debug, error, info, warn};
 
 use super::client::WsConnectInfo;
+use super::cot::FeishuCotEventRecord;
 use super::mentions::{build_mention_prefix, extract_mention_targets, is_mention_forward_request};
 use super::message::{extract_image_keys, merge_stream_text};
 use super::pbbp2::{self, Frame};
@@ -85,6 +86,162 @@ fn resolve_native_thread_scope(
             Some(message.chat_id.clone())
         }
     }
+}
+
+async fn ensure_cot_session(
+    client: &FeishuClient,
+    state: &mut FeishuResponseStreamState,
+    account_id: &str,
+    chat_id: &str,
+    thread_id: &str,
+    origin_message_id: &str,
+) -> Option<super::cot::FeishuCotSession> {
+    if state.cot.failed {
+        return None;
+    }
+    if let Some(session) = state.cot.session.clone() {
+        return Some(session);
+    }
+
+    let run_started = state.cot.run_started_event(thread_id, thread_id);
+    match client
+        .create_cot_run_start_message(chat_id, thread_id, Some(origin_message_id), run_started)
+        .await
+    {
+        Ok(session) => {
+            state.cot.session = Some(session.clone());
+            Some(session)
+        }
+        Err(err) => {
+            state.cot.failed = true;
+            debug!(
+                account_id = %account_id,
+                thread_id = %thread_id,
+                error = %err,
+                "Feishu COT run creation failed; continuing with Card Kit reply"
+            );
+            None
+        }
+    }
+}
+
+async fn send_cot_events(
+    client: &FeishuClient,
+    state: &mut FeishuResponseStreamState,
+    account_id: &str,
+    chat_id: &str,
+    thread_id: &str,
+    origin_message_id: &str,
+    events: Vec<FeishuCotEventRecord>,
+    label: &str,
+) {
+    if events.is_empty() || state.cot.failed {
+        return;
+    }
+    let Some(session) = ensure_cot_session(
+        client,
+        state,
+        account_id,
+        chat_id,
+        thread_id,
+        origin_message_id,
+    )
+    .await
+    else {
+        return;
+    };
+    if let Err(err) = client.update_cot_events(&session, &events).await {
+        state.cot.failed = true;
+        debug!(
+            account_id = %account_id,
+            thread_id = %thread_id,
+            label = %label,
+            error = %err,
+            "Feishu COT event update failed; continuing with Card Kit reply"
+        );
+    }
+}
+
+async fn send_tool_use_cot_events(
+    client: &FeishuClient,
+    state: &mut FeishuResponseStreamState,
+    account_id: &str,
+    chat_id: &str,
+    thread_id: &str,
+    origin_message_id: &str,
+    message: &ProviderMessage,
+) {
+    let events = state.cot.tool_use_events(message);
+    send_cot_events(
+        client,
+        state,
+        account_id,
+        chat_id,
+        thread_id,
+        origin_message_id,
+        events,
+        "tool_use",
+    )
+    .await;
+}
+
+async fn send_tool_result_cot_events(
+    client: &FeishuClient,
+    state: &mut FeishuResponseStreamState,
+    account_id: &str,
+    chat_id: &str,
+    thread_id: &str,
+    origin_message_id: &str,
+    message: &ProviderMessage,
+) {
+    let events = state.cot.tool_result_events(message);
+    send_cot_events(
+        client,
+        state,
+        account_id,
+        chat_id,
+        thread_id,
+        origin_message_id,
+        events,
+        "tool_result",
+    )
+    .await;
+}
+
+async fn finish_cot_run(
+    client: &FeishuClient,
+    state: &mut FeishuResponseStreamState,
+    account_id: &str,
+    thread_id: &str,
+) {
+    if state.cot.failed || state.cot.completed {
+        return;
+    }
+    let Some(session) = state.cot.session.clone() else {
+        return;
+    };
+    let run_finished = state.cot.run_finished_event(thread_id, &session.cot_id);
+    if let Err(err) = client.update_cot_events(&session, &[run_finished]).await {
+        state.cot.failed = true;
+        debug!(
+            account_id = %account_id,
+            thread_id = %thread_id,
+            error = %err,
+            "Feishu COT run finish update failed"
+        );
+        return;
+    }
+    if let Err(err) = client.complete_cot_run(&session).await {
+        state.cot.failed = true;
+        debug!(
+            account_id = %account_id,
+            thread_id = %thread_id,
+            error = %err,
+            "Feishu COT run complete failed"
+        );
+        return;
+    }
+    state.cot.completed = true;
 }
 
 async fn record_terminal_inbound_event(
@@ -895,10 +1052,30 @@ pub(super) async fn handle_im_message_event(
                     }
                     continue;
                 }
-                StreamEvent::ToolUse { .. } => {
+                StreamEvent::ToolUse { message } => {
+                    send_tool_use_cot_events(
+                        &worker_client,
+                        &mut state,
+                        &worker_account_id,
+                        &worker_chat_id,
+                        &canonical_thread_id,
+                        &worker_msg_id,
+                        &message,
+                    )
+                    .await;
                     continue;
                 }
                 StreamEvent::ToolResult { message } => {
+                    send_tool_result_cot_events(
+                        &worker_client,
+                        &mut state,
+                        &worker_account_id,
+                        &worker_chat_id,
+                        &canonical_thread_id,
+                        &worker_msg_id,
+                        &message,
+                    )
+                    .await;
                     let Some(image) = extract_image_generation_result(&message) else {
                         continue;
                     };
@@ -969,7 +1146,16 @@ pub(super) async fn handle_im_message_event(
                     }
                     continue;
                 }
-                StreamEvent::ThreadTitleUpdated { .. } | StreamEvent::Done => {}
+                StreamEvent::ThreadTitleUpdated { .. } => {}
+                StreamEvent::Done => {
+                    finish_cot_run(
+                        &worker_client,
+                        &mut state,
+                        &worker_account_id,
+                        &canonical_thread_id,
+                    )
+                    .await;
+                }
             }
 
             let mut final_text = state.stream_text.clone();

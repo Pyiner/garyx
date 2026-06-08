@@ -2107,6 +2107,160 @@ mod e2e_tests {
     }
 
     #[tokio::test]
+    async fn test_e2e_feishu_tool_trace_emits_cot_openapi_events() {
+        let (server, client) = setup_feishu_mock().await;
+        Mock::given(method("POST"))
+            .and(path("/im/v1/message_cot"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": 0,
+                "msg": "ok",
+                "data": {
+                    "cot_id": "cot_mock_001",
+                    "message_id": "om_cot_001"
+                }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/im/v1/message_cot"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": 0,
+                "msg": "ok"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path_regex(r"^/im/v1/message_cot/complete/[^/]+$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": 0,
+                "msg": "ok"
+            })))
+            .mount(&server)
+            .await;
+
+        let provider = Arc::new(FeishuToolThenAssistantProvider);
+        let bridge = make_bridge_with(provider).await;
+        let router = make_router();
+        let account = make_default_account();
+
+        let event = FeishuEventBuilder::group("ou_user123", "oc_group456", "hi from group")
+            .with_root_id("om_thread_root")
+            .build();
+
+        dispatch_im_message_event(
+            "app1",
+            &event,
+            &router,
+            &bridge,
+            &client,
+            &account,
+            "",
+            &account.app_id,
+        )
+        .await;
+
+        let create_calls = wait_for_matching_requests_quiet_window(
+            &server,
+            std::time::Duration::from_millis(200),
+            std::time::Duration::from_secs(5),
+            1,
+            |r| r.method.as_str() == "POST" && r.url.path() == "/im/v1/message_cot",
+        )
+        .await;
+        assert_eq!(create_calls.len(), 1, "COT run should be created once");
+        let create_body: Value = serde_json::from_slice(&create_calls[0].body).unwrap();
+        assert_eq!(create_body["receive_id"], "oc_group456");
+        assert_eq!(create_body["origin_message_id"], "om_test_msg_001");
+        assert_eq!(create_calls[0].url.query(), Some("receive_id_type=chat_id"));
+
+        let update_calls = wait_for_matching_requests_quiet_window(
+            &server,
+            std::time::Duration::from_millis(200),
+            std::time::Duration::from_secs(5),
+            4,
+            |r| r.method.as_str() == "PUT" && r.url.path() == "/im/v1/message_cot",
+        )
+        .await;
+        let event_types: Vec<String> = update_calls
+            .iter()
+            .flat_map(|request| {
+                let body: Value = serde_json::from_slice(&request.body).unwrap();
+                assert_eq!(body["cot_id"], "cot_mock_001");
+                assert_eq!(body["message_id"], "om_cot_001");
+                body["events"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+            })
+            .filter_map(|event| {
+                event
+                    .get("event_type")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            })
+            .collect();
+        for expected in [
+            "RUN_STARTED",
+            "TOOL_CALL_START",
+            "TOOL_CALL_ARGS",
+            "TOOL_CALL_END",
+            "TOOL_CALL_RESULT",
+            "RUN_FINISHED",
+        ] {
+            assert!(
+                event_types.iter().any(|event_type| event_type == expected),
+                "missing COT event {expected}; event_types={event_types:?}"
+            );
+        }
+
+        let tool_result_contents: Vec<Value> = update_calls
+            .iter()
+            .flat_map(|request| {
+                let body: Value = serde_json::from_slice(&request.body).unwrap();
+                body["events"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+            })
+            .filter(|event| event["event_type"] == "TOOL_CALL_RESULT")
+            .filter_map(|event| {
+                event
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .and_then(|content| serde_json::from_str::<Value>(content).ok())
+            })
+            .collect();
+        assert!(
+            tool_result_contents.iter().any(|content| {
+                content["result"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("/tmp/workspace")
+            }),
+            "tool result output should be present in COT events: {tool_result_contents:?}"
+        );
+
+        let complete_calls = wait_for_matching_requests_quiet_window(
+            &server,
+            std::time::Duration::from_millis(200),
+            std::time::Duration::from_secs(5),
+            1,
+            |r| {
+                r.method.as_str() == "POST"
+                    && r.url.path() == "/im/v1/message_cot/complete/cot_mock_001"
+            },
+        )
+        .await;
+        assert_eq!(complete_calls.len(), 1, "COT run should be completed");
+        assert_eq!(
+            complete_calls[0].url.query(),
+            Some("message_id=om_cot_001&reason=done")
+        );
+    }
+
+    #[tokio::test]
     async fn test_e2e_feishu_image_generation_result_sends_image_only() {
         let (server, client) = setup_feishu_mock().await;
 

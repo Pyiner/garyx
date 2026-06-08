@@ -99,4 +99,6 @@ pub(super) struct FeishuResponseStreamState {
     pub(super) last_stream_sent_text: String,
     pub(super) processing_reaction_id: Option<String>,
     pub(super) processing_reaction_removed: bool,
+    pub(super) cot: FeishuCotState,
 }
+use super::cot::FeishuCotState;

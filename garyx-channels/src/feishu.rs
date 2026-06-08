@@ -34,6 +34,7 @@ use crate::channel_trait::{Channel, ChannelError};
 
 mod auth_flow_executor;
 mod client;
+mod cot;
 mod device_auth;
 mod mentions;
 mod message;
