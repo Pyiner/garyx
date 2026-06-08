@@ -4171,13 +4171,16 @@ code {
 }
 
 .side-tools-tab:hover,
-.side-tools-tab.is-active {
+.side-tools-tab.is-active,
+.side-tools-tab-shell:hover .side-tools-tab,
+.side-tools-tab-shell:focus-within .side-tools-tab {
   background: color-mix(in srgb, var(--color-token-bg-secondary) 86%, white);
   color: var(--color-token-text-primary);
 }
 
 .side-tools-tab-close {
   position: absolute;
+  z-index: 2;
   right: 5px;
   top: 50%;
   display: inline-flex;
@@ -4190,6 +4193,7 @@ code {
   border-radius: 999px;
   background: transparent;
   color: currentColor;
+  cursor: pointer;
   opacity: 0;
   pointer-events: none;
   transform: translateY(-50%);
@@ -4199,6 +4203,7 @@ code {
 }
 
 .side-tools-tab-shell:hover .side-tools-tab-close,
+.side-tools-tab-shell.is-active .side-tools-tab-close,
 .side-tools-tab-shell:focus-within .side-tools-tab-close {
   opacity: 0.58;
   pointer-events: auto;
@@ -4213,6 +4218,13 @@ code {
   position: relative;
   flex: 0 0 auto;
   z-index: 2;
+}
+
+.side-tools-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
 }
 
 .side-tools-add,
@@ -4291,24 +4303,35 @@ code {
 .side-tool-files {
   --side-tool-file-browser-width: 280px;
   --side-tool-file-browser-min-width: 220px;
-  --side-tool-file-preview-min-width: min(420px, 100%);
+  --side-tool-file-browser-collapsed-width: 36px;
+  --side-tool-file-browser-current-width: var(--side-tool-file-browser-width);
   position: relative;
   display: grid;
   grid-template-columns:
-    minmax(var(--side-tool-file-preview-min-width), 1fr)
-    minmax(
-      var(--side-tool-file-browser-min-width),
-      var(--side-tool-file-browser-width)
-    );
+    minmax(0, 1fr)
+    minmax(0, var(--side-tool-file-browser-current-width));
   gap: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow: hidden;
   padding: 0;
   contain: layout paint style;
-  overscroll-behavior-x: contain;
+  transition: grid-template-columns 170ms var(--ease-out-expo);
+}
+
+.side-tool-files.is-directory-collapsed {
+  --side-tool-file-browser-current-width: var(--side-tool-file-browser-collapsed-width);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .side-tool-files {
+    transition: none;
+  }
 }
 
 .side-tool-filter-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: 6px;
   padding: 8px 8px 8px 10px;
 }
 
@@ -4329,6 +4352,22 @@ code {
   outline: none;
 }
 
+.side-tools-file-directory-toggle {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+
+.side-tool-files.is-directory-collapsed .side-tool-filter-shell {
+  grid-template-columns: 28px;
+  justify-content: center;
+  padding-inline: 4px;
+}
+
+.side-tool-files.is-directory-collapsed .side-tool-filter-shell input {
+  display: none;
+}
+
 .side-tool-file-tree {
   flex: 1 1 0;
   min-width: 0;
@@ -4339,7 +4378,7 @@ code {
 .side-tool-file-preview-panel {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
-  min-width: var(--side-tool-file-preview-min-width);
+  min-width: 0;
   min-height: 0;
   height: 100%;
   overflow: hidden;
@@ -4356,11 +4395,23 @@ code {
 .side-tool-file-browser {
   display: flex;
   flex-direction: column;
-  min-width: var(--side-tool-file-browser-min-width);
+  width: var(--side-tool-file-browser-current-width);
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
   background: var(--color-token-bg-primary);
   contain: layout paint style;
+  transition:
+    opacity 140ms var(--ease-standard),
+    visibility 140ms var(--ease-standard);
+}
+
+.side-tool-files:not(.is-directory-collapsed) .side-tool-file-browser {
+  min-width: var(--side-tool-file-browser-min-width);
+}
+
+.side-tool-files.is-directory-collapsed .side-tool-file-browser {
+  opacity: 1;
 }
 
 .side-tool-file-preview-header {
@@ -4496,6 +4547,10 @@ code {
   overflow: auto;
   padding-right: 6px;
   padding-left: 2px;
+}
+
+.side-tool-files.is-directory-collapsed .side-tool-file-tree {
+  display: none;
 }
 
 .side-tool-empty {

@@ -14,6 +14,8 @@ import {
   FolderOpen,
   Globe,
   MessageSquare,
+  PanelRightClose,
+  PanelRightOpen,
   Plus,
   Terminal as TerminalIcon,
   X,
@@ -408,8 +410,12 @@ export function ThreadSideToolsPanel({
   const [activeToolId, setActiveToolId] = useState<ThreadSideToolId>("files");
   const [menuOpen, setMenuOpen] = useState(false);
   const [filePathCopied, setFilePathCopied] = useState(false);
+  const [fileDirectoryCollapsed, setFileDirectoryCollapsed] = useState(false);
   const filePathCopiedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeTool = tools.find((tool) => tool.id === activeToolId) || tools[0];
+  const FileDirectoryToggleIcon = fileDirectoryCollapsed
+    ? PanelRightOpen
+    : PanelRightClose;
   const previewCopyPath = selectedWorkspaceFile?.absolutePath ||
     (workspaceFilePreview?.workspacePath && workspaceFilePreview.path
       ? workspaceFileAbsolutePath(workspaceFilePreview.workspacePath, workspaceFilePreview.path)
@@ -550,6 +556,9 @@ export function ThreadSideToolsPanel({
                     <button
                       aria-label={t("Close")}
                       className="side-tools-tab-close"
+                      onPointerDown={(event) => {
+                        event.stopPropagation();
+                      }}
                       onClick={(event) => {
                         event.stopPropagation();
                         closeTool(tool.id);
@@ -597,20 +606,26 @@ export function ThreadSideToolsPanel({
             ) : null}
           </div>
         </div>
-        <button
-          aria-label={t("Hide side tools")}
-          className="codex-icon-button side-tools-collapse"
-          onClick={closeSideTools}
-          title={t("Hide side tools")}
-          type="button"
-        >
-          <PanelIcon />
-        </button>
+        <div className="side-tools-header-actions">
+          <button
+            aria-label={t("Hide side tools")}
+            className="codex-icon-button side-tools-collapse"
+            onClick={closeSideTools}
+            title={t("Hide side tools")}
+            type="button"
+          >
+            <PanelIcon />
+          </button>
+        </div>
       </div>
 
       <div className={`side-tools-body is-${activeTool.id}`}>
         {activeTool.id === "files" ? (
-          <div className="side-tool-files">
+          <div
+            className={`side-tool-files ${
+              fileDirectoryCollapsed ? "is-directory-collapsed" : ""
+            }`}
+          >
             <section className={`side-tool-file-preview-panel ${shouldShowWorkspacePreview ? "" : "is-empty"}`}>
               {shouldShowWorkspacePreview ? (
                 <>
@@ -688,13 +703,37 @@ export function ThreadSideToolsPanel({
               <div className="side-tool-filter-shell">
                 <input
                   aria-label={t("Filter files")}
+                  disabled={fileDirectoryCollapsed}
                   onChange={(event) => onWorkspaceFileFilterChange(event.target.value)}
                   placeholder={t("Filter files…")}
                   type="search"
                   value={workspaceFileFilter}
                 />
+                <button
+                  aria-label={
+                    fileDirectoryCollapsed
+                      ? t("Show file directory")
+                      : t("Hide file directory")
+                  }
+                  aria-pressed={!fileDirectoryCollapsed}
+                  className="codex-icon-button side-tools-file-directory-toggle"
+                  onClick={() => setFileDirectoryCollapsed((current) => !current)}
+                  title={
+                    fileDirectoryCollapsed
+                      ? t("Show file directory")
+                      : t("Hide file directory")
+                  }
+                  type="button"
+                >
+                  <FileDirectoryToggleIcon aria-hidden />
+                </button>
               </div>
-              <div className="side-tool-file-tree">{workspaceDirectoryPanel}</div>
+              <div
+                aria-hidden={fileDirectoryCollapsed ? true : undefined}
+                className="side-tool-file-tree"
+              >
+                {workspaceDirectoryPanel}
+              </div>
             </aside>
           </div>
         ) : null}
