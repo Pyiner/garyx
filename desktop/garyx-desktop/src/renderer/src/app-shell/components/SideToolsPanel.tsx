@@ -422,36 +422,42 @@ export function ThreadSideToolsPanel({
         <div className="side-tools-tab-track" role="tablist">
           {openToolDescriptors.map((tool) => {
             const Icon = tool.icon;
+            const selected = tool.id === activeToolId;
             return (
-              <button
-                aria-selected={tool.id === activeToolId}
-                className={`side-tools-tab ${tool.id === activeToolId ? "is-active" : ""}`}
+              <div
+                className={`side-tools-tab-shell ${selected ? "is-active" : ""}`}
                 key={tool.id}
-                onClick={() => {
-                  setActiveToolId(tool.id);
-                  if (tool.id === "chat") {
-                    onOpenSideChat();
-                  }
-                }}
-                role="tab"
-                type="button"
               >
-                <Icon aria-hidden size={14} strokeWidth={1.8} />
-                <span>{tool.label}</span>
+                <button
+                  aria-selected={selected}
+                  className={`side-tools-tab ${selected ? "is-active" : ""}`}
+                  onClick={() => {
+                    setActiveToolId(tool.id);
+                    if (tool.id === "chat") {
+                      onOpenSideChat();
+                    }
+                  }}
+                  role="tab"
+                  type="button"
+                >
+                  <Icon aria-hidden size={14} strokeWidth={1.8} />
+                  <span className="side-tools-tab-label">{tool.label}</span>
+                </button>
                 {openTools.length > 1 ? (
-                  <span
+                  <button
+                    aria-label={t("Close")}
                     className="side-tools-tab-close"
                     onClick={(event) => {
                       event.stopPropagation();
                       closeTool(tool.id);
                     }}
-                    role="button"
-                    tabIndex={-1}
+                    title={t("Close")}
+                    type="button"
                   >
                     <X aria-hidden size={12} strokeWidth={1.9} />
-                  </span>
+                  </button>
                 ) : null}
-              </button>
+              </div>
             );
           })}
         </div>

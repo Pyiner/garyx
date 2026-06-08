@@ -4087,12 +4087,21 @@ code {
   display: none;
 }
 
+.side-tools-tab-shell {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  max-width: 145px;
+  border-radius: 8px;
+}
+
 .side-tools-tab {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  flex: 0 0 auto;
-  max-width: 145px;
+  width: 100%;
+  min-width: 0;
   height: 28px;
   padding: 0 8px;
   border: 0;
@@ -4106,7 +4115,12 @@ code {
     color var(--duration-fast) var(--ease-standard);
 }
 
-.side-tools-tab span:not(.side-tools-tab-close) {
+.side-tools-tab-shell:has(.side-tools-tab-close) .side-tools-tab {
+  padding-right: 27px;
+}
+
+.side-tools-tab-label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4119,15 +4133,31 @@ code {
 }
 
 .side-tools-tab-close {
+  position: absolute;
+  right: 5px;
+  top: 50%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 16px;
   height: 16px;
-  margin-right: -3px;
+  padding: 0;
+  border: 0;
   border-radius: 999px;
+  background: transparent;
   color: currentColor;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%);
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    opacity var(--duration-fast) var(--ease-standard);
+}
+
+.side-tools-tab-shell:hover .side-tools-tab-close,
+.side-tools-tab-shell:focus-within .side-tools-tab-close {
   opacity: 0.58;
+  pointer-events: auto;
 }
 
 .side-tools-tab-close:hover {
