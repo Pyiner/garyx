@@ -28,7 +28,7 @@ enum GaryxTheme {
 }
 
 enum GaryxSafeAreaChrome {
-    static let pageBackgroundEdges: Edge.Set = .all
+    static let pageBackgroundEdges: Edge.Set = [.top, .horizontal]
     static let floatingBottomMinimumPadding: CGFloat = 0
 
     static func installWindowDefaults() {
