@@ -9,6 +9,7 @@ import {
   type BrowserWindow,
   type IpcMainEvent,
   type IpcMainInvokeEvent,
+  type NativeImage,
   type Rectangle,
   type WebContents,
 } from 'electron';
@@ -33,6 +34,7 @@ const DEFAULT_REMOTE_DEBUGGING_PORT = '39222';
 const configuredRemoteDebuggingPort =
   process.env.GARYX_DESKTOP_REMOTE_DEBUGGING_PORT?.trim() || DEFAULT_REMOTE_DEBUGGING_PORT;
 const disableFixedRemoteDebuggingPort = process.env.GARYX_DESKTOP_DISABLE_FIXED_CDP === '1';
+const BROWSER_CAPTURE_RETRY_DELAYS_MS = [0, 60, 120, 220, 360];
 
 function browserAnnotationModeScript(enabled: boolean, commentMessagePrefix: string): string {
   return `(() => {
@@ -566,6 +568,27 @@ function safeTitle(value: string): string {
   return trimmed || 'New Tab';
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function captureWebContentsPage(webContents: WebContents): Promise<NativeImage> {
+  let lastImage = nativeImage.createEmpty();
+  for (const retryDelay of BROWSER_CAPTURE_RETRY_DELAYS_MS) {
+    if (retryDelay > 0) {
+      await delay(retryDelay);
+    }
+    const image = await webContents.capturePage();
+    if (!image.isEmpty()) {
+      return image;
+    }
+    lastImage = image;
+  }
+  return lastImage;
+}
+
 export function getBrowserDebugEndpoint(): DesktopBrowserDebugEndpoint {
   const origin = `http://127.0.0.1:${configuredRemoteDebuggingPort}`;
   return {
@@ -744,9 +767,16 @@ class BrowserRuntime {
   async captureTab(input: CaptureBrowserTabInput): Promise<CaptureBrowserTabResult> {
     const tabId = input.tabId;
     const record = this.requireTab(tabId);
-    const image = await record.view.webContents.capturePage();
+    this.reconcileMountedView();
+    const image = await captureWebContentsPage(record.view.webContents);
+    if (image.isEmpty()) {
+      throw new Error('Browser screenshot is empty.');
+    }
     if (input.copyToClipboard !== false) {
       clipboard.writeImage(image);
+      if (clipboard.readImage().isEmpty()) {
+        throw new Error('Failed to write browser screenshot to clipboard.');
+      }
     }
     const size = image.getSize();
     return {

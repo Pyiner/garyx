@@ -9,7 +9,9 @@ import {
 } from "react";
 import {
   ChevronDown,
+  Copy,
   FileText,
+  FolderOpen,
   Globe,
   MessageSquare,
   Plus,
@@ -24,10 +26,12 @@ import type {
   BrowserAnnotationCommentRequest,
   DesktopTerminalEvent,
   DesktopTerminalState,
+  DesktopWorkspaceFilePreview,
   DesktopWorkspaceMode,
   MessageFileAttachment,
 } from "@shared/contracts";
 
+import { WorkspaceFilePreview } from "../../workspace-file-preview";
 import { PanelIcon } from "../icons";
 import { useI18n } from "../../i18n";
 
@@ -51,8 +55,15 @@ type ThreadSideToolsPanelProps = {
   workspaceBranch?: string | null;
   workspaceDirectoryPanel: ReactNode;
   workspaceFileFilter: string;
+  workspaceFilePreview?: DesktopWorkspaceFilePreview | null;
+  workspaceFilePreviewError?: string | null;
+  workspaceFilePreviewLoading?: boolean;
   workspaceMode?: DesktopWorkspaceMode | null;
+  workspacePreviewOpen?: boolean;
+  workspacePreviewTitle?: string;
   sideChatPanel: ReactNode;
+  onCloseWorkspacePreview?: () => void;
+  onLocalFileLinkClick?: (absolutePath: string) => void;
   onRevealSelectedWorkspaceFile?: () => Promise<void> | void;
   onAddBrowserAnnotationComment: (request: BrowserAnnotationCommentRequest) => void;
   onAttachFileToSideChat: (file: MessageFileAttachment) => void;
@@ -371,6 +382,13 @@ export function ThreadSideToolsPanel({
   sideChatPanel,
   workspaceDirectoryPanel,
   workspaceFileFilter,
+  workspaceFilePreview = null,
+  workspaceFilePreviewError = null,
+  workspaceFilePreviewLoading = false,
+  workspacePreviewOpen = false,
+  workspacePreviewTitle = "",
+  onCloseWorkspacePreview,
+  onLocalFileLinkClick,
   onRevealSelectedWorkspaceFile,
   onAddBrowserAnnotationComment,
   onAttachFileToSideChat,
@@ -392,6 +410,12 @@ export function ThreadSideToolsPanel({
   const [activeToolId, setActiveToolId] = useState<ThreadSideToolId>("files");
   const [menuOpen, setMenuOpen] = useState(false);
   const activeTool = tools.find((tool) => tool.id === activeToolId) || tools[0];
+  const shouldShowWorkspacePreview = Boolean(
+    workspacePreviewOpen ||
+      workspaceFilePreviewLoading ||
+      workspaceFilePreviewError ||
+      workspaceFilePreview,
+  );
   const openToolDescriptors = openTools
     .map((toolId) => tools.find((tool) => tool.id === toolId))
     .filter((tool): tool is ToolDescriptor => Boolean(tool));
@@ -410,6 +434,16 @@ export function ThreadSideToolsPanel({
     });
   }, [activeToolId]);
 
+  useEffect(() => {
+    if (!shouldShowWorkspacePreview) {
+      return;
+    }
+    setOpenTools((current) =>
+      current.includes("files") ? current : ["files", ...current],
+    );
+    setActiveToolId("files");
+  }, [shouldShowWorkspacePreview, workspaceFilePreview?.path, workspacePreviewTitle]);
+
   function attachSelectedWorkspaceFile() {
     if (!selectedWorkspaceFile) {
       return;
@@ -422,6 +456,17 @@ export function ThreadSideToolsPanel({
     };
     onAttachFileToSideChat(file);
     openTool("chat");
+  }
+
+  async function copySelectedWorkspaceFilePath() {
+    if (!selectedWorkspaceFile) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(selectedWorkspaceFile.absolutePath);
+    } catch {
+      // Clipboard can be unavailable in constrained renderer environments.
+    }
   }
 
   function handleBrowserAnnotationCommentRequest(request: BrowserAnnotationCommentRequest) {
@@ -560,42 +605,110 @@ export function ThreadSideToolsPanel({
       <div className={`side-tools-body is-${activeTool.id}`}>
         {activeTool.id === "files" ? (
           <div className="side-tool-files">
-            <div className="side-tool-section-heading">
-              <span>{t("Open file")}</span>
-            </div>
-            <p className="side-tool-section-subtitle">
-              {t("Choose from the workspace directory tree")}
-            </p>
-            <div className="side-tool-filter-shell">
-              <input
-                aria-label={t("Filter files")}
-                onChange={(event) => onWorkspaceFileFilterChange(event.target.value)}
-                placeholder={t("Filter files…")}
-                type="search"
-                value={workspaceFileFilter}
-              />
-            </div>
-            {selectedWorkspaceFile ? (
-              <div className="side-tool-selected-file">
-                <div>
-                  <FileText aria-hidden size={14} strokeWidth={1.8} />
-                  <span title={selectedWorkspaceFile.relativePath}>
-                    {selectedWorkspaceFile.relativePath}
-                  </span>
-                </div>
-                <div className="side-tool-selected-file-actions">
-                  <button onClick={attachSelectedWorkspaceFile} type="button">
-                    {t("Attach to chat")}
-                  </button>
-                  {onRevealSelectedWorkspaceFile ? (
-                    <button onClick={() => void onRevealSelectedWorkspaceFile()} type="button">
-                      {t("Reveal")}
-                    </button>
+            <section className={`side-tool-file-preview-panel ${shouldShowWorkspacePreview ? "" : "is-empty"}`}>
+              {shouldShowWorkspacePreview ? (
+                <>
+                  <div className="side-tool-file-preview-header">
+                    <div className="side-tool-file-preview-copy">
+                      <FileText aria-hidden size={14} strokeWidth={1.8} />
+                      <span title={workspacePreviewTitle}>
+                        {selectedWorkspaceFile?.relativePath ||
+                          workspaceFilePreview?.path ||
+                          workspaceFilePreview?.name ||
+                          workspacePreviewTitle}
+                      </span>
+                    </div>
+                    <div className="side-tool-file-preview-actions">
+                      <button
+                        aria-label={t("Copy file path")}
+                        disabled={!selectedWorkspaceFile}
+                        onClick={() => {
+                          void copySelectedWorkspaceFilePath();
+                        }}
+                        title={t("Copy file path")}
+                        type="button"
+                      >
+                        <Copy aria-hidden size={13} strokeWidth={1.8} />
+                      </button>
+                      {onRevealSelectedWorkspaceFile ? (
+                        <button
+                          aria-label={t("Show in Finder")}
+                          disabled={!selectedWorkspaceFile}
+                          onClick={() => void onRevealSelectedWorkspaceFile()}
+                          title={t("Show in Finder")}
+                          type="button"
+                        >
+                          <FolderOpen aria-hidden size={13} strokeWidth={1.8} />
+                        </button>
+                      ) : null}
+                      {onCloseWorkspacePreview ? (
+                        <button
+                          aria-label={t("Close")}
+                          onClick={onCloseWorkspacePreview}
+                          title={t("Close")}
+                          type="button"
+                        >
+                          <X aria-hidden size={13} strokeWidth={1.8} />
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                  {workspaceFilePreviewError ? (
+                    <div className="workspace-file-error side-tool-file-preview-error">
+                      {workspaceFilePreviewError}
+                    </div>
                   ) : null}
+                  <div className="side-tool-file-preview-body">
+                    {workspaceFilePreviewLoading ? (
+                      <div className="workspace-file-empty">{t("Loading preview…")}</div>
+                    ) : (
+                      <WorkspaceFilePreview
+                        onLocalFileLinkClick={onLocalFileLinkClick}
+                        preview={workspaceFilePreview}
+                      />
+                    )}
+                  </div>
+                </>
+              ) : (
+                <div className="side-tool-file-preview-empty">
+                  <FolderOpen aria-hidden size={30} strokeWidth={1.65} />
+                  <strong>{t("Open file")}</strong>
+                  <span>{t("Choose from the workspace directory tree")}</span>
                 </div>
+              )}
+            </section>
+            <aside className="side-tool-file-browser">
+              <div className="side-tool-filter-shell">
+                <input
+                  aria-label={t("Filter files")}
+                  onChange={(event) => onWorkspaceFileFilterChange(event.target.value)}
+                  placeholder={t("Filter files…")}
+                  type="search"
+                  value={workspaceFileFilter}
+                />
               </div>
-            ) : null}
-            <div className="side-tool-file-tree">{workspaceDirectoryPanel}</div>
+              {selectedWorkspaceFile ? (
+                <div className="side-tool-selected-file">
+                  <div>
+                    <FileText aria-hidden size={14} strokeWidth={1.8} />
+                    <span title={selectedWorkspaceFile.relativePath}>
+                      {selectedWorkspaceFile.relativePath}
+                    </span>
+                  </div>
+                  <div className="side-tool-selected-file-actions">
+                    <button onClick={attachSelectedWorkspaceFile} type="button">
+                      {t("Attach to chat")}
+                    </button>
+                    {onRevealSelectedWorkspaceFile ? (
+                      <button onClick={() => void onRevealSelectedWorkspaceFile()} type="button">
+                        {t("Reveal")}
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+              <div className="side-tool-file-tree">{workspaceDirectoryPanel}</div>
+            </aside>
           </div>
         ) : null}
         {activeTool.id === "chat" ? (

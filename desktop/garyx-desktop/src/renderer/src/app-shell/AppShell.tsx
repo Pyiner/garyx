@@ -291,11 +291,6 @@ const MemoryDialog = lazy(() =>
     default: module.MemoryDialog,
   })),
 );
-const WorkspacePreviewModal = lazy(() =>
-  import("./components/WorkspacePreviewModal").then((module) => ({
-    default: module.WorkspacePreviewModal,
-  })),
-);
 const AgentsHubPanel = lazy(() =>
   import("./components/AgentsHubPanel").then((module) => ({
     default: module.AgentsHubPanel,
@@ -5397,6 +5392,14 @@ export function AppShell() {
   }, [activeWorkspacePath]);
 
   useEffect(() => {
+    if (!workspacePreviewModalOpen || contentView !== "thread") {
+      return;
+    }
+    setThreadLogsOpen(false);
+    setInspectorOpen(true);
+  }, [contentView, workspacePreviewModalOpen]);
+
+  useEffect(() => {
     if (!inspectorOpen || contentView !== "thread" || !activeWorkspacePath) {
       return;
     }
@@ -9654,7 +9657,16 @@ export function AppShell() {
       workspaceBranch={composerWorkspaceBranch}
       workspaceDirectoryPanel={workspaceDirectoryPanel}
       workspaceFileFilter={workspaceFileFilter}
+      workspaceFilePreview={workspaceFilePreview}
+      workspaceFilePreviewError={workspaceFilePreviewError}
+      workspaceFilePreviewLoading={workspaceFilePreviewLoading}
       workspaceMode={composerWorkspaceMode || "local"}
+      workspacePreviewOpen={workspacePreviewModalOpen}
+      workspacePreviewTitle={workspacePreviewTitle}
+      onCloseWorkspacePreview={() => {
+        setWorkspacePreviewModalOpen(false);
+      }}
+      onLocalFileLinkClick={handleLocalFileLinkClick}
       onRevealSelectedWorkspaceFile={handleRevealSelectedWorkspaceFile}
       onAddBrowserAnnotationComment={handleAddBrowserAnnotationComment}
       onAttachFileToSideChat={(file) => {
@@ -10678,22 +10690,6 @@ export function AppShell() {
           </section>
         </main>
       )}
-      {workspacePreviewModalOpen ? (
-        <Suspense fallback={null}>
-          <WorkspacePreviewModal
-            error={workspaceFilePreviewError}
-            loading={workspaceFilePreviewLoading}
-            onClose={() => {
-              setWorkspacePreviewModalOpen(false);
-            }}
-            onLocalFileLinkClick={handleLocalFileLinkClick}
-            open={workspacePreviewModalOpen}
-            preview={workspaceFilePreview}
-            title={workspacePreviewTitle}
-          />
-        </Suspense>
-      ) : null}
-
       {automationDialog ? (
         <Suspense fallback={null}>
           <AutomationDialog

@@ -30,6 +30,7 @@ export function BrowserPage({
   const api = getDesktopApi();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const browserInfoButtonRef = useRef<HTMLButtonElement | null>(null);
+  const browserStatusTimerRef = useRef<number | null>(null);
   const [browserState, setBrowserState] = useState<DesktopBrowserState | null>(null);
   const [addressValue, setAddressValue] = useState('');
   const [annotationMode, setAnnotationMode] = useState(false);
@@ -42,6 +43,35 @@ export function BrowserPage({
   useEffect(() => {
     annotationCommentRequestRef.current = onAnnotationCommentRequest;
   }, [onAnnotationCommentRequest]);
+
+  useEffect(() => {
+    return () => {
+      if (browserStatusTimerRef.current !== null) {
+        window.clearTimeout(browserStatusTimerRef.current);
+      }
+    };
+  }, []);
+
+  function clearBrowserStatusTimer() {
+    if (browserStatusTimerRef.current !== null) {
+      window.clearTimeout(browserStatusTimerRef.current);
+      browserStatusTimerRef.current = null;
+    }
+  }
+
+  function setPersistentBrowserStatus(message: string | null) {
+    clearBrowserStatusTimer();
+    setBrowserStatus(message);
+  }
+
+  function setTransientBrowserStatus(message: string) {
+    clearBrowserStatusTimer();
+    setBrowserStatus(message);
+    browserStatusTimerRef.current = window.setTimeout(() => {
+      browserStatusTimerRef.current = null;
+      setBrowserStatus((current) => (current === message ? null : current));
+    }, 2200);
+  }
 
   useEffect(() => {
     let disposed = false;
@@ -163,14 +193,14 @@ export function BrowserPage({
   async function toggleAnnotationMode() {
     if (annotationMode) {
       setAnnotationMode(false);
-      setBrowserStatus(null);
+      setPersistentBrowserStatus(null);
       return;
     }
     if (!active) {
       return;
     }
     setAnnotationMode(true);
-    setBrowserStatus(t('Hover an element, click it, type a comment, then press Enter to add it.'));
+    setPersistentBrowserStatus(t('Hover an element, click it, type a comment, then press Enter to add it.'));
   }
 
   async function copyCurrentScreenshot() {
@@ -182,9 +212,9 @@ export function BrowserPage({
         tabId: active.id,
         copyToClipboard: true,
       });
-      setBrowserStatus(t('Screenshot copied.'));
+      setTransientBrowserStatus(t('Screenshot copied.'));
     } catch {
-      setBrowserStatus(
+      setTransientBrowserStatus(
         annotationMode
           ? t('Failed to copy annotated screenshot.')
           : t('Failed to copy screenshot.'),
@@ -320,20 +350,20 @@ export function BrowserPage({
           >
             <ExternalLinkIcon />
           </button>
+          <button
+            aria-label={t('Copy Screenshot')}
+            className="codex-icon-button browser-toolbar-icon"
+            disabled={!active}
+            onClick={() => {
+              void copyCurrentScreenshot();
+            }}
+            title={t('Copy Screenshot')}
+            type="button"
+          >
+            <Camera aria-hidden />
+          </button>
           {sidePanel ? (
             <>
-              <button
-                aria-label={t('Screenshot')}
-                className="codex-icon-button browser-toolbar-icon"
-                disabled={!active}
-                onClick={() => {
-                  void copyCurrentScreenshot();
-                }}
-                title={t('Screenshot')}
-                type="button"
-              >
-                <Camera aria-hidden />
-              </button>
               <button
                 aria-label={t('Annotate')}
                 aria-pressed={annotationMode}
@@ -363,11 +393,9 @@ export function BrowserPage({
         </div>
       </div>
 
-      {!sidePanel ? (
-        <div className={`browser-status-line ${browserStatus ? '' : 'is-empty'}`}>
-          {browserStatus}
-        </div>
-      ) : null}
+      <div className={`browser-status-line ${sidePanel ? 'browser-status-line-side-panel' : ''} ${browserStatus ? '' : 'is-empty'}`}>
+        {browserStatus}
+      </div>
 
       <div className="browser-stage">
         <div className="browser-stage-shell">
