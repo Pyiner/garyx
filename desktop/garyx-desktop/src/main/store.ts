@@ -1087,6 +1087,7 @@ export async function createDesktopThread(input?: {
   sdkSessionId?: string | null;
   sdkSessionProviderHint?: DesktopSessionProviderHint | null;
   forkFromThreadId?: string | null;
+  metadata?: Record<string, unknown> | null;
 }): Promise<{ state: DesktopState; thread: DesktopThreadSummary; session?: DesktopThreadSummary }> {
   const current = await getDesktopState();
   const sdkSessionId = normalizeSdkSessionIdInput(input?.sdkSessionId);
@@ -1126,6 +1127,7 @@ export async function createDesktopThread(input?: {
     sdkSessionId,
     sdkSessionProviderHint,
     forkFromThreadId,
+    metadata: input?.metadata || undefined,
   });
   let state = await getDesktopState();
   let thread = state.threads.find((entry) => entry.id === created.id) || created;

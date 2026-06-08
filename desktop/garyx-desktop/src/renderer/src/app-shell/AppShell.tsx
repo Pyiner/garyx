@@ -82,8 +82,6 @@ import { AddBotDialog } from "./components/AddBotDialog";
 import { DreamsPanel } from "./components/DreamsPanel";
 import {
   ThreadSideToolsPanel,
-  type SideChatSubmitInput,
-  type SideChatSubmitResult,
   type SideToolWorkspaceFile,
 } from "./components/SideToolsPanel";
 import { BotConversationSidebar } from "../BotConversationSidebar";
@@ -388,6 +386,55 @@ type MemoryDialogTarget =
       automationId: string;
       title: string;
     };
+
+type SideComposerDraft = {
+  text: string;
+  textPresent: boolean;
+  images: MessageImageAttachment[];
+  files: MessageFileAttachment[];
+  browserAnnotations: BrowserAnnotationCommentRequest[];
+  resetKey: number;
+};
+
+function emptySideComposerDraft(): SideComposerDraft {
+  return {
+    text: "",
+    textPresent: false,
+    images: [],
+    files: [],
+    browserAnnotations: [],
+    resetKey: 0,
+  };
+}
+
+function sideChatThreadStorageKey(sourceThreadId: string): string {
+  return `garyx.side-tools.side-chat-thread.${sourceThreadId}`;
+}
+
+function readPersistedSideChatThreadId(sourceThreadId: string): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    return window.sessionStorage.getItem(sideChatThreadStorageKey(sourceThreadId)) || null;
+  } catch {
+    return null;
+  }
+}
+
+function persistSideChatThreadId(sourceThreadId: string, sideThreadId: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.sessionStorage.setItem(
+      sideChatThreadStorageKey(sourceThreadId),
+      sideThreadId,
+    );
+  } catch {
+    // Side chat can still run from in-memory state if sessionStorage is blocked.
+  }
+}
 
 function memoryKey(value: string, fallback: string): string {
   const trimmed = value.trim();
@@ -1725,6 +1772,21 @@ export function AppShell() {
   >([]);
   const [composerAttachmentUploadPending, setComposerAttachmentUploadPending] =
     useState(false);
+  const [sideComposerBySource, setSideComposerBySource] = useState<
+    Record<string, SideComposerDraft>
+  >({});
+  const [sideComposerAttachmentUploadPending, setSideComposerAttachmentUploadPending] =
+    useState(false);
+  const [sideChatThreadBySource, setSideChatThreadBySource] = useState<
+    Record<string, string>
+  >({});
+  const [sideChatCreatingBySource, setSideChatCreatingBySource] = useState<
+    Record<string, boolean>
+  >({});
+  const [sideChatErrorBySource, setSideChatErrorBySource] = useState<
+    Record<string, string>
+  >({});
+  const [sideChatHistoryLoading, setSideChatHistoryLoading] = useState(false);
   const [titleDraft, setTitleDraft] = useState(DEFAULT_SESSION_TITLE);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1850,16 +1912,27 @@ export function AppShell() {
   } | null>(null);
   const composerAttachmentInputRef = useRef<HTMLInputElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const sideComposerAttachmentInputRef = useRef<HTMLInputElement | null>(null);
+  const sideComposerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const threadTitleInputRef = useRef<HTMLInputElement | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
+  const sideChatMessagesRef = useRef<HTMLDivElement | null>(null);
   const threadLogsRef = useRef<HTMLDivElement | null>(null);
   const threadLayoutRef = useRef<HTMLDivElement | null>(null);
+  const sideChatThreadLayoutRef = useRef<HTMLDivElement | null>(null);
   const selectedThreadIdRef = useRef<string | null>(null);
   const newThreadDraftActiveRef = useRef(false);
   const pendingWorkspacePathRef = useRef<string | null>(null);
   const pendingWorkspaceModeRef = useRef<DesktopWorkspaceMode>("local");
   const pendingBotIdRef = useRef<string | null>(null);
   const composerHasPayloadRef = useRef(false);
+  const sideChatThreadIdRef = useRef<string | null>(null);
+  const sideChatThreadIdsRef = useRef<Set<string>>(new Set());
+  const sideChatCreationBySourceRef = useRef<
+    Record<string, Promise<string | null>>
+  >({});
+  const sideIsComposingRef = useRef(false);
+  const sideIgnoreComposerSubmitUntilRef = useRef(0);
   const newThreadInitialDispatchLockRef = useRef(false);
   const threadLogsOpenRef = useRef(false);
   const threadLogsActiveTabRef = useRef<ThreadLogTab>("client");
@@ -2447,6 +2520,53 @@ export function AppShell() {
   }
 
   const activeThread = selectedThread(desktopState, selectedThreadId);
+  const sideChatSourceThreadId = activeThread?.id?.trim() || null;
+  const sideChatThreadId = sideChatSourceThreadId
+    ? sideChatThreadBySource[sideChatSourceThreadId] || null
+    : null;
+  const sideChatCreating = sideChatSourceThreadId
+    ? Boolean(sideChatCreatingBySource[sideChatSourceThreadId])
+    : false;
+  const sideChatError = sideChatSourceThreadId
+    ? sideChatErrorBySource[sideChatSourceThreadId] || null
+    : null;
+  const sideComposerDraft = sideChatSourceThreadId
+    ? sideComposerDraftForSource(sideChatSourceThreadId)
+    : emptySideComposerDraft();
+
+  useEffect(() => {
+    if (!sideChatSourceThreadId) {
+      return;
+    }
+    const persistedThreadId = readPersistedSideChatThreadId(sideChatSourceThreadId);
+    if (!persistedThreadId) {
+      return;
+    }
+    setSideChatThreadBySource((current) =>
+      current[sideChatSourceThreadId]
+        ? current
+        : {
+            ...current,
+            [sideChatSourceThreadId]: persistedThreadId,
+          },
+    );
+  }, [sideChatSourceThreadId]);
+
+  useEffect(() => {
+    sideChatThreadIdRef.current = sideChatThreadId;
+  }, [sideChatThreadId]);
+
+  useEffect(() => {
+    sideChatThreadIdsRef.current = new Set(Object.values(sideChatThreadBySource));
+  }, [sideChatThreadBySource]);
+
+  function rememberSideChatThreadId(threadId: string) {
+    sideChatThreadIdsRef.current = new Set([
+      ...sideChatThreadIdsRef.current,
+      threadId,
+    ]);
+  }
+
   const threadSummaryById = useMemo(() => {
     const summaries = new Map<string, DesktopThreadSummary>();
     for (const thread of desktopState?.threads || []) {
@@ -3296,6 +3416,170 @@ export function AppShell() {
     !activeMessages.length &&
     !showAutomationRunInitialPlaceholder,
   );
+  const sideChatThreadSummary = sideChatThreadId
+    ? threadSummaryById.get(sideChatThreadId) || null
+    : null;
+  const sideChatThreadTeamView = deriveThreadTeamView(sideChatThreadSummary);
+  const sideChatAgent =
+    sideChatThreadSummary?.agentId
+      ? desktopAgentMap.get(sideChatThreadSummary.agentId) || null
+      : null;
+  const sideChatAgentLabel =
+    sideChatThreadTeamView.teamDisplayName ||
+    sideChatAgent?.displayName ||
+    sideChatThreadSummary?.agentId ||
+    null;
+  const sideChatComposerProviderType: DesktopApiProviderType =
+    sideChatThreadId
+      ? inferProviderTypeForThread(
+          sideChatThreadId,
+          threadInfoByThread,
+          desktopState,
+          desktopAgents,
+        ) || "claude_code"
+      : composerProviderType;
+  const sideChatRawMessages = sideChatThreadId
+    ? messagesByThread[sideChatThreadId] || EMPTY_UI_TRANSCRIPT_MESSAGES
+    : EMPTY_UI_TRANSCRIPT_MESSAGES;
+  const sideChatMessages = sideChatRawMessages.filter(
+    (message) => !isRunLoadingPlaceholderMessage(message),
+  );
+  const sideChatMessageTailSignature = messageTailSignature(sideChatMessages);
+  const sideChatThreadInfo = sideChatThreadId
+    ? threadInfoByThread[sideChatThreadId] || null
+    : null;
+  const sideChatThreadWorktree =
+    sideChatThreadInfo?.worktree || sideChatThreadSummary?.worktree || null;
+  const sideChatComposerWorkspaceMode: DesktopWorkspaceMode | null =
+    sideChatThreadId && sideChatThreadWorktree ? "worktree" : null;
+  const sideChatComposerWorkspaceBranch =
+    sideChatThreadWorktree?.branch?.trim() || null;
+  const sideChatRenderableMessages = buildRenderableTranscript(sideChatMessages);
+  const sideChatRenderableBlocks = buildRenderTranscriptBlocks(
+    sideChatRenderableMessages,
+  );
+  const sideChatLastRenderableBlock =
+    sideChatRenderableBlocks[sideChatRenderableBlocks.length - 1] || null;
+  const sideChatTailToolTraceBlockKey =
+    sideChatLastRenderableBlock?.kind === "tool_group"
+      ? sideChatLastRenderableBlock.key
+      : null;
+  const sideChatQueue = sideChatThreadId
+    ? selectQueueIntentIds(messageState, sideChatThreadId)
+        .map((intentId) => messageState.intentsById[intentId])
+        .filter((intent): intent is MessageIntent => Boolean(intent))
+    : [];
+  const sideChatRuntime = selectThreadRuntime(messageState, sideChatThreadId);
+  const sideChatLiveStream = sideChatThreadId
+    ? liveStreamStateByThread[sideChatThreadId] || null
+    : null;
+  const sideChatPendingAckIntents = (
+    sideChatLiveStream?.pendingAckIntentIds || []
+  )
+    .map((intentId) => messageState.intentsById[intentId])
+    .filter((intent): intent is MessageIntent => Boolean(intent));
+  const sideChatVisiblePendingAckIntents = sideChatPendingAckIntents.filter(
+    (intent) => {
+      return !sideChatMessages.some((message) => {
+        return (
+          message.role === "user" &&
+          (message.intentId === intent.intentId ||
+            transcriptMessageMatchesIntent(message, intent))
+        );
+      });
+    },
+  );
+  const sideChatRemotePendingInputs = sideChatThreadId
+    ? pendingRemoteInputsByThread[sideChatThreadId] || []
+    : [];
+  const sideChatVisibleRemotePendingInputs =
+    sideChatPendingAckIntents.length > 0
+      ? []
+      : sideChatRemotePendingInputs.filter((input) => {
+          if (input.status !== "awaiting_ack") {
+            return false;
+          }
+          return !sideChatMessages.some((message) =>
+            pendingThreadInputMatchesMessage(input, message),
+          );
+        });
+  const sideChatPendingHistoryIntent = sideChatThreadId
+    ? Object.values(messageState.intentsById).some((intent) => {
+        return (
+          intent.threadId === sideChatThreadId &&
+          [
+            "dispatching",
+            "remote_accepted",
+            "awaiting_provider_ack",
+            "awaiting_response",
+            "awaiting_history",
+          ].includes(intent.state)
+        );
+      })
+    : false;
+  const sideChatThreadActivity = deriveThreadActivityModel({
+    messages: sideChatMessages,
+    threadInfo: sideChatThreadInfo,
+    liveStream: sideChatLiveStream,
+    runtimeBusy: Boolean(
+      sideChatRuntime && isRuntimeBusy(sideChatRuntime.state),
+    ),
+    pendingAckIntentCount: sideChatPendingAckIntents.length,
+    remoteAwaitingAckInputCount: sideChatVisibleRemotePendingInputs.length,
+    pendingHistoryIntent: sideChatPendingHistoryIntent,
+  });
+  const sideChatShowPendingAckLoading =
+    sideChatThreadActivity.showPendingAckLoading;
+  const sideChatRunLoading = sideChatThreadActivity.showRunLoading;
+  const sideChatCanSteerQueuedPrompt =
+    sideChatThreadActivity.canSteerQueuedPrompt;
+  const sideChatIsSendingThread = Boolean(
+    sideChatThreadId &&
+      (sideChatThreadActivity.runActive || sideChatShowPendingAckLoading),
+  );
+  const sideChatHistoryPagination = sideChatThreadId
+    ? historyPaginationByThread[sideChatThreadId] || null
+    : null;
+  const sideChatThreadEndpoints =
+    sideChatThreadId && !automationForLatestThread(desktopState, sideChatThreadId)
+      ? (desktopState?.endpoints || []).filter(
+          (endpoint) => endpoint.threadId === sideChatThreadId,
+        )
+      : [];
+  const sideChatThreadBots = boundBotsForThread(sideChatThreadEndpoints);
+  const sideChatMappedThreadBotId = sideChatThreadId
+    ? (Object.entries(desktopState?.botMainThreads || {}).find(
+        ([, threadId]) => threadId === sideChatThreadId,
+      )?.[0] ?? null)
+    : null;
+  const sideChatThreadBotId =
+    sideChatMappedThreadBotId ||
+    (sideChatThreadBots.length === 1 ? sideChatThreadBots[0]?.id ?? null : null);
+  const sideChatThreadBot = sideChatThreadBotId
+    ? botGroups.find((group) => group.id === sideChatThreadBotId) || null
+    : null;
+  const sideChatComposerHasPayload =
+    sideComposerDraft.textPresent ||
+    sideComposerDraft.images.length > 0 ||
+    sideComposerDraft.files.length > 0 ||
+    sideComposerDraft.browserAnnotations.length > 0;
+  const sideChatComposerLocked =
+    sideComposerAttachmentUploadPending || sideChatCreating;
+  const sideChatComposerPlaceholder =
+    sideChatIsSendingThread || sideChatQueue.length > 0
+      ? "Queue another follow-up for Garyx..."
+      : "Ask in side chat";
+  const sideChatShowHistoryLoadingPlaceholder = Boolean(
+    sideChatHistoryLoading &&
+      sideChatThreadId &&
+      !sideChatMessages.length,
+  );
+  const sideChatShowTailLoading = Boolean(
+    sideChatRunLoading && !sideChatTailToolTraceBlockKey,
+  );
+  const sideChatToolTraceLoadingKey = sideChatThreadActivity.runActive
+    ? sideChatTailToolTraceBlockKey
+    : null;
   const conversationContextText = isAutomationView
     ? `${desktopState?.automations.length || 0} scheduled runs`
     : isSkillsView
@@ -3649,6 +3933,156 @@ export function AppShell() {
     setComposerFiles([]);
     setComposerBrowserAnnotations([]);
     resetComposerAttachmentPicker();
+  }
+
+  function sideComposerDraftForSource(sourceThreadId: string): SideComposerDraft {
+    return sideComposerBySource[sourceThreadId] || emptySideComposerDraft();
+  }
+
+  function updateSideComposerDraft(
+    sourceThreadId: string,
+    updater: (current: SideComposerDraft) => SideComposerDraft,
+  ) {
+    setSideComposerBySource((current) => {
+      const previous = current[sourceThreadId] || emptySideComposerDraft();
+      return {
+        ...current,
+        [sourceThreadId]: updater(previous),
+      };
+    });
+  }
+
+  function resetSideComposerAttachmentPicker() {
+    if (sideComposerAttachmentInputRef.current) {
+      sideComposerAttachmentInputRef.current.value = "";
+    }
+  }
+
+  function clearSideComposerDraft(sourceThreadId: string) {
+    updateSideComposerDraft(sourceThreadId, (current) => ({
+      ...current,
+      text: "",
+      textPresent: false,
+      images: [],
+      files: [],
+      browserAnnotations: [],
+      resetKey: current.resetKey + 1,
+    }));
+    resetSideComposerAttachmentPicker();
+  }
+
+  function removeSideComposerImage(sourceThreadId: string, imageId: string) {
+    updateSideComposerDraft(sourceThreadId, (current) => ({
+      ...current,
+      images: current.images.filter((image) => image.id !== imageId),
+    }));
+  }
+
+  function removeSideComposerFile(sourceThreadId: string, fileId: string) {
+    updateSideComposerDraft(sourceThreadId, (current) => ({
+      ...current,
+      files: current.files.filter((file) => file.id !== fileId),
+    }));
+  }
+
+  function removeSideComposerBrowserAnnotation(
+    sourceThreadId: string,
+    annotationId: string,
+  ) {
+    updateSideComposerDraft(sourceThreadId, (current) => ({
+      ...current,
+      browserAnnotations: current.browserAnnotations.filter(
+        (annotation) => annotation.id !== annotationId,
+      ),
+    }));
+  }
+
+  function appendSideComposerFile(
+    sourceThreadId: string,
+    file: MessageFileAttachment,
+  ) {
+    updateSideComposerDraft(sourceThreadId, (current) => {
+      if (current.files.some((entry) => entry.path === file.path)) {
+        return current;
+      }
+      return {
+        ...current,
+        files: [...current.files, file],
+      };
+    });
+  }
+
+  async function appendSideComposerAttachments(
+    sourceThreadId: string,
+    files: File[],
+  ) {
+    if (!files.length) {
+      return;
+    }
+
+    setSideComposerAttachmentUploadPending(true);
+    try {
+      const prepared = await prepareAttachmentUploads(files);
+      if (!prepared.length) {
+        setError("No attachments could be loaded.");
+        return;
+      }
+      const uploaded = await window.garyxDesktop.uploadChatAttachments({
+        files: prepared.map((file) => ({
+          kind: file.kind,
+          name: file.name,
+          mediaType: file.mediaType,
+          dataBase64: file.dataBase64,
+        })),
+      });
+      if (uploaded.files.length !== prepared.length) {
+        throw new Error("Gateway returned an incomplete attachment upload result.");
+      }
+
+      const nextImages: MessageImageAttachment[] = [];
+      const nextFiles: MessageFileAttachment[] = [];
+      prepared.forEach((file, index) => {
+        const stored = uploaded.files[index];
+        if (!stored?.path?.trim()) {
+          return;
+        }
+        if (file.kind === "image") {
+          nextImages.push({
+            id: file.id,
+            name: stored.name,
+            mediaType: stored.mediaType || file.mediaType,
+            path: stored.path,
+            data: file.dataBase64,
+          });
+          return;
+        }
+        nextFiles.push({
+          id: file.id,
+          name: stored.name,
+          mediaType: stored.mediaType || file.mediaType,
+          path: stored.path,
+        });
+      });
+
+      if (!nextImages.length && !nextFiles.length) {
+        throw new Error("Gateway did not return any uploaded attachments.");
+      }
+      updateSideComposerDraft(sourceThreadId, (current) => ({
+        ...current,
+        images: nextImages.length ? [...current.images, ...nextImages] : current.images,
+        files: nextFiles.length ? [...current.files, ...nextFiles] : current.files,
+      }));
+      setError(null);
+    } catch (attachmentError) {
+      setError(
+        attachmentError instanceof Error
+          ? attachmentError.message
+          : "Failed to load attachment",
+      );
+    } finally {
+      setSideComposerAttachmentUploadPending(false);
+      resetSideComposerAttachmentPicker();
+    }
   }
 
   async function openExistingThread(
@@ -4578,6 +5012,120 @@ export function AppShell() {
       window.clearInterval(timer);
     };
   }, [contentView, selectedThreadId]);
+
+  useEffect(() => {
+    if (!sideChatThreadId || !desktopState) {
+      return;
+    }
+
+    void loadThreadHistory({
+      api: getDesktopApi(),
+      threadId: sideChatThreadId,
+      onBeforeLoad: (threadId) => {
+        if (!(messagesByThreadRef.current[threadId] || []).length) {
+          scrollMessagesToLatest(sideChatMessagesRef.current);
+        }
+      },
+      onTranscript: applyRemoteTranscript,
+      onAutomationResponseDetected: (threadId) => {
+        setPendingAutomationRun(threadId, null);
+      },
+      hasAutomationResponse: transcriptHasAutomationResponse,
+      setHistoryLoading: setSideChatHistoryLoading,
+      setError,
+    });
+  }, [desktopState, sideChatThreadId]);
+
+  useEffect(() => {
+    if (!sideChatThreadId) {
+      return;
+    }
+
+    let cancelled = false;
+    let polling = false;
+
+    const pollSideChatHistory = async () => {
+      if (cancelled || document.hidden || polling) {
+        return;
+      }
+
+      const liveStream = liveStreamStateRef.current[sideChatThreadId] || null;
+      if (
+        liveStream &&
+        ["connecting", "streaming", "reconciling"].includes(
+          liveStream.streamStatus,
+        )
+      ) {
+        return;
+      }
+
+      polling = true;
+      try {
+        const transcript =
+          await window.garyxDesktop.getThreadHistory(sideChatThreadId);
+        const nextSignature = threadActivitySignature(
+          transcript.messages,
+          transcript.pendingInputs,
+          transcript.threadInfo,
+        );
+        if (
+          nextSignature ===
+          remoteTranscriptSignatureByThreadRef.current[sideChatThreadId]
+        ) {
+          return;
+        }
+        applyRemoteTranscript(sideChatThreadId, transcript);
+      } catch {
+        // Best-effort reconcile loop for passive side-thread updates.
+      } finally {
+        polling = false;
+      }
+    };
+
+    const timer = window.setInterval(() => {
+      void pollSideChatHistory();
+    }, 1500);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [sideChatThreadId]);
+
+  useEffect(() => {
+    if (!sideChatThreadId) {
+      return;
+    }
+    if (sideChatQueue.length === 0) {
+      delete deferredQueueDrainByThreadRef.current[sideChatThreadId];
+      delete queueDrainInFlightByThreadRef.current[sideChatThreadId];
+      return;
+    }
+    if (
+      sideChatIsSendingThread ||
+      !deferredQueueDrainByThreadRef.current[sideChatThreadId] ||
+      queueDrainInFlightByThreadRef.current[sideChatThreadId]
+    ) {
+      return;
+    }
+
+    deferredQueueDrainByThreadRef.current[sideChatThreadId] = false;
+    queueDrainInFlightByThreadRef.current[sideChatThreadId] = true;
+    void runQueuedBatch(sideChatThreadId).finally(() => {
+      delete queueDrainInFlightByThreadRef.current[sideChatThreadId];
+    });
+  }, [sideChatIsSendingThread, sideChatQueue.length, sideChatThreadId]);
+
+  useLayoutEffect(() => {
+    if (!sideChatThreadId || sideChatHistoryLoading) {
+      return;
+    }
+    scrollMessagesToLatest(sideChatMessagesRef.current);
+  }, [
+    sideChatHistoryLoading,
+    sideChatThreadId,
+    sideChatMessageTailSignature,
+  ]);
 
   useLayoutEffect(() => {
     const currentThreadId = activeThreadMessageKey;
@@ -6930,58 +7478,212 @@ export function AppShell() {
     }
   }
 
-  async function handleSubmitSideChat(
-    input: SideChatSubmitInput,
-  ): Promise<SideChatSubmitResult> {
-    const prompt = input.message.trim();
-    if (!prompt) {
-      throw new Error("Enter a message first.");
-    }
-    const sourceThreadId = activeThread?.id?.trim() || null;
+  async function ensureSideChatThread(): Promise<string | null> {
+    const sourceThreadId = sideChatSourceThreadId;
     if (!sourceThreadId) {
-      throw new Error("Open a thread before starting side chat.");
+      return null;
     }
 
-    let sideThreadId = input.threadId?.trim() || "";
-    let sideThreadTitle: string | null = null;
-    if (!sideThreadId) {
-      const created = await window.garyxDesktop.createThread({
-        title: "Side chat",
-        agentId: activeThread?.agentId || pendingAgentId || "claude",
-        forkFromThreadId: sourceThreadId,
-      });
-      sideThreadId = created.thread.id;
-      sideThreadTitle = created.thread.title;
-      setDesktopState(created.state);
-      updateMessagesByThread((current) => ({
-        ...current,
-        [created.thread.id]: current[created.thread.id] || [],
-      }));
-    }
-
-    const result = await window.garyxDesktop.openChatStream({
-      threadId: sideThreadId,
-      message: prompt,
-      files: input.files,
-    });
-    const resultThreadId = result.threadId || result.sessionId || sideThreadId;
-    setDesktopState((current) => {
-      if (!current) {
-        return current;
+    const existingThreadId =
+      sideChatThreadBySource[sourceThreadId] ||
+      readPersistedSideChatThreadId(sourceThreadId);
+    if (existingThreadId) {
+      try {
+        if (await ensureThreadOpenable(existingThreadId)) {
+          rememberSideChatThreadId(existingThreadId);
+          setSideChatThreadBySource((current) => ({
+            ...current,
+            [sourceThreadId]: existingThreadId,
+          }));
+          setSideChatErrorBySource((current) => {
+            if (!(sourceThreadId in current)) {
+              return current;
+            }
+            const next = { ...current };
+            delete next[sourceThreadId];
+            return next;
+          });
+          return existingThreadId;
+        }
+      } catch {
+        setSideChatThreadBySource((current) => {
+          if (current[sourceThreadId] !== existingThreadId) {
+            return current;
+          }
+          const next = { ...current };
+          delete next[sourceThreadId];
+          return next;
+        });
       }
-      return {
+    }
+
+    const inFlight = sideChatCreationBySourceRef.current[sourceThreadId];
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const creation = (async () => {
+      setSideChatCreatingBySource((current) => ({
         ...current,
-        threads: mergeThread(current.threads, result.thread),
-        sessions: mergeThread(current.sessions || current.threads, result.thread),
-      };
+        [sourceThreadId]: true,
+      }));
+      setSideChatErrorBySource((current) => {
+        if (!(sourceThreadId in current)) {
+          return current;
+        }
+        const next = { ...current };
+        delete next[sourceThreadId];
+        return next;
+      });
+
+      try {
+        const sourceThread =
+          threadSummaryById.get(sourceThreadId) || activeThread || null;
+        const created = await window.garyxDesktop.createThread({
+          title: "Side chat",
+          agentId: sourceThread?.agentId || pendingAgentId || "claude",
+          forkFromThreadId: sourceThreadId,
+          metadata: {
+            source: "side_chat",
+            hidden: true,
+            exclude_from_recent: true,
+            side_chat_parent_thread_id: sourceThreadId,
+          },
+        });
+        setDesktopState(created.state);
+        updateMessagesByThread((current) => ({
+          ...current,
+          [created.thread.id]: current[created.thread.id] || [],
+        }));
+        rememberSideChatThreadId(created.thread.id);
+        setSideChatThreadBySource((current) => ({
+          ...current,
+          [sourceThreadId]: created.thread.id,
+        }));
+        persistSideChatThreadId(sourceThreadId, created.thread.id);
+        return created.thread.id;
+      } catch (createError) {
+        const message =
+          createError instanceof Error
+            ? createError.message
+            : "Failed to start side chat.";
+        setSideChatErrorBySource((current) => ({
+          ...current,
+          [sourceThreadId]: message,
+        }));
+        setError(message);
+        return null;
+      } finally {
+        setSideChatCreatingBySource((current) => {
+          if (!current[sourceThreadId]) {
+            return current;
+          }
+          const next = { ...current };
+          delete next[sourceThreadId];
+          return next;
+        });
+        delete sideChatCreationBySourceRef.current[sourceThreadId];
+      }
+    })();
+
+    sideChatCreationBySourceRef.current[sourceThreadId] = creation;
+    return creation;
+  }
+
+  async function handleSideComposerSubmit(options?: {
+    useAlternateFollowUpBehavior?: boolean;
+  }) {
+    const sourceThreadId = sideChatSourceThreadId;
+    if (!sourceThreadId) {
+      setError("Open a thread before starting side chat.");
+      return;
+    }
+    if (sideComposerAttachmentUploadPending) {
+      setError("Attachments are still uploading to gateway.");
+      return;
+    }
+
+    const draft = sideComposerDraftForSource(sourceThreadId);
+    const prompt = composePromptWithBrowserAnnotations(
+      draft.text,
+      draft.browserAnnotations,
+      t,
+    );
+    const promptImages = [...draft.images];
+    const promptFiles = [...draft.files];
+    const hasPromptPayload =
+      Boolean(prompt) ||
+      promptImages.length > 0 ||
+      promptFiles.length > 0 ||
+      draft.browserAnnotations.length > 0;
+    if (!hasPromptPayload) {
+      return;
+    }
+
+    const threadId = await ensureSideChatThread();
+    if (!threadId) {
+      return;
+    }
+
+    const runtime = selectThreadRuntime(messageStateRef.current, threadId);
+    const liveStream = getLiveStreamState(threadId);
+    const streamBusy = Boolean(
+      liveStream &&
+        ["connecting", "streaming", "reconciling"].includes(
+          liveStream.streamStatus,
+        ),
+    );
+    const sendingThread =
+      (sideChatThreadId === threadId && sideChatIsSendingThread) ||
+      Boolean(runtime && isRuntimeBusy(runtime.state)) ||
+      streamBusy;
+
+    if (sendingThread) {
+      const intent = buildIntent({
+        threadId,
+        text: prompt,
+        images: promptImages,
+        files: promptFiles,
+        source: "composer_queue",
+        state: "queued_local",
+      });
+      dispatchMessageState({
+        type: "intent/created",
+        intent,
+        enqueue: true,
+      });
+      deferredQueueDrainByThreadRef.current[threadId] = true;
+      clearSideComposerDraft(sourceThreadId);
+      setError(null);
+
+      const followUpBehavior = options?.useAlternateFollowUpBehavior
+        ? settingsDraft.followUpBehavior === "steer"
+          ? "queue"
+          : "steer"
+        : settingsDraft.followUpBehavior;
+      if (followUpBehavior === "steer" && sideChatCanSteerQueuedPrompt) {
+        await steerQueuedIntent(intent, { canSteer: sideChatCanSteerQueuedPrompt });
+      }
+      return;
+    }
+
+    const intent = buildIntent({
+      threadId,
+      text: prompt,
+      images: promptImages,
+      files: promptFiles,
+      source: "composer_send",
+      state: "dispatch_requested",
+      dispatchMode: "sync_send",
     });
-    scheduleHistoryRefresh(resultThreadId, 4, 900, true);
-    return {
-      response: result.response,
-      status: result.status,
-      threadId: resultThreadId,
-      title: result.thread.title || sideThreadTitle,
-    };
+    dispatchMessageState({
+      type: "intent/created",
+      intent,
+      enqueue: false,
+    });
+    clearSideComposerDraft(sourceThreadId);
+    setError(null);
+    void runQueuedBatch(threadId, intent.intentId);
   }
 
   function handleAddBrowserAnnotationComment(
@@ -7669,6 +8371,17 @@ export function AppShell() {
         const resultThread = titleOverride
           ? { ...result.thread, title: titleOverride }
           : result.thread;
+        if (sideChatThreadIdsRef.current.has(resultThread.id)) {
+          return {
+            ...current,
+            threads: current.threads.filter(
+              (thread) => thread.id !== resultThread.id,
+            ),
+            sessions: current.sessions.filter(
+              (session) => session.id !== resultThread.id,
+            ),
+          };
+        }
         return {
           ...current,
           threads: mergeThread(current.threads, resultThread),
@@ -7990,9 +8703,12 @@ export function AppShell() {
     }
   }
 
-  async function steerQueuedIntent(latestIntent: MessageIntent) {
+  async function steerQueuedIntent(
+    latestIntent: MessageIntent,
+    options?: { canSteer?: boolean },
+  ) {
     const threadId = latestIntent.threadId;
-    if (!canSteerQueuedPrompt) {
+    if (!(options?.canSteer ?? canSteerQueuedPrompt)) {
       return;
     }
     if (latestIntent.state !== "queued_local") {
@@ -8420,8 +9136,7 @@ export function AppShell() {
     }));
   }
 
-  async function handleInterrupt() {
-    const threadId = activeThreadId || selectedThreadId;
+  async function interruptThread(threadId: string | null | undefined) {
     if (!threadId) {
       return;
     }
@@ -8465,6 +9180,10 @@ export function AppShell() {
     scheduleHistoryRefresh(threadId, 2, 500);
     const status = await window.garyxDesktop.checkConnection();
     setConnection(status);
+  }
+
+  async function handleInterrupt() {
+    await interruptThread(activeThreadId || selectedThreadId);
   }
 
   function markIgnoreComposerSubmitWindow(durationMs = 80) {
@@ -8672,19 +9391,216 @@ export function AppShell() {
     });
   }
 
+  const sideChatPanel = !sideChatSourceThreadId ? (
+    <div className="side-tool-empty">
+      {t("Open a thread before starting side chat.")}
+    </div>
+  ) : sideChatThreadId ? (
+    <ThreadPage
+      agentLabel={sideChatAgentLabel}
+      composerAgentOptions={composerAgentOptions}
+      composerWorkflowOptions={composerWorkflowOptions}
+      composerWorkflowOptionsLoading={workflowDefinitionsLoading}
+      activeMessages={sideChatMessages}
+      activePendingAckIntents={sideChatVisiblePendingAckIntents}
+      activePendingAutomationRun={null}
+      activeToolTraceLoadingKey={sideChatToolTraceLoadingKey}
+      activeQueue={sideChatQueue}
+      activeRenderableBlocks={sideChatRenderableBlocks}
+      activeThreadLogsHasUnread={false}
+      activeThreadLogsPath=""
+      activeThreadSummary={sideChatThreadSummary}
+      activeThreadTitle={sideChatThreadSummary?.title || null}
+      activeThreadRunId={
+        sideChatLiveStream?.runId || sideChatThreadSummary?.recentRunId || null
+      }
+      availableWorkspaceCount={availableWorkspaceCount}
+      clientThreadLogEntries={
+        sideChatThreadId ? clientLogsByThread[sideChatThreadId] || [] : []
+      }
+      composer={sideComposerDraft.text}
+      composerAttachmentInputRef={sideComposerAttachmentInputRef}
+      composerBrowserAnnotations={sideComposerDraft.browserAnnotations}
+      composerFiles={sideComposerDraft.files}
+      composerHasPayload={sideChatComposerHasPayload}
+      composerImages={sideComposerDraft.images}
+      composerLocked={sideChatComposerLocked}
+      composerPlaceholder={sideChatComposerPlaceholder}
+      composerProviderType={sideChatComposerProviderType}
+      composerResetKey={sideComposerDraft.resetKey}
+      composerWorkspaceBranch={sideChatComposerWorkspaceBranch}
+      composerWorkspaceMode={sideChatComposerWorkspaceMode}
+      activeThreadBot={sideChatThreadBot}
+      activeThreadBotId={sideChatThreadBotId}
+      botBindingDisabled={bindingMutation === "bot-binding"}
+      botGroups={botGroups}
+      slashCommands={commands}
+      slashCommandsLoaded={commandsLoaded}
+      slashCommandsLoading={commandsLoading}
+      composerTextareaRef={sideComposerTextareaRef}
+      draggedQueueIntentId={draggedQueueIntentId}
+      expandedClientLogEntries={{}}
+      historyLoading={sideChatHistoryLoading}
+      historyLoadingEarlier={Boolean(sideChatHistoryPagination?.loadingBefore)}
+      ignoreComposerSubmitUntilRef={sideIgnoreComposerSubmitUntilRef}
+      inspectorOpen={false}
+      isActiveSendingThread={sideChatIsSendingThread}
+      canSteerQueuedPrompt={sideChatCanSteerQueuedPrompt}
+      isComposingRef={sideIsComposingRef}
+      messagesRef={sideChatMessagesRef}
+      mobileThreadLogLines={[]}
+      newThreadSelectedAgentId={sideChatThreadSummary?.agentId || pendingAgentId}
+      newThreadSelectedWorkflowId={null}
+      newThreadWorkspaceEntry={newThreadWorkspaceEntry}
+      newThreadWorkspaceMode={pendingWorkspaceMode}
+      onAddWorkspace={() => {
+        void handleAddWorkspace();
+      }}
+      onAppendComposerAttachments={(files) => {
+        void appendSideComposerAttachments(sideChatSourceThreadId, files);
+      }}
+      onCancelIntent={(threadId, intentId) => {
+        dispatchMessageState({
+          type: "intent/cancelled",
+          threadId,
+          intentId,
+        });
+      }}
+      onComposerChange={(value) => {
+        updateSideComposerDraft(sideChatSourceThreadId, (current) => ({
+          ...current,
+          text: value,
+          textPresent: value.trim().length > 0,
+        }));
+        if (
+          /^\/[a-z0-9_]*$/i.test(value) &&
+          !commandsLoaded &&
+          !commandsLoading
+        ) {
+          void loadSlashCommands();
+        }
+      }}
+      onComposerCompositionEnd={(value) => {
+        sideIsComposingRef.current = false;
+        updateSideComposerDraft(sideChatSourceThreadId, (current) => ({
+          ...current,
+          text: value,
+          textPresent: value.trim().length > 0,
+        }));
+        sideIgnoreComposerSubmitUntilRef.current = performance.now() + 80;
+      }}
+      onComposerCompositionStart={() => {
+        sideIsComposingRef.current = true;
+      }}
+      onComposerInterrupt={() => {
+        void interruptThread(sideChatThreadIdRef.current);
+      }}
+      onComposerSubmit={handleSideComposerSubmit}
+      onJumpToLatestThreadLogs={() => {}}
+      onLocalWorkspaceFileLinkClick={handleLocalFileLinkClick}
+      onMarkIgnoreComposerSubmitWindow={() => {
+        sideIgnoreComposerSubmitUntilRef.current = performance.now() + 80;
+      }}
+      onMessagesScroll={() => {
+        const node = sideChatMessagesRef.current;
+        if (
+          sideChatThreadId &&
+          node &&
+          messagesNearEarlierUserTurnBoundary(node)
+        ) {
+          void loadOlderThreadHistoryPage(sideChatThreadId);
+        }
+      }}
+      onMessagesUserScrollIntent={() => {}}
+      onQueueDropTargetChange={setQueueDropTarget}
+      onRemoveComposerFile={(fileId) => {
+        removeSideComposerFile(sideChatSourceThreadId, fileId);
+      }}
+      onRemoveComposerImage={(imageId) => {
+        removeSideComposerImage(sideChatSourceThreadId, imageId);
+      }}
+      onRemoveComposerBrowserAnnotation={(annotationId) => {
+        removeSideComposerBrowserAnnotation(sideChatSourceThreadId, annotationId);
+      }}
+      onReorderQueuedIntent={reorderQueuedIntent}
+      onSelectNewThreadAgent={() => {}}
+      onSelectNewThreadWorkflow={() => {}}
+      onSelectNewThreadWorkspaceMode={() => {}}
+      onResumeProviderSession={handleResumeProviderSession}
+      onSelectBotBinding={(botId) => {
+        if (sideChatThreadId) {
+          void syncThreadBotBinding(sideChatThreadId, botId);
+        }
+      }}
+      onSelectThreadLogsTab={() => {}}
+      onOpenThreadById={(threadId) => {
+        void openExistingThread(threadId);
+      }}
+      onSelectWorkspace={() => {}}
+      onSetDraggedQueueIntentId={setDraggedQueueIntentId}
+      onSteerQueuedPrompt={(item) => {
+        void steerQueuedIntent(item, { canSteer: sideChatCanSteerQueuedPrompt });
+      }}
+      onThreadLogsContentScroll={() => {}}
+      onThreadLogsResizeKeyDown={() => {}}
+      onThreadLogsResizeStart={() => {}}
+      onToggleClientLogEntry={() => {}}
+      preferredWorkspaceForNewThread={preferredWorkspaceForNewThread}
+      queueDropTarget={queueDropTarget}
+      selectableNewThreadWorkspaces={selectableNewThreadWorkspaces}
+      selectedThreadId={sideChatThreadId}
+      showAutomationRunInitialPlaceholder={false}
+      showDreams={false}
+      showAutomationRunTailLoading={sideChatShowTailLoading}
+      showHistoryLoadingPlaceholder={sideChatShowHistoryLoadingPlaceholder}
+      showPendingAckLoading={sideChatShowPendingAckLoading}
+      sideToolsPanel={null}
+      threadLayoutRef={sideChatThreadLayoutRef}
+      threadLogsActiveTab="client"
+      threadLogsError={null}
+      threadLogsLoading={false}
+      threadLogsMaxWidth={0}
+      threadLogsOpen={false}
+      threadLogsPanelWidth={0}
+      threadLogsRef={threadLogsRef}
+      threadLogsResizing={false}
+      teamAgentDisplayNamesById={teamAgentDisplayNamesById}
+      visibleRemoteAwaitingAckInputs={sideChatVisibleRemotePendingInputs}
+      visibleRemotePendingInputs={sideChatVisibleRemotePendingInputs}
+      workflowRunContent={null}
+      workspaceMutation={workspaceMutation}
+    />
+  ) : (
+    <div className="side-tool-empty">
+      {sideChatCreating
+        ? t("Starting…")
+        : sideChatError || t("Start a focused side thread.")}
+    </div>
+  );
+
   const sideToolsPanel = activeWorkspacePath ? (
     <ThreadSideToolsPanel
       activeWorkspaceName={activeWorkspace?.name || null}
       activeWorkspacePath={activeWorkspacePath}
       selectedWorkspaceFile={selectedSideToolWorkspaceFile}
-      threadId={selectedThreadId}
+      sideChatPanel={sideChatPanel}
       workspaceBranch={composerWorkspaceBranch}
       workspaceDirectoryPanel={workspaceDirectoryPanel}
       workspaceFileFilter={workspaceFileFilter}
       workspaceMode={composerWorkspaceMode || "local"}
       onRevealSelectedWorkspaceFile={handleRevealSelectedWorkspaceFile}
       onAddBrowserAnnotationComment={handleAddBrowserAnnotationComment}
-      onSubmitSideChat={handleSubmitSideChat}
+      onAttachFileToSideChat={(file) => {
+        if (!sideChatSourceThreadId) {
+          setError("Open a thread before starting side chat.");
+          return;
+        }
+        appendSideComposerFile(sideChatSourceThreadId, file);
+        void ensureSideChatThread();
+      }}
+      onOpenSideChat={() => {
+        void ensureSideChatThread();
+      }}
       onWorkspaceFileFilterChange={setWorkspaceFileFilter}
     />
   ) : null;

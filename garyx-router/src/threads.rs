@@ -385,6 +385,7 @@ pub fn upsert_thread_fields(value: &mut Value, thread_id: &str, options: &Thread
                 if matches!(
                     trimmed_key,
                     "source"
+                        | "hidden"
                         | "automation_id"
                         | "automation_thread_mode"
                         | "exclude_from_recent"

@@ -458,6 +458,23 @@ async fn create_thread_record_persists_metadata_object() {
     );
 }
 
+#[tokio::test]
+async fn create_thread_record_mirrors_hidden_metadata_to_top_level() {
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let (_thread_id, created) = create_thread_record(
+        &store,
+        ThreadEnsureOptions {
+            metadata: HashMap::from([("hidden".to_owned(), json!(true))]),
+            ..ThreadEnsureOptions::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(created.get("hidden"), Some(&json!(true)));
+    assert!(is_hidden_thread_value(&created));
+}
+
 #[test]
 fn default_workspace_for_channel_account_returns_bot_workspace() {
     let mut config = garyx_models::config::GaryxConfig::default();

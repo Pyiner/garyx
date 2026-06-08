@@ -5,19 +5,13 @@ import {
   useMemo,
   useRef,
   useState,
-  type Dispatch,
-  type FormEvent,
-  type KeyboardEvent,
   type ReactNode,
-  type SetStateAction,
 } from "react";
 import {
   FileText,
   Globe,
   MessageSquare,
-  Paperclip,
   Plus,
-  Send,
   Terminal as TerminalIcon,
   X,
 } from "lucide-react";
@@ -31,7 +25,6 @@ import type {
   DesktopTerminalState,
   DesktopWorkspaceMode,
   MessageFileAttachment,
-  OpenChatStreamResult,
 } from "@shared/contracts";
 
 import { useI18n } from "../../i18n";
@@ -41,19 +34,6 @@ const SidePanelBrowserPage = lazy(() =>
 );
 
 export type ThreadSideToolId = "files" | "chat" | "browser" | "terminal";
-
-export type SideChatSubmitResult = Pick<
-  OpenChatStreamResult,
-  "response" | "status" | "threadId"
-> & {
-  title?: string | null;
-};
-
-export type SideChatSubmitInput = {
-  message: string;
-  threadId?: string | null;
-  files?: MessageFileAttachment[];
-};
 
 export type SideToolWorkspaceFile = {
   name: string;
@@ -66,74 +46,17 @@ type ThreadSideToolsPanelProps = {
   activeWorkspaceName?: string | null;
   activeWorkspacePath?: string | null;
   selectedWorkspaceFile?: SideToolWorkspaceFile | null;
-  threadId?: string | null;
   workspaceBranch?: string | null;
   workspaceDirectoryPanel: ReactNode;
   workspaceFileFilter: string;
   workspaceMode?: DesktopWorkspaceMode | null;
+  sideChatPanel: ReactNode;
   onRevealSelectedWorkspaceFile?: () => Promise<void> | void;
   onAddBrowserAnnotationComment: (request: BrowserAnnotationCommentRequest) => void;
-  onSubmitSideChat: (input: SideChatSubmitInput) => Promise<SideChatSubmitResult>;
+  onAttachFileToSideChat: (file: MessageFileAttachment) => void;
+  onOpenSideChat: () => void;
   onWorkspaceFileFilterChange: (value: string) => void;
 };
-
-type SideChatMessage = {
-  id: string;
-  role: "user" | "assistant";
-  text: string;
-  threadId?: string | null;
-};
-
-type PersistedSideChatState = {
-  draft: string;
-  messages: SideChatMessage[];
-  sideThreadId: string | null;
-};
-
-function emptySideChatState(): PersistedSideChatState {
-  return {
-    draft: "",
-    messages: [],
-    sideThreadId: null,
-  };
-}
-
-function readSideChatState(key: string): PersistedSideChatState {
-  if (typeof window === "undefined") {
-    return emptySideChatState();
-  }
-  try {
-    const raw = window.sessionStorage.getItem(key);
-    if (!raw) {
-      return emptySideChatState();
-    }
-    const parsed = JSON.parse(raw) as Partial<PersistedSideChatState>;
-    return {
-      draft: typeof parsed.draft === "string" ? parsed.draft : "",
-      messages: Array.isArray(parsed.messages)
-        ? parsed.messages.filter((message): message is SideChatMessage => (
-            typeof message?.id === "string" &&
-            (message.role === "user" || message.role === "assistant") &&
-            typeof message.text === "string"
-          ))
-        : [],
-      sideThreadId: typeof parsed.sideThreadId === "string" ? parsed.sideThreadId : null,
-    };
-  } catch {
-    return emptySideChatState();
-  }
-}
-
-function writeSideChatState(key: string, state: PersistedSideChatState) {
-  if (typeof window === "undefined") {
-    return;
-  }
-  try {
-    window.sessionStorage.setItem(key, JSON.stringify(state));
-  } catch {
-    // Ignore storage quota or privacy-mode failures; in-memory state still works.
-  }
-}
 
 type ToolDescriptor = {
   id: ThreadSideToolId;
@@ -156,176 +79,6 @@ function appendTerminalOutput(output: string, data: string): string {
   return nextOutput.length > MAX_RENDERER_TERMINAL_OUTPUT_LENGTH
     ? nextOutput.slice(nextOutput.length - MAX_RENDERER_TERMINAL_OUTPUT_LENGTH)
     : nextOutput;
-}
-
-function SideChatTool({
-  attachments,
-  draft,
-  error,
-  messages,
-  onClearAttachments,
-  onDraftChange,
-  onErrorChange,
-  onMessagesChange,
-  onOpenFiles,
-  onRemoveAttachment,
-  onSendingChange,
-  onSideThreadIdChange,
-  onSubmitSideChat,
-  sending,
-  sideThreadId,
-}: {
-  attachments: MessageFileAttachment[];
-  draft: string;
-  error: string | null;
-  messages: SideChatMessage[];
-  onClearAttachments: () => void;
-  onDraftChange: Dispatch<SetStateAction<string>>;
-  onErrorChange: Dispatch<SetStateAction<string | null>>;
-  onMessagesChange: Dispatch<SetStateAction<SideChatMessage[]>>;
-  onOpenFiles: () => void;
-  onRemoveAttachment: (id: string) => void;
-  onSendingChange: Dispatch<SetStateAction<boolean>>;
-  onSideThreadIdChange: Dispatch<SetStateAction<string | null>>;
-  onSubmitSideChat: ThreadSideToolsPanelProps["onSubmitSideChat"];
-  sending: boolean;
-  sideThreadId: string | null;
-}) {
-  const { t } = useI18n();
-  const transcriptRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    const node = transcriptRef.current;
-    if (node) {
-      node.scrollTop = node.scrollHeight;
-    }
-  }, [messages, sending]);
-
-  async function submit(event?: FormEvent<HTMLFormElement>) {
-    event?.preventDefault();
-    const text = draft.trim();
-    if (!text || sending) {
-      return;
-    }
-    const userMessage: SideChatMessage = {
-      id: `side-chat-user-${Date.now()}`,
-      role: "user",
-      text,
-    };
-    onMessagesChange((current) => [...current, userMessage]);
-    onDraftChange("");
-    onSendingChange(true);
-    onErrorChange(null);
-    try {
-      const result = await onSubmitSideChat({
-        message: text,
-        threadId: sideThreadId,
-        files: attachments,
-      });
-      onSideThreadIdChange(result.threadId);
-      onClearAttachments();
-      onMessagesChange((current) => [
-        ...current,
-        {
-          id: `side-chat-assistant-${Date.now()}`,
-          role: "assistant",
-          text:
-            result.response.trim() ||
-            (result.status === "accepted"
-              ? t("Started.")
-              : result.status === "disconnected"
-                ? t("Stream disconnected before a final response.")
-                : t("Done.")),
-          threadId: result.threadId,
-        },
-      ]);
-    } catch (chatError) {
-      onErrorChange(
-        chatError instanceof Error
-          ? chatError.message
-          : t("Failed to start side chat."),
-      );
-    } finally {
-      onSendingChange(false);
-    }
-  }
-
-  return (
-    <div className="side-tool-chat">
-      <div className="side-tool-chat-transcript" ref={transcriptRef}>
-        {messages.length ? (
-          messages.map((message) => (
-            <article
-              className={`side-tool-chat-message is-${message.role}`}
-              key={message.id}
-            >
-              <p>{message.text}</p>
-            </article>
-          ))
-        ) : (
-          <div className="side-tool-empty">
-            {t("Start a focused side thread.")}
-          </div>
-        )}
-        {sending ? (
-          <article className="side-tool-chat-message is-assistant is-pending">
-            <p>{t("Working…")}</p>
-          </article>
-        ) : null}
-      </div>
-      {error ? <div className="side-tool-error">{error}</div> : null}
-      <form className="side-tool-chat-composer" onSubmit={(event) => void submit(event)}>
-        {attachments.length ? (
-          <div className="side-tool-chat-attachments">
-            {attachments.map((file) => (
-              <span className="side-tool-chat-attachment" key={file.id} title={file.path}>
-                <FileText aria-hidden size={13} strokeWidth={1.8} />
-                <span>{file.name}</span>
-                <button
-                  aria-label={t("Remove attachment")}
-                  onClick={() => onRemoveAttachment(file.id)}
-                  type="button"
-                >
-                  <X aria-hidden size={11} strokeWidth={2} />
-                </button>
-              </span>
-            ))}
-          </div>
-        ) : null}
-        <textarea
-          aria-label={t("Side chat message")}
-          onChange={(event) => onDraftChange(event.target.value)}
-          onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              void submit();
-            }
-          }}
-          placeholder={t("Ask in side chat")}
-          rows={3}
-          value={draft}
-        />
-        <div className="side-tool-chat-actions">
-          <button
-            className="codex-icon-button"
-            onClick={onOpenFiles}
-            title={t("Add file")}
-            type="button"
-          >
-            <Paperclip aria-hidden />
-          </button>
-          <button
-            className="codex-icon-button side-tool-chat-send"
-            disabled={!draft.trim() || sending}
-            title={t("Send")}
-            type="submit"
-          >
-            <Send aria-hidden />
-          </button>
-        </div>
-      </form>
-    </div>
-  );
 }
 
 function SideTerminalTool({ cwd }: { cwd?: string | null }) {
@@ -590,12 +343,13 @@ function SideTerminalTool({ cwd }: { cwd?: string | null }) {
 export function ThreadSideToolsPanel({
   activeWorkspacePath,
   selectedWorkspaceFile,
-  threadId,
+  sideChatPanel,
   workspaceDirectoryPanel,
   workspaceFileFilter,
   onRevealSelectedWorkspaceFile,
   onAddBrowserAnnotationComment,
-  onSubmitSideChat,
+  onAttachFileToSideChat,
+  onOpenSideChat,
   onWorkspaceFileFilterChange,
 }: ThreadSideToolsPanelProps) {
   const { t } = useI18n();
@@ -610,43 +364,11 @@ export function ThreadSideToolsPanel({
   );
   const [openTools, setOpenTools] = useState<ThreadSideToolId[]>(["files"]);
   const [activeToolId, setActiveToolId] = useState<ThreadSideToolId>("files");
-  const [attachedFiles, setAttachedFiles] = useState<MessageFileAttachment[]>([]);
-  const [sideChatDraft, setSideChatDraft] = useState("");
-  const [sideChatMessages, setSideChatMessages] = useState<SideChatMessage[]>([]);
-  const [sideChatThreadId, setSideChatThreadId] = useState<string | null>(null);
-  const [sideChatSending, setSideChatSending] = useState(false);
-  const [sideChatError, setSideChatError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
-  const sideChatStorageKey = useMemo(() => {
-    const ownerKey = threadId?.trim() || activeWorkspacePath?.trim() || "global";
-    return `garyx.side-tools.side-chat.${ownerKey}`;
-  }, [activeWorkspacePath, threadId]);
-  const sideChatHydratedKeyRef = useRef<string | null>(null);
   const activeTool = tools.find((tool) => tool.id === activeToolId) || tools[0];
   const openToolDescriptors = openTools
     .map((toolId) => tools.find((tool) => tool.id === toolId))
     .filter((tool): tool is ToolDescriptor => Boolean(tool));
-
-  useEffect(() => {
-    const persisted = readSideChatState(sideChatStorageKey);
-    setSideChatDraft(persisted.draft);
-    setSideChatMessages(persisted.messages);
-    setSideChatThreadId(persisted.sideThreadId);
-    setSideChatError(null);
-    setSideChatSending(false);
-    sideChatHydratedKeyRef.current = sideChatStorageKey;
-  }, [sideChatStorageKey]);
-
-  useEffect(() => {
-    if (sideChatHydratedKeyRef.current !== sideChatStorageKey) {
-      return;
-    }
-    writeSideChatState(sideChatStorageKey, {
-      draft: sideChatDraft,
-      messages: sideChatMessages,
-      sideThreadId: sideChatThreadId,
-    });
-  }, [sideChatDraft, sideChatMessages, sideChatStorageKey, sideChatThreadId]);
 
   function attachSelectedWorkspaceFile() {
     if (!selectedWorkspaceFile) {
@@ -658,9 +380,7 @@ export function ThreadSideToolsPanel({
       mediaType: selectedWorkspaceFile.mediaType || "",
       path: selectedWorkspaceFile.absolutePath,
     };
-    setAttachedFiles((current) =>
-      current.some((entry) => entry.path === file.path) ? current : [...current, file],
-    );
+    onAttachFileToSideChat(file);
     openTool("chat");
   }
 
@@ -677,6 +397,9 @@ export function ThreadSideToolsPanel({
     );
     setActiveToolId(toolId);
     setMenuOpen(false);
+    if (toolId === "chat") {
+      onOpenSideChat();
+    }
   }
 
   function closeTool(toolId: ThreadSideToolId) {
@@ -704,7 +427,12 @@ export function ThreadSideToolsPanel({
                 aria-selected={tool.id === activeToolId}
                 className={`side-tools-tab ${tool.id === activeToolId ? "is-active" : ""}`}
                 key={tool.id}
-                onClick={() => setActiveToolId(tool.id)}
+                onClick={() => {
+                  setActiveToolId(tool.id);
+                  if (tool.id === "chat") {
+                    onOpenSideChat();
+                  }
+                }}
                 role="tab"
                 type="button"
               >
@@ -803,25 +531,7 @@ export function ThreadSideToolsPanel({
           </div>
         ) : null}
         {activeTool.id === "chat" ? (
-          <SideChatTool
-            attachments={attachedFiles}
-            draft={sideChatDraft}
-            error={sideChatError}
-            messages={sideChatMessages}
-            onClearAttachments={() => setAttachedFiles([])}
-            onDraftChange={setSideChatDraft}
-            onErrorChange={setSideChatError}
-            onMessagesChange={setSideChatMessages}
-            onOpenFiles={() => openTool("files")}
-            onRemoveAttachment={(id) =>
-              setAttachedFiles((current) => current.filter((file) => file.id !== id))
-            }
-            onSendingChange={setSideChatSending}
-            onSideThreadIdChange={setSideChatThreadId}
-            onSubmitSideChat={onSubmitSideChat}
-            sending={sideChatSending}
-            sideThreadId={sideChatThreadId}
-          />
+          <div className="side-tool-chat-thread">{sideChatPanel}</div>
         ) : null}
         {activeTool.id === "browser" ? (
           <Suspense

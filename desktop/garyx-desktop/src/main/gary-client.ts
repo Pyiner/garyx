@@ -3394,6 +3394,7 @@ export async function createRemoteThread(
     sdkSessionId?: string | null;
     sdkSessionProviderHint?: "claude" | "codex" | "gemini" | null;
     forkFromThreadId?: string | null;
+    metadata?: Record<string, unknown> | null;
   },
 ): Promise<DesktopThreadSummary> {
   const payload = await requestJson<ThreadSummaryPayload>(
@@ -3410,6 +3411,7 @@ export async function createRemoteThread(
         sdkSessionId: input?.sdkSessionId || undefined,
         sdkSessionProviderHint: input?.sdkSessionProviderHint || undefined,
         forkFromThreadId: input?.forkFromThreadId || undefined,
+        metadata: input?.metadata || undefined,
       }),
     },
   );

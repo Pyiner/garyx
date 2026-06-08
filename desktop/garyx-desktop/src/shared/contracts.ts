@@ -1445,6 +1445,8 @@ export interface CreateThreadInput {
   sdkSessionProviderHint?: DesktopSessionProviderHint | null;
   /** Optional Garyx thread id to fork from using the provider-native session fork. */
   forkFromThreadId?: string | null;
+  /** Optional thread metadata forwarded to the gateway. */
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface StartWorkflowThreadInput {
