@@ -3724,7 +3724,12 @@ code {
     calc((100vw - var(--spacing-token-sidebar, 245px)) * 0.46),
     680px
   );
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns:
+    minmax(0, 1fr)
+    minmax(
+      var(--workspace-directory-panel-min-width, 280px),
+      var(--workspace-directory-panel-width, 414px)
+    );
   column-gap: 0;
   row-gap: 0;
   align-items: stretch;
@@ -4044,37 +4049,23 @@ code {
 
 .thread-side-tools-panel {
   display: grid;
-  position: fixed;
-  z-index: 41;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: min(var(--workspace-directory-panel-width, 414px), calc(100vw - 24px));
-  height: 100vh;
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
   grid-template-rows: 46px minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   overflow: hidden;
   border-left: 0.5px solid var(--color-token-border);
   background: var(--color-token-bg-primary);
-  box-shadow: -18px 0 36px rgba(15, 23, 42, 0.08);
+  box-shadow: none;
   animation: side-tools-panel-enter 170ms var(--ease-out-expo) both;
   backface-visibility: hidden;
   contain: layout paint style;
   transform: translateX(0);
   will-change: transform, opacity;
   -webkit-app-region: no-drag;
-}
-
-.side-tool-selected-file-actions button {
-  height: 28px;
-  padding: 0 9px;
-  border: 1px solid color-mix(in srgb, var(--color-token-border) 80%, white);
-  border-radius: 8px;
-  background: var(--color-token-bg-primary);
-  color: var(--color-token-text-primary);
-  font-size: 12px;
-  font-weight: 600;
 }
 
 .side-tools-tabs {
@@ -4313,37 +4304,6 @@ code {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-}
-
-.side-tool-selected-file {
-  display: grid;
-  gap: 7px;
-  margin: 0 8px 8px 10px;
-  padding: 8px;
-  border: 1px solid color-mix(in srgb, var(--color-token-border) 76%, white);
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--color-token-bg-secondary) 80%, white);
-}
-
-.side-tool-selected-file > div:first-child {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  color: var(--color-token-text-secondary);
-  font-size: 12px;
-}
-
-.side-tool-selected-file > div:first-child span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.side-tool-selected-file-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
 }
 
 .side-tool-file-preview-panel {
@@ -16575,7 +16535,13 @@ button.codex-list-row {
   }
 
   .thread-layout.with-inspector-panel {
-    grid-template-columns: minmax(0, 1fr);
+    --workspace-directory-panel-width: clamp(320px, 42vw, 414px);
+    grid-template-columns:
+      minmax(0, 1fr)
+      minmax(
+        var(--workspace-directory-panel-min-width, 260px),
+        var(--workspace-directory-panel-width, 414px)
+      );
   }
 }
 

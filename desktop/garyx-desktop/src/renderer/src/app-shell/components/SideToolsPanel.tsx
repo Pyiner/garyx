@@ -28,7 +28,6 @@ import type {
   DesktopTerminalState,
   DesktopWorkspaceFilePreview,
   DesktopWorkspaceMode,
-  MessageFileAttachment,
 } from "@shared/contracts";
 
 import { WorkspaceFilePreview } from "../../workspace-file-preview";
@@ -66,7 +65,6 @@ type ThreadSideToolsPanelProps = {
   onLocalFileLinkClick?: (absolutePath: string) => void;
   onRevealSelectedWorkspaceFile?: () => Promise<void> | void;
   onAddBrowserAnnotationComment: (request: BrowserAnnotationCommentRequest) => void;
-  onAttachFileToSideChat: (file: MessageFileAttachment) => void;
   onCloseSideTools: () => void;
   onOpenSideChat: () => void;
   onWorkspaceFileFilterChange: (value: string) => void;
@@ -391,7 +389,6 @@ export function ThreadSideToolsPanel({
   onLocalFileLinkClick,
   onRevealSelectedWorkspaceFile,
   onAddBrowserAnnotationComment,
-  onAttachFileToSideChat,
   onCloseSideTools,
   onOpenSideChat,
   onWorkspaceFileFilterChange,
@@ -443,20 +440,6 @@ export function ThreadSideToolsPanel({
     );
     setActiveToolId("files");
   }, [shouldShowWorkspacePreview, workspaceFilePreview?.path, workspacePreviewTitle]);
-
-  function attachSelectedWorkspaceFile() {
-    if (!selectedWorkspaceFile) {
-      return;
-    }
-    const file: MessageFileAttachment = {
-      id: `side-chat-file-${selectedWorkspaceFile.absolutePath}`,
-      name: selectedWorkspaceFile.name,
-      mediaType: selectedWorkspaceFile.mediaType || "",
-      path: selectedWorkspaceFile.absolutePath,
-    };
-    onAttachFileToSideChat(file);
-    openTool("chat");
-  }
 
   async function copySelectedWorkspaceFilePath() {
     if (!selectedWorkspaceFile) {
@@ -687,26 +670,6 @@ export function ThreadSideToolsPanel({
                   value={workspaceFileFilter}
                 />
               </div>
-              {selectedWorkspaceFile ? (
-                <div className="side-tool-selected-file">
-                  <div>
-                    <FileText aria-hidden size={14} strokeWidth={1.8} />
-                    <span title={selectedWorkspaceFile.relativePath}>
-                      {selectedWorkspaceFile.relativePath}
-                    </span>
-                  </div>
-                  <div className="side-tool-selected-file-actions">
-                    <button onClick={attachSelectedWorkspaceFile} type="button">
-                      {t("Attach to chat")}
-                    </button>
-                    {onRevealSelectedWorkspaceFile ? (
-                      <button onClick={() => void onRevealSelectedWorkspaceFile()} type="button">
-                        {t("Reveal")}
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
-              ) : null}
               <div className="side-tool-file-tree">{workspaceDirectoryPanel}</div>
             </aside>
           </div>

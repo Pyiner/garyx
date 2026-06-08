@@ -9669,14 +9669,6 @@ export function AppShell() {
       onLocalFileLinkClick={handleLocalFileLinkClick}
       onRevealSelectedWorkspaceFile={handleRevealSelectedWorkspaceFile}
       onAddBrowserAnnotationComment={handleAddBrowserAnnotationComment}
-      onAttachFileToSideChat={(file) => {
-        if (!sideChatSourceThreadId) {
-          setError("Open a thread before starting side chat.");
-          return;
-        }
-        appendSideComposerFile(sideChatSourceThreadId, file);
-        void ensureSideChatThread();
-      }}
       onCloseSideTools={() => {
         trackUiAction("thread.close_inspector", () => {
           setInspectorOpen(false);
