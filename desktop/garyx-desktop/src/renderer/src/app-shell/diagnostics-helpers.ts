@@ -13,6 +13,12 @@ export const THREAD_LOG_PANEL_MAX_WIDTH = 760;
 const THREAD_LOG_PANEL_MIN_MAIN_WIDTH = 540;
 const THREAD_LOG_PANEL_RESIZER_WIDTH = 10;
 const DEFAULT_THREAD_LOG_PANEL_WIDTH = 360;
+export const SIDE_TOOLS_PANEL_MIN_WIDTH = 520;
+export const SIDE_TOOLS_PANEL_MAX_WIDTH = 1180;
+export const SIDE_TOOLS_PANEL_DEFAULT_RATIO = 0.6;
+const SIDE_TOOLS_PANEL_MIN_MAIN_WIDTH = 540;
+const SIDE_TOOLS_PANEL_RESIZER_WIDTH = 10;
+const DEFAULT_SIDE_TOOLS_PANEL_WIDTH = 720;
 const GATEWAY_OFFLINE_THRESHOLD = 3;
 
 export function keepRecentThreadLogLines(
@@ -257,6 +263,37 @@ export function clampThreadLogsPanelWidth(
     THREAD_LOG_PANEL_MIN_WIDTH,
     Math.min(THREAD_LOG_PANEL_MAX_WIDTH, Math.min(layoutMax, Math.round(baseWidth))),
   );
+}
+
+export function clampSideToolsPanelWidth(
+  width: number,
+  layoutWidth?: number | null,
+): number {
+  const baseWidth = Number.isFinite(width)
+    ? width
+    : DEFAULT_SIDE_TOOLS_PANEL_WIDTH;
+  const layoutMax = layoutWidth && layoutWidth > 0
+    ? Math.max(
+        SIDE_TOOLS_PANEL_MIN_WIDTH,
+        layoutWidth -
+          SIDE_TOOLS_PANEL_MIN_MAIN_WIDTH -
+          SIDE_TOOLS_PANEL_RESIZER_WIDTH,
+      )
+    : SIDE_TOOLS_PANEL_MAX_WIDTH;
+  return Math.max(
+    SIDE_TOOLS_PANEL_MIN_WIDTH,
+    Math.min(
+      SIDE_TOOLS_PANEL_MAX_WIDTH,
+      Math.min(layoutMax, Math.round(baseWidth)),
+    ),
+  );
+}
+
+export function defaultSideToolsPanelWidth(layoutWidth?: number | null): number {
+  const baseWidth = layoutWidth && layoutWidth > 0
+    ? layoutWidth * SIDE_TOOLS_PANEL_DEFAULT_RATIO
+    : DEFAULT_SIDE_TOOLS_PANEL_WIDTH;
+  return clampSideToolsPanelWidth(baseWidth, layoutWidth);
 }
 
 export function computeGatewayIndicator(input: {

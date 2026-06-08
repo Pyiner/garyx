@@ -8,6 +8,7 @@ import {
   useReducer,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import { startTransition } from "react";
@@ -195,12 +196,16 @@ import { useAutoResearchController } from "./useAutoResearchController";
 import {
   MAX_CLIENT_STREAM_LOG_ENTRIES,
   appendClientStreamLogEntry,
+  SIDE_TOOLS_PANEL_MAX_WIDTH,
+  SIDE_TOOLS_PANEL_MIN_WIDTH,
   THREAD_LOG_PANEL_MAX_WIDTH,
   THREAD_LOG_PANEL_MIN_WIDTH,
   buildClientStreamLogEntry,
   buildThreadLogLines,
+  clampSideToolsPanelWidth,
   clampThreadLogsPanelWidth,
   computeGatewayIndicator,
+  defaultSideToolsPanelWidth,
   keepRecentThreadLogLines,
 } from "./diagnostics-helpers";
 import { useSettingsController } from "./useSettingsController";
@@ -1874,6 +1879,10 @@ export function AppShell() {
     DEFAULT_DESKTOP_SETTINGS.threadLogsPanelWidth,
   );
   const [threadLogsResizing, setThreadLogsResizing] = useState(false);
+  const [sideToolsPanelWidth, setSideToolsPanelWidth] = useState(() =>
+    defaultSideToolsPanelWidth(null),
+  );
+  const [sideToolsResizing, setSideToolsResizing] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(245);
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [railWidth, setRailWidth] = useState(258);
@@ -1971,6 +1980,7 @@ export function AppShell() {
   const threadLogsRef = useRef<HTMLDivElement | null>(null);
   const threadLayoutRef = useRef<HTMLDivElement | null>(null);
   const sideChatThreadLayoutRef = useRef<HTMLDivElement | null>(null);
+  const conversationRef = useRef<HTMLElement | null>(null);
   const selectedThreadIdRef = useRef<string | null>(null);
   const newThreadDraftActiveRef = useRef(false);
   const pendingWorkspacePathRef = useRef<string | null>(null);
@@ -2033,6 +2043,12 @@ export function AppShell() {
     startX: number;
     startWidth: number;
   } | null>(null);
+  const sideToolsPanelWidthRef = useRef(defaultSideToolsPanelWidth(null));
+  const sideToolsResizeStateRef = useRef<{
+    startX: number;
+    startWidth: number;
+  } | null>(null);
+  const sideToolsPanelWidthCustomizedRef = useRef(false);
   const pendingThreadBottomSnapRef = useRef<string | null>(null);
   const pendingMessagesPrependAnchorRef = useRef<{
     threadId: string;
@@ -2379,6 +2395,10 @@ export function AppShell() {
     return threadLayoutRef.current?.clientWidth || null;
   }
 
+  function currentConversationWidth(): number | null {
+    return conversationRef.current?.clientWidth || null;
+  }
+
   function hasGatewayRecoveryActivity(): boolean {
     const hasBusyStream = Object.values(liveStreamStateRef.current).some(
       (stream) => {
@@ -2568,6 +2588,57 @@ export function AppShell() {
                 currentThreadLayoutWidth(),
               );
     void persistThreadLogsPanelWidth(nextWidth);
+  }
+
+  function handleSideToolsResizeStart(
+    event: React.PointerEvent<HTMLDivElement>,
+  ) {
+    if (!inspectorOpen || contentView !== "thread" || !activeWorkspacePath) {
+      return;
+    }
+    sideToolsPanelWidthCustomizedRef.current = true;
+    sideToolsResizeStateRef.current = {
+      startX: event.clientX,
+      startWidth: sideToolsPanelWidthRef.current,
+    };
+    setSideToolsResizing(true);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    event.preventDefault();
+  }
+
+  function handleSideToolsResizeKeyDown(
+    event: React.KeyboardEvent<HTMLDivElement>,
+  ) {
+    if (!inspectorOpen || contentView !== "thread" || !activeWorkspacePath) {
+      return;
+    }
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+      return;
+    }
+
+    event.preventDefault();
+    sideToolsPanelWidthCustomizedRef.current = true;
+    const step = event.shiftKey ? 56 : 28;
+    const layoutWidth = currentConversationWidth();
+    const nextWidth =
+      event.key === "Home"
+        ? SIDE_TOOLS_PANEL_MIN_WIDTH
+        : event.key === "End"
+          ? clampSideToolsPanelWidth(
+              SIDE_TOOLS_PANEL_MAX_WIDTH,
+              layoutWidth,
+            )
+          : event.key === "ArrowLeft"
+            ? clampSideToolsPanelWidth(
+                sideToolsPanelWidthRef.current + step,
+                layoutWidth,
+              )
+            : clampSideToolsPanelWidth(
+                sideToolsPanelWidthRef.current - step,
+                layoutWidth,
+              );
+    setSideToolsPanelWidth(nextWidth);
   }
 
   const activeThread = selectedThread(desktopState, selectedThreadId);
@@ -3406,15 +3477,6 @@ export function AppShell() {
     (shouldShowConversationRail && recentThreadsRailOpen)
       ? "with-bot-conversation-rail"
       : null,
-  ]
-    .filter(Boolean)
-    .join(" ");
-  const conversationClassName = [
-    "conversation",
-    isSettingsView ? "settings-view" : null,
-    isTasksView ? "tasks-view" : null,
-    isWorkflowView ? "workflow-view" : null,
-    isDreamsView ? "dreams-view" : null,
   ]
     .filter(Boolean)
     .join(" ");
@@ -4393,6 +4455,10 @@ export function AppShell() {
   }, [threadLogsPanelWidth]);
 
   useEffect(() => {
+    sideToolsPanelWidthRef.current = sideToolsPanelWidth;
+  }, [sideToolsPanelWidth]);
+
+  useEffect(() => {
     const nextWidth = clampThreadLogsPanelWidth(
       desktopState?.settings.threadLogsPanelWidth ??
         DEFAULT_DESKTOP_SETTINGS.threadLogsPanelWidth,
@@ -4409,6 +4475,26 @@ export function AppShell() {
       };
     });
   }, [desktopState?.settings.threadLogsPanelWidth]);
+
+  useLayoutEffect(() => {
+    if (!inspectorOpen || contentView !== "thread" || !activeWorkspacePath) {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      const layoutWidth = currentConversationWidth();
+      const nextWidth = sideToolsPanelWidthCustomizedRef.current
+        ? clampSideToolsPanelWidth(sideToolsPanelWidthRef.current, layoutWidth)
+        : defaultSideToolsPanelWidth(layoutWidth);
+      if (nextWidth !== sideToolsPanelWidthRef.current) {
+        setSideToolsPanelWidth(nextWidth);
+      }
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [activeWorkspacePath, contentView, inspectorOpen]);
 
   useEffect(() => {
     streamEventHandlerRef.current = handleChatStreamEvent;
@@ -4492,6 +4578,16 @@ export function AppShell() {
           ...current,
           threadLogsPanelWidth: nextWidth,
         }));
+      }
+      const conversationWidth = currentConversationWidth();
+      const nextSideToolsWidth = sideToolsPanelWidthCustomizedRef.current
+        ? clampSideToolsPanelWidth(
+            sideToolsPanelWidthRef.current,
+            conversationWidth,
+          )
+        : defaultSideToolsPanelWidth(conversationWidth);
+      if (nextSideToolsWidth !== sideToolsPanelWidthRef.current) {
+        setSideToolsPanelWidth(nextSideToolsWidth);
       }
     };
     window.addEventListener("resize", handleResize);
@@ -4622,6 +4718,42 @@ export function AppShell() {
       window.removeEventListener("pointercancel", finishResize);
     };
   }, [threadLogsResizing, desktopState?.settings.threadLogsPanelWidth]);
+
+  useEffect(() => {
+    if (!sideToolsResizing) {
+      return;
+    }
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const resizeState = sideToolsResizeStateRef.current;
+      if (!resizeState) {
+        return;
+      }
+      const nextWidth = clampSideToolsPanelWidth(
+        resizeState.startWidth + (resizeState.startX - event.clientX),
+        currentConversationWidth(),
+      );
+      setSideToolsPanelWidth(nextWidth);
+    };
+
+    const finishResize = () => {
+      sideToolsResizeStateRef.current = null;
+      setSideToolsResizing(false);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", finishResize);
+    window.addEventListener("pointercancel", finishResize);
+    return () => {
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", finishResize);
+      window.removeEventListener("pointercancel", finishResize);
+    };
+  }, [sideToolsResizing]);
 
   useEffect(() => {
     syncComposerPhase(composer, isComposingRef.current);
@@ -9624,7 +9756,6 @@ export function AppShell() {
       showAutomationRunTailLoading={sideChatShowTailLoading}
       showHistoryLoadingPlaceholder={sideChatShowHistoryLoadingPlaceholder}
       showPendingAckLoading={sideChatShowPendingAckLoading}
-      sideToolsPanel={null}
       threadLayoutRef={sideChatThreadLayoutRef}
       threadLogsActiveTab="client"
       threadLogsError={null}
@@ -9680,6 +9811,26 @@ export function AppShell() {
       onWorkspaceFileFilterChange={setWorkspaceFileFilter}
     />
   ) : null;
+
+  const showConversationSideTools = Boolean(
+    inspectorOpen && contentView === "thread" && sideToolsPanel,
+  );
+  const conversationClassName = [
+    "conversation",
+    isSettingsView ? "settings-view" : null,
+    isTasksView ? "tasks-view" : null,
+    isWorkflowView ? "workflow-view" : null,
+    isDreamsView ? "dreams-view" : null,
+    showConversationSideTools ? "with-side-tools" : null,
+    sideToolsResizing ? "side-tools-resizing" : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const conversationStyle = showConversationSideTools
+    ? ({
+        "--side-tools-panel-width": `${sideToolsPanelWidth}px`,
+      } as CSSProperties)
+    : undefined;
 
   if (loading) {
     return (
@@ -10111,7 +10262,11 @@ export function AppShell() {
           </Suspense>
         </main>
       ) : (
-        <main className={conversationClassName}>
+        <main
+          className={conversationClassName}
+          ref={conversationRef}
+          style={conversationStyle}
+        >
           {isTasksView || isWorkflowView || isDreamsView ? null : showStaticWindowToolbar ? (
             <div aria-hidden="true" className="settings-window-toolbar" />
           ) : (
@@ -10640,13 +10795,12 @@ export function AppShell() {
                 showAutomationRunTailLoading={showAutomationRunTailLoading}
                 showHistoryLoadingPlaceholder={showHistoryLoadingPlaceholder}
                 showPendingAckLoading={showPendingAckLoading}
-                sideToolsPanel={sideToolsPanel}
                 threadLayoutRef={threadLayoutRef}
                 threadLayoutStyle={
                   threadLogsOpen
                     ? ({
                         "--thread-log-panel-width": `${threadLogsPanelWidth}px`,
-                      } as React.CSSProperties)
+                      } as CSSProperties)
                     : undefined
                 }
                 threadLogsActiveTab={threadLogsActiveTab}
@@ -10680,6 +10834,26 @@ export function AppShell() {
             )}
             </Suspense>
           </section>
+          {showConversationSideTools ? (
+            <>
+              <div
+                aria-label={t("Resize side tools")}
+                aria-orientation="vertical"
+                aria-valuemax={clampSideToolsPanelWidth(
+                  SIDE_TOOLS_PANEL_MAX_WIDTH,
+                  currentConversationWidth(),
+                )}
+                aria-valuemin={SIDE_TOOLS_PANEL_MIN_WIDTH}
+                aria-valuenow={sideToolsPanelWidth}
+                className="side-tools-resizer"
+                onKeyDown={handleSideToolsResizeKeyDown}
+                onPointerDown={handleSideToolsResizeStart}
+                role="separator"
+                tabIndex={0}
+              />
+              {sideToolsPanel}
+            </>
+          ) : null}
         </main>
       )}
       {automationDialog ? (

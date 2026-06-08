@@ -274,7 +274,6 @@ type ThreadPageProps = {
   showAutomationRunTailLoading: boolean;
   showHistoryLoadingPlaceholder: boolean;
   showPendingAckLoading: boolean;
-  sideToolsPanel: ReactNode;
   threadLayoutRef: RefObject<HTMLDivElement | null>;
   threadLayoutStyle?: CSSProperties;
   threadLogsActiveTab: ThreadLogTab;
@@ -432,7 +431,6 @@ export function ThreadPage({
   showAutomationRunTailLoading,
   showHistoryLoadingPlaceholder,
   showPendingAckLoading,
-  sideToolsPanel,
   threadLayoutRef,
   threadLayoutStyle,
   threadLogsActiveTab,
@@ -1032,8 +1030,6 @@ export function ThreadPage({
           </div>
         ) : null}
       </div>
-
-      {inspectorOpen && sideToolsPanel ? sideToolsPanel : null}
 
       {threadLogsOpen ? (
         <>
