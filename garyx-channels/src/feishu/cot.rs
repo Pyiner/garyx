@@ -1,12 +1,14 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use garyx_models::provider::ProviderMessage;
 use serde_json::{Map, Value, json};
 
 const MAX_EVENT_CONTENT_BYTES: usize = 4096;
-const MAX_TOOL_ARG_PREVIEW_BYTES: usize = 900;
 const MAX_TOOL_RESULT_PREVIEW_BYTES: usize = 900;
+const MAX_TOOL_ARG_DISPLAY_CHARS: usize = 120;
+const COT_TOOL_DISPLAY_COLS: usize = 70;
+const COT_TOOL_ERROR_MAX_LINES: usize = 3;
 const TRUNCATED_SUFFIX: &str = "\n...[truncated]";
 
 pub(super) const EVENT_RUN_STARTED: &str = "RUN_STARTED";
@@ -26,7 +28,7 @@ pub(super) struct FeishuCotSession {
 pub(super) struct FeishuCotEventRecord {
     pub(super) event_id: String,
     pub(super) event_type: String,
-    pub(super) timestamp: String,
+    pub(super) timestamp: u64,
     pub(super) content: String,
 }
 
@@ -36,10 +38,19 @@ impl FeishuCotEventRecord {
         event_id: impl Into<String>,
         content: Value,
     ) -> Self {
+        Self::new_at(event_type, event_id, content, current_timestamp_millis())
+    }
+
+    pub(super) fn new_at(
+        event_type: impl Into<String>,
+        event_id: impl Into<String>,
+        content: Value,
+        timestamp: u64,
+    ) -> Self {
         Self {
             event_id: sanitize_event_id_part(&event_id.into()),
             event_type: event_type.into(),
-            timestamp: current_timestamp_seconds(),
+            timestamp,
             content: stringify_event_content(content),
         }
     }
@@ -62,6 +73,8 @@ pub(super) struct FeishuCotState {
     pub(super) sequence: u64,
     pub(super) started_tool_call_ids: HashSet<String>,
     pub(super) ended_tool_call_ids: HashSet<String>,
+    pub(super) tool_names_by_call_id: HashMap<String, String>,
+    pub(super) tool_inputs_by_call_id: HashMap<String, String>,
 }
 
 impl FeishuCotState {
@@ -113,25 +126,37 @@ impl FeishuCotState {
         }
 
         let tool_name = tool_name(message);
-        let mut events = vec![FeishuCotEventRecord::new(
+        let tool_input = readable_tool_input(message);
+        self.tool_names_by_call_id
+            .insert(call_id.clone(), tool_name.clone());
+        self.tool_inputs_by_call_id
+            .insert(call_id.clone(), tool_input.clone());
+        let timestamp = message_timestamp_millis(message);
+        let mut events = vec![FeishuCotEventRecord::new_at(
             EVENT_TOOL_CALL_START,
             self.next_event_id(&format!("tool-start-{call_id}")),
             json!({
                 "toolCallId": call_id,
-                "icon": "tool",
-                "toolCallName": tool_name,
+                "toolCallName": truncate_chars(tool_input.trim(), MAX_TOOL_ARG_DISPLAY_CHARS)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| tool_name.clone()),
+                "title": tool_title(&tool_name),
+                "status": "running",
+                "icon": tool_icon(&tool_name),
             }),
+            timestamp,
         )];
 
         let args = summarize_tool_args(message);
         if !args.is_empty() {
-            events.push(FeishuCotEventRecord::new(
+            events.push(FeishuCotEventRecord::new_at(
                 EVENT_TOOL_CALL_ARGS,
                 self.next_event_id(&format!("tool-args-{call_id}")),
                 json!({
                     "toolCallId": call_id,
                     "delta": args,
                 }),
+                timestamp,
             ));
         }
         events
@@ -142,37 +167,70 @@ impl FeishuCotState {
         message: &ProviderMessage,
     ) -> Vec<FeishuCotEventRecord> {
         let call_id = tool_call_id(message, self.sequence + 1);
+        let timestamp = message_timestamp_millis(message);
         let mut events = Vec::new();
         if self.ended_tool_call_ids.insert(call_id.clone()) {
-            events.push(FeishuCotEventRecord::new(
+            events.push(FeishuCotEventRecord::new_at(
                 EVENT_TOOL_CALL_END,
                 self.next_event_id(&format!("tool-end-{call_id}")),
                 json!({
                     "toolCallId": call_id,
                 }),
+                timestamp,
             ));
         }
 
         let result = summarize_tool_result(message);
-        events.push(FeishuCotEventRecord::new(
+        let is_error = message.is_error.unwrap_or(false);
+        let tool_name = self
+            .tool_names_by_call_id
+            .get(&call_id)
+            .cloned()
+            .unwrap_or_else(|| tool_name(message));
+        let tool_input = self
+            .tool_inputs_by_call_id
+            .get(&call_id)
+            .cloned()
+            .unwrap_or_else(|| readable_tool_input(message));
+        events.push(FeishuCotEventRecord::new_at(
             EVENT_TOOL_CALL_RESULT,
             self.next_event_id(&format!("tool-result-{call_id}")),
             json!({
                 "messageId": format!("tool-result-{call_id}"),
                 "toolCallId": call_id,
                 "role": "tool",
-                "content": result,
+                "status": if is_error { "failed" } else { "completed" },
+                "isError": is_error,
+                "content": tool_result_content(&tool_name, &tool_input, &result, is_error),
             }),
+            timestamp,
         ));
         events
     }
 }
 
-fn current_timestamp_seconds() -> String {
+fn current_timestamp_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs().to_string())
-        .unwrap_or_else(|_| "0".to_owned())
+        .map(|duration| duration.as_millis().try_into().unwrap_or(u64::MAX))
+        .unwrap_or(0)
+}
+
+fn message_timestamp_millis(message: &ProviderMessage) -> u64 {
+    message
+        .timestamp
+        .as_deref()
+        .and_then(parse_timestamp_millis)
+        .unwrap_or_else(current_timestamp_millis)
+}
+
+fn parse_timestamp_millis(value: &str) -> Option<u64> {
+    let timestamp = value.trim().parse::<u64>().ok()?;
+    if timestamp < 1_000_000_000_000 {
+        timestamp.checked_mul(1000)
+    } else {
+        Some(timestamp)
+    }
 }
 
 fn stringify_event_content(content: Value) -> String {
@@ -257,11 +315,27 @@ fn tool_name(message: &ProviderMessage) -> String {
 fn summarize_tool_args(message: &ProviderMessage) -> String {
     let candidate = message
         .content
-        .get("input")
+        .get("command")
+        .or_else(|| message.content.get("input"))
+        .or_else(|| message.content.get("input_json"))
+        .or_else(|| message.content.get("inputJson"))
         .or_else(|| message.content.get("args"))
         .or_else(|| message.content.get("arguments"))
         .unwrap_or(&message.content);
-    preview_json(candidate, MAX_TOOL_ARG_PREVIEW_BYTES)
+    preview_json(candidate, MAX_TOOL_ARG_DISPLAY_CHARS)
+}
+
+fn readable_tool_input(message: &ProviderMessage) -> String {
+    let candidate = message
+        .content
+        .get("command")
+        .or_else(|| message.content.get("input"))
+        .or_else(|| message.content.get("args"))
+        .or_else(|| message.content.get("arguments"))
+        .or_else(|| message.content.get("input_json"))
+        .or_else(|| message.content.get("inputJson"))
+        .unwrap_or(&Value::Null);
+    preview_json(candidate, MAX_TOOL_RESULT_PREVIEW_BYTES)
 }
 
 fn summarize_tool_result(message: &ProviderMessage) -> String {
@@ -308,11 +382,170 @@ fn preview_json(value: &Value, max_bytes: usize) -> String {
     match value {
         Value::Null => String::new(),
         Value::String(text) => truncate_utf8_bytes(text.trim(), max_bytes),
-        _ => serde_json::to_string_pretty(value)
-            .or_else(|_| serde_json::to_string(value))
+        _ => serde_json::to_string(value)
             .map(|text| truncate_utf8_bytes(text.trim(), max_bytes))
             .unwrap_or_default(),
     }
+}
+
+fn tool_title(tool_name: &str) -> String {
+    let value = tool_name.to_ascii_lowercase();
+    if contains_any(&value, &["bash", "shell", "exec", "run"]) {
+        "运行命令".to_owned()
+    } else if contains_any(&value, &["read"]) {
+        "读取文件".to_owned()
+    } else if contains_any(&value, &["write"]) {
+        "写入文件".to_owned()
+    } else if contains_any(&value, &["edit"]) {
+        "编辑文件".to_owned()
+    } else if contains_any(&value, &["grep", "glob"]) {
+        "检索代码".to_owned()
+    } else if contains_any(&value, &["skill"]) {
+        "加载技能".to_owned()
+    } else if contains_any(&value, &["task"]) {
+        "派发子任务".to_owned()
+    } else if contains_any(&value, &["search"]) {
+        "搜索".to_owned()
+    } else if contains_any(&value, &["webfetch", "fetch"]) {
+        "抓取网页".to_owned()
+    } else {
+        tool_name.trim().to_owned()
+    }
+}
+
+fn tool_icon(tool_name: &str) -> &'static str {
+    let value = tool_name.to_ascii_lowercase();
+    if contains_any(&value, &["search", "web"]) {
+        "search"
+    } else if contains_any(&value, &["read", "grep", "glob"]) {
+        "read"
+    } else if contains_any(&value, &["write", "edit"]) {
+        "write"
+    } else if contains_any(
+        &value,
+        &["run", "exec", "bash", "shell", "skill", "mcp", "task"],
+    ) {
+        "bash"
+    } else {
+        "default"
+    }
+}
+
+fn tool_result_content(tool_name: &str, tool_input: &str, output: &str, is_error: bool) -> Value {
+    let shown = clamp_tool_text(
+        output,
+        if is_error {
+            COT_TOOL_ERROR_MAX_LINES
+        } else {
+            1
+        },
+    );
+    if !is_error && is_code_output_tool(tool_name) {
+        let header = invocation_header(tool_name, tool_input);
+        return json!({
+            "type": "code",
+            "code": format!("{header}{shown}"),
+        });
+    }
+    json!({
+        "type": "text",
+        "text": shown,
+    })
+}
+
+fn invocation_header(tool_name: &str, tool_input: &str) -> String {
+    let trimmed = tool_input.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let (line, was_cut) = clamp_cols(trimmed, COT_TOOL_DISPLAY_COLS);
+    let prefix = if contains_any(
+        &tool_name.to_ascii_lowercase(),
+        &["bash", "shell", "exec", "run"],
+    ) {
+        "$"
+    } else {
+        "#"
+    };
+    format!("{prefix} {line}{}\n", if was_cut { "..." } else { "" })
+}
+
+fn clamp_tool_text(text: &str, max_lines: usize) -> String {
+    let lines = text
+        .lines()
+        .skip_while(|line| line.trim().is_empty())
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        return String::new();
+    }
+    let mut kept = Vec::new();
+    for line in lines.iter().take(max_lines) {
+        let (clamped, was_cut) = clamp_cols(line.trim_end(), COT_TOOL_DISPLAY_COLS);
+        kept.push(format!("{clamped}{}", if was_cut { "..." } else { "" }));
+    }
+    let omitted = lines.len().saturating_sub(kept.len());
+    if omitted > 0
+        && let Some(last) = kept.last_mut()
+    {
+        last.push_str(&format!(" ...(+{omitted} lines)"));
+    }
+    kept.join("\n")
+}
+
+fn clamp_cols(text: &str, max_cols: usize) -> (String, bool) {
+    let mut used = 0;
+    let mut out = String::new();
+    for ch in text.chars() {
+        used += char_cols(ch);
+        if used > max_cols {
+            return (out, true);
+        }
+        out.push(ch);
+    }
+    (out, false)
+}
+
+fn char_cols(ch: char) -> usize {
+    if matches!(
+        ch,
+        '\u{1100}'..='\u{115f}'
+            | '\u{2e80}'..='\u{a4cf}'
+            | '\u{ac00}'..='\u{d7a3}'
+            | '\u{f900}'..='\u{faff}'
+            | '\u{fe10}'..='\u{fe19}'
+            | '\u{fe30}'..='\u{fe6f}'
+            | '\u{ff00}'..='\u{ff60}'
+            | '\u{ffe0}'..='\u{ffe6}'
+    ) {
+        2
+    } else {
+        1
+    }
+}
+
+fn is_code_output_tool(tool_name: &str) -> bool {
+    contains_any(
+        &tool_name.to_ascii_lowercase(),
+        &[
+            "bash", "shell", "exec", "run", "read", "grep", "glob", "edit", "write",
+        ],
+    )
+}
+
+fn contains_any(value: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| value.contains(needle))
+}
+
+fn truncate_chars(text: &str, max_chars: usize) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut out = trimmed.chars().take(max_chars).collect::<String>();
+    if trimmed.chars().count() > max_chars {
+        out.push('…');
+    }
+    Some(out)
 }
 
 fn sanitize_event_id_part(value: &str) -> String {
@@ -348,6 +581,10 @@ fn truncate_utf8_bytes(text: &str, max_bytes: usize) -> String {
 mod tests {
     use super::*;
 
+    fn content_json(event: &FeishuCotEventRecord) -> Value {
+        serde_json::from_str(&event.content).expect("event content json")
+    }
+
     #[test]
     fn event_content_is_capped_by_bytes() {
         let content = stringify_event_content(json!({
@@ -375,7 +612,36 @@ mod tests {
         let events = state.tool_result_events(&message);
         assert_eq!(events[0].event_type, EVENT_TOOL_CALL_END);
         assert_eq!(events[1].event_type, EVENT_TOOL_CALL_RESULT);
-        assert!(events[1].content.contains("/tmp/workspace"));
+        let content = content_json(&events[1]);
+        assert_eq!(content["role"], "tool");
+        assert_eq!(content["isError"], false);
+        assert_eq!(content["content"]["type"], "code");
+        assert_eq!(content["content"]["code"], "$ pwd\n/tmp/workspace");
+    }
+
+    #[test]
+    fn tool_use_uses_readable_name_title_icon_and_millisecond_timestamp() {
+        let message = ProviderMessage::tool_use(
+            json!({
+                "type": "commandExecution",
+                "command": "pwd",
+            }),
+            Some("tool-1".to_owned()),
+            Some("shell".to_owned()),
+        )
+        .with_timestamp("1713200000");
+        let mut state = FeishuCotState::default();
+        let events = state.tool_use_events(&message);
+        assert_eq!(events[0].timestamp, 1_713_200_000_000);
+        let start = content_json(&events[0]);
+        assert_eq!(start["toolCallId"], "tool-1");
+        assert_eq!(start["toolCallName"], "pwd");
+        assert_eq!(start["title"], "运行命令");
+        assert_eq!(start["icon"], "bash");
+        assert_eq!(start["status"], "running");
+        let args = content_json(&events[1]);
+        assert_eq!(args["toolCallId"], "tool-1");
+        assert_eq!(args["delta"], "pwd");
     }
 
     #[test]
@@ -396,7 +662,9 @@ mod tests {
             .iter()
             .find(|event| event.event_type == EVENT_TOOL_CALL_RESULT)
             .expect("tool result event");
-        assert!(result_event.content.contains("Image generated."));
+        let content = content_json(result_event);
+        assert_eq!(content["content"]["type"], "text");
+        assert_eq!(content["content"]["text"], "Image generated.");
         assert!(!result_event.content.contains("iVBORw0KGgo="));
     }
 }

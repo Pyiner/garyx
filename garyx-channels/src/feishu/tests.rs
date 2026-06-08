@@ -2253,7 +2253,10 @@ mod e2e_tests {
             tool_event_contents.iter().any(|(event_type, content)| {
                 event_type == "TOOL_CALL_START"
                     && content["toolCallId"].as_str() == Some(tool_call_id.as_str())
-                    && content["toolCallName"].as_str() == Some("shell")
+                    && content["toolCallName"].as_str() == Some("pwd")
+                    && content["title"].as_str() == Some("运行命令")
+                    && content["icon"].as_str() == Some("bash")
+                    && content["status"].as_str() == Some("running")
                     && content.get("toolName").is_none()
             }),
             "tool start should use Feishu COT toolCallName schema: {tool_event_contents:?}"
@@ -2282,7 +2285,10 @@ mod e2e_tests {
                 event_type == "TOOL_CALL_RESULT"
                     && content["toolCallId"].as_str() == Some(tool_call_id.as_str())
                     && content["role"].as_str() == Some("tool")
-                    && content["content"]
+                    && content["isError"].as_bool() == Some(false)
+                    && content["status"].as_str() == Some("completed")
+                    && content["content"]["type"].as_str() == Some("code")
+                    && content["content"]["code"]
                         .as_str()
                         .unwrap_or_default()
                         .contains("/tmp/workspace")
@@ -2303,10 +2309,10 @@ mod e2e_tests {
         )
         .await;
         assert_eq!(complete_calls.len(), 1, "COT run should be completed");
-        assert_eq!(
-            complete_calls[0].url.query(),
-            Some("message_id=om_cot_001&reason=done")
-        );
+        assert_eq!(complete_calls[0].url.query(), Some("message_id=om_cot_001"));
+        let complete_body: Value = serde_json::from_slice(&complete_calls[0].body).unwrap();
+        assert_eq!(complete_body["message_id"], "om_cot_001");
+        assert_eq!(complete_body["reason"], "done");
     }
 
     #[tokio::test]

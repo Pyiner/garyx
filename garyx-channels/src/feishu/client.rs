@@ -538,7 +538,7 @@ impl FeishuClient {
         session: &FeishuCotSession,
     ) -> Result<(), FeishuError> {
         let url = format!(
-            "{}/im/v1/message_cot/complete/{}?message_id={}&reason=done",
+            "{}/im/v1/message_cot/complete/{}?message_id={}",
             self.api_base(),
             urlencoding::encode(&session.cot_id),
             urlencoding::encode(&session.message_id),
@@ -546,7 +546,10 @@ impl FeishuClient {
         self.request_cot_json(
             reqwest::Method::POST,
             &url,
-            serde_json::json!({}),
+            serde_json::json!({
+                "message_id": session.message_id,
+                "reason": "done",
+            }),
             "complete COT run",
         )
         .await?;
