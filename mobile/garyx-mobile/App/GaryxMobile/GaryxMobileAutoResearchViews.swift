@@ -247,7 +247,7 @@ struct GaryxAutoResearchDetailSheet: View {
                 .frame(maxWidth: 620, alignment: .leading)
                 .frame(maxWidth: .infinity)
             }
-            .background(GaryxTheme.background)
+            .garyxPageBackground()
             .refreshable {
                 await model.loadAutoResearchDetail(runId: run.runId)
             }
@@ -550,7 +550,7 @@ struct GaryxAutoResearchFeedbackSheet: View {
                 Spacer(minLength: 0)
             }
             .padding(16)
-            .background(GaryxTheme.background)
+            .garyxPageBackground()
             .navigationTitle("Feedback on Candidate \(candidate.iteration)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
