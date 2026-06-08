@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  ChevronDown,
   FileText,
   Globe,
   MessageSquare,
@@ -109,13 +110,29 @@ function SideTerminalTool({ cwd }: { cwd?: string | null }) {
       cursorBlink: true,
       fontFamily: '"SFMono-Regular", "Cascadia Code", Menlo, Monaco, Consolas, monospace',
       fontSize: 12,
-      lineHeight: 1.22,
+      lineHeight: 1.24,
       scrollback: 3_000,
       theme: {
-        background: "#111214",
-        foreground: "#e7e7e7",
-        cursor: "#f5f5f5",
-        selectionBackground: "#4b5563",
+        background: "#ffffff",
+        foreground: "#1a1c1f",
+        cursor: "#1a1c1f",
+        selectionBackground: "#cfe8ff",
+        black: "#1a1c1f",
+        blue: "#2563eb",
+        brightBlack: "#7c7f85",
+        brightBlue: "#1d4ed8",
+        brightCyan: "#0e7490",
+        brightGreen: "#15803d",
+        brightMagenta: "#7c3aed",
+        brightRed: "#b91c1c",
+        brightWhite: "#334155",
+        brightYellow: "#b45309",
+        cyan: "#0891b2",
+        green: "#16a34a",
+        magenta: "#9333ea",
+        red: "#dc2626",
+        white: "#5f6368",
+        yellow: "#ca8a04",
       },
     });
     const fitAddon = new FitAddon();
@@ -281,25 +298,31 @@ function SideTerminalTool({ cwd }: { cwd?: string | null }) {
   return (
     <div className="side-tool-terminal">
       <div className="side-tool-terminal-header">
-        {state?.sessions.length ? (
-          <select
-            aria-label={t("Terminal session")}
-            onChange={(event) => {
-              void window.garyxDesktop
-                .activateTerminalSession({ sessionId: event.target.value })
-                .then(setState);
-            }}
-            value={session?.id || ""}
-          >
-            {state.sessions.map((entry) => (
-              <option key={entry.id} value={entry.id}>
-                {entry.title}
-              </option>
-            ))}
-          </select>
-        ) : (
-          <span>{t("Terminal")}</span>
-        )}
+        <div className="side-tool-terminal-session">
+          <TerminalIcon aria-hidden size={14} strokeWidth={1.8} />
+          {state?.sessions.length ? (
+            <>
+              <select
+                aria-label={t("Terminal session")}
+                onChange={(event) => {
+                  void window.garyxDesktop
+                    .activateTerminalSession({ sessionId: event.target.value })
+                    .then(setState);
+                }}
+                value={session?.id || ""}
+              >
+                {state.sessions.map((entry) => (
+                  <option key={entry.id} value={entry.id}>
+                    {entry.title}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown aria-hidden className="side-tool-terminal-session-chevron" size={13} />
+            </>
+          ) : (
+            <span>{t("Terminal")}</span>
+          )}
+        </div>
         <div className="side-tool-terminal-header-actions">
           {session ? (
             <button
