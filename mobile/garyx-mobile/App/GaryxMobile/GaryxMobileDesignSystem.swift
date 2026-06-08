@@ -241,14 +241,6 @@ private struct GaryxSoftScrollEdgeModifier: ViewModifier {
     }
 }
 
-private struct GaryxFloatingBottomChromeHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}
-
 extension View {
     func garyxRootChromeBackground() -> some View {
         background(GaryxHostingBackgroundClearer())
@@ -259,26 +251,13 @@ extension View {
     }
 
     func garyxFloatingBottomChrome<Chrome: View>(
-        onHeightChange: ((CGFloat) -> Void)? = nil,
         @ViewBuilder _ chrome: @escaping () -> Chrome
     ) -> some View {
-        overlay(alignment: .bottom) {
+        safeAreaInset(edge: .bottom, spacing: 0) {
             chrome()
                 .frame(maxWidth: .infinity)
                 .background(Color.clear)
-                .background {
-                    GeometryReader { geometry in
-                        Color.clear.preference(
-                            key: GaryxFloatingBottomChromeHeightKey.self,
-                            value: geometry.size.height
-                        )
-                    }
-                }
                 .ignoresSafeArea(.container, edges: .bottom)
-        }
-        .ignoresSafeArea(.container, edges: .bottom)
-        .onPreferenceChange(GaryxFloatingBottomChromeHeightKey.self) { height in
-            onHeightChange?(height)
         }
     }
 

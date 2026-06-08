@@ -97,7 +97,6 @@ struct GaryxConversationView: View {
     @State private var conversationTopOffset: CGFloat?
     @State private var conversationBottomOffset: CGFloat = 0
     @State private var conversationViewportHeight: CGFloat = 0
-    @State private var bottomChromeHeight: CGFloat = 0
     @State private var isNearConversationBottom = true
     @State private var hasMovedTowardOlderHistory = false
     @State private var showsScrollToBottomButton = false
@@ -108,9 +107,7 @@ struct GaryxConversationView: View {
             ZStack(alignment: .bottomTrailing) {
                 messageScroll(proxy: proxy)
             }
-            .garyxFloatingBottomChrome(onHeightChange: { height in
-                bottomChromeHeight = height
-            }) {
+            .garyxFloatingBottomChrome {
                 VStack(alignment: .trailing, spacing: 8) {
                     if showsScrollToBottomButton {
                         Button {
@@ -187,12 +184,8 @@ struct GaryxConversationView: View {
                     guard isFocused else { return }
                     scheduleScrollToConversationTail(proxy, animated: true, retryLayout: true, requestKind: .manual)
                 }
-                .onChange(of: bottomChromeHeight) { _, _ in
-                    guard isNearConversationBottom else { return }
-                    scheduleScrollToConversationTail(proxy, animated: false, retryLayout: true, requestKind: .repair)
-                }
         }
-        .garyxPageBackground()
+        .background(GaryxTheme.background)
         .garyxAdaptiveTopBar {
             GaryxConversationHeader()
         }
@@ -254,10 +247,6 @@ struct GaryxConversationView: View {
             .padding(.horizontal, 16)
             .padding(.top, 18)
             .padding(.bottom, 24)
-
-            Color.clear
-                .frame(height: conversationBottomChromeClearance)
-                .accessibilityHidden(true)
 
             Color.clear
                 .frame(height: 1)
@@ -322,10 +311,6 @@ struct GaryxConversationView: View {
                     )
             }
         }
-    }
-
-    private var conversationBottomChromeClearance: CGFloat {
-        max(24, bottomChromeHeight + 10)
     }
 
     private func scrollToConversationTail(_ proxy: ScrollViewProxy) {

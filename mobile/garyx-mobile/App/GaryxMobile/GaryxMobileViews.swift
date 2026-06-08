@@ -79,7 +79,7 @@ struct GaryxGatewaySetupView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .garyxPageBackground()
+            .background(GaryxTheme.background)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if showsSetupDetails {
@@ -313,7 +313,7 @@ struct GaryxShellView: View {
                         GaryxMainPanelView()
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
-                    .garyxPageBackground()
+                    .background(GaryxTheme.background)
                 } else {
                     drawerBody(width: drawerSidebarWidth(for: proxy.size), containerSize: proxy.size)
                 }
@@ -387,7 +387,7 @@ struct GaryxShellView: View {
         }
         .frame(width: containerSize.width, height: containerSize.height, alignment: .topLeading)
         .clipped()
-        .garyxPageBackground()
+        .background(GaryxTheme.background)
     }
 
     private func drawerRevealProgress(revealWidth: CGFloat, width: CGFloat) -> CGFloat {
@@ -543,7 +543,7 @@ private struct GaryxDrawerMainPanelStyle: ViewModifier {
         )
 
         content
-            .garyxPageBackground()
+            .background(GaryxTheme.background)
             .overlay(alignment: .leading) {
                 Rectangle()
                     .fill(Color.primary.opacity(0.10))
