@@ -27,14 +27,6 @@ enum GaryxTheme {
     static let hairline = Color.primary.opacity(0.08)
 }
 
-enum GaryxSafeAreaChrome {
-    static let pageBackgroundEdges: Edge.Set = [.top, .horizontal]
-
-    static func installWindowDefaults() {
-        UIWindow.appearance().backgroundColor = .clear
-    }
-}
-
 enum GaryxFont {
     static func largeTitle(weight: Font.Weight = .regular) -> Font {
         .system(size: 34, weight: weight)
@@ -242,25 +234,6 @@ private struct GaryxSoftScrollEdgeModifier: ViewModifier {
 }
 
 extension View {
-    func garyxRootChromeBackground() -> some View {
-        background(GaryxHostingBackgroundClearer())
-    }
-
-    func garyxPageBackground() -> some View {
-        background(GaryxTheme.background.ignoresSafeArea(edges: GaryxSafeAreaChrome.pageBackgroundEdges))
-    }
-
-    func garyxFloatingBottomChrome<Chrome: View>(
-        @ViewBuilder _ chrome: @escaping () -> Chrome
-    ) -> some View {
-        safeAreaInset(edge: .bottom, spacing: 0) {
-            chrome()
-                .frame(maxWidth: .infinity)
-                .background(Color.clear)
-                .ignoresSafeArea(.container, edges: .bottom)
-        }
-    }
-
     func garyxInputStyle() -> some View {
         self
             .font(GaryxFont.body())
@@ -325,34 +298,6 @@ extension View {
             transform(self)
         } else {
             self
-        }
-    }
-}
-
-private struct GaryxHostingBackgroundClearer: UIViewRepresentable {
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView(frame: .zero)
-        clearHostingBackground(from: view)
-        return view
-    }
-
-    func updateUIView(_ uiView: UIView, context: Context) {
-        clearHostingBackground(from: uiView)
-    }
-
-    private func clearHostingBackground(from view: UIView) {
-        DispatchQueue.main.async {
-            // SwiftUI hosting views otherwise provide an opaque system background
-            // behind safe-area gaps, which makes shared bottom chrome appear as a
-            // white base even when its own background is clear.
-            view.backgroundColor = .clear
-            view.window?.backgroundColor = .clear
-
-            var ancestor = view.superview
-            while let current = ancestor {
-                current.backgroundColor = .clear
-                ancestor = current.superview
-            }
         }
     }
 }
