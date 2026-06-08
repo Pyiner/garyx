@@ -4336,7 +4336,42 @@ code {
 }
 
 .side-tool-chat-thread .composer-shell-wrap {
+  bottom: calc(30px + var(--padding-panel));
   width: calc(100% - 20px);
+}
+
+.thread-main--side-chat .empty-state--side-chat {
+  width: min(420px, calc(100% - 48px));
+  margin: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--color-token-text-primary);
+  text-align: left;
+}
+
+.thread-main--side-chat .empty-state--side-chat .eyebrow {
+  color: var(--color-token-text-tertiary);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.thread-main--side-chat .empty-state--side-chat h3 {
+  margin: 7px 0 6px;
+  color: var(--color-token-text-primary);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+.thread-main--side-chat .empty-state--side-chat p {
+  max-width: 340px;
+  color: var(--color-token-text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .side-tool-terminal {

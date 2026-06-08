@@ -216,6 +216,7 @@ type QueueDropTarget = {
 } | null;
 
 type ThreadPageProps = {
+  surfaceVariant?: "default" | "side-chat";
   activeMessages: UiTranscriptMessage[];
   activePendingAckIntents: MessageIntent[];
   agentLabel?: string | null;
@@ -337,6 +338,7 @@ type ThreadPageProps = {
 };
 
 export function ThreadPage({
+  surfaceVariant = "default",
   agentLabel,
   composerAgentOptions,
   composerWorkflowOptions,
@@ -450,6 +452,7 @@ export function ThreadPage({
   const { t } = useI18n();
   const composerShellWrapRef = useRef<HTMLDivElement | null>(null);
   const threadMainRef = useRef<HTMLDivElement | null>(null);
+  const isSideChatSurface = surfaceVariant === "side-chat";
   const teamView = useMemo(
     () => deriveThreadTeamView(activeThreadSummary),
     [activeThreadSummary],
@@ -542,12 +545,12 @@ export function ThreadPage({
 
   return (
     <div
-      className={`thread-layout ${inspectorOpen ? "with-inspector-panel" : ""} ${threadLogsOpen ? "with-log-panel" : ""} ${threadLogsResizing ? "log-panel-resizing" : ""}`}
+      className={`thread-layout ${isSideChatSurface ? "thread-layout--side-chat" : ""} ${inspectorOpen ? "with-inspector-panel" : ""} ${threadLogsOpen ? "with-log-panel" : ""} ${threadLogsResizing ? "log-panel-resizing" : ""}`}
       ref={threadLayoutRef}
       style={threadLayoutStyle}
     >
       <div
-        className={`thread-main ${emptyNewThread ? "new-thread-centered" : ""} ${hasWorkflowRunContent ? "has-workflow-run-content" : ""}`}
+        className={`thread-main ${isSideChatSurface ? "thread-main--side-chat" : ""} ${emptyNewThread ? "new-thread-centered" : ""} ${hasWorkflowRunContent ? "has-workflow-run-content" : ""}`}
         ref={threadMainRef}
       >
         {hasWorkflowRunContent ? (
@@ -578,11 +581,25 @@ export function ThreadPage({
           !historyLoading &&
           !showAutomationRunInitialPlaceholder ? (
             selectedThreadId ? (
-              <div className="empty-state">
-                <span className="eyebrow">{t("Ready")}</span>
-                <h3>{t("Continue the current thread")}</h3>
+              <div
+                className={`empty-state ${isSideChatSurface ? "empty-state--side-chat" : ""}`}
+              >
+                <span className="eyebrow">
+                  {t(isSideChatSurface ? "Side Chat" : "Ready")}
+                </span>
+                <h3>
+                  {t(
+                    isSideChatSurface
+                      ? "Ask without changing the main thread"
+                      : "Continue the current thread",
+                  )}
+                </h3>
                 <p>
-                  {t("Every thread is replayable from gateway history and can continue on this Mac.")}
+                  {t(
+                    isSideChatSurface
+                      ? "This hidden fork keeps its own messages while the main conversation stays untouched."
+                      : "Every thread is replayable from gateway history and can continue on this Mac.",
+                  )}
                 </p>
               </div>
             ) : null

@@ -9463,6 +9463,7 @@ export function AppShell() {
     </div>
   ) : sideChatThreadId ? (
     <ThreadPage
+      surfaceVariant="side-chat"
       agentLabel={sideChatAgentLabel}
       composerAgentOptions={composerAgentOptions}
       composerWorkflowOptions={composerWorkflowOptions}
