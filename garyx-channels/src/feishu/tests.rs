@@ -2214,7 +2214,7 @@ mod e2e_tests {
             );
         }
 
-        let tool_result_contents: Vec<Value> = update_calls
+        let tool_event_contents: Vec<(String, Value)> = update_calls
             .iter()
             .flat_map(|request| {
                 let body: Value = serde_json::from_slice(&request.body).unwrap();
@@ -2224,22 +2224,71 @@ mod e2e_tests {
                     .unwrap_or_default()
                     .into_iter()
             })
-            .filter(|event| event["event_type"] == "TOOL_CALL_RESULT")
             .filter_map(|event| {
-                event
+                let event_type = event
+                    .get("event_type")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)?;
+                let content = event
                     .get("content")
                     .and_then(Value::as_str)
-                    .and_then(|content| serde_json::from_str::<Value>(content).ok())
+                    .and_then(|content| serde_json::from_str::<Value>(content).ok())?;
+                Some((event_type, content))
             })
             .collect();
+        let tool_call_id = tool_event_contents
+            .iter()
+            .find_map(|(event_type, content)| {
+                if event_type == "TOOL_CALL_START" {
+                    content
+                        .get("toolCallId")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned)
+                } else {
+                    None
+                }
+            })
+            .expect("tool call id from COT start event");
         assert!(
-            tool_result_contents.iter().any(|content| {
-                content["result"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .contains("/tmp/workspace")
+            tool_event_contents.iter().any(|(event_type, content)| {
+                event_type == "TOOL_CALL_START"
+                    && content["toolCallId"].as_str() == Some(tool_call_id.as_str())
+                    && content["toolCallName"].as_str() == Some("shell")
+                    && content.get("toolName").is_none()
             }),
-            "tool result output should be present in COT events: {tool_result_contents:?}"
+            "tool start should use Feishu COT toolCallName schema: {tool_event_contents:?}"
+        );
+        assert!(
+            tool_event_contents.iter().any(|(event_type, content)| {
+                event_type == "TOOL_CALL_ARGS"
+                    && content["toolCallId"].as_str() == Some(tool_call_id.as_str())
+                    && content["delta"]
+                        .as_str()
+                        .is_some_and(|delta| delta.contains("pwd"))
+                    && content.get("args").is_none()
+            }),
+            "tool args should use Feishu COT delta schema: {tool_event_contents:?}"
+        );
+        assert!(
+            tool_event_contents.iter().any(|(event_type, content)| {
+                event_type == "TOOL_CALL_END"
+                    && content["toolCallId"].as_str() == Some(tool_call_id.as_str())
+                    && content.get("messageId").is_none()
+            }),
+            "tool end should use Feishu COT toolCallId schema: {tool_event_contents:?}"
+        );
+        assert!(
+            tool_event_contents.iter().any(|(event_type, content)| {
+                event_type == "TOOL_CALL_RESULT"
+                    && content["toolCallId"].as_str() == Some(tool_call_id.as_str())
+                    && content["role"].as_str() == Some("tool")
+                    && content["content"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .contains("/tmp/workspace")
+                    && content.get("result").is_none()
+            }),
+            "tool result should use Feishu COT content schema: {tool_event_contents:?}"
         );
 
         let complete_calls = wait_for_matching_requests_quiet_window(

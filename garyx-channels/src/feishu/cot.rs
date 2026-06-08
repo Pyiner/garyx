@@ -117,8 +117,9 @@ impl FeishuCotState {
             EVENT_TOOL_CALL_START,
             self.next_event_id(&format!("tool-start-{call_id}")),
             json!({
-                "messageId": call_id,
-                "toolName": tool_name,
+                "toolCallId": call_id,
+                "icon": "tool",
+                "toolCallName": tool_name,
             }),
         )];
 
@@ -128,8 +129,8 @@ impl FeishuCotState {
                 EVENT_TOOL_CALL_ARGS,
                 self.next_event_id(&format!("tool-args-{call_id}")),
                 json!({
-                    "messageId": call_id,
-                    "args": args,
+                    "toolCallId": call_id,
+                    "delta": args,
                 }),
             ));
         }
@@ -147,7 +148,7 @@ impl FeishuCotState {
                 EVENT_TOOL_CALL_END,
                 self.next_event_id(&format!("tool-end-{call_id}")),
                 json!({
-                    "messageId": call_id,
+                    "toolCallId": call_id,
                 }),
             ));
         }
@@ -159,8 +160,8 @@ impl FeishuCotState {
             json!({
                 "messageId": format!("tool-result-{call_id}"),
                 "toolCallId": call_id,
-                "isError": message.is_error.unwrap_or(false),
-                "result": result,
+                "role": "tool",
+                "content": result,
             }),
         ));
         events
@@ -351,7 +352,9 @@ mod tests {
     fn event_content_is_capped_by_bytes() {
         let content = stringify_event_content(json!({
             "messageId": "tool-result-1",
-            "result": "中".repeat(5000),
+            "toolCallId": "tool-1",
+            "role": "tool",
+            "content": "中".repeat(5000),
         }));
         assert!(content.len() <= MAX_EVENT_CONTENT_BYTES);
         assert!(content.contains("truncated") || content.contains("[truncated]"));
