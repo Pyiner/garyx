@@ -363,6 +363,8 @@ const api: GaryxDesktopApi = {
     ipcRenderer.invoke("garyx:set-browser-annotation-mode", input),
   copyImageToClipboard: (input) =>
     ipcRenderer.invoke("garyx:copy-image-to-clipboard", input),
+  copyTextToClipboard: (input) =>
+    ipcRenderer.invoke("garyx:copy-text-to-clipboard", input),
   updateBrowserBounds: (input) =>
     ipcRenderer.invoke("garyx:update-browser-bounds", input),
   setBrowserOverlayPaused: (paused) =>

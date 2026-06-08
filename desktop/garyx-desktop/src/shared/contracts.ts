@@ -1793,6 +1793,10 @@ export interface CopyImageToClipboardInput {
   dataUrl: string;
 }
 
+export interface CopyTextToClipboardInput {
+  text: string;
+}
+
 export interface ShowBrowserConnectionMenuInput {
   x: number;
   y: number;
@@ -2122,6 +2126,7 @@ export interface GaryxDesktopApi {
     input: BrowserAnnotationModeInput,
   ) => Promise<void>;
   copyImageToClipboard: (input: CopyImageToClipboardInput) => Promise<void>;
+  copyTextToClipboard: (input: CopyTextToClipboardInput) => Promise<void>;
   updateBrowserBounds: (input: BrowserBoundsInput) => Promise<void>;
   setBrowserOverlayPaused: (paused: boolean) => Promise<void>;
   showBrowserConnectionMenu: (

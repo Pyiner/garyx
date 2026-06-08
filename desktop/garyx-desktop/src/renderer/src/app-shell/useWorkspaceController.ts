@@ -206,6 +206,15 @@ export function useWorkspaceController({
     })();
   }, [setError, workspaces]);
 
+  function closeWorkspacePreview() {
+    workspacePreviewRequestIdRef.current += 1;
+    setWorkspacePreviewModalOpen(false);
+    setSelectedWorkspaceFile(null);
+    setWorkspaceFilePreview(null);
+    setWorkspaceFilePreviewError(null);
+    setWorkspaceFilePreviewLoading(false);
+  }
+
   async function handleWorkspaceFileEntryActivate(entry: DesktopWorkspaceFileEntry) {
     if (!activeWorkspacePath) {
       return;
@@ -304,6 +313,7 @@ export function useWorkspaceController({
     handleLocalWorkspaceFileLinkClick,
     handleRefreshWorkspaceFiles,
     handleWorkspaceFileEntryActivate,
+    closeWorkspacePreview,
     loadWorkspaceDirectory,
     loadWorkspaceFilePreview,
     selectedWorkspaceFile,

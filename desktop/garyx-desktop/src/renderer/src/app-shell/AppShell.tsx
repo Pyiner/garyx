@@ -3144,6 +3144,7 @@ export function AppShell() {
     loadWorkspaceFilePreview,
     selectedWorkspaceFile,
     selectedWorkspaceFileEntry,
+    closeWorkspacePreview,
     setExpandedWorkspaceDirectories,
     setWorkspacePreviewModalOpen,
     uploadWorkspaceFilesToActiveWorkspace,
@@ -9794,9 +9795,7 @@ export function AppShell() {
       workspaceMode={composerWorkspaceMode || "local"}
       workspacePreviewOpen={workspacePreviewModalOpen}
       workspacePreviewTitle={workspacePreviewTitle}
-      onCloseWorkspacePreview={() => {
-        setWorkspacePreviewModalOpen(false);
-      }}
+      onCloseWorkspacePreview={closeWorkspacePreview}
       onLocalFileLinkClick={handleLocalFileLinkClick}
       onRevealSelectedWorkspaceFile={handleRevealSelectedWorkspaceFile}
       onAddBrowserAnnotationComment={handleAddBrowserAnnotationComment}

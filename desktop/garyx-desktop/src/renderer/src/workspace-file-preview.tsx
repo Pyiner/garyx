@@ -33,6 +33,7 @@ import {
 import { useI18n } from './i18n';
 
 const MAX_HIGHLIGHT_CHAR_COUNT = 200_000;
+const MARKDOWN_FILE_EXTENSIONS = new Set(['md', 'markdown', 'mdown', 'mkd']);
 
 const LANGUAGE_BY_EXTENSION: Record<string, string> = {
   bash: 'bash',
@@ -124,14 +125,35 @@ function inferLanguageFromFileName(fileName: string): string {
   return LANGUAGE_BY_EXTENSION[normalized.slice(dotIndex + 1)] || 'text';
 }
 
+function fileExtension(fileName: string): string {
+  const leafName = fileName.trim().toLowerCase().split(/[\\/]/).pop() || '';
+  const dotIndex = leafName.lastIndexOf('.');
+  if (dotIndex <= 0 || dotIndex === leafName.length - 1) {
+    return '';
+  }
+  return leafName.slice(dotIndex + 1);
+}
+
+function shouldRenderMarkdownPreview(preview: DesktopWorkspaceFilePreview): boolean {
+  const extension = fileExtension(preview.path || preview.name);
+  if (MARKDOWN_FILE_EXTENSIONS.has(extension)) {
+    return true;
+  }
+  return !extension && preview.mediaType.toLowerCase() === 'text/markdown';
+}
+
 function CodePreview({
   source,
   fileName,
   language,
+  showLineNumbers = true,
+  variant = 'file',
 }: {
   source: string;
   fileName?: string;
   language?: string;
+  showLineNumbers?: boolean;
+  variant?: 'file' | 'block';
 }) {
   const normalizedLanguage = normalizeLanguageAlias(language || '') || inferLanguageFromFileName(fileName || '');
   const prismLanguage = normalizedLanguage !== 'text' && Prism.languages[normalizedLanguage]
@@ -141,19 +163,33 @@ function CodePreview({
   const highlightedHtml = showHighlight
     ? Prism.highlight(source, Prism.languages[prismLanguage], prismLanguage)
     : '';
+  const lineCount = showLineNumbers ? Math.max(1, source.split('\n').length) : 0;
 
   return (
-    <div className={`workspace-file-code-frame ${showHighlight ? 'is-highlighted' : 'is-plain'}`}>
-      <pre className="workspace-file-code-block">
-        {showHighlight ? (
-          <code
-            className={`language-${prismLanguage}`}
-            dangerouslySetInnerHTML={{ __html: highlightedHtml }}
-          />
-        ) : (
-          <code>{source}</code>
-        )}
-      </pre>
+    <div
+      className={`workspace-file-code-frame ${variant === 'file' ? 'is-file-preview' : 'is-code-block'} ${showHighlight ? 'is-highlighted' : 'is-plain'} ${showLineNumbers ? 'has-line-numbers' : ''}`}
+    >
+      <div className="workspace-file-code-editor">
+        {showLineNumbers ? (
+          <div aria-hidden="true" className="workspace-file-code-gutter">
+            {Array.from({ length: lineCount }, (_, index) => (
+              <span className="workspace-file-code-line-number" key={index}>
+                {index + 1}
+              </span>
+            ))}
+          </div>
+        ) : null}
+        <pre className="workspace-file-code-block">
+          {showHighlight ? (
+            <code
+              className={`language-${prismLanguage}`}
+              dangerouslySetInnerHTML={{ __html: highlightedHtml }}
+            />
+          ) : (
+            <code>{source}</code>
+          )}
+        </pre>
+      </div>
     </div>
   );
 }
@@ -316,7 +352,15 @@ function MarkdownDocument({
                 return <MermaidDiagram code={source} />;
               }
 
-              return <CodePreview fileName="" language={language} source={source} />;
+              return (
+                <CodePreview
+                  fileName=""
+                  language={language}
+                  showLineNumbers={false}
+                  source={source}
+                  variant="block"
+                />
+              );
             }
 
             return <pre>{children}</pre>;
@@ -355,7 +399,7 @@ export function WorkspaceFilePreview({
     );
   }
 
-  if (preview.previewKind === 'markdown') {
+  if (preview.previewKind === 'markdown' && shouldRenderMarkdownPreview(preview)) {
     return (
       <MarkdownDocument
         onLocalFileLinkClick={onLocalFileLinkClick}
@@ -397,7 +441,7 @@ export function WorkspaceFilePreview({
     );
   }
 
-  if (preview.previewKind === 'text') {
+  if (preview.previewKind === 'text' || preview.previewKind === 'markdown') {
     return <CodePreview fileName={preview.path || preview.name} source={preview.text || ''} />;
   }
 

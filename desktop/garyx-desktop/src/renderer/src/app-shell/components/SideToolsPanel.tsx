@@ -33,6 +33,7 @@ import type {
 import { WorkspaceFilePreview } from "../../workspace-file-preview";
 import { PanelIcon } from "../icons";
 import { useI18n } from "../../i18n";
+import { workspaceFileAbsolutePath } from "../workspace-helpers";
 
 const SidePanelBrowserPage = lazy(() =>
   import("../../BrowserPage").then((module) => ({ default: module.BrowserPage }))
@@ -406,7 +407,13 @@ export function ThreadSideToolsPanel({
   const [openTools, setOpenTools] = useState<ThreadSideToolId[]>(["files"]);
   const [activeToolId, setActiveToolId] = useState<ThreadSideToolId>("files");
   const [menuOpen, setMenuOpen] = useState(false);
+  const [filePathCopied, setFilePathCopied] = useState(false);
+  const filePathCopiedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeTool = tools.find((tool) => tool.id === activeToolId) || tools[0];
+  const previewCopyPath = selectedWorkspaceFile?.absolutePath ||
+    (workspaceFilePreview?.workspacePath && workspaceFilePreview.path
+      ? workspaceFileAbsolutePath(workspaceFilePreview.workspacePath, workspaceFilePreview.path)
+      : "");
   const shouldShowWorkspacePreview = Boolean(
     workspacePreviewOpen ||
       workspaceFilePreviewLoading ||
@@ -416,6 +423,18 @@ export function ThreadSideToolsPanel({
   const openToolDescriptors = openTools
     .map((toolId) => tools.find((tool) => tool.id === toolId))
     .filter((tool): tool is ToolDescriptor => Boolean(tool));
+
+  useEffect(() => {
+    return () => {
+      if (filePathCopiedTimeoutRef.current) {
+        clearTimeout(filePathCopiedTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    setFilePathCopied(false);
+  }, [previewCopyPath]);
 
   useEffect(() => {
     if (activeToolId === "browser") {
@@ -442,14 +461,18 @@ export function ThreadSideToolsPanel({
   }, [shouldShowWorkspacePreview, workspaceFilePreview?.path, workspacePreviewTitle]);
 
   async function copySelectedWorkspaceFilePath() {
-    if (!selectedWorkspaceFile) {
+    if (!previewCopyPath) {
       return;
     }
-    try {
-      await navigator.clipboard.writeText(selectedWorkspaceFile.absolutePath);
-    } catch {
-      // Clipboard can be unavailable in constrained renderer environments.
+    await window.garyxDesktop.copyTextToClipboard({ text: previewCopyPath });
+    setFilePathCopied(true);
+    if (filePathCopiedTimeoutRef.current) {
+      clearTimeout(filePathCopiedTimeoutRef.current);
     }
+    filePathCopiedTimeoutRef.current = setTimeout(() => {
+      setFilePathCopied(false);
+      filePathCopiedTimeoutRef.current = null;
+    }, 1200);
   }
 
   function handleBrowserAnnotationCommentRequest(request: BrowserAnnotationCommentRequest) {
@@ -603,12 +626,13 @@ export function ThreadSideToolsPanel({
                     </div>
                     <div className="side-tool-file-preview-actions">
                       <button
-                        aria-label={t("Copy file path")}
-                        disabled={!selectedWorkspaceFile}
+                        aria-label={filePathCopied ? t("Copied") : t("Copy file path")}
+                        className={filePathCopied ? "is-copied" : ""}
+                        disabled={!previewCopyPath}
                         onClick={() => {
                           void copySelectedWorkspaceFilePath();
                         }}
-                        title={t("Copy file path")}
+                        title={filePathCopied ? t("Copied") : t("Copy file path")}
                         type="button"
                       >
                         <Copy aria-hidden size={13} strokeWidth={1.8} />

@@ -105,6 +105,7 @@ import type {
   UpsertSlashCommandInput,
   ShowBrowserConnectionMenuInput,
   AssignTaskInput,
+  CopyTextToClipboardInput,
   UnassignTaskInput,
 } from "@shared/contracts";
 
@@ -1404,6 +1405,9 @@ function registerIpcHandlers(): void {
   ipcMain.handle("garyx:capture-browser-tab", captureBrowserTab);
   ipcMain.handle("garyx:set-browser-annotation-mode", setBrowserAnnotationMode);
   ipcMain.handle("garyx:copy-image-to-clipboard", copyImageToClipboard);
+  ipcMain.handle("garyx:copy-text-to-clipboard", (_event, input: CopyTextToClipboardInput) => {
+    clipboard.writeText(typeof input.text === "string" ? input.text : "");
+  });
   ipcMain.handle("garyx:update-browser-bounds", updateBrowserBounds);
   ipcMain.handle("garyx:set-browser-overlay-paused", setBrowserOverlayPaused);
   ipcMain.handle("garyx:show-browser-connection-menu", (_event, input: ShowBrowserConnectionMenuInput) => {
