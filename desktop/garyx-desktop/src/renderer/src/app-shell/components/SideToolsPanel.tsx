@@ -28,6 +28,7 @@ import type {
   MessageFileAttachment,
 } from "@shared/contracts";
 
+import { PanelIcon } from "../icons";
 import { useI18n } from "../../i18n";
 
 const SidePanelBrowserPage = lazy(() =>
@@ -55,6 +56,7 @@ type ThreadSideToolsPanelProps = {
   onRevealSelectedWorkspaceFile?: () => Promise<void> | void;
   onAddBrowserAnnotationComment: (request: BrowserAnnotationCommentRequest) => void;
   onAttachFileToSideChat: (file: MessageFileAttachment) => void;
+  onCloseSideTools: () => void;
   onOpenSideChat: () => void;
   onWorkspaceFileFilterChange: (value: string) => void;
 };
@@ -372,6 +374,7 @@ export function ThreadSideToolsPanel({
   onRevealSelectedWorkspaceFile,
   onAddBrowserAnnotationComment,
   onAttachFileToSideChat,
+  onCloseSideTools,
   onOpenSideChat,
   onWorkspaceFileFilterChange,
 }: ThreadSideToolsPanelProps) {
@@ -453,83 +456,105 @@ export function ThreadSideToolsPanel({
     });
   }
 
+  function closeSideTools() {
+    void window.garyxDesktop.updateBrowserBounds({
+      x: 0,
+      y: 0,
+      width: 0,
+      height: 0,
+      visible: false,
+    });
+    onCloseSideTools();
+  }
+
   return (
     <aside className={`thread-side-tools-panel is-${activeToolId}-active`}>
       <div className="side-tools-tabs">
-        <div className="side-tools-tab-track" role="tablist">
-          {openToolDescriptors.map((tool) => {
-            const Icon = tool.icon;
-            const selected = tool.id === activeToolId;
-            return (
-              <div
-                className={`side-tools-tab-shell ${selected ? "is-active" : ""}`}
-                key={tool.id}
-              >
-                <button
-                  aria-selected={selected}
-                  className={`side-tools-tab ${selected ? "is-active" : ""}`}
-                  onClick={() => {
-                    setActiveToolId(tool.id);
-                    if (tool.id === "chat") {
-                      onOpenSideChat();
-                    }
-                  }}
-                  role="tab"
-                  type="button"
+        <div className="side-tools-tab-cluster">
+          <div className="side-tools-tab-track" role="tablist">
+            {openToolDescriptors.map((tool) => {
+              const Icon = tool.icon;
+              const selected = tool.id === activeToolId;
+              return (
+                <div
+                  className={`side-tools-tab-shell ${selected ? "is-active" : ""}`}
+                  key={tool.id}
                 >
-                  <Icon aria-hidden size={14} strokeWidth={1.8} />
-                  <span className="side-tools-tab-label">{tool.label}</span>
-                </button>
-                {openTools.length > 1 ? (
                   <button
-                    aria-label={t("Close")}
-                    className="side-tools-tab-close"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      closeTool(tool.id);
+                    aria-selected={selected}
+                    className={`side-tools-tab ${selected ? "is-active" : ""}`}
+                    onClick={() => {
+                      setActiveToolId(tool.id);
+                      if (tool.id === "chat") {
+                        onOpenSideChat();
+                      }
                     }}
-                    title={t("Close")}
+                    role="tab"
                     type="button"
                   >
-                    <X aria-hidden size={12} strokeWidth={1.9} />
+                    <Icon aria-hidden size={14} strokeWidth={1.8} />
+                    <span className="side-tools-tab-label">{tool.label}</span>
                   </button>
-                ) : null}
+                  {openTools.length > 1 ? (
+                    <button
+                      aria-label={t("Close")}
+                      className="side-tools-tab-close"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        closeTool(tool.id);
+                      }}
+                      title={t("Close")}
+                      type="button"
+                    >
+                      <X aria-hidden size={12} strokeWidth={1.9} />
+                    </button>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+          <div className="side-tools-add-shell">
+            <button
+              aria-expanded={menuOpen}
+              aria-haspopup="menu"
+              className="codex-icon-button side-tools-add"
+              onClick={() => setMenuOpen((current) => !current)}
+              title={t("Add tool")}
+              type="button"
+            >
+              <Plus aria-hidden />
+            </button>
+            {menuOpen ? (
+              <div className="side-tools-menu" role="menu">
+                {tools.map((tool) => {
+                  const Icon = tool.icon;
+                  return (
+                    <button
+                      className="side-tools-menu-item"
+                      key={tool.id}
+                      onClick={() => openTool(tool.id)}
+                      role="menuitem"
+                      type="button"
+                    >
+                      <Icon aria-hidden size={15} strokeWidth={1.8} />
+                      <span>{tool.label}</span>
+                      {tool.shortcut ? <kbd>{tool.shortcut}</kbd> : null}
+                    </button>
+                  );
+                })}
               </div>
-            );
-          })}
+            ) : null}
+          </div>
         </div>
-        <div className="side-tools-add-shell">
-          <button
-            aria-expanded={menuOpen}
-            aria-haspopup="menu"
-            className="codex-icon-button side-tools-add"
-            onClick={() => setMenuOpen((current) => !current)}
-            title={t("Add tool")}
-            type="button"
-          >
-            <Plus aria-hidden />
-          </button>
-          {menuOpen ? (
-            <div className="side-tools-menu" role="menu">
-              {tools.map((tool) => {
-                const Icon = tool.icon;
-                return (
-                  <button
-                    className="side-tools-menu-item"
-                    key={tool.id}
-                    onClick={() => openTool(tool.id)}
-                    role="menuitem"
-                    type="button"
-                  >
-                    <Icon aria-hidden size={15} strokeWidth={1.8} />
-                    <span>{tool.label}</span>
-                    {tool.shortcut ? <kbd>{tool.shortcut}</kbd> : null}
-                  </button>
-                );
-              })}
-            </div>
-          ) : null}
-        </div>
+        <button
+          aria-label={t("Hide side tools")}
+          className="codex-icon-button side-tools-collapse"
+          onClick={closeSideTools}
+          title={t("Hide side tools")}
+          type="button"
+        >
+          <PanelIcon />
+        </button>
       </div>
 
       <div className={`side-tools-body is-${activeTool.id}`}>

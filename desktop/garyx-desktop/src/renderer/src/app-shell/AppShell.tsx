@@ -9665,6 +9665,11 @@ export function AppShell() {
         appendSideComposerFile(sideChatSourceThreadId, file);
         void ensureSideChatThread();
       }}
+      onCloseSideTools={() => {
+        trackUiAction("thread.close_inspector", () => {
+          setInspectorOpen(false);
+        });
+      }}
       onOpenSideChat={() => {
         void ensureSideChatThread();
       }}

@@ -4065,7 +4065,8 @@ code {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: space-between;
+  gap: 8px;
   height: 46px;
   min-width: 0;
   padding: 0 8px;
@@ -4073,11 +4074,20 @@ code {
   background: var(--color-token-bg-primary);
 }
 
+.side-tools-tab-cluster {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
 .side-tools-tab-track {
   display: flex;
   align-items: center;
   gap: 3px;
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
@@ -4170,10 +4180,15 @@ code {
   flex: 0 0 auto;
 }
 
-.side-tools-add {
+.side-tools-add,
+.side-tools-collapse {
   width: 28px;
   height: 28px;
   border-radius: 8px;
+}
+
+.side-tools-collapse {
+  flex: 0 0 auto;
 }
 
 .side-tools-menu {
