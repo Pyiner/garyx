@@ -4048,6 +4048,7 @@ code {
   overflow: hidden;
   border-left: 0.5px solid var(--color-token-border);
   background: var(--color-token-bg-primary);
+  -webkit-app-region: no-drag;
 }
 
 .side-tool-selected-file-actions button {
@@ -4072,6 +4073,13 @@ code {
   padding: 0 8px;
   border-bottom: 0.5px solid color-mix(in srgb, var(--color-token-border) 72%, transparent);
   background: var(--color-token-bg-primary);
+  -webkit-app-region: no-drag;
+}
+
+.side-tools-tabs button,
+.side-tools-tabs [role="menu"],
+.side-tools-tabs [role="menuitem"] {
+  -webkit-app-region: no-drag;
 }
 
 .side-tools-tab-cluster {
