@@ -4078,9 +4078,10 @@ code {
   display: flex;
   align-items: center;
   gap: 4px;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
-  overflow: hidden;
+  max-width: calc(100% - 36px);
+  overflow: visible;
 }
 
 .side-tools-tab-track {
@@ -4178,6 +4179,7 @@ code {
 .side-tools-add-shell {
   position: relative;
   flex: 0 0 auto;
+  z-index: 2;
 }
 
 .side-tools-add,
@@ -4194,7 +4196,7 @@ code {
 .side-tools-menu {
   position: absolute;
   top: calc(100% + 6px);
-  right: 0;
+  left: 0;
   z-index: 30;
   display: grid;
   gap: 2px;
