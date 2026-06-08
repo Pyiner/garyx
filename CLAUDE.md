@@ -81,6 +81,9 @@ Detailed data and runtime contracts: @docs/agents/repository-contracts.md and
 - Mobile route state, presentation mapping, formatting, and business-rule
   transformations should live in `GaryxMobileCore` with SwiftPM tests.
 - Keep mobile SwiftUI feature surfaces in feature-specific files.
+- Mobile page backgrounds and bottom floating controls should use the shared
+  safe-area chrome helpers (`garyxPageBackground`, `garyxFloatingBottomChrome`)
+  instead of local `ignoresSafeArea` / `Color.clear` patches.
 
 Detailed UI rules: @docs/agents/mobile-ui.md and @docs/agents/desktop-ui.md.
 

@@ -14,14 +14,14 @@ struct GaryxRootView: View {
 
     var body: some View {
         ZStack {
-            GaryxTheme.background.ignoresSafeArea()
-
             if model.hasGatewaySettings, case .ready = model.connectionState {
                 GaryxShellView()
             } else {
                 GaryxGatewaySetupView()
             }
         }
+        .garyxPageBackground()
+        .garyxRootChromeBackground()
         .overlay(alignment: .top) {
             GaryxGlobalErrorToastHost(topOffset: 72)
         }
