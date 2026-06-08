@@ -233,9 +233,11 @@ import {
   navigateBrowserTab,
   setBrowserAnnotationMode,
   subscribeBrowserAnnotationComments,
+  subscribeBrowserPageMouseDown,
   subscribeBrowserState,
   unbindBrowserWindow,
   unsubscribeBrowserAnnotationComments,
+  unsubscribeBrowserPageMouseDown,
   unsubscribeBrowserState,
   updateBrowserBounds,
   setBrowserOverlayPaused,
@@ -1425,6 +1427,12 @@ function registerIpcHandlers(): void {
   });
   ipcMain.on("garyx:browser-annotation-comment-unsubscribe", (event) => {
     unsubscribeBrowserAnnotationComments(event);
+  });
+  ipcMain.on("garyx:browser-page-mouse-down-subscribe", (event) => {
+    subscribeBrowserPageMouseDown(event);
+  });
+  ipcMain.on("garyx:browser-page-mouse-down-unsubscribe", (event) => {
+    unsubscribeBrowserPageMouseDown(event);
   });
   ipcMain.handle("garyx:list-terminal-state", async () => {
     return listTerminalState();

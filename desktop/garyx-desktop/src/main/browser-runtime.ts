@@ -606,6 +606,8 @@ class BrowserRuntime {
 
   private readonly annotationSubscribers = new Set<WebContents>();
 
+  private readonly pageMouseDownSubscribers = new Set<WebContents>();
+
   private readonly annotationMessagePrefix = `__GARYX_BROWSER_ANNOTATION_COMMENT__${randomUUID()}__`;
 
   private window: BrowserWindow | null = null;
@@ -661,6 +663,17 @@ class BrowserRuntime {
 
   unsubscribeAnnotationComments(event: IpcMainEvent): void {
     this.annotationSubscribers.delete(event.sender);
+  }
+
+  subscribePageMouseDown(event: IpcMainEvent): void {
+    this.pageMouseDownSubscribers.add(event.sender);
+    event.sender.once('destroyed', () => {
+      this.pageMouseDownSubscribers.delete(event.sender);
+    });
+  }
+
+  unsubscribePageMouseDown(event: IpcMainEvent): void {
+    this.pageMouseDownSubscribers.delete(event.sender);
   }
 
   listState(): DesktopBrowserState {
@@ -883,6 +896,11 @@ class BrowserRuntime {
       }
       void this.handleAnnotationConsoleMessage(record, String(details.message || ''));
     });
+    webContents.on('before-mouse-event', (_event, mouse) => {
+      if (mouse.type === 'mouseDown') {
+        this.emitPageMouseDown();
+      }
+    });
   }
 
   private async handleAnnotationConsoleMessage(record: BrowserTabRecord, message: string): Promise<void> {
@@ -1027,6 +1045,16 @@ class BrowserRuntime {
     }
   }
 
+  private emitPageMouseDown(): void {
+    for (const subscriber of Array.from(this.pageMouseDownSubscribers)) {
+      if (subscriber.isDestroyed()) {
+        this.pageMouseDownSubscribers.delete(subscriber);
+        continue;
+      }
+      subscriber.send('garyx:browser-page-mouse-down');
+    }
+  }
+
   private reconcileMountedView(): void {
     const window = this.window;
     if (!window || window.isDestroyed()) {
@@ -1089,6 +1117,14 @@ export function subscribeBrowserAnnotationComments(event: IpcMainEvent): void {
 
 export function unsubscribeBrowserAnnotationComments(event: IpcMainEvent): void {
   browserRuntime.unsubscribeAnnotationComments(event);
+}
+
+export function subscribeBrowserPageMouseDown(event: IpcMainEvent): void {
+  browserRuntime.subscribePageMouseDown(event);
+}
+
+export function unsubscribeBrowserPageMouseDown(event: IpcMainEvent): void {
+  browserRuntime.unsubscribePageMouseDown(event);
 }
 
 export function listBrowserState(): DesktopBrowserState {

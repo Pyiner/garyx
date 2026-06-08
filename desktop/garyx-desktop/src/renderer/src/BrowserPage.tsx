@@ -20,9 +20,11 @@ function activeTab(state: DesktopBrowserState | null) {
 }
 
 export function BrowserPage({
+  obstructionBottom = null,
   onAnnotationCommentRequest,
   variant = 'page',
 }: {
+  obstructionBottom?: number | null;
   onAnnotationCommentRequest?: (request: BrowserAnnotationCommentRequest) => void;
   variant?: 'page' | 'side-panel';
 }) {
@@ -136,12 +138,16 @@ export function BrowserPage({
 
     const syncBounds = () => {
       const rect = node.getBoundingClientRect();
+      const topInset = obstructionBottom
+        ? Math.max(0, Math.ceil(obstructionBottom - rect.y))
+        : 0;
+      const height = Math.max(0, rect.height - topInset);
       void api.updateBrowserBounds({
         x: rect.x,
-        y: rect.y,
+        y: rect.y + topInset,
         width: rect.width,
-        height: rect.height,
-        visible: rect.width > 0 && rect.height > 0,
+        height,
+        visible: rect.width > 0 && height > 0,
       });
     };
 
@@ -155,7 +161,7 @@ export function BrowserPage({
       window.removeEventListener('resize', syncBounds);
       window.removeEventListener('scroll', syncBounds, true);
     };
-  }, [api, browserState?.activeTabId]);
+  }, [api, browserState?.activeTabId, obstructionBottom]);
 
   async function submitAddress(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

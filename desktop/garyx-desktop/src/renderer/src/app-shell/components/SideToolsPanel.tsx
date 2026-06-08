@@ -2,6 +2,7 @@ import {
   lazy,
   Suspense,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -411,6 +412,10 @@ export function ThreadSideToolsPanel({
   const [menuOpen, setMenuOpen] = useState(false);
   const [filePathCopied, setFilePathCopied] = useState(false);
   const [fileDirectoryCollapsed, setFileDirectoryCollapsed] = useState(false);
+  const [browserMenuObstructionBottom, setBrowserMenuObstructionBottom] =
+    useState<number | null>(null);
+  const addToolShellRef = useRef<HTMLDivElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const filePathCopiedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeTool = tools.find((tool) => tool.id === activeToolId) || tools[0];
   const FileDirectoryToggleIcon = fileDirectoryCollapsed
@@ -429,8 +434,6 @@ export function ThreadSideToolsPanel({
   const openToolDescriptors = openTools
     .map((toolId) => tools.find((tool) => tool.id === toolId))
     .filter((tool): tool is ToolDescriptor => Boolean(tool));
-  const browserBlockedByToolMenu = activeToolId === "browser" && menuOpen;
-
   useEffect(() => {
     return () => {
       if (filePathCopiedTimeoutRef.current) {
@@ -458,16 +461,6 @@ export function ThreadSideToolsPanel({
   }, [activeToolId]);
 
   useEffect(() => {
-    if (activeToolId !== "browser") {
-      return;
-    }
-    void window.garyxDesktop.setBrowserOverlayPaused(menuOpen);
-    return () => {
-      void window.garyxDesktop.setBrowserOverlayPaused(false);
-    };
-  }, [activeToolId, menuOpen]);
-
-  useEffect(() => {
     if (!shouldShowWorkspacePreview) {
       return;
     }
@@ -476,6 +469,71 @@ export function ThreadSideToolsPanel({
     );
     setActiveToolId("files");
   }, [shouldShowWorkspacePreview, workspaceFilePreview?.path, workspacePreviewTitle]);
+
+  useEffect(() => {
+    if (!menuOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && addToolShellRef.current?.contains(target)) {
+        return;
+      }
+      setMenuOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [menuOpen]);
+
+  useEffect(() => {
+    if (!menuOpen || activeToolId !== "browser") {
+      return;
+    }
+
+    const handleBrowserMouseDown = () => {
+      setMenuOpen(false);
+    };
+    window.garyxDesktop.subscribeBrowserPageMouseDown(handleBrowserMouseDown);
+    return () => {
+      window.garyxDesktop.unsubscribeBrowserPageMouseDown(handleBrowserMouseDown);
+    };
+  }, [activeToolId, menuOpen]);
+
+  useLayoutEffect(() => {
+    if (!menuOpen || activeToolId !== "browser") {
+      setBrowserMenuObstructionBottom(null);
+      return;
+    }
+
+    const measure = () => {
+      const rect = menuRef.current?.getBoundingClientRect();
+      setBrowserMenuObstructionBottom(rect ? Math.ceil(rect.bottom + 8) : null);
+    };
+
+    measure();
+    const observer = new ResizeObserver(measure);
+    if (menuRef.current) {
+      observer.observe(menuRef.current);
+    }
+    window.addEventListener("resize", measure);
+    window.addEventListener("scroll", measure, true);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("scroll", measure, true);
+    };
+  }, [activeToolId, menuOpen]);
 
   async function copySelectedWorkspaceFilePath() {
     if (!previewCopyPath) {
@@ -584,7 +642,7 @@ export function ThreadSideToolsPanel({
               );
             })}
           </div>
-          <div className="side-tools-add-shell">
+          <div className="side-tools-add-shell" ref={addToolShellRef}>
             <button
               aria-expanded={menuOpen}
               aria-haspopup="menu"
@@ -596,7 +654,7 @@ export function ThreadSideToolsPanel({
               <Plus aria-hidden />
             </button>
             {menuOpen ? (
-              <div className="side-tools-menu" role="menu">
+              <div className="side-tools-menu" ref={menuRef} role="menu">
                 {tools.map((tool) => {
                   const Icon = tool.icon;
                   return (
@@ -752,18 +810,15 @@ export function ThreadSideToolsPanel({
           <div className="side-tool-chat-thread">{sideChatPanel}</div>
         ) : null}
         {activeTool.id === "browser" ? (
-          browserBlockedByToolMenu ? (
-            <div className="browser-page browser-page-side-panel browser-side-panel-loading" />
-          ) : (
-            <Suspense
-              fallback={<div className="browser-page browser-page-side-panel browser-side-panel-loading" />}
-            >
-              <SidePanelBrowserPage
-                onAnnotationCommentRequest={handleBrowserAnnotationCommentRequest}
-                variant="side-panel"
-              />
-            </Suspense>
-          )
+          <Suspense
+            fallback={<div className="browser-page browser-page-side-panel browser-side-panel-loading" />}
+          >
+            <SidePanelBrowserPage
+              obstructionBottom={browserMenuObstructionBottom}
+              onAnnotationCommentRequest={handleBrowserAnnotationCommentRequest}
+              variant="side-panel"
+            />
+          </Suspense>
         ) : null}
         {activeTool.id === "terminal" ? (
           <SideTerminalTool cwd={activeWorkspacePath} />

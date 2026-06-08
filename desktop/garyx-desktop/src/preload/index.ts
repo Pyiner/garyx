@@ -104,6 +104,11 @@ const browserAnnotationCommentListeners = new Map<
   (_event: Electron.IpcRendererEvent, payload: unknown) => void
 >();
 
+const browserPageMouseDownListeners = new Map<
+  Parameters<GaryxDesktopApi["subscribeBrowserPageMouseDown"]>[0],
+  (_event: Electron.IpcRendererEvent) => void
+>();
+
 function clearBrowserAnnotationCommentListeners(): void {
   for (const wrapped of browserAnnotationCommentListeners.values()) {
     ipcRenderer.removeListener("garyx:browser-annotation-comment", wrapped);
@@ -410,6 +415,25 @@ const api: GaryxDesktopApi = {
     browserAnnotationCommentListeners.delete(listener);
     if (browserAnnotationCommentListeners.size === 0) {
       ipcRenderer.send("garyx:browser-annotation-comment-unsubscribe");
+    }
+  },
+  subscribeBrowserPageMouseDown: (listener) => {
+    const wrapped = () => {
+      listener();
+    };
+    browserPageMouseDownListeners.set(listener, wrapped);
+    ipcRenderer.on("garyx:browser-page-mouse-down", wrapped);
+    ipcRenderer.send("garyx:browser-page-mouse-down-subscribe");
+  },
+  unsubscribeBrowserPageMouseDown: (listener) => {
+    const wrapped = browserPageMouseDownListeners.get(listener);
+    if (!wrapped) {
+      return;
+    }
+    ipcRenderer.removeListener("garyx:browser-page-mouse-down", wrapped);
+    browserPageMouseDownListeners.delete(listener);
+    if (browserPageMouseDownListeners.size === 0) {
+      ipcRenderer.send("garyx:browser-page-mouse-down-unsubscribe");
     }
   },
   listTerminalState: () => ipcRenderer.invoke("garyx:list-terminal-state"),

@@ -1812,6 +1812,8 @@ export type DesktopBrowserAnnotationCommentListener = (
   request: BrowserAnnotationCommentRequest,
 ) => void;
 
+export type DesktopBrowserPageMouseDownListener = () => void;
+
 export interface DesktopTerminalSession {
   id: string;
   title: string;
@@ -2139,6 +2141,12 @@ export interface GaryxDesktopApi {
   ) => void;
   unsubscribeBrowserAnnotationComments: (
     listener: DesktopBrowserAnnotationCommentListener,
+  ) => void;
+  subscribeBrowserPageMouseDown: (
+    listener: DesktopBrowserPageMouseDownListener,
+  ) => void;
+  unsubscribeBrowserPageMouseDown: (
+    listener: DesktopBrowserPageMouseDownListener,
   ) => void;
   listTerminalState: () => Promise<DesktopTerminalState>;
   createTerminalSession: (
