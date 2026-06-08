@@ -174,6 +174,7 @@ function browserAnnotationModeScript(enabled: boolean, commentMessagePrefix: str
     let currentElement = null;
     let selectedElement = null;
     let commentRequestEmitted = false;
+    let nextMarkerNumber = 1;
 
     const isDisabled = (element) => {
       if (!(element instanceof Element)) {
@@ -304,6 +305,42 @@ function browserAnnotationModeScript(enabled: boolean, commentMessagePrefix: str
       );
     };
 
+    const placeMarker = (markerNumber, rect) => {
+      const marker = document.createElement('div');
+      marker.setAttribute('data-garyx-browser-annotation-ui', 'true');
+      marker.setAttribute('data-garyx-browser-annotation-marker', 'true');
+      marker.textContent = String(markerNumber);
+      const size = 28;
+      const left = Math.min(
+        Math.max(6, rect.left + rect.width - size - 8),
+        window.innerWidth - size - 6,
+      );
+      const top = Math.min(
+        Math.max(6, rect.top + Math.max(0, (rect.height - size) / 2)),
+        window.innerHeight - size - 6,
+      );
+      Object.assign(marker.style, {
+        position: 'fixed',
+        left: '0',
+        top: '0',
+        width: size + 'px',
+        height: size + 'px',
+        borderRadius: '999px',
+        background: '#2563eb',
+        color: '#ffffff',
+        border: '2px solid #ffffff',
+        boxShadow: '0 8px 22px rgba(37,99,235,0.35), 0 0 0 1px rgba(37,99,235,0.18)',
+        display: 'grid',
+        placeItems: 'center',
+        font: '700 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        pointerEvents: 'none',
+        transform: 'translate(' + Math.round(left) + 'px, ' + Math.round(top) + 'px)',
+        zIndex: '2147483647',
+      });
+      (document.body || document.documentElement).appendChild(marker);
+      return marker;
+    };
+
     const emitCommentRequest = (comment) => {
       const normalizedComment = truncate(comment, 1200);
       if (!normalizedComment) {
@@ -317,10 +354,13 @@ function browserAnnotationModeScript(enabled: boolean, commentMessagePrefix: str
         commentForm.style.display = 'none';
         return false;
       }
+      const markerNumber = nextMarkerNumber++;
+      placeMarker(markerNumber, rect);
       const payload = {
         comment: normalizedComment,
         tagName: selectedElement.tagName.toLowerCase(),
         label: labelFor(selectedElement),
+        markerNumber,
         role: selectedElement.getAttribute('role'),
         selector: selectorFor(selectedElement),
         text: truncate(selectedElement.textContent || '', 240) || null,
@@ -807,11 +847,11 @@ class BrowserRuntime {
       if (details.frame !== webContents.mainFrame) {
         return;
       }
-      this.handleAnnotationConsoleMessage(record, String(details.message || ''));
+      void this.handleAnnotationConsoleMessage(record, String(details.message || ''));
     });
   }
 
-  private handleAnnotationConsoleMessage(record: BrowserTabRecord, message: string): void {
+  private async handleAnnotationConsoleMessage(record: BrowserTabRecord, message: string): Promise<void> {
     if (!message.startsWith(this.annotationMessagePrefix)) {
       return;
     }
@@ -822,7 +862,7 @@ class BrowserRuntime {
     } catch {
       return;
     }
-    const request = this.createAnnotationCommentRequest(record, payload);
+    const request = await this.createAnnotationCommentRequest(record, payload);
     if (!request) {
       return;
     }
@@ -832,14 +872,14 @@ class BrowserRuntime {
   private createAnnotationCommentRequest(
     record: BrowserTabRecord,
     payload: unknown,
-  ): BrowserAnnotationCommentRequest | null {
+  ): Promise<BrowserAnnotationCommentRequest | null> {
     if (!payload || typeof payload !== 'object') {
-      return null;
+      return Promise.resolve(null);
     }
     const input = payload as Record<string, unknown>;
     const rect = input.rect;
     if (!rect || typeof rect !== 'object') {
-      return null;
+      return Promise.resolve(null);
     }
     const rectInput = rect as Record<string, unknown>;
     const x = Number(rectInput.x);
@@ -847,7 +887,7 @@ class BrowserRuntime {
     const width = Number(rectInput.width);
     const height = Number(rectInput.height);
     if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) {
-      return null;
+      return Promise.resolve(null);
     }
     const stringValue = (value: unknown): string | null => {
       if (typeof value !== 'string') {
@@ -860,10 +900,26 @@ class BrowserRuntime {
     const label = stringValue(input.label) || tagName;
     const comment = stringValue(input.comment);
     if (!comment) {
-      return null;
+      return Promise.resolve(null);
     }
     const webContents = record.view.webContents;
-    return {
+    return (async () => {
+      let screenshot: CaptureBrowserTabResult | null = null;
+      try {
+        const image = await webContents.capturePage();
+        const size = image.getSize();
+        screenshot = {
+          dataUrl: image.toDataURL(),
+          height: size.height,
+          mediaType: 'image/png',
+          title: safeTitle(webContents.getTitle() || record.title || 'Browser annotation'),
+          width: size.width,
+        };
+      } catch {
+        screenshot = null;
+      }
+      const markerNumber = Number(input.markerNumber);
+      return {
       id: `browser-comment-${randomUUID()}`,
       tabId: record.id,
       url: webContents.getURL() || record.url,
@@ -871,6 +927,7 @@ class BrowserRuntime {
       comment,
       tagName,
       label,
+      markerNumber: Number.isFinite(markerNumber) && markerNumber > 0 ? markerNumber : null,
       role: stringValue(input.role),
       selector: stringValue(input.selector),
       text: stringValue(input.text),
@@ -880,7 +937,9 @@ class BrowserRuntime {
         width: Math.round(width),
         height: Math.round(height),
       },
-    };
+      screenshot,
+      };
+    })();
   }
 
   private requireTab(tabId: string): BrowserTabRecord {

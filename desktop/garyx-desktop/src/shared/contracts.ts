@@ -1776,6 +1776,7 @@ export interface BrowserAnnotationCommentRequest {
   comment: string;
   tagName: string;
   label: string;
+  markerNumber?: number | null;
   role?: string | null;
   selector?: string | null;
   text?: string | null;
@@ -1785,6 +1786,7 @@ export interface BrowserAnnotationCommentRequest {
     width: number;
     height: number;
   };
+  screenshot?: CaptureBrowserTabResult | null;
 }
 
 export interface CopyImageToClipboardInput {
