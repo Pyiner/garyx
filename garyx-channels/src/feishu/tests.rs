@@ -1885,31 +1885,24 @@ mod e2e_tests {
             "send_message should be called for DM"
         );
 
-        // Streaming DMs now send a Card Kit reference message and keep the
-        // actual markdown body inside Card Kit create/update requests.
         let send_body: serde_json::Value = serde_json::from_slice(&send_calls[0].body).unwrap();
         let send_content: serde_json::Value =
             serde_json::from_str(send_body["content"].as_str().unwrap()).unwrap();
         assert_eq!(send_body["msg_type"], "interactive");
-        assert_eq!(send_content["type"], "card");
-        assert_eq!(send_content["data"]["card_id"], "cardkit_mock_card");
-
-        let card_create_calls =
-            wait_for_matching_requests(&server, std::time::Duration::from_secs(5), 1, |r| {
-                r.method.as_str() == "POST" && r.url.path() == "/cardkit/v1/cards"
-            })
-            .await;
-        let card_create_body: serde_json::Value =
-            serde_json::from_slice(&card_create_calls[0].body).unwrap();
-        let card_data: serde_json::Value =
-            serde_json::from_str(card_create_body["data"].as_str().unwrap()).unwrap();
-        assert_eq!(card_data["body"]["elements"][0]["tag"], "markdown");
+        assert_eq!(send_content["body"]["elements"][0]["tag"], "markdown");
         assert!(
-            card_data["body"]["elements"][0]["content"]
+            send_content["body"]["elements"][0]["content"]
                 .as_str()
                 .unwrap_or_default()
                 .contains("echo:"),
-            "card content should contain echo response"
+            "direct card content should contain echo response"
+        );
+        let requests = server.received_requests().await.unwrap_or_default();
+        assert!(
+            requests
+                .iter()
+                .all(|request| !request.url.path().starts_with("/cardkit/v1/cards")),
+            "Feishu replies should not use streaming Card Kit requests"
         );
     }
 
@@ -1992,56 +1985,34 @@ mod e2e_tests {
             |r| r.url.path().contains("/reply"),
         )
         .await;
-        let card_create_calls = wait_for_matching_requests_quiet_window(
-            &server,
-            std::time::Duration::from_millis(200),
-            std::time::Duration::from_secs(5),
-            2,
-            |r| r.method.as_str() == "POST" && r.url.path() == "/cardkit/v1/cards",
-        )
-        .await;
-        let update_bodies: Vec<Value> = wait_for_matching_requests_quiet_window(
-            &server,
-            std::time::Duration::from_millis(200),
-            std::time::Duration::from_secs(5),
-            1,
-            |r| {
-                r.method.as_str() == "PUT"
-                    && r.url.path().starts_with("/cardkit/v1/cards/")
-                    && r.url.path().ends_with("/elements/content/content")
-            },
-        )
-        .await
-        .into_iter()
-        .map(|r| serde_json::from_slice(&r.body).expect("valid cardkit update body"))
-        .collect();
-        let close_calls = wait_for_matching_requests_quiet_window(
-            &server,
-            std::time::Duration::from_millis(200),
-            std::time::Duration::from_secs(5),
-            1,
-            |r| r.method.as_str() == "PATCH" && r.url.path().ends_with("/settings"),
-        )
-        .await;
-
         assert!(
             reply_calls.len() >= 2,
             "user ack boundary should start a fresh Feishu reply message"
         );
+        let reply_contents = reply_calls
+            .iter()
+            .map(|request| {
+                let body: Value = serde_json::from_slice(&request.body).unwrap();
+                serde_json::from_str::<Value>(body["content"].as_str().unwrap()).unwrap()
+            })
+            .collect::<Vec<_>>();
         assert!(
-            card_create_calls.len() >= 2,
-            "user ack boundary should start a fresh Feishu streaming card after the boundary"
+            reply_contents
+                .iter()
+                .any(|content| content["body"]["elements"][0]["content"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("第一段")),
+            "first boundary segment should be sent as a complete card; reply_contents={reply_contents:?}"
         );
         assert!(
-            update_bodies.iter().any(|body| body["content"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("第二段")),
-            "second segment should close the new streaming card with the second segment text; update_bodies={update_bodies:?}"
-        );
-        assert!(
-            !close_calls.is_empty(),
-            "final segment should close the Feishu Card Kit stream"
+            reply_contents
+                .iter()
+                .any(|content| content["body"]["elements"][0]["content"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("第二段")),
+            "second boundary segment should be sent as a complete card; reply_contents={reply_contents:?}"
         );
 
         let _ = store;
@@ -2080,47 +2051,20 @@ mod e2e_tests {
             |r| r.url.path().contains("/reply"),
         )
         .await;
-        let update_bodies: Vec<Value> = wait_for_matching_requests_quiet_window(
-            &server,
-            std::time::Duration::from_millis(200),
-            std::time::Duration::from_secs(5),
-            1,
-            |r| {
-                r.method.as_str() == "PUT"
-                    && r.url.path().starts_with("/cardkit/v1/cards/")
-                    && r.url.path().ends_with("/elements/content/content")
-            },
-        )
-        .await
-        .into_iter()
-        .map(|r| serde_json::from_slice(&r.body).expect("valid cardkit update body"))
-        .collect();
-        let close_calls = wait_for_matching_requests_quiet_window(
-            &server,
-            std::time::Duration::from_millis(200),
-            std::time::Duration::from_secs(5),
-            1,
-            |r| r.method.as_str() == "PATCH" && r.url.path().ends_with("/settings"),
-        )
-        .await;
-
         assert_eq!(
             reply_calls.len(),
             1,
             "assistant segment must stay within a single Feishu reply message"
         );
+        let reply_body: Value = serde_json::from_slice(&reply_calls[0].body).unwrap();
+        let reply_content: Value =
+            serde_json::from_str(reply_body["content"].as_str().unwrap()).unwrap();
         assert!(
-            update_bodies.iter().any(|body| {
-                body["content"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .contains("第一段\n\n第二段")
-            }),
-            "assistant segment should keep updating the same Feishu Card Kit body with inline separation; update_bodies={update_bodies:?}"
-        );
-        assert!(
-            !close_calls.is_empty(),
-            "assistant segment should close the existing Feishu Card Kit stream in place"
+            reply_content["body"]["elements"][0]["content"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("第一段\n\n第二段"),
+            "assistant segment should be sent once with inline separation; reply_content={reply_content:?}"
         );
     }
 
@@ -2157,47 +2101,20 @@ mod e2e_tests {
             |r| r.url.path().contains("/reply"),
         )
         .await;
-        let update_bodies: Vec<Value> = wait_for_matching_requests_quiet_window(
-            &server,
-            std::time::Duration::from_millis(200),
-            std::time::Duration::from_secs(5),
-            1,
-            |r| {
-                r.method.as_str() == "PUT"
-                    && r.url.path().starts_with("/cardkit/v1/cards/")
-                    && r.url.path().ends_with("/elements/content/content")
-            },
-        )
-        .await
-        .into_iter()
-        .map(|r| serde_json::from_slice(&r.body).expect("valid cardkit update body"))
-        .collect();
-        let close_calls = wait_for_matching_requests_quiet_window(
-            &server,
-            std::time::Duration::from_millis(200),
-            std::time::Duration::from_secs(5),
-            1,
-            |r| r.method.as_str() == "PATCH" && r.url.path().ends_with("/settings"),
-        )
-        .await;
-
         assert_eq!(
             reply_calls.len(),
             1,
             "tool trace should not fan out assistant continuation into a new Feishu reply"
         );
+        let reply_body: Value = serde_json::from_slice(&reply_calls[0].body).unwrap();
+        let reply_content: Value =
+            serde_json::from_str(reply_body["content"].as_str().unwrap()).unwrap();
         assert!(
-            update_bodies.iter().any(|body| {
-                body["content"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .contains("先说一句，再接一句")
-            }),
-            "assistant continuation after tool trace should stay in the same Feishu Card Kit body; update_bodies={update_bodies:?}"
-        );
-        assert!(
-            !close_calls.is_empty(),
-            "assistant continuation after tool trace should close the existing Feishu Card Kit stream"
+            reply_content["body"]["elements"][0]["content"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("先说一句，再接一句"),
+            "assistant continuation after tool trace should be sent once; reply_content={reply_content:?}"
         );
     }
 
@@ -4151,25 +4068,17 @@ mod e2e_tests {
         let send_content: serde_json::Value =
             serde_json::from_str(send_body["content"].as_str().unwrap()).unwrap();
         assert_eq!(send_body["msg_type"], "interactive");
-        assert_eq!(send_content["type"], "card");
-        assert_eq!(send_content["data"]["card_id"], "cardkit_mock_card");
-
-        let card_create_calls = wait_for_matching_requests_quiet_window(
-            &server,
-            std::time::Duration::from_millis(200),
-            std::time::Duration::from_secs(5),
-            1,
-            |r| r.method.as_str() == "POST" && r.url.path() == "/cardkit/v1/cards",
-        )
-        .await;
-        let card_create_body: serde_json::Value =
-            serde_json::from_slice(&card_create_calls[0].body).unwrap();
-        let card_data: serde_json::Value =
-            serde_json::from_str(card_create_body["data"].as_str().unwrap()).unwrap();
-        assert_eq!(card_data["body"]["elements"][0]["tag"], "markdown");
+        assert_eq!(send_content["body"]["elements"][0]["tag"], "markdown");
         assert_eq!(
-            card_data["body"]["elements"][0]["content"],
+            send_content["body"]["elements"][0]["content"],
             "Hello **bold** text"
+        );
+        let requests = server.received_requests().await.unwrap_or_default();
+        assert!(
+            requests
+                .iter()
+                .all(|request| !request.url.path().starts_with("/cardkit/v1/cards")),
+            "final Feishu card should be sent once without streaming Card Kit"
         );
     }
 

@@ -157,32 +157,6 @@ pub fn build_card_content(text: &str) -> String {
     card.to_string()
 }
 
-/// Build a Card Kit card JSON body for streaming (schema 2.0, streaming_mode enabled).
-pub fn build_streaming_card_body(initial_text: &str) -> String {
-    let card = serde_json::json!({
-        "schema": "2.0",
-        "config": {
-            "width_mode": "fill",
-            "streaming_mode": true,
-            "summary": { "content": "[生成中...]" },
-            "streaming_config": {
-                "print_frequency_ms": { "default": 50 },
-                "print_step": { "default": 1 }
-            }
-        },
-        "body": {
-            "elements": [
-                {
-                    "tag": "markdown",
-                    "content": initial_text,
-                    "element_id": "content"
-                }
-            ]
-        }
-    });
-    card.to_string()
-}
-
 /// Build a simple text content JSON string.
 pub fn build_text_content(text: &str) -> String {
     serde_json::json!({ "text": text }).to_string()

@@ -919,31 +919,66 @@ pub(super) async fn handle_im_message_event(
                 }
                 StreamEvent::Boundary { kind, .. } => match kind {
                     StreamBoundaryKind::UserAck => {
-                        let boundary_outbound = state.stream_reply_message_id.clone();
+                        let mut boundary_text = state.stream_text.clone();
+                        if !worker_mention_prefix.is_empty() {
+                            boundary_text = format!("{worker_mention_prefix} {boundary_text}");
+                        }
+                        boundary_text = boundary_text.trim().to_owned();
                         crate::streaming_core::apply_stream_boundary_text(
                             &mut state.stream_text,
                             StreamBoundaryKind::UserAck,
                         );
-                        state.stream_card_id = None;
-                        state.stream_card_seq = 0;
-                        state.stream_reply_message_id = None;
-                        state.last_stream_sent_text.clear();
                         drop(state);
 
-                        if let Some(outbound_msg_id) = boundary_outbound
-                            && !outbound_msg_id.is_empty()
-                            && !canonical_thread_id.is_empty()
-                        {
-                            let mut r = worker_router.lock().await;
-                            r.record_outbound_message_with_persistence(
-                                &canonical_thread_id,
-                                "feishu",
-                                &worker_account_id,
-                                &worker_chat_id,
-                                worker_native_thread_scope.as_deref(),
-                                &outbound_msg_id,
-                            )
-                            .await;
+                        if !boundary_text.is_empty() {
+                            let content = build_card_content(&boundary_text);
+                            let boundary_result = if worker_is_group {
+                                worker_client
+                                    .reply_message_ext(
+                                        &worker_msg_id,
+                                        &content,
+                                        "interactive",
+                                        worker_reply_in_thread,
+                                    )
+                                    .await
+                            } else {
+                                worker_client
+                                    .send_message(&worker_chat_id, &content, "interactive")
+                                    .await
+                            };
+                            match boundary_result {
+                                Ok(outbound_msg_id) => {
+                                    if !outbound_msg_id.is_empty()
+                                        && !canonical_thread_id.is_empty()
+                                    {
+                                        let mut r = worker_router.lock().await;
+                                        r.record_outbound_message_with_persistence(
+                                            &canonical_thread_id,
+                                            "feishu",
+                                            &worker_account_id,
+                                            &worker_chat_id,
+                                            worker_native_thread_scope.as_deref(),
+                                            &outbound_msg_id,
+                                        )
+                                        .await;
+                                    }
+                                }
+                                Err(e) => {
+                                    error!(
+                                        account_id = %worker_account_id,
+                                        error = %e,
+                                        "Failed to send Feishu boundary reply"
+                                    );
+                                    notify_permission_error_if_needed(
+                                        &worker_client,
+                                        &worker_account_id,
+                                        &worker_chat_id,
+                                        &worker_msg_id,
+                                        &e.to_string(),
+                                    )
+                                    .await;
+                                }
+                            }
                         }
                         continue;
                     }
@@ -960,96 +995,6 @@ pub(super) async fn handle_im_message_event(
                         continue;
                     }
                     state.stream_text = merge_stream_text(&state.stream_text, &text);
-                    if !state.stream_text.is_empty() {
-                        let mut reply_text = state.stream_text.clone();
-                        if !worker_mention_prefix.is_empty() {
-                            reply_text = format!("{worker_mention_prefix} {reply_text}");
-                        }
-                        reply_text = reply_text.trim().to_owned();
-
-                        if !reply_text.is_empty() && reply_text != state.last_stream_sent_text {
-                            if let Some(ref card_id) = state.stream_card_id.clone() {
-                                // Update Card Kit streaming card element
-                                state.stream_card_seq += 1;
-                                let seq = state.stream_card_seq;
-                                match worker_client
-                                    .update_cardkit_element(card_id, "content", &reply_text, seq)
-                                    .await
-                                {
-                                    Ok(()) => {
-                                        state.last_stream_sent_text = reply_text;
-                                    }
-                                    Err(err) => {
-                                        debug!(
-                                            account_id = %worker_account_id,
-                                            message_id = %worker_msg_id,
-                                            error = %err,
-                                            "Feishu Card Kit element update failed"
-                                        );
-                                    }
-                                }
-                            } else {
-                                // First chunk: create Card Kit card, send reference message
-                                match worker_client.create_cardkit_card(&reply_text).await {
-                                    Ok(card_id) => {
-                                        let card_ref =
-                                            FeishuClient::card_reference_content(&card_id);
-                                        debug!(
-                                            account_id = %worker_account_id,
-                                            reply_to = %worker_msg_id,
-                                            is_group = worker_is_group,
-                                            "Feishu streaming card: sending initial reply"
-                                        );
-                                        let msg_result = if worker_is_group {
-                                            worker_client
-                                                .reply_message_ext(
-                                                    &worker_msg_id,
-                                                    &card_ref,
-                                                    "interactive",
-                                                    worker_reply_in_thread,
-                                                )
-                                                .await
-                                        } else {
-                                            worker_client
-                                                .send_message(
-                                                    &worker_chat_id,
-                                                    &card_ref,
-                                                    "interactive",
-                                                )
-                                                .await
-                                        };
-                                        match msg_result {
-                                            Ok(outbound_msg_id) => {
-                                                state.stream_card_id = Some(card_id);
-                                                state.stream_card_seq = 1;
-                                                if !outbound_msg_id.is_empty() {
-                                                    state.stream_reply_message_id =
-                                                        Some(outbound_msg_id);
-                                                }
-                                                state.last_stream_sent_text = reply_text;
-                                            }
-                                            Err(err) => {
-                                                debug!(
-                                                    account_id = %worker_account_id,
-                                                    message_id = %worker_msg_id,
-                                                    error = %err,
-                                                    "Feishu streaming card send failed"
-                                                );
-                                            }
-                                        }
-                                    }
-                                    Err(err) => {
-                                        debug!(
-                                            account_id = %worker_account_id,
-                                            message_id = %worker_msg_id,
-                                            error = %err,
-                                            "Feishu Card Kit create failed"
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    }
                     continue;
                 }
                 StreamEvent::ToolUse { message } => {
@@ -1170,33 +1115,7 @@ pub(super) async fn handle_im_message_event(
             }
 
             if !text_to_send.is_empty() {
-                if let Some(card_id) = state.stream_card_id.clone() {
-                    // Close Card Kit streaming with final text
-                    state.stream_card_seq += 1;
-                    let seq = state.stream_card_seq;
-                    match worker_client
-                        .close_cardkit_streaming(&card_id, &text_to_send, seq)
-                        .await
-                    {
-                        Ok(()) => {
-                            state.last_stream_sent_text = text_to_send.clone();
-                            if let Some(ref msg_id) = state.stream_reply_message_id {
-                                send_result = Some(Ok(msg_id.clone()));
-                            }
-                        }
-                        Err(err) => {
-                            error!(
-                                account_id = %worker_account_id,
-                                message_id = %worker_msg_id,
-                                error = %err,
-                                "Feishu Card Kit close streaming failed"
-                            );
-                            send_interactive_fallback = true;
-                        }
-                    }
-                } else {
-                    send_interactive_fallback = true;
-                }
+                send_interactive_fallback = true;
             }
 
             if send_interactive_fallback && !text_to_send.is_empty() {

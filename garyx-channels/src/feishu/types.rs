@@ -90,13 +90,6 @@ pub(super) struct MentionTarget {
 #[derive(Default)]
 pub(super) struct FeishuResponseStreamState {
     pub(super) stream_text: String,
-    /// Card Kit card ID for streaming updates (None until first chunk sent).
-    pub(super) stream_card_id: Option<String>,
-    /// Monotonically increasing sequence number for Card Kit API calls.
-    pub(super) stream_card_seq: u32,
-    /// The message_id of the reply that references the streaming card.
-    pub(super) stream_reply_message_id: Option<String>,
-    pub(super) last_stream_sent_text: String,
     pub(super) processing_reaction_id: Option<String>,
     pub(super) processing_reaction_removed: bool,
     pub(super) cot: FeishuCotState,

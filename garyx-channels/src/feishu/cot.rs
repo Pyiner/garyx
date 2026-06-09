@@ -347,6 +347,10 @@ fn summarize_tool_args(message: &ProviderMessage) -> String {
         return image_view_summary(message);
     }
 
+    if let Some(command) = readable_command_argument(message, MAX_TOOL_ARG_DISPLAY_CHARS) {
+        return command;
+    }
+
     let candidate = message
         .content
         .get("command")
@@ -362,6 +366,10 @@ fn summarize_tool_args(message: &ProviderMessage) -> String {
 fn readable_tool_input(message: &ProviderMessage) -> String {
     if is_image_view_message(message) {
         return image_view_summary(message);
+    }
+
+    if let Some(command) = readable_command_argument(message, MAX_TOOL_RESULT_PREVIEW_BYTES) {
+        return command;
     }
 
     let candidate = message
@@ -451,6 +459,78 @@ fn image_view_summary(message: &ProviderMessage) -> String {
         .find(|part| !part.is_empty())
         .unwrap_or(path);
     truncate_utf8_bytes(file_name.trim(), MAX_TOOL_ARG_DISPLAY_CHARS)
+}
+
+fn readable_command_argument(message: &ProviderMessage, max_bytes: usize) -> Option<String> {
+    if !is_command_like_tool(message) {
+        return None;
+    }
+
+    for key in [
+        "command",
+        "cmd",
+        "input",
+        "input_json",
+        "inputJson",
+        "args",
+        "arguments",
+    ] {
+        if let Some(value) = message.content.get(key)
+            && let Some(command) = command_from_value(value)
+        {
+            return Some(truncate_utf8_bytes(command.trim(), max_bytes));
+        }
+    }
+    command_from_value(&message.content)
+        .map(|command| truncate_utf8_bytes(command.trim(), max_bytes))
+}
+
+fn command_from_value(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            if let Ok(parsed) = serde_json::from_str::<Value>(trimmed)
+                && let Some(command) = command_from_value(&parsed)
+            {
+                return Some(command);
+            }
+            Some(trimmed.to_owned())
+        }
+        Value::Object(map) => [
+            "command",
+            "cmd",
+            "script",
+            "shell",
+            "bash",
+            "input",
+            "args",
+            "arguments",
+        ]
+        .iter()
+        .filter_map(|key| map.get(*key))
+        .find_map(command_from_value),
+        _ => None,
+    }
+}
+
+fn is_command_like_tool(message: &ProviderMessage) -> bool {
+    let tool_name = tool_name(message).to_ascii_lowercase();
+    if contains_any(&tool_name, &["bash", "shell", "exec", "run", "command"]) {
+        return true;
+    }
+
+    let content_type = message
+        .content
+        .get("type")
+        .or_else(|| message.content.get("item_type"))
+        .or_else(|| message.content.get("itemType"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    contains_any(&content_type, &["command", "bash", "shell", "exec", "run"])
 }
 
 fn preview_json(value: &Value, max_bytes: usize) -> String {
@@ -730,6 +810,54 @@ mod tests {
         assert_eq!(start["toolCallId"], "tool-call-exec-command-1");
         assert_eq!(start["toolCallName"], "运行命令");
         assert_ne!(start["toolCallName"], "tool-call-exec-command-1");
+    }
+
+    #[test]
+    fn command_tool_args_extract_nested_command_without_json_wrapper() {
+        let message = ProviderMessage::tool_use(
+            json!({
+                "type": "commandExecution",
+                "input_json": {
+                    "command": "echo \"=== knowledge-base/prds/ ===\" && ls /Users/test/prds",
+                },
+            }),
+            Some("tool-command-1".to_owned()),
+            Some("tool-call-exec-command-1".to_owned()),
+        );
+        let mut state = FeishuCotState::default();
+        let events = state.tool_use_events(&message);
+        let args = content_json(&events[1]);
+        assert_eq!(
+            args["delta"],
+            "echo \"=== knowledge-base/prds/ ===\" && ls /Users/test/prds"
+        );
+        assert!(!args["delta"].as_str().unwrap_or_default().contains("{"));
+
+        let result = ProviderMessage::tool_result(
+            json!({
+                "type": "commandExecution",
+                "input_json": {
+                    "command": "echo \"=== knowledge-base/prds/ ===\" && ls /Users/test/prds",
+                },
+                "output": "=== knowledge-base/prds/ ===\nexample.md",
+            }),
+            Some("tool-command-1".to_owned()),
+            Some("tool-call-exec-command-1".to_owned()),
+            Some(false),
+        );
+        let result_events = state.tool_result_events(&result);
+        let result_content = content_json(
+            result_events
+                .iter()
+                .find(|event| event.event_type == EVENT_TOOL_CALL_RESULT)
+                .expect("result event"),
+        );
+        assert!(
+            result_content["content"]["code"]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("$ echo \"=== knowledge-base/prds/ ===\" && ls /Users/test/prds\n")
+        );
     }
 
     #[test]
