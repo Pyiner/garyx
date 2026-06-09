@@ -2217,7 +2217,6 @@ mod e2e_tests {
             "TOOL_CALL_START",
             "TOOL_CALL_ARGS",
             "TOOL_CALL_END",
-            "TOOL_CALL_RESULT",
             "RUN_FINISHED",
         ] {
             assert!(
@@ -2225,6 +2224,12 @@ mod e2e_tests {
                 "missing COT event {expected}; event_types={event_types:?}"
             );
         }
+        assert!(
+            !event_types
+                .iter()
+                .any(|event_type| event_type == "TOOL_CALL_RESULT"),
+            "tool results should not be sent to Feishu COT; event_types={event_types:?}"
+        );
 
         let tool_event_contents: Vec<(String, Value)> = update_calls
             .iter()
@@ -2293,20 +2298,11 @@ mod e2e_tests {
             "tool end should use Feishu COT toolCallId schema: {tool_event_contents:?}"
         );
         assert!(
-            tool_event_contents.iter().any(|(event_type, content)| {
-                event_type == "TOOL_CALL_RESULT"
-                    && content["toolCallId"].as_str() == Some(tool_call_id.as_str())
-                    && content["role"].as_str() == Some("tool")
-                    && content["isError"].as_bool() == Some(false)
-                    && content["status"].as_str() == Some("completed")
-                    && content["content"]["type"].as_str() == Some("code")
-                    && content["content"]["code"]
-                        .as_str()
-                        .unwrap_or_default()
-                        .contains("/tmp/workspace")
-                    && content.get("result").is_none()
-            }),
-            "tool result should use Feishu COT content schema: {tool_event_contents:?}"
+            tool_event_contents
+                .iter()
+                .all(|(event_type, content)| event_type != "TOOL_CALL_RESULT"
+                    && !content.to_string().contains("/tmp/workspace")),
+            "tool results should not be sent to Feishu COT: {tool_event_contents:?}"
         );
 
         let complete_calls = wait_for_matching_requests_quiet_window(
@@ -2454,15 +2450,10 @@ mod e2e_tests {
             "imageView args should use a filename delta: {tool_event_contents:?}"
         );
         assert!(
-            tool_event_contents.iter().any(|(event_type, content)| {
-                event_type == "TOOL_CALL_RESULT"
-                    && content["toolCallId"].as_str() == Some("call_home_image")
-                    && content["role"].as_str() == Some("tool")
-                    && content["isError"].as_bool() == Some(false)
-                    && content["content"]["type"].as_str() == Some("text")
-                    && content["content"]["text"].as_str() == Some("file_131.jpg")
-            }),
-            "imageView result should be a readable text result: {tool_event_contents:?}"
+            tool_event_contents
+                .iter()
+                .all(|(event_type, _)| event_type != "TOOL_CALL_RESULT"),
+            "tool results should not be sent to Feishu COT: {tool_event_contents:?}"
         );
 
         let complete_calls = wait_for_matching_requests_quiet_window(

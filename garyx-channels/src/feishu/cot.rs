@@ -1,14 +1,11 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use garyx_models::provider::ProviderMessage;
 use serde_json::{Map, Value, json};
 
 const MAX_EVENT_CONTENT_BYTES: usize = 4096;
-const MAX_TOOL_RESULT_PREVIEW_BYTES: usize = 900;
 const MAX_TOOL_ARG_DISPLAY_CHARS: usize = 120;
-const COT_TOOL_DISPLAY_COLS: usize = 70;
-const COT_TOOL_ERROR_MAX_LINES: usize = 3;
 const TRUNCATED_SUFFIX: &str = "\n...[truncated]";
 
 pub(super) const EVENT_RUN_STARTED: &str = "RUN_STARTED";
@@ -16,7 +13,6 @@ pub(super) const EVENT_RUN_FINISHED: &str = "RUN_FINISHED";
 pub(super) const EVENT_TOOL_CALL_START: &str = "TOOL_CALL_START";
 pub(super) const EVENT_TOOL_CALL_ARGS: &str = "TOOL_CALL_ARGS";
 pub(super) const EVENT_TOOL_CALL_END: &str = "TOOL_CALL_END";
-pub(super) const EVENT_TOOL_CALL_RESULT: &str = "TOOL_CALL_RESULT";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct FeishuCotSession {
@@ -73,8 +69,6 @@ pub(super) struct FeishuCotState {
     pub(super) sequence: u64,
     pub(super) started_tool_call_ids: HashSet<String>,
     pub(super) ended_tool_call_ids: HashSet<String>,
-    pub(super) tool_names_by_call_id: HashMap<String, String>,
-    pub(super) tool_inputs_by_call_id: HashMap<String, String>,
 }
 
 impl FeishuCotState {
@@ -130,11 +124,6 @@ impl FeishuCotState {
         }
 
         let tool_name = tool_name(message);
-        let tool_input = readable_tool_input(message);
-        self.tool_names_by_call_id
-            .insert(call_id.clone(), tool_name.clone());
-        self.tool_inputs_by_call_id
-            .insert(call_id.clone(), tool_input.clone());
         let timestamp = message_timestamp_millis(message);
         let tool_display_name = tool_title(&tool_name);
         let mut events = vec![FeishuCotEventRecord::new_at(
@@ -186,32 +175,6 @@ impl FeishuCotState {
                 timestamp,
             ));
         }
-
-        let result = summarize_tool_result(message);
-        let is_error = message.is_error.unwrap_or(false);
-        let tool_name = self
-            .tool_names_by_call_id
-            .get(&call_id)
-            .cloned()
-            .unwrap_or_else(|| tool_name(message));
-        let tool_input = self
-            .tool_inputs_by_call_id
-            .get(&call_id)
-            .cloned()
-            .unwrap_or_else(|| readable_tool_input(message));
-        events.push(FeishuCotEventRecord::new_at(
-            EVENT_TOOL_CALL_RESULT,
-            self.next_event_id(&format!("tool-result-{call_id}")),
-            json!({
-                "messageId": format!("tool-result-{call_id}"),
-                "toolCallId": call_id,
-                "role": "tool",
-                "status": if is_error { "failed" } else { "completed" },
-                "isError": is_error,
-                "content": tool_result_content(&tool_name, &tool_input, &result, is_error),
-            }),
-            timestamp,
-        ));
         events
     }
 }
@@ -343,89 +306,12 @@ fn is_hidden_cot_tool(message: &ProviderMessage) -> bool {
 }
 
 fn summarize_tool_args(message: &ProviderMessage) -> String {
-    if is_image_view_message(message) {
-        return image_view_summary(message);
-    }
-
-    if let Some(command) = readable_command_argument(message, MAX_TOOL_ARG_DISPLAY_CHARS) {
-        return command;
-    }
-
-    let candidate = message
-        .content
-        .get("command")
-        .or_else(|| message.content.get("input"))
-        .or_else(|| message.content.get("input_json"))
-        .or_else(|| message.content.get("inputJson"))
-        .or_else(|| message.content.get("args"))
-        .or_else(|| message.content.get("arguments"))
-        .unwrap_or(&message.content);
-    preview_json(candidate, MAX_TOOL_ARG_DISPLAY_CHARS)
-}
-
-fn readable_tool_input(message: &ProviderMessage) -> String {
-    if is_image_view_message(message) {
-        return image_view_summary(message);
-    }
-
-    if let Some(command) = readable_command_argument(message, MAX_TOOL_RESULT_PREVIEW_BYTES) {
-        return command;
-    }
-
-    let candidate = message
-        .content
-        .get("command")
-        .or_else(|| message.content.get("input"))
-        .or_else(|| message.content.get("args"))
-        .or_else(|| message.content.get("arguments"))
-        .or_else(|| message.content.get("input_json"))
-        .or_else(|| message.content.get("inputJson"))
-        .unwrap_or(&Value::Null);
-    preview_json(candidate, MAX_TOOL_RESULT_PREVIEW_BYTES)
-}
-
-fn summarize_tool_result(message: &ProviderMessage) -> String {
-    if is_image_view_message(message) {
-        return image_view_summary(message);
-    }
-
-    if is_image_generation_message(message) {
-        return if message.is_error.unwrap_or(false) {
-            "Image generation failed.".to_owned()
-        } else {
-            "Image generated.".to_owned()
-        };
-    }
-    if let Some(text) = message.text.as_deref() {
-        return truncate_utf8_bytes(text.trim(), MAX_TOOL_RESULT_PREVIEW_BYTES);
-    }
-    let candidate = message
-        .content
-        .get("output")
-        .or_else(|| message.content.get("result"))
-        .or_else(|| message.content.get("message"))
-        .or_else(|| message.content.get("content"))
-        .unwrap_or(&message.content);
-    preview_json(candidate, MAX_TOOL_RESULT_PREVIEW_BYTES)
-}
-
-fn is_image_generation_message(message: &ProviderMessage) -> bool {
-    let metadata_type = message
-        .metadata
-        .get("item_type")
-        .or_else(|| message.metadata.get("itemType"))
-        .and_then(Value::as_str);
-    if matches!(metadata_type, Some("imageGeneration")) {
-        return true;
-    }
-    let content_type = message
-        .content
-        .get("type")
-        .or_else(|| message.content.get("item_type"))
-        .or_else(|| message.content.get("itemType"))
-        .and_then(Value::as_str);
-    matches!(content_type, Some("imageGeneration"))
-        || message.tool_name.as_deref() == Some("imageGeneration")
+    readable_tool_argument(message).unwrap_or_else(|| {
+        preview_json(
+            default_tool_args_candidate(message),
+            MAX_TOOL_ARG_DISPLAY_CHARS,
+        )
+    })
 }
 
 fn is_image_view_message(message: &ProviderMessage) -> bool {
@@ -461,28 +347,112 @@ fn image_view_summary(message: &ProviderMessage) -> String {
     truncate_utf8_bytes(file_name.trim(), MAX_TOOL_ARG_DISPLAY_CHARS)
 }
 
-fn readable_command_argument(message: &ProviderMessage, max_bytes: usize) -> Option<String> {
-    if !is_command_like_tool(message) {
-        return None;
+fn readable_tool_argument(message: &ProviderMessage) -> Option<String> {
+    if is_image_view_message(message) {
+        return Some(image_view_summary(message));
     }
 
-    for key in [
-        "command",
-        "cmd",
-        "input",
-        "input_json",
-        "inputJson",
-        "args",
-        "arguments",
-    ] {
-        if let Some(value) = message.content.get(key)
-            && let Some(command) = command_from_value(value)
-        {
-            return Some(truncate_utf8_bytes(command.trim(), max_bytes));
+    if is_command_like_tool(message)
+        && let Some(command) = command_from_value(&message.content)
+    {
+        return Some(truncate_utf8_bytes(
+            command.trim(),
+            MAX_TOOL_ARG_DISPLAY_CHARS,
+        ));
+    }
+
+    let tool = tool_name(message).to_ascii_lowercase();
+    if contains_any(&tool, &["read", "write", "edit", "grep", "glob"]) {
+        if let Some(path) = readable_value_from_keys(
+            &message.content,
+            &[
+                "file_path",
+                "filePath",
+                "filepath",
+                "path",
+                "paths",
+                "filename",
+                "file",
+                "pattern",
+                "glob",
+            ],
+        ) {
+            return Some(path);
         }
     }
-    command_from_value(&message.content)
-        .map(|command| truncate_utf8_bytes(command.trim(), max_bytes))
+
+    if contains_any(&tool, &["search", "webfetch", "fetch"]) {
+        if let Some(query) =
+            readable_value_from_keys(&message.content, &["query", "queries", "url", "urls"])
+        {
+            return Some(query);
+        }
+    }
+
+    if contains_any(&tool, &["task", "skill"]) {
+        if let Some(prompt) = readable_value_from_keys(
+            &message.content,
+            &["prompt", "task", "title", "description", "name", "skill"],
+        ) {
+            return Some(prompt);
+        }
+    }
+
+    readable_value_from_keys(
+        &message.content,
+        &[
+            "file_path",
+            "filePath",
+            "path",
+            "url",
+            "query",
+            "queries",
+            "pattern",
+            "prompt",
+            "title",
+            "name",
+        ],
+    )
+}
+
+fn readable_value_from_keys(value: &Value, keys: &[&str]) -> Option<String> {
+    match value {
+        Value::String(text) => {
+            let trimmed = text.trim();
+            if let Ok(parsed) = serde_json::from_str::<Value>(trimmed)
+                && let Some(found) = readable_value_from_keys(&parsed, keys)
+            {
+                return Some(found);
+            }
+            None
+        }
+        Value::Object(map) => {
+            for key in keys {
+                if let Some(value) = map.get(*key) {
+                    return value_to_readable_text(value)
+                        .map(|text| truncate_utf8_bytes(text.trim(), MAX_TOOL_ARG_DISPLAY_CHARS));
+                }
+            }
+            for key in [
+                "input_json",
+                "inputJson",
+                "input",
+                "args",
+                "arguments",
+                "parameters",
+                "params",
+                "action",
+            ] {
+                if let Some(value) = map.get(key)
+                    && let Some(found) = readable_value_from_keys(value, keys)
+                {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
 }
 
 fn command_from_value(value: &Value) -> Option<String> {
@@ -506,14 +476,57 @@ fn command_from_value(value: &Value) -> Option<String> {
             "shell",
             "bash",
             "input",
+            "input_json",
+            "inputJson",
             "args",
             "arguments",
+            "parameters",
+            "params",
         ]
         .iter()
         .filter_map(|key| map.get(*key))
         .find_map(command_from_value),
         _ => None,
     }
+}
+
+fn value_to_readable_text(value: &Value) -> Option<String> {
+    match value {
+        Value::Null => None,
+        Value::String(text) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_owned())
+            }
+        }
+        Value::Array(values) => {
+            let parts = values
+                .iter()
+                .filter_map(value_to_readable_text)
+                .filter(|part| !part.trim().is_empty())
+                .collect::<Vec<_>>();
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join(", "))
+            }
+        }
+        _ => Some(preview_json(value, MAX_TOOL_ARG_DISPLAY_CHARS)),
+    }
+}
+
+fn default_tool_args_candidate(message: &ProviderMessage) -> &Value {
+    message
+        .content
+        .get("command")
+        .or_else(|| message.content.get("input"))
+        .or_else(|| message.content.get("input_json"))
+        .or_else(|| message.content.get("inputJson"))
+        .or_else(|| message.content.get("args"))
+        .or_else(|| message.content.get("arguments"))
+        .unwrap_or(&message.content)
 }
 
 fn is_command_like_tool(message: &ProviderMessage) -> bool {
@@ -590,111 +603,6 @@ fn tool_icon(tool_name: &str) -> &'static str {
     }
 }
 
-fn tool_result_content(tool_name: &str, tool_input: &str, output: &str, is_error: bool) -> Value {
-    let shown = clamp_tool_text(
-        output,
-        if is_error {
-            COT_TOOL_ERROR_MAX_LINES
-        } else {
-            1
-        },
-    );
-    if !is_error && is_code_output_tool(tool_name) {
-        let header = invocation_header(tool_name, tool_input);
-        return json!({
-            "type": "code",
-            "code": format!("{header}{shown}"),
-        });
-    }
-    json!({
-        "type": "text",
-        "text": shown,
-    })
-}
-
-fn invocation_header(tool_name: &str, tool_input: &str) -> String {
-    let trimmed = tool_input.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-    let (line, was_cut) = clamp_cols(trimmed, COT_TOOL_DISPLAY_COLS);
-    let prefix = if contains_any(
-        &tool_name.to_ascii_lowercase(),
-        &["bash", "shell", "exec", "run"],
-    ) {
-        "$"
-    } else {
-        "#"
-    };
-    format!("{prefix} {line}{}\n", if was_cut { "..." } else { "" })
-}
-
-fn clamp_tool_text(text: &str, max_lines: usize) -> String {
-    let lines = text
-        .lines()
-        .skip_while(|line| line.trim().is_empty())
-        .collect::<Vec<_>>();
-    if lines.is_empty() {
-        return String::new();
-    }
-    let mut kept = Vec::new();
-    for line in lines.iter().take(max_lines) {
-        let (clamped, was_cut) = clamp_cols(line.trim_end(), COT_TOOL_DISPLAY_COLS);
-        kept.push(format!("{clamped}{}", if was_cut { "..." } else { "" }));
-    }
-    let omitted = lines.len().saturating_sub(kept.len());
-    if omitted > 0
-        && let Some(last) = kept.last_mut()
-    {
-        last.push_str(&format!(" ...(+{omitted} lines)"));
-    }
-    kept.join("\n")
-}
-
-fn clamp_cols(text: &str, max_cols: usize) -> (String, bool) {
-    let mut used = 0;
-    let mut out = String::new();
-    for ch in text.chars() {
-        used += char_cols(ch);
-        if used > max_cols {
-            return (out, true);
-        }
-        out.push(ch);
-    }
-    (out, false)
-}
-
-fn char_cols(ch: char) -> usize {
-    if matches!(
-        ch,
-        '\u{1100}'..='\u{115f}'
-            | '\u{2e80}'..='\u{a4cf}'
-            | '\u{ac00}'..='\u{d7a3}'
-            | '\u{f900}'..='\u{faff}'
-            | '\u{fe10}'..='\u{fe19}'
-            | '\u{fe30}'..='\u{fe6f}'
-            | '\u{ff00}'..='\u{ff60}'
-            | '\u{ffe0}'..='\u{ffe6}'
-    ) {
-        2
-    } else {
-        1
-    }
-}
-
-fn is_code_output_tool(tool_name: &str) -> bool {
-    if tool_name.eq_ignore_ascii_case("imageView") {
-        return false;
-    }
-
-    contains_any(
-        &tool_name.to_ascii_lowercase(),
-        &[
-            "bash", "shell", "exec", "run", "read", "grep", "glob", "edit", "write",
-        ],
-    )
-}
-
 fn contains_any(value: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| value.contains(needle))
 }
@@ -749,7 +657,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_result_summary_prefers_output_field() {
+    fn tool_result_events_only_close_tool_without_result_payload() {
         let message = ProviderMessage::tool_result(
             json!({
                 "command": "pwd",
@@ -761,13 +669,11 @@ mod tests {
         );
         let mut state = FeishuCotState::default();
         let events = state.tool_result_events(&message);
+        assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_type, EVENT_TOOL_CALL_END);
-        assert_eq!(events[1].event_type, EVENT_TOOL_CALL_RESULT);
-        let content = content_json(&events[1]);
-        assert_eq!(content["role"], "tool");
-        assert_eq!(content["isError"], false);
-        assert_eq!(content["content"]["type"], "code");
-        assert_eq!(content["content"]["code"], "$ pwd\n/tmp/workspace");
+        let content = content_json(&events[0]);
+        assert_eq!(content["toolCallId"], "tool-1");
+        assert!(!events[0].content.contains("/tmp/workspace"));
     }
 
     #[test]
@@ -846,22 +752,54 @@ mod tests {
             Some(false),
         );
         let result_events = state.tool_result_events(&result);
-        let result_content = content_json(
-            result_events
-                .iter()
-                .find(|event| event.event_type == EVENT_TOOL_CALL_RESULT)
-                .expect("result event"),
-        );
-        assert!(
-            result_content["content"]["code"]
-                .as_str()
-                .unwrap_or_default()
-                .starts_with("$ echo \"=== knowledge-base/prds/ ===\" && ls /Users/test/prds\n")
-        );
+        assert_eq!(result_events.len(), 1);
+        assert_eq!(result_events[0].event_type, EVENT_TOOL_CALL_END);
+        assert!(!result_events[0].content.contains("example.md"));
     }
 
     #[test]
-    fn image_generation_tool_result_does_not_embed_base64() {
+    fn read_file_tool_args_extract_file_path_without_json_wrapper() {
+        let message = ProviderMessage::tool_use(
+            json!({
+                "type": "readFile",
+                "input_json": {
+                    "file_path": "/Users/test/workspace/src/main.rs",
+                },
+            }),
+            Some("tool-read-1".to_owned()),
+            Some("read_file".to_owned()),
+        );
+        let mut state = FeishuCotState::default();
+        let events = state.tool_use_events(&message);
+        let start = content_json(&events[0]);
+        assert_eq!(start["toolCallName"], "读取文件");
+        let args = content_json(&events[1]);
+        assert_eq!(args["delta"], "/Users/test/workspace/src/main.rs");
+        assert!(!args["delta"].as_str().unwrap_or_default().contains("{"));
+    }
+
+    #[test]
+    fn search_tool_args_extract_queries_without_json_wrapper() {
+        let message = ProviderMessage::tool_use(
+            json!({
+                "action": {
+                    "queries": ["EPM LAPS password", "macOS Secure Token"],
+                },
+            }),
+            Some("tool-search-1".to_owned()),
+            Some("webSearch".to_owned()),
+        );
+        let mut state = FeishuCotState::default();
+        let events = state.tool_use_events(&message);
+        let start = content_json(&events[0]);
+        assert_eq!(start["toolCallName"], "搜索");
+        let args = content_json(&events[1]);
+        assert_eq!(args["delta"], "EPM LAPS password, macOS Secure Token");
+        assert!(!args["delta"].as_str().unwrap_or_default().contains("{"));
+    }
+
+    #[test]
+    fn image_generation_tool_result_only_closes_without_base64() {
         let message = ProviderMessage::tool_result(
             json!({
                 "type": "imageGeneration",
@@ -874,14 +812,9 @@ mod tests {
         .with_metadata_value("item_type", json!("imageGeneration"));
         let mut state = FeishuCotState::default();
         let events = state.tool_result_events(&message);
-        let result_event = events
-            .iter()
-            .find(|event| event.event_type == EVENT_TOOL_CALL_RESULT)
-            .expect("tool result event");
-        let content = content_json(result_event);
-        assert_eq!(content["content"]["type"], "text");
-        assert_eq!(content["content"]["text"], "Image generated.");
-        assert!(!result_event.content.contains("iVBORw0KGgo="));
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, EVENT_TOOL_CALL_END);
+        assert!(!events[0].content.contains("iVBORw0KGgo="));
     }
 
     #[test]
@@ -944,13 +877,8 @@ mod tests {
         assert_eq!(args["delta"], "file_131.jpg");
 
         let result_events = state.tool_result_events(&image_result);
-        let result = content_json(
-            result_events
-                .iter()
-                .find(|event| event.event_type == EVENT_TOOL_CALL_RESULT)
-                .expect("result event"),
-        );
-        assert_eq!(result["content"]["type"], "text");
-        assert_eq!(result["content"]["text"], "file_131.jpg");
+        assert_eq!(result_events.len(), 1);
+        assert_eq!(result_events[0].event_type, EVENT_TOOL_CALL_END);
+        assert!(!result_events[0].content.contains("file_131.jpg"));
     }
 }
