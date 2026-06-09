@@ -274,6 +274,11 @@ struct GaryxConversationView: View {
                 }
         }
         .id(conversationScrollIdentity)
+        // Chat-style anchoring: when the transcript is shorter than the viewport,
+        // keep it pinned to the bottom so the latest message and the running
+        // "Thinking" indicator sit just above the composer instead of floating at
+        // the top of the screen.
+        .defaultScrollAnchor(.bottom)
         .coordinateSpace(name: "garyx-conversation-scroll")
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background {
@@ -326,7 +331,11 @@ struct GaryxConversationView: View {
     }
 
     private var conversationBottomChromeClearance: CGFloat {
-        max(24, bottomChromeHeight + 10)
+        // The floating composer is attached with `safeAreaInset(.bottom)`, which already
+        // reserves its full height above the transcript. This spacer only needs to add a
+        // small breathing margin above that — adding the chrome height again double-counted
+        // it and pushed the latest message a whole composer-height away from the input.
+        24
     }
 
     private func scrollToConversationTail(_ proxy: ScrollViewProxy) {
