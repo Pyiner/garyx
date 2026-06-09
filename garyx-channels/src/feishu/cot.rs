@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use garyx_models::provider::ProviderMessage;
@@ -13,6 +13,7 @@ pub(super) const EVENT_RUN_FINISHED: &str = "RUN_FINISHED";
 pub(super) const EVENT_TOOL_CALL_START: &str = "TOOL_CALL_START";
 pub(super) const EVENT_TOOL_CALL_ARGS: &str = "TOOL_CALL_ARGS";
 pub(super) const EVENT_TOOL_CALL_END: &str = "TOOL_CALL_END";
+pub(super) const EVENT_TOOL_CALL_RESULT: &str = "TOOL_CALL_RESULT";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct FeishuCotSession {
@@ -69,7 +70,9 @@ pub(super) struct FeishuCotState {
     pub(super) sequence: u64,
     pub(super) started_tool_call_ids: HashSet<String>,
     pub(super) ended_tool_call_ids: HashSet<String>,
+    pub(super) result_sent_tool_call_ids: HashSet<String>,
     pub(super) arg_sent_tool_call_ids: HashSet<String>,
+    pub(super) tool_call_args_by_id: HashMap<String, String>,
 }
 
 impl FeishuCotState {
@@ -144,6 +147,8 @@ impl FeishuCotState {
         )];
 
         if !args.is_empty() {
+            self.tool_call_args_by_id
+                .insert(call_id.clone(), args.clone());
             self.arg_sent_tool_call_ids.insert(call_id.clone());
             events.push(FeishuCotEventRecord::new_at(
                 EVENT_TOOL_CALL_ARGS,
@@ -172,6 +177,8 @@ impl FeishuCotState {
         if !self.arg_sent_tool_call_ids.contains(&call_id) {
             let args = readable_tool_argument(message).unwrap_or_default();
             if !args.is_empty() {
+                self.tool_call_args_by_id
+                    .insert(call_id.clone(), args.clone());
                 self.arg_sent_tool_call_ids.insert(call_id.clone());
                 events.push(FeishuCotEventRecord::new_at(
                     EVENT_TOOL_CALL_ARGS,
@@ -190,6 +197,27 @@ impl FeishuCotState {
                 self.next_event_id(&format!("tool-end-{call_id}")),
                 json!({
                     "toolCallId": call_id,
+                }),
+                timestamp,
+            ));
+        }
+        if self.result_sent_tool_call_ids.insert(call_id.clone())
+            && let Some(args) = self
+                .tool_call_args_by_id
+                .get(&call_id)
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        {
+            events.push(FeishuCotEventRecord::new_at(
+                EVENT_TOOL_CALL_RESULT,
+                self.next_event_id(&format!("tool-result-{call_id}")),
+                json!({
+                    "messageId": format!("tool-result-{call_id}"),
+                    "toolCallId": call_id,
+                    "role": "tool",
+                    "content": tool_parameter_result_content(message, &args),
+                    "isError": false,
                 }),
                 timestamp,
             ));
@@ -333,6 +361,27 @@ fn summarize_tool_args(message: &ProviderMessage) -> String {
         return String::new();
     }
     preview_json(candidate, MAX_TOOL_ARG_DISPLAY_CHARS)
+}
+
+fn tool_parameter_result_content(message: &ProviderMessage, args: &str) -> Value {
+    let args = args.trim();
+    if is_command_like_tool(message) {
+        return json!({
+            "type": "code",
+            "code": format!("$ {args}"),
+        });
+    }
+    let tool = tool_name(message).to_ascii_lowercase();
+    if contains_any(&tool, &["read", "write", "edit", "grep", "glob"]) {
+        return json!({
+            "type": "code",
+            "code": format!("# {args}"),
+        });
+    }
+    json!({
+        "type": "text",
+        "text": args,
+    })
 }
 
 fn is_image_view_message(message: &ProviderMessage) -> bool {
@@ -780,7 +829,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_result_events_backfill_args_without_result_payload() {
+    fn tool_result_events_backfill_args_and_emit_parameter_result_without_output() {
         let message = ProviderMessage::tool_result(
             json!({
                 "command": "pwd",
@@ -792,11 +841,16 @@ mod tests {
         );
         let mut state = FeishuCotState::default();
         let events = state.tool_result_events(&message);
-        assert_eq!(events.len(), 2);
+        assert_eq!(events.len(), 3);
         assert_eq!(events[0].event_type, EVENT_TOOL_CALL_ARGS);
         let args = content_json(&events[0]);
         assert_eq!(args["delta"], "pwd");
         assert_eq!(events[1].event_type, EVENT_TOOL_CALL_END);
+        assert_eq!(events[2].event_type, EVENT_TOOL_CALL_RESULT);
+        let result = content_json(&events[2]);
+        assert_eq!(result["toolCallId"], "tool-1");
+        assert_eq!(result["role"], "tool");
+        assert_eq!(result["content"], json!({"type": "code", "code": "$ pwd"}));
         assert!(
             events
                 .iter()
@@ -881,9 +935,16 @@ mod tests {
             Some(false),
         );
         let result_events = state.tool_result_events(&result);
-        assert_eq!(result_events.len(), 1);
+        assert_eq!(result_events.len(), 2);
         assert_eq!(result_events[0].event_type, EVENT_TOOL_CALL_END);
+        assert_eq!(result_events[1].event_type, EVENT_TOOL_CALL_RESULT);
+        let result = content_json(&result_events[1]);
+        assert_eq!(
+            result["content"],
+            json!({"type": "code", "code": "$ echo \"=== knowledge-base/prds/ ===\" && ls /Users/test/prds"})
+        );
         assert!(!result_events[0].content.contains("example.md"));
+        assert!(!result_events[1].content.contains("example.md"));
     }
 
     #[test]
@@ -956,7 +1017,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_result_backfills_missing_args_without_result_payload() {
+    fn tool_result_backfills_missing_args_and_emits_parameter_result_without_file_content() {
         let use_message = ProviderMessage::tool_use(
             json!({
                 "type": "readFile",
@@ -978,11 +1039,17 @@ mod tests {
         assert_eq!(use_events.len(), 1, "ToolUse has no args to display");
 
         let result_events = state.tool_result_events(&result_message);
-        assert_eq!(result_events.len(), 2);
+        assert_eq!(result_events.len(), 3);
         assert_eq!(result_events[0].event_type, EVENT_TOOL_CALL_ARGS);
         let args = content_json(&result_events[0]);
         assert_eq!(args["delta"], "/Users/test/workspace/src/lib.rs");
         assert_eq!(result_events[1].event_type, EVENT_TOOL_CALL_END);
+        assert_eq!(result_events[2].event_type, EVENT_TOOL_CALL_RESULT);
+        let result = content_json(&result_events[2]);
+        assert_eq!(
+            result["content"],
+            json!({"type": "code", "code": "# /Users/test/workspace/src/lib.rs"})
+        );
         assert!(
             result_events
                 .iter()
@@ -1093,8 +1160,15 @@ mod tests {
         assert_eq!(args["delta"], "file_131.jpg");
 
         let result_events = state.tool_result_events(&image_result);
-        assert_eq!(result_events.len(), 1);
+        assert_eq!(result_events.len(), 2);
         assert_eq!(result_events[0].event_type, EVENT_TOOL_CALL_END);
+        assert_eq!(result_events[1].event_type, EVENT_TOOL_CALL_RESULT);
+        let result = content_json(&result_events[1]);
+        assert_eq!(
+            result["content"],
+            json!({"type": "text", "text": "file_131.jpg"})
+        );
         assert!(!result_events[0].content.contains("file_131.jpg"));
+        assert!(result_events[1].content.contains("file_131.jpg"));
     }
 }

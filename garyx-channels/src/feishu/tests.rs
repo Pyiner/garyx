@@ -2290,6 +2290,7 @@ mod e2e_tests {
             "TOOL_CALL_START",
             "TOOL_CALL_ARGS",
             "TOOL_CALL_END",
+            "TOOL_CALL_RESULT",
             "RUN_FINISHED",
         ] {
             assert!(
@@ -2297,12 +2298,6 @@ mod e2e_tests {
                 "missing COT event {expected}; event_types={event_types:?}"
             );
         }
-        assert!(
-            !event_types
-                .iter()
-                .any(|event_type| event_type == "TOOL_CALL_RESULT"),
-            "tool results should not be sent to Feishu COT; event_types={event_types:?}"
-        );
 
         let tool_event_contents: Vec<(String, Value)> = update_calls
             .iter()
@@ -2371,11 +2366,20 @@ mod e2e_tests {
             "tool end should use Feishu COT toolCallId schema: {tool_event_contents:?}"
         );
         assert!(
+            tool_event_contents.iter().any(|(event_type, content)| {
+                event_type == "TOOL_CALL_RESULT"
+                    && content["toolCallId"].as_str() == Some(tool_call_id.as_str())
+                    && content["role"].as_str() == Some("tool")
+                    && content["content"]["type"].as_str() == Some("code")
+                    && content["content"]["code"].as_str() == Some("$ pwd")
+            }),
+            "tool result should surface only the readable input parameter: {tool_event_contents:?}"
+        );
+        assert!(
             tool_event_contents
                 .iter()
-                .all(|(event_type, content)| event_type != "TOOL_CALL_RESULT"
-                    && !content.to_string().contains("/tmp/workspace")),
-            "tool results should not be sent to Feishu COT: {tool_event_contents:?}"
+                .all(|(_, content)| !content.to_string().contains("/tmp/workspace")),
+            "tool output should not be sent to Feishu COT: {tool_event_contents:?}"
         );
 
         let complete_calls = wait_for_matching_requests_quiet_window(
@@ -2513,11 +2517,21 @@ mod e2e_tests {
         assert!(
             tool_event_contents
                 .iter()
-                .all(|(event_type, content)| event_type != "TOOL_CALL_RESULT"
-                    && !content
-                        .to_string()
-                        .contains("file content should not be sent")),
-            "read file results should not be sent to Feishu COT: {tool_event_contents:?}"
+                .any(|(event_type, content)| event_type == "TOOL_CALL_RESULT"
+                    && content["toolCallId"].as_str() == Some("tool-read-feishu-1")
+                    && content["content"]["type"].as_str() == Some("code")
+                    && content["content"]["code"].as_str().is_some_and(|code| {
+                        code.starts_with("# .../inbound/")
+                            && code.contains("feishu-img_v3_0212g")
+                            && code.ends_with(".jpeg")
+                    })),
+            "read file result should surface only the readable path parameter: {tool_event_contents:?}"
+        );
+        assert!(
+            tool_event_contents.iter().all(|(_, content)| !content
+                .to_string()
+                .contains("file content should not be sent")),
+            "read file output should not be sent to Feishu COT: {tool_event_contents:?}"
         );
 
         let complete_calls = wait_for_matching_requests_quiet_window(
@@ -2660,8 +2674,11 @@ mod e2e_tests {
         assert!(
             tool_event_contents
                 .iter()
-                .all(|(event_type, _)| event_type != "TOOL_CALL_RESULT"),
-            "tool results should not be sent to Feishu COT: {tool_event_contents:?}"
+                .any(|(event_type, content)| event_type == "TOOL_CALL_RESULT"
+                    && content["toolCallId"].as_str() == Some("call_home_image")
+                    && content["content"]["type"].as_str() == Some("text")
+                    && content["content"]["text"].as_str() == Some("file_131.jpg")),
+            "imageView result should surface only the visible filename parameter: {tool_event_contents:?}"
         );
 
         let complete_calls = wait_for_matching_requests_quiet_window(
