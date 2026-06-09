@@ -13,7 +13,9 @@ use super::outbox::{
     wait_for_outbound_slot,
 };
 use super::text::split_message;
-use super::{MAX_MESSAGE_LENGTH, OUTBOUND_MAX_RETRIES, TgMessage, TgResponse};
+use super::{
+    MAX_MESSAGE_LENGTH, OUTBOUND_MAX_RETRIES, TgMessage, TgResponse, telegram_reqwest_error_detail,
+};
 
 /// Body for sendChatAction.
 #[derive(Debug, Serialize)]
@@ -188,12 +190,19 @@ pub async fn send_photo(
         .multipart(form)
         .send()
         .await
-        .map_err(|e| ChannelError::SendFailed(format!("sendPhoto failed: {e}")))?;
+        .map_err(|e| {
+            ChannelError::SendFailed(format!(
+                "sendPhoto failed: {}",
+                telegram_reqwest_error_detail(&e, target.token)
+            ))
+        })?;
 
-    let result: TgResponse<TgMessage> = resp
-        .json()
-        .await
-        .map_err(|e| ChannelError::SendFailed(format!("sendPhoto parse failed: {e}")))?;
+    let result: TgResponse<TgMessage> = resp.json().await.map_err(|e| {
+        ChannelError::SendFailed(format!(
+            "sendPhoto parse failed: {}",
+            telegram_reqwest_error_detail(&e, target.token)
+        ))
+    })?;
 
     if !result.ok {
         let desc = result.description.unwrap_or_default();
@@ -255,12 +264,19 @@ pub async fn send_document(
         .multipart(form)
         .send()
         .await
-        .map_err(|e| ChannelError::SendFailed(format!("sendDocument failed: {e}")))?;
+        .map_err(|e| {
+            ChannelError::SendFailed(format!(
+                "sendDocument failed: {}",
+                telegram_reqwest_error_detail(&e, target.token)
+            ))
+        })?;
 
-    let result: TgResponse<TgMessage> = resp
-        .json()
-        .await
-        .map_err(|e| ChannelError::SendFailed(format!("sendDocument parse failed: {e}")))?;
+    let result: TgResponse<TgMessage> = resp.json().await.map_err(|e| {
+        ChannelError::SendFailed(format!(
+            "sendDocument parse failed: {}",
+            telegram_reqwest_error_detail(&e, target.token)
+        ))
+    })?;
 
     if !result.ok {
         let desc = result.description.unwrap_or_default();
@@ -337,12 +353,12 @@ pub(super) async fn send_chat_action(
     };
 
     let url = format!("{api_base}/bot{token}/sendChatAction");
-    let _resp = http
-        .post(&url)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| ChannelError::SendFailed(format!("sendChatAction failed: {e}")))?;
+    let _resp = http.post(&url).json(&body).send().await.map_err(|e| {
+        ChannelError::SendFailed(format!(
+            "sendChatAction failed: {}",
+            telegram_reqwest_error_detail(&e, token)
+        ))
+    })?;
 
     Ok(())
 }

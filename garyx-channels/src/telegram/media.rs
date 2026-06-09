@@ -8,7 +8,9 @@ use garyx_models::provider::{PromptAttachment, PromptAttachmentKind};
 
 use crate::channel_trait::ChannelError;
 
-use super::{MAX_IMAGE_SIZE_BYTES, TgDocument, TgFile, TgMessage, TgResponse};
+use super::{
+    MAX_IMAGE_SIZE_BYTES, TgDocument, TgFile, TgMessage, TgResponse, telegram_reqwest_error_detail,
+};
 
 fn is_supported_image_media_type(media_type: &str) -> bool {
     matches!(
@@ -57,10 +59,20 @@ async fn fetch_telegram_file_metadata(
         .get(&url)
         .send()
         .await
-        .map_err(|e| ChannelError::Connection(format!("getFile request failed: {e}")))?
+        .map_err(|e| {
+            ChannelError::Connection(format!(
+                "getFile request failed: {}",
+                telegram_reqwest_error_detail(&e, token)
+            ))
+        })?
         .json()
         .await
-        .map_err(|e| ChannelError::Connection(format!("getFile parse failed: {e}")))?;
+        .map_err(|e| {
+            ChannelError::Connection(format!(
+                "getFile parse failed: {}",
+                telegram_reqwest_error_detail(&e, token)
+            ))
+        })?;
 
     if !resp.ok {
         return Err(ChannelError::Connection(format!(
@@ -87,11 +99,12 @@ async fn download_telegram_file_bytes(
     }
 
     let url = format!("{api_base}/file/bot{token}/{trimmed_path}");
-    let resp = http
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| ChannelError::Connection(format!("file download failed: {e}")))?;
+    let resp = http.get(&url).send().await.map_err(|e| {
+        ChannelError::Connection(format!(
+            "file download failed: {}",
+            telegram_reqwest_error_detail(&e, token)
+        ))
+    })?;
 
     if !resp.status().is_success() {
         return Err(ChannelError::Connection(format!(
@@ -100,10 +113,12 @@ async fn download_telegram_file_bytes(
         )));
     }
 
-    let bytes = resp
-        .bytes()
-        .await
-        .map_err(|e| ChannelError::Connection(format!("file download parse failed: {e}")))?;
+    let bytes = resp.bytes().await.map_err(|e| {
+        ChannelError::Connection(format!(
+            "file download parse failed: {}",
+            telegram_reqwest_error_detail(&e, token)
+        ))
+    })?;
     Ok(bytes.to_vec())
 }
 

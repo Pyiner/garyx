@@ -55,6 +55,19 @@ fn command_menu_sync_interval_is_ten_minutes() {
 }
 
 #[test]
+fn telegram_error_log_redacts_bot_token() {
+    let token = "123456:very-secret-token";
+    let raw = format!(
+        "error sending request for url (https://api.telegram.org/bot{token}/getUpdates?offset=1)"
+    );
+
+    let redacted = redact_telegram_token_for_log(&raw, token);
+
+    assert!(!redacted.contains(token));
+    assert!(redacted.contains("/bot<telegram-token>/getUpdates"));
+}
+
+#[test]
 fn telegram_bot_commands_are_projected_from_command_list() {
     let mut config = garyx_models::config::GaryxConfig::default();
     config.commands.push(SlashCommand {

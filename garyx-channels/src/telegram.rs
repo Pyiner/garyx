@@ -1,3 +1,4 @@
+use std::error::Error as StdError;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -66,6 +67,25 @@ const TELEGRAM_COMMAND_MENU_SYNC_INTERVAL: Duration = Duration::from_secs(10 * 6
 const MAX_TELEGRAM_BOT_COMMANDS: usize = 100;
 const MAX_TELEGRAM_COMMAND_NAME_LEN: usize = 32;
 const MAX_TELEGRAM_COMMAND_DESCRIPTION_CHARS: usize = 256;
+
+pub(crate) fn redact_telegram_token_for_log(text: &str, token: &str) -> String {
+    let token = token.trim();
+    if token.is_empty() {
+        return text.to_owned();
+    }
+    text.replace(token, "<telegram-token>")
+}
+
+pub(crate) fn telegram_reqwest_error_detail(error: &reqwest::Error, token: &str) -> String {
+    let mut detail = error.to_string();
+    let mut source = error.source();
+    while let Some(current) = source {
+        detail.push_str("; source: ");
+        detail.push_str(&current.to_string());
+        source = current.source();
+    }
+    redact_telegram_token_for_log(&detail, token)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub(crate) struct TelegramBotCommand {
@@ -188,7 +208,12 @@ impl TelegramChannel {
                 true
             }
             Err(e) => {
-                warn!(error = %e, "setMyCommands request failed (non-fatal)");
+                warn!(
+                    error = %telegram_reqwest_error_detail(&e, token),
+                    is_timeout = e.is_timeout(),
+                    is_connect = e.is_connect(),
+                    "setMyCommands request failed (non-fatal)"
+                );
                 false
             }
         }
@@ -255,10 +280,20 @@ impl TelegramChannel {
             .get(&url)
             .send()
             .await
-            .map_err(|e| ChannelError::Connection(format!("getMe request failed: {e}")))?
+            .map_err(|e| {
+                ChannelError::Connection(format!(
+                    "getMe request failed: {}",
+                    telegram_reqwest_error_detail(&e, token)
+                ))
+            })?
             .json()
             .await
-            .map_err(|e| ChannelError::Connection(format!("getMe parse failed: {e}")))?;
+            .map_err(|e| {
+                ChannelError::Connection(format!(
+                    "getMe parse failed: {}",
+                    telegram_reqwest_error_detail(&e, token)
+                ))
+            })?;
 
         match resp.result {
             Some(user) if resp.ok => Ok(user),
@@ -291,7 +326,13 @@ impl TelegramChannel {
                     if !running.load(Ordering::Relaxed) {
                         break;
                     }
-                    warn!(account_id = runtime.account_id, error = %e, "getUpdates request failed, retrying");
+                    warn!(
+                        account_id = runtime.account_id,
+                        error = %telegram_reqwest_error_detail(&e, &bot.token),
+                        is_timeout = e.is_timeout(),
+                        is_connect = e.is_connect(),
+                        "getUpdates request failed, retrying"
+                    );
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                     continue;
                 }
@@ -300,7 +341,13 @@ impl TelegramChannel {
             let body: TgResponse<Vec<TgUpdate>> = match response.json().await {
                 Ok(b) => b,
                 Err(e) => {
-                    warn!(account_id = runtime.account_id, error = %e, "getUpdates parse failed, retrying");
+                    warn!(
+                        account_id = runtime.account_id,
+                        error = %telegram_reqwest_error_detail(&e, &bot.token),
+                        is_timeout = e.is_timeout(),
+                        is_connect = e.is_connect(),
+                        "getUpdates parse failed, retrying"
+                    );
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                     continue;
                 }

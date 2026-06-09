@@ -773,19 +773,22 @@ async fn validate_telegram_account_config(
         .build()
         .map_err(|error| format!("failed to build Telegram validator: {error}"))?;
     let url = format!("https://api.telegram.org/bot{token}/getMe");
-    let response = http
-        .get(url)
-        .send()
-        .await
-        .map_err(|error| format!("Telegram getMe request failed: {error}"))?;
+    let response = http.get(url).send().await.map_err(|error| {
+        format!(
+            "Telegram getMe request failed: {}",
+            crate::telegram::telegram_reqwest_error_detail(&error, token)
+        )
+    })?;
     let status = response.status();
     if !status.is_success() {
         return Err(format!("Telegram getMe HTTP {status}"));
     }
-    let payload: TelegramGetMeResponse = response
-        .json()
-        .await
-        .map_err(|error| format!("Telegram getMe response parse failed: {error}"))?;
+    let payload: TelegramGetMeResponse = response.json().await.map_err(|error| {
+        format!(
+            "Telegram getMe response parse failed: {}",
+            crate::telegram::telegram_reqwest_error_detail(&error, token)
+        )
+    })?;
     if !payload.ok {
         let reason = payload.description.trim();
         return Err(if reason.is_empty() {
@@ -1243,7 +1246,13 @@ async fn fetch_recent_telegram_private_chat_id(
         .send()
         .await
         .map_err(|error| {
-            warn!(account_id, error = %error, "failed to fetch Telegram updates for main endpoint")
+            warn!(
+                account_id,
+                error = %crate::telegram::telegram_reqwest_error_detail(&error, token),
+                is_timeout = error.is_timeout(),
+                is_connect = error.is_connect(),
+                "failed to fetch Telegram updates for main endpoint"
+            )
         })
         .ok()?;
     if !response.status().is_success() {

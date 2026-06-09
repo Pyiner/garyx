@@ -12,7 +12,7 @@ use tracing::{info, warn};
 use crate::channel_trait::ChannelError;
 
 use super::markdown::{MARKDOWN_V2_PARSE_MODE, is_markdown_parse_error};
-use super::{OUTBOUND_MAX_RETRIES, TgMessage, TgResponse};
+use super::{OUTBOUND_MAX_RETRIES, TgMessage, TgResponse, telegram_reqwest_error_detail};
 
 const TELEGRAM_CHAT_REQUEST_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -670,13 +670,26 @@ async fn send_message_once(
     body: &SendMessageBody,
 ) -> Result<TgMessage, TelegramApiCallError> {
     let url = format!("{api_base}/bot{token}/sendMessage");
-    let resp =
-        http.post(&url).json(body).send().await.map_err(|e| {
-            TelegramApiCallError::new(format!("sendMessage failed: {e}"), None, false)
-        })?;
+    let resp = http.post(&url).json(body).send().await.map_err(|e| {
+        TelegramApiCallError::new(
+            format!(
+                "sendMessage failed: {}",
+                telegram_reqwest_error_detail(&e, token)
+            ),
+            None,
+            false,
+        )
+    })?;
 
     let result: TgResponse<TgMessage> = resp.json().await.map_err(|e| {
-        TelegramApiCallError::new(format!("sendMessage parse failed: {e}"), None, false)
+        TelegramApiCallError::new(
+            format!(
+                "sendMessage parse failed: {}",
+                telegram_reqwest_error_detail(&e, token)
+            ),
+            None,
+            false,
+        )
     })?;
 
     if !result.ok {
@@ -701,11 +714,25 @@ async fn edit_message_text_once(
 ) -> Result<(), TelegramApiCallError> {
     let url = format!("{api_base}/bot{token}/editMessageText");
     let resp = http.post(&url).json(body).send().await.map_err(|e| {
-        TelegramApiCallError::new(format!("editMessageText failed: {e}"), None, true)
+        TelegramApiCallError::new(
+            format!(
+                "editMessageText failed: {}",
+                telegram_reqwest_error_detail(&e, token)
+            ),
+            None,
+            true,
+        )
     })?;
 
     let result: TgResponse<TgMessage> = resp.json().await.map_err(|e| {
-        TelegramApiCallError::new(format!("editMessageText parse failed: {e}"), None, true)
+        TelegramApiCallError::new(
+            format!(
+                "editMessageText parse failed: {}",
+                telegram_reqwest_error_detail(&e, token)
+            ),
+            None,
+            true,
+        )
     })?;
 
     if !result.ok {
@@ -729,13 +756,26 @@ async fn delete_message_once(
     body: &DeleteMessageBody,
 ) -> Result<(), TelegramApiCallError> {
     let url = format!("{api_base}/bot{token}/deleteMessage");
-    let resp =
-        http.post(&url).json(body).send().await.map_err(|e| {
-            TelegramApiCallError::new(format!("deleteMessage failed: {e}"), None, true)
-        })?;
+    let resp = http.post(&url).json(body).send().await.map_err(|e| {
+        TelegramApiCallError::new(
+            format!(
+                "deleteMessage failed: {}",
+                telegram_reqwest_error_detail(&e, token)
+            ),
+            None,
+            true,
+        )
+    })?;
 
     let result: TgResponse<bool> = resp.json().await.map_err(|e| {
-        TelegramApiCallError::new(format!("deleteMessage parse failed: {e}"), None, true)
+        TelegramApiCallError::new(
+            format!(
+                "deleteMessage parse failed: {}",
+                telegram_reqwest_error_detail(&e, token)
+            ),
+            None,
+            true,
+        )
     })?;
 
     if !result.ok {

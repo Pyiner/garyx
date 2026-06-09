@@ -29,18 +29,9 @@ enum GaryxTheme {
 
 enum GaryxSafeAreaChrome {
     static let pageBackgroundEdges: Edge.Set = .all
-    static let floatingBottomMinimumPadding: CGFloat = 0
 
     static func installWindowDefaults() {
         UIWindow.appearance().backgroundColor = .clear
-    }
-
-    static var currentWindowBottomInset: CGFloat {
-        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        let keyWindow = scenes
-            .flatMap(\.windows)
-            .first { $0.isKeyWindow }
-        return keyWindow?.safeAreaInsets.bottom ?? 0
     }
 }
 
@@ -264,35 +255,20 @@ private struct GaryxFloatingBottomChromeModifier<Chrome: View>: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .overlay {
-                GeometryReader { geometry in
-                    let bottomInset = max(
-                        geometry.safeAreaInsets.bottom,
-                        GaryxSafeAreaChrome.currentWindowBottomInset,
-                        GaryxSafeAreaChrome.floatingBottomMinimumPadding
-                    )
-
-                    VStack(spacing: 0) {
-                        Spacer(minLength: 0)
-                            .allowsHitTesting(false)
-
-                        chrome()
-                            .frame(maxWidth: .infinity)
-                            .padding(.bottom, bottomInset)
-                            .background {
-                                GeometryReader { chromeGeometry in
-                                    Color.clear.preference(
-                                        key: GaryxFloatingBottomChromeHeightKey.self,
-                                        value: chromeGeometry.size.height
-                                    )
-                                }
-                            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                chrome()
+                    .frame(maxWidth: .infinity)
+                    .background(Color.clear)
+                    .background {
+                        GeometryReader { chromeGeometry in
+                            Color.clear.preference(
+                                key: GaryxFloatingBottomChromeHeightKey.self,
+                                value: chromeGeometry.size.height
+                            )
+                        }
                     }
-                    .frame(width: geometry.size.width, height: geometry.size.height, alignment: .bottom)
-                }
-                .ignoresSafeArea(.container, edges: .bottom)
+                    .ignoresSafeArea(.container, edges: .bottom)
             }
-            .ignoresSafeArea(.container, edges: .bottom)
             .onPreferenceChange(GaryxFloatingBottomChromeHeightKey.self) { height in
                 onHeightChange?(height)
             }
