@@ -1389,7 +1389,80 @@ mod e2e_tests {
 
     struct FeishuImageGenerationProvider;
 
+    struct FeishuReadFileProvider;
+
     struct FeishuReasoningThenImageViewProvider;
+
+    #[async_trait]
+    impl AgentLoopProvider for FeishuReadFileProvider {
+        fn provider_type(&self) -> ProviderType {
+            ProviderType::CodexAppServer
+        }
+
+        fn is_ready(&self) -> bool {
+            true
+        }
+
+        async fn initialize(&mut self) -> Result<(), BridgeError> {
+            Ok(())
+        }
+
+        async fn shutdown(&mut self) -> Result<(), BridgeError> {
+            Ok(())
+        }
+
+        async fn run_streaming(
+            &self,
+            options: &ProviderRunOptions,
+            on_chunk: StreamCallback,
+        ) -> Result<ProviderRunResult, BridgeError> {
+            let tool_use = ProviderMessage::tool_use(
+                serde_json::json!({
+                    "tool": "Read",
+                    "input": {
+                        "file_path": "/var/folders/test/session/T/garyx-feishu/inbound/12345678-1234-1234-1234-123456789abc-feishu-img_v3_0212g_98bd011e-4897-4f72-80ed-5348e3f2612g.jpeg",
+                    },
+                }),
+                Some("tool-read-feishu-1".to_owned()),
+                Some("Read".to_owned()),
+            );
+            let tool_result = ProviderMessage::tool_result(
+                serde_json::json!({
+                    "result": "file content should not be sent to COT",
+                    "text": "file content should not be sent to COT",
+                }),
+                Some("tool-read-feishu-1".to_owned()),
+                Some("Read".to_owned()),
+                Some(false),
+            );
+
+            on_chunk(StreamEvent::ToolUse { message: tool_use });
+            on_chunk(StreamEvent::ToolResult {
+                message: tool_result,
+            });
+            on_chunk(StreamEvent::Done);
+
+            Ok(ProviderRunResult {
+                run_id: "feishu-read-file".to_owned(),
+                thread_id: options.thread_id.clone(),
+                response: String::new(),
+                session_messages: Vec::new(),
+                sdk_session_id: None,
+                actual_model: None,
+                thread_title: None,
+                success: true,
+                error: None,
+                input_tokens: 1,
+                output_tokens: 1,
+                cost: 0.0,
+                duration_ms: 1,
+            })
+        }
+
+        async fn get_or_create_session(&self, session_key: &str) -> Result<String, BridgeError> {
+            Ok(format!("sdk-{session_key}"))
+        }
+    }
 
     #[async_trait]
     impl AgentLoopProvider for FeishuImageGenerationProvider {
@@ -2324,6 +2397,137 @@ mod e2e_tests {
         let complete_body: Value = serde_json::from_slice(&complete_calls[0].body).unwrap();
         assert_eq!(complete_body["message_id"], "om_cot_001");
         assert_eq!(complete_body["reason"], "done");
+    }
+
+    #[tokio::test]
+    async fn test_e2e_feishu_read_file_cot_args_preserve_filename() {
+        let (server, client) = setup_feishu_mock().await;
+        Mock::given(method("POST"))
+            .and(path("/im/v1/message_cot"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": 0,
+                "msg": "ok",
+                "data": {
+                    "cot_id": "cot_read_file_001",
+                    "message_id": "om_cot_read_file_001"
+                }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/im/v1/message_cot"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": 0,
+                "msg": "ok"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path_regex(r"^/im/v1/message_cot/complete/[^/]+$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": 0,
+                "msg": "ok"
+            })))
+            .mount(&server)
+            .await;
+
+        let provider = Arc::new(FeishuReadFileProvider);
+        let bridge = make_bridge_with(provider).await;
+        let router = make_router();
+        let account = make_default_account();
+
+        let event = FeishuEventBuilder::dm("ou_user123", "<media:image>").build();
+
+        dispatch_im_message_event(
+            "app1",
+            &event,
+            &router,
+            &bridge,
+            &client,
+            &account,
+            "",
+            &account.app_id,
+        )
+        .await;
+
+        let update_calls = wait_for_matching_requests_quiet_window(
+            &server,
+            std::time::Duration::from_millis(200),
+            std::time::Duration::from_secs(5),
+            4,
+            |r| r.method.as_str() == "PUT" && r.url.path() == "/im/v1/message_cot",
+        )
+        .await;
+        let tool_event_contents: Vec<(String, Value)> = update_calls
+            .iter()
+            .flat_map(|request| {
+                let body: Value = serde_json::from_slice(&request.body).unwrap();
+                assert_eq!(body["cot_id"], "cot_read_file_001");
+                assert_eq!(body["message_id"], "om_cot_read_file_001");
+                body["events"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+            })
+            .filter_map(|event| {
+                let event_type = event
+                    .get("event_type")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)?;
+                let content = event
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .and_then(|content| serde_json::from_str::<Value>(content).ok())?;
+                Some((event_type, content))
+            })
+            .collect();
+
+        assert!(
+            tool_event_contents.iter().any(|(event_type, content)| {
+                event_type == "TOOL_CALL_START"
+                    && content["toolCallId"].as_str() == Some("tool-read-feishu-1")
+                    && content["toolCallName"].as_str() == Some("读取文件")
+                    && content["title"].as_str() == Some("读取文件")
+                    && content["icon"].as_str() == Some("read")
+            }),
+            "read file should be sent as a readable COT tool call: {tool_event_contents:?}"
+        );
+        assert!(
+            tool_event_contents.iter().any(|(event_type, content)| {
+                event_type == "TOOL_CALL_ARGS"
+                    && content["toolCallId"].as_str() == Some("tool-read-feishu-1")
+                    && content["delta"].as_str().is_some_and(|delta| {
+                        delta.starts_with(".../inbound/")
+                            && delta.contains("feishu-img_v3_0212g")
+                            && delta.ends_with(".jpeg")
+                            && !delta.contains("[truncated]")
+                    })
+            }),
+            "read file args should preserve the filename: {tool_event_contents:?}"
+        );
+        assert!(
+            tool_event_contents
+                .iter()
+                .all(|(event_type, content)| event_type != "TOOL_CALL_RESULT"
+                    && !content
+                        .to_string()
+                        .contains("file content should not be sent")),
+            "read file results should not be sent to Feishu COT: {tool_event_contents:?}"
+        );
+
+        let complete_calls = wait_for_matching_requests_quiet_window(
+            &server,
+            std::time::Duration::from_millis(200),
+            std::time::Duration::from_secs(5),
+            1,
+            |r| {
+                r.method.as_str() == "POST"
+                    && r.url.path() == "/im/v1/message_cot/complete/cot_read_file_001"
+            },
+        )
+        .await;
+        assert_eq!(complete_calls.len(), 1, "COT run should be completed");
     }
 
     #[tokio::test]

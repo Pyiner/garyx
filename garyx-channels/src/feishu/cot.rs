@@ -69,6 +69,7 @@ pub(super) struct FeishuCotState {
     pub(super) sequence: u64,
     pub(super) started_tool_call_ids: HashSet<String>,
     pub(super) ended_tool_call_ids: HashSet<String>,
+    pub(super) arg_sent_tool_call_ids: HashSet<String>,
 }
 
 impl FeishuCotState {
@@ -141,6 +142,7 @@ impl FeishuCotState {
 
         let args = summarize_tool_args(message);
         if !args.is_empty() {
+            self.arg_sent_tool_call_ids.insert(call_id.clone());
             events.push(FeishuCotEventRecord::new_at(
                 EVENT_TOOL_CALL_ARGS,
                 self.next_event_id(&format!("tool-args-{call_id}")),
@@ -165,6 +167,21 @@ impl FeishuCotState {
         let call_id = tool_call_id(message, self.sequence + 1);
         let timestamp = message_timestamp_millis(message);
         let mut events = Vec::new();
+        if !self.arg_sent_tool_call_ids.contains(&call_id) {
+            let args = readable_tool_argument(message).unwrap_or_default();
+            if !args.is_empty() {
+                self.arg_sent_tool_call_ids.insert(call_id.clone());
+                events.push(FeishuCotEventRecord::new_at(
+                    EVENT_TOOL_CALL_ARGS,
+                    self.next_event_id(&format!("tool-args-{call_id}")),
+                    json!({
+                        "toolCallId": call_id,
+                        "delta": args,
+                    }),
+                    timestamp,
+                ));
+            }
+        }
         if self.ended_tool_call_ids.insert(call_id.clone()) {
             events.push(FeishuCotEventRecord::new_at(
                 EVENT_TOOL_CALL_END,
@@ -306,12 +323,14 @@ fn is_hidden_cot_tool(message: &ProviderMessage) -> bool {
 }
 
 fn summarize_tool_args(message: &ProviderMessage) -> String {
-    readable_tool_argument(message).unwrap_or_else(|| {
-        preview_json(
-            default_tool_args_candidate(message),
-            MAX_TOOL_ARG_DISPLAY_CHARS,
-        )
-    })
+    if let Some(args) = readable_tool_argument(message) {
+        return args;
+    }
+    let candidate = default_tool_args_candidate(message);
+    if is_uninformative_tool_args(candidate) {
+        return String::new();
+    }
+    preview_json(candidate, MAX_TOOL_ARG_DISPLAY_CHARS)
 }
 
 fn is_image_view_message(message: &ProviderMessage) -> bool {
@@ -429,8 +448,7 @@ fn readable_value_from_keys(value: &Value, keys: &[&str]) -> Option<String> {
         Value::Object(map) => {
             for key in keys {
                 if let Some(value) = map.get(*key) {
-                    return value_to_readable_text(value)
-                        .map(|text| truncate_utf8_bytes(text.trim(), MAX_TOOL_ARG_DISPLAY_CHARS));
+                    return value_to_readable_text_for_key(value, key);
                 }
             }
             for key in [
@@ -453,6 +471,69 @@ fn readable_value_from_keys(value: &Value, keys: &[&str]) -> Option<String> {
         }
         _ => None,
     }
+}
+
+fn value_to_readable_text_for_key(value: &Value, key: &str) -> Option<String> {
+    match value {
+        Value::Array(values) => {
+            let parts = values
+                .iter()
+                .filter_map(|item| value_to_readable_text_for_key(item, key))
+                .filter(|part| !part.trim().is_empty())
+                .collect::<Vec<_>>();
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join(", "))
+            }
+        }
+        _ => value_to_readable_text(value).map(|text| format_readable_value_for_key(key, &text)),
+    }
+}
+
+fn format_readable_value_for_key(key: &str, text: &str) -> String {
+    let trimmed = text.trim();
+    if is_path_like_key(key) {
+        return truncate_path_for_display(trimmed, MAX_TOOL_ARG_DISPLAY_CHARS);
+    }
+    truncate_utf8_bytes(trimmed, MAX_TOOL_ARG_DISPLAY_CHARS)
+}
+
+fn is_path_like_key(key: &str) -> bool {
+    matches!(
+        key,
+        "file_path" | "filePath" | "filepath" | "path" | "paths" | "filename" | "file"
+    )
+}
+
+fn truncate_path_for_display(path: &str, max_bytes: usize) -> String {
+    if path.len() <= max_bytes {
+        return path.to_owned();
+    }
+
+    let normalized = path.trim_end_matches('/');
+    let mut parts = normalized.rsplit('/').filter(|part| !part.is_empty());
+    let Some(file_name) = parts.next() else {
+        return truncate_utf8_bytes(path, max_bytes);
+    };
+
+    if let Some(parent) = parts.next() {
+        let parent_tail = format!(".../{parent}/{file_name}");
+        if parent_tail.len() <= max_bytes {
+            return parent_tail;
+        }
+    }
+
+    let file_tail = format!(".../{file_name}");
+    if file_tail.len() <= max_bytes {
+        return file_tail;
+    }
+
+    let filename_budget = max_bytes.saturating_sub(".../".len());
+    format!(
+        ".../{}",
+        middle_elide_utf8_bytes(file_name, filename_budget)
+    )
 }
 
 fn command_from_value(value: &Value) -> Option<String> {
@@ -527,6 +608,24 @@ fn default_tool_args_candidate(message: &ProviderMessage) -> &Value {
         .or_else(|| message.content.get("args"))
         .or_else(|| message.content.get("arguments"))
         .unwrap_or(&message.content)
+}
+
+fn is_uninformative_tool_args(value: &Value) -> bool {
+    match value {
+        Value::Null => true,
+        Value::String(text) => text.trim().is_empty(),
+        Value::Object(map) => {
+            map.is_empty()
+                || map.keys().all(|key| {
+                    matches!(
+                        key.as_str(),
+                        "type" | "item_type" | "itemType" | "id" | "status"
+                    )
+                })
+        }
+        Value::Array(values) => values.is_empty(),
+        _ => false,
+    }
 }
 
 fn is_command_like_tool(message: &ProviderMessage) -> bool {
@@ -636,6 +735,28 @@ fn truncate_utf8_bytes(text: &str, max_bytes: usize) -> String {
     format!("{}{}", &text[..end], TRUNCATED_SUFFIX)
 }
 
+fn middle_elide_utf8_bytes(text: &str, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text.to_owned();
+    }
+    const MARKER: &str = "...";
+    if max_bytes <= MARKER.len() {
+        return truncate_utf8_bytes(text, max_bytes);
+    }
+
+    let keep = max_bytes - MARKER.len();
+    let mut head = keep / 2;
+    let mut tail = keep - head;
+    while head > 0 && !text.is_char_boundary(head) {
+        head -= 1;
+        tail += 1;
+    }
+    while tail > 0 && !text.is_char_boundary(text.len() - tail) {
+        tail -= 1;
+    }
+    format!("{}{}{}", &text[..head], MARKER, &text[text.len() - tail..])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -657,7 +778,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_result_events_only_close_tool_without_result_payload() {
+    fn tool_result_events_backfill_args_without_result_payload() {
         let message = ProviderMessage::tool_result(
             json!({
                 "command": "pwd",
@@ -669,11 +790,16 @@ mod tests {
         );
         let mut state = FeishuCotState::default();
         let events = state.tool_result_events(&message);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_type, EVENT_TOOL_CALL_END);
-        let content = content_json(&events[0]);
-        assert_eq!(content["toolCallId"], "tool-1");
-        assert!(!events[0].content.contains("/tmp/workspace"));
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].event_type, EVENT_TOOL_CALL_ARGS);
+        let args = content_json(&events[0]);
+        assert_eq!(args["delta"], "pwd");
+        assert_eq!(events[1].event_type, EVENT_TOOL_CALL_END);
+        assert!(
+            events
+                .iter()
+                .all(|event| !event.content.contains("/tmp/workspace"))
+        );
     }
 
     #[test]
@@ -776,6 +902,84 @@ mod tests {
         let args = content_json(&events[1]);
         assert_eq!(args["delta"], "/Users/test/workspace/src/main.rs");
         assert!(!args["delta"].as_str().unwrap_or_default().contains("{"));
+    }
+
+    #[test]
+    fn read_file_tool_args_extract_claude_sdk_input_file_path() {
+        let message = ProviderMessage::tool_use(
+            json!({
+                "tool": "Read",
+                "input": {
+                    "file_path": "/Users/test/workspace/references/schema.md",
+                },
+            }),
+            Some("tool-read-claude".to_owned()),
+            Some("Read".to_owned()),
+        );
+        let mut state = FeishuCotState::default();
+        let events = state.tool_use_events(&message);
+        let start = content_json(&events[0]);
+        assert_eq!(start["toolCallName"], "读取文件");
+        let args = content_json(&events[1]);
+        assert_eq!(args["delta"], "/Users/test/workspace/references/schema.md");
+        assert!(!args["delta"].as_str().unwrap_or_default().contains("{"));
+    }
+
+    #[test]
+    fn read_file_tool_args_preserve_filename_for_long_temp_paths() {
+        let message = ProviderMessage::tool_use(
+            json!({
+                "tool": "Read",
+                "input": {
+                    "file_path": "/var/folders/test/session/T/garyx-feishu/inbound/12345678-1234-1234-1234-123456789abc-feishu-img_v3_0212g_98bd011e-4897-4f72-80ed-5348e3f2612g.jpeg",
+                },
+            }),
+            Some("tool-read-long-path".to_owned()),
+            Some("Read".to_owned()),
+        );
+        let mut state = FeishuCotState::default();
+        let events = state.tool_use_events(&message);
+        let args = content_json(&events[1]);
+        let delta = args["delta"].as_str().unwrap_or_default();
+        assert!(delta.starts_with(".../inbound/"), "delta={delta}");
+        assert!(delta.contains("feishu-img_v3_0212g"), "delta={delta}");
+        assert!(delta.ends_with(".jpeg"), "delta={delta}");
+        assert!(!delta.contains("[truncated]"), "delta={delta}");
+    }
+
+    #[test]
+    fn tool_result_backfills_missing_args_without_result_payload() {
+        let use_message = ProviderMessage::tool_use(
+            json!({
+                "type": "readFile",
+            }),
+            Some("tool-read-2".to_owned()),
+            Some("read_file".to_owned()),
+        );
+        let result_message = ProviderMessage::tool_result(
+            json!({
+                "file_path": "/Users/test/workspace/src/lib.rs",
+                "data": "secret file contents",
+            }),
+            Some("tool-read-2".to_owned()),
+            Some("read_file".to_owned()),
+            Some(false),
+        );
+        let mut state = FeishuCotState::default();
+        let use_events = state.tool_use_events(&use_message);
+        assert_eq!(use_events.len(), 1, "ToolUse has no args to display");
+
+        let result_events = state.tool_result_events(&result_message);
+        assert_eq!(result_events.len(), 2);
+        assert_eq!(result_events[0].event_type, EVENT_TOOL_CALL_ARGS);
+        let args = content_json(&result_events[0]);
+        assert_eq!(args["delta"], "/Users/test/workspace/src/lib.rs");
+        assert_eq!(result_events[1].event_type, EVENT_TOOL_CALL_END);
+        assert!(
+            result_events
+                .iter()
+                .all(|event| !event.content.contains("secret file contents"))
+        );
     }
 
     #[test]
