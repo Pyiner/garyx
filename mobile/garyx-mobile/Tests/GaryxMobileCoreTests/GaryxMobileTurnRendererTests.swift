@@ -269,6 +269,33 @@ final class GaryxMobileTurnRendererTests: XCTestCase {
         )
     }
 
+    func testRunningTurnCollapsesDuplicateEmptyThinkingPlaceholders() throws {
+        // A running turn that carries a tool step plus more than one empty,
+        // still-streaming assistant placeholder must not render stacked "Thinking"
+        // rows. Only the trailing placeholder survives.
+        let rows = GaryxMobileTurnRenderer.buildTurnRows(
+            messages: [
+                message("user-1", role: .user, text: "Push code and trigger iOS build"),
+                toolMessage("tool-1", isActive: true),
+                message("assistant-think-1", role: .assistant, isStreaming: true),
+                message("assistant-think-2", role: .assistant, isStreaming: true),
+            ],
+            isRunningThread: true
+        )
+
+        guard case .turn(let turn) = try XCTUnwrap(try XCTUnwrap(rows.only).activityRows.only) else {
+            return XCTFail("Expected a running working turn")
+        }
+        let thinkingPlaceholders = turn.steps.filter { block in
+            guard case .message(let message) = block else { return false }
+            return message.role == .assistant
+                && message.isStreaming
+                && message.attachments.isEmpty
+                && message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        XCTAssertEqual(thinkingPlaceholders.count, 1, "Duplicate empty thinking placeholders must collapse to one")
+    }
+
     func testTranscriptMapperDoesNotAppendActiveRunAssistantResponseAfterPendingInput() throws {
         let transcript = try JSONDecoder().decode(
             GaryxThreadTranscript.self,

@@ -87,9 +87,34 @@ enum GaryxMobileTurnRenderer {
         isRunningThread: Bool
     ) -> [GaryxMobileTurnRow] {
         buildTurnRows(
-            blocks: transcriptBlocks(from: messages),
+            blocks: transcriptBlocks(from: collapseStreamingThinkingPlaceholders(messages)),
             deferTrailingFinalAssistant: isRunningThread
         )
+    }
+
+    /// An empty, still-streaming assistant message is a "Thinking" placeholder with no
+    /// content of its own. Only a trailing one represents live activity; any earlier empty
+    /// placeholder is stale — a newer assistant segment or tool step already superseded it —
+    /// and would otherwise render a second, duplicate "Thinking" row. Keep at most the final
+    /// placeholder so the transcript never shows stacked "Thinking" labels.
+    private static func collapseStreamingThinkingPlaceholders(
+        _ messages: [GaryxMobileMessage]
+    ) -> [GaryxMobileMessage] {
+        guard messages.count > 1 else { return messages }
+        let lastIndex = messages.index(before: messages.endIndex)
+        return messages.enumerated().compactMap { index, message in
+            if index != lastIndex, isEmptyStreamingAssistant(message) {
+                return nil
+            }
+            return message
+        }
+    }
+
+    private static func isEmptyStreamingAssistant(_ message: GaryxMobileMessage) -> Bool {
+        message.role == .assistant
+            && message.isStreaming
+            && message.attachments.isEmpty
+            && message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private static func buildTurnRows(
