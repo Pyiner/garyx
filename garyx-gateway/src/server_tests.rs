@@ -518,6 +518,62 @@ async fn test_bind_channel_endpoint_moves_binding_to_target_thread() {
 }
 
 #[tokio::test]
+async fn test_bind_channel_endpoint_noops_when_already_bound_to_target_thread() {
+    let state = test_state();
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::target",
+            serde_json::json!({
+                "thread_id": "thread::target",
+                "label": "Target",
+                "channel_bindings": [{
+                    "channel": "telegram",
+                    "account_id": "main",
+                    "peer_id": "alice",
+                    "chat_id": "alice",
+                    "display_label": "Alice"
+                }]
+            }),
+        )
+        .await;
+
+    let gw = Gateway::new(state.clone());
+    let req = authed_request()
+        .method("POST")
+        .uri("/api/channel-bindings/bind")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            r#"{"endpointKey":"telegram::main::alice","threadId":"thread::target"}"#,
+        ))
+        .unwrap();
+
+    let resp = gw.router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["thread_id"], "thread::target");
+    assert!(json["previous_thread_id"].is_null());
+
+    let target = state
+        .threads
+        .thread_store
+        .get("thread::target")
+        .await
+        .unwrap();
+    assert_eq!(
+        target["channel_bindings"]
+            .as_array()
+            .map(|items| items.len()),
+        Some(1)
+    );
+}
+
+#[tokio::test]
 async fn test_bind_channel_endpoint_moves_delivery_target_to_bound_thread() {
     let state = test_state();
     state

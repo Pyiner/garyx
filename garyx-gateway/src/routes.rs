@@ -1063,23 +1063,6 @@ fn binding_from_known_endpoint(endpoint: &KnownChannelEndpoint) -> ChannelBindin
     }
 }
 
-async fn resolve_channel_binding_for_endpoint_key(
-    state: &Arc<AppState>,
-    requested_endpoint_key: &str,
-) -> Option<ChannelBinding> {
-    let endpoints = state.cached_channel_endpoints().await;
-    if let Some(binding) = endpoints
-        .into_iter()
-        .find(|endpoint| endpoint_key_matches(&endpoint.endpoint_key, requested_endpoint_key))
-        .map(|endpoint| binding_from_known_endpoint(&endpoint))
-    {
-        return Some(binding);
-    }
-    resolve_main_endpoint_by_key(state, requested_endpoint_key)
-        .await
-        .map(|endpoint| endpoint.to_binding())
-}
-
 pub(crate) async fn bind_channel_endpoint_key_to_thread(
     state: &Arc<AppState>,
     endpoint_key: &str,
@@ -1093,9 +1076,29 @@ pub(crate) async fn bind_channel_endpoint_key_to_thread(
         ));
     };
 
-    let Some(binding) =
-        resolve_channel_binding_for_endpoint_key(state, &requested_endpoint_key).await
-    else {
+    let known_endpoint = state
+        .cached_channel_endpoints()
+        .await
+        .into_iter()
+        .find(|endpoint| endpoint_key_matches(&endpoint.endpoint_key, &requested_endpoint_key));
+
+    let binding = if let Some(endpoint) = known_endpoint.as_ref() {
+        let binding = binding_from_known_endpoint(endpoint);
+        if endpoint.thread_id.as_deref() == Some(thread_id.as_str()) {
+            return Ok(ChannelEndpointBindResult {
+                thread_id,
+                previous_thread_id: None,
+                endpoint_key: requested_endpoint_key,
+                binding,
+            });
+        }
+        binding
+    } else if let Some(binding) = resolve_main_endpoint_by_key(state, &requested_endpoint_key)
+        .await
+        .map(|endpoint| endpoint.to_binding())
+    {
+        binding
+    } else {
         return Err(ChannelEndpointMutationError::new(
             StatusCode::NOT_FOUND,
             "endpoint not found",
