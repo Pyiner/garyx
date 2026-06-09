@@ -132,15 +132,15 @@ impl FeishuCotState {
         self.tool_inputs_by_call_id
             .insert(call_id.clone(), tool_input.clone());
         let timestamp = message_timestamp_millis(message);
+        let tool_display_name = tool_title(&tool_name);
+        let tool_detail = tool_detail_title(&tool_input, &tool_display_name);
         let mut events = vec![FeishuCotEventRecord::new_at(
             EVENT_TOOL_CALL_START,
             self.next_event_id(&format!("tool-start-{call_id}")),
             json!({
                 "toolCallId": call_id,
-                "toolCallName": truncate_chars(tool_input.trim(), MAX_TOOL_ARG_DISPLAY_CHARS)
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or_else(|| tool_name.clone()),
-                "title": tool_title(&tool_name),
+                "toolCallName": tool_display_name,
+                "title": tool_detail,
                 "status": "running",
                 "icon": tool_icon(&tool_name),
             }),
@@ -388,6 +388,11 @@ fn preview_json(value: &Value, max_bytes: usize) -> String {
     }
 }
 
+fn tool_detail_title(tool_input: &str, fallback: &str) -> String {
+    let compact = compact_one_line(tool_input);
+    truncate_chars(&compact, MAX_TOOL_ARG_DISPLAY_CHARS).unwrap_or_else(|| fallback.to_owned())
+}
+
 fn tool_title(tool_name: &str) -> String {
     let value = tool_name.to_ascii_lowercase();
     if contains_any(&value, &["bash", "shell", "exec", "run"]) {
@@ -411,6 +416,10 @@ fn tool_title(tool_name: &str) -> String {
     } else {
         tool_name.trim().to_owned()
     }
+}
+
+fn compact_one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn tool_icon(tool_name: &str) -> &'static str {
@@ -635,13 +644,30 @@ mod tests {
         assert_eq!(events[0].timestamp, 1_713_200_000_000);
         let start = content_json(&events[0]);
         assert_eq!(start["toolCallId"], "tool-1");
-        assert_eq!(start["toolCallName"], "pwd");
-        assert_eq!(start["title"], "运行命令");
+        assert_eq!(start["toolCallName"], "运行命令");
+        assert_eq!(start["title"], "pwd");
         assert_eq!(start["icon"], "bash");
         assert_eq!(start["status"], "running");
         let args = content_json(&events[1]);
         assert_eq!(args["toolCallId"], "tool-1");
         assert_eq!(args["delta"], "pwd");
+    }
+
+    #[test]
+    fn tool_use_does_not_surface_internal_tool_call_id_as_display_name() {
+        let message = ProviderMessage::tool_use(
+            json!({
+                "output": "garyx-channels/src/feishu/client.rs",
+            }),
+            Some("tool-call-exec-command-1".to_owned()),
+            Some("tool-call-exec-command-1".to_owned()),
+        );
+        let mut state = FeishuCotState::default();
+        let events = state.tool_use_events(&message);
+        let start = content_json(&events[0]);
+        assert_eq!(start["toolCallId"], "tool-call-exec-command-1");
+        assert_eq!(start["toolCallName"], "运行命令");
+        assert_ne!(start["toolCallName"], "tool-call-exec-command-1");
     }
 
     #[test]

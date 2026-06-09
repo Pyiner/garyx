@@ -2253,8 +2253,8 @@ mod e2e_tests {
             tool_event_contents.iter().any(|(event_type, content)| {
                 event_type == "TOOL_CALL_START"
                     && content["toolCallId"].as_str() == Some(tool_call_id.as_str())
-                    && content["toolCallName"].as_str() == Some("pwd")
-                    && content["title"].as_str() == Some("运行命令")
+                    && content["toolCallName"].as_str() == Some("运行命令")
+                    && content["title"].as_str() == Some("pwd")
                     && content["icon"].as_str() == Some("bash")
                     && content["status"].as_str() == Some("running")
                     && content.get("toolName").is_none()
