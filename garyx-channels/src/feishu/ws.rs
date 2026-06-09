@@ -19,7 +19,7 @@ use tokio::time::Instant;
 use tracing::{debug, error, info, warn};
 
 use super::client::WsConnectInfo;
-use super::cot::FeishuCotEventRecord;
+use super::cot::{FeishuCotEventRecord, FeishuCotSession};
 use super::mentions::{build_mention_prefix, extract_mention_targets, is_mention_forward_request};
 use super::message::{extract_image_keys, merge_stream_text};
 use super::pbbp2::{self, Frame};
@@ -150,6 +150,7 @@ async fn send_cot_events(
     else {
         return;
     };
+    log_cot_events(account_id, thread_id, label, &session, &events);
     if let Err(err) = client.update_cot_events(&session, &events).await {
         state.cot.failed = true;
         warn!(
@@ -160,6 +161,65 @@ async fn send_cot_events(
             "Feishu COT event update failed; continuing with Card Kit reply"
         );
     }
+}
+
+fn log_cot_events(
+    account_id: &str,
+    thread_id: &str,
+    label: &str,
+    session: &FeishuCotSession,
+    events: &[FeishuCotEventRecord],
+) {
+    for event in events {
+        let content = serde_json::from_str::<Value>(&event.content).ok();
+        let tool_call_id = content
+            .as_ref()
+            .and_then(|value| value.get("toolCallId"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let title = content
+            .as_ref()
+            .and_then(|value| value.get("title"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let tool_call_name = content
+            .as_ref()
+            .and_then(|value| value.get("toolCallName"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let delta = content
+            .as_ref()
+            .and_then(|value| value.get("delta"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        info!(
+            account_id = %account_id,
+            thread_id = %thread_id,
+            label = %label,
+            cot_id = %session.cot_id,
+            cot_message_id = %session.message_id,
+            event_type = %event.event_type,
+            event_id = %event.event_id,
+            tool_call_id = %tool_call_id,
+            title = %truncate_log_field(title),
+            tool_call_name = %truncate_log_field(tool_call_name),
+            delta = %truncate_log_field(delta),
+            content = %truncate_log_field(&event.content),
+            "Feishu COT event outgoing"
+        );
+    }
+}
+
+fn truncate_log_field(value: &str) -> String {
+    const MAX: usize = 240;
+    if value.len() <= MAX {
+        return value.to_owned();
+    }
+    let mut end = MAX.saturating_sub(15);
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...[truncated]", &value[..end])
 }
 
 async fn send_tool_use_cot_events(
