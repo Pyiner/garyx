@@ -120,6 +120,10 @@ impl FeishuCotState {
         &mut self,
         message: &ProviderMessage,
     ) -> Vec<FeishuCotEventRecord> {
+        if is_hidden_cot_tool(message) {
+            return Vec::new();
+        }
+
         let call_id = tool_call_id(message, self.sequence + 1);
         if !self.started_tool_call_ids.insert(call_id.clone()) {
             return Vec::new();
@@ -166,6 +170,10 @@ impl FeishuCotState {
         &mut self,
         message: &ProviderMessage,
     ) -> Vec<FeishuCotEventRecord> {
+        if is_hidden_cot_tool(message) {
+            return Vec::new();
+        }
+
         let call_id = tool_call_id(message, self.sequence + 1);
         let timestamp = message_timestamp_millis(message);
         let mut events = Vec::new();
@@ -312,7 +320,34 @@ fn tool_name(message: &ProviderMessage) -> String {
         .unwrap_or_else(|| "tool".to_owned())
 }
 
+fn is_hidden_cot_tool(message: &ProviderMessage) -> bool {
+    let tool_name = message.tool_name.as_deref().unwrap_or_default().trim();
+    let metadata_item_type = message
+        .metadata
+        .get("item_type")
+        .or_else(|| message.metadata.get("itemType"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim();
+    let content_type = message
+        .content
+        .get("type")
+        .or_else(|| message.content.get("item_type"))
+        .or_else(|| message.content.get("itemType"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim();
+
+    [tool_name, metadata_item_type, content_type]
+        .iter()
+        .any(|value| value.eq_ignore_ascii_case("reasoning"))
+}
+
 fn summarize_tool_args(message: &ProviderMessage) -> String {
+    if is_image_view_message(message) {
+        return image_view_summary(message);
+    }
+
     let candidate = message
         .content
         .get("command")
@@ -326,6 +361,10 @@ fn summarize_tool_args(message: &ProviderMessage) -> String {
 }
 
 fn readable_tool_input(message: &ProviderMessage) -> String {
+    if is_image_view_message(message) {
+        return image_view_summary(message);
+    }
+
     let candidate = message
         .content
         .get("command")
@@ -339,6 +378,10 @@ fn readable_tool_input(message: &ProviderMessage) -> String {
 }
 
 fn summarize_tool_result(message: &ProviderMessage) -> String {
+    if is_image_view_message(message) {
+        return image_view_summary(message);
+    }
+
     if is_image_generation_message(message) {
         return if message.is_error.unwrap_or(false) {
             "Image generation failed.".to_owned()
@@ -378,6 +421,39 @@ fn is_image_generation_message(message: &ProviderMessage) -> bool {
         || message.tool_name.as_deref() == Some("imageGeneration")
 }
 
+fn is_image_view_message(message: &ProviderMessage) -> bool {
+    let metadata_type = message
+        .metadata
+        .get("item_type")
+        .or_else(|| message.metadata.get("itemType"))
+        .and_then(Value::as_str);
+    if metadata_type.is_some_and(|value| value.eq_ignore_ascii_case("imageView")) {
+        return true;
+    }
+    let content_type = message
+        .content
+        .get("type")
+        .or_else(|| message.content.get("item_type"))
+        .or_else(|| message.content.get("itemType"))
+        .and_then(Value::as_str);
+    content_type.is_some_and(|value| value.eq_ignore_ascii_case("imageView"))
+        || message
+            .tool_name
+            .as_deref()
+            .is_some_and(|value| value.eq_ignore_ascii_case("imageView"))
+}
+
+fn image_view_summary(message: &ProviderMessage) -> String {
+    let Some(path) = message.content.get("path").and_then(Value::as_str) else {
+        return "查看图片".to_owned();
+    };
+    let file_name = path
+        .rsplit('/')
+        .find(|part| !part.is_empty())
+        .unwrap_or(path);
+    truncate_utf8_bytes(file_name.trim(), MAX_TOOL_ARG_DISPLAY_CHARS)
+}
+
 fn preview_json(value: &Value, max_bytes: usize) -> String {
     match value {
         Value::Null => String::new(),
@@ -413,6 +489,8 @@ fn tool_title(tool_name: &str) -> String {
         "搜索".to_owned()
     } else if contains_any(&value, &["webfetch", "fetch"]) {
         "抓取网页".to_owned()
+    } else if value.eq_ignore_ascii_case("imageview") {
+        "查看图片".to_owned()
     } else {
         tool_name.trim().to_owned()
     }
@@ -427,6 +505,8 @@ fn tool_icon(tool_name: &str) -> &'static str {
     if contains_any(&value, &["search", "web"]) {
         "search"
     } else if contains_any(&value, &["read", "grep", "glob"]) {
+        "read"
+    } else if value.eq_ignore_ascii_case("imageview") {
         "read"
     } else if contains_any(&value, &["write", "edit"]) {
         "write"
@@ -533,6 +613,10 @@ fn char_cols(ch: char) -> usize {
 }
 
 fn is_code_output_tool(tool_name: &str) -> bool {
+    if tool_name.eq_ignore_ascii_case("imageView") {
+        return false;
+    }
+
     contains_any(
         &tool_name.to_ascii_lowercase(),
         &[
@@ -692,5 +776,75 @@ mod tests {
         assert_eq!(content["content"]["type"], "text");
         assert_eq!(content["content"]["text"], "Image generated.");
         assert!(!result_event.content.contains("iVBORw0KGgo="));
+    }
+
+    #[test]
+    fn reasoning_items_do_not_emit_cot_tool_events() {
+        let reasoning = ProviderMessage::tool_use(
+            json!({
+                "type": "reasoning",
+                "id": "rs_home_log",
+                "summary": [],
+                "content": [],
+            }),
+            Some("rs_home_log".to_owned()),
+            Some("reasoning".to_owned()),
+        )
+        .with_metadata_value("item_type", json!("reasoning"));
+        let reasoning_result = ProviderMessage::tool_result(
+            reasoning.content.clone(),
+            reasoning.tool_use_id.clone(),
+            reasoning.tool_name.clone(),
+            Some(false),
+        )
+        .with_metadata_value("item_type", json!("reasoning"));
+
+        let mut state = FeishuCotState::default();
+        assert!(state.tool_use_events(&reasoning).is_empty());
+        assert!(state.tool_result_events(&reasoning_result).is_empty());
+        assert!(state.started_tool_call_ids.is_empty());
+        assert!(state.ended_tool_call_ids.is_empty());
+    }
+
+    #[test]
+    fn image_view_items_emit_readable_cot_tool_events() {
+        let image_view = ProviderMessage::tool_use(
+            json!({
+                "type": "imageView",
+                "id": "call_home_image",
+                "path": "/var/folders/example/file_131.jpg",
+            }),
+            Some("call_home_image".to_owned()),
+            Some("imageView".to_owned()),
+        )
+        .with_metadata_value("item_type", json!("imageView"));
+        let image_result = ProviderMessage::tool_result(
+            image_view.content.clone(),
+            image_view.tool_use_id.clone(),
+            image_view.tool_name.clone(),
+            Some(false),
+        )
+        .with_metadata_value("item_type", json!("imageView"));
+
+        let mut state = FeishuCotState::default();
+        let use_events = state.tool_use_events(&image_view);
+        assert_eq!(use_events.len(), 2);
+        let start = content_json(&use_events[0]);
+        assert_eq!(start["toolCallId"], "call_home_image");
+        assert_eq!(start["toolCallName"], "查看图片");
+        assert_eq!(start["title"], "file_131.jpg");
+        assert_eq!(start["icon"], "read");
+        let args = content_json(&use_events[1]);
+        assert_eq!(args["delta"], "file_131.jpg");
+
+        let result_events = state.tool_result_events(&image_result);
+        let result = content_json(
+            result_events
+                .iter()
+                .find(|event| event.event_type == EVENT_TOOL_CALL_RESULT)
+                .expect("result event"),
+        );
+        assert_eq!(result["content"]["type"], "text");
+        assert_eq!(result["content"]["text"], "file_131.jpg");
     }
 }

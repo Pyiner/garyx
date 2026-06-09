@@ -538,7 +538,7 @@ impl FeishuClient {
         session: &FeishuCotSession,
     ) -> Result<(), FeishuError> {
         let url = format!(
-            "{}/im/v1/message_cot/complete/{}?message_id={}",
+            "{}/im/v1/message_cot/complete/{}?message_id={}&reason=done",
             self.api_base(),
             urlencoding::encode(&session.cot_id),
             urlencoding::encode(&session.message_id),

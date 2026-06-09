@@ -114,7 +114,7 @@ async fn ensure_cot_session(
         }
         Err(err) => {
             state.cot.failed = true;
-            debug!(
+            warn!(
                 account_id = %account_id,
                 thread_id = %thread_id,
                 error = %err,
@@ -152,7 +152,7 @@ async fn send_cot_events(
     };
     if let Err(err) = client.update_cot_events(&session, &events).await {
         state.cot.failed = true;
-        debug!(
+        warn!(
             account_id = %account_id,
             thread_id = %thread_id,
             label = %label,
@@ -223,7 +223,7 @@ async fn finish_cot_run(
     let run_finished = state.cot.run_finished_event(thread_id, &session.cot_id);
     if let Err(err) = client.update_cot_events(&session, &[run_finished]).await {
         state.cot.failed = true;
-        debug!(
+        warn!(
             account_id = %account_id,
             thread_id = %thread_id,
             error = %err,
@@ -233,7 +233,7 @@ async fn finish_cot_run(
     }
     if let Err(err) = client.complete_cot_run(&session).await {
         state.cot.failed = true;
-        debug!(
+        warn!(
             account_id = %account_id,
             thread_id = %thread_id,
             error = %err,
