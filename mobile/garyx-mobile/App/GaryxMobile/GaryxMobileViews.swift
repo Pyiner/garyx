@@ -294,6 +294,7 @@ struct GaryxShellView: View {
     @State private var sidebarDragAxis: GaryxSidebarDragAxis?
 
     private let sidebarWidth: CGFloat = 330
+    private let drawerMainPanelCornerRadius: CGFloat = 36
     private let sidebarEdgeGestureWidth: CGFloat = 24
     private let sidebarAxisDecisionDistance: CGFloat = 14
     private let sidebarAxisDecisionRatio: CGFloat = 1.5
@@ -317,6 +318,7 @@ struct GaryxShellView: View {
                     drawerBody(width: drawerSidebarWidth(for: proxy.size), containerSize: proxy.size)
                 }
             }
+            .environment(\.garyxSidebarDragActive, sidebarDragAxis == .horizontal)
             .onChange(of: usePersistentSidebar) { _, isPersistent in
                 sidebarDragOffset = 0
                 if isPersistent {
@@ -324,6 +326,7 @@ struct GaryxShellView: View {
                 }
             }
         }
+        .ignoresSafeArea(.container, edges: .all)
         .onChange(of: horizontalSizeClass) { _, _ in
             sidebarDragOffset = 0
         }
@@ -361,6 +364,27 @@ struct GaryxShellView: View {
                             .opacity(drawerProgress)
                             .allowsHitTesting(false)
                     }
+                    .clipShape(
+                        UnevenRoundedRectangle(
+                            topLeadingRadius: drawerMainPanelCornerRadius * drawerProgress,
+                            bottomLeadingRadius: drawerMainPanelCornerRadius * drawerProgress,
+                            bottomTrailingRadius: 0,
+                            topTrailingRadius: 0,
+                            style: .continuous
+                        )
+                    )
+                    .shadow(
+                        color: Color.black.opacity(0.18 * Double(drawerProgress)),
+                        radius: 30 * drawerProgress,
+                        x: -10 * drawerProgress,
+                        y: 0
+                    )
+                    .shadow(
+                        color: Color.black.opacity(0.06 * Double(drawerProgress)),
+                        radius: 10 * drawerProgress,
+                        x: -3 * drawerProgress,
+                        y: 0
+                    )
                     .contentShape(Rectangle())
                     .simultaneousGesture(openingSidebarGesture(sidebarWidth: width))
             }

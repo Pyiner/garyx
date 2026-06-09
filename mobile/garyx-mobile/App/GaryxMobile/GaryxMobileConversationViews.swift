@@ -91,6 +91,7 @@ private enum GaryxConversationTailScrollRequestKind {
 
 struct GaryxConversationView: View {
     @EnvironmentObject private var model: GaryxMobileModel
+    @Environment(\.garyxSidebarDragActive) private var sidebarDragActive
     @FocusState private var isComposerFocused: Bool
     @State private var scrollPreservationThreadId: String?
     @State private var pendingHistoryPrefetchThreadId: String?
@@ -302,7 +303,7 @@ struct GaryxConversationView: View {
             prefetchOlderHistoryIfNeeded()
             repairVisibleTailGapIfNeeded(proxy)
         }
-        .scrollDisabled(isComposerFocused)
+        .scrollDisabled(isComposerFocused || sidebarDragActive)
         .scrollDismissesKeyboard(.never)
         .refreshable {
             await model.loadSelectedThreadHistory()

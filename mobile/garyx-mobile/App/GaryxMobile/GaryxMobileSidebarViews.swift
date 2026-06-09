@@ -82,6 +82,7 @@ private enum GaryxSidebarMetrics {
 
 struct GaryxThreadSidebar: View {
     @EnvironmentObject private var model: GaryxMobileModel
+    @Environment(\.garyxSidebarDragActive) private var sidebarDragActive
     var showsInlineCloseButton: Bool
     private let silentRefreshIntervalNanos: UInt64 = 3_000_000_000
 
@@ -117,6 +118,7 @@ struct GaryxThreadSidebar: View {
                     .accessibilityHidden(true)
             }
         }
+        .scrollDisabled(sidebarDragActive)
         .scrollDismissesKeyboard(.interactively)
         .refreshable {
             await refreshAll()

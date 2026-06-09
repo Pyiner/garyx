@@ -6,10 +6,22 @@ private struct GaryxOpenSidebarActionKey: EnvironmentKey {
     static let defaultValue: () -> Void = {}
 }
 
+private struct GaryxSidebarDragActiveKey: EnvironmentKey {
+    static let defaultValue: Bool = false
+}
+
 extension EnvironmentValues {
     var garyxOpenSidebar: () -> Void {
         get { self[GaryxOpenSidebarActionKey.self] }
         set { self[GaryxOpenSidebarActionKey.self] = newValue }
+    }
+
+    // True while a horizontal sidebar open/close drag is in progress. Surfaces
+    // inside the drawer disable their own vertical scrolling so the swipe only
+    // moves the sidebar, never the thread list or transcript behind it.
+    var garyxSidebarDragActive: Bool {
+        get { self[GaryxSidebarDragActiveKey.self] }
+        set { self[GaryxSidebarDragActiveKey.self] = newValue }
     }
 }
 
