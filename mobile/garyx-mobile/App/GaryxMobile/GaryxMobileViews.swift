@@ -14,14 +14,14 @@ struct GaryxRootView: View {
 
     var body: some View {
         ZStack {
+            GaryxTheme.background.ignoresSafeArea()
+
             if model.hasGatewaySettings, case .ready = model.connectionState {
                 GaryxShellView()
             } else {
                 GaryxGatewaySetupView()
             }
         }
-        .garyxPageBackground()
-        .garyxRootChromeBackground()
         .overlay(alignment: .top) {
             GaryxGlobalErrorToastHost(topOffset: 72)
         }
@@ -79,7 +79,7 @@ struct GaryxGatewaySetupView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .garyxPageBackground()
+            .background(GaryxTheme.background)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if showsSetupDetails {
@@ -289,12 +289,12 @@ struct GaryxGatewaySetupView: View {
 struct GaryxShellView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.colorScheme) private var colorScheme
 
     @State private var sidebarDragOffset: CGFloat = 0
     @State private var sidebarDragAxis: GaryxSidebarDragAxis?
 
     private let sidebarWidth: CGFloat = 330
-    private let drawerMainPanelCornerRadius: CGFloat = 36
     private let sidebarEdgeGestureWidth: CGFloat = 24
     private let sidebarAxisDecisionDistance: CGFloat = 14
     private let sidebarAxisDecisionRatio: CGFloat = 1.5
@@ -313,7 +313,7 @@ struct GaryxShellView: View {
                         GaryxMainPanelView()
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
-                    .garyxPageBackground()
+                    .background(GaryxTheme.background)
                 } else {
                     drawerBody(width: drawerSidebarWidth(for: proxy.size), containerSize: proxy.size)
                 }
@@ -332,9 +332,6 @@ struct GaryxShellView: View {
 
     private func drawerSidebarWidth(for containerSize: CGSize) -> CGFloat {
         if horizontalSizeClass == .compact {
-            // Final open state is a full-width sidebar (full-screen page swap).
-            // The rounded card / shadow / divider effects are intentionally only
-            // visible mid-drag as a transition, driven by drawerProgress.
             return containerSize.width
         }
         return min(sidebarWidth, containerSize.width * 0.92)
@@ -342,57 +339,44 @@ struct GaryxShellView: View {
 
     private func drawerBody(width: CGFloat, containerSize: CGSize) -> some View {
         let revealWidth = sidebarRevealWidth(for: width)
-        let drawerProgress = drawerRevealProgress(revealWidth: revealWidth, width: width)
         let drawerOffset = revealWidth - width
-        let closeCaptureWidth = max(0, containerSize.width - revealWidth)
+        let closeStripX = max(0, min(revealWidth, max(0, containerSize.width - 28)))
 
         return ZStack(alignment: .topLeading) {
-            HStack(spacing: 0) {
-                GaryxThreadSidebar(showsInlineCloseButton: true)
-                    .frame(width: width)
-                    .frame(maxHeight: .infinity)
-                    .contentShape(Rectangle())
-                    .allowsHitTesting(revealWidth > width * 0.82)
-                    .simultaneousGesture(closingSidebarGesture(sidebarWidth: width))
+            GaryxMainPanelView()
+                .frame(width: containerSize.width, height: containerSize.height)
+                .contentShape(Rectangle())
+                .simultaneousGesture(openingSidebarGesture(sidebarWidth: width))
+                .zIndex(0)
 
-                GaryxMainPanelView()
-                    .frame(width: containerSize.width, height: containerSize.height)
-                    .modifier(
-                        GaryxDrawerMainPanelStyle(
-                            progress: drawerProgress,
-                            cornerRadius: drawerMainPanelCornerRadius
-                        )
-                    )
-                    .contentShape(Rectangle())
-                    .simultaneousGesture(openingSidebarGesture(sidebarWidth: width))
-            }
-            .frame(
-                width: width + containerSize.width,
-                height: containerSize.height,
-                alignment: .topLeading
-            )
-            .offset(x: drawerOffset)
-            .zIndex(0)
+            (colorScheme == .dark ? Color.white : Color.black)
+                .opacity(contentDimOpacity(for: width))
+                .frame(width: containerSize.width, height: containerSize.height)
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .allowsHitTesting(revealWidth > 1)
+                .onTapGesture { closeSidebar() }
+                .gesture(closingSidebarGesture(sidebarWidth: width))
+                .zIndex(1)
 
-            if revealWidth > 1, closeCaptureWidth > 0 {
+            GaryxThreadSidebar(showsInlineCloseButton: true)
+                .frame(width: width)
+                .frame(maxHeight: .infinity)
+                .offset(x: drawerOffset)
+                .allowsHitTesting(revealWidth > width * 0.82)
+                .zIndex(2)
+
+            if revealWidth > 1 {
                 Color.clear
-                    .frame(width: closeCaptureWidth, height: containerSize.height)
-                    .offset(x: revealWidth)
+                    .frame(width: 28, height: containerSize.height)
+                    .offset(x: closeStripX)
                     .contentShape(Rectangle())
-                    .onTapGesture { closeSidebar() }
                     .simultaneousGesture(closingSidebarGesture(sidebarWidth: width))
-                    .zIndex(1)
+                    .zIndex(3)
                     .accessibilityHidden(true)
             }
         }
-        .frame(width: containerSize.width, height: containerSize.height, alignment: .topLeading)
-        .clipped()
-        .garyxPageBackground()
-    }
-
-    private func drawerRevealProgress(revealWidth: CGFloat, width: CGFloat) -> CGFloat {
-        guard width > 0 else { return 0 }
-        return max(0, min(1, revealWidth / width))
+        .background(GaryxTheme.background)
     }
 
     private func sidebarRevealWidth(for width: CGFloat) -> CGFloat {
@@ -400,6 +384,11 @@ struct GaryxShellView: View {
             return max(0, min(width, width + sidebarDragOffset))
         }
         return max(0, min(width, sidebarDragOffset))
+    }
+
+    private func contentDimOpacity(for width: CGFloat) -> Double {
+        guard width > 0 else { return 0 }
+        return 0.12 * min(1, sidebarRevealWidth(for: width) / width)
     }
 
     private func openingSidebarGesture(sidebarWidth: CGFloat) -> some Gesture {
@@ -524,45 +513,5 @@ struct GaryxShellView: View {
             from: nil,
             for: nil
         )
-    }
-}
-
-private struct GaryxDrawerMainPanelStyle: ViewModifier {
-    let progress: CGFloat
-    let cornerRadius: CGFloat
-
-    func body(content: Content) -> some View {
-        let clampedProgress = max(0, min(1, progress))
-        let resolvedCornerRadius = cornerRadius * clampedProgress
-        let shape = UnevenRoundedRectangle(
-            topLeadingRadius: resolvedCornerRadius,
-            bottomLeadingRadius: resolvedCornerRadius,
-            bottomTrailingRadius: 0,
-            topTrailingRadius: 0,
-            style: .continuous
-        )
-
-        content
-            .garyxPageBackground()
-            .overlay(alignment: .leading) {
-                Rectangle()
-                    .fill(Color.primary.opacity(0.10))
-                    .frame(width: 1 / UIScreen.main.scale)
-                    .opacity(clampedProgress)
-                    .allowsHitTesting(false)
-            }
-            .clipShape(shape)
-            .shadow(
-                color: Color.black.opacity(0.18 * Double(clampedProgress)),
-                radius: 30 * clampedProgress,
-                x: -10 * clampedProgress,
-                y: 0
-            )
-            .shadow(
-                color: Color.black.opacity(0.06 * Double(clampedProgress)),
-                radius: 10 * clampedProgress,
-                x: -3 * clampedProgress,
-                y: 0
-            )
     }
 }

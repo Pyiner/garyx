@@ -24,8 +24,17 @@ private enum GaryxComposerLayout {
     static let composerMaterialHighlight = Color.white.opacity(0.82)
     static let composerShadow = Color.black.opacity(0.1)
     static let composerLiftShadow = Color.black.opacity(0.13)
-    static let workspaceModeChipForeground = Color.primary.opacity(0.78)
-    static let workspaceModeChipStroke = Color.primary.opacity(0.055)
+    static let workspaceBaseFill = Color(.systemGray5).opacity(0.58)
+    static let workspaceBaseForeground = Color.primary.opacity(0.78)
+    static let workspaceBaseStroke = Color.primary.opacity(0.035)
+    static let workspaceBaseHighlight = Color.white.opacity(0.3)
+    static let workspaceBaseTopShadow = Color.black.opacity(0.035)
+    static let workspaceBaseOverlap: CGFloat = composerCornerRadius
+    static let workspaceBaseTopPadding: CGFloat = 26
+    static let workspaceBaseBottomPadding: CGFloat = 5
+    static let workspaceBaseCornerRadius: CGFloat = 16
+    static let workspaceBaseTopCornerRadius: CGFloat = 0
+    static let workspaceStripHeight: CGFloat = 23
     static let workspaceSheetHeight: CGFloat = 264
     static let workspaceSheetCornerRadius: CGFloat = 34
     static let workspaceSheetTopPadding: CGFloat = 32
@@ -59,7 +68,7 @@ struct GaryxComposer: View {
     }
 
     private var showsSendButton: Bool {
-        !model.isSelectedThreadVisiblyRunning || hasLocalPayload
+        !model.isSelectedThreadSending || hasLocalPayload
     }
 
     private var canChangeWorkspaceMode: Bool {
@@ -69,8 +78,8 @@ struct GaryxComposer: View {
             && !model.newThreadWorkspace.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private var showsWorkspaceModeControl: Bool {
-        canChangeWorkspaceMode && model.newThreadWorkspaceCanUseWorktree
+    private var showsWorkspaceModeStrip: Bool {
+        canChangeWorkspaceMode
     }
 
     var body: some View {
@@ -150,7 +159,7 @@ struct GaryxComposer: View {
                 showsWorkspaceModeSheet = false
             }
         }
-        .onChange(of: showsWorkspaceModeControl) { _, visible in
+        .onChange(of: showsWorkspaceModeStrip) { _, visible in
             if !visible {
                 showsWorkspaceModeSheet = false
             }
@@ -171,10 +180,24 @@ struct GaryxComposer: View {
     private var composerStack: some View {
         Group {
             if model.selectedThread == nil {
-                newThreadComposerCard
+                newThreadComposerDeck
             } else {
                 composerCard
             }
+        }
+    }
+
+    @ViewBuilder
+    private var newThreadComposerDeck: some View {
+        if showsWorkspaceModeStrip {
+            VStack(spacing: -GaryxComposerLayout.workspaceBaseOverlap) {
+                newThreadComposerCard
+
+                workspaceModeStrip
+                    .zIndex(0)
+            }
+        } else {
+            newThreadComposerCard
         }
     }
 
@@ -196,29 +219,15 @@ struct GaryxComposer: View {
                 composerCardShape
                     .stroke(GaryxComposerLayout.composerMaterialHighlight, lineWidth: 0.7)
                     .blendMode(.plusLighter)
-                    .mask(composerTopEdgeMask)
             }
             .overlay {
                 composerCardShape
                     .stroke(GaryxComposerLayout.composerMaterialStroke, lineWidth: 0.7)
-                    .mask(composerTopEdgeMask)
             }
     }
 
     private var composerCardShape: RoundedRectangle {
         RoundedRectangle(cornerRadius: GaryxComposerLayout.composerCornerRadius, style: .continuous)
-    }
-
-    private var composerTopEdgeMask: some View {
-        LinearGradient(
-            stops: [
-                .init(color: .white, location: 0),
-                .init(color: .white, location: 0.45),
-                .init(color: .clear, location: 0.82),
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
     }
 
     private var composerCardContent: some View {
@@ -232,6 +241,76 @@ struct GaryxComposer: View {
         }
     }
 
+    private var workspaceModeStrip: some View {
+        // The gray apron is a non-interactive backdrop; only the leading Local
+        // select control (icon + label + chevron) is tappable, not the whole strip.
+        HStack(spacing: 0) {
+            Button {
+                guard canChangeWorkspaceMode else { return }
+                showsWorkspaceModeSheet = true
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: workspaceModeIcon)
+                        .font(GaryxFont.system(size: 14, weight: .semibold))
+                        .frame(width: 19, height: 19)
+
+                    Text(workspaceModeTitle)
+                        .font(GaryxFont.footnote(weight: .regular))
+                        .lineLimit(1)
+
+                    Image(systemName: "chevron.down")
+                        .font(GaryxFont.system(size: 10, weight: .semibold))
+                }
+                .foregroundStyle(GaryxComposerLayout.workspaceBaseForeground)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!canChangeWorkspaceMode)
+            .accessibilityLabel("Workspace mode")
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .frame(maxWidth: .infinity, minHeight: GaryxComposerLayout.workspaceStripHeight, alignment: .leading)
+        .padding(.top, GaryxComposerLayout.workspaceBaseTopPadding)
+        .padding(.bottom, GaryxComposerLayout.workspaceBaseBottomPadding)
+        .background(GaryxComposerLayout.workspaceBaseFill, in: workspaceBaseShape)
+        .garyxAdaptiveGlass(.regular, isInteractive: false, fallbackMaterial: .ultraThinMaterial, in: workspaceBaseShape)
+        .overlay {
+            workspaceBaseShape
+                .stroke(GaryxComposerLayout.workspaceBaseHighlight, lineWidth: 0.6)
+                .blendMode(.plusLighter)
+        }
+        .overlay {
+            workspaceBaseShape
+                .stroke(GaryxComposerLayout.workspaceBaseStroke, lineWidth: 0.6)
+        }
+        .overlay(alignment: .top) {
+            LinearGradient(
+                colors: [
+                    GaryxComposerLayout.workspaceBaseTopShadow,
+                    Color.clear,
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 18)
+            .clipShape(workspaceBaseShape)
+            .allowsHitTesting(false)
+        }
+        .shadow(color: Color.black.opacity(0.07), radius: 28, x: 0, y: 10)
+    }
+
+    private var workspaceBaseShape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(
+            topLeadingRadius: GaryxComposerLayout.workspaceBaseTopCornerRadius,
+            bottomLeadingRadius: GaryxComposerLayout.workspaceBaseCornerRadius,
+            bottomTrailingRadius: GaryxComposerLayout.workspaceBaseCornerRadius,
+            topTrailingRadius: GaryxComposerLayout.workspaceBaseTopCornerRadius,
+            style: .continuous
+        )
+    }
+
     private var workspaceModeTitle: String {
         model.newThreadUsesWorktree ? "WorkTree" : "Local"
     }
@@ -242,7 +321,7 @@ struct GaryxComposer: View {
 
     #if DEBUG
     private func presentDebugWorkspaceModeSheetIfNeeded() {
-        guard model.debugShowsWorkspaceModeSheet, showsWorkspaceModeControl else { return }
+        guard model.debugShowsWorkspaceModeSheet, showsWorkspaceModeStrip else { return }
         showsWorkspaceModeSheet = true
         model.debugShowsWorkspaceModeSheet = false
     }
@@ -300,13 +379,9 @@ struct GaryxComposer: View {
         HStack(spacing: GaryxComposerLayout.bottomBarSpacing) {
             addMenuButton
 
-            if showsWorkspaceModeControl {
-                workspaceModeInlineButton
-            }
-
             Spacer(minLength: 0)
 
-            if model.isSelectedThreadVisiblyRunning {
+            if model.isSelectedThreadSending {
                 Button {
                     Task { await model.interruptActiveRun() }
                 } label: {
@@ -338,35 +413,6 @@ struct GaryxComposer: View {
         .padding(.horizontal, GaryxComposerLayout.bottomBarHorizontalPadding)
         .padding(.top, GaryxComposerLayout.bottomBarTopPadding)
         .padding(.bottom, GaryxComposerLayout.bottomBarBottomPadding)
-    }
-
-    private var workspaceModeInlineButton: some View {
-        Button {
-            guard canChangeWorkspaceMode else { return }
-            showsWorkspaceModeSheet = true
-        } label: {
-            HStack(spacing: 5) {
-                Image(systemName: workspaceModeIcon)
-                    .font(GaryxFont.system(size: 12, weight: .semibold))
-
-                Text(workspaceModeTitle)
-                    .font(GaryxFont.caption(weight: .regular))
-                    .lineLimit(1)
-
-                Image(systemName: "chevron.down")
-                    .font(GaryxFont.system(size: 9, weight: .semibold))
-            }
-            .foregroundStyle(GaryxComposerLayout.workspaceModeChipForeground)
-            .frame(height: GaryxComposerLayout.actionButtonSide)
-            .padding(.horizontal, 9)
-            .background(GaryxComposerLayout.actionButtonFill, in: Capsule())
-            .overlay {
-                Capsule()
-                    .stroke(GaryxComposerLayout.workspaceModeChipStroke, lineWidth: 0.6)
-            }
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Workspace mode")
     }
 
     private var addMenuButton: some View {
