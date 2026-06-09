@@ -194,6 +194,9 @@ final class GaryxMobileModel: ObservableObject {
     var selectedThreadTurnRowsCacheKey: TurnRowsCacheKey?
     var selectedThreadTurnRowsCache: [GaryxMobileTurnRow] = []
     var activeAssistantMessageIdsByThread: [String: String] = [:]
+    // Most recent run id the client observed terminate per thread. Lets a transcript
+    // reload ignore a stale `active_run` snapshot for a run we already saw finish.
+    var terminatedActiveRunIdsByThread: [String: String] = [:]
     var pendingAssistantDeltasByThread: [String: PendingAssistantDelta] = [:]
     var assistantDeltaFlushTasksByThread: [String: Task<Void, Never>] = [:]
     var pendingQueuedInputsByIntentId: [String: GaryxPendingQueuedInput] = [:]

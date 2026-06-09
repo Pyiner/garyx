@@ -264,6 +264,37 @@ enum GaryxMobileThreadActivityModel {
         return latestAssistantOrToolIndex.map { $0 < latestUserIndex } ?? true
     }
 
+    /// Decide whether a reloaded transcript should mark its thread as busy.
+    ///
+    /// A run completes on the gateway's thread-store write path before its `.done`
+    /// event reaches the client, but a transcript reload triggered by that same event
+    /// can still race a not-yet-repaired `active_run_snapshot` and report the finished
+    /// run as active. Without this guard the client re-marks the thread busy and the
+    /// "Thinking" indicator never clears. The client already observed the run terminate,
+    /// so its own terminal signal wins: an `active_run` whose id matches the run we just
+    /// saw finish is ignored.
+    static func shouldTreatThreadRuntimeAsActive(
+        activeRunPresent: Bool,
+        activeRunId: String?,
+        hasActivePendingInput: Bool,
+        lastTerminatedRunId: String?
+    ) -> Bool {
+        if hasActivePendingInput {
+            return true
+        }
+        guard activeRunPresent else {
+            return false
+        }
+        let normalizedActive = activeRunId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedTerminated = lastTerminatedRunId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let normalizedActive,
+           !normalizedActive.isEmpty,
+           normalizedActive == normalizedTerminated {
+            return false
+        }
+        return true
+    }
+
     static func showsTailThinkingIndicator(
         messages: [GaryxMobileMessage],
         runActive: Bool

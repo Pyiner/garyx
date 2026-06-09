@@ -296,6 +296,46 @@ final class GaryxMobileTurnRendererTests: XCTestCase {
         XCTAssertEqual(thinkingPlaceholders.count, 1, "Duplicate empty thinking placeholders must collapse to one")
     }
 
+    func testThreadRuntimeIgnoresActiveRunThatClientAlreadySawTerminate() {
+        // A transcript reload right after `.done` can race a stale active_run_snapshot.
+        // The run the client just saw finish must not re-mark the thread as busy.
+        XCTAssertFalse(
+            GaryxMobileThreadActivityModel.shouldTreatThreadRuntimeAsActive(
+                activeRunPresent: true,
+                activeRunId: "run::abc",
+                hasActivePendingInput: false,
+                lastTerminatedRunId: "run::abc"
+            )
+        )
+        // A different, newer run is still active.
+        XCTAssertTrue(
+            GaryxMobileThreadActivityModel.shouldTreatThreadRuntimeAsActive(
+                activeRunPresent: true,
+                activeRunId: "run::def",
+                hasActivePendingInput: false,
+                lastTerminatedRunId: "run::abc"
+            )
+        )
+        // No active run -> idle.
+        XCTAssertFalse(
+            GaryxMobileThreadActivityModel.shouldTreatThreadRuntimeAsActive(
+                activeRunPresent: false,
+                activeRunId: nil,
+                hasActivePendingInput: false,
+                lastTerminatedRunId: "run::abc"
+            )
+        )
+        // An active pending input keeps the thread busy regardless of the run id.
+        XCTAssertTrue(
+            GaryxMobileThreadActivityModel.shouldTreatThreadRuntimeAsActive(
+                activeRunPresent: true,
+                activeRunId: "run::abc",
+                hasActivePendingInput: true,
+                lastTerminatedRunId: "run::abc"
+            )
+        )
+    }
+
     func testTranscriptMapperDoesNotAppendActiveRunAssistantResponseAfterPendingInput() throws {
         let transcript = try JSONDecoder().decode(
             GaryxThreadTranscript.self,

@@ -32,6 +32,14 @@ extension GaryxMobileModel {
     func handle(_ event: GaryxChatStreamEvent, threadId: String, assistantMessageId: String, affectsActiveRun: Bool) {
         let eventThreadId = Self.threadId(from: event)
         updateRemoteBusyState(from: event)
+        switch event {
+        case .done, .runComplete, .interrupt:
+            recordTerminatedActiveRun(from: event)
+        case .error(_, _, let error) where !Self.isTransientGatewayErrorMessage(error):
+            recordTerminatedActiveRun(from: event)
+        default:
+            break
+        }
         if !Self.isAssistantDeltaEvent(event) {
             flushPendingAssistantDelta(for: threadId)
         }
@@ -1231,6 +1239,44 @@ extension GaryxMobileModel {
         case .ping, .unknown:
             return ""
         }
+    }
+
+    static func runId(from event: GaryxChatStreamEvent) -> String {
+        switch event {
+        case .accepted(let runId, _),
+             .assistantDelta(let runId, _, _, _),
+             .assistantBoundary(let runId, _),
+             .toolUse(let runId, _, _),
+             .toolResult(let runId, _, _),
+             .userMessage(let runId, _, _, _),
+             .userAck(let runId, _, _),
+             .threadTitleUpdated(let runId, _, _),
+             .done(let runId, _),
+             .runComplete(let runId, _),
+             .error(let runId, _, _):
+            return runId
+        case .streamInput, .interrupt, .snapshot, .ping, .unknown:
+            return ""
+        }
+    }
+
+    /// Remember a run the client directly observed terminate so a racing transcript
+    /// reload cannot resurrect it as an active run. See
+    /// `GaryxMobileThreadActivityModel.shouldTreatThreadRuntimeAsActive`.
+    func recordTerminatedActiveRun(from event: GaryxChatStreamEvent) {
+        let threadId = Self.threadId(from: event)
+        guard !threadId.isEmpty else { return }
+        if case .interrupt(_, _, let abortedRuns) = event {
+            if let aborted = abortedRuns
+                .map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) })
+                .last(where: { !$0.isEmpty }) {
+                terminatedActiveRunIdsByThread[threadId] = aborted
+            }
+            return
+        }
+        let runId = Self.runId(from: event).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !runId.isEmpty else { return }
+        terminatedActiveRunIdsByThread[threadId] = runId
     }
 }
 

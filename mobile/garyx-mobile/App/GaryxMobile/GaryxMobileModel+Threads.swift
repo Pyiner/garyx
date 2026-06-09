@@ -862,11 +862,16 @@ extension GaryxMobileModel {
     }
 
     func updateThreadRuntimeState(threadId: String, transcript: GaryxThreadTranscript) {
-        let hasActiveRun = transcript.threadRuntime?.activeRun != nil
         let hasActivePendingInput = transcript.pendingUserInputs.contains { input in
             input.active && (input.status ?? "awaiting_ack").lowercased() != "abandoned"
         }
-        if hasActiveRun || hasActivePendingInput {
+        let isActive = GaryxMobileThreadActivityModel.shouldTreatThreadRuntimeAsActive(
+            activeRunPresent: transcript.threadRuntime?.activeRun != nil,
+            activeRunId: transcript.threadRuntime?.activeRun?.runId,
+            hasActivePendingInput: hasActivePendingInput,
+            lastTerminatedRunId: terminatedActiveRunIdsByThread[threadId]
+        )
+        if isActive {
             remoteBusyThreadIds.insert(threadId)
         } else {
             remoteBusyThreadIds.remove(threadId)
