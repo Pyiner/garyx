@@ -331,7 +331,10 @@ fn list_recent_local_provider_sessions_with_roots_orders_titles_and_filters() {
             "#,
             rusqlite::params![
                 "codex-new",
-                temp.path().join("rollout-codex-new.jsonl").display().to_string(),
+                temp.path()
+                    .join("rollout-codex-new.jsonl")
+                    .display()
+                    .to_string(),
                 1_780_000_004_i64,
                 workspace.display().to_string(),
                 "Codex newest task title",
@@ -376,11 +379,8 @@ fn list_recent_local_provider_sessions_with_roots_orders_titles_and_filters() {
     assert_eq!(recent[1].provider_hint, "gemini");
     assert_eq!(recent[1].session_id, "gemini-mid");
 
-    let claude = list_recent_local_provider_sessions_with_roots(
-        Some(ProviderType::ClaudeCode),
-        10,
-        &roots,
-    );
+    let claude =
+        list_recent_local_provider_sessions_with_roots(Some(ProviderType::ClaudeCode), 10, &roots);
     assert_eq!(claude.len(), 1);
     assert_eq!(claude[0].provider_hint, "claude");
     assert_eq!(claude[0].session_id, "claude-old");
@@ -442,7 +442,10 @@ fn list_recent_codex_sessions_reads_state_db_threads_index() {
             "#,
             rusqlite::params![
                 "codex-archived",
-                temp.path().join("rollout-archived.jsonl").display().to_string(),
+                temp.path()
+                    .join("rollout-archived.jsonl")
+                    .display()
+                    .to_string(),
                 1_780_000_001_i64,
                 workspace.display().to_string(),
                 "Archived should not show",

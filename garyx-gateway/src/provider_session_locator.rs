@@ -331,10 +331,7 @@ fn strip_leading_metadata_block(text: &str) -> &str {
     loop {
         let mut stripped = false;
         for (open, close) in [
-            (
-                "<garyx_thread_metadata>",
-                "</garyx_thread_metadata>",
-            ),
+            ("<garyx_thread_metadata>", "</garyx_thread_metadata>"),
             ("<garyx_memory_context>", "</garyx_memory_context>"),
             ("<system_instruction>", "</system_instruction>"),
             ("<environment_context>", "</environment_context>"),
@@ -485,7 +482,12 @@ fn list_recent_claude_sessions(
     limit: usize,
 ) -> Vec<RecentLocalProviderSession> {
     let mut candidates = Vec::new();
-    for entry in fs::read_dir(projects_dir).ok().into_iter().flatten().flatten() {
+    for entry in fs::read_dir(projects_dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
         let Ok(file_type) = entry.file_type() else {
             continue;
         };
@@ -494,7 +496,12 @@ fn list_recent_claude_sessions(
         }
 
         let project_dir = entry.path();
-        for session_entry in fs::read_dir(&project_dir).ok().into_iter().flatten().flatten() {
+        for session_entry in fs::read_dir(&project_dir)
+            .ok()
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
             let Ok(session_type) = session_entry.file_type() else {
                 continue;
             };

@@ -223,12 +223,7 @@ async fn handle_chat_ws_start(
     let callback_state = state.clone();
     let callback_out_tx = out_tx.clone();
     let callback_builder = move |run_id: &str, thread_id: &str| {
-        build_chat_ws_stream_callback(
-            callback_out_tx.clone(),
-            &callback_state,
-            run_id,
-            thread_id,
-        )
+        build_chat_ws_stream_callback(callback_out_tx.clone(), &callback_state, run_id, thread_id)
     };
     match start_chat_run(state, request, Some(Box::new(callback_builder))).await {
         Ok(response) => {
@@ -274,12 +269,17 @@ async fn start_chat_run(
 ) -> Result<StartChatResponse, (StatusCode, Json<Value>)> {
     let prepared = match prepare_chat_request(state, request).await {
         Ok(prepared) => prepared,
-        Err(ChatPreparationError::InvalidRequest(status, payload)) => return Err((status, payload)),
+        Err(ChatPreparationError::InvalidRequest(status, payload)) => {
+            return Err((status, payload));
+        }
         Err(ChatPreparationError::ThreadUpdateConflict { thread_id, error }) => {
-            return Err((StatusCode::CONFLICT, Json(json!({
-                "threadId": thread_id,
-                "error": error
-            }))));
+            return Err((
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "threadId": thread_id,
+                    "error": error
+                })),
+            ));
         }
     };
 
@@ -358,11 +358,14 @@ async fn start_chat_run(
                 thread_id,
             })
         }
-        Err(error) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
-            "runId": run_id,
-            "threadId": thread_id,
-            "error": error.to_string()
-        })))),
+        Err(error) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "runId": run_id,
+                "threadId": thread_id,
+                "error": error.to_string()
+            })),
+        )),
     }
 }
 
