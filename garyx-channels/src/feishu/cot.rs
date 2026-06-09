@@ -137,7 +137,11 @@ impl FeishuCotState {
             .insert(call_id.clone(), tool_input.clone());
         let timestamp = message_timestamp_millis(message);
         let tool_display_name = tool_title(&tool_name);
-        let tool_detail = tool_detail_title(&tool_input, &tool_display_name);
+        let tool_detail = if is_image_view_message(message) {
+            tool_display_name.clone()
+        } else {
+            tool_detail_title(&tool_input, &tool_display_name)
+        };
         let mut events = vec![FeishuCotEventRecord::new_at(
             EVENT_TOOL_CALL_START,
             self.next_event_id(&format!("tool-start-{call_id}")),
@@ -490,7 +494,7 @@ fn tool_title(tool_name: &str) -> String {
     } else if contains_any(&value, &["webfetch", "fetch"]) {
         "抓取网页".to_owned()
     } else if value.eq_ignore_ascii_case("imageview") {
-        "查看图片".to_owned()
+        "ImageView".to_owned()
     } else {
         tool_name.trim().to_owned()
     }
@@ -831,8 +835,8 @@ mod tests {
         assert_eq!(use_events.len(), 2);
         let start = content_json(&use_events[0]);
         assert_eq!(start["toolCallId"], "call_home_image");
-        assert_eq!(start["toolCallName"], "查看图片");
-        assert_eq!(start["title"], "file_131.jpg");
+        assert_eq!(start["toolCallName"], "ImageView");
+        assert_eq!(start["title"], "ImageView");
         assert_eq!(start["icon"], "read");
         let args = content_json(&use_events[1]);
         assert_eq!(args["delta"], "file_131.jpg");

@@ -2522,8 +2522,8 @@ mod e2e_tests {
             tool_event_contents.iter().any(|(event_type, content)| {
                 event_type == "TOOL_CALL_START"
                     && content["toolCallId"].as_str() == Some("call_home_image")
-                    && content["toolCallName"].as_str() == Some("查看图片")
-                    && content["title"].as_str() == Some("file_131.jpg")
+                    && content["toolCallName"].as_str() == Some("ImageView")
+                    && content["title"].as_str() == Some("ImageView")
                     && content["icon"].as_str() == Some("read")
             }),
             "imageView should be kept as a readable COT tool call: {tool_event_contents:?}"
