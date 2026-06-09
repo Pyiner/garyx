@@ -257,7 +257,7 @@ fn stringify_event_content(content: Value) -> String {
     }
 
     let Value::Object(map) = content else {
-        return truncate_utf8_bytes(&serialized, MAX_EVENT_CONTENT_BYTES);
+        return truncate_utf8_bytes_with_suffix(&serialized, MAX_EVENT_CONTENT_BYTES);
     };
 
     let mut fitted = map;
@@ -270,7 +270,7 @@ fn stringify_event_content(content: Value) -> String {
 
     json!({
         "truncated": true,
-        "preview": truncate_utf8_bytes(&serialized, MAX_EVENT_CONTENT_BYTES / 2),
+        "preview": truncate_utf8_bytes_with_suffix(&serialized, MAX_EVENT_CONTENT_BYTES / 2),
     })
     .to_string()
 }
@@ -287,7 +287,7 @@ fn shrink_longest_string_fields(map: &mut Map<String, Value>) {
             continue;
         };
         let next_len = (len / 2).max(64);
-        *text = truncate_utf8_bytes(text, next_len);
+        *text = truncate_utf8_bytes_with_suffix(text, next_len);
         let serialized =
             serde_json::to_string(&Value::Object(map.clone())).unwrap_or_else(|_| "{}".to_owned());
         if fits_event_content(&serialized) {
@@ -778,6 +778,17 @@ fn truncate_utf8_bytes(text: &str, max_bytes: usize) -> String {
     if text.len() <= max_bytes {
         return text.to_owned();
     }
+    let mut end = max_bytes;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_owned()
+}
+
+fn truncate_utf8_bytes_with_suffix(text: &str, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text.to_owned();
+    }
     let suffix_len = TRUNCATED_SUFFIX.len().min(max_bytes);
     let mut end = max_bytes.saturating_sub(suffix_len);
     while end > 0 && !text.is_char_boundary(end) {
@@ -945,6 +956,49 @@ mod tests {
         );
         assert!(!result_events[0].content.contains("example.md"));
         assert!(!result_events[1].content.contains("example.md"));
+    }
+
+    #[test]
+    fn command_tool_args_truncate_without_visible_marker() {
+        let command = format!(
+            "cd /Users/test/knowledge-base/prds && echo \"{}\"",
+            "关键模块分布".repeat(20)
+        );
+        let message = ProviderMessage::tool_use(
+            json!({
+                "type": "commandExecution",
+                "command": command,
+            }),
+            Some("tool-command-long".to_owned()),
+            Some("shell".to_owned()),
+        );
+        let mut state = FeishuCotState::default();
+        let events = state.tool_use_events(&message);
+        let args = content_json(&events[1]);
+        let delta = args["delta"].as_str().unwrap_or_default();
+        assert!(delta.len() <= MAX_TOOL_ARG_DISPLAY_CHARS);
+        assert!(!delta.contains("truncated"), "delta={delta}");
+
+        let result = ProviderMessage::tool_result(
+            json!({
+                "type": "commandExecution",
+                "command": command,
+                "output": "hidden output",
+            }),
+            Some("tool-command-long".to_owned()),
+            Some("shell".to_owned()),
+            Some(false),
+        );
+        let result_events = state.tool_result_events(&result);
+        let result = content_json(&result_events[1]);
+        let code = result["content"]["code"].as_str().unwrap_or_default();
+        assert!(code.starts_with("$ cd /Users/test/knowledge-base/prds"));
+        assert!(!code.contains("truncated"), "code={code}");
+        assert!(
+            !result_events
+                .iter()
+                .any(|event| event.content.contains("hidden output"))
+        );
     }
 
     #[test]
