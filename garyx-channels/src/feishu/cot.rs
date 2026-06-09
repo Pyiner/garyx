@@ -127,20 +127,22 @@ impl FeishuCotState {
         let tool_name = tool_name(message);
         let timestamp = message_timestamp_millis(message);
         let tool_display_name = tool_title(&tool_name);
+        let args = summarize_tool_args(message);
+        let tool_call_name = readable_tool_argument(message)
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| tool_display_name.clone());
         let mut events = vec![FeishuCotEventRecord::new_at(
             EVENT_TOOL_CALL_START,
             self.next_event_id(&format!("tool-start-{call_id}")),
             json!({
                 "toolCallId": call_id,
-                "toolCallName": tool_display_name,
+                "toolCallName": tool_call_name,
                 "title": tool_display_name,
-                "status": "running",
                 "icon": tool_icon(&tool_name),
             }),
             timestamp,
         )];
 
-        let args = summarize_tool_args(message);
         if !args.is_empty() {
             self.arg_sent_tool_call_ids.insert(call_id.clone());
             events.push(FeishuCotEventRecord::new_at(
@@ -818,10 +820,10 @@ mod tests {
         assert_eq!(events[0].timestamp, 1_713_200_000_000);
         let start = content_json(&events[0]);
         assert_eq!(start["toolCallId"], "tool-1");
-        assert_eq!(start["toolCallName"], "运行命令");
+        assert_eq!(start["toolCallName"], "pwd");
         assert_eq!(start["title"], "运行命令");
         assert_eq!(start["icon"], "bash");
-        assert_eq!(start["status"], "running");
+        assert!(start.get("status").is_none());
         let args = content_json(&events[1]);
         assert_eq!(args["toolCallId"], "tool-1");
         assert_eq!(args["delta"], "pwd");
@@ -841,6 +843,7 @@ mod tests {
         let start = content_json(&events[0]);
         assert_eq!(start["toolCallId"], "tool-call-exec-command-1");
         assert_eq!(start["toolCallName"], "运行命令");
+        assert_eq!(start["title"], "运行命令");
         assert_ne!(start["toolCallName"], "tool-call-exec-command-1");
     }
 
@@ -898,7 +901,8 @@ mod tests {
         let mut state = FeishuCotState::default();
         let events = state.tool_use_events(&message);
         let start = content_json(&events[0]);
-        assert_eq!(start["toolCallName"], "读取文件");
+        assert_eq!(start["toolCallName"], "/Users/test/workspace/src/main.rs");
+        assert_eq!(start["title"], "读取文件");
         let args = content_json(&events[1]);
         assert_eq!(args["delta"], "/Users/test/workspace/src/main.rs");
         assert!(!args["delta"].as_str().unwrap_or_default().contains("{"));
@@ -919,7 +923,11 @@ mod tests {
         let mut state = FeishuCotState::default();
         let events = state.tool_use_events(&message);
         let start = content_json(&events[0]);
-        assert_eq!(start["toolCallName"], "读取文件");
+        assert_eq!(
+            start["toolCallName"],
+            "/Users/test/workspace/references/schema.md"
+        );
+        assert_eq!(start["title"], "读取文件");
         let args = content_json(&events[1]);
         assert_eq!(args["delta"], "/Users/test/workspace/references/schema.md");
         assert!(!args["delta"].as_str().unwrap_or_default().contains("{"));
@@ -996,7 +1004,11 @@ mod tests {
         let mut state = FeishuCotState::default();
         let events = state.tool_use_events(&message);
         let start = content_json(&events[0]);
-        assert_eq!(start["toolCallName"], "搜索");
+        assert_eq!(
+            start["toolCallName"],
+            "EPM LAPS password, macOS Secure Token"
+        );
+        assert_eq!(start["title"], "搜索");
         let args = content_json(&events[1]);
         assert_eq!(args["delta"], "EPM LAPS password, macOS Secure Token");
         assert!(!args["delta"].as_str().unwrap_or_default().contains("{"));
@@ -1074,7 +1086,7 @@ mod tests {
         assert_eq!(use_events.len(), 2);
         let start = content_json(&use_events[0]);
         assert_eq!(start["toolCallId"], "call_home_image");
-        assert_eq!(start["toolCallName"], "ImageView");
+        assert_eq!(start["toolCallName"], "file_131.jpg");
         assert_eq!(start["title"], "ImageView");
         assert_eq!(start["icon"], "read");
         let args = content_json(&use_events[1]);

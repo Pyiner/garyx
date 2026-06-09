@@ -2343,10 +2343,10 @@ mod e2e_tests {
             tool_event_contents.iter().any(|(event_type, content)| {
                 event_type == "TOOL_CALL_START"
                     && content["toolCallId"].as_str() == Some(tool_call_id.as_str())
-                    && content["toolCallName"].as_str() == Some("运行命令")
+                    && content["toolCallName"].as_str() == Some("pwd")
                     && content["title"].as_str() == Some("运行命令")
                     && content["icon"].as_str() == Some("bash")
-                    && content["status"].as_str() == Some("running")
+                    && content.get("status").is_none()
                     && content.get("toolName").is_none()
             }),
             "tool start should use Feishu COT toolCallName schema: {tool_event_contents:?}"
@@ -2487,7 +2487,11 @@ mod e2e_tests {
             tool_event_contents.iter().any(|(event_type, content)| {
                 event_type == "TOOL_CALL_START"
                     && content["toolCallId"].as_str() == Some("tool-read-feishu-1")
-                    && content["toolCallName"].as_str() == Some("读取文件")
+                    && content["toolCallName"].as_str().is_some_and(|value| {
+                        value.starts_with(".../inbound/")
+                            && value.contains("feishu-img_v3_0212g")
+                            && value.ends_with(".jpeg")
+                    })
                     && content["title"].as_str() == Some("读取文件")
                     && content["icon"].as_str() == Some("read")
             }),
@@ -2639,7 +2643,7 @@ mod e2e_tests {
             tool_event_contents.iter().any(|(event_type, content)| {
                 event_type == "TOOL_CALL_START"
                     && content["toolCallId"].as_str() == Some("call_home_image")
-                    && content["toolCallName"].as_str() == Some("ImageView")
+                    && content["toolCallName"].as_str() == Some("file_131.jpg")
                     && content["title"].as_str() == Some("ImageView")
                     && content["icon"].as_str() == Some("read")
             }),
