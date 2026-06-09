@@ -1063,6 +1063,17 @@ fn binding_from_known_endpoint(endpoint: &KnownChannelEndpoint) -> ChannelBindin
     }
 }
 
+async fn existing_thread_binding_for_endpoint_key(
+    state: &Arc<AppState>,
+    thread_id: &str,
+    requested_endpoint_key: &str,
+) -> Option<ChannelBinding> {
+    let thread_data = state.threads.thread_store.get(thread_id).await?;
+    bindings_from_value(&thread_data)
+        .into_iter()
+        .find(|binding| endpoint_key_matches(&binding.endpoint_key(), requested_endpoint_key))
+}
+
 pub(crate) async fn bind_channel_endpoint_key_to_thread(
     state: &Arc<AppState>,
     endpoint_key: &str,
@@ -1075,6 +1086,17 @@ pub(crate) async fn bind_channel_endpoint_key_to_thread(
             "target thread not found",
         ));
     };
+
+    if let Some(binding) =
+        existing_thread_binding_for_endpoint_key(state, &thread_id, &requested_endpoint_key).await
+    {
+        return Ok(ChannelEndpointBindResult {
+            thread_id,
+            previous_thread_id: None,
+            endpoint_key: requested_endpoint_key,
+            binding,
+        });
+    }
 
     let known_endpoint = state
         .cached_channel_endpoints()
