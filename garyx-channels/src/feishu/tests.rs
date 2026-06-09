@@ -2287,8 +2287,9 @@ mod e2e_tests {
             .collect();
         for expected in [
             "RUN_STARTED",
-            "STEP_STARTED",
-            "STEP_FINISHED",
+            "TEXT_MESSAGE_START",
+            "TEXT_MESSAGE_CONTENT",
+            "TEXT_MESSAGE_END",
             "TOOL_CALL_START",
             "TOOL_CALL_ARGS",
             "TOOL_CALL_END",
@@ -2336,19 +2337,41 @@ mod e2e_tests {
                 }
             })
             .expect("tool call id from COT start event");
+        let text_message_id = tool_event_contents
+            .iter()
+            .find_map(|(event_type, content)| {
+                if event_type == "TEXT_MESSAGE_START" {
+                    content
+                        .get("messageId")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned)
+                } else {
+                    None
+                }
+            })
+            .expect("text message id from COT text start event");
         assert!(
             tool_event_contents.iter().any(|(event_type, content)| {
-                event_type == "STEP_STARTED"
-                    && content["title"].as_str() == Some("先说一句")
-                    && content["status"].as_str() == Some("running")
+                event_type == "TEXT_MESSAGE_START"
+                    && content["messageId"].as_str() == Some(text_message_id.as_str())
+                    && content["role"].as_str() == Some("assistant")
             }),
-            "pre-tool assistant text should be sent as a COT step title: {tool_event_contents:?}"
+            "pre-tool assistant text should start a COT text message: {tool_event_contents:?}"
         );
         assert!(
             tool_event_contents.iter().any(|(event_type, content)| {
-                event_type == "STEP_FINISHED" && content["status"].as_str() == Some("completed")
+                event_type == "TEXT_MESSAGE_CONTENT"
+                    && content["messageId"].as_str() == Some(text_message_id.as_str())
+                    && content["delta"].as_str() == Some("先说一句")
             }),
-            "COT step title should be completed immediately: {tool_event_contents:?}"
+            "pre-tool assistant text should be sent as visible COT text, not step ids: {tool_event_contents:?}"
+        );
+        assert!(
+            tool_event_contents.iter().any(|(event_type, content)| {
+                event_type == "TEXT_MESSAGE_END"
+                    && content["messageId"].as_str() == Some(text_message_id.as_str())
+            }),
+            "COT text message should be closed immediately: {tool_event_contents:?}"
         );
         assert!(
             tool_event_contents.iter().any(|(event_type, content)| {
@@ -2439,7 +2462,7 @@ mod e2e_tests {
             .unwrap_or_default();
         assert!(
             !reply_text.contains("先说一句") && reply_text.contains("再接一句"),
-            "pre-tool text should move into COT step title, while final text stays in reply; reply_text={reply_text:?}"
+            "pre-tool text should move into COT text, while final text stays in reply; reply_text={reply_text:?}"
         );
     }
 

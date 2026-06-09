@@ -245,7 +245,7 @@ async fn send_tool_use_cot_events(
     .await;
 }
 
-async fn send_pending_stream_title_cot_events(
+async fn send_pending_stream_text_cot_events(
     client: &FeishuClient,
     state: &mut FeishuResponseStreamState,
     account_id: &str,
@@ -253,11 +253,11 @@ async fn send_pending_stream_title_cot_events(
     thread_id: &str,
     origin_message_id: &str,
 ) {
-    let title = state.stream_text.trim().to_owned();
-    if title.is_empty() {
+    let text = state.stream_text.trim().to_owned();
+    if text.is_empty() {
         return;
     }
-    let events = state.cot.step_title_events(&title);
+    let events = state.cot.text_message_events(&text);
     send_cot_events(
         client,
         state,
@@ -266,7 +266,7 @@ async fn send_pending_stream_title_cot_events(
         thread_id,
         origin_message_id,
         events,
-        "stream_title",
+        "stream_text",
     )
     .await;
     if !state.cot.failed {
@@ -1087,7 +1087,7 @@ pub(super) async fn handle_im_message_event(
                     continue;
                 }
                 StreamEvent::ToolUse { message } => {
-                    send_pending_stream_title_cot_events(
+                    send_pending_stream_text_cot_events(
                         &worker_client,
                         &mut state,
                         &worker_account_id,
@@ -1109,7 +1109,7 @@ pub(super) async fn handle_im_message_event(
                     continue;
                 }
                 StreamEvent::ToolResult { message } => {
-                    send_pending_stream_title_cot_events(
+                    send_pending_stream_text_cot_events(
                         &worker_client,
                         &mut state,
                         &worker_account_id,

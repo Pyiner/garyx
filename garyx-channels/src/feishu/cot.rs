@@ -5,13 +5,15 @@ use garyx_models::provider::ProviderMessage;
 use serde_json::{Map, Value, json};
 
 const MAX_EVENT_CONTENT_BYTES: usize = 4096;
+const MAX_TEXT_DELTA_BYTES: usize = 3500;
 const MAX_TOOL_ARG_DISPLAY_CHARS: usize = 120;
 const TRUNCATED_SUFFIX: &str = "\n...[truncated]";
 
 pub(super) const EVENT_RUN_STARTED: &str = "RUN_STARTED";
 pub(super) const EVENT_RUN_FINISHED: &str = "RUN_FINISHED";
-pub(super) const EVENT_STEP_STARTED: &str = "STEP_STARTED";
-pub(super) const EVENT_STEP_FINISHED: &str = "STEP_FINISHED";
+pub(super) const EVENT_TEXT_MESSAGE_START: &str = "TEXT_MESSAGE_START";
+pub(super) const EVENT_TEXT_MESSAGE_CONTENT: &str = "TEXT_MESSAGE_CONTENT";
+pub(super) const EVENT_TEXT_MESSAGE_END: &str = "TEXT_MESSAGE_END";
 pub(super) const EVENT_TOOL_CALL_START: &str = "TOOL_CALL_START";
 pub(super) const EVENT_TOOL_CALL_ARGS: &str = "TOOL_CALL_ARGS";
 pub(super) const EVENT_TOOL_CALL_END: &str = "TOOL_CALL_END";
@@ -116,32 +118,43 @@ impl FeishuCotState {
         )
     }
 
-    pub(super) fn step_title_events(&mut self, title: &str) -> Vec<FeishuCotEventRecord> {
-        let title = truncate_utf8_bytes(title.trim(), MAX_TOOL_ARG_DISPLAY_CHARS);
-        if title.is_empty() {
+    pub(super) fn text_message_events(&mut self, text: &str) -> Vec<FeishuCotEventRecord> {
+        let text = text.trim();
+        if text.is_empty() {
             return Vec::new();
         }
 
-        let step_id = self.next_event_id("step");
-        vec![
-            FeishuCotEventRecord::new(
-                EVENT_STEP_STARTED,
-                self.next_event_id(&format!("{step_id}-start")),
+        let message_id = self.next_event_id("text");
+        let mut events = Vec::new();
+        events.push(FeishuCotEventRecord::new(
+            EVENT_TEXT_MESSAGE_START,
+            self.next_event_id(&format!("{message_id}-start")),
+            json!({
+                "messageId": message_id.clone(),
+                "role": "assistant",
+            }),
+        ));
+        for (idx, delta) in split_utf8_bytes(text, MAX_TEXT_DELTA_BYTES)
+            .into_iter()
+            .enumerate()
+        {
+            events.push(FeishuCotEventRecord::new(
+                EVENT_TEXT_MESSAGE_CONTENT,
+                self.next_event_id(&format!("{message_id}-content-{idx}")),
                 json!({
-                    "stepId": step_id.clone(),
-                    "title": title,
-                    "status": "running",
+                    "messageId": message_id.clone(),
+                    "delta": delta,
                 }),
-            ),
-            FeishuCotEventRecord::new(
-                EVENT_STEP_FINISHED,
-                self.next_event_id(&format!("{step_id}-finish")),
-                json!({
-                    "stepId": step_id,
-                    "status": "completed",
-                }),
-            ),
-        ]
+            ));
+        }
+        events.push(FeishuCotEventRecord::new(
+            EVENT_TEXT_MESSAGE_END,
+            self.next_event_id(&format!("{message_id}-end")),
+            json!({
+                "messageId": message_id,
+            }),
+        ));
+        events
     }
 
     pub(super) fn tool_use_events(
@@ -815,6 +828,34 @@ fn truncate_utf8_bytes(text: &str, max_bytes: usize) -> String {
     text[..end].to_owned()
 }
 
+fn split_utf8_bytes(text: &str, max_bytes: usize) -> Vec<String> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    if max_bytes == 0 {
+        return vec![text.to_owned()];
+    }
+
+    let mut chunks = Vec::new();
+    let mut start = 0;
+    while start < text.len() {
+        let mut end = (start + max_bytes).min(text.len());
+        while end > start && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        if end == start {
+            end = text[start..]
+                .char_indices()
+                .nth(1)
+                .map(|(idx, _)| start + idx)
+                .unwrap_or(text.len());
+        }
+        chunks.push(text[start..end].to_owned());
+        start = end;
+    }
+    chunks
+}
+
 fn truncate_utf8_bytes_with_suffix(text: &str, max_bytes: usize) -> String {
     if text.len() <= max_bytes {
         return text.to_owned();
@@ -870,24 +911,26 @@ mod tests {
     }
 
     #[test]
-    fn step_title_events_emit_completed_title_without_visible_truncation_marker() {
+    fn text_message_events_emit_visible_text_without_step_ids_or_truncation_marker() {
         let mut state = FeishuCotState::default();
         let title = "准备做文档并下载截图".repeat(20);
-        let events = state.step_title_events(&title);
-        assert_eq!(events.len(), 2);
-        assert_eq!(events[0].event_type, EVENT_STEP_STARTED);
-        assert_eq!(events[1].event_type, EVENT_STEP_FINISHED);
+        let events = state.text_message_events(&title);
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].event_type, EVENT_TEXT_MESSAGE_START);
+        assert_eq!(events[1].event_type, EVENT_TEXT_MESSAGE_CONTENT);
+        assert_eq!(events[2].event_type, EVENT_TEXT_MESSAGE_END);
 
         let start = content_json(&events[0]);
-        let finish = content_json(&events[1]);
-        assert_eq!(start["status"], "running");
-        assert_eq!(finish["status"], "completed");
-        assert_eq!(start["stepId"], finish["stepId"]);
-        let visible_title = start["title"].as_str().unwrap_or_default();
-        assert!(visible_title.len() <= MAX_TOOL_ARG_DISPLAY_CHARS);
+        let content = content_json(&events[1]);
+        let end = content_json(&events[2]);
+        assert_eq!(start["messageId"], content["messageId"]);
+        assert_eq!(start["messageId"], end["messageId"]);
+        assert_eq!(start["role"], "assistant");
+        let visible_text = content["delta"].as_str().unwrap_or_default();
+        assert!(visible_text.contains("准备做文档并下载截图"));
         assert!(
-            !visible_title.contains("truncated"),
-            "title={visible_title}"
+            !visible_text.contains("truncated") && !visible_text.contains("step-"),
+            "text={visible_text}"
         );
     }
 
