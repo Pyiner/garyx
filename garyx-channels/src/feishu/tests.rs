@@ -2287,6 +2287,8 @@ mod e2e_tests {
             .collect();
         for expected in [
             "RUN_STARTED",
+            "STEP_STARTED",
+            "STEP_FINISHED",
             "TOOL_CALL_START",
             "TOOL_CALL_ARGS",
             "TOOL_CALL_END",
@@ -2334,6 +2336,20 @@ mod e2e_tests {
                 }
             })
             .expect("tool call id from COT start event");
+        assert!(
+            tool_event_contents.iter().any(|(event_type, content)| {
+                event_type == "STEP_STARTED"
+                    && content["title"].as_str() == Some("先说一句")
+                    && content["status"].as_str() == Some("running")
+            }),
+            "pre-tool assistant text should be sent as a COT step title: {tool_event_contents:?}"
+        );
+        assert!(
+            tool_event_contents.iter().any(|(event_type, content)| {
+                event_type == "STEP_FINISHED" && content["status"].as_str() == Some("completed")
+            }),
+            "COT step title should be completed immediately: {tool_event_contents:?}"
+        );
         assert!(
             tool_event_contents.iter().any(|(event_type, content)| {
                 event_type == "TOOL_CALL_START"
@@ -2401,6 +2417,30 @@ mod e2e_tests {
         let complete_body: Value = serde_json::from_slice(&complete_calls[0].body).unwrap();
         assert_eq!(complete_body["message_id"], "om_cot_001");
         assert_eq!(complete_body["reason"], "done");
+
+        let reply_calls = wait_for_matching_requests_quiet_window(
+            &server,
+            std::time::Duration::from_millis(200),
+            std::time::Duration::from_secs(5),
+            1,
+            |r| r.url.path().contains("/reply"),
+        )
+        .await;
+        assert_eq!(
+            reply_calls.len(),
+            1,
+            "tool trace should still send one final Feishu reply card"
+        );
+        let reply_body: Value = serde_json::from_slice(&reply_calls[0].body).unwrap();
+        let reply_content: Value =
+            serde_json::from_str(reply_body["content"].as_str().unwrap()).unwrap();
+        let reply_text = reply_content["body"]["elements"][0]["content"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            !reply_text.contains("先说一句") && reply_text.contains("再接一句"),
+            "pre-tool text should move into COT step title, while final text stays in reply; reply_text={reply_text:?}"
+        );
     }
 
     #[tokio::test]

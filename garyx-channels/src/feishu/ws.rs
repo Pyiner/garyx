@@ -245,6 +245,35 @@ async fn send_tool_use_cot_events(
     .await;
 }
 
+async fn send_pending_stream_title_cot_events(
+    client: &FeishuClient,
+    state: &mut FeishuResponseStreamState,
+    account_id: &str,
+    chat_id: &str,
+    thread_id: &str,
+    origin_message_id: &str,
+) {
+    let title = state.stream_text.trim().to_owned();
+    if title.is_empty() {
+        return;
+    }
+    let events = state.cot.step_title_events(&title);
+    send_cot_events(
+        client,
+        state,
+        account_id,
+        chat_id,
+        thread_id,
+        origin_message_id,
+        events,
+        "stream_title",
+    )
+    .await;
+    if !state.cot.failed {
+        state.stream_text.clear();
+    }
+}
+
 async fn send_tool_result_cot_events(
     client: &FeishuClient,
     state: &mut FeishuResponseStreamState,
@@ -1058,6 +1087,15 @@ pub(super) async fn handle_im_message_event(
                     continue;
                 }
                 StreamEvent::ToolUse { message } => {
+                    send_pending_stream_title_cot_events(
+                        &worker_client,
+                        &mut state,
+                        &worker_account_id,
+                        &worker_chat_id,
+                        &canonical_thread_id,
+                        &worker_msg_id,
+                    )
+                    .await;
                     send_tool_use_cot_events(
                         &worker_client,
                         &mut state,
@@ -1071,6 +1109,15 @@ pub(super) async fn handle_im_message_event(
                     continue;
                 }
                 StreamEvent::ToolResult { message } => {
+                    send_pending_stream_title_cot_events(
+                        &worker_client,
+                        &mut state,
+                        &worker_account_id,
+                        &worker_chat_id,
+                        &canonical_thread_id,
+                        &worker_msg_id,
+                    )
+                    .await;
                     send_tool_result_cot_events(
                         &worker_client,
                         &mut state,

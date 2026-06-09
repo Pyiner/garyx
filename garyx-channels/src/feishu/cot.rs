@@ -10,6 +10,8 @@ const TRUNCATED_SUFFIX: &str = "\n...[truncated]";
 
 pub(super) const EVENT_RUN_STARTED: &str = "RUN_STARTED";
 pub(super) const EVENT_RUN_FINISHED: &str = "RUN_FINISHED";
+pub(super) const EVENT_STEP_STARTED: &str = "STEP_STARTED";
+pub(super) const EVENT_STEP_FINISHED: &str = "STEP_FINISHED";
 pub(super) const EVENT_TOOL_CALL_START: &str = "TOOL_CALL_START";
 pub(super) const EVENT_TOOL_CALL_ARGS: &str = "TOOL_CALL_ARGS";
 pub(super) const EVENT_TOOL_CALL_END: &str = "TOOL_CALL_END";
@@ -112,6 +114,34 @@ impl FeishuCotState {
                 "status": "completed",
             }),
         )
+    }
+
+    pub(super) fn step_title_events(&mut self, title: &str) -> Vec<FeishuCotEventRecord> {
+        let title = truncate_utf8_bytes(title.trim(), MAX_TOOL_ARG_DISPLAY_CHARS);
+        if title.is_empty() {
+            return Vec::new();
+        }
+
+        let step_id = self.next_event_id("step");
+        vec![
+            FeishuCotEventRecord::new(
+                EVENT_STEP_STARTED,
+                self.next_event_id(&format!("{step_id}-start")),
+                json!({
+                    "stepId": step_id.clone(),
+                    "title": title,
+                    "status": "running",
+                }),
+            ),
+            FeishuCotEventRecord::new(
+                EVENT_STEP_FINISHED,
+                self.next_event_id(&format!("{step_id}-finish")),
+                json!({
+                    "stepId": step_id,
+                    "status": "completed",
+                }),
+            ),
+        ]
     }
 
     pub(super) fn tool_use_events(
@@ -837,6 +867,28 @@ mod tests {
         }));
         assert!(content.len() <= MAX_EVENT_CONTENT_BYTES);
         assert!(content.contains("truncated") || content.contains("[truncated]"));
+    }
+
+    #[test]
+    fn step_title_events_emit_completed_title_without_visible_truncation_marker() {
+        let mut state = FeishuCotState::default();
+        let title = "准备做文档并下载截图".repeat(20);
+        let events = state.step_title_events(&title);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].event_type, EVENT_STEP_STARTED);
+        assert_eq!(events[1].event_type, EVENT_STEP_FINISHED);
+
+        let start = content_json(&events[0]);
+        let finish = content_json(&events[1]);
+        assert_eq!(start["status"], "running");
+        assert_eq!(finish["status"], "completed");
+        assert_eq!(start["stepId"], finish["stepId"]);
+        let visible_title = start["title"].as_str().unwrap_or_default();
+        assert!(visible_title.len() <= MAX_TOOL_ARG_DISPLAY_CHARS);
+        assert!(
+            !visible_title.contains("truncated"),
+            "title={visible_title}"
+        );
     }
 
     #[test]
