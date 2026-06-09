@@ -137,18 +137,13 @@ impl FeishuCotState {
             .insert(call_id.clone(), tool_input.clone());
         let timestamp = message_timestamp_millis(message);
         let tool_display_name = tool_title(&tool_name);
-        let tool_detail = if is_image_view_message(message) {
-            tool_display_name.clone()
-        } else {
-            tool_detail_title(&tool_input, &tool_display_name)
-        };
         let mut events = vec![FeishuCotEventRecord::new_at(
             EVENT_TOOL_CALL_START,
             self.next_event_id(&format!("tool-start-{call_id}")),
             json!({
                 "toolCallId": call_id,
                 "toolCallName": tool_display_name,
-                "title": tool_detail,
+                "title": tool_display_name,
                 "status": "running",
                 "icon": tool_icon(&tool_name),
             }),
@@ -468,11 +463,6 @@ fn preview_json(value: &Value, max_bytes: usize) -> String {
     }
 }
 
-fn tool_detail_title(tool_input: &str, fallback: &str) -> String {
-    let compact = compact_one_line(tool_input);
-    truncate_chars(&compact, MAX_TOOL_ARG_DISPLAY_CHARS).unwrap_or_else(|| fallback.to_owned())
-}
-
 fn tool_title(tool_name: &str) -> String {
     let value = tool_name.to_ascii_lowercase();
     if contains_any(&value, &["bash", "shell", "exec", "run"]) {
@@ -498,10 +488,6 @@ fn tool_title(tool_name: &str) -> String {
     } else {
         tool_name.trim().to_owned()
     }
-}
-
-fn compact_one_line(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn tool_icon(tool_name: &str) -> &'static str {
@@ -633,18 +619,6 @@ fn contains_any(value: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| value.contains(needle))
 }
 
-fn truncate_chars(text: &str, max_chars: usize) -> Option<String> {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let mut out = trimmed.chars().take(max_chars).collect::<String>();
-    if trimmed.chars().count() > max_chars {
-        out.push('…');
-    }
-    Some(out)
-}
-
 fn sanitize_event_id_part(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for ch in value.trim().chars() {
@@ -733,7 +707,7 @@ mod tests {
         let start = content_json(&events[0]);
         assert_eq!(start["toolCallId"], "tool-1");
         assert_eq!(start["toolCallName"], "运行命令");
-        assert_eq!(start["title"], "pwd");
+        assert_eq!(start["title"], "运行命令");
         assert_eq!(start["icon"], "bash");
         assert_eq!(start["status"], "running");
         let args = content_json(&events[1]);
