@@ -101,6 +101,36 @@ struct GaryxLoadEarlierHistoryButton: View {
     }
 }
 
+/// Scrolls the modified scroll view to its bottom edge whenever `trigger`
+/// advances. Uses the iOS 18 `ScrollPosition` API, which works from any
+/// scroll offset; on iOS 17 the caller's `ScrollViewReader` anchor jump is
+/// the only mechanism.
+private struct GaryxScrollToBottomEffect: ViewModifier {
+    let trigger: Int
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.modifier(GaryxScrollToBottomPositionEffect(trigger: trigger))
+        } else {
+            content
+        }
+    }
+}
+
+@available(iOS 18.0, *)
+private struct GaryxScrollToBottomPositionEffect: ViewModifier {
+    let trigger: Int
+    @State private var position = ScrollPosition()
+
+    func body(content: Content) -> some View {
+        content
+            .scrollPosition($position)
+            .onChange(of: trigger) { _, _ in
+                position.scrollTo(edge: .bottom)
+            }
+    }
+}
+
 private struct GaryxConversationBottomOffsetKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
 
@@ -129,6 +159,7 @@ struct GaryxConversationView: View {
     @State private var pendingHistoryPrefetchThreadId: String?
     @State private var bottomChromeHeight: CGFloat = 0
     @State private var tailScrollRequestGeneration = 0
+    @State private var scrollToBottomTrigger = 0
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -142,15 +173,14 @@ struct GaryxConversationView: View {
                     GaryxEmptyConversationView()
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                 }
-
-                // Scroll-to-bottom floats over the transcript directly above
-                // the composer; visibility is a projection of the scroll
-                // state machine.
+            }
+            // Scroll-to-bottom hovers directly above the composer with a
+            // clear gap; the overlay is applied before the bottom chrome so
+            // the chrome's safe-area inset pushes it above the composer, and
+            // its visibility is a projection of the scroll state machine.
+            .overlay(alignment: .bottom) {
                 if scrollState.showsScrollToBottomButton {
                     Button {
-                        withAnimation(.easeOut(duration: 0.2)) {
-                            scrollToConversationTail(proxy)
-                        }
                         apply(scrollState.scrollToBottomTapped(), proxy: proxy)
                     } label: {
                         Image(systemName: "arrow.down")
@@ -166,10 +196,7 @@ struct GaryxConversationView: View {
                             .shadow(color: Color.black.opacity(0.12), radius: 14, x: 0, y: 8)
                     }
                     .buttonStyle(.plain)
-                    // The transcript extends under the floating composer, so
-                    // the overlay must clear the measured chrome height to
-                    // hover directly above the input.
-                    .padding(.bottom, bottomChromeHeight + 12)
+                    .padding(.bottom, 12)
                     .transition(.scale(scale: 0.88).combined(with: .opacity))
                     .accessibilityLabel("Scroll to latest message")
                 }
@@ -304,6 +331,10 @@ struct GaryxConversationView: View {
         // the top of the viewport. Tail anchoring is driven explicitly by the
         // scroll state machine instead of a bottom default anchor.
         .coordinateSpace(name: "garyx-conversation-scroll")
+        // ScrollViewReader.scrollTo is unreliable from an already-scrolled
+        // position on newer iOS; on iOS 18+ this effect scrolls via the
+        // ScrollPosition API whenever the trigger advances.
+        .modifier(GaryxScrollToBottomEffect(trigger: scrollToBottomTrigger))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onGeometryChange(for: CGFloat.self) { geometry in
             geometry.size.height
@@ -367,16 +398,6 @@ struct GaryxConversationView: View {
             metrics,
             hasTailContent: !model.messages.isEmpty || model.showsTailThinkingIndicator
         )
-        #if DEBUG
-        NSLog(
-            "GARYX-SCROLL top=%.0f bottom=%.0f viewport=%.0f anchoring=%@ button=%d",
-            metrics.contentTopOffset ?? .nan,
-            metrics.contentBottomOffset,
-            metrics.viewportHeight,
-            String(describing: scrollState.anchoring),
-            scrollState.showsScrollToBottomButton ? 1 : 0
-        )
-        #endif
         apply(request, proxy: proxy)
         prefetchOlderHistoryIfNeeded()
     }
@@ -391,6 +412,10 @@ struct GaryxConversationView: View {
     }
 
     private func scrollToConversationTail(_ proxy: ScrollViewProxy) {
+        // Drives both scroll mechanisms: the iOS 18+ ScrollPosition effect
+        // (reliable from any position) and the ScrollViewReader anchor jump
+        // (the only option on iOS 17).
+        scrollToBottomTrigger += 1
         proxy.scrollTo(conversationBottomAnchorId, anchor: .bottom)
     }
 
@@ -405,8 +430,11 @@ struct GaryxConversationView: View {
         tailScrollRequestGeneration += 1
         let generation = tailScrollRequestGeneration
         let identity = conversationScrollIdentity
+        // Long transcripts re-layout while scrolling, so a single scrollTo
+        // can land short; the later attempts converge on the true bottom.
         let delays: [DispatchTimeInterval] = [
-            .milliseconds(0), .milliseconds(16), .milliseconds(40), .milliseconds(140), .milliseconds(320),
+            .milliseconds(0), .milliseconds(16), .milliseconds(40), .milliseconds(140),
+            .milliseconds(320), .milliseconds(650), .milliseconds(1_000),
         ]
 
         for (index, delay) in delays.enumerated() {

@@ -323,6 +323,12 @@ struct GaryxShellView: View {
 
     @State private var sidebarDragOffset: CGFloat = 0
     @State private var sidebarDragAxis: GaryxSidebarDragAxis?
+    /// Auto-resetting liveness for the drawer drag. `DragGesture.onEnded` is
+    /// skipped when the system cancels a gesture, which used to leave
+    /// `sidebarDragAxis` stuck on `.horizontal` and the conversation scroll
+    /// permanently disabled; `@GestureState` always resets, so the
+    /// `onChange(of: sidebarDragLive)` below can clean up after cancellation.
+    @GestureState private var sidebarDragLive = false
 
     private let sidebarWidth: CGFloat = 330
     private let drawerMainPanelCornerRadius: CGFloat = 36
@@ -354,6 +360,11 @@ struct GaryxShellView: View {
                 }
             }
             .environment(\.garyxSidebarDragActive, sidebarDragAxis == .horizontal)
+            .onChange(of: sidebarDragLive) { _, live in
+                guard !live, sidebarDragAxis != nil else { return }
+                sidebarDragAxis = nil
+                resetSidebarDrag()
+            }
             .onChange(of: usePersistentSidebar) { _, isPersistent in
                 sidebarDragOffset = 0
                 if isPersistent {
@@ -468,6 +479,9 @@ struct GaryxShellView: View {
 
     private func openingSidebarGesture(sidebarWidth: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 18, coordinateSpace: .global)
+            .updating($sidebarDragLive) { _, state, _ in
+                state = true
+            }
             .onChanged { value in
                 guard !model.sidebarVisible else { return }
                 if sidebarDragAxis == nil {
@@ -512,6 +526,9 @@ struct GaryxShellView: View {
 
     private func closingSidebarGesture(sidebarWidth: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 18, coordinateSpace: .global)
+            .updating($sidebarDragLive) { _, state, _ in
+                state = true
+            }
             .onChanged { value in
                 guard model.sidebarVisible else { return }
                 if sidebarDragAxis == nil {
