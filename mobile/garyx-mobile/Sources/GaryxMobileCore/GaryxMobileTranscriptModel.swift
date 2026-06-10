@@ -144,23 +144,33 @@ struct GaryxMobileToolTraceGroup: Equatable {
         false
     }
 
+    /// Natural-language activity summary in the "Ran 3 commands, read 2
+    /// files" style: commands, then reads, then edits, then anything else.
+    /// Only the first part is capitalized.
     var summary: String {
         guard !entries.isEmpty else { return "Tool activity" }
-        let commandCount = entries.filter(\.isCommand).count
-        let editEntries = entries.filter(\.isFileEdit)
-        let fileCount = Set(editEntries.compactMap(\.primaryPathBadge)).count
+        let commandEntries = entries.filter(\.isCommand)
+        let readEntries = entries.filter { $0.isFileRead && !$0.isCommand }
+        let editEntries = entries.filter { $0.isFileEdit && !$0.isCommand && !$0.isFileRead }
+        let editedFileCount = Set(editEntries.compactMap(\.primaryPathBadge)).count
         var parts: [String] = []
-        if fileCount > 0 {
-            parts.append("Edited \(fileCount) file\(fileCount == 1 ? "" : "s")")
+        if !commandEntries.isEmpty {
+            parts.append("ran \(commandEntries.count) command\(commandEntries.count == 1 ? "" : "s")")
         }
-        if commandCount > 0 {
-            parts.append("Ran \(commandCount) command\(commandCount == 1 ? "" : "s")")
+        if !readEntries.isEmpty {
+            let readFileCount = max(Set(readEntries.compactMap { $0.primaryPath ?? $0.primaryPathBadge }).count, 1)
+            parts.append("read \(readFileCount) file\(readFileCount == 1 ? "" : "s")")
         }
-        let otherCount = entries.count - commandCount - editEntries.count
+        if editedFileCount > 0 {
+            parts.append("edited \(editedFileCount) file\(editedFileCount == 1 ? "" : "s")")
+        }
+        let otherCount = entries.count - commandEntries.count - readEntries.count - editEntries.count
         if otherCount > 0 || parts.isEmpty {
-            parts.append("Used \(max(otherCount, entries.count)) tool\(max(otherCount, entries.count) == 1 ? "" : "s")")
+            let count = parts.isEmpty ? entries.count : otherCount
+            parts.append("used \(count) tool\(count == 1 ? "" : "s")")
         }
-        return parts.joined(separator: ", ")
+        let joined = parts.joined(separator: ", ")
+        return joined.prefix(1).uppercased() + joined.dropFirst()
     }
 }
 
@@ -179,6 +189,10 @@ struct GaryxMobileToolTraceEntry: Identifiable, Equatable {
     var isError: Bool
     var timestamp: String?
     var primaryPathBadge: String?
+    /// Full file path from the call input, when one exists. The badge above
+    /// keeps only the tail for compact rows; thumbnails and per-call list
+    /// rows need the whole path.
+    var primaryPath: String? = nil
 
     var isCommand: Bool {
         let normalized = toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -186,7 +200,25 @@ struct GaryxMobileToolTraceEntry: Identifiable, Equatable {
             || normalized == "command"
             || normalized == "bashtool"
             || normalized == "commandexecution"
+            || normalized == "bash"
+            || normalized == "shell"
             || normalized.contains("command")
+    }
+
+    var isFileRead: Bool {
+        let normalized = toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized == "read"
+            || normalized == "view"
+            || normalized == "open"
+            || normalized == "cat"
+            || normalized == "view_image"
+            || normalized == "imageview"
+            || normalized == "notebookread"
+    }
+
+    var isFileWrite: Bool {
+        let normalized = toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized == "write" || normalized == "create"
     }
 
     var isFileEdit: Bool {
@@ -231,6 +263,7 @@ struct GaryxMobileToolTraceEntry: Identifiable, Equatable {
         status = result.isError ? .failed : .completed
         timestamp = result.timestamp ?? timestamp
         primaryPathBadge = primaryPathBadge ?? result.primaryPathBadge
+        primaryPath = primaryPath ?? result.primaryPath
     }
 
     private static func singleLineTruncated(_ value: String, limit: Int) -> String {

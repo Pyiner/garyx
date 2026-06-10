@@ -1293,6 +1293,7 @@ private struct GaryxMobileToolTracePayload {
     var summaryText: String?
     var timestamp: String?
     var primaryPathBadge: String?
+    var primaryPath: String?
     var source: String?
     var itemType: String?
     var isError: Bool
@@ -1329,6 +1330,7 @@ private struct GaryxMobileToolTracePayload {
                 summaryText: fallbackText.flatMap(GaryxMobileToolSummaryFormatter.safeSummary),
                 timestamp: fallbackTimestamp,
                 primaryPathBadge: nil,
+                primaryPath: nil,
                 source: nil,
                 itemType: fallbackToolName?.garyxTrimmedNilIfEmpty,
                 isError: false
@@ -1374,10 +1376,11 @@ private struct GaryxMobileToolTracePayload {
             eventKind: eventKind
         ) ?? fallbackText.flatMap(GaryxMobileToolSummaryFormatter.safeSummary)
         let timestamp = object.stringValue(forKeys: ["timestamp", "createdAt", "created_at"]) ?? fallbackTimestamp
-        let primaryPathBadge = Self.primaryPathBadge(
+        let primaryPath = Self.primaryPath(
             payload: payloadObject,
             nestedContent: nestedContent
         )
+        let primaryPathBadge = primaryPath.map { GaryxMobileToolSummaryFormatter.pathTail($0) }
         let isError = object.boolValue(forKeys: ["isError", "is_error", "error"])
             ?? payloadObject?.boolValue(forKeys: ["isError", "is_error", "error"])
             ?? nestedContent?.boolValue(forKeys: ["isError", "is_error", "error"])
@@ -1391,13 +1394,14 @@ private struct GaryxMobileToolTracePayload {
             summaryText: summary,
             timestamp: timestamp,
             primaryPathBadge: primaryPathBadge,
+            primaryPath: primaryPath,
             source: source,
             itemType: itemType,
             isError: isError
         )
     }
 
-    private static func primaryPathBadge(
+    private static func primaryPath(
         payload: [String: GaryxJSONValue]?,
         nestedContent: [String: GaryxJSONValue]?
     ) -> String? {
@@ -1406,7 +1410,6 @@ private struct GaryxMobileToolTracePayload {
             ?? payload
             ?? nestedContent
         return input?.stringValue(forKeys: ["file_path", "filePath", "path", "file"])
-            .map { GaryxMobileToolSummaryFormatter.pathTail($0) }
     }
 
     private static func summaryText(
@@ -1499,7 +1502,8 @@ private extension GaryxMobileToolTraceEntry {
             status: eventKind == .toolResult ? (payload.isError ? .failed : .completed) : .running,
             isError: payload.isError,
             timestamp: payload.timestamp,
-            primaryPathBadge: payload.primaryPathBadge
+            primaryPathBadge: payload.primaryPathBadge,
+            primaryPath: payload.primaryPath
         )
     }
 
@@ -1523,7 +1527,8 @@ private extension GaryxMobileToolTraceEntry {
             status: eventKind == .toolUse ? .running : (payload.isError ? .failed : .completed),
             isError: payload.isError,
             timestamp: payload.timestamp,
-            primaryPathBadge: payload.primaryPathBadge
+            primaryPathBadge: payload.primaryPathBadge,
+            primaryPath: payload.primaryPath
         )
     }
 

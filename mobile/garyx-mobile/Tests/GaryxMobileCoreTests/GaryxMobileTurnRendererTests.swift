@@ -534,7 +534,7 @@ final class GaryxMobileTurnRendererTests: XCTestCase {
             ]
         )
 
-        XCTAssertEqual(group.summary, "Edited 1 file, Ran 1 command")
+        XCTAssertEqual(group.summary, "Ran 1 command, edited 1 file")
     }
 
     private func message(
