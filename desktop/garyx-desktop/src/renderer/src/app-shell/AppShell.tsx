@@ -144,6 +144,7 @@ import {
   selectedThread,
   selectedWorkspace,
   teamBlocksEqual,
+  threadSummariesEquivalent,
   visibleWorkspaceList,
   workspaceForThread,
   workspaceSuggestionFromPath,
@@ -3605,8 +3606,12 @@ export function AppShell() {
   const sideChatRawMessages = sideChatThreadId
     ? messagesByThread[sideChatThreadId] || EMPTY_UI_TRANSCRIPT_MESSAGES
     : EMPTY_UI_TRANSCRIPT_MESSAGES;
-  const sideChatMessages = sideChatRawMessages.filter(
-    (message) => !isRunLoadingPlaceholderMessage(message),
+  const sideChatMessages = useMemo(
+    () =>
+      sideChatRawMessages.filter(
+        (message) => !isRunLoadingPlaceholderMessage(message),
+      ),
+    [sideChatRawMessages],
   );
   const sideChatMessageTailSignature = messageTailSignature(sideChatMessages);
   const sideChatThreadInfo = sideChatThreadId
@@ -3618,9 +3623,13 @@ export function AppShell() {
     sideChatThreadId && sideChatThreadWorktree ? "worktree" : null;
   const sideChatComposerWorkspaceBranch =
     sideChatThreadWorktree?.branch?.trim() || null;
-  const sideChatRenderableMessages = buildRenderableTranscript(sideChatMessages);
-  const sideChatRenderableBlocks = buildRenderTranscriptBlocks(
-    sideChatRenderableMessages,
+  const sideChatRenderableMessages = useMemo(
+    () => buildRenderableTranscript(sideChatMessages),
+    [sideChatMessages],
+  );
+  const sideChatRenderableBlocks = useMemo(
+    () => buildRenderTranscriptBlocks(sideChatRenderableMessages),
+    [sideChatRenderableMessages],
   );
   const sideChatLastRenderableBlock =
     sideChatRenderableBlocks[sideChatRenderableBlocks.length - 1] || null;
@@ -3733,11 +3742,6 @@ export function AppShell() {
     sideChatIsSendingThread || sideChatQueue.length > 0
       ? "Queue another follow-up for Garyx..."
       : "Ask in side chat";
-  const sideChatShowHistoryLoadingPlaceholder = Boolean(
-    sideChatHistoryLoading &&
-      sideChatThreadId &&
-      !sideChatMessages.length,
-  );
   const sideChatShowTailLoading = Boolean(
     sideChatRunLoading && !sideChatTailToolTraceBlockKey,
   );
@@ -5247,8 +5251,14 @@ export function AppShell() {
     };
   }, [contentView, selectedThreadId]);
 
+  // Load the side thread transcript once per side thread (after state
+  // hydration). Depending on `desktopState` identity here is unsafe: applying
+  // a transcript can rewrite `desktopState.sessions`, which would re-fire
+  // this effect in a fetch loop. Steady-state sync comes from the 1.5s
+  // signature-checked poll below.
+  const desktopStateHydrated = Boolean(desktopState);
   useEffect(() => {
-    if (!sideChatThreadId || !desktopState) {
+    if (!sideChatThreadId || !desktopStateHydrated) {
       return;
     }
 
@@ -5268,7 +5278,7 @@ export function AppShell() {
       setHistoryLoading: setSideChatHistoryLoading,
       setError,
     });
-  }, [desktopState, sideChatThreadId]);
+  }, [desktopStateHydrated, sideChatThreadId]);
 
   useEffect(() => {
     if (!sideChatThreadId) {
@@ -7298,6 +7308,16 @@ export function AppShell() {
       if (!current || current.threads.some((thread) => thread.id === threadId)) {
         return current;
       }
+      // Hidden threads (side chats, child threads) live only in `sessions`,
+      // so this cache write runs on every transcript application. Re-writing
+      // an equivalent summary must keep `desktopState` identity stable, or
+      // history-loading effects keyed on it re-fire and loop.
+      const existing = current.sessions.find(
+        (session) => session.id === threadId,
+      );
+      if (existing && threadSummariesEquivalent(existing, summary)) {
+        return current;
+      }
       return {
         ...current,
         sessions: mergeThread(current.sessions, summary),
@@ -7737,10 +7757,14 @@ export function AppShell() {
       try {
         if (await ensureThreadOpenable(existingThreadId)) {
           rememberSideChatThreadId(existingThreadId);
-          setSideChatThreadBySource((current) => ({
-            ...current,
-            [sourceThreadId]: existingThreadId,
-          }));
+          setSideChatThreadBySource((current) =>
+            current[sourceThreadId] === existingThreadId
+              ? current
+              : {
+                  ...current,
+                  [sourceThreadId]: existingThreadId,
+                },
+          );
           setSideChatErrorBySource((current) => {
             if (!(sourceThreadId in current)) {
               return current;
@@ -9809,7 +9833,10 @@ export function AppShell() {
       showAutomationRunInitialPlaceholder={false}
       showDreams={false}
       showAutomationRunTailLoading={sideChatShowTailLoading}
-      showHistoryLoadingPlaceholder={sideChatShowHistoryLoadingPlaceholder}
+      // Side chats fork the provider session without importing visible
+      // history, so there is never parent history to wait for — the panel
+      // opens as an empty thread instead of a loading placeholder.
+      showHistoryLoadingPlaceholder={false}
       showPendingAckLoading={sideChatShowPendingAckLoading}
       threadLayoutRef={sideChatThreadLayoutRef}
       threadLogsActiveTab="client"
@@ -10144,11 +10171,6 @@ export function AppShell() {
         onOpenAutoResearch={() => {
           trackUiAction("nav.open_auto_research", () => {
             setContentView("auto_research");
-          });
-        }}
-        onOpenBrowser={() => {
-          trackUiAction("nav.open_browser", () => {
-            setContentView("browser");
           });
         }}
         onOpenAgents={() => {

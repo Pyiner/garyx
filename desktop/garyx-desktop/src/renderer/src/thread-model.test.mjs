@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildWorkspaceThreadGroups, selectedThread } from './thread-model.ts';
+import {
+  buildWorkspaceThreadGroups,
+  selectedThread,
+  threadSummariesEquivalent,
+} from './thread-model.ts';
 
 function makeWorkspace(path, overrides = {}) {
   return {
@@ -111,4 +115,58 @@ test('selectedThread can resolve cached hidden session threads', () => {
   });
 
   assert.equal(selectedThread(state, hiddenChild.id)?.id, hiddenChild.id);
+});
+
+test('threadSummariesEquivalent treats re-fetched identical summaries as equal', () => {
+  const makeSummary = () =>
+    makeThread('thread-side-chat', '/Users/test/project', {
+      messageCount: 4,
+      agentId: 'claude',
+      recentRunId: null,
+      worktree: { branch: 'main', path: '/Users/test/project' },
+      team: {
+        team_id: 'team-1',
+        display_name: 'Team One',
+        leader_agent_id: 'claude',
+        member_agent_ids: ['claude', 'codex'],
+        child_thread_ids: { codex: 'thread-child' },
+      },
+    });
+
+  assert.equal(threadSummariesEquivalent(makeSummary(), makeSummary()), true);
+});
+
+test('threadSummariesEquivalent normalizes missing optional fields to null', () => {
+  const left = makeThread('thread-side-chat', '/Users/test/project');
+  const right = makeThread('thread-side-chat', '/Users/test/project', {
+    agentId: null,
+    recentRunId: null,
+    worktree: null,
+    team: null,
+  });
+
+  assert.equal(threadSummariesEquivalent(left, right), true);
+});
+
+test('threadSummariesEquivalent detects meaningful changes', () => {
+  const base = makeThread('thread-side-chat', '/Users/test/project', {
+    messageCount: 4,
+  });
+
+  assert.equal(
+    threadSummariesEquivalent(base, { ...base, updatedAt: '2026-01-02T00:00:00.000Z' }),
+    false,
+  );
+  assert.equal(
+    threadSummariesEquivalent(base, { ...base, messageCount: 5 }),
+    false,
+  );
+  assert.equal(
+    threadSummariesEquivalent(base, { ...base, recentRunId: 'run-1' }),
+    false,
+  );
+  assert.equal(
+    threadSummariesEquivalent(base, { ...base, worktree: { branch: 'main' } }),
+    false,
+  );
 });

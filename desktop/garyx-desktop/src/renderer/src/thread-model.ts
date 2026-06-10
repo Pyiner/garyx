@@ -5,6 +5,7 @@ import type {
   DesktopState,
   DesktopWorkspace,
   ThreadTeamBlock,
+  ThreadWorktreeInfo,
 } from '@shared/contracts';
 
 export interface WorkspaceThreadGroup {
@@ -94,6 +95,56 @@ export function teamBlocksEqual(
     }
   }
   return true;
+}
+
+function worktreeInfosEqual(
+  left: ThreadWorktreeInfo | null | undefined,
+  right: ThreadWorktreeInfo | null | undefined,
+): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (!left || !right) {
+    return !left && !right;
+  }
+  return (
+    (left.mode ?? null) === (right.mode ?? null)
+    && (left.enabled ?? null) === (right.enabled ?? null)
+    && (left.branch ?? null) === (right.branch ?? null)
+    && (left.sourceBranch ?? null) === (right.sourceBranch ?? null)
+    && (left.path ?? null) === (right.path ?? null)
+    && (left.worktreeDir ?? null) === (right.worktreeDir ?? null)
+    && (left.sourceWorkspaceDir ?? null) === (right.sourceWorkspaceDir ?? null)
+    && (left.sourceRepoRoot ?? null) === (right.sourceRepoRoot ?? null)
+  );
+}
+
+/**
+ * Structural equality for thread summaries. Transcript caching uses this to
+ * keep `desktopState` referentially stable when a re-fetched summary carries
+ * no new information; effects keyed on `desktopState` identity must not
+ * re-fire for idempotent cache writes.
+ */
+export function threadSummariesEquivalent(
+  left: DesktopThreadSummary,
+  right: DesktopThreadSummary,
+): boolean {
+  return (
+    left.id === right.id
+    && left.title === right.title
+    && (left.threadType ?? null) === (right.threadType ?? null)
+    && left.createdAt === right.createdAt
+    && left.updatedAt === right.updatedAt
+    && left.lastMessagePreview === right.lastMessagePreview
+    && (left.workspacePath ?? null) === (right.workspacePath ?? null)
+    && (left.messageCount ?? null) === (right.messageCount ?? null)
+    && (left.agentId ?? null) === (right.agentId ?? null)
+    && (left.teamId ?? null) === (right.teamId ?? null)
+    && (left.teamName ?? null) === (right.teamName ?? null)
+    && (left.recentRunId ?? null) === (right.recentRunId ?? null)
+    && worktreeInfosEqual(left.worktree, right.worktree)
+    && teamBlocksEqual(left.team ?? null, right.team ?? null)
+  );
 }
 
 export function automationForLatestThread(
