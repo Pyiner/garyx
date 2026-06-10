@@ -266,11 +266,20 @@ extension GaryxMobileModel {
         return providerModelsByType[providerType]
     }
 
+    /// The model that filters thinking levels for the new-thread draft: the
+    /// override when chosen, else the agent's configured model.
+    var newThreadEffortFilterModel: String? {
+        GaryxThreadModelOverridePresentation.effortFilterModel(
+            override: newThreadModelOverride,
+            agentConfiguredModel: newThreadAgentTarget?.model
+        )
+    }
+
     func setNewThreadModelOverride(_ model: String) {
         newThreadModelOverride = model.trimmingCharacters(in: .whitespacesAndNewlines)
         newThreadReasoningEffortOverride = GaryxThreadModelOverridePresentation.sanitizedReasoningEffort(
             providerModels: newThreadProviderModels,
-            model: newThreadModelOverride,
+            model: newThreadEffortFilterModel,
             reasoningEffort: newThreadReasoningEffortOverride
         ) ?? ""
     }

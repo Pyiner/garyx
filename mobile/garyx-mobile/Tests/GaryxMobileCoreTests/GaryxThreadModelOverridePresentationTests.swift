@@ -133,6 +133,29 @@ final class GaryxThreadModelOverridePresentationTests: XCTestCase {
         )
     }
 
+    func testEffortFilterModelPrefersOverrideThenAgentModel() {
+        XCTAssertEqual(
+            GaryxThreadModelOverridePresentation.effortFilterModel(
+                override: "claude-opus-4-8",
+                agentConfiguredModel: "claude-haiku-4-5"
+            ),
+            "claude-opus-4-8"
+        )
+        XCTAssertEqual(
+            GaryxThreadModelOverridePresentation.effortFilterModel(
+                override: "  ",
+                agentConfiguredModel: "claude-haiku-4-5"
+            ),
+            "claude-haiku-4-5"
+        )
+        XCTAssertNil(
+            GaryxThreadModelOverridePresentation.effortFilterModel(
+                override: nil,
+                agentConfiguredModel: ""
+            )
+        )
+    }
+
     private func decodeProviderModels(_ json: String) throws -> GaryxProviderModels {
         try JSONDecoder().decode(GaryxProviderModels.self, from: Data(json.utf8))
     }

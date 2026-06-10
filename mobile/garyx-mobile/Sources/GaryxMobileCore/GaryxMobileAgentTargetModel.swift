@@ -12,6 +12,8 @@ public struct GaryxMobileAgentTarget: Identifiable, Equatable, Sendable {
     public let kind: Kind
     public let avatarDataUrl: String
     public let providerType: String
+    /// The agent's configured model; empty when the provider default applies.
+    public let model: String
     public let builtIn: Bool
 
     public init(
@@ -21,6 +23,7 @@ public struct GaryxMobileAgentTarget: Identifiable, Equatable, Sendable {
         kind: Kind,
         avatarDataUrl: String,
         providerType: String,
+        model: String = "",
         builtIn: Bool
     ) {
         self.id = id
@@ -29,6 +32,7 @@ public struct GaryxMobileAgentTarget: Identifiable, Equatable, Sendable {
         self.kind = kind
         self.avatarDataUrl = avatarDataUrl
         self.providerType = providerType
+        self.model = model
         self.builtIn = builtIn
     }
 }
@@ -48,6 +52,7 @@ public enum GaryxMobileAgentTargetMapper {
                     kind: .agent,
                     avatarDataUrl: $0.avatarDataUrl,
                     providerType: $0.providerType,
+                    model: $0.model,
                     builtIn: $0.builtIn
                 )
             }

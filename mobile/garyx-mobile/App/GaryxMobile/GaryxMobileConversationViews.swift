@@ -1011,7 +1011,7 @@ struct GaryxEmptyConversationView: View {
            GaryxThreadModelOverridePresentation.supportsOverride(providerModels) {
             let reasoningEfforts = GaryxThreadModelOverridePresentation.reasoningEffortOptions(
                 providerModels: providerModels,
-                model: model.newThreadModelOverride
+                model: model.newThreadEffortFilterModel
             )
             Menu {
                 Picker("Model", selection: newThreadModelOverrideBinding) {

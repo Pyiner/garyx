@@ -9,6 +9,15 @@ public enum GaryxThreadModelOverridePresentation {
         providerModels?.supportsModelSelection == true
     }
 
+    /// The model that will actually run and should filter thinking levels:
+    /// the per-thread override when chosen, else the agent's configured model.
+    public static func effortFilterModel(
+        override modelOverride: String?,
+        agentConfiguredModel: String?
+    ) -> String? {
+        normalized(modelOverride) ?? normalized(agentConfiguredModel)
+    }
+
     /// Thinking levels valid for the current selection: the chosen model's own
     /// list when it constrains efforts, otherwise the provider-level list.
     public static func reasoningEffortOptions(
