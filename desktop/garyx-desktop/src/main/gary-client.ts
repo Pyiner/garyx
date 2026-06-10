@@ -3405,7 +3405,10 @@ export async function createRemoteThread(
     "/api/threads",
     {
       method: "POST",
-      signal: AbortSignal.timeout(8000),
+      // Creating a thread can wait behind gateway thread-store write locks
+      // (10s lock timeout); aborting earlier than that surfaces an opaque
+      // TimeoutError instead of the gateway's own error.
+      signal: AbortSignal.timeout(20000),
       body: JSON.stringify({
         label: input?.title || undefined,
         workspaceDir: input?.workspacePath || undefined,

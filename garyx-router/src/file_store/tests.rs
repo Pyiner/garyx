@@ -306,6 +306,35 @@ async fn test_stale_lock_cleanup() {
     assert!(!lock_path.exists());
 }
 
+#[tokio::test]
+async fn test_get_reads_while_write_lock_is_held() {
+    let tmp = TempDir::new().unwrap();
+    let store = FileThreadStore::with_options(
+        tmp.path(),
+        Duration::ZERO, // disable the read cache so get always hits the disk path
+        1000,
+        Duration::from_millis(200),
+        DEFAULT_MAX_CONCURRENT_OPS,
+    )
+    .await
+    .unwrap();
+
+    store.set("busy", json!({"v": 1})).await;
+
+    // Simulate another holder owning a fresh (non-stale) write lock.
+    let lock_path = FileThreadStore::lock_file_for_path(&store.thread_file("busy"));
+    tokio::fs::write(&lock_path, b"").await.unwrap();
+
+    // Reads are lock-free: writers publish via atomic rename, so get must
+    // return data instead of queueing on the lock until timeout.
+    let v = store.get("busy").await.unwrap();
+    assert_eq!(v["v"], 1);
+    assert!(
+        lock_path.exists(),
+        "get must not remove another holder's fresh lock"
+    );
+}
+
 // ---------------------------------------------------------------
 // Atomic writes
 // ---------------------------------------------------------------

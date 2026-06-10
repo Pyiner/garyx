@@ -369,85 +369,106 @@ impl ThreadStore for FileThreadStore {
             return None;
         }
 
-        self.check_stale_lock(&path).await;
-
         let _permit = self.semaphore.acquire().await.ok()?;
-        if let Err(e) = self.acquire_lock(&path).await {
-            error!(thread_id, error = %e, "lock timeout on get");
-            return None;
-        }
 
-        let result = async {
-            let bytes = tokio::fs::read(&path).await.ok()?;
-            let mut data: Value = serde_json::from_slice(&bytes).ok()?;
+        // Lock-free read: every writer lands through `atomic_write`
+        // (temp file + rename), so a plain read always observes one
+        // complete record. Readers must not queue on the write lock —
+        // concurrent history polling otherwise starves other readers
+        // and thread-create paths into lock timeouts.
+        let bytes = tokio::fs::read(&path).await.ok()?;
+        let mut data: Value = serde_json::from_slice(&bytes).ok()?;
 
-            // One-shot migration: strip legacy team-chat fossils and, if
-            // anything was mutated, re-persist the cleaned record so
-            // subsequent loads short-circuit. We already hold the lock
-            // for this thread_id, so a direct atomic_write here is safe.
-            let scrubbed = scrub_legacy_team_fields(&mut data);
-            if scrubbed {
-                // Write back to the canonical location. On a legacy
-                // compat path the write still lands in the canonical
-                // v2 directory, which matches the migration semantics
-                // of `set()`.
-                let canonical_path = self.thread_file(thread_id);
-                match serde_json::to_vec_pretty(&data) {
-                    Ok(bytes) => {
-                        if let Err(e) = Self::atomic_write(&canonical_path, &bytes).await {
-                            error!(thread_id, error = %e, "failed to re-persist scrubbed thread");
-                        } else {
-                            // If we just migrated out of a legacy
-                            // location, best-effort drop the old file so
-                            // the resolver stops preferring it.
-                            let legacy_path = self.legacy_thread_file(thread_id);
-                            if legacy_path != canonical_path && legacy_path.exists() {
-                                let _ = tokio::fs::remove_file(&legacy_path).await;
-                                let _ =
-                                    tokio::fs::remove_file(Self::lock_file_for_path(&legacy_path))
-                                        .await;
-                            }
-                            let legacy_compat_path = self.legacy_compat_thread_file(thread_id);
-                            if legacy_compat_path != canonical_path && legacy_compat_path.exists() {
-                                let _ = tokio::fs::remove_file(&legacy_compat_path).await;
-                                let _ = tokio::fs::remove_file(Self::lock_file_for_path(
-                                    &legacy_compat_path,
-                                ))
-                                .await;
+        // One-shot migration: strip legacy team-chat fossils. Persisting
+        // the cleaned record is the only mutation `get` performs, so only
+        // this rare path takes the write lock, and it re-reads under the
+        // lock so it never clobbers a concurrent write.
+        if scrub_legacy_team_fields(&mut data) {
+            self.check_stale_lock(&path).await;
+            match self.acquire_lock(&path).await {
+                Err(e) => {
+                    // Serve the scrubbed in-memory record; the migration
+                    // retries on a later read.
+                    error!(thread_id, error = %e, "lock timeout on scrub write-back");
+                }
+                Ok(()) => {
+                    let persisted = async {
+                        let bytes = tokio::fs::read(&path).await.ok()?;
+                        let mut fresh: Value = serde_json::from_slice(&bytes).ok()?;
+                        if scrub_legacy_team_fields(&mut fresh) {
+                            // Write back to the canonical location. On a
+                            // legacy compat path the write still lands in
+                            // the canonical v2 directory, which matches
+                            // the migration semantics of `set()`.
+                            let canonical_path = self.thread_file(thread_id);
+                            match serde_json::to_vec_pretty(&fresh) {
+                                Ok(bytes) => {
+                                    if let Err(e) =
+                                        Self::atomic_write(&canonical_path, &bytes).await
+                                    {
+                                        error!(thread_id, error = %e, "failed to re-persist scrubbed thread");
+                                    } else {
+                                        // If we just migrated out of a legacy
+                                        // location, best-effort drop the old file so
+                                        // the resolver stops preferring it.
+                                        let legacy_path = self.legacy_thread_file(thread_id);
+                                        if legacy_path != canonical_path && legacy_path.exists() {
+                                            let _ = tokio::fs::remove_file(&legacy_path).await;
+                                            let _ = tokio::fs::remove_file(
+                                                Self::lock_file_for_path(&legacy_path),
+                                            )
+                                            .await;
+                                        }
+                                        let legacy_compat_path =
+                                            self.legacy_compat_thread_file(thread_id);
+                                        if legacy_compat_path != canonical_path
+                                            && legacy_compat_path.exists()
+                                        {
+                                            let _ =
+                                                tokio::fs::remove_file(&legacy_compat_path).await;
+                                            let _ = tokio::fs::remove_file(
+                                                Self::lock_file_for_path(&legacy_compat_path),
+                                            )
+                                            .await;
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    error!(thread_id, error = %e, "failed to serialize scrubbed thread");
+                                }
                             }
                         }
+                        Some(fresh)
                     }
-                    Err(e) => {
-                        error!(thread_id, error = %e, "failed to serialize scrubbed thread");
+                    .await;
+                    self.release_lock(&path).await;
+                    if let Some(fresh) = persisted {
+                        data = fresh;
                     }
                 }
             }
-
-            // Use the canonical path for mtime / cache keying so a
-            // just-migrated record's cache entry matches what the next
-            // `get()` sees on disk.
-            let cache_path = self.thread_file(thread_id);
-            let mtime = Self::file_mtime(&cache_path)
-                .await
-                .or(Self::file_mtime(&path).await)?;
-
-            let mut cache = self.cache.lock().await;
-            Self::evict_if_needed(&mut cache, self.cache_max_size);
-            cache.insert(
-                thread_id.to_owned(),
-                CacheEntry {
-                    data: Self::deep_clone(&data),
-                    mtime,
-                    inserted_at: Instant::now(),
-                },
-            );
-
-            Some(data)
         }
-        .await;
 
-        self.release_lock(&path).await;
-        result
+        // Use the canonical path for mtime / cache keying so a
+        // just-migrated record's cache entry matches what the next
+        // `get()` sees on disk.
+        let cache_path = self.thread_file(thread_id);
+        let mtime = Self::file_mtime(&cache_path)
+            .await
+            .or(Self::file_mtime(&path).await)?;
+
+        let mut cache = self.cache.lock().await;
+        Self::evict_if_needed(&mut cache, self.cache_max_size);
+        cache.insert(
+            thread_id.to_owned(),
+            CacheEntry {
+                data: Self::deep_clone(&data),
+                mtime,
+                inserted_at: Instant::now(),
+            },
+        );
+
+        Some(data)
     }
 
     async fn set(&self, thread_id: &str, data: Value) {
