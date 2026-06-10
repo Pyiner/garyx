@@ -101,36 +101,6 @@ struct GaryxLoadEarlierHistoryButton: View {
     }
 }
 
-/// Scrolls the modified scroll view to its bottom edge whenever `trigger`
-/// advances. Uses the iOS 18 `ScrollPosition` API, which works from any
-/// scroll offset; on iOS 17 the caller's `ScrollViewReader` anchor jump is
-/// the only mechanism.
-private struct GaryxScrollToBottomEffect: ViewModifier {
-    let trigger: Int
-
-    func body(content: Content) -> some View {
-        if #available(iOS 18.0, *) {
-            content.modifier(GaryxScrollToBottomPositionEffect(trigger: trigger))
-        } else {
-            content
-        }
-    }
-}
-
-@available(iOS 18.0, *)
-private struct GaryxScrollToBottomPositionEffect: ViewModifier {
-    let trigger: Int
-    @State private var position = ScrollPosition()
-
-    func body(content: Content) -> some View {
-        content
-            .scrollPosition($position)
-            .onChange(of: trigger) { _, _ in
-                position.scrollTo(edge: .bottom)
-            }
-    }
-}
-
 private struct GaryxConversationBottomOffsetKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
 
@@ -159,7 +129,6 @@ struct GaryxConversationView: View {
     @State private var pendingHistoryPrefetchThreadId: String?
     @State private var bottomChromeHeight: CGFloat = 0
     @State private var tailScrollRequestGeneration = 0
-    @State private var scrollToBottomTrigger = 0
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -331,10 +300,6 @@ struct GaryxConversationView: View {
         // the top of the viewport. Tail anchoring is driven explicitly by the
         // scroll state machine instead of a bottom default anchor.
         .coordinateSpace(name: "garyx-conversation-scroll")
-        // ScrollViewReader.scrollTo is unreliable from an already-scrolled
-        // position on newer iOS; on iOS 18+ this effect scrolls via the
-        // ScrollPosition API whenever the trigger advances.
-        .modifier(GaryxScrollToBottomEffect(trigger: scrollToBottomTrigger))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onGeometryChange(for: CGFloat.self) { geometry in
             geometry.size.height
@@ -412,10 +377,11 @@ struct GaryxConversationView: View {
     }
 
     private func scrollToConversationTail(_ proxy: ScrollViewProxy) {
-        // Drives both scroll mechanisms: the iOS 18+ ScrollPosition effect
-        // (reliable from any position) and the ScrollViewReader anchor jump
-        // (the only option on iOS 17).
-        scrollToBottomTrigger += 1
+        // A `.scrollPosition` binding is deliberately avoided here: binding a
+        // ScrollPosition disables ScrollViewReader.scrollTo, and positioning
+        // by `edge: .bottom` makes the scroll view stick to the bottom on
+        // every content change, which fights the reader while a run streams.
+        // The anchor jump plus the scheduled retry chain is reliable.
         proxy.scrollTo(conversationBottomAnchorId, anchor: .bottom)
     }
 
