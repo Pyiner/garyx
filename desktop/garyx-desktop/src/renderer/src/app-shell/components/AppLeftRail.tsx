@@ -14,7 +14,6 @@ import {
   AutomationIcon,
   AutoResearchIcon,
   BackIcon,
-  BrowserIcon,
   DreamsIcon,
   NewThreadIcon,
   RecentIcon,
@@ -54,7 +53,6 @@ type AppLeftRailProps = {
   onOpenRecent: () => void;
   onSelectAutomation: (automationId: string | null) => void;
   onOpenAutoResearch: () => void;
-  onOpenBrowser: () => void;
   onOpenAgents: () => void;
   onOpenSkills: () => void;
   onOpenTasks: () => void;
@@ -105,7 +103,6 @@ export function AppLeftRail({
   onOpenRecent,
   onSelectAutomation,
   onOpenAutoResearch,
-  onOpenBrowser,
   onOpenAgents,
   onOpenSkills,
   onOpenTasks,
@@ -207,14 +204,6 @@ export function AppLeftRail({
             >
               <TasksIcon />
               <span>{t('Tasks')}</span>
-            </button>
-            <button
-              className={`sidebar-action ${isBrowserView ? 'active' : ''}`}
-              onClick={onOpenBrowser}
-              type="button"
-            >
-              <BrowserIcon />
-              <span>{t('Browser')}</span>
             </button>
             {showAutoResearch ? (
               <button
