@@ -247,6 +247,7 @@ const zhCN: Record<string, string> = {
   'Stream disconnected before a final response.': '流在最终回复前已断开。',
   'Terminal': '终端',
   'Terminal exited': '终端已退出',
+  'Terminal exited · Restart': '终端已退出 · 重启',
   'Terminal input': '终端输入',
   'Terminal session': '终端会话',
   'Push': '推送',

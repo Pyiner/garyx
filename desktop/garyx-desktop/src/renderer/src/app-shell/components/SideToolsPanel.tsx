@@ -9,7 +9,6 @@ import {
   type ReactNode,
 } from "react";
 import {
-  ChevronDown,
   Copy,
   FileText,
   FolderOpen,
@@ -310,69 +309,35 @@ function SideTerminalTool({ cwd }: { cwd?: string | null }) {
     renderedOutputRef.current = session.output;
   }, [session?.id, session?.output, terminalReady]);
 
+  // The side tools panel already manages tabs; the terminal body stays a
+  // single session with no inner session chrome. Closing the exited session
+  // lets the auto-create effect start a fresh one.
+  function restartExitedSession() {
+    const exited = activeSessionRef.current;
+    if (!exited || exited.running) {
+      return;
+    }
+    void window.garyxDesktop
+      .closeTerminalSession({ sessionId: exited.id })
+      .then(setState);
+  }
+
   return (
     <div className="side-tool-terminal">
-      <div className="side-tool-terminal-header">
-        <div className="side-tool-terminal-session">
-          <TerminalIcon aria-hidden size={14} strokeWidth={1.8} />
-          {state?.sessions.length ? (
-            <>
-              <select
-                aria-label={t("Terminal session")}
-                onChange={(event) => {
-                  void window.garyxDesktop
-                    .activateTerminalSession({ sessionId: event.target.value })
-                    .then(setState);
-                }}
-                value={session?.id || ""}
-              >
-                {state.sessions.map((entry) => (
-                  <option key={entry.id} value={entry.id}>
-                    {entry.title}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown aria-hidden className="side-tool-terminal-session-chevron" size={13} />
-            </>
-          ) : (
-            <span>{t("Terminal")}</span>
-          )}
-        </div>
-        <div className="side-tool-terminal-header-actions">
-          {session ? (
-            <button
-              className="codex-icon-button"
-              onClick={() => {
-                void window.garyxDesktop
-                  .closeTerminalSession({ sessionId: session.id })
-                  .then(setState);
-              }}
-              title={t("Close terminal")}
-              type="button"
-            >
-              <X aria-hidden />
-            </button>
-          ) : null}
-          <button
-            className="codex-icon-button"
-            onClick={() => {
-              void createSession();
-            }}
-            title={t("New terminal")}
-            type="button"
-          >
-            <Plus aria-hidden />
-          </button>
-        </div>
-      </div>
       <div
         aria-label={t("Terminal input")}
         className="side-tool-terminal-output"
         ref={terminalHostRef}
       />
       {creating ? <div className="side-tool-terminal-status">{t("Starting…")}</div> : null}
-      {session && !session.running ? (
-        <div className="side-tool-terminal-status">{t("Terminal exited")}</div>
+      {session && !session.running && !creating ? (
+        <button
+          className="side-tool-terminal-status side-tool-terminal-restart"
+          onClick={restartExitedSession}
+          type="button"
+        >
+          {t("Terminal exited · Restart")}
+        </button>
       ) : null}
     </div>
   );
