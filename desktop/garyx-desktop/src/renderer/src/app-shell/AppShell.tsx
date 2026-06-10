@@ -35,6 +35,7 @@ import {
   type DesktopChatStreamEvent,
   type DesktopChannelEndpoint,
   type DesktopDeepLinkEvent,
+  type DesktopProviderModels,
   type DesktopSettings,
   type DesktopSessionProviderHint,
   type DesktopState,
@@ -1800,6 +1801,12 @@ export function AppShell() {
       ? initialRouteValue.agentId
       : "claude",
   );
+  const [pendingModel, setPendingModel] = useState<string | null>(null);
+  const [pendingModelReasoningEffort, setPendingModelReasoningEffort] =
+    useState<string | null>(null);
+  const [providerModelsByType, setProviderModelsByType] = useState<
+    Record<string, DesktopProviderModels | null>
+  >({});
   const [pendingWorkflowId, setPendingWorkflowId] = useState<string | null>(
     initialRouteValue.kind === "new-thread" && initialRouteValue.workflowId
       ? initialRouteValue.workflowId
@@ -2727,6 +2734,49 @@ export function AppShell() {
   const activeAgentId = activeThread?.agentId || null;
   const pendingAgent = desktopAgentMap.get(pendingAgentId) || null;
   const pendingTeam = desktopTeamMap.get(pendingAgentId) || null;
+  const pendingAgentProviderType = pendingTeam
+    ? null
+    : pendingAgent?.providerType || null;
+  const pendingProviderModels = pendingAgentProviderType
+    ? providerModelsByType[pendingAgentProviderType] || null
+    : null;
+
+  useEffect(() => {
+    // A model/thinking override only makes sense for the agent it was picked for.
+    setPendingModel(null);
+    setPendingModelReasoningEffort(null);
+  }, [pendingAgentId]);
+
+  useEffect(() => {
+    if (!pendingAgentProviderType) {
+      return;
+    }
+    if (pendingAgentProviderType in providerModelsByType) {
+      return;
+    }
+    let cancelled = false;
+    void window.garyxDesktop.listProviderModels(pendingAgentProviderType).then(
+      (models) => {
+        if (!cancelled) {
+          setProviderModelsByType((current) => ({
+            ...current,
+            [pendingAgentProviderType]: models,
+          }));
+        }
+      },
+      () => {
+        if (!cancelled) {
+          setProviderModelsByType((current) => ({
+            ...current,
+            [pendingAgentProviderType]: null,
+          }));
+        }
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingAgentProviderType, providerModelsByType]);
   const activeAgent = activeAgentId
     ? desktopAgentMap.get(activeAgentId) || null
     : null;
@@ -7466,6 +7516,8 @@ export function AppShell() {
       pendingWorkspacePath,
       pendingWorkspaceMode,
       pendingAgentId,
+      pendingModel,
+      pendingModelReasoningEffort,
       preferredWorkspacePath: preferredWorkspaceForNewThread?.available
         ? preferredWorkspaceForNewThread.path
         : null,
@@ -7485,6 +7537,8 @@ export function AppShell() {
       setPendingWorkspaceMode,
       setPendingBotId,
       setPendingAgentId,
+      setPendingModel,
+      setPendingModelReasoningEffort,
       setError,
     });
   }
@@ -10651,6 +10705,9 @@ export function AppShell() {
                 mobileThreadLogLines={mobileThreadLogLines}
                 newThreadSelectedAgentId={pendingAgentId}
                 newThreadSelectedWorkflowId={pendingWorkflowId}
+                newThreadProviderModels={pendingProviderModels}
+                newThreadSelectedModel={pendingModel}
+                newThreadSelectedReasoningEffort={pendingModelReasoningEffort}
                 newThreadWorkspaceEntry={newThreadWorkspaceEntry}
                 newThreadWorkspaceMode={pendingWorkspaceMode}
                 onAddWorkspace={() => {
@@ -10728,6 +10785,8 @@ export function AppShell() {
                   setPendingAgentId(agentId);
                   setPendingWorkflowId(null);
                 }}
+                onSelectNewThreadModel={setPendingModel}
+                onSelectNewThreadReasoningEffort={setPendingModelReasoningEffort}
                 onSelectNewThreadWorkflow={(workflowId) => {
                   setPendingWorkflowId(workflowId);
                   setPendingAgentId("claude");

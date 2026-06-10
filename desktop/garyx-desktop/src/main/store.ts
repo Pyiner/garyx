@@ -1084,6 +1084,9 @@ export async function createDesktopThread(input?: {
   workspacePath?: string | null;
   workspaceMode?: "local" | "worktree";
   agentId?: string | null;
+  model?: string | null;
+  modelReasoningEffort?: string | null;
+  modelServiceTier?: string | null;
   sdkSessionId?: string | null;
   sdkSessionProviderHint?: DesktopSessionProviderHint | null;
   forkFromThreadId?: string | null;
@@ -1124,6 +1127,9 @@ export async function createDesktopThread(input?: {
     workspacePath,
     workspaceMode: providerBoundSource ? "local" : input?.workspaceMode,
     agentId: input?.agentId,
+    model: input?.model,
+    modelReasoningEffort: input?.modelReasoningEffort,
+    modelServiceTier: input?.modelServiceTier,
     sdkSessionId,
     sdkSessionProviderHint,
     forkFromThreadId,

@@ -3391,6 +3391,9 @@ export async function createRemoteThread(
     workspacePath?: string | null;
     workspaceMode?: "local" | "worktree";
     agentId?: string | null;
+    model?: string | null;
+    modelReasoningEffort?: string | null;
+    modelServiceTier?: string | null;
     sdkSessionId?: string | null;
     sdkSessionProviderHint?: "claude" | "codex" | "gemini" | null;
     forkFromThreadId?: string | null;
@@ -3408,6 +3411,9 @@ export async function createRemoteThread(
         workspaceDir: input?.workspacePath || undefined,
         workspaceMode: input?.workspaceMode || undefined,
         agentId: input?.agentId || undefined,
+        model: input?.model || undefined,
+        modelReasoningEffort: input?.modelReasoningEffort || undefined,
+        modelServiceTier: input?.modelServiceTier || undefined,
         sdkSessionId: input?.sdkSessionId || undefined,
         sdkSessionProviderHint: input?.sdkSessionProviderHint || undefined,
         forkFromThreadId: input?.forkFromThreadId || undefined,

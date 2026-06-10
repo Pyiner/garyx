@@ -1439,6 +1439,12 @@ export interface CreateThreadInput {
   workspaceMode?: DesktopWorkspaceMode;
   /** Agent or team ID. Backend resolves whether it's a team leader or custom agent. */
   agentId?: string | null;
+  /** Optional per-thread model override; wins over the agent's configured model. */
+  model?: string | null;
+  /** Optional per-thread reasoning/thinking level override. */
+  modelReasoningEffort?: string | null;
+  /** Optional per-thread service tier override. */
+  modelServiceTier?: string | null;
   /** Optional Claude/Codex/Gemini provider session id to resume from. Garyx resolves the real local provider/workspace from it. */
   sdkSessionId?: string | null;
   /** Optional provider hint for sdkSessionId. Supported values are claude, codex, and gemini. */

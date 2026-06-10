@@ -10524,6 +10524,17 @@ button.composer-provider-trigger[data-state="open"] {
   color: rgba(13, 13, 13, 0.88);
 }
 
+/* New-thread model override pill stays quiet until an override is chosen. */
+button.composer-provider-trigger[data-muted] {
+  background: transparent;
+  color: rgba(13, 13, 13, 0.45);
+}
+
+button.composer-provider-trigger[data-muted]:hover {
+  background: rgba(13, 13, 13, 0.045);
+  color: rgba(13, 13, 13, 0.7);
+}
+
 /* Tame the SelectTrigger's built-in chevron so it matches the static pill. */
 button.composer-provider-trigger > svg:last-child {
   width: 10px;

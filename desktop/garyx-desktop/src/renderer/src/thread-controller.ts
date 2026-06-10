@@ -358,6 +358,8 @@ export async function ensureThread(input: {
   pendingWorkspacePath?: string | null;
   pendingWorkspaceMode?: DesktopWorkspaceMode;
   pendingAgentId?: string | null;
+  pendingModel?: string | null;
+  pendingModelReasoningEffort?: string | null;
   preferredWorkspacePath?: string | null;
   selectableWorkspaceCount: number;
   onAddWorkspace?: () => Promise<DesktopWorkspace | null>;
@@ -372,6 +374,8 @@ export async function ensureThread(input: {
   setPendingWorkspaceMode: (value: DesktopWorkspaceMode) => void;
   setPendingBotId: (value: string | null) => void;
   setPendingAgentId: (value: string) => void;
+  setPendingModel?: (value: string | null) => void;
+  setPendingModelReasoningEffort?: (value: string | null) => void;
   setError: (value: string | null) => void;
 }): Promise<string | null> {
   let threadId = input.selectedThreadId || null;
@@ -400,6 +404,8 @@ export async function ensureThread(input: {
       workspacePath,
       workspaceMode: input.pendingWorkspaceMode || "local",
       agentId,
+      model: input.pendingModel?.trim() || undefined,
+      modelReasoningEffort: input.pendingModelReasoningEffort?.trim() || undefined,
     });
     input.setDesktopState(created.state);
     input.setSelectedThreadId(created.thread.id);
@@ -410,6 +416,8 @@ export async function ensureThread(input: {
     input.setPendingWorkspaceMode("local");
     input.setPendingBotId(null);
     input.setPendingAgentId("claude");
+    input.setPendingModel?.(null);
+    input.setPendingModelReasoningEffort?.(null);
     return threadId;
   } catch (creationError) {
     input.setError(

@@ -42,6 +42,7 @@ import type {
   BrowserAnnotationCommentRequest,
   DesktopBotConsoleSummary,
   DesktopApiProviderType,
+  DesktopProviderModels,
   DesktopWorkflowDefinition,
   MessageFileAttachment,
   MessageImageAttachment,
@@ -107,6 +108,12 @@ type ComposerFormProps = {
   selectedWorkflowId?: string | null;
   workflowOptionsLoading?: boolean;
   onSelectWorkflow?: (workflowId: string) => void;
+  /** Provider model catalog for the pending agent; enables the new-thread model override control. */
+  newThreadProviderModels?: DesktopProviderModels | null;
+  newThreadSelectedModel?: string | null;
+  newThreadSelectedReasoningEffort?: string | null;
+  onSelectNewThreadModel?: (model: string | null) => void;
+  onSelectNewThreadReasoningEffort?: (effort: string | null) => void;
   isActiveSendingThread: boolean;
   onAppendComposerAttachments: (files: File[]) => void;
   onComposerChange: (value: string) => void;
@@ -357,6 +364,111 @@ function browserAnnotationChipMeta(annotation: BrowserAnnotationCommentRequest):
   ]
     .filter(Boolean)
     .join(' · ');
+}
+
+function renderComposerModelControl({
+  providerModels,
+  selectedModel,
+  selectedReasoningEffort,
+  onSelectModel,
+  onSelectReasoningEffort,
+  t,
+}: {
+  providerModels?: DesktopProviderModels | null;
+  selectedModel?: string | null;
+  selectedReasoningEffort?: string | null;
+  onSelectModel?: (model: string | null) => void;
+  onSelectReasoningEffort?: (effort: string | null) => void;
+  t: Translate;
+}) {
+  if (!onSelectModel || !providerModels?.supportsModelSelection) {
+    return null;
+  }
+
+  const models = providerModels.models || [];
+  const selectedModelOption = selectedModel
+    ? models.find((option) => option.id === selectedModel)
+    : undefined;
+  // Thinking options follow the chosen model when it constrains them.
+  const reasoningEfforts =
+    selectedModelOption?.supportedReasoningEfforts?.length
+      ? selectedModelOption.supportedReasoningEfforts
+      : providerModels.reasoningEfforts || [];
+  const supportsReasoning =
+    Boolean(providerModels.supportsReasoningEffortSelection) &&
+    reasoningEfforts.length > 0;
+  const selectedEffortOption = selectedReasoningEffort
+    ? reasoningEfforts.find((option) => option.id === selectedReasoningEffort)
+    : undefined;
+  const triggerLabel = selectedModelOption
+    ? selectedEffortOption
+      ? `${selectedModelOption.label} · ${selectedEffortOption.label}`
+      : selectedModelOption.label
+    : selectedEffortOption
+      ? `${t("Model")} · ${selectedEffortOption.label}`
+      : t("Model");
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        aria-label={t("Change model for this thread")}
+        className="composer-provider-trigger"
+        data-muted={!selectedModelOption && !selectedEffortOption ? "" : undefined}
+        type="button"
+      >
+        <IconCube aria-hidden size={15} stroke={1.75} />
+        <span className="composer-provider-label">{triggerLabel}</span>
+        {PROVIDER_CHEVRON_GLYPH}
+      </DropdownMenuTrigger>
+      <FloatingActionMenuContent align="start" side="top">
+        <FloatingActionMenuItem
+          data-active={!selectedModel ? '' : undefined}
+          onSelect={() => onSelectModel(null)}
+        >
+          <span className="composer-menu-label">{t("Agent default model")}</span>
+        </FloatingActionMenuItem>
+        {models.map((option) => (
+          <FloatingActionMenuItem
+            data-active={option.id === selectedModel ? '' : undefined}
+            key={option.id}
+            onSelect={() => onSelectModel(option.id)}
+          >
+            <span className="composer-menu-label">{option.label}</span>
+          </FloatingActionMenuItem>
+        ))}
+        {supportsReasoning && onSelectReasoningEffort ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuSub>
+              <FloatingActionMenuSubTrigger>
+                <IconBrain aria-hidden size={15} stroke={1.75} />
+                {t("Thinking level")}
+              </FloatingActionMenuSubTrigger>
+              <FloatingActionMenuSubContent>
+                <FloatingActionMenuItem
+                  data-active={!selectedReasoningEffort ? '' : undefined}
+                  onSelect={() => onSelectReasoningEffort(null)}
+                >
+                  <span className="composer-menu-label">{t("Agent default")}</span>
+                </FloatingActionMenuItem>
+                {reasoningEfforts.map((option) => (
+                  <FloatingActionMenuItem
+                    data-active={
+                      option.id === selectedReasoningEffort ? '' : undefined
+                    }
+                    key={option.id}
+                    onSelect={() => onSelectReasoningEffort(option.id)}
+                  >
+                    <span className="composer-menu-label">{option.label}</span>
+                  </FloatingActionMenuItem>
+                ))}
+              </FloatingActionMenuSubContent>
+            </DropdownMenuSub>
+          </>
+        ) : null}
+      </FloatingActionMenuContent>
+    </DropdownMenu>
+  );
 }
 
 function renderComposerProviderControl({
@@ -629,6 +741,11 @@ export function ComposerForm({
   selectedWorkflowId,
   workflowOptionsLoading,
   onSelectWorkflow,
+  newThreadProviderModels,
+  newThreadSelectedModel,
+  newThreadSelectedReasoningEffort,
+  onSelectNewThreadModel,
+  onSelectNewThreadReasoningEffort,
   isActiveSendingThread,
   onAppendComposerAttachments,
   onComposerChange,
@@ -1091,6 +1208,14 @@ export function ComposerForm({
           </FloatingActionMenuContent>
         </DropdownMenu>
         <div className="composer-buttons">
+          {renderComposerModelControl({
+            providerModels: newThreadProviderModels,
+            selectedModel: newThreadSelectedModel,
+            selectedReasoningEffort: newThreadSelectedReasoningEffort,
+            onSelectModel: onSelectNewThreadModel,
+            onSelectReasoningEffort: onSelectNewThreadReasoningEffort,
+            t,
+          })}
           {renderComposerProviderControl({
             composerProviderType,
             agentLabel,

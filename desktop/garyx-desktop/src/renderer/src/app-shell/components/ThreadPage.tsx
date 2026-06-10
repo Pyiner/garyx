@@ -16,6 +16,7 @@ import type {
   DesktopBotConsoleSummary,
   MessageFileAttachment,
   MessageImageAttachment,
+  DesktopProviderModels,
   DesktopThreadSummary,
   DesktopWorkspace,
   DesktopWorkspaceMode,
@@ -264,6 +265,9 @@ type ThreadPageProps = {
   mobileThreadLogLines: ThreadLogLine[];
   newThreadSelectedAgentId: string;
   newThreadSelectedWorkflowId?: string | null;
+  newThreadProviderModels?: DesktopProviderModels | null;
+  newThreadSelectedModel?: string | null;
+  newThreadSelectedReasoningEffort?: string | null;
   newThreadWorkspaceEntry: DesktopWorkspace | null;
   newThreadWorkspaceMode: DesktopWorkspaceMode;
   queueDropTarget: QueueDropTarget;
@@ -318,6 +322,8 @@ type ThreadPageProps = {
     position: "before" | "after",
   ) => void;
   onSelectNewThreadAgent: (agentId: string) => void;
+  onSelectNewThreadModel?: (model: string | null) => void;
+  onSelectNewThreadReasoningEffort?: (effort: string | null) => void;
   onSelectNewThreadWorkflow: (workflowId: string) => void;
   onSelectNewThreadWorkspaceMode: (mode: DesktopWorkspaceMode) => void;
   onResumeProviderSession: (sessionId: string) => Promise<void>;
@@ -388,6 +394,9 @@ export function ThreadPage({
   mobileThreadLogLines,
   newThreadSelectedAgentId,
   newThreadSelectedWorkflowId,
+  newThreadProviderModels,
+  newThreadSelectedModel,
+  newThreadSelectedReasoningEffort,
   newThreadWorkspaceEntry,
   newThreadWorkspaceMode,
   onAddWorkspace,
@@ -409,6 +418,8 @@ export function ThreadPage({
   onRemoveComposerBrowserAnnotation,
   onReorderQueuedIntent,
   onSelectNewThreadAgent,
+  onSelectNewThreadModel,
+  onSelectNewThreadReasoningEffort,
   onSelectNewThreadWorkflow,
   onSelectNewThreadWorkspaceMode,
   onResumeProviderSession,
@@ -947,6 +958,21 @@ export function ThreadPage({
               workflowOptionsLoading={composerWorkflowOptionsLoading}
               onSelectWorkflow={
                 !selectedThreadId ? onSelectNewThreadWorkflow : undefined
+              }
+              newThreadProviderModels={
+                !selectedThreadId ? newThreadProviderModels : null
+              }
+              newThreadSelectedModel={
+                !selectedThreadId ? newThreadSelectedModel : null
+              }
+              newThreadSelectedReasoningEffort={
+                !selectedThreadId ? newThreadSelectedReasoningEffort : null
+              }
+              onSelectNewThreadModel={
+                !selectedThreadId ? onSelectNewThreadModel : undefined
+              }
+              onSelectNewThreadReasoningEffort={
+                !selectedThreadId ? onSelectNewThreadReasoningEffort : undefined
               }
               isActiveSendingThread={isActiveSendingThread}
               onAppendComposerAttachments={onAppendComposerAttachments}
