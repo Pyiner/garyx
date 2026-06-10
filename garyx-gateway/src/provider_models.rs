@@ -111,12 +111,25 @@ pub(crate) async fn list_provider_models(
             ),
             Err(error) => unsupported(provider_type, "gemini_acp", Some(error)),
         },
-        ProviderType::ClaudeCode => native_model_catalog_response(
-            provider_type,
-            "claude_code_builtin",
-            claude_code_models(),
-            "claude-sonnet-4-6",
-        ),
+        ProviderType::ClaudeCode => {
+            // The CLI's actual default model is account/plan dependent and not
+            // statically knowable, so the catalog claims no default. Without a
+            // chosen model, only the levels every model supports are offered.
+            let models = claude_code_models();
+            let reasoning_efforts = common_reasoning_efforts(&models);
+            ProviderModelsResponse {
+                provider_type,
+                supports_model_selection: true,
+                supports_reasoning_effort_selection: !reasoning_efforts.is_empty(),
+                reasoning_efforts,
+                models,
+                supports_service_tier_selection: false,
+                service_tiers: Vec::new(),
+                default_model: None,
+                source: "claude_code_builtin",
+                error: None,
+            }
+        }
         ProviderType::CodexAppServer => {
             let discovery = gpt_builtin_models(None);
             ProviderModelsResponse {
@@ -448,6 +461,28 @@ fn native_model_option(
     }
 }
 
+/// Reasoning levels supported by every model in the catalog, preserving the
+/// first model's ordering. Used when no model is chosen so any selectable
+/// level stays valid regardless of which model the CLI resolves.
+fn common_reasoning_efforts(models: &[ProviderModelOption]) -> Vec<ProviderReasoningEffortOption> {
+    let Some(first) = models.first() else {
+        return Vec::new();
+    };
+    first
+        .supported_reasoning_efforts
+        .iter()
+        .filter(|effort| {
+            models.iter().all(|model| {
+                model
+                    .supported_reasoning_efforts
+                    .iter()
+                    .any(|candidate| candidate.id == effort.id)
+            })
+        })
+        .cloned()
+        .collect()
+}
+
 // Mirrors the Claude Code CLI model picker; effort levels map to the CLI's
 // `--effort` values. Per the CLI's own gating, `xhigh` is available on
 // Fable 5 and Opus 4.8 only, and `max` additionally on Sonnet 4.6.
@@ -478,7 +513,7 @@ fn claude_code_models() -> Vec<ProviderModelOption> {
             "claude-sonnet-4-6",
             "Claude Sonnet 4.6",
             "Best for everyday, complex tasks.",
-            true,
+            false,
             "high",
             claude_sonnet_efforts,
         ),
@@ -996,15 +1031,16 @@ mod tests {
         assert!(response.supports_model_selection);
         assert!(response.supports_reasoning_effort_selection);
         assert_eq!(response.source, "claude_code_builtin");
-        assert_eq!(response.default_model.as_deref(), Some("claude-sonnet-4-6"));
-        // Default model (Sonnet 4.6) supports max but not xhigh.
+        // The CLI's account default is unknowable, so no default is claimed and
+        // the model-less effort list is the intersection every model supports.
+        assert_eq!(response.default_model, None);
         assert_eq!(
             response
                 .reasoning_efforts
                 .iter()
                 .map(|effort| effort.id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["low", "medium", "high", "max"]
+            vec!["low", "medium", "high"]
         );
         assert_eq!(
             response.models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),

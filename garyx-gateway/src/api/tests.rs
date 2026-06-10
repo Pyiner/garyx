@@ -907,7 +907,7 @@ async fn test_provider_models_reports_claude_code_catalog() {
     assert_eq!(json["provider_type"], "claude_code");
     assert_eq!(json["supports_model_selection"], true);
     assert_eq!(json["supports_reasoning_effort_selection"], true);
-    assert_eq!(json["default_model"], "claude-sonnet-4-6");
+    assert_eq!(json["default_model"], Value::Null);
     assert!(!json["models"].as_array().unwrap().is_empty());
 }
 
