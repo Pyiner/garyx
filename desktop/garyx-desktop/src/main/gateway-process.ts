@@ -26,20 +26,21 @@ function setStatus(nextStatus: GatewayStatus): void {
   statusChangeHandler?.();
 }
 
-function launchdTarget(): string {
-  const uid = process.getuid?.();
-  if (typeof uid !== 'number') {
+function uid(): number {
+  const value = process.getuid?.();
+  if (typeof value !== 'number') {
     throw new Error('launchd control requires a POSIX uid');
   }
-  return `gui/${uid}/${LAUNCHD_SERVICE_NAME}`;
+  return value;
 }
 
-function launchdDomain(): string {
-  const uid = process.getuid?.();
-  if (typeof uid !== 'number') {
-    throw new Error('launchd control requires a POSIX uid');
-  }
-  return `gui/${uid}`;
+// Domains the gateway can be installed into, in the desktop's preferred order.
+// The CLI may bootstrap into `gui/<uid>` (Aqua sessions) or `user/<uid>`
+// (SSH/headless or the Aqua fallback), so the desktop must probe both rather
+// than assuming the GUI domain.
+function candidateDomains(): string[] {
+  const id = uid();
+  return [`gui/${id}`, `user/${id}`];
 }
 
 async function runCommand(file: string, args: string[]): Promise<string> {
@@ -58,12 +59,23 @@ async function tryRunCommand(file: string, args: string[]): Promise<string | nul
   }
 }
 
+async function loadedDomainOutput(): Promise<{ target: string; output: string } | null> {
+  for (const domain of candidateDomains()) {
+    const target = `${domain}/${LAUNCHD_SERVICE_NAME}`;
+    const output = await tryRunCommand(LAUNCHCTL_BIN, ['print', target]);
+    if (output !== null) {
+      return { target, output };
+    }
+  }
+  return null;
+}
+
 async function getLaunchdPid(): Promise<number | null> {
-  const output = await tryRunCommand(LAUNCHCTL_BIN, ['print', launchdTarget()]);
-  if (!output) {
+  const loaded = await loadedDomainOutput();
+  if (!loaded) {
     return null;
   }
-  const match = output.match(/\bpid = (\d+)\b/);
+  const match = loaded.output.match(/\bpid = (\d+)\b/);
   if (!match) {
     return null;
   }
@@ -72,12 +84,13 @@ async function getLaunchdPid(): Promise<number | null> {
 }
 
 async function ensureLaunchdLoaded(): Promise<void> {
-  const existingPid = await getLaunchdPid();
-  if (existingPid) {
+  if (await loadedDomainOutput()) {
     return;
   }
+  // Not loaded in any domain yet. The desktop launcher runs inside the Aqua
+  // session, so bootstrap into the GUI domain to match historical installs.
   try {
-    await runCommand(LAUNCHCTL_BIN, ['bootstrap', launchdDomain(), LAUNCHD_PLIST_PATH]);
+    await runCommand(LAUNCHCTL_BIN, ['bootstrap', `gui/${uid()}`, LAUNCHD_PLIST_PATH]);
   } catch (error) {
     const stderr = error instanceof Error ? error.message : String(error);
     if (!stderr.includes('service already loaded')) {
@@ -87,7 +100,11 @@ async function ensureLaunchdLoaded(): Promise<void> {
 }
 
 async function kickstartLaunchd(): Promise<void> {
-  await runCommand(LAUNCHCTL_BIN, ['kickstart', '-k', launchdTarget()]);
+  const loaded = await loadedDomainOutput();
+  if (!loaded) {
+    throw new Error('launchd gateway is not loaded in any domain');
+  }
+  await runCommand(LAUNCHCTL_BIN, ['kickstart', '-k', loaded.target]);
 }
 
 async function getListeningPid(port: number): Promise<number | null> {
