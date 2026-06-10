@@ -87,17 +87,40 @@ final class GaryxToolCallPresentationTests: XCTestCase {
         XCTAssertEqual(detail.sections[1].content, .codeCard("Running…"))
     }
 
-    func testReadDetailShowsFilePathPlainAndResult() {
+    func testReadDetailOfImageShowsImagePreviewNotBase64() {
         let detail = GaryxToolCallPresentation.detail(for: entry(
             toolName: "read",
             title: "Read",
             inputText: "{\"file_path\": \"/tmp/a.png\"}",
-            resultText: "binary image",
+            resultText: "iVBORw0KGgoAAAANSUh…",
             primaryPath: "/tmp/a.png"
         ))
-        XCTAssertEqual(detail.sections.map(\.label), ["File", "Result"])
+        XCTAssertEqual(detail.sections.map(\.label), ["File", "Content"])
         XCTAssertEqual(detail.sections[0].content, .plainMonospace("/tmp/a.png"))
-        XCTAssertEqual(detail.sections[1].content, .codeCard("binary image"))
+        XCTAssertEqual(detail.sections[1].content, .imagePreview("/tmp/a.png"))
+    }
+
+    func testReadDetailOfTextFileKeepsResultCard() {
+        let detail = GaryxToolCallPresentation.detail(for: entry(
+            toolName: "read",
+            title: "Read",
+            inputText: "{\"file_path\": \"/tmp/notes.md\"}",
+            resultText: "# Notes",
+            primaryPath: "/tmp/notes.md"
+        ))
+        XCTAssertEqual(detail.sections.map(\.label), ["File", "Result"])
+        XCTAssertEqual(detail.sections[1].content, .codeCard("# Notes"))
+    }
+
+    func testWriteDetailOfImagePathShowsImagePreview() {
+        let detail = GaryxToolCallPresentation.detail(for: entry(
+            toolName: "write",
+            title: "Write",
+            inputText: "{\"file_path\": \"/tmp/generated.png\"}",
+            primaryPath: "/tmp/generated.png"
+        ))
+        XCTAssertEqual(detail.sections.map(\.label), ["File", "Content"])
+        XCTAssertEqual(detail.sections[1].content, .imagePreview("/tmp/generated.png"))
     }
 
     func testEditDetailRendersOldNewStringsAsDiff() {

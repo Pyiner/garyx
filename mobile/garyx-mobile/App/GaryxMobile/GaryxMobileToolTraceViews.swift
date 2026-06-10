@@ -182,6 +182,10 @@ struct GaryxToolCallDetailView: View {
                             GaryxToolCallCodeCard(text: text)
                         case .diff(let lines):
                             GaryxToolCallDiffView(lines: lines)
+                        case .imagePreview(let path):
+                            GaryxToolImageThumbnail(
+                                ref: GaryxToolCallImageRef(id: "detail:\(path)", path: path)
+                            )
                         }
                     }
                 }

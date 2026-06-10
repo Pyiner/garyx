@@ -48,12 +48,14 @@ struct GaryxToolCallDiffLine: Identifiable, Equatable {
 }
 
 /// Section content vocabulary for the call detail page: a bare monospace
-/// value (file paths), a code card (commands, raw payloads), or a colored
-/// diff (file edits).
+/// value (file paths), a code card (commands, raw payloads), a colored
+/// diff (file edits), or an inline image preview (image files — never
+/// their raw base64 payload).
 enum GaryxToolCallDetailContent: Equatable {
     case plainMonospace(String)
     case codeCard(String)
     case diff([GaryxToolCallDiffLine])
+    case imagePreview(String)
 }
 
 struct GaryxToolCallDetailSectionModel: Identifiable, Equatable {
@@ -142,19 +144,30 @@ enum GaryxToolCallPresentation {
             }
             sections.append(outputSection(for: entry, label: "Output"))
         } else if entry.isFileEdit {
-            if let path = filePath(for: entry, input: input) {
+            let path = filePath(for: entry, input: input)
+            if let path {
                 sections.append(.init(label: "File", content: .plainMonospace(path)))
             }
-            if let diff = diffLines(input: input, inputText: entry.inputText) {
+            if let path, isImagePath(path) {
+                sections.append(.init(label: "Content", content: .imagePreview(path)))
+            } else if let diff = diffLines(input: input, inputText: entry.inputText) {
                 sections.append(.init(label: "Output", content: .diff(diff)))
             } else {
                 sections.append(outputSection(for: entry, label: "Output"))
             }
         } else if entry.isFileRead {
-            if let path = filePath(for: entry, input: input) {
+            let path = filePath(for: entry, input: input)
+            if let path {
                 sections.append(.init(label: "File", content: .plainMonospace(path)))
             }
-            sections.append(outputSection(for: entry, label: entry.resultLabel))
+            if let path, isImagePath(path) {
+                // The raw result of reading an image is base64 noise; show
+                // the image itself, like the reference design's Content
+                // section.
+                sections.append(.init(label: "Content", content: .imagePreview(path)))
+            } else {
+                sections.append(outputSection(for: entry, label: entry.resultLabel))
+            }
         } else {
             if let inputText = entry.inputText {
                 sections.append(.init(label: entry.inputLabel, content: .codeCard(inputText)))
