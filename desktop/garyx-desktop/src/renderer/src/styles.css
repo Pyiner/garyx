@@ -4616,6 +4616,31 @@ code {
   text-align: center;
 }
 
+.settings-error-stack {
+  margin-top: 8px;
+}
+
+.settings-error-stack summary {
+  color: var(--color-token-description-foreground);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.settings-error-stack pre {
+  max-height: 260px;
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border: 1px solid color-mix(in srgb, var(--color-token-border) 82%, white);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-token-bg-secondary) 55%, white);
+  color: var(--color-token-text-secondary);
+  font-family: var(--message-code-font);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
 .side-tool-error {
   margin: 0 10px 8px;
   padding: 7px 8px;

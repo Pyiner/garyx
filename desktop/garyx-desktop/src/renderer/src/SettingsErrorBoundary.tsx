@@ -9,6 +9,7 @@ type SettingsErrorBoundaryProps = {
 
 type SettingsErrorBoundaryState = {
   error: Error | null;
+  componentStack: string | null;
 };
 
 export class SettingsErrorBoundary extends Component<
@@ -17,24 +18,26 @@ export class SettingsErrorBoundary extends Component<
 > {
   state: SettingsErrorBoundaryState = {
     error: null,
+    componentStack: null,
   };
 
-  static getDerivedStateFromError(error: Error): SettingsErrorBoundaryState {
+  static getDerivedStateFromError(error: Error): Partial<SettingsErrorBoundaryState> {
     return { error };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error('Settings view crashed', error, info.componentStack);
+    this.setState({ componentStack: info.componentStack ?? null });
   }
 
   componentDidUpdate(prevProps: SettingsErrorBoundaryProps) {
     if (prevProps.activeTab !== this.props.activeTab && this.state.error) {
-      this.setState({ error: null });
+      this.setState({ error: null, componentStack: null });
     }
   }
 
   private handleRetry = () => {
-    this.setState({ error: null });
+    this.setState({ error: null, componentStack: null });
     this.props.onRetry();
   };
 
@@ -66,6 +69,12 @@ export class SettingsErrorBoundary extends Component<
                       <p className="settings-control-row-description">
                         {errorMessage || t('Unknown renderer error')}
                       </p>
+                      {this.state.componentStack ? (
+                        <details className="settings-error-stack">
+                          <summary>{t('Technical details')}</summary>
+                          <pre>{this.state.componentStack.trim()}</pre>
+                        </details>
+                      ) : null}
                     </div>
                     <div className="settings-control-row-control">
                       <button className="primary-button" onClick={this.handleRetry} type="button">

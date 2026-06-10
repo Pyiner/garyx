@@ -31,6 +31,12 @@ export default defineConfig({
       outDir: resolve(__dirname, 'out/renderer'),
       emptyOutDir: true,
     },
+    // Keep component names through minification so production React
+    // component stacks (error boundaries, update-depth crashes) stay
+    // readable in screenshots and logs.
+    esbuild: {
+      keepNames: true,
+    },
     resolve: {
       alias: {
         '@renderer': resolve(__dirname, 'src/renderer/src'),
