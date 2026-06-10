@@ -768,36 +768,47 @@ pub async fn detach_endpoint_from_thread(
     Ok(previous_thread.map(|(key, _)| key))
 }
 
+/// Endpoints recorded in the channel binding registry, without touching any
+/// thread records. Cheap: reads a single store key.
+pub async fn list_registry_channel_endpoints(
+    store: &Arc<dyn ThreadStore>,
+) -> Vec<KnownChannelEndpoint> {
+    let Some(registry) = store.get(KNOWN_CHANNEL_ENDPOINTS_KEY).await else {
+        return Vec::new();
+    };
+    bindings_from_value(&registry)
+        .into_iter()
+        .map(|binding| {
+            let endpoint_key = binding.endpoint_key();
+            let delivery_target_type = binding.resolved_delivery_target_type();
+            let delivery_target_id = binding.resolved_delivery_target_id();
+            KnownChannelEndpoint {
+                endpoint_key,
+                channel: binding.channel,
+                account_id: binding.account_id,
+                binding_key: binding.binding_key,
+                chat_id: binding.chat_id,
+                delivery_target_type,
+                delivery_target_id,
+                display_label: binding.display_label,
+                thread_id: None,
+                thread_label: None,
+                workspace_dir: None,
+                thread_updated_at: None,
+                last_inbound_at: binding.last_inbound_at,
+                last_delivery_at: binding.last_delivery_at,
+            }
+        })
+        .collect()
+}
+
 pub async fn list_known_channel_endpoints(
     store: &Arc<dyn ThreadStore>,
 ) -> Vec<KnownChannelEndpoint> {
     let mut endpoints = HashMap::new();
 
-    if let Some(registry) = store.get(KNOWN_CHANNEL_ENDPOINTS_KEY).await {
-        for binding in bindings_from_value(&registry) {
-            let endpoint_key = binding.endpoint_key();
-            let delivery_target_type = binding.resolved_delivery_target_type();
-            let delivery_target_id = binding.resolved_delivery_target_id();
-            endpoints.insert(
-                endpoint_key.clone(),
-                KnownChannelEndpoint {
-                    endpoint_key,
-                    channel: binding.channel,
-                    account_id: binding.account_id,
-                    binding_key: binding.binding_key,
-                    chat_id: binding.chat_id,
-                    delivery_target_type,
-                    delivery_target_id,
-                    display_label: binding.display_label,
-                    thread_id: None,
-                    thread_label: None,
-                    workspace_dir: None,
-                    thread_updated_at: None,
-                    last_inbound_at: binding.last_inbound_at,
-                    last_delivery_at: binding.last_delivery_at,
-                },
-            );
-        }
+    for endpoint in list_registry_channel_endpoints(store).await {
+        endpoints.insert(endpoint.endpoint_key.clone(), endpoint);
     }
 
     let keys = store.list_keys(None).await;

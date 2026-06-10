@@ -6,7 +6,7 @@ use garyx_models::routing::{
 use garyx_router::{
     KnownChannelEndpoint, ThreadStore, active_run_snapshot_messages, active_run_snapshot_run_id,
     agent_id_from_value, bindings_from_value, history_message_count, is_default_thread_list_hidden,
-    is_thread_key, label_from_value, list_known_channel_endpoints, thread_kind_from_value,
+    is_thread_key, label_from_value, list_registry_channel_endpoints, thread_kind_from_value,
     workspace_dir_from_value,
 };
 use serde_json::Value;
@@ -59,14 +59,17 @@ pub(crate) async fn list_channel_endpoints_with_projection_backfill(
         let thread_ids = thread_store.list_keys(Some("thread::")).await;
         let _ = backfill_thread_meta_projection(thread_ids, thread_store, garyx_db).await;
     }
+    // Thread-bound endpoints come from the write-time projection; the registry
+    // only contributes endpoints that have no thread yet. Scanning the full
+    // thread store here stalled every snapshot rebuild for seconds.
     match garyx_db.list_thread_channel_endpoints() {
         Ok(endpoints) => merge_projected_and_known_channel_endpoints(
             endpoints,
-            list_known_channel_endpoints(thread_store).await,
+            list_registry_channel_endpoints(thread_store).await,
         ),
         Err(error) => {
             warn!(error = %error, "failed to list channel endpoint projection");
-            list_known_channel_endpoints(thread_store).await
+            list_registry_channel_endpoints(thread_store).await
         }
     }
 }

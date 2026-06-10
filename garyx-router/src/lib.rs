@@ -57,7 +57,8 @@ pub mod threading {
         default_workspace_mode_for_channel_account, delete_thread_record,
         detach_endpoint_from_thread, endpoint_key, is_default_thread_list_hidden,
         is_hidden_thread_value, is_thread_key, label_from_value, list_known_channel_endpoints,
-        new_thread_key, normalize_workspace_dir, thread_kind_from_value,
+        list_registry_channel_endpoints, new_thread_key, normalize_workspace_dir,
+        thread_kind_from_value,
         thread_metadata_from_value, update_thread_record, upsert_binding, upsert_thread_fields,
         workspace_dir_from_value, worktree_base_dir_for_config,
     };
@@ -99,8 +100,9 @@ pub use threads::{
     default_agent_for_channel_account, default_workspace_for_channel_account,
     default_workspace_mode_for_channel_account, delete_thread_record, detach_endpoint_from_thread,
     endpoint_key, is_default_thread_list_hidden, is_hidden_thread_value, is_thread_key,
-    label_from_value, list_known_channel_endpoints, new_thread_key, normalize_workspace_dir,
-    thread_kind_from_value, thread_metadata_from_value, update_thread_record, upsert_binding,
+    label_from_value, list_known_channel_endpoints, list_registry_channel_endpoints,
+    new_thread_key, normalize_workspace_dir, thread_kind_from_value, thread_metadata_from_value,
+    update_thread_record, upsert_binding,
     upsert_thread_fields, workspace_dir_from_value, worktree_base_dir_for_config,
 };
 pub use worktree::{
