@@ -87,7 +87,15 @@ async fn try_launchd_restart() -> bool {
         return false;
     }
 
-    let service_target = format!("gui/{uid}/{LAUNCHD_SERVICE_NAME}");
+    // The agent may be bootstrapped into either the GUI (`gui/<uid>`, desktop
+    // login) or the per-user (`user/<uid>`, SSH / headless) domain. Kickstart
+    // must target the domain it actually lives in, so probe both rather than
+    // assuming GUI. Falls back to the GUI target if neither prints (e.g. a
+    // dev `gateway run` not managed by launchd), where the stop/start and
+    // subprocess paths below still apply.
+    let service_target = resolve_loaded_target(&uid)
+        .await
+        .unwrap_or_else(|| format!("gui/{uid}/{LAUNCHD_SERVICE_NAME}"));
 
     match Command::new("launchctl")
         .args(["kickstart", "-k", &service_target])
@@ -136,6 +144,27 @@ async fn try_launchd_restart() -> bool {
             false
         }
     }
+}
+
+/// Return the `<domain>/<uid>/<service>` target the agent is currently loaded
+/// in, probing the GUI domain first and then the per-user domain. `None` when
+/// the service is not loaded in either (the caller then assumes a sensible
+/// default and relies on its further fallbacks).
+#[cfg(not(test))]
+async fn resolve_loaded_target(uid: &str) -> Option<String> {
+    for domain in [format!("gui/{uid}"), format!("user/{uid}")] {
+        let target = format!("{domain}/{LAUNCHD_SERVICE_NAME}");
+        let loaded = Command::new("launchctl")
+            .args(["print", &target])
+            .output()
+            .await
+            .map(|out| out.status.success())
+            .unwrap_or(false);
+        if loaded {
+            return Some(target);
+        }
+    }
+    None
 }
 
 #[cfg(not(test))]

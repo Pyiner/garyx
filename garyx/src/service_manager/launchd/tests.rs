@@ -31,6 +31,12 @@ fn render_launch_agent_plist_uses_expected_label_and_program() {
     assert!(plist.contains("<key>HardResourceLimits</key>"));
     assert!(plist.contains("<integer>65536</integer>"));
     assert!(!plist.contains("<integer>1024</integer>"));
+    // The unit must not pin itself to the Aqua (GUI) session: the agent is a
+    // headless HTTP server and is bootstrapped into an explicit domain
+    // (gui/<uid> on desktop, user/<uid> over SSH). An Aqua limit would stop it
+    // loading in the per-user domain that SSH / headless logins must use.
+    assert!(!plist.contains("LimitLoadToSessionType"));
+    assert!(!plist.contains("Aqua"));
 }
 
 #[test]
