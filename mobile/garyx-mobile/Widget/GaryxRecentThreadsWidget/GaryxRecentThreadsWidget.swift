@@ -75,20 +75,22 @@ struct GaryxRecentThreadsWidgetView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        Group {
             if threads.isEmpty {
-                Spacer(minLength: 0)
-                Text("No recent threads")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.primary)
-                Text("Open Gary X to refresh")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 0)
+                VStack(spacing: 3) {
+                    Text("No recent threads")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.primary)
+                    Text("Open Gary X to refresh")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+                .multilineTextAlignment(.center)
             } else {
                 VStack(spacing: metrics.rowSpacing) {
                     ForEach(threads) { thread in
-                        if let url = GaryxMobileThreadLink.make(threadId: thread.id) {
+                        if metrics.supportsRowLinks,
+                           let url = GaryxMobileThreadLink.make(threadId: thread.id) {
                             Link(destination: url) {
                                 GaryxRecentThreadWidgetRow(thread: thread, metrics: metrics)
                             }
@@ -97,10 +99,10 @@ struct GaryxRecentThreadsWidgetView: View {
                             GaryxRecentThreadWidgetRow(thread: thread, metrics: metrics)
                         }
                     }
-                    Spacer(minLength: 0)
                 }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(metrics.contentPadding)
         .containerBackground(for: .widget) {
             ContainerRelativeShape()
@@ -113,7 +115,8 @@ private struct GaryxRecentThreadsWidgetMetrics {
     let contentPadding: CGFloat
     let rowContentSpacing: CGFloat
     let rowSpacing: CGFloat
-    let rowHeight: CGFloat
+    let rowMinHeight: CGFloat
+    let rowMaxHeight: CGFloat
     let avatarSize: CGFloat
     let avatarIconSize: CGFloat
     let runningDotSize: CGFloat
@@ -121,14 +124,31 @@ private struct GaryxRecentThreadsWidgetMetrics {
     let rowWorkspaceFontSize: CGFloat
     let rowWorkspaceSpacing: CGFloat
     let visibleRowCount: Int
+    let supportsRowLinks: Bool
 
     init(family: WidgetFamily) {
         switch family {
+        case .systemSmall:
+            // systemSmall ignores per-row Links; a tap opens the app instead.
+            contentPadding = 10
+            rowContentSpacing = 8
+            rowSpacing = 2
+            rowMinHeight = 36
+            rowMaxHeight = 52
+            avatarSize = 30
+            avatarIconSize = 12
+            runningDotSize = 6
+            rowTitleFontSize = 13
+            rowWorkspaceFontSize = 10.5
+            rowWorkspaceSpacing = 1
+            visibleRowCount = 3
+            supportsRowLinks = false
         case .systemMedium:
             contentPadding = 10
             rowContentSpacing = 10
             rowSpacing = 3
-            rowHeight = 44
+            rowMinHeight = 38
+            rowMaxHeight = 56
             avatarSize = 34
             avatarIconSize = 14
             runningDotSize = 7
@@ -136,11 +156,13 @@ private struct GaryxRecentThreadsWidgetMetrics {
             rowWorkspaceFontSize = 12
             rowWorkspaceSpacing = 1
             visibleRowCount = 3
+            supportsRowLinks = true
         case .systemExtraLarge:
             contentPadding = 14
             rowContentSpacing = 13
             rowSpacing = 6
-            rowHeight = 62
+            rowMinHeight = 52
+            rowMaxHeight = 80
             avatarSize = 44
             avatarIconSize = 18
             runningDotSize = 8
@@ -148,11 +170,13 @@ private struct GaryxRecentThreadsWidgetMetrics {
             rowWorkspaceFontSize = 13.5
             rowWorkspaceSpacing = 2
             visibleRowCount = GaryxMobileWidgetStore.visibleThreadLimit
+            supportsRowLinks = true
         default:
             contentPadding = 12
             rowContentSpacing = 12
-            rowSpacing = 6
-            rowHeight = 60
+            rowSpacing = 4
+            rowMinHeight = 50
+            rowMaxHeight = 78
             avatarSize = 42
             avatarIconSize = 17
             runningDotSize = 8
@@ -160,6 +184,7 @@ private struct GaryxRecentThreadsWidgetMetrics {
             rowWorkspaceFontSize = 13
             rowWorkspaceSpacing = 2
             visibleRowCount = GaryxMobileWidgetStore.visibleThreadLimit
+            supportsRowLinks = true
         }
     }
 }
@@ -201,7 +226,12 @@ private struct GaryxRecentThreadWidgetRow: View {
 
             Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, minHeight: metrics.rowHeight, maxHeight: metrics.rowHeight, alignment: .leading)
+        .frame(
+            maxWidth: .infinity,
+            minHeight: metrics.rowMinHeight,
+            maxHeight: metrics.rowMaxHeight,
+            alignment: .leading
+        )
         .contentShape(Rectangle())
     }
 }
@@ -257,6 +287,10 @@ private struct GaryxWidgetAgentAvatar: View {
             }
         }
         .frame(width: metrics.avatarSize, height: metrics.avatarSize)
+        .overlay {
+            Circle()
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+        }
         .accessibilityHidden(true)
     }
 
@@ -303,7 +337,7 @@ struct GaryxRecentThreadsWidget: Widget {
         }
         .configurationDisplayName("Gary X Recent")
         .description("Open recent Gary X threads.")
-        .supportedFamilies([.systemMedium, .systemLarge, .systemExtraLarge])
+        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge, .systemExtraLarge])
         .contentMarginsDisabled()
     }
 }
