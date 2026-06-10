@@ -11,7 +11,9 @@ use garyx_models::config::ChannelsConfig;
 use garyx_models::config::TelegramAccount;
 use garyx_models::provider::{
     FORK_FROM_PROVIDER_TYPE_METADATA_KEY, FORK_FROM_SDK_SESSION_ID_METADATA_KEY,
-    FORK_FROM_THREAD_ID_METADATA_KEY, ProviderType, SDK_SESSION_FORK_METADATA_KEY,
+    FORK_FROM_THREAD_ID_METADATA_KEY, MODEL_OVERRIDE_METADATA_KEY,
+    MODEL_REASONING_EFFORT_OVERRIDE_METADATA_KEY, MODEL_SERVICE_TIER_OVERRIDE_METADATA_KEY,
+    ProviderType, SDK_SESSION_FORK_METADATA_KEY,
 };
 use garyx_models::routing::{DELIVERY_TARGET_TYPE_CHAT_ID, DELIVERY_TARGET_TYPE_OPEN_ID};
 use garyx_router::{
@@ -886,6 +888,15 @@ pub struct CreateThreadBody {
     /// Agent or team ID. Backend resolves whether it's a team or custom agent.
     #[serde(default)]
     pub agent_id: Option<String>,
+    /// Optional per-thread model override; wins over the agent's configured model.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Optional per-thread reasoning/thinking level override.
+    #[serde(default)]
+    pub model_reasoning_effort: Option<String>,
+    /// Optional per-thread service tier override.
+    #[serde(default)]
+    pub model_service_tier: Option<String>,
     /// Optional provider-native session id to resume from on the first run.
     #[serde(default, alias = "sessionId")]
     pub sdk_session_id: Option<String>,
@@ -1759,6 +1770,21 @@ pub async fn create_thread(
     };
 
     let mut metadata = body.metadata.clone();
+    for (override_key, requested) in [
+        (MODEL_OVERRIDE_METADATA_KEY, body.model.as_deref()),
+        (
+            MODEL_REASONING_EFFORT_OVERRIDE_METADATA_KEY,
+            body.model_reasoning_effort.as_deref(),
+        ),
+        (
+            MODEL_SERVICE_TIER_OVERRIDE_METADATA_KEY,
+            body.model_service_tier.as_deref(),
+        ),
+    ] {
+        if let Some(value) = requested.map(str::trim).filter(|value| !value.is_empty()) {
+            metadata.insert(override_key.to_owned(), Value::String(value.to_owned()));
+        }
+    }
     if let Some((source_thread_id, _source_thread_data, provider_type, sdk_session_id)) =
         fork_source.as_ref()
     {

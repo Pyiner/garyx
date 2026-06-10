@@ -2997,3 +2997,31 @@ async fn test_enqueue_after_close_fails() {
     assert!(run_handle.is_none());
     assert!(thread_id.is_none());
 }
+
+#[test]
+fn test_reasoning_effort_maps_to_claude_effort_levels() {
+    for level in ["low", "medium", "high", "xhigh", "max"] {
+        assert_eq!(
+            claude_effort_for_reasoning_effort(level),
+            Some(level.to_owned())
+        );
+    }
+    assert_eq!(
+        claude_effort_for_reasoning_effort(" High "),
+        Some("high".to_owned())
+    );
+    assert_eq!(claude_effort_for_reasoning_effort("off"), None);
+    assert_eq!(claude_effort_for_reasoning_effort("minimal"), None);
+    assert_eq!(claude_effort_for_reasoning_effort("auto"), None);
+    assert_eq!(claude_effort_for_reasoning_effort(""), None);
+}
+
+#[test]
+fn test_resolve_requested_effort_reads_metadata() {
+    let metadata = HashMap::from([(
+        "model_reasoning_effort".to_owned(),
+        Value::String("xhigh".to_owned()),
+    )]);
+    assert_eq!(resolve_requested_effort(&metadata), Some("xhigh".to_owned()));
+    assert_eq!(resolve_requested_effort(&HashMap::new()), None);
+}

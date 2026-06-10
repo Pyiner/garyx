@@ -4,8 +4,10 @@ use std::sync::Arc;
 use axum::Json;
 use axum::http::StatusCode;
 use garyx_models::provider::{
-    ATTACHMENTS_METADATA_KEY, ImagePayload, ProviderType, attachments_to_metadata_value,
-    stage_file_payloads_for_prompt, stage_image_payloads_for_prompt,
+    ATTACHMENTS_METADATA_KEY, ImagePayload, MODEL_OVERRIDE_METADATA_KEY,
+    MODEL_REASONING_EFFORT_OVERRIDE_METADATA_KEY, MODEL_SERVICE_TIER_OVERRIDE_METADATA_KEY,
+    ProviderType, attachments_to_metadata_value, stage_file_payloads_for_prompt,
+    stage_image_payloads_for_prompt,
 };
 use garyx_models::thread_logs::ThreadLogEvent;
 use garyx_router::{
@@ -98,6 +100,41 @@ async fn persist_thread_provider_type_if_missing(
     true
 }
 
+/// Apply per-thread provider overrides (chosen at thread creation) to the run
+/// metadata. Request-level metadata still wins; the agent profile only fills
+/// keys that neither the request nor the thread override set.
+fn merge_thread_provider_overrides(
+    thread_data: &Value,
+    run_metadata: &mut HashMap<String, Value>,
+) {
+    let Some(thread_metadata) = thread_data.get("metadata").and_then(Value::as_object) else {
+        return;
+    };
+    for (override_key, run_key) in [
+        (MODEL_OVERRIDE_METADATA_KEY, "model"),
+        (
+            MODEL_REASONING_EFFORT_OVERRIDE_METADATA_KEY,
+            "model_reasoning_effort",
+        ),
+        (
+            MODEL_SERVICE_TIER_OVERRIDE_METADATA_KEY,
+            "model_service_tier",
+        ),
+    ] {
+        let Some(value) = thread_metadata
+            .get(override_key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        run_metadata
+            .entry(run_key.to_owned())
+            .or_insert_with(|| Value::String(value.to_owned()));
+    }
+}
+
 pub(crate) async fn prepare_chat_request(
     state: &Arc<AppState>,
     mut req: ChatRequest,
@@ -119,6 +156,9 @@ pub(crate) async fn prepare_chat_request(
         req.metadata.insert(key, value);
     }
     let thread_data = state.threads.thread_store.get(&thread_id).await;
+    if let Some(thread_data) = thread_data.as_ref() {
+        merge_thread_provider_overrides(thread_data, &mut req.metadata);
+    }
     let thread_provider_type = thread_data.as_ref().and_then(thread_bound_provider_type);
     let agent_reference = match thread_data
         .as_ref()

@@ -111,8 +111,26 @@ pub(crate) async fn list_provider_models(
             ),
             Err(error) => unsupported(provider_type, "gemini_acp", Some(error)),
         },
-        ProviderType::ClaudeCode | ProviderType::CodexAppServer => {
-            unsupported(provider_type, "provider", None)
+        ProviderType::ClaudeCode => native_model_catalog_response(
+            provider_type,
+            "claude_code_builtin",
+            claude_code_models(),
+            "claude-sonnet-4-6",
+        ),
+        ProviderType::CodexAppServer => {
+            let discovery = gpt_builtin_models(None);
+            ProviderModelsResponse {
+                provider_type,
+                supports_model_selection: true,
+                models: discovery.models,
+                supports_reasoning_effort_selection: true,
+                reasoning_efforts: discovery.reasoning_efforts,
+                supports_service_tier_selection: !discovery.service_tiers.is_empty(),
+                service_tiers: discovery.service_tiers,
+                default_model: discovery.default_model,
+                source: discovery.source,
+                error: discovery.error,
+            }
         }
         ProviderType::Gpt => match fetch_gpt_codex_models(config).await {
             Ok(discovery) if !discovery.models.is_empty() => ProviderModelsResponse {
@@ -402,6 +420,11 @@ fn native_reasoning_effort_metadata(
             "Extra High",
             "Use the highest supported adaptive reasoning effort.",
         )),
+        "max" => Some((
+            "max",
+            "Max",
+            "Maximum capability with deepest reasoning.",
+        )),
         _ => None,
     }
 }
@@ -423,6 +446,51 @@ fn native_model_option(
         supported_reasoning_efforts: reasoning_efforts,
         service_tiers: Vec::new(),
     }
+}
+
+// Mirrors the Claude Code CLI model picker; effort levels map to the CLI's
+// `--effort` values. Per the CLI's own gating, `xhigh` is available on
+// Fable 5 and Opus 4.8 only, and `max` additionally on Sonnet 4.6.
+fn claude_code_models() -> Vec<ProviderModelOption> {
+    let claude_haiku_efforts = native_reasoning_efforts("high", &["low", "medium", "high"]);
+    let claude_sonnet_efforts =
+        native_reasoning_efforts("high", &["low", "medium", "high", "max"]);
+    let claude_deep_efforts =
+        native_reasoning_efforts("high", &["low", "medium", "high", "xhigh", "max"]);
+    vec![
+        native_model_option(
+            "claude-fable-5",
+            "Fable 5",
+            "Newest model for complex, long-running work.",
+            false,
+            "high",
+            claude_deep_efforts.clone(),
+        ),
+        native_model_option(
+            "claude-opus-4-8",
+            "Claude Opus 4.8",
+            "Most capable for the hardest and longest-running tasks.",
+            false,
+            "high",
+            claude_deep_efforts,
+        ),
+        native_model_option(
+            "claude-sonnet-4-6",
+            "Claude Sonnet 4.6",
+            "Best for everyday, complex tasks.",
+            true,
+            "high",
+            claude_sonnet_efforts,
+        ),
+        native_model_option(
+            "claude-haiku-4-5",
+            "Claude Haiku 4.5",
+            "Fastest for quick answers.",
+            false,
+            "high",
+            claude_haiku_efforts,
+        ),
+    ]
 }
 
 fn native_claude_models() -> Vec<ProviderModelOption> {
@@ -917,6 +985,77 @@ mod tests {
         assert_eq!(discovery.service_tiers[0].id, "priority");
         assert_eq!(discovery.reasoning_efforts[1].id, "medium");
         assert!(discovery.reasoning_efforts[1].recommended);
+    }
+
+    #[tokio::test]
+    async fn claude_code_model_catalog_supports_selection_and_reasoning() {
+        let response =
+            list_provider_models(&GaryxConfig::default(), ProviderType::ClaudeCode).await;
+
+        assert_eq!(response.provider_type, ProviderType::ClaudeCode);
+        assert!(response.supports_model_selection);
+        assert!(response.supports_reasoning_effort_selection);
+        assert_eq!(response.source, "claude_code_builtin");
+        assert_eq!(response.default_model.as_deref(), Some("claude-sonnet-4-6"));
+        // Default model (Sonnet 4.6) supports max but not xhigh.
+        assert_eq!(
+            response
+                .reasoning_efforts
+                .iter()
+                .map(|effort| effort.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["low", "medium", "high", "max"]
+        );
+        assert_eq!(
+            response.models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            vec![
+                "claude-fable-5",
+                "claude-opus-4-8",
+                "claude-sonnet-4-6",
+                "claude-haiku-4-5",
+            ]
+        );
+        for deep_model in ["claude-fable-5", "claude-opus-4-8"] {
+            assert_eq!(
+                response
+                    .models
+                    .iter()
+                    .find(|model| model.id == deep_model)
+                    .expect("deep model")
+                    .supported_reasoning_efforts
+                    .iter()
+                    .map(|effort| effort.id.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["low", "medium", "high", "xhigh", "max"]
+            );
+        }
+        assert_eq!(
+            response
+                .models
+                .iter()
+                .find(|model| model.id == "claude-haiku-4-5")
+                .expect("haiku model")
+                .supported_reasoning_efforts
+                .iter()
+                .map(|effort| effort.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["low", "medium", "high"]
+        );
+        assert!(!response.supports_service_tier_selection);
+    }
+
+    #[tokio::test]
+    async fn codex_app_server_model_catalog_supports_selection_and_reasoning() {
+        let response =
+            list_provider_models(&GaryxConfig::default(), ProviderType::CodexAppServer).await;
+
+        assert_eq!(response.provider_type, ProviderType::CodexAppServer);
+        assert!(response.supports_model_selection);
+        assert!(response.supports_reasoning_effort_selection);
+        assert_eq!(response.source, "codex_builtin");
+        assert!(response.default_model.is_some());
+        assert!(!response.models.is_empty());
+        assert!(!response.reasoning_efforts.is_empty());
     }
 
     #[tokio::test]

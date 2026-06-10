@@ -889,7 +889,7 @@ async fn test_create_custom_agent_allows_omitted_model() {
 }
 
 #[tokio::test]
-async fn test_provider_models_reports_claude_unsupported() {
+async fn test_provider_models_reports_claude_code_catalog() {
     let state = test_state();
     let router = api_router(state);
     let req = Request::builder()
@@ -905,8 +905,10 @@ async fn test_provider_models_reports_claude_unsupported() {
         .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["provider_type"], "claude_code");
-    assert_eq!(json["supports_model_selection"], false);
-    assert!(json["models"].as_array().unwrap().is_empty());
+    assert_eq!(json["supports_model_selection"], true);
+    assert_eq!(json["supports_reasoning_effort_selection"], true);
+    assert_eq!(json["default_model"], "claude-sonnet-4-6");
+    assert!(!json["models"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]

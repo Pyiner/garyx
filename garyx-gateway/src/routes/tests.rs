@@ -828,6 +828,48 @@ async fn create_thread_rejects_invalid_sdk_session_provider_hint() {
 }
 
 #[tokio::test]
+async fn create_thread_persists_model_and_reasoning_overrides() {
+    let (state, _logger, _dir) = test_state().await;
+    let workspace = tempdir().unwrap();
+    let router = build_router(state.clone());
+    let request = authed_request()
+        .method("POST")
+        .uri("/api/threads")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "agentId": "claude",
+                "workspaceDir": workspace.path().to_string_lossy(),
+                "model": "claude-opus-4-7",
+                "modelReasoningEffort": "xhigh",
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    let thread_id = payload["thread_id"].as_str().expect("thread id");
+
+    let stored = state
+        .threads
+        .thread_store
+        .get(thread_id)
+        .await
+        .expect("stored thread");
+    assert_eq!(stored["metadata"]["model_override"], "claude-opus-4-7");
+    assert_eq!(stored["metadata"]["model_reasoning_effort_override"], "xhigh");
+    assert!(
+        stored["metadata"]
+            .get("model_service_tier_override")
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn thread_pin_routes_persist_state_in_garyx_db() {
     let state = AppStateBuilder::new(test_config()).build();
     let thread_id = "thread::pin-route";

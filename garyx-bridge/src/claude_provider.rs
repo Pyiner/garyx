@@ -369,6 +369,20 @@ fn resolve_requested_model(
         .or_else(|| (!config.default_model.trim().is_empty()).then(|| config.default_model.clone()))
 }
 
+/// Reasoning levels accepted by the Claude Code CLI `--effort` flag. Unknown
+/// values are dropped so a stale or cross-provider level cannot break spawn.
+fn claude_effort_for_reasoning_effort(effort: &str) -> Option<String> {
+    let effort = effort.trim().to_ascii_lowercase();
+    matches!(effort.as_str(), "low" | "medium" | "high" | "xhigh" | "max").then_some(effort)
+}
+
+fn resolve_requested_effort(metadata: &HashMap<String, Value>) -> Option<String> {
+    metadata
+        .get("model_reasoning_effort")
+        .and_then(|v| v.as_str())
+        .and_then(claude_effort_for_reasoning_effort)
+}
+
 fn normalize_thread_title(value: &str) -> String {
     let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
     let trimmed = normalized.trim();
@@ -959,6 +973,8 @@ impl ClaudeCliProvider {
 
         // Model: metadata override > config default
         let model = resolve_requested_model(&self.config, &options.metadata);
+        // Thinking level: metadata reasoning effort mapped to the CLI `--effort` flag.
+        let requested_effort = resolve_requested_effort(&options.metadata);
 
         let runtime_system_prompt = options
             .metadata
@@ -1031,6 +1047,9 @@ impl ClaudeCliProvider {
         // Extra args: replay-user-messages for UserMessage ACK
         let mut extra_args = HashMap::new();
         extra_args.insert("replay-user-messages".to_string(), None);
+        if let Some(effort) = requested_effort {
+            extra_args.insert("effort".to_string(), Some(effort));
+        }
         let fork_session = metadata_bool(&options.metadata, SDK_SESSION_FORK_METADATA_KEY);
 
         ClaudeAgentOptions {

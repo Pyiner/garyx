@@ -119,6 +119,12 @@ impl AgentRunRequest {
 
 pub const ATTACHMENTS_METADATA_KEY: &str = "attachments";
 pub const SDK_SESSION_ID_METADATA_KEY: &str = "sdk_session_id";
+/// Per-thread provider overrides chosen at thread creation. Stored in thread
+/// metadata under dedicated keys so they win over the agent profile at run
+/// time without freezing the agent's own defaults into every thread.
+pub const MODEL_OVERRIDE_METADATA_KEY: &str = "model_override";
+pub const MODEL_REASONING_EFFORT_OVERRIDE_METADATA_KEY: &str = "model_reasoning_effort_override";
+pub const MODEL_SERVICE_TIER_OVERRIDE_METADATA_KEY: &str = "model_service_tier_override";
 pub const SDK_SESSION_FORK_METADATA_KEY: &str = "sdk_session_fork";
 pub const FORK_FROM_THREAD_ID_METADATA_KEY: &str = "fork_from_thread_id";
 pub const FORK_FROM_SDK_SESSION_ID_METADATA_KEY: &str = "fork_from_sdk_session_id";
