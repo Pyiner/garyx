@@ -407,8 +407,12 @@ export function ThreadSideToolsPanel({
     ],
     [t],
   );
-  const [openTools, setOpenTools] = useState<ThreadSideToolId[]>(["files"]);
-  const [activeToolId, setActiveToolId] = useState<ThreadSideToolId>("files");
+  // The panel opens with no tool chosen so the body shows a tool picker;
+  // workspace file previews still force the Files tool open below.
+  const [openTools, setOpenTools] = useState<ThreadSideToolId[]>([]);
+  const [activeToolId, setActiveToolId] = useState<ThreadSideToolId | null>(
+    null,
+  );
   const [menuOpen, setMenuOpen] = useState(false);
   const [filePathCopied, setFilePathCopied] = useState(false);
   const [fileDirectoryCollapsed, setFileDirectoryCollapsed] = useState(false);
@@ -417,7 +421,9 @@ export function ThreadSideToolsPanel({
   const addToolShellRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const filePathCopiedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const activeTool = tools.find((tool) => tool.id === activeToolId) || tools[0];
+  const activeTool = activeToolId
+    ? tools.find((tool) => tool.id === activeToolId) || null
+    : null;
   const FileDirectoryToggleIcon = fileDirectoryCollapsed
     ? PanelRightOpen
     : PanelRightClose;
@@ -572,8 +578,8 @@ export function ThreadSideToolsPanel({
     setOpenTools((current) => {
       const next = current.filter((id) => id !== toolId);
       if (!next.length) {
-        setActiveToolId("files");
-        return ["files"];
+        setActiveToolId(null);
+        return next;
       }
       if (activeToolId === toolId) {
         setActiveToolId(next[next.length - 1]);
@@ -594,7 +600,9 @@ export function ThreadSideToolsPanel({
   }
 
   return (
-    <aside className={`thread-side-tools-panel is-${activeToolId}-active`}>
+    <aside
+      className={`thread-side-tools-panel is-${activeToolId ?? "picker"}-active`}
+    >
       <div className="side-tools-tabs">
         <div className="side-tools-tab-cluster">
           <div className="side-tools-tab-track" role="tablist">
@@ -621,23 +629,21 @@ export function ThreadSideToolsPanel({
                     <Icon aria-hidden size={14} strokeWidth={1.8} />
                     <span className="side-tools-tab-label">{tool.label}</span>
                   </button>
-                  {openTools.length > 1 ? (
-                    <button
-                      aria-label={t("Close")}
-                      className="side-tools-tab-close"
-                      onPointerDown={(event) => {
-                        event.stopPropagation();
-                      }}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        closeTool(tool.id);
-                      }}
-                      title={t("Close")}
-                      type="button"
-                    >
-                      <X aria-hidden size={12} strokeWidth={1.9} />
-                    </button>
-                  ) : null}
+                  <button
+                    aria-label={t("Close")}
+                    className="side-tools-tab-close"
+                    onPointerDown={(event) => {
+                      event.stopPropagation();
+                    }}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      closeTool(tool.id);
+                    }}
+                    title={t("Close")}
+                    type="button"
+                  >
+                    <X aria-hidden size={12} strokeWidth={1.9} />
+                  </button>
                 </div>
               );
             })}
@@ -688,8 +694,29 @@ export function ThreadSideToolsPanel({
         </div>
       </div>
 
-      <div className={`side-tools-body is-${activeTool.id}`}>
-        {activeTool.id === "files" ? (
+      <div className={`side-tools-body is-${activeTool?.id ?? "picker"}`}>
+        {!activeTool ? (
+          <div className="side-tools-picker">
+            <div className="side-tools-picker-list">
+              {tools.map((tool) => {
+                const Icon = tool.icon;
+                return (
+                  <button
+                    className="side-tools-picker-item"
+                    key={tool.id}
+                    onClick={() => openTool(tool.id)}
+                    type="button"
+                  >
+                    <Icon aria-hidden size={15} strokeWidth={1.8} />
+                    <span className="side-tools-picker-label">{tool.label}</span>
+                    {tool.shortcut ? <kbd>{tool.shortcut}</kbd> : null}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
+        {activeTool?.id === "files" ? (
           <div
             className={`side-tool-files ${
               fileDirectoryCollapsed ? "is-directory-collapsed" : ""
@@ -806,10 +833,10 @@ export function ThreadSideToolsPanel({
             </aside>
           </div>
         ) : null}
-        {activeTool.id === "chat" ? (
+        {activeTool?.id === "chat" ? (
           <div className="side-tool-chat-thread">{sideChatPanel}</div>
         ) : null}
-        {activeTool.id === "browser" ? (
+        {activeTool?.id === "browser" ? (
           <Suspense
             fallback={<div className="browser-page browser-page-side-panel browser-side-panel-loading" />}
           >
@@ -820,7 +847,7 @@ export function ThreadSideToolsPanel({
             />
           </Suspense>
         ) : null}
-        {activeTool.id === "terminal" ? (
+        {activeTool?.id === "terminal" ? (
           <SideTerminalTool cwd={activeWorkspacePath} />
         ) : null}
       </div>
