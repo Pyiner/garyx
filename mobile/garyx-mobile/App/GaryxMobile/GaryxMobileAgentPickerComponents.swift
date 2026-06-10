@@ -395,11 +395,32 @@ struct GaryxAgentTargetPickerControl: View {
     @Binding var selectedAgentTargetId: String
     var style: GaryxAgentPickerLabel.Style = .form
     var showsConfigure = false
+    /// Presents the new-thread bottom sheet that also offers the per-thread
+    /// model / thinking-level overrides instead of the compact popover.
+    var showsThreadModelOverride = false
     var onConfigure: (() -> Void)?
     @State private var showsPicker = false
 
     var body: some View {
-        Button {
+        pickerButton
+            .onChange(of: model.sidebarVisible) { _, visible in
+                if visible {
+                    showsPicker = false
+                }
+            }
+            .onChange(of: model.activePanel) { _, _ in
+                showsPicker = false
+            }
+            .onChange(of: model.showsSettings) { _, visible in
+                if visible {
+                    showsPicker = false
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var pickerButton: some View {
+        let button = Button {
             Task { await model.refreshAgentTargetsIfNeeded() }
             showsPicker = true
         } label: {
@@ -411,31 +432,31 @@ struct GaryxAgentTargetPickerControl: View {
             )
         }
         .buttonStyle(.plain)
-        .popover(
-            isPresented: $showsPicker,
-            attachmentAnchor: .rect(.bounds),
-            arrowEdge: .top
-        ) {
-            GaryxAgentTargetPickerPopover(
-                selectedAgentTargetId: $selectedAgentTargetId,
-                showsConfigure: showsConfigure,
-                onConfigure: onConfigure
-            )
-            .environmentObject(model)
-            .presentationCompactAdaptation(.popover)
-        }
-        .onChange(of: model.sidebarVisible) { _, visible in
-            if visible {
-                showsPicker = false
-            }
-        }
-        .onChange(of: model.activePanel) { _, _ in
-            showsPicker = false
-        }
-        .onChange(of: model.showsSettings) { _, visible in
-            if visible {
-                showsPicker = false
-            }
+
+        if showsThreadModelOverride {
+            button
+                .sheet(isPresented: $showsPicker) {
+                    GaryxNewThreadAgentSheet(
+                        selectedAgentTargetId: $selectedAgentTargetId,
+                        onConfigure: onConfigure
+                    )
+                    .environmentObject(model)
+                }
+        } else {
+            button
+                .popover(
+                    isPresented: $showsPicker,
+                    attachmentAnchor: .rect(.bounds),
+                    arrowEdge: .top
+                ) {
+                    GaryxAgentTargetPickerPopover(
+                        selectedAgentTargetId: $selectedAgentTargetId,
+                        showsConfigure: showsConfigure,
+                        onConfigure: onConfigure
+                    )
+                    .environmentObject(model)
+                    .presentationCompactAdaptation(.popover)
+                }
         }
     }
 
@@ -590,6 +611,394 @@ struct GaryxAgentTargetPickerPopover: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// Bottom-sheet agent picker for the new-thread draft: choose the agent and
+/// optional per-thread model / thinking-level overrides in one surface.
+/// Long lists and the override pickers drill into inline sub-levels.
+struct GaryxNewThreadAgentSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var model: GaryxMobileModel
+    @Binding var selectedAgentTargetId: String
+    var onConfigure: (() -> Void)?
+
+    private enum Page {
+        case main
+        case allAgents
+        case model
+        case thinkingLevel
+
+        var title: String {
+            switch self {
+            case .main: "Agent"
+            case .allAgents: "All Agents"
+            case .model: "Model"
+            case .thinkingLevel: "Thinking level"
+            }
+        }
+    }
+
+    @State private var page = Page.main
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    switch page {
+                    case .main:
+                        agentSection
+                        threadModelOverrideSection
+                    case .allAgents:
+                        allAgentsPage
+                    case .model:
+                        modelOptionsPage
+                    case .thinkingLevel:
+                        thinkingLevelOptionsPage
+                    }
+                }
+                .padding(.horizontal, 22)
+                .padding(.bottom, 28)
+            }
+            .scrollIndicators(.hidden)
+        }
+        .garyxWorkspacePickerSheetStyle()
+        // Tall enough that the model and thinking-level rows are fully
+        // visible below the collapsed agent list without dragging.
+        .presentationDetents([.fraction(0.72), .large])
+        .presentationDragIndicator(.visible)
+        .task {
+            await model.refreshAgentTargetsIfNeeded()
+        }
+        .task(id: model.newThreadAgentTarget?.id) {
+            await model.ensureNewThreadProviderModelsLoaded()
+        }
+    }
+
+    private var header: some View {
+        HStack(alignment: .center, spacing: 12) {
+            if page == .main {
+                Text(Page.main.title)
+                    .font(GaryxFont.callout(weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+            } else {
+                Button {
+                    page = .main
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.left")
+                            .font(GaryxFont.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                        Text(page.title)
+                            .font(GaryxFont.callout(weight: .medium))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer(minLength: 0)
+        }
+        .overlay(alignment: .trailing) {
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(GaryxFont.system(size: 12, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 30, height: 30)
+                    .background(.quaternary.opacity(0.5), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close")
+        }
+        .padding(.horizontal, 22)
+        .padding(.top, 22)
+        .padding(.bottom, 14)
+    }
+
+    @ViewBuilder
+    private var agentSection: some View {
+        if model.agentTargets.isEmpty {
+            Text(model.agentTargetsPlaceholderText)
+                .font(GaryxFont.callout())
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 12)
+        } else {
+            let primaryTargets = GaryxAgentTargetListPresentation.primary(
+                model.agentTargets,
+                selectedId: normalizedSelection
+            )
+            let overflowCount = GaryxAgentTargetListPresentation.overflowCount(model.agentTargets)
+
+            GaryxGlassPanel(cornerRadius: 28, fallbackMaterial: .ultraThinMaterial, shadowOpacity: 0.045) {
+                VStack(spacing: 0) {
+                    ForEach(Array(primaryTargets.enumerated()), id: \.element.id) { index, target in
+                        agentRow(for: target)
+                        if index < primaryTargets.count - 1 || overflowCount > 0 {
+                            Divider().padding(.leading, 52)
+                        }
+                    }
+
+                    if overflowCount > 0 {
+                        allAgentsRow
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+            }
+        }
+    }
+
+    private var allAgentsRow: some View {
+        Button {
+            page = .allAgents
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "ellipsis.circle")
+                    .font(GaryxFont.system(size: 19, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 30)
+
+                Text("All Agents")
+                    .font(GaryxFont.callout(weight: .medium))
+                    .foregroundStyle(.primary)
+
+                Spacer(minLength: 0)
+
+                Text("\(model.agentTargets.count)")
+                    .font(GaryxFont.callout())
+                    .foregroundStyle(.secondary)
+
+                Image(systemName: "chevron.right")
+                    .font(GaryxFont.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 8)
+            .frame(minHeight: 50)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var allAgentsPage: some View {
+        let orderedTargets = GaryxAgentTargetListPresentation.ordered(model.agentTargets)
+        return GaryxGlassPanel(cornerRadius: 28, fallbackMaterial: .ultraThinMaterial, shadowOpacity: 0.045) {
+            VStack(spacing: 0) {
+                ForEach(Array(orderedTargets.enumerated()), id: \.element.id) { index, target in
+                    agentRow(for: target, returnsToMain: true)
+                    if index < orderedTargets.count - 1 {
+                        Divider().padding(.leading, 52)
+                    }
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+        }
+    }
+
+    private func agentRow(for target: GaryxMobileAgentTarget, returnsToMain: Bool = false) -> some View {
+        Button {
+            selectedAgentTargetId = target.id
+            if returnsToMain {
+                page = .main
+            }
+        } label: {
+            HStack(spacing: 12) {
+                GaryxAgentAvatarView(
+                    agentId: target.id,
+                    avatarDataUrl: target.avatarDataUrl,
+                    kind: target.kind,
+                    label: target.title,
+                    providerType: target.providerType,
+                    builtIn: target.builtIn,
+                    diameter: 30
+                )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(target.title)
+                        .font(GaryxFont.callout(weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    if !target.subtitle.isEmpty {
+                        Text(target.subtitle)
+                            .font(GaryxFont.caption())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+
+                Spacer(minLength: 0)
+
+                if normalizedSelection == target.id {
+                    GaryxSelectionCheckmark(size: 18)
+                }
+            }
+            .padding(.horizontal, 8)
+            .frame(minHeight: 52)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var threadModelOverrideSection: some View {
+        if let providerModels = model.newThreadProviderModels,
+           GaryxThreadModelOverridePresentation.supportsOverride(providerModels) {
+            let reasoningEfforts = GaryxThreadModelOverridePresentation.reasoningEffortOptions(
+                providerModels: providerModels,
+                model: model.newThreadEffortFilterModel
+            )
+
+            Text("This thread")
+                .font(GaryxFont.footnote(weight: .semibold))
+                .foregroundStyle(.secondary)
+                .padding(.leading, 8)
+                .padding(.top, 10)
+
+            GaryxGlassPanel(cornerRadius: 28, fallbackMaterial: .ultraThinMaterial, shadowOpacity: 0.045) {
+                VStack(spacing: 0) {
+                    overrideRow(
+                        title: "Model",
+                        value: GaryxThreadModelOverridePresentation.modelLabel(
+                            providerModels: providerModels,
+                            model: model.newThreadModelOverride
+                        ) ?? "Agent default"
+                    ) {
+                        page = .model
+                    }
+
+                    if !reasoningEfforts.isEmpty {
+                        Divider().padding(.leading, 18)
+
+                        overrideRow(
+                            title: "Thinking level",
+                            value: GaryxThreadModelOverridePresentation.reasoningEffortLabel(
+                                providerModels: providerModels,
+                                model: model.newThreadEffortFilterModel,
+                                reasoningEffort: model.newThreadReasoningEffortOverride
+                            ) ?? "Agent default"
+                        ) {
+                            page = .thinkingLevel
+                        }
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+            }
+        }
+    }
+
+    private func overrideRow(
+        title: String,
+        value: String,
+        onTap: @escaping () -> Void
+    ) -> some View {
+        Button(action: onTap) {
+            HStack(spacing: 10) {
+                Text(title)
+                    .font(GaryxFont.callout(weight: .medium))
+                    .foregroundStyle(.primary)
+
+                Spacer(minLength: 0)
+
+                Text(value)
+                    .font(GaryxFont.callout())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                Image(systemName: "chevron.right")
+                    .font(GaryxFont.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 8)
+            .frame(minHeight: 48)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var modelOptionsPage: some View {
+        let providerModels = model.newThreadProviderModels
+        optionsPanel(
+            options: [(id: "", label: "Agent default")]
+                + (providerModels?.models ?? []).map { (id: $0.id, label: $0.label) },
+            selectedId: model.newThreadModelOverride
+        ) { selected in
+            model.setNewThreadModelOverride(selected)
+            page = .main
+        }
+    }
+
+    @ViewBuilder
+    private var thinkingLevelOptionsPage: some View {
+        let efforts = GaryxThreadModelOverridePresentation.reasoningEffortOptions(
+            providerModels: model.newThreadProviderModels,
+            model: model.newThreadEffortFilterModel
+        )
+        optionsPanel(
+            options: [(id: "", label: "Agent default")]
+                + efforts.map { (id: $0.id, label: $0.label) },
+            selectedId: model.newThreadReasoningEffortOverride
+        ) { selected in
+            model.setNewThreadReasoningEffortOverride(selected)
+            page = .main
+        }
+    }
+
+    private func optionsPanel(
+        options: [(id: String, label: String)],
+        selectedId: String,
+        onSelect: @escaping (String) -> Void
+    ) -> some View {
+        GaryxGlassPanel(cornerRadius: 28, fallbackMaterial: .ultraThinMaterial, shadowOpacity: 0.045) {
+            VStack(spacing: 0) {
+                ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
+                    Button {
+                        onSelect(option.id)
+                    } label: {
+                        HStack(spacing: 12) {
+                            Group {
+                                if selectedId == option.id {
+                                    GaryxSelectionCheckmark(size: 18)
+                                } else {
+                                    Color.clear
+                                }
+                            }
+                            .frame(width: 24)
+
+                            Text(option.label)
+                                .font(GaryxFont.callout(weight: selectedId == option.id ? .semibold : .regular))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 8)
+                        .frame(minHeight: 48)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+
+                    if index < options.count - 1 {
+                        Divider().padding(.leading, 46)
+                    }
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+        }
+    }
+
+    private var normalizedSelection: String {
+        selectedAgentTargetId.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

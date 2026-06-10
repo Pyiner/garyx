@@ -1014,7 +1014,7 @@ private struct GaryxDismissButton: View {
     }
 }
 
-private extension View {
+extension View {
     func garyxWorkspacePickerSheetStyle() -> some View {
         self
             .background {
