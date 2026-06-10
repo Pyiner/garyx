@@ -301,6 +301,19 @@ fn should_retry_with_fresh_session(error: &BridgeError) -> bool {
     }
 }
 
+/// A resumed session left dangling mid tool-loop (e.g. the previous run was
+/// killed by a gateway restart) makes the CLI close the turn with a synthetic
+/// "No response requested." without ever invoking the model. Such a run
+/// reports success with no output and would otherwise wedge the thread
+/// forever, so it must retry on a fresh session.
+fn resumed_run_stalled_without_response(outcome: &SdkRunOutcome) -> bool {
+    if outcome.is_error || outcome.output_tokens > 0 {
+        return false;
+    }
+    let text = outcome.response_text.trim();
+    text.is_empty() || text == "No response requested."
+}
+
 fn bridge_error_from_sdk_stream_error(error: ClaudeSDKError) -> BridgeError {
     match error {
         ClaudeSDKError::MessageParse { message, data } => {
@@ -1741,6 +1754,7 @@ impl AgentLoopProvider for ClaudeCliProvider {
                 Ok(Some(outcome)) if outcome.is_error => {
                     should_retry_message_with_fresh_session(&outcome.response_text)
                 }
+                Ok(Some(outcome)) => resumed_run_stalled_without_response(outcome),
                 _ => false,
             };
 
@@ -1767,7 +1781,8 @@ impl AgentLoopProvider for ClaudeCliProvider {
                     lost_history_messages = lost_history_messages.map(|count| count as i64).unwrap_or(-1),
                     lost_history_messages_known = lost_history_messages.is_some(),
                     response = %outcome.response_text,
-                    "resume returned error, retrying as new session"
+                    is_error = outcome.is_error,
+                    "resume returned no usable response, retrying as new session"
                 ),
                 _ => {}
             }
