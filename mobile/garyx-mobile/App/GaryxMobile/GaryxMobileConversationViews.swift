@@ -159,12 +159,25 @@ struct GaryxConversationView: View {
                                 .font(GaryxFont.system(size: 15, weight: .semibold))
                                 .foregroundStyle(.primary)
                                 .frame(width: 42, height: 42)
-                                // Not adaptive glass: the iOS 26 interactive
-                                // glassEffect renders this button without a
+                                // Glass is decoration only: an iOS 26
+                                // glassEffect applied to this button gets no
                                 // working hit-test region inside the bottom
                                 // chrome, so taps fell through to transcript
                                 // rows (verified by tap bisection on 26.2).
-                                .background(.ultraThinMaterial, in: Circle())
+                                // The tap target is the explicit content
+                                // shape; the glass circle never hit-tests.
+                                .background {
+                                    Circle()
+                                        .fill(Color.clear)
+                                        .garyxAdaptiveGlass(
+                                            .regular,
+                                            isInteractive: false,
+                                            fallbackMaterial: .ultraThinMaterial,
+                                            in: Circle()
+                                        )
+                                        .allowsHitTesting(false)
+                                }
+                                .contentShape(Circle())
                                 .shadow(color: Color.black.opacity(0.12), radius: 14, x: 0, y: 8)
                         }
                         .buttonStyle(.plain)
