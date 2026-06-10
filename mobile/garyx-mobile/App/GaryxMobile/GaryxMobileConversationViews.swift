@@ -250,25 +250,24 @@ struct GaryxConversationView: View {
 
     private func messageScroll(proxy: ScrollViewProxy) -> some View {
         ScrollView {
-            // The top measurement lives outside the lazy stack: a culled
-            // lazy child stops reporting its preference, which would reset
-            // the content-top offset to zero mid-scroll.
-            Color.clear
-                .frame(height: 1)
-                .accessibilityHidden(true)
-                .background {
-                    GeometryReader { geometry in
-                        Color.clear.preference(
-                            key: GaryxConversationTopOffsetKey.self,
-                            value: geometry.frame(in: .named("garyx-conversation-scroll")).minY
-                        )
+            // Deliberately an eager VStack: LazyVStack's estimated row
+            // heights put the synthetic bottom anchor below the real
+            // content end, so scroll-to-tail landed in blank phantom space
+            // that the anchor-based metrics could not detect. Long-thread
+            // scroll cost is controlled by keeping per-frame measurements
+            // out of SwiftUI state (`scrollStateBox`) instead.
+            VStack(alignment: .leading, spacing: 14) {
+                Color.clear
+                    .frame(height: 1)
+                    .background {
+                        GeometryReader { geometry in
+                            Color.clear.preference(
+                                key: GaryxConversationTopOffsetKey.self,
+                                value: geometry.frame(in: .named("garyx-conversation-scroll")).minY
+                            )
+                        }
                     }
-                }
 
-            // Lazy so a long transcript only materializes the visible rows;
-            // an eager stack rebuilt every loaded message bubble per layout
-            // pass and dominated scroll cost on message-heavy threads.
-            LazyVStack(alignment: .leading, spacing: 14) {
                 if model.messages.isEmpty,
                    model.isLoadingSelectedThreadHistory || model.isSelectedThreadAwaitingInitialHistory {
                     GaryxThreadHistoryLoadingView()
@@ -352,6 +351,11 @@ struct GaryxConversationView: View {
         }
         .scrollDisabled(isComposerFocused || sidebarDragActive)
         .scrollDismissesKeyboard(.never)
+        .garyxUserScrollInteraction { isInteracting in
+            updateScrollState(proxy: proxy) {
+                $0.userScrollInteractionChanged(isInteracting: isInteracting)
+            }
+        }
         .refreshable {
             await model.loadSelectedThreadHistory()
         }
@@ -890,6 +894,27 @@ private func garyxConfiguredBot(
 }
 
 private extension View {
+    /// Reports whether the reader's gesture currently drives the scroll
+    /// view (finger down or fling decelerating). Programmatic phases do not
+    /// count. No-op before iOS 18, where the scroll phase API is missing.
+    @ViewBuilder
+    func garyxUserScrollInteraction(_ onChange: @escaping (Bool) -> Void) -> some View {
+        if #available(iOS 18.0, *) {
+            onScrollPhaseChange { _, newPhase in
+                switch newPhase {
+                case .tracking, .interacting, .decelerating:
+                    onChange(true)
+                case .idle, .animating:
+                    onChange(false)
+                @unknown default:
+                    onChange(false)
+                }
+            }
+        } else {
+            self
+        }
+    }
+
     func garyxBotBindingSheetStyle() -> some View {
         self
             .background {

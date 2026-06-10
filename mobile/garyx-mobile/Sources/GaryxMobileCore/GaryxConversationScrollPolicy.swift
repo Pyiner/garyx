@@ -122,6 +122,14 @@ public struct GaryxConversationScrollState: Equatable {
     /// Whether the reader ever scrolled toward older history in this thread.
     /// Gates history prefetch so an untouched thread never pages backwards.
     public private(set) var hasMovedTowardOlderHistory = false
+    /// Whether the reader's finger or fling currently drives the scroll
+    /// view. Programmatic tail scrolls must never fight an active gesture.
+    public private(set) var isUserScrollInteracting = false
+    /// Tracks the visible-tail-gap level so repairs fire on its rising edge
+    /// only. A persistent gap (such as lazy-layout estimation drift around a
+    /// collapsed tail row) must not regenerate a repair on every frame, or
+    /// the reader can never scroll away from the tail.
+    private var hadVisibleTailGap = false
 
     public init() {}
 
@@ -200,10 +208,33 @@ public struct GaryxConversationScrollState: Equatable {
             anchoring = .browsingHistory
             hasMovedTowardOlderHistory = true
         }
-        if isFollowingTail, hasTailContent, metrics.hasVisibleTailGap {
+        // Repairs are edge-triggered on the gap appearing and never start
+        // while the reader is dragging: a level-triggered repair regenerates
+        // a scroll-to-tail on every measurement frame whenever the gap
+        // cannot be closed exactly (lazy layout estimation), which pins the
+        // viewport to the bottom and makes scrolling up impossible.
+        let gapAppeared = metrics.hasVisibleTailGap && !hadVisibleTailGap
+        hadVisibleTailGap = metrics.hasVisibleTailGap
+        if isFollowingTail, hasTailContent, gapAppeared, !isUserScrollInteracting {
             return TailScrollRequest(reason: .repair, animated: false)
         }
         return nil
+    }
+
+    /// The reader's scroll gesture started or ended (finger down, or a fling
+    /// still decelerating). While interacting, no programmatic tail scroll
+    /// may run. When the interaction ends over a visible tail gap while
+    /// still following, one repair closes it.
+    public mutating func userScrollInteractionChanged(isInteracting: Bool) -> TailScrollRequest? {
+        guard isUserScrollInteracting != isInteracting else { return nil }
+        isUserScrollInteracting = isInteracting
+        guard !isInteracting,
+              isFollowingTail,
+              hasTailContent,
+              metrics.hasVisibleTailGap else {
+            return nil
+        }
+        return TailScrollRequest(reason: .repair, animated: false)
     }
 
     /// The composer gained focus. Keep the tail visible above the keyboard
@@ -228,13 +259,20 @@ public struct GaryxConversationScrollState: Equatable {
     // MARK: Scheduled scroll retries
 
     /// Whether a delayed retry of a scheduled tail scroll should still run.
-    /// First attempts always run; later attempts of repair scrolls are
-    /// dropped once the reader left the tail or the gap closed.
+    ///
+    /// Nothing but the reader's finger may move the viewport while a scroll
+    /// gesture is active. After that, opening jumps and explicit manual
+    /// scrolls always retry; tail updates and repairs are dropped as soon as
+    /// the reader leaves the tail, so a streaming run can never pin a reader
+    /// who is scrolling up toward history.
     public func shouldRunTailScrollAttempt(index: Int, reason: TailScrollReason) -> Bool {
+        if isUserScrollInteracting, reason != .manual { return false }
         guard index > 0 else { return true }
         switch reason {
-        case .openingThread, .tailUpdate, .manual:
+        case .openingThread, .manual:
             return true
+        case .tailUpdate:
+            return isFollowingTail
         case .repair:
             return isFollowingTail && (metrics.isNearBottom || metrics.hasVisibleTailGap)
         }

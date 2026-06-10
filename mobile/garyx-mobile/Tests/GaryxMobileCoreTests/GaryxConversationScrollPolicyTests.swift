@@ -90,6 +90,16 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         )
     }
 
+    /// Content pulled past the bottom: still near the bottom (following),
+    /// but with a visible gap between the content end and the viewport.
+    private func tailGapMetrics() -> GaryxConversationLayoutMetrics {
+        GaryxConversationLayoutMetrics(
+            contentTopOffset: -2_000,
+            contentBottomOffset: 500,
+            viewportHeight: 800
+        )
+    }
+
     func testThreadOpenedResetsAndJumpsToTail() {
         var state = GaryxConversationScrollState()
         _ = state.metricsChanged(browsingMetrics(), hasTailContent: true)
@@ -256,6 +266,76 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         XCTAssertTrue(state.shouldRunTailScrollAttempt(index: 0, reason: .repair))
         XCTAssertFalse(state.shouldRunTailScrollAttempt(index: 1, reason: .repair))
         XCTAssertTrue(state.shouldRunTailScrollAttempt(index: 1, reason: .openingThread))
+    }
+
+    func testTailUpdateRetriesStopAfterReaderLeavesTail() {
+        var state = GaryxConversationScrollState()
+        _ = state.contentChanged(isInitialLoad: true, isHistoryPrepend: false, hasTailContent: true)
+
+        XCTAssertTrue(state.shouldRunTailScrollAttempt(index: 1, reason: .tailUpdate))
+
+        _ = state.metricsChanged(browsingMetrics(), hasTailContent: true)
+        XCTAssertTrue(state.shouldRunTailScrollAttempt(index: 0, reason: .tailUpdate))
+        XCTAssertFalse(state.shouldRunTailScrollAttempt(index: 1, reason: .tailUpdate))
+    }
+
+    func testPersistentTailGapRepairsOnlyOnRisingEdge() {
+        var state = GaryxConversationScrollState()
+        _ = state.contentChanged(isInitialLoad: true, isHistoryPrepend: false, hasTailContent: true)
+
+        XCTAssertEqual(
+            state.metricsChanged(tailGapMetrics(), hasTailContent: true),
+            .init(reason: .repair, animated: false)
+        )
+        // The gap persists (lazy layout estimation could not close it):
+        // later frames must not regenerate the repair, or the reader can
+        // never scroll away.
+        XCTAssertNil(state.metricsChanged(tailGapMetrics(), hasTailContent: true))
+        XCTAssertNil(state.metricsChanged(tailGapMetrics(), hasTailContent: true))
+
+        // Once the gap closes and later reappears, the repair fires again.
+        _ = state.metricsChanged(tailMetrics(), hasTailContent: true)
+        XCTAssertEqual(
+            state.metricsChanged(tailGapMetrics(), hasTailContent: true),
+            .init(reason: .repair, animated: false)
+        )
+    }
+
+    func testNoProgrammaticScrollWhileUserGestureIsActive() {
+        var state = GaryxConversationScrollState()
+        _ = state.contentChanged(isInitialLoad: true, isHistoryPrepend: false, hasTailContent: true)
+
+        XCTAssertNil(state.userScrollInteractionChanged(isInteracting: true))
+        XCTAssertNil(state.metricsChanged(tailGapMetrics(), hasTailContent: true))
+        XCTAssertFalse(state.shouldRunTailScrollAttempt(index: 0, reason: .repair))
+        XCTAssertFalse(state.shouldRunTailScrollAttempt(index: 0, reason: .tailUpdate))
+        XCTAssertFalse(state.shouldRunTailScrollAttempt(index: 1, reason: .openingThread))
+        XCTAssertTrue(state.shouldRunTailScrollAttempt(index: 0, reason: .manual))
+    }
+
+    func testGestureEndOverTailGapRepairsOnce() {
+        var state = GaryxConversationScrollState()
+        _ = state.contentChanged(isInitialLoad: true, isHistoryPrepend: false, hasTailContent: true)
+
+        _ = state.userScrollInteractionChanged(isInteracting: true)
+        _ = state.metricsChanged(tailGapMetrics(), hasTailContent: true)
+
+        XCTAssertEqual(
+            state.userScrollInteractionChanged(isInteracting: false),
+            .init(reason: .repair, animated: false)
+        )
+        // Repeated end events without a new interaction change nothing.
+        XCTAssertNil(state.userScrollInteractionChanged(isInteracting: false))
+    }
+
+    func testGestureEndAwayFromTailDoesNotScroll() {
+        var state = GaryxConversationScrollState()
+        _ = state.contentChanged(isInitialLoad: true, isHistoryPrepend: false, hasTailContent: true)
+
+        _ = state.userScrollInteractionChanged(isInteracting: true)
+        _ = state.metricsChanged(browsingMetrics(), hasTailContent: true)
+        XCTAssertNil(state.userScrollInteractionChanged(isInteracting: false))
+        XCTAssertTrue(state.showsScrollToBottomButton)
     }
 
     func testHistoryPrefetchRequiresMovementAndProximity() {
