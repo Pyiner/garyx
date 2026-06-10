@@ -117,6 +117,13 @@ private struct GaryxConversationTopOffsetKey: PreferenceKey {
     }
 }
 
+/// Plain (non-observable) holder for the conversation scroll state machine.
+/// Scroll measurements mutate it on every frame; keeping it out of SwiftUI
+/// state means that churn never re-evaluates the transcript body.
+private final class GaryxConversationScrollStateBox {
+    var state = GaryxConversationScrollState()
+}
+
 struct GaryxConversationView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @Environment(\.garyxSidebarDragActive) private var sidebarDragActive
@@ -124,7 +131,12 @@ struct GaryxConversationView: View {
     /// Unified scroll state machine (GaryxMobileCore). The view feeds it
     /// events and executes the tail-scroll requests it returns; UI such as
     /// the scroll-to-bottom control reads its projections.
-    @State private var scrollState = GaryxConversationScrollState()
+    // The scroll state machine lives in a plain reference box so the
+    // per-frame scroll measurements feeding it never invalidate the
+    // conversation body; `showsScrollToBottomButton` is the only scroll
+    // fact the body reads, mirrored into SwiftUI state when it flips.
+    @State private var scrollStateBox = GaryxConversationScrollStateBox()
+    @State private var showsScrollToBottomButton = false
     @State private var scrollPreservationThreadId: String?
     @State private var pendingHistoryPrefetchThreadId: String?
     @State private var bottomChromeHeight: CGFloat = 0
@@ -151,9 +163,9 @@ struct GaryxConversationView: View {
                 bottomChromeHeight = height
             }) {
                 VStack(spacing: 12) {
-                    if scrollState.showsScrollToBottomButton {
+                    if showsScrollToBottomButton {
                         Button {
-                            apply(scrollState.scrollToBottomTapped(), proxy: proxy)
+                            updateScrollState(proxy: proxy) { $0.scrollToBottomTapped() }
                         } label: {
                             Image(systemName: "arrow.down")
                                 .font(GaryxFont.system(size: 15, weight: .semibold))
@@ -188,16 +200,16 @@ struct GaryxConversationView: View {
                     GaryxComposer(isFocused: $isComposerFocused)
                 }
                 .frame(maxWidth: .infinity)
-                .animation(.easeOut(duration: 0.18), value: scrollState.showsScrollToBottomButton)
+                .animation(.easeOut(duration: 0.18), value: showsScrollToBottomButton)
             }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onAppear {
-                    apply(scrollState.threadOpened(), proxy: proxy)
+                    updateScrollState(proxy: proxy) { $0.threadOpened() }
                 }
                 .onChange(of: model.selectedThread?.id) { _, _ in
                     scrollPreservationThreadId = model.selectedThread?.id
                     pendingHistoryPrefetchThreadId = nil
-                    apply(scrollState.threadOpened(), proxy: proxy)
+                    updateScrollState(proxy: proxy) { $0.threadOpened() }
                 }
                 .onChange(of: model.messages) { oldValue, newValue in
                     defer {
@@ -210,25 +222,24 @@ struct GaryxConversationView: View {
                         currentIds: newValue.map(\.id),
                         threadUnchanged: threadUnchanged
                     )
-                    apply(
-                        scrollState.contentChanged(
+                    updateScrollState(proxy: proxy) {
+                        $0.contentChanged(
                             isInitialLoad: oldValue.isEmpty,
                             isHistoryPrepend: isHistoryPrepend,
                             hasTailContent: !newValue.isEmpty || model.showsTailThinkingIndicator
-                        ),
-                        proxy: proxy
-                    )
+                        )
+                    }
                 }
                 .onChange(of: model.showsTailThinkingIndicator) { _, visible in
                     guard visible else { return }
-                    apply(scrollState.thinkingIndicatorShown(), proxy: proxy)
+                    updateScrollState(proxy: proxy) { $0.thinkingIndicatorShown() }
                 }
                 .onChange(of: isComposerFocused) { _, isFocused in
                     guard isFocused else { return }
-                    apply(scrollState.composerFocused(), proxy: proxy)
+                    updateScrollState(proxy: proxy) { $0.composerFocused() }
                 }
                 .onChange(of: bottomChromeHeight) { _, _ in
-                    apply(scrollState.bottomChromeChanged(), proxy: proxy)
+                    updateScrollState(proxy: proxy) { $0.bottomChromeChanged() }
                 }
         }
         .garyxPageBackground()
@@ -239,18 +250,25 @@ struct GaryxConversationView: View {
 
     private func messageScroll(proxy: ScrollViewProxy) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                Color.clear
-                    .frame(height: 1)
-                    .background {
-                        GeometryReader { geometry in
-                            Color.clear.preference(
-                                key: GaryxConversationTopOffsetKey.self,
-                                value: geometry.frame(in: .named("garyx-conversation-scroll")).minY
-                            )
-                        }
+            // The top measurement lives outside the lazy stack: a culled
+            // lazy child stops reporting its preference, which would reset
+            // the content-top offset to zero mid-scroll.
+            Color.clear
+                .frame(height: 1)
+                .accessibilityHidden(true)
+                .background {
+                    GeometryReader { geometry in
+                        Color.clear.preference(
+                            key: GaryxConversationTopOffsetKey.self,
+                            value: geometry.frame(in: .named("garyx-conversation-scroll")).minY
+                        )
                     }
+                }
 
+            // Lazy so a long transcript only materializes the visible rows;
+            // an eager stack rebuilt every loaded message bubble per layout
+            // pass and dominated scroll cost on message-heavy threads.
+            LazyVStack(alignment: .leading, spacing: 14) {
                 if model.messages.isEmpty,
                    model.isLoadingSelectedThreadHistory || model.isSelectedThreadAwaitingInitialHistory {
                     GaryxThreadHistoryLoadingView()
@@ -318,17 +336,17 @@ struct GaryxConversationView: View {
         .onGeometryChange(for: CGFloat.self) { geometry in
             geometry.size.height
         } action: { height in
-            var metrics = scrollState.metrics
+            var metrics = scrollStateBox.state.metrics
             metrics.viewportHeight = height
             applyMetrics(metrics, proxy: proxy)
         }
         .onPreferenceChange(GaryxConversationBottomOffsetKey.self) { value in
-            var metrics = scrollState.metrics
+            var metrics = scrollStateBox.state.metrics
             metrics.contentBottomOffset = value
             applyMetrics(metrics, proxy: proxy)
         }
         .onPreferenceChange(GaryxConversationTopOffsetKey.self) { value in
-            var metrics = scrollState.metrics
+            var metrics = scrollStateBox.state.metrics
             metrics.contentTopOffset = value
             applyMetrics(metrics, proxy: proxy)
         }
@@ -373,12 +391,29 @@ struct GaryxConversationView: View {
     /// Feed a measurement update into the scroll state machine and run the
     /// follow-up work every metrics change shares.
     private func applyMetrics(_ metrics: GaryxConversationLayoutMetrics, proxy: ScrollViewProxy) {
-        let request = scrollState.metricsChanged(
-            metrics,
-            hasTailContent: !model.messages.isEmpty || model.showsTailThinkingIndicator
-        )
-        apply(request, proxy: proxy)
+        updateScrollState(proxy: proxy) {
+            $0.metricsChanged(
+                metrics,
+                hasTailContent: !model.messages.isEmpty || model.showsTailThinkingIndicator
+            )
+        }
         prefetchOlderHistoryIfNeeded()
+    }
+
+    /// Run a scroll state machine event, mirror the UI projection into
+    /// SwiftUI state only when it flipped, and execute the returned scroll
+    /// request. Routing every event through here keeps the per-frame
+    /// measurement churn from re-evaluating the conversation body.
+    private func updateScrollState(
+        proxy: ScrollViewProxy,
+        _ event: (inout GaryxConversationScrollState) -> GaryxConversationScrollState.TailScrollRequest?
+    ) {
+        let request = event(&scrollStateBox.state)
+        let showsButton = scrollStateBox.state.showsScrollToBottomButton
+        if showsScrollToBottomButton != showsButton {
+            showsScrollToBottomButton = showsButton
+        }
+        apply(request, proxy: proxy)
     }
 
     /// Execute a tail-scroll request produced by the scroll state machine.
@@ -422,7 +457,7 @@ struct GaryxConversationView: View {
                 DispatchQueue.main.async {
                     guard generation == tailScrollRequestGeneration,
                           identity == conversationScrollIdentity,
-                          scrollState.shouldRunTailScrollAttempt(index: index, reason: request.reason) else {
+                          scrollStateBox.state.shouldRunTailScrollAttempt(index: index, reason: request.reason) else {
                         return
                     }
                     if request.animated && index == 0 {
@@ -451,7 +486,7 @@ struct GaryxConversationView: View {
 
     private func prefetchOlderHistoryIfNeeded(ignoreDistance: Bool = false) {
         guard let threadId = model.selectedThread?.id,
-              scrollState.shouldPrefetchOlderHistory(
+              scrollStateBox.state.shouldPrefetchOlderHistory(
                 hasMoreHistoryBefore: model.selectedThreadHasMoreHistoryBefore,
                 isLoadingOlderHistory: model.isLoadingOlderThreadHistory,
                 hasPendingPrefetch: pendingHistoryPrefetchThreadId == threadId,
