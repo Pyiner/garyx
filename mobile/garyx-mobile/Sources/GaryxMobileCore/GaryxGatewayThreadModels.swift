@@ -434,6 +434,12 @@ public struct GaryxCreateThreadRequest: Encodable, Equatable, Sendable {
     public var workspaceDir: String?
     public var workspaceMode: String?
     public var agentId: String?
+    /// Per-thread model override; wins over the agent's configured model.
+    public var model: String?
+    /// Per-thread reasoning/thinking level override.
+    public var modelReasoningEffort: String?
+    /// Per-thread service tier override.
+    public var modelServiceTier: String?
     public var metadata: [String: String]
 
     public init(
@@ -441,12 +447,18 @@ public struct GaryxCreateThreadRequest: Encodable, Equatable, Sendable {
         workspaceDir: String? = nil,
         workspaceMode: String? = nil,
         agentId: String? = nil,
+        model: String? = nil,
+        modelReasoningEffort: String? = nil,
+        modelServiceTier: String? = nil,
         metadata: [String: String] = [:]
     ) {
         self.label = label
         self.workspaceDir = workspaceDir
         self.workspaceMode = workspaceMode
         self.agentId = agentId
+        self.model = model
+        self.modelReasoningEffort = modelReasoningEffort
+        self.modelServiceTier = modelServiceTier
         self.metadata = metadata
     }
 }

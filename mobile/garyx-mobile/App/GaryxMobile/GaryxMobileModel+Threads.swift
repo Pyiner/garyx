@@ -494,6 +494,7 @@ extension GaryxMobileModel {
         selectedThread = nil
         draftThreadTitle = ""
         setPendingNewThreadAgentTarget(agentTargetOverride)
+        clearNewThreadModelOverride()
         resetComposerDraft()
         messages = []
         activePanel = .chat
@@ -535,11 +536,16 @@ extension GaryxMobileModel {
             let workspace = (workspaceOverride ?? newThreadWorkspace).trimmingCharacters(in: .whitespacesAndNewlines)
             let agentId = newThreadAgentTargetId(agentOverride: agentOverride)
             let workspaceMode = workspaceModeForNewThread(workspace: workspace)
+            let modelOverride = newThreadModelOverride.trimmingCharacters(in: .whitespacesAndNewlines)
+            let reasoningEffortOverride = newThreadReasoningEffortOverride
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             let thread = try await client().createThread(
                 GaryxCreateThreadRequest(
                     workspaceDir: workspace.isEmpty ? nil : workspace,
                     workspaceMode: workspaceMode,
                     agentId: agentId.isEmpty ? nil : agentId,
+                    model: modelOverride.isEmpty ? nil : modelOverride,
+                    modelReasoningEffort: reasoningEffortOverride.isEmpty ? nil : reasoningEffortOverride,
                     metadata: ["client": "garyx-mobile"]
                 )
             )
@@ -547,6 +553,7 @@ extension GaryxMobileModel {
             threadHistoryLoadedIds.insert(thread.id)
             selectedThread = thread
             clearPendingNewThreadAgentTarget()
+            clearNewThreadModelOverride()
             clearPendingBotDraft()
             resetComposerDraft()
             draftThreadTitle = thread.title

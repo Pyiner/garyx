@@ -110,6 +110,7 @@ struct GaryxAgentDetailCard: View {
                 displayName: .constant(displayAgent.displayName),
                 providerType: .constant(displayAgent.providerType),
                 modelName: .constant(displayAgent.model),
+                modelReasoningEffort: .constant(displayAgent.modelReasoningEffort),
                 workspace: .constant(displayAgent.defaultWorkspaceDir),
                 avatarDataUrl: .constant(displayAgent.avatarDataUrl),
                 systemPrompt: .constant(displayAgent.systemPrompt),
@@ -248,6 +249,7 @@ private struct GaryxAgentFormContent: View {
     @Binding var displayName: String
     @Binding var providerType: String
     @Binding var modelName: String
+    @Binding var modelReasoningEffort: String
     @Binding var workspace: String
     @Binding var avatarDataUrl: String
     @Binding var systemPrompt: String
@@ -307,17 +309,27 @@ private struct GaryxAgentFormContent: View {
                 if mode.isEditable {
                     GaryxAgentProviderSelectionRow(
                         providerType: $providerType,
-                        modelName: $modelName
+                        modelName: $modelName,
+                        modelReasoningEffort: $modelReasoningEffort
                     )
                     Divider().padding(.leading, 16)
                     GaryxAgentModelSelectionRow(
                         providerType: $providerType,
                         modelName: $modelName
                     )
+                    GaryxAgentReasoningEffortSelectionRow(
+                        providerType: $providerType,
+                        modelName: $modelName,
+                        reasoningEffort: $modelReasoningEffort
+                    )
                 } else {
                     GaryxFormReadOnlyRow(title: "Provider", value: garyxAgentProviderLabel(for: providerType))
                     Divider().padding(.leading, 16)
                     GaryxFormReadOnlyRow(title: "Model", value: modelDisplayValue)
+                    if !modelReasoningEffort.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Divider().padding(.leading, 16)
+                        GaryxFormReadOnlyRow(title: "Thinking level", value: modelReasoningEffort)
+                    }
                 }
             }
 
@@ -487,6 +499,7 @@ struct GaryxCreateAgentCard: View {
     @State private var displayName = ""
     @State private var providerType = "codex_app_server"
     @State private var modelName = ""
+    @State private var modelReasoningEffort = ""
     @State private var workspace = ""
     @State private var avatarDataUrl = ""
     @State private var systemPrompt = ""
@@ -503,6 +516,7 @@ struct GaryxCreateAgentCard: View {
                 displayName: $displayName,
                 providerType: $providerType,
                 modelName: $modelName,
+                modelReasoningEffort: $modelReasoningEffort,
                 workspace: $workspace,
                 avatarDataUrl: $avatarDataUrl,
                 systemPrompt: $systemPrompt,
@@ -533,6 +547,7 @@ struct GaryxCreateAgentCard: View {
             displayName: displayName,
             providerType: providerType,
             modelName: modelName,
+            modelReasoningEffort: modelReasoningEffort,
             workspace: workspace,
             avatarDataUrl: avatarDataUrl,
             systemPrompt: systemPrompt
@@ -610,6 +625,7 @@ private struct GaryxAgentEditSheet: View {
     @State private var displayName = ""
     @State private var providerType = ""
     @State private var modelName = ""
+    @State private var modelReasoningEffort = ""
     @State private var workspace = ""
     @State private var avatarDataUrl = ""
     @State private var systemPrompt = ""
@@ -626,6 +642,7 @@ private struct GaryxAgentEditSheet: View {
                 displayName: $displayName,
                 providerType: $providerType,
                 modelName: $modelName,
+                modelReasoningEffort: $modelReasoningEffort,
                 workspace: $workspace,
                 avatarDataUrl: $avatarDataUrl,
                 systemPrompt: $systemPrompt,
@@ -656,6 +673,7 @@ private struct GaryxAgentEditSheet: View {
         displayName = agent.displayName
         providerType = agent.providerType
         modelName = agent.model
+        modelReasoningEffort = agent.modelReasoningEffort
         workspace = agent.defaultWorkspaceDir
         avatarDataUrl = agent.avatarDataUrl
         systemPrompt = agent.systemPrompt
@@ -669,6 +687,7 @@ private struct GaryxAgentEditSheet: View {
             displayName: displayName,
             providerType: providerType,
             modelName: modelName,
+            modelReasoningEffort: modelReasoningEffort,
             workspace: workspace,
             avatarDataUrl: avatarDataUrl,
             systemPrompt: systemPrompt
@@ -1315,6 +1334,7 @@ private struct GaryxAgentProviderSelectionRow: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @Binding var providerType: String
     @Binding var modelName: String
+    @Binding var modelReasoningEffort: String
     @State private var showsProviderSheet = false
 
     var body: some View {
@@ -1360,6 +1380,7 @@ private struct GaryxAgentProviderSelectionRow: View {
         providerType = nextProvider
         if previousProvider != nextProvider {
             modelName = ""
+            modelReasoningEffort = ""
         }
         Task { await model.loadProviderModels(providerType: nextProvider) }
     }
@@ -1464,6 +1485,107 @@ private struct GaryxAgentModelSelectionRow: View {
 
     private func modelChoiceTitle(_ choice: GaryxAgentModelChoice) -> String {
         choice.recommended ? "\(choice.label) · Recommended" : choice.label
+    }
+}
+
+private struct GaryxAgentReasoningEffortSelectionRow: View {
+    @EnvironmentObject private var model: GaryxMobileModel
+    @Binding var providerType: String
+    @Binding var modelName: String
+    @Binding var reasoningEffort: String
+    @State private var showsEffortSheet = false
+
+    var body: some View {
+        if !effortChoices.isEmpty {
+            Divider().padding(.leading, 16)
+            GaryxFormSelectionRow(
+                title: "Thinking level",
+                value: selectedEffortLabel,
+                placeholder: "Provider default"
+            ) {
+                showsEffortSheet = true
+            }
+            .sheet(isPresented: $showsEffortSheet) {
+                GaryxAgentReasoningEffortSelectionSheet(
+                    selectedEffort: normalizedEffort,
+                    choices: effortChoices
+                ) { nextEffort in
+                    reasoningEffort = nextEffort
+                }
+            }
+            .onChange(of: modelName) { _, _ in
+                // Drop a thinking level the newly selected model does not support.
+                reasoningEffort = GaryxThreadModelOverridePresentation.sanitizedReasoningEffort(
+                    providerModels: providerModels,
+                    model: modelName,
+                    reasoningEffort: reasoningEffort
+                ) ?? ""
+            }
+        }
+    }
+
+    private var normalizedProvider: String {
+        providerType.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var normalizedEffort: String {
+        reasoningEffort.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var providerModels: GaryxProviderModels? {
+        model.providerModelsByType[normalizedProvider]
+    }
+
+    private var effortChoices: [GaryxProviderModelOption] {
+        GaryxThreadModelOverridePresentation.reasoningEffortOptions(
+            providerModels: providerModels,
+            model: modelName
+        )
+    }
+
+    private var selectedEffortLabel: String {
+        guard !normalizedEffort.isEmpty else { return "Provider default" }
+        return effortChoices.first(where: { $0.id == normalizedEffort })?.label ?? normalizedEffort
+    }
+}
+
+private struct GaryxAgentReasoningEffortSelectionSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let selectedEffort: String
+    let choices: [GaryxProviderModelOption]
+    let onSelect: (String) -> Void
+
+    var body: some View {
+        GaryxAgentOptionSelectionSheet(title: "Thinking level", subtitle: "Choose thinking level") {
+            GaryxAgentPlainOptionRow(
+                title: "Provider default",
+                subtitle: "Use the model's default thinking level",
+                systemName: "wand.and.stars",
+                selected: selectedEffort.isEmpty
+            ) {
+                onSelect("")
+                dismiss()
+            }
+
+            if !choices.isEmpty {
+                Divider().padding(.leading, 58)
+            }
+
+            ForEach(Array(choices.enumerated()), id: \.element.id) { index, choice in
+                GaryxAgentPlainOptionRow(
+                    title: choice.recommended ? "\(choice.label) · Recommended" : choice.label,
+                    subtitle: choice.description ?? choice.id,
+                    systemName: "brain",
+                    selected: selectedEffort == choice.id
+                ) {
+                    onSelect(choice.id)
+                    dismiss()
+                }
+                if index < choices.count - 1 {
+                    Divider().padding(.leading, 58)
+                }
+            }
+        }
     }
 }
 

@@ -1,0 +1,95 @@
+import Foundation
+
+/// Presentation rules for the per-thread model / thinking-level override chosen
+/// while drafting a new thread. The Mac app's composer model control is the
+/// source of truth for labels and semantics; mobile adapts only the layout.
+public enum GaryxThreadModelOverridePresentation {
+    /// Whether the override control should be offered for this provider.
+    public static func supportsOverride(_ providerModels: GaryxProviderModels?) -> Bool {
+        providerModels?.supportsModelSelection == true
+    }
+
+    /// Thinking levels valid for the current selection: the chosen model's own
+    /// list when it constrains efforts, otherwise the provider-level list.
+    public static func reasoningEffortOptions(
+        providerModels: GaryxProviderModels?,
+        model: String?
+    ) -> [GaryxProviderModelOption] {
+        guard let providerModels, providerModels.supportsReasoningEffortSelection else {
+            return []
+        }
+        if let model = normalized(model),
+           let modelOption = providerModels.models.first(where: { $0.id == model }),
+           !modelOption.supportedReasoningEfforts.isEmpty {
+            return modelOption.supportedReasoningEfforts
+        }
+        return providerModels.reasoningEfforts
+    }
+
+    /// Drops a thinking level the current model selection does not support.
+    public static func sanitizedReasoningEffort(
+        providerModels: GaryxProviderModels?,
+        model: String?,
+        reasoningEffort: String?
+    ) -> String? {
+        guard let effort = normalized(reasoningEffort) else {
+            return nil
+        }
+        let options = reasoningEffortOptions(providerModels: providerModels, model: model)
+        return options.contains(where: { $0.id == effort }) ? effort : nil
+    }
+
+    public static func modelLabel(
+        providerModels: GaryxProviderModels?,
+        model: String?
+    ) -> String? {
+        guard let model = normalized(model) else {
+            return nil
+        }
+        return providerModels?.models.first(where: { $0.id == model })?.label ?? model
+    }
+
+    public static func reasoningEffortLabel(
+        providerModels: GaryxProviderModels?,
+        model: String?,
+        reasoningEffort: String?
+    ) -> String? {
+        guard let effort = normalized(reasoningEffort) else {
+            return nil
+        }
+        let options = reasoningEffortOptions(providerModels: providerModels, model: model)
+        return options.first(where: { $0.id == effort })?.label ?? effort
+    }
+
+    /// Compact label for the new-thread override control.
+    public static func controlLabel(
+        providerModels: GaryxProviderModels?,
+        model: String?,
+        reasoningEffort: String?,
+        fallback: String
+    ) -> String {
+        let modelLabel = modelLabel(providerModels: providerModels, model: model)
+        let effortLabel = reasoningEffortLabel(
+            providerModels: providerModels,
+            model: model,
+            reasoningEffort: reasoningEffort
+        )
+        switch (modelLabel, effortLabel) {
+        case let (modelLabel?, effortLabel?):
+            return "\(modelLabel) · \(effortLabel)"
+        case let (modelLabel?, nil):
+            return modelLabel
+        case let (nil, effortLabel?):
+            return "\(fallback) · \(effortLabel)"
+        case (nil, nil):
+            return fallback
+        }
+    }
+
+    private static func normalized(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return nil
+        }
+        return value
+    }
+}

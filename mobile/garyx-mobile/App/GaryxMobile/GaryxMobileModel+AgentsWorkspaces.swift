@@ -249,6 +249,46 @@ extension GaryxMobileModel {
         } else {
             setSelectedAgentTarget(id)
         }
+        // A model/thinking override only makes sense for the agent it was picked for.
+        clearNewThreadModelOverride()
+    }
+
+    var newThreadAgentTarget: GaryxMobileAgentTarget? {
+        let targetId = newThreadAgentTargetId()
+        guard !targetId.isEmpty else { return nil }
+        return agentTargets.first { $0.id == targetId }
+    }
+
+    var newThreadProviderModels: GaryxProviderModels? {
+        guard let target = newThreadAgentTarget, target.kind == .agent else { return nil }
+        let providerType = target.providerType.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !providerType.isEmpty else { return nil }
+        return providerModelsByType[providerType]
+    }
+
+    func setNewThreadModelOverride(_ model: String) {
+        newThreadModelOverride = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        newThreadReasoningEffortOverride = GaryxThreadModelOverridePresentation.sanitizedReasoningEffort(
+            providerModels: newThreadProviderModels,
+            model: newThreadModelOverride,
+            reasoningEffort: newThreadReasoningEffortOverride
+        ) ?? ""
+    }
+
+    func setNewThreadReasoningEffortOverride(_ effort: String) {
+        newThreadReasoningEffortOverride = effort.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func clearNewThreadModelOverride() {
+        newThreadModelOverride = ""
+        newThreadReasoningEffortOverride = ""
+    }
+
+    func ensureNewThreadProviderModelsLoaded() async {
+        guard let target = newThreadAgentTarget, target.kind == .agent else { return }
+        let providerType = target.providerType.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !providerType.isEmpty, providerModelsByType[providerType] == nil else { return }
+        await loadProviderModels(providerType: providerType)
     }
 
     func setPendingNewThreadAgentTarget(_ id: String?) {
@@ -420,6 +460,7 @@ extension GaryxMobileModel {
         displayName: String,
         providerType: String,
         modelName: String,
+        modelReasoningEffort: String = "",
         workspace: String,
         avatarDataUrl: String,
         systemPrompt: String
@@ -428,6 +469,7 @@ extension GaryxMobileModel {
         let displayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         let provider = providerType.trimmingCharacters(in: .whitespacesAndNewlines)
         let model = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let reasoningEffort = modelReasoningEffort.trimmingCharacters(in: .whitespacesAndNewlines)
         let workspace = workspace.trimmingCharacters(in: .whitespacesAndNewlines)
         let avatarDataUrl = avatarDataUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         let prompt = systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -440,6 +482,7 @@ extension GaryxMobileModel {
                     displayName: displayName,
                     providerType: provider,
                     model: model.isEmpty ? nil : model,
+                    modelReasoningEffort: reasoningEffort.isEmpty ? nil : reasoningEffort,
                     defaultWorkspaceDir: workspace.isEmpty ? nil : workspace,
                     avatarDataUrl: avatarDataUrl.isEmpty ? nil : avatarDataUrl,
                     systemPrompt: prompt
@@ -462,6 +505,7 @@ extension GaryxMobileModel {
         displayName: String,
         providerType: String,
         modelName: String,
+        modelReasoningEffort: String? = nil,
         workspace: String,
         avatarDataUrl: String,
         systemPrompt: String
@@ -489,6 +533,9 @@ extension GaryxMobileModel {
             let preservedSystemPrompt = agent.systemPrompt.isEmpty
                 && nextSystemPrompt.isEmpty
                 && !baseAgent.systemPrompt.isEmpty
+            // nil keeps the stored thinking level; an explicit value (or "") replaces it.
+            let nextReasoningEffort = modelReasoningEffort?.trimmingCharacters(in: .whitespacesAndNewlines)
+                ?? baseAgent.modelReasoningEffort
             let updated = try await client().updateAgent(
                 agentId: agent.id,
                 request: GaryxCustomAgentRequest(
@@ -496,7 +543,7 @@ extension GaryxMobileModel {
                     displayName: nextDisplayName,
                     providerType: nextProviderType,
                     model: nextModelName.isEmpty ? nil : nextModelName,
-                    modelReasoningEffort: baseAgent.modelReasoningEffort.isEmpty ? nil : baseAgent.modelReasoningEffort,
+                    modelReasoningEffort: nextReasoningEffort.isEmpty ? nil : nextReasoningEffort,
                     modelServiceTier: baseAgent.modelServiceTier.isEmpty ? nil : baseAgent.modelServiceTier,
                     providerEnv: baseAgent.providerEnv.isEmpty ? nil : baseAgent.providerEnv,
                     authSource: baseAgent.authSource.isEmpty ? nil : baseAgent.authSource,

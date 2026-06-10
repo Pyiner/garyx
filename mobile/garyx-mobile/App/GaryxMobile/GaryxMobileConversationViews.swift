@@ -943,6 +943,8 @@ struct GaryxEmptyConversationView: View {
                 .foregroundStyle(.primary)
 
             workspacePicker
+
+            modelOverridePicker
         }
         .frame(maxWidth: 300)
         .frame(maxWidth: .infinity)
@@ -955,6 +957,9 @@ struct GaryxEmptyConversationView: View {
                 placeholder: "No workspace",
                 allowsEmpty: true
             )
+        }
+        .task(id: model.newThreadAgentTarget?.id) {
+            await model.ensureNewThreadProviderModelsLoaded()
         }
         .onChange(of: model.sidebarVisible) { _, visible in
             if visible {
@@ -997,6 +1002,73 @@ struct GaryxEmptyConversationView: View {
             model.newThreadWorkspace
         } set: { value in
             model.setNewThreadWorkspace(value)
+        }
+    }
+
+    @ViewBuilder
+    private var modelOverridePicker: some View {
+        if let providerModels = model.newThreadProviderModels,
+           GaryxThreadModelOverridePresentation.supportsOverride(providerModels) {
+            let reasoningEfforts = GaryxThreadModelOverridePresentation.reasoningEffortOptions(
+                providerModels: providerModels,
+                model: model.newThreadModelOverride
+            )
+            Menu {
+                Picker("Model", selection: newThreadModelOverrideBinding) {
+                    Text("Agent default").tag("")
+                    ForEach(providerModels.models) { option in
+                        Text(option.label).tag(option.id)
+                    }
+                }
+                if !reasoningEfforts.isEmpty {
+                    Menu("Thinking level") {
+                        Picker("Thinking level", selection: newThreadReasoningEffortBinding) {
+                            Text("Agent default").tag("")
+                            ForEach(reasoningEfforts) { option in
+                                Text(option.label).tag(option.id)
+                            }
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "cpu")
+                        .font(GaryxFont.system(size: 12, weight: .semibold))
+                    Text(
+                        GaryxThreadModelOverridePresentation.controlLabel(
+                            providerModels: providerModels,
+                            model: model.newThreadModelOverride,
+                            reasoningEffort: model.newThreadReasoningEffortOverride,
+                            fallback: "Model"
+                        )
+                    )
+                    .font(GaryxFont.subheadline(weight: .medium))
+                    .lineLimit(1)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(GaryxFont.system(size: 9, weight: .bold))
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 14)
+                .frame(height: 36)
+                .background(.quaternary.opacity(0.5), in: Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var newThreadModelOverrideBinding: Binding<String> {
+        Binding {
+            model.newThreadModelOverride
+        } set: { value in
+            model.setNewThreadModelOverride(value)
+        }
+    }
+
+    private var newThreadReasoningEffortBinding: Binding<String> {
+        Binding {
+            model.newThreadReasoningEffortOverride
+        } set: { value in
+            model.setNewThreadReasoningEffortOverride(value)
         }
     }
 }
