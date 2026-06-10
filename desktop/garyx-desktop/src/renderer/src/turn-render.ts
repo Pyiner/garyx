@@ -94,9 +94,13 @@ function summarizeTurn(
   finalBlock: RenderTranscriptBlock | null,
   key: string,
   precedingUserTs: string | null,
+  forceRunning: boolean,
 ): TurnRow {
   const allBlocks = finalBlock ? [...steps, finalBlock] : steps;
-  const isRunning = allBlocks.some(blockIsPending);
+  // The trailing turn of an actively running thread is running by
+  // definition: a lull between steps (no pending block for a moment) must
+  // not flap the turn to "Worked" and auto-collapse it mid-run.
+  const isRunning = forceRunning || allBlocks.some(blockIsPending);
   const timestamps = allBlocks
     .map(blockTimestamp)
     .filter((value): value is string => Boolean(value));
@@ -155,7 +159,15 @@ function buildUserTurnActivityRows(
   const { steps: summarySteps, finalBlock } = shouldSurfaceFinalAssistant
     ? pickFinalBlock(steps)
     : { steps, finalBlock: null };
-  return [summarizeTurn(summarySteps, finalBlock, key, precedingUserTs)];
+  return [
+    summarizeTurn(
+      summarySteps,
+      finalBlock,
+      key,
+      precedingUserTs,
+      deferTrailingFinalAssistant && isTrailingTurn,
+    ),
+  ];
 }
 
 /**

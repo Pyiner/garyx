@@ -883,6 +883,16 @@ extension GaryxMobileModel {
         } else {
             remoteBusyThreadIds.remove(threadId)
             markThreadSummaryRuntimeInactive(threadId)
+            // The authoritative transcript reports no active run. If the
+            // terminal stream event never reached this client (dropped
+            // connection or a race), the local send state would stay
+            // "sending" forever, pinning the thinking indicator and the
+            // stop button. Reconcile it here — unless a chat start is
+            // still in flight, where "no active run yet" is expected.
+            if !pendingChatStartThreadIds.contains(threadId), activeRunThreadId == threadId {
+                clearActiveRunState(for: threadId)
+                markStreamingAssistantComplete(for: threadId, removeEmpty: true)
+            }
         }
     }
 

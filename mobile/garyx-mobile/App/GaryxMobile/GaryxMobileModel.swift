@@ -200,6 +200,10 @@ final class GaryxMobileModel: ObservableObject {
     // Most recent run id the client observed terminate per thread. Lets a transcript
     // reload ignore a stale `active_run` snapshot for a run we already saw finish.
     var terminatedActiveRunIdsByThread: [String: String] = [:]
+    // Threads with a chat-start request still in flight toward the gateway.
+    // A transcript reload in that window legitimately reports no active run
+    // yet, so runtime reconciliation must not clear the local sending state.
+    var pendingChatStartThreadIds: Set<String> = []
     var pendingAssistantDeltasByThread: [String: PendingAssistantDelta] = [:]
     var assistantDeltaFlushTasksByThread: [String: Task<Void, Never>] = [:]
     var pendingQueuedInputsByIntentId: [String: GaryxPendingQueuedInput] = [:]

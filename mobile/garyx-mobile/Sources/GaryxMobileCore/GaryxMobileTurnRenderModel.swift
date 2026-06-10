@@ -87,30 +87,25 @@ enum GaryxMobileTurnRenderer {
         isRunningThread: Bool
     ) -> [GaryxMobileTurnRow] {
         buildTurnRows(
-            blocks: transcriptBlocks(from: collapseStreamingThinkingPlaceholders(messages)),
-            deferTrailingFinalAssistant: isRunningThread
+            blocks: transcriptBlocks(from: removeStreamingThinkingPlaceholders(messages)),
+            deferTrailingFinalAssistant: isRunningThread,
+            isRunningThread: isRunningThread
         )
     }
 
-    /// An empty, still-streaming assistant message is a "Thinking" placeholder with no
-    /// content of its own. Only a trailing one represents live activity; any earlier empty
-    /// placeholder is stale — a newer assistant segment or tool step already superseded it —
-    /// and would otherwise render a second, duplicate "Thinking" row. Keep at most the final
-    /// placeholder so the transcript never shows stacked "Thinking" labels.
-    private static func collapseStreamingThinkingPlaceholders(
+    /// An empty, still-streaming assistant message is a "Thinking" placeholder
+    /// with no content of its own. Placeholders never render as transcript
+    /// blocks: the tail thinking indicator is the single "Thinking" surface.
+    /// Rendering them as blocks turned pure-text replies into multi-step
+    /// turns (showing a bogus Working summary) and stacked a second
+    /// "Thinking" bubble above the tail indicator.
+    private static func removeStreamingThinkingPlaceholders(
         _ messages: [GaryxMobileMessage]
     ) -> [GaryxMobileMessage] {
-        guard messages.count > 1 else { return messages }
-        let lastIndex = messages.index(before: messages.endIndex)
-        return messages.enumerated().compactMap { index, message in
-            if index != lastIndex, isEmptyStreamingAssistant(message) {
-                return nil
-            }
-            return message
-        }
+        messages.filter { !isEmptyStreamingAssistant($0) }
     }
 
-    private static func isEmptyStreamingAssistant(_ message: GaryxMobileMessage) -> Bool {
+    static func isEmptyStreamingAssistant(_ message: GaryxMobileMessage) -> Bool {
         message.role == .assistant
             && message.isStreaming
             && message.attachments.isEmpty
@@ -119,7 +114,8 @@ enum GaryxMobileTurnRenderer {
 
     private static func buildTurnRows(
         blocks: [GaryxMobileTranscriptBlock],
-        deferTrailingFinalAssistant: Bool
+        deferTrailingFinalAssistant: Bool,
+        isRunningThread: Bool
     ) -> [GaryxMobileTurnRow] {
         var rows: [GaryxMobileTurnRow] = []
         var currentUserBlock: GaryxMobileTranscriptBlock?
@@ -133,7 +129,8 @@ enum GaryxMobileTurnRenderer {
                 key: currentKey,
                 precedingUserTimestamp: precedingUserTimestamp,
                 deferTrailingFinalAssistant: deferTrailingFinalAssistant,
-                isTrailingTurn: isTrailingTurn
+                isTrailingTurn: isTrailingTurn,
+                isRunningThread: isRunningThread
             )
             if let currentUserBlock {
                 rows.append(
@@ -179,7 +176,8 @@ enum GaryxMobileTurnRenderer {
         key: String?,
         precedingUserTimestamp: String?,
         deferTrailingFinalAssistant: Bool,
-        isTrailingTurn: Bool
+        isTrailingTurn: Bool,
+        isRunningThread: Bool
     ) -> [GaryxMobileTurnRow.ActivityRow] {
         guard let key else { return [] }
 
@@ -191,11 +189,6 @@ enum GaryxMobileTurnRenderer {
         if steps.count == 1,
            case .message(let message) = steps[0],
            message.role == .assistant {
-            if message.isStreaming,
-               message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-               message.attachments.isEmpty {
-                return []
-            }
             return [.flat(steps[0])]
         }
 
@@ -207,7 +200,13 @@ enum GaryxMobileTurnRenderer {
             steps: picked.steps,
             finalBlock: picked.finalBlock,
             key: key,
-            precedingUserTimestamp: precedingUserTimestamp
+            precedingUserTimestamp: precedingUserTimestamp,
+            // The trailing turn of an actively running thread is running by
+            // definition: the run-level flag must drive the label and the
+            // expansion so a lull between steps (no pending block for a
+            // moment) cannot flap the turn into "Worked" and auto-collapse
+            // it while output is still coming.
+            forceRunning: isRunningThread && isTrailingTurn
         )
         return [.turn(turn)]
     }
@@ -228,10 +227,11 @@ enum GaryxMobileTurnRenderer {
         steps: [GaryxMobileTranscriptBlock],
         finalBlock: GaryxMobileTranscriptBlock?,
         key: String,
-        precedingUserTimestamp: String?
+        precedingUserTimestamp: String?,
+        forceRunning: Bool
     ) -> GaryxMobileAgentTurn {
         let allBlocks = finalBlock.map { steps + [$0] } ?? steps
-        let isRunning = allBlocks.contains { $0.isPending }
+        let isRunning = forceRunning || allBlocks.contains { $0.isPending }
         let timestamps = allBlocks.compactMap(\.timestamp)
         let startedAt = precedingUserTimestamp ?? timestamps.first
         let finishedAt = isRunning ? nil : timestamps.last
@@ -295,45 +295,40 @@ enum GaryxMobileThreadActivityModel {
         return true
     }
 
+    /// The tail "Thinking" indicator is the single thinking surface, driven
+    /// purely by thread state:
+    ///
+    /// | State                                                | Thinking |
+    /// |------------------------------------------------------|----------|
+    /// | No run active                                        | hidden   |
+    /// | Run active, no visible output yet                    | shown    |
+    /// | Run active, assistant text visibly streaming         | hidden   |
+    /// | Run active, tool call actively running               | hidden   |
+    /// | Run active, last visible output finished (a lull, or |          |
+    /// | the final reply not yet started)                     | shown    |
+    ///
+    /// Empty streaming assistant placeholders are not visible output (the
+    /// renderer drops them), so they count as "no visible output yet".
     static func showsTailThinkingIndicator(
         messages: [GaryxMobileMessage],
         runActive: Bool
     ) -> Bool {
         guard runActive else { return false }
-        guard let last = messages.last else { return true }
+        guard let last = messages.last(where: {
+            !GaryxMobileTurnRenderer.isEmptyStreamingAssistant($0)
+        }) else {
+            return true
+        }
         if last.role == .assistant,
            last.isStreaming,
-           last.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           last.attachments.isEmpty {
+           !last.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !last.attachments.isEmpty {
             return false
         }
         if last.role == .tool,
            last.toolTraceGroup?.isActive == true {
             return false
         }
-        return latestUserMessageAwaitsAssistant(messages)
+        return true
     }
 
-    static func hasVisibleRunningActivity(
-        messages: [GaryxMobileMessage],
-        runActive: Bool
-    ) -> Bool {
-        guard runActive else { return false }
-        guard !messages.isEmpty else { return true }
-        if latestUserMessageAwaitsAssistant(messages) {
-            return true
-        }
-        let activityMessages: ArraySlice<GaryxMobileMessage>
-        if let latestUserIndex = messages.lastIndex(where: { $0.role == .user }) {
-            activityMessages = messages[messages.index(after: latestUserIndex)...]
-        } else {
-            activityMessages = messages[...]
-        }
-        return activityMessages.contains { message in
-            if message.isStreaming {
-                return true
-            }
-            return message.toolTraceGroup?.isActive == true
-        }
-    }
 }

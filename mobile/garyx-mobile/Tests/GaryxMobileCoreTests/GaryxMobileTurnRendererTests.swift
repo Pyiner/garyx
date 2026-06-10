@@ -160,21 +160,23 @@ final class GaryxMobileTurnRendererTests: XCTestCase {
 
         XCTAssertTrue(GaryxMobileThreadActivityModel.latestUserMessageAwaitsAssistant(messages))
         XCTAssertTrue(
-            GaryxMobileThreadActivityModel.hasVisibleRunningActivity(
-                messages: messages,
-                runActive: true
-            )
-        )
-        XCTAssertTrue(
             GaryxMobileThreadActivityModel.showsTailThinkingIndicator(
                 messages: messages,
                 runActive: true
             )
         )
+        XCTAssertFalse(
+            GaryxMobileThreadActivityModel.showsTailThinkingIndicator(
+                messages: messages,
+                runActive: false
+            )
+        )
     }
 
-    func testActivityModelSuppressesThinkingForEmptyAssistantPlaceholderAndActiveTool() {
-        XCTAssertFalse(
+    func testActivityModelShowsThinkingForEmptyAssistantPlaceholder() {
+        // The renderer never displays empty streaming placeholders, so the
+        // tail indicator is the single "Thinking" surface and must show.
+        XCTAssertTrue(
             GaryxMobileThreadActivityModel.showsTailThinkingIndicator(
                 messages: [
                     message("user-1", role: .user, text: "Run this"),
@@ -183,11 +185,37 @@ final class GaryxMobileTurnRendererTests: XCTestCase {
                 runActive: true
             )
         )
+    }
+
+    func testActivityModelSuppressesThinkingWhileToolRunsOrTextStreams() {
         XCTAssertFalse(
             GaryxMobileThreadActivityModel.showsTailThinkingIndicator(
                 messages: [
                     message("user-1", role: .user, text: "Run this"),
                     toolMessage("tool-1", isActive: true),
+                ],
+                runActive: true
+            )
+        )
+        XCTAssertFalse(
+            GaryxMobileThreadActivityModel.showsTailThinkingIndicator(
+                messages: [
+                    message("user-1", role: .user, text: "Run this"),
+                    message("assistant-1", role: .assistant, text: "Partial", isStreaming: true),
+                ],
+                runActive: true
+            )
+        )
+    }
+
+    func testActivityModelShowsThinkingDuringLullBetweenSteps() {
+        // Tool finished, the next step (or the final reply) has not started:
+        // the run is still active, so the tail keeps indicating progress.
+        XCTAssertTrue(
+            GaryxMobileThreadActivityModel.showsTailThinkingIndicator(
+                messages: [
+                    message("user-1", role: .user, text: "Run this"),
+                    toolMessage("tool-1", isActive: false),
                 ],
                 runActive: true
             )
@@ -212,12 +240,6 @@ final class GaryxMobileTurnRendererTests: XCTestCase {
             ),
         ]
 
-        XCTAssertTrue(
-            GaryxMobileThreadActivityModel.hasVisibleRunningActivity(
-                messages: messages,
-                runActive: true
-            )
-        )
         XCTAssertFalse(
             GaryxMobileThreadActivityModel.showsTailThinkingIndicator(
                 messages: messages,
@@ -226,53 +248,33 @@ final class GaryxMobileTurnRendererTests: XCTestCase {
         )
     }
 
-    func testActivityModelSuppressesStaleThinkingAfterCompletedAssistant() {
+    func testActivityModelThinkingFollowsRunStateAfterCompletedAssistant() {
         let messages = [
             message("user-1", role: .user, text: "Question"),
             message("assistant-1", role: .assistant, text: "Done."),
         ]
 
-        XCTAssertFalse(GaryxMobileThreadActivityModel.latestUserMessageAwaitsAssistant(messages))
-        XCTAssertFalse(
-            GaryxMobileThreadActivityModel.hasVisibleRunningActivity(
-                messages: messages,
-                runActive: true
-            )
-        )
-        XCTAssertFalse(
+        // Run still active: the completed text may be an intermediate
+        // segment, so the tail keeps indicating progress.
+        XCTAssertTrue(
             GaryxMobileThreadActivityModel.showsTailThinkingIndicator(
                 messages: messages,
                 runActive: true
             )
         )
-    }
-
-    func testActivityModelIgnoresStaleActivityBeforeLatestCompletedTurn() {
-        let messages = [
-            message("user-1", role: .user, text: "Old request"),
-            message("assistant-1", role: .assistant, text: "Old partial", isStreaming: true),
-            message("user-2", role: .user, text: "Current request"),
-            message("assistant-2", role: .assistant, text: "Current answer."),
-        ]
-
-        XCTAssertFalse(
-            GaryxMobileThreadActivityModel.hasVisibleRunningActivity(
-                messages: messages,
-                runActive: true
-            )
-        )
+        // Run over: the indicator clears immediately.
         XCTAssertFalse(
             GaryxMobileThreadActivityModel.showsTailThinkingIndicator(
                 messages: messages,
-                runActive: true
+                runActive: false
             )
         )
     }
 
-    func testRunningTurnCollapsesDuplicateEmptyThinkingPlaceholders() throws {
-        // A running turn that carries a tool step plus more than one empty,
-        // still-streaming assistant placeholder must not render stacked "Thinking"
-        // rows. Only the trailing placeholder survives.
+    func testRunningTurnNeverRendersEmptyThinkingPlaceholders() throws {
+        // Empty streaming placeholders never render as steps: they would
+        // stack "Thinking" bubbles above the tail indicator and turn
+        // text-only replies into bogus multi-step working turns.
         let rows = GaryxMobileTurnRenderer.buildTurnRows(
             messages: [
                 message("user-1", role: .user, text: "Push code and trigger iOS build"),
@@ -286,14 +288,62 @@ final class GaryxMobileTurnRendererTests: XCTestCase {
         guard case .turn(let turn) = try XCTUnwrap(try XCTUnwrap(rows.only).activityRows.only) else {
             return XCTFail("Expected a running working turn")
         }
-        let thinkingPlaceholders = turn.steps.filter { block in
-            guard case .message(let message) = block else { return false }
-            return message.role == .assistant
-                && message.isStreaming
-                && message.attachments.isEmpty
-                && message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        XCTAssertEqual(turn.steps.map(\.id), ["tool-1"])
+        XCTAssertTrue(turn.isRunning)
+    }
+
+    func testCompletedTextReplyWithTrailingPlaceholderStaysFlat() throws {
+        // A pure text reply followed by an empty streaming placeholder (the
+        // run is still open, no final reply yet) must render as plain text:
+        // no Working summary row, no placeholder bubble.
+        let rows = GaryxMobileTurnRenderer.buildTurnRows(
+            messages: [
+                message("user-1", role: .user, text: "ok"),
+                message("assistant-1", role: .assistant, text: "好的，我开始。"),
+                message("assistant-think-1", role: .assistant, isStreaming: true),
+            ],
+            isRunningThread: true
+        )
+
+        let activity = try XCTUnwrap(try XCTUnwrap(rows.only).activityRows.only)
+        guard case .flat(let block) = activity else {
+            return XCTFail("Expected the text-only reply to stay flat without a working turn")
         }
-        XCTAssertEqual(thinkingPlaceholders.count, 1, "Duplicate empty thinking placeholders must collapse to one")
+        XCTAssertEqual(block.id, "assistant-1")
+    }
+
+    func testTrailingTurnStaysRunningThroughStepLulls() throws {
+        // All blocks momentarily idle (tool finished, next step pending):
+        // the trailing turn of a running thread must stay "Working" and
+        // expanded instead of flapping to "Worked" and auto-collapsing.
+        let rows = GaryxMobileTurnRenderer.buildTurnRows(
+            messages: [
+                message("user-1", role: .user, text: "Run this"),
+                toolMessage("tool-1", isActive: false),
+                message("assistant-1", role: .assistant, text: "Intermediate note"),
+            ],
+            isRunningThread: true
+        )
+
+        guard case .turn(let turn) = try XCTUnwrap(try XCTUnwrap(rows.only).activityRows.only) else {
+            return XCTFail("Expected a running working turn")
+        }
+        XCTAssertTrue(turn.isRunning)
+        XCTAssertNil(turn.finishedAt)
+
+        // The same transcript with the run over collapses to a finished turn.
+        let finishedRows = GaryxMobileTurnRenderer.buildTurnRows(
+            messages: [
+                message("user-1", role: .user, text: "Run this"),
+                toolMessage("tool-1", isActive: false),
+                message("assistant-1", role: .assistant, text: "Intermediate note"),
+            ],
+            isRunningThread: false
+        )
+        guard case .turn(let finishedTurn) = try XCTUnwrap(try XCTUnwrap(finishedRows.only).activityRows.only) else {
+            return XCTFail("Expected a finished turn")
+        }
+        XCTAssertFalse(finishedTurn.isRunning)
     }
 
     func testThreadRuntimeIgnoresActiveRunThatClientAlreadySawTerminate() {

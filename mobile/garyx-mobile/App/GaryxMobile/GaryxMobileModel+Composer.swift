@@ -142,6 +142,12 @@ extension GaryxMobileModel {
                 messages.append(userMessage)
             }
             activeAssistantMessageIdsByThread[optimisticThreadId] = assistantId
+            // The run is active the instant the user sends: the tail
+            // thinking indicator must appear immediately, not after the
+            // gateway round-trips below. Failure paths clear this state.
+            isSending = true
+            activeRunThreadId = optimisticThreadId
+            pendingChatStartThreadIds.insert(optimisticThreadId)
         } else {
             messages = draftOptimisticMessages
         }
@@ -157,10 +163,13 @@ extension GaryxMobileModel {
             guard !remoteBusyThreadIds.contains(thread.id) else {
                 markLatestLocalUserFailed(for: thread.id, message: "Thread is busy")
                 markStreamingAssistantComplete(for: thread.id, removeEmpty: true)
+                pendingChatStartThreadIds.remove(thread.id)
+                clearActiveRunState(for: thread.id)
                 return
             }
             isSending = true
             activeRunThreadId = thread.id
+            pendingChatStartThreadIds.insert(thread.id)
             remoteBusyThreadIds.remove(thread.id)
             lastError = nil
             activeAssistantMessageIdsByThread[thread.id] = assistantId
@@ -187,6 +196,7 @@ extension GaryxMobileModel {
                 }
             }
             if let optimisticThreadId {
+                pendingChatStartThreadIds.remove(optimisticThreadId)
                 clearActiveRunState(for: optimisticThreadId)
             }
             lastError = displayMessage(for: error)
@@ -362,6 +372,8 @@ extension GaryxMobileModel {
         let acceptedThreadId = result.threadId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? threadId
             : result.threadId
+        pendingChatStartThreadIds.remove(threadId)
+        pendingChatStartThreadIds.remove(acceptedThreadId)
         activeRunThreadId = acceptedThreadId
         remoteBusyThreadIds.insert(acceptedThreadId)
         activeAssistantMessageIdsByThread[acceptedThreadId] = assistantMessageId

@@ -293,7 +293,11 @@ struct GaryxConversationView: View {
                     }
                     GaryxMobileTurnRowsView(
                         rows: model.selectedThreadTurnRows(),
-                        forceRunningLastTurn: model.isSelectedThreadVisiblyRunning,
+                        // The run-level sending flag, not per-block pending
+                        // state: a lull between steps must not flip the
+                        // trailing turn to "Worked" and auto-collapse it
+                        // while the run is still going.
+                        forceRunningLastTurn: model.isSelectedThreadSending,
                         prefetchBoundaryRowCount: garyxHistoryPrefetchBoundaryRows
                     ) {
                         prefetchOlderHistoryIfNeeded(ignoreDistance: true)
