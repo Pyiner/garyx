@@ -1754,9 +1754,19 @@ impl AgentLoopProvider for ClaudeCliProvider {
                 Ok(Some(outcome)) if outcome.is_error => {
                     should_retry_message_with_fresh_session(&outcome.response_text)
                 }
-                Ok(Some(outcome)) => resumed_run_stalled_without_response(outcome),
                 _ => false,
             };
+        // A wedged-but-intact session: the run "succeeded" with zero output
+        // (the CLI closed a dangling turn with a synthetic "No response
+        // requested." and exited without calling the model). The session
+        // content itself is fine, so retry ON THE SAME SESSION to keep the
+        // full conversation context instead of falling back to a fresh one.
+        let should_retry_same_session = !should_retry
+            && session_id.is_some()
+            && matches!(
+                &attempt_result,
+                Ok(Some(outcome)) if resumed_run_stalled_without_response(outcome)
+            );
 
         let mut result = if should_retry {
             let lost_history_messages = count_claude_transcript_history_messages(
@@ -1782,13 +1792,21 @@ impl AgentLoopProvider for ClaudeCliProvider {
                     lost_history_messages_known = lost_history_messages.is_some(),
                     response = %outcome.response_text,
                     is_error = outcome.is_error,
-                    "resume returned no usable response, retrying as new session"
+                    "resume returned error, retrying as new session"
                 ),
                 _ => {}
             }
             self.session_map.lock().await.remove(&options.thread_id);
             self.reset_failure_count(&options.thread_id).await;
             self.execute_sdk_run(options, None, &run_id, &on_chunk)
+                .await?
+        } else if should_retry_same_session {
+            tracing::warn!(
+                thread_id = %options.thread_id,
+                sdk_session_id = session_id.as_deref().unwrap_or(""),
+                "resumed run produced no response; retrying once on the same session"
+            );
+            self.execute_sdk_run(options, session_id.as_deref(), &run_id, &on_chunk)
                 .await?
         } else {
             attempt_result?
