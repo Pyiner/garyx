@@ -143,38 +143,39 @@ struct GaryxConversationView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                 }
             }
-            // Scroll-to-bottom hovers directly above the composer with a
-            // clear gap; the overlay is applied before the bottom chrome so
-            // the chrome's safe-area inset pushes it above the composer, and
-            // its visibility is a projection of the scroll state machine.
-            .overlay(alignment: .bottom) {
-                if scrollState.showsScrollToBottomButton {
-                    Button {
-                        apply(scrollState.scrollToBottomTapped(), proxy: proxy)
-                    } label: {
-                        Image(systemName: "arrow.down")
-                            .font(GaryxFont.system(size: 15, weight: .semibold))
-                            .foregroundStyle(.primary)
-                            .frame(width: 42, height: 42)
-                            .garyxAdaptiveGlass(
-                                .regular,
-                                isInteractive: true,
-                                fallbackMaterial: .ultraThinMaterial,
-                                in: Circle()
-                            )
-                            .shadow(color: Color.black.opacity(0.12), radius: 14, x: 0, y: 8)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.bottom, 12)
-                    .transition(.scale(scale: 0.88).combined(with: .opacity))
-                    .accessibilityLabel("Scroll to latest message")
-                }
-            }
-            .animation(.easeOut(duration: 0.18), value: scrollState.showsScrollToBottomButton)
+            // Scroll-to-bottom hovers directly above the composer. It lives
+            // INSIDE the bottom chrome: hosting it in a content overlay made
+            // the safe-area inset shift its visuals without its hit-test
+            // region, so taps fell through to the transcript rows behind it.
             .garyxFloatingBottomChrome(onHeightChange: { height in
                 bottomChromeHeight = height
             }) {
-                GaryxComposer(isFocused: $isComposerFocused)
+                VStack(spacing: 12) {
+                    if scrollState.showsScrollToBottomButton {
+                        Button {
+                            apply(scrollState.scrollToBottomTapped(), proxy: proxy)
+                        } label: {
+                            Image(systemName: "arrow.down")
+                                .font(GaryxFont.system(size: 15, weight: .semibold))
+                                .foregroundStyle(.primary)
+                                .frame(width: 42, height: 42)
+                                .garyxAdaptiveGlass(
+                                    .regular,
+                                    isInteractive: true,
+                                    fallbackMaterial: .ultraThinMaterial,
+                                    in: Circle()
+                                )
+                                .shadow(color: Color.black.opacity(0.12), radius: 14, x: 0, y: 8)
+                        }
+                        .buttonStyle(.plain)
+                        .transition(.scale(scale: 0.88).combined(with: .opacity))
+                        .accessibilityLabel("Scroll to latest message")
+                    }
+
+                    GaryxComposer(isFocused: $isComposerFocused)
+                }
+                .frame(maxWidth: .infinity)
+                .animation(.easeOut(duration: 0.18), value: scrollState.showsScrollToBottomButton)
             }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onAppear {
