@@ -24,7 +24,7 @@ impl LaunchdManager {
         Self
     }
 
-    fn domain(&self) -> Result<String, Box<dyn std::error::Error>> {
+    fn uid(&self) -> Result<String, Box<dyn std::error::Error>> {
         let output = ProcessCommand::new("id").arg("-u").output()?;
         if !output.status.success() {
             return Err(format!(
@@ -37,11 +37,73 @@ impl LaunchdManager {
         if uid.is_empty() {
             return Err("empty uid from `id -u`".into());
         }
-        Ok(format!("gui/{uid}"))
+        Ok(uid)
+    }
+
+    /// Whether the calling process lives in the GUI (Aqua) login session.
+    ///
+    /// Only an Aqua-session process can `bootstrap` into the `gui/<uid>`
+    /// domain; over SSH / headless logins the manager is the per-user
+    /// background domain and the GUI domain is unreachable (launchctl rejects
+    /// it with "Domain does not support specified action"). `managername`
+    /// reports the current process's domain manager, which is exactly the
+    /// signal that decides which domain we can install into.
+    fn is_aqua_session(&self) -> bool {
+        ProcessCommand::new(LAUNCHCTL_BIN)
+            .arg("managername")
+            .output()
+            .map(|out| {
+                out.status.success()
+                    && String::from_utf8_lossy(&out.stdout).trim() == "Aqua"
+            })
+            .unwrap_or(false)
+    }
+
+    /// Domains to attempt when bootstrapping a not-yet-loaded agent, in
+    /// priority order. In an Aqua session we prefer `gui/<uid>` to keep parity
+    /// with historical desktop installs, falling back to the per-user domain;
+    /// over SSH the per-user domain is the only one available.
+    fn candidate_install_domains(&self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        let uid = self.uid()?;
+        if self.is_aqua_session() {
+            Ok(vec![format!("gui/{uid}"), format!("user/{uid}")])
+        } else {
+            Ok(vec![format!("user/{uid}")])
+        }
+    }
+
+    /// The domain the agent is currently loaded in, if any. Probing both
+    /// domains lets stop / restart / uninstall act on the live service
+    /// regardless of which session type installed it.
+    fn loaded_domain(&self) -> Option<String> {
+        let uid = self.uid().ok()?;
+        for domain in [format!("gui/{uid}"), format!("user/{uid}")] {
+            let target = format!("{domain}/{LAUNCHD_SERVICE_NAME}");
+            let loaded = ProcessCommand::new(LAUNCHCTL_BIN)
+                .args(["print", &target])
+                .output()
+                .map(|out| out.status.success())
+                .unwrap_or(false);
+            if loaded {
+                return Some(domain);
+            }
+        }
+        None
     }
 
     fn target(&self) -> Result<String, Box<dyn std::error::Error>> {
-        Ok(format!("{}/{}", self.domain()?, LAUNCHD_SERVICE_NAME))
+        // Prefer where the agent actually lives; otherwise fall back to the
+        // domain we would install into, so commands run before the first
+        // bootstrap still resolve a sensible target.
+        if let Some(domain) = self.loaded_domain() {
+            return Ok(format!("{domain}/{LAUNCHD_SERVICE_NAME}"));
+        }
+        let domain = self
+            .candidate_install_domains()?
+            .into_iter()
+            .next()
+            .ok_or("no launchd domain available for the current session")?;
+        Ok(format!("{domain}/{LAUNCHD_SERVICE_NAME}"))
     }
 
     fn plist_path(&self) -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -78,27 +140,34 @@ impl LaunchdManager {
     }
 
     fn ensure_bootstrapped(&self, plist_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-        let target = self.target()?;
-        let print_output = ProcessCommand::new(LAUNCHCTL_BIN)
-            .args(["print", &target])
-            .output()?;
-        if print_output.status.success() {
+        if self.loaded_domain().is_some() {
             return Ok(());
         }
 
-        let domain = self.domain()?;
         let plist_arg = plist_path.display().to_string();
-        let output = ProcessCommand::new(LAUNCHCTL_BIN)
-            .args(["bootstrap", &domain, &plist_arg])
-            .output()?;
-        if output.status.success() {
-            return Ok(());
+        let mut last_err: Option<String> = None;
+        for domain in self.candidate_install_domains()? {
+            let output = ProcessCommand::new(LAUNCHCTL_BIN)
+                .args(["bootstrap", &domain, &plist_arg])
+                .output()?;
+            if output.status.success() {
+                return Ok(());
+            }
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("service already loaded") {
+                return Ok(());
+            }
+            // Fall through to the next candidate domain — e.g. an Aqua session
+            // whose GUI domain rejected the bootstrap can still land in the
+            // per-user domain.
+            last_err = Some(format!(
+                "launchctl bootstrap {domain} failed: {}",
+                stderr.trim()
+            ));
         }
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.contains("service already loaded") {
-            return Ok(());
-        }
-        Err(format!("launchctl bootstrap failed: {}", stderr.trim()).into())
+        Err(last_err
+            .unwrap_or_else(|| "launchctl bootstrap failed: no domain available".to_owned())
+            .into())
     }
 
     fn bootout(&self) -> Result<(), Box<dyn std::error::Error>> {
@@ -255,8 +324,6 @@ fn render_launch_agent_plist(
   <true/>
   <key>ThrottleInterval</key>
   <integer>35</integer>
-  <key>LimitLoadToSessionType</key>
-  <string>Aqua</string>
 {env_block}  <key>SoftResourceLimits</key>
   <dict>
     <key>NumberOfFiles</key>
