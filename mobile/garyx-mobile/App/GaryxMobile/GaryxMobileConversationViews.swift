@@ -6,8 +6,6 @@ import UIKit
 import UniformTypeIdentifiers
 
 private let garyxHistoryPrefetchBoundaryRows = 3
-private let garyxHistoryPrefetchMinDistance: CGFloat = 640
-private let garyxHistoryPrefetchViewportMultiplier: CGFloat = 1.5
 
 private func garyxDismissKeyboard() {
     UIApplication.shared.sendAction(
@@ -18,17 +16,62 @@ private func garyxDismissKeyboard() {
     )
 }
 
+/// Transcript loading placeholder: a chat-shaped skeleton (user pill on the
+/// trailing edge, assistant text lines on the leading edge) swept by the same
+/// soft shimmer treatment as `GaryxShimmerText`, instead of a bare spinner.
 struct GaryxThreadHistoryLoadingView: View {
+    private static let shimmerDuration: Double = 2.4
+
     var body: some View {
-        HStack(spacing: 8) {
-            ProgressView()
-                .scaleEffect(0.76)
-            Text("Loading thread")
-                .font(GaryxFont.callout())
-                .foregroundStyle(.secondary)
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
+            let normalized = context.date.timeIntervalSinceReferenceDate
+                .truncatingRemainder(dividingBy: Self.shimmerDuration) / Self.shimmerDuration
+            let phase = CGFloat(normalized) * 2.0 - 0.5
+            let fill = LinearGradient(
+                colors: [
+                    Color.primary.opacity(0.05),
+                    Color.primary.opacity(0.11),
+                    Color.primary.opacity(0.05),
+                ],
+                startPoint: UnitPoint(x: phase - 0.6, y: 0.35),
+                endPoint: UnitPoint(x: phase + 0.6, y: 0.65)
+            )
+
+            VStack(alignment: .leading, spacing: 18) {
+                userBubble(width: 168, fill: fill)
+                assistantLines(trailingInsets: [24, 64, 148], fill: fill)
+                userBubble(width: 122, fill: fill)
+                assistantLines(trailingInsets: [40, 96], fill: fill)
+
+                GaryxShimmerText(
+                    text: "Loading thread",
+                    font: GaryxFont.footnote(weight: .medium)
+                )
+                .frame(maxWidth: .infinity)
+                .padding(.top, 10)
+            }
         }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 24)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading thread")
+    }
+
+    private func userBubble(width: CGFloat, fill: LinearGradient) -> some View {
+        RoundedRectangle(cornerRadius: 19, style: .continuous)
+            .fill(fill)
+            .frame(width: width, height: 38)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    private func assistantLines(trailingInsets: [CGFloat], fill: LinearGradient) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            ForEach(Array(trailingInsets.enumerated()), id: \.offset) { _, inset in
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(fill)
+                    .frame(height: 14)
+                    .padding(.trailing, inset)
+            }
+        }
     }
 }
 
@@ -74,131 +117,108 @@ private struct GaryxConversationTopOffsetKey: PreferenceKey {
     }
 }
 
-private struct GaryxConversationViewportHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
-private enum GaryxConversationTailScrollRequestKind {
-    case openingThread
-    case tailUpdate
-    case manual
-    case repair
-}
-
 struct GaryxConversationView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @Environment(\.garyxSidebarDragActive) private var sidebarDragActive
     @FocusState private var isComposerFocused: Bool
+    /// Unified scroll state machine (GaryxMobileCore). The view feeds it
+    /// events and executes the tail-scroll requests it returns; UI such as
+    /// the scroll-to-bottom control reads its projections.
+    @State private var scrollState = GaryxConversationScrollState()
     @State private var scrollPreservationThreadId: String?
     @State private var pendingHistoryPrefetchThreadId: String?
-    @State private var conversationTopOffset: CGFloat?
-    @State private var conversationBottomOffset: CGFloat = 0
-    @State private var conversationViewportHeight: CGFloat = 0
     @State private var bottomChromeHeight: CGFloat = 0
-    @State private var isNearConversationBottom = true
-    @State private var hasMovedTowardOlderHistory = false
-    @State private var showsScrollToBottomButton = false
     @State private var tailScrollRequestGeneration = 0
 
     var body: some View {
         ScrollViewReader { proxy in
-            ZStack(alignment: .bottomTrailing) {
+            ZStack(alignment: .bottom) {
                 messageScroll(proxy: proxy)
 
-                // The new-thread empty state lives outside the bottom-anchored
-                // transcript scroll so it stays centered between the header and
-                // the composer instead of sticking to the composer.
+                // The new-thread empty state lives outside the transcript
+                // scroll so it stays centered between the header and the
+                // composer.
                 if showsNewThreadEmptyState {
                     GaryxEmptyConversationView()
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                 }
+
+                // Scroll-to-bottom floats over the transcript directly above
+                // the composer; visibility is a projection of the scroll
+                // state machine.
+                if scrollState.showsScrollToBottomButton {
+                    Button {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            scrollToConversationTail(proxy)
+                        }
+                        apply(scrollState.scrollToBottomTapped(), proxy: proxy)
+                    } label: {
+                        Image(systemName: "arrow.down")
+                            .font(GaryxFont.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .frame(width: 42, height: 42)
+                            .garyxAdaptiveGlass(
+                                .regular,
+                                isInteractive: true,
+                                fallbackMaterial: .ultraThinMaterial,
+                                in: Circle()
+                            )
+                            .shadow(color: Color.black.opacity(0.12), radius: 14, x: 0, y: 8)
+                    }
+                    .buttonStyle(.plain)
+                    // The transcript extends under the floating composer, so
+                    // the overlay must clear the measured chrome height to
+                    // hover directly above the input.
+                    .padding(.bottom, bottomChromeHeight + 12)
+                    .transition(.scale(scale: 0.88).combined(with: .opacity))
+                    .accessibilityLabel("Scroll to latest message")
+                }
             }
+            .animation(.easeOut(duration: 0.18), value: scrollState.showsScrollToBottomButton)
             .garyxFloatingBottomChrome(onHeightChange: { height in
                 bottomChromeHeight = height
             }) {
-                VStack(alignment: .trailing, spacing: 8) {
-                    if showsScrollToBottomButton {
-                        Button {
-                            withAnimation(.easeOut(duration: 0.2)) {
-                                scrollToConversationTail(proxy)
-                            }
-                            showsScrollToBottomButton = false
-                            scheduleScrollToConversationTail(proxy, animated: false, retryLayout: true, requestKind: .manual)
-                        } label: {
-                            Image(systemName: "arrow.down")
-                                .font(GaryxFont.system(size: 15, weight: .semibold))
-                                .foregroundStyle(.primary)
-                                .frame(width: 42, height: 42)
-                                .garyxAdaptiveGlass(
-                                    .regular,
-                                    isInteractive: true,
-                                    fallbackMaterial: .ultraThinMaterial,
-                                    in: Circle()
-                                )
-                                .shadow(color: Color.black.opacity(0.12), radius: 14, x: 0, y: 8)
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.trailing, 18)
-                        .transition(.scale(scale: 0.88).combined(with: .opacity))
-                        .accessibilityLabel("Scroll to latest message")
-                    }
-
-                    GaryxComposer(isFocused: $isComposerFocused)
-                }
-                .frame(maxWidth: .infinity, alignment: .trailing)
+                GaryxComposer(isFocused: $isComposerFocused)
             }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onAppear {
-                    isNearConversationBottom = true
-                    hasMovedTowardOlderHistory = false
-                    showsScrollToBottomButton = false
-                    scheduleScrollToConversationTail(proxy, animated: false, retryLayout: true, requestKind: .openingThread)
+                    apply(scrollState.threadOpened(), proxy: proxy)
                 }
                 .onChange(of: model.selectedThread?.id) { _, _ in
                     scrollPreservationThreadId = model.selectedThread?.id
                     pendingHistoryPrefetchThreadId = nil
-                    conversationTopOffset = nil
-                    conversationBottomOffset = 0
-                    isNearConversationBottom = true
-                    hasMovedTowardOlderHistory = false
-                    showsScrollToBottomButton = false
-                    scheduleScrollToConversationTail(proxy, animated: false, retryLayout: true, requestKind: .openingThread)
+                    apply(scrollState.threadOpened(), proxy: proxy)
                 }
                 .onChange(of: model.messages) { oldValue, newValue in
                     defer {
                         prefetchOlderHistoryIfNeeded()
                     }
-                    if shouldPreserveScrollForPrependedHistory(oldValue: oldValue, newValue: newValue) {
-                        return
-                    }
-                    guard !newValue.isEmpty || model.showsTailThinkingIndicator else { return }
-                    if oldValue.isEmpty || isNearConversationBottom {
-                        scheduleScrollToConversationTail(
-                            proxy,
-                            animated: !oldValue.isEmpty,
-                            retryLayout: true,
-                            requestKind: oldValue.isEmpty ? .openingThread : .tailUpdate
-                        )
-                        showsScrollToBottomButton = false
-                    } else {
-                        showsScrollToBottomButton = true
-                    }
+                    let threadUnchanged = model.selectedThread?.id == scrollPreservationThreadId
+                    scrollPreservationThreadId = model.selectedThread?.id
+                    let isHistoryPrepend = GaryxConversationScrollState.preservesScrollForPrependedHistory(
+                        previousIds: oldValue.map(\.id),
+                        currentIds: newValue.map(\.id),
+                        threadUnchanged: threadUnchanged
+                    )
+                    apply(
+                        scrollState.contentChanged(
+                            isInitialLoad: oldValue.isEmpty,
+                            isHistoryPrepend: isHistoryPrepend,
+                            hasTailContent: !newValue.isEmpty || model.showsTailThinkingIndicator
+                        ),
+                        proxy: proxy
+                    )
                 }
                 .onChange(of: model.showsTailThinkingIndicator) { _, visible in
                     guard visible else { return }
-                    scheduleScrollToConversationTail(proxy, animated: false, retryLayout: true, requestKind: .tailUpdate)
+                    apply(scrollState.thinkingIndicatorShown(), proxy: proxy)
                 }
                 .onChange(of: isComposerFocused) { _, isFocused in
                     guard isFocused else { return }
-                    scheduleScrollToConversationTail(proxy, animated: true, retryLayout: true, requestKind: .manual)
+                    apply(scrollState.composerFocused(), proxy: proxy)
                 }
                 .onChange(of: bottomChromeHeight) { _, _ in
-                    guard isNearConversationBottom else { return }
-                    scheduleScrollToConversationTail(proxy, animated: false, retryLayout: true, requestKind: .repair)
+                    apply(scrollState.bottomChromeChanged(), proxy: proxy)
                 }
         }
         .garyxPageBackground()
@@ -224,7 +244,7 @@ struct GaryxConversationView: View {
                 if model.messages.isEmpty,
                    model.isLoadingSelectedThreadHistory || model.isSelectedThreadAwaitingInitialHistory {
                     GaryxThreadHistoryLoadingView()
-                        .padding(.top, 96)
+                        .padding(.top, 12)
                 } else if model.messages.isEmpty {
                     if model.showsTailThinkingIndicator {
                         GaryxThinkingLabel()
@@ -280,39 +300,27 @@ struct GaryxConversationView: View {
                 }
         }
         .id(conversationScrollIdentity)
-        // Chat-style anchoring: when the transcript is shorter than the viewport,
-        // keep it pinned to the bottom so the latest message and the running
-        // "Thinking" indicator sit just above the composer instead of floating at
-        // the top of the screen.
-        .defaultScrollAnchor(.bottom)
+        // The transcript is laid out top-down: short conversations start at
+        // the top of the viewport. Tail anchoring is driven explicitly by the
+        // scroll state machine instead of a bottom default anchor.
         .coordinateSpace(name: "garyx-conversation-scroll")
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background {
-            GeometryReader { geometry in
-                Color.clear.preference(
-                    key: GaryxConversationViewportHeightKey.self,
-                    value: geometry.size.height
-                )
-            }
+        .onGeometryChange(for: CGFloat.self) { geometry in
+            geometry.size.height
+        } action: { height in
+            var metrics = scrollState.metrics
+            metrics.viewportHeight = height
+            applyMetrics(metrics, proxy: proxy)
         }
         .onPreferenceChange(GaryxConversationBottomOffsetKey.self) { value in
-            conversationBottomOffset = value
-            updateConversationBottomState()
-            repairVisibleTailGapIfNeeded(proxy)
+            var metrics = scrollState.metrics
+            metrics.contentBottomOffset = value
+            applyMetrics(metrics, proxy: proxy)
         }
         .onPreferenceChange(GaryxConversationTopOffsetKey.self) { value in
-            conversationTopOffset = value
-            if let value, value < -96 {
-                hasMovedTowardOlderHistory = true
-            }
-            prefetchOlderHistoryIfNeeded()
-            repairVisibleTailGapIfNeeded(proxy)
-        }
-        .onPreferenceChange(GaryxConversationViewportHeightKey.self) { value in
-            conversationViewportHeight = value
-            updateConversationBottomState()
-            prefetchOlderHistoryIfNeeded()
-            repairVisibleTailGapIfNeeded(proxy)
+            var metrics = scrollState.metrics
+            metrics.contentTopOffset = value
+            applyMetrics(metrics, proxy: proxy)
         }
         .scrollDisabled(isComposerFocused || sidebarDragActive)
         .scrollDismissesKeyboard(.never)
@@ -352,72 +360,73 @@ struct GaryxConversationView: View {
         24
     }
 
+    /// Feed a measurement update into the scroll state machine and run the
+    /// follow-up work every metrics change shares.
+    private func applyMetrics(_ metrics: GaryxConversationLayoutMetrics, proxy: ScrollViewProxy) {
+        let request = scrollState.metricsChanged(
+            metrics,
+            hasTailContent: !model.messages.isEmpty || model.showsTailThinkingIndicator
+        )
+        #if DEBUG
+        NSLog(
+            "GARYX-SCROLL top=%.0f bottom=%.0f viewport=%.0f anchoring=%@ button=%d",
+            metrics.contentTopOffset ?? .nan,
+            metrics.contentBottomOffset,
+            metrics.viewportHeight,
+            String(describing: scrollState.anchoring),
+            scrollState.showsScrollToBottomButton ? 1 : 0
+        )
+        #endif
+        apply(request, proxy: proxy)
+        prefetchOlderHistoryIfNeeded()
+    }
+
+    /// Execute a tail-scroll request produced by the scroll state machine.
+    private func apply(
+        _ request: GaryxConversationScrollState.TailScrollRequest?,
+        proxy: ScrollViewProxy
+    ) {
+        guard let request else { return }
+        scheduleScrollToConversationTail(proxy, request: request)
+    }
+
     private func scrollToConversationTail(_ proxy: ScrollViewProxy) {
         proxy.scrollTo(conversationBottomAnchorId, anchor: .bottom)
     }
 
+    /// Run a tail scroll now and retry across the next layout passes, so the
+    /// scroll lands even when row content (markdown, images, tool traces) is
+    /// still settling. The state machine decides whether late retries should
+    /// still run.
     private func scheduleScrollToConversationTail(
         _ proxy: ScrollViewProxy,
-        animated: Bool,
-        retryLayout: Bool = false,
-        requestKind: GaryxConversationTailScrollRequestKind = .tailUpdate
+        request: GaryxConversationScrollState.TailScrollRequest
     ) {
         tailScrollRequestGeneration += 1
         let generation = tailScrollRequestGeneration
         let identity = conversationScrollIdentity
-        let delays: [DispatchTimeInterval] = retryLayout
-            ? [.milliseconds(0), .milliseconds(16), .milliseconds(40), .milliseconds(140), .milliseconds(320)]
-            : [.milliseconds(0)]
+        let delays: [DispatchTimeInterval] = [
+            .milliseconds(0), .milliseconds(16), .milliseconds(40), .milliseconds(140), .milliseconds(320),
+        ]
 
         for (index, delay) in delays.enumerated() {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                 DispatchQueue.main.async {
                     guard generation == tailScrollRequestGeneration,
                           identity == conversationScrollIdentity,
-                          shouldRunTailScrollAttempt(index: index, requestKind: requestKind) else {
+                          scrollState.shouldRunTailScrollAttempt(index: index, reason: request.reason) else {
                         return
                     }
-                    let shouldAnimate = animated && index == 0
-                    if shouldAnimate {
+                    if request.animated && index == 0 {
                         withAnimation(.easeOut(duration: 0.2)) {
                             scrollToConversationTail(proxy)
                         }
                     } else {
                         scrollToConversationTail(proxy)
                     }
-                    showsScrollToBottomButton = false
                 }
             }
         }
-    }
-
-    private func repairVisibleTailGapIfNeeded(_ proxy: ScrollViewProxy) {
-        guard shouldRepairVisibleTailGap else { return }
-        scheduleScrollToConversationTail(proxy, animated: false, retryLayout: true, requestKind: .repair)
-    }
-
-    private func shouldRunTailScrollAttempt(index: Int, requestKind: GaryxConversationTailScrollRequestKind) -> Bool {
-        if index == 0 {
-            return true
-        }
-        switch requestKind {
-        case .openingThread, .tailUpdate, .manual:
-            return true
-        case .repair:
-            return isNearConversationBottom || shouldRepairVisibleTailGap
-        }
-    }
-
-    private var shouldRepairVisibleTailGap: Bool {
-        guard conversationViewportHeight > 0,
-              let conversationTopOffset,
-              isNearConversationBottom,
-              !model.messages.isEmpty || model.showsTailThinkingIndicator else {
-            return false
-        }
-        let contentBottomIsAboveViewportBottom = conversationBottomOffset < conversationViewportHeight - 96
-        let contentTopIsScrolledAboveViewport = conversationTopOffset < -96
-        return contentBottomIsAboveViewportBottom && contentTopIsScrolledAboveViewport
     }
 
     private var conversationScrollIdentity: String {
@@ -432,25 +441,14 @@ struct GaryxConversationView: View {
         "tail-thinking-\(conversationScrollIdentity)"
     }
 
-    private func updateConversationBottomState() {
-        guard conversationViewportHeight > 0 else { return }
-        let distanceFromBottom = conversationBottomOffset - conversationViewportHeight
-        let isNearBottom = distanceFromBottom <= 96
-        if !isNearBottom {
-            hasMovedTowardOlderHistory = true
-        }
-        isNearConversationBottom = isNearBottom
-        showsScrollToBottomButton = !isNearBottom && !model.messages.isEmpty
-        prefetchOlderHistoryIfNeeded()
-    }
-
     private func prefetchOlderHistoryIfNeeded(ignoreDistance: Bool = false) {
         guard let threadId = model.selectedThread?.id,
-              model.selectedThreadHasMoreHistoryBefore,
-              !model.isLoadingOlderThreadHistory,
-              pendingHistoryPrefetchThreadId != threadId,
-              hasMovedTowardOlderHistory,
-              ignoreDistance || isNearLoadedHistoryStart else {
+              scrollState.shouldPrefetchOlderHistory(
+                hasMoreHistoryBefore: model.selectedThreadHasMoreHistoryBefore,
+                isLoadingOlderHistory: model.isLoadingOlderThreadHistory,
+                hasPendingPrefetch: pendingHistoryPrefetchThreadId == threadId,
+                ignoreDistance: ignoreDistance
+              ) else {
             return
         }
         pendingHistoryPrefetchThreadId = threadId
@@ -462,34 +460,6 @@ struct GaryxConversationView: View {
                 }
             }
         }
-    }
-
-    private var isNearLoadedHistoryStart: Bool {
-        guard let conversationTopOffset,
-              conversationViewportHeight > 0 else {
-            return false
-        }
-        let prefetchDistance = max(
-            garyxHistoryPrefetchMinDistance,
-            conversationViewportHeight * garyxHistoryPrefetchViewportMultiplier
-        )
-        return conversationTopOffset >= -prefetchDistance
-    }
-
-    private func shouldPreserveScrollForPrependedHistory(
-        oldValue: [GaryxMobileMessage],
-        newValue: [GaryxMobileMessage]
-    ) -> Bool {
-        let threadId = model.selectedThread?.id
-        defer { scrollPreservationThreadId = threadId }
-        guard threadId == scrollPreservationThreadId,
-              newValue.count > oldValue.count,
-              let oldFirstId = oldValue.first?.id,
-              newValue.first?.id != oldFirstId,
-              let oldFirstIndex = newValue.firstIndex(where: { $0.id == oldFirstId }) else {
-            return false
-        }
-        return oldFirstIndex > 0
     }
 
     private func dismissComposerKeyboard() {
