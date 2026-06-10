@@ -286,6 +286,37 @@ struct GaryxGatewaySetupView: View {
     }
 }
 
+// Drawer panel clip whose bounds are outset through the surrounding safe areas:
+// the clipped panel keeps its safe-area layout while its full-bleed background
+// still reaches the physical screen edges. The leading corner radius is driven
+// by the drawer drag progress.
+private struct GaryxDrawerPanelClipShape: Shape {
+    var leadingCornerRadius: CGFloat
+    var safeAreaOutsets: EdgeInsets
+
+    var animatableData: CGFloat {
+        get { leadingCornerRadius }
+        set { leadingCornerRadius = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let expanded = CGRect(
+            x: rect.minX - safeAreaOutsets.leading,
+            y: rect.minY - safeAreaOutsets.top,
+            width: rect.width + safeAreaOutsets.leading + safeAreaOutsets.trailing,
+            height: rect.height + safeAreaOutsets.top + safeAreaOutsets.bottom
+        )
+        return UnevenRoundedRectangle(
+            topLeadingRadius: leadingCornerRadius,
+            bottomLeadingRadius: leadingCornerRadius,
+            bottomTrailingRadius: 0,
+            topTrailingRadius: 0,
+            style: .continuous
+        )
+        .path(in: expanded)
+    }
+}
+
 struct GaryxShellView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -315,7 +346,11 @@ struct GaryxShellView: View {
                     }
                     .background(GaryxTheme.background)
                 } else {
-                    drawerBody(width: drawerSidebarWidth(for: proxy.size), containerSize: proxy.size)
+                    drawerBody(
+                        width: drawerSidebarWidth(for: proxy.size),
+                        containerSize: proxy.size,
+                        safeAreaInsets: proxy.safeAreaInsets
+                    )
                 }
             }
             .environment(\.garyxSidebarDragActive, sidebarDragAxis == .horizontal)
@@ -326,7 +361,6 @@ struct GaryxShellView: View {
                 }
             }
         }
-        .ignoresSafeArea(.container, edges: .all)
         .onChange(of: horizontalSizeClass) { _, _ in
             sidebarDragOffset = 0
         }
@@ -339,11 +373,22 @@ struct GaryxShellView: View {
         return min(sidebarWidth, containerSize.width * 0.92)
     }
 
-    private func drawerBody(width: CGFloat, containerSize: CGSize) -> some View {
+    private func drawerBody(width: CGFloat, containerSize: CGSize, safeAreaInsets: EdgeInsets) -> some View {
         let revealWidth = sidebarRevealWidth(for: width)
         let drawerOffset = revealWidth - width
         let closeCaptureWidth = max(0, containerSize.width - revealWidth)
         let drawerProgress = drawerRevealProgress(revealWidth: revealWidth, width: width)
+        // Clip bounds extend through the surrounding safe areas so the panels'
+        // full-bleed backgrounds and bottom chrome aprons reach the physical
+        // screen edges instead of leaving a plain background band under the
+        // notch and home indicator, while panel content keeps native safe-area
+        // layout.
+        let clipOutsets = EdgeInsets(
+            top: safeAreaInsets.top,
+            leading: 0,
+            bottom: safeAreaInsets.bottom,
+            trailing: safeAreaInsets.trailing
+        )
 
         return ZStack(alignment: .topLeading) {
             HStack(spacing: 0) {
@@ -365,12 +410,9 @@ struct GaryxShellView: View {
                             .allowsHitTesting(false)
                     }
                     .clipShape(
-                        UnevenRoundedRectangle(
-                            topLeadingRadius: drawerMainPanelCornerRadius * drawerProgress,
-                            bottomLeadingRadius: drawerMainPanelCornerRadius * drawerProgress,
-                            bottomTrailingRadius: 0,
-                            topTrailingRadius: 0,
-                            style: .continuous
+                        GaryxDrawerPanelClipShape(
+                            leadingCornerRadius: drawerMainPanelCornerRadius * drawerProgress,
+                            safeAreaOutsets: clipOutsets
                         )
                     )
                     .shadow(
@@ -408,7 +450,7 @@ struct GaryxShellView: View {
             }
         }
         .frame(width: containerSize.width, height: containerSize.height, alignment: .topLeading)
-        .clipped()
+        .clipShape(GaryxDrawerPanelClipShape(leadingCornerRadius: 0, safeAreaOutsets: clipOutsets))
         .garyxPageBackground()
     }
 

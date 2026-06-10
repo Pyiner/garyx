@@ -108,6 +108,14 @@ struct GaryxConversationView: View {
         ScrollViewReader { proxy in
             ZStack(alignment: .bottomTrailing) {
                 messageScroll(proxy: proxy)
+
+                // The new-thread empty state lives outside the bottom-anchored
+                // transcript scroll so it stays centered between the header and
+                // the composer instead of sticking to the composer.
+                if showsNewThreadEmptyState {
+                    GaryxEmptyConversationView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                }
             }
             .garyxFloatingBottomChrome(onHeightChange: { height in
                 bottomChromeHeight = height
@@ -224,9 +232,6 @@ struct GaryxConversationView: View {
                     } else if model.selectedThread != nil {
                         GaryxSelectedThreadEmptyConversationView()
                             .padding(.top, 96)
-                    } else {
-                        GaryxEmptyConversationView()
-                            .padding(.top, 96)
                     }
                 } else {
                     if model.selectedThreadHasMoreHistoryBefore {
@@ -328,6 +333,14 @@ struct GaryxConversationView: View {
                     )
             }
         }
+    }
+
+    private var showsNewThreadEmptyState: Bool {
+        model.selectedThread == nil
+            && model.messages.isEmpty
+            && !model.showsTailThinkingIndicator
+            && !model.isLoadingSelectedThreadHistory
+            && !model.isSelectedThreadAwaitingInitialHistory
     }
 
     private var conversationBottomChromeClearance: CGFloat {
