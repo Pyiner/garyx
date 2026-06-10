@@ -46,7 +46,7 @@ struct GaryxFormSheet<Content: View>: View {
                     .padding(.top, 92)
                     .padding(.bottom, 28)
                     .frame(maxWidth: 560, alignment: .leading)
-                    .frame(maxWidth: .infinity)
+                    .garyxVerticalScrollContentWidth(maxWidth: 560)
             }
 
             ZStack {
@@ -680,6 +680,7 @@ struct GaryxWorkspaceSelectSheet: View {
                 }
                 .padding(.horizontal, 22)
                 .padding(.bottom, 28)
+                .garyxVerticalScrollContentWidth()
             }
             .scrollIndicators(.hidden)
         }
@@ -786,6 +787,7 @@ struct GaryxWorkspacePathPickerSheet: View {
                 }
                 .padding(.horizontal, 22)
                 .padding(.bottom, 28)
+                .garyxVerticalScrollContentWidth()
             }
             .scrollIndicators(.hidden)
         }

@@ -276,6 +276,19 @@ private struct GaryxFloatingBottomChromeModifier<Chrome: View>: ViewModifier {
 }
 
 extension View {
+    /// Pins vertical scroll content to the scroll container's width so stray
+    /// horizontal child overflow can never widen the scroll content and make
+    /// the page horizontally pannable. Apply to the top-level content of a
+    /// vertical `ScrollView`.
+    func garyxVerticalScrollContentWidth(
+        maxWidth: CGFloat = .infinity,
+        alignment: Alignment = .top
+    ) -> some View {
+        containerRelativeFrame(.horizontal, alignment: alignment) { length, _ in
+            min(length, maxWidth)
+        }
+    }
+
     func garyxRootChromeBackground() -> some View {
         background(GaryxHostingBackgroundClearer())
     }

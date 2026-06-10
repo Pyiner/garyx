@@ -245,7 +245,7 @@ struct GaryxAutoResearchDetailSheet: View {
                 }
                 .padding(12)
                 .frame(maxWidth: 620, alignment: .leading)
-                .frame(maxWidth: .infinity)
+                .garyxVerticalScrollContentWidth(maxWidth: 620)
             }
             .garyxPageBackground()
             .refreshable {

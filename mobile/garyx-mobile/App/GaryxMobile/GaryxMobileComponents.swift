@@ -95,7 +95,7 @@ struct GaryxPanelScaffold<Content: View, Actions: View>: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
                 .frame(maxWidth: 560, alignment: .leading)
-                .frame(maxWidth: .infinity)
+                .garyxVerticalScrollContentWidth(maxWidth: 560)
         }
         .refreshable {
             if let onRefresh {

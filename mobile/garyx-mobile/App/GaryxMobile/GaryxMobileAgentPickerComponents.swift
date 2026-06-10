@@ -521,6 +521,7 @@ struct GaryxAgentTargetPickerPopover: View {
                             }
                         }
                     }
+                    .garyxVerticalScrollContentWidth()
                 }
                 .frame(maxHeight: 480)
                 .scrollIndicators(.hidden)
@@ -661,6 +662,7 @@ struct GaryxNewThreadAgentSheet: View {
                 }
                 .padding(.horizontal, 22)
                 .padding(.bottom, 28)
+                .garyxVerticalScrollContentWidth()
             }
             .scrollIndicators(.hidden)
         }

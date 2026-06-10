@@ -903,6 +903,7 @@ struct GaryxAutomationThreadPickerSheet: View {
                 }
                 .padding(.horizontal, 22)
                 .padding(.bottom, 28)
+                .garyxVerticalScrollContentWidth()
             }
             .refreshable {
                 await refreshThreadOptions()

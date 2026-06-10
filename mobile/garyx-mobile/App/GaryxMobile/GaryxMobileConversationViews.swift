@@ -260,6 +260,7 @@ struct GaryxConversationView: View {
             .padding(.horizontal, 16)
             .padding(.top, 18)
             .padding(.bottom, 24)
+            .garyxVerticalScrollContentWidth(alignment: .topLeading)
 
             Color.clear
                 .frame(height: conversationBottomChromeClearance)
@@ -740,6 +741,7 @@ private struct GaryxThreadBotBindingSheet: View {
                 }
                 .padding(.horizontal, 22)
                 .padding(.bottom, 28)
+                .garyxVerticalScrollContentWidth()
             }
             .scrollIndicators(.hidden)
         }

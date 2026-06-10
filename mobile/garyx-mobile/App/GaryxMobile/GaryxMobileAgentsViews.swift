@@ -1743,6 +1743,7 @@ private struct GaryxAgentOptionSelectionSheet<Content: View>: View {
                 }
                 .padding(.horizontal, 22)
                 .padding(.bottom, 28)
+                .garyxVerticalScrollContentWidth()
             }
             .scrollIndicators(.hidden)
         }
@@ -1985,6 +1986,7 @@ private struct GaryxTeamMembersSelectionSheet: View {
                 }
                 .padding(.horizontal, 22)
                 .padding(.bottom, 28)
+                .garyxVerticalScrollContentWidth()
             }
             .scrollIndicators(.hidden)
         }
