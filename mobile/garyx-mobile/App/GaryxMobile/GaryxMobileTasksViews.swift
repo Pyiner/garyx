@@ -298,30 +298,26 @@ struct GaryxTaskListRow: View {
     var body: some View {
         GaryxRowActionMenu(actions: taskSwipeActions) {
             VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .top, spacing: 8) {
-                    Button {
-                        model.selectedTaskDetail = task
-                    } label: {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(task.title)
-                                .font(GaryxFont.subheadline(weight: .semibold))
-                                .foregroundStyle(.primary)
-                                .lineLimit(2)
-                                .multilineTextAlignment(.leading)
-                            Text(task.displayId)
-                                .font(GaryxFont.caption())
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .buttonStyle(.plain)
-
-                    GaryxStatusPill(text: task.status.label, tone: task.status.tone)
-                        .fixedSize(horizontal: true, vertical: false)
+                Button {
+                    model.selectedTaskDetail = task
+                } label: {
+                    (
+                        Text(task.displayId)
+                            .font(GaryxFont.subheadline(weight: .medium))
+                            .foregroundStyle(.secondary)
+                        + Text(" ")
+                        + Text(task.title)
+                            .font(GaryxFont.subheadline(weight: .semibold))
+                            .foregroundStyle(.primary)
+                    )
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .buttonStyle(.plain)
 
                 HStack(spacing: 8) {
+                    GaryxStatusPill(text: task.status.label, tone: task.status.tone)
                     Text(task.assigneeDisplayLabel)
                         .font(GaryxFont.caption())
                         .foregroundStyle(.secondary)
