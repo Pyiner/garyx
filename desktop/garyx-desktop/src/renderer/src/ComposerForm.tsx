@@ -110,6 +110,8 @@ type ComposerFormProps = {
   onSelectWorkflow?: (workflowId: string) => void;
   /** Provider model catalog for the pending agent; enables the new-thread model override control. */
   newThreadProviderModels?: DesktopProviderModels | null;
+  /** The pending agent's configured model; filters thinking levels when no override is chosen. */
+  newThreadAgentConfiguredModel?: string | null;
   newThreadSelectedModel?: string | null;
   newThreadSelectedReasoningEffort?: string | null;
   onSelectNewThreadModel?: (model: string | null) => void;
@@ -368,6 +370,7 @@ function browserAnnotationChipMeta(annotation: BrowserAnnotationCommentRequest):
 
 function renderComposerModelControl({
   providerModels,
+  agentConfiguredModel,
   selectedModel,
   selectedReasoningEffort,
   onSelectModel,
@@ -375,6 +378,7 @@ function renderComposerModelControl({
   t,
 }: {
   providerModels?: DesktopProviderModels | null;
+  agentConfiguredModel?: string | null;
   selectedModel?: string | null;
   selectedReasoningEffort?: string | null;
   onSelectModel?: (model: string | null) => void;
@@ -389,10 +393,16 @@ function renderComposerModelControl({
   const selectedModelOption = selectedModel
     ? models.find((option) => option.id === selectedModel)
     : undefined;
-  // Thinking options follow the chosen model when it constrains them.
+  // Thinking options follow the model that will actually run: the override,
+  // else the agent's configured model, else the provider-level common list.
+  const effortFilterModelOption =
+    selectedModelOption ||
+    (agentConfiguredModel
+      ? models.find((option) => option.id === agentConfiguredModel.trim())
+      : undefined);
   const reasoningEfforts =
-    selectedModelOption?.supportedReasoningEfforts?.length
-      ? selectedModelOption.supportedReasoningEfforts
+    effortFilterModelOption?.supportedReasoningEfforts?.length
+      ? effortFilterModelOption.supportedReasoningEfforts
       : providerModels.reasoningEfforts || [];
   const supportsReasoning =
     Boolean(providerModels.supportsReasoningEffortSelection) &&
@@ -742,6 +752,7 @@ export function ComposerForm({
   workflowOptionsLoading,
   onSelectWorkflow,
   newThreadProviderModels,
+  newThreadAgentConfiguredModel,
   newThreadSelectedModel,
   newThreadSelectedReasoningEffort,
   onSelectNewThreadModel,
@@ -1210,6 +1221,7 @@ export function ComposerForm({
         <div className="composer-buttons">
           {renderComposerModelControl({
             providerModels: newThreadProviderModels,
+            agentConfiguredModel: newThreadAgentConfiguredModel,
             selectedModel: newThreadSelectedModel,
             selectedReasoningEffort: newThreadSelectedReasoningEffort,
             onSelectModel: onSelectNewThreadModel,

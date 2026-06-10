@@ -273,7 +273,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
     draft.modelReasoningEffort,
   );
   const supportsReasoningEffortSelection =
-    (draft.providerType === 'codex_app_server' || isNativeModelProvider(draft.providerType))
+    activeProviderModels?.supportsReasoningEffortSelection === true
     && reasoningEffortOptions.length > 0;
   const serviceTierOptions = serviceTiersWithCurrent(
     activeProviderModels,

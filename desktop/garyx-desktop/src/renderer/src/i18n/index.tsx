@@ -72,6 +72,7 @@ const zhCN: Record<string, string> = {
   'Agent default model': 'Agent 默认模型',
   'Agent default': 'Agent 默认',
   'Thinking level': '思考级别',
+  'Reasoning effort': '思考级别',
   'Choose gateway': '选择网关',
   'Client Logs': '客户端日志',
   'Close': '关闭',

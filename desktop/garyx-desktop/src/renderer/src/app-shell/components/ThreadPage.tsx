@@ -266,6 +266,7 @@ type ThreadPageProps = {
   newThreadSelectedAgentId: string;
   newThreadSelectedWorkflowId?: string | null;
   newThreadProviderModels?: DesktopProviderModels | null;
+  newThreadAgentConfiguredModel?: string | null;
   newThreadSelectedModel?: string | null;
   newThreadSelectedReasoningEffort?: string | null;
   newThreadWorkspaceEntry: DesktopWorkspace | null;
@@ -395,6 +396,7 @@ export function ThreadPage({
   newThreadSelectedAgentId,
   newThreadSelectedWorkflowId,
   newThreadProviderModels,
+  newThreadAgentConfiguredModel,
   newThreadSelectedModel,
   newThreadSelectedReasoningEffort,
   newThreadWorkspaceEntry,
@@ -961,6 +963,9 @@ export function ThreadPage({
               }
               newThreadProviderModels={
                 !selectedThreadId ? newThreadProviderModels : null
+              }
+              newThreadAgentConfiguredModel={
+                !selectedThreadId ? newThreadAgentConfiguredModel : null
               }
               newThreadSelectedModel={
                 !selectedThreadId ? newThreadSelectedModel : null

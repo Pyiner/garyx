@@ -726,7 +726,7 @@ export function AgentsHubPanel({
     agentDraft.modelReasoningEffort,
   );
   const agentSupportsReasoningEffortSelection =
-    (agentDraft.providerType === 'codex_app_server' || isNativeModelProvider(agentDraft.providerType))
+    activeAgentProviderModels?.supportsReasoningEffortSelection === true
     && agentReasoningEffortOptions.length > 0;
   const agentServiceTierOptions = serviceTiersWithCurrent(
     activeAgentProviderModels,

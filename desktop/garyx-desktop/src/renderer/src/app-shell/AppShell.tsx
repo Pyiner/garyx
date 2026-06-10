@@ -10706,6 +10706,7 @@ export function AppShell() {
                 newThreadSelectedAgentId={pendingAgentId}
                 newThreadSelectedWorkflowId={pendingWorkflowId}
                 newThreadProviderModels={pendingProviderModels}
+                newThreadAgentConfiguredModel={pendingAgent?.model || null}
                 newThreadSelectedModel={pendingModel}
                 newThreadSelectedReasoningEffort={pendingModelReasoningEffort}
                 newThreadWorkspaceEntry={newThreadWorkspaceEntry}
