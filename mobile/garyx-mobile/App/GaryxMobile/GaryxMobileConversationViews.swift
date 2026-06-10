@@ -1122,12 +1122,14 @@ struct GaryxMessageBubble: View {
                             codeBackground: userCodeBackground,
                             codeBorder: GaryxTheme.hairline,
                             fillsAvailableWidth: false,
+                            allowsTextSelection: false,
                             onFileLinkTap: openMessageFileLink,
                             onImageFilePreview: messageImageFilePreview
                         )
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
                         .background(userBubbleBackground, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .garyxMessageInteraction(text: displayText)
                     }
 
                     if let statusText = message.statusText, !statusText.isEmpty {
@@ -1151,9 +1153,11 @@ struct GaryxMessageBubble: View {
                     GaryxMarkdownText(
                         text: displayText,
                         foreground: .primary,
+                        allowsTextSelection: false,
                         onFileLinkTap: openMessageFileLink,
                         onImageFilePreview: messageImageFilePreview
                     )
+                    .garyxMessageInteraction(text: displayText)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1166,6 +1170,7 @@ struct GaryxMessageBubble: View {
                 text: displayText,
                 foreground: .secondary,
                 fillsAvailableWidth: false,
+                allowsTextSelection: false,
                 onFileLinkTap: openMessageFileLink,
                 onImageFilePreview: messageImageFilePreview
             )
@@ -1179,6 +1184,7 @@ struct GaryxMessageBubble: View {
                 }
                 .frame(maxWidth: 720, alignment: .center)
                 .frame(maxWidth: .infinity, alignment: .center)
+                .garyxMessageInteraction(text: displayText)
         case .tool:
             EmptyView()
         }
@@ -1324,6 +1330,48 @@ private struct GaryxMessageCopyContextModifier: ViewModifier {
 private extension View {
     func garyxMessageCopyContext(text: String, title: String = "Copy Message") -> some View {
         modifier(GaryxMessageCopyContextModifier(text: text, title: title))
+    }
+
+    func garyxMessageInteraction(text: String) -> some View {
+        modifier(GaryxMessageInteractionModifier(text: text))
+    }
+}
+
+/// Long-press surface for message bubbles: copy the whole message, open the
+/// drag-handle selection sheet, or share. This replaces SwiftUI text
+/// selection inside the transcript, which could not select ranges and fought
+/// the long-press gesture.
+private struct GaryxMessageInteractionModifier: ViewModifier {
+    let text: String
+
+    @State private var showsTextSelection = false
+
+    private var copyableText: String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .contextMenu {
+                if !copyableText.isEmpty {
+                    Button {
+                        GaryxClipboard.copyString(text)
+                    } label: {
+                        Label("Copy", systemImage: "doc.on.doc")
+                    }
+                    Button {
+                        showsTextSelection = true
+                    } label: {
+                        Label("Select Text", systemImage: "character.cursor.ibeam")
+                    }
+                    ShareLink(item: text) {
+                        Label("Share", systemImage: "square.and.arrow.up")
+                    }
+                }
+            }
+            .sheet(isPresented: $showsTextSelection) {
+                GaryxMessageTextSelectionSheet(text: text)
+            }
     }
 }
 

@@ -22,6 +22,10 @@ enum GaryxTheme {
     static let secondaryText = Color.secondary
     static let tertiaryText = Color(.tertiaryLabel)
     static let accent = Color(red: 0.000, green: 0.635, blue: 0.250)
+    /// Inline links in rendered content. The system link blue adapts to
+    /// light/dark; the green accent stays reserved for running/success
+    /// semantics and never colors links.
+    static let link = Color(uiColor: .link)
     static let warning = Color.orange
     static let danger = Color.red
     static let hairline = Color.primary.opacity(0.08)

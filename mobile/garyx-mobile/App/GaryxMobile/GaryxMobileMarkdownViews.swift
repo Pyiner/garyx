@@ -23,6 +23,10 @@ struct GaryxMarkdownText: View {
     var codeBorder: Color = GaryxTheme.hairline
     var fillsAvailableWidth = true
     var allowsRelativeFileLinks = false
+    /// Transcript bubbles disable system text selection: it conflicts with
+    /// the bubble long-press menu, which offers a dedicated selection sheet
+    /// with real drag-handle range selection instead.
+    var allowsTextSelection = true
     var onFileLinkTap: ((String) -> Void)?
     var onImageFilePreview: GaryxMarkdownImagePreviewResolver?
 
@@ -35,6 +39,7 @@ struct GaryxMarkdownText: View {
                         markdown: markdown,
                         foreground: foreground,
                         allowsRelativeFileLinks: allowsRelativeFileLinks,
+                        allowsTextSelection: allowsTextSelection,
                         onFileLinkTap: onFileLinkTap
                     )
                 case .code(let language, let code):
@@ -44,7 +49,8 @@ struct GaryxMarkdownText: View {
                         foreground: foreground,
                         background: codeBackground,
                         border: codeBorder,
-                        fillsAvailableWidth: fillsAvailableWidth
+                        fillsAvailableWidth: fillsAvailableWidth,
+                        allowsTextSelection: allowsTextSelection
                     )
                 case .image(let alt, let source):
                     GaryxMarkdownImageView(
@@ -61,13 +67,14 @@ struct GaryxMarkdownText: View {
                         border: codeBorder,
                         fillsAvailableWidth: fillsAvailableWidth,
                         allowsRelativeFileLinks: allowsRelativeFileLinks,
+                        allowsTextSelection: allowsTextSelection,
                         onFileLinkTap: onFileLinkTap
                     )
                 }
             }
         }
         .frame(maxWidth: fillsAvailableWidth ? .infinity : nil, alignment: .leading)
-        .textSelection(.enabled)
+        .garyxTextSelection(allowsTextSelection)
     }
 
     fileprivate static func attributedString(from markdown: String) -> AttributedString {
@@ -79,6 +86,7 @@ private struct GaryxMarkdownParagraphView: View {
     let markdown: String
     let foreground: Color
     var allowsRelativeFileLinks = false
+    var allowsTextSelection = true
     var onFileLinkTap: ((String) -> Void)?
 
     private var lines: [String] {
@@ -86,10 +94,10 @@ private struct GaryxMarkdownParagraphView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 4) {
             ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                 if line.trimmingCharacters(in: .whitespaces).isEmpty {
-                    Color.clear.frame(height: 8)
+                    Color.clear.frame(height: 10)
                 } else if let bullet = Self.bulletText(from: line) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Circle()
@@ -100,10 +108,10 @@ private struct GaryxMarkdownParagraphView: View {
                         Text(GaryxMarkdownText.attributedString(from: bullet))
                             .font(GaryxFont.body())
                             .foregroundStyle(foreground)
-                            .tint(GaryxTheme.accent)
+                            .tint(GaryxTheme.link)
                             .environment(\.openURL, openURLAction)
-                            .textSelection(.enabled)
-                            .lineSpacing(2)
+                            .garyxTextSelection(allowsTextSelection)
+                            .lineSpacing(5)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 } else if let numbered = Self.numberedList(from: line) {
@@ -111,25 +119,25 @@ private struct GaryxMarkdownParagraphView: View {
                         Text(numbered.label)
                             .font(GaryxFont.body(weight: .medium))
                             .foregroundStyle(foreground)
-                            .textSelection(.enabled)
+                            .garyxTextSelection(allowsTextSelection)
 
                         Text(GaryxMarkdownText.attributedString(from: numbered.text))
                             .font(GaryxFont.body())
                             .foregroundStyle(foreground)
-                            .tint(GaryxTheme.accent)
+                            .tint(GaryxTheme.link)
                             .environment(\.openURL, openURLAction)
-                            .textSelection(.enabled)
-                            .lineSpacing(2)
+                            .garyxTextSelection(allowsTextSelection)
+                            .lineSpacing(5)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 } else {
                     Text(GaryxMarkdownText.attributedString(from: line))
                         .font(GaryxFont.body())
                         .foregroundStyle(foreground)
-                        .tint(GaryxTheme.accent)
+                        .tint(GaryxTheme.link)
                         .environment(\.openURL, openURLAction)
-                        .textSelection(.enabled)
-                        .lineSpacing(2)
+                        .garyxTextSelection(allowsTextSelection)
+                        .lineSpacing(5)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -227,6 +235,7 @@ private struct GaryxCodeBlockView: View {
     let background: Color
     let border: Color
     let fillsAvailableWidth: Bool
+    var allowsTextSelection = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -243,7 +252,7 @@ private struct GaryxCodeBlockView: View {
                 Text(code.isEmpty ? " " : code)
                     .font(.system(size: 12.5, weight: .regular, design: .monospaced))
                     .foregroundStyle(foreground)
-                    .textSelection(.enabled)
+                    .garyxTextSelection(allowsTextSelection)
                     .fixedSize(horizontal: true, vertical: true)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
@@ -315,6 +324,7 @@ private struct GaryxMarkdownTableView: View {
     let border: Color
     let fillsAvailableWidth: Bool
     var allowsRelativeFileLinks = false
+    var allowsTextSelection = true
     var onFileLinkTap: ((String) -> Void)?
 
     private var columnWidths: [CGFloat] {
@@ -394,11 +404,11 @@ private struct GaryxMarkdownTableView: View {
         Text(GaryxMarkdownText.attributedString(from: text.isEmpty ? " " : text))
             .font(isHeader ? GaryxFont.callout(weight: .semibold) : GaryxFont.callout())
             .foregroundStyle(foreground)
-            .tint(GaryxTheme.accent)
+            .tint(GaryxTheme.link)
             .multilineTextAlignment(column.alignment.textAlignment)
             .environment(\.openURL, openURLAction)
-            .textSelection(.enabled)
-            .lineSpacing(2)
+            .garyxTextSelection(allowsTextSelection)
+            .lineSpacing(5)
             .fixedSize(horizontal: false, vertical: true)
             .frame(width: width, alignment: column.alignment.frameAlignment)
             .padding(.horizontal, 8)
@@ -784,5 +794,16 @@ private final class GaryxMarkdownAttributedCacheEntry {
 
     init(value: AttributedString) {
         self.value = value
+    }
+}
+
+extension View {
+    @ViewBuilder
+    func garyxTextSelection(_ enabled: Bool) -> some View {
+        if enabled {
+            textSelection(.enabled)
+        } else {
+            textSelection(.disabled)
+        }
     }
 }
