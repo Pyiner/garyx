@@ -232,6 +232,7 @@ import {
   useResolvedLocale,
 } from "../i18n";
 import { isRunLoadingPlaceholderMessage } from "./loading-labels";
+import garyxIconUrl from "../assets/garyx-icon.png";
 import {
   contentViewForDesktopRoute,
   parseDesktopRoute,
@@ -9917,7 +9918,13 @@ export function AppShell() {
       <I18nProvider languagePreference={settingsDraft.languagePreference}>
         <div className="startup-shell" role="status" aria-live="polite">
           <div className="startup-panel">
-            <div className="startup-mark" aria-hidden="true">G</div>
+            <img
+              alt=""
+              aria-hidden="true"
+              className="startup-mark"
+              draggable={false}
+              src={garyxIconUrl}
+            />
             <div className="startup-copy">
               <strong>{t('Starting Garyx')}</strong>
               <span>{t('Syncing workspace state and gateway status...')}</span>

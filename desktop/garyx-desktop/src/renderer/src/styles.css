@@ -278,61 +278,50 @@ code {
 }
 
 .startup-panel {
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  width: min(360px, 100%);
-  gap: 12px;
-  padding: 16px;
-  border: 1px solid rgba(26, 28, 31, 0.08);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.82);
-  box-shadow: 0 10px 30px rgba(26, 28, 31, 0.08);
+  transform: translateY(-5vh);
+  animation: startup-fade-in 0.45s ease-out both;
 }
 
+/* The macOS app icon ships with its own rounded mask and margin. */
 .startup-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
-  background: #111111;
-  color: #ffffff;
-  font-size: 15px;
-  font-weight: 650;
-  letter-spacing: 0;
+  width: 116px;
+  height: 116px;
+  filter: drop-shadow(0 16px 28px rgba(26, 28, 31, 0.16));
+  user-select: none;
+  -webkit-user-drag: none;
 }
 
 .startup-copy {
   display: grid;
-  min-width: 0;
-  gap: 3px;
+  gap: 4px;
+  margin-top: 16px;
+  justify-items: center;
+  text-align: center;
 }
 
 .startup-copy strong {
   color: var(--color-token-text-primary);
-  font-size: var(--text-base);
+  font-size: 15px;
   font-weight: 600;
-  letter-spacing: 0;
-  line-height: 1.25;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
 }
 
 .startup-copy span {
-  overflow: hidden;
   color: var(--color-token-text-secondary);
   font-size: var(--text-sm);
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.4;
 }
 
 .startup-progress {
   position: relative;
-  grid-column: 1 / -1;
   overflow: hidden;
+  width: 172px;
   height: 3px;
-  margin-top: 3px;
+  margin-top: 20px;
   border-radius: 999px;
   background: rgba(26, 28, 31, 0.08);
 }
@@ -343,9 +332,21 @@ code {
   bottom: 0;
   width: 42%;
   border-radius: inherit;
-  background: rgba(17, 17, 17, 0.72);
+  background: rgba(17, 17, 17, 0.6);
   content: "";
   animation: startup-progress-slide 1.05s ease-in-out infinite;
+}
+
+@keyframes startup-fade-in {
+  0% {
+    opacity: 0;
+    transform: translateY(calc(-5vh + 8px)) scale(0.985);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(-5vh) scale(1);
+  }
 }
 
 .loading-shell {
