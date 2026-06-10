@@ -107,7 +107,7 @@ function WorkspacePathSummary({ path, placeholder }: WorkspacePathSummaryProps) 
         {trimmed ? workspaceLabel(trimmed) : placeholder}
       </span>
       {trimmed ? (
-        <span className="truncate text-xs text-muted-foreground">
+        <span className="workspace-path-secondary truncate text-xs text-muted-foreground">
           {trimmed}
         </span>
       ) : null}

@@ -622,6 +622,16 @@ export function AgentsHubPanel({
   }, [agentDialogMode, agentDraft.providerType]);
 
   useEffect(() => {
+    // The view dialog resolves model/effort ids to catalog labels.
+    if (agentDialogMode === 'view' && selectedAgentId) {
+      const agent = agents.find((entry) => entry.agentId === selectedAgentId);
+      if (agent) {
+        void ensureProviderModels(agent.providerType as ProviderType);
+      }
+    }
+  }, [agentDialogMode, selectedAgentId, agents]);
+
+  useEffect(() => {
     if (agentDialogMode !== 'create' || agentIdTouched) {
       return;
     }
@@ -745,6 +755,19 @@ export function AgentsHubPanel({
           ? t('Local Gemini ACP does not expose a model list yet.')
           : null
       : null;
+  const viewAgentProviderModels = selectedAgent
+    ? providerModelsByType[selectedAgent.providerType]
+    : undefined;
+  const viewAgentModelId = selectedAgent?.model.trim() || '';
+  const viewAgentModelLabel = viewAgentModelId
+    ? viewAgentProviderModels?.models.find((option) => option.id === viewAgentModelId)?.label
+      || viewAgentModelId
+    : '';
+  const viewAgentEffortId = selectedAgent?.modelReasoningEffort.trim() || '';
+  const viewAgentEffortLabel = viewAgentEffortId
+    ? reasoningEffortsWithCurrent(viewAgentProviderModels, viewAgentModelId, viewAgentEffortId)
+      .find((option) => option.id === viewAgentEffortId)?.label || viewAgentEffortId
+    : '';
   const activeAvatarStylePrompt = avatarStyleId === CUSTOM_AVATAR_STYLE_ID
     ? customAvatarStyle.trim()
     : AVATAR_STYLE_OPTIONS.find((option) => option.id === avatarStyleId)?.prompt || '';
@@ -1494,11 +1517,8 @@ export function AgentsHubPanel({
           }
         }}
       >
-        <DialogContent className="agents-hub-agent-dialog" size="form">
+        <DialogContent aria-describedby={undefined} className="agents-hub-agent-dialog" size="form">
           <DialogHeader className="agents-hub-dialog-header">
-            <DialogDescription className="agents-hub-dialog-kicker">
-              {t('Agent')}
-            </DialogDescription>
             <DialogTitle className="agents-hub-dialog-title">
               {agentDialogMode === 'create'
                 ? t('Create agent')
@@ -1506,11 +1526,6 @@ export function AgentsHubPanel({
                   ? t('Edit agent')
                   : selectedAgent?.displayName || t('Agent')}
             </DialogTitle>
-            <DialogDescription className="agents-hub-dialog-description">
-              {agentDialogMode === 'create'
-                ? t('Create a reusable agent identity with its own provider and system prompt.')
-                : t('Inspect or adjust how this agent shows up in the desktop app.')}
-            </DialogDescription>
           </DialogHeader>
 
           {agentDialogMode === 'create' || agentDialogMode === 'edit' ? (
@@ -1593,41 +1608,131 @@ export function AgentsHubPanel({
                 </div>
               </div>
 
-              <div className="codex-form-field">
-                <Label className="codex-form-label">{t('Provider')}</Label>
-                <Select
-                  onValueChange={(value: ProviderType) => {
-                    setAgentDraft((current) => ({
-                      ...current,
-                      providerType: value,
-                      model: '',
-                      modelReasoningEffort: value === 'codex_app_server' || isNativeModelProvider(value)
-                        ? current.modelReasoningEffort
-                        : '',
-                      modelServiceTier: value === 'gpt' ? current.modelServiceTier : '',
-                      authSource: isNativeModelProvider(value) ? defaultAuthSource(value) : '',
-                      apiKey: '',
-                      baseUrl: '',
-                    }));
-                    void ensureProviderModels(value);
-                  }}
-                  value={agentDraft.providerType}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder={t('Select provider')} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      <SelectItem value="claude_code">Claude</SelectItem>
-                      <SelectItem value="codex_app_server">Codex</SelectItem>
-                      <SelectItem value="gemini_cli">Gemini</SelectItem>
-                      <SelectItem value="gpt">GPT</SelectItem>
-                      <SelectItem value="anthropic">Claude</SelectItem>
-                      <SelectItem value="google">Gemini</SelectItem>
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-                {agentModelStatus ? <span className="codex-form-hint">{agentModelStatus}</span> : null}
+              <div className="agents-hub-model-row">
+                <div className="codex-form-field">
+                  <Label className="codex-form-label">{t('Provider')}</Label>
+                  <Select
+                    onValueChange={(value: ProviderType) => {
+                      setAgentDraft((current) => ({
+                        ...current,
+                        providerType: value,
+                        model: '',
+                        modelReasoningEffort: value === 'codex_app_server' || isNativeModelProvider(value)
+                          ? current.modelReasoningEffort
+                          : '',
+                        modelServiceTier: value === 'gpt' ? current.modelServiceTier : '',
+                        authSource: isNativeModelProvider(value) ? defaultAuthSource(value) : '',
+                        apiKey: '',
+                        baseUrl: '',
+                      }));
+                      void ensureProviderModels(value);
+                    }}
+                    value={agentDraft.providerType}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder={t('Select provider')} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value="claude_code">Claude</SelectItem>
+                        <SelectItem value="codex_app_server">Codex</SelectItem>
+                        <SelectItem value="gemini_cli">Gemini</SelectItem>
+                        <SelectItem value="gpt">GPT</SelectItem>
+                        <SelectItem value="anthropic">Claude</SelectItem>
+                        <SelectItem value="google">Gemini</SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  {agentModelStatus ? <span className="codex-form-hint">{agentModelStatus}</span> : null}
+                </div>
+
+                {agentSupportsModelSelection ? (
+                  <div className="codex-form-field">
+                    <Label className="codex-form-label" htmlFor="agent-dialog-model">{t('Model')}</Label>
+                    <Select
+                      onValueChange={(value) => {
+                        setAgentDraft((current) => ({
+                          ...current,
+                          model: value === PROVIDER_DEFAULT_MODEL_VALUE ? '' : value,
+                          modelServiceTier: '',
+                        }));
+                      }}
+                      value={agentDraft.model.trim() || PROVIDER_DEFAULT_MODEL_VALUE}
+                    >
+                      <SelectTrigger className="agents-hub-model-select" id="agent-dialog-model">
+                        <SelectValue placeholder={t('Select model')} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value={PROVIDER_DEFAULT_MODEL_VALUE}>{t('Provider default')}</SelectItem>
+                          {agentModelOptions.map((model) => (
+                            <SelectItem key={model.id} value={model.id}>
+                              {model.label}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : null}
+
+                {agentSupportsReasoningEffortSelection ? (
+                  <div className="codex-form-field">
+                    <Label className="codex-form-label" htmlFor="agent-dialog-reasoning-effort">{t('Reasoning effort')}</Label>
+                    <Select
+                      onValueChange={(value) => {
+                        setAgentDraft((current) => ({
+                          ...current,
+                          modelReasoningEffort: value === PROVIDER_DEFAULT_REASONING_VALUE ? '' : value,
+                        }));
+                      }}
+                      value={agentDraft.modelReasoningEffort.trim() || PROVIDER_DEFAULT_REASONING_VALUE}
+                    >
+                      <SelectTrigger className="agents-hub-model-select" id="agent-dialog-reasoning-effort">
+                        <SelectValue placeholder={t('Select reasoning effort')} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value={PROVIDER_DEFAULT_REASONING_VALUE}>{t('Provider default')}</SelectItem>
+                          {agentReasoningEffortOptions.map((effort) => (
+                            <SelectItem key={effort.id} value={effort.id}>
+                              {effort.label}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : null}
+
+                {agentSupportsServiceTierSelection ? (
+                  <div className="codex-form-field">
+                    <Label className="codex-form-label" htmlFor="agent-dialog-service-tier">{t('Service tier')}</Label>
+                    <Select
+                      onValueChange={(value) => {
+                        setAgentDraft((current) => ({
+                          ...current,
+                          modelServiceTier: value === PROVIDER_DEFAULT_SERVICE_TIER_VALUE ? '' : value,
+                        }));
+                      }}
+                      value={agentDraft.modelServiceTier.trim() || PROVIDER_DEFAULT_SERVICE_TIER_VALUE}
+                    >
+                      <SelectTrigger className="agents-hub-model-select" id="agent-dialog-service-tier">
+                        <SelectValue placeholder={t('Select service tier')} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value={PROVIDER_DEFAULT_SERVICE_TIER_VALUE}>{t('Provider default')}</SelectItem>
+                          {agentServiceTierOptions.map((tier) => (
+                            <SelectItem key={tier.id} value={tier.id}>
+                              {tier.label}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : null}
               </div>
 
               {isNativeModelProvider(agentDraft.providerType) ? (
@@ -1706,105 +1811,6 @@ export function AgentsHubPanel({
                 </>
               ) : null}
 
-              {agentSupportsModelSelection ? (
-                <div className="codex-form-field">
-                  <Label className="codex-form-label" htmlFor="agent-dialog-model">{t('Model')}</Label>
-                  <Select
-                    onValueChange={(value) => {
-                      setAgentDraft((current) => ({
-                        ...current,
-                        model: value === PROVIDER_DEFAULT_MODEL_VALUE ? '' : value,
-                        modelServiceTier: '',
-                      }));
-                    }}
-                    value={agentDraft.model.trim() || PROVIDER_DEFAULT_MODEL_VALUE}
-                  >
-                    <SelectTrigger className="agents-hub-model-select" id="agent-dialog-model">
-                      <SelectValue placeholder={t('Select model')} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        <SelectItem value={PROVIDER_DEFAULT_MODEL_VALUE}>{t('Provider default')}</SelectItem>
-                        {agentModelOptions.map((model) => (
-                          <SelectItem key={model.id} value={model.id}>
-                            {model.label}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                  <span className="codex-form-hint">
-                    {activeAgentProviderModels?.defaultModel
-                      ? t('Gateway default: {model}', { model: activeAgentProviderModels.defaultModel })
-                      : t('Optional. Leave empty to use the provider default.')}
-                  </span>
-                </div>
-              ) : null}
-
-              {agentSupportsReasoningEffortSelection ? (
-                <div className="codex-form-field">
-                  <Label className="codex-form-label" htmlFor="agent-dialog-reasoning-effort">{t('Reasoning effort')}</Label>
-                  <Select
-                    onValueChange={(value) => {
-                      setAgentDraft((current) => ({
-                        ...current,
-                        modelReasoningEffort: value === PROVIDER_DEFAULT_REASONING_VALUE ? '' : value,
-                      }));
-                    }}
-                    value={agentDraft.modelReasoningEffort.trim() || PROVIDER_DEFAULT_REASONING_VALUE}
-                  >
-                    <SelectTrigger className="agents-hub-model-select" id="agent-dialog-reasoning-effort">
-                      <SelectValue placeholder={t('Select reasoning effort')} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        <SelectItem value={PROVIDER_DEFAULT_REASONING_VALUE}>{t('Provider default')}</SelectItem>
-                        {agentReasoningEffortOptions.map((effort) => (
-                          <SelectItem key={effort.id} value={effort.id}>
-                            {effort.label}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                  <span className="codex-form-hint">
-                    {t('Lower values are faster; higher values spend more reasoning.')}
-                  </span>
-                </div>
-              ) : null}
-
-              {agentSupportsServiceTierSelection ? (
-                <div className="codex-form-field">
-                  <Label className="codex-form-label" htmlFor="agent-dialog-service-tier">{t('Service tier')}</Label>
-                  <Select
-                    onValueChange={(value) => {
-                      setAgentDraft((current) => ({
-                        ...current,
-                        modelServiceTier: value === PROVIDER_DEFAULT_SERVICE_TIER_VALUE ? '' : value,
-                      }));
-                    }}
-                    value={agentDraft.modelServiceTier.trim() || PROVIDER_DEFAULT_SERVICE_TIER_VALUE}
-                  >
-                    <SelectTrigger className="agents-hub-model-select" id="agent-dialog-service-tier">
-                      <SelectValue placeholder={t('Select service tier')} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        <SelectItem value={PROVIDER_DEFAULT_SERVICE_TIER_VALUE}>{t('Provider default')}</SelectItem>
-                        {agentServiceTierOptions.map((tier) => (
-                          <SelectItem key={tier.id} value={tier.id}>
-                            {tier.label}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                  <span className="codex-form-hint">
-                    {t('Fast service tiers trade higher usage for lower latency when the model supports them.')}
-                  </span>
-                </div>
-              ) : null}
-
               <div className="codex-form-field">
                 <Label className="codex-form-label" htmlFor="agent-dialog-default-workspace">
                   {t('Default workspace directory')}
@@ -1816,12 +1822,10 @@ export function AgentsHubPanel({
                   }}
                   onAddWorkspace={onAddWorkspace}
                   placeholder={t('/path/to/project')}
+                  triggerClassName="agents-hub-workspace-trigger"
                   value={agentDraft.defaultWorkspaceDir}
                   workspaces={workspaces}
                 />
-                <span className="codex-form-hint">
-                  {t('Used when a new bot or task thread has no explicit workspace.')}
-                </span>
               </div>
 
               <div className="codex-form-field">
@@ -1866,41 +1870,58 @@ export function AgentsHubPanel({
                   providerType={selectedAgent?.providerType}
                 />
                 <div className="agents-hub-detail-copy">
-                <div className="agents-hub-card-badges">
-                  <Badge variant="outline">{selectedAgent?.builtIn ? t('Built-in') : t('Custom')}</Badge>
-                  {selectedAgent ? <Badge variant="outline">{providerLabel(selectedAgent.providerType)}</Badge> : null}
-                </div>
-                <h3>{selectedAgent?.displayName || t('Agent')}</h3>
-                <p>{selectedAgent?.agentId || ''}</p>
-                {selectedAgent && (selectedAgent.providerType === 'gemini_cli' || isNativeModelProvider(selectedAgent.providerType as ProviderType) || selectedAgent.model.trim()) ? (
-                  <p>{selectedAgent.model || t('(provider default)')}</p>
-                ) : null}
-                {selectedAgent && isNativeModelProvider(selectedAgent.providerType as ProviderType) ? (
-                  <p>{t('Auth')}: {selectedAgent.authSource || defaultAuthSource(selectedAgent.providerType as ProviderType)}</p>
-                ) : null}
-                {selectedAgent?.modelReasoningEffort.trim() ? (
-                  <p>{t('Reasoning effort')}: {selectedAgent.modelReasoningEffort}</p>
-                ) : null}
-                {selectedAgent?.modelServiceTier.trim() ? (
-                  <p>{t('Service tier')}: {selectedAgent.modelServiceTier}</p>
-                ) : null}
-                {selectedAgent?.defaultWorkspaceDir.trim() ? (
-                  <p>{selectedAgent.defaultWorkspaceDir.trim()}</p>
-                ) : null}
-              </div>
-              </div>
-
-              <div className="agents-hub-detail-block">
-                <div className="agents-hub-detail-label">{t('Default workspace directory')}</div>
-                <div className="agents-hub-detail-body mono">
-                  {selectedAgent?.defaultWorkspaceDir.trim() || t('(not set)')}
+                  <div className="agents-hub-card-badges">
+                    <Badge variant="outline">{selectedAgent?.builtIn ? t('Built-in') : t('Custom')}</Badge>
+                    {selectedAgent ? <Badge variant="outline">{providerLabel(selectedAgent.providerType)}</Badge> : null}
+                  </div>
+                  <p className="agents-hub-detail-id">{selectedAgent?.agentId || ''}</p>
                 </div>
               </div>
 
-              <div className="agents-hub-detail-block">
-                <div className="agents-hub-detail-label">{t('System Prompt')}</div>
-                <div className="agents-hub-detail-body mono">
-                  {selectedAgent?.systemPrompt || t('(empty)')}
+              <div className="agents-hub-detail-scroll">
+                <div className="agents-hub-detail-grid agents-hub-detail-facts">
+                  <div className="agents-hub-detail-item">
+                    <div className="agents-hub-detail-term">{t('Model')}</div>
+                    <div className="agents-hub-detail-value" title={viewAgentModelId || undefined}>
+                      {viewAgentModelLabel || t('(provider default)')}
+                    </div>
+                  </div>
+                  <div className="agents-hub-detail-item">
+                    <div className="agents-hub-detail-term">{t('Thinking level')}</div>
+                    <div className="agents-hub-detail-value">
+                      {viewAgentEffortLabel || t('(provider default)')}
+                    </div>
+                  </div>
+                  {selectedAgent && isNativeModelProvider(selectedAgent.providerType as ProviderType) ? (
+                    <div className="agents-hub-detail-item">
+                      <div className="agents-hub-detail-term">{t('Auth')}</div>
+                      <div className="agents-hub-detail-value">
+                        {selectedAgent.authSource || defaultAuthSource(selectedAgent.providerType as ProviderType)}
+                      </div>
+                    </div>
+                  ) : null}
+                  {selectedAgent?.modelServiceTier.trim() ? (
+                    <div className="agents-hub-detail-item">
+                      <div className="agents-hub-detail-term">{t('Service tier')}</div>
+                      <div className="agents-hub-detail-value">{selectedAgent.modelServiceTier}</div>
+                    </div>
+                  ) : null}
+                  <div className="agents-hub-detail-item agents-hub-detail-item-full">
+                    <div className="agents-hub-detail-term">{t('Default workspace directory')}</div>
+                    <div
+                      className="agents-hub-detail-value mono"
+                      title={selectedAgent?.defaultWorkspaceDir.trim() || undefined}
+                    >
+                      {selectedAgent?.defaultWorkspaceDir.trim() || t('(not set)')}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="agents-hub-detail-block">
+                  <div className="agents-hub-detail-label">{t('System Prompt')}</div>
+                  <div className="agents-hub-detail-body mono agents-hub-detail-prompt">
+                    {selectedAgent?.systemPrompt || t('(empty)')}
+                  </div>
                 </div>
               </div>
 
