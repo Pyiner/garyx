@@ -305,6 +305,7 @@ struct GaryxConversationView: View {
                     if model.showsTailThinkingIndicator {
                         GaryxThinkingLabel()
                             .id(tailThinkingAnchorId)
+                            .transition(.garyxTranscriptAppear)
                     }
                 }
             }
@@ -312,6 +313,12 @@ struct GaryxConversationView: View {
             .padding(.top, 18)
             .padding(.bottom, 24)
             .garyxVerticalScrollContentWidth(alignment: .topLeading)
+            // A short entrance animation keyed to cheap insertion signals
+            // (message count, indicator visibility), so new bubbles and tool
+            // rows ease in instead of popping. Streaming text growth and
+            // scroll measurements never re-key it.
+            .animation(.easeOut(duration: 0.2), value: model.messages.count)
+            .animation(.easeOut(duration: 0.2), value: model.showsTailThinkingIndicator)
 
             Color.clear
                 .frame(height: conversationBottomChromeClearance)
@@ -1150,6 +1157,10 @@ struct GaryxMessageBubble: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            // Smooth the height growth while this bubble streams. Settled
+            // bubbles compare their (storage-shared) text in O(1) and never
+            // animate, so long transcripts pay nothing.
+            .animation(message.isStreaming ? .easeOut(duration: 0.16) : nil, value: message.text)
         case .system:
             GaryxMarkdownText(
                 text: displayText,

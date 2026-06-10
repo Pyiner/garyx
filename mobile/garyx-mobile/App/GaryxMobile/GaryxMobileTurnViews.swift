@@ -1,5 +1,14 @@
 import SwiftUI
 
+extension AnyTransition {
+    /// Shared entrance for transcript content: a quick fade with a subtle
+    /// 10pt lift. Deliberately offset-based instead of `.move`, so tall
+    /// bubbles do not slide across their whole height.
+    static let garyxTranscriptAppear = AnyTransition
+        .offset(y: 10)
+        .combined(with: .opacity)
+}
+
 struct GaryxMobileTurnRowsView: View {
     let rows: [GaryxMobileTurnRow]
     let forceRunningLastTurn: Bool
@@ -32,6 +41,7 @@ struct GaryxMobileTurnRowsView: View {
     private func turnRowContent(rowIndex: Int, row: GaryxMobileTurnRow) -> some View {
         if let userBlock = row.userBlock {
             GaryxMobileTranscriptBlockView(block: userBlock)
+                .transition(.garyxTranscriptAppear)
         }
 
         ForEach(Array(row.activityRows.enumerated()), id: \.element.id) { activityIndex, activityRow in
@@ -42,6 +52,7 @@ struct GaryxMobileTurnRowsView: View {
                 row: activityRow,
                 forceRunning: forceRunning
             )
+            .transition(.garyxTranscriptAppear)
         }
     }
 }
