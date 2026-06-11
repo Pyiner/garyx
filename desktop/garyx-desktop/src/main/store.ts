@@ -393,6 +393,15 @@ function upsertGatewayProfile(
     return profiles;
   }
 
+  // Re-saving on reconnect must not clobber a custom profile name with the
+  // URL-derived default label.
+  const existing = profiles.find((entry) => (
+    gatewayProfileKey(entry.gatewayUrl) === gatewayProfileKey(profile.gatewayUrl)
+  ));
+  if (existing && existing.label.trim()) {
+    profile.label = existing.label;
+  }
+
   const next = [
     profile,
     ...profiles.filter((entry) => (
@@ -932,6 +941,28 @@ export async function rememberDesktopGatewayProfile(): Promise<DesktopState> {
   const next = {
     ...current,
     gatewayProfiles: upsertGatewayProfile(current.gatewayProfiles || [], current.settings),
+  };
+  await writeState(next);
+  return getDesktopState();
+}
+
+export async function renameDesktopGatewayProfile(
+  profileId: string,
+  label: string,
+): Promise<DesktopState> {
+  const current = await getLocalDesktopState();
+  const normalizedId = profileId.trim();
+  const trimmedLabel = label.trim();
+  const next = {
+    ...current,
+    gatewayProfiles: (current.gatewayProfiles || []).map((entry) => (
+      entry.id === normalizedId
+        ? {
+            ...entry,
+            label: trimmedLabel || gatewayProfileLabel(entry.gatewayUrl),
+          }
+        : entry
+    )),
   };
   await writeState(next);
   return getDesktopState();

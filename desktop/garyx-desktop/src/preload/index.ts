@@ -137,6 +137,8 @@ const api: GaryxDesktopApi = {
     ipcRenderer.invoke("garyx:save-settings", settings),
   rememberGatewayProfile: () =>
     ipcRenderer.invoke("garyx:remember-gateway-profile"),
+  renameGatewayProfile: (input) =>
+    ipcRenderer.invoke("garyx:rename-gateway-profile", input),
   getGatewaySettings: () => ipcRenderer.invoke("garyx:get-gateway-settings"),
   fetchChannelPlugins: () =>
     ipcRenderer.invoke("garyx:fetch-channel-plugins"),

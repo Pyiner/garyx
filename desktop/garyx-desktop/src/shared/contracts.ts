@@ -1874,6 +1874,10 @@ export interface GaryxDesktopApi {
   getState: () => Promise<DesktopState>;
   saveSettings: (settings: DesktopSettings) => Promise<DesktopState>;
   rememberGatewayProfile: () => Promise<DesktopState>;
+  renameGatewayProfile: (input: {
+    profileId: string;
+    label: string;
+  }) => Promise<DesktopState>;
   getGatewaySettings: () => Promise<GatewaySettingsPayload>;
   fetchChannelPlugins: () => Promise<ChannelPluginCatalogEntry[]>;
   openExternalUrl: (input: { url: string }) => Promise<void>;

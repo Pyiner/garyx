@@ -77,6 +77,7 @@ import {
 } from "../message-machine";
 import type { SettingsTabId } from "../settings-tabs";
 import { GatewayProfileHistoryButton } from "../GatewayProfileHistoryButton";
+import { GatewaySwitcherControl } from "../GatewaySwitcher";
 import { SettingsErrorBoundary } from "../SettingsErrorBoundary";
 import { Input } from "../components/ui/input";
 import { WorkspacePathPickerDialog } from "../components/WorkspacePathPicker";
@@ -10129,6 +10130,37 @@ export function AppShell() {
     >
       <ToastViewport onDismiss={dismissToast} toasts={toasts} />
       <AppLeftRail
+        gatewaySwitcherSlot={
+          <GatewaySwitcherControl
+            connection={connection}
+            currentGatewayUrl={persistedGatewayUrl}
+            indicatorTone={gatewayIndicator?.tone || null}
+            profiles={gatewayProfiles}
+            onOpenGatewaySettings={() => {
+              trackUiAction("nav.open_gateway_settings", async () => {
+                setContentView("settings");
+                await handleSelectSettingsTab("gateway");
+              });
+            }}
+            onRename={async (profileId, label) => {
+              const nextState = await window.garyxDesktop.renameGatewayProfile({
+                profileId,
+                label,
+              });
+              setDesktopState(nextState);
+            }}
+            onSwitch={async (profile) => {
+              return handleSaveLocalSettingsDraft(
+                {
+                  ...settingsDraft,
+                  gatewayUrl: profile.gatewayUrl,
+                  gatewayAuthToken: profile.gatewayAuthToken,
+                },
+                { requireGatewayConnection: true },
+              );
+            }}
+          />
+        }
         activeBotConversationGroupId={
           shouldShowConversationRail ? botConversationGroupId : null
         }

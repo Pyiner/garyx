@@ -208,6 +208,7 @@ import {
   runDesktopAutomationNow,
   renameDesktopThread,
   rememberDesktopGatewayProfile,
+  renameDesktopGatewayProfile,
   saveDesktopSettings,
   selectDesktopAutomation,
   selectDesktopWorkspace,
@@ -600,6 +601,16 @@ function registerIpcHandlers(): void {
     }
     return state;
   });
+
+  ipcMain.handle(
+    "garyx:rename-gateway-profile",
+    async (_event, input: { profileId?: string; label?: string }) => {
+      return renameDesktopGatewayProfile(
+        String(input?.profileId || ""),
+        String(input?.label || ""),
+      );
+    },
+  );
 
   ipcMain.handle("garyx:get-gateway-settings", async () => {
     const settings = await resolveSettings();
