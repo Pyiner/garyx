@@ -247,6 +247,7 @@ const zhCN: Record<string, string> = {
   'Stream disconnected before a final response.': '流在最终回复前已断开。',
   'Terminal': '终端',
   'Technical details': '技术细节',
+  'The app files were updated while Garyx was running. Quit and reopen Garyx to load the new version.': '应用文件在 Garyx 运行期间被更新了。退出并重新打开 Garyx 以加载新版本。',
   'Terminal exited': '终端已退出',
   'Terminal exited · Restart': '终端已退出 · 重启',
   'Terminal input': '终端输入',

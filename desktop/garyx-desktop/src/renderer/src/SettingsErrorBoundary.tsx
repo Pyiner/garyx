@@ -12,6 +12,17 @@ type SettingsErrorBoundaryState = {
   componentStack: string | null;
 };
 
+/// A lazily loaded settings chunk that no longer matches the running
+/// renderer — the app bundle was replaced on disk (rebuild/update) while
+/// this instance kept running. Only a relaunch loads a consistent bundle.
+function isStaleBundleError(message: string): boolean {
+  return (
+    message.includes('already been declared') ||
+    message.includes('dynamically imported module') ||
+    message.includes('Importing a module script failed')
+  );
+}
+
 export class SettingsErrorBoundary extends Component<
   SettingsErrorBoundaryProps,
   SettingsErrorBoundaryState
@@ -69,6 +80,11 @@ export class SettingsErrorBoundary extends Component<
                       <p className="settings-control-row-description">
                         {errorMessage || t('Unknown renderer error')}
                       </p>
+                      {errorMessage && isStaleBundleError(errorMessage) ? (
+                        <p className="settings-control-row-description">
+                          {t('The app files were updated while Garyx was running. Quit and reopen Garyx to load the new version.')}
+                        </p>
+                      ) : null}
                       {this.state.componentStack ? (
                         <details className="settings-error-stack">
                           <summary>{t('Technical details')}</summary>
