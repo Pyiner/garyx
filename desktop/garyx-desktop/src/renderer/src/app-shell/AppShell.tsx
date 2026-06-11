@@ -77,7 +77,7 @@ import {
 } from "../message-machine";
 import type { SettingsTabId } from "../settings-tabs";
 import { GatewayProfileHistoryButton } from "../GatewayProfileHistoryButton";
-import { GatewaySwitcherControl } from "../GatewaySwitcher";
+import { GatewayIdentityBar } from "../GatewaySwitcher";
 import { SettingsErrorBoundary } from "../SettingsErrorBoundary";
 import { Input } from "../components/ui/input";
 import { WorkspacePathPickerDialog } from "../components/WorkspacePathPicker";
@@ -10130,8 +10130,8 @@ export function AppShell() {
     >
       <ToastViewport onDismiss={dismissToast} toasts={toasts} />
       <AppLeftRail
-        gatewaySwitcherSlot={
-          <GatewaySwitcherControl
+        gatewayIdentitySlot={
+          <GatewayIdentityBar
             connection={connection}
             currentGatewayUrl={persistedGatewayUrl}
             indicatorTone={gatewayIndicator?.tone || null}
@@ -10141,6 +10141,9 @@ export function AppShell() {
                 setContentView("settings");
                 await handleSelectSettingsTab("gateway");
               });
+            }}
+            onOpenSettings={() => {
+              trackUiAction("nav.open_settings", openSettingsView);
             }}
             onRename={async (profileId, label) => {
               const nextState = await window.garyxDesktop.renameGatewayProfile({

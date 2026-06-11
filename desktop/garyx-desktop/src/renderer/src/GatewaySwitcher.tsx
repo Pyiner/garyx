@@ -1,20 +1,24 @@
 import { useMemo, useState } from 'react';
-import { CheckIcon, ChevronDownIcon, PencilIcon, ServerIcon } from 'lucide-react';
+import {
+  CheckIcon,
+  ChevronUpIcon,
+  PencilIcon,
+  ServerIcon,
+  SettingsIcon,
+} from 'lucide-react';
 
 import type { ConnectionStatus, DesktopGatewayProfile } from '@shared/contracts';
 import { cn } from '@/lib/utils';
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from '@/components/ui/dialog';
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
 import { useI18n } from './i18n';
 
 type GatewaySwitcherTone = 'connected' | 'syncing' | 'offline';
 
-type GatewaySwitcherControlProps = {
+type GatewayIdentityBarProps = {
   connection: ConnectionStatus | null;
   indicatorTone: 'syncing' | 'offline' | null;
   currentGatewayUrl: string;
@@ -22,6 +26,7 @@ type GatewaySwitcherControlProps = {
   onSwitch: (profile: DesktopGatewayProfile) => Promise<boolean>;
   onRename: (profileId: string, label: string) => Promise<void>;
   onOpenGatewaySettings: () => void;
+  onOpenSettings: () => void;
 };
 
 function gatewayHostLabel(gatewayUrl: string): string {
@@ -39,10 +44,11 @@ function gatewayUrlKey(gatewayUrl: string): string {
 
 const UNSAVED_CURRENT_PROFILE_ID = 'gateway-switcher::current-unsaved';
 
-/// Title-bar gateway identity control: shows the current gateway and its
-/// connection state next to the macOS traffic lights; clicking opens the
-/// switcher dialog. Gateway management stays in Settings -> Gateway.
-export function GatewaySwitcherControl({
+/// Bottom-left gateway identity bar: replaces the plain Settings row with the
+/// current gateway's name and connection state. The bar body opens an upward
+/// switcher popover (switch, inline rename, settings entries); the trailing
+/// gear keeps Settings one click away. Management stays in Settings -> Gateway.
+export function GatewayIdentityBar({
   connection,
   indicatorTone,
   currentGatewayUrl,
@@ -50,7 +56,8 @@ export function GatewaySwitcherControl({
   onSwitch,
   onRename,
   onOpenGatewaySettings,
-}: GatewaySwitcherControlProps) {
+  onOpenSettings,
+}: GatewayIdentityBarProps) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [switchingId, setSwitchingId] = useState<string | null>(null);
@@ -96,7 +103,7 @@ export function GatewaySwitcherControl({
 
   const currentLabel = rows.current?.label || gatewayHostLabel(currentGatewayUrl);
 
-  function resetDialogState() {
+  function resetPopoverState() {
     setSwitchingId(null);
     setErrorText(null);
     setEditingId(null);
@@ -241,67 +248,87 @@ export function GatewaySwitcherControl({
   }
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        setOpen(next);
-        if (!next) {
-          resetDialogState();
-        }
-      }}
-    >
-      <DialogTrigger asChild>
-        <button
-          aria-label={t('Switch gateway')}
-          className="gateway-switcher-trigger"
-          title={`${currentLabel} · ${toneLabel}`}
-          type="button"
-        >
-          <span aria-hidden className={`gateway-switcher-dot is-${tone}`} />
-          <span className="gateway-switcher-trigger-name">{currentLabel}</span>
-          <ChevronDownIcon
-            aria-hidden
-            className="gateway-switcher-trigger-chevron"
-            size={12}
-            strokeWidth={2}
-          />
-        </button>
-      </DialogTrigger>
-      <DialogContent className="gateway-switcher-dialog" size="compact">
-        <DialogHeader className="gateway-profile-dialog-header">
-          <div className="gateway-profile-dialog-title-row">
-            <span aria-hidden className="gateway-profile-dialog-icon">
-              <ServerIcon size={15} strokeWidth={1.9} />
-            </span>
-            <DialogTitle className="gateway-profile-dialog-title">
-              {t('Gateways')}
-            </DialogTitle>
-          </div>
-        </DialogHeader>
-
-        <div className="gateway-switcher-list">
-          {rows.current ? renderRow(rows.current, true) : null}
-          {rows.others.map((profile) => renderRow(profile, false))}
-        </div>
-
-        {errorText ? (
-          <p className="gateway-switcher-error" role="alert">{errorText}</p>
-        ) : null}
-
-        <div className="gateway-switcher-foot">
+    <div className="gateway-identity-bar">
+      <Popover
+        open={open}
+        onOpenChange={(next) => {
+          setOpen(next);
+          if (!next) {
+            resetPopoverState();
+          }
+        }}
+      >
+        <PopoverTrigger asChild>
           <button
-            className="gateway-switcher-manage"
+            aria-label={t('Switch gateway')}
+            className="gateway-identity-main"
+            title={`${currentLabel} · ${toneLabel}`}
+            type="button"
+          >
+            <span aria-hidden className={`gateway-switcher-dot is-${tone}`} />
+            <span className="gateway-identity-name">{currentLabel}</span>
+            <ChevronUpIcon
+              aria-hidden
+              className="gateway-identity-chevron"
+              size={12}
+              strokeWidth={2}
+            />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          align="start"
+          className="gateway-switcher-popover"
+          side="top"
+          sideOffset={8}
+        >
+          <div className="gateway-switcher-section-label">{t('Gateways')}</div>
+          <div className="gateway-switcher-list">
+            {rows.current ? renderRow(rows.current, true) : null}
+            {rows.others.map((profile) => renderRow(profile, false))}
+          </div>
+
+          {errorText ? (
+            <p className="gateway-switcher-error" role="alert">{errorText}</p>
+          ) : null}
+
+          <div className="gateway-switcher-popdivider" />
+
+          <button
+            className="gateway-switcher-action"
             onClick={() => {
               setOpen(false);
-              resetDialogState();
+              resetPopoverState();
               onOpenGatewaySettings();
             }}
             type="button"
           >
-            {t('Gateway Settings…')}
+            <ServerIcon aria-hidden size={13} strokeWidth={1.9} />
+            <span>{t('Gateway Settings…')}</span>
           </button>
-        </div>
-      </DialogContent>
-    </Dialog>
+          <button
+            className="gateway-switcher-action"
+            onClick={() => {
+              setOpen(false);
+              resetPopoverState();
+              onOpenSettings();
+            }}
+            type="button"
+          >
+            <SettingsIcon aria-hidden size={13} strokeWidth={1.9} />
+            <span>{t('Settings')}</span>
+          </button>
+        </PopoverContent>
+      </Popover>
+
+      <button
+        aria-label={t('Settings')}
+        className="gateway-identity-gear"
+        onClick={onOpenSettings}
+        title={t('Settings')}
+        type="button"
+      >
+        <SettingsIcon aria-hidden size={14} strokeWidth={1.9} />
+      </button>
+    </div>
   );
 }

@@ -25,7 +25,7 @@ import {
 import { useI18n } from '../../i18n';
 
 type AppLeftRailProps = {
-  gatewaySwitcherSlot?: React.ReactNode;
+  gatewayIdentitySlot?: React.ReactNode;
   isSettingsView: boolean;
   isAutomationView: boolean;
   isAutoResearchView: boolean;
@@ -76,7 +76,7 @@ type AppLeftRailProps = {
 };
 
 export function AppLeftRail({
-  gatewaySwitcherSlot,
+  gatewayIdentitySlot,
   isSettingsView,
   isAutomationView,
   isAutoResearchView,
@@ -130,9 +130,6 @@ export function AppLeftRail({
   const visibleSelectedThreadId = isThreadView ? selectedThreadId : null;
   return (
     <aside className={`left-rail ${isSettingsView ? 'settings-rail-shell' : ''}`}>
-      {gatewaySwitcherSlot ? (
-        <div className="gateway-switcher-slot">{gatewaySwitcherSlot}</div>
-      ) : null}
       {isSettingsView ? (
         <nav
           aria-label={t('Settings navigation')}
@@ -276,14 +273,16 @@ export function AppLeftRail({
           />
 
           <div className="sidebar-footer">
-            <button
-              className={`sidebar-action ${isSettingsView ? 'active' : ''}`}
-              onClick={onOpenSettings}
-              type="button"
-            >
-              <SettingsIcon />
-              <span>{t('Settings')}</span>
-            </button>
+            {gatewayIdentitySlot ?? (
+              <button
+                className={`sidebar-action ${isSettingsView ? 'active' : ''}`}
+                onClick={onOpenSettings}
+                type="button"
+              >
+                <SettingsIcon />
+                <span>{t('Settings')}</span>
+              </button>
+            )}
           </div>
         </>
       )}
