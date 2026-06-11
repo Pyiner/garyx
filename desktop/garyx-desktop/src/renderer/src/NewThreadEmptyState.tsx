@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  IconChevronDown,
   IconDeviceLaptop,
   IconFolder,
   IconGitBranch,
   IconHistory,
   IconPlus,
   IconRefresh,
-  IconSearch,
   IconSparkles,
 } from "@tabler/icons-react";
 
@@ -33,14 +33,12 @@ import {
   SelectGroup,
   SelectItem,
   SelectLabel,
-  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { WorkspaceSelectDialog } from "@/components/WorkspacePathPicker";
 import { useI18n } from "./i18n";
 
-const ADD_WORKSPACE_VALUE = "__add_workspace__";
-const MISSING_WORKSPACE_VALUE_PREFIX = "__missing_workspace__:";
 const GIT_STATUS_CHECK_DELAY_MS = 120;
 const HOME_DREAMS_LIMIT = 4;
 const HOME_DREAMS_CACHE_STALE_MS = 45_000;
@@ -105,6 +103,7 @@ export function NewThreadEmptyState({
     workspacePath: string;
     status: DesktopWorkspaceGitStatus;
   } | null>(null);
+  const [workspacePickerOpen, setWorkspacePickerOpen] = useState(false);
 
   useEffect(() => {
     setResumeError(null);
@@ -248,76 +247,18 @@ export function NewThreadEmptyState({
       <div className="new-thread-empty-state">
         <div className="new-thread-option-row">
           {selectableNewThreadWorkspaces.length ? (
-            <Select
-              onValueChange={(value) => {
-                if (value === ADD_WORKSPACE_VALUE) {
-                  onAddWorkspace();
-                  return;
-                }
-                if (value.startsWith(MISSING_WORKSPACE_VALUE_PREFIX)) {
-                  return;
-                }
-                onWorkspaceModeChange("local");
-                onSelectWorkspace(value);
-              }}
-              value={selectedWorkspace?.path ?? ""}
+            <button
+              aria-label={t("Workspace for the new thread")}
+              className="new-thread-workspace-trigger workspace-picker-trigger"
+              onClick={() => setWorkspacePickerOpen(true)}
+              type="button"
             >
-              <SelectTrigger
-                aria-label={t("Workspace for the new thread")}
-                className="new-thread-workspace-trigger"
-              >
-                <SelectValue placeholder={t("Select a workspace")} />
-              </SelectTrigger>
-              <SelectContent
-                align="start"
-                className="new-thread-workspace-menu min-w-[var(--radix-select-trigger-width)]"
-                position="popper"
-                side="bottom"
-                sideOffset={-1}
-              >
-                <SelectGroup>
-                  <SelectLabel>
-                    <IconSearch aria-hidden size={16} stroke={1.7} />
-                    {t("Search projects")}
-                  </SelectLabel>
-                  {selectableNewThreadWorkspaces.map((workspace) => {
-                    const value =
-                      workspace.path ||
-                      `${MISSING_WORKSPACE_VALUE_PREFIX}${workspace.name}`;
-                    return (
-                      <SelectItem
-                        disabled={!workspace.available || !workspace.path}
-                        key={workspace.path || workspace.name}
-                        value={value}
-                      >
-                        <IconFolder aria-hidden size={16} stroke={1.7} />
-                        <span className="new-thread-menu-text">
-                          {workspace.available && workspace.path
-                            ? workspace.name
-                            : t("{name} (Unavailable)", {
-                                name: workspace.name,
-                              })}
-                        </span>
-                      </SelectItem>
-                    );
-                  })}
-                </SelectGroup>
-                <SelectSeparator />
-                <SelectGroup>
-                  <SelectItem
-                    value={ADD_WORKSPACE_VALUE}
-                    disabled={workspaceMutation === "add"}
-                  >
-                    <IconFolder aria-hidden size={16} stroke={1.7} />
-                    <span className="new-thread-menu-text">
-                      {workspaceMutation === "add"
-                        ? t("Opening folder…")
-                        : t("Choose folder…")}
-                    </span>
-                  </SelectItem>
-                </SelectGroup>
-              </SelectContent>
-            </Select>
+              <IconFolder aria-hidden size={16} stroke={1.7} />
+              <span className="new-thread-menu-text">
+                {selectedWorkspace?.name ?? t("Select a workspace")}
+              </span>
+              <IconChevronDown aria-hidden size={14} stroke={1.8} />
+            </button>
           ) : (
             <Button
               variant="outline"
@@ -381,6 +322,19 @@ export function NewThreadEmptyState({
           <NewThreadDreamsSummary onOpenThread={onOpenDreamThread} />
         ) : null}
       </div>
+
+      <WorkspaceSelectDialog
+        addWorkspaceBusy={workspaceMutation === "add"}
+        onAddWorkspace={onAddWorkspace}
+        onClose={() => setWorkspacePickerOpen(false)}
+        onSelect={(workspacePath) => {
+          onWorkspaceModeChange("local");
+          onSelectWorkspace(workspacePath);
+        }}
+        open={workspacePickerOpen}
+        selectedPath={selectedWorkspace?.path || ""}
+        workspaces={selectableNewThreadWorkspaces}
+      />
 
       <Dialog
         onOpenChange={(open) => {

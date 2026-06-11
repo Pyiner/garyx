@@ -142,6 +142,7 @@ const zhCN: Record<string, string> = {
   'No bot': '无机器人',
   'No client stream events yet.': '还没有客户端流事件。',
   'No logs yet.': '还没有日志。',
+  'No matching projects.': '没有匹配的项目。',
   'No matching shortcut': '没有匹配的快捷指令',
   'No shortcuts yet': '还没有快捷指令',
   'No threads yet': '还没有线程',

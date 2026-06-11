@@ -1,5 +1,12 @@
 import { useEffect, useId, useMemo, useState } from 'react';
-import { ArrowLeft, Check, ChevronRight, Folder, FolderOpen, FolderPlus, MinusCircle } from 'lucide-react';
+import { ArrowLeft, Check, ChevronDown, ChevronRight, Folder, FolderOpen } from 'lucide-react';
+import {
+  IconCheck,
+  IconCircleMinus,
+  IconFolder,
+  IconPlus,
+  IconSearch,
+} from '@tabler/icons-react';
 
 import type { DesktopLocalDirectoryEntry, DesktopWorkspace } from '@shared/contracts';
 
@@ -13,23 +20,10 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Field, FieldDescription, FieldError, FieldGroup } from '@/components/ui/field';
+import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectSeparator,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { useI18n } from '@/i18n';
 import { cn } from '@/lib/utils';
-
-const EMPTY_WORKSPACE_VALUE = '__garyx_empty_workspace__';
-const ADD_WORKSPACE_VALUE = '__garyx_add_workspace__';
-const CURRENT_WORKSPACE_VALUE = '__garyx_current_workspace__';
 
 export type WorkspacePathPickerProps = {
   value: string;
@@ -83,13 +77,6 @@ function workspaceLeafName(path: string): string {
   return parts.at(-1) || normalized;
 }
 
-function workspaceCompactPath(path: string): string {
-  const normalized = normalizeWorkspacePath(path);
-  const parts = normalized.split('/').filter(Boolean);
-  if (parts.length <= 2) return normalized;
-  return `.../${parts.slice(-2).join('/')}`;
-}
-
 function workspaceLabel(path: string): string {
   return workspaceLeafName(path) || path;
 }
@@ -115,26 +102,17 @@ function WorkspacePathSummary({ path, placeholder }: WorkspacePathSummaryProps) 
   );
 }
 
-function normalizeWorkspaceOptions(workspaces: DesktopWorkspace[] = []): string[] {
-  const seen = new Set<string>();
-  return workspaces
-    .map((workspace) => workspace.path?.trim() || '')
-    .filter((path) => {
-      if (!path) return false;
-      const key = workspacePathKey(path);
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-}
-
 type LocalDirectoryBrowserProps = {
   selectedPath: string;
   disabled?: boolean;
   onSelect: (path: string) => void;
 };
 
-function LocalDirectoryBrowser({ selectedPath, disabled = false, onSelect }: LocalDirectoryBrowserProps) {
+function LocalDirectoryBrowser({
+  selectedPath,
+  disabled = false,
+  onSelect,
+}: LocalDirectoryBrowserProps) {
   const { t } = useI18n();
   const [currentPath, setCurrentPath] = useState(selectedPath);
   const [parentPath, setParentPath] = useState<string | null>(null);
@@ -176,7 +154,7 @@ function LocalDirectoryBrowser({ selectedPath, disabled = false, onSelect }: Loc
 
   return (
     <div className="overflow-hidden rounded-xl border border-border/70 bg-background text-foreground">
-      <div className="flex items-center gap-2 px-3 py-3">
+      <div className="flex items-center gap-2 px-3 py-2.5">
         <Button
           aria-label={t('Back')}
           disabled={!parentPath || disabled || loading}
@@ -225,7 +203,7 @@ function LocalDirectoryBrowser({ selectedPath, disabled = false, onSelect }: Loc
             {entries.map((entry) => (
               <button
                 className={cn(
-                  'flex min-h-11 w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors',
+                  'flex min-h-9 w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-sm transition-colors',
                   disabled ? 'cursor-not-allowed opacity-50' : 'hover:bg-accent hover:text-accent-foreground',
                 )}
                 disabled={disabled}
@@ -233,14 +211,9 @@ function LocalDirectoryBrowser({ selectedPath, disabled = false, onSelect }: Loc
                 onClick={() => setCurrentPath(entry.path)}
                 type="button"
               >
-                <Folder aria-hidden className="text-muted-foreground" />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate font-medium">{entry.name}</span>
-                  <span className="block truncate text-xs text-muted-foreground">
-                    {workspaceCompactPath(entry.path)}
-                  </span>
-                </span>
-                <ChevronRight aria-hidden className="text-muted-foreground" />
+                <Folder aria-hidden className="size-4 text-muted-foreground" />
+                <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+                <ChevronRight aria-hidden className="size-4 text-muted-foreground/70" />
               </button>
             ))}
           </div>
@@ -286,16 +259,194 @@ function WorkspaceAddDialog({ open, initialPath, saving = false, onOpenChange, o
           <Button disabled={saving} onClick={() => onOpenChange(false)} type="button" variant="outline">
             {t('Cancel')}
           </Button>
-          <Button
-            disabled={saving || !isAbsoluteWorkspacePath(draft)}
-            onClick={() => {
-              void onAdd(normalizeWorkspacePath(draft));
-            }}
-            type="button"
-          >
-            {saving ? t('Saving...') : t('Save')}
-          </Button>
+          {isAbsoluteWorkspacePath(draft) ? (
+            <Button
+              disabled={saving}
+              onClick={() => {
+                void onAdd(normalizeWorkspacePath(draft));
+              }}
+              type="button"
+            >
+              {saving ? t('Saving...') : t('Save')}
+            </Button>
+          ) : null}
         </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Row shape for {@link WorkspaceSelectDialog}; `DesktopWorkspace` satisfies it. */
+export type WorkspaceSelectDialogWorkspace = Pick<DesktopWorkspace, 'name' | 'path' | 'available'>;
+
+export type WorkspaceSelectDialogProps = {
+  open: boolean;
+  /** Defaults to "Choose workspace". */
+  title?: string;
+  workspaces?: WorkspaceSelectDialogWorkspace[];
+  /** Offer a "No workspace" row that selects the empty path. */
+  allowEmpty?: boolean;
+  selectedPath?: string;
+  onSelect: (workspacePath: string) => void;
+  onClose: () => void;
+  /** Renders the "Choose folder…" footer row that opens the caller's
+   * add-workspace flow. */
+  onAddWorkspace?: () => void;
+  addWorkspaceLabel?: string;
+  addWorkspaceBusy?: boolean;
+};
+
+/** Shared floating workspace picker: search field, workspace rows, and a
+ * "Choose folder…" footer. Every workspace selector — the new-thread picker
+ * and the in-form pickers — opens this dialog. */
+export function WorkspaceSelectDialog({
+  open,
+  title,
+  workspaces = [],
+  allowEmpty = false,
+  selectedPath = '',
+  onSelect,
+  onClose,
+  onAddWorkspace,
+  addWorkspaceLabel,
+  addWorkspaceBusy = false,
+}: WorkspaceSelectDialogProps) {
+  const { t } = useI18n();
+  const [query, setQuery] = useState('');
+  const selectedKey = workspacePathKey(selectedPath);
+  const normalizedQuery = query.trim().toLowerCase();
+  const matchesQuery = (name: string, path: string | null) =>
+    !normalizedQuery ||
+    name.toLowerCase().includes(normalizedQuery) ||
+    (path || '').toLowerCase().includes(normalizedQuery);
+
+  const seenPaths = new Set<string>();
+  const localRows = workspaces.filter((workspace) => {
+    const key = workspacePathKey(workspace.path);
+    if (!key) return true;
+    if (seenPaths.has(key)) return false;
+    seenPaths.add(key);
+    return true;
+  });
+  // Keep a selected-but-unlisted path visible so the check mark always has
+  // a row (parity with the old in-form dropdown's "current value" item).
+  const rows: WorkspaceSelectDialogWorkspace[] =
+    selectedKey && !seenPaths.has(selectedKey)
+      ? [
+          { name: workspaceLabel(selectedPath), path: selectedPath.trim(), available: true },
+          ...localRows,
+        ]
+      : localRows;
+  const filteredRows = rows.filter((workspace) => matchesQuery(workspace.name, workspace.path));
+
+  const closeDialog = () => {
+    setQuery('');
+    onClose();
+  };
+
+  return (
+    <Dialog
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) closeDialog();
+      }}
+      open={open}
+    >
+      <DialogContent className="workspace-picker-dialog" size="compact">
+        <DialogHeader>
+          <DialogTitle>{title || t('Choose workspace')}</DialogTitle>
+        </DialogHeader>
+        <div className="workspace-picker-search">
+          <IconSearch aria-hidden size={15} stroke={1.7} />
+          <Input
+            autoFocus
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={t('Search projects')}
+            value={query}
+          />
+        </div>
+        <div className="workspace-picker-list">
+          {allowEmpty && !normalizedQuery ? (
+            <button
+              className="workspace-picker-row"
+              data-active={selectedKey ? undefined : ''}
+              onClick={() => {
+                onSelect('');
+                closeDialog();
+              }}
+              type="button"
+            >
+              <IconCircleMinus aria-hidden size={16} stroke={1.7} />
+              <span className="workspace-picker-name">{t('No workspace')}</span>
+              {selectedKey ? null : (
+                <IconCheck
+                  aria-hidden
+                  className="workspace-picker-check"
+                  size={15}
+                  stroke={2}
+                />
+              )}
+            </button>
+          ) : null}
+          {filteredRows.map((workspace) => {
+            const rowKey = workspacePathKey(workspace.path);
+            const isSelected = Boolean(rowKey && rowKey === selectedKey);
+            return (
+              <button
+                className="workspace-picker-row"
+                data-active={isSelected ? '' : undefined}
+                disabled={!workspace.available || !workspace.path}
+                key={workspace.path || workspace.name}
+                onClick={() => {
+                  if (!workspace.path) {
+                    return;
+                  }
+                  onSelect(workspace.path);
+                  closeDialog();
+                }}
+                type="button"
+              >
+                <IconFolder aria-hidden size={16} stroke={1.7} />
+                <span className="workspace-picker-name">
+                  {workspace.available && workspace.path
+                    ? workspace.name
+                    : t('{name} (Unavailable)', { name: workspace.name })}
+                </span>
+                <span className="workspace-picker-path">{workspace.path}</span>
+                {isSelected ? (
+                  <IconCheck
+                    aria-hidden
+                    className="workspace-picker-check"
+                    size={15}
+                    stroke={2}
+                  />
+                ) : null}
+              </button>
+            );
+          })}
+          {!filteredRows.length ? (
+            <p className="workspace-picker-empty">{t('No matching projects.')}</p>
+          ) : null}
+        </div>
+        {onAddWorkspace ? (
+          <div className="workspace-picker-footer">
+            <button
+              className="workspace-picker-row"
+              disabled={addWorkspaceBusy}
+              onClick={() => {
+                closeDialog();
+                onAddWorkspace();
+              }}
+              type="button"
+            >
+              <IconPlus aria-hidden size={15} stroke={1.8} />
+              <span className="workspace-picker-name">
+                {addWorkspaceBusy
+                  ? t('Opening folder…')
+                  : addWorkspaceLabel || t('Choose folder…')}
+              </span>
+            </button>
+          </div>
+        ) : null}
       </DialogContent>
     </Dialog>
   );
@@ -312,7 +463,6 @@ export function WorkspacePathPicker({
   className,
   fieldClassName,
   triggerClassName,
-  contentClassName,
   addWorkspaceLabel,
   onAddWorkspace,
 }: WorkspacePathPickerProps) {
@@ -321,19 +471,17 @@ export function WorkspacePathPicker({
   const inputId = id ?? `workspace-path-${generatedId}`;
   const errorId = `${inputId}-error`;
   const hintId = `${inputId}-hint`;
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [savingAdd, setSavingAdd] = useState(false);
-  const optionPaths = useMemo(() => normalizeWorkspaceOptions(workspaces), [workspaces]);
+  // Pathless entries cannot be picked as a form value; hide them like the
+  // previous dropdown options did.
+  const selectableWorkspaces = useMemo(
+    () => workspaces.filter((workspace) => workspace.path?.trim()),
+    [workspaces],
+  );
   const trimmed = value.trim();
   const invalid = Boolean(trimmed && !isAbsoluteWorkspacePath(trimmed));
-  const selectedKey = workspacePathKey(trimmed);
-  const selectedOption = optionPaths.find((path) => workspacePathKey(path) === selectedKey) || null;
-  const selectedMissing = Boolean(trimmed && !selectedOption);
-  const selectValue = trimmed
-    ? selectedOption || CURRENT_WORKSPACE_VALUE
-    : allowEmpty
-      ? EMPTY_WORKSPACE_VALUE
-      : undefined;
   const describedBy = [
     invalid ? errorId : null,
     !allowEmpty && !trimmed ? hintId : null,
@@ -358,65 +506,26 @@ export function WorkspacePathPicker({
   return (
     <FieldGroup className={cn('gap-2', className)}>
       <Field className={cn('gap-2', fieldClassName)} data-invalid={invalid || undefined}>
-        <Select
+        {/* data-slot keeps the form-context trigger styling that targets the
+            shadcn Select trigger (automation/tasks/agents-hub forms). */}
+        <button
+          aria-describedby={describedBy}
+          aria-expanded={pickerOpen}
+          aria-haspopup="dialog"
+          aria-invalid={invalid || undefined}
+          className={cn(
+            'flex h-auto min-h-11 w-full select-none items-center justify-between gap-2 rounded-md border border-input bg-background px-3 py-2 text-left text-sm shadow-xs transition-colors outline-none disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0',
+            triggerClassName,
+          )}
+          data-slot="select-trigger"
           disabled={disabled}
-          value={selectValue}
-          onValueChange={(nextValue) => {
-            if (nextValue === ADD_WORKSPACE_VALUE) {
-              setAddOpen(true);
-              return;
-            }
-            if (nextValue === EMPTY_WORKSPACE_VALUE) {
-              onChange('');
-              return;
-            }
-            if (nextValue === CURRENT_WORKSPACE_VALUE) {
-              return;
-            }
-            onChange(nextValue);
-          }}
+          id={inputId}
+          onClick={() => setPickerOpen(true)}
+          type="button"
         >
-          <SelectTrigger
-            aria-describedby={describedBy}
-            aria-invalid={invalid || undefined}
-            className={cn('h-auto min-h-11 w-full justify-between', triggerClassName)}
-            id={inputId}
-          >
-            <SelectValue placeholder={placeholder || t('Choose workspace')} />
-          </SelectTrigger>
-          <SelectContent position="popper" align="start" className={contentClassName}>
-            <SelectGroup>
-              <SelectLabel>{t('Workspace')}</SelectLabel>
-              {allowEmpty ? (
-                <SelectItem value={EMPTY_WORKSPACE_VALUE}>
-                  <span className="flex items-center gap-2">
-                    <MinusCircle />
-                    {t('No workspace')}
-                  </span>
-                </SelectItem>
-              ) : null}
-              {selectedMissing ? (
-                <SelectItem value={CURRENT_WORKSPACE_VALUE}>
-                  <WorkspacePathSummary path={trimmed} placeholder={placeholder || t('Choose workspace')} />
-                </SelectItem>
-              ) : null}
-              {optionPaths.map((path) => (
-                <SelectItem key={path} value={path}>
-                  <WorkspacePathSummary path={path} placeholder={placeholder || t('Choose workspace')} />
-                </SelectItem>
-              ))}
-            </SelectGroup>
-            <SelectSeparator />
-            <SelectGroup>
-              <SelectItem value={ADD_WORKSPACE_VALUE}>
-                <span className="flex items-center gap-2">
-                  <FolderPlus />
-                  {addWorkspaceLabel || t('Add workspace…')}
-                </span>
-              </SelectItem>
-            </SelectGroup>
-          </SelectContent>
-        </Select>
+          <WorkspacePathSummary path={trimmed} placeholder={placeholder || t('Choose workspace')} />
+          <ChevronDown aria-hidden className="size-4 text-muted-foreground opacity-50" />
+        </button>
         {invalid ? (
           <FieldError id={errorId}>{t('Use an absolute path.')}</FieldError>
         ) : null}
@@ -424,6 +533,16 @@ export function WorkspacePathPicker({
           <FieldDescription id={hintId}>{t('Choose workspace')}</FieldDescription>
         ) : null}
       </Field>
+      <WorkspaceSelectDialog
+        addWorkspaceLabel={addWorkspaceLabel}
+        allowEmpty={allowEmpty}
+        onAddWorkspace={() => setAddOpen(true)}
+        onClose={() => setPickerOpen(false)}
+        onSelect={onChange}
+        open={pickerOpen}
+        selectedPath={trimmed}
+        workspaces={selectableWorkspaces}
+      />
       <WorkspaceAddDialog
         initialPath={trimmed}
         onAdd={addWorkspace}
@@ -447,7 +566,7 @@ export function WorkspacePathPickerDialog({
   const { t } = useI18n();
   const [draft, setDraft] = useState(initialPath);
   const trimmed = draft.trim();
-  const canConfirm = Boolean(trimmed && isAbsoluteWorkspacePath(trimmed) && !saving);
+  const canSave = Boolean(trimmed && isAbsoluteWorkspacePath(trimmed));
 
   useEffect(() => {
     if (open) setDraft(initialPath);
@@ -474,15 +593,17 @@ export function WorkspacePathPickerDialog({
           <Button disabled={saving} onClick={onCancel} type="button" variant="outline">
             {t('Cancel')}
           </Button>
-          <Button
-            disabled={!canConfirm}
-            onClick={() => {
-              void onConfirm(normalizeWorkspacePath(trimmed));
-            }}
-            type="button"
-          >
-            {saving ? t('Saving...') : t('Save')}
-          </Button>
+          {canSave ? (
+            <Button
+              disabled={saving}
+              onClick={() => {
+                void onConfirm(normalizeWorkspacePath(trimmed));
+              }}
+              type="button"
+            >
+              {saving ? t('Saving...') : t('Save')}
+            </Button>
+          ) : null}
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -1838,6 +1838,37 @@ export function GatewaySettingsPanel({
   const connectionPanel = (
     <div className="codex-section">
       <div className="codex-section-header">
+        <span className="codex-section-title">{t('Gateway')}</span>
+      </div>
+      <div className="codex-list-card">
+        <SettingsControlRow
+          control={
+            <div className="gateway-summary-control">
+              <code className="gateway-summary-url">
+                {localSettings.gatewayUrl.trim() || t('Not configured')}
+              </code>
+              <Button
+                className="rounded-xl bg-[#111111] text-white shadow-none hover:bg-[#222222]"
+                onClick={onOpenGatewaySetup}
+                size="sm"
+                type="button"
+              >
+                {t('Switch Gateway')}
+              </Button>
+            </div>
+          }
+          label={t('Gateway URL')}
+        />
+      </div>
+      <MobileConnectPanel settings={localSettings} />
+    </div>
+  );
+
+  // Client-side preferences live on the General tab; the gateway tab
+  // only manages the gateway connection.
+  const desktopSettingsSection = (
+    <div className="codex-section">
+      <div className="codex-section-header">
         <span className="codex-section-title">{t('Desktop Settings')}</span>
       </div>
       <div className="codex-list-card">
@@ -1902,24 +1933,6 @@ export function GatewaySettingsPanel({
           description={t('Choose whether follow-ups sent while Garyx is running are queued or sent into the active run. Press Command+Enter to use the opposite behavior for one message.')}
           label={t('Follow-up behavior')}
         />
-        <SettingsControlRow
-          control={
-            <div className="gateway-summary-control">
-              <code className="gateway-summary-url">
-                {localSettings.gatewayUrl.trim() || t('Not configured')}
-              </code>
-              <Button
-                className="rounded-xl bg-[#111111] text-white shadow-none hover:bg-[#222222]"
-                onClick={onOpenGatewaySetup}
-                size="sm"
-                type="button"
-              >
-                {t('Switch Gateway')}
-              </Button>
-            </div>
-          }
-          label={t('Gateway URL')}
-        />
         {localSettingsDirty ? (
           <SettingsControlRow
             control={<div className="settings-control-actions">{renderLocalSaveAction()}</div>}
@@ -1927,7 +1940,6 @@ export function GatewaySettingsPanel({
           />
         ) : null}
       </div>
-      <MobileConnectPanel settings={localSettings} />
     </div>
   );
 
@@ -3442,6 +3454,7 @@ export function GatewaySettingsPanel({
 
   const labsPanel = (
     <>
+      {desktopSettingsSection}
       <div className="codex-section">
         <div className="codex-section-header">
           <span className="codex-section-title">{t('Updates')}</span>
