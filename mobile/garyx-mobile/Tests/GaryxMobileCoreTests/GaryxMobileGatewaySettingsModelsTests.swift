@@ -2,13 +2,35 @@ import XCTest
 @testable import GaryxMobileCore
 
 final class GaryxMobileGatewaySettingsModelsTests: XCTestCase {
-    func testGatewaySetupShowsDetailsWhileCheckingExistingGateway() {
-        XCTAssertTrue(
+    func testGatewaySetupHidesDetailsWhileCheckingExistingGateway() {
+        XCTAssertFalse(
             GaryxGatewaySetupPresentation.showsDetails(
                 isSheet: false,
                 startsEmpty: false,
                 hasGatewaySettings: true,
                 phase: .checking
+            )
+        )
+    }
+
+    func testGatewaySetupHidesDetailsWhileDisconnectedWithExistingGateway() {
+        XCTAssertFalse(
+            GaryxGatewaySetupPresentation.showsDetails(
+                isSheet: false,
+                startsEmpty: false,
+                hasGatewaySettings: true,
+                phase: .disconnected
+            )
+        )
+    }
+
+    func testGatewaySetupShowsDetailsWithoutGatewaySettings() {
+        XCTAssertTrue(
+            GaryxGatewaySetupPresentation.showsDetails(
+                isSheet: false,
+                startsEmpty: false,
+                hasGatewaySettings: false,
+                phase: .disconnected
             )
         )
     }

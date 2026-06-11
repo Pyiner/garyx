@@ -25,10 +25,12 @@ enum GaryxGatewaySetupPresentation {
         if isSheet || startsEmpty { return true }
         if !hasGatewaySettings { return true }
         switch phase {
-        case .disconnected, .checking, .failed:
-            return true
-        case .ready:
+        case .disconnected, .checking, .ready:
+            // Saved settings connect directly behind the branded startup
+            // loading screen; gateway selection appears only after a failure.
             return false
+        case .failed:
+            return true
         }
     }
 }

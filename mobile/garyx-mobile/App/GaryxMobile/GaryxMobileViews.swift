@@ -148,12 +148,7 @@ struct GaryxGatewaySetupView: View {
     }
 
     private var connectingBody: some View {
-        VStack {
-            Spacer()
-            GaryxIonicLoader(fontSize: 88)
-                .padding(.horizontal, 24)
-            Spacer()
-        }
+        GaryxStartupLoadingView()
     }
 
     private var setupForm: some View {
