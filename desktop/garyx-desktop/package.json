@@ -10,6 +10,8 @@
   "scripts": {
     "dev": "electron-vite dev",
     "dev:web": "vite --config vite.web.config.ts",
+    "storybook": "vite --config vite.storybook.config.ts --open /storybook.html",
+    "storybook:build": "vite build --config vite.storybook.config.ts",
     "build": "npm run build:ui",
     "build:ui": "tsc --noEmit && electron-vite build",
     "build:web": "tsc --noEmit && vite build --config vite.web.config.ts",
