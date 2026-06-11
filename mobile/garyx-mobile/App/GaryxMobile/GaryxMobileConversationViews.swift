@@ -338,6 +338,7 @@ struct GaryxConversationView: View {
                 }
         }
         .id(conversationScrollIdentity)
+        .garyxBottomAnchoredTranscript()
         // The transcript is laid out top-down: short conversations start at
         // the top of the viewport. Tail anchoring is driven explicitly by the
         // scroll state machine instead of a bottom default anchor.
@@ -905,6 +906,23 @@ private func garyxConfiguredBot(
 }
 
 private extension View {
+    /// Opens the transcript anchored to its bottom from the very first
+    /// layout pass and keeps the tail pinned through content growth while
+    /// positioned there — no post-load programmatic scroll-down. The
+    /// alignment role is deliberately not anchored so short conversations
+    /// keep starting at the top. Before iOS 18 the scroll state machine's
+    /// retry chain remains the only mechanism.
+    @ViewBuilder
+    func garyxBottomAnchoredTranscript() -> some View {
+        if #available(iOS 18.0, *) {
+            self
+                .defaultScrollAnchor(.bottom, for: .initialOffset)
+                .defaultScrollAnchor(.bottom, for: .sizeChanges)
+        } else {
+            self
+        }
+    }
+
     /// Reports whether the reader's gesture currently drives the scroll
     /// view (finger down or fling decelerating). Programmatic phases do not
     /// count. No-op before iOS 18, where the scroll phase API is missing.
