@@ -8,6 +8,9 @@ struct GaryxImagePreviewSource: Equatable {
     var dataUrl: String?
     var remoteUrl: String?
     var filePath: String?
+    /// Gateway-readable path resolved through the host's `loadGatewayDataUrl`
+    /// closure. Used by gallery pages whose data has not been fetched yet.
+    var gatewayFilePath: String?
     /// Already-decoded image from the tapped thumbnail. Seeds the preview's
     /// first frame so opening never flashes an empty screen while the
     /// full-resolution decode runs; the decode replaces it seamlessly.
@@ -23,6 +26,7 @@ struct GaryxImagePreviewSource: Equatable {
             dataUrl ?? "",
             remoteUrl ?? "",
             filePath ?? "",
+            gatewayFilePath ?? "",
         ].joined(separator: "|")
     }
 }
@@ -31,29 +35,74 @@ struct GaryxFullscreenImagePreview: View {
     let source: GaryxImagePreviewSource
     let onDismiss: () -> Void
 
-    @State private var image: UIImage?
-    @State private var isLoading = false
-    @State private var loadFailed = false
+    var body: some View {
+        GaryxFullscreenImageGalleryPreview(
+            sources: [source],
+            initialIndex: 0,
+            onDismiss: onDismiss
+        )
+    }
+}
 
-    init(source: GaryxImagePreviewSource, onDismiss: @escaping () -> Void) {
-        self.source = source
+/// Paged fullscreen preview: swiping left/right moves between the images of
+/// the launching surface (for example one tool call's thumbnail strip)
+/// without closing and reopening the preview for each image.
+struct GaryxFullscreenImageGalleryPreview: View {
+    let sources: [GaryxImagePreviewSource]
+    let initialIndex: Int
+    /// Resolves a `gatewayFilePath` source into a data URL through the
+    /// gateway preview API. Injected by hosts that own gateway access.
+    var loadGatewayDataUrl: ((String) async -> String?)?
+    let onDismiss: () -> Void
+
+    @State private var selection: Int
+    @State private var pagingDisabled = false
+
+    init(
+        sources: [GaryxImagePreviewSource],
+        initialIndex: Int,
+        loadGatewayDataUrl: ((String) async -> String?)? = nil,
+        onDismiss: @escaping () -> Void
+    ) {
+        self.sources = sources
+        self.initialIndex = initialIndex
+        self.loadGatewayDataUrl = loadGatewayDataUrl
         self.onDismiss = onDismiss
-        _image = State(initialValue: source.initialImage)
+        _selection = State(initialValue: min(max(initialIndex, 0), max(sources.count - 1, 0)))
     }
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            if let image {
-                GaryxZoomableImageCanvas(image: image, onDismiss: onDismiss)
-                    .ignoresSafeArea()
-            } else if isLoading {
-                ProgressView()
-                    .tint(.white)
-                    .controlSize(.large)
+            if sources.count == 1, let onlySource = sources.first {
+                GaryxImagePreviewPage(
+                    source: onlySource,
+                    loadGatewayDataUrl: loadGatewayDataUrl,
+                    onDismiss: onDismiss
+                )
             } else {
-                failureContent
+                TabView(selection: $selection) {
+                    ForEach(sources.indices, id: \.self) { index in
+                        GaryxImagePreviewPage(
+                            source: sources[index],
+                            loadGatewayDataUrl: loadGatewayDataUrl,
+                            onZoomActiveChanged: { zoomed in
+                                guard index == selection, pagingDisabled != zoomed else { return }
+                                pagingDisabled = zoomed
+                            },
+                            onDismiss: onDismiss
+                        )
+                        .tag(index)
+                    }
+                }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                .ignoresSafeArea()
+                // While zoomed in, horizontal pans move the image, not the pager.
+                .scrollDisabled(pagingDisabled)
+                .onChange(of: selection) { _, _ in
+                    pagingDisabled = false
+                }
             }
         }
         .preferredColorScheme(.dark)
@@ -63,8 +112,11 @@ struct GaryxFullscreenImagePreview: View {
                 .padding(.trailing, 16)
                 .zIndex(10)
         }
-        .task(id: source.loadKey) {
-            await loadImage()
+        .overlay(alignment: .top) {
+            if sources.count > 1 {
+                pageIndexLabel
+                    .padding(.top, 20)
+            }
         }
     }
 
@@ -87,6 +139,70 @@ struct GaryxFullscreenImagePreview: View {
         .buttonStyle(.plain)
         .contentShape(Circle())
         .accessibilityLabel("Close image preview")
+    }
+
+    private var pageIndexLabel: some View {
+        Text("\(selection + 1) / \(sources.count)")
+            .font(GaryxFont.footnote(weight: .semibold))
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 12)
+            .frame(minHeight: 28)
+            .garyxAdaptiveGlass(
+                .regular,
+                isInteractive: false,
+                tint: Color(.systemBackground).opacity(0.32),
+                fallbackMaterial: .ultraThinMaterial,
+                in: Capsule()
+            )
+            .accessibilityLabel("Image \(selection + 1) of \(sources.count)")
+    }
+}
+
+private struct GaryxImagePreviewPage: View {
+    let source: GaryxImagePreviewSource
+    var loadGatewayDataUrl: ((String) async -> String?)?
+    var onZoomActiveChanged: ((Bool) -> Void)? = nil
+    let onDismiss: () -> Void
+
+    @State private var image: UIImage?
+    @State private var isLoading = false
+    @State private var loadFailed = false
+
+    init(
+        source: GaryxImagePreviewSource,
+        loadGatewayDataUrl: ((String) async -> String?)? = nil,
+        onZoomActiveChanged: ((Bool) -> Void)? = nil,
+        onDismiss: @escaping () -> Void
+    ) {
+        self.source = source
+        self.loadGatewayDataUrl = loadGatewayDataUrl
+        self.onZoomActiveChanged = onZoomActiveChanged
+        self.onDismiss = onDismiss
+        _image = State(initialValue: source.initialImage)
+    }
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+
+            if let image {
+                GaryxZoomableImageCanvas(
+                    image: image,
+                    onZoomActiveChanged: onZoomActiveChanged,
+                    onDismiss: onDismiss
+                )
+                .ignoresSafeArea()
+            } else if isLoading {
+                ProgressView()
+                    .tint(.white)
+                    .controlSize(.large)
+            } else {
+                failureContent
+            }
+        }
+        .task(id: source.loadKey) {
+            await loadImage()
+        }
     }
 
     @ViewBuilder
@@ -129,6 +245,22 @@ struct GaryxFullscreenImagePreview: View {
             guard !Task.isCancelled else { return }
             image = loaded
             return
+        }
+
+        if let gatewayPath = source.gatewayFilePath?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !gatewayPath.isEmpty,
+           let loadGatewayDataUrl {
+            if let resolvedDataUrl = await loadGatewayDataUrl(gatewayPath) {
+                let gatewayImage = await Task.detached(priority: .userInitiated) {
+                    GaryxImageDecoder.image(fromDataUrl: resolvedDataUrl, maxPixelSize: 4096)
+                }.value
+                guard !Task.isCancelled else { return }
+                if let gatewayImage {
+                    image = gatewayImage
+                    return
+                }
+            }
+            guard !Task.isCancelled else { return }
         }
 
         guard let url = remoteURL(from: source.remoteUrl) else {
@@ -205,6 +337,7 @@ enum GaryxImageDecoder {
 
 private struct GaryxZoomableImageCanvas: View {
     let image: UIImage
+    var onZoomActiveChanged: ((Bool) -> Void)? = nil
     let onDismiss: () -> Void
 
     @State private var scale: CGFloat = 1
@@ -237,6 +370,15 @@ private struct GaryxZoomableImageCanvas: View {
                 .accessibilityLabel("Full screen image")
         }
         .background(Color.black)
+        .onChange(of: scale) { _, newScale in
+            onZoomActiveChanged?(newScale > 1.02)
+        }
+        .onDisappear {
+            // Pager pages stay alive off screen; coming back shows the image
+            // fit-to-screen again instead of a stale zoom viewport.
+            resetViewport()
+            onZoomActiveChanged?(false)
+        }
     }
 
     private var magnificationGesture: some Gesture {
@@ -261,7 +403,11 @@ private struct GaryxZoomableImageCanvas: View {
         DragGesture()
             .onChanged { value in
                 guard scale > 1 else {
-                    dismissDragOffset = max(0, value.translation.height)
+                    // Only track clearly downward drags so horizontal pager
+                    // swipes do not bob the image vertically.
+                    let downward = value.translation.height
+                    let horizontal = abs(value.translation.width)
+                    dismissDragOffset = downward > 0 && downward > horizontal ? downward : 0
                     return
                 }
                 offset = CGSize(

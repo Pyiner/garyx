@@ -274,20 +274,80 @@ private struct GaryxToolCallDiffView: View {
 private struct GaryxToolImageThumbnailStrip: View {
     let refs: [GaryxToolCallImageRef]
 
+    @EnvironmentObject private var model: GaryxMobileModel
+    @State private var loadedByPath: [String: GaryxToolImageLoadedPreview] = [:]
+    @State private var previewSelection: GaryxToolImagePreviewSelection?
+
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(refs) { ref in
-                    GaryxToolImageThumbnail(ref: ref)
+                ForEach(Array(refs.enumerated()), id: \.element.id) { index, ref in
+                    GaryxToolImageThumbnail(
+                        ref: ref,
+                        onLoaded: { image, dataUrl in
+                            loadedByPath[ref.path] = GaryxToolImageLoadedPreview(image: image, dataUrl: dataUrl)
+                        },
+                        onTap: {
+                            previewSelection = GaryxToolImagePreviewSelection(index: index)
+                        }
+                    )
                 }
             }
         }
         .scrollClipDisabled()
+        // One shared gallery cover for the whole strip so the fullscreen
+        // preview can swipe between this tool group's images.
+        .fullScreenCover(item: $previewSelection) { selection in
+            GaryxFullscreenImageGalleryPreview(
+                sources: refs.map { ref in
+                    let loaded = loadedByPath[ref.path]
+                    return GaryxImagePreviewSource(
+                        title: ref.fileName,
+                        dataUrl: loaded?.dataUrl,
+                        remoteUrl: nil,
+                        filePath: nil,
+                        gatewayFilePath: ref.path,
+                        initialImage: loaded?.image
+                    )
+                },
+                initialIndex: selection.index,
+                loadGatewayDataUrl: { path in
+                    await loadGatewayImageDataUrl(path)
+                },
+                onDismiss: { previewSelection = nil }
+            )
+        }
     }
+
+    private func loadGatewayImageDataUrl(_ path: String) async -> String? {
+        guard let preview = await model.localFilePreview(path, reportsError: false),
+              let base64 = preview.dataBase64,
+              !base64.isEmpty else {
+            return nil
+        }
+        let mediaType = preview.mediaType.isEmpty ? "image/png" : preview.mediaType
+        return "data:\(mediaType);base64,\(base64)"
+    }
+}
+
+private struct GaryxToolImageLoadedPreview {
+    let image: UIImage
+    let dataUrl: String
+}
+
+private struct GaryxToolImagePreviewSelection: Identifiable {
+    let index: Int
+    var id: Int { index }
 }
 
 private struct GaryxToolImageThumbnail: View {
     let ref: GaryxToolCallImageRef
+    /// Reports the decoded image and data URL up to a hosting strip so its
+    /// gallery preview can seed every page that has already loaded.
+    var onLoaded: ((UIImage, String) -> Void)? = nil
+    /// When set, tapping delegates to the host's shared gallery instead of
+    /// this thumbnail's own single-image cover.
+    var onTap: (() -> Void)? = nil
 
     @EnvironmentObject private var model: GaryxMobileModel
     @State private var image: UIImage?
@@ -310,7 +370,11 @@ private struct GaryxToolImageThumbnail: View {
     var body: some View {
         Button {
             guard image != nil else { return }
-            showsPreview = true
+            if let onTap {
+                onTap()
+            } else {
+                showsPreview = true
+            }
         } label: {
             Group {
                 if let image {
@@ -370,7 +434,9 @@ private struct GaryxToolImageThumbnail: View {
         }
         image = loaded
         let mediaType = preview.mediaType.isEmpty ? "image/png" : preview.mediaType
-        dataUrl = "data:\(mediaType);base64,\(base64)"
+        let resolvedDataUrl = "data:\(mediaType);base64,\(base64)"
+        dataUrl = resolvedDataUrl
+        onLoaded?(loaded, resolvedDataUrl)
     }
 }
 
