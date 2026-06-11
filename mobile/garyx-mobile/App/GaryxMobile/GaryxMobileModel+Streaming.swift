@@ -5,41 +5,12 @@ import WidgetKit
 
 extension GaryxMobileModel {
     func updateRemoteBusyState(from event: GaryxChatStreamEvent) {
-        let threadId = Self.threadId(from: event)
-        guard !threadId.isEmpty else { return }
-        switch event {
-        case .accepted,
-             .userMessage,
-             .assistantDelta,
-             .assistantBoundary,
-             .userAck,
-             .toolUse,
-             .toolResult:
-            remoteBusyThreadIds.insert(threadId)
-        case .streamInput(let status, _, _, _):
-            if Self.isSuccessfulStreamInputStatus(status) {
-                remoteBusyThreadIds.insert(threadId)
-            } else {
-                remoteBusyThreadIds.remove(threadId)
-            }
-        case .done, .runComplete, .error, .interrupt:
-            remoteBusyThreadIds.remove(threadId)
-        default:
-            break
-        }
+        runTracker.apply(streamEvent: event)
     }
 
     func handle(_ event: GaryxChatStreamEvent, threadId: String, assistantMessageId: String, affectsActiveRun: Bool) {
         let eventThreadId = Self.threadId(from: event)
         updateRemoteBusyState(from: event)
-        switch event {
-        case .done, .runComplete, .interrupt:
-            recordTerminatedActiveRun(from: event)
-        case .error(_, _, let error) where !Self.isTransientGatewayErrorMessage(error):
-            recordTerminatedActiveRun(from: event)
-        default:
-            break
-        }
         if !Self.isAssistantDeltaEvent(event) {
             flushPendingAssistantDelta(for: threadId)
         }
@@ -90,37 +61,24 @@ extension GaryxMobileModel {
         case .threadTitleUpdated(_, let threadId, let title):
             applyThreadTitleUpdate(threadId: threadId, title: title)
         case .done where affectsActiveRun:
-            if !eventThreadId.isEmpty {
-                remoteBusyThreadIds.remove(eventThreadId)
-            }
             clearActiveRun(threadId: eventThreadId.isEmpty ? threadId : eventThreadId)
             markStreamingAssistantComplete(for: threadId, removeEmpty: true)
         case .runComplete where affectsActiveRun:
-            if !eventThreadId.isEmpty {
-                remoteBusyThreadIds.remove(eventThreadId)
-            }
             clearActiveRun(threadId: eventThreadId.isEmpty ? threadId : eventThreadId)
             markStreamingAssistantComplete(for: threadId, removeEmpty: true)
         case .error(_, _, let error) where affectsActiveRun:
             if Self.isTransientGatewayErrorMessage(error) {
-                if !eventThreadId.isEmpty {
-                    remoteBusyThreadIds.insert(eventThreadId)
-                }
+                // The tracker keeps the run busy through transient gateway
+                // noise; only the status banner and stream UI react here.
                 gatewaySettingsStatus = "Waiting to sync with gateway"
                 markStreamingAssistantComplete(for: threadId, removeEmpty: true)
             } else {
-                if !eventThreadId.isEmpty {
-                    remoteBusyThreadIds.remove(eventThreadId)
-                }
                 lastError = error
                 markLatestLocalUserFailed(for: threadId, message: error)
                 markStreamingAssistantComplete(for: threadId, removeEmpty: true)
+                clearActiveRun(threadId: eventThreadId.isEmpty ? threadId : eventThreadId)
             }
-            clearActiveRun(threadId: eventThreadId.isEmpty ? threadId : eventThreadId)
         case .interrupt where affectsActiveRun:
-            if !eventThreadId.isEmpty {
-                remoteBusyThreadIds.remove(eventThreadId)
-            }
             clearActiveRun(threadId: eventThreadId.isEmpty ? threadId : eventThreadId)
             markStreamingAssistantComplete(for: threadId, removeEmpty: true)
         case .snapshot(let threadId, let payload):
@@ -1136,6 +1094,7 @@ extension GaryxMobileModel {
         }
     }
 
+    /// Full reset of all tracked run state (gateway switch, debug snapshot).
     func clearActiveRunState() {
         for threadId in Array(pendingAssistantDeltasByThread.keys) {
             flushPendingAssistantDelta(for: threadId)
@@ -1143,19 +1102,18 @@ extension GaryxMobileModel {
         if let activeRunThreadId {
             activeAssistantMessageIdsByThread[activeRunThreadId] = nil
         }
-        activeRunThreadId = nil
-        isSending = false
+        runTracker = GaryxConversationRunTracker()
     }
 
     func clearActiveRunState(for threadId: String) {
         flushPendingAssistantDelta(for: threadId)
         activeAssistantMessageIdsByThread[threadId] = nil
-        if activeRunThreadId == threadId {
-            activeRunThreadId = nil
-        }
-        isSending = activeRunThreadId != nil
+        runTracker.clearLocalRun(threadId: threadId)
     }
 
+    /// Stream/transcript-side cleanup after a run terminated. The tracker has
+    /// already released the runtime via `apply(streamEvent:)` or
+    /// `interruptConfirmed`; this clears the model-side streaming state.
     func clearActiveRun(threadId: String?) {
         guard let resolvedThreadId = threadId else {
             clearActiveRunState()
@@ -1164,10 +1122,7 @@ extension GaryxMobileModel {
 
         flushPendingAssistantDelta(for: resolvedThreadId)
         activeAssistantMessageIdsByThread[resolvedThreadId] = nil
-        if activeRunThreadId == resolvedThreadId {
-            activeRunThreadId = nil
-        }
-        isSending = activeRunThreadId != nil
+        runTracker.clearLocalRun(threadId: resolvedThreadId)
         cancelSelectedThreadRecoveryIfNeeded(threadId: resolvedThreadId)
     }
 
@@ -1185,38 +1140,15 @@ extension GaryxMobileModel {
     }
 
     static func isTransientGatewayErrorMessage(_ message: String) -> Bool {
-        let normalized = message.lowercased()
-        return normalized.contains("timed out")
-            || normalized.contains("timeout")
-            || normalized.contains("network connection was lost")
-            || normalized.contains("not connected to the internet")
-            || normalized.contains("connection reset")
-            || normalized.contains("connection closed")
-            || normalized.contains("websocket")
-            || normalized.contains("socket")
-            || normalized.contains("gateway unavailable")
-            || normalized.contains("bad gateway")
-            || normalized.contains("http 502")
-            || normalized.contains("http 503")
-            || normalized.contains("http 504")
-            || normalized.contains("service unavailable")
+        GaryxGatewayStreamStatusClassifier.isTransientGatewayErrorMessage(message)
     }
 
     static func isSuccessfulStreamInputStatus(_ status: String) -> Bool {
-        let normalized = status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return normalized == "queued"
-            || normalized == "accepted"
-            || normalized == "ok"
-            || normalized == "success"
+        GaryxGatewayStreamStatusClassifier.isSuccessfulStreamInput(status)
     }
 
     static func shouldFallbackStreamInputStatus(_ status: String) -> Bool {
-        let normalized = status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return normalized == "no_active_session"
-            || normalized == "no active session"
-            || normalized == "inactive"
-            || normalized == "closed"
-            || normalized == "not_found"
+        GaryxGatewayStreamStatusClassifier.shouldFallbackStreamInput(status)
     }
 
     static func threadId(from event: GaryxChatStreamEvent) -> String {
@@ -1260,24 +1192,6 @@ extension GaryxMobileModel {
         }
     }
 
-    /// Remember a run the client directly observed terminate so a racing transcript
-    /// reload cannot resurrect it as an active run. See
-    /// `GaryxMobileThreadActivityModel.shouldTreatThreadRuntimeAsActive`.
-    func recordTerminatedActiveRun(from event: GaryxChatStreamEvent) {
-        let threadId = Self.threadId(from: event)
-        guard !threadId.isEmpty else { return }
-        if case .interrupt(_, _, let abortedRuns) = event {
-            if let aborted = abortedRuns
-                .map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) })
-                .last(where: { !$0.isEmpty }) {
-                terminatedActiveRunIdsByThread[threadId] = aborted
-            }
-            return
-        }
-        let runId = Self.runId(from: event).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !runId.isEmpty else { return }
-        terminatedActiveRunIdsByThread[threadId] = runId
-    }
 }
 
 private enum GaryxMobileToolTraceEventKind {

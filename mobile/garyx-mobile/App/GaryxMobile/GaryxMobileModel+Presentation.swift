@@ -70,17 +70,12 @@ extension GaryxMobileModel {
         guard let selectedThread else {
             return false
         }
-        return (isSending && activeRunThreadId == selectedThread.id)
-            || remoteBusyThreadIds.contains(selectedThread.id)
-            || threads.contains { thread in
-                thread.id == selectedThread.id
-                    && !(thread.activeRunId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-            }
+        return isThreadBusy(selectedThread.id)
     }
 
     var isSelectedThreadRemoteBusy: Bool {
         guard let selectedThread else { return false }
-        return remoteBusyThreadIds.contains(selectedThread.id)
+        return runTracker.isThreadBusy(selectedThread.id)
     }
 
     var showsTailThinkingIndicator: Bool {
@@ -91,11 +86,13 @@ extension GaryxMobileModel {
     }
 
     func isThreadBusy(_ threadId: String) -> Bool {
-        activeRunThreadId == threadId
-            || remoteBusyThreadIds.contains(threadId)
+        runTracker.isThreadBusy(threadId)
             || threads.contains { thread in
                 thread.id == threadId
-                    && !(thread.activeRunId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+                    && runTracker.isSummaryRunConsideredActive(
+                        threadId: threadId,
+                        activeRunId: thread.activeRunId
+                    )
             }
     }
 
