@@ -123,6 +123,7 @@ function ThreadStage({ step }: { step: StoryStep }) {
       onSelectNewThreadWorkflow={noop}
       onSelectNewThreadWorkspaceMode={noop}
       onResumeProviderSession={async () => {}}
+      onRetryFailedMessage={noop}
       onSelectBotBinding={noop}
       onSelectThreadLogsTab={noop}
       onOpenThreadById={noop}

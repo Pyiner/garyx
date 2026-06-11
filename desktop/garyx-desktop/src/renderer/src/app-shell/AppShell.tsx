@@ -9137,6 +9137,53 @@ export function AppShell() {
     }
   }
 
+  async function handleRetryFailedMessage(message: UiTranscriptMessage) {
+    const intentId = message.intentId;
+    if (!intentId) {
+      return;
+    }
+    const intent = intentForId(intentId);
+    if (!intent || (intent.state !== "failed" && intent.state !== "interrupted")) {
+      return;
+    }
+    const threadId = intent.threadId;
+    const runtime = selectThreadRuntime(messageStateRef.current, threadId);
+    if (runtime && isRuntimeBusy(runtime.state)) {
+      return;
+    }
+
+    // Clear the failed marks: the user bubble returns to its optimistic
+    // look and the assistant error bubble for this intent disappears.
+    updateMessagesByThread((current) => {
+      const existing = current[threadId] || [];
+      const next = existing
+        .filter(
+          (entry) =>
+            !(entry.role === "assistant" && entry.error && entry.intentId === intentId),
+        )
+        .map((entry) =>
+          entry.intentId === intentId && entry.error
+            ? {
+                ...entry,
+                error: false,
+                localState: "optimistic" as TranscriptEntryState,
+              }
+            : entry,
+        );
+      return { ...current, [threadId]: next };
+    });
+
+    dispatchMessageState({
+      type: "intent/request-dispatch",
+      threadId,
+      intentId,
+      mode: "sync_send",
+      source: "retry",
+      removeFromQueue: false,
+    });
+    await sendIntentOnce(threadId, intentId, { seedUserBubble: false });
+  }
+
   async function handleSteerQueuedPrompt(intent: MessageIntent) {
     const latestIntent = intentForId(intent.intentId);
     if (!latestIntent || latestIntent.state !== "queued_local") {
@@ -9809,6 +9856,9 @@ export function AppShell() {
       onSelectNewThreadWorkflow={() => {}}
       onSelectNewThreadWorkspaceMode={() => {}}
       onResumeProviderSession={handleResumeProviderSession}
+      onRetryFailedMessage={(message) => {
+        void handleRetryFailedMessage(message);
+      }}
       onSelectBotBinding={(botId) => {
         if (sideChatThreadId) {
           void syncThreadBotBinding(sideChatThreadId, botId);
@@ -10823,6 +10873,9 @@ export function AppShell() {
                 }}
                 onSelectNewThreadWorkspaceMode={setPendingWorkspaceMode}
                 onResumeProviderSession={handleResumeProviderSession}
+      onRetryFailedMessage={(message) => {
+        void handleRetryFailedMessage(message);
+      }}
                 onSelectBotBinding={(botId) => {
                   if (selectedThreadId) {
                     const threadId = selectedThreadId;
