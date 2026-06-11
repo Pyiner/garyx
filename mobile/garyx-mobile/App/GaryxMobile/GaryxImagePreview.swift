@@ -8,6 +8,10 @@ struct GaryxImagePreviewSource: Equatable {
     var dataUrl: String?
     var remoteUrl: String?
     var filePath: String?
+    /// Already-decoded image from the tapped thumbnail. Seeds the preview's
+    /// first frame so opening never flashes an empty screen while the
+    /// full-resolution decode runs; the decode replaces it seamlessly.
+    var initialImage: UIImage?
 
     var displayTitle: String {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -30,6 +34,12 @@ struct GaryxFullscreenImagePreview: View {
     @State private var image: UIImage?
     @State private var isLoading = false
     @State private var loadFailed = false
+
+    init(source: GaryxImagePreviewSource, onDismiss: @escaping () -> Void) {
+        self.source = source
+        self.onDismiss = onDismiss
+        _image = State(initialValue: source.initialImage)
+    }
 
     var body: some View {
         ZStack {
@@ -94,9 +104,10 @@ struct GaryxFullscreenImagePreview: View {
 
     @MainActor
     private func loadImage() async {
-        image = nil
+        // Keep the seeded thumbnail on screen while the full-resolution
+        // decode runs; the result replaces it without an empty frame.
         loadFailed = false
-        isLoading = true
+        isLoading = image == nil
         defer { isLoading = false }
 
         let source = source

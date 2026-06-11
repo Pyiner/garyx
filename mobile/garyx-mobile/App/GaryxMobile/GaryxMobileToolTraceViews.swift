@@ -350,7 +350,8 @@ private struct GaryxToolImageThumbnail: View {
                     title: ref.fileName,
                     dataUrl: dataUrl,
                     remoteUrl: nil,
-                    filePath: nil
+                    filePath: nil,
+                    initialImage: image
                 )
             ) {
                 showsPreview = false

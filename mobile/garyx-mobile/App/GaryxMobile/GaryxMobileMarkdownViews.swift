@@ -544,7 +544,8 @@ private struct GaryxMarkdownImageView: View {
                     title: alt.isEmpty ? "Image" : alt,
                     dataUrl: sourceDataUrl ?? gatewayPreviewDataUrl,
                     remoteUrl: resolvedURL?.absoluteString,
-                    filePath: gatewayPreviewDataUrl == nil ? localFilePath : nil
+                    filePath: gatewayPreviewDataUrl == nil ? localFilePath : nil,
+                    initialImage: localImage
                 )
             ) {
                 showsPreview = false

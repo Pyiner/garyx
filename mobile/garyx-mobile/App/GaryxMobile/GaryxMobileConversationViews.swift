@@ -1468,7 +1468,8 @@ struct GaryxMessageImageAttachmentView: View {
                     title: attachment.name.isEmpty ? "Image" : attachment.name,
                     dataUrl: attachment.dataUrl ?? gatewayPreviewDataUrl,
                     remoteUrl: attachment.remoteUrl,
-                    filePath: gatewayPreviewDataUrl == nil ? Self.localFilePath(from: attachment.path) : nil
+                    filePath: gatewayPreviewDataUrl == nil ? Self.localFilePath(from: attachment.path) : nil,
+                    initialImage: decodedImage
                 )
             ) {
                 showsPreview = false
