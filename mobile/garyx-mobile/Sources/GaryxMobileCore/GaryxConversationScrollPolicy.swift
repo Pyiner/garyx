@@ -125,6 +125,11 @@ public struct GaryxConversationScrollState: Equatable {
     /// Whether the reader's finger or fling currently drives the scroll
     /// view. Programmatic tail scrolls must never fight an active gesture.
     public private(set) var isUserScrollInteracting = false
+    /// Whether the reader has scrolled at all since the thread opened.
+    /// Until they do, drifting away from the bottom can only be late layout
+    /// settling (markdown measuring, async thumbnails), so the tail re-pins
+    /// instead of stranding the viewport mid-history.
+    public private(set) var hasUserScrolledSinceOpen = false
     /// Tracks the visible-tail-gap level so repairs fire on its rising edge
     /// only. A persistent gap (such as lazy-layout estimation drift around a
     /// collapsed tail row) must not regenerate a repair on every frame, or
@@ -204,6 +209,12 @@ public struct GaryxConversationScrollState: Equatable {
         guard metrics.viewportHeight > 0 else { return nil }
         if metrics.isNearBottom {
             anchoring = .followingTail
+        } else if isFollowingTail, !hasUserScrolledSinceOpen, !isUserScrollInteracting {
+            // The tail drifted away before the reader ever scrolled: late
+            // layout settling pushed the content down (heavy markdown,
+            // async thumbnails). Stay anchored and pull the tail back —
+            // the reader's first real gesture disables this for good.
+            return TailScrollRequest(reason: .repair, animated: false)
         } else {
             anchoring = .browsingHistory
             hasMovedTowardOlderHistory = true
@@ -228,6 +239,9 @@ public struct GaryxConversationScrollState: Equatable {
     public mutating func userScrollInteractionChanged(isInteracting: Bool) -> TailScrollRequest? {
         guard isUserScrollInteracting != isInteracting else { return nil }
         isUserScrollInteracting = isInteracting
+        if isInteracting {
+            hasUserScrolledSinceOpen = true
+        }
         guard !isInteracting,
               isFollowingTail,
               hasTailContent,
@@ -274,6 +288,12 @@ public struct GaryxConversationScrollState: Equatable {
         case .tailUpdate:
             return isFollowingTail
         case .repair:
+            // Until the reader's first gesture, repairs chase late layout
+            // settling across their whole retry window — single attempts
+            // cannot catch up with a heavy transcript that keeps reflowing.
+            if isFollowingTail, !hasUserScrolledSinceOpen {
+                return true
+            }
             return isFollowingTail && (metrics.isNearBottom || metrics.hasVisibleTailGap)
         }
     }

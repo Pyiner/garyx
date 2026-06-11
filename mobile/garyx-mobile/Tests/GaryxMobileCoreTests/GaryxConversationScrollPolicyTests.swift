@@ -74,6 +74,13 @@ final class GaryxConversationLayoutMetricsTests: XCTestCase {
 }
 
 final class GaryxConversationScrollStateTests: XCTestCase {
+    /// The position-based browsing flip only happens after a real reader
+    /// gesture; tests that browse history must first simulate one.
+    private func simulateUserScroll(_ state: inout GaryxConversationScrollState) {
+        _ = state.userScrollInteractionChanged(isInteracting: true)
+        _ = state.userScrollInteractionChanged(isInteracting: false)
+    }
+
     private func browsingMetrics() -> GaryxConversationLayoutMetrics {
         GaryxConversationLayoutMetrics(
             contentTopOffset: -2_000,
@@ -145,6 +152,7 @@ final class GaryxConversationScrollStateTests: XCTestCase {
 
     func testTailGrowthWhileBrowsingShowsButtonInsteadOfScrolling() {
         var state = GaryxConversationScrollState()
+        simulateUserScroll(&state)
         _ = state.metricsChanged(browsingMetrics(), hasTailContent: true)
 
         let request = state.contentChanged(
@@ -182,6 +190,7 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         var state = GaryxConversationScrollState()
         _ = state.contentChanged(isInitialLoad: true, isHistoryPrepend: false, hasTailContent: true)
 
+        simulateUserScroll(&state)
         _ = state.metricsChanged(browsingMetrics(), hasTailContent: true)
         XCTAssertEqual(state.anchoring, .browsingHistory)
         XCTAssertTrue(state.hasMovedTowardOlderHistory)
@@ -215,6 +224,7 @@ final class GaryxConversationScrollStateTests: XCTestCase {
             .init(reason: .tailUpdate, animated: false)
         )
 
+        simulateUserScroll(&state)
         _ = state.metricsChanged(browsingMetrics(), hasTailContent: true)
         XCTAssertNil(state.thinkingIndicatorShown())
         XCTAssertTrue(state.showsScrollToBottomButton)
@@ -225,6 +235,7 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         _ = state.contentChanged(isInitialLoad: true, isHistoryPrepend: false, hasTailContent: true)
         XCTAssertEqual(state.composerFocused(), .init(reason: .manual, animated: true))
 
+        simulateUserScroll(&state)
         _ = state.metricsChanged(browsingMetrics(), hasTailContent: true)
         XCTAssertNil(state.composerFocused())
     }
@@ -239,6 +250,7 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         _ = state.contentChanged(isInitialLoad: true, isHistoryPrepend: false, hasTailContent: true)
         XCTAssertEqual(state.bottomChromeChanged(), .init(reason: .repair, animated: false))
 
+        simulateUserScroll(&state)
         _ = state.metricsChanged(browsingMetrics(), hasTailContent: true)
         XCTAssertNil(state.bottomChromeChanged())
     }
@@ -246,6 +258,7 @@ final class GaryxConversationScrollStateTests: XCTestCase {
     func testScrollToBottomTapResumesFollowing() {
         var state = GaryxConversationScrollState()
         _ = state.contentChanged(isInitialLoad: true, isHistoryPrepend: false, hasTailContent: true)
+        simulateUserScroll(&state)
         _ = state.metricsChanged(browsingMetrics(), hasTailContent: true)
         XCTAssertTrue(state.showsScrollToBottomButton)
 
@@ -262,6 +275,13 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         XCTAssertTrue(state.shouldRunTailScrollAttempt(index: 0, reason: .repair))
         XCTAssertTrue(state.shouldRunTailScrollAttempt(index: 1, reason: .repair))
 
+        // Before the first gesture, repair retries keep chasing late layout
+        // settling even while the measured position is far from the bottom.
+        _ = state.metricsChanged(browsingMetrics(), hasTailContent: true)
+        XCTAssertTrue(state.shouldRunTailScrollAttempt(index: 1, reason: .repair))
+
+        // Once the reader scrolls away themselves, retries stop.
+        simulateUserScroll(&state)
         _ = state.metricsChanged(browsingMetrics(), hasTailContent: true)
         XCTAssertTrue(state.shouldRunTailScrollAttempt(index: 0, reason: .repair))
         XCTAssertFalse(state.shouldRunTailScrollAttempt(index: 1, reason: .repair))
@@ -274,6 +294,7 @@ final class GaryxConversationScrollStateTests: XCTestCase {
 
         XCTAssertTrue(state.shouldRunTailScrollAttempt(index: 1, reason: .tailUpdate))
 
+        simulateUserScroll(&state)
         _ = state.metricsChanged(browsingMetrics(), hasTailContent: true)
         XCTAssertTrue(state.shouldRunTailScrollAttempt(index: 0, reason: .tailUpdate))
         XCTAssertFalse(state.shouldRunTailScrollAttempt(index: 1, reason: .tailUpdate))
@@ -338,6 +359,36 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         XCTAssertTrue(state.showsScrollToBottomButton)
     }
 
+    func testLayoutDriftBeforeFirstScrollRepinsTail() {
+        var state = GaryxConversationScrollState()
+        _ = state.contentChanged(isInitialLoad: true, isHistoryPrepend: false, hasTailContent: true)
+
+        // Late layout settling (heavy markdown, async thumbnails) pushed the
+        // tail away before the reader ever touched the scroll view: stay
+        // following and pull the tail back.
+        let request = state.metricsChanged(browsingMetrics(), hasTailContent: true)
+        XCTAssertEqual(request, .init(reason: .repair, animated: false))
+        XCTAssertTrue(state.isFollowingTail)
+        XCTAssertFalse(state.showsScrollToBottomButton)
+        XCTAssertFalse(state.hasMovedTowardOlderHistory)
+    }
+
+    func testFirstGestureDisablesDriftRepin() {
+        var state = GaryxConversationScrollState()
+        _ = state.contentChanged(isInitialLoad: true, isHistoryPrepend: false, hasTailContent: true)
+
+        // While the reader drags away, the viewport is theirs.
+        _ = state.userScrollInteractionChanged(isInteracting: true)
+        XCTAssertNil(state.metricsChanged(browsingMetrics(), hasTailContent: true))
+        XCTAssertEqual(state.anchoring, .browsingHistory)
+
+        // And after the gesture, drifting positions never re-pin again.
+        _ = state.userScrollInteractionChanged(isInteracting: false)
+        XCTAssertNil(state.metricsChanged(browsingMetrics(), hasTailContent: true))
+        XCTAssertEqual(state.anchoring, .browsingHistory)
+        XCTAssertTrue(state.showsScrollToBottomButton)
+    }
+
     func testHistoryPrefetchRequiresMovementAndProximity() {
         var state = GaryxConversationScrollState()
         XCTAssertFalse(
@@ -349,6 +400,7 @@ final class GaryxConversationScrollStateTests: XCTestCase {
             )
         )
 
+        simulateUserScroll(&state)
         _ = state.metricsChanged(browsingMetrics(), hasTailContent: true)
         XCTAssertTrue(
             state.shouldPrefetchOlderHistory(
