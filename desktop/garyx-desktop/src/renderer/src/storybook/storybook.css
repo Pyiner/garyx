@@ -1,0 +1,240 @@
+.storybook-shell {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  height: 100vh;
+  overflow: hidden;
+  background: #fafaf9;
+  color: var(--color-token-text-primary, #1a1c1f);
+}
+
+.storybook-sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid #eeeeee;
+  background: #f4f4f2;
+}
+
+.storybook-header {
+  padding: 20px 18px 14px;
+  border-bottom: 1px solid #eeeeee;
+}
+
+.storybook-header h1 {
+  margin: 6px 0 8px;
+  font-size: 17px;
+}
+
+.storybook-header p {
+  margin: 0;
+  color: #6f7277;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.storybook-story-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  overflow-y: auto;
+}
+
+.storybook-story {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.storybook-story:hover {
+  background: #ecece9;
+}
+
+.storybook-story.is-active {
+  border-color: #e2e2df;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+}
+
+.storybook-story strong {
+  font-size: 13px;
+}
+
+.storybook-story span {
+  color: #6f7277;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.storybook-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.storybook-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 18px;
+  border-bottom: 1px solid #eeeeee;
+  background: #ffffff;
+}
+
+.storybook-transport {
+  display: flex;
+  gap: 6px;
+}
+
+.storybook-transport button {
+  padding: 6px 12px;
+  border: 1px solid #e2e2df;
+  border-radius: 8px;
+  background: #ffffff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.storybook-transport button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.storybook-transport .storybook-play {
+  border-color: #2e7d32;
+  background: #2e7d32;
+  color: #ffffff;
+}
+
+.storybook-timeline {
+  display: flex;
+  flex-basis: 100%;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.storybook-timeline-step {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 4px;
+  align-items: stretch;
+  min-width: 72px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.storybook-timeline-step:hover {
+  background: #f4f4f2;
+}
+
+.storybook-timeline-dot {
+  width: 100%;
+  height: 4px;
+  border-radius: 999px;
+  background: #e2e2df;
+}
+
+.storybook-timeline-step.is-passed .storybook-timeline-dot {
+  background: #a5d6a7;
+}
+
+.storybook-timeline-step.is-active .storybook-timeline-dot {
+  background: #2e7d32;
+}
+
+.storybook-timeline-label {
+  overflow: hidden;
+  color: #6f7277;
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.storybook-timeline-step.is-active .storybook-timeline-label {
+  color: #1a1c1f;
+  font-weight: 600;
+}
+
+.storybook-step-meta {
+  padding: 12px 18px 10px;
+  border-bottom: 1px solid #eeeeee;
+  background: #ffffff;
+}
+
+.storybook-step-meta h2 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.storybook-step-meta p {
+  margin: 0 0 8px;
+  color: #6f7277;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.storybook-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.storybook-badge {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding: 3px 8px;
+  border: 1px solid #e2e2df;
+  border-radius: 999px;
+  font-family: "SFMono-Regular", Menlo, monospace;
+  font-size: 10.5px;
+}
+
+.storybook-badge-label {
+  color: #6f7277;
+}
+
+.storybook-badge.is-state .storybook-badge-value {
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+.storybook-badge.is-derived-on {
+  border-color: #a5d6a7;
+  background: #f1f8e9;
+}
+
+.storybook-badge.is-derived-on .storybook-badge-value {
+  color: #2e7d32;
+  font-weight: 600;
+}
+
+.storybook-badge.is-derived-off .storybook-badge-value {
+  color: #9b9ea3;
+}
+
+.storybook-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: #fafaf9;
+}
+
+.storybook-stage .thread-layout {
+  height: 100%;
+}

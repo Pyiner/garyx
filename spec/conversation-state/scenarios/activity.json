@@ -1,0 +1,224 @@
+{
+  "cases": [
+    {
+      "name": "no signals means fully idle",
+      "input": {
+        "messages": [{ "role": "user" }, { "role": "assistant" }],
+        "liveStreamStatus": null,
+        "activeRunId": null,
+        "runtimeBusy": false,
+        "pendingAckIntentCount": 0,
+        "remoteAwaitingAckInputCount": 0,
+        "pendingHistoryIntent": false
+      },
+      "expect": {
+        "runActive": false,
+        "showRunLoading": false,
+        "showPendingAckLoading": false,
+        "canSteerQueuedPrompt": false
+      }
+    },
+    {
+      "name": "connecting stream counts as an active run",
+      "input": {
+        "messages": [{ "role": "user" }],
+        "liveStreamStatus": "connecting",
+        "activeRunId": null,
+        "runtimeBusy": false,
+        "pendingAckIntentCount": 0,
+        "remoteAwaitingAckInputCount": 0,
+        "pendingHistoryIntent": false
+      },
+      "expect": {
+        "runActive": true,
+        "showRunLoading": true,
+        "showPendingAckLoading": false,
+        "canSteerQueuedPrompt": true
+      }
+    },
+    {
+      "name": "reconciling stream still counts as active",
+      "input": {
+        "messages": [{ "role": "user" }, { "role": "assistant" }],
+        "liveStreamStatus": "reconciling",
+        "activeRunId": null,
+        "runtimeBusy": false,
+        "pendingAckIntentCount": 0,
+        "remoteAwaitingAckInputCount": 0,
+        "pendingHistoryIntent": false
+      },
+      "expect": {
+        "runActive": true,
+        "showRunLoading": true,
+        "showPendingAckLoading": false,
+        "canSteerQueuedPrompt": true
+      }
+    },
+    {
+      "name": "disconnected stream alone is not an active run",
+      "input": {
+        "messages": [{ "role": "user" }],
+        "liveStreamStatus": "disconnected",
+        "activeRunId": null,
+        "runtimeBusy": false,
+        "pendingAckIntentCount": 0,
+        "remoteAwaitingAckInputCount": 0,
+        "pendingHistoryIntent": false
+      },
+      "expect": {
+        "runActive": false,
+        "showRunLoading": false,
+        "showPendingAckLoading": false,
+        "canSteerQueuedPrompt": false
+      }
+    },
+    {
+      "name": "busy runtime counts as an active run",
+      "input": {
+        "messages": [{ "role": "user" }],
+        "liveStreamStatus": null,
+        "activeRunId": null,
+        "runtimeBusy": true,
+        "pendingAckIntentCount": 0,
+        "remoteAwaitingAckInputCount": 0,
+        "pendingHistoryIntent": false
+      },
+      "expect": {
+        "runActive": true,
+        "showRunLoading": true,
+        "showPendingAckLoading": false,
+        "canSteerQueuedPrompt": true
+      }
+    },
+    {
+      "name": "server-tracked active run counts without any local signals",
+      "input": {
+        "messages": [{ "role": "user" }],
+        "liveStreamStatus": null,
+        "activeRunId": "run-1",
+        "runtimeBusy": false,
+        "pendingAckIntentCount": 0,
+        "remoteAwaitingAckInputCount": 0,
+        "pendingHistoryIntent": false
+      },
+      "expect": {
+        "runActive": true,
+        "showRunLoading": true,
+        "showPendingAckLoading": false,
+        "canSteerQueuedPrompt": true
+      }
+    },
+    {
+      "name": "streaming assistant text suppresses the run loading indicator",
+      "input": {
+        "messages": [{ "role": "user" }, { "role": "assistant", "pending": true }],
+        "liveStreamStatus": "streaming",
+        "activeRunId": "run-1",
+        "runtimeBusy": true,
+        "pendingAckIntentCount": 0,
+        "remoteAwaitingAckInputCount": 0,
+        "pendingHistoryIntent": false
+      },
+      "expect": {
+        "runActive": true,
+        "showRunLoading": false,
+        "showPendingAckLoading": false,
+        "canSteerQueuedPrompt": true
+      }
+    },
+    {
+      "name": "pending ack intents win over the run loading indicator",
+      "input": {
+        "messages": [{ "role": "user" }],
+        "liveStreamStatus": "streaming",
+        "activeRunId": "run-1",
+        "runtimeBusy": true,
+        "pendingAckIntentCount": 1,
+        "remoteAwaitingAckInputCount": 0,
+        "pendingHistoryIntent": false
+      },
+      "expect": {
+        "runActive": true,
+        "showRunLoading": false,
+        "showPendingAckLoading": true,
+        "canSteerQueuedPrompt": true
+      }
+    },
+    {
+      "name": "remote awaiting-ack inputs show pending ack loading even when idle",
+      "input": {
+        "messages": [{ "role": "user" }],
+        "liveStreamStatus": null,
+        "activeRunId": null,
+        "runtimeBusy": false,
+        "pendingAckIntentCount": 0,
+        "remoteAwaitingAckInputCount": 2,
+        "pendingHistoryIntent": false
+      },
+      "expect": {
+        "runActive": false,
+        "showRunLoading": false,
+        "showPendingAckLoading": true,
+        "canSteerQueuedPrompt": true
+      }
+    },
+    {
+      "name": "history-pending intent shows ack loading while the user awaits a reply",
+      "input": {
+        "messages": [{ "role": "assistant" }, { "role": "user" }],
+        "liveStreamStatus": null,
+        "activeRunId": null,
+        "runtimeBusy": false,
+        "pendingAckIntentCount": 0,
+        "remoteAwaitingAckInputCount": 0,
+        "pendingHistoryIntent": true
+      },
+      "expect": {
+        "runActive": false,
+        "showRunLoading": false,
+        "showPendingAckLoading": true,
+        "canSteerQueuedPrompt": true
+      }
+    },
+    {
+      "name": "history-pending intent stays quiet once assistant progress lands",
+      "input": {
+        "messages": [{ "role": "user" }, { "role": "tool_use" }],
+        "liveStreamStatus": null,
+        "activeRunId": null,
+        "runtimeBusy": false,
+        "pendingAckIntentCount": 0,
+        "remoteAwaitingAckInputCount": 0,
+        "pendingHistoryIntent": true
+      },
+      "expect": {
+        "runActive": false,
+        "showRunLoading": false,
+        "showPendingAckLoading": false,
+        "canSteerQueuedPrompt": false
+      }
+    },
+    {
+      "name": "loop continuation user turns do not count as awaiting a reply",
+      "input": {
+        "messages": [
+          { "role": "user" },
+          { "role": "assistant" },
+          { "role": "user", "internal": true, "internalKind": "loop_continuation" }
+        ],
+        "liveStreamStatus": null,
+        "activeRunId": null,
+        "runtimeBusy": false,
+        "pendingAckIntentCount": 0,
+        "remoteAwaitingAckInputCount": 0,
+        "pendingHistoryIntent": true
+      },
+      "expect": {
+        "runActive": false,
+        "showRunLoading": false,
+        "showPendingAckLoading": false,
+        "canSteerQueuedPrompt": false
+      }
+    }
+  ]
+}

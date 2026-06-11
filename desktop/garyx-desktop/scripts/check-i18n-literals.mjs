@@ -23,11 +23,16 @@ const checkedExtensions = new Set([
   '.ts',
   '.tsx',
 ]);
-const allowedPrefix = path.join(projectDir, 'src/renderer/src/i18n') + path.sep;
+const allowedPrefixes = [
+  path.join(projectDir, 'src/renderer/src/i18n') + path.sep,
+  // The conversation-state storybook is a dev-only harness, not product UI;
+  // its scenario copy is intentionally untranslated.
+  path.join(projectDir, 'src/renderer/src/storybook') + path.sep,
+];
 const hanPattern = /\p{Script=Han}/u;
 
 function isAllowed(filePath) {
-  return filePath.startsWith(allowedPrefix);
+  return allowedPrefixes.some((prefix) => filePath.startsWith(prefix));
 }
 
 function findHanLines(filePath) {

@@ -131,7 +131,8 @@ extension GaryxMobileModel {
             attachments: Self.messageAttachments(from: attachments),
             timestamp: nil,
             isStreaming: false,
-            clientIntentId: clientIntentId
+            clientIntentId: clientIntentId,
+            localState: .optimistic
         )
         let assistantId = "local-assistant-\(UUID().uuidString)"
         var optimisticThreadId = selectedThread?.id
@@ -145,9 +146,11 @@ extension GaryxMobileModel {
             // The run is active the instant the user sends: the tail
             // thinking indicator must appear immediately, not after the
             // gateway round-trips below. Failure paths clear this state.
-            isSending = true
-            activeRunThreadId = optimisticThreadId
-            pendingChatStartThreadIds.insert(optimisticThreadId)
+            runTracker.beginLocalDispatch(
+                threadId: optimisticThreadId,
+                intentId: clientIntentId,
+                text: visibleUserText
+            )
         } else {
             messages = draftOptimisticMessages
         }
@@ -160,17 +163,20 @@ extension GaryxMobileModel {
                 setMessages(draftOptimisticMessages, for: thread.id)
                 activeAssistantMessageIdsByThread[thread.id] = assistantId
             }
-            guard !remoteBusyThreadIds.contains(thread.id) else {
+            guard runTracker.beginLocalDispatch(
+                threadId: thread.id,
+                intentId: clientIntentId,
+                text: visibleUserText
+            ) else {
                 markLatestLocalUserFailed(for: thread.id, message: "Thread is busy")
                 markStreamingAssistantComplete(for: thread.id, removeEmpty: true)
-                pendingChatStartThreadIds.remove(thread.id)
-                clearActiveRunState(for: thread.id)
+                runTracker.failLocalDispatch(
+                    threadId: thread.id,
+                    intentId: clientIntentId,
+                    error: "Thread is busy"
+                )
                 return
             }
-            isSending = true
-            activeRunThreadId = thread.id
-            pendingChatStartThreadIds.insert(thread.id)
-            remoteBusyThreadIds.remove(thread.id)
             lastError = nil
             activeAssistantMessageIdsByThread[thread.id] = assistantId
             let workspacePath = Self.firstNonEmpty(
@@ -196,8 +202,13 @@ extension GaryxMobileModel {
                 }
             }
             if let optimisticThreadId {
-                pendingChatStartThreadIds.remove(optimisticThreadId)
-                clearActiveRunState(for: optimisticThreadId)
+                flushPendingAssistantDelta(for: optimisticThreadId)
+                activeAssistantMessageIdsByThread[optimisticThreadId] = nil
+                runTracker.failLocalDispatch(
+                    threadId: optimisticThreadId,
+                    intentId: clientIntentId,
+                    error: displayMessage(for: error)
+                )
             }
             lastError = displayMessage(for: error)
         }
@@ -217,7 +228,8 @@ extension GaryxMobileModel {
             attachments: Self.messageAttachments(from: attachments),
             timestamp: nil,
             isStreaming: false,
-            clientIntentId: clientIntentId
+            clientIntentId: clientIntentId,
+            localState: .optimistic
         )
         mutateMessages(for: thread.id) { messages in
             messages.append(userMessage)
@@ -229,6 +241,7 @@ extension GaryxMobileModel {
             clientIntentId: clientIntentId
         )
         pendingQueuedInputsByIntentId[clientIntentId] = queued
+        runTracker.beginQueuedSteer(threadId: thread.id, intentId: clientIntentId, text: visibleUserText)
         await submitQueuedInputViaGateway(queued)
     }
 
@@ -249,7 +262,11 @@ extension GaryxMobileModel {
                     clientIntentId: result.clientIntentId ?? queued.clientIntentId,
                     pendingInputId: result.pendingInputId
                 )
-                remoteBusyThreadIds.insert(queued.threadId)
+                runTracker.confirmQueuedSteerAccepted(
+                    threadId: queued.threadId,
+                    intentId: queued.clientIntentId,
+                    pendingInputId: result.pendingInputId
+                )
             } else if Self.shouldFallbackStreamInputStatus(result.status) {
                 if let claimed = pendingQueuedInputsByIntentId.removeValue(forKey: queued.clientIntentId) {
                     await dispatchQueuedInputFallback(claimed)
@@ -257,6 +274,11 @@ extension GaryxMobileModel {
             } else {
                 pendingQueuedInputsByIntentId.removeValue(forKey: queued.clientIntentId)
                 let failureMessage = result.status.isEmpty ? "Input was not queued" : result.status
+                runTracker.failQueuedSteer(
+                    threadId: queued.threadId,
+                    intentId: queued.clientIntentId,
+                    error: failureMessage
+                )
                 let markedInput = markLocalInputFailed(
                     threadId: queued.threadId,
                     clientIntentId: result.clientIntentId ?? queued.clientIntentId,
@@ -270,6 +292,11 @@ extension GaryxMobileModel {
         } catch {
             if pendingQueuedInputsByIntentId.removeValue(forKey: queued.clientIntentId) != nil {
                 let message = displayMessage(for: error)
+                runTracker.failQueuedSteer(
+                    threadId: queued.threadId,
+                    intentId: queued.clientIntentId,
+                    error: message
+                )
                 markLocalInputFailed(
                     threadId: queued.threadId,
                     clientIntentId: queued.clientIntentId,
@@ -292,7 +319,7 @@ extension GaryxMobileModel {
             )
             return
         }
-        remoteBusyThreadIds.remove(queued.threadId)
+        runTracker.releaseQueuedSteer(threadId: queued.threadId, intentId: queued.clientIntentId)
         clearLocalInputStatus(threadId: queued.threadId, clientIntentId: queued.clientIntentId)
 
         let assistantId = "stream-assistant-\(queued.threadId)-\(UUID().uuidString)"
@@ -302,7 +329,8 @@ extension GaryxMobileModel {
                 role: .assistant,
                 text: "",
                 timestamp: nil,
-                isStreaming: true
+                isStreaming: true,
+                localState: .remotePartial
             )
             if let userIndex = messages.indices.last(where: { index in
                 messages[index].role == .user && messages[index].clientIntentId == queued.clientIntentId
@@ -315,8 +343,14 @@ extension GaryxMobileModel {
         }
 
         do {
-            isSending = true
-            activeRunThreadId = queued.threadId
+            // The fallback is a fresh chat dispatch; claiming the chat-start
+            // window here keeps a racing transcript reload from clearing the
+            // sending state mid-dispatch (the legacy flags missed this).
+            runTracker.beginLocalDispatch(
+                threadId: queued.threadId,
+                intentId: queued.clientIntentId,
+                text: queued.text
+            )
             activeAssistantMessageIdsByThread[queued.threadId] = assistantId
             let workspacePath = Self.firstNonEmpty(
                 thread.workspacePath,
@@ -338,7 +372,13 @@ extension GaryxMobileModel {
                 message: displayMessage(for: error)
             )
             markStreamingAssistantComplete(for: queued.threadId, removeEmpty: true)
-            clearActiveRunState(for: queued.threadId)
+            flushPendingAssistantDelta(for: queued.threadId)
+            activeAssistantMessageIdsByThread[queued.threadId] = nil
+            runTracker.failLocalDispatch(
+                threadId: queued.threadId,
+                intentId: queued.clientIntentId,
+                error: displayMessage(for: error)
+            )
             lastError = displayMessage(for: error)
         }
     }
@@ -372,10 +412,12 @@ extension GaryxMobileModel {
         let acceptedThreadId = result.threadId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? threadId
             : result.threadId
-        pendingChatStartThreadIds.remove(threadId)
-        pendingChatStartThreadIds.remove(acceptedThreadId)
-        activeRunThreadId = acceptedThreadId
-        remoteBusyThreadIds.insert(acceptedThreadId)
+        runTracker.confirmChatStartAccepted(
+            requestedThreadId: threadId,
+            acceptedThreadId: acceptedThreadId,
+            intentId: clientIntentId,
+            runId: result.runId
+        )
         activeAssistantMessageIdsByThread[acceptedThreadId] = assistantMessageId
     }
 
@@ -435,7 +477,7 @@ extension GaryxMobileModel {
         guard sentGatewayInterrupt else {
             return
         }
-        remoteBusyThreadIds.remove(threadId)
+        runTracker.interruptConfirmed(threadId: threadId)
         clearActiveRun(threadId: threadId)
         markStreamingAssistantComplete(for: threadId, removeEmpty: true)
         await refreshThreads()

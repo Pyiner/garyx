@@ -458,9 +458,6 @@ extension GaryxMobileModel {
         )
         gatewaySettingsStatus = nil
         connectionState = .ready(version: "debug")
-        isSending = false
-        activeRunThreadId = nil
-        remoteBusyThreadIds = []
         debugShowsWorkspaceModeSheet = false
         isLoadingThreads = false
         resetThreadListPagination()

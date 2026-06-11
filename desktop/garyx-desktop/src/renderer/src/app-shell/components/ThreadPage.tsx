@@ -9,6 +9,7 @@ import {
   type RefObject,
 } from "react";
 import { IconGitBranch } from "@tabler/icons-react";
+import { CircleAlert } from "lucide-react";
 
 import type {
   DesktopApiProviderType,
@@ -155,6 +156,8 @@ function renderUserMessageBubbleParts({
   content,
   pending,
   error,
+  retryLabel,
+  onRetry,
   onLocalFileLinkClick,
   markUserTurnStart = true,
 }: {
@@ -163,6 +166,8 @@ function renderUserMessageBubbleParts({
   content?: unknown;
   pending?: boolean;
   error?: boolean;
+  retryLabel?: string;
+  onRetry?: () => void;
   onLocalFileLinkClick: (path: string) => void;
   markUserTurnStart?: boolean;
 }): ReactNode {
@@ -172,7 +177,7 @@ function renderUserMessageBubbleParts({
     text,
   });
 
-  return parts.map((part, index) => {
+  const bubbles = parts.map((part, index) => {
     const userTurnMarker =
       markUserTurnStart && index === 0
         ? { "data-user-turn-start": "true" }
@@ -209,6 +214,21 @@ function renderUserMessageBubbleParts({
       </article>
     );
   });
+
+  if (!error) {
+    return bubbles;
+  }
+  return [
+    ...bubbles,
+    <div className="message-error-note" key={`${keyPrefix}:error-note`} role="status">
+      <CircleAlert aria-hidden size={12} strokeWidth={2} />
+      {onRetry && retryLabel ? (
+        <button className="message-error-note-retry" onClick={onRetry} type="button">
+          {retryLabel}
+        </button>
+      ) : null}
+    </div>,
+  ];
 }
 
 type QueueDropTarget = {
@@ -328,6 +348,7 @@ type ThreadPageProps = {
   onSelectNewThreadWorkflow: (workflowId: string) => void;
   onSelectNewThreadWorkspaceMode: (mode: DesktopWorkspaceMode) => void;
   onResumeProviderSession: (sessionId: string) => Promise<void>;
+  onRetryFailedMessage?: (message: UiTranscriptMessage) => void;
   onSelectThreadLogsTab: (tab: ThreadLogTab) => void;
   onSelectBotBinding: (botId: string | null) => void;
   onSelectWorkspace: (workspacePath: string) => void;
@@ -425,6 +446,7 @@ export function ThreadPage({
   onSelectNewThreadWorkflow,
   onSelectNewThreadWorkspaceMode,
   onResumeProviderSession,
+  onRetryFailedMessage,
   onSelectBotBinding,
   onSelectThreadLogsTab,
   onSelectWorkspace,
@@ -688,6 +710,12 @@ export function ThreadPage({
                   content: entry.message.content,
                   pending: entry.message.pending,
                   error: entry.message.error,
+                  retryLabel: t("Retry"),
+                  onRetry:
+                    onRetryFailedMessage &&
+                    (entry.message as UiTranscriptMessage).intentId
+                      ? () => onRetryFailedMessage(entry.message as UiTranscriptMessage)
+                      : undefined,
                   onLocalFileLinkClick: onLocalWorkspaceFileLinkClick,
                   markUserTurnStart: options.markUserTurnStart !== false,
                 });

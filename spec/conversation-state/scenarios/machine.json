@@ -1,0 +1,491 @@
+{
+  "scenarios": [
+    {
+      "name": "sync send happy path",
+      "steps": [
+        {
+          "action": {
+            "type": "intent/created",
+            "enqueue": true,
+            "intent": {
+              "intentId": "i1",
+              "threadId": "t1",
+              "text": "hello",
+              "state": "queued_local",
+              "source": "composer_queue"
+            }
+          }
+        },
+        {
+          "expect": {
+            "intents": { "i1": { "state": "queued_local", "threadId": "t1" } },
+            "queues": { "t1": ["i1"] }
+          }
+        },
+        {
+          "action": {
+            "type": "intent/request-dispatch",
+            "threadId": "t1",
+            "intentId": "i1",
+            "mode": "sync_send",
+            "source": "queue_send",
+            "removeFromQueue": true
+          }
+        },
+        {
+          "expect": {
+            "intents": {
+              "i1": { "state": "dispatch_requested", "source": "queue_send", "dispatchMode": "sync_send" }
+            },
+            "queues": { "t1": [] }
+          }
+        },
+        { "action": { "type": "intent/dispatch-started", "intentId": "i1" } },
+        {
+          "action": {
+            "type": "thread/runtime",
+            "threadId": "t1",
+            "runtimeState": "dispatching_sync",
+            "activeIntentId": "i1"
+          }
+        },
+        {
+          "expect": {
+            "intents": { "i1": { "state": "dispatching" } },
+            "runtimes": { "t1": { "state": "dispatching_sync", "busy": true, "activeIntentId": "i1" } }
+          }
+        },
+        {
+          "action": {
+            "type": "intent/remote-accepted",
+            "intentId": "i1",
+            "runId": "run-1",
+            "threadId": "t1",
+            "removeFromQueue": false
+          }
+        },
+        {
+          "action": {
+            "type": "thread/runtime",
+            "threadId": "t1",
+            "runtimeState": "running_remote",
+            "activeIntentId": "i1",
+            "remoteRunId": "run-1"
+          }
+        },
+        {
+          "expect": {
+            "intents": { "i1": { "state": "remote_accepted", "remoteRunId": "run-1" } },
+            "runtimes": { "t1": { "state": "running_remote", "busy": true, "remoteRunId": "run-1" } }
+          }
+        },
+        {
+          "action": { "type": "intent/awaiting-history", "intentId": "i1", "responseText": "final answer" }
+        },
+        {
+          "action": { "type": "thread/runtime", "threadId": "t1", "runtimeState": "reconciling_history" }
+        },
+        {
+          "expect": {
+            "intents": { "i1": { "state": "awaiting_history", "responseText": "final answer" } },
+            "runtimes": { "t1": { "state": "reconciling_history", "busy": true } }
+          }
+        },
+        { "action": { "type": "intent/completed", "intentId": "i1" } },
+        { "action": { "type": "thread/runtime", "threadId": "t1", "runtimeState": "idle" } },
+        {
+          "expect": {
+            "intents": { "i1": { "state": "completed", "error": null } },
+            "runtimes": { "t1": { "state": "idle", "busy": false } }
+          }
+        }
+      ]
+    },
+    {
+      "name": "async steer waits for provider ack and survives duplicate accepted events",
+      "steps": [
+        {
+          "action": {
+            "type": "intent/created",
+            "enqueue": true,
+            "intent": {
+              "intentId": "s1",
+              "threadId": "t1",
+              "text": "follow up",
+              "state": "queued_local",
+              "source": "composer_queue"
+            }
+          }
+        },
+        {
+          "action": {
+            "type": "intent/request-dispatch",
+            "threadId": "t1",
+            "intentId": "s1",
+            "mode": "async_steer",
+            "source": "queue_steer",
+            "removeFromQueue": false
+          }
+        },
+        { "action": { "type": "intent/dispatch-started", "intentId": "s1" } },
+        {
+          "action": {
+            "type": "intent/remote-accepted",
+            "intentId": "s1",
+            "runId": "run-9",
+            "threadId": "t1",
+            "pendingInputId": "p-1",
+            "removeFromQueue": true,
+            "awaitProviderAck": true
+          }
+        },
+        {
+          "expect": {
+            "intents": {
+              "s1": { "state": "awaiting_provider_ack", "pendingInputId": "p-1", "remoteRunId": "run-9" }
+            },
+            "queues": { "t1": [] }
+          }
+        },
+        {
+          "action": {
+            "type": "intent/remote-accepted",
+            "intentId": "s1",
+            "runId": "run-9",
+            "threadId": "t1",
+            "removeFromQueue": false
+          }
+        },
+        {
+          "expect": {
+            "intents": {
+              "s1": { "state": "awaiting_provider_ack", "pendingInputId": "p-1" }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "late accepted events do not regress awaiting_history or completed",
+      "steps": [
+        {
+          "action": {
+            "type": "intent/created",
+            "enqueue": false,
+            "intent": {
+              "intentId": "h1",
+              "threadId": "t1",
+              "text": "question",
+              "state": "dispatching",
+              "source": "composer_send"
+            }
+          }
+        },
+        { "action": { "type": "intent/awaiting-history", "intentId": "h1" } },
+        {
+          "action": {
+            "type": "intent/remote-accepted",
+            "intentId": "h1",
+            "runId": "run-2",
+            "threadId": "t1",
+            "removeFromQueue": false
+          }
+        },
+        {
+          "expect": {
+            "intents": { "h1": { "state": "awaiting_history", "remoteRunId": "run-2", "responseText": null } }
+          }
+        },
+        { "action": { "type": "intent/completed", "intentId": "h1" } },
+        {
+          "action": {
+            "type": "intent/remote-accepted",
+            "intentId": "h1",
+            "runId": "run-3",
+            "threadId": "t1",
+            "removeFromQueue": false
+          }
+        },
+        { "expect": { "intents": { "h1": { "state": "completed" } } } }
+      ]
+    },
+    {
+      "name": "requeue-front clears remote identity and prepends without duplicating",
+      "steps": [
+        {
+          "action": {
+            "type": "intent/created",
+            "enqueue": true,
+            "intent": {
+              "intentId": "other",
+              "threadId": "t1",
+              "text": "queued later",
+              "state": "queued_local",
+              "source": "composer_queue"
+            }
+          }
+        },
+        {
+          "action": {
+            "type": "intent/created",
+            "enqueue": false,
+            "intent": {
+              "intentId": "r1",
+              "threadId": "t1",
+              "text": "steered",
+              "state": "awaiting_provider_ack",
+              "source": "queue_steer",
+              "dispatchMode": "async_steer",
+              "remoteRunId": "run-4",
+              "pendingInputId": "p-9",
+              "responseText": "stale"
+            }
+          }
+        },
+        {
+          "action": { "type": "intent/requeue-front", "threadId": "t1", "intentId": "r1", "error": "stream ended" }
+        },
+        {
+          "expect": {
+            "intents": {
+              "r1": {
+                "state": "queued_local",
+                "source": "queue_send",
+                "dispatchMode": null,
+                "remoteRunId": null,
+                "pendingInputId": null,
+                "responseText": null,
+                "error": "stream ended"
+              }
+            },
+            "queues": { "t1": ["r1", "other"] }
+          }
+        },
+        {
+          "action": { "type": "intent/requeue-front", "threadId": "t1", "intentId": "r1" }
+        },
+        { "expect": { "queues": { "t1": ["r1", "other"] } } }
+      ]
+    },
+    {
+      "name": "cancel removes from queue while unknown request-dispatch is a full no-op",
+      "steps": [
+        {
+          "action": {
+            "type": "intent/created",
+            "enqueue": true,
+            "intent": {
+              "intentId": "q1",
+              "threadId": "t1",
+              "text": "first",
+              "state": "queued_local",
+              "source": "composer_queue"
+            }
+          }
+        },
+        {
+          "action": {
+            "type": "intent/created",
+            "enqueue": true,
+            "intent": {
+              "intentId": "q2",
+              "threadId": "t1",
+              "text": "second",
+              "state": "queued_local",
+              "source": "composer_queue"
+            }
+          }
+        },
+        { "action": { "type": "intent/cancelled", "threadId": "t1", "intentId": "q1" } },
+        {
+          "expect": {
+            "intents": { "q1": { "state": "cancelled" } },
+            "queues": { "t1": ["q2"] }
+          }
+        },
+        {
+          "action": {
+            "type": "intent/request-dispatch",
+            "threadId": "t1",
+            "intentId": "ghost",
+            "mode": "sync_send",
+            "source": "queue_send",
+            "removeFromQueue": true
+          }
+        },
+        { "expect": { "queues": { "t1": ["q2"] }, "intents": { "ghost": null } } }
+      ]
+    },
+    {
+      "name": "reorder clamps to queue bounds and ignores unknown ids",
+      "steps": [
+        {
+          "action": {
+            "type": "intent/created",
+            "enqueue": true,
+            "intent": { "intentId": "a", "threadId": "t1", "text": "a", "state": "queued_local", "source": "composer_queue" }
+          }
+        },
+        {
+          "action": {
+            "type": "intent/created",
+            "enqueue": true,
+            "intent": { "intentId": "b", "threadId": "t1", "text": "b", "state": "queued_local", "source": "composer_queue" }
+          }
+        },
+        {
+          "action": {
+            "type": "intent/created",
+            "enqueue": true,
+            "intent": { "intentId": "c", "threadId": "t1", "text": "c", "state": "queued_local", "source": "composer_queue" }
+          }
+        },
+        { "action": { "type": "intent/reorder", "threadId": "t1", "intentId": "b", "toIndex": 99 } },
+        { "expect": { "queues": { "t1": ["a", "c", "b"] } } },
+        { "action": { "type": "intent/reorder", "threadId": "t1", "intentId": "b", "toIndex": 0 } },
+        { "expect": { "queues": { "t1": ["b", "a", "c"] } } },
+        { "action": { "type": "intent/reorder", "threadId": "t1", "intentId": "missing", "toIndex": 0 } },
+        { "expect": { "queues": { "t1": ["b", "a", "c"] } } }
+      ]
+    },
+    {
+      "name": "thread/replace-id moves intents, merges queues, and keeps target runtime fields",
+      "steps": [
+        {
+          "action": {
+            "type": "intent/created",
+            "enqueue": true,
+            "intent": {
+              "intentId": "d1",
+              "threadId": "draft:1",
+              "text": "draft send",
+              "state": "queued_local",
+              "source": "composer_queue"
+            }
+          }
+        },
+        {
+          "action": {
+            "type": "intent/created",
+            "enqueue": true,
+            "intent": {
+              "intentId": "t9-existing",
+              "threadId": "t9",
+              "text": "already there",
+              "state": "queued_local",
+              "source": "composer_queue"
+            }
+          }
+        },
+        {
+          "action": {
+            "type": "thread/runtime",
+            "threadId": "draft:1",
+            "runtimeState": "dispatching_sync",
+            "activeIntentId": "d1"
+          }
+        },
+        { "action": { "type": "thread/replace-id", "fromThreadId": "draft:1", "toThreadId": "t9" } },
+        {
+          "expect": {
+            "intents": { "d1": { "threadId": "t9" } },
+            "queues": { "t9": ["t9-existing", "d1"], "draft:1": [] },
+            "runtimes": {
+              "t9": { "state": "dispatching_sync", "activeIntentId": "d1" },
+              "draft:1": { "exists": false }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "thread/delete drops intents queue and runtime",
+      "steps": [
+        {
+          "action": {
+            "type": "intent/created",
+            "enqueue": true,
+            "intent": {
+              "intentId": "z1",
+              "threadId": "t1",
+              "text": "doomed",
+              "state": "queued_local",
+              "source": "composer_queue"
+            }
+          }
+        },
+        {
+          "action": { "type": "thread/runtime", "threadId": "t1", "runtimeState": "running_remote", "remoteRunId": "run-7" }
+        },
+        { "action": { "type": "thread/delete", "threadId": "t1" } },
+        {
+          "expect": {
+            "intents": { "z1": null },
+            "queues": { "t1": [] },
+            "runtimes": { "t1": { "exists": false } }
+          }
+        }
+      ]
+    },
+    {
+      "name": "thread/runtime overwrites omitted fields",
+      "steps": [
+        {
+          "action": {
+            "type": "thread/runtime",
+            "threadId": "t1",
+            "runtimeState": "running_remote",
+            "activeIntentId": "i1",
+            "remoteRunId": "run-1"
+          }
+        },
+        { "action": { "type": "thread/runtime", "threadId": "t1", "runtimeState": "reconciling_history" } },
+        {
+          "expect": {
+            "runtimes": {
+              "t1": { "state": "reconciling_history", "busy": true, "activeIntentId": null, "remoteRunId": null }
+            }
+          }
+        },
+        { "action": { "type": "thread/clear", "threadId": "t1" } },
+        { "expect": { "runtimes": { "t1": { "exists": false } } } }
+      ]
+    },
+    {
+      "name": "failure and interruption are terminal and keep the error",
+      "steps": [
+        {
+          "action": {
+            "type": "intent/created",
+            "enqueue": false,
+            "intent": {
+              "intentId": "f1",
+              "threadId": "t1",
+              "text": "will fail",
+              "state": "dispatching",
+              "source": "composer_send"
+            }
+          }
+        },
+        { "action": { "type": "intent/failed", "intentId": "f1", "error": "gateway exploded" } },
+        { "expect": { "intents": { "f1": { "state": "failed", "error": "gateway exploded" } } } },
+        {
+          "action": {
+            "type": "intent/created",
+            "enqueue": false,
+            "intent": {
+              "intentId": "x1",
+              "threadId": "t1",
+              "text": "will be interrupted",
+              "state": "remote_accepted",
+              "source": "composer_send",
+              "remoteRunId": "run-5"
+            }
+          }
+        },
+        { "action": { "type": "intent/interrupted", "intentId": "x1" } },
+        { "expect": { "intents": { "x1": { "state": "interrupted", "remoteRunId": "run-5" } } } }
+      ]
+    }
+  ]
+}

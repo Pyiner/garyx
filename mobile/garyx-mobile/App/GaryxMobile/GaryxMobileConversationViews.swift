@@ -1274,8 +1274,8 @@ struct GaryxMessageBubble: View {
 
     @ViewBuilder
     private func failureStatusRow(statusText: String) -> some View {
-        let canRetry = message.id.hasPrefix("local-user-")
-            || message.id.hasPrefix("pending-user:")
+        let canRetry = message.localState != nil
+            && message.localState != .remoteFinal
         if canRetry {
             Button {
                 guard !retrying else { return }

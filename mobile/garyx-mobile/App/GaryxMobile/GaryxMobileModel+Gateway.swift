@@ -91,13 +91,11 @@ extension GaryxMobileModel {
         selectedThreadActivitySignatures = [:]
         cancelGlobalEventStream()
         clearActiveRunState()
-        isSending = false
         connectRefreshRequestId = nil
         remoteStateRefreshRequestId = nil
         agentTargetsRefreshRequestId = nil
         agentTargetsStateRequestId = nil
         workspaceRefreshRequestId = nil
-        remoteBusyThreadIds = []
         agentTargetsLoadPhase = .idle
         connectionState = .disconnected
         threads = []

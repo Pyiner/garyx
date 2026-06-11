@@ -344,15 +344,9 @@ extension GaryxMobileModel {
     }
 
     func refreshRemoteBusyIdsForVisibleThreads() {
-        var refreshedBusyIds = remoteBusyThreadIds
-        for thread in threads {
-            if !(thread.activeRunId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
-                refreshedBusyIds.insert(thread.id)
-            } else {
-                refreshedBusyIds.remove(thread.id)
-            }
-        }
-        remoteBusyThreadIds = refreshedBusyIds
+        runTracker.syncThreadSummaries(
+            threads.map { (threadId: $0.id, activeRunId: $0.activeRunId) }
+        )
     }
 
     func hydrateCompletedRecentThreadHistories(
@@ -872,25 +866,26 @@ extension GaryxMobileModel {
         let hasActivePendingInput = transcript.pendingUserInputs.contains { input in
             input.active && (input.status ?? "awaiting_ack").lowercased() != "abandoned"
         }
-        let isActive = GaryxMobileThreadActivityModel.shouldTreatThreadRuntimeAsActive(
+        let outcome = runTracker.reconcileTranscriptRuntime(
+            threadId: threadId,
             activeRunPresent: transcript.threadRuntime?.activeRun != nil,
             activeRunId: transcript.threadRuntime?.activeRun?.runId,
-            hasActivePendingInput: hasActivePendingInput,
-            lastTerminatedRunId: terminatedActiveRunIdsByThread[threadId]
+            hasActivePendingInput: hasActivePendingInput
         )
-        if isActive {
-            remoteBusyThreadIds.insert(threadId)
-        } else {
-            remoteBusyThreadIds.remove(threadId)
+        switch outcome {
+        case .active:
+            break
+        case .inactive(let clearedLocalRun):
             markThreadSummaryRuntimeInactive(threadId)
             // The authoritative transcript reports no active run. If the
             // terminal stream event never reached this client (dropped
             // connection or a race), the local send state would stay
             // "sending" forever, pinning the thinking indicator and the
-            // stop button. Reconcile it here — unless a chat start is
-            // still in flight, where "no active run yet" is expected.
-            if !pendingChatStartThreadIds.contains(threadId), activeRunThreadId == threadId {
-                clearActiveRunState(for: threadId)
+            // stop button. The tracker reconciled it — unless a chat start
+            // is still in flight, where "no active run yet" is expected.
+            if clearedLocalRun {
+                flushPendingAssistantDelta(for: threadId)
+                activeAssistantMessageIdsByThread[threadId] = nil
                 markStreamingAssistantComplete(for: threadId, removeEmpty: true)
             }
         }
@@ -953,7 +948,7 @@ extension GaryxMobileModel {
 
     func oldestLoadedHistoryIndex(for threadId: String) -> Int? {
         cachedMessages(for: threadId)
-            .compactMap { Self.historyIndex(fromMessageId: $0.id) }
+            .compactMap(\.historyIndex)
             .min()
     }
 

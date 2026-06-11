@@ -18,6 +18,20 @@ struct GaryxMobileMessage: Identifiable, Equatable {
     var clientIntentId: String? = nil
     var pendingInputId: String? = nil
     var toolTraceGroup: GaryxMobileToolTraceGroup? = nil
+    /// Birth provenance per the conversation state contract
+    /// (docs/agents/conversation-state.md): `optimistic` for local sends,
+    /// `remote_partial` for streamed/pending content, `remote_final` for
+    /// canonical history rows. Merge and presentation logic branches on this
+    /// instead of id-prefix conventions. Failure is carried by `statusText`
+    /// as an overlay on the provenance. `nil` only for synthetic fixtures.
+    var localState: GaryxTranscriptEntryState? = nil
+    /// Canonical transcript index for history rows; replaces parsing
+    /// `history:N` ids. Survives identity reuse when a remote row
+    /// materializes an optimistic local message.
+    var historyIndex: Int? = nil
+    /// The remote id this row materialized, when identity reuse kept the
+    /// local id for row stability. Used to dedupe repeated remote events.
+    var remoteId: String? = nil
 }
 
 struct GaryxMobileMessageAttachment: Identifiable, Equatable {
@@ -75,7 +89,8 @@ enum GaryxMobileTranscriptMapper {
                     attachments: attachments,
                     timestamp: input.timestamp,
                     isStreaming: false,
-                    pendingInputId: pendingId
+                    pendingInputId: pendingId,
+                    localState: .remotePartial
                 )
             )
         }

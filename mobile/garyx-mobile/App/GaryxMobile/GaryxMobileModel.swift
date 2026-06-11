@@ -30,7 +30,7 @@ struct GaryxMobileRouteNotFound: Identifiable, Equatable {
 @MainActor
 final class GaryxMobileModel: ObservableObject {
     static let threadListPageLimit = 30
-    static let threadHistoryPageLimit = 120
+    static let threadHistoryPageLimit = 100
     static let threadHistoryUserQueryLimit = 10
     static let selectedThreadReconcileIntervalNanos: UInt64 = 1_500_000_000
     static let assistantDeltaFlushDelayNanos: UInt64 = 50_000_000
@@ -88,9 +88,15 @@ final class GaryxMobileModel: ObservableObject {
     @Published var isLoadingSelectedThreadHistory = false
     @Published var isLoadingOlderThreadHistory = false
     @Published var selectedThreadHasMoreHistoryBefore = false
-    @Published var isSending = false
-    @Published var activeRunThreadId: String?
-    @Published var remoteBusyThreadIds: Set<String> = []
+    /// Conversation run/send lifecycle state. Owns what used to be the
+    /// scattered `isSending` / `activeRunThreadId` / `remoteBusyThreadIds` /
+    /// `pendingChatStartThreadIds` / `terminatedActiveRunIdsByThread` flags;
+    /// see docs/agents/conversation-state.md.
+    @Published var runTracker = GaryxConversationRunTracker()
+    /// Legacy-shaped read bridges over `runTracker`.
+    var isSending: Bool { runTracker.hasLocalActiveRun }
+    var activeRunThreadId: String? { runTracker.localActiveRunThreadId }
+    var remoteBusyThreadIds: Set<String> { runTracker.busyThreadIds }
     @Published var navigationState = GaryxMobileNavigationState()
     @Published var pendingMobileRoute: GaryxMobileRoute?
     @Published var storedLastError: String?
@@ -197,13 +203,6 @@ final class GaryxMobileModel: ObservableObject {
     var selectedThreadTurnRowsCacheKey: TurnRowsCacheKey?
     var selectedThreadTurnRowsCache: [GaryxMobileTurnRow] = []
     var activeAssistantMessageIdsByThread: [String: String] = [:]
-    // Most recent run id the client observed terminate per thread. Lets a transcript
-    // reload ignore a stale `active_run` snapshot for a run we already saw finish.
-    var terminatedActiveRunIdsByThread: [String: String] = [:]
-    // Threads with a chat-start request still in flight toward the gateway.
-    // A transcript reload in that window legitimately reports no active run
-    // yet, so runtime reconciliation must not clear the local sending state.
-    var pendingChatStartThreadIds: Set<String> = []
     var pendingAssistantDeltasByThread: [String: PendingAssistantDelta] = [:]
     var assistantDeltaFlushTasksByThread: [String: Task<Void, Never>] = [:]
     var pendingQueuedInputsByIntentId: [String: GaryxPendingQueuedInput] = [:]
