@@ -1,0 +1,75 @@
+{
+  "pendingAckIndex": [
+    {
+      "name": "empty pending list never matches",
+      "pendingAckIntentIds": [],
+      "acknowledgedPendingInputId": "p-1",
+      "intents": {},
+      "expect": -1
+    },
+    {
+      "name": "ack without an id targets the queue head",
+      "pendingAckIntentIds": ["a", "b"],
+      "acknowledgedPendingInputId": "",
+      "intents": { "a": { "pendingInputId": "p-1" }, "b": { "pendingInputId": "p-2" } },
+      "expect": 0
+    },
+    {
+      "name": "exact pending input id wins",
+      "pendingAckIntentIds": ["a", "b"],
+      "acknowledgedPendingInputId": "p-2",
+      "intents": { "a": { "pendingInputId": "p-1" }, "b": { "pendingInputId": "p-2" } },
+      "expect": 1
+    },
+    {
+      "name": "unknown ack falls back to the only unresolved intent",
+      "pendingAckIntentIds": ["a", "b"],
+      "acknowledgedPendingInputId": "p-9",
+      "intents": { "a": { "pendingInputId": "p-1" }, "b": {} },
+      "expect": 1
+    },
+    {
+      "name": "unknown ack with every intent unresolved targets the head",
+      "pendingAckIntentIds": ["a", "b"],
+      "acknowledgedPendingInputId": "p-9",
+      "intents": { "a": {}, "b": {} },
+      "expect": 0
+    },
+    {
+      "name": "unknown ack with all ids resolved matches nothing",
+      "pendingAckIntentIds": ["a", "b"],
+      "acknowledgedPendingInputId": "p-9",
+      "intents": { "a": { "pendingInputId": "p-1" }, "b": { "pendingInputId": "p-2" } },
+      "expect": -1
+    },
+    {
+      "name": "ambiguous unresolved intents match nothing",
+      "pendingAckIntentIds": ["a", "b", "c"],
+      "acknowledgedPendingInputId": "p-9",
+      "intents": { "a": {}, "b": {}, "c": { "pendingInputId": "p-1" } },
+      "expect": -1
+    }
+  ],
+  "providerAckTracking": [
+    { "intentState": null, "expect": false },
+    { "intentState": "queued_local", "expect": true },
+    { "intentState": "dispatch_requested", "expect": true },
+    { "intentState": "dispatching", "expect": true },
+    { "intentState": "remote_accepted", "expect": true },
+    { "intentState": "awaiting_provider_ack", "expect": true },
+    { "intentState": "awaiting_response", "expect": true },
+    { "intentState": "awaiting_history", "expect": false },
+    { "intentState": "completed", "expect": false },
+    { "intentState": "failed", "expect": false },
+    { "intentState": "interrupted", "expect": false },
+    { "intentState": "cancelled", "expect": false }
+  ],
+  "composerPhase": [
+    { "hasText": false, "isComposing": false, "locked": false, "expect": "empty" },
+    { "hasText": true, "isComposing": false, "locked": false, "expect": "editing" },
+    { "hasText": false, "isComposing": true, "locked": false, "expect": "ime_composing" },
+    { "hasText": true, "isComposing": true, "locked": false, "expect": "ime_composing" },
+    { "hasText": true, "isComposing": true, "locked": true, "expect": "locked" },
+    { "hasText": false, "isComposing": false, "locked": true, "expect": "locked" }
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "intentState": [
+    "queued_local",
+    "dispatch_requested",
+    "dispatching",
+    "remote_accepted",
+    "awaiting_provider_ack",
+    "awaiting_response",
+    "awaiting_history",
+    "completed",
+    "failed",
+    "interrupted",
+    "cancelled"
+  ],
+  "intentSource": [
+    "composer_send",
+    "composer_queue",
+    "queue_send",
+    "queue_steer",
+    "retry"
+  ],
+  "intentDispatchMode": ["sync_send", "async_steer"],
+  "threadRuntimeState": [
+    "idle",
+    "dispatching_sync",
+    "running_remote",
+    "reconciling_history",
+    "interrupting",
+    "failed"
+  ],
+  "liveStreamStatus": [
+    "connecting",
+    "streaming",
+    "reconciling",
+    "disconnected",
+    "failed",
+    "interrupted"
+  ],
+  "transcriptEntryState": [
+    "optimistic",
+    "remote_partial",
+    "remote_final",
+    "error",
+    "interrupted"
+  ],
+  "composerPhase": ["empty", "editing", "ime_composing", "locked"]
+}

@@ -3,29 +3,39 @@ import type {
   MessageImageAttachment,
 } from '@shared/contracts';
 
-export type ComposerPhase = 'empty' | 'editing' | 'ime_composing' | 'locked';
+// These vocabularies are part of the cross-platform conversation state
+// contract (docs/agents/conversation-state.md). The runtime arrays exist so
+// conformance tests can assert them against spec/conversation-state; keep
+// them in sync with the spec and the iOS GaryxConversationStateMachine.
+export const COMPOSER_PHASES = ['empty', 'editing', 'ime_composing', 'locked'] as const;
+export type ComposerPhase = (typeof COMPOSER_PHASES)[number];
 
-export type IntentDispatchMode = 'sync_send' | 'async_steer';
+export const INTENT_DISPATCH_MODES = ['sync_send', 'async_steer'] as const;
+export type IntentDispatchMode = (typeof INTENT_DISPATCH_MODES)[number];
 
-export type IntentState =
-  | 'queued_local'
-  | 'dispatch_requested'
-  | 'dispatching'
-  | 'remote_accepted'
-  | 'awaiting_provider_ack'
-  | 'awaiting_response'
-  | 'awaiting_history'
-  | 'completed'
-  | 'failed'
-  | 'interrupted'
-  | 'cancelled';
+export const INTENT_STATES = [
+  'queued_local',
+  'dispatch_requested',
+  'dispatching',
+  'remote_accepted',
+  'awaiting_provider_ack',
+  'awaiting_response',
+  'awaiting_history',
+  'completed',
+  'failed',
+  'interrupted',
+  'cancelled',
+] as const;
+export type IntentState = (typeof INTENT_STATES)[number];
 
-export type IntentSource =
-  | 'composer_send'
-  | 'composer_queue'
-  | 'queue_send'
-  | 'queue_steer'
-  | 'retry';
+export const INTENT_SOURCES = [
+  'composer_send',
+  'composer_queue',
+  'queue_send',
+  'queue_steer',
+  'retry',
+] as const;
+export type IntentSource = (typeof INTENT_SOURCES)[number];
 
 export interface MessageIntent {
   intentId: string;
@@ -45,13 +55,15 @@ export interface MessageIntent {
   error?: string;
 }
 
-export type ThreadRuntimeState =
-  | 'idle'
-  | 'dispatching_sync'
-  | 'running_remote'
-  | 'reconciling_history'
-  | 'interrupting'
-  | 'failed';
+export const THREAD_RUNTIME_STATES = [
+  'idle',
+  'dispatching_sync',
+  'running_remote',
+  'reconciling_history',
+  'interrupting',
+  'failed',
+] as const;
+export type ThreadRuntimeState = (typeof THREAD_RUNTIME_STATES)[number];
 
 export interface ThreadRuntime {
   threadId: string;

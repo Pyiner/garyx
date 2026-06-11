@@ -13,7 +13,17 @@ import type {
 } from '@shared/contracts';
 import type { AgentPickerOption } from './agent-options';
 
-export type TranscriptEntryState = 'optimistic' | 'remote_partial' | 'remote_final' | 'error' | 'interrupted';
+// These vocabularies are part of the cross-platform conversation state
+// contract (docs/agents/conversation-state.md). The runtime arrays exist so
+// conformance tests can assert them against spec/conversation-state.
+export const TRANSCRIPT_ENTRY_STATES = [
+  'optimistic',
+  'remote_partial',
+  'remote_final',
+  'error',
+  'interrupted',
+] as const;
+export type TranscriptEntryState = (typeof TRANSCRIPT_ENTRY_STATES)[number];
 
 export type UiTranscriptMessage = TranscriptMessage & {
   intentId?: string;
@@ -25,13 +35,15 @@ export type MessageMap = Record<string, UiTranscriptMessage[]>;
 export type PendingThreadInputMap = Record<string, PendingThreadInput[]>;
 export type ContentView = 'thread' | 'browser' | 'bots' | 'automation' | 'auto_research' | 'agents' | 'teams' | 'skills' | 'tasks' | 'workflow' | 'dreams' | 'settings';
 
-export type LiveStreamStatus =
-  | 'connecting'
-  | 'streaming'
-  | 'reconciling'
-  | 'disconnected'
-  | 'failed'
-  | 'interrupted';
+export const LIVE_STREAM_STATUSES = [
+  'connecting',
+  'streaming',
+  'reconciling',
+  'disconnected',
+  'failed',
+  'interrupted',
+] as const;
+export type LiveStreamStatus = (typeof LIVE_STREAM_STATUSES)[number];
 
 export type GatewayIndicatorTone = 'syncing' | 'offline' | null;
 
