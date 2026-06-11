@@ -77,7 +77,14 @@ Every locally known transcript message carries one:
 iOS note: this replaces the legacy id-prefix conventions
 (`local-user-*`, `stream-assistant-*`, …) as the carrier of message
 provenance. Id schemes may remain as identifiers, but logic must branch on
-`TranscriptEntryState`, not on id prefixes.
+`TranscriptEntryState`, not on id prefixes. iOS keeps `localState` as
+immutable birth provenance (`optimistic` local sends, `remote_partial`
+streamed/pending content, `remote_final` canonical rows) and carries
+failure as a `statusText` overlay; canonical history indexes live in an
+explicit `historyIndex` field instead of `history:N` id parsing. Merge
+reconciliation reuses the local row id when a remote row materializes it
+(`GaryxTranscriptMerge`), mirroring the desktop identity-preservation rule
+so reconciles do not churn list row identity.
 
 ### ComposerPhase
 

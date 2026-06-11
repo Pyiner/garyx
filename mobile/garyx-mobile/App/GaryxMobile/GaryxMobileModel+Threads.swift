@@ -948,7 +948,7 @@ extension GaryxMobileModel {
 
     func oldestLoadedHistoryIndex(for threadId: String) -> Int? {
         cachedMessages(for: threadId)
-            .compactMap { Self.historyIndex(fromMessageId: $0.id) }
+            .compactMap(\.historyIndex)
             .min()
     }
 

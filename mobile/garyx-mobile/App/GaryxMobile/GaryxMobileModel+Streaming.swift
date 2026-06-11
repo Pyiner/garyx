@@ -147,7 +147,8 @@ extension GaryxMobileModel {
                         role: .assistant,
                         text: pending.text,
                         timestamp: nil,
-                        isStreaming: true
+                        isStreaming: true,
+                        localState: .remotePartial
                     )
                 )
                 return
@@ -178,34 +179,29 @@ extension GaryxMobileModel {
         let existingMessages = cachedMessages(for: threadId)
         let materializesExistingLocalUser = existingMessages.contains { message in
             message.role == .user
-                && (message.id.hasPrefix("local-user-") || message.id.hasPrefix("pending-user:"))
+                && message.localState != .remoteFinal
                 && Self.normalizedMergeText(message.text) == Self.normalizedMergeText(visibleText)
         }
-        if !existingMessages.contains(where: { $0.id == messageId }) && !materializesExistingLocalUser {
+        if !existingMessages.contains(where: { $0.id == messageId || $0.remoteId == messageId })
+            && !materializesExistingLocalUser {
             finishActiveAssistantSegmentBeforeUserTurn(for: threadId)
         }
         mutateMessages(for: threadId) { messages in
-            if messages.contains(where: { $0.id == messageId }) {
+            if messages.contains(where: { $0.id == messageId || $0.remoteId == messageId }) {
                 return
             }
             if let localIndex = messages.firstIndex(where: { message in
                 message.role == .user
-                    && (message.id.hasPrefix("local-user-") || message.id.hasPrefix("pending-user:"))
+                    && message.localState != .remoteFinal
                     && Self.normalizedMergeText(message.text) == Self.normalizedMergeText(visibleText)
             }) {
-                let local = messages[localIndex]
-                let remoteMessage = GaryxMobileMessage(
-                    id: messageId,
-                    role: .user,
-                    text: visibleText,
-                    attachments: local.attachments,
-                    timestamp: local.timestamp,
-                    isStreaming: false,
-                    statusText: local.statusText,
-                    clientIntentId: local.clientIntentId,
-                    pendingInputId: local.pendingInputId
-                )
-                messages[localIndex] = remoteMessage
+                // Materialize in place, keeping the local row id so the list
+                // row identity stays stable (no re-created rows on echo).
+                messages[localIndex].text = visibleText
+                messages[localIndex].statusText = nil
+                messages[localIndex].isStreaming = false
+                messages[localIndex].localState = .remoteFinal
+                messages[localIndex].remoteId = messageId
                 return
             }
             messages.append(
@@ -214,7 +210,8 @@ extension GaryxMobileModel {
                     role: .user,
                     text: visibleText,
                     timestamp: nil,
-                    isStreaming: false
+                    isStreaming: false,
+                    localState: .remoteFinal
                 )
             )
         }
@@ -326,7 +323,7 @@ extension GaryxMobileModel {
             let fallbackIndex: Int?
             if normalizedClientIntentId.isEmpty && normalizedPendingInputId.isEmpty {
                 fallbackIndex = messages.indices.last(where: { index in
-                    messages[index].role == .user && messages[index].id.hasPrefix("local-user-")
+                    messages[index].role == .user && messages[index].localState == .optimistic
                 })
             } else {
                 fallbackIndex = nil
@@ -387,212 +384,22 @@ extension GaryxMobileModel {
         withLocal localMessages: [GaryxMobileMessage],
         preserveRemoteBeforeIndex: Int? = nil
     ) -> [GaryxMobileMessage] {
-        guard !remoteMessages.isEmpty else {
-            return localMessages
-        }
-
-        var merged = remoteMessages
-        var preservedOlderRemoteMessages: [GaryxMobileMessage] = []
-        var preservedOlderRemoteIds = Set<String>()
-        var remoteUserTextCounts = Dictionary(
-            grouping: remoteMessages.filter { $0.role == .user }.map(Self.userMergeKey),
-            by: { $0 }
+        GaryxTranscriptMerge.mergedMessages(
+            remoteMessages,
+            withLocal: localMessages,
+            preserveRemoteBeforeIndex: preserveRemoteBeforeIndex
         )
-        .mapValues(\.count)
-        for localRemoteUserText in localMessages
-            .filter({ $0.role == .user && !$0.id.hasPrefix("local-user-") })
-            .map(Self.userMergeKey) {
-            if let count = remoteUserTextCounts[localRemoteUserText], count > 0 {
-                remoteUserTextCounts[localRemoteUserText] = count - 1
-            }
-        }
-        let currentTurnRemoteAssistantTexts = Self.currentTurnAssistantTexts(in: remoteMessages)
-        let remoteClientIntentIds = Set(remoteMessages.compactMap { $0.clientIntentId?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
-        let remotePendingInputIds = Set(remoteMessages.compactMap { $0.pendingInputId?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
-
-        var isAfterUnmaterializedLocalUser = false
-        for local in localMessages {
-            if let remoteIndex = merged.firstIndex(where: { $0.id == local.id }) {
-                if local.role == .assistant,
-                   local.isStreaming,
-                   merged[remoteIndex].role == .assistant,
-                   Self.normalizedMergeText(local.text).count > Self.normalizedMergeText(merged[remoteIndex].text).count {
-                    merged[remoteIndex] = local
-                }
-                continue
-            }
-            if let preserveRemoteBeforeIndex,
-               let historyIndex = Self.historyIndex(fromMessageId: local.id),
-               historyIndex < preserveRemoteBeforeIndex,
-               preservedOlderRemoteIds.insert(local.id).inserted {
-                preservedOlderRemoteMessages.append(local)
-                continue
-            }
-            let localClientIntentId = local.clientIntentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let localPendingInputId = local.pendingInputId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if !localClientIntentId.isEmpty,
-               remoteClientIntentIds.contains(localClientIntentId) {
-                isAfterUnmaterializedLocalUser = false
-                continue
-            }
-            if !localPendingInputId.isEmpty,
-               remotePendingInputIds.contains(localPendingInputId) {
-                isAfterUnmaterializedLocalUser = false
-                continue
-            }
-            let normalizedText = Self.normalizedMergeText(local.text)
-            switch local.role {
-            case .user:
-                if local.id.hasPrefix("local-user-") {
-                    let mergeKey = Self.userMergeKey(local)
-                    if let count = remoteUserTextCounts[mergeKey],
-                       count > 0 {
-                        remoteUserTextCounts[mergeKey] = count - 1
-                        isAfterUnmaterializedLocalUser = false
-                        continue
-                    }
-                    merged.append(local)
-                    isAfterUnmaterializedLocalUser = true
-                } else {
-                    isAfterUnmaterializedLocalUser = false
-                }
-            case .assistant:
-                if local.isStreaming || local.id.hasPrefix("local-assistant-") {
-                    if isAfterUnmaterializedLocalUser {
-                        merged.append(local)
-                        continue
-                    }
-                    let alreadyMaterialized = currentTurnRemoteAssistantTexts.contains { remoteText in
-                        !normalizedText.isEmpty
-                            && !remoteText.isEmpty
-                            && remoteText.count >= normalizedText.count
-                            && remoteText.hasPrefix(normalizedText)
-                    }
-                    if !alreadyMaterialized {
-                        merged.append(local)
-                    }
-                }
-            case .tool:
-                if local.isStreaming || local.toolTraceGroup?.isActive == true {
-                    if let localGroup = local.toolTraceGroup,
-                       let remoteIndex = merged.indices.first(where: { remoteIndex in
-                           let remote = merged[remoteIndex]
-                           guard let remoteGroup = remote.toolTraceGroup else { return false }
-                           return Self.toolTraceGroupsOverlap(
-                               remoteGroup,
-                               localGroup,
-                               allowFingerprint: Self.isInCurrentTurn(index: remoteIndex, messages: merged)
-                           )
-                       }) {
-                        if var remoteGroup = merged[remoteIndex].toolTraceGroup {
-                            remoteGroup = Self.mergedToolTraceGroup(remoteGroup, with: localGroup)
-                            merged[remoteIndex].toolTraceGroup = remoteGroup
-                            merged[remoteIndex].text = remoteGroup.summary
-                            merged[remoteIndex].isStreaming = remoteGroup.isActive
-                        }
-                        continue
-                    }
-                    merged.append(local)
-                }
-            case .system:
-                if local.statusText != nil || local.id.hasPrefix("local-") {
-                    merged.append(local)
-                }
-            }
-        }
-
-        if !preservedOlderRemoteMessages.isEmpty {
-            merged = preservedOlderRemoteMessages + merged
-        }
-        return merged
     }
 
-    static func historyIndex(fromMessageId id: String) -> Int? {
-        guard let range = id.range(of: "history:") else { return nil }
-        let suffix = id[range.upperBound...]
-        let digits = suffix.prefix { $0.isNumber }
-        guard !digits.isEmpty else { return nil }
-        return Int(digits)
-    }
 
-    static func currentTurnAssistantTexts(in messages: [GaryxMobileMessage]) -> [String] {
-        let startIndex: Array<GaryxMobileMessage>.Index
-        if let lastUserIndex = messages.lastIndex(where: { $0.role == .user }) {
-            startIndex = messages.index(after: lastUserIndex)
-        } else {
-            startIndex = messages.startIndex
-        }
-        return messages[startIndex...]
-            .filter { $0.role == .assistant }
-            .map { Self.normalizedMergeText($0.text) }
-    }
+
+
+
+
+
 
     static func normalizedMergeText(_ text: String) -> String {
-        text.trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "\r\n", with: "\n")
-    }
-
-    static func toolTraceGroupsOverlap(
-        _ left: GaryxMobileToolTraceGroup,
-        _ right: GaryxMobileToolTraceGroup,
-        allowFingerprint: Bool
-    ) -> Bool {
-        let leftKeys = Set(left.entries.compactMap { toolTraceMergeKey($0, includeFingerprint: allowFingerprint) })
-        let rightKeys = Set(right.entries.compactMap { toolTraceMergeKey($0, includeFingerprint: allowFingerprint) })
-        return !leftKeys.isDisjoint(with: rightKeys)
-    }
-
-    static func isInCurrentTurn(index: Int, messages: [GaryxMobileMessage]) -> Bool {
-        guard let lastUserIndex = messages.lastIndex(where: { $0.role == .user }) else {
-            return true
-        }
-        return index > lastUserIndex
-    }
-
-    static func mergedToolTraceGroup(
-        _ remote: GaryxMobileToolTraceGroup,
-        with local: GaryxMobileToolTraceGroup
-    ) -> GaryxMobileToolTraceGroup {
-        var merged = remote
-        merged.live = remote.live || local.live
-        for localEntry in local.entries {
-            if let localKey = toolTraceMergeKey(localEntry),
-               let index = merged.entries.firstIndex(where: { toolTraceMergeKey($0) == localKey }) {
-                if localEntry.status != .running {
-                    merged.entries[index].absorb(result: localEntry)
-                }
-                continue
-            }
-            merged.entries.append(localEntry)
-        }
-        return merged
-    }
-
-    static func toolTraceMergeKey(
-        _ entry: GaryxMobileToolTraceEntry,
-        includeFingerprint: Bool = true
-    ) -> String? {
-        if let toolUseId = entry.toolUseId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !toolUseId.isEmpty {
-            return "id:\(toolUseId)"
-        }
-        guard includeFingerprint else {
-            return nil
-        }
-        let normalizedTool = entry.toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let input = entry.inputText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let summary = entry.summaryText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !normalizedTool.isEmpty, !input.isEmpty || !summary.isEmpty else {
-            return nil
-        }
-        return "fp:\(normalizedTool):\(input):\(summary):\(entry.isError)"
-    }
-
-    static func userMergeKey(_ message: GaryxMobileMessage) -> String {
-        GaryxStructuredContentRenderer.userMergeKey(
-            text: message.text,
-            attachments: message.attachments.map(\.contentDescriptor)
-        )
+        GaryxTranscriptMerge.normalizedMergeText(text)
     }
 
     static func attachmentSummary(from attachments: [GaryxMobileMessageAttachment]) -> String? {
@@ -755,17 +562,19 @@ extension GaryxMobileModel {
                 return
             }
             let firstEntry = group.entries[0]
+            let groupIsLive = live && group.entries.contains { $0.status == .running }
             rendered.append(
                 GaryxMobileMessage(
                     id: "tool-group:\(firstEntry.id)",
                     role: .tool,
                     text: group.summary,
                     timestamp: firstEntry.timestamp,
-                    isStreaming: live && group.entries.contains { $0.status == .running },
+                    isStreaming: groupIsLive,
                     toolTraceGroup: GaryxMobileToolTraceGroup(
                         entries: group.entries,
-                        live: live && group.entries.contains { $0.status == .running }
-                    )
+                        live: groupIsLive
+                    ),
+                    localState: groupIsLive ? .remotePartial : .remoteFinal
                 )
             )
             pendingToolGroup = nil
@@ -802,7 +611,9 @@ extension GaryxMobileModel {
                     text: displayText,
                     attachments: attachments,
                     timestamp: item.timestamp,
-                    isStreaming: false
+                    isStreaming: false,
+                    localState: .remoteFinal,
+                    historyIndex: item.index
                 )
             )
         }
@@ -851,7 +662,8 @@ extension GaryxMobileModel {
                     text: group.summary,
                     timestamp: entry.timestamp,
                     isStreaming: group.isActive,
-                    toolTraceGroup: group
+                    toolTraceGroup: group,
+                    localState: .remotePartial
                 )
             )
         }

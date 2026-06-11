@@ -131,7 +131,8 @@ extension GaryxMobileModel {
             attachments: Self.messageAttachments(from: attachments),
             timestamp: nil,
             isStreaming: false,
-            clientIntentId: clientIntentId
+            clientIntentId: clientIntentId,
+            localState: .optimistic
         )
         let assistantId = "local-assistant-\(UUID().uuidString)"
         var optimisticThreadId = selectedThread?.id
@@ -227,7 +228,8 @@ extension GaryxMobileModel {
             attachments: Self.messageAttachments(from: attachments),
             timestamp: nil,
             isStreaming: false,
-            clientIntentId: clientIntentId
+            clientIntentId: clientIntentId,
+            localState: .optimistic
         )
         mutateMessages(for: thread.id) { messages in
             messages.append(userMessage)
@@ -327,7 +329,8 @@ extension GaryxMobileModel {
                 role: .assistant,
                 text: "",
                 timestamp: nil,
-                isStreaming: true
+                isStreaming: true,
+                localState: .remotePartial
             )
             if let userIndex = messages.indices.last(where: { index in
                 messages[index].role == .user && messages[index].clientIntentId == queued.clientIntentId

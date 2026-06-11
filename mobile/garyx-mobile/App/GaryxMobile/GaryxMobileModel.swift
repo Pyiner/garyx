@@ -30,7 +30,7 @@ struct GaryxMobileRouteNotFound: Identifiable, Equatable {
 @MainActor
 final class GaryxMobileModel: ObservableObject {
     static let threadListPageLimit = 30
-    static let threadHistoryPageLimit = 120
+    static let threadHistoryPageLimit = 100
     static let threadHistoryUserQueryLimit = 10
     static let selectedThreadReconcileIntervalNanos: UInt64 = 1_500_000_000
     static let assistantDeltaFlushDelayNanos: UInt64 = 50_000_000
