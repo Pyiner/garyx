@@ -80,7 +80,10 @@ struct GaryxPanelScaffold<Content: View, Actions: View>: View {
         self.title = title
         self.subtitle = subtitle
         self.onRefresh = onRefresh
-        self.showsRefreshButton = showsRefreshButton ?? (onRefresh != nil)
+        // Pull-to-refresh, on-appear loads, and the per-gateway event
+        // streams already cover freshness — header refresh buttons are
+        // opt-in chrome, not the default.
+        self.showsRefreshButton = showsRefreshButton ?? false
         self.leadingActionLabel = leadingActionLabel
         self.leadingActionSystemName = leadingActionSystemName
         self.leadingAction = leadingAction
