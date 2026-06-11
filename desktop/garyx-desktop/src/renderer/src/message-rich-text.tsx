@@ -8,6 +8,7 @@ import {
 } from 'streamdown';
 
 import { useI18n } from './i18n';
+import { prepareMessageMarkdown } from './message-markdown-preprocess';
 
 type RichMessageTone = 'default' | 'assistant';
 
@@ -116,6 +117,9 @@ export const RichMessageText = memo(function RichMessageText({
   onLocalFileLinkClick?: LocalFileLinkHandler;
 }) {
   const translations = useStreamdownTranslations();
+  // Surface custom XML tags as visible text and hide Garyx-internal injected
+  // tags before Streamdown sanitizes them away. Display-only.
+  const prepared = useMemo(() => prepareMessageMarkdown(text), [text]);
   const components = useMemo<Components>(
     () => ({
       a({
@@ -169,7 +173,7 @@ export const RichMessageText = memo(function RichMessageText({
         translations={translations}
         urlTransform={streamdownUrlTransform}
       >
-        {text}
+        {prepared}
       </Streamdown>
     </div>
   );
