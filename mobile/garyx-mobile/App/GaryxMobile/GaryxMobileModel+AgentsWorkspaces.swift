@@ -811,9 +811,15 @@ extension GaryxMobileModel {
     }
 
     func localFilePreview(_ target: String, reportsError: Bool = true) async -> GaryxWorkspaceFilePreview? {
+        // Relative targets (bare `docs/a.md` paths or relative markdown links
+        // in transcripts) resolve against the selected thread's workspace;
+        // absolute targets ignore this.
+        let threadWorkspace = selectedThread?.workspacePath?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard let resolved = GaryxMobileFileLink.previewTarget(
             fromLink: target,
-            workspacePaths: workspacePathSuggestions
+            workspacePaths: workspacePathSuggestions,
+            currentWorkspaceDir: threadWorkspace.isEmpty ? nil : threadWorkspace
         ) else {
             if reportsError {
                 lastError = "Garyx could not resolve this local file for preview."

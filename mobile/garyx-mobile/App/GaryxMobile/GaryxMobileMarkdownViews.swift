@@ -57,7 +57,8 @@ struct GaryxMarkdownText: View {
                         alt: alt,
                         source: source,
                         allowsRelativeFileLinks: allowsRelativeFileLinks,
-                        filePreviewResolver: onImageFilePreview
+                        filePreviewResolver: onImageFilePreview,
+                        onFileLinkTap: onFileLinkTap
                     )
                 case .table(let table):
                     GaryxMarkdownTableView(
@@ -77,8 +78,14 @@ struct GaryxMarkdownText: View {
         .garyxTextSelection(allowsTextSelection)
     }
 
-    fileprivate static func attributedString(from markdown: String) -> AttributedString {
-        GaryxMarkdownRenderCache.shared.attributedString(from: markdown)
+    fileprivate static func attributedString(
+        from markdown: String,
+        linkifyFilePaths: Bool = false
+    ) -> AttributedString {
+        GaryxMarkdownRenderCache.shared.attributedString(
+            from: markdown,
+            linkifyFilePaths: linkifyFilePaths
+        )
     }
 }
 
@@ -105,7 +112,7 @@ private struct GaryxMarkdownParagraphView: View {
                             .frame(width: 4, height: 4)
                             .offset(y: -2)
 
-                        Text(GaryxMarkdownText.attributedString(from: bullet))
+                        Text(GaryxMarkdownText.attributedString(from: bullet, linkifyFilePaths: onFileLinkTap != nil))
                             .font(GaryxFont.body())
                             .foregroundStyle(foreground)
                             .tint(GaryxTheme.link)
@@ -121,7 +128,7 @@ private struct GaryxMarkdownParagraphView: View {
                             .foregroundStyle(foreground)
                             .garyxTextSelection(allowsTextSelection)
 
-                        Text(GaryxMarkdownText.attributedString(from: numbered.text))
+                        Text(GaryxMarkdownText.attributedString(from: numbered.text, linkifyFilePaths: onFileLinkTap != nil))
                             .font(GaryxFont.body())
                             .foregroundStyle(foreground)
                             .tint(GaryxTheme.link)
@@ -131,7 +138,7 @@ private struct GaryxMarkdownParagraphView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 } else {
-                    Text(GaryxMarkdownText.attributedString(from: line))
+                    Text(GaryxMarkdownText.attributedString(from: line, linkifyFilePaths: onFileLinkTap != nil))
                         .font(GaryxFont.body())
                         .foregroundStyle(foreground)
                         .tint(GaryxTheme.link)
@@ -212,6 +219,12 @@ private enum GaryxMarkdownLinkTarget {
         from url: URL,
         allowsRelativeFileLinks: Bool
     ) -> String {
+        if let detected = GaryxFilePathLinkDetector.target(from: url) {
+            if detected.hasPrefix("/") {
+                return detected
+            }
+            return allowsRelativeFileLinks ? detected : ""
+        }
         if let path = GaryxMobileFileLink.localFilePath(from: url) {
             return path
         }
@@ -401,7 +414,7 @@ private struct GaryxMarkdownTableView: View {
         width: CGFloat,
         isHeader: Bool
     ) -> some View {
-        Text(GaryxMarkdownText.attributedString(from: text.isEmpty ? " " : text))
+        Text(GaryxMarkdownText.attributedString(from: text.isEmpty ? " " : text, linkifyFilePaths: onFileLinkTap != nil))
             .font(isHeader ? GaryxFont.callout(weight: .semibold) : GaryxFont.callout())
             .foregroundStyle(foreground)
             .tint(GaryxTheme.link)
@@ -444,6 +457,7 @@ private struct GaryxMarkdownImageView: View {
     let source: String
     let allowsRelativeFileLinks: Bool
     var filePreviewResolver: GaryxMarkdownImagePreviewResolver?
+    var onFileLinkTap: ((String) -> Void)?
 
     @State private var localImage: UIImage?
     @State private var gatewayPreviewDataUrl: String?
@@ -486,7 +500,15 @@ private struct GaryxMarkdownImageView: View {
 
     var body: some View {
         Button {
-            guard localImage != nil || !loadFailed else { return }
+            if localImage == nil, loadFailed {
+                // Embeds whose target is a real but non-image file (for
+                // example an HTML document) open the shared file preview
+                // instead of dead-ending on a broken image card.
+                if let fileLinkTarget, let onFileLinkTap {
+                    onFileLinkTap(fileLinkTarget)
+                }
+                return
+            }
             showsPreview = true
         } label: {
             if let image = localImage {
@@ -503,7 +525,11 @@ private struct GaryxMarkdownImageView: View {
             } else {
                 Group {
                     if loadFailed {
-                        failurePlaceholder
+                        if fileLinkTarget != nil, onFileLinkTap != nil {
+                            filePreviewChip
+                        } else {
+                            failurePlaceholder
+                        }
                     } else {
                         loadingPlaceholder
                     }
@@ -573,6 +599,47 @@ private struct GaryxMarkdownImageView: View {
                 .scaleEffect(0.78)
         }
         .frame(width: maxDisplayWidth, height: 160)
+    }
+
+    private var fileLinkTarget: String? {
+        guard sourceDataUrl == nil, resolvedURL == nil else { return nil }
+        let target = GaryxMarkdownLinkTarget.fileTarget(
+            fromRawSource: source,
+            allowsRelativeFileLinks: allowsRelativeFileLinks
+        )
+        return target.isEmpty ? nil : target
+    }
+
+    @ViewBuilder
+    private var filePreviewChip: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "doc.text")
+                .font(GaryxFont.system(size: 18, weight: .medium))
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(alt.isEmpty ? sourceFileName : alt)
+                    .font(GaryxFont.callout(weight: .medium))
+                    .foregroundStyle(.primary)
+                Text(source)
+                    .font(GaryxFont.caption())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right")
+                .font(GaryxFont.system(size: 11, weight: .semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(width: maxDisplayWidth, alignment: .leading)
+        .background(Color(.secondarySystemFill))
+    }
+
+    private var sourceFileName: String {
+        let name = (trimmedSource as NSString).lastPathComponent
+        return name.isEmpty ? "File" : name
     }
 
     @ViewBuilder
@@ -767,18 +834,43 @@ private final class GaryxMarkdownRenderCache {
         return blocks
     }
 
-    func attributedString(from markdown: String) -> AttributedString {
+    func attributedString(from markdown: String, linkifyFilePaths: Bool = false) -> AttributedString {
         let byteCount = markdown.utf8.count
         guard byteCount <= maxCacheableAttributedBytes else {
-            return (try? AttributedString(markdown: markdown, options: attributedOptions)) ?? AttributedString(markdown)
+            return renderAttributedString(from: markdown, linkifyFilePaths: linkifyFilePaths)
         }
-        let key = NSString(string: markdown)
+        let key = NSString(string: "\(linkifyFilePaths ? "L" : "P")|\(markdown)")
         if let cached = attributedCache.object(forKey: key) {
             return cached.value
         }
-        let value = (try? AttributedString(markdown: markdown, options: attributedOptions)) ?? AttributedString(markdown)
+        let value = renderAttributedString(from: markdown, linkifyFilePaths: linkifyFilePaths)
         attributedCache.setObject(GaryxMarkdownAttributedCacheEntry(value: value), forKey: key, cost: max(1, byteCount))
         return value
+    }
+
+    private func renderAttributedString(from markdown: String, linkifyFilePaths: Bool) -> AttributedString {
+        let value = (try? AttributedString(markdown: markdown, options: attributedOptions)) ?? AttributedString(markdown)
+        guard linkifyFilePaths else { return value }
+        return Self.linkifyingBareFilePaths(value)
+    }
+
+    /// Turns bare file-system paths in already-parsed markdown into tappable
+    /// `garyx-path:` links so transcript surfaces route them through the
+    /// shared file-preview path. Existing links are left untouched.
+    private static func linkifyingBareFilePaths(_ attributed: AttributedString) -> AttributedString {
+        let plain = String(attributed.characters)
+        let detected = GaryxFilePathLinkDetector.detect(in: plain)
+        guard !detected.isEmpty else { return attributed }
+        var result = attributed
+        for link in detected {
+            guard let url = GaryxFilePathLinkDetector.linkURL(forTarget: link.target) else { continue }
+            let lower = result.index(result.startIndex, offsetByCharacters: link.characterOffset)
+            let upper = result.index(lower, offsetByCharacters: link.characterCount)
+            let range = lower..<upper
+            guard result[range].runs.allSatisfy({ $0.link == nil }) else { continue }
+            result[range].link = url
+        }
+        return result
     }
 }
 

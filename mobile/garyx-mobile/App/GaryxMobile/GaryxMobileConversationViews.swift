@@ -1140,6 +1140,7 @@ struct GaryxMessageBubble: View {
                             codeBackground: userCodeBackground,
                             codeBorder: GaryxTheme.hairline,
                             fillsAvailableWidth: false,
+                            allowsRelativeFileLinks: true,
                             allowsTextSelection: false,
                             onFileLinkTap: openMessageFileLink,
                             onImageFilePreview: messageImageFilePreview
@@ -1171,6 +1172,7 @@ struct GaryxMessageBubble: View {
                     GaryxMarkdownText(
                         text: displayText,
                         foreground: .primary,
+                        allowsRelativeFileLinks: true,
                         allowsTextSelection: false,
                         onFileLinkTap: openMessageFileLink,
                         onImageFilePreview: messageImageFilePreview
@@ -1188,6 +1190,7 @@ struct GaryxMessageBubble: View {
                 text: displayText,
                 foreground: .secondary,
                 fillsAvailableWidth: false,
+                allowsRelativeFileLinks: true,
                 allowsTextSelection: false,
                 onFileLinkTap: openMessageFileLink,
                 onImageFilePreview: messageImageFilePreview
