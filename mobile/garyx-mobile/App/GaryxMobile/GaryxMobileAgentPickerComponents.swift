@@ -738,21 +738,17 @@ struct GaryxNewThreadAgentSheet: View {
             )
             let overflowCount = GaryxAgentTargetListPresentation.overflowCount(model.agentTargets)
 
-            GaryxGlassPanel(cornerRadius: 28, fallbackMaterial: .ultraThinMaterial, shadowOpacity: 0.045) {
-                VStack(spacing: 0) {
-                    ForEach(Array(primaryTargets.enumerated()), id: \.element.id) { index, target in
-                        agentRow(for: target)
-                        if index < primaryTargets.count - 1 || overflowCount > 0 {
-                            Divider().padding(.leading, 52)
-                        }
-                    }
-
-                    if overflowCount > 0 {
-                        allAgentsRow
+            VStack(spacing: 0) {
+                ForEach(Array(primaryTargets.enumerated()), id: \.element.id) { index, target in
+                    agentRow(for: target)
+                    if index < primaryTargets.count - 1 || overflowCount > 0 {
+                        Divider().padding(.leading, 52)
                     }
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
+
+                if overflowCount > 0 {
+                    allAgentsRow
+                }
             }
         }
     }
@@ -790,17 +786,13 @@ struct GaryxNewThreadAgentSheet: View {
 
     private var allAgentsPage: some View {
         let orderedTargets = GaryxAgentTargetListPresentation.ordered(model.agentTargets)
-        return GaryxGlassPanel(cornerRadius: 28, fallbackMaterial: .ultraThinMaterial, shadowOpacity: 0.045) {
-            VStack(spacing: 0) {
-                ForEach(Array(orderedTargets.enumerated()), id: \.element.id) { index, target in
-                    agentRow(for: target, returnsToMain: true)
-                    if index < orderedTargets.count - 1 {
-                        Divider().padding(.leading, 52)
-                    }
+        return VStack(spacing: 0) {
+            ForEach(Array(orderedTargets.enumerated()), id: \.element.id) { index, target in
+                agentRow(for: target, returnsToMain: true)
+                if index < orderedTargets.count - 1 {
+                    Divider().padding(.leading, 52)
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
         }
     }
 
@@ -864,35 +856,31 @@ struct GaryxNewThreadAgentSheet: View {
                 .padding(.leading, 8)
                 .padding(.top, 10)
 
-            GaryxGlassPanel(cornerRadius: 28, fallbackMaterial: .ultraThinMaterial, shadowOpacity: 0.045) {
-                VStack(spacing: 0) {
+            VStack(spacing: 0) {
+                overrideRow(
+                    title: "Model",
+                    value: GaryxThreadModelOverridePresentation.modelLabel(
+                        providerModels: providerModels,
+                        model: model.newThreadModelOverride
+                    ) ?? "Agent default"
+                ) {
+                    page = .model
+                }
+
+                if !reasoningEfforts.isEmpty {
+                    Divider().padding(.leading, 18)
+
                     overrideRow(
-                        title: "Model",
-                        value: GaryxThreadModelOverridePresentation.modelLabel(
+                        title: "Thinking level",
+                        value: GaryxThreadModelOverridePresentation.reasoningEffortLabel(
                             providerModels: providerModels,
-                            model: model.newThreadModelOverride
+                            model: model.newThreadEffortFilterModel,
+                            reasoningEffort: model.newThreadReasoningEffortOverride
                         ) ?? "Agent default"
                     ) {
-                        page = .model
-                    }
-
-                    if !reasoningEfforts.isEmpty {
-                        Divider().padding(.leading, 18)
-
-                        overrideRow(
-                            title: "Thinking level",
-                            value: GaryxThreadModelOverridePresentation.reasoningEffortLabel(
-                                providerModels: providerModels,
-                                model: model.newThreadEffortFilterModel,
-                                reasoningEffort: model.newThreadReasoningEffortOverride
-                            ) ?? "Agent default"
-                        ) {
-                            page = .thinkingLevel
-                        }
+                        page = .thinkingLevel
                     }
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
             }
         }
     }
@@ -960,42 +948,38 @@ struct GaryxNewThreadAgentSheet: View {
         selectedId: String,
         onSelect: @escaping (String) -> Void
     ) -> some View {
-        GaryxGlassPanel(cornerRadius: 28, fallbackMaterial: .ultraThinMaterial, shadowOpacity: 0.045) {
-            VStack(spacing: 0) {
-                ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
-                    Button {
-                        onSelect(option.id)
-                    } label: {
-                        HStack(spacing: 12) {
-                            Group {
-                                if selectedId == option.id {
-                                    GaryxSelectionCheckmark(size: 18)
-                                } else {
-                                    Color.clear
-                                }
+        VStack(spacing: 0) {
+            ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
+                Button {
+                    onSelect(option.id)
+                } label: {
+                    HStack(spacing: 12) {
+                        Group {
+                            if selectedId == option.id {
+                                GaryxSelectionCheckmark(size: 18)
+                            } else {
+                                Color.clear
                             }
-                            .frame(width: 24)
-
-                            Text(option.label)
-                                .font(GaryxFont.callout(weight: selectedId == option.id ? .semibold : .regular))
-                                .foregroundStyle(.primary)
-                                .lineLimit(1)
-
-                            Spacer(minLength: 0)
                         }
-                        .padding(.horizontal, 8)
-                        .frame(minHeight: 48)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
+                        .frame(width: 24)
 
-                    if index < options.count - 1 {
-                        Divider().padding(.leading, 46)
+                        Text(option.label)
+                            .font(GaryxFont.callout(weight: selectedId == option.id ? .semibold : .regular))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+
+                        Spacer(minLength: 0)
                     }
+                    .padding(.horizontal, 8)
+                    .frame(minHeight: 48)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                if index < options.count - 1 {
+                    Divider().padding(.leading, 46)
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
         }
     }
 

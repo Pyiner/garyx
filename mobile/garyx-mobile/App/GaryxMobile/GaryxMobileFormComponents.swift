@@ -617,65 +617,61 @@ struct GaryxWorkspaceSelectSheet: View {
             sheetHeader(title: title)
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    GaryxGlassPanel(cornerRadius: 28, fallbackMaterial: .ultraThinMaterial, shadowOpacity: 0.045) {
-                        VStack(spacing: 0) {
-                            if allowsEmpty {
-                                workspaceOptionRow(
-                                    title: "No workspace",
-                                    detail: "",
-                                    systemName: "minus.circle",
-                                    isSelected: trimmedPath.isEmpty
-                                ) {
-                                    path = ""
-                                    dismiss()
-                                }
-                                if !visibleWorkspacePaths.isEmpty || selectedPathMissingFromOptions {
-                                    Divider().padding(.leading, 52)
-                                }
-                            }
-                            if selectedPathMissingFromOptions {
-                                workspaceOptionRow(
-                                    title: workspaceDisplayName(trimmedPath),
-                                    detail: trimmedPath,
-                                    systemName: "folder",
-                                    isSelected: true,
-                                    badge: "Current"
-                                ) {
-                                    dismiss()
-                                }
-                                if !visibleWorkspacePaths.isEmpty {
-                                    Divider().padding(.leading, 52)
-                                }
-                            }
-                            ForEach(Array(visibleWorkspacePaths.enumerated()), id: \.element) { index, workspace in
-                                workspaceOptionRow(
-                                    title: workspaceDisplayName(workspace),
-                                    detail: workspace,
-                                    systemName: "folder",
-                                    isSelected: normalizedWorkspacePath(workspace) == normalizedSelectedPath
-                                ) {
-                                    path = workspace
-                                    dismiss()
-                                }
-                                if index < visibleWorkspacePaths.count - 1 {
-                                    Divider().padding(.leading, 52)
-                                }
-                            }
-                            Divider().padding(.leading, 52)
+                    VStack(spacing: 0) {
+                        if allowsEmpty {
                             workspaceOptionRow(
-                                title: isAddingWorkspace ? "Adding workspace..." : "Add workspace",
+                                title: "No workspace",
                                 detail: "",
-                                systemName: isAddingWorkspace ? "hourglass" : "plus.circle",
-                                isSelected: false,
-                                showsChevron: true
+                                systemName: "minus.circle",
+                                isSelected: trimmedPath.isEmpty
                             ) {
-                                addWorkspacePath = ""
-                                showsAddWorkspace = true
+                                path = ""
+                                dismiss()
                             }
-                            .disabled(isAddingWorkspace)
+                            if !visibleWorkspacePaths.isEmpty || selectedPathMissingFromOptions {
+                                Divider().padding(.leading, 52)
+                            }
                         }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
+                        if selectedPathMissingFromOptions {
+                            workspaceOptionRow(
+                                title: workspaceDisplayName(trimmedPath),
+                                detail: trimmedPath,
+                                systemName: "folder",
+                                isSelected: true,
+                                badge: "Current"
+                            ) {
+                                dismiss()
+                            }
+                            if !visibleWorkspacePaths.isEmpty {
+                                Divider().padding(.leading, 52)
+                            }
+                        }
+                        ForEach(Array(visibleWorkspacePaths.enumerated()), id: \.element) { index, workspace in
+                            workspaceOptionRow(
+                                title: workspaceDisplayName(workspace),
+                                detail: workspace,
+                                systemName: "folder",
+                                isSelected: normalizedWorkspacePath(workspace) == normalizedSelectedPath
+                            ) {
+                                path = workspace
+                                dismiss()
+                            }
+                            if index < visibleWorkspacePaths.count - 1 {
+                                Divider().padding(.leading, 52)
+                            }
+                        }
+                        Divider().padding(.leading, 52)
+                        workspaceOptionRow(
+                            title: isAddingWorkspace ? "Adding workspace..." : "Add workspace",
+                            detail: "",
+                            systemName: isAddingWorkspace ? "hourglass" : "plus.circle",
+                            isSelected: false,
+                            showsChevron: true
+                        ) {
+                            addWorkspacePath = ""
+                            showsAddWorkspace = true
+                        }
+                        .disabled(isAddingWorkspace)
                     }
                 }
                 .padding(.horizontal, 22)
@@ -726,6 +722,13 @@ struct GaryxWorkspaceSelectSheet: View {
                             Text(badge)
                                 .font(GaryxFont.caption(weight: .semibold))
                                 .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 1.5)
+                                .background(
+                                    Color(.secondarySystemFill),
+                                    in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                )
                         }
                     }
                     if !detail.isEmpty {
@@ -776,13 +779,9 @@ struct GaryxWorkspacePathPickerSheet: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    GaryxGlassPanel(cornerRadius: 28, fallbackMaterial: .ultraThinMaterial, shadowOpacity: 0.045) {
-                        GaryxWorkspaceDirectoryBrowser(selectedPath: path) { selectedPath in
-                            path = selectedPath
-                            dismiss()
-                        }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
+                    GaryxWorkspaceDirectoryBrowser(selectedPath: path) { selectedPath in
+                        path = selectedPath
+                        dismiss()
                     }
                 }
                 .padding(.horizontal, 22)
