@@ -61,7 +61,52 @@ extension GaryxMobileModel {
         pinnedThreadIds.removeAll { $0 == normalizedId }
         recentThreadIds.removeAll { $0 == normalizedId }
         threads.removeAll { $0.id == normalizedId }
+        clearPersistedLastOpenedThreadId(ifMatches: normalizedId)
         persistRecentThreadsWidgetSnapshot()
+    }
+
+    // MARK: - Last opened thread restore
+
+    /// Remembers the most recently opened thread per gateway scope so a fresh
+    /// app launch can land back in it instead of the new-thread draft.
+    func persistLastOpenedThreadId(_ threadId: String) {
+        #if DEBUG
+        if debugSnapshotActive { return }
+        #endif
+        let normalizedId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedId.isEmpty else { return }
+        defaults.set(normalizedId, forKey: scopedSettingsKey(GaryxMobileSettingsKeys.lastOpenedThreadId))
+    }
+
+    func clearPersistedLastOpenedThreadId(ifMatches threadId: String) {
+        let key = scopedSettingsKey(GaryxMobileSettingsKeys.lastOpenedThreadId)
+        guard defaults.string(forKey: key) == threadId else { return }
+        defaults.removeObject(forKey: key)
+    }
+
+    var persistedLastOpenedThreadId: String? {
+        let value = defaults.string(forKey: scopedSettingsKey(GaryxMobileSettingsKeys.lastOpenedThreadId))?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return value.isEmpty ? nil : value
+    }
+
+    /// One-shot launch restore: when nothing else (deep link, widget link,
+    /// pending route) claimed navigation, reopen the last opened thread
+    /// through the shared open path.
+    func restoreLastOpenedThreadIfNeeded() async {
+        guard !hasAttemptedLastOpenedThreadRestore else { return }
+        hasAttemptedLastOpenedThreadRestore = true
+        #if DEBUG
+        guard !debugSnapshotActive else { return }
+        #endif
+        guard selectedThread == nil,
+              pendingMobileRoute == nil,
+              !threadOpenState.hasPendingIntent,
+              activePanel == .chat,
+              let threadId = persistedLastOpenedThreadId else {
+            return
+        }
+        await openThread(id: threadId)
     }
 
     static func pinnedThreadIdsWith(
@@ -490,6 +535,7 @@ extension GaryxMobileModel {
             resetSelectedThreadHistoryPagination()
         }
         selectedThread = thread
+        persistLastOpenedThreadId(thread.id)
         clearPendingNewThreadAgentTarget()
         clearPendingBotDraft()
         draftThreadTitle = thread.title

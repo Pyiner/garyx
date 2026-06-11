@@ -71,6 +71,7 @@ extension GaryxMobileModel {
 
     func resetGatewayRuntimeState() {
         gatewayRuntimeGeneration = UUID()
+        hasAttemptedLastOpenedThreadRestore = false
         selectedThreadRecoveryTask?.cancel()
         selectedThreadRecoveryTask = nil
         selectedThreadRecoveryThreadId = nil
@@ -369,6 +370,10 @@ extension GaryxMobileModel {
                 guard isCurrentConnectRefresh(requestId, runtimeGeneration: runtimeGeneration, scopeId: gatewayScopeId) else {
                     return
                 }
+            }
+            await restoreLastOpenedThreadIfNeeded()
+            guard isCurrentConnectRefresh(requestId, runtimeGeneration: runtimeGeneration, scopeId: gatewayScopeId) else {
+                return
             }
             async let agentTargetsRefresh: Void = refreshAgentTargets()
             await refreshThreads()
