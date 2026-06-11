@@ -156,7 +156,6 @@ function renderUserMessageBubbleParts({
   content,
   pending,
   error,
-  errorNote,
   retryLabel,
   onRetry,
   onLocalFileLinkClick,
@@ -167,7 +166,6 @@ function renderUserMessageBubbleParts({
   content?: unknown;
   pending?: boolean;
   error?: boolean;
-  errorNote?: string;
   retryLabel?: string;
   onRetry?: () => void;
   onLocalFileLinkClick: (path: string) => void;
@@ -217,14 +215,13 @@ function renderUserMessageBubbleParts({
     );
   });
 
-  if (!error || !errorNote) {
+  if (!error) {
     return bubbles;
   }
   return [
     ...bubbles,
     <div className="message-error-note" key={`${keyPrefix}:error-note`} role="status">
       <CircleAlert aria-hidden size={12} strokeWidth={2} />
-      <span>{errorNote}</span>
       {onRetry && retryLabel ? (
         <button className="message-error-note-retry" onClick={onRetry} type="button">
           {retryLabel}
@@ -713,7 +710,6 @@ export function ThreadPage({
                   content: entry.message.content,
                   pending: entry.message.pending,
                   error: entry.message.error,
-                  errorNote: t("Not delivered"),
                   retryLabel: t("Retry"),
                   onRetry:
                     onRetryFailedMessage &&

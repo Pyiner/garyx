@@ -9345,8 +9345,8 @@ button.team-agent-speaker:focus-visible {
 }
 
 /* A failed send keeps reading as a completely normal user bubble — the
-   content is not the error, delivery is. The "Not delivered · Retry"
-   annotation below carries the failure. */
+   content is not the error, delivery is. The alert-icon + Retry annotation
+   below carries the failure. */
 .message-bubble.user.error,
 .message-attachment-bubble.user.error {
   padding: 8px 12px;
