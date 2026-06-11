@@ -280,17 +280,6 @@ export function WebSettingsPage({
                   value={String(gateway.public_url || '')}
                 />
               </label>
-              <label className="web-settings-field web-settings-field-span">
-                <span className="eyebrow">sessions.data_dir</span>
-                <Input
-                  onChange={(event) => {
-                    onPatchSessions({ dataDir: event.target.value });
-                  }}
-                  placeholder="/path/to/thread-history"
-                  type="text"
-                  value={String(sessions.data_dir || '')}
-                />
-              </label>
                 </div>
               </>
             ) : null}

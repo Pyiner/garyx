@@ -751,7 +751,6 @@ const zhCN: Record<string, string> = {
   'Delivery': '投递',
   'Description': '描述',
   'Detail': '详情',
-  'Directory used by the gateway to persist thread history.': '网关用于持久化线程历史的目录。',
   'Disable skill': '禁用技能',
   'Display name': '显示名',
   'Done': '完成',

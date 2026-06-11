@@ -1931,42 +1931,7 @@ export function GatewaySettingsPanel({
     </div>
   );
 
-  const gatewayRuntimePanel = (
-    <>
-      <div className="codex-section">
-        <div className="codex-section-header">
-          <span className="codex-section-title">{t('Defaults')}</span>
-          {renderGatewaySaveAction()}
-        </div>
-        <div className="codex-list-card">
-          <SettingsControlRow
-            control={
-              <Input
-                className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
-                value={String(gatewayDraft?.sessions?.data_dir || '')}
-                onChange={(event) => {
-                  onMutateGatewayDraft((next) => {
-                    next.sessions ||= {};
-                    next.sessions.data_dir = event.target.value.trim() || null;
-                  });
-                }}
-              />
-            }
-            description={t('Directory used by the gateway to persist thread history.')}
-            label="sessions.data_dir"
-            stacked
-          />
-        </div>
-      </div>
-    </>
-  );
-
-  const gatewayPanel = (
-    <>
-      {connectionPanel}
-      {gatewayRuntimePanel}
-    </>
-  );
+  const gatewayPanel = <>{connectionPanel}</>;
 
   const providerConfigTablePanel = (
     <section className="provider-section">
