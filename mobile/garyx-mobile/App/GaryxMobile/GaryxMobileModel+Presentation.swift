@@ -36,6 +36,28 @@ extension GaryxMobileModel {
         return gatewayProfiles.first { $0.gatewayUrl.lowercased() == currentURL }
     }
 
+    var gatewaySwitcherIdentity: GaryxGatewaySwitcherIdentity {
+        GaryxGatewaySwitcherPresentation.identity(
+            gatewayURL: gatewayURL,
+            profileLabel: currentGatewayProfile?.label,
+            connectionState: connectionState
+        )
+    }
+
+    var gatewaySwitcherRows: [GaryxGatewaySwitcherRow] {
+        GaryxGatewaySwitcherPresentation.rows(
+            profiles: gatewayProfiles,
+            currentGatewayURL: gatewayURL
+        )
+    }
+
+    var isGatewayConnectionReady: Bool {
+        if case .ready = connectionState {
+            return true
+        }
+        return false
+    }
+
     var canSend: Bool {
         canSendComposerPayload(text: draft, attachments: composerAttachments)
     }

@@ -87,6 +87,33 @@ final class GaryxMobileGatewaySettingsModelsTests: XCTestCase {
         XCTAssertEqual(profiles.first?.label, "gateway.example.test")
     }
 
+    func testPreservedLabelPrefersExplicitThenExistingThenDefault() {
+        XCTAssertEqual(
+            GaryxGatewayProfileStorage.preservedLabel(
+                explicit: " Home Mac mini ",
+                existing: "Old Name",
+                gatewayUrl: "https://gateway.example.test"
+            ),
+            "Home Mac mini"
+        )
+        XCTAssertEqual(
+            GaryxGatewayProfileStorage.preservedLabel(
+                explicit: "  ",
+                existing: "Custom Name",
+                gatewayUrl: "https://gateway.example.test"
+            ),
+            "Custom Name"
+        )
+        XCTAssertEqual(
+            GaryxGatewayProfileStorage.preservedLabel(
+                explicit: nil,
+                existing: nil,
+                gatewayUrl: "http://127.0.0.1:31337"
+            ),
+            "127.0.0.1:31337"
+        )
+    }
+
     func testGatewayProfileStorageKeepsOnlyEightRecentProfiles() {
         let profiles = (0..<10).map { index in
             makeProfile(

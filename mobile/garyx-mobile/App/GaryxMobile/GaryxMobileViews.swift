@@ -57,6 +57,7 @@ struct GaryxGatewaySetupView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     var isSheet = false
     var startsEmpty = false
+    @State private var draftGatewayLabel = ""
     @State private var draftGatewayURL = ""
     @State private var draftGatewayAuthToken = ""
     @State private var didInitializeDraft = false
@@ -119,7 +120,9 @@ struct GaryxGatewaySetupView: View {
                     GaryxFormErrorText(text: failureMessage)
                 }
 
-                GaryxFormGroupedSection(title: "Connection") {
+                GaryxFormGroupedSection(title: "Gateway") {
+                    GaryxFormTextFieldRow(title: "Name", text: $draftGatewayLabel)
+                    Divider().padding(.leading, 16)
                     GaryxFormTextFieldRow(
                         title: "Gateway URL",
                         text: $draftGatewayURL,
@@ -258,6 +261,7 @@ struct GaryxGatewaySetupView: View {
 
     private func initializeDraft() {
         guard !didInitializeDraft else { return }
+        draftGatewayLabel = startsEmpty ? "" : (model.currentGatewayProfile?.label ?? "")
         draftGatewayURL = startsEmpty ? "" : model.gatewayURL
         draftGatewayAuthToken = startsEmpty ? "" : model.gatewayAuthToken
         didInitializeDraft = true
@@ -273,8 +277,11 @@ struct GaryxGatewaySetupView: View {
         model.gatewayURL = draftGatewayURL
         model.gatewayAuthToken = draftGatewayAuthToken
         await model.connectAndRefresh()
-        if isSheet, case .ready = model.connectionState {
-            closeSettingsSheet()
+        if case .ready = model.connectionState {
+            model.rememberCurrentGatewayProfile(label: draftGatewayLabel)
+            if isSheet {
+                closeSettingsSheet()
+            }
         }
     }
 

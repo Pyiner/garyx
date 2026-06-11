@@ -389,6 +389,7 @@ extension GaryxMobileModel {
             openNewThreadDraft()
         }
         debugShowsWorkspaceModeSheet = shouldShowWorkspaceModeSheet
+        debugShowsGatewaySwitcher = queryValue("sheet") == "gatewaySwitcher"
         return true
     }
 
@@ -459,6 +460,7 @@ extension GaryxMobileModel {
         gatewaySettingsStatus = nil
         connectionState = .ready(version: "debug")
         debugShowsWorkspaceModeSheet = false
+        debugShowsGatewaySwitcher = false
         isLoadingThreads = false
         resetThreadListPagination()
         remoteStateLoadPhase = .loaded

@@ -290,12 +290,16 @@ extension GaryxMobileModel {
         }
     }
 
-    func rememberCurrentGatewayProfile() {
+    func rememberCurrentGatewayProfile(label: String? = nil) {
         let url = normalizedGatewayURL(gatewayURL)
         guard !url.isEmpty else { return }
         let profile = GaryxGatewayProfile(
             id: GaryxGatewayProfileStorage.stableId(for: url),
-            label: GaryxGatewayProfileStorage.label(for: url),
+            label: GaryxGatewayProfileStorage.preservedLabel(
+                explicit: label,
+                existing: currentGatewayProfile?.label,
+                gatewayUrl: url
+            ),
             gatewayUrl: url,
             updatedAt: Date(),
             hasToken: !gatewayAuthToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

@@ -98,6 +98,22 @@ enum GaryxGatewayProfileStorage {
         }
         return url.host ?? gatewayUrl
     }
+
+    /// Label to persist when re-saving a gateway profile: an explicit
+    /// user-entered name wins, then the already-saved name, then the
+    /// URL-derived default. Re-saving on reconnect must not clobber a
+    /// custom name with the host default.
+    static func preservedLabel(explicit: String?, existing: String?, gatewayUrl: String) -> String {
+        let explicitTrimmed = explicit?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !explicitTrimmed.isEmpty {
+            return explicitTrimmed
+        }
+        let existingTrimmed = existing?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !existingTrimmed.isEmpty {
+            return existingTrimmed
+        }
+        return label(for: gatewayUrl)
+    }
 }
 
 struct GaryxConfiguredBotAccountSettings: Identifiable, Equatable {
