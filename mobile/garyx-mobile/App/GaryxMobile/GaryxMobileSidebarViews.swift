@@ -137,10 +137,59 @@ struct GaryxThreadSidebar: View {
         }
     }
 
+    // Section headers and thread rows are emitted directly into the enclosing
+    // LazyVStack. Wrapping a section's ForEach in its own VStack would turn the
+    // whole section into one eager lazy item and materialize every row at once.
     @ViewBuilder
     private var sidebarThreadSections: some View {
-        GaryxPinnedThreadsSection()
-        GaryxRecentThreadsSection()
+        let pinned = model.pinnedThreads
+        if !pinned.isEmpty {
+            GaryxSidebarSectionHeader(title: "Pinned", systemImage: "pin.fill")
+                .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
+                .padding(.bottom, 4)
+
+            ForEach(pinned) { thread in
+                GaryxSidebarThreadButton(
+                    model: model,
+                    thread: thread,
+                    isSelected: model.selectedThread?.id == thread.id,
+                    isPinned: true,
+                    trailingTimestamp: garyxFormattedTaskTimestamp(thread.updatedAt ?? thread.createdAt)
+                )
+            }
+
+            Color.clear
+                .frame(height: 10)
+                .accessibilityHidden(true)
+        }
+
+        let recent = model.recentThreads.filter { !model.isThreadPinned($0.id) }
+        GaryxSidebarSectionHeader(title: "Recent", systemImage: "clock.fill")
+            .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
+            .padding(.bottom, 4)
+
+        if recent.isEmpty {
+            if model.isLoadingThreads {
+                GaryxSidebarLoadingRow(title: "Loading recent threads")
+            } else {
+                GaryxSidebarEmptyRow(title: "No recent threads")
+            }
+        } else {
+            ForEach(recent) { thread in
+                GaryxSidebarThreadButton(
+                    model: model,
+                    thread: thread,
+                    isSelected: model.selectedThread?.id == thread.id,
+                    isPinned: false,
+                    trailingTimestamp: garyxFormattedTaskTimestamp(thread.updatedAt ?? thread.createdAt)
+                )
+            }
+        }
+
+        Color.clear
+            .frame(height: 10)
+            .accessibilityHidden(true)
+
         GaryxSidebarThreadAutoLoadFooter()
     }
 
@@ -159,6 +208,10 @@ struct GaryxThreadSidebar: View {
 
     private func runSilentSidebarRefreshLoop() async {
         guard shouldRefreshSidebarThreads else { return }
+        // Let the drawer-open animation settle before the first refresh so
+        // response handling does not contend with the opening transition.
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        guard !Task.isCancelled, shouldRefreshSidebarThreads else { return }
         await refreshSidebarThreads(silent: true)
         while !Task.isCancelled {
             try? await Task.sleep(nanoseconds: silentRefreshIntervalNanos)
@@ -209,11 +262,7 @@ struct GaryxSidebarHeaderView: View {
                     )
                     .layoutPriority(1)
                 } else {
-                    Text("Garyx")
-                        .font(GaryxFont.system(size: 26, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
+                    GaryxSidebarGatewayIdentityControl()
 
                     Spacer(minLength: 0)
                 }
@@ -337,68 +386,6 @@ private func garyxThreadSort(_ lhs: GaryxThreadSummary, _ rhs: GaryxThreadSummar
         return left > right
     }
     return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
-}
-
-private struct GaryxRecentThreadsSection: View {
-    @EnvironmentObject private var model: GaryxMobileModel
-
-    var body: some View {
-        let threads = model.recentThreads.filter { !model.isThreadPinned($0.id) }
-        VStack(alignment: .leading, spacing: 0) {
-            GaryxSidebarSectionHeader(title: "Recent", systemImage: "clock.fill")
-                .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
-                .padding(.bottom, 4)
-
-            if threads.isEmpty {
-                if model.isLoadingThreads {
-                    GaryxSidebarLoadingRow(title: "Loading recent threads")
-                } else {
-                    GaryxSidebarEmptyRow(title: "No recent threads")
-                }
-            } else {
-                ForEach(threads) { thread in
-                    GaryxSidebarThreadButton(
-                        thread: thread,
-                        trailingTimestamp: garyxFormattedTaskTimestamp(thread.updatedAt ?? thread.createdAt)
-                    )
-                }
-            }
-        }
-        .padding(.bottom, 10)
-        .transition(.opacity)
-    }
-}
-
-private struct GaryxPinnedThreadsSection: View {
-    @EnvironmentObject private var model: GaryxMobileModel
-
-    var body: some View {
-        if !model.pinnedThreads.isEmpty {
-            GaryxPinnedThreadsDetailSection()
-                .padding(.bottom, 10)
-        }
-    }
-}
-
-private struct GaryxPinnedThreadsDetailSection: View {
-    @EnvironmentObject private var model: GaryxMobileModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            GaryxSidebarSectionHeader(title: "Pinned", systemImage: "pin.fill")
-                .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
-                .padding(.bottom, 4)
-
-            ForEach(model.pinnedThreads) { thread in
-                GaryxSidebarThreadButton(
-                    thread: thread,
-                    showsPinnedMarker: true,
-                    trailingTimestamp: garyxFormattedTaskTimestamp(thread.updatedAt ?? thread.createdAt)
-                )
-            }
-        }
-        .transition(.opacity)
-    }
 }
 
 private struct GaryxSidebarLoadingRow: View {
@@ -604,7 +591,10 @@ private struct GaryxAutomationThreadsDetailSection: View {
                 ForEach(entries) { entry in
                     if let thread = threadSummary(for: entry) {
                         GaryxSidebarThreadButton(
+                            model: model,
                             thread: thread,
+                            isSelected: model.selectedThread?.id == thread.id,
+                            isPinned: model.isThreadPinned(thread.id),
                             trailingTimestamp: garyxFormattedTaskTimestamp(entry.finishedAt ?? entry.startedAt)
                         )
                     } else {
@@ -757,7 +747,10 @@ private struct GaryxBotThreadDetailSection: View {
                     let timestamp = garyxFormattedTaskTimestamp(entry.latestActivity)
                     if let thread = threadSummary(for: entry) {
                         GaryxSidebarThreadButton(
+                            model: model,
                             thread: thread,
+                            isSelected: model.selectedThread?.id == thread.id,
+                            isPinned: model.isThreadPinned(thread.id),
                             trailingTimestamp: timestamp,
                             canArchive: canArchive(entry),
                             onSelect: {
@@ -885,6 +878,7 @@ private struct GaryxWorkspaceThreadGroupView: View {
 }
 
 private struct GaryxWorkspaceThreadDetailSection: View {
+    @EnvironmentObject private var model: GaryxMobileModel
     let group: GaryxSidebarWorkspaceThreadGroup
 
     var body: some View {
@@ -902,7 +896,10 @@ private struct GaryxWorkspaceThreadDetailSection: View {
             } else {
                 ForEach(group.threads) { thread in
                     GaryxSidebarThreadButton(
+                        model: model,
                         thread: thread,
+                        isSelected: model.selectedThread?.id == thread.id,
+                        isPinned: model.isThreadPinned(thread.id),
                         trailingTimestamp: garyxFormattedTaskTimestamp(thread.updatedAt ?? thread.createdAt)
                     )
                 }
@@ -946,10 +943,15 @@ private struct GaryxSidebarDisclosureRow: View {
 }
 
 private struct GaryxSidebarThreadButton: View {
-    @EnvironmentObject private var model: GaryxMobileModel
+    // Plain reference on purpose: rows call model actions but must not each
+    // subscribe to the whole observable model, which re-rendered every
+    // materialized row on any model publish. Render state (`isSelected`,
+    // `isPinned`) comes in as values from the observing parent section.
+    let model: GaryxMobileModel
     let thread: GaryxThreadSummary
     var indent: CGFloat = 0
-    var showsPinnedMarker = false
+    var isSelected = false
+    var isPinned = false
     var trailingTimestamp: String?
     var isFullBleed = false
     var canArchive: Bool?
@@ -961,8 +963,8 @@ private struct GaryxSidebarThreadButton: View {
         GaryxSidebarThreadRowView(
             model: GaryxSidebarThreadRowPresentation(
                 thread: thread,
-                isSelected: model.selectedThread?.id == thread.id,
-                isPinned: showsPinnedMarker || model.isThreadPinned(thread.id),
+                isSelected: isSelected,
+                isPinned: isPinned,
                 trailingTimestamp: trailingTimestamp
             ),
             isFullBleed: isFullBleed,

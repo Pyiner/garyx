@@ -426,18 +426,26 @@ struct GaryxShellView: View {
                             safeAreaOutsets: clipOutsets
                         )
                     )
-                    .shadow(
-                        color: Color.black.opacity(0.18 * Double(drawerProgress)),
-                        radius: 30 * drawerProgress,
-                        x: -10 * drawerProgress,
-                        y: 0
-                    )
-                    .shadow(
-                        color: Color.black.opacity(0.06 * Double(drawerProgress)),
-                        radius: 10 * drawerProgress,
-                        x: -3 * drawerProgress,
-                        y: 0
-                    )
+                    // A pre-baked gradient strip instead of `.shadow`: animated
+                    // shadow radii force a full-screen offscreen blur of the
+                    // main panel every drag frame, which drops drawer frames.
+                    .overlay(alignment: .leading) {
+                        LinearGradient(
+                            gradient: Gradient(stops: [
+                                .init(color: Color.black.opacity(0), location: 0),
+                                .init(color: Color.black.opacity(0.04), location: 0.5),
+                                .init(color: Color.black.opacity(0.16), location: 1),
+                            ]),
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                        .frame(width: 40)
+                        .padding(.vertical, -safeAreaInsets.top - safeAreaInsets.bottom)
+                        .offset(x: -40)
+                        .opacity(Double(drawerProgress))
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                    }
                     .contentShape(Rectangle())
                     .simultaneousGesture(openingSidebarGesture(sidebarWidth: width))
             }

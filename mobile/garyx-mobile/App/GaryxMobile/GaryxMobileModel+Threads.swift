@@ -42,7 +42,12 @@ extension GaryxMobileModel {
     }
 
     func applyPinnedThreadIds(_ ids: [String]) {
-        pinnedThreadIds = Self.normalizedPinnedThreadIds(ids)
+        let normalized = Self.normalizedPinnedThreadIds(ids)
+        // The silent sidebar refresh loop calls this every few seconds; skip
+        // the publish when nothing changed so observers do not re-render.
+        if pinnedThreadIds != normalized {
+            pinnedThreadIds = normalized
+        }
     }
 
     func removePinnedThreadIdLocally(_ threadId: String) {
@@ -113,7 +118,10 @@ extension GaryxMobileModel {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             let existingThreads = silent ? threads : []
             let refreshedThreads = Self.mergedThreadSummaries(nextThreads)
-            threads = Self.mergedThreadSummaries(existingThreads + refreshedThreads)
+            let mergedThreads = Self.mergedThreadSummaries(existingThreads + refreshedThreads)
+            if threads != mergedThreads {
+                threads = mergedThreads
+            }
             persistRecentThreadsWidgetSnapshot()
             refreshRemoteBusyIdsForVisibleThreads()
             hydrateCompletedRecentThreadHistories(
@@ -126,8 +134,12 @@ extension GaryxMobileModel {
             if let selectionIdForThisRefresh,
                currentSelectedId == selectionIdForThisRefresh,
                let updatedSelection = threads.first(where: { $0.id == selectionIdForThisRefresh }) {
-                selectedThread = updatedSelection
-                draftThreadTitle = updatedSelection.title
+                if selectedThread != updatedSelection {
+                    selectedThread = updatedSelection
+                }
+                if draftThreadTitle != updatedSelection.title {
+                    draftThreadTitle = updatedSelection.title
+                }
             }
         } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
@@ -144,12 +156,17 @@ extension GaryxMobileModel {
         if hasLoadedBeyondHead {
             let pageIdSet = Set(pageIds)
             let existingTail = recentThreadIds.filter { !pageIdSet.contains($0) }
-            recentThreadIds = pageIds + existingTail
+            let merged = pageIds + existingTail
+            if recentThreadIds != merged {
+                recentThreadIds = merged
+            }
             return
         }
 
         updateThreadListPagination(from: page)
-        recentThreadIds = pageIds
+        if recentThreadIds != pageIds {
+            recentThreadIds = pageIds
+        }
     }
 
     func persistRecentThreadsWidgetSnapshot() {
@@ -179,6 +196,10 @@ extension GaryxMobileModel {
                 builtIn: identity.builtIn
             )
         }
+        // This runs on every silent thread refresh; skip the disk write and
+        // system-wide widget timeline reload when the snapshot is unchanged.
+        guard widgetThreads != lastPersistedWidgetThreads else { return }
+        lastPersistedWidgetThreads = widgetThreads
         GaryxMobileWidgetStore.saveRecentThreads(widgetThreads)
         WidgetCenter.shared.reloadTimelines(ofKind: GaryxRecentThreadsWidgetConstants.kind)
     }
@@ -304,12 +325,17 @@ extension GaryxMobileModel {
     func updateThreadListPagination(from page: GaryxThreadsPage) {
         let returnedEnd = page.offset + page.count
         nextThreadListOffset = returnedEnd
-        hasMoreThreadSummaries = returnedEnd < page.total
+        let hasMore = returnedEnd < page.total
+        if hasMoreThreadSummaries != hasMore {
+            hasMoreThreadSummaries = hasMore
+        }
     }
 
     func updateThreadListPagination(from page: GaryxRecentThreadsPage) {
         nextThreadListOffset = page.offset + page.count
-        hasMoreThreadSummaries = page.hasMore
+        if hasMoreThreadSummaries != page.hasMore {
+            hasMoreThreadSummaries = page.hasMore
+        }
     }
 
     func refreshWorkspaceAndBotThreads() async {
@@ -344,9 +370,15 @@ extension GaryxMobileModel {
     }
 
     func refreshRemoteBusyIdsForVisibleThreads() {
-        runTracker.syncThreadSummaries(
+        // Mutating the @Published tracker in place publishes even when the
+        // sync is a no-op, so reconcile on a copy and only assign on change.
+        var syncedTracker = runTracker
+        syncedTracker.syncThreadSummaries(
             threads.map { (threadId: $0.id, activeRunId: $0.activeRunId) }
         )
+        if syncedTracker != runTracker {
+            runTracker = syncedTracker
+        }
     }
 
     func hydrateCompletedRecentThreadHistories(

@@ -425,17 +425,39 @@ func garyxThreadDate(from value: String) -> Date? {
     garyxISO8601Date(from: value)
 }
 
+// Formatter construction is expensive and these run per row per render in
+// sidebar/task lists, so keep shared instances (ISO8601DateFormatter is
+// thread-safe) plus a bounded parse cache keyed by the raw timestamp string.
+private let garyxISO8601FractionalFormatter: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter
+}()
+
+private let garyxISO8601StandardFormatter: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    return formatter
+}()
+
+private let garyxISO8601DateCache: NSCache<NSString, NSDate> = {
+    let cache = NSCache<NSString, NSDate>()
+    cache.countLimit = 4096
+    return cache
+}()
+
 private func garyxISO8601Date(from value: String) -> Date? {
     let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return nil }
 
-    let fractional = ISO8601DateFormatter()
-    fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    if let date = fractional.date(from: trimmed) {
-        return date
+    let cacheKey = trimmed as NSString
+    if let cached = garyxISO8601DateCache.object(forKey: cacheKey) {
+        return cached as Date
     }
-
-    let standard = ISO8601DateFormatter()
-    standard.formatOptions = [.withInternetDateTime]
-    return standard.date(from: trimmed)
+    let parsed = garyxISO8601FractionalFormatter.date(from: trimmed)
+        ?? garyxISO8601StandardFormatter.date(from: trimmed)
+    if let parsed {
+        garyxISO8601DateCache.setObject(parsed as NSDate, forKey: cacheKey)
+    }
+    return parsed
 }

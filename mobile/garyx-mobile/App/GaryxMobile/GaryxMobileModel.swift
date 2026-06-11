@@ -143,6 +143,7 @@ final class GaryxMobileModel: ObservableObject {
     @Published var workspaceGitStatuses: [String: GaryxWorkspaceGitStatus] = [:]
     #if DEBUG
     @Published var debugShowsWorkspaceModeSheet = false
+    @Published var debugShowsGatewaySwitcher = false
     #endif
     @Published var isUploadingWorkspaceFiles = false
     @Published var workspaceUploadStatus: String?
@@ -223,6 +224,7 @@ final class GaryxMobileModel: ObservableObject {
     var agentTargetsStateRequestId: UUID?
     var workspaceRefreshRequestId: UUID?
     var nextThreadListOffset = 0
+    var lastPersistedWidgetThreads: [GaryxMobileWidgetThread]?
     var selectedThreadNextHistoryBeforeIndex: Int?
     var sceneRefreshTask: Task<Void, Never>?
     var pendingBotId: String?
