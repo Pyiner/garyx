@@ -282,6 +282,9 @@ extension GaryxMobileModel {
                 }
             }
         case .background:
+            // Remember where the user left: only an exit from the
+            // conversation page restores that thread on the next launch.
+            persistLastSessionLocation()
             sceneRefreshTask?.cancel()
             sceneRefreshTask = nil
             cancelSelectedThreadReconcileLoop()

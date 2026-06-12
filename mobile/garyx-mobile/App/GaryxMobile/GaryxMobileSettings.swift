@@ -12,6 +12,7 @@ enum GaryxMobileSettingsKeys {
     static let catalogCacheSnapshot = "garyx.mobile.catalogCacheSnapshot"
     static let pinnedThreadIds = "garyx.mobile.pinnedThreadIds"
     static let lastOpenedThreadId = "garyx.mobile.lastOpenedThreadId"
+    static let lastSessionOnThread = "garyx.mobile.lastSessionOnThread"
     static let gatewayProfiles = "garyx.mobile.gatewayProfiles"
     static let keychainService = "com.garyx.mobile"
     static let gatewayAuthToken = "gatewayAuthToken"

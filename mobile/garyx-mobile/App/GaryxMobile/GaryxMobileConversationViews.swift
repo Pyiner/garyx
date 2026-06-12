@@ -42,13 +42,6 @@ struct GaryxThreadHistoryLoadingView: View {
                 assistantLines(trailingInsets: [24, 64, 148], fill: fill)
                 userBubble(width: 122, fill: fill)
                 assistantLines(trailingInsets: [40, 96], fill: fill)
-
-                GaryxShimmerText(
-                    text: "Loading thread",
-                    font: GaryxFont.footnote(weight: .medium)
-                )
-                .frame(maxWidth: .infinity)
-                .padding(.top, 10)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

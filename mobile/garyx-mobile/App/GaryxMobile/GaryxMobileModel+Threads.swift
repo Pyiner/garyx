@@ -84,6 +84,22 @@ extension GaryxMobileModel {
         defaults.removeObject(forKey: key)
     }
 
+    /// True when the app last went to background while showing a
+    /// conversation; launches restore the thread only in that case.
+    func persistLastSessionLocation() {
+        #if DEBUG
+        if debugSnapshotActive { return }
+        #endif
+        let onThread = navigationState.presentsContent
+            && activePanel == .chat
+            && selectedThread != nil
+        defaults.set(onThread, forKey: scopedSettingsKey(GaryxMobileSettingsKeys.lastSessionOnThread))
+    }
+
+    var persistedLastSessionWasOnThread: Bool {
+        defaults.bool(forKey: scopedSettingsKey(GaryxMobileSettingsKeys.lastSessionOnThread))
+    }
+
     var persistedLastOpenedThreadId: String? {
         let value = defaults.string(forKey: scopedSettingsKey(GaryxMobileSettingsKeys.lastOpenedThreadId))?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -107,6 +123,10 @@ extension GaryxMobileModel {
               // connection was still being established, restoring would slam
               // it shut mid-browse.
               !sidebarVisible,
+              // Only an exit from the conversation page comes back to it;
+              // leaving from the home list (or anywhere else) relaunches
+              // into the list.
+              persistedLastSessionWasOnThread,
               let threadId = persistedLastOpenedThreadId else {
             return
         }
