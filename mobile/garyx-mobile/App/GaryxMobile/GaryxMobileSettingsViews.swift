@@ -436,6 +436,7 @@ struct GaryxGatewayProfileMenuButton: View {
 }
 
 struct GaryxSavedGatewayProfileRow: View {
+    @Environment(\.isEnabled) private var isEnabled
     @EnvironmentObject private var model: GaryxMobileModel
     let profile: GaryxGatewayProfile
     let isCurrent: Bool
@@ -481,6 +482,7 @@ struct GaryxSavedGatewayProfileRow: View {
             .padding(.vertical, 7)
             .contentShape(Rectangle())
             .onTapGesture {
+                guard isEnabled else { return }
                 Task { await model.activateGatewayProfile(profile) }
             }
         }

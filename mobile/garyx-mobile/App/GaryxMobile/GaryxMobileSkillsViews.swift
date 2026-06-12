@@ -340,6 +340,7 @@ private struct GaryxSkillMetadataFields: View {
 }
 
 struct GaryxSkillEntryRow: View {
+    @Environment(\.isEnabled) private var isEnabled
     @EnvironmentObject private var model: GaryxMobileModel
     let node: GaryxSkillEntryNode
     let depth: Int
@@ -381,6 +382,7 @@ struct GaryxSkillEntryRow: View {
             }
             .contentShape(Rectangle())
             .onTapGesture {
+                guard isEnabled else { return }
                 if node.entryType == "file" {
                     onOpenFile(node.path)
                 }

@@ -1076,6 +1076,10 @@ struct GaryxSidebarThreadRowView: View {
     var selectionDisplay: GaryxSidebarThreadSelectionDisplay = .sidebar
     var onSelect: (() -> Void)?
     var onUnpin: (() -> Void)?
+    // `.onTapGesture` ignores `.disabled`, so honor the environment manually:
+    // the drawer disables the sidebar while a horizontal drag is in flight to
+    // keep mid-drag finger-ups from opening rows.
+    @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
@@ -1120,6 +1124,7 @@ struct GaryxSidebarThreadRowView: View {
         }
         .contentShape(Rectangle())
         .onTapGesture {
+            guard isEnabled else { return }
             onSelect?()
         }
         .accessibilityElement(children: .contain)

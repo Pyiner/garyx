@@ -95,6 +95,9 @@ private struct GaryxMarkdownParagraphView: View {
     var allowsRelativeFileLinks = false
     var allowsTextSelection = true
     var onFileLinkTap: ((String) -> Void)?
+    // Text link taps bypass `.disabled`, so the open action honors the
+    // environment manually (the drawer disables content mid-drag).
+    @Environment(\.isEnabled) private var isEnabled
 
     private var lines: [String] {
         markdown.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
@@ -153,6 +156,7 @@ private struct GaryxMarkdownParagraphView: View {
 
     private var openURLAction: OpenURLAction {
         OpenURLAction { url in
+            guard isEnabled else { return .discarded }
             guard let onFileLinkTap else { return .systemAction }
             let target = GaryxMarkdownLinkTarget.fileTarget(
                 from: url,
@@ -339,6 +343,7 @@ private struct GaryxMarkdownTableView: View {
     var allowsRelativeFileLinks = false
     var allowsTextSelection = true
     var onFileLinkTap: ((String) -> Void)?
+    @Environment(\.isEnabled) private var isEnabled
 
     private var columnWidths: [CGFloat] {
         table.columns.indices.map { index in
@@ -440,6 +445,7 @@ private struct GaryxMarkdownTableView: View {
 
     private var openURLAction: OpenURLAction {
         OpenURLAction { url in
+            guard isEnabled else { return .discarded }
             guard let onFileLinkTap else { return .systemAction }
             let target = GaryxMarkdownLinkTarget.fileTarget(
                 from: url,

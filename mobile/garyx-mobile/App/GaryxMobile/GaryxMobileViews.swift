@@ -403,9 +403,19 @@ struct GaryxShellView: View {
             trailing: safeAreaInsets.trailing
         )
 
+        // The drawer pan runs as a simultaneous gesture, so it does not cancel
+        // child taps by itself: a button under the finger would still fire on
+        // touch-up mid-drag and could present covers above the opened
+        // sidebar. While a horizontal drag is in flight both panels' controls
+        // are disabled so the in-flight tap lands dead; while any part of the
+        // sidebar stays revealed, the main panel additionally rejects new
+        // touches without the disabled dimming.
+        let drawerDragActive = sidebarDragAxis == .horizontal
+
         return ZStack(alignment: .topLeading) {
             HStack(spacing: 0) {
                 GaryxThreadSidebar(showsInlineCloseButton: true)
+                    .disabled(drawerDragActive)
                     .frame(width: width)
                     .frame(maxHeight: .infinity)
                     .contentShape(Rectangle())
@@ -413,6 +423,8 @@ struct GaryxShellView: View {
                     .simultaneousGesture(closingSidebarGesture(sidebarWidth: width))
 
                 GaryxMainPanelView()
+                    .disabled(drawerDragActive)
+                    .allowsHitTesting(revealWidth == 0)
                     .frame(width: containerSize.width, height: containerSize.height)
                     .garyxPageBackground()
                     .overlay(alignment: .leading) {

@@ -50,6 +50,7 @@ private enum GaryxComposerLayout {
 
 
 struct GaryxComposer: View {
+    @Environment(\.isEnabled) private var isEnabled
     @EnvironmentObject private var model: GaryxMobileModel
     let isFocused: FocusState<Bool>.Binding
     @State private var draftText = ""
@@ -367,6 +368,9 @@ struct GaryxComposer: View {
         .padding(.bottom, GaryxComposerLayout.inputBottomPadding)
         .contentShape(Rectangle())
         .onTapGesture {
+            // `.onTapGesture` ignores `.disabled`; do not pop the keyboard
+            // from a finger-up while the drawer drag has content disabled.
+            guard isEnabled else { return }
             isFocused.wrappedValue = true
         }
     }
