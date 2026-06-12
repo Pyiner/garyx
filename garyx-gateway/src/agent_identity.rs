@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -54,57 +53,7 @@ pub(crate) fn provider_type_label(provider_type: &garyx_models::ProviderType) ->
     provider_type.as_slug()
 }
 
-pub(crate) fn agent_runtime_metadata(reference: &AgentReference) -> HashMap<String, Value> {
-    let mut metadata = HashMap::new();
-    metadata.insert(
-        "agent_id".to_owned(),
-        Value::String(reference.bound_agent_id().to_owned()),
-    );
-    metadata.insert(
-        "requested_provider_type".to_owned(),
-        Value::String(provider_type_label(&reference.provider_type()).to_owned()),
-    );
-    match reference {
-        AgentReference::Standalone { profile, .. } => {
-            metadata.insert(
-                "agent_display_name".to_owned(),
-                Value::String(profile.display_name.clone()),
-            );
-            if !profile.model.trim().is_empty() {
-                metadata.insert("model".to_owned(), Value::String(profile.model.clone()));
-            }
-            if !profile.model_reasoning_effort.trim().is_empty() {
-                metadata.insert(
-                    "model_reasoning_effort".to_owned(),
-                    Value::String(profile.model_reasoning_effort.clone()),
-                );
-            }
-            if !profile.model_service_tier.trim().is_empty() {
-                metadata.insert(
-                    "model_service_tier".to_owned(),
-                    Value::String(profile.model_service_tier.clone()),
-                );
-            }
-            if !profile.system_prompt.trim().is_empty() {
-                metadata.insert(
-                    "system_prompt".to_owned(),
-                    Value::String(profile.system_prompt.clone()),
-                );
-            }
-        }
-        AgentReference::Team { team, .. } => {
-            metadata.insert(
-                "agent_team_id".to_owned(),
-                Value::String(team.team_id.clone()),
-            );
-            metadata.insert(
-                "agent_display_name".to_owned(),
-                Value::String(team.display_name.clone()),
-            );
-        }
-    }
-    metadata
-}
+pub(crate) use garyx_models::agent_runtime_metadata;
 
 fn message_actor_label(object: &serde_json::Map<String, Value>) -> Option<String> {
     let metadata = object.get("metadata").and_then(Value::as_object);

@@ -1008,6 +1008,13 @@ impl MultiProviderBridge {
         requested_provider: Option<ProviderType>,
     ) -> Result<(String, Arc<dyn AgentLoopProvider>, Option<ProviderType>), BridgeError> {
         let _ = restore_thread_affinity_from_store(self, thread_id).await;
+        // Every dispatch funnels through here, so the thread's bound agent
+        // configuration is backfilled once at this chokepoint instead of at
+        // each entry point. Entry points that resolve an explicit agent
+        // override (for example chat one-off targets) have already written
+        // their values, which win.
+        self.backfill_bound_agent_runtime_metadata(thread_id, metadata)
+            .await;
         let requested_provider =
             requested_provider.or_else(|| requested_provider_from_metadata(metadata));
 

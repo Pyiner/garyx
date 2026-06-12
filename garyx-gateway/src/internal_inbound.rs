@@ -7,7 +7,6 @@ use garyx_models::routing::DeliveryContext;
 use garyx_router::{ChannelBinding, MessageRouter, ThreadMessageRequest};
 use serde_json::Value;
 
-use crate::agent_identity::{agent_runtime_metadata, resolve_agent_reference_from_stores};
 use crate::chat_delivery::build_bound_response_callback;
 use crate::server::AppState;
 
@@ -136,24 +135,9 @@ pub(crate) async fn dispatch_internal_message_to_thread(
             Value::String(requested_provider.as_slug().to_owned()),
         );
     }
-
-    // Internal dispatches (tasks, automations, workflows) target agent-bound
-    // threads. The chat path expands the bound agent's runtime metadata in
-    // prepare; without the same expansion here the shared provider runs with
-    // its default model and persona instead of the agent's configured
-    // model/effort/system prompt. Caller-provided values win.
-    if let Some(agent_id) = thread_string_field(&thread_data, "agent_id")
-        && let Ok(reference) = resolve_agent_reference_from_stores(
-            state.ops.custom_agents.as_ref(),
-            state.ops.agent_teams.as_ref(),
-            &agent_id,
-        )
-        .await
-    {
-        for (key, value) in agent_runtime_metadata(&reference) {
-            extra_metadata.entry(key).or_insert(value);
-        }
-    }
+    // The thread's bound agent runtime configuration (model, effort, system
+    // prompt) is backfilled by the bridge at run resolution; no per-entry
+    // expansion is needed here.
     let response_callback = build_bound_response_callback(
         state,
         target_thread_id,

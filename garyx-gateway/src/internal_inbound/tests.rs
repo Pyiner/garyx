@@ -256,6 +256,11 @@ async fn test_dispatch_internal_message_to_thread_expands_bound_agent_runtime_me
         })
         .await
         .expect("custom agent");
+    // Production keeps the bridge's profile registry in sync on bootstrap and
+    // on every agent write; the bridge chokepoint backfill reads from it.
+    bridge
+        .replace_agent_profiles(state.ops.custom_agents.list_agents().await)
+        .await;
 
     state
         .threads

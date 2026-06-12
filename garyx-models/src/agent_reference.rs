@@ -1,3 +1,7 @@
+use std::collections::HashMap;
+
+use serde_json::Value;
+
 use crate::provider::ProviderType;
 use crate::{AgentTeamProfile, CustomAgentProfile};
 
@@ -111,6 +115,65 @@ pub fn resolve_agent_reference(
         requested_id: normalized.to_owned(),
         profile,
     })
+}
+
+/// Run metadata that carries an agent reference's execution configuration to
+/// the shared providers: identity, provider routing, model override,
+/// reasoning effort, service tier, and system prompt.
+///
+/// Every dispatch path must apply this for the thread's bound agent (the
+/// bridge backfills it at run resolution); entry points that resolve an
+/// explicit agent override apply it at the edge and their values win.
+pub fn agent_runtime_metadata(reference: &AgentReference) -> HashMap<String, Value> {
+    let mut metadata = HashMap::new();
+    metadata.insert(
+        "agent_id".to_owned(),
+        Value::String(reference.bound_agent_id().to_owned()),
+    );
+    metadata.insert(
+        "requested_provider_type".to_owned(),
+        Value::String(reference.provider_type().as_slug().to_owned()),
+    );
+    match reference {
+        AgentReference::Standalone { profile, .. } => {
+            metadata.insert(
+                "agent_display_name".to_owned(),
+                Value::String(profile.display_name.clone()),
+            );
+            if !profile.model.trim().is_empty() {
+                metadata.insert("model".to_owned(), Value::String(profile.model.clone()));
+            }
+            if !profile.model_reasoning_effort.trim().is_empty() {
+                metadata.insert(
+                    "model_reasoning_effort".to_owned(),
+                    Value::String(profile.model_reasoning_effort.clone()),
+                );
+            }
+            if !profile.model_service_tier.trim().is_empty() {
+                metadata.insert(
+                    "model_service_tier".to_owned(),
+                    Value::String(profile.model_service_tier.clone()),
+                );
+            }
+            if !profile.system_prompt.trim().is_empty() {
+                metadata.insert(
+                    "system_prompt".to_owned(),
+                    Value::String(profile.system_prompt.clone()),
+                );
+            }
+        }
+        AgentReference::Team { team, .. } => {
+            metadata.insert(
+                "agent_team_id".to_owned(),
+                Value::String(team.team_id.clone()),
+            );
+            metadata.insert(
+                "agent_display_name".to_owned(),
+                Value::String(team.display_name.clone()),
+            );
+        }
+    }
+    metadata
 }
 
 /// Verify that team_ids do not collide with agent_ids in the unified namespace.

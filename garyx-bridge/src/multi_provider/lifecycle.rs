@@ -344,6 +344,68 @@ impl MultiProviderBridge {
         }
     }
 
+    /// Backfill run metadata with the thread's bound agent runtime
+    /// configuration (model, reasoning effort, service tier, system prompt,
+    /// identity). Shared providers only see per-run metadata, so a dispatch
+    /// that carries no agent fields would otherwise run the provider's
+    /// defaults instead of the bound agent's configuration. Existing
+    /// metadata values always win; built-in agent ids resolve to no custom
+    /// profile and leave the metadata untouched.
+    pub(super) async fn backfill_bound_agent_runtime_metadata(
+        &self,
+        thread_id: &str,
+        metadata: &mut HashMap<String, serde_json::Value>,
+    ) {
+        use serde_json::Value;
+
+        let metadata_agent_id = metadata
+            .get("agent_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let agent_id = match metadata_agent_id {
+            Some(value) => Some(value),
+            None => match self.inner.thread_store.read().await.clone() {
+                Some(store) => store.get(thread_id).await.and_then(|record| {
+                    record
+                        .get("agent_id")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned)
+                }),
+                None => None,
+            },
+        };
+        let Some(agent_id) = agent_id else {
+            return;
+        };
+        let agent_profiles = self
+            .inner
+            .agent_profiles
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let team_profiles = self
+            .inner
+            .team_profiles
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let Ok(reference) = resolve_agent_reference(&agent_id, &agent_profiles, &team_profiles)
+        else {
+            return;
+        };
+        for (key, value) in garyx_models::agent_runtime_metadata(&reference) {
+            metadata.entry(key).or_insert(value);
+        }
+    }
+
     pub(super) async fn provider_key_for_agent_id(
         &self,
         agent_id: &str,
