@@ -415,12 +415,12 @@ public struct GaryxMobileNavigationState: Equatable, Sendable {
     }
 
     public var leadingEdgeAction: GaryxMobileLeadingEdgeAction {
-        if activePanel == .workspaceBots, workspaceBotsDrilldown != nil {
-            return .workspaceBotsOverview
-        }
         if activePanel == .settings, activeSettingsTab != .manage {
             return .settingsOverview
         }
+        // Bot/workspace drilldowns open directly from the drawer or from a
+        // page on the back stack; back follows that stack (or pops home)
+        // instead of surfacing the overview list as an extra level.
         if !mainPanelBackStack.isEmpty {
             return .mainPanelBack
         }
@@ -512,9 +512,10 @@ public struct GaryxMobileNavigationState: Equatable, Sendable {
         dreamsAutoScanEnabled: Bool
     ) -> GaryxMobilePanel {
         switch panel {
-        case .workspaces:
-            // Legacy workspace links land on the workspace-threads page; the
-            // .workspaces panel itself is the file browser.
+        case .bots, .workspaces:
+            // Bot and workspace conversations browse through the
+            // workspace-threads page drilldowns; the .workspaces panel itself
+            // is the file browser.
             .workspaceBots
         case .dreams where !dreamsAutoScanEnabled:
             .chat

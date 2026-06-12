@@ -80,7 +80,7 @@ private struct GaryxRootRouteContentView: View {
         case .autoResearch:
             GaryxAutoResearchView()
         case .bots:
-            GaryxBotConversationsView()
+            GaryxWorkspaceBotsView()
         case .settings:
             GaryxMobileSettingsPanel()
         }
@@ -1580,57 +1580,6 @@ struct GaryxSidebarEmptyState: View {
     }
 }
 
-/// Drawer "Bots" page: configured bots with their conversation drilldowns,
-/// split out of the old combined threads page.
-struct GaryxBotConversationsView: View {
-    @EnvironmentObject private var model: GaryxMobileModel
-    @State private var activeDrilldown: GaryxWorkspaceBotsDrilldown?
-
-    var body: some View {
-        GaryxPanelScaffold(
-            title: title,
-            subtitle: "",
-            onRefresh: { await refresh() },
-            leadingActionLabel: activeDrilldown == nil ? nil : "Bots",
-            leadingAction: activeDrilldown == nil ? nil : { goBack() }
-        ) {
-            VStack(alignment: .leading, spacing: 16) {
-                GaryxSidebarBotsSection(activeDrilldown: $activeDrilldown)
-                if activeDrilldown == nil, model.mobileBotGroups.isEmpty {
-                    GaryxEmptyPanelView(
-                        icon: "bubble.left.and.bubble.right",
-                        title: "No bots yet",
-                        text: ""
-                    )
-                }
-            }
-        } actions: {
-            EmptyView()
-        }
-        .task {
-            await refresh()
-        }
-    }
-
-    private var title: String {
-        if case let .bot(id) = activeDrilldown {
-            return model.mobileBotGroups.first { $0.id == id }?.title ?? "Bot"
-        }
-        return "Bots"
-    }
-
-    private func refresh() async {
-        await model.refreshRemoteState()
-        await model.refreshWorkspaceAndBotThreads()
-    }
-
-    private func goBack() {
-        withAnimation(GaryxMobileMotion.sidebarDrilldown) {
-            activeDrilldown = nil
-        }
-    }
-}
-
 struct GaryxWorkspaceBotsView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @State private var showsAddWorkspace = false
@@ -1641,8 +1590,8 @@ struct GaryxWorkspaceBotsView: View {
             title: title,
             subtitle: "",
             onRefresh: { await refresh() },
-            leadingActionLabel: activeDrilldown == nil ? nil : "Threads",
-            leadingAction: activeDrilldown == nil ? nil : { goBack() }
+            leadingActionLabel: nil,
+            leadingAction: nil
         ) {
             VStack(alignment: .leading, spacing: 16) {
                 switch activeDrilldown {
@@ -1732,13 +1681,5 @@ struct GaryxWorkspaceBotsView: View {
         await model.selectWorkspace(addedPath)
         await model.refreshWorkspaceAndBotThreads()
         model.workspaceBotsDrilldown = .workspace(addedPath)
-    }
-
-    private func goBack() {
-        if activeDrilldown != nil {
-            withAnimation(GaryxMobileMotion.sidebarDrilldown) {
-                model.workspaceBotsDrilldown = nil
-            }
-        }
     }
 }

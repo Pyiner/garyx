@@ -118,7 +118,6 @@ struct GaryxSettingsOverviewContent: View {
             model.dreamsAutoScanEnabled ? .dreams : nil,
             .tasks,
             .autoResearch,
-            .agents,
             .skills,
         ].compactMap { $0 }
     }

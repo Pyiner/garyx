@@ -229,9 +229,29 @@ final class GaryxMobileNavigationStateTests: XCTestCase {
 
         state.openPanel(.workspaceBots, dreamsAutoScanEnabled: true, source: .replace)
         state.setWorkspaceBotsDrilldown(.bot("agent-1"))
-        XCTAssertEqual(state.leadingEdgeAction, .workspaceBotsOverview)
+        // Drilldowns opened from the drawer have no back stack; back pops
+        // straight home instead of surfacing the overview list.
+        XCTAssertEqual(state.leadingEdgeAction, .popToHome)
         state.showWorkspaceBotsOverview()
         XCTAssertEqual(state.leadingEdgeAction, .popToHome)
+    }
+
+    func testDrilldownOpenedFromPageGoesBackToThatPage() {
+        var state = GaryxMobileNavigationState()
+        state.openPanel(.automations, dreamsAutoScanEnabled: true, source: .sidebar)
+
+        state.openRoute(
+            GaryxMobilePanelRoute(
+                panel: .workspaceBots,
+                settingsTab: .manage,
+                workspaceBotsDrilldown: .automationThreads("auto-1")
+            ),
+            source: .current
+        )
+
+        XCTAssertEqual(state.leadingEdgeAction, .mainPanelBack)
+        XCTAssertTrue(state.goBackInMainPanel())
+        XCTAssertEqual(state.activePanel, .automations)
     }
 
     func testDirectPanelMutationClearsStackAndWorkspaceDrilldown() {
@@ -254,7 +274,7 @@ final class GaryxMobileNavigationStateTests: XCTestCase {
         state.setWorkspaceBotsDrilldown(.workspace("/workspace"))
 
         XCTAssertEqual(state.workspaceBotsDrilldown, .workspace("/workspace"))
-        XCTAssertEqual(state.leadingEdgeAction, .workspaceBotsOverview)
+        XCTAssertEqual(state.leadingEdgeAction, .popToHome)
 
         state.openPanel(.automations, dreamsAutoScanEnabled: true, source: .current)
 
