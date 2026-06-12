@@ -22686,7 +22686,10 @@ button.new-thread-dreams-scan:hover {
 }
 
 .gateway-switcher-popover {
-  width: 264px;
+  /* Hug the identity bar below: same width as the trigger, so the popover
+     and the bar read as one column even when the sidebar is resized. */
+  width: var(--radix-popover-trigger-width);
+  min-width: 208px;
   padding: 8px;
   border: 1px solid #ececea;
   border-radius: 16px;
