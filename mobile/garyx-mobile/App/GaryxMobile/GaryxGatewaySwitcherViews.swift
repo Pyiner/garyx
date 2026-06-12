@@ -55,7 +55,9 @@ struct GaryxSidebarGatewayIdentityControl: View {
                     .foregroundStyle(.secondary)
             }
 
-            if let subtitle = identity.subtitle {
+            // Connected is the normal state and needs no callout; surface
+            // the status line only when something is off.
+            if identity.status != .connected, let subtitle = identity.subtitle {
                 HStack(spacing: 5) {
                     Circle()
                         .fill(identity.status.garyxStatusColor)
