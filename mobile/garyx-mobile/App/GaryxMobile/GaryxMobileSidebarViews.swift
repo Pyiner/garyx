@@ -268,7 +268,13 @@ struct GaryxHomeHeaderView: View {
                 Spacer(minLength: 0)
 
                 Button(action: onNewChat) {
-                    GaryxToolbarIcon(systemName: "square.and.pencil")
+                    // Mirrors the menu button's glass circle treatment.
+                    Image(systemName: "plus.bubble")
+                        .font(GaryxFont.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 44, height: 44)
+                        .garyxAdaptiveGlass(.regular, isInteractive: true, fallbackMaterial: .ultraThinMaterial, in: Circle())
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("New chat")
