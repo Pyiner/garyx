@@ -1576,9 +1576,13 @@ struct GaryxWorkspaceBotsView: View {
             subtitle: "",
             onRefresh: { await refresh() },
             leadingActionLabel: nil,
-            leadingAction: nil
+            leadingAction: nil,
+            // Thread and drilldown rows here are the home pinned+recent row
+            // components; they own their horizontal geometry, so the page
+            // must not add the default content inset on top of it.
+            contentHorizontalPadding: 0
         ) {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 0) {
                 switch activeDrilldown {
                 case .automationThreads:
                     GaryxSidebarAutomationsSection(activeDrilldown: activeDrilldownBinding)

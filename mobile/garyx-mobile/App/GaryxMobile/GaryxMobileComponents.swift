@@ -62,6 +62,7 @@ struct GaryxPanelScaffold<Content: View, Actions: View>: View {
     let leadingActionSystemName: String
     let leadingAction: (() -> Void)?
     let background: Color
+    let contentHorizontalPadding: CGFloat
     let content: Content
     let actions: Actions
 
@@ -74,6 +75,7 @@ struct GaryxPanelScaffold<Content: View, Actions: View>: View {
         leadingActionSystemName: String = "chevron.left",
         leadingAction: (() -> Void)? = nil,
         background: Color = GaryxTheme.background,
+        contentHorizontalPadding: CGFloat = 16,
         @ViewBuilder content: () -> Content,
         @ViewBuilder actions: () -> Actions
     ) {
@@ -88,6 +90,10 @@ struct GaryxPanelScaffold<Content: View, Actions: View>: View {
         self.leadingActionSystemName = leadingActionSystemName
         self.leadingAction = leadingAction
         self.background = background
+        // Pages whose content is sidebar-style row sections (which carry
+        // their own outer row padding, matching the home pinned+recent
+        // list) pass 0 so rows keep the same edge geometry as home.
+        self.contentHorizontalPadding = contentHorizontalPadding
         self.content = content()
         self.actions = actions()
     }
@@ -95,7 +101,7 @@ struct GaryxPanelScaffold<Content: View, Actions: View>: View {
     var body: some View {
         ScrollView {
             content
-                .padding(.horizontal, 16)
+                .padding(.horizontal, contentHorizontalPadding)
                 .padding(.vertical, 10)
                 .frame(maxWidth: 560, alignment: .leading)
                 .garyxVerticalScrollContentWidth(maxWidth: 560)
