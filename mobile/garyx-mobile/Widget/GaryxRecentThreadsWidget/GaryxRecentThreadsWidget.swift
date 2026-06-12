@@ -119,7 +119,6 @@ private struct GaryxRecentThreadsWidgetMetrics {
     let rowMaxHeight: CGFloat
     let avatarSize: CGFloat
     let avatarIconSize: CGFloat
-    let runningDotSize: CGFloat
     let rowTitleFontSize: CGFloat
     let rowWorkspaceFontSize: CGFloat
     let rowWorkspaceSpacing: CGFloat
@@ -137,7 +136,6 @@ private struct GaryxRecentThreadsWidgetMetrics {
             rowMaxHeight = 52
             avatarSize = 30
             avatarIconSize = 12
-            runningDotSize = 6
             rowTitleFontSize = 13
             rowWorkspaceFontSize = 10.5
             rowWorkspaceSpacing = 1
@@ -151,7 +149,6 @@ private struct GaryxRecentThreadsWidgetMetrics {
             rowMaxHeight = 56
             avatarSize = 34
             avatarIconSize = 14
-            runningDotSize = 7
             rowTitleFontSize = 15.5
             rowWorkspaceFontSize = 12
             rowWorkspaceSpacing = 1
@@ -165,7 +162,6 @@ private struct GaryxRecentThreadsWidgetMetrics {
             rowMaxHeight = 80
             avatarSize = 44
             avatarIconSize = 18
-            runningDotSize = 8
             rowTitleFontSize = 17.5
             rowWorkspaceFontSize = 13.5
             rowWorkspaceSpacing = 2
@@ -179,7 +175,6 @@ private struct GaryxRecentThreadsWidgetMetrics {
             rowMaxHeight = 78
             avatarSize = 42
             avatarIconSize = 17
-            runningDotSize = 8
             rowTitleFontSize = 17
             rowWorkspaceFontSize = 13
             rowWorkspaceSpacing = 2
@@ -202,6 +197,12 @@ private struct GaryxRecentThreadWidgetRow: View {
     var body: some View {
         HStack(spacing: metrics.rowContentSpacing) {
             GaryxWidgetAgentAvatar(thread: thread, metrics: metrics)
+                .overlay(alignment: .bottomTrailing) {
+                    if isRunning {
+                        GaryxWidgetTypingBadge(avatarSize: metrics.avatarSize)
+                            .offset(x: 2, y: 2)
+                    }
+                }
 
             VStack(alignment: .leading, spacing: metrics.rowWorkspaceSpacing) {
                 HStack(spacing: 6) {
@@ -210,10 +211,6 @@ private struct GaryxRecentThreadWidgetRow: View {
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                         .truncationMode(.middle)
-
-                    if isRunning {
-                        GaryxWidgetRunningIndicator(size: metrics.runningDotSize)
-                    }
                 }
 
                 if !thread.workspaceName.isEmpty {
@@ -236,22 +233,26 @@ private struct GaryxRecentThreadWidgetRow: View {
     }
 }
 
-private struct GaryxWidgetRunningIndicator: View {
-    let size: CGFloat
+/// Static version of the app's avatar typing badge: widgets cannot animate,
+/// so the three dots fade across fixed opacities to suggest the wave.
+private struct GaryxWidgetTypingBadge: View {
+    let avatarSize: CGFloat
 
     var body: some View {
-        ZStack {
-            Circle()
-                .stroke(Color.primary.opacity(0.14), lineWidth: 1)
-            Circle()
-                .trim(from: 0.12, to: 0.78)
-                .stroke(
-                    Color.primary.opacity(0.58),
-                    style: StrokeStyle(lineWidth: 1.35, lineCap: .round)
-                )
-                .rotationEffect(.degrees(34))
+        let width = max(16, avatarSize * 0.56)
+        let height = max(11, avatarSize * 0.38)
+        let dot = max(2.2, avatarSize * 0.08)
+        HStack(spacing: dot * 0.7) {
+            Circle().fill(Color(.systemGray)).frame(width: dot, height: dot)
+            Circle().fill(Color(.systemGray).opacity(0.65)).frame(width: dot, height: dot)
+            Circle().fill(Color(.systemGray).opacity(0.4)).frame(width: dot, height: dot)
         }
-        .frame(width: max(size + 4, 8), height: max(size + 4, 8))
+        .frame(width: width, height: height)
+        .background(Color(.systemGray5), in: Capsule())
+        .overlay {
+            Capsule()
+                .stroke(Color(.systemBackground), lineWidth: 1.5)
+        }
         .accessibilityLabel("Running")
     }
 }
