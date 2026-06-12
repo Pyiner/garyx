@@ -87,6 +87,7 @@ struct GaryxFullscreenImageGalleryPreview: View {
                         GaryxImagePreviewPage(
                             source: sources[index],
                             loadGatewayDataUrl: loadGatewayDataUrl,
+                            isPagedGalleryPage: true,
                             onZoomActiveChanged: { zoomed in
                                 guard index == selection, pagingDisabled != zoomed else { return }
                                 pagingDisabled = zoomed
@@ -161,6 +162,7 @@ struct GaryxFullscreenImageGalleryPreview: View {
 private struct GaryxImagePreviewPage: View {
     let source: GaryxImagePreviewSource
     var loadGatewayDataUrl: ((String) async -> String?)?
+    var isPagedGalleryPage = false
     var onZoomActiveChanged: ((Bool) -> Void)? = nil
     let onDismiss: () -> Void
 
@@ -171,11 +173,13 @@ private struct GaryxImagePreviewPage: View {
     init(
         source: GaryxImagePreviewSource,
         loadGatewayDataUrl: ((String) async -> String?)? = nil,
+        isPagedGalleryPage: Bool = false,
         onZoomActiveChanged: ((Bool) -> Void)? = nil,
         onDismiss: @escaping () -> Void
     ) {
         self.source = source
         self.loadGatewayDataUrl = loadGatewayDataUrl
+        self.isPagedGalleryPage = isPagedGalleryPage
         self.onZoomActiveChanged = onZoomActiveChanged
         self.onDismiss = onDismiss
         _image = State(initialValue: source.initialImage)
@@ -188,6 +192,7 @@ private struct GaryxImagePreviewPage: View {
             if let image {
                 GaryxZoomableImageCanvas(
                     image: image,
+                    isPagedGalleryPage: isPagedGalleryPage,
                     onZoomActiveChanged: onZoomActiveChanged,
                     onDismiss: onDismiss
                 )
@@ -337,6 +342,13 @@ enum GaryxImageDecoder {
 
 private struct GaryxZoomableImageCanvas: View {
     let image: UIImage
+    /// True when this canvas is one page of a paged gallery. Inside a paged
+    /// TabView, an attached drag gesture claims the touch stream before the
+    /// pager's scroll view, so left/right page swipes stop working. Paged
+    /// canvases keep the drag gesture masked off until the image is zoomed
+    /// in (paging is disabled then anyway); the standalone single-image
+    /// preview keeps it always for pull-down dismissal.
+    var isPagedGalleryPage = false
     var onZoomActiveChanged: ((Bool) -> Void)? = nil
     let onDismiss: () -> Void
 
@@ -345,6 +357,13 @@ private struct GaryxZoomableImageCanvas: View {
     @State private var offset: CGSize = .zero
     @State private var lastOffset: CGSize = .zero
     @State private var dismissDragOffset: CGFloat = 0
+
+    private var dragGestureMask: GestureMask {
+        if isPagedGalleryPage, scale <= 1.02 {
+            return .subviews
+        }
+        return .all
+    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -356,7 +375,7 @@ private struct GaryxZoomableImageCanvas: View {
                 .scaleEffect(scale)
                 .offset(x: offset.width, y: offset.height + dismissDragOffset)
                 .gesture(magnificationGesture)
-                .simultaneousGesture(dragGesture)
+                .simultaneousGesture(dragGesture, including: dragGestureMask)
                 .onTapGesture(count: 2) {
                     withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
                         if scale > 1 {
