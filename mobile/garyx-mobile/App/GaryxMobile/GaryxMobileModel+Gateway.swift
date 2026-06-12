@@ -355,8 +355,11 @@ extension GaryxMobileModel {
         gatewaySettingsStatus = nil
         do {
             let gateway = try client()
-            let status = try await gateway.status()
-            _ = try await gateway.chatHealth()
+            // Bound the initial reachability check so an unreachable gateway
+            // fails into the chooser quickly instead of hanging on the
+            // system request timeout.
+            let status = try await withConnectTimeout { try await gateway.status() }
+            _ = try await withConnectTimeout { try await gateway.chatHealth() }
             guard isCurrentConnectRefresh(requestId, runtimeGeneration: runtimeGeneration, scopeId: gatewayScopeId) else {
                 return
             }
@@ -395,6 +398,25 @@ extension GaryxMobileModel {
             let message = displayMessage(for: error)
             connectionState = .failed(message)
             lastError = message
+        }
+    }
+
+    private static let connectCheckTimeoutNanos: UInt64 = 5_000_000_000
+
+    private func withConnectTimeout<T: Sendable>(
+        _ operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(nanoseconds: Self.connectCheckTimeoutNanos)
+                throw GaryxGatewayConnectTimeoutError()
+            }
+            guard let result = try await group.next() else {
+                throw GaryxGatewayConnectTimeoutError()
+            }
+            group.cancelAll()
+            return result
         }
     }
 

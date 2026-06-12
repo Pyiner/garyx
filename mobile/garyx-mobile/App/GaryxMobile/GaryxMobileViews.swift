@@ -61,6 +61,7 @@ struct GaryxGatewaySetupView: View {
     @State private var draftGatewayURL = ""
     @State private var draftGatewayAuthToken = ""
     @State private var didInitializeDraft = false
+    @State private var showsAddGateway = false
 
     var body: some View {
         if isSheet, showsSetupDetails {
@@ -155,62 +156,79 @@ struct GaryxGatewaySetupView: View {
         VStack(spacing: 0) {
             Spacer(minLength: 24)
 
-            VStack(spacing: 24) {
-                GaryxIonicLoader(fontSize: 72, isAnimating: setupIsBusy)
+            VStack(spacing: 22) {
+                Image("GaryxAppMark")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 104, height: 104)
+                    .shadow(color: Color(red: 0.10, green: 0.11, blue: 0.12).opacity(0.16), radius: 13, x: 0, y: 9)
 
                 if let failureMessage {
                     Text(failureMessage)
-                        .font(GaryxFont.callout(weight: .medium))
-                        .foregroundStyle(Color.orange)
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: 300)
-                } else {
-                    Text("Set the gateway address and token, then save. Saving verifies the gateway before continuing.")
-                        .font(GaryxFont.callout())
+                        .font(GaryxFont.footnote(weight: .medium))
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: 300)
+                } else {
+                    Text("Choose a gateway to connect.")
+                        .font(GaryxFont.footnote())
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 300)
                 }
 
-                VStack(spacing: 10) {
-                    HStack(spacing: 8) {
-                        TextField("Gateway URL", text: $draftGatewayURL)
-                            .textContentType(.URL)
-                            .keyboardType(.URL)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .garyxInputStyle()
-
-                        GaryxGatewayProfileMenuButton { profile in
-                            model.selectGatewayProfile(profile)
-                            draftGatewayURL = model.gatewayURL
-                            draftGatewayAuthToken = model.gatewayAuthToken
+                VStack(spacing: 0) {
+                    ForEach(Array(model.gatewaySwitcherRows.enumerated()), id: \.element.id) { index, row in
+                        if index > 0 {
+                            Divider().padding(.leading, 48)
+                        }
+                        GaryxSetupGatewayRow(row: row) {
+                            guard !setupIsBusy,
+                                  let profile = model.gatewayProfiles.first(where: { $0.id == row.profileId }) else {
+                                return
+                            }
+                            Task { await model.activateGatewayProfile(profile) }
                         }
                     }
 
-                    SecureField("Gateway Token", text: $draftGatewayAuthToken)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxInputStyle()
-                }
-
-                GaryxPrimaryCapsuleButton(
-                    title: setupIsBusy ? "Saving..." : "Save and Continue",
-                    systemImage: setupIsBusy ? nil : "checkmark.circle.fill"
-                ) {
-                    Task {
-                        await saveGatewaySettings()
+                    if !model.gatewaySwitcherRows.isEmpty {
+                        Divider().padding(.leading, 48)
                     }
+
+                    Button {
+                        showsAddGateway = true
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "plus")
+                                .font(GaryxFont.system(size: 15, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 26, height: 26)
+                            Text("Add Gateway")
+                                .font(GaryxFont.callout(weight: .medium))
+                                .foregroundStyle(.primary)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 14)
+                        .frame(minHeight: 52)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Add Gateway")
                 }
-                .disabled(!canSaveGateway || setupIsBusy)
-                .opacity(canSaveGateway && !setupIsBusy ? 1 : 0.45)
+                .background(GaryxTheme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+                }
+                .frame(maxWidth: 360)
             }
-            .frame(maxWidth: 320)
             .padding(.horizontal, 24)
 
             Spacer(minLength: 24)
+        }
+        .fullScreenCover(isPresented: $showsAddGateway) {
+            GaryxGatewaySetupView(isSheet: true, startsEmpty: true)
         }
     }
 
@@ -285,6 +303,48 @@ struct GaryxGatewaySetupView: View {
             return true
         }
         return false
+    }
+}
+
+private struct GaryxSetupGatewayRow: View {
+    let row: GaryxGatewaySwitcherRow
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                if row.isCurrent {
+                    GaryxSelectionCheckmark(style: .circle, size: 15)
+                        .frame(width: 26, height: 26)
+                } else {
+                    Image(systemName: "network")
+                        .font(GaryxFont.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 26, height: 26)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(row.title)
+                        .font(GaryxFont.callout(weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    if !row.subtitle.isEmpty {
+                        Text(row.subtitle)
+                            .font(GaryxFont.caption())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 14)
+            .frame(minHeight: 52)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(row.title)
     }
 }
 
@@ -366,7 +426,6 @@ struct GaryxShellView: View {
     private func drawerBody(width: CGFloat, containerSize: CGSize, safeAreaInsets: EdgeInsets) -> some View {
         let revealWidth = sidebarRevealWidth(for: width)
         let drawerOffset = revealWidth - width
-        let closeCaptureWidth = max(0, containerSize.width - revealWidth)
         let drawerProgress = drawerRevealProgress(revealWidth: revealWidth, width: width)
         // Clip bounds extend through the surrounding safe areas so the panels'
         // full-bleed backgrounds and bottom chrome aprons reach the physical
@@ -402,6 +461,16 @@ struct GaryxShellView: View {
                 GaryxRootNavigationView()
                     .disabled(drawerDragActive)
                     .allowsHitTesting(revealWidth == 0)
+                    .overlay {
+                        // While any part of the drawer is revealed, the main
+                        // panel area becomes one big close target.
+                        if revealWidth > 1 {
+                            Color.clear
+                                .contentShape(Rectangle())
+                                .onTapGesture { closeSidebar() }
+                                .simultaneousGesture(closingSidebarGesture(sidebarWidth: width))
+                        }
+                    }
                     .frame(width: containerSize.width, height: containerSize.height)
                     .garyxPageBackground()
                     .overlay(alignment: .leading) {
@@ -448,16 +517,6 @@ struct GaryxShellView: View {
             .offset(x: drawerOffset)
             .zIndex(0)
 
-            if revealWidth > 1, closeCaptureWidth > 0 {
-                Color.clear
-                    .frame(width: closeCaptureWidth, height: containerSize.height)
-                    .offset(x: revealWidth)
-                    .contentShape(Rectangle())
-                    .onTapGesture { closeSidebar() }
-                    .simultaneousGesture(closingSidebarGesture(sidebarWidth: width))
-                    .zIndex(1)
-                    .accessibilityHidden(true)
-            }
         }
         .frame(width: containerSize.width, height: containerSize.height, alignment: .topLeading)
         .clipShape(GaryxDrawerPanelClipShape(leadingCornerRadius: 0, safeAreaOutsets: clipOutsets))

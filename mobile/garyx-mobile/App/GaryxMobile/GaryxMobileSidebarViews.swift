@@ -109,7 +109,7 @@ private enum GaryxSidebarMetrics {
     static let rowCornerRadius: CGFloat = 12
     static let selectedThreadCornerRadius: CGFloat = 12
     static let iconFrame: CGFloat = 28
-    static let bottomBarClearance: CGFloat = 112
+    static let bottomBarClearance: CGFloat = 28
 }
 
 struct GaryxHomeThreadListView: View {
@@ -123,7 +123,10 @@ struct GaryxHomeThreadListView: View {
             .frame(maxHeight: .infinity)
             .garyxPageBackground()
             .garyxAdaptiveTopBar {
-                GaryxHomeHeaderView(onOpenDrawer: { openDrawer() })
+                GaryxHomeHeaderView(
+                    onOpenDrawer: { openDrawer() },
+                    onNewChat: { startNewChat() }
+                )
             }
             .task(id: model.isHomeVisible) {
                 await runSilentSidebarRefreshLoop()
@@ -148,18 +151,6 @@ struct GaryxHomeThreadListView: View {
         .scrollDismissesKeyboard(.interactively)
         .refreshable {
             await refreshAll()
-        }
-        .garyxFloatingBottomChrome {
-            GaryxSidebarBottomActionBar(
-                isChatEnabled: model.hasGatewaySettings,
-                isCreatingThread: false,
-                onTapSettings: {
-                    model.openSettings()
-                },
-                onTapChat: {
-                    startNewChat()
-                }
-            )
         }
     }
 
@@ -261,6 +252,7 @@ struct GaryxHomeThreadListView: View {
 
 struct GaryxHomeHeaderView: View {
     let onOpenDrawer: () -> Void
+    let onNewChat: () -> Void
 
     var body: some View {
         GaryxAdaptiveGlassContainer(spacing: 10) {
@@ -274,6 +266,12 @@ struct GaryxHomeHeaderView: View {
                     .minimumScaleFactor(0.75)
 
                 Spacer(minLength: 0)
+
+                Button(action: onNewChat) {
+                    GaryxToolbarIcon(systemName: "square.and.pencil")
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("New chat")
             }
         }
         .padding(.horizontal, 16)
@@ -288,16 +286,11 @@ struct GaryxHomeHeaderView: View {
 struct GaryxNavigationDrawerView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @Environment(\.garyxSidebarDragActive) private var sidebarDragActive
-    @State private var botsExpanded = true
-    @State private var workspacesExpanded = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             GaryxAdaptiveGlassContainer(spacing: 10) {
                 HStack(alignment: .center, spacing: 12) {
-                    // No menu button here: the home header's menu button stays
-                    // visible in the sliver next to the drawer and tapping it
-                    // (or anywhere outside) closes the drawer.
                     Text("Garyx")
                         .font(GaryxFont.system(size: 26, weight: .semibold))
                         .foregroundStyle(.primary)
@@ -305,6 +298,8 @@ struct GaryxNavigationDrawerView: View {
                         .minimumScaleFactor(0.75)
 
                     Spacer(minLength: 0)
+
+                    GaryxSidebarGatewayIdentityControl()
                 }
             }
             .padding(.horizontal, 16)
@@ -318,19 +313,20 @@ struct GaryxNavigationDrawerView: View {
                         isSelected: model.activePanel == .automations
                     )
 
-                    GaryxDrawerSectionRow(
-                        title: GaryxMobilePanel.bots.label,
-                        systemImage: GaryxMobilePanel.bots.iconName,
-                        isExpanded: $botsExpanded
+                    GaryxSidebarNavigationRow(
+                        panel: .agents,
+                        isSelected: model.activePanel == .agents
                     )
-                    if botsExpanded {
+
+                    if !model.mobileBotGroups.isEmpty {
+                        GaryxDrawerSectionLabel(title: GaryxMobilePanel.bots.label)
                         ForEach(model.mobileBotGroups) { group in
                             GaryxDrawerChildRow(title: group.title) {
                                 GaryxChannelLogoView(
                                     channel: group.channel,
                                     label: group.title,
                                     iconDataUrl: group.iconDataUrl,
-                                    diameter: 20
+                                    diameter: 22
                                 )
                             } action: {
                                 openBotGroup(group)
@@ -338,28 +334,20 @@ struct GaryxNavigationDrawerView: View {
                         }
                     }
 
-                    GaryxDrawerSectionRow(
-                        title: GaryxMobilePanel.workspaceBots.label,
-                        systemImage: GaryxMobilePanel.workspaceBots.iconName,
-                        isExpanded: $workspacesExpanded
-                    )
-                    if workspacesExpanded {
+                    if !model.sidebarWorkspaceThreadGroups.isEmpty {
+                        GaryxDrawerSectionLabel(title: GaryxMobilePanel.workspaceBots.label)
                         ForEach(model.sidebarWorkspaceThreadGroups) { group in
                             GaryxDrawerChildRow(title: group.name) {
                                 Image(systemName: "folder")
-                                    .font(GaryxFont.system(size: 14, weight: .semibold))
+                                    .font(GaryxFont.system(size: 15, weight: .semibold))
                                     .foregroundStyle(.secondary)
-                                    .frame(width: 20, height: 20)
+                                    .frame(width: 22, height: 22)
                             } action: {
                                 model.openWorkspaceBotsDrilldown(.workspace(group.path), source: .sidebar)
                             }
                         }
                     }
 
-                    GaryxSidebarNavigationRow(
-                        panel: .agents,
-                        isSelected: model.activePanel == .agents
-                    )
                 }
                 .padding(.horizontal, GaryxSidebarMetrics.outerHorizontalPadding)
                 .padding(.top, 6)
@@ -369,20 +357,23 @@ struct GaryxNavigationDrawerView: View {
 
             Spacer(minLength: 0)
 
-            // Settings entry and gateway identity live at the drawer bottom,
-            // mirroring the Mac app's bottom-left identity bar.
-            VStack(alignment: .leading, spacing: 6) {
-                GaryxSidebarNavigationRow(
-                    panel: .settings,
-                    isSelected: model.activePanel == .settings
-                )
+            // Settings keeps the floating glass pill treatment at the drawer
+            // bottom.
+            GaryxAdaptiveGlassContainer(spacing: 10) {
+                HStack(spacing: 0) {
+                    GaryxSidebarActionPill(
+                        title: "Settings",
+                        iconSystemName: "gearshape",
+                        style: .glass,
+                        action: { model.openSettings() }
+                    )
 
-                GaryxSidebarGatewayIdentityControl()
-                    .padding(.horizontal, GaryxSidebarMetrics.rowInnerHorizontalPadding)
-                    .padding(.top, 4)
+                    Spacer(minLength: 0)
+                }
             }
-            .padding(.horizontal, GaryxSidebarMetrics.outerHorizontalPadding)
-            .padding(.bottom, 14)
+            .padding(.horizontal, 16)
+            .padding(.top, 6)
+            .padding(.bottom, 10)
         }
         .frame(maxHeight: .infinity, alignment: .top)
         .garyxPageBackground()
@@ -398,47 +389,24 @@ struct GaryxNavigationDrawerView: View {
     }
 }
 
-/// Expandable drawer section header (Bots / Workspaces).
-private struct GaryxDrawerSectionRow: View {
+/// Non-interactive caption above a flat drawer group, matching the home
+/// list's Pinned/Recent section labels.
+private struct GaryxDrawerSectionLabel: View {
     let title: String
-    let systemImage: String
-    @Binding var isExpanded: Bool
 
     var body: some View {
-        Button {
-            withAnimation(GaryxMobileMotion.sidebarDrilldown) {
-                isExpanded.toggle()
-            }
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: systemImage)
-                    .font(GaryxFont.system(size: 19, weight: .regular))
-                    .foregroundStyle(Color.primary.opacity(0.78))
-                    .frame(width: 26, height: 26)
-
-                Text(title)
-                    .font(GaryxFont.callout(weight: .medium))
-                    .foregroundStyle(Color.primary.opacity(0.88))
-                    .lineLimit(1)
-
-                Spacer(minLength: 0)
-
-                Image(systemName: "chevron.right")
-                    .font(GaryxFont.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
-            }
+        Text(title)
+            .font(GaryxFont.caption(weight: .medium))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
             .padding(.horizontal, GaryxSidebarMetrics.rowInnerHorizontalPadding)
-            .frame(minHeight: 44)
-            .contentShape(RoundedRectangle(cornerRadius: GaryxSidebarMetrics.rowCornerRadius, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(title)
-        .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+            .padding(.top, 14)
+            .padding(.bottom, 2)
+            .accessibilityAddTraits(.isHeader)
     }
 }
 
-/// Indented child row under an expanded drawer section.
+/// Flat drawer row for a bot account or workspace folder.
 private struct GaryxDrawerChildRow<Icon: View>: View {
     let title: String
     @ViewBuilder var icon: () -> Icon
@@ -446,8 +414,9 @@ private struct GaryxDrawerChildRow<Icon: View>: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 10) {
+            HStack(spacing: 12) {
                 icon()
+                    .frame(width: 26, height: 26)
 
                 Text(title)
                     .font(GaryxFont.callout())
@@ -457,9 +426,8 @@ private struct GaryxDrawerChildRow<Icon: View>: View {
 
                 Spacer(minLength: 0)
             }
-            .padding(.leading, GaryxSidebarMetrics.rowInnerHorizontalPadding + 30)
-            .padding(.trailing, GaryxSidebarMetrics.rowInnerHorizontalPadding)
-            .frame(minHeight: 38)
+            .padding(.horizontal, GaryxSidebarMetrics.rowInnerHorizontalPadding)
+            .frame(minHeight: 40)
             .contentShape(RoundedRectangle(cornerRadius: GaryxSidebarMetrics.rowCornerRadius, style: .continuous))
         }
         .buttonStyle(.plain)

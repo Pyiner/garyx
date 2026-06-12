@@ -81,7 +81,7 @@ public enum GaryxMobilePanel: String, CaseIterable, Identifiable, Sendable {
         case .automations:
             "clock.arrow.circlepath"
         case .agents:
-            "person.2.wave.2.fill"
+            "person.2.fill"
         case .skills:
             "wand.and.stars"
         case .commands:

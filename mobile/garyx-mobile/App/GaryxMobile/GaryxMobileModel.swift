@@ -21,6 +21,12 @@ struct GaryxEnsuredThread {
     var adoptedSelection: Bool
 }
 
+struct GaryxGatewayConnectTimeoutError: LocalizedError {
+    var errorDescription: String? {
+        "Gateway did not respond within 5 seconds."
+    }
+}
+
 struct GaryxMobileRouteNotFound: Identifiable, Equatable {
     let id = UUID()
     let title: String
