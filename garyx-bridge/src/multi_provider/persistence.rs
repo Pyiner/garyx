@@ -421,7 +421,12 @@ impl StreamingRunSnapshot {
             return;
         }
 
-        let mut message = ProviderMessage::assistant_text(delta);
+        // Stamp the segment at creation. Unstamped rows get backfilled with
+        // `now()` on every partial save, which re-stamps the whole run's
+        // assistant rows to the latest flush moment and destroys their real
+        // ordering against tool rows.
+        let mut message =
+            ProviderMessage::assistant_text(delta).with_timestamp(Utc::now().to_rfc3339());
         if let Some(metadata) = metadata {
             message.metadata = metadata.clone();
         }

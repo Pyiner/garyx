@@ -185,6 +185,31 @@ fn test_streaming_run_snapshot_splits_assistant_segments() {
 }
 
 #[test]
+fn test_streaming_run_snapshot_stamps_assistant_segments_at_creation() {
+    let mut snapshot = StreamingRunSnapshot::default();
+    assert!(snapshot.apply_stream_event(&StreamEvent::Delta {
+        text: "alpha".to_owned(),
+    }));
+    let created_timestamp = snapshot.session_messages[0]
+        .timestamp
+        .clone()
+        .expect("assistant segment must be stamped at creation");
+
+    // Appending more deltas to the same segment keeps the creation stamp:
+    // every partial save backfills unstamped rows with the save moment, so a
+    // missing or shifting timestamp re-stamps the whole run's assistant rows
+    // at each flush and loses their real order against tool rows.
+    assert!(snapshot.apply_stream_event(&StreamEvent::Delta {
+        text: " beta".to_owned(),
+    }));
+    assert_eq!(snapshot.session_messages.len(), 1);
+    assert_eq!(
+        snapshot.session_messages[0].timestamp.as_deref(),
+        Some(created_timestamp.as_str())
+    );
+}
+
+#[test]
 fn test_streaming_run_snapshot_strips_agent_prefix_into_metadata() {
     let mut snapshot = StreamingRunSnapshot::default();
     assert!(snapshot.apply_stream_event(&StreamEvent::Delta {
