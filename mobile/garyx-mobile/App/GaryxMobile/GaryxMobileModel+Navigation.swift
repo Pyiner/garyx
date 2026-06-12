@@ -37,6 +37,30 @@ extension GaryxMobileModel {
         navigationState.mainPanelBackStack
     }
 
+    var rootNavigationPath: [GaryxMobileRootRoute] {
+        navigationState.rootNavigationPath
+    }
+
+    var isHomeVisible: Bool {
+        !navigationState.presentsContent
+    }
+
+    /// Receives NavigationStack path writes. The system only pops (back
+    /// swipe / back button); pushes always originate from the model.
+    func applyRootNavigationPath(_ newPath: [GaryxMobileRootRoute]) {
+        guard newPath.isEmpty, navigationState.presentsContent else { return }
+        popToHome()
+    }
+
+    func popToHome() {
+        guard navigationState.presentsContent else { return }
+        invalidatePendingThreadOpen()
+        cancelSelectedThreadReconcileLoop()
+        var nextState = navigationState
+        nextState.popToHome()
+        navigationState = nextState
+    }
+
     func setSidebarVisible(_ visible: Bool, animated: Bool = true) {
         guard sidebarVisible != visible else { return }
         if animated {
@@ -52,7 +76,16 @@ extension GaryxMobileModel {
         _ panel: GaryxMobilePanel,
         invalidatesPendingThreadOpen: Bool = true
     ) {
-        guard navigationState.activePanel != panel else { return }
+        guard navigationState.activePanel != panel else {
+            // Same panel, but it may not be presented above the home list
+            // yet (for example reopening the conversation after a pop).
+            if !navigationState.presentsContent {
+                var nextState = navigationState
+                nextState.setActivePanel(panel)
+                navigationState = nextState
+            }
+            return
+        }
         if invalidatesPendingThreadOpen {
             invalidatePendingThreadOpen()
         }
@@ -316,7 +349,7 @@ extension GaryxMobileModel {
         switch mainPanelLeadingEdgeAction {
         case .openSidebar:
             "Open menu"
-        case .mainPanelBack:
+        case .popToHome, .mainPanelBack:
             "Back"
         case .settingsOverview:
             "All Settings"
@@ -329,6 +362,8 @@ extension GaryxMobileModel {
         switch mainPanelLeadingEdgeAction {
         case .openSidebar:
             setSidebarVisible(true)
+        case .popToHome:
+            popToHome()
         case .mainPanelBack:
             goBackInMainPanel()
         case .settingsOverview:
@@ -382,6 +417,9 @@ extension GaryxMobileModel {
             tabName: queryValue("tab"),
             showSidebar: url.path == "/sidebar" || queryValue("panel") == "sidebar"
         )
+        if queryValue("drawer") == "1" {
+            setSidebarVisible(true, animated: false)
+        }
         let shouldShowWorkspaceModeSheet =
             queryValue("sheet") == "workspaceMode"
             || queryValue("workspaceModeSheet") == "1"
@@ -395,8 +433,10 @@ extension GaryxMobileModel {
 
     func applyDebugDestination(panelName: String?, tabName: String?, showSidebar: Bool = false) {
         if showSidebar {
-            activePanel = .chat
-            setSidebarVisible(true, animated: false)
+            // The thread list is the home root now; the legacy debug sidebar
+            // route lands there instead of opening the navigation drawer.
+            popToHome()
+            setSidebarVisible(false, animated: false)
             return
         }
 

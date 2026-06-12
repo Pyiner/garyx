@@ -159,14 +159,53 @@ final class GaryxMobileAgentTargetModelTests: XCTestCase {
 }
 
 final class GaryxMobileNavigationStateTests: XCTestCase {
-    func testCurrentPanelNavigationPushesPreviousRoute() {
+    func testOpeningPanelFromHomeStartsFreshContentStack() {
         var state = GaryxMobileNavigationState()
+        XCTAssertFalse(state.presentsContent)
+        XCTAssertEqual(state.rootNavigationPath, [])
 
         state.openPanel(.automations, dreamsAutoScanEnabled: true, source: .current)
 
         XCTAssertEqual(state.activePanel, .automations)
-        XCTAssertEqual(state.mainPanelBackStack, [GaryxMobilePanelRoute(panel: .chat, settingsTab: .manage)])
+        XCTAssertTrue(state.presentsContent)
+        XCTAssertEqual(state.rootNavigationPath, [.panel(.automations)])
+        // The home list is not a back-stack entry; back means pop to home.
+        XCTAssertTrue(state.mainPanelBackStack.isEmpty)
+        XCTAssertEqual(state.leadingEdgeAction, .popToHome)
+    }
+
+    func testCurrentPanelNavigationPushesPreviousPresentedRoute() {
+        var state = GaryxMobileNavigationState()
+        state.openPanel(.tasks, dreamsAutoScanEnabled: true, source: .current)
+
+        state.openPanel(.automations, dreamsAutoScanEnabled: true, source: .current)
+
+        XCTAssertEqual(state.activePanel, .automations)
+        XCTAssertEqual(state.mainPanelBackStack, [GaryxMobilePanelRoute(panel: .tasks, settingsTab: .manage)])
         XCTAssertEqual(state.leadingEdgeAction, .mainPanelBack)
+    }
+
+    func testPopToHomeResetsContentState() {
+        var state = GaryxMobileNavigationState()
+        state.openPanel(.workspaceBots, dreamsAutoScanEnabled: true, source: .current)
+        state.setWorkspaceBotsDrilldown(.bot("bot-1"))
+
+        state.popToHome()
+
+        XCTAssertFalse(state.presentsContent)
+        XCTAssertEqual(state.rootNavigationPath, [])
+        XCTAssertTrue(state.mainPanelBackStack.isEmpty)
+        XCTAssertNil(state.workspaceBotsDrilldown)
+        XCTAssertEqual(state.leadingEdgeAction, .openSidebar)
+    }
+
+    func testChatPanelPresentsConversationRoute() {
+        var state = GaryxMobileNavigationState()
+
+        state.setActivePanel(.chat)
+
+        XCTAssertTrue(state.presentsContent)
+        XCTAssertEqual(state.rootNavigationPath, [.conversation])
     }
 
     func testSidebarNavigationClearsPreviousRouteStack() {
@@ -177,7 +216,7 @@ final class GaryxMobileNavigationStateTests: XCTestCase {
 
         XCTAssertEqual(state.activePanel, .automations)
         XCTAssertTrue(state.mainPanelBackStack.isEmpty)
-        XCTAssertEqual(state.leadingEdgeAction, .openSidebar)
+        XCTAssertEqual(state.leadingEdgeAction, .popToHome)
     }
 
     func testLeadingEdgePrioritizesLocalDrilldowns() {
@@ -186,13 +225,13 @@ final class GaryxMobileNavigationStateTests: XCTestCase {
         state.openSettings(tab: .provider, source: .current)
         XCTAssertEqual(state.leadingEdgeAction, .settingsOverview)
         state.showSettingsOverview()
-        XCTAssertEqual(state.leadingEdgeAction, .mainPanelBack)
+        XCTAssertEqual(state.leadingEdgeAction, .popToHome)
 
         state.openPanel(.workspaceBots, dreamsAutoScanEnabled: true, source: .replace)
         state.setWorkspaceBotsDrilldown(.bot("agent-1"))
         XCTAssertEqual(state.leadingEdgeAction, .workspaceBotsOverview)
         state.showWorkspaceBotsOverview()
-        XCTAssertEqual(state.leadingEdgeAction, .openSidebar)
+        XCTAssertEqual(state.leadingEdgeAction, .popToHome)
     }
 
     func testDirectPanelMutationClearsStackAndWorkspaceDrilldown() {
@@ -205,7 +244,7 @@ final class GaryxMobileNavigationStateTests: XCTestCase {
         XCTAssertEqual(state.activePanel, .chat)
         XCTAssertTrue(state.mainPanelBackStack.isEmpty)
         XCTAssertNil(state.workspaceBotsDrilldown)
-        XCTAssertEqual(state.leadingEdgeAction, .openSidebar)
+        XCTAssertEqual(state.leadingEdgeAction, .popToHome)
     }
 
     func testWorkspaceBotsDrilldownRoutePersistsInNavigationState() {

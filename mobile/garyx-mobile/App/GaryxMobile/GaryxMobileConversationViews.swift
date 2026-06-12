@@ -538,7 +538,11 @@ struct GaryxConversationHeader: View {
     var body: some View {
         GaryxAdaptiveGlassContainer(spacing: 10) {
             HStack(spacing: 12) {
-                GaryxSidebarMenuButton(action: openSidebar)
+                Button(action: goHome) {
+                    GaryxToolbarIcon(systemName: "chevron.left")
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Back")
 
                 if model.selectedThread == nil {
                     GaryxHeaderAgentControl()
@@ -666,10 +670,10 @@ struct GaryxConversationHeader: View {
         showsRenamePrompt = true
     }
 
-    private func openSidebar() {
+    private func goHome() {
         garyxDismissKeyboard()
         dismissThreadPresentations()
-        model.setSidebarVisible(true)
+        model.popToHome()
     }
 
     private func dismissThreadPresentations() {

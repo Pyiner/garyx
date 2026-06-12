@@ -6,51 +6,83 @@ enum GaryxSidebarDragAxis {
     case vertical
 }
 
-struct GaryxMainPanelView: View {
+/// Root content column: the home thread list with conversation and panel
+/// pages pushed above it. Pushes originate from model navigation state; the
+/// path binding only ever receives pops (system back swipe or back buttons).
+struct GaryxRootNavigationView: View {
     @EnvironmentObject private var model: GaryxMobileModel
 
     var body: some View {
-        NavigationStack {
-            Group {
-                switch model.activePanel {
-                case .chat:
-                    GaryxConversationView()
-                case .dreams:
-                    if model.dreamsAutoScanEnabled {
-                        GaryxDreamsView()
-                    } else {
-                        GaryxConversationView()
-                    }
-                case .tasks:
-                    GaryxTasksView()
-                case .workspaces:
-                    GaryxWorkspacesView()
-                case .automations:
-                    GaryxAutomationsView()
-                case .workspaceBots:
-                    GaryxWorkspaceBotsView()
-                case .agents:
-                    GaryxAgentsView()
-                case .skills:
-                    GaryxSkillsView()
-                case .commands:
-                    GaryxCommandsView()
-                case .mcp:
-                    GaryxMcpServersView()
-                case .autoResearch:
-                    GaryxAutoResearchView()
-                case .bots:
-                    GaryxBotsView()
-                case .settings:
-                    GaryxMobileSettingsPanel()
+        NavigationStack(path: rootPathBinding) {
+            GaryxHomeThreadListView()
+                .toolbar(.hidden, for: .navigationBar)
+                .navigationDestination(for: GaryxMobileRootRoute.self) { route in
+                    GaryxRootRouteContentView(route: route)
+                        .toolbar(.hidden, for: .navigationBar)
                 }
-            }
         }
         .garyxPageBackground()
         .fullScreenCover(item: $model.selectedRouteNotFound) { state in
             GaryxFormSheet(title: state.title) {
                 GaryxRouteNotFoundCard(state: state)
             }
+        }
+    }
+
+    private var rootPathBinding: Binding<[GaryxMobileRootRoute]> {
+        Binding(
+            get: { model.rootNavigationPath },
+            set: { model.applyRootNavigationPath($0) }
+        )
+    }
+}
+
+private struct GaryxRootRouteContentView: View {
+    @EnvironmentObject private var model: GaryxMobileModel
+    let route: GaryxMobileRootRoute
+
+    var body: some View {
+        switch route {
+        case .conversation:
+            GaryxConversationView()
+        case .panel(let panel):
+            panelContent(for: panel)
+        }
+    }
+
+    @ViewBuilder
+    private func panelContent(for panel: GaryxMobilePanel) -> some View {
+        switch panel {
+        case .chat:
+            GaryxConversationView()
+        case .dreams:
+            if model.dreamsAutoScanEnabled {
+                GaryxDreamsView()
+            } else {
+                GaryxConversationView()
+            }
+        case .tasks:
+            GaryxTasksView()
+        case .workspaces:
+            GaryxWorkspacesView()
+        case .automations:
+            GaryxAutomationsView()
+        case .workspaceBots:
+            GaryxWorkspaceBotsView()
+        case .agents:
+            GaryxAgentsView()
+        case .skills:
+            GaryxSkillsView()
+        case .commands:
+            GaryxCommandsView()
+        case .mcp:
+            GaryxMcpServersView()
+        case .autoResearch:
+            GaryxAutoResearchView()
+        case .bots:
+            GaryxBotsView()
+        case .settings:
+            GaryxMobileSettingsPanel()
         }
     }
 }
@@ -80,10 +112,10 @@ private enum GaryxSidebarMetrics {
     static let bottomBarClearance: CGFloat = 112
 }
 
-struct GaryxThreadSidebar: View {
+struct GaryxHomeThreadListView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @Environment(\.garyxSidebarDragActive) private var sidebarDragActive
-    var showsInlineCloseButton: Bool
+    @Environment(\.garyxOpenSidebar) private var openDrawer
     private let silentRefreshIntervalNanos: UInt64 = 3_000_000_000
 
     var body: some View {
@@ -91,14 +123,9 @@ struct GaryxThreadSidebar: View {
             .frame(maxHeight: .infinity)
             .garyxPageBackground()
             .garyxAdaptiveTopBar {
-                GaryxSidebarHeaderView(
-                    drilldownContext: sidebarHeaderContext,
-                    showsCloseButton: showsInlineCloseButton,
-                    onBack: {},
-                    onClose: { closeSidebar() }
-                )
+                GaryxHomeHeaderView(onOpenDrawer: { openDrawer() })
             }
-            .task(id: model.sidebarVisible) {
+            .task(id: model.isHomeVisible) {
                 await runSilentSidebarRefreshLoop()
             }
     }
@@ -106,10 +133,9 @@ struct GaryxThreadSidebar: View {
     private var threadListWithBottomBar: some View {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(alignment: .leading, spacing: 0) {
-                GaryxSidebarNavigationList()
-                    .padding(.horizontal, GaryxSidebarMetrics.outerHorizontalPadding)
-                    .padding(.top, 6)
-                    .padding(.bottom, 14)
+                Color.clear
+                    .frame(height: 4)
+                    .accessibilityHidden(true)
 
                 sidebarThreadSections
 
@@ -199,14 +225,6 @@ struct GaryxThreadSidebar: View {
         GaryxSidebarThreadAutoLoadFooter()
     }
 
-    private var sidebarHeaderContext: GaryxSidebarHeaderContext? {
-        nil
-    }
-
-    private func closeSidebar() {
-        model.setSidebarVisible(false)
-    }
-
     private func refreshAll() async {
         await model.refreshThreads(silent: true)
         await model.refreshRemoteState()
@@ -233,7 +251,7 @@ struct GaryxThreadSidebar: View {
     }
 
     private var shouldRefreshSidebarThreads: Bool {
-        !(showsInlineCloseButton && !model.sidebarVisible)
+        model.isHomeVisible
     }
 
     private func startNewChat() {
@@ -241,52 +259,55 @@ struct GaryxThreadSidebar: View {
     }
 }
 
-struct GaryxSidebarHeaderContext: Equatable {
-    let title: String
-    let subtitle: String?
-}
-
-struct GaryxSidebarHeaderView: View {
-    let drilldownContext: GaryxSidebarHeaderContext?
-    let showsCloseButton: Bool
-    let onBack: () -> Void
-    let onClose: () -> Void
+struct GaryxHomeHeaderView: View {
+    let onOpenDrawer: () -> Void
 
     var body: some View {
         GaryxAdaptiveGlassContainer(spacing: 10) {
             HStack(alignment: .center, spacing: 12) {
-                if let drilldownContext {
-                    Button(action: onBack) {
-                        GaryxToolbarIcon(systemName: "chevron.left")
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Back")
+                GaryxSidebarMenuButton(action: onOpenDrawer)
 
-                    GaryxPanelHeaderTitle(
-                        title: drilldownContext.title,
-                        subtitle: drilldownContext.subtitle ?? ""
-                    )
-                    .layoutPriority(1)
-                } else {
-                    GaryxSidebarGatewayIdentityControl()
-
-                    Spacer(minLength: 0)
-                }
+                GaryxSidebarGatewayIdentityControl()
 
                 Spacer(minLength: 0)
-
-                if showsCloseButton {
-                    Button(action: onClose) {
-                        GaryxToolbarIcon(systemName: "xmark")
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Close menu")
-                }
             }
         }
         .padding(.horizontal, 16)
         .padding(.top, 10)
         .padding(.bottom, 8)
+    }
+}
+
+/// Navigation-only drawer over the home thread list: the module entries the
+/// Mac app keeps in its sidebar rail.
+struct GaryxNavigationDrawerView: View {
+    @EnvironmentObject private var model: GaryxMobileModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            GaryxAdaptiveGlassContainer(spacing: 10) {
+                HStack(alignment: .center, spacing: 12) {
+                    Text("Garyx")
+                        .font(GaryxFont.system(size: 26, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+
+                    Spacer(minLength: 0)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 10)
+            .padding(.bottom, 8)
+
+            GaryxSidebarNavigationList()
+                .padding(.horizontal, GaryxSidebarMetrics.outerHorizontalPadding)
+                .padding(.top, 6)
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+        .garyxPageBackground()
     }
 }
 
@@ -296,6 +317,7 @@ struct GaryxSidebarNavigationList: View {
     private let panels: [GaryxMobilePanel] = [
         .automations,
         .workspaceBots,
+        .agents,
     ]
 
     var body: some View {

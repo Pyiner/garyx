@@ -340,38 +340,16 @@ struct GaryxShellView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let usePersistentSidebar = proxy.size.width > 760 && horizontalSizeClass != .compact
-            let currentSidebarWidth = min(sidebarWidth, proxy.size.width)
-
-            Group {
-                if usePersistentSidebar {
-                    HStack(spacing: 0) {
-                        GaryxThreadSidebar(showsInlineCloseButton: false)
-                            .frame(width: currentSidebarWidth)
-
-                        GaryxMainPanelView()
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                    .background(GaryxTheme.background)
-                } else {
-                    drawerBody(
-                        width: drawerSidebarWidth(for: proxy.size),
-                        containerSize: proxy.size,
-                        safeAreaInsets: proxy.safeAreaInsets
-                    )
-                }
-            }
+            drawerBody(
+                width: drawerSidebarWidth(for: proxy.size),
+                containerSize: proxy.size,
+                safeAreaInsets: proxy.safeAreaInsets
+            )
             .environment(\.garyxSidebarDragActive, sidebarDragAxis == .horizontal)
             .onChange(of: sidebarDragLive) { _, live in
                 guard !live, sidebarDragAxis != nil else { return }
                 sidebarDragAxis = nil
                 resetSidebarDrag()
-            }
-            .onChange(of: usePersistentSidebar) { _, isPersistent in
-                sidebarDragOffset = 0
-                if isPersistent {
-                    model.setSidebarVisible(false, animated: false)
-                }
             }
         }
         .onChange(of: horizontalSizeClass) { _, _ in
@@ -380,10 +358,9 @@ struct GaryxShellView: View {
     }
 
     private func drawerSidebarWidth(for containerSize: CGSize) -> CGFloat {
-        if horizontalSizeClass == .compact {
-            return containerSize.width
-        }
-        return min(sidebarWidth, containerSize.width * 0.92)
+        // The drawer is navigation-only now; it overlays the home list as a
+        // partial sheet on every size class.
+        min(sidebarWidth, containerSize.width * 0.86)
     }
 
     private func drawerBody(width: CGFloat, containerSize: CGSize, safeAreaInsets: EdgeInsets) -> some View {
@@ -414,7 +391,7 @@ struct GaryxShellView: View {
 
         return ZStack(alignment: .topLeading) {
             HStack(spacing: 0) {
-                GaryxThreadSidebar(showsInlineCloseButton: true)
+                GaryxNavigationDrawerView()
                     .disabled(drawerDragActive)
                     .frame(width: width)
                     .frame(maxHeight: .infinity)
@@ -422,7 +399,7 @@ struct GaryxShellView: View {
                     .allowsHitTesting(revealWidth > width * 0.82)
                     .simultaneousGesture(closingSidebarGesture(sidebarWidth: width))
 
-                GaryxMainPanelView()
+                GaryxRootNavigationView()
                     .disabled(drawerDragActive)
                     .allowsHitTesting(revealWidth == 0)
                     .frame(width: containerSize.width, height: containerSize.height)
@@ -517,7 +494,7 @@ struct GaryxShellView: View {
                 switch model.mainPanelLeadingEdgeAction {
                 case .openSidebar:
                     sidebarDragOffset = max(0, min(sidebarWidth, value.translation.width))
-                case .mainPanelBack, .settingsOverview, .workspaceBotsOverview:
+                case .popToHome, .mainPanelBack, .settingsOverview, .workspaceBotsOverview:
                     sidebarDragOffset = 0
                 }
             }
@@ -534,7 +511,7 @@ struct GaryxShellView: View {
                 switch model.mainPanelLeadingEdgeAction {
                 case .openSidebar:
                     finishGesture(open: shouldOpen)
-                case .mainPanelBack, .settingsOverview, .workspaceBotsOverview:
+                case .popToHome, .mainPanelBack, .settingsOverview, .workspaceBotsOverview:
                     resetSidebarDrag()
                     if shouldOpen {
                         hideKeyboard()

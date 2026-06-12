@@ -328,9 +328,18 @@ public struct GaryxMobileThreadOpenState: Equatable, Sendable {
 
 public enum GaryxMobileLeadingEdgeAction: Equatable, Sendable {
     case openSidebar
+    case popToHome
     case mainPanelBack
     case settingsOverview
     case workspaceBotsOverview
+}
+
+/// Top-level pushed route over the home thread list. Routes are stable
+/// tokens; pushed pages read their detail state (settings tab, drilldowns)
+/// from the navigation state so in-page navigation never re-pushes.
+public enum GaryxMobileRootRoute: Hashable, Sendable {
+    case conversation
+    case panel(GaryxMobilePanel)
 }
 
 public enum GaryxMobilePanelOpenSource: Equatable, Sendable {
@@ -366,17 +375,35 @@ public struct GaryxMobileNavigationState: Equatable, Sendable {
     public var activeSettingsTab: GaryxMobileSettingsTab
     public var workspaceBotsDrilldown: GaryxWorkspaceBotsDrilldown?
     public private(set) var mainPanelBackStack: [GaryxMobilePanelRoute]
+    /// False while the home thread list is the visible root; true while a
+    /// conversation or panel page is pushed above it.
+    public private(set) var presentsContent: Bool
 
     public init(
         activePanel: GaryxMobilePanel = .chat,
         activeSettingsTab: GaryxMobileSettingsTab = .manage,
         workspaceBotsDrilldown: GaryxWorkspaceBotsDrilldown? = nil,
-        mainPanelBackStack: [GaryxMobilePanelRoute] = []
+        mainPanelBackStack: [GaryxMobilePanelRoute] = [],
+        presentsContent: Bool = false
     ) {
         self.activePanel = activePanel
         self.activeSettingsTab = activeSettingsTab
         self.workspaceBotsDrilldown = workspaceBotsDrilldown
         self.mainPanelBackStack = mainPanelBackStack
+        self.presentsContent = presentsContent
+    }
+
+    /// NavigationStack path over the home thread list.
+    public var rootNavigationPath: [GaryxMobileRootRoute] {
+        guard presentsContent else { return [] }
+        return activePanel == .chat ? [.conversation] : [.panel(activePanel)]
+    }
+
+    public mutating func popToHome() {
+        presentsContent = false
+        mainPanelBackStack.removeAll()
+        workspaceBotsDrilldown = nil
+        activeSettingsTab = .manage
     }
 
     public var currentRoute: GaryxMobilePanelRoute {
@@ -397,12 +424,16 @@ public struct GaryxMobileNavigationState: Equatable, Sendable {
         if !mainPanelBackStack.isEmpty {
             return .mainPanelBack
         }
-        return .openSidebar
+        return presentsContent ? .popToHome : .openSidebar
     }
 
     public mutating func setActivePanel(_ panel: GaryxMobilePanel) {
-        guard activePanel != panel else { return }
+        guard activePanel != panel else {
+            presentsContent = true
+            return
+        }
         activePanel = panel
+        presentsContent = true
         mainPanelBackStack.removeAll()
         if panel != .workspaceBots {
             workspaceBotsDrilldown = nil
@@ -440,13 +471,16 @@ public struct GaryxMobileNavigationState: Equatable, Sendable {
         let previousRoute = currentRoute
         switch source {
         case .current:
-            if previousRoute != route, mainPanelBackStack.last != previousRoute {
+            // Only an already-presented page can be a back target; opening
+            // from the home list starts a fresh content stack.
+            if presentsContent, previousRoute != route, mainPanelBackStack.last != previousRoute {
                 mainPanelBackStack.append(previousRoute)
             }
         case .sidebar, .replace:
             mainPanelBackStack.removeAll()
         }
 
+        presentsContent = true
         apply(route)
     }
 
