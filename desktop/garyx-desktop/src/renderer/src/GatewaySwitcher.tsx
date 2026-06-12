@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
   CheckIcon,
-  ChevronUpIcon,
   PencilIcon,
   ServerIcon,
   SettingsIcon,
@@ -45,9 +44,10 @@ function gatewayUrlKey(gatewayUrl: string): string {
 const UNSAVED_CURRENT_PROFILE_ID = 'gateway-switcher::current-unsaved';
 
 /// Bottom-left gateway identity bar: replaces the plain Settings row with the
-/// current gateway's name and connection state. The bar body opens an upward
-/// switcher popover (switch, inline rename, settings entries); the trailing
-/// gear keeps Settings one click away. Management stays in Settings -> Gateway.
+/// current gateway's identity (glyph + name + connection state). The bar body
+/// opens an upward switcher popover (switch, inline rename, settings entries);
+/// the trailing gear keeps Settings one click away. Gateway management stays
+/// in Settings -> Gateway.
 export function GatewayIdentityBar({
   connection,
   indicatorTone,
@@ -150,6 +150,17 @@ export function GatewayIdentityBar({
     await onRename(profile.id, draft);
   }
 
+  function renderGlyph(withBadge: boolean, className: string) {
+    return (
+      <span aria-hidden className={className}>
+        <ServerIcon size={13} strokeWidth={1.8} />
+        {withBadge ? (
+          <span className={`gateway-glyph-badge is-${tone}`} />
+        ) : null}
+      </span>
+    );
+  }
+
   function renderRow(profile: DesktopGatewayProfile, isCurrent: boolean) {
     const editing = editingId === profile.id;
     const switching = switchingId === profile.id;
@@ -177,13 +188,7 @@ export function GatewayIdentityBar({
         role="button"
         tabIndex={0}
       >
-        <span
-          aria-hidden
-          className={cn(
-            'gateway-switcher-dot',
-            isCurrent ? `is-${tone}` : 'is-idle',
-          )}
-        />
+        {renderGlyph(isCurrent, 'gateway-row-glyph')}
         <span className="gateway-switcher-item-copy">
           {editing ? (
             <input
@@ -265,23 +270,19 @@ export function GatewayIdentityBar({
             title={`${currentLabel} · ${toneLabel}`}
             type="button"
           >
-            <span aria-hidden className={`gateway-switcher-dot is-${tone}`} />
-            <span className="gateway-identity-name">{currentLabel}</span>
-            <ChevronUpIcon
-              aria-hidden
-              className="gateway-identity-chevron"
-              size={12}
-              strokeWidth={2}
-            />
+            {renderGlyph(true, 'gateway-identity-glyph')}
+            <span className="gateway-identity-copy">
+              <span className="gateway-identity-name">{currentLabel}</span>
+              <span className="gateway-identity-status">{toneLabel}</span>
+            </span>
           </button>
         </PopoverTrigger>
         <PopoverContent
           align="start"
           className="gateway-switcher-popover"
           side="top"
-          sideOffset={8}
+          sideOffset={10}
         >
-          <div className="gateway-switcher-section-label">{t('Gateways')}</div>
           <div className="gateway-switcher-list">
             {rows.current ? renderRow(rows.current, true) : null}
             {rows.others.map((profile) => renderRow(profile, false))}
@@ -302,7 +303,7 @@ export function GatewayIdentityBar({
             }}
             type="button"
           >
-            <ServerIcon aria-hidden size={13} strokeWidth={1.9} />
+            <ServerIcon aria-hidden size={15} strokeWidth={1.8} />
             <span>{t('Gateway Settings…')}</span>
           </button>
           <button
@@ -314,7 +315,7 @@ export function GatewayIdentityBar({
             }}
             type="button"
           >
-            <SettingsIcon aria-hidden size={13} strokeWidth={1.9} />
+            <SettingsIcon aria-hidden size={15} strokeWidth={1.8} />
             <span>{t('Settings')}</span>
           </button>
         </PopoverContent>
