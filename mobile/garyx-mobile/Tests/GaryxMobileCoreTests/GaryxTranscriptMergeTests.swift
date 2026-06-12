@@ -219,4 +219,128 @@ final class GaryxTranscriptMergeTests: XCTestCase {
         let local = [optimisticUser("local-user-1", text: "hello")]
         XCTAssertEqual(GaryxTranscriptMerge.mergedMessages([], withLocal: local), local)
     }
+
+    private func commandEntry(
+        _ id: String,
+        toolUseId: String,
+        status: GaryxMobileToolTraceStatus
+    ) -> GaryxMobileToolTraceEntry {
+        GaryxMobileToolTraceEntry(
+            id: id,
+            toolUseId: toolUseId,
+            toolName: "commandExecution",
+            title: "Command",
+            inputText: "npm install",
+            inputLabel: "Call",
+            resultLabel: "Result",
+            status: status,
+            isError: false,
+            timestamp: nil,
+            primaryPathBadge: nil
+        )
+    }
+
+    private func localLiveToolGroup(_ id: String, toolUseId: String) -> GaryxMobileMessage {
+        let group = GaryxMobileToolTraceGroup(
+            entries: [commandEntry("\(id)-e1", toolUseId: toolUseId, status: .running)],
+            live: true
+        )
+        return GaryxMobileMessage(
+            id: "tool-group:\(id)",
+            role: .tool,
+            text: group.summary,
+            timestamp: nil,
+            isStreaming: true,
+            toolTraceGroup: group,
+            localState: .remotePartial
+        )
+    }
+
+    func testCompletedRunDropsStaleLiveToolGroupInsteadOfTrailingFinalAnswer() {
+        // A local tool group that lost its terminal events (backgrounded
+        // stream) stays "running" forever. Its rows can also be outside the
+        // fetched page of a long thread, so no remote group overlaps it. Once
+        // the run is inactive the canonical page wins: the group must be
+        // dropped, not appended after the final assistant answer.
+        let local = [
+            historyUser(0, text: "question"),
+            localLiveToolGroup("stale", toolUseId: "call-stale"),
+        ]
+        let remote = [
+            historyUser(0, text: "question"),
+            historyAssistant(60, text: "final answer"),
+        ]
+
+        let merged = GaryxTranscriptMerge.mergedMessages(
+            remote,
+            withLocal: local,
+            threadRunActive: false
+        )
+
+        XCTAssertEqual(merged.map(\.id), ["history:0", "history:60"])
+        XCTAssertEqual(merged.last?.role, .assistant, "the final answer stays the last row")
+    }
+
+    func testActiveRunStillKeepsUnmatchedLiveToolGroup() {
+        let local = [
+            historyUser(0, text: "question"),
+            localLiveToolGroup("inflight", toolUseId: "call-inflight"),
+        ]
+        let remote = [
+            historyUser(0, text: "question"),
+            historyAssistant(1, text: "intermediate segment"),
+        ]
+
+        let merged = GaryxTranscriptMerge.mergedMessages(
+            remote,
+            withLocal: local,
+            threadRunActive: true
+        )
+
+        XCTAssertEqual(
+            merged.map(\.id),
+            ["history:0", "history:1", "tool-group:inflight"],
+            "in-flight activity not yet persisted must stay visible mid-run"
+        )
+    }
+
+    func testPreserveRemoteBeforeIndexKeepsOlderToolGroups() {
+        // Remote-mapped tool groups carry the first grouped row's transcript
+        // index, so older loaded pages keep their tool activity across
+        // reconciles just like their text rows.
+        let olderGroup = GaryxMobileToolTraceGroup(
+            entries: [commandEntry("old-e1", toolUseId: "call-old", status: .completed)],
+            live: false
+        )
+        let olderPage = [
+            historyUser(0, text: "old question"),
+            GaryxMobileMessage(
+                id: "tool-group:old",
+                role: .tool,
+                text: olderGroup.summary,
+                timestamp: nil,
+                isStreaming: false,
+                toolTraceGroup: olderGroup,
+                localState: .remoteFinal,
+                historyIndex: 1
+            ),
+            historyAssistant(2, text: "old answer"),
+        ]
+        let latestPage = [
+            historyUser(40, text: "new question"),
+            historyAssistant(41, text: "new answer"),
+        ]
+
+        let merged = GaryxTranscriptMerge.mergedMessages(
+            latestPage,
+            withLocal: olderPage,
+            preserveRemoteBeforeIndex: 40,
+            threadRunActive: false
+        )
+
+        XCTAssertEqual(
+            merged.map(\.id),
+            ["history:0", "tool-group:old", "history:2", "history:40", "history:41"]
+        )
+    }
 }

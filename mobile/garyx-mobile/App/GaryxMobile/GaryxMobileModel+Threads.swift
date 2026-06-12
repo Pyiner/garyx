@@ -857,12 +857,14 @@ extension GaryxMobileModel {
                 preservingLoadedOlderPages: preservingLoadedOlderPages
             )
         }
-        let remoteMessages = mobileMessages(from: transcript, threadId: threadId, live: remoteBusyThreadIds.contains(threadId))
+        let threadRunActive = remoteBusyThreadIds.contains(threadId)
+        let remoteMessages = mobileMessages(from: transcript, threadId: threadId, live: threadRunActive)
         setMessages(
             mergedMessages(
                 remoteMessages,
                 withLocal: cachedMessages(for: threadId),
-                preserveRemoteBeforeIndex: preserveRemoteBeforeIndex(from: transcript)
+                preserveRemoteBeforeIndex: preserveRemoteBeforeIndex(from: transcript),
+                threadRunActive: threadRunActive
             ),
             for: threadId,
             reconcileActiveAssistant: true
@@ -1117,17 +1119,19 @@ extension GaryxMobileModel {
                 transcript: transcript,
                 preservingLoadedOlderPages: true
             )
-            let remoteMessages = mobileMessages(from: transcript, threadId: threadId, live: remoteBusyThreadIds.contains(threadId))
+            let threadRunActive = remoteBusyThreadIds.contains(threadId)
+            let remoteMessages = mobileMessages(from: transcript, threadId: threadId, live: threadRunActive)
             setMessages(
                 mergedMessages(
                     remoteMessages,
                     withLocal: cachedMessages(for: threadId),
-                    preserveRemoteBeforeIndex: preserveRemoteBeforeIndex(from: transcript)
+                    preserveRemoteBeforeIndex: preserveRemoteBeforeIndex(from: transcript),
+                    threadRunActive: threadRunActive
                 ),
                 for: threadId,
                 reconcileActiveAssistant: true
             )
-            if !remoteBusyThreadIds.contains(threadId) {
+            if !threadRunActive {
                 await refreshThreads()
             }
         } catch {
@@ -1200,17 +1204,19 @@ extension GaryxMobileModel {
                 transcript: transcript,
                 preservingLoadedOlderPages: true
             )
-            let remoteMessages = mobileMessages(from: transcript, threadId: threadId, live: remoteBusyThreadIds.contains(threadId))
+            let threadRunActive = remoteBusyThreadIds.contains(threadId)
+            let remoteMessages = mobileMessages(from: transcript, threadId: threadId, live: threadRunActive)
             setMessages(
                 mergedMessages(
                     remoteMessages,
                     withLocal: cachedMessages(for: threadId),
-                    preserveRemoteBeforeIndex: preserveRemoteBeforeIndex(from: transcript)
+                    preserveRemoteBeforeIndex: preserveRemoteBeforeIndex(from: transcript),
+                    threadRunActive: threadRunActive
                 ),
                 for: threadId,
                 reconcileActiveAssistant: true
             )
-            if !remoteBusyThreadIds.contains(threadId) {
+            if !threadRunActive {
                 await refreshThreads()
             }
         } catch {

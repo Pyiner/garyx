@@ -89,12 +89,14 @@ extension GaryxMobileModel {
             selectedThreadActivitySignatures[threadId] = GaryxThreadActivitySignature.make(from: transcript)
             updateThreadRuntimeState(threadId: threadId, transcript: transcript)
             scheduleSelectedThreadRecoveryIfNeeded(threadId: threadId)
-            let remoteMessages = mobileMessages(from: transcript, threadId: threadId, live: remoteBusyThreadIds.contains(threadId))
+            let threadRunActive = remoteBusyThreadIds.contains(threadId)
+            let remoteMessages = mobileMessages(from: transcript, threadId: threadId, live: threadRunActive)
             setMessages(
                 mergedMessages(
                     remoteMessages,
                     withLocal: cachedMessages(for: threadId),
-                    preserveRemoteBeforeIndex: preserveRemoteBeforeIndex(from: transcript)
+                    preserveRemoteBeforeIndex: preserveRemoteBeforeIndex(from: transcript),
+                    threadRunActive: threadRunActive
                 ),
                 for: threadId,
                 reconcileActiveAssistant: true
@@ -382,12 +384,14 @@ extension GaryxMobileModel {
     func mergedMessages(
         _ remoteMessages: [GaryxMobileMessage],
         withLocal localMessages: [GaryxMobileMessage],
-        preserveRemoteBeforeIndex: Int? = nil
+        preserveRemoteBeforeIndex: Int? = nil,
+        threadRunActive: Bool = true
     ) -> [GaryxMobileMessage] {
         GaryxTranscriptMerge.mergedMessages(
             remoteMessages,
             withLocal: localMessages,
-            preserveRemoteBeforeIndex: preserveRemoteBeforeIndex
+            preserveRemoteBeforeIndex: preserveRemoteBeforeIndex,
+            threadRunActive: threadRunActive
         )
     }
 
@@ -555,10 +559,12 @@ extension GaryxMobileModel {
     func mobileMessages(from transcript: [GaryxTranscriptMessage], live: Bool = false) -> [GaryxMobileMessage] {
         var rendered: [GaryxMobileMessage] = []
         var pendingToolGroup: GaryxMobileToolTraceGroup?
+        var pendingToolGroupHistoryIndex: Int?
 
         func flushToolGroup() {
             guard let group = pendingToolGroup, !group.entries.isEmpty else {
                 pendingToolGroup = nil
+                pendingToolGroupHistoryIndex = nil
                 return
             }
             let firstEntry = group.entries[0]
@@ -574,10 +580,15 @@ extension GaryxMobileModel {
                         entries: group.entries,
                         live: groupIsLive
                     ),
-                    localState: groupIsLive ? .remotePartial : .remoteFinal
+                    localState: groupIsLive ? .remotePartial : .remoteFinal,
+                    // Carry the first grouped row's transcript index so the
+                    // merge's older-page preservation keeps tool groups like
+                    // it keeps text rows instead of silently dropping them.
+                    historyIndex: pendingToolGroupHistoryIndex
                 )
             )
             pendingToolGroup = nil
+            pendingToolGroupHistoryIndex = nil
         }
 
         for item in transcript {
@@ -587,6 +598,9 @@ extension GaryxMobileModel {
                     continue
                 }
                 var group = pendingToolGroup ?? GaryxMobileToolTraceGroup(entries: [], live: false)
+                if pendingToolGroupHistoryIndex == nil {
+                    pendingToolGroupHistoryIndex = item.index
+                }
                 if toolTraceKind == .toolResult, mergeToolResult(entry, into: &group) {
                     pendingToolGroup = group
                     continue

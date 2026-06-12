@@ -112,7 +112,8 @@ enum GaryxTranscriptMerge {
     static func mergedMessages(
         _ incomingRemoteMessages: [GaryxMobileMessage],
         withLocal localMessages: [GaryxMobileMessage],
-        preserveRemoteBeforeIndex: Int? = nil
+        preserveRemoteBeforeIndex: Int? = nil,
+        threadRunActive: Bool = true
     ) -> [GaryxMobileMessage] {
         guard !incomingRemoteMessages.isEmpty else {
             return localMessages
@@ -236,7 +237,15 @@ enum GaryxTranscriptMerge {
                     }
                 }
             case .tool:
-                if local.isStreaming || local.toolTraceGroup?.isActive == true {
+                // A live local tool group only outranks the remote page while
+                // the run is actually active. Once the gateway reports the run
+                // finished, the canonical transcript already contains every
+                // tool row in order; a local group still claiming to run lost
+                // its terminal events (backgrounded stream, dropped socket).
+                // Keeping it would re-append it after the final assistant
+                // answer on every reconcile and pin the turn in a fake
+                // running state.
+                if threadRunActive, local.isStreaming || local.toolTraceGroup?.isActive == true {
                     if let localGroup = local.toolTraceGroup,
                        let remoteIndex = merged.indices.first(where: { remoteIndex in
                            let remote = merged[remoteIndex]
