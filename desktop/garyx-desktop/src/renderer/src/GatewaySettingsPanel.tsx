@@ -1878,17 +1878,10 @@ export function GatewaySettingsPanel({
   }
 
   const currentGatewayKey = localSettings.gatewayUrl.trim().toLowerCase();
+  // Saved order is kept as-is; the active gateway is marked, not moved.
   const savedGatewayProfiles = useMemo(() => {
-    const saved = gatewayProfiles.filter((profile) => profile.gatewayUrl.trim().length > 0);
-    const currentIndex = saved.findIndex(
-      (profile) => profile.gatewayUrl.trim().toLowerCase() === currentGatewayKey,
-    );
-    if (currentIndex > 0) {
-      const [current] = saved.splice(currentIndex, 1);
-      saved.unshift(current);
-    }
-    return saved;
-  }, [gatewayProfiles, currentGatewayKey]);
+    return gatewayProfiles.filter((profile) => profile.gatewayUrl.trim().length > 0);
+  }, [gatewayProfiles]);
 
   // The settings tab manages the saved gateway list only; switching the
   // active gateway lives in the sidebar identity bar.

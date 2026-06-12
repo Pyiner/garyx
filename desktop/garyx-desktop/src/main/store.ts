@@ -401,6 +401,11 @@ function upsertGatewayProfile(
   if (existing && existing.label.trim()) {
     profile.label = existing.label;
   }
+  // Keep the saved-list order stable: reconnecting must not bump an existing
+  // profile to the front of the recency-sorted list.
+  if (existing) {
+    profile.updatedAt = existing.updatedAt;
+  }
 
   const next = [
     profile,
@@ -568,7 +573,13 @@ function normalizeState(value?: Partial<DesktopState>): DesktopState {
 async function writeState(state: DesktopState): Promise<void> {
   const filePath = stateFilePath();
   await mkdir(dirname(filePath), { recursive: true });
-  await writeFile(filePath, JSON.stringify(state, null, 2), 'utf8');
+  // Write-then-rename keeps the live file complete at all times. A plain
+  // truncate-and-write let concurrent readers see partial JSON, which
+  // tripped the corruption recovery below and wiped settings and gateway
+  // profiles to defaults.
+  const tempPath = `${filePath}.tmp-${process.pid}-${Date.now().toString(36)}`;
+  await writeFile(tempPath, JSON.stringify(state, null, 2), 'utf8');
+  await rename(tempPath, filePath);
 }
 
 function isAbsoluteWorkspacePath(path: string): boolean {
@@ -682,7 +693,20 @@ function rememberHydratedDesktopState(state: DesktopState): DesktopState {
 }
 
 async function getHydratedDesktopStateForUiMutation(): Promise<DesktopState> {
-  return latestHydratedDesktopState || getDesktopState();
+  const hydrated = latestHydratedDesktopState;
+  if (!hydrated) {
+    return getDesktopState();
+  }
+  // The hydrated snapshot can predate recent settings/profile writes (its
+  // remote merge may still have been in flight while the user switched
+  // gateways). UI mutations persist a full state, so client-owned fields
+  // must be re-read from disk or those writes get clobbered.
+  const local = await getLocalDesktopState();
+  return {
+    ...hydrated,
+    settings: local.settings,
+    gatewayProfiles: local.gatewayProfiles,
+  };
 }
 
 function remoteErrorMessage(error: unknown): string {
@@ -882,6 +906,23 @@ async function getLocalDesktopState(): Promise<DesktopState> {
         throw error;
       }
 
+      // Re-read once before declaring corruption: a torn read that races an
+      // in-flight rewrite resolves itself as soon as the writer finishes,
+      // and recovery resets settings and gateway profiles to defaults.
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      let retryState: DesktopState | null = null;
+      try {
+        const retryRaw = await readFile(filePath, 'utf8');
+        retryState = await hydrateState(JSON.parse(retryRaw) as Partial<DesktopState>);
+      } catch (retryError) {
+        if (!(retryError instanceof SyntaxError)) {
+          throw retryError;
+        }
+      }
+      if (retryState) {
+        return retryState;
+      }
+
       const recoveredState = await hydrateState({
         settings: resolvedDefaults,
       });
@@ -992,7 +1033,9 @@ export async function updateDesktopGatewayProfile(input: {
     gatewayAuthToken: typeof input.gatewayAuthToken === 'string'
       ? input.gatewayAuthToken
       : existing.gatewayAuthToken,
-    updatedAt: new Date().toISOString(),
+    // Editing keeps the row where it was; only newly added profiles take a
+    // fresh timestamp.
+    updatedAt: existing.updatedAt,
   });
   if (!nextProfile) {
     return getDesktopState();

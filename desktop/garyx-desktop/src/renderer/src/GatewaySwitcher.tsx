@@ -65,32 +65,34 @@ export function GatewayIdentityBar({
       ? t('Gateway offline')
       : t('Connecting…');
 
+  // Saved order is kept as-is so rows do not jump around while switching;
+  // the current gateway is only marked, never moved.
   const rows = useMemo(() => {
     const saved = profiles.filter((profile) => profile.gatewayUrl.trim().length > 0);
     const currentKey = gatewayUrlKey(currentGatewayUrl);
-    const currentIndex = saved.findIndex(
+    const hasCurrent = saved.some(
       (profile) => gatewayUrlKey(profile.gatewayUrl) === currentKey,
     );
-    let current: DesktopGatewayProfile | null = null;
-    if (currentIndex >= 0) {
-      [current] = saved.splice(currentIndex, 1);
-    } else if (currentKey) {
-      current = {
+    if (!hasCurrent && currentKey) {
+      saved.unshift({
         id: UNSAVED_CURRENT_PROFILE_ID,
         label: gatewayHostLabel(currentGatewayUrl),
         gatewayUrl: currentGatewayUrl.trim(),
         gatewayAuthToken: '',
         updatedAt: '',
-      };
+      });
     }
-    return { current, others: saved };
+    return { list: saved, currentKey };
   }, [profiles, currentGatewayUrl]);
 
   if (!currentGatewayUrl.trim()) {
     return null;
   }
 
-  const currentLabel = rows.current?.label || gatewayHostLabel(currentGatewayUrl);
+  const currentProfile = rows.list.find(
+    (profile) => gatewayUrlKey(profile.gatewayUrl) === rows.currentKey,
+  ) || null;
+  const currentLabel = currentProfile?.label || gatewayHostLabel(currentGatewayUrl);
 
   function resetPopoverState() {
     setSwitchingId(null);
@@ -206,8 +208,9 @@ export function GatewayIdentityBar({
           sideOffset={10}
         >
           <div className="gateway-switcher-list">
-            {rows.current ? renderRow(rows.current, true) : null}
-            {rows.others.map((profile) => renderRow(profile, false))}
+            {rows.list.map((profile) => (
+              renderRow(profile, gatewayUrlKey(profile.gatewayUrl) === rows.currentKey)
+            ))}
           </div>
 
           {errorText ? (
