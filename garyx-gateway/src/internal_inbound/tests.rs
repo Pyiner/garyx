@@ -219,6 +219,110 @@ async fn test_dispatch_internal_message_to_thread_uses_explicit_thread() {
 }
 
 #[tokio::test]
+async fn test_dispatch_internal_message_to_thread_expands_bound_agent_runtime_metadata() {
+    let bridge = Arc::new(MultiProviderBridge::new());
+    let provider = Arc::new(RecordingProvider::default());
+    bridge
+        .register_provider("test-provider", provider.clone())
+        .await;
+    bridge.set_route("api", "main", "test-provider").await;
+    bridge.set_default_provider_key("test-provider").await;
+
+    let state = crate::server::create_app_state_with_bridge(GaryxConfig::default(), bridge.clone());
+    bridge
+        .set_thread_store(state.threads.thread_store.clone())
+        .await;
+    bridge.set_event_tx(state.ops.events.sender()).await;
+
+    state
+        .ops
+        .custom_agents
+        .upsert_agent(crate::custom_agents::UpsertCustomAgentRequest {
+            agent_id: "reviewer".to_owned(),
+            display_name: "Reviewer".to_owned(),
+            provider_type: ProviderType::ClaudeCode,
+            model: "claude-sonnet-4-6".to_owned(),
+            model_reasoning_effort: "xhigh".to_owned(),
+            model_service_tier: String::new(),
+            provider_env: None,
+            auth_source: None,
+            base_url: None,
+            codex_home: None,
+            max_tool_iterations: None,
+            request_timeout_seconds: None,
+            default_workspace_dir: None,
+            avatar_data_url: None,
+            system_prompt: "Review carefully.".to_owned(),
+        })
+        .await
+        .expect("custom agent");
+
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::agent-task",
+            json!({
+                "thread_id": "thread::agent-task",
+                "channel": "api",
+                "account_id": "main",
+                "from_id": "loop",
+                "is_group": false,
+                "agent_id": "reviewer",
+                "provider_type": "claude_code",
+                "messages": [],
+                "channel_bindings": []
+            }),
+        )
+        .await;
+
+    dispatch_internal_message_to_thread(
+        &state,
+        "thread::agent-task",
+        "run-task-auto",
+        "review this work",
+        InternalDispatchOptions::default(),
+    )
+    .await
+    .unwrap();
+
+    let calls = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let maybe_calls = {
+                let calls = provider.calls.lock().unwrap();
+                if calls.len() == 1 {
+                    Some(calls.clone())
+                } else {
+                    None
+                }
+            };
+            if let Some(calls) = maybe_calls {
+                break calls;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("provider should receive internal dispatch");
+
+    let metadata = &calls[0].2;
+    assert_eq!(
+        metadata["model"],
+        Value::String("claude-sonnet-4-6".to_owned()),
+        "the bound agent's model override must reach the provider"
+    );
+    assert_eq!(
+        metadata["model_reasoning_effort"],
+        Value::String("xhigh".to_owned())
+    );
+    assert_eq!(
+        metadata["system_prompt"],
+        Value::String("Review carefully.".to_owned())
+    );
+    assert_eq!(metadata["agent_id"], Value::String("reviewer".to_owned()));
+}
+
+#[tokio::test]
 async fn test_dispatch_internal_message_to_thread_restores_missing_dm_binding() {
     let bridge = Arc::new(MultiProviderBridge::new());
     let provider = Arc::new(RecordingProvider::default());
