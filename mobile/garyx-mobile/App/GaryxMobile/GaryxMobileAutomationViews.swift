@@ -148,6 +148,15 @@ struct GaryxAutomationCard: View {
                                 await model.runAutomation(automation)
                             }
                         },
+                        onThreads: automation.isGeneratedThreadMode
+                            ? {
+                                showsActionPanel = false
+                                model.openWorkspaceBotsDrilldown(
+                                    .automationThreads(automation.id),
+                                    source: .current
+                                )
+                            }
+                            : nil,
                         onEdit: {
                             showsActionPanel = false
                             openEditForm()
@@ -260,12 +269,17 @@ private func garyxAutomationScheduleCardSummary(_ schedule: GaryxAutomationSched
 
 private struct GaryxAutomationActionPopover: View {
     let onRun: () -> Void
+    var onThreads: (() -> Void)?
     let onEdit: () -> Void
     let onDelete: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
             actionButton(title: "Run Once", systemName: "clock.arrow.circlepath", action: onRun)
+            if let onThreads {
+                Divider().padding(.leading, 44)
+                actionButton(title: "Threads", systemName: "bubble.left.and.text.bubble.right", action: onThreads)
+            }
             Divider().padding(.leading, 44)
             actionButton(title: "Edit", systemName: "pencil", action: onEdit)
             Divider().padding(.leading, 44)

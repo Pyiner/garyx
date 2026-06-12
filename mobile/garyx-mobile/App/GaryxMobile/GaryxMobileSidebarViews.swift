@@ -80,7 +80,7 @@ private struct GaryxRootRouteContentView: View {
         case .autoResearch:
             GaryxAutoResearchView()
         case .bots:
-            GaryxBotsView()
+            GaryxBotConversationsView()
         case .settings:
             GaryxMobileSettingsPanel()
         }
@@ -267,7 +267,11 @@ struct GaryxHomeHeaderView: View {
             HStack(alignment: .center, spacing: 12) {
                 GaryxSidebarMenuButton(action: onOpenDrawer)
 
-                GaryxSidebarGatewayIdentityControl()
+                Text("Garyx")
+                    .font(GaryxFont.system(size: 26, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
 
                 Spacer(minLength: 0)
             }
@@ -278,15 +282,22 @@ struct GaryxHomeHeaderView: View {
     }
 }
 
-/// Navigation-only drawer over the home thread list: the module entries the
-/// Mac app keeps in its sidebar rail.
+/// Navigation drawer over the home thread list: module entries with Bots and
+/// Workspaces expanding inline like the Mac sidebar rail, and Settings plus
+/// the gateway identity bar at the bottom.
 struct GaryxNavigationDrawerView: View {
     @EnvironmentObject private var model: GaryxMobileModel
+    @Environment(\.garyxSidebarDragActive) private var sidebarDragActive
+    @State private var botsExpanded = true
+    @State private var workspacesExpanded = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             GaryxAdaptiveGlassContainer(spacing: 10) {
                 HStack(alignment: .center, spacing: 12) {
+                    // No menu button here: the home header's menu button stays
+                    // visible in the sliver next to the drawer and tapping it
+                    // (or anywhere outside) closes the drawer.
                     Text("Garyx")
                         .font(GaryxFont.system(size: 26, weight: .semibold))
                         .foregroundStyle(.primary)
@@ -300,35 +311,159 @@ struct GaryxNavigationDrawerView: View {
             .padding(.top, 10)
             .padding(.bottom, 8)
 
-            GaryxSidebarNavigationList()
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 6) {
+                    GaryxSidebarNavigationRow(
+                        panel: .automations,
+                        isSelected: model.activePanel == .automations
+                    )
+
+                    GaryxDrawerSectionRow(
+                        title: GaryxMobilePanel.bots.label,
+                        systemImage: GaryxMobilePanel.bots.iconName,
+                        isExpanded: $botsExpanded
+                    )
+                    if botsExpanded {
+                        ForEach(model.mobileBotGroups) { group in
+                            GaryxDrawerChildRow(title: group.title) {
+                                GaryxChannelLogoView(
+                                    channel: group.channel,
+                                    label: group.title,
+                                    iconDataUrl: group.iconDataUrl,
+                                    diameter: 20
+                                )
+                            } action: {
+                                openBotGroup(group)
+                            }
+                        }
+                    }
+
+                    GaryxDrawerSectionRow(
+                        title: GaryxMobilePanel.workspaceBots.label,
+                        systemImage: GaryxMobilePanel.workspaceBots.iconName,
+                        isExpanded: $workspacesExpanded
+                    )
+                    if workspacesExpanded {
+                        ForEach(model.sidebarWorkspaceThreadGroups) { group in
+                            GaryxDrawerChildRow(title: group.name) {
+                                Image(systemName: "folder")
+                                    .font(GaryxFont.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 20, height: 20)
+                            } action: {
+                                model.openWorkspaceBotsDrilldown(.workspace(group.path), source: .sidebar)
+                            }
+                        }
+                    }
+
+                    GaryxSidebarNavigationRow(
+                        panel: .agents,
+                        isSelected: model.activePanel == .agents
+                    )
+                }
                 .padding(.horizontal, GaryxSidebarMetrics.outerHorizontalPadding)
                 .padding(.top, 6)
+                .padding(.bottom, 12)
+            }
+            .scrollDisabled(sidebarDragActive)
 
             Spacer(minLength: 0)
+
+            // Settings entry and gateway identity live at the drawer bottom,
+            // mirroring the Mac app's bottom-left identity bar.
+            VStack(alignment: .leading, spacing: 6) {
+                GaryxSidebarNavigationRow(
+                    panel: .settings,
+                    isSelected: model.activePanel == .settings
+                )
+
+                GaryxSidebarGatewayIdentityControl()
+                    .padding(.horizontal, GaryxSidebarMetrics.rowInnerHorizontalPadding)
+                    .padding(.top, 4)
+            }
+            .padding(.horizontal, GaryxSidebarMetrics.outerHorizontalPadding)
+            .padding(.bottom, 14)
         }
         .frame(maxHeight: .infinity, alignment: .top)
         .garyxPageBackground()
     }
+
+    private func openBotGroup(_ group: GaryxMobileBotGroup) {
+        if group.rootCanOpen {
+            Task { await model.openBotGroup(group) }
+            model.setSidebarVisible(false)
+        } else {
+            model.openWorkspaceBotsDrilldown(.bot(group.id), source: .sidebar)
+        }
+    }
 }
 
-struct GaryxSidebarNavigationList: View {
-    @EnvironmentObject private var model: GaryxMobileModel
-
-    private let panels: [GaryxMobilePanel] = [
-        .automations,
-        .workspaceBots,
-        .agents,
-    ]
+/// Expandable drawer section header (Bots / Workspaces).
+private struct GaryxDrawerSectionRow: View {
+    let title: String
+    let systemImage: String
+    @Binding var isExpanded: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ForEach(panels) { panel in
-                GaryxSidebarNavigationRow(
-                    panel: panel,
-                    isSelected: model.activePanel == panel
-                )
+        Button {
+            withAnimation(GaryxMobileMotion.sidebarDrilldown) {
+                isExpanded.toggle()
             }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: systemImage)
+                    .font(GaryxFont.system(size: 19, weight: .regular))
+                    .foregroundStyle(Color.primary.opacity(0.78))
+                    .frame(width: 26, height: 26)
+
+                Text(title)
+                    .font(GaryxFont.callout(weight: .medium))
+                    .foregroundStyle(Color.primary.opacity(0.88))
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "chevron.right")
+                    .font(GaryxFont.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+            }
+            .padding(.horizontal, GaryxSidebarMetrics.rowInnerHorizontalPadding)
+            .frame(minHeight: 44)
+            .contentShape(RoundedRectangle(cornerRadius: GaryxSidebarMetrics.rowCornerRadius, style: .continuous))
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+    }
+}
+
+/// Indented child row under an expanded drawer section.
+private struct GaryxDrawerChildRow<Icon: View>: View {
+    let title: String
+    @ViewBuilder var icon: () -> Icon
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                icon()
+
+                Text(title)
+                    .font(GaryxFont.callout())
+                    .foregroundStyle(Color.primary.opacity(0.88))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Spacer(minLength: 0)
+            }
+            .padding(.leading, GaryxSidebarMetrics.rowInnerHorizontalPadding + 30)
+            .padding(.trailing, GaryxSidebarMetrics.rowInnerHorizontalPadding)
+            .frame(minHeight: 38)
+            .contentShape(RoundedRectangle(cornerRadius: GaryxSidebarMetrics.rowCornerRadius, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
     }
 }
 
@@ -1161,6 +1296,12 @@ struct GaryxSidebarThreadRowView: View {
                     builtIn: avatar.builtIn,
                     diameter: 38
                 )
+                .overlay(alignment: .bottomTrailing) {
+                    if model.isRunning {
+                        GaryxAvatarTypingBadge()
+                            .offset(x: 3, y: 3)
+                    }
+                }
             }
 
             VStack(alignment: .leading, spacing: density.textSpacing) {
@@ -1238,6 +1379,39 @@ struct GaryxSidebarThreadRowView: View {
     }
 }
 
+/// Running-state badge pinned to the avatar's bottom-right corner: a small
+/// tinted bubble with an iMessage-style three-dot typing wave, ringed by the
+/// page background so it sits cleanly on any avatar.
+struct GaryxAvatarTypingBadge: View {
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+            let cycle = 1.05
+            let progress = context.date.timeIntervalSinceReferenceDate
+                .truncatingRemainder(dividingBy: cycle) / cycle
+
+            HStack(spacing: 1.6) {
+                ForEach(0..<3, id: \.self) { index in
+                    Circle()
+                        .fill(Color.white.opacity(dotOpacity(progress: progress, index: index)))
+                        .frame(width: 2.6, height: 2.6)
+                }
+            }
+            .frame(width: 16, height: 16)
+            .background(Color(.systemGreen), in: Circle())
+            .overlay {
+                Circle()
+                    .stroke(GaryxTheme.background, lineWidth: 2)
+            }
+        }
+        .accessibilityLabel("Running")
+    }
+
+    private func dotOpacity(progress: Double, index: Int) -> Double {
+        let phase = progress * 2 * .pi - Double(index) * (.pi / 4)
+        return 0.45 + 0.55 * max(0, sin(phase))
+    }
+}
+
 private struct GaryxSidebarRunningIndicator: View {
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
@@ -1298,7 +1472,7 @@ private extension GaryxSidebarThreadRowView {
 
     var trailingMeta: some View {
         HStack(spacing: 6) {
-            if model.isRunning {
+            if model.isRunning, avatar == nil {
                 GaryxSidebarRunningIndicator()
             } else if model.isSelected {
                 switch selectionDisplay {
@@ -1435,6 +1609,57 @@ struct GaryxSidebarEmptyState: View {
     }
 }
 
+/// Drawer "Bots" page: configured bots with their conversation drilldowns,
+/// split out of the old combined threads page.
+struct GaryxBotConversationsView: View {
+    @EnvironmentObject private var model: GaryxMobileModel
+    @State private var activeDrilldown: GaryxWorkspaceBotsDrilldown?
+
+    var body: some View {
+        GaryxPanelScaffold(
+            title: title,
+            subtitle: "",
+            onRefresh: { await refresh() },
+            leadingActionLabel: activeDrilldown == nil ? nil : "Bots",
+            leadingAction: activeDrilldown == nil ? nil : { goBack() }
+        ) {
+            VStack(alignment: .leading, spacing: 16) {
+                GaryxSidebarBotsSection(activeDrilldown: $activeDrilldown)
+                if activeDrilldown == nil, model.mobileBotGroups.isEmpty {
+                    GaryxEmptyPanelView(
+                        icon: "bubble.left.and.bubble.right",
+                        title: "No bots yet",
+                        text: ""
+                    )
+                }
+            }
+        } actions: {
+            EmptyView()
+        }
+        .task {
+            await refresh()
+        }
+    }
+
+    private var title: String {
+        if case let .bot(id) = activeDrilldown {
+            return model.mobileBotGroups.first { $0.id == id }?.title ?? "Bot"
+        }
+        return "Bots"
+    }
+
+    private func refresh() async {
+        await model.refreshRemoteState()
+        await model.refreshWorkspaceAndBotThreads()
+    }
+
+    private func goBack() {
+        withAnimation(GaryxMobileMotion.sidebarDrilldown) {
+            activeDrilldown = nil
+        }
+    }
+}
+
 struct GaryxWorkspaceBotsView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @State private var showsAddWorkspace = false
@@ -1454,18 +1679,14 @@ struct GaryxWorkspaceBotsView: View {
                     GaryxSidebarAutomationsSection(activeDrilldown: activeDrilldownBinding)
                 case .bot:
                     GaryxSidebarBotsSection(activeDrilldown: activeDrilldownBinding)
-                case .workspace:
+                case .workspace, nil:
+                    // Root lists workspaces only; bots have their own page
+                    // and automation threads open from the Automation page.
                     GaryxWorkspaceThreadGroupsSection(activeDrilldown: activeDrilldownBinding)
-                case nil:
-                    GaryxSidebarAutomationsSection(activeDrilldown: activeDrilldownBinding)
-                    GaryxSidebarBotsSection(activeDrilldown: activeDrilldownBinding)
-                    GaryxWorkspaceThreadGroupsSection(activeDrilldown: activeDrilldownBinding)
-                    if generatedAutomations.isEmpty
-                        && model.mobileBotGroups.isEmpty
-                        && model.sidebarWorkspaceThreadGroups.isEmpty {
+                    if activeDrilldown == nil, model.sidebarWorkspaceThreadGroups.isEmpty {
                         GaryxEmptyPanelView(
-                            icon: "bubble.left.and.bubble.right",
-                            title: "No threads yet",
+                            icon: "folder",
+                            title: "No workspaces yet",
                             text: ""
                         )
                     }
@@ -1522,7 +1743,7 @@ struct GaryxWorkspaceBotsView: View {
         case let .automationThreads(id):
             generatedAutomations.first { $0.id == id }?.label ?? "Automation Threads"
         case nil:
-            "Threads"
+            "Workspaces"
         }
     }
 

@@ -60,7 +60,7 @@ public enum GaryxMobilePanel: String, CaseIterable, Identifiable, Sendable {
         case .autoResearch:
             "Auto Research"
         case .workspaceBots:
-            "Threads"
+            "Workspaces"
         case .bots:
             "Bots"
         case .settings:
@@ -91,7 +91,7 @@ public enum GaryxMobilePanel: String, CaseIterable, Identifiable, Sendable {
         case .autoResearch:
             "atom"
         case .workspaceBots:
-            "bubble.left.and.bubble.right.fill"
+            "folder.fill"
         case .bots:
             "bubble.left.and.bubble.right"
         case .settings:
@@ -512,7 +512,9 @@ public struct GaryxMobileNavigationState: Equatable, Sendable {
         dreamsAutoScanEnabled: Bool
     ) -> GaryxMobilePanel {
         switch panel {
-        case .bots, .workspaces:
+        case .workspaces:
+            // Legacy workspace links land on the workspace-threads page; the
+            // .workspaces panel itself is the file browser.
             .workspaceBots
         case .dreams where !dreamsAutoScanEnabled:
             .chat

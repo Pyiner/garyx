@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 import WidgetKit
 
@@ -63,6 +64,8 @@ extension GaryxMobileModel {
 
     func setSidebarVisible(_ visible: Bool, animated: Bool = true) {
         guard sidebarVisible != visible else { return }
+        // A light tick on open and close so the drawer state change is felt.
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
         if animated {
             withAnimation(GaryxMobileMotion.sidebar) {
                 sidebarVisible = visible
