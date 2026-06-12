@@ -14,7 +14,7 @@ use garyx_models::{
     TaskStatus, ThreadTask,
 };
 use garyx_router::{
-    CreateTaskInput, FileTaskCounterStore, PromoteTaskInput, TaskListFilter, TaskRuntimeInput,
+    CreateTaskInput, FileTaskCounterStore, TaskListFilter, TaskRuntimeInput,
     TaskService, TaskServiceError, UpdateTaskStatusInput, WorkspaceMode,
     mark_thread_task_in_review_if_in_progress, workspace_dir_from_value,
 };
@@ -138,21 +138,6 @@ pub enum TaskNotificationTargetBody {
         #[serde(alias = "accountId")]
         account_id: String,
     },
-}
-
-#[derive(Debug, Deserialize)]
-pub struct PromoteTaskBody {
-    pub thread_id: String,
-    #[serde(default)]
-    pub title: Option<String>,
-    #[serde(default)]
-    pub assignee: Option<Principal>,
-    #[serde(default, alias = "notificationTarget")]
-    pub notification_target: Option<TaskNotificationTargetBody>,
-    #[serde(default)]
-    pub source: Option<TaskSource>,
-    #[serde(default)]
-    pub actor: Option<Principal>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -517,73 +502,6 @@ pub async fn create_tasks_batch(
     }
     state.invalidate_gateway_sync_caches().await;
     (StatusCode::CREATED, Json(json!({ "tasks": created })))
-}
-
-pub async fn promote_task(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Json(body): Json<PromoteTaskBody>,
-) -> (StatusCode, Json<Value>) {
-    let Some(service) = task_service(&state) else {
-        return tasks_disabled();
-    };
-    let actor = match actor_from_request(body.actor, &headers) {
-        Ok(actor) => actor,
-        Err(error) => return task_error_response(error),
-    };
-    if let Err(error) = validate_task_assignee_agent(&state, body.assignee.as_ref()).await {
-        return task_error_response(error);
-    }
-    let notification_target = match required_notification_target(body.notification_target) {
-        Ok(target) => target,
-        Err(error) => return task_error_response(error),
-    };
-    let thread_id = body.thread_id;
-    let title_for_dispatch = body.title.clone();
-    match service
-        .promote_task(PromoteTaskInput {
-            thread_id: thread_id.clone(),
-            title: body.title,
-            assignee: body.assignee,
-            notification_target,
-            source: body.source,
-            actor,
-        })
-        .await
-    {
-        Ok(task) => {
-            if let Err(error) = ensure_thread_workspace_from_assignee_default(
-                &state,
-                &thread_id,
-                task.assignee.as_ref(),
-            )
-            .await
-            {
-                return task_error_response(error);
-            }
-            state.invalidate_gateway_sync_caches().await;
-            let runtime_agent_id = runtime_agent_id_for_thread(&state, &thread_id).await;
-            let mut payload = json!({
-                "task_id": garyx_router::tasks::canonical_task_id(&task),
-                "number": task.number,
-                "status": task.status,
-                "runtime_agent_id": runtime_agent_id,
-                "task": task,
-            });
-            if let Some(dispatch) = spawn_task_auto_dispatch(
-                state.clone(),
-                thread_id,
-                payload["task"].clone(),
-                "promote",
-                title_for_dispatch.as_deref(),
-                None,
-            ) {
-                payload["dispatch"] = dispatch;
-            }
-            (StatusCode::OK, Json(payload))
-        }
-        Err(error) => task_error_response(error),
-    }
 }
 
 pub async fn get_task(
@@ -1614,7 +1532,6 @@ fn task_error_response(error: TaskServiceError) -> (StatusCode, Json<Value>) {
     let code = match &error {
         TaskServiceError::NotFound(_) => "NotFound",
         TaskServiceError::NotATask(_) => "NotATask",
-        TaskServiceError::AlreadyATask(_) => "AlreadyATask",
         TaskServiceError::InvalidTransition { .. } => "InvalidTransition",
         TaskServiceError::BadRequest(_) => "BadRequest",
         TaskServiceError::UnknownPrincipal(_) => "UnknownPrincipal",
@@ -1625,7 +1542,7 @@ fn task_error_response(error: TaskServiceError) -> (StatusCode, Json<Value>) {
     };
     let status = match code {
         "NotFound" => StatusCode::NOT_FOUND,
-        "NotATask" | "AlreadyATask" | "InvalidTransition" | "BadRequest" | "UnknownPrincipal"
+        "NotATask" | "InvalidTransition" | "BadRequest" | "UnknownPrincipal"
         | "UnknownAgent" => StatusCode::BAD_REQUEST,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };

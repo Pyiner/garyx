@@ -72,7 +72,6 @@ import type {
   MarkAutomationSeenInput,
   ReadMemoryDocumentInput,
   PreviewWorkspaceFileInput,
-  PromoteTaskInput,
   RevealWorkspaceFileInput,
   ReadSkillFileInput,
   RenameThreadInput,
@@ -182,7 +181,6 @@ import {
   updateMcpServer,
   updateSkill,
   updateSlashCommand,
-  promoteThreadToTask,
   updateTaskStatus,
   assignTask,
   unassignTask,
@@ -863,14 +861,6 @@ function registerIpcHandlers(): void {
     "garyx:start-workflow-thread",
     async (_event, input: StartWorkflowThreadInput) => {
       return startDesktopWorkflowThread(input);
-    },
-  );
-
-  ipcMain.handle(
-    "garyx:promote-thread-to-task",
-    async (_event, input: PromoteTaskInput) => {
-      const settings = await resolveSettings();
-      return promoteThreadToTask(settings, input);
     },
   );
 

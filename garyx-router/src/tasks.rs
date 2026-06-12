@@ -13,14 +13,13 @@ use uuid::Uuid;
 use crate::{TaskCounterError, TaskCounterStore};
 use crate::{
     ThreadEnsureOptions, ThreadStore, WorkspaceMode, agent_id_from_value, create_thread_record,
-    history_message_count, is_thread_key, label_from_value,
+    history_message_count, is_thread_key,
 };
 
 const DEFAULT_TASK_LIST_LIMIT: usize = 50;
 const MAX_TASK_LIST_LIMIT: usize = 200;
 const DEFAULT_TASK_AGENT_ID: &str = "claude";
 const TASK_THREAD_TITLE_SOURCE: &str = "task";
-const EXPLICIT_THREAD_TITLE_SOURCE: &str = "explicit";
 type TaskThreadLock = Arc<tokio::sync::Mutex<()>>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -44,8 +43,6 @@ pub enum TaskServiceError {
     NotFound(String),
     #[error("NotATask: {0}")]
     NotATask(String),
-    #[error("AlreadyATask: {0}")]
-    AlreadyATask(String),
     #[error("InvalidTransition: {from:?} -> {to:?}")]
     InvalidTransition { from: TaskStatus, to: TaskStatus },
     #[error("BadRequest: {0}")]
@@ -102,21 +99,6 @@ pub struct TaskRuntimeInput {
 
 fn is_local_workspace_mode(value: &WorkspaceMode) -> bool {
     *value == WorkspaceMode::Local
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PromoteTaskInput {
-    pub thread_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub assignee: Option<Principal>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub notification_target: Option<TaskNotificationTarget>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<TaskSource>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub actor: Option<Principal>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -340,59 +322,6 @@ impl TaskService {
         self.thread_store.set(&thread_id, record).await;
         task_index_upsert(self.index_store_id(), &thread_id, &task);
         Ok((thread_id, task))
-    }
-
-    pub async fn promote_task(
-        &self,
-        input: PromoteTaskInput,
-    ) -> Result<ThreadTask, TaskServiceError> {
-        let actor = input.actor.unwrap_or_else(default_actor);
-        validate_principal(&actor)?;
-        if let Some(assignee) = &input.assignee {
-            validate_principal(assignee)?;
-        }
-        validate_notification_target(input.notification_target.as_ref())?;
-        let source = normalize_task_source(input.source);
-        let lock = task_thread_lock(&input.thread_id);
-        let _guard = lock.lock().await;
-        let mut record = self.load_record(&input.thread_id).await?;
-        if task_from_record(&record)?.is_some() {
-            return Err(TaskServiceError::AlreadyATask(input.thread_id));
-        }
-        let title = derive_promoted_title(input.title.as_deref(), &record);
-        let auto_start = input.assignee.is_some();
-        let task = self
-            .build_task(
-                title,
-                if auto_start {
-                    TaskStatus::InProgress
-                } else {
-                    TaskStatus::Todo
-                },
-                actor,
-                input.assignee,
-                input.notification_target,
-                source,
-                None,
-                TaskEventKind::Promoted {
-                    initial_status: if auto_start {
-                        TaskStatus::InProgress
-                    } else {
-                        TaskStatus::Todo
-                    },
-                    assignee: None,
-                },
-            )
-            .await?;
-        let mut task = task;
-        if let TaskEventKind::Promoted { assignee, .. } = &mut task.events[0].kind {
-            *assignee = task.assignee.clone();
-        }
-        set_task_thread_title(&mut record, &task)?;
-        set_task_on_record(&mut record, &task)?;
-        self.thread_store.set(&input.thread_id, record).await;
-        task_index_upsert(self.index_store_id(), &input.thread_id, &task);
-        Ok(task)
     }
 
     pub async fn get_task(
@@ -806,20 +735,6 @@ impl TaskService {
         Ok(task)
     }
 
-    async fn load_record(&self, thread_id: &str) -> Result<Value, TaskServiceError> {
-        if !is_thread_key(thread_id) {
-            return Err(TaskServiceError::BadRequest(format!(
-                "invalid thread id: {thread_id}"
-            )));
-        }
-        let record = self
-            .thread_store
-            .get(thread_id)
-            .await
-            .ok_or_else(|| TaskServiceError::NotFound(thread_id.to_owned()))?;
-        Ok(record)
-    }
-
     async fn resolve_task_record(
         &self,
         task_id: &str,
@@ -1183,22 +1098,6 @@ fn derive_title(input: Option<&str>, record: &Value) -> String {
     "Untitled task".to_owned()
 }
 
-fn derive_promoted_title(input: Option<&str>, record: &Value) -> String {
-    if input.map(str::trim).is_some_and(|value| !value.is_empty()) {
-        return derive_title(input, record);
-    }
-    if record
-        .get("thread_title_source")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        == Some(EXPLICIT_THREAD_TITLE_SOURCE)
-        && let Some(label) = label_from_value(record)
-    {
-        return truncate_title(&label);
-    }
-    derive_title(None, record)
-}
-
 fn message_text(message: &Value) -> Option<String> {
     let content = message.get("content")?;
     match content {
@@ -1448,53 +1347,6 @@ mod tests {
         assert_eq!(
             record["label"],
             Value::String(format!("{} Audit daemons", canonical_task_id(&task)))
-        );
-        assert_eq!(record["thread_title_source"], "task");
-    }
-
-    #[tokio::test]
-    async fn task_promote_prefixes_explicit_thread_title() {
-        let service = service();
-        service
-            .thread_store
-            .set(
-                "thread::promote-title",
-                json!({
-                    "thread_id": "thread::promote-title",
-                    "label": "Customer interview followup",
-                    "thread_title_source": "explicit",
-                    "messages": [{
-                        "role": "user",
-                        "content": "First message text should not win."
-                    }]
-                }),
-            )
-            .await;
-
-        let task = service
-            .promote_task(PromoteTaskInput {
-                thread_id: "thread::promote-title".to_owned(),
-                title: None,
-                assignee: None,
-                notification_target: None,
-                source: None,
-                actor: None,
-            })
-            .await
-            .unwrap();
-
-        let record = service
-            .thread_store
-            .get("thread::promote-title")
-            .await
-            .unwrap();
-        assert_eq!(task.title, "Customer interview followup");
-        assert_eq!(
-            record["label"],
-            Value::String(format!(
-                "{} Customer interview followup",
-                canonical_task_id(&task)
-            ))
         );
         assert_eq!(record["thread_title_source"], "task");
     }

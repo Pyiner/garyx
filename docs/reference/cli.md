@@ -117,7 +117,6 @@ requested window.
 | `garyx task list` | List tasks. |
 | `garyx task create [--title <title>] [--body <body>] [--agent <id> \| --team <id> \| --workflow <id> \| --assignee <principal>] [--workspace-dir <path>] --notify <target>` | Create a task thread backed by an Agent, Agent Team, or Workflow executor. Legacy `--assignee <principal>` still works for compatibility, and assigned tasks start automatically. Notification targets are `current-thread`, `thread <thread_id>`, `bot <channel:account_id>`, or `none`. |
 | `garyx task get <task_ref>` | Fetch one task. |
-| `garyx task promote <thread_id> --notify <target>` | Promote an existing thread into a task with an explicit review notification target. |
 | `garyx task update <task_ref> --status <status> [--note <note>]` | Move a task through its lifecycle. Garyx moves an in-progress task to review when its agent run stops; only mark `done` after explicit approval. |
 | `garyx task stop <task_ref>` | Interrupt the active run on the task's backing thread, if one exists, then release the task back to a non-running state. |
 | `garyx task delete <task_ref>` | Delete task metadata so it leaves task lists. The backing thread and transcript are retained for audit. |

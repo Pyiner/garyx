@@ -189,8 +189,6 @@ const api: GaryxDesktopApi = {
     ipcRenderer.invoke("garyx:get-workflow-run", input),
   startWorkflowThread: (input) =>
     ipcRenderer.invoke("garyx:start-workflow-thread", input),
-  promoteThreadToTask: (input) =>
-    ipcRenderer.invoke("garyx:promote-thread-to-task", input),
   updateTaskStatus: (input) =>
     ipcRenderer.invoke("garyx:update-task-status", input),
   assignTask: (input) => ipcRenderer.invoke("garyx:assign-task", input),

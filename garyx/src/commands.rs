@@ -5889,40 +5889,6 @@ fn task_source_payload_from_env() -> Option<Value> {
     Some(Value::Object(source))
 }
 
-pub(crate) async fn cmd_task_promote(
-    config_path: &str,
-    thread_id: &str,
-    title: Option<String>,
-    assignee: Option<&str>,
-    notify: Vec<String>,
-    json_output: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let thread_id = thread_id.trim();
-    if thread_id.is_empty() {
-        return Err("thread_id cannot be empty".into());
-    }
-    let notification_target = task_notification_target_payload(notify)?;
-    let source = task_source_payload_from_env();
-    let gateway = gateway_endpoint(config_path)?;
-    let payload = post_gateway_json_as_cli_actor(
-        &gateway,
-        "/api/tasks/promote",
-        &json!({
-            "thread_id": thread_id,
-            "title": title,
-            "assignee": assignee.map(principal_payload).transpose()?,
-            "notification_target": notification_target,
-            "source": source,
-        }),
-    )
-    .await?;
-    if json_output {
-        return print_pretty_json(&payload);
-    }
-    print_task_summary(&payload);
-    Ok(())
-}
-
 fn task_notification_target_payload(
     parts: Vec<String>,
 ) -> Result<Value, Box<dyn std::error::Error>> {

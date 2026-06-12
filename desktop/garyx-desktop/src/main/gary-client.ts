@@ -85,7 +85,6 @@ import type {
   OpenChatStreamResult,
   PendingThreadInput,
   PreviewWorkspaceFileInput,
-  PromoteTaskInput,
   SendMessageInput,
   SendStreamingInputResult,
   SlashCommand,
@@ -5123,33 +5122,6 @@ export async function createTask(
     }),
   });
   return mapTaskSummary(payload);
-}
-
-export async function promoteThreadToTask(
-  settings: DesktopSettings,
-  input: PromoteTaskInput,
-): Promise<DesktopTaskSummary> {
-  const assignee = input.assignee?.trim()
-    ? principalPayload(input.assignee)
-    : null;
-  const payload = await requestJson<TaskSummaryPayload>(
-    settings,
-    "/api/tasks/promote",
-    {
-      method: "POST",
-      signal: AbortSignal.timeout(8000),
-      body: JSON.stringify({
-        thread_id: input.threadId,
-        title: input.title?.trim() || null,
-        assignee,
-        notification_target: taskNotificationTargetPayload(input.notificationTarget),
-      }),
-    },
-  );
-  return {
-    ...mapTaskSummary(payload),
-    threadId: input.threadId,
-  };
 }
 
 function taskNotificationTargetPayload(

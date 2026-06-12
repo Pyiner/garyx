@@ -1617,19 +1617,6 @@ pub(crate) enum TaskAction {
         #[arg(long)]
         json: bool,
     },
-    /// Promote an existing thread into a task
-    Promote {
-        thread_id: String,
-        #[arg(long)]
-        title: Option<String>,
-        #[arg(long)]
-        assignee: Option<String>,
-        /// Required notification target when the task enters review: `none`, `current-thread`, `thread <thread_id>`, or `bot <channel:account_id>`
-        #[arg(long, value_name = "TARGET", num_args = 1..=2)]
-        notify: Vec<String>,
-        #[arg(long)]
-        json: bool,
-    },
     /// Claim a task
     Claim {
         task_id: String,

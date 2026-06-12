@@ -141,10 +141,6 @@ fn thread_routes() -> Router<Arc<AppState>> {
             axum::routing::post(tasks::create_tasks_batch),
         )
         .route(
-            "/api/tasks/promote",
-            axum::routing::post(tasks::promote_task),
-        )
-        .route(
             "/api/tasks/{task_id}",
             axum::routing::get(tasks::get_task).delete(tasks::delete_task),
         )

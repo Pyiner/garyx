@@ -84,8 +84,8 @@ pub use task_counter::{
     FileTaskCounterStore, InMemoryTaskCounterStore, TaskCounterError, TaskCounterStore,
 };
 pub use tasks::{
-    CreateTaskInput, PromoteTaskInput, TaskHistoryPage, TaskId, TaskListFilter, TaskRuntimeInput,
-    TaskService, TaskServiceError, TaskSummary, UpdateTaskStatusInput,
+    CreateTaskInput, TaskHistoryPage, TaskId, TaskListFilter, TaskRuntimeInput, TaskService,
+    TaskServiceError, TaskSummary, UpdateTaskStatusInput,
     mark_thread_task_in_review_if_in_progress,
 };
 pub use thread_history::{

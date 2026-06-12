@@ -305,13 +305,6 @@ export type CreateTaskExecutorInput =
   | { type: 'team'; teamId: string }
   | { type: 'workflow'; workflowId: string; input?: unknown };
 
-export interface PromoteTaskInput {
-  threadId: string;
-  title?: string | null;
-  assignee?: string | null;
-  notificationTarget: DesktopTaskNotificationTarget;
-}
-
 export interface UpdateTaskStatusInput {
   taskId: string;
   status: DesktopTaskStatus;
@@ -1972,7 +1965,6 @@ export interface GaryxDesktopApi {
   pushWorkspaceBranch: (
     input: PushWorkspaceBranchInput,
   ) => Promise<WorkspaceGitMutationResult>;
-  promoteThreadToTask: (input: PromoteTaskInput) => Promise<DesktopTaskSummary>;
   updateTaskStatus: (input: UpdateTaskStatusInput) => Promise<void>;
   assignTask: (input: AssignTaskInput) => Promise<void>;
   unassignTask: (input: UnassignTaskInput) => Promise<void>;

@@ -49,10 +49,6 @@ pub(crate) fn default_workspace_dir_from_agent_reference(
     }
 }
 
-pub(crate) fn provider_type_label(provider_type: &garyx_models::ProviderType) -> &'static str {
-    provider_type.as_slug()
-}
-
 pub(crate) use garyx_models::agent_runtime_metadata;
 
 fn message_actor_label(object: &serde_json::Map<String, Value>) -> Option<String> {

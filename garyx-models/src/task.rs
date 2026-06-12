@@ -153,11 +153,6 @@ pub enum TaskEventKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         assignee: Option<Principal>,
     },
-    Promoted {
-        initial_status: TaskStatus,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        assignee: Option<Principal>,
-    },
     Claimed {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         from: Option<Principal>,
@@ -202,11 +197,6 @@ impl<'de> Deserialize<'de> for TaskEventKind {
                 #[serde(default)]
                 assignee: Option<Principal>,
             },
-            Promoted {
-                initial_status: TaskStatus,
-                #[serde(default)]
-                assignee: Option<Principal>,
-            },
             Claimed {
                 #[serde(default)]
                 from: Option<Principal>,
@@ -245,13 +235,6 @@ impl<'de> Deserialize<'de> for TaskEventKind {
                 initial_status,
                 assignee,
             } => Ok(Self::Created {
-                initial_status,
-                assignee,
-            }),
-            TaskEventKindWire::Promoted {
-                initial_status,
-                assignee,
-            } => Ok(Self::Promoted {
                 initial_status,
                 assignee,
             }),
