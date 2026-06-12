@@ -24,6 +24,35 @@ final class GaryxMobilePresentationModelsTests: XCTestCase {
         XCTAssertTrue(presentation.isRunning)
     }
 
+    func testSidebarThreadPresentationJoinsWorkspaceAndCompactedPreview() {
+        let thread = makeThread(
+            workspacePath: "/workspace/project-alpha",
+            lastMessagePreview: "line one\n  line two"
+        )
+
+        let presentation = GaryxSidebarThreadRowPresentation(
+            thread: thread,
+            isSelected: false,
+            isPinned: false,
+            trailingTimestamp: nil
+        )
+
+        XCTAssertEqual(presentation.subtitle, "project-alpha \u{00B7} line one line two")
+    }
+
+    func testSidebarThreadPresentationUsesPreviewWithoutWorkspace() {
+        let thread = makeThread(lastMessagePreview: "hello there")
+
+        let presentation = GaryxSidebarThreadRowPresentation(
+            thread: thread,
+            isSelected: false,
+            isPinned: false,
+            trailingTimestamp: nil
+        )
+
+        XCTAssertEqual(presentation.subtitle, "hello there")
+    }
+
     func testAutomationDraftRequiresEitherAgentWorkspaceOrExistingThread() {
         var draft = GaryxAutomationDraft()
         draft.label = "Daily summary"
@@ -94,14 +123,15 @@ final class GaryxMobilePresentationModelsTests: XCTestCase {
         title: String = "Thread",
         workspacePath: String? = nil,
         activeRunId: String? = nil,
-        runState: String? = nil
+        runState: String? = nil,
+        lastMessagePreview: String = ""
     ) -> GaryxThreadSummary {
         GaryxThreadSummary(
             id: id,
             title: title,
             createdAt: nil,
             updatedAt: nil,
-            lastMessagePreview: "",
+            lastMessagePreview: lastMessagePreview,
             workspacePath: workspacePath,
             messageCount: nil,
             agentId: nil,

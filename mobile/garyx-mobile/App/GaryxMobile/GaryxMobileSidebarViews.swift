@@ -148,7 +148,10 @@ struct GaryxThreadSidebar: View {
                 .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
                 .padding(.bottom, 4)
 
-            ForEach(pinned) { thread in
+            ForEach(Array(pinned.enumerated()), id: \.element.id) { index, thread in
+                if index > 0 {
+                    GaryxSidebarRowDivider()
+                }
                 GaryxSidebarThreadButton(
                     model: model,
                     thread: thread,
@@ -175,7 +178,10 @@ struct GaryxThreadSidebar: View {
                 GaryxSidebarEmptyRow(title: "No recent threads")
             }
         } else {
-            ForEach(recent) { thread in
+            ForEach(Array(recent.enumerated()), id: \.element.id) { index, thread in
+                if index > 0 {
+                    GaryxSidebarRowDivider()
+                }
                 GaryxSidebarThreadButton(
                     model: model,
                     thread: thread,
@@ -386,6 +392,21 @@ private func garyxThreadSort(_ lhs: GaryxThreadSummary, _ rhs: GaryxThreadSummar
         return left > right
     }
     return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+}
+
+/// Hairline between thread rows, inset to the text column so it reads like a
+/// native chat list separator.
+private struct GaryxSidebarRowDivider: View {
+    var body: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(0.06))
+            .frame(height: 1.0 / UIScreen.main.scale)
+            // Outer row padding (rowOuterPadding - 4) + inner padding + avatar
+            // diameter + avatar-text gap.
+            .padding(.leading, (GaryxSidebarMetrics.rowOuterPadding - 4) + GaryxSidebarMetrics.rowInnerHorizontalPadding + 38 + 10)
+            .padding(.trailing, GaryxSidebarMetrics.rowOuterPadding)
+            .accessibilityHidden(true)
+    }
 }
 
 private struct GaryxSidebarLoadingRow: View {
@@ -1035,7 +1056,7 @@ enum GaryxSidebarThreadRowDensity {
     var titleWeight: Font.Weight {
         switch self {
         case .regular:
-            .medium
+            .semibold
         case .compact:
             .regular
         }
@@ -1053,7 +1074,7 @@ enum GaryxSidebarThreadRowDensity {
     var subtitleFont: Font {
         switch self {
         case .regular:
-            GaryxFont.caption()
+            GaryxFont.footnote()
         case .compact:
             GaryxFont.caption()
         }
@@ -1062,7 +1083,7 @@ enum GaryxSidebarThreadRowDensity {
     var textSpacing: CGFloat {
         switch self {
         case .regular:
-            4
+            3
         case .compact:
             2
         }
@@ -1116,12 +1137,12 @@ struct GaryxSidebarThreadRowView: View {
                     label: avatar.label,
                     providerType: avatar.providerType,
                     builtIn: avatar.builtIn,
-                    diameter: 32
+                    diameter: 38
                 )
             }
 
             VStack(alignment: .leading, spacing: density.textSpacing) {
-                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                HStack(alignment: .center, spacing: 5) {
                     Text(model.title)
                         .font(density.titleFont)
                         .lineLimit(1)
@@ -1134,16 +1155,21 @@ struct GaryxSidebarThreadRowView: View {
                             onUnpin?()
                         } label: {
                             Image(systemName: "pin.fill")
-                                .font(GaryxFont.system(size: 13, weight: .semibold))
-                                .foregroundStyle(.secondary)
+                                .font(GaryxFont.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.tertiary)
                                 .rotationEffect(.degrees(28))
-                                .frame(width: 22, height: 22)
+                                .frame(width: 20, height: 20)
                         }
-                        .frame(width: 30, height: 24)
+                        .frame(width: 26, height: 22)
                         .contentShape(Rectangle())
                         .buttonStyle(.plain)
                         .accessibilityLabel("Unpin thread")
                     }
+
+                    Spacer(minLength: 8)
+
+                    trailingMeta
+                        .fixedSize(horizontal: true, vertical: false)
                 }
 
                 if let subtitle = model.subtitle, !subtitle.isEmpty {
@@ -1155,9 +1181,6 @@ struct GaryxSidebarThreadRowView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-
-            trailingMeta
-                .fixedSize(horizontal: true, vertical: false)
         }
         .contentShape(Rectangle())
         .onTapGesture {

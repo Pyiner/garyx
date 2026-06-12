@@ -24,13 +24,29 @@ struct GaryxSidebarThreadRowPresentation: Equatable {
     }
 
     private static func subtitle(for thread: GaryxThreadSummary) -> String? {
-        if let workspacePath = thread.workspacePath, !workspacePath.isEmpty {
-            return workspacePath.garyxLastPathComponent
+        let context: String? = {
+            if let workspacePath = thread.workspacePath, !workspacePath.isEmpty {
+                return workspacePath.garyxLastPathComponent
+            }
+            if let teamName = thread.teamName, !teamName.isEmpty {
+                return teamName
+            }
+            return thread.agentId
+        }()
+        let parts = [context, compactedPreview(thread.lastMessagePreview)].compactMap { part -> String? in
+            let trimmed = part?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty ? nil : trimmed
         }
-        if let teamName = thread.teamName, !teamName.isEmpty {
-            return teamName
-        }
-        return thread.agentId
+        return parts.isEmpty ? nil : parts.joined(separator: " \u{00B7} ")
+    }
+
+    /// Last-message previews can span lines; collapse to one display line.
+    private static func compactedPreview(_ raw: String) -> String? {
+        let collapsed = raw
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        return collapsed.isEmpty ? nil : collapsed
     }
 
     private static func isRunning(_ thread: GaryxThreadSummary) -> Bool {
