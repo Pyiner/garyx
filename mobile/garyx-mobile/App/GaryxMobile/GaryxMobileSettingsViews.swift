@@ -413,7 +413,8 @@ struct GaryxSavedGatewayProfileRow: View {
                             keyboardType: .URL,
                             textContentType: .URL,
                             autocapitalization: .never,
-                            autocorrectionDisabled: true
+                            autocorrectionDisabled: true,
+                            wrapsValue: true
                         )
                         Divider().padding(.leading, 16)
                         GaryxFormSecureFieldRow(

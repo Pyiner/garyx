@@ -286,14 +286,24 @@ struct GaryxFormTextFieldRow: View {
     var autocapitalization: TextInputAutocapitalization?
     var autocorrectionDisabled = false
     var isReadOnly = false
+    /// Long values like gateway URLs wrap onto extra lines instead of
+    /// truncating, keeping the field name on the left.
+    var wrapsValue = false
 
     var body: some View {
         GaryxFormRow(title: title, valuePlacement: valuePlacement) {
             if isReadOnly {
                 Text(displayValue)
                     .foregroundStyle(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .secondary : .primary)
-                    .lineLimit(1)
+                    .lineLimit(wrapsValue ? 3 : 1)
                     .truncationMode(.middle)
+            } else if wrapsValue {
+                TextField(placeholder, text: $text, axis: .vertical)
+                    .textContentType(textContentType)
+                    .textInputAutocapitalization(autocapitalization)
+                    .autocorrectionDisabled(autocorrectionDisabled)
+                    .keyboardType(keyboardType)
+                    .lineLimit(1...3)
             } else {
                 TextField(placeholder, text: $text)
                     .textContentType(textContentType)

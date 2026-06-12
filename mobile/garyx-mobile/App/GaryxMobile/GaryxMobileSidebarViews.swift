@@ -297,15 +297,10 @@ struct GaryxNavigationDrawerView: View {
         VStack(alignment: .leading, spacing: 0) {
             GaryxAdaptiveGlassContainer(spacing: 10) {
                 HStack(alignment: .center, spacing: 12) {
-                    Text("Garyx")
-                        .font(GaryxFont.system(size: 26, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
+                    // The gateway identity IS the drawer title.
+                    GaryxSidebarGatewayIdentityControl()
 
                     Spacer(minLength: 0)
-
-                    GaryxSidebarGatewayIdentityControl()
                 }
             }
             .padding(.horizontal, 16)
@@ -740,7 +735,10 @@ private struct GaryxAutomationThreadsDetailSection: View {
                     .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
                     .padding(.vertical, 8)
             } else {
-                ForEach(entries) { entry in
+                ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                    if index > 0 {
+                        GaryxSidebarRowDivider()
+                    }
                     if let thread = threadSummary(for: entry) {
                         GaryxSidebarThreadButton(
                             model: model,
@@ -895,8 +893,11 @@ private struct GaryxBotThreadDetailSection: View {
                     .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
                     .padding(.vertical, 8)
             } else {
-                ForEach(entries) { entry in
+                ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                     let timestamp = garyxFormattedTaskTimestamp(entry.latestActivity)
+                    if index > 0 {
+                        GaryxSidebarRowDivider()
+                    }
                     if let thread = threadSummary(for: entry) {
                         GaryxSidebarThreadButton(
                             model: model,
@@ -1046,7 +1047,10 @@ private struct GaryxWorkspaceThreadDetailSection: View {
                     .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
                     .padding(.vertical, 8)
             } else {
-                ForEach(group.threads) { thread in
+                ForEach(Array(group.threads.enumerated()), id: \.element.id) { index, thread in
+                    if index > 0 {
+                        GaryxSidebarRowDivider()
+                    }
                     GaryxSidebarThreadButton(
                         model: model,
                         thread: thread,
@@ -1363,17 +1367,17 @@ struct GaryxAvatarTypingBadge: View {
             let progress = context.date.timeIntervalSinceReferenceDate
                 .truncatingRemainder(dividingBy: cycle) / cycle
 
-            HStack(spacing: 1.6) {
+            HStack(spacing: 2.2) {
                 ForEach(0..<3, id: \.self) { index in
                     Circle()
-                        .fill(Color.white.opacity(dotOpacity(progress: progress, index: index)))
-                        .frame(width: 2.6, height: 2.6)
+                        .fill(Color(.systemGray).opacity(dotOpacity(progress: progress, index: index)))
+                        .frame(width: 3.2, height: 3.2)
                 }
             }
-            .frame(width: 16, height: 16)
-            .background(Color(.systemGreen), in: Circle())
+            .frame(width: 22, height: 15)
+            .background(Color(.systemGray5), in: Capsule())
             .overlay {
-                Circle()
+                Capsule()
                     .stroke(GaryxTheme.background, lineWidth: 2)
             }
         }
@@ -1382,7 +1386,7 @@ struct GaryxAvatarTypingBadge: View {
 
     private func dotOpacity(progress: Double, index: Int) -> Double {
         let phase = progress * 2 * .pi - Double(index) * (.pi / 4)
-        return 0.45 + 0.55 * max(0, sin(phase))
+        return 0.35 + 0.65 * max(0, sin(phase))
     }
 }
 
@@ -1448,18 +1452,11 @@ private extension GaryxSidebarThreadRowView {
         HStack(spacing: 6) {
             if model.isRunning, avatar == nil {
                 GaryxSidebarRunningIndicator()
-            } else if model.isSelected {
-                switch selectionDisplay {
-                case .sidebar:
-                    Circle()
-                        .fill(.secondary)
-                        .frame(width: 7, height: 7)
-                case .checkmark:
-                    GaryxSelectionCheckmark(size: 13)
-                case .none:
-                    EmptyView()
-                }
+            } else if model.isSelected, selectionDisplay == .checkmark {
+                GaryxSelectionCheckmark(size: 13)
             } else if let trailingTimestamp = model.trailingTimestamp, !trailingTimestamp.isEmpty {
+                // The selected row already reads through its background fill;
+                // no extra trailing marker.
                 Text(trailingTimestamp)
                     .font(GaryxFont.caption())
                     .foregroundStyle(.tertiary)
