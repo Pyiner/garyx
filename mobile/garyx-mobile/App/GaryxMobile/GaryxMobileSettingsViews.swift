@@ -388,9 +388,12 @@ struct GaryxSavedGatewayProfileRow: View {
             .padding(.horizontal, 9)
             .padding(.vertical, 7)
             .contentShape(Rectangle())
+            // The settings tab manages saved gateways only; switching lives
+            // in the sidebar gateway switcher, so row tap opens the editor.
             .onTapGesture {
                 guard isEnabled else { return }
-                Task { await model.activateGatewayProfile(profile) }
+                fillDraft()
+                showsEditForm = true
             }
         }
         .onAppear(perform: fillDraft)
@@ -435,9 +438,6 @@ struct GaryxSavedGatewayProfileRow: View {
 
     private var profileSwipeActions: [GaryxRowAction] {
         [
-            GaryxRowAction(title: "Switch", systemImage: "arrow.triangle.2.circlepath", tone: .accent) {
-                Task { await model.activateGatewayProfile(profile) }
-            },
             GaryxRowAction(title: "Edit", systemImage: "pencil") {
                 fillDraft()
                 showsEditForm = true
