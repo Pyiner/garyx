@@ -608,8 +608,8 @@ struct GaryxShellView: View {
                     resetSidebarDrag()
                     return
                 }
-                let shouldClose = -value.translation.width > sidebarWidth * 0.22
-                    || -value.predictedEndTranslation.width > sidebarWidth * 0.35
+                let shouldClose = -value.translation.width > sidebarWidth * 0.12
+                    || -value.predictedEndTranslation.width > sidebarWidth * 0.28
                 finishGesture(open: !shouldClose)
             }
     }
@@ -625,7 +625,11 @@ struct GaryxShellView: View {
         let verticalMag = abs(vertical)
         let dominant = max(horizontalMag, verticalMag)
         guard dominant >= sidebarAxisDecisionDistance else { return nil }
-        guard horizontalMag > verticalMag * sidebarAxisDecisionRatio else {
+        // Opening competes with vertical list scrolling and stays strict;
+        // closing an open drawer is an unambiguous intent, so any
+        // horizontally-dominant swipe qualifies.
+        let ratio = opening ? sidebarAxisDecisionRatio : 1.0
+        guard horizontalMag > verticalMag * ratio else {
             return .vertical
         }
         if opening {
