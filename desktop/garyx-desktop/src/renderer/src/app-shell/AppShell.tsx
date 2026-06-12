@@ -7155,6 +7155,17 @@ export function AppShell() {
     options?: {
       activeRunSnapshot?: boolean;
       preserveRemoteBeforeIndex?: number | null;
+      /**
+       * Whether the fetched transcript reports an active run. Streamed local
+       * tool bubbles outrank the canonical page only while the run is
+       * actually active; once the gateway reports the run finished, the page
+       * already contains every tool row, so an unmatched local bubble lost
+       * its terminal events (dropped stream, missed `done`) or its rows fell
+       * outside the fetched page. Keeping it would re-append it after the
+       * final assistant answer on every reconcile. Mirrors the iOS
+       * `GaryxTranscriptMerge` `threadRunActive` rule.
+       */
+      threadRunActive?: boolean;
     },
   ): UiTranscriptMessage[] {
     if (transcript.length === 0) {
@@ -7217,6 +7228,9 @@ export function AppShell() {
         return !match.assistantVisible;
       }
       if (isToolRole(entry.role)) {
+        if (options?.threadRunActive === false) {
+          return false;
+        }
         return !materializedRemote.some((candidate) =>
           toolMessagesEquivalent(candidate, entry),
         );
@@ -7377,6 +7391,7 @@ export function AppShell() {
           {
             activeRunSnapshot: Boolean(transcript.threadInfo?.activeRun),
             preserveRemoteBeforeIndex: transcript.pageInfo?.startIndex ?? null,
+            threadRunActive: Boolean(transcript.threadInfo?.activeRun),
           },
         );
         if (
