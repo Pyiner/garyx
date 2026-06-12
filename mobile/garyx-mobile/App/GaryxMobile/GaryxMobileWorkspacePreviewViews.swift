@@ -6,6 +6,14 @@ struct GaryxWorkspacePreviewBody: View {
     let preview: GaryxWorkspaceFilePreview
 
     var body: some View {
+        previewContent
+            // Hosts in-place long-press menus for markdown code blocks and
+            // inline images rendered inside this embedded preview.
+            .garyxMessageMenuHost()
+    }
+
+    @ViewBuilder
+    private var previewContent: some View {
         Group {
             switch preview.previewKind {
             case "markdown":
@@ -142,6 +150,7 @@ struct GaryxFullscreenWorkspaceFilePreview: View {
                 .padding(.horizontal, 18)
                 .padding(.bottom, 32)
             }
+            .garyxMessageMenuHost()
             .safeAreaPadding(.top, 72)
         case "text":
             ScrollView([.vertical, .horizontal], showsIndicators: true) {

@@ -427,6 +427,9 @@ private struct GaryxSkillDocumentPreview: View {
                 } else {
                     GaryxMarkdownText(text: document.content)
                         .textSelection(.enabled)
+                        // Hosts in-place long-press menus for code blocks and
+                        // inline images in the skill document preview.
+                        .garyxMessageMenuHost()
                 }
             case "text":
                 GaryxSkillPlainTextPreview(content: document.content)

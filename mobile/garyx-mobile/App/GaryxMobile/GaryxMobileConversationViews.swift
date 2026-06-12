@@ -148,6 +148,10 @@ struct GaryxConversationView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                 }
             }
+            // Floating long-press menus render here, outside the transcript
+            // scroll, so panels are never clipped and the pressed message
+            // itself stays untouched.
+            .garyxMessageMenuHost(bottomInset: bottomChromeHeight)
             // Scroll-to-bottom hovers directly above the composer. It lives
             // INSIDE the bottom chrome: hosting it in a content overlay made
             // the safe-area inset shift its visuals without its hit-test
@@ -1127,7 +1131,7 @@ struct GaryxMessageBubble: View {
                 VStack(alignment: .trailing, spacing: 4) {
                     if !message.attachments.isEmpty {
                         GaryxMessageAttachmentStack(attachments: message.attachments, isUser: true)
-                            .garyxMessageCopyContext(text: messageCopyText)
+                            .garyxMessageCopyContext(text: messageCopyText, edge: .trailing)
                     }
 
                     if !displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -1145,7 +1149,7 @@ struct GaryxMessageBubble: View {
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
                         .background(userBubbleBackground, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                        .garyxMessageInteraction(text: displayText)
+                        .garyxMessageInteraction(text: displayText, edge: .trailing)
                     }
 
                     if let statusText = message.statusText, !statusText.isEmpty {
@@ -1322,6 +1326,7 @@ private struct GaryxMessageFilePreviewSheet: Identifiable {
 private struct GaryxMessageCopyContextModifier: ViewModifier {
     let text: String
     var title = "Copy Message"
+    var edge: GaryxMessageMenuEdge = .leading
 
     private var copyableText: String {
         text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1329,14 +1334,13 @@ private struct GaryxMessageCopyContextModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .contextMenu {
-                if !copyableText.isEmpty {
-                    Button {
+            .garyxInPlaceMessageMenu(edge: edge) {
+                guard !copyableText.isEmpty else { return [] }
+                return [
+                    GaryxMessageMenuItem(title: title, systemImage: "doc.on.doc") {
                         GaryxClipboard.copyString(text)
-                    } label: {
-                        Label(title, systemImage: "doc.on.doc")
                     }
-                }
+                ]
             }
             .accessibilityAction(named: Text(title)) {
                 guard !copyableText.isEmpty else { return }
@@ -1346,23 +1350,29 @@ private struct GaryxMessageCopyContextModifier: ViewModifier {
 }
 
 private extension View {
-    func garyxMessageCopyContext(text: String, title: String = "Copy Message") -> some View {
-        modifier(GaryxMessageCopyContextModifier(text: text, title: title))
+    func garyxMessageCopyContext(
+        text: String,
+        title: String = "Copy Message",
+        edge: GaryxMessageMenuEdge = .leading
+    ) -> some View {
+        modifier(GaryxMessageCopyContextModifier(text: text, title: title, edge: edge))
     }
 
-    func garyxMessageInteraction(text: String) -> some View {
-        modifier(GaryxMessageInteractionModifier(text: text))
+    func garyxMessageInteraction(text: String, edge: GaryxMessageMenuEdge = .leading) -> some View {
+        modifier(GaryxMessageInteractionModifier(text: text, edge: edge))
     }
 }
 
 /// Long-press surface for message bubbles: copy the whole message, open the
-/// drag-handle selection sheet, or share. This replaces SwiftUI text
-/// selection inside the transcript, which could not select ranges and fought
-/// the long-press gesture.
+/// drag-handle selection sheet, or share. Presented through the in-place
+/// floating menu — the pressed message must keep its exact position, size,
+/// and style (no system context-menu lift).
 private struct GaryxMessageInteractionModifier: ViewModifier {
     let text: String
+    var edge: GaryxMessageMenuEdge = .leading
 
     @State private var showsTextSelection = false
+    @State private var showsShareSheet = false
 
     private var copyableText: String {
         text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1370,25 +1380,25 @@ private struct GaryxMessageInteractionModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .contextMenu {
-                if !copyableText.isEmpty {
-                    Button {
+            .garyxInPlaceMessageMenu(edge: edge) {
+                guard !copyableText.isEmpty else { return [] }
+                return [
+                    GaryxMessageMenuItem(title: "Copy", systemImage: "doc.on.doc") {
                         GaryxClipboard.copyString(text)
-                    } label: {
-                        Label("Copy", systemImage: "doc.on.doc")
-                    }
-                    Button {
+                    },
+                    GaryxMessageMenuItem(title: "Select Text", systemImage: "character.cursor.ibeam") {
                         showsTextSelection = true
-                    } label: {
-                        Label("Select Text", systemImage: "character.cursor.ibeam")
-                    }
-                    ShareLink(item: text) {
-                        Label("Share", systemImage: "square.and.arrow.up")
-                    }
-                }
+                    },
+                    GaryxMessageMenuItem(title: "Share", systemImage: "square.and.arrow.up") {
+                        showsShareSheet = true
+                    },
+                ]
             }
             .sheet(isPresented: $showsTextSelection) {
                 GaryxMessageTextSelectionSheet(text: text)
+            }
+            .sheet(isPresented: $showsShareSheet) {
+                GaryxActivityShareSheet(items: [text])
             }
     }
 }
@@ -1475,28 +1485,24 @@ struct GaryxMessageImageAttachmentView: View {
                 showsPreview = false
             }
         }
-        .contextMenu {
+        .garyxInPlaceMessageMenu(edge: isUser ? .trailing : .leading) {
+            var items: [GaryxMessageMenuItem] = []
             if let decodedImage {
-                Button {
+                items.append(GaryxMessageMenuItem(title: "Copy Image", systemImage: "photo.on.rectangle") {
                     GaryxClipboard.copyImage(decodedImage)
-                } label: {
-                    Label("Copy Image", systemImage: "photo.on.rectangle")
-                }
+                })
             }
             if let sourceText = imageSourceText {
-                Button {
+                items.append(GaryxMessageMenuItem(title: "Copy Image Source", systemImage: "link") {
                     GaryxClipboard.copyString(sourceText)
-                } label: {
-                    Label("Copy Image Source", systemImage: "link")
-                }
+                })
             }
             if !attachment.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Button {
+                items.append(GaryxMessageMenuItem(title: "Copy Name", systemImage: "text.cursor") {
                     GaryxClipboard.copyString(attachment.name)
-                } label: {
-                    Label("Copy Name", systemImage: "text.cursor")
-                }
+                })
             }
+            return items
         }
         .accessibilityAction(named: Text("Copy Image Source")) {
             guard let imageSourceText else { return }
@@ -1616,21 +1622,19 @@ struct GaryxMessageFileAttachmentView: View {
             isUser ? Color.black.opacity(0.06) : Color(.secondarySystemFill),
             in: Capsule()
         )
-        .contextMenu {
+        .garyxInPlaceMessageMenu(edge: isUser ? .trailing : .leading) {
+            var items: [GaryxMessageMenuItem] = []
             if let sourceText {
-                Button {
+                items.append(GaryxMessageMenuItem(title: "Copy File Path", systemImage: "doc.on.doc") {
                     GaryxClipboard.copyString(sourceText)
-                } label: {
-                    Label("Copy File Path", systemImage: "doc.on.doc")
-                }
+                })
             }
             if !attachment.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Button {
+                items.append(GaryxMessageMenuItem(title: "Copy Name", systemImage: "text.cursor") {
                     GaryxClipboard.copyString(attachment.name)
-                } label: {
-                    Label("Copy Name", systemImage: "text.cursor")
-                }
+                })
             }
+            return items
         }
         .accessibilityAction(named: Text("Copy File Path")) {
             guard let sourceText else { return }

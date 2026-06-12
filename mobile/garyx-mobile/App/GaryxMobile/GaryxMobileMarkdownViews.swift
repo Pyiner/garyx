@@ -281,13 +281,13 @@ private struct GaryxCodeBlockView: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(border, lineWidth: 1)
         }
-        .contextMenu {
-            Button {
-                GaryxClipboard.copyString(code)
-            } label: {
-                Label("Copy Code", systemImage: "doc.on.doc")
-            }
-            .disabled(code.isEmpty)
+        .garyxInPlaceMessageMenu {
+            guard !code.isEmpty else { return [] }
+            return [
+                GaryxMessageMenuItem(title: "Copy Code", systemImage: "doc.on.doc") {
+                    GaryxClipboard.copyString(code)
+                }
+            ]
         }
         .accessibilityAction(named: Text("Copy Code")) {
             guard !code.isEmpty else { return }
@@ -550,20 +550,19 @@ private struct GaryxMarkdownImageView: View {
         .buttonStyle(.plain)
         .fixedSize()
         .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .contextMenu {
+        .garyxInPlaceMessageMenu {
+            var items: [GaryxMessageMenuItem] = []
             if let localImage {
-                Button {
+                items.append(GaryxMessageMenuItem(title: "Copy Image", systemImage: "photo.on.rectangle") {
                     GaryxClipboard.copyImage(localImage)
-                } label: {
-                    Label("Copy Image", systemImage: "photo.on.rectangle")
-                }
+                })
             }
-            Button {
-                GaryxClipboard.copyString(source)
-            } label: {
-                Label("Copy Image Source", systemImage: "link")
+            if !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                items.append(GaryxMessageMenuItem(title: "Copy Image Source", systemImage: "link") {
+                    GaryxClipboard.copyString(source)
+                })
             }
-            .disabled(source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            return items
         }
         .accessibilityAction(named: Text("Copy Image Source")) {
             let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
