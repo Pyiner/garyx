@@ -1338,21 +1338,6 @@ struct GaryxSidebarThreadRowView: View {
         .frame(minHeight: density.minHeight, alignment: .leading)
         .padding(.horizontal, isFullBleed ? GaryxSidebarMetrics.sectionHorizontalPadding : GaryxSidebarMetrics.rowInnerHorizontalPadding)
         .padding(.vertical, density.verticalPadding(isFullBleed: isFullBleed))
-        .background {
-            if model.isSelected, selectionDisplay == .sidebar {
-                if isFullBleed {
-                    Color(.secondarySystemGroupedBackground)
-                } else {
-                    Color(.tertiarySystemFill).opacity(0.5)
-                        .clipShape(
-                            RoundedRectangle(
-                                cornerRadius: GaryxSidebarMetrics.selectedThreadCornerRadius,
-                                style: .continuous
-                            )
-                        )
-                }
-            }
-        }
         .padding(.horizontal, isFullBleed ? 0 : GaryxSidebarMetrics.rowOuterPadding - 4)
     }
 }
