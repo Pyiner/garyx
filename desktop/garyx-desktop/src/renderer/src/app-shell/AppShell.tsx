@@ -10541,6 +10541,17 @@ export function AppShell() {
                       const nextState = await window.garyxDesktop.addGatewayProfile(input);
                       setDesktopState(nextState);
                     }}
+                    onUpdateGatewayProfile={async (input) => {
+                      const nextState = await window.garyxDesktop.updateGatewayProfile(input);
+                      setDesktopState(nextState);
+                      setSettingsDraft((current) => ({
+                        ...current,
+                        gatewayUrl: nextState.settings.gatewayUrl,
+                        gatewayAuthToken: nextState.settings.gatewayAuthToken,
+                      }));
+                      const status = await window.garyxDesktop.checkConnection();
+                      setConnection(status);
+                    }}
                     onDeleteGatewayProfile={async (profileId) => {
                       const nextState = await window.garyxDesktop.deleteGatewayProfile({
                         profileId,

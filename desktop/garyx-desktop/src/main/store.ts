@@ -974,6 +974,55 @@ export async function addDesktopGatewayProfile(input: {
   return getDesktopState();
 }
 
+export async function updateDesktopGatewayProfile(input: {
+  profileId: string;
+  label?: string;
+  gatewayUrl: string;
+  gatewayAuthToken?: string;
+}): Promise<DesktopState> {
+  const current = await getLocalDesktopState();
+  const normalizedId = input.profileId.trim();
+  const existing = (current.gatewayProfiles || []).find((entry) => entry.id === normalizedId);
+  if (!existing) {
+    return getDesktopState();
+  }
+  const nextProfile = normalizeGatewayProfile({
+    label: typeof input.label === 'string' ? input.label : existing.label,
+    gatewayUrl: input.gatewayUrl,
+    gatewayAuthToken: typeof input.gatewayAuthToken === 'string'
+      ? input.gatewayAuthToken
+      : existing.gatewayAuthToken,
+    updatedAt: new Date().toISOString(),
+  });
+  if (!nextProfile) {
+    return getDesktopState();
+  }
+
+  // Editing the active gateway's profile also updates the live connection
+  // settings so the saved list and the actual connection cannot drift apart.
+  const wasCurrent = gatewayProfileKey(existing.gatewayUrl)
+    === gatewayProfileKey(current.settings.gatewayUrl);
+  const next = {
+    ...current,
+    gatewayProfiles: normalizeGatewayProfiles([
+      nextProfile,
+      ...(current.gatewayProfiles || []).filter((entry) => (
+        entry.id !== normalizedId
+        && gatewayProfileKey(entry.gatewayUrl) !== gatewayProfileKey(nextProfile.gatewayUrl)
+      )),
+    ]),
+    settings: wasCurrent
+      ? normalizeSettings({
+          ...current.settings,
+          gatewayUrl: nextProfile.gatewayUrl,
+          gatewayAuthToken: nextProfile.gatewayAuthToken,
+        })
+      : current.settings,
+  };
+  await writeState(next);
+  return getDesktopState();
+}
+
 export async function deleteDesktopGatewayProfile(profileId: string): Promise<DesktopState> {
   const normalizedId = profileId.trim();
   const current = await getLocalDesktopState();

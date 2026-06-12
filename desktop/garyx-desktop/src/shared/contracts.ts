@@ -1879,6 +1879,12 @@ export interface GaryxDesktopApi {
     gatewayUrl: string;
     gatewayAuthToken?: string;
   }) => Promise<DesktopState>;
+  updateGatewayProfile: (input: {
+    profileId: string;
+    label?: string;
+    gatewayUrl: string;
+    gatewayAuthToken?: string;
+  }) => Promise<DesktopState>;
   deleteGatewayProfile: (input: { profileId: string }) => Promise<DesktopState>;
   getGatewaySettings: () => Promise<GatewaySettingsPayload>;
   fetchChannelPlugins: () => Promise<ChannelPluginCatalogEntry[]>;

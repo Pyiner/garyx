@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import QRCode from 'qrcode';
-import { Copy, Plus, RefreshCw, Server, Smartphone, Trash } from 'lucide-react';
+import { Pencil, Plus, RefreshCw, Server, Trash } from 'lucide-react';
 
 import {
   DEFAULT_DESKTOP_SETTINGS,
@@ -144,6 +143,12 @@ type GatewaySettingsPanelProps = {
     options?: GatewaySettingsSaveOptions,
   ) => Promise<boolean>;
   onAddGatewayProfile?: (input: {
+    label?: string;
+    gatewayUrl: string;
+    gatewayAuthToken?: string;
+  }) => Promise<void>;
+  onUpdateGatewayProfile?: (input: {
+    profileId: string;
     label?: string;
     gatewayUrl: string;
     gatewayAuthToken?: string;
@@ -951,25 +956,6 @@ function classNames(...values: Array<string | false | null | undefined>): string
   return values.filter(Boolean).join(' ');
 }
 
-function buildGaryxMobileConnectLink(settings: DesktopSettings): string {
-  const params = new URLSearchParams();
-  params.set('gatewayUrl', settings.gatewayUrl.trim());
-  params.set('gatewayAuthToken', settings.gatewayAuthToken.trim());
-  return `garyx://mobile/connect?${params.toString()}`;
-}
-
-function describeMobileGatewayUrl(gatewayUrl: string, t: Translate): string {
-  try {
-    const parsed = new URL(gatewayUrl.trim());
-    if (parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost') {
-      return t('Use your Mac LAN IP for a real phone; loopback only works in the simulator.');
-    }
-  } catch {
-    return t('Enter a gateway URL before sharing with mobile.');
-  }
-  return t('Scan from Gary X on iPhone to reuse this gateway token.');
-}
-
 function configuredChannelAccountsFromDraft(
   channels: unknown,
 ): Array<{ kind: string; accountId: string; account: any }> {
@@ -1085,102 +1071,14 @@ function SettingsControlRow({
   );
 }
 
-function MobileConnectPanel({ settings }: { settings: DesktopSettings }) {
-  const { t } = useI18n();
-  const connectLink = useMemo(() => buildGaryxMobileConnectLink(settings), [settings]);
-  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const hasGatewayUrl = settings.gatewayUrl.trim().length > 0;
-  const hasGatewayToken = settings.gatewayAuthToken.trim().length > 0;
-  const ready = hasGatewayUrl && hasGatewayToken;
-  const urlHint = describeMobileGatewayUrl(settings.gatewayUrl, t);
-
-  useEffect(() => {
-    let cancelled = false;
-    setQrDataUrl(null);
-    if (!ready) {
-      return () => {
-        cancelled = true;
-      };
-    }
-    QRCode.toDataURL(connectLink, { margin: 1, width: 176 })
-      .then((url) => {
-        if (!cancelled) {
-          setQrDataUrl(url);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setQrDataUrl(null);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [connectLink, ready]);
-
-  useEffect(() => {
-    if (!copied) {
-      return undefined;
-    }
-    const timeout = window.setTimeout(() => setCopied(false), 1600);
-    return () => window.clearTimeout(timeout);
-  }, [copied]);
-
-  async function copyConnectLink() {
-    if (!ready) {
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(connectLink);
-      setCopied(true);
-    } catch {
-      setCopied(false);
-    }
-  }
-
-  return (
-    <div className="garyx-mobile-connect-panel">
-      <div className="garyx-mobile-connect-copy">
-        <div className="garyx-mobile-connect-title">
-          <Smartphone aria-hidden size={16} strokeWidth={1.7} />
-          <span>{t('Gary X Mobile')}</span>
-        </div>
-        <p>{t('Reuse this Mac app gateway token on your phone. Provider API keys stay on the gateway host.')}</p>
-        <code>{settings.gatewayUrl.trim() || t('Not configured')}</code>
-        <span className={classNames('garyx-mobile-connect-hint', !ready && 'danger')}>
-          {!hasGatewayToken ? t('Gateway token is required before mobile can connect.') : urlHint}
-        </span>
-        <div className="garyx-mobile-connect-actions">
-          <Button
-            className="rounded-xl bg-[#111111] text-white shadow-none hover:bg-[#222222]"
-            disabled={!ready}
-            onClick={() => void copyConnectLink()}
-            size="sm"
-            type="button"
-          >
-            <Copy aria-hidden size={14} strokeWidth={1.7} />
-            {copied ? t('Copied') : t('Copy Mobile Link')}
-          </Button>
-        </div>
-      </div>
-      <div className={classNames('garyx-mobile-connect-qr', !ready && 'disabled')}>
-        {ready && qrDataUrl ? (
-          <img alt={t('Gary X Mobile connect QR')} src={qrDataUrl} />
-        ) : (
-          <span>{ready ? t('Rendering QR code...') : t('Mobile QR')}</span>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function AddGatewayDialog({
+function GatewayProfileDialog({
   open,
+  profile,
   onOpenChange,
   onSubmit,
 }: {
   open: boolean;
+  profile: DesktopGatewayProfile | null;
   onOpenChange: (open: boolean) => void;
   onSubmit: (input: {
     label?: string;
@@ -1193,6 +1091,14 @@ function AddGatewayDialog({
   const [gatewayUrl, setGatewayUrl] = useState('');
   const [gatewayAuthToken, setGatewayAuthToken] = useState('');
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setLabel(profile?.label ?? '');
+      setGatewayUrl(profile?.gatewayUrl ?? '');
+      setGatewayAuthToken(profile?.gatewayAuthToken ?? '');
+    }
+  }, [open, profile]);
 
   const canSave = useMemo(() => {
     try {
@@ -1235,7 +1141,7 @@ function AddGatewayDialog({
     >
       <DialogContent className="gateway-add-dialog" size="compact">
         <DialogHeader>
-          <DialogTitle>{t('Add Gateway')}</DialogTitle>
+          <DialogTitle>{profile ? t('Edit Gateway') : t('Add Gateway')}</DialogTitle>
           <DialogDescription>
             {t('Saved gateways appear in the sidebar gateway switcher.')}
           </DialogDescription>
@@ -1474,6 +1380,7 @@ export function GatewaySettingsPanel({
   onSaveGatewaySettingsPatch = noopAsyncBoolean,
   gatewayProfiles = [],
   onAddGatewayProfile = noopAsync,
+  onUpdateGatewayProfile = noopAsync,
   onDeleteGatewayProfile = noopAsync,
   onMutateGatewayDraft = noop,
   onRefreshAgentTargets = noopAsync,
@@ -1496,7 +1403,8 @@ export function GatewaySettingsPanel({
     activeTab === 'connection' ? 'gateway' : activeTab;
   const pluginAccounts = configuredChannelAccountsFromDraft(gatewayDraft?.channels);
   const [isAddingChannel, setIsAddingChannel] = useState(false);
-  const [addGatewayOpen, setAddGatewayOpen] = useState(false);
+  const [gatewayDialogOpen, setGatewayDialogOpen] = useState(false);
+  const [gatewayDialogProfile, setGatewayDialogProfile] = useState<DesktopGatewayProfile | null>(null);
   const [editingBot, setEditingBot] = useState<EditBotDialogContext | null>(null);
   const standaloneAgents = sortedStandaloneAgents(agents);
   const agentTargets = sortedAgentTargets(agents, teams);
@@ -1986,11 +1894,13 @@ export function GatewaySettingsPanel({
   // active gateway lives in the sidebar identity bar.
   const connectionPanel = (
     <div className="codex-section">
-      <div className="codex-section-header">
-        <span className="codex-section-title">{t('Gateway')}</span>
+      <div className="codex-section-header gateway-profiles-header">
         <Button
           className="rounded-xl border-[#e7e7e5] bg-white shadow-none hover:bg-[#f7f7f6]"
-          onClick={() => setAddGatewayOpen(true)}
+          onClick={() => {
+            setGatewayDialogProfile(null);
+            setGatewayDialogOpen(true);
+          }}
           size="sm"
           type="button"
           variant="outline"
@@ -2021,7 +1931,20 @@ export function GatewaySettingsPanel({
                 </span>
                 {isCurrent ? (
                   <span className="gateway-profile-current">{t('Current')}</span>
-                ) : (
+                ) : null}
+                <button
+                  aria-label={t('Edit Gateway')}
+                  className="gateway-profile-edit"
+                  onClick={() => {
+                    setGatewayDialogProfile(profile);
+                    setGatewayDialogOpen(true);
+                  }}
+                  title={t('Edit Gateway')}
+                  type="button"
+                >
+                  <Pencil aria-hidden size={13} strokeWidth={1.8} />
+                </button>
+                {!isCurrent ? (
                   <button
                     aria-label={t('Remove')}
                     className="gateway-profile-delete"
@@ -2039,19 +1962,27 @@ export function GatewaySettingsPanel({
                   >
                     <Trash aria-hidden size={13} strokeWidth={1.8} />
                   </button>
-                )}
+                ) : null}
               </div>
             );
           })
         )}
       </div>
-      <p className="small-note">{t('Switch the active gateway from the sidebar gateway bar.')}</p>
-      <AddGatewayDialog
-        open={addGatewayOpen}
-        onOpenChange={setAddGatewayOpen}
-        onSubmit={onAddGatewayProfile}
+      <GatewayProfileDialog
+        open={gatewayDialogOpen}
+        profile={gatewayDialogProfile}
+        onOpenChange={setGatewayDialogOpen}
+        onSubmit={async (input) => {
+          if (gatewayDialogProfile) {
+            await onUpdateGatewayProfile({
+              profileId: gatewayDialogProfile.id,
+              ...input,
+            });
+            return;
+          }
+          await onAddGatewayProfile(input);
+        }}
       />
-      <MobileConnectPanel settings={localSettings} />
     </div>
   );
 

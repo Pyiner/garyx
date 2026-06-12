@@ -22882,6 +22882,32 @@ button.new-thread-dreams-scan:hover {
   font-weight: 550;
 }
 
+.gateway-profiles-header {
+  justify-content: flex-end;
+}
+
+.gateway-profile-edit {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #a8a29e;
+  cursor: default;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.gateway-profile-edit:hover {
+  background: #f4f4f2;
+  color: #3a3a37;
+}
+
 .gateway-profile-delete {
   flex: none;
   display: inline-flex;

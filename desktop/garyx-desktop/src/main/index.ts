@@ -209,6 +209,7 @@ import {
   renameDesktopThread,
   rememberDesktopGatewayProfile,
   addDesktopGatewayProfile,
+  updateDesktopGatewayProfile,
   deleteDesktopGatewayProfile,
   saveDesktopSettings,
   selectDesktopAutomation,
@@ -613,6 +614,32 @@ function registerIpcHandlers(): void {
           ? input.gatewayAuthToken
           : "",
       });
+    },
+  );
+
+  ipcMain.handle(
+    "garyx:update-gateway-profile",
+    async (
+      _event,
+      input: {
+        profileId?: string;
+        label?: string;
+        gatewayUrl?: string;
+        gatewayAuthToken?: string;
+      },
+    ) => {
+      const state = await updateDesktopGatewayProfile({
+        profileId: String(input?.profileId || ""),
+        label: typeof input?.label === "string" ? input.label : undefined,
+        gatewayUrl: String(input?.gatewayUrl || ""),
+        gatewayAuthToken: typeof input?.gatewayAuthToken === "string"
+          ? input.gatewayAuthToken
+          : undefined,
+      });
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        startGatewayEventForwarder(mainWindow);
+      }
+      return state;
     },
   );
 
