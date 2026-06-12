@@ -103,6 +103,10 @@ extension GaryxMobileModel {
               pendingMobileRoute == nil,
               !threadOpenState.hasPendingIntent,
               activePanel == .chat,
+              // If the user already swiped the sidebar open while the
+              // connection was still being established, restoring would slam
+              // it shut mid-browse.
+              !sidebarVisible,
               let threadId = persistedLastOpenedThreadId else {
             return
         }

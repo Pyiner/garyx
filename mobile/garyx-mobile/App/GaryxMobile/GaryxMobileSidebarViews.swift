@@ -967,6 +967,7 @@ private struct GaryxSidebarThreadButton: View {
                 isPinned: isPinned,
                 trailingTimestamp: trailingTimestamp
             ),
+            avatar: rowAvatar,
             isFullBleed: isFullBleed,
             onSelect: {
                 if let onSelect {
@@ -993,6 +994,20 @@ private struct GaryxSidebarThreadButton: View {
 
     private var archiveAvailable: Bool {
         canArchive ?? model.canArchiveThread(thread)
+    }
+
+    // Same identity resolution as the recent-threads widget so sidebar rows
+    // and widget rows show the same agent/team avatar for a thread.
+    private var rowAvatar: GaryxSidebarThreadRowAvatar {
+        let identity = model.widgetAgentIdentity(for: thread)
+        return GaryxSidebarThreadRowAvatar(
+            agentId: identity.id ?? "",
+            avatarDataUrl: identity.avatarDataUrl ?? "",
+            kind: identity.isTeam ? .team : .agent,
+            label: identity.name ?? thread.title,
+            providerType: identity.providerType ?? "",
+            builtIn: identity.builtIn
+        )
     }
 
     private func archive() {
@@ -1069,8 +1084,18 @@ enum GaryxSidebarThreadSelectionDisplay: Equatable {
     case none
 }
 
+struct GaryxSidebarThreadRowAvatar: Equatable {
+    let agentId: String
+    let avatarDataUrl: String
+    let kind: GaryxMobileAgentTarget.Kind
+    let label: String
+    let providerType: String
+    let builtIn: Bool
+}
+
 struct GaryxSidebarThreadRowView: View {
     let model: GaryxSidebarThreadRowPresentation
+    var avatar: GaryxSidebarThreadRowAvatar?
     var isFullBleed = false
     var density: GaryxSidebarThreadRowDensity = .regular
     var selectionDisplay: GaryxSidebarThreadSelectionDisplay = .sidebar
@@ -1082,7 +1107,19 @@ struct GaryxSidebarThreadRowView: View {
     @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
-        HStack(alignment: .center, spacing: 8) {
+        HStack(alignment: .center, spacing: 10) {
+            if let avatar {
+                GaryxAgentAvatarView(
+                    agentId: avatar.agentId,
+                    avatarDataUrl: avatar.avatarDataUrl,
+                    kind: avatar.kind,
+                    label: avatar.label,
+                    providerType: avatar.providerType,
+                    builtIn: avatar.builtIn,
+                    diameter: 32
+                )
+            }
+
             VStack(alignment: .leading, spacing: density.textSpacing) {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Text(model.title)
