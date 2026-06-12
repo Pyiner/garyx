@@ -15,14 +15,10 @@ struct GaryxToolTraceGroupView: View {
                 showsCallList = true
             } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: "terminal")
-                        .font(GaryxFont.system(size: 13, weight: .regular))
-                        .frame(width: 16, height: 16)
-
                     summaryText
 
                     Image(systemName: "chevron.right")
-                        .font(GaryxFont.system(size: 10, weight: .semibold))
+                        .font(GaryxFont.system(size: 11, weight: .semibold))
                         .opacity(0.74)
                 }
                 .foregroundStyle(group.isActive ? GaryxTheme.primaryText : GaryxTheme.secondaryText)
@@ -51,7 +47,7 @@ struct GaryxToolTraceGroupView: View {
         if group.isActive {
             GaryxShimmerText(
                 text: group.summary,
-                font: GaryxFont.footnote(),
+                font: GaryxFont.subheadline(),
                 baseColor: GaryxTheme.secondaryText,
                 peakColor: GaryxTheme.primaryText
             )
@@ -59,7 +55,7 @@ struct GaryxToolTraceGroupView: View {
             .truncationMode(.tail)
         } else {
             Text(group.summary)
-                .font(GaryxFont.footnote())
+                .font(GaryxFont.subheadline())
                 .lineLimit(1)
                 .truncationMode(.tail)
         }
