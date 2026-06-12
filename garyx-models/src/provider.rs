@@ -125,6 +125,46 @@ pub const SDK_SESSION_ID_METADATA_KEY: &str = "sdk_session_id";
 pub const MODEL_OVERRIDE_METADATA_KEY: &str = "model_override";
 pub const MODEL_REASONING_EFFORT_OVERRIDE_METADATA_KEY: &str = "model_reasoning_effort_override";
 pub const MODEL_SERVICE_TIER_OVERRIDE_METADATA_KEY: &str = "model_service_tier_override";
+/// Apply per-thread provider overrides (chosen at thread creation) from a
+/// thread record's metadata onto run metadata. Existing run metadata wins:
+/// request-level values stay, and agent-profile defaults applied afterwards
+/// with the same `or_insert` semantics only fill keys neither the request nor
+/// the thread override set.
+pub fn merge_thread_provider_overrides(
+    thread_data: &serde_json::Value,
+    run_metadata: &mut std::collections::HashMap<String, serde_json::Value>,
+) {
+    let Some(thread_metadata) = thread_data
+        .get("metadata")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return;
+    };
+    for (override_key, run_key) in [
+        (MODEL_OVERRIDE_METADATA_KEY, "model"),
+        (
+            MODEL_REASONING_EFFORT_OVERRIDE_METADATA_KEY,
+            "model_reasoning_effort",
+        ),
+        (
+            MODEL_SERVICE_TIER_OVERRIDE_METADATA_KEY,
+            "model_service_tier",
+        ),
+    ] {
+        let Some(value) = thread_metadata
+            .get(override_key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        run_metadata
+            .entry(run_key.to_owned())
+            .or_insert_with(|| serde_json::Value::String(value.to_owned()));
+    }
+}
+
 pub const SDK_SESSION_FORK_METADATA_KEY: &str = "sdk_session_fork";
 pub const FORK_FROM_THREAD_ID_METADATA_KEY: &str = "fork_from_thread_id";
 pub const FORK_FROM_SDK_SESSION_ID_METADATA_KEY: &str = "fork_from_sdk_session_id";

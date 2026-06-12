@@ -325,6 +325,73 @@ async fn test_dispatch_internal_message_to_thread_expands_bound_agent_runtime_me
         Value::String("Review carefully.".to_owned())
     );
     assert_eq!(metadata["agent_id"], Value::String("reviewer".to_owned()));
+
+    // A per-thread override chosen at thread creation must beat the agent
+    // profile default on this path too.
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::agent-task-override",
+            json!({
+                "thread_id": "thread::agent-task-override",
+                "channel": "api",
+                "account_id": "main",
+                "from_id": "loop",
+                "is_group": false,
+                "agent_id": "reviewer",
+                "provider_type": "claude_code",
+                "metadata": {
+                    "model_override": "claude-haiku-4-5",
+                    "model_reasoning_effort_override": "low"
+                },
+                "messages": [],
+                "channel_bindings": []
+            }),
+        )
+        .await;
+    dispatch_internal_message_to_thread(
+        &state,
+        "thread::agent-task-override",
+        "run-task-auto-override",
+        "review this work",
+        InternalDispatchOptions::default(),
+    )
+    .await
+    .unwrap();
+    let calls = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let maybe_calls = {
+                let calls = provider.calls.lock().unwrap();
+                if calls.len() == 2 {
+                    Some(calls.clone())
+                } else {
+                    None
+                }
+            };
+            if let Some(calls) = maybe_calls {
+                break calls;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("provider should receive override dispatch");
+    let metadata = &calls[1].2;
+    assert_eq!(
+        metadata["model"],
+        Value::String("claude-haiku-4-5".to_owned()),
+        "the thread-level override must beat the agent profile default"
+    );
+    assert_eq!(
+        metadata["model_reasoning_effort"],
+        Value::String("low".to_owned())
+    );
+    assert_eq!(
+        metadata["system_prompt"],
+        Value::String("Review carefully.".to_owned()),
+        "fields without a thread override still come from the agent profile"
+    );
 }
 
 #[tokio::test]
