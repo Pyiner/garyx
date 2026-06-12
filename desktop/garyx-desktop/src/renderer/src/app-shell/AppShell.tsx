@@ -10136,21 +10136,8 @@ export function AppShell() {
             currentGatewayUrl={persistedGatewayUrl}
             indicatorTone={gatewayIndicator?.tone || null}
             profiles={gatewayProfiles}
-            onOpenGatewaySettings={() => {
-              trackUiAction("nav.open_gateway_settings", async () => {
-                setContentView("settings");
-                await handleSelectSettingsTab("gateway");
-              });
-            }}
             onOpenSettings={() => {
               trackUiAction("nav.open_settings", openSettingsView);
-            }}
-            onRename={async (profileId, label) => {
-              const nextState = await window.garyxDesktop.renameGatewayProfile({
-                profileId,
-                label,
-              });
-              setDesktopState(nextState);
             }}
             onSwitch={async (profile) => {
               return handleSaveLocalSettingsDraft(
@@ -10546,9 +10533,20 @@ export function AppShell() {
                     gatewaySettingsSource={gatewaySettingsSource}
                     gatewaySaving={gatewaySettingsSaving}
                     gatewayStatusMessage={gatewaySettingsStatus}
+                    gatewayProfiles={gatewayProfiles}
                     localSettingsDirty={localSettingsDirty}
                     localSettings={settingsDraft}
                     performanceSnapshot={performanceSnapshot}
+                    onAddGatewayProfile={async (input) => {
+                      const nextState = await window.garyxDesktop.addGatewayProfile(input);
+                      setDesktopState(nextState);
+                    }}
+                    onDeleteGatewayProfile={async (profileId) => {
+                      const nextState = await window.garyxDesktop.deleteGatewayProfile({
+                        profileId,
+                      });
+                      setDesktopState(nextState);
+                    }}
                     workspaces={workspacePickerWorkspaces}
                     onAddWorkspace={addWorkspacePathFromPicker}
                     mcpServers={mcpServers}
@@ -10584,9 +10582,6 @@ export function AppShell() {
                     }}
                     onSaveGatewaySettingsPatch={(patch, options) => {
                       return handleSaveGatewaySettingsPatch(patch, options);
-                    }}
-                    onOpenGatewaySetup={() => {
-                      void handleOpenGatewaySetup();
                     }}
                     onRefreshAgentTargets={refreshAgentTargets}
                     onToggleMcpServer={handleToggleMcpServer}

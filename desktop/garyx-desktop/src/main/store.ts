@@ -946,23 +946,42 @@ export async function rememberDesktopGatewayProfile(): Promise<DesktopState> {
   return getDesktopState();
 }
 
-export async function renameDesktopGatewayProfile(
-  profileId: string,
-  label: string,
-): Promise<DesktopState> {
+export async function addDesktopGatewayProfile(input: {
+  label?: string;
+  gatewayUrl: string;
+  gatewayAuthToken?: string;
+}): Promise<DesktopState> {
+  const profile = normalizeGatewayProfile({
+    label: input.label,
+    gatewayUrl: input.gatewayUrl,
+    gatewayAuthToken: input.gatewayAuthToken,
+    updatedAt: new Date().toISOString(),
+  });
+  if (!profile) {
+    return getDesktopState();
+  }
   const current = await getLocalDesktopState();
-  const normalizedId = profileId.trim();
-  const trimmedLabel = label.trim();
   const next = {
     ...current,
-    gatewayProfiles: (current.gatewayProfiles || []).map((entry) => (
-      entry.id === normalizedId
-        ? {
-            ...entry,
-            label: trimmedLabel || gatewayProfileLabel(entry.gatewayUrl),
-          }
-        : entry
-    )),
+    gatewayProfiles: normalizeGatewayProfiles([
+      profile,
+      ...(current.gatewayProfiles || []).filter((entry) => (
+        gatewayProfileKey(entry.gatewayUrl) !== gatewayProfileKey(profile.gatewayUrl)
+      )),
+    ]),
+  };
+  await writeState(next);
+  return getDesktopState();
+}
+
+export async function deleteDesktopGatewayProfile(profileId: string): Promise<DesktopState> {
+  const normalizedId = profileId.trim();
+  const current = await getLocalDesktopState();
+  const next = {
+    ...current,
+    gatewayProfiles: (current.gatewayProfiles || []).filter(
+      (entry) => entry.id !== normalizedId,
+    ),
   };
   await writeState(next);
   return getDesktopState();

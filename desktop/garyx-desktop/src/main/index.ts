@@ -208,7 +208,8 @@ import {
   runDesktopAutomationNow,
   renameDesktopThread,
   rememberDesktopGatewayProfile,
-  renameDesktopGatewayProfile,
+  addDesktopGatewayProfile,
+  deleteDesktopGatewayProfile,
   saveDesktopSettings,
   selectDesktopAutomation,
   selectDesktopWorkspace,
@@ -603,12 +604,22 @@ function registerIpcHandlers(): void {
   });
 
   ipcMain.handle(
-    "garyx:rename-gateway-profile",
-    async (_event, input: { profileId?: string; label?: string }) => {
-      return renameDesktopGatewayProfile(
-        String(input?.profileId || ""),
-        String(input?.label || ""),
-      );
+    "garyx:add-gateway-profile",
+    async (_event, input: { label?: string; gatewayUrl?: string; gatewayAuthToken?: string }) => {
+      return addDesktopGatewayProfile({
+        label: typeof input?.label === "string" ? input.label : "",
+        gatewayUrl: String(input?.gatewayUrl || ""),
+        gatewayAuthToken: typeof input?.gatewayAuthToken === "string"
+          ? input.gatewayAuthToken
+          : "",
+      });
+    },
+  );
+
+  ipcMain.handle(
+    "garyx:delete-gateway-profile",
+    async (_event, input: { profileId?: string }) => {
+      return deleteDesktopGatewayProfile(String(input?.profileId || ""));
     },
   );
 

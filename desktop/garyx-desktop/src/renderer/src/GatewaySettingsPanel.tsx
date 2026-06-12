@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import QRCode from 'qrcode';
-import { Copy, RefreshCw, Smartphone, Trash } from 'lucide-react';
+import { Copy, Plus, RefreshCw, Server, Smartphone, Trash } from 'lucide-react';
 
 import {
   DEFAULT_DESKTOP_SETTINGS,
@@ -15,6 +15,7 @@ import {
   type DesktopProviderModels,
   type DesktopWorkspace,
   type DesktopTeam,
+  type DesktopGatewayProfile,
   type DesktopSettings,
   type DesktopMcpServer,
   type DesktopSkillInfo,
@@ -107,6 +108,7 @@ type GatewaySettingsPanelProps = {
   gatewayDraft?: any;
   gatewayDirty?: boolean;
   gatewayLoading?: boolean;
+  gatewayProfiles?: DesktopGatewayProfile[];
   gatewaySaving?: boolean;
   gatewaySettingsSource?: GatewaySettingsSource;
   gatewayStatusMessage?: string | null;
@@ -141,7 +143,12 @@ type GatewaySettingsPanelProps = {
     patch: GatewayConfigDocument,
     options?: GatewaySettingsSaveOptions,
   ) => Promise<boolean>;
-  onOpenGatewaySetup?: () => void;
+  onAddGatewayProfile?: (input: {
+    label?: string;
+    gatewayUrl: string;
+    gatewayAuthToken?: string;
+  }) => Promise<void>;
+  onDeleteGatewayProfile?: (profileId: string) => Promise<void>;
   onMutateGatewayDraft?: DraftMutator;
   onRefreshAgentTargets?: () => Promise<void>;
   onAddChannelAccount?: (input: {
@@ -1168,6 +1175,130 @@ function MobileConnectPanel({ settings }: { settings: DesktopSettings }) {
   );
 }
 
+function AddGatewayDialog({
+  open,
+  onOpenChange,
+  onSubmit,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSubmit: (input: {
+    label?: string;
+    gatewayUrl: string;
+    gatewayAuthToken?: string;
+  }) => Promise<void>;
+}) {
+  const { t } = useI18n();
+  const [label, setLabel] = useState('');
+  const [gatewayUrl, setGatewayUrl] = useState('');
+  const [gatewayAuthToken, setGatewayAuthToken] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const canSave = useMemo(() => {
+    try {
+      const parsed = new URL(gatewayUrl.trim());
+      return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && Boolean(parsed.host);
+    } catch {
+      return false;
+    }
+  }, [gatewayUrl]);
+
+  function resetFields() {
+    setLabel('');
+    setGatewayUrl('');
+    setGatewayAuthToken('');
+  }
+
+  async function handleSave() {
+    if (!canSave || saving) {
+      return;
+    }
+    setSaving(true);
+    try {
+      await onSubmit({ label, gatewayUrl, gatewayAuthToken });
+      resetFields();
+      onOpenChange(false);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) {
+          resetFields();
+        }
+        onOpenChange(next);
+      }}
+    >
+      <DialogContent className="gateway-add-dialog" size="compact">
+        <DialogHeader>
+          <DialogTitle>{t('Add Gateway')}</DialogTitle>
+          <DialogDescription>
+            {t('Saved gateways appear in the sidebar gateway switcher.')}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="gateway-add-fields">
+          <label className="gateway-setup-field">
+            <span>{t('Name')}</span>
+            <Input
+              autoCapitalize="off"
+              autoComplete="off"
+              spellCheck={false}
+              type="text"
+              value={label}
+              onChange={(event) => setLabel(event.target.value)}
+            />
+          </label>
+          <label className="gateway-setup-field">
+            <span>{t('Gateway URL')}</span>
+            <Input
+              autoCapitalize="off"
+              autoComplete="off"
+              placeholder="http://127.0.0.1:31337"
+              spellCheck={false}
+              type="text"
+              value={gatewayUrl}
+              onChange={(event) => setGatewayUrl(event.target.value)}
+            />
+          </label>
+          <label className="gateway-setup-field">
+            <span>{t('Gateway Token')}</span>
+            <Input
+              autoCapitalize="off"
+              autoComplete="off"
+              spellCheck={false}
+              type="password"
+              value={gatewayAuthToken}
+              onChange={(event) => setGatewayAuthToken(event.target.value)}
+            />
+          </label>
+        </div>
+        <DialogFooter>
+          <Button
+            className="rounded-xl border-[#e7e7e5] bg-white shadow-none hover:bg-[#f7f7f6]"
+            onClick={() => onOpenChange(false)}
+            type="button"
+            variant="outline"
+          >
+            {t('Cancel')}
+          </Button>
+          <Button
+            className="rounded-xl bg-[#111111] text-white shadow-none hover:bg-[#222222]"
+            disabled={!canSave || saving}
+            onClick={() => void handleSave()}
+            type="button"
+          >
+            {t('Save')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function SettingsSection({
   eyebrow,
   title,
@@ -1341,7 +1472,9 @@ export function GatewaySettingsPanel({
   onSaveLocalSettingsDraft = noopAsyncBoolean,
   onSaveGatewaySettings = noopAsyncBoolean,
   onSaveGatewaySettingsPatch = noopAsyncBoolean,
-  onOpenGatewaySetup = noop,
+  gatewayProfiles = [],
+  onAddGatewayProfile = noopAsync,
+  onDeleteGatewayProfile = noopAsync,
   onMutateGatewayDraft = noop,
   onRefreshAgentTargets = noopAsync,
   onAddChannelAccount = noopAsync,
@@ -1363,6 +1496,7 @@ export function GatewaySettingsPanel({
     activeTab === 'connection' ? 'gateway' : activeTab;
   const pluginAccounts = configuredChannelAccountsFromDraft(gatewayDraft?.channels);
   const [isAddingChannel, setIsAddingChannel] = useState(false);
+  const [addGatewayOpen, setAddGatewayOpen] = useState(false);
   const [editingBot, setEditingBot] = useState<EditBotDialogContext | null>(null);
   const standaloneAgents = sortedStandaloneAgents(agents);
   const agentTargets = sortedAgentTargets(agents, teams);
@@ -1835,31 +1969,88 @@ export function GatewaySettingsPanel({
     }
   }
 
+  const currentGatewayKey = localSettings.gatewayUrl.trim().toLowerCase();
+  const savedGatewayProfiles = useMemo(() => {
+    const saved = gatewayProfiles.filter((profile) => profile.gatewayUrl.trim().length > 0);
+    const currentIndex = saved.findIndex(
+      (profile) => profile.gatewayUrl.trim().toLowerCase() === currentGatewayKey,
+    );
+    if (currentIndex > 0) {
+      const [current] = saved.splice(currentIndex, 1);
+      saved.unshift(current);
+    }
+    return saved;
+  }, [gatewayProfiles, currentGatewayKey]);
+
+  // The settings tab manages the saved gateway list only; switching the
+  // active gateway lives in the sidebar identity bar.
   const connectionPanel = (
     <div className="codex-section">
       <div className="codex-section-header">
         <span className="codex-section-title">{t('Gateway')}</span>
+        <Button
+          className="rounded-xl border-[#e7e7e5] bg-white shadow-none hover:bg-[#f7f7f6]"
+          onClick={() => setAddGatewayOpen(true)}
+          size="sm"
+          type="button"
+          variant="outline"
+        >
+          <Plus aria-hidden size={14} strokeWidth={1.8} />
+          {t('Add Gateway')}
+        </Button>
       </div>
-      <div className="codex-list-card">
-        <SettingsControlRow
-          control={
-            <div className="gateway-summary-control">
-              <code className="gateway-summary-url">
-                {localSettings.gatewayUrl.trim() || t('Not configured')}
-              </code>
-              <Button
-                className="rounded-xl bg-[#111111] text-white shadow-none hover:bg-[#222222]"
-                onClick={onOpenGatewaySetup}
-                size="sm"
-                type="button"
-              >
-                {t('Switch Gateway')}
-              </Button>
-            </div>
-          }
-          label={t('Gateway URL')}
-        />
+      <div className="codex-list-card gateway-profiles-card">
+        {savedGatewayProfiles.length === 0 ? (
+          <p className="gateway-profiles-empty">{t('No saved gateways yet.')}</p>
+        ) : (
+          savedGatewayProfiles.map((profile) => {
+            const isCurrent = profile.gatewayUrl.trim().toLowerCase() === currentGatewayKey;
+            return (
+              <div className="gateway-profile-row" key={profile.id}>
+                <span aria-hidden className="gateway-row-glyph">
+                  <Server size={13} strokeWidth={1.8} />
+                  {isCurrent ? (
+                    <span
+                      className={`gateway-glyph-badge ${connection?.ok ? 'is-connected' : 'is-syncing'}`}
+                    />
+                  ) : null}
+                </span>
+                <span className="gateway-profile-row-copy">
+                  <span className="gateway-profile-row-name">{profile.label}</span>
+                  <span className="gateway-profile-row-url">{profile.gatewayUrl}</span>
+                </span>
+                {isCurrent ? (
+                  <span className="gateway-profile-current">{t('Current')}</span>
+                ) : (
+                  <button
+                    aria-label={t('Remove')}
+                    className="gateway-profile-delete"
+                    onClick={() => {
+                      if (
+                        window.confirm(
+                          t('Remove {label} from saved gateways?', { label: profile.label }),
+                        )
+                      ) {
+                        void onDeleteGatewayProfile(profile.id);
+                      }
+                    }}
+                    title={t('Remove')}
+                    type="button"
+                  >
+                    <Trash aria-hidden size={13} strokeWidth={1.8} />
+                  </button>
+                )}
+              </div>
+            );
+          })
+        )}
       </div>
+      <p className="small-note">{t('Switch the active gateway from the sidebar gateway bar.')}</p>
+      <AddGatewayDialog
+        open={addGatewayOpen}
+        onOpenChange={setAddGatewayOpen}
+        onSubmit={onAddGatewayProfile}
+      />
       <MobileConnectPanel settings={localSettings} />
     </div>
   );
