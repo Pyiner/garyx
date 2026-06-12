@@ -559,10 +559,14 @@ struct GaryxShellView: View {
                 }
             }
             .onEnded { value in
+                // The closing gesture owns drags while the drawer is open;
+                // touching the shared axis/offset here would clobber its
+                // decision before it runs.
+                guard !model.sidebarVisible else { return }
                 defer {
                     sidebarDragAxis = nil
                 }
-                guard !model.sidebarVisible, sidebarDragAxis == .horizontal else {
+                guard sidebarDragAxis == .horizontal else {
                     resetSidebarDrag()
                     return
                 }
@@ -601,10 +605,13 @@ struct GaryxShellView: View {
                 sidebarDragOffset = min(0, max(-sidebarWidth, value.translation.width))
             }
             .onEnded { value in
+                // Mirror of the opening gesture: stay inert while the drawer
+                // is closed so the opening gesture's state is untouched.
+                guard model.sidebarVisible else { return }
                 defer {
                     sidebarDragAxis = nil
                 }
-                guard model.sidebarVisible, sidebarDragAxis == .horizontal else {
+                guard sidebarDragAxis == .horizontal else {
                     resetSidebarDrag()
                     return
                 }
