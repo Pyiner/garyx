@@ -947,6 +947,10 @@ export interface DesktopRemoteStateError {
 export interface DesktopState {
   settings: DesktopSettings;
   gatewayProfiles: DesktopGatewayProfile[];
+  /** Gateway URL the entity slices below were loaded from. Slices from a
+   *  different gateway are dropped on hydrate instead of leaking into the
+   *  newly selected gateway's view. */
+  entitiesGatewayUrl?: string | null;
   workspaces: DesktopWorkspace[];
   selectedWorkspacePath: string | null;
   pinnedThreadIds: string[];

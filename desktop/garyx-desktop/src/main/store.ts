@@ -498,16 +498,23 @@ function pickSelectedAutomationId(
 function normalizeState(value?: Partial<DesktopState>): DesktopState {
   const settings = normalizeSettings(value?.settings);
   const gatewayProfiles = normalizeGatewayProfiles(value?.gatewayProfiles);
+  // Entity slices are gateway-scoped: state persisted while another gateway
+  // was selected must not leak into this gateway's view.
+  const entitiesGatewayUrl = typeof value?.entitiesGatewayUrl === 'string'
+    ? value.entitiesGatewayUrl.trim()
+    : '';
+  const entityScopeMatches = entitiesGatewayUrl === (settings.gatewayUrl || '').trim();
   const legacyBotBindings =
     value && typeof value === 'object' && 'botBindings' in value
       ? (value as Partial<DesktopState> & { botBindings?: Record<string, string> }).botBindings
       : undefined;
   const rawWorkspaces: Partial<DesktopWorkspace>[] = [];
-  const threads: DesktopThreadSummary[] = Array.isArray(value?.threads)
+  const persistedThreads: DesktopThreadSummary[] = Array.isArray(value?.threads)
     ? value.threads
     : Array.isArray(value?.sessions)
       ? value.sessions
       : [];
+  const threads = entityScopeMatches ? persistedThreads : [];
   const normalizedWorkspacesByPath = new Map<string, DesktopWorkspace>();
   for (const workspace of rawWorkspaces) {
     const normalizedWorkspace = normalizeWorkspace(workspace);
@@ -528,18 +535,19 @@ function normalizeState(value?: Partial<DesktopState>): DesktopState {
   return {
     settings,
     gatewayProfiles,
+    entitiesGatewayUrl: (settings.gatewayUrl || '').trim(),
     workspaces,
-    selectedWorkspacePath: value?.selectedWorkspacePath ?? null,
-    pinnedThreadIds: normalizePinnedThreadIds(value?.pinnedThreadIds),
+    selectedWorkspacePath: entityScopeMatches ? (value?.selectedWorkspacePath ?? null) : null,
+    pinnedThreadIds: entityScopeMatches ? normalizePinnedThreadIds(value?.pinnedThreadIds) : [],
     threads,
     sessions: threads,
     endpoints: [],
     configuredBots: [],
     botConsoles: [],
     automations: [],
-    selectedAutomationId: value?.selectedAutomationId ?? null,
+    selectedAutomationId: entityScopeMatches ? (value?.selectedAutomationId ?? null) : null,
     botMainThreads:
-      value?.botMainThreads && typeof value.botMainThreads === 'object'
+      entityScopeMatches && value?.botMainThreads && typeof value.botMainThreads === 'object'
         ? Object.fromEntries(
             Object.entries(value.botMainThreads).filter(
               ([, v]) => typeof v === 'string' && v.trim().length > 0,
@@ -559,7 +567,7 @@ function normalizeState(value?: Partial<DesktopState>): DesktopState {
             )
           : {},
     lastSeenRunAtByAutomation:
-      value?.lastSeenRunAtByAutomation && typeof value.lastSeenRunAtByAutomation === 'object'
+      entityScopeMatches && value?.lastSeenRunAtByAutomation && typeof value.lastSeenRunAtByAutomation === 'object'
         ? Object.fromEntries(
             Object.entries(value.lastSeenRunAtByAutomation).filter(([, entryValue]) => {
               return typeof entryValue === 'string' && entryValue.trim().length > 0;
@@ -600,7 +608,10 @@ function canonicalizeWorkspacePath(path: string): string {
   return trimmed;
 }
 
-async function resolveWorkspaceAvailability(workspace: DesktopWorkspace): Promise<DesktopWorkspace> {
+function resolveWorkspaceAvailability(workspace: DesktopWorkspace): DesktopWorkspace {
+  // Workspace paths live on the gateway host. Probing the local filesystem
+  // wrongly marked every remote gateway workspace unavailable, so trust the
+  // gateway's workspace list instead of a client-side fs check.
   if (!workspace.path) {
     return {
       ...workspace,
@@ -608,20 +619,11 @@ async function resolveWorkspaceAvailability(workspace: DesktopWorkspace): Promis
     };
   }
 
-  try {
-    await access(workspace.path);
-    return {
-      ...workspace,
-      name: workspaceNameFromPath(workspace.path),
-      available: true,
-    };
-  } catch {
-    return {
-      ...workspace,
-      name: workspaceNameFromPath(workspace.path),
-      available: false,
-    };
-  }
+  return {
+    ...workspace,
+    name: workspaceNameFromPath(workspace.path),
+    available: true,
+  };
 }
 
 function withSortedEntities(
@@ -681,7 +683,7 @@ type RemoteFetchResult<T> =
   | { ok: false; value: T; error: DesktopRemoteStateError };
 
 const BOT_CONSOLES_REMOTE_CACHE_TTL_MS = 60_000;
-const remoteSliceCache = new Map<RemoteFetchSource, {
+const remoteSliceCache = new Map<string, {
   fetchedAt: number;
   value: unknown;
 }>();
@@ -718,10 +720,13 @@ async function fetchRemoteSlice<T>(
   label: string,
   fallback: T,
   fetcher: () => Promise<T>,
-  options?: { cacheTtlMs?: number },
+  options?: { cacheTtlMs?: number; cacheScope?: string },
 ): Promise<RemoteFetchResult<T>> {
   const cacheTtlMs = options?.cacheTtlMs || 0;
-  const cached = remoteSliceCache.get(source);
+  // Scope cached slices to the gateway they came from; an unscoped cache
+  // kept serving the previous gateway's data right after a switch.
+  const cacheKey = `${source}::${options?.cacheScope || ''}`;
+  const cached = remoteSliceCache.get(cacheKey);
   if (cacheTtlMs > 0 && cached && Date.now() - cached.fetchedAt <= cacheTtlMs) {
     return {
       ok: true,
@@ -733,7 +738,7 @@ async function fetchRemoteSlice<T>(
   try {
     const value = await fetcher();
     if (cacheTtlMs > 0) {
-      remoteSliceCache.set(source, {
+      remoteSliceCache.set(cacheKey, {
         fetchedAt: Date.now(),
         value,
       });
@@ -758,10 +763,10 @@ async function fetchRemoteSlice<T>(
   }
 }
 
-async function remoteWorkspacesWithAvailability(
+function remoteWorkspacesWithAvailability(
   workspaces: DesktopWorkspace[],
-): Promise<DesktopWorkspace[]> {
-  return Promise.all(workspaces.map((workspace) => resolveWorkspaceAvailability(workspace)));
+): DesktopWorkspace[] {
+  return workspaces.map((workspace) => resolveWorkspaceAvailability(workspace));
 }
 
 async function mergeRemoteDesktopState(localState: DesktopState): Promise<DesktopState> {
@@ -782,7 +787,10 @@ async function mergeRemoteDesktopState(localState: DesktopState): Promise<Deskto
         'bot consoles',
         localState.botConsoles,
         () => fetchBotConsoles(localState.settings),
-        { cacheTtlMs: BOT_CONSOLES_REMOTE_CACHE_TTL_MS },
+        {
+          cacheTtlMs: BOT_CONSOLES_REMOTE_CACHE_TTL_MS,
+          cacheScope: localState.settings.gatewayUrl || '',
+        },
       ),
       fetchRemoteSlice('automations', 'automations', localState.automations, () => fetchAutomations(localState.settings)),
     ]);
@@ -803,7 +811,7 @@ async function mergeRemoteDesktopState(localState: DesktopState): Promise<Deskto
   const remoteBotConsoles = botConsolesResult.value;
   const remoteAutomations = automationsResult.value;
 
-  const workspaces = await remoteWorkspacesWithAvailability(remoteWorkspaces);
+  const workspaces = remoteWorkspacesWithAvailability(remoteWorkspaces);
 
   const threads = remoteThreads.map((thread) => ({
     ...thread,
@@ -858,8 +866,8 @@ async function mergeRemoteDesktopState(localState: DesktopState): Promise<Deskto
 
 async function hydrateState(value?: Partial<DesktopState>): Promise<DesktopState> {
   const normalized = normalizeState(value);
-  const refreshedWorkspaces = await Promise.all(
-    normalized.workspaces.map((workspace) => resolveWorkspaceAvailability(workspace)),
+  const refreshedWorkspaces = normalized.workspaces.map((workspace) =>
+    resolveWorkspaceAvailability(workspace),
   );
   const next = withSortedEntities({
     ...normalized,
@@ -957,6 +965,17 @@ async function getLocalDesktopState(): Promise<DesktopState> {
 }
 
 export async function getDesktopState(): Promise<DesktopState> {
+  // A remote merge that raced a gateway switch would deliver (and remember)
+  // the previous gateway's entities; re-run until the gateway URL is stable
+  // across the merge.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const localState = await getLocalDesktopState();
+    const merged = await mergeRemoteDesktopState(localState);
+    const settingsAfter = (await getLocalDesktopSettings()).gatewayUrl || '';
+    if (settingsAfter === (localState.settings.gatewayUrl || '')) {
+      return rememberHydratedDesktopState(merged);
+    }
+  }
   const localState = await getLocalDesktopState();
   return rememberHydratedDesktopState(await mergeRemoteDesktopState(localState));
 }
@@ -1159,7 +1178,7 @@ export async function addDesktopWorkspace(path: string): Promise<{
     path: canonicalPath,
     name: workspaceNameFromPath(canonicalPath),
   });
-  const workspaces = await remoteWorkspacesWithAvailability(remoteWorkspaces);
+  const workspaces = remoteWorkspacesWithAvailability(remoteWorkspaces);
   const workspace =
     workspaces.find((entry) => normalizeWorkspacePathKey(entry.path || '') === normalizeWorkspacePathKey(canonicalPath))
     || {
@@ -1191,7 +1210,7 @@ export async function removeDesktopWorkspace(workspacePath: string): Promise<Des
   const remoteWorkspaces = await deleteRemoteWorkspace(current.settings, {
     path: workspace.path || workspacePath,
   });
-  const workspaces = await remoteWorkspacesWithAvailability(remoteWorkspaces);
+  const workspaces = remoteWorkspacesWithAvailability(remoteWorkspaces);
   const local = await getLocalDesktopState();
   await writeState(withSortedEntities({
     ...local,
