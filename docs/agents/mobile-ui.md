@@ -21,8 +21,9 @@
 - Mobile top-left controls and leading-edge gestures must share the same route
   action.
 - The home root is the pinned+recent thread list; conversations and module
-  panels push above it in a navigation stack and pop back to home. In-page
-  drilldowns go back to their immediate parent.
+  panels push above it in a navigation stack and pop back to home. Bot,
+  workspace, and automation-thread drilldowns go back to whatever opened them
+  (home or the originating page), never to an overview list.
 - Mobile entry points that open an existing thread by row tap, widget link,
   task, automation, bot conversation, or deep link should route through the
   shared `GaryxMobileModel.openThread` path; home-list behavior is the
@@ -34,9 +35,10 @@
   with a one-off target override, matching the Mac app.
 - Do not mutate the saved default selected agent or eagerly create an empty
   thread; `Use` owns default agent selection.
-- The navigation drawer shows Automation, Bots, Workspaces, and Agents, with a
-  Settings entry and the gateway identity bar at the drawer bottom; Tasks, Auto
-  Research, and Skills live under Settings. A thread-mode automation's
+- The navigation drawer shows Automation and Agents entries with Bots and
+  Workspaces expanded inline as flat children, the gateway identity control as
+  the drawer header, and a floating Settings pill at the drawer bottom; Tasks,
+  Auto Research, and Skills live under Settings. A thread-mode automation's
   triggered threads open from that automation's row actions.
 - Keep workspace and bot conversations inside drilldown layers rather than
   dumping raw sessions inline.
