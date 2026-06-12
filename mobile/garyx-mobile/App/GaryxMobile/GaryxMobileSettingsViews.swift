@@ -273,118 +273,25 @@ struct GaryxSettingsGatewayContent: View {
     @EnvironmentObject private var model: GaryxMobileModel
 
     var body: some View {
+        // Just the gateway list: the row checkmark already carries the
+        // selected state, so no Current block, reconnect button, or status
+        // line.
         VStack(alignment: .leading, spacing: 12) {
-            GaryxSectionBlock(title: "Current") {
-                GaryxGatewayCurrentRow()
-            }
-
             if !model.gatewayProfiles.isEmpty {
-                GaryxSectionBlock(title: "Gateways") {
-                    GaryxCompactListGroup {
-                        ForEach(Array(model.gatewayProfiles.enumerated()), id: \.element.id) { index, profile in
-                            GaryxSavedGatewayProfileRow(
-                                profile: profile,
-                                isCurrent: model.currentGatewayProfile?.id == profile.id
-                            )
-                            if index < model.gatewayProfiles.count - 1 {
-                                GaryxCompactRowDivider()
-                            }
+                GaryxCompactListGroup {
+                    ForEach(Array(model.gatewayProfiles.enumerated()), id: \.element.id) { index, profile in
+                        GaryxSavedGatewayProfileRow(
+                            profile: profile,
+                            isCurrent: model.currentGatewayProfile?.id == profile.id
+                        )
+                        if index < model.gatewayProfiles.count - 1 {
+                            GaryxCompactRowDivider()
                         }
                     }
                 }
             } else {
-                GaryxSectionBlock(title: "Gateways") {
-                    GaryxGatewayEmptyProfilesRow()
-                }
+                GaryxGatewayEmptyProfilesRow()
             }
-
-            if let status = model.gatewaySettingsStatus, !status.isEmpty {
-                Text(status)
-                    .font(GaryxFont.caption(weight: .medium))
-                    .foregroundStyle(GaryxTheme.accent)
-                    .padding(.horizontal, 2)
-            }
-        }
-    }
-}
-
-struct GaryxGatewayCurrentRow: View {
-    @EnvironmentObject private var model: GaryxMobileModel
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: currentIcon)
-                .font(GaryxFont.system(size: 15, weight: .semibold))
-                .foregroundStyle(currentColor)
-                .frame(width: 22, height: 22)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(currentTitle)
-                    .font(GaryxFont.subheadline(weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Text(model.gatewayURL.isEmpty ? "No gateway selected" : model.gatewayURL)
-                    .font(GaryxFont.caption())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-
-            Spacer(minLength: 0)
-
-            Button {
-                Task { await model.connectAndRefresh() }
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .font(GaryxFont.system(size: 13, weight: .semibold))
-                    .frame(width: 34, height: 34)
-                    .background(Color(.secondarySystemFill), in: Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Reconnect gateway")
-        }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 8)
-    }
-
-    private var currentTitle: String {
-        switch model.connectionState {
-        case .ready(let version):
-            if let version, !version.isEmpty {
-                return "Connected \(version)"
-            }
-            return "Connected"
-        case .checking:
-            return "Connecting"
-        case .failed:
-            return "Connection failed"
-        case .disconnected:
-            return "Not connected"
-        }
-    }
-
-    private var currentIcon: String {
-        switch model.connectionState {
-        case .ready:
-            return "checkmark.circle.fill"
-        case .checking:
-            return "arrow.triangle.2.circlepath"
-        case .failed:
-            return "exclamationmark.circle.fill"
-        case .disconnected:
-            return "network"
-        }
-    }
-
-    private var currentColor: Color {
-        switch model.connectionState {
-        case .ready:
-            return GaryxTheme.accent
-        case .checking:
-            return .secondary
-        case .failed:
-            return GaryxTheme.danger
-        case .disconnected:
-            return .secondary
         }
     }
 }
