@@ -55,6 +55,13 @@ struct GaryxComposer: View {
     let isFocused: FocusState<Bool>.Binding
     @State private var draftText = ""
     @State private var draftContextVersion = 0
+    /// Identity generation for the draft field. While a CJK keyboard still
+    /// reports an input session, SwiftUI can skip pushing a programmatic
+    /// clear into the focused vertical-axis `TextField`, leaving the sent
+    /// text visible until the next layout pass. Re-assigning the same empty
+    /// string cannot dirty state, so the only deterministic flush is
+    /// recreating the field when the draft context resets.
+    @State private var draftFieldGeneration = 0
     @State private var isPickingAttachments = false
     @State private var isPickingPhotos = false
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
@@ -140,6 +147,16 @@ struct GaryxComposer: View {
         .onChange(of: model.composerContextVersion) { _, newValue in
             draftContextVersion = newValue
             draftText = model.draft
+            let wasFocused = isFocused.wrappedValue
+            draftFieldGeneration &+= 1
+            if wasFocused {
+                // The recreated field starts unfocused; re-attach the
+                // keyboard on the next runloop so sending keeps the
+                // composer ready for a follow-up message.
+                DispatchQueue.main.async {
+                    isFocused.wrappedValue = true
+                }
+            }
         }
         .onChange(of: model.draft) { _, newValue in
             guard newValue != draftText else { return }
@@ -352,7 +369,7 @@ struct GaryxComposer: View {
             }
 
             TextField("", text: $draftText, axis: .vertical)
-                .id(GaryxComposerLayout.draftFieldIdentity)
+                .id("\(GaryxComposerLayout.draftFieldIdentity)-\(draftFieldGeneration)")
                 .font(GaryxFont.subheadline())
                 .foregroundStyle(.primary)
                 .focused(isFocused)
