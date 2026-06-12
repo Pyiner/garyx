@@ -874,6 +874,20 @@ pub async fn mark_thread_task_in_review_if_in_progress(
     if task.status != TaskStatus::InProgress {
         return Ok(None);
     }
+    // A run that ends while this task still has running subtasks is not the
+    // task's final result: each subtask's completion callback re-activates
+    // this thread, and the task acts again before its own outcome is ready.
+    // Leaving the task in progress defers the ready-for-review transition
+    // (and the parent notification it triggers) to the run that ends with no
+    // running subtasks left.
+    if thread_task_has_running_subtasks(thread_store, thread_id).await {
+        tracing::info!(
+            thread_id = %thread_id,
+            task_id = %canonical_task_id(&task),
+            "task run ended with running subtasks; leaving task in progress"
+        );
+        return Ok(None);
+    }
     let from = task.status;
     task.status = TaskStatus::InReview;
     push_event(
@@ -890,6 +904,42 @@ pub async fn mark_thread_task_in_review_if_in_progress(
     thread_store.set(thread_id, record).await;
     task_index_upsert(thread_store_id(thread_store), thread_id, &task);
     Ok(Some(task))
+}
+
+/// True when another task is still running and targets this thread for its
+/// completion notification. Such a task is a subtask of this thread's task:
+/// it was created from this thread and will call back into it when done.
+///
+/// Candidates come from the in-memory task index, which is populated at task
+/// write time; right after a process restart the index is empty until the
+/// first task read warms it, in which case this conservatively reports no
+/// subtasks (pre-gate behavior).
+pub async fn thread_task_has_running_subtasks(
+    thread_store: &Arc<dyn ThreadStore>,
+    thread_id: &str,
+) -> bool {
+    let store_id = thread_store_id(thread_store);
+    for (_, candidate_thread_id) in task_index_entries(store_id) {
+        if candidate_thread_id == thread_id {
+            continue;
+        }
+        let Some(record) = thread_store.get(&candidate_thread_id).await else {
+            continue;
+        };
+        let Ok(Some(task)) = task_from_record(&record) else {
+            continue;
+        };
+        if task.status != TaskStatus::InProgress {
+            continue;
+        }
+        if matches!(
+            task.notification_target.as_ref(),
+            Some(TaskNotificationTarget::Thread { thread_id: target }) if target == thread_id
+        ) {
+            return true;
+        }
+    }
+    false
 }
 
 impl TaskSummary {
@@ -1842,6 +1892,97 @@ mod tests {
                 note: Some(note),
             }) if note == "agent run completed"
         ));
+    }
+
+    #[tokio::test]
+    async fn run_completion_defers_review_while_subtasks_run() {
+        let service = service();
+        let (parent_thread_id, _parent_task) = service
+            .create_task(CreateTaskInput {
+                title: Some("Parent work".to_owned()),
+                body: None,
+                assignee: Some(Principal::Agent {
+                    agent_id: "codex".to_owned(),
+                }),
+                notification_target: None,
+                source: None,
+                executor: None,
+                start: true,
+                actor: None,
+                agent_id: None,
+                workspace_dir: None,
+                runtime: None,
+            })
+            .await
+            .unwrap();
+        let (_child_thread_id, child_task) = service
+            .create_task(CreateTaskInput {
+                title: Some("Child review".to_owned()),
+                body: None,
+                assignee: Some(Principal::Agent {
+                    agent_id: "reviewer".to_owned(),
+                }),
+                notification_target: Some(TaskNotificationTarget::Thread {
+                    thread_id: parent_thread_id.clone(),
+                }),
+                source: None,
+                executor: None,
+                start: true,
+                actor: None,
+                agent_id: None,
+                workspace_dir: None,
+                runtime: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(child_task.status, TaskStatus::InProgress);
+
+        // The parent's run ends while the child still runs: the parent task
+        // must stay in progress so the parent notification defers until the
+        // child has returned.
+        let gated = mark_thread_task_in_review_if_in_progress(
+            &service.thread_store,
+            &parent_thread_id,
+            Principal::Agent {
+                agent_id: "garyx".to_owned(),
+            },
+            Some("agent run completed".to_owned()),
+        )
+        .await
+        .unwrap();
+        assert!(gated.is_none());
+        let (_, _, parent) = service
+            .get_task(&format!("#TASK-{}", _parent_task.number))
+            .await
+            .unwrap();
+        assert_eq!(parent.status, TaskStatus::InProgress);
+
+        // Once the child has returned (in review), the parent's next run end
+        // transitions normally.
+        service
+            .update_status(UpdateTaskStatusInput {
+                task_id: canonical_task_id(&child_task),
+                to: TaskStatus::InReview,
+                note: None,
+                force: false,
+                actor: Some(Principal::Agent {
+                    agent_id: "reviewer".to_owned(),
+                }),
+            })
+            .await
+            .unwrap();
+        let released = mark_thread_task_in_review_if_in_progress(
+            &service.thread_store,
+            &parent_thread_id,
+            Principal::Agent {
+                agent_id: "garyx".to_owned(),
+            },
+            Some("agent run completed".to_owned()),
+        )
+        .await
+        .unwrap()
+        .expect("parent task should move to review once no subtasks run");
+        assert_eq!(released.status, TaskStatus::InReview);
     }
 
     #[tokio::test]
