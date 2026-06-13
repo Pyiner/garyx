@@ -75,6 +75,31 @@ final class GaryxThreadModelOverridePresentationTests: XCTestCase {
         )
     }
 
+    func testDefaultReasoningEffortRequiresActualModel() throws {
+        let providerModels = try decodeProviderModels(claudeProviderJSON)
+
+        XCTAssertNil(
+            GaryxThreadModelOverridePresentation.defaultReasoningEffort(
+                providerModels: providerModels,
+                model: nil
+            )
+        )
+        XCTAssertEqual(
+            GaryxThreadModelOverridePresentation.defaultReasoningEffort(
+                providerModels: providerModels,
+                model: "claude-opus-4-7"
+            ),
+            "xhigh"
+        )
+        XCTAssertEqual(
+            GaryxThreadModelOverridePresentation.defaultReasoningEffort(
+                providerModels: providerModels,
+                model: "not-in-catalog"
+            ),
+            "high"
+        )
+    }
+
     func testControlLabelComposition() throws {
         let providerModels = try decodeProviderModels(claudeProviderJSON)
 
@@ -185,6 +210,7 @@ final class GaryxThreadModelOverridePresentationTests: XCTestCase {
                 "id": "claude-opus-4-7",
                 "label": "Claude Opus 4.7",
                 "recommended": false,
+                "default_reasoning_effort": "xhigh",
                 "supported_reasoning_efforts": [
                     { "id": "low", "label": "Low", "recommended": false },
                     { "id": "high", "label": "High", "recommended": true },

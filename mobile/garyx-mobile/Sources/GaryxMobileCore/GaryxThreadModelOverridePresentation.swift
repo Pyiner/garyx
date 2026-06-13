@@ -41,8 +41,10 @@ public enum GaryxThreadModelOverridePresentation {
         providerModels: GaryxProviderModels?,
         model: String?
     ) -> String? {
-        if let model = normalized(model),
-           let modelOption = providerModels?.models.first(where: { $0.id == model }),
+        guard let model = normalized(model) else {
+            return nil
+        }
+        if let modelOption = providerModels?.models.first(where: { $0.id == model }),
            let effort = normalized(modelOption.defaultReasoningEffort) {
             return effort
         }

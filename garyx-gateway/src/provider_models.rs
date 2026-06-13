@@ -149,14 +149,16 @@ pub(crate) async fn list_provider_models(
             }
         }
         ProviderType::CodexAppServer => {
-            let discovery = apply_default_model_to_gpt_discovery(
-                gpt_builtin_models(None),
-                configured_default_model(
-                    config,
-                    ProviderType::CodexAppServer,
-                    &["codex", "codex_app_server"],
-                ),
-            );
+            let mut discovery = gpt_builtin_models(None);
+            if let Some(default_model) = configured_default_model(
+                config,
+                ProviderType::CodexAppServer,
+                &["codex", "codex_app_server"],
+            ) {
+                discovery = apply_default_model_to_gpt_discovery(discovery, Some(default_model));
+            } else {
+                discovery.default_model = None;
+            }
             ProviderModelsResponse {
                 provider_type,
                 supports_model_selection: true,
@@ -257,7 +259,7 @@ pub(crate) fn builtin_provider_catalog_default(
     provider_type: ProviderType,
 ) -> ProviderCatalogDefault {
     match provider_type {
-        ProviderType::CodexAppServer | ProviderType::Gpt => {
+        ProviderType::Gpt => {
             let discovery = gpt_builtin_models(None);
             ProviderCatalogDefault {
                 model: discovery.default_model,
@@ -291,9 +293,10 @@ pub(crate) fn builtin_provider_catalog_default(
                 service_tier: recommended_model_option(&response.service_tiers),
             }
         }
-        ProviderType::ClaudeCode | ProviderType::GeminiCli | ProviderType::AgentTeam => {
-            ProviderCatalogDefault::default()
-        }
+        ProviderType::ClaudeCode
+        | ProviderType::CodexAppServer
+        | ProviderType::GeminiCli
+        | ProviderType::AgentTeam => ProviderCatalogDefault::default(),
     }
 }
 
@@ -1307,7 +1310,7 @@ mod tests {
         assert!(response.supports_model_selection);
         assert!(response.supports_reasoning_effort_selection);
         assert_eq!(response.source, "codex_builtin");
-        assert!(response.default_model.is_some());
+        assert!(response.default_model.is_none());
         assert!(!response.models.is_empty());
         assert!(!response.reasoning_efforts.is_empty());
     }

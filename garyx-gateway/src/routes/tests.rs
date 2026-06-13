@@ -1908,9 +1908,57 @@ async fn thread_history_runtime_reports_provider_default_alias() {
 }
 
 #[tokio::test]
-async fn thread_history_runtime_reports_builtin_provider_default() {
+async fn thread_history_runtime_leaves_cli_provider_defaults_empty() {
     let (state, _logger, _dir) = test_state().await;
-    let thread_id = "thread::runtime-builtin-default";
+    for (thread_id, provider_type) in [
+        ("thread::runtime-codex-cli-default", "codex_app_server"),
+        ("thread::runtime-claude-cli-default", "claude_code"),
+        ("thread::runtime-gemini-cli-default", "gemini_cli"),
+    ] {
+        state
+            .threads
+            .thread_store
+            .set(
+                thread_id,
+                json!({
+                    "thread_id": thread_id,
+                    "label": "Runtime CLI default",
+                    "provider_type": provider_type,
+                    "metadata": {},
+                }),
+            )
+            .await;
+    }
+
+    let router = build_router(state);
+    for (encoded_thread_id, provider_type) in [
+        ("thread%3A%3Aruntime-codex-cli-default", "codex_app_server"),
+        ("thread%3A%3Aruntime-claude-cli-default", "claude_code"),
+        ("thread%3A%3Aruntime-gemini-cli-default", "gemini_cli"),
+    ] {
+        let request = authed_request()
+            .uri(format!(
+                "/api/threads/history?thread_id={encoded_thread_id}&limit=1"
+            ))
+            .body(Body::empty())
+            .unwrap();
+        let response = router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        assert!(payload["thread_runtime"]["agent_id"].is_null());
+        assert_eq!(payload["thread_runtime"]["provider_type"], provider_type);
+        assert!(payload["thread_runtime"]["model"].is_null());
+        assert!(payload["thread_runtime"]["model_reasoning_effort"].is_null());
+    }
+}
+
+#[tokio::test]
+async fn thread_history_runtime_reports_native_builtin_provider_default() {
+    let (state, _logger, _dir) = test_state().await;
+    let thread_id = "thread::runtime-native-builtin-default";
     state
         .threads
         .thread_store
@@ -1918,9 +1966,9 @@ async fn thread_history_runtime_reports_builtin_provider_default() {
             thread_id,
             json!({
                 "thread_id": thread_id,
-                "label": "Runtime builtin default",
-                "agent_id": "codex",
-                "provider_type": "codex_app_server",
+                "label": "Runtime native builtin default",
+                "agent_id": "gpt",
+                "provider_type": "gpt",
                 "metadata": {},
             }),
         )
@@ -1928,7 +1976,7 @@ async fn thread_history_runtime_reports_builtin_provider_default() {
 
     let router = build_router(state);
     let request = authed_request()
-        .uri("/api/threads/history?thread_id=thread%3A%3Aruntime-builtin-default&limit=1")
+        .uri("/api/threads/history?thread_id=thread%3A%3Aruntime-native-builtin-default&limit=1")
         .body(Body::empty())
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
@@ -1937,11 +1985,8 @@ async fn thread_history_runtime_reports_builtin_provider_default() {
         .await
         .unwrap();
     let payload: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(payload["thread_runtime"]["agent_id"], "codex");
-    assert_eq!(
-        payload["thread_runtime"]["provider_type"],
-        "codex_app_server"
-    );
+    assert_eq!(payload["thread_runtime"]["agent_id"], "gpt");
+    assert_eq!(payload["thread_runtime"]["provider_type"], "gpt");
     assert_eq!(payload["thread_runtime"]["model"], "gpt-5.5");
     assert_eq!(
         payload["thread_runtime"]["model_reasoning_effort"],
