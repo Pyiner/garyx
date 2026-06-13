@@ -592,6 +592,8 @@ from the Mac app's Providers > Claude Code Configure dialog and from the CLI:
 garyx config claude-cli --mode native --clear-path
 garyx config claude-cli --mode cctty
 garyx config claude-cli --mode cctty --path /opt/garyx/bin/custom-cctty
+garyx config provider-model claude_code --claude-cli-mode cctty
+garyx config provider-model claude_code --claude-cli-mode cctty --claude-cli-path /opt/garyx/bin/custom-cctty
 ```
 
 Custom agents may also set `model`, `model_reasoning_effort`, and

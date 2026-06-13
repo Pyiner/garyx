@@ -1,3 +1,5 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use garyx_models::config::AgentProviderConfig;
@@ -52,6 +54,36 @@ mod tests {
 
         assert_eq!(config.default_model, "claude-opus-4-8");
         assert_eq!(config.model_reasoning_effort, "max");
+    }
+
+    #[test]
+    fn compute_provider_key_keeps_default_claude_code_key_stable() {
+        let agent_cfg = AgentProviderConfig {
+            provider_type: ProviderType::ClaudeCode.as_slug().to_owned(),
+            ..Default::default()
+        };
+
+        assert_eq!(compute_provider_key(&agent_cfg, &None), "claude_code");
+    }
+
+    #[test]
+    fn compute_provider_key_changes_for_claude_cli_launcher_config() {
+        let cctty_cfg = AgentProviderConfig {
+            provider_type: ProviderType::ClaudeCode.as_slug().to_owned(),
+            claude_cli_mode: "cctty".to_owned(),
+            ..Default::default()
+        };
+        let path_cfg = AgentProviderConfig {
+            provider_type: ProviderType::ClaudeCode.as_slug().to_owned(),
+            claude_cli_path: "/opt/garyx/bin/custom-cctty".to_owned(),
+            ..Default::default()
+        };
+
+        let cctty_key = compute_provider_key(&cctty_cfg, &None);
+        let path_key = compute_provider_key(&path_cfg, &None);
+        assert!(cctty_key.starts_with("claude_code:cli:cctty:"));
+        assert!(path_key.starts_with("claude_code:cli:native:"));
+        assert_ne!(cctty_key, path_key);
     }
 }
 
@@ -178,6 +210,20 @@ pub(super) fn compute_provider_key(
         )
     {
         return format!("agent:{provider_id}");
+    }
+    if provider_type == Some(ProviderType::ClaudeCode) {
+        let mode = agent_cfg.claude_cli_mode.trim().to_ascii_lowercase();
+        let path = agent_cfg.claude_cli_path.trim();
+        if mode == "cctty" || !path.is_empty() {
+            let mode = if mode.is_empty() {
+                "native"
+            } else {
+                mode.as_str()
+            };
+            let mut hasher = DefaultHasher::new();
+            path.hash(&mut hasher);
+            return format!("claude_code:cli:{mode}:{:016x}", hasher.finish());
+        }
     }
     provider_type
         .map(|provider_type| provider_type.as_slug().to_owned())

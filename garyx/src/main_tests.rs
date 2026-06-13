@@ -547,6 +547,9 @@ fn parse_config_provider_model() {
         "claude-opus-4-8",
         "--model-reasoning-effort",
         "max",
+        "--claude-cli-mode",
+        "cctty",
+        "--clear-claude-cli-path",
         "--json",
     ]);
     match cli.command {
@@ -558,6 +561,10 @@ fn parse_config_provider_model() {
                     clear_model,
                     model_reasoning_effort,
                     clear_model_reasoning_effort,
+                    claude_cli_mode,
+                    clear_claude_cli_mode,
+                    claude_cli_path,
+                    clear_claude_cli_path,
                     json,
                 },
         }) => {
@@ -566,6 +573,10 @@ fn parse_config_provider_model() {
             assert!(!clear_model);
             assert_eq!(model_reasoning_effort.as_deref(), Some("max"));
             assert!(!clear_model_reasoning_effort);
+            assert_eq!(claude_cli_mode.as_deref(), Some("cctty"));
+            assert!(!clear_claude_cli_mode);
+            assert_eq!(claude_cli_path, None);
+            assert!(clear_claude_cli_path);
             assert!(json);
         }
         _ => panic!("expected Config::ProviderModel"),

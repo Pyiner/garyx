@@ -363,6 +363,22 @@ pub(crate) enum ConfigAction {
         /// Clear the configured default reasoning effort.
         #[arg(long)]
         clear_model_reasoning_effort: bool,
+        /// Claude Code CLI mode. Only valid when provider is claude_code.
+        #[arg(
+            long,
+            value_parser = ["cctty", "native"],
+            conflicts_with = "clear_claude_cli_mode"
+        )]
+        claude_cli_mode: Option<String>,
+        /// Clear the configured Claude Code CLI mode.
+        #[arg(long)]
+        clear_claude_cli_mode: bool,
+        /// Explicit Claude Code CLI path. Only valid when provider is claude_code.
+        #[arg(long, conflicts_with = "clear_claude_cli_path")]
+        claude_cli_path: Option<String>,
+        /// Clear the configured Claude Code CLI path.
+        #[arg(long)]
+        clear_claude_cli_path: bool,
         /// Output as JSON
         #[arg(long)]
         json: bool,

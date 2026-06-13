@@ -736,6 +736,10 @@ async fn cmd_config_provider_model_puts_settings_patch() {
         false,
         Some("max".to_owned()),
         false,
+        None,
+        false,
+        None,
+        false,
         true,
     )
     .await
@@ -775,6 +779,10 @@ async fn cmd_config_provider_model_clears_native_provider_defaults() {
         true,
         None,
         true,
+        None,
+        false,
+        None,
+        false,
         true,
     )
     .await
@@ -811,6 +819,10 @@ async fn cmd_config_provider_model_rejects_unknown_provider_without_request() {
         false,
         None,
         false,
+        None,
+        false,
+        None,
+        false,
         true,
     )
     .await
@@ -822,6 +834,82 @@ async fn cmd_config_provider_model_rejects_unknown_provider_without_request() {
         error
             .to_string()
             .contains("unsupported provider type: unknown_provider")
+    );
+    assert!(requests.lock().expect("request lock").is_empty());
+}
+
+#[tokio::test]
+async fn cmd_config_provider_model_puts_claude_cli_mode_patch() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_settings_update_http_test_server(requests.clone()).await;
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_test_gateway_config(&dir, &base_url);
+
+    cmd_config_provider_model(
+        config_path.to_str().expect("config path"),
+        "claude_code",
+        None,
+        false,
+        None,
+        false,
+        Some("cctty".to_owned()),
+        false,
+        Some("/opt/garyx/bin/custom-cctty".to_owned()),
+        false,
+        true,
+    )
+    .await
+    .expect("claude cli mode update should succeed");
+
+    handle.abort();
+
+    let records = requests.lock().expect("request lock");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].method, "PUT");
+    assert_eq!(records[0].path, "/api/settings?merge=true");
+    assert_eq!(
+        records[0].body["agents"]["claude"]["provider_type"],
+        "claude_code"
+    );
+    assert_eq!(
+        records[0].body["agents"]["claude"]["claude_cli_mode"],
+        "cctty"
+    );
+    assert_eq!(
+        records[0].body["agents"]["claude"]["claude_cli_path"],
+        "/opt/garyx/bin/custom-cctty"
+    );
+}
+
+#[tokio::test]
+async fn cmd_config_provider_model_rejects_claude_cli_mode_for_other_providers() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_settings_update_http_test_server(requests.clone()).await;
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_test_gateway_config(&dir, &base_url);
+
+    let error = cmd_config_provider_model(
+        config_path.to_str().expect("config path"),
+        "codex_app_server",
+        None,
+        false,
+        None,
+        false,
+        Some("cctty".to_owned()),
+        false,
+        None,
+        false,
+        true,
+    )
+    .await
+    .expect_err("claude cli options should be claude-only");
+
+    handle.abort();
+
+    assert!(
+        error
+            .to_string()
+            .contains("only supported for provider claude_code")
     );
     assert!(requests.lock().expect("request lock").is_empty());
 }

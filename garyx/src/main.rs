@@ -316,6 +316,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 clear_model,
                 model_reasoning_effort,
                 clear_model_reasoning_effort,
+                claude_cli_mode,
+                clear_claude_cli_mode,
+                claude_cli_path,
+                clear_claude_cli_path,
                 json,
             } => {
                 cmd_config_provider_model(
@@ -325,6 +329,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     clear_model,
                     model_reasoning_effort,
                     clear_model_reasoning_effort,
+                    claude_cli_mode,
+                    clear_claude_cli_mode,
+                    claude_cli_path,
+                    clear_claude_cli_path,
                     json,
                 )
                 .await

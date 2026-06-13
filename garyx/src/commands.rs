@@ -841,18 +841,30 @@ pub(crate) async fn cmd_config_provider_model(
     clear_model: bool,
     model_reasoning_effort: Option<String>,
     clear_model_reasoning_effort: bool,
+    claude_cli_mode: Option<String>,
+    clear_claude_cli_mode: bool,
+    claude_cli_path: Option<String>,
+    clear_claude_cli_path: bool,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let provider_type = ProviderType::from_slug(provider)
         .ok_or_else(|| format!("unsupported provider type: {provider}"))?;
     let provider_key = provider_model_config_key(&provider_type)?;
+    let has_claude_cli_update = claude_cli_mode.is_some()
+        || clear_claude_cli_mode
+        || claude_cli_path.is_some()
+        || clear_claude_cli_path;
+    if has_claude_cli_update && provider_type != ProviderType::ClaudeCode {
+        return Err("--claude-cli-* options are only supported for provider claude_code".into());
+    }
     if model.is_none()
         && !clear_model
         && model_reasoning_effort.is_none()
         && !clear_model_reasoning_effort
+        && !has_claude_cli_update
     {
         return Err(
-            "set --model, --clear-model, --model-reasoning-effort, or --clear-model-reasoning-effort"
+            "set --model, --clear-model, --model-reasoning-effort, --clear-model-reasoning-effort, --claude-cli-mode, --clear-claude-cli-mode, --claude-cli-path, or --clear-claude-cli-path"
                 .into(),
         );
     }
@@ -868,6 +880,16 @@ pub(crate) async fn cmd_config_provider_model(
         provider_config.insert("model_reasoning_effort".to_owned(), json!(""));
     } else if let Some(effort) = model_reasoning_effort.as_deref().map(str::trim) {
         provider_config.insert("model_reasoning_effort".to_owned(), json!(effort));
+    }
+    if clear_claude_cli_mode {
+        provider_config.insert("claude_cli_mode".to_owned(), json!(""));
+    } else if let Some(mode) = claude_cli_mode.as_deref().map(str::trim) {
+        provider_config.insert("claude_cli_mode".to_owned(), json!(mode));
+    }
+    if clear_claude_cli_path {
+        provider_config.insert("claude_cli_path".to_owned(), json!(""));
+    } else if let Some(path) = claude_cli_path.as_deref().map(str::trim) {
+        provider_config.insert("claude_cli_path".to_owned(), json!(path));
     }
 
     let mut agents_patch = serde_json::Map::new();
@@ -899,8 +921,16 @@ pub(crate) async fn cmd_config_provider_model(
             .get("model_reasoning_effort")
             .and_then(Value::as_str)
             .unwrap_or("<unchanged>");
+        let cli_mode = provider_config
+            .get("claude_cli_mode")
+            .and_then(Value::as_str)
+            .unwrap_or("<unchanged>");
+        let cli_path = provider_config
+            .get("claude_cli_path")
+            .and_then(Value::as_str)
+            .unwrap_or("<unchanged>");
         println!(
-            "Updated provider defaults: {} (key={provider_key}, model={default_model}, reasoning={effort})",
+            "Updated provider defaults: {} (key={provider_key}, model={default_model}, reasoning={effort}, claude_cli_mode={cli_mode}, claude_cli_path={cli_path})",
             provider_type.as_slug()
         );
     }
