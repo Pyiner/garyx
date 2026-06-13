@@ -1149,6 +1149,70 @@ async fn test_resolve_provider_default_fallback() {
 }
 
 #[tokio::test]
+async fn built_in_agent_uses_configured_default_provider_model() {
+    let bridge = MultiProviderBridge::new();
+    bridge
+        .replace_agent_profiles(builtin_provider_agent_profiles())
+        .await;
+    let mut config = GaryxConfig::default();
+    config.agents.insert(
+        "claude".to_owned(),
+        json!({
+            "provider_type": "claude_code",
+            "default_model": "claude-opus-4-8",
+            "model_reasoning_effort": "max"
+        }),
+    );
+
+    bridge.reload_from_config(&config).await.unwrap();
+
+    let provider_config = bridge
+        .provider_config_for_agent("claude")
+        .await
+        .expect("built-in claude agent config");
+    assert_eq!(provider_config.default_model, "claude-opus-4-8");
+    assert_eq!(provider_config.model_reasoning_effort, "max");
+
+    let legacy_provider_config = bridge
+        .provider_config_for_agent("claude-tty")
+        .await
+        .expect("legacy built-in claude alias config");
+    assert_eq!(legacy_provider_config.default_model, "claude-opus-4-8");
+}
+
+#[tokio::test]
+async fn configured_native_provider_default_is_addressable() {
+    let bridge = MultiProviderBridge::new();
+    bridge
+        .replace_agent_profiles(builtin_provider_agent_profiles())
+        .await;
+    assert_eq!(bridge.provider_type_for_agent("gpt").await, None);
+
+    let mut config = GaryxConfig::default();
+    config.agents.insert(
+        "gpt".to_owned(),
+        json!({
+            "provider_type": "gpt",
+            "default_model": "gpt-5.4",
+            "model_reasoning_effort": "high"
+        }),
+    );
+
+    bridge.reload_from_config(&config).await.unwrap();
+
+    assert_eq!(
+        bridge.provider_type_for_agent("gpt").await,
+        Some(ProviderType::Gpt)
+    );
+    let provider_config = bridge
+        .provider_config_for_agent("gpt")
+        .await
+        .expect("configured gpt provider config");
+    assert_eq!(provider_config.default_model, "gpt-5.4");
+    assert_eq!(provider_config.model_reasoning_effort, "high");
+}
+
+#[tokio::test]
 async fn test_provider_type_for_team_returns_agent_team_meta_provider() {
     // A team is its own addressable agent in the unified namespace, served by
     // the AgentTeam meta-provider. Leader is NOT privileged — resolving the

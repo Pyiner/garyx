@@ -655,6 +655,41 @@ extension GaryxMobileModel {
         }
     }
 
+    func updateModelProviderDefaults(
+        provider: GaryxModelProviderDefault,
+        modelName: String,
+        reasoningEffort: String
+    ) async -> Bool {
+        let nextModel = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nextReasoningEffort = reasoningEffort.trimmingCharacters(in: .whitespacesAndNewlines)
+        let runtimeGeneration = gatewayRuntimeGeneration
+        do {
+            var patch: [String: GaryxJSONValue] = [:]
+            GaryxModelProviderDefaults.update(
+                settings: &patch,
+                provider: provider,
+                model: nextModel,
+                reasoningEffort: nextReasoningEffort
+            )
+            _ = try await client().saveGatewaySettings(patch, merge: true)
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
+            GaryxModelProviderDefaults.update(
+                settings: &gatewaySettingsDocument,
+                provider: provider,
+                model: nextModel,
+                reasoningEffort: nextReasoningEffort
+            )
+            providerModelsByType.removeValue(forKey: provider.providerType)
+            await loadProviderModels(providerType: provider.providerType, runtimeGeneration: runtimeGeneration)
+            await refreshRemoteState()
+            return true
+        } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
+            lastError = displayMessage(for: error)
+            return false
+        }
+    }
+
     func createTeam(
         teamId: String,
         displayName: String,

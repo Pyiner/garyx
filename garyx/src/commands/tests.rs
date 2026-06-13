@@ -296,6 +296,40 @@ async fn spawn_agent_http_test_server(
     (format!("http://{addr}"), handle)
 }
 
+async fn spawn_settings_update_http_test_server(
+    requests: StdArc<Mutex<Vec<RecordedRequest>>>,
+) -> (String, JoinHandle<()>) {
+    let put_requests = requests.clone();
+    let app = Router::new().route(
+        "/api/settings",
+        put(move |uri: axum::http::Uri, Json(payload): Json<Value>| {
+            let requests = put_requests.clone();
+            async move {
+                requests
+                    .lock()
+                    .expect("request lock")
+                    .push(RecordedRequest {
+                        method: "PUT".to_owned(),
+                        path: uri
+                            .path_and_query()
+                            .map(|value| value.as_str().to_owned())
+                            .unwrap_or_else(|| "/api/settings".to_owned()),
+                        body: payload,
+                    });
+                (StatusCode::OK, Json(json!({"ok": true})))
+            }
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let addr = listener.local_addr().expect("listener addr");
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve test router");
+    });
+    (format!("http://{addr}"), handle)
+}
+
 async fn spawn_automation_http_test_server(
     requests: StdArc<Mutex<Vec<RecordedRequest>>>,
 ) -> (String, JoinHandle<()>) {
@@ -686,6 +720,45 @@ async fn spawn_thread_task_http_test_server(
         axum::serve(listener, app).await.expect("serve test router");
     });
     (format!("http://{addr}"), handle)
+}
+
+#[tokio::test]
+async fn cmd_config_provider_model_puts_settings_patch() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_settings_update_http_test_server(requests.clone()).await;
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_test_gateway_config(&dir, &base_url);
+
+    cmd_config_provider_model(
+        config_path.to_str().expect("config path"),
+        "claude_code",
+        Some("claude-opus-4-8".to_owned()),
+        false,
+        Some("max".to_owned()),
+        false,
+        true,
+    )
+    .await
+    .expect("provider model update should succeed");
+
+    handle.abort();
+
+    let records = requests.lock().expect("request lock");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].method, "PUT");
+    assert_eq!(records[0].path, "/api/settings?merge=true");
+    assert_eq!(
+        records[0].body["agents"]["claude"]["provider_type"],
+        "claude_code"
+    );
+    assert_eq!(
+        records[0].body["agents"]["claude"]["default_model"],
+        "claude-opus-4-8"
+    );
+    assert_eq!(
+        records[0].body["agents"]["claude"]["model_reasoning_effort"],
+        "max"
+    );
 }
 
 #[tokio::test]

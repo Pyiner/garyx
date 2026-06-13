@@ -16,21 +16,30 @@ pub(super) fn default_provider_config(provider_type: ProviderType) -> AgentProvi
     }
 }
 
-fn configured_default_provider_config(
+fn configured_provider_config(
     config: &GaryxConfig,
     provider_type: ProviderType,
     keys: &[&str],
-) -> AgentProviderConfig {
+) -> Option<AgentProviderConfig> {
     for key in keys {
         if let Some(value) = config.agents.get(*key)
             && let Ok(mut agent_cfg) = serde_json::from_value::<AgentProviderConfig>(value.clone())
             && ProviderType::from_slug(&agent_cfg.provider_type) == Some(provider_type.clone())
         {
             agent_cfg.provider_type = provider_type.as_slug().to_owned();
-            return agent_cfg;
+            return Some(agent_cfg);
         }
     }
-    default_provider_config(provider_type)
+    None
+}
+
+fn configured_default_provider_config(
+    config: &GaryxConfig,
+    provider_type: ProviderType,
+    keys: &[&str],
+) -> AgentProviderConfig {
+    configured_provider_config(config, provider_type.clone(), keys)
+        .unwrap_or_else(|| default_provider_config(provider_type))
 }
 
 impl MultiProviderBridge {
@@ -76,7 +85,11 @@ impl MultiProviderBridge {
             .await?;
         tracing::info!(provider_key = %default_key, "registered default provider");
 
-        let codex_default_agent_cfg = default_provider_config(ProviderType::CodexAppServer);
+        let codex_default_agent_cfg = configured_default_provider_config(
+            config,
+            ProviderType::CodexAppServer,
+            &["codex", "codex_app_server"],
+        );
         let codex_default_key = match self
             .get_or_create_provider(&codex_default_agent_cfg, &default_workspace)
             .await
@@ -94,7 +107,11 @@ impl MultiProviderBridge {
             }
         };
 
-        let gemini_default_agent_cfg = default_provider_config(ProviderType::GeminiCli);
+        let gemini_default_agent_cfg = configured_default_provider_config(
+            config,
+            ProviderType::GeminiCli,
+            &["gemini", "gemini_cli"],
+        );
         let gemini_default_key = match self
             .get_or_create_provider(&gemini_default_agent_cfg, &default_workspace)
             .await
@@ -108,6 +125,35 @@ impl MultiProviderBridge {
                 None
             }
         };
+
+        let mut default_provider_configs = vec![
+            default_agent_cfg.clone(),
+            codex_default_agent_cfg.clone(),
+            gemini_default_agent_cfg.clone(),
+        ];
+        default_provider_configs.extend(
+            [
+                configured_provider_config(
+                    config,
+                    ProviderType::Gpt,
+                    &["gpt", "openai", "garyx", "garyx_native", "native"],
+                ),
+                configured_provider_config(
+                    config,
+                    ProviderType::ClaudeLlm,
+                    &["anthropic", "claude_llm"],
+                ),
+                configured_provider_config(
+                    config,
+                    ProviderType::GeminiLlm,
+                    &["google", "gemini_llm"],
+                ),
+            ]
+            .into_iter()
+            .flatten(),
+        );
+        self.replace_default_provider_configs(default_provider_configs)
+            .await;
 
         let configured_model_provider_keys = self
             .register_configured_model_providers(&default_workspace)
@@ -330,18 +376,78 @@ impl MultiProviderBridge {
                 if !profile.built_in {
                     return Some(profile.to_provider_config());
                 }
-                return Some(default_provider_config(profile.provider_type));
+                return Some(
+                    self.default_provider_config_for_type(profile.provider_type)
+                        .await,
+                );
             }
             return Some(default_provider_config(ProviderType::AgentTeam));
         }
         match normalized {
-            "codex" => Some(default_provider_config(ProviderType::CodexAppServer)),
-            "claude" | "claude-tty" | "claude_tty" => {
-                Some(default_provider_config(ProviderType::ClaudeCode))
+            "codex" => Some(
+                self.default_provider_config_for_type(ProviderType::CodexAppServer)
+                    .await,
+            ),
+            "claude" | "claude-tty" | "claude_tty" => Some(
+                self.default_provider_config_for_type(ProviderType::ClaudeCode)
+                    .await,
+            ),
+            "gemini" => Some(
+                self.default_provider_config_for_type(ProviderType::GeminiCli)
+                    .await,
+            ),
+            "gpt" | "openai" | "garyx" | "garyx_native" | "native" => {
+                self.configured_provider_config_for_type(ProviderType::Gpt)
+                    .await
             }
-            "gemini" => Some(default_provider_config(ProviderType::GeminiCli)),
+            "anthropic" | "claude_llm" => {
+                self.configured_provider_config_for_type(ProviderType::ClaudeLlm)
+                    .await
+            }
+            "google" | "gemini_llm" => {
+                self.configured_provider_config_for_type(ProviderType::GeminiLlm)
+                    .await
+            }
             _ => None,
         }
+    }
+
+    async fn replace_default_provider_configs(
+        &self,
+        configs: impl IntoIterator<Item = AgentProviderConfig>,
+    ) {
+        let mut default_provider_configs = self.inner.default_provider_configs.write().await;
+        default_provider_configs.clear();
+        for config in configs {
+            if let Some(provider_type) = ProviderType::from_slug(&config.provider_type) {
+                default_provider_configs.insert(provider_type, config);
+            }
+        }
+    }
+
+    async fn default_provider_config_for_type(
+        &self,
+        provider_type: ProviderType,
+    ) -> AgentProviderConfig {
+        self.inner
+            .default_provider_configs
+            .read()
+            .await
+            .get(&provider_type)
+            .cloned()
+            .unwrap_or_else(|| default_provider_config(provider_type))
+    }
+
+    async fn configured_provider_config_for_type(
+        &self,
+        provider_type: ProviderType,
+    ) -> Option<AgentProviderConfig> {
+        self.inner
+            .default_provider_configs
+            .read()
+            .await
+            .get(&provider_type)
+            .cloned()
     }
 
     /// Backfill run metadata with the thread's runtime configuration:
@@ -512,6 +618,18 @@ impl MultiProviderBridge {
             "codex" => Some(ProviderType::CodexAppServer),
             "claude" | "claude-tty" | "claude_tty" => Some(ProviderType::ClaudeCode),
             "gemini" => Some(ProviderType::GeminiCli),
+            "gpt" | "openai" | "garyx" | "garyx_native" | "native" => self
+                .configured_provider_config_for_type(ProviderType::Gpt)
+                .await
+                .map(|_| ProviderType::Gpt),
+            "anthropic" | "claude_llm" => self
+                .configured_provider_config_for_type(ProviderType::ClaudeLlm)
+                .await
+                .map(|_| ProviderType::ClaudeLlm),
+            "google" | "gemini_llm" => self
+                .configured_provider_config_for_type(ProviderType::GeminiLlm)
+                .await
+                .map(|_| ProviderType::GeminiLlm),
             _ => None,
         }
     }

@@ -91,30 +91,37 @@ pub(crate) async fn list_provider_models(
     provider_type: ProviderType,
 ) -> ProviderModelsResponse {
     match provider_type {
-        ProviderType::GeminiCli => match fetch_gemini_acp_models(config).await {
-            Ok(discovery) if !discovery.models.is_empty() => ProviderModelsResponse {
-                provider_type,
-                supports_model_selection: true,
-                models: discovery.models,
-                supports_reasoning_effort_selection: false,
-                reasoning_efforts: Vec::new(),
-                supports_service_tier_selection: false,
-                service_tiers: Vec::new(),
-                default_model: discovery.default_model,
-                source: "gemini_acp",
-                error: None,
-            },
-            Ok(_) => unsupported(
-                provider_type,
-                "gemini_acp",
-                Some("local Gemini ACP returned no models".to_owned()),
-            ),
-            Err(error) => unsupported(provider_type, "gemini_acp", Some(error)),
-        },
+        ProviderType::GeminiCli => {
+            let configured_default = configured_default_model(
+                config,
+                ProviderType::GeminiCli,
+                &["gemini", "gemini_cli"],
+            );
+            match fetch_gemini_acp_models(config).await {
+                Ok(discovery) if !discovery.models.is_empty() => ProviderModelsResponse {
+                    provider_type,
+                    supports_model_selection: true,
+                    models: discovery.models,
+                    supports_reasoning_effort_selection: false,
+                    reasoning_efforts: Vec::new(),
+                    supports_service_tier_selection: false,
+                    service_tiers: Vec::new(),
+                    default_model: configured_default.or(discovery.default_model),
+                    source: "gemini_acp",
+                    error: None,
+                },
+                Ok(_) => unsupported(
+                    provider_type,
+                    "gemini_acp",
+                    Some("local Gemini ACP returned no models".to_owned()),
+                ),
+                Err(error) => unsupported(provider_type, "gemini_acp", Some(error)),
+            }
+        }
         ProviderType::ClaudeCode => {
             // The CLI's actual default model is account/plan dependent and not
-            // statically knowable, so the catalog claims no default. Without a
-            // chosen model, only the levels every model supports are offered.
+            // statically knowable unless the gateway config pins one. Without
+            // a chosen model, only the levels every model supports are offered.
             let models = claude_code_models();
             let reasoning_efforts = common_reasoning_efforts(&models);
             ProviderModelsResponse {
@@ -125,13 +132,24 @@ pub(crate) async fn list_provider_models(
                 models,
                 supports_service_tier_selection: false,
                 service_tiers: Vec::new(),
-                default_model: None,
+                default_model: configured_default_model(
+                    config,
+                    ProviderType::ClaudeCode,
+                    &["claude", "claude_code", "claude_tty"],
+                ),
                 source: "claude_code_builtin",
                 error: None,
             }
         }
         ProviderType::CodexAppServer => {
-            let discovery = gpt_builtin_models(None);
+            let discovery = apply_default_model_to_gpt_discovery(
+                gpt_builtin_models(None),
+                configured_default_model(
+                    config,
+                    ProviderType::CodexAppServer,
+                    &["codex", "codex_app_server"],
+                ),
+            );
             ProviderModelsResponse {
                 provider_type,
                 supports_model_selection: true,
@@ -146,25 +164,42 @@ pub(crate) async fn list_provider_models(
             }
         }
         ProviderType::Gpt => match fetch_gpt_codex_models(config).await {
-            Ok(discovery) if !discovery.models.is_empty() => ProviderModelsResponse {
-                provider_type,
-                supports_model_selection: true,
-                models: discovery.models,
-                supports_reasoning_effort_selection: true,
-                reasoning_efforts: discovery.reasoning_efforts,
-                supports_service_tier_selection: !discovery.service_tiers.is_empty(),
-                service_tiers: discovery.service_tiers,
-                default_model: discovery.default_model,
-                source: discovery.source,
-                error: discovery.error,
-            },
+            Ok(discovery) if !discovery.models.is_empty() => {
+                let discovery = apply_default_model_to_gpt_discovery(
+                    discovery,
+                    configured_default_model(
+                        config,
+                        ProviderType::Gpt,
+                        &["gpt", "openai", "garyx", "garyx_native", "native"],
+                    ),
+                );
+                ProviderModelsResponse {
+                    provider_type,
+                    supports_model_selection: true,
+                    models: discovery.models,
+                    supports_reasoning_effort_selection: true,
+                    reasoning_efforts: discovery.reasoning_efforts,
+                    supports_service_tier_selection: !discovery.service_tiers.is_empty(),
+                    service_tiers: discovery.service_tiers,
+                    default_model: discovery.default_model,
+                    source: discovery.source,
+                    error: discovery.error,
+                }
+            }
             Ok(discovery) => unsupported(
                 provider_type,
                 discovery.source,
                 Some("Codex model catalog returned no picker-visible models".to_owned()),
             ),
             Err(error) => {
-                let discovery = gpt_builtin_models(Some(error));
+                let discovery = apply_default_model_to_gpt_discovery(
+                    gpt_builtin_models(Some(error)),
+                    configured_default_model(
+                        config,
+                        ProviderType::Gpt,
+                        &["gpt", "openai", "garyx", "garyx_native", "native"],
+                    ),
+                );
                 ProviderModelsResponse {
                     provider_type,
                     supports_model_selection: true,
@@ -179,18 +214,34 @@ pub(crate) async fn list_provider_models(
                 }
             }
         },
-        ProviderType::ClaudeLlm => native_model_catalog_response(
-            provider_type,
-            "native_builtin",
-            native_claude_models(),
-            "claude-sonnet-4-6",
-        ),
-        ProviderType::GeminiLlm => native_model_catalog_response(
-            provider_type,
-            "native_builtin",
-            native_gemini_models(),
-            "gemini-3-flash-preview",
-        ),
+        ProviderType::ClaudeLlm => {
+            let default_model = configured_default_model(
+                config,
+                ProviderType::ClaudeLlm,
+                &["anthropic", "claude_llm"],
+            )
+            .unwrap_or_else(|| "claude-sonnet-4-6".to_owned());
+            native_model_catalog_response(
+                provider_type,
+                "native_builtin",
+                native_claude_models(),
+                &default_model,
+            )
+        }
+        ProviderType::GeminiLlm => {
+            let default_model = configured_default_model(
+                config,
+                ProviderType::GeminiLlm,
+                &["google", "gemini_llm"],
+            )
+            .unwrap_or_else(|| "gemini-3-flash-preview".to_owned());
+            native_model_catalog_response(
+                provider_type,
+                "native_builtin",
+                native_gemini_models(),
+                &default_model,
+            )
+        }
         ProviderType::AgentTeam => unsupported(provider_type, "provider", None),
     }
 }
@@ -212,6 +263,42 @@ fn unsupported(
         source,
         error,
     }
+}
+
+fn configured_agent_provider_config(
+    config: &GaryxConfig,
+    provider_type: ProviderType,
+    keys: &[&str],
+) -> Option<AgentProviderConfig> {
+    for key in keys {
+        if let Some(value) = config.agents.get(*key)
+            && let Ok(mut agent_config) =
+                serde_json::from_value::<AgentProviderConfig>(value.clone())
+            && ProviderType::from_slug(&agent_config.provider_type) == Some(provider_type.clone())
+        {
+            agent_config.provider_type = provider_type.as_slug().to_owned();
+            return Some(agent_config);
+        }
+    }
+    for value in config.agents.values() {
+        if let Ok(mut agent_config) = serde_json::from_value::<AgentProviderConfig>(value.clone())
+            && ProviderType::from_slug(&agent_config.provider_type) == Some(provider_type.clone())
+        {
+            agent_config.provider_type = provider_type.as_slug().to_owned();
+            return Some(agent_config);
+        }
+    }
+    None
+}
+
+fn configured_default_model(
+    config: &GaryxConfig,
+    provider_type: ProviderType,
+    keys: &[&str],
+) -> Option<String> {
+    configured_agent_provider_config(config, provider_type, keys)
+        .map(|config| config.default_model.trim().to_owned())
+        .filter(|model| !model.is_empty())
 }
 
 async fn fetch_gpt_codex_models(config: &GaryxConfig) -> Result<GptModelDiscovery, String> {
@@ -260,6 +347,25 @@ async fn fetch_gpt_codex_models(config: &GaryxConfig) -> Result<GptModelDiscover
 
 fn gpt_builtin_models(error: Option<String>) -> GptModelDiscovery {
     gpt_discovery_from_presets(codex_builtin_model_presets(), "codex_builtin", error)
+}
+
+fn apply_default_model_to_gpt_discovery(
+    mut discovery: GptModelDiscovery,
+    default_model: Option<String>,
+) -> GptModelDiscovery {
+    let Some(default_model) = default_model else {
+        return discovery;
+    };
+    let trimmed = default_model.trim();
+    if trimmed.is_empty() {
+        return discovery;
+    }
+    discovery.default_model = Some(trimmed.to_owned());
+    if let Some(model) = discovery.models.iter().find(|model| model.id == trimmed) {
+        discovery.reasoning_efforts = model.supported_reasoning_efforts.clone();
+        discovery.service_tiers = model.service_tiers.clone();
+    }
+    discovery
 }
 
 fn gpt_discovery_from_presets(
@@ -433,11 +539,7 @@ fn native_reasoning_effort_metadata(
             "Extra High",
             "Use the highest supported adaptive reasoning effort.",
         )),
-        "max" => Some((
-            "max",
-            "Max",
-            "Maximum capability with deepest reasoning.",
-        )),
+        "max" => Some(("max", "Max", "Maximum capability with deepest reasoning.")),
         _ => None,
     }
 }
@@ -488,8 +590,7 @@ fn common_reasoning_efforts(models: &[ProviderModelOption]) -> Vec<ProviderReaso
 // Fable 5 and Opus 4.8 only, and `max` additionally on Sonnet 4.6.
 fn claude_code_models() -> Vec<ProviderModelOption> {
     let claude_haiku_efforts = native_reasoning_efforts("high", &["low", "medium", "high"]);
-    let claude_sonnet_efforts =
-        native_reasoning_efforts("high", &["low", "medium", "high", "max"]);
+    let claude_sonnet_efforts = native_reasoning_efforts("high", &["low", "medium", "high", "max"]);
     let claude_deep_efforts =
         native_reasoning_efforts("high", &["low", "medium", "high", "xhigh", "max"]);
     vec![
@@ -1043,7 +1144,11 @@ mod tests {
             vec!["low", "medium", "high"]
         );
         assert_eq!(
-            response.models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            response
+                .models
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect::<Vec<_>>(),
             vec![
                 "claude-fable-5",
                 "claude-opus-4-8",
@@ -1081,6 +1186,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn claude_code_catalog_uses_configured_provider_default_model() {
+        let mut config = GaryxConfig::default();
+        config.agents.insert(
+            "claude".to_owned(),
+            json!({
+                "provider_type": "claude_code",
+                "default_model": "claude-opus-4-8",
+                "model_reasoning_effort": "max"
+            }),
+        );
+
+        let response = list_provider_models(&config, ProviderType::ClaudeCode).await;
+
+        assert_eq!(response.default_model.as_deref(), Some("claude-opus-4-8"));
+    }
+
+    #[tokio::test]
     async fn codex_app_server_model_catalog_supports_selection_and_reasoning() {
         let response =
             list_provider_models(&GaryxConfig::default(), ProviderType::CodexAppServer).await;
@@ -1092,6 +1214,22 @@ mod tests {
         assert!(response.default_model.is_some());
         assert!(!response.models.is_empty());
         assert!(!response.reasoning_efforts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn codex_app_server_catalog_uses_configured_provider_default_model() {
+        let mut config = GaryxConfig::default();
+        config.agents.insert(
+            "codex".to_owned(),
+            json!({
+                "provider_type": "codex_app_server",
+                "default_model": "gpt-5.4"
+            }),
+        );
+
+        let response = list_provider_models(&config, ProviderType::CodexAppServer).await;
+
+        assert_eq!(response.default_model.as_deref(), Some("gpt-5.4"));
     }
 
     #[tokio::test]
@@ -1128,6 +1266,29 @@ mod tests {
                 .last()
                 .map(|effort| effort.id.as_str()),
             Some("high")
+        );
+    }
+
+    #[tokio::test]
+    async fn native_claude_catalog_uses_configured_provider_default_model() {
+        let mut config = GaryxConfig::default();
+        config.agents.insert(
+            "anthropic".to_owned(),
+            json!({
+                "provider_type": "anthropic",
+                "default_model": "claude-opus-4-7"
+            }),
+        );
+
+        let response = list_provider_models(&config, ProviderType::ClaudeLlm).await;
+
+        assert_eq!(response.default_model.as_deref(), Some("claude-opus-4-7"));
+        assert_eq!(
+            response
+                .reasoning_efforts
+                .last()
+                .map(|effort| effort.id.as_str()),
+            Some("xhigh")
         );
     }
 

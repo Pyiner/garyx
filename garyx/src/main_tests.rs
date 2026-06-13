@@ -537,6 +537,42 @@ fn parse_config_claude_cli() {
 }
 
 #[test]
+fn parse_config_provider_model() {
+    let cli = Cli::parse_from([
+        "garyx",
+        "config",
+        "provider-model",
+        "claude_code",
+        "--model",
+        "claude-opus-4-8",
+        "--model-reasoning-effort",
+        "max",
+        "--json",
+    ]);
+    match cli.command {
+        Some(Commands::Config {
+            action:
+                ConfigAction::ProviderModel {
+                    provider,
+                    model,
+                    clear_model,
+                    model_reasoning_effort,
+                    clear_model_reasoning_effort,
+                    json,
+                },
+        }) => {
+            assert_eq!(provider, "claude_code");
+            assert_eq!(model.as_deref(), Some("claude-opus-4-8"));
+            assert!(!clear_model);
+            assert_eq!(model_reasoning_effort.as_deref(), Some("max"));
+            assert!(!clear_model_reasoning_effort);
+            assert!(json);
+        }
+        _ => panic!("expected Config::ProviderModel"),
+    }
+}
+
+#[test]
 fn parse_dream_scan() {
     let cli = Cli::parse_from([
         "garyx",

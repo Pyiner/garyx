@@ -822,6 +822,91 @@ pub(crate) async fn cmd_config_claude_cli(
     Ok(())
 }
 
+fn provider_model_config_key(provider_type: &ProviderType) -> Result<&'static str, String> {
+    match provider_type {
+        ProviderType::ClaudeCode => Ok("claude"),
+        ProviderType::CodexAppServer => Ok("codex"),
+        ProviderType::GeminiCli => Ok("gemini"),
+        ProviderType::Gpt => Ok("gpt"),
+        ProviderType::ClaudeLlm => Ok("anthropic"),
+        ProviderType::GeminiLlm => Ok("google"),
+        ProviderType::AgentTeam => Err("agent_team is not a model provider".to_owned()),
+    }
+}
+
+pub(crate) async fn cmd_config_provider_model(
+    config_path: &str,
+    provider: &str,
+    model: Option<String>,
+    clear_model: bool,
+    model_reasoning_effort: Option<String>,
+    clear_model_reasoning_effort: bool,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let provider_type = ProviderType::from_slug(provider)
+        .ok_or_else(|| format!("unsupported provider type: {provider}"))?;
+    let provider_key = provider_model_config_key(&provider_type)?;
+    if model.is_none()
+        && !clear_model
+        && model_reasoning_effort.is_none()
+        && !clear_model_reasoning_effort
+    {
+        return Err(
+            "set --model, --clear-model, --model-reasoning-effort, or --clear-model-reasoning-effort"
+                .into(),
+        );
+    }
+
+    let mut provider_config = serde_json::Map::new();
+    provider_config.insert("provider_type".to_owned(), json!(provider_type.as_slug()));
+    if clear_model {
+        provider_config.insert("default_model".to_owned(), json!(""));
+    } else if let Some(model) = model.as_deref().map(str::trim) {
+        provider_config.insert("default_model".to_owned(), json!(model));
+    }
+    if clear_model_reasoning_effort {
+        provider_config.insert("model_reasoning_effort".to_owned(), json!(""));
+    } else if let Some(effort) = model_reasoning_effort.as_deref().map(str::trim) {
+        provider_config.insert("model_reasoning_effort".to_owned(), json!(effort));
+    }
+
+    let mut agents_patch = serde_json::Map::new();
+    agents_patch.insert(
+        provider_key.to_owned(),
+        Value::Object(provider_config.clone()),
+    );
+    let patch = json!({
+        "agents": Value::Object(agents_patch)
+    });
+    let gateway = gateway_endpoint(config_path)?;
+    put_gateway_json(&gateway, "/api/settings?merge=true", &patch).await?;
+
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "provider": provider_type.as_slug(),
+                "config_key": provider_key,
+                "config": Value::Object(provider_config),
+            }))?
+        );
+    } else {
+        let default_model = provider_config
+            .get("default_model")
+            .and_then(Value::as_str)
+            .unwrap_or("<unchanged>");
+        let effort = provider_config
+            .get("model_reasoning_effort")
+            .and_then(Value::as_str)
+            .unwrap_or("<unchanged>");
+        println!(
+            "Updated provider defaults: {} (key={provider_key}, model={default_model}, reasoning={effort})",
+            provider_type.as_slug()
+        );
+    }
+    Ok(())
+}
+
 pub(crate) fn cmd_config_init(
     config_path: &str,
     force: bool,

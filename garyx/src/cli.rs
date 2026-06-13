@@ -347,6 +347,26 @@ pub(crate) enum ConfigAction {
         #[arg(long)]
         json: bool,
     },
+    /// Set the gateway default model for a model provider
+    ProviderModel {
+        /// Provider type: claude_code, codex_app_server, gemini_cli, gpt, anthropic, or google
+        provider: String,
+        /// Default model id. Omit to leave unchanged.
+        #[arg(long, conflicts_with = "clear_model")]
+        model: Option<String>,
+        /// Clear the configured default model.
+        #[arg(long)]
+        clear_model: bool,
+        /// Default reasoning effort / thinking level. Omit to leave unchanged.
+        #[arg(long, conflicts_with = "clear_model_reasoning_effort")]
+        model_reasoning_effort: Option<String>,
+        /// Clear the configured default reasoning effort.
+        #[arg(long)]
+        clear_model_reasoning_effort: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Initialize config file from defaults
     Init {
         /// Overwrite existing config file
