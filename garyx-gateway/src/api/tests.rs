@@ -3022,6 +3022,66 @@ fn enrich_message_content_for_history_inlines_image_path_blocks() {
 }
 
 #[test]
+fn enrich_history_caps_long_string_content() {
+    let long = "x".repeat(20_000);
+    let enriched = enrich_message_content_for_history(&json!(long));
+    let value = enriched.as_str().expect("string content");
+    assert!(value.chars().count() <= MAX_HISTORY_CONTENT_TEXT_CHARS + 80);
+    assert!(value.contains("[truncated: showing"));
+    assert!(value.starts_with(&"x".repeat(100)));
+}
+
+#[test]
+fn enrich_history_keeps_short_string_content() {
+    let enriched = enrich_message_content_for_history(&json!("hello world"));
+    assert_eq!(enriched.as_str(), Some("hello world"));
+}
+
+#[test]
+fn enrich_history_caps_text_inside_blocks() {
+    let long = "y".repeat(20_000);
+    let enriched = enrich_message_content_for_history(&json!([{ "type": "text", "text": long }]));
+    let text = enriched[0]["text"].as_str().expect("block text");
+    assert!(text.chars().count() <= MAX_HISTORY_CONTENT_TEXT_CHARS + 80);
+    assert!(text.contains("[truncated:"));
+}
+
+#[test]
+fn enrich_history_caps_text_nested_in_object() {
+    let long = "z".repeat(20_000);
+    let enriched = enrich_message_content_for_history(&json!({
+        "type": "tool_result",
+        "content": [{ "type": "text", "text": long }],
+    }));
+    let text = enriched["content"][0]["text"]
+        .as_str()
+        .expect("nested text");
+    assert!(text.chars().count() <= MAX_HISTORY_CONTENT_TEXT_CHARS + 80);
+    assert!(text.contains("[truncated:"));
+}
+
+#[test]
+fn enrich_history_does_not_cap_image_base64() {
+    let temp = tempdir().expect("tempdir");
+    let image_path = temp.path().join("big.png");
+    std::fs::write(&image_path, vec![0u8; 30_000]).expect("write image");
+
+    let enriched = enrich_message_content_for_history(&json!([{
+        "type": "image",
+        "path": image_path.to_string_lossy().to_string(),
+        "media_type": "image/png"
+    }]));
+    let data = enriched[0]["source"]["data"]
+        .as_str()
+        .expect("inline base64 data");
+    assert!(
+        data.chars().count() > MAX_HISTORY_CONTENT_TEXT_CHARS,
+        "image base64 must not be truncated, got {} chars",
+        data.chars().count()
+    );
+}
+
+#[test]
 fn humanize_structured_content_mentions_file_blocks() {
     let summary = humanize_structured_content(&json!([
         {

@@ -1749,6 +1749,24 @@ fn enrich_image_block_for_history(block: &serde_json::Map<String, Value>) -> Val
     Value::Object(hydrated)
 }
 
+/// Upper bound on any single text/string segment embedded in a thread-history
+/// `message` payload. Large tool inputs/outputs (file reads, command output,
+/// agent reports) can be hundreds of KB each; clipping them here keeps the
+/// history response small without affecting the already-capped `text`/`content`
+/// summary fields. Images are never clipped (see below).
+const MAX_HISTORY_CONTENT_TEXT_CHARS: usize = 8000;
+
+fn cap_history_text(text: &str) -> Value {
+    let total = text.chars().count();
+    if total <= MAX_HISTORY_CONTENT_TEXT_CHARS {
+        return Value::String(text.to_owned());
+    }
+    let kept: String = text.chars().take(MAX_HISTORY_CONTENT_TEXT_CHARS).collect();
+    Value::String(format!(
+        "{kept}\n[truncated: showing {MAX_HISTORY_CONTENT_TEXT_CHARS} of {total} chars]"
+    ))
+}
+
 fn enrich_message_content_for_history(content: &Value) -> Value {
     match content {
         Value::Array(items) => Value::Array(
@@ -1762,9 +1780,19 @@ fn enrich_message_content_for_history(content: &Value) -> Value {
             .and_then(Value::as_str)
             .unwrap_or_default()
         {
+            // Images are hydrated to inline base64 and must not be length-capped.
             "image" => enrich_image_block_for_history(block),
-            _ => Value::Object(block.clone()),
+            // Recurse into other objects so nested tool text is capped too.
+            _ => Value::Object(
+                block
+                    .iter()
+                    .map(|(key, value)| {
+                        (key.clone(), enrich_message_content_for_history(value))
+                    })
+                    .collect(),
+            ),
         },
+        Value::String(text) => cap_history_text(text),
         _ => content.clone(),
     }
 }
