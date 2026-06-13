@@ -3018,10 +3018,36 @@ fn test_reasoning_effort_maps_to_claude_effort_levels() {
 
 #[test]
 fn test_resolve_requested_effort_reads_metadata() {
+    let config = ClaudeCodeConfig::default();
     let metadata = HashMap::from([(
         "model_reasoning_effort".to_owned(),
         Value::String("xhigh".to_owned()),
     )]);
-    assert_eq!(resolve_requested_effort(&metadata), Some("xhigh".to_owned()));
-    assert_eq!(resolve_requested_effort(&HashMap::new()), None);
+    assert_eq!(
+        resolve_requested_effort(&config, &metadata),
+        Some("xhigh".to_owned())
+    );
+    assert_eq!(resolve_requested_effort(&config, &HashMap::new()), None);
+}
+
+#[test]
+fn test_resolve_requested_effort_uses_config_default() {
+    let config = ClaudeCodeConfig {
+        model_reasoning_effort: "max".to_owned(),
+        ..ClaudeCodeConfig::default()
+    };
+
+    assert_eq!(
+        resolve_requested_effort(&config, &HashMap::new()),
+        Some("max".to_owned())
+    );
+
+    let metadata = HashMap::from([(
+        "model_reasoning_effort".to_owned(),
+        Value::String("high".to_owned()),
+    )]);
+    assert_eq!(
+        resolve_requested_effort(&config, &metadata),
+        Some("high".to_owned())
+    );
 }

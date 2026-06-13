@@ -389,11 +389,15 @@ fn claude_effort_for_reasoning_effort(effort: &str) -> Option<String> {
     matches!(effort.as_str(), "low" | "medium" | "high" | "xhigh" | "max").then_some(effort)
 }
 
-fn resolve_requested_effort(metadata: &HashMap<String, Value>) -> Option<String> {
+fn resolve_requested_effort(
+    config: &ClaudeCodeConfig,
+    metadata: &HashMap<String, Value>,
+) -> Option<String> {
     metadata
         .get("model_reasoning_effort")
         .and_then(|v| v.as_str())
         .and_then(claude_effort_for_reasoning_effort)
+        .or_else(|| claude_effort_for_reasoning_effort(&config.model_reasoning_effort))
 }
 
 fn normalize_thread_title(value: &str) -> String {
@@ -986,8 +990,9 @@ impl ClaudeCliProvider {
 
         // Model: metadata override > config default
         let model = resolve_requested_model(&self.config, &options.metadata);
-        // Thinking level: metadata reasoning effort mapped to the CLI `--effort` flag.
-        let requested_effort = resolve_requested_effort(&options.metadata);
+        // Thinking level: per-run metadata overrides the provider default and
+        // is mapped to the Claude CLI `--effort` flag.
+        let requested_effort = resolve_requested_effort(&self.config, &options.metadata);
 
         let runtime_system_prompt = options
             .metadata

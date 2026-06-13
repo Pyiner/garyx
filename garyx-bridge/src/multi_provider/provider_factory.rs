@@ -27,10 +27,31 @@ fn build_claude_config(
         permission_mode: agent_cfg.permission_mode.clone(),
         mcp_base_url: agent_cfg.mcp_base_url.clone(),
         default_model: agent_cfg.default_model.clone(),
+        model_reasoning_effort: agent_cfg.model_reasoning_effort.clone(),
         max_turns: agent_cfg.max_turns,
         timeout_seconds: agent_cfg.timeout_seconds,
         env: agent_cfg.env.clone(),
         ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_claude_config_carries_default_model_and_reasoning_effort() {
+        let agent_cfg = AgentProviderConfig {
+            provider_type: ProviderType::ClaudeCode.as_slug().to_owned(),
+            default_model: "claude-opus-4-8".to_owned(),
+            model_reasoning_effort: "max".to_owned(),
+            ..Default::default()
+        };
+
+        let config = build_claude_config(&agent_cfg, &None);
+
+        assert_eq!(config.default_model, "claude-opus-4-8");
+        assert_eq!(config.model_reasoning_effort, "max");
     }
 }
 

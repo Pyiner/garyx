@@ -408,6 +408,8 @@ pub struct ClaudeCodeConfig {
 
     #[serde(default)]
     pub default_model: String,
+    #[serde(default)]
+    pub model_reasoning_effort: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<i64>,
     #[serde(default)]
@@ -476,6 +478,7 @@ impl Default for ClaudeCodeConfig {
             claude_cli_mode: default_claude_cli_mode(),
             claude_cli_path: None,
             default_model: String::new(),
+            model_reasoning_effort: String::new(),
             max_turns: None,
             timeout_seconds: 0.0,
             env: HashMap::new(),

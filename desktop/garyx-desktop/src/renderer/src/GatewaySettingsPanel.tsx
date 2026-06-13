@@ -7,7 +7,6 @@ import {
   type ChannelPluginCatalogEntry,
   type ConnectionStatus,
   type DesktopApiProviderType,
-  type CreateCustomAgentInput,
   type DesktopCustomAgent,
   type DesktopFollowUpBehavior,
   type DesktopProviderModelOption,
@@ -25,7 +24,6 @@ import {
   type SlashCommand,
   type UpdateMcpServerInput,
   type UpdateSlashCommandInput,
-  type UpdateCustomAgentInput,
   type UpsertMcpServerInput,
   type UpsertSlashCommandInput,
   type PollWeixinChannelAuthResult,
@@ -299,8 +297,6 @@ const MODEL_PROVIDER_ROWS: FixedModelProviderRow[] = [
     defaultModel: 'gemini-3-flash-preview',
   },
 ];
-const MODEL_PROVIDER_SYSTEM_PROMPT =
-  'You are Garyx. Follow the user request directly and use available tools when needed.';
 const PROVIDER_DEFAULT_MODEL_VALUE = '__provider_default_model__';
 const PROVIDER_DEFAULT_REASONING_VALUE = '__provider_default_reasoning__';
 
@@ -687,6 +683,7 @@ const REASONING_EFFORT_RANK: Record<string, number> = {
   medium: 3,
   high: 4,
   xhigh: 5,
+  max: 6,
 };
 
 function providerModelOptionsWithCurrent(
@@ -756,15 +753,21 @@ function highestReasoningEffort(options: DesktopProviderModelOption[]): string {
 
 function applyProviderCatalogDefaults(
   draft: ModelProviderConfigDraft,
-  row: FixedModelProviderRow,
+  _row: FixedModelProviderRow,
   providerModels: DesktopProviderModels | null | undefined,
 ): ModelProviderConfigDraft {
-  if (row.group !== 'native' || !providerModels) {
+  if (!providerModels) {
     return draft;
   }
-  const model = draft.model.trim()
-    || providerModels.defaultModel?.trim()
-    || (row.defaultModel.startsWith('(') ? '' : row.defaultModel);
+  const model = draft.model.trim();
+  if (!model) {
+    return {
+      ...draft,
+      model: '',
+      modelReasoningEffort: '',
+      modelServiceTier: '',
+    };
+  }
   const reasoningOptions = reasoningEffortOptionsForModel(
     providerModels,
     model,
@@ -835,6 +838,39 @@ function providerAgentConfig(gatewayDraft: any, key: FixedModelProviderKey): Rec
   return {};
 }
 
+function providerConfigEnv(providerConfig: Record<string, any>): Record<string, string> {
+  const env = providerConfig.env;
+  if (!env || typeof env !== 'object' || Array.isArray(env)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(env)
+      .filter(([, value]) => typeof value === 'string')
+      .map(([key, value]) => [key, value as string]),
+  );
+}
+
+function apiKeyFromProviderConfig(
+  providerConfig: Record<string, any>,
+  providerType: DesktopApiProviderType,
+): string {
+  const envName = apiKeyEnvName(providerType);
+  return envName ? providerConfigEnv(providerConfig)[envName] || '' : '';
+}
+
+function providerConfigHasNativeSettings(providerConfig: Record<string, any>): boolean {
+  const keys = [
+    'provider_type',
+    'default_model',
+    'model_reasoning_effort',
+    'model_service_tier',
+    'auth_source',
+    'base_url',
+  ];
+  return keys.some((key) => String(providerConfig[key] || '').trim().length > 0)
+    || Object.keys(providerConfigEnv(providerConfig)).length > 0;
+}
+
 function claudeAgentConfig(gatewayDraft: any): Record<string, any> {
   return providerAgentConfig(gatewayDraft, 'claude_code');
 }
@@ -875,6 +911,9 @@ function modelProviderDraftFromState(
   const row = fixedModelProviderRow(key);
   const agent = configuredProviderAgent(agents, key);
   const providerConfig = providerAgentConfig(gatewayDraft, key);
+  const configModel = String(providerConfig.default_model || '');
+  const configReasoning = String(providerConfig.model_reasoning_effort || '');
+  const configServiceTier = String(providerConfig.model_service_tier || '');
   return {
     key,
     claudeCliMode: normalizeClaudeCliMode(providerConfig.claude_cli_mode),
@@ -884,17 +923,20 @@ function modelProviderDraftFromState(
     codexApiKey: localSettings.providerCodexApiKey,
     geminiEnv: localSettings.providerGeminiEnv,
     model: row.group === 'native'
-      ? agent?.model || (row.defaultModel.startsWith('(') ? '' : row.defaultModel)
-      : String(providerConfig.default_model || ''),
+      ? configModel || agent?.model || ''
+      : configModel,
     modelReasoningEffort: row.group === 'native'
-      ? agent?.modelReasoningEffort || ''
-      : String(providerConfig.model_reasoning_effort || ''),
+      ? configReasoning || agent?.modelReasoningEffort || ''
+      : configReasoning,
     modelServiceTier: row.group === 'native'
-      ? agent?.modelServiceTier || ''
-      : String(providerConfig.model_service_tier || ''),
-    authSource: agent?.authSource || defaultNativeAuthSource(row.providerType),
-    apiKey: apiKeyFromProviderAgent(agent),
-    baseUrl: agent?.baseUrl || '',
+      ? configServiceTier || agent?.modelServiceTier || ''
+      : configServiceTier,
+    authSource: String(providerConfig.auth_source || '').trim()
+      || agent?.authSource
+      || defaultNativeAuthSource(row.providerType),
+    apiKey: apiKeyFromProviderConfig(providerConfig, row.providerType)
+      || apiKeyFromProviderAgent(agent),
+    baseUrl: String(providerConfig.base_url || '') || agent?.baseUrl || '',
   };
 }
 
@@ -1496,6 +1538,11 @@ export function GatewaySettingsPanel({
   const providerConfigAgent = providerConfigKey
     ? configuredProviderAgent(agents, providerConfigKey)
     : null;
+  const providerConfigRuntime = providerConfigKey
+    ? providerAgentConfig(gatewayDraft, providerConfigKey)
+    : {};
+  const providerConfigHasSettings = providerConfigRow?.group === 'native'
+    && (providerConfigHasNativeSettings(providerConfigRuntime) || Boolean(providerConfigAgent));
   const activeProviderModels = providerConfigRow
     ? providerModelsByType[providerConfigRow.providerType] || null
     : null;
@@ -1631,9 +1678,7 @@ export function GatewaySettingsPanel({
   }, [providerConfigRow?.providerType, providerModelsByType, providerModelsLoading]);
 
   useEffect(() => {
-    // Only native provider rows derive draft defaults from catalog presets.
-    // CLI-backed provider rows read explicit defaults from gatewayDraft.
-    if (!providerConfigRow || providerConfigRow.group !== 'native' || !activeProviderModels) {
+    if (!providerConfigRow || !activeProviderModels) {
       return;
     }
     setProviderConfigDraft((current) => {
@@ -1759,15 +1804,19 @@ export function GatewaySettingsPanel({
     }
 
     const agent = configuredProviderAgent(agents, row.key);
-    const authSource = agent?.authSource || defaultNativeAuthSource(row.providerType);
+    const authSource = String(runtimeConfig.auth_source || '').trim()
+      || agent?.authSource
+      || defaultNativeAuthSource(row.providerType);
+    const configuredApiKey = apiKeyFromProviderConfig(runtimeConfig, row.providerType)
+      || apiKeyFromProviderAgent(agent);
     return {
-      status: agent ? t('Configured') : t('Not configured'),
+      status: providerConfigHasNativeSettings(runtimeConfig) || agent ? t('Configured') : t('Not configured'),
       auth: row.providerType === 'gpt' && authSource === 'codex'
         ? t('GPT token')
-        : apiKeyFromProviderAgent(agent)
+        : configuredApiKey
           ? t('API Key')
           : t('Env / API key'),
-      model: agent?.model || row.defaultModel,
+      model: configuredDefaultModel || agent?.model || row.defaultModel,
     };
   }
 
@@ -1794,12 +1843,51 @@ export function GatewaySettingsPanel({
       const current = next.agents[row.agentId] && typeof next.agents[row.agentId] === 'object'
         ? next.agents[row.agentId]
         : {};
-      next.agents[row.agentId] = {
+      const nextConfig: Record<string, any> = {
         ...current,
         provider_type: row.providerType,
         default_model: draft.model.trim(),
         model_reasoning_effort: draft.modelReasoningEffort.trim(),
       };
+      delete nextConfig.model;
+      if (row.providerType === 'gpt') {
+        nextConfig.model_service_tier = draft.modelServiceTier.trim();
+      } else {
+        delete nextConfig.model_service_tier;
+      }
+      if (row.group === 'native') {
+        const envName = apiKeyEnvName(row.providerType);
+        const env = providerConfigEnv(current);
+        if (envName) {
+          const apiKey = draft.apiKey.trim();
+          if (apiKey) {
+            env[envName] = apiKey;
+          } else {
+            delete env[envName];
+          }
+        }
+        if (Object.keys(env).length > 0) {
+          nextConfig.env = env;
+        } else {
+          delete nextConfig.env;
+        }
+        nextConfig.auth_source = draft.authSource.trim()
+          || defaultNativeAuthSource(row.providerType);
+        nextConfig.base_url = draft.baseUrl.trim();
+      }
+      next.agents[row.agentId] = nextConfig;
+    });
+  }
+
+  function mutateClearNativeProviderConfig(row: FixedModelProviderRow) {
+    onMutateGatewayDraft((next) => {
+      if (!next.agents || typeof next.agents !== 'object') {
+        return;
+      }
+      delete next.agents[row.agentId];
+      for (const legacyAgentId of row.legacyAgentIds || []) {
+        delete next.agents[legacyAgentId];
+      }
     });
   }
 
@@ -1873,50 +1961,26 @@ export function GatewaySettingsPanel({
         }
         return;
       }
-
-      const envName = apiKeyEnvName(providerConfigRow.providerType);
-      const providerEnv = envName && providerConfigDraft.apiKey.trim()
-        ? { [envName]: providerConfigDraft.apiKey.trim() }
-        : {};
-      const payload: CreateCustomAgentInput = {
-        agentId: providerConfigRow.agentId,
-        displayName: providerConfigRow.label,
-        providerType: providerConfigRow.providerType,
-        model: providerConfigDraft.model.trim(),
-        modelReasoningEffort: providerConfigDraft.modelReasoningEffort.trim(),
-        modelServiceTier: providerConfigRow.providerType === 'gpt'
-          ? providerConfigDraft.modelServiceTier.trim()
-          : '',
-        providerEnv,
-        authSource: providerConfigDraft.authSource.trim()
-          || defaultNativeAuthSource(providerConfigRow.providerType),
-        baseUrl: providerConfigDraft.baseUrl.trim(),
-        defaultWorkspaceDir: '',
-        systemPrompt: providerConfigAgent?.systemPrompt || MODEL_PROVIDER_SYSTEM_PROMPT,
-      };
-      if (providerConfigAgent) {
-        if (providerConfigAgent.agentId !== providerConfigRow.agentId) {
-          await window.garyxDesktop.createCustomAgent(payload);
-          await window.garyxDesktop.deleteCustomAgent({ agentId: providerConfigAgent.agentId });
-        } else {
-          const updatePayload: UpdateCustomAgentInput = {
-            ...payload,
-            currentAgentId: providerConfigAgent.agentId,
-          };
-          await window.garyxDesktop.updateCustomAgent(updatePayload);
+      if (providerConfigRow.group === 'native') {
+        mutateGatewayProviderModelDefaults(providerConfigRow, providerConfigDraft);
+        if (!(await onSaveGatewaySettings({ refreshDesktopState: 'background' }))) {
+          return;
         }
-      } else {
-        await window.garyxDesktop.createCustomAgent(payload);
+        if (providerConfigAgent) {
+          await window.garyxDesktop.deleteCustomAgent({ agentId: providerConfigAgent.agentId });
+          await onRefreshAgentTargets();
+        }
+        closeProviderConfigDialog();
+        return;
       }
-      await onRefreshAgentTargets();
-      closeProviderConfigDialog();
+
     } finally {
       setProviderConfigSaving(false);
     }
   }
 
   async function handleClearProviderConfig() {
-    if (!providerConfigRow || providerConfigRow.group !== 'native' || !providerConfigAgent) {
+    if (!providerConfigRow || providerConfigRow.group !== 'native' || !providerConfigHasSettings) {
       return;
     }
     if (!window.confirm(t('Clear configuration for {name}?', { name: providerConfigRow.label }))) {
@@ -1924,8 +1988,14 @@ export function GatewaySettingsPanel({
     }
     setProviderConfigSaving(true);
     try {
-      await window.garyxDesktop.deleteCustomAgent({ agentId: providerConfigAgent.agentId });
-      await onRefreshAgentTargets();
+      mutateClearNativeProviderConfig(providerConfigRow);
+      if (!(await onSaveGatewaySettings({ refreshDesktopState: 'background' }))) {
+        return;
+      }
+      if (providerConfigAgent) {
+        await window.garyxDesktop.deleteCustomAgent({ agentId: providerConfigAgent.agentId });
+        await onRefreshAgentTargets();
+      }
       closeProviderConfigDialog();
     } finally {
       setProviderConfigSaving(false);
@@ -2555,7 +2625,7 @@ export function GatewaySettingsPanel({
 
           <DialogFooter className="commands-dialog-footer">
             <div className="provider-config-footer-left">
-              {providerConfigRow?.group === 'native' && providerConfigAgent ? (
+              {providerConfigRow?.group === 'native' && providerConfigHasSettings ? (
                 <Button
                   className="commands-dialog-button danger"
                   disabled={providerConfigSaving}
