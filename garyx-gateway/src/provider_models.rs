@@ -280,14 +280,6 @@ fn configured_agent_provider_config(
             return Some(agent_config);
         }
     }
-    for value in config.agents.values() {
-        if let Ok(mut agent_config) = serde_json::from_value::<AgentProviderConfig>(value.clone())
-            && ProviderType::from_slug(&agent_config.provider_type) == Some(provider_type.clone())
-        {
-            agent_config.provider_type = provider_type.as_slug().to_owned();
-            return Some(agent_config);
-        }
-    }
     None
 }
 
@@ -1138,6 +1130,26 @@ mod tests {
         assert_eq!(discovery.default_model.as_deref(), Some("gpt-6-turbo"));
         assert!(discovery.reasoning_efforts.is_empty());
         assert!(discovery.service_tiers.is_empty());
+    }
+
+    #[test]
+    fn configured_default_model_does_not_scan_non_default_agent_keys() {
+        let mut config = GaryxConfig::default();
+        config.agents.insert(
+            "custom-gpt".to_owned(),
+            json!({
+                "provider_type": "gpt",
+                "default_model": "gpt-custom-shadow"
+            }),
+        );
+
+        let default_model = configured_default_model(
+            &config,
+            ProviderType::Gpt,
+            &["gpt", "openai", "garyx", "garyx_native", "native"],
+        );
+
+        assert_eq!(default_model, None);
     }
 
     #[tokio::test]

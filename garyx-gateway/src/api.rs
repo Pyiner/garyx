@@ -279,10 +279,10 @@ fn thread_metadata_string(thread_value: &Value, key: &str) -> Option<String> {
 
 fn provider_default_config_keys(provider_type: &ProviderType) -> &'static [&'static str] {
     match provider_type {
-        ProviderType::ClaudeCode => &["claude", "claude_code"],
+        ProviderType::ClaudeCode => &["claude", "claude_code", "claude_tty"],
         ProviderType::CodexAppServer => &["codex", "codex_app_server"],
         ProviderType::GeminiCli => &["gemini", "gemini_cli"],
-        ProviderType::Gpt => &["gpt"],
+        ProviderType::Gpt => &["gpt", "openai", "garyx", "garyx_native", "native"],
         ProviderType::ClaudeLlm => &["anthropic", "claude_llm"],
         ProviderType::GeminiLlm => &["google", "gemini_llm"],
         ProviderType::AgentTeam => &[],

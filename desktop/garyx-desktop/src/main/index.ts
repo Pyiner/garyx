@@ -1305,11 +1305,23 @@ function registerIpcHandlers(): void {
     async (_event, input: UpdateThreadRuntimeSettingsInput) => {
       const settings = await resolveSettings();
       const threadId = input.threadId || "";
-      await updateRemoteThread(settings, threadId, {
-        model: input.model,
-        modelReasoningEffort: input.modelReasoningEffort,
-        modelServiceTier: input.modelServiceTier,
-      });
+      const patch: {
+        model?: string | null;
+        modelReasoningEffort?: string | null;
+        modelServiceTier?: string | null;
+      } = {};
+      if (Object.prototype.hasOwnProperty.call(input, "model")) {
+        patch.model = input.model;
+      }
+      if (
+        Object.prototype.hasOwnProperty.call(input, "modelReasoningEffort")
+      ) {
+        patch.modelReasoningEffort = input.modelReasoningEffort;
+      }
+      if (Object.prototype.hasOwnProperty.call(input, "modelServiceTier")) {
+        patch.modelServiceTier = input.modelServiceTier;
+      }
+      await updateRemoteThread(settings, threadId, patch);
       return fetchThreadHistory(settings, { threadId });
     },
   );
