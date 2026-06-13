@@ -917,7 +917,7 @@ struct GaryxNewThreadAgentSheet: View {
     @ViewBuilder
     private var modelOptionsPage: some View {
         let providerModels = model.newThreadProviderModels
-        optionsPanel(
+        GaryxAgentSheetOptionsPanel(
             options: [(id: "", label: "Agent default")]
                 + (providerModels?.models ?? []).map { (id: $0.id, label: $0.label) },
             selectedId: model.newThreadModelOverride
@@ -933,7 +933,7 @@ struct GaryxNewThreadAgentSheet: View {
             providerModels: model.newThreadProviderModels,
             model: model.newThreadEffortFilterModel
         )
-        optionsPanel(
+        GaryxAgentSheetOptionsPanel(
             options: [(id: "", label: "Agent default")]
                 + efforts.map { (id: $0.id, label: $0.label) },
             selectedId: model.newThreadReasoningEffortOverride
@@ -943,11 +943,17 @@ struct GaryxNewThreadAgentSheet: View {
         }
     }
 
-    private func optionsPanel(
-        options: [(id: String, label: String)],
-        selectedId: String,
-        onSelect: @escaping (String) -> Void
-    ) -> some View {
+    private var normalizedSelection: String {
+        selectedAgentTargetId.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+struct GaryxAgentSheetOptionsPanel: View {
+    let options: [(id: String, label: String)]
+    let selectedId: String
+    let onSelect: (String) -> Void
+
+    var body: some View {
         VStack(spacing: 0) {
             ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
                 Button {
@@ -981,10 +987,6 @@ struct GaryxNewThreadAgentSheet: View {
                 }
             }
         }
-    }
-
-    private var normalizedSelection: String {
-        selectedAgentTargetId.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

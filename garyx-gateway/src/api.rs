@@ -361,6 +361,10 @@ async fn build_thread_runtime_summary(
         let value = config.model_service_tier.trim();
         (!value.is_empty()).then(|| value.to_owned())
     });
+    let provider_catalog_default = provider_type
+        .clone()
+        .map(crate::provider_models::builtin_provider_catalog_default)
+        .unwrap_or_default();
     let model_override = thread_metadata_string(thread_value, MODEL_OVERRIDE_METADATA_KEY);
     let reasoning_effort_override =
         thread_metadata_string(thread_value, MODEL_REASONING_EFFORT_OVERRIDE_METADATA_KEY);
@@ -375,15 +379,18 @@ async fn build_thread_runtime_summary(
     let model = model_override
         .clone()
         .or(agent_model)
-        .or(provider_default_model);
+        .or(provider_default_model)
+        .or(provider_catalog_default.model);
     let reasoning_effort = reasoning_effort_override
         .clone()
         .or(agent_reasoning_effort)
-        .or(provider_default_reasoning_effort);
+        .or(provider_default_reasoning_effort)
+        .or(provider_catalog_default.reasoning_effort);
     let service_tier = service_tier_override
         .clone()
         .or(agent_service_tier)
-        .or(provider_default_service_tier);
+        .or(provider_default_service_tier)
+        .or(provider_catalog_default.service_tier);
     let sdk_session_id = trimmed_json_string(thread_value.get("sdk_session_id"));
     let active_run_snapshot = thread_value
         .get("history")

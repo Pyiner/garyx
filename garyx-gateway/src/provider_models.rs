@@ -72,6 +72,13 @@ pub(crate) struct ProviderModelsResponse {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ProviderCatalogDefault {
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub service_tier: Option<String>,
+}
+
 struct GeminiModelDiscovery {
     models: Vec<ProviderModelOption>,
     default_model: Option<String>,
@@ -244,6 +251,66 @@ pub(crate) async fn list_provider_models(
         }
         ProviderType::AgentTeam => unsupported(provider_type, "provider", None),
     }
+}
+
+pub(crate) fn builtin_provider_catalog_default(
+    provider_type: ProviderType,
+) -> ProviderCatalogDefault {
+    match provider_type {
+        ProviderType::CodexAppServer | ProviderType::Gpt => {
+            let discovery = gpt_builtin_models(None);
+            ProviderCatalogDefault {
+                model: discovery.default_model,
+                reasoning_effort: recommended_reasoning_effort(&discovery.reasoning_efforts),
+                service_tier: recommended_model_option(&discovery.service_tiers),
+            }
+        }
+        ProviderType::ClaudeLlm => {
+            let response = native_model_catalog_response(
+                ProviderType::ClaudeLlm,
+                "native_builtin",
+                native_claude_models(),
+                "claude-sonnet-4-6",
+            );
+            ProviderCatalogDefault {
+                model: response.default_model,
+                reasoning_effort: recommended_reasoning_effort(&response.reasoning_efforts),
+                service_tier: recommended_model_option(&response.service_tiers),
+            }
+        }
+        ProviderType::GeminiLlm => {
+            let response = native_model_catalog_response(
+                ProviderType::GeminiLlm,
+                "native_builtin",
+                native_gemini_models(),
+                "gemini-3-flash-preview",
+            );
+            ProviderCatalogDefault {
+                model: response.default_model,
+                reasoning_effort: recommended_reasoning_effort(&response.reasoning_efforts),
+                service_tier: recommended_model_option(&response.service_tiers),
+            }
+        }
+        ProviderType::ClaudeCode | ProviderType::GeminiCli | ProviderType::AgentTeam => {
+            ProviderCatalogDefault::default()
+        }
+    }
+}
+
+fn recommended_reasoning_effort(options: &[ProviderReasoningEffortOption]) -> Option<String> {
+    options
+        .iter()
+        .find(|option| option.recommended)
+        .or_else(|| options.first())
+        .map(|option| option.id.clone())
+}
+
+fn recommended_model_option(options: &[ProviderModelOption]) -> Option<String> {
+    options
+        .iter()
+        .find(|option| option.recommended)
+        .or_else(|| options.first())
+        .map(|option| option.id.clone())
 }
 
 fn unsupported(

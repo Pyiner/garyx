@@ -1904,8 +1904,48 @@ async fn thread_history_runtime_reports_provider_default_alias() {
     assert_eq!(payload["thread_runtime"]["model"], "gpt-5.4");
     assert_eq!(payload["thread_runtime"]["model_reasoning_effort"], "high");
     assert!(payload["thread_runtime"]["model_override"].is_null());
-    assert!(
-        payload["thread_runtime"]["model_reasoning_effort_override"].is_null()
+    assert!(payload["thread_runtime"]["model_reasoning_effort_override"].is_null());
+}
+
+#[tokio::test]
+async fn thread_history_runtime_reports_builtin_provider_default() {
+    let (state, _logger, _dir) = test_state().await;
+    let thread_id = "thread::runtime-builtin-default";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "Runtime builtin default",
+                "agent_id": "codex",
+                "provider_type": "codex_app_server",
+                "metadata": {},
+            }),
+        )
+        .await;
+
+    let router = build_router(state);
+    let request = authed_request()
+        .uri("/api/threads/history?thread_id=thread%3A%3Aruntime-builtin-default&limit=1")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["thread_runtime"]["agent_id"], "codex");
+    assert_eq!(
+        payload["thread_runtime"]["provider_type"],
+        "codex_app_server"
+    );
+    assert_eq!(payload["thread_runtime"]["model"], "gpt-5.5");
+    assert_eq!(
+        payload["thread_runtime"]["model_reasoning_effort"],
+        "medium"
     );
 }
 

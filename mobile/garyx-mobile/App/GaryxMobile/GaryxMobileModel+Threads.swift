@@ -186,7 +186,19 @@ extension GaryxMobileModel {
             )
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             let existingThreads = silent ? threads : []
-            let refreshedThreads = Self.mergedThreadSummaries(nextThreads)
+            let previousRuntimeByThreadId = Dictionary(
+                uniqueKeysWithValues: previousThreadSummaries.compactMap { thread -> (String, GaryxThreadRuntimeSummary)? in
+                    guard let runtime = thread.threadRuntime else { return nil }
+                    return (thread.id, runtime)
+                }
+            )
+            let refreshedThreads = Self.mergedThreadSummaries(nextThreads).map { thread in
+                var next = thread
+                if next.threadRuntime == nil {
+                    next.threadRuntime = previousRuntimeByThreadId[next.id]
+                }
+                return next
+            }
             let mergedThreads = Self.mergedThreadSummaries(existingThreads + refreshedThreads)
             if threads != mergedThreads {
                 threads = mergedThreads
@@ -203,11 +215,15 @@ extension GaryxMobileModel {
             if let selectionIdForThisRefresh,
                currentSelectedId == selectionIdForThisRefresh,
                let updatedSelection = threads.first(where: { $0.id == selectionIdForThisRefresh }) {
-                if selectedThread != updatedSelection {
-                    selectedThread = updatedSelection
+                var nextSelection = updatedSelection
+                if nextSelection.threadRuntime == nil {
+                    nextSelection.threadRuntime = selectedThread?.threadRuntime
                 }
-                if draftThreadTitle != updatedSelection.title {
-                    draftThreadTitle = updatedSelection.title
+                if selectedThread != nextSelection {
+                    selectedThread = nextSelection
+                }
+                if draftThreadTitle != nextSelection.title {
+                    draftThreadTitle = nextSelection.title
                 }
             }
         } catch {

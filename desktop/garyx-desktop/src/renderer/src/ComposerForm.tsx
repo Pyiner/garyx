@@ -412,6 +412,12 @@ function renderComposerModelControl({
   const effectiveModelOption = effectiveModelId
     ? models.find((option) => option.id === effectiveModelId)
     : undefined;
+  const defaultModelId =
+    agentConfiguredModel?.trim() || providerModels.defaultModel?.trim() || effectiveModelId;
+  const defaultModelOption = defaultModelId
+    ? models.find((option) => option.id === defaultModelId)
+    : undefined;
+  const defaultModelLabel = defaultModelOption?.label || defaultModelId || t("Model");
   // Thinking options follow the model that will actually run: explicit
   // override first, then the resolved agent/provider default.
   const effortFilterModelOption = selectedModelOption || effectiveModelOption;
@@ -427,6 +433,16 @@ function renderComposerModelControl({
   const selectedEffortOption = effectiveReasoningEffortId
     ? reasoningEfforts.find((option) => option.id === effectiveReasoningEffortId)
     : undefined;
+  const defaultReasoningEffortId =
+    effortFilterModelOption?.defaultReasoningEffort?.trim() ||
+    reasoningEfforts.find((option) => option.recommended)?.id ||
+    reasoningEfforts[0]?.id ||
+    "";
+  const defaultEffortOption = defaultReasoningEffortId
+    ? reasoningEfforts.find((option) => option.id === defaultReasoningEffortId)
+    : undefined;
+  const defaultEffortLabel =
+    defaultEffortOption?.label || defaultReasoningEffortId || t("Thinking level");
   const triggerLabel = effectiveModelOption
     ? selectedEffortOption
       ? `${effectiveModelOption.label} · ${selectedEffortOption.label}`
@@ -449,20 +465,24 @@ function renderComposerModelControl({
       </DropdownMenuTrigger>
       <FloatingActionMenuContent align="start" side="top">
         <FloatingActionMenuItem
-          data-active={!selectedModel ? '' : undefined}
+          data-active={
+            !selectedModel || selectedModel.trim() === defaultModelId ? '' : undefined
+          }
           onSelect={() => onSelectModel(null)}
         >
-          <span className="composer-menu-label">{t("Agent default model")}</span>
+          <span className="composer-menu-label">{defaultModelLabel}</span>
         </FloatingActionMenuItem>
-        {models.map((option) => (
-          <FloatingActionMenuItem
-            data-active={option.id === selectedModel ? '' : undefined}
-            key={option.id}
-            onSelect={() => onSelectModel(option.id)}
-          >
-            <span className="composer-menu-label">{option.label}</span>
-          </FloatingActionMenuItem>
-        ))}
+        {models
+          .filter((option) => option.id !== defaultModelId)
+          .map((option) => (
+            <FloatingActionMenuItem
+              data-active={option.id === selectedModel ? '' : undefined}
+              key={option.id}
+              onSelect={() => onSelectModel(option.id)}
+            >
+              <span className="composer-menu-label">{option.label}</span>
+            </FloatingActionMenuItem>
+          ))}
         {supportsReasoning && onSelectReasoningEffort ? (
           <>
             <DropdownMenuSeparator />
@@ -473,22 +493,29 @@ function renderComposerModelControl({
               </FloatingActionMenuSubTrigger>
               <FloatingActionMenuSubContent>
                 <FloatingActionMenuItem
-                  data-active={!selectedReasoningEffort ? '' : undefined}
+                  data-active={
+                    !selectedReasoningEffort ||
+                    selectedReasoningEffort.trim() === defaultReasoningEffortId
+                      ? ''
+                      : undefined
+                  }
                   onSelect={() => onSelectReasoningEffort(null)}
                 >
-                  <span className="composer-menu-label">{t("Agent default")}</span>
+                  <span className="composer-menu-label">{defaultEffortLabel}</span>
                 </FloatingActionMenuItem>
-                {reasoningEfforts.map((option) => (
-                  <FloatingActionMenuItem
-                    data-active={
-                      option.id === selectedReasoningEffort ? '' : undefined
-                    }
-                    key={option.id}
-                    onSelect={() => onSelectReasoningEffort(option.id)}
-                  >
-                    <span className="composer-menu-label">{option.label}</span>
-                  </FloatingActionMenuItem>
-                ))}
+                {reasoningEfforts
+                  .filter((option) => option.id !== defaultReasoningEffortId)
+                  .map((option) => (
+                    <FloatingActionMenuItem
+                      data-active={
+                        option.id === selectedReasoningEffort ? '' : undefined
+                      }
+                      key={option.id}
+                      onSelect={() => onSelectReasoningEffort(option.id)}
+                    >
+                      <span className="composer-menu-label">{option.label}</span>
+                    </FloatingActionMenuItem>
+                  ))}
               </FloatingActionMenuSubContent>
             </DropdownMenuSub>
           </>
