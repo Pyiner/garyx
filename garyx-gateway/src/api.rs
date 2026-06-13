@@ -20,6 +20,7 @@ use garyx_models::config_loader::{
     ConfigLoadOptions, ConfigWriteOptions, load_config, write_config_value_atomic,
 };
 use garyx_models::provider::{ProviderMessage, ProviderType};
+use garyx_models::transcript_kind::{is_tool_related_message, resolve_message_kind};
 use garyx_models::{ChannelOutboundContent, CustomAgentProfile};
 use garyx_router::{
     ChannelBinding, ThreadHistoryError, bindings_from_value, count_user_query_messages,
@@ -1573,80 +1574,6 @@ fn infer_thread_type(thread_id: &str) -> &'static str {
     } else {
         "chat"
     }
-}
-
-fn resolve_message_kind(role: &str, tool_related: bool) -> &'static str {
-    match role {
-        "user" => "user_input",
-        "assistant" => {
-            if tool_related {
-                "tool_trace"
-            } else {
-                "assistant_reply"
-            }
-        }
-        "tool" | "tool_use" | "tool_result" => "tool_trace",
-        "system" => "system",
-        _ if tool_related => "tool_trace",
-        _ => "internal",
-    }
-}
-
-fn is_tool_related_message(role: &str, message: &serde_json::Map<String, Value>) -> bool {
-    if matches!(role, "tool" | "tool_use" | "tool_result") {
-        return true;
-    }
-
-    if message
-        .get("tool_use_result")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        return true;
-    }
-
-    if message
-        .get("tool_name")
-        .and_then(Value::as_str)
-        .is_some_and(|s| !s.trim().is_empty())
-    {
-        return true;
-    }
-
-    contains_tool_hint(message.get("content"))
-        || contains_tool_hint(message.get("metadata"))
-        || contains_tool_hint(message.get("input"))
-        || contains_tool_hint(message.get("result"))
-}
-
-fn contains_tool_hint(value: Option<&Value>) -> bool {
-    fn inner(value: &Value, depth: usize) -> bool {
-        if depth > 64 {
-            return false;
-        }
-        match value {
-            Value::String(text) => {
-                let lower = text.to_ascii_lowercase();
-                lower.contains("tool_use")
-                    || lower.contains("tool_result")
-                    || lower.contains("tool_call")
-                    || lower.contains("mcp__")
-            }
-            Value::Array(items) => items.iter().any(|item| inner(item, depth + 1)),
-            Value::Object(map) => map.iter().any(|(key, item)| {
-                let lower = key.to_ascii_lowercase();
-                lower == "tool_use_id"
-                    || lower == "tool_call_id"
-                    || lower == "tool_calls"
-                    || lower.contains("mcp__")
-                    || lower.contains("tool_")
-                    || inner(item, depth + 1)
-            }),
-            _ => false,
-        }
-    }
-
-    value.is_some_and(|value| inner(value, 0))
 }
 
 fn raw_content_type_name(content: &Value) -> &'static str {

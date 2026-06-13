@@ -8,6 +8,7 @@ use std::sync::{Mutex as StdMutex, RwLock as StdRwLock};
 use chrono::{DateTime, Utc};
 use garyx_models::config::ConversationIndexConfig;
 use garyx_models::provider::ProviderMessage;
+use garyx_models::transcript_kind::is_tool_related_message;
 use reqwest::Client;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Map, Value, json};
@@ -1095,62 +1096,6 @@ fn sanitize_visible_text(value: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-fn is_tool_related_message(role: &str, message: &Map<String, Value>) -> bool {
-    if matches!(role, "tool" | "tool_use" | "tool_result") {
-        return true;
-    }
-    if message
-        .get("tool_use_result")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        return true;
-    }
-    if message
-        .get("tool_name")
-        .and_then(Value::as_str)
-        .is_some_and(|value| !value.trim().is_empty())
-    {
-        return true;
-    }
-
-    contains_tool_hint(message.get("content"))
-        || contains_tool_hint(message.get("metadata"))
-        || contains_tool_hint(message.get("input"))
-        || contains_tool_hint(message.get("result"))
-}
-
-fn contains_tool_hint(value: Option<&Value>) -> bool {
-    fn inner(value: &Value, depth: usize) -> bool {
-        if depth > 64 {
-            return false;
-        }
-
-        match value {
-            Value::String(text) => {
-                let lower = text.to_ascii_lowercase();
-                lower.contains("tool_use")
-                    || lower.contains("tool_result")
-                    || lower.contains("tool_call")
-                    || lower.contains("mcp__")
-            }
-            Value::Array(items) => items.iter().any(|item| inner(item, depth + 1)),
-            Value::Object(map) => map.iter().any(|(key, item)| {
-                let lower = key.to_ascii_lowercase();
-                lower == "tool_use_id"
-                    || lower == "tool_call_id"
-                    || lower == "tool_calls"
-                    || lower.contains("mcp__")
-                    || lower.contains("tool_")
-                    || inner(item, depth + 1)
-            }),
-            _ => false,
-        }
-    }
-
-    value.is_some_and(|value| inner(value, 0))
 }
 
 fn read_lock<T>(lock: &StdRwLock<T>) -> std::sync::RwLockReadGuard<'_, T> {
