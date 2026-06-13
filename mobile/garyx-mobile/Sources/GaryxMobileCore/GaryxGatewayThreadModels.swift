@@ -103,6 +103,7 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
     public var automationId: String?
     public var automationThreadMode: String?
     public var excludeFromRecent: Bool
+    public var threadRuntime: GaryxThreadRuntimeSummary?
 
     public init(
         id: String,
@@ -122,7 +123,8 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         worktreePath: String?,
         automationId: String? = nil,
         automationThreadMode: String? = nil,
-        excludeFromRecent: Bool = false
+        excludeFromRecent: Bool = false,
+        threadRuntime: GaryxThreadRuntimeSummary? = nil
     ) {
         self.id = id
         self.title = title
@@ -142,6 +144,7 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         self.automationId = automationId
         self.automationThreadMode = automationThreadMode
         self.excludeFromRecent = excludeFromRecent
+        self.threadRuntime = threadRuntime
     }
 
     enum CodingKeys: String, CodingKey {
@@ -188,6 +191,7 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         case automationThreadModeCamel = "automationThreadMode"
         case excludeFromRecent = "exclude_from_recent"
         case excludeFromRecentCamel = "excludeFromRecent"
+        case threadRuntime = "thread_runtime"
     }
 
     public init(from decoder: Decoder) throws {
@@ -223,6 +227,7 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         excludeFromRecent = try container.decodeIfPresent(Bool.self, forKey: .excludeFromRecentCamel)
             ?? container.decodeIfPresent(Bool.self, forKey: .excludeFromRecent)
             ?? false
+        threadRuntime = try container.decodeIfPresent(GaryxThreadRuntimeSummary.self, forKey: .threadRuntime)
     }
 }
 
@@ -305,22 +310,43 @@ public struct GaryxThreadTranscriptPageInfo: Decodable, Equatable, Sendable {
 
 
 public struct GaryxThreadRuntimeSummary: Decodable, Equatable, Sendable {
+    public var agentId: String?
     public var providerType: String?
     public var providerLabel: String?
+    public var model: String?
+    public var modelReasoningEffort: String?
+    public var modelServiceTier: String?
+    public var modelOverride: String?
+    public var modelReasoningEffortOverride: String?
+    public var modelServiceTierOverride: String?
     public var sdkSessionId: String?
     public var activeRun: GaryxThreadActiveRunSummary?
 
     enum CodingKeys: String, CodingKey {
+        case agentId = "agent_id"
         case providerType = "provider_type"
         case providerLabel = "provider_label"
+        case model
+        case modelReasoningEffort = "model_reasoning_effort"
+        case modelServiceTier = "model_service_tier"
+        case modelOverride = "model_override"
+        case modelReasoningEffortOverride = "model_reasoning_effort_override"
+        case modelServiceTierOverride = "model_service_tier_override"
         case sdkSessionId = "sdk_session_id"
         case activeRun = "active_run"
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        agentId = try container.garyxDecodeFirstString(.agentId)
         providerType = try container.garyxDecodeFirstString(.providerType)
         providerLabel = try container.garyxDecodeFirstString(.providerLabel)
+        model = try container.garyxDecodeFirstString(.model)
+        modelReasoningEffort = try container.garyxDecodeFirstString(.modelReasoningEffort)
+        modelServiceTier = try container.garyxDecodeFirstString(.modelServiceTier)
+        modelOverride = try container.garyxDecodeFirstString(.modelOverride)
+        modelReasoningEffortOverride = try container.garyxDecodeFirstString(.modelReasoningEffortOverride)
+        modelServiceTierOverride = try container.garyxDecodeFirstString(.modelServiceTierOverride)
         sdkSessionId = try container.garyxDecodeFirstString(.sdkSessionId)
         activeRun = try container.decodeIfPresent(GaryxThreadActiveRunSummary.self, forKey: .activeRun)
     }
@@ -467,6 +493,9 @@ public struct GaryxCreateThreadRequest: Encodable, Equatable, Sendable {
 public struct GaryxUpdateThreadRequest: Encodable, Equatable, Sendable {
     public var label: String?
     public var workspaceDir: String?
+    public var model: String?
+    public var modelReasoningEffort: String?
+    public var modelServiceTier: String?
 }
 
 

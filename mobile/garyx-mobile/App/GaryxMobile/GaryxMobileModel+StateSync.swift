@@ -142,7 +142,11 @@ extension GaryxMobileModel {
                 continue
             }
             if let index = indexesById[value.id] {
-                merged[index] = value
+                var next = value
+                if next.threadRuntime == nil {
+                    next.threadRuntime = merged[index].threadRuntime
+                }
+                merged[index] = next
             } else {
                 indexesById[value.id] = merged.count
                 merged.append(value)

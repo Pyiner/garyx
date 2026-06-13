@@ -861,7 +861,10 @@ async fn create_thread_persists_model_and_reasoning_overrides() {
         .await
         .expect("stored thread");
     assert_eq!(stored["metadata"]["model_override"], "claude-opus-4-7");
-    assert_eq!(stored["metadata"]["model_reasoning_effort_override"], "xhigh");
+    assert_eq!(
+        stored["metadata"]["model_reasoning_effort_override"],
+        "xhigh"
+    );
     assert!(
         stored["metadata"]
             .get("model_service_tier_override")
@@ -1733,6 +1736,124 @@ async fn dream_scan_route_preserves_historical_incremental_topics() {
             .get_dream_topic("dream::historical")
             .expect("get historical dream")
             .is_some()
+    );
+}
+
+#[tokio::test]
+async fn update_thread_persists_and_clears_model_overrides() {
+    let (state, _logger, _dir) = test_state().await;
+    let thread_id = "thread::model-update";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "Model update",
+                "metadata": {},
+            }),
+        )
+        .await;
+
+    let router = build_router(state.clone());
+    let request = authed_request()
+        .method("PATCH")
+        .uri("/api/threads/thread%3A%3Amodel-update")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "model": " claude-opus-4-7 ",
+                "modelReasoningEffort": " max ",
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let stored = state
+        .threads
+        .thread_store
+        .get(thread_id)
+        .await
+        .expect("stored thread after update");
+    assert_eq!(stored["metadata"]["model_override"], "claude-opus-4-7");
+    assert_eq!(stored["metadata"]["model_reasoning_effort_override"], "max");
+
+    let request = authed_request()
+        .method("PATCH")
+        .uri("/api/threads/thread%3A%3Amodel-update")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "model": "",
+                "modelReasoningEffort": "",
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let stored = state
+        .threads
+        .thread_store
+        .get(thread_id)
+        .await
+        .expect("stored thread after clear");
+    assert!(stored["metadata"].get("model_override").is_none());
+    assert!(
+        stored["metadata"]
+            .get("model_reasoning_effort_override")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn thread_history_runtime_reports_effective_model_overrides() {
+    let (state, _logger, _dir) = test_state().await;
+    let thread_id = "thread::runtime-model";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "Runtime model",
+                "agent_id": "claude",
+                "provider_type": "claude_code",
+                "metadata": {
+                    "model_override": "claude-opus-4-7",
+                    "model_reasoning_effort_override": "max",
+                },
+            }),
+        )
+        .await;
+
+    let router = build_router(state);
+    let request = authed_request()
+        .uri("/api/threads/history?thread_id=thread%3A%3Aruntime-model&limit=1")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["thread_runtime"]["agent_id"], "claude");
+    assert_eq!(payload["thread_runtime"]["provider_type"], "claude_code");
+    assert_eq!(payload["thread_runtime"]["model"], "claude-opus-4-7");
+    assert_eq!(payload["thread_runtime"]["model_reasoning_effort"], "max");
+    assert_eq!(
+        payload["thread_runtime"]["model_override"],
+        "claude-opus-4-7"
+    );
+    assert_eq!(
+        payload["thread_runtime"]["model_reasoning_effort_override"],
+        "max"
     );
 }
 

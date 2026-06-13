@@ -116,6 +116,13 @@ type ComposerFormProps = {
   newThreadSelectedReasoningEffort?: string | null;
   onSelectNewThreadModel?: (model: string | null) => void;
   onSelectNewThreadReasoningEffort?: (effort: string | null) => void;
+  threadProviderModels?: DesktopProviderModels | null;
+  threadEffectiveModel?: string | null;
+  threadEffectiveReasoningEffort?: string | null;
+  threadSelectedModel?: string | null;
+  threadSelectedReasoningEffort?: string | null;
+  onSelectThreadModel?: (model: string | null) => void;
+  onSelectThreadReasoningEffort?: (effort: string | null) => void;
   isActiveSendingThread: boolean;
   onAppendComposerAttachments: (files: File[]) => void;
   onComposerChange: (value: string) => void;
@@ -371,6 +378,8 @@ function browserAnnotationChipMeta(annotation: BrowserAnnotationCommentRequest):
 function renderComposerModelControl({
   providerModels,
   agentConfiguredModel,
+  effectiveModel,
+  effectiveReasoningEffort,
   selectedModel,
   selectedReasoningEffort,
   onSelectModel,
@@ -379,6 +388,8 @@ function renderComposerModelControl({
 }: {
   providerModels?: DesktopProviderModels | null;
   agentConfiguredModel?: string | null;
+  effectiveModel?: string | null;
+  effectiveReasoningEffort?: string | null;
   selectedModel?: string | null;
   selectedReasoningEffort?: string | null;
   onSelectModel?: (model: string | null) => void;
@@ -393,13 +404,17 @@ function renderComposerModelControl({
   const selectedModelOption = selectedModel
     ? models.find((option) => option.id === selectedModel)
     : undefined;
-  // Thinking options follow the model that will actually run: the override,
-  // else the agent's configured model, else the provider-level common list.
-  const effortFilterModelOption =
-    selectedModelOption ||
-    (agentConfiguredModel
-      ? models.find((option) => option.id === agentConfiguredModel.trim())
-      : undefined);
+  const effectiveModelId =
+    selectedModel?.trim() ||
+    effectiveModel?.trim() ||
+    agentConfiguredModel?.trim() ||
+    "";
+  const effectiveModelOption = effectiveModelId
+    ? models.find((option) => option.id === effectiveModelId)
+    : undefined;
+  // Thinking options follow the model that will actually run: explicit
+  // override first, then the resolved agent/provider default.
+  const effortFilterModelOption = selectedModelOption || effectiveModelOption;
   const reasoningEfforts =
     effortFilterModelOption?.supportedReasoningEfforts?.length
       ? effortFilterModelOption.supportedReasoningEfforts
@@ -407,13 +422,15 @@ function renderComposerModelControl({
   const supportsReasoning =
     Boolean(providerModels.supportsReasoningEffortSelection) &&
     reasoningEfforts.length > 0;
-  const selectedEffortOption = selectedReasoningEffort
-    ? reasoningEfforts.find((option) => option.id === selectedReasoningEffort)
+  const effectiveReasoningEffortId =
+    selectedReasoningEffort?.trim() || effectiveReasoningEffort?.trim() || "";
+  const selectedEffortOption = effectiveReasoningEffortId
+    ? reasoningEfforts.find((option) => option.id === effectiveReasoningEffortId)
     : undefined;
-  const triggerLabel = selectedModelOption
+  const triggerLabel = effectiveModelOption
     ? selectedEffortOption
-      ? `${selectedModelOption.label} · ${selectedEffortOption.label}`
-      : selectedModelOption.label
+      ? `${effectiveModelOption.label} · ${selectedEffortOption.label}`
+      : effectiveModelOption.label
     : selectedEffortOption
       ? `${t("Model")} · ${selectedEffortOption.label}`
       : t("Model");
@@ -423,7 +440,7 @@ function renderComposerModelControl({
       <DropdownMenuTrigger
         aria-label={t("Change model for this thread")}
         className="composer-provider-trigger"
-        data-muted={!selectedModelOption && !selectedEffortOption ? "" : undefined}
+        data-muted={!effectiveModelOption && !selectedEffortOption ? "" : undefined}
         type="button"
       >
         <IconCube aria-hidden size={15} stroke={1.75} />
@@ -757,6 +774,13 @@ export function ComposerForm({
   newThreadSelectedReasoningEffort,
   onSelectNewThreadModel,
   onSelectNewThreadReasoningEffort,
+  threadProviderModels,
+  threadEffectiveModel,
+  threadEffectiveReasoningEffort,
+  threadSelectedModel,
+  threadSelectedReasoningEffort,
+  onSelectThreadModel,
+  onSelectThreadReasoningEffort,
   isActiveSendingThread,
   onAppendComposerAttachments,
   onComposerChange,
@@ -1220,12 +1244,16 @@ export function ComposerForm({
         </DropdownMenu>
         <div className="composer-buttons">
           {renderComposerModelControl({
-            providerModels: newThreadProviderModels,
+            providerModels: threadProviderModels ?? newThreadProviderModels,
             agentConfiguredModel: newThreadAgentConfiguredModel,
-            selectedModel: newThreadSelectedModel,
-            selectedReasoningEffort: newThreadSelectedReasoningEffort,
-            onSelectModel: onSelectNewThreadModel,
-            onSelectReasoningEffort: onSelectNewThreadReasoningEffort,
+            effectiveModel: threadEffectiveModel ?? newThreadAgentConfiguredModel,
+            effectiveReasoningEffort: threadEffectiveReasoningEffort,
+            selectedModel: threadSelectedModel ?? newThreadSelectedModel,
+            selectedReasoningEffort:
+              threadSelectedReasoningEffort ?? newThreadSelectedReasoningEffort,
+            onSelectModel: onSelectThreadModel ?? onSelectNewThreadModel,
+            onSelectReasoningEffort:
+              onSelectThreadReasoningEffort ?? onSelectNewThreadReasoningEffort,
             t,
           })}
           {renderComposerProviderControl({

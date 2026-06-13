@@ -2735,6 +2735,23 @@ export function AppShell() {
     desktopTeams.map((team) => [team.teamId, team] as const),
   );
   const activeAgentId = activeThread?.agentId || null;
+  const activeThreadInfo = selectedThreadId
+    ? threadInfoByThread[selectedThreadId] || null
+    : null;
+  const activeThreadInfoLoaded = selectedThreadId
+    ? Object.prototype.hasOwnProperty.call(threadInfoByThread, selectedThreadId)
+    : false;
+  const activeThreadProviderType = selectedThreadId
+    ? inferProviderTypeForThread(
+        selectedThreadId,
+        threadInfoByThread,
+        desktopState,
+        desktopAgents,
+      )
+    : null;
+  const activeThreadProviderModels = activeThreadProviderType
+    ? providerModelsByType[activeThreadProviderType] || null
+    : null;
   const pendingAgent = desktopAgentMap.get(pendingAgentId) || null;
   const pendingTeam = desktopTeamMap.get(pendingAgentId) || null;
   const pendingAgentProviderType = pendingTeam
@@ -2780,6 +2797,36 @@ export function AppShell() {
       cancelled = true;
     };
   }, [pendingAgentProviderType, providerModelsByType]);
+  useEffect(() => {
+    if (!activeThreadProviderType) {
+      return;
+    }
+    if (activeThreadProviderType in providerModelsByType) {
+      return;
+    }
+    let cancelled = false;
+    void window.garyxDesktop.listProviderModels(activeThreadProviderType).then(
+      (models) => {
+        if (!cancelled) {
+          setProviderModelsByType((current) => ({
+            ...current,
+            [activeThreadProviderType]: models,
+          }));
+        }
+      },
+      () => {
+        if (!cancelled) {
+          setProviderModelsByType((current) => ({
+            ...current,
+            [activeThreadProviderType]: null,
+          }));
+        }
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [activeThreadProviderType, providerModelsByType]);
   const activeAgent = activeAgentId
     ? desktopAgentMap.get(activeAgentId) || null
     : null;
@@ -2993,12 +3040,6 @@ export function AppShell() {
   const activeHistoryPagination = activeThreadMessageKey
     ? historyPaginationByThread[activeThreadMessageKey] || null
     : null;
-  const activeThreadInfo = selectedThreadId
-    ? threadInfoByThread[selectedThreadId] || null
-    : null;
-  const activeThreadInfoLoaded = selectedThreadId
-    ? Object.prototype.hasOwnProperty.call(threadInfoByThread, selectedThreadId)
-    : false;
   const activeThreadWorktree =
     activeThreadInfo?.worktree || activeThread?.worktree || null;
   const composerWorkspaceMode: DesktopWorkspaceMode | null =
@@ -8426,6 +8467,31 @@ export function AppShell() {
     });
   }
 
+  async function handleUpdateActiveThreadRuntimeSettings(input: {
+    model?: string | null;
+    modelReasoningEffort?: string | null;
+    modelServiceTier?: string | null;
+  }) {
+    const threadId = selectedThreadId;
+    if (!threadId) {
+      return;
+    }
+    setError(null);
+    try {
+      const transcript = await window.garyxDesktop.updateThreadRuntimeSettings({
+        threadId,
+        ...input,
+      });
+      applyRemoteTranscript(threadId, transcript);
+    } catch (runtimeSettingsError) {
+      setError(
+        runtimeSettingsError instanceof Error
+          ? runtimeSettingsError.message
+          : "Failed to update thread model settings",
+      );
+    }
+  }
+
   function hasPendingHistoryIntents(threadId: string): boolean {
     return Object.values(messageStateRef.current.intentsById).some((intent) => {
       return (
@@ -10844,6 +10910,15 @@ export function AppShell() {
                 newThreadAgentConfiguredModel={pendingAgent?.model || null}
                 newThreadSelectedModel={pendingModel}
                 newThreadSelectedReasoningEffort={pendingModelReasoningEffort}
+                threadProviderModels={activeThreadProviderModels}
+                threadEffectiveModel={activeThreadInfo?.model || null}
+                threadEffectiveReasoningEffort={
+                  activeThreadInfo?.modelReasoningEffort || null
+                }
+                threadSelectedModel={activeThreadInfo?.modelOverride || null}
+                threadSelectedReasoningEffort={
+                  activeThreadInfo?.modelReasoningEffortOverride || null
+                }
                 newThreadWorkspaceEntry={newThreadWorkspaceEntry}
                 newThreadWorkspaceMode={pendingWorkspaceMode}
                 onAddWorkspace={() => {
@@ -10923,6 +10998,14 @@ export function AppShell() {
                 }}
                 onSelectNewThreadModel={setPendingModel}
                 onSelectNewThreadReasoningEffort={setPendingModelReasoningEffort}
+                onSelectThreadModel={(model) => {
+                  void handleUpdateActiveThreadRuntimeSettings({ model });
+                }}
+                onSelectThreadReasoningEffort={(modelReasoningEffort) => {
+                  void handleUpdateActiveThreadRuntimeSettings({
+                    modelReasoningEffort,
+                  });
+                }}
                 onSelectNewThreadWorkflow={(workflowId) => {
                   setPendingWorkflowId(workflowId);
                   setPendingAgentId("claude");

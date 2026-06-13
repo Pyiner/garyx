@@ -23,7 +23,7 @@ use garyx_router::{
     workspace_dir_from_value, workspace_git_status as router_workspace_git_status,
 };
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -954,6 +954,61 @@ pub struct UpdateThreadBody {
     pub label: Option<String>,
     #[serde(default)]
     pub workspace_dir: Option<String>,
+    /// Optional per-thread model override. An empty string clears the override.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Optional per-thread reasoning/thinking level override. An empty string clears it.
+    #[serde(default)]
+    pub model_reasoning_effort: Option<String>,
+    /// Optional per-thread service tier override. An empty string clears it.
+    #[serde(default)]
+    pub model_service_tier: Option<String>,
+}
+
+fn apply_thread_metadata_override(data: &mut Value, key: &str, input: &Option<String>) -> bool {
+    let Some(input) = input.as_deref() else {
+        return false;
+    };
+    let Some(obj) = data.as_object_mut() else {
+        return false;
+    };
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return obj
+            .get_mut("metadata")
+            .and_then(Value::as_object_mut)
+            .map(|metadata| metadata.remove(key).is_some())
+            .unwrap_or(false);
+    }
+
+    if !obj.get("metadata").is_some_and(Value::is_object) {
+        obj.insert("metadata".to_owned(), Value::Object(Map::new()));
+    }
+    let Some(metadata) = obj.get_mut("metadata").and_then(Value::as_object_mut) else {
+        return false;
+    };
+    let next = Value::String(trimmed.to_owned());
+    if metadata.get(key) == Some(&next) {
+        return false;
+    }
+    metadata.insert(key.to_owned(), next);
+    true
+}
+
+fn apply_thread_runtime_overrides(data: &mut Value, body: &UpdateThreadBody) -> bool {
+    let mut changed = false;
+    changed |= apply_thread_metadata_override(data, MODEL_OVERRIDE_METADATA_KEY, &body.model);
+    changed |= apply_thread_metadata_override(
+        data,
+        MODEL_REASONING_EFFORT_OVERRIDE_METADATA_KEY,
+        &body.model_reasoning_effort,
+    );
+    changed |= apply_thread_metadata_override(
+        data,
+        MODEL_SERVICE_TIER_OVERRIDE_METADATA_KEY,
+        &body.model_service_tier,
+    );
+    changed
 }
 
 #[derive(Deserialize)]
@@ -1962,12 +2017,30 @@ pub async fn update_thread(
     match update_thread_record(
         &state.threads.thread_store,
         &thread_id,
-        body.label,
-        body.workspace_dir,
+        body.label.clone(),
+        body.workspace_dir.clone(),
     )
     .await
     {
-        Ok(data) => {
+        Ok(mut data) => {
+            let runtime_overrides_changed = apply_thread_runtime_overrides(&mut data, &body);
+            if runtime_overrides_changed {
+                if let Some(obj) = data.as_object_mut() {
+                    obj.insert(
+                        "updated_at".to_owned(),
+                        Value::String(Utc::now().to_rfc3339()),
+                    );
+                }
+                state
+                    .threads
+                    .thread_store
+                    .set(&thread_id, data.clone())
+                    .await;
+                state
+                    .threads
+                    .history
+                    .enqueue_conversation_index_for_thread(&thread_id);
+            }
             state
                 .integration
                 .bridge

@@ -534,7 +534,7 @@ struct GaryxConversationHeader: View {
 
     var body: some View {
         GaryxAdaptiveGlassContainer(spacing: 10) {
-            HStack(spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
                 Button(action: goHome) {
                     GaryxToolbarIcon(systemName: "chevron.left")
                 }
@@ -545,35 +545,7 @@ struct GaryxConversationHeader: View {
                     GaryxHeaderAgentControl()
                         .layoutPriority(1)
                 } else {
-                    HStack(spacing: 8) {
-                        if let target = model.selectedThreadAgentTarget {
-                            GaryxAgentAvatarView(
-                                agentId: target.id,
-                                avatarDataUrl: target.avatarDataUrl,
-                                kind: target.kind,
-                                label: target.title,
-                                providerType: target.providerType,
-                                builtIn: target.builtIn,
-                                diameter: 22
-                            )
-                        }
-
-                        Text(model.selectedThread?.title ?? model.draftThreadTitle)
-                            .font(GaryxFont.callout(weight: .medium))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .layoutPriority(1)
-                    }
-                    .padding(.horizontal, 12)
-                    .frame(height: 44, alignment: .leading)
-                    .frame(maxWidth: 282, alignment: .leading)
-                    .garyxAdaptiveGlass(
-                        .regular,
-                        isInteractive: false,
-                        fallbackMaterial: .ultraThinMaterial,
-                        in: Capsule()
-                    )
+                    GaryxThreadRuntimeHeaderControl()
                     .layoutPriority(1)
                 }
 
@@ -677,6 +649,336 @@ struct GaryxConversationHeader: View {
         showsRenamePrompt = false
         showsBotBindingSheet = false
         botBindingThreadId = nil
+    }
+}
+
+private struct GaryxThreadRuntimeHeaderControl: View {
+    @EnvironmentObject private var model: GaryxMobileModel
+    @Namespace private var glassNamespace
+    @State private var isExpanded = false
+
+    private var selectedThread: GaryxThreadSummary? { model.selectedThread }
+    private var runtime: GaryxThreadRuntimeSummary? { selectedThread?.threadRuntime }
+
+    private var providerType: String {
+        normalized(runtime?.providerType)
+            ?? normalized(selectedThread?.providerType)
+            ?? normalized(model.selectedThreadAgentTarget?.providerType)
+            ?? ""
+    }
+
+    private var providerModels: GaryxProviderModels? {
+        guard !providerType.isEmpty else { return nil }
+        return model.providerModelsByType[providerType]
+    }
+
+    private var effectiveModel: String? {
+        normalized(runtime?.model)
+    }
+
+    private var effectiveReasoningEffort: String? {
+        normalized(runtime?.modelReasoningEffort)
+    }
+
+    private var modelOverride: String? {
+        normalized(runtime?.modelOverride)
+    }
+
+    private var reasoningEffortOverride: String? {
+        normalized(runtime?.modelReasoningEffortOverride)
+    }
+
+    private var effortFilterModel: String? {
+        GaryxThreadModelOverridePresentation.effortFilterModel(
+            override: modelOverride,
+            agentConfiguredModel: effectiveModel
+        )
+    }
+
+    private var reasoningEfforts: [GaryxProviderModelOption] {
+        GaryxThreadModelOverridePresentation.reasoningEffortOptions(
+            providerModels: providerModels,
+            model: effortFilterModel
+        )
+    }
+
+    private var compactSubtitle: String {
+        let agent = normalized(model.selectedThreadAgentTarget?.title)
+        let runtimeLabel = GaryxThreadModelOverridePresentation.controlLabel(
+            providerModels: providerModels,
+            model: effectiveModel,
+            reasoningEffort: effectiveReasoningEffort,
+            fallback: runtime?.providerLabel ?? "Model"
+        )
+        return [agent, normalized(runtimeLabel)]
+            .compactMap { $0 }
+            .joined(separator: " · ")
+    }
+
+    private var modelValueLabel: String {
+        if let override = modelOverride {
+            return GaryxThreadModelOverridePresentation.modelLabel(
+                providerModels: providerModels,
+                model: override
+            ) ?? override
+        }
+        return "Agent default"
+    }
+
+    private var reasoningValueLabel: String {
+        if let override = reasoningEffortOverride {
+            return GaryxThreadModelOverridePresentation.reasoningEffortLabel(
+                providerModels: providerModels,
+                model: effortFilterModel,
+                reasoningEffort: override
+            ) ?? override
+        }
+        return "Agent default"
+    }
+
+    var body: some View {
+        Group {
+            if isExpanded {
+                expandedBody
+            } else {
+                compactBody
+            }
+        }
+        .frame(maxWidth: 236, alignment: .leading)
+        .animation(.spring(response: 0.34, dampingFraction: 0.82), value: isExpanded)
+        .task(id: providerType) {
+            guard !providerType.isEmpty,
+                  model.providerModelsByType[providerType] == nil else {
+                return
+            }
+            await model.loadProviderModels(providerType: providerType)
+        }
+        .onChange(of: selectedThread?.id) { _, _ in
+            isExpanded = false
+        }
+    }
+
+    private var compactBody: some View {
+        Button {
+            withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
+                isExpanded = true
+            }
+        } label: {
+            HStack(spacing: 8) {
+                avatar(diameter: 24)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(selectedThread?.title ?? model.draftThreadTitle)
+                        .font(GaryxFont.callout(weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+
+                    Text(compactSubtitle.isEmpty ? "Thread settings" : compactSubtitle)
+                        .font(GaryxFont.caption())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                .layoutPriority(1)
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 48, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .matchedGeometryEffect(id: "thread-runtime-glass", in: glassNamespace)
+            .garyxAdaptiveGlass(
+                .regular,
+                isInteractive: true,
+                fallbackMaterial: .ultraThinMaterial,
+                in: Capsule()
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Thread model settings")
+    }
+
+    private var expandedBody: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
+                    isExpanded = false
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    avatar(diameter: 26)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(selectedThread?.title ?? model.draftThreadTitle)
+                            .font(GaryxFont.callout(weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        Text(compactSubtitle.isEmpty ? "Thread settings" : compactSubtitle)
+                            .font(GaryxFont.caption())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    .layoutPriority(1)
+
+                    Image(systemName: "chevron.up")
+                        .font(GaryxFont.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .buttonStyle(.plain)
+
+            runtimeInfoRow(
+                title: "Agent",
+                value: normalized(model.selectedThreadAgentTarget?.title)
+                    ?? normalized(runtime?.providerLabel)
+                    ?? "Default"
+            )
+
+            selectionMenuRow(
+                title: "Model",
+                value: modelValueLabel,
+                options: modelOptions,
+                selectedId: modelOverride ?? ""
+            ) { selected in
+                Task {
+                    await selectModel(selected)
+                }
+            }
+
+            if !reasoningEfforts.isEmpty {
+                selectionMenuRow(
+                    title: "Thinking",
+                    value: reasoningValueLabel,
+                    options: [(id: "", label: "Agent default")]
+                        + reasoningEfforts.map { (id: $0.id, label: $0.label) },
+                    selectedId: reasoningEffortOverride ?? ""
+                ) { selected in
+                    Task {
+                        await model.updateSelectedThreadRuntimeSettings(reasoningEffort: selected)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .matchedGeometryEffect(id: "thread-runtime-glass", in: glassNamespace)
+        .garyxAdaptiveGlass(
+            .regular,
+            isInteractive: true,
+            fallbackMaterial: .ultraThinMaterial,
+            in: RoundedRectangle(cornerRadius: 24, style: .continuous)
+        )
+        .accessibilityElement(children: .contain)
+    }
+
+    private var modelOptions: [(id: String, label: String)] {
+        [(id: "", label: "Agent default")]
+            + (providerModels?.models ?? []).map { (id: $0.id, label: $0.label) }
+    }
+
+    @ViewBuilder
+    private func avatar(diameter: CGFloat) -> some View {
+        if let target = model.selectedThreadAgentTarget {
+            GaryxAgentAvatarView(
+                agentId: target.id,
+                avatarDataUrl: target.avatarDataUrl,
+                kind: target.kind,
+                label: target.title,
+                providerType: target.providerType,
+                builtIn: target.builtIn,
+                diameter: diameter
+            )
+        }
+    }
+
+    private func runtimeInfoRow(title: String, value: String) -> some View {
+        HStack(spacing: 10) {
+            Text(title)
+                .font(GaryxFont.caption(weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 58, alignment: .leading)
+
+            Text(value)
+                .font(GaryxFont.caption(weight: .medium))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Spacer(minLength: 0)
+        }
+        .frame(minHeight: 24, alignment: .center)
+    }
+
+    private func selectionMenuRow(
+        title: String,
+        value: String,
+        options: [(id: String, label: String)],
+        selectedId: String,
+        onSelect: @escaping (String) -> Void
+    ) -> some View {
+        Menu {
+            ForEach(options.indices, id: \.self) { index in
+                let option = options[index]
+                Button {
+                    withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
+                        isExpanded = false
+                    }
+                    onSelect(option.id)
+                } label: {
+                    if option.id == selectedId {
+                        Label(option.label, systemImage: "checkmark")
+                    } else {
+                        Text(option.label)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 10) {
+                Text(title)
+                    .font(GaryxFont.caption(weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 58, alignment: .leading)
+
+                Text(value)
+                    .font(GaryxFont.caption(weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "chevron.down")
+                    .font(GaryxFont.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .contentShape(Rectangle())
+            .frame(minHeight: 26, alignment: .center)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func selectModel(_ selected: String) async {
+        var nextReasoningEffort: String?
+        if !selected.isEmpty,
+           let currentReasoning = reasoningEffortOverride,
+           GaryxThreadModelOverridePresentation.sanitizedReasoningEffort(
+            providerModels: providerModels,
+            model: selected,
+            reasoningEffort: currentReasoning
+           ) == nil {
+            nextReasoningEffort = ""
+        }
+        await model.updateSelectedThreadRuntimeSettings(
+            model: selected,
+            reasoningEffort: nextReasoningEffort
+        )
+    }
+
+    private func normalized(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return nil
+        }
+        return value
     }
 }
 

@@ -298,8 +298,15 @@ interface ThreadMetadataPayload extends ThreadSummaryPayload {
 }
 
 interface ThreadRuntimePayload {
+  agent_id?: string | null;
   provider_type?: string | null;
   provider_label?: string | null;
+  model?: string | null;
+  model_reasoning_effort?: string | null;
+  model_service_tier?: string | null;
+  model_override?: string | null;
+  model_reasoning_effort_override?: string | null;
+  model_service_tier_override?: string | null;
   sdk_session_id?: string | null;
   active_run?: ThreadActiveRunPayload | null;
 }
@@ -1920,9 +1927,18 @@ function mapThreadRuntimeInfo(
   );
   return {
     agentId:
-      typeof value.agent_id === "string" ? value.agent_id : value.agentId ?? null,
+      typeof value.agent_id === "string"
+        ? value.agent_id
+        : asString(runtime.agent_id) || value.agentId || null,
     providerType,
     providerLabel: asString(runtime.provider_label) || providerLabelForThread(providerType),
+    model: asString(runtime.model) || null,
+    modelReasoningEffort: asString(runtime.model_reasoning_effort) || null,
+    modelServiceTier: asString(runtime.model_service_tier) || null,
+    modelOverride: asString(runtime.model_override) || null,
+    modelReasoningEffortOverride:
+      asString(runtime.model_reasoning_effort_override) || null,
+    modelServiceTierOverride: asString(runtime.model_service_tier_override) || null,
     sdkSessionId:
       typeof value.sdk_session_id === "string"
         ? value.sdk_session_id
@@ -3597,18 +3613,31 @@ export async function updateRemoteThread(
   input: {
     title?: string;
     workspacePath?: string | null;
+    model?: string | null;
+    modelReasoningEffort?: string | null;
+    modelServiceTier?: string | null;
   },
 ): Promise<DesktopThreadSummary> {
+  const body: Record<string, unknown> = {
+    label: input.title || undefined,
+    workspaceDir: input.workspacePath || undefined,
+  };
+  if (Object.prototype.hasOwnProperty.call(input, "model")) {
+    body.model = input.model || "";
+  }
+  if (Object.prototype.hasOwnProperty.call(input, "modelReasoningEffort")) {
+    body.modelReasoningEffort = input.modelReasoningEffort || "";
+  }
+  if (Object.prototype.hasOwnProperty.call(input, "modelServiceTier")) {
+    body.modelServiceTier = input.modelServiceTier || "";
+  }
   const payload = await requestJson<ThreadSummaryPayload>(
     settings,
     `/api/threads/${encodeURIComponent(threadId)}`,
     {
       method: "PATCH",
       signal: AbortSignal.timeout(8000),
-      body: JSON.stringify({
-        label: input.title || undefined,
-        workspaceDir: input.workspacePath || undefined,
-      }),
+      body: JSON.stringify(body),
     },
   );
   return mapThreadSummary(payload);

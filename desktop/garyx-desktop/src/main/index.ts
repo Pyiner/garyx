@@ -95,6 +95,7 @@ import type {
   UpdateAutomationInput,
   UpdateCustomAgentInput,
   UpdateTeamInput,
+  UpdateThreadRuntimeSettingsInput,
   UpdateMcpServerInput,
   UpdateSkillInput,
   UpdateSlashCommandInput,
@@ -185,6 +186,7 @@ import {
   assignTask,
   unassignTask,
   updateTaskTitle,
+  updateRemoteThread,
 } from "./gary-client";
 import {
   addChannelAccount,
@@ -1295,6 +1297,20 @@ function registerIpcHandlers(): void {
         input.threadId || input.sessionId || "",
         input.title,
       );
+    },
+  );
+
+  ipcMain.handle(
+    "garyx:update-thread-runtime-settings",
+    async (_event, input: UpdateThreadRuntimeSettingsInput) => {
+      const settings = await resolveSettings();
+      const threadId = input.threadId || "";
+      await updateRemoteThread(settings, threadId, {
+        model: input.model,
+        modelReasoningEffort: input.modelReasoningEffort,
+        modelServiceTier: input.modelServiceTier,
+      });
+      return fetchThreadHistory(settings, { threadId });
     },
   );
 

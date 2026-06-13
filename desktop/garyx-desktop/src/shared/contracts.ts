@@ -868,6 +868,12 @@ export interface ThreadRuntimeInfo {
   agentId?: string | null;
   providerType?: DesktopThreadProviderType | null;
   providerLabel?: string | null;
+  model?: string | null;
+  modelReasoningEffort?: string | null;
+  modelServiceTier?: string | null;
+  modelOverride?: string | null;
+  modelReasoningEffortOverride?: string | null;
+  modelServiceTierOverride?: string | null;
   sdkSessionId?: string | null;
   workspacePath?: string | null;
   worktree?: ThreadWorktreeInfo | null;
@@ -1515,6 +1521,13 @@ export interface RenameThreadInput {
   title: string;
 }
 
+export interface UpdateThreadRuntimeSettingsInput {
+  threadId: string;
+  model?: string | null;
+  modelReasoningEffort?: string | null;
+  modelServiceTier?: string | null;
+}
+
 export interface DeleteThreadInput {
   threadId: string;
   // Compatibility fallback for older callers. Prefer `threadId`.
@@ -2099,6 +2112,9 @@ export interface GaryxDesktopApi {
     input?: ListProviderRecentSessionsInput,
   ) => Promise<DesktopProviderRecentSession[]>;
   renameThread: (input: RenameThreadInput) => Promise<DesktopState>;
+  updateThreadRuntimeSettings: (
+    input: UpdateThreadRuntimeSettingsInput,
+  ) => Promise<ThreadTranscript>;
   deleteThread: (input: DeleteThreadInput) => Promise<DesktopState>;
   setThreadPinned: (input: SetThreadPinnedInput) => Promise<DesktopState>;
   getThreadHistory: (

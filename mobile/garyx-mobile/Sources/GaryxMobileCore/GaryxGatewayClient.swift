@@ -291,11 +291,20 @@ public final class GaryxGatewayClient {
     public func updateThread(
         threadId: String,
         label: String? = nil,
-        workspaceDir: String? = nil
+        workspaceDir: String? = nil,
+        model: String? = nil,
+        modelReasoningEffort: String? = nil,
+        modelServiceTier: String? = nil
     ) async throws -> GaryxThreadSummary {
         try await patch(
             "/api/threads/\(threadId.urlPathEncoded)",
-            body: GaryxUpdateThreadRequest(label: label, workspaceDir: workspaceDir)
+            body: GaryxUpdateThreadRequest(
+                label: label,
+                workspaceDir: workspaceDir,
+                model: model,
+                modelReasoningEffort: modelReasoningEffort,
+                modelServiceTier: modelServiceTier
+            )
         )
     }
 

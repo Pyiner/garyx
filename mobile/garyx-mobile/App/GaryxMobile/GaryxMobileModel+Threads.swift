@@ -759,6 +759,35 @@ extension GaryxMobileModel {
         }
     }
 
+    func updateSelectedThreadRuntimeSettings(
+        model: String? = nil,
+        reasoningEffort: String? = nil
+    ) async {
+        guard let selectedThread else { return }
+        let threadId = selectedThread.id
+        do {
+            let updated = try await client().updateThread(
+                threadId: threadId,
+                model: model,
+                modelReasoningEffort: reasoningEffort
+            )
+            if self.selectedThread?.id == threadId {
+                var next = updated
+                next.threadRuntime = self.selectedThread?.threadRuntime
+                self.selectedThread = next
+                draftThreadTitle = next.title
+            }
+            if let index = threads.firstIndex(where: { $0.id == threadId }) {
+                var next = updated
+                next.threadRuntime = threads[index].threadRuntime
+                threads[index] = next
+            }
+            await loadSelectedThreadHistory()
+        } catch {
+            lastError = displayMessage(for: error)
+        }
+    }
+
     func loadSelectedThreadHistory() async {
         guard let selectedThread else {
             selectedThreadHistoryRetryTask?.cancel()
@@ -850,6 +879,9 @@ extension GaryxMobileModel {
         markThreadHistoryLoaded(threadId)
         selectedThreadActivitySignatures[threadId] = GaryxThreadActivitySignature.make(from: transcript)
         updateThreadRuntimeState(threadId: threadId, transcript: transcript)
+        if let runtime = transcript.threadRuntime {
+            applyThreadRuntimeSummary(runtime, threadId: threadId)
+        }
         if selectedThread?.id == threadId {
             updateSelectedThreadHistoryPagination(
                 threadId: threadId,
@@ -1024,6 +1056,42 @@ extension GaryxMobileModel {
         }
         if changed {
             refreshRemoteBusyIdsForVisibleThreads()
+        }
+    }
+
+    func applyThreadRuntimeSummary(_ runtime: GaryxThreadRuntimeSummary, threadId: String) {
+        let normalizedThreadId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedThreadId.isEmpty else { return }
+
+        func mergedRuntimeSummary(_ thread: GaryxThreadSummary) -> GaryxThreadSummary {
+            var updated = thread
+            updated.threadRuntime = runtime
+            if let agentId = runtime.agentId?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !agentId.isEmpty {
+                updated.agentId = agentId
+            }
+            if let providerType = runtime.providerType?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !providerType.isEmpty {
+                updated.providerType = providerType
+            }
+            if let activeRunId = runtime.activeRun?.runId?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !activeRunId.isEmpty {
+                updated.activeRunId = activeRunId
+                updated.runState = "running"
+            } else if updated.activeRunId != nil {
+                updated.activeRunId = nil
+                let recentRunId = updated.recentRunId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                updated.runState = recentRunId.isEmpty ? "idle" : "completed"
+            }
+            return updated
+        }
+
+        threads = threads.map { thread in
+            thread.id == normalizedThreadId ? mergedRuntimeSummary(thread) : thread
+        }
+        if selectedThread?.id == normalizedThreadId,
+           let selectedThread {
+            self.selectedThread = mergedRuntimeSummary(selectedThread)
         }
     }
 
