@@ -893,37 +893,10 @@ extension GaryxMobileModel {
                 isLoadingSelectedThreadHistory = false
             }
         }
-        let shouldFastLoadVisibleMessages = cachedMessages(for: threadId).isEmpty
         do {
-            if shouldFastLoadVisibleMessages {
-                let visibleTranscript = try await client().threadHistory(
-                    threadId: threadId,
-                    limit: Self.threadHistoryPageLimit,
-                    userQueryLimit: Self.threadHistoryUserQueryLimit,
-                    includeToolMessages: false
-                )
-                guard self.selectedThread?.id == threadId, selectedThreadHistoryRequestId == requestId else { return }
-                applySelectedThreadTranscript(visibleTranscript, threadId: threadId)
-                isLoadingSelectedThreadHistory = false
-
-                do {
-                    let fullTranscript = try await client().threadHistory(
-                        threadId: threadId,
-                        limit: Self.threadHistoryPageLimit,
-                        userQueryLimit: Self.threadHistoryUserQueryLimit
-                    )
-                    guard self.selectedThread?.id == threadId, selectedThreadHistoryRequestId == requestId else { return }
-                    applySelectedThreadTranscript(fullTranscript, threadId: threadId)
-                } catch {
-                    guard self.selectedThread?.id == threadId, selectedThreadHistoryRequestId == requestId else { return }
-                    let message = displayMessage(for: error)
-                    if Self.isTransientGatewayErrorMessage(message) {
-                        gatewaySettingsStatus = "Waiting to sync with gateway"
-                    }
-                }
-                return
-            }
-
+            // Single load of the most recent few turns (including tool messages).
+            // Any cached transcript is shown immediately by the caller while this
+            // one request refreshes it — there is no separate no-tools pre-pass.
             let transcript = try await client().threadHistory(
                 threadId: threadId,
                 limit: Self.threadHistoryPageLimit,
