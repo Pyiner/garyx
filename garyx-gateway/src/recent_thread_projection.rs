@@ -184,7 +184,13 @@ pub(crate) async fn prune_excluded_recent_thread_projection(
     for record in records {
         let should_remove = match thread_store.get(&record.thread_id).await {
             Some(data) => is_hidden_thread_value(&data) || is_recent_thread_excluded(&data),
-            None => true,
+            // An unresolved read is not proof the thread should leave the recent
+            // list. A concurrent gateway, a not-yet-warm store, or a path mismatch
+            // can transiently fail to load an existing thread; pruning on that
+            // signal once wiped the whole projection. Genuine deletions are removed
+            // explicitly via `remove_recent_thread`, so only drop rows we can
+            // positively confirm are hidden or excluded.
+            None => false,
         };
         if !should_remove {
             continue;
@@ -655,6 +661,31 @@ mod tests {
                 .list_recent_threads(10, 0)
                 .expect("list after prune")
                 .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn prune_excluded_recent_thread_projection_keeps_unresolved_rows() {
+        // A thread whose data cannot be loaded right now (empty store here; in
+        // production a concurrent gateway, a cold store, or a path mismatch) must
+        // not be pruned: an unresolved read is not proof of exclusion. Regression
+        // guard for the projection wipe caused by pruning on `None`.
+        let thread_id = "thread::unresolved-keep";
+        let thread_store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        let garyx_db = GaryxDbService::memory().expect("memory db");
+        garyx_db
+            .upsert_recent_thread(stale_active_draft(thread_id))
+            .expect("seed recent row");
+
+        let count = prune_excluded_recent_thread_projection(&thread_store, &garyx_db).await;
+
+        assert_eq!(count, 0);
+        assert_eq!(
+            garyx_db
+                .list_recent_threads(10, 0)
+                .expect("list after prune")
+                .len(),
+            1
         );
     }
 }
