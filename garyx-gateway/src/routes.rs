@@ -36,6 +36,7 @@ use crate::recent_thread_projection::backfill_recent_thread_projection_if_incomp
 use crate::server::AppState;
 use crate::skills::SkillStoreError;
 use crate::thread_meta_projection::backfill_thread_meta_projection_if_incomplete;
+use crate::thread_runtime::build_thread_runtime_summary;
 use crate::workspace_mode::{
     ensure_implicit_thread_workspace_for_config, worktree_base_dir_for_config,
 };
@@ -1409,14 +1410,21 @@ fn thread_pins_payload(records: &[PinnedThreadRecord]) -> Value {
     })
 }
 
-fn recent_threads_payload(
+async fn recent_threads_payload(
+    state: &Arc<AppState>,
     records: &[RecentThreadRecord],
     limit: usize,
     offset: usize,
     total: usize,
 ) -> Value {
+    let mut threads = Vec::with_capacity(records.len());
+    for record in records {
+        let mut thread = serde_json::to_value(record).unwrap_or_else(|_| Value::Null);
+        attach_thread_runtime_summary(state, &record.thread_id, &mut thread).await;
+        threads.push(thread);
+    }
     json!({
-        "threads": records,
+        "threads": threads,
         "count": records.len(),
         "limit": limit,
         "offset": offset,
@@ -1508,8 +1516,26 @@ async fn thread_metadata_response(state: &Arc<AppState>, thread_id: &str, data: 
         if let Some(block) = team_block {
             obj.insert("team".to_owned(), block);
         }
+        obj.insert(
+            "thread_runtime".to_owned(),
+            build_thread_runtime_summary(state, Some(data)).await,
+        );
     }
     value
+}
+
+async fn attach_thread_runtime_summary(
+    state: &Arc<AppState>,
+    thread_id: &str,
+    summary: &mut Value,
+) {
+    let thread_value = state.threads.thread_store.get(thread_id).await;
+    if let Some(obj) = summary.as_object_mut() {
+        obj.insert(
+            "thread_runtime".to_owned(),
+            build_thread_runtime_summary(state, thread_value.as_ref()).await,
+        );
+    }
 }
 
 /// GET /api/threads - list threads with filtering and pagination.
@@ -1538,10 +1564,15 @@ pub async fn list_threads(
         params.include_hidden,
         params.prefix.as_deref(),
     ) {
-        Ok(records) => records
-            .iter()
-            .map(thread_summary_from_meta)
-            .collect::<Vec<_>>(),
+        Ok(records) => {
+            let mut page = Vec::with_capacity(records.len());
+            for record in &records {
+                let mut summary = thread_summary_from_meta(record);
+                attach_thread_runtime_summary(&state, &record.thread_id, &mut summary).await;
+                page.push(summary);
+            }
+            page
+        }
         Err(error) => return garyx_db_error_response(error).into_response(),
     };
     let count = page.len();
@@ -1578,7 +1609,7 @@ pub async fn list_recent_threads(
     match state.ops.garyx_db.list_recent_threads(limit, offset) {
         Ok(records) => (
             StatusCode::OK,
-            Json(recent_threads_payload(&records, limit, offset, total)),
+            Json(recent_threads_payload(&state, &records, limit, offset, total).await),
         )
             .into_response(),
         Err(error) => garyx_db_error_response(error).into_response(),

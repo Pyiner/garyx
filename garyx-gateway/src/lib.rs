@@ -37,6 +37,7 @@ mod task_notifications;
 pub mod tasks;
 pub mod thread_logs;
 mod thread_meta_projection;
+mod thread_runtime;
 mod tool_image;
 mod wikis;
 pub mod workflows;

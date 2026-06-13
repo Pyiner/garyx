@@ -1858,6 +1858,113 @@ async fn thread_history_runtime_reports_effective_model_overrides() {
 }
 
 #[tokio::test]
+async fn thread_summary_routes_include_runtime_summary() {
+    let (state, _logger, _dir) = test_state().await;
+    let thread_id = "thread::runtime-summary-routes";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "Runtime summary routes",
+                "agent_id": "codex",
+                "provider_type": "codex_app_server",
+                "metadata": {
+                    "model_override": "gpt-5.5",
+                    "model_reasoning_effort_override": "xhigh",
+                },
+                "sdk_session_id": "sdk-codex-123",
+                "created_at": "2026-06-13T10:00:00.000Z",
+                "updated_at": "2026-06-13T10:01:00.000Z",
+            }),
+        )
+        .await;
+    state
+        .ops
+        .garyx_db
+        .replace_thread_meta_projection(ThreadMetaProjectionDraft {
+            thread_id: thread_id.to_owned(),
+            thread_meta: ThreadMetaDraft {
+                thread_id: thread_id.to_owned(),
+                workspace_dir: None,
+                thread_type: "chat".to_owned(),
+                thread_label: Some("Runtime summary routes".to_owned()),
+                agent_id: Some("codex".to_owned()),
+                provider_type: Some("codex_app_server".to_owned()),
+                created_at: Some("2026-06-13T10:00:00.000Z".to_owned()),
+                updated_at: Some("2026-06-13T10:01:00.000Z".to_owned()),
+                message_count: 1,
+                last_user_message: Some("hello".to_owned()),
+                last_assistant_message: Some("hi".to_owned()),
+                last_message_preview: Some("hi".to_owned()),
+                recent_run_id: None,
+                active_run_id: None,
+                worktree_json: None,
+                last_delivery_context_json: None,
+                last_delivery_updated_at: None,
+                default_list_hidden: false,
+            },
+            channel_endpoints: vec![],
+            message_routes: vec![],
+        })
+        .expect("seed thread meta projection");
+    state
+        .ops
+        .garyx_db
+        .upsert_recent_thread(RecentThreadDraft {
+            thread_id: thread_id.to_owned(),
+            title: "Runtime summary routes".to_owned(),
+            workspace_dir: None,
+            thread_type: "chat".to_owned(),
+            provider_type: Some("codex_app_server".to_owned()),
+            agent_id: Some("codex".to_owned()),
+            message_count: 1,
+            last_message_preview: "hi".to_owned(),
+            recent_run_id: None,
+            active_run_id: None,
+            run_state: "idle".to_owned(),
+            updated_at: Some("2026-06-13T10:01:00.000Z".to_owned()),
+            last_active_at: "2026-06-13T10:01:00.000Z".to_owned(),
+        })
+        .expect("seed recent thread projection");
+
+    let router = build_router(state);
+    for (uri, nested_in_threads) in [
+        ("/api/threads/thread::runtime-summary-routes", false),
+        (
+            "/api/threads?limit=10&prefix=thread%3A%3Aruntime-summary-routes",
+            true,
+        ),
+        ("/api/recent-threads?limit=10", true),
+    ] {
+        let request = authed_request().uri(uri).body(Body::empty()).unwrap();
+        let response = router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "route {uri}");
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        let runtime = if nested_in_threads {
+            &payload["threads"][0]["thread_runtime"]
+        } else {
+            &payload["thread_runtime"]
+        };
+        assert_eq!(runtime["agent_id"], "codex", "route {uri}");
+        assert_eq!(runtime["provider_type"], "codex_app_server", "route {uri}");
+        assert_eq!(runtime["model"], "gpt-5.5", "route {uri}");
+        assert_eq!(runtime["model_reasoning_effort"], "xhigh", "route {uri}");
+        assert_eq!(runtime["model_override"], "gpt-5.5", "route {uri}");
+        assert_eq!(
+            runtime["model_reasoning_effort_override"], "xhigh",
+            "route {uri}"
+        );
+        assert_eq!(runtime["sdk_session_id"], "sdk-codex-123", "route {uri}");
+    }
+}
+
+#[tokio::test]
 async fn thread_history_runtime_reports_provider_default_alias() {
     let mut config = test_config();
     config.agents.insert(
