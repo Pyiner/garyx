@@ -37,7 +37,9 @@ struct GaryxMobileRouteNotFound: Identifiable, Equatable {
 final class GaryxMobileModel: ObservableObject {
     static let threadListPageLimit = 30
     static let threadHistoryPageLimit = 100
-    static let threadHistoryUserQueryLimit = 10
+    // Open a thread by loading the most recent few user-query turns (with tool
+    // messages) in a single request — no separate fast/no-tools pre-pass.
+    static let threadHistoryUserQueryLimit = 5
     static let selectedThreadReconcileIntervalNanos: UInt64 = 1_500_000_000
     static let assistantDeltaFlushDelayNanos: UInt64 = 50_000_000
     static let selectedThreadHistoryRetryLimit = 8
