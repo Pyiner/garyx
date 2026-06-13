@@ -534,7 +534,7 @@ struct GaryxConversationHeader: View {
 
     var body: some View {
         GaryxAdaptiveGlassContainer(spacing: 10) {
-            HStack(alignment: .top, spacing: 12) {
+            HStack(spacing: 12) {
                 Button(action: goHome) {
                     GaryxToolbarIcon(systemName: "chevron.left")
                 }
@@ -658,6 +658,7 @@ private struct GaryxThreadRuntimeHeaderControl: View {
 
     private var selectedThread: GaryxThreadSummary? { model.selectedThread }
     private var runtime: GaryxThreadRuntimeSummary? { selectedThread?.threadRuntime }
+    private var title: String { selectedThread?.title ?? model.draftThreadTitle }
 
     private var providerType: String {
         normalized(runtime?.providerType)
@@ -666,50 +667,44 @@ private struct GaryxThreadRuntimeHeaderControl: View {
             ?? ""
     }
 
-    private var providerModels: GaryxProviderModels? {
-        guard !providerType.isEmpty else { return nil }
-        return model.providerModelsByType[providerType]
-    }
-
-    private var effectiveModel: String? {
-        normalized(runtime?.model) ?? normalized(providerModels?.defaultModel)
-    }
-
-    private var effectiveReasoningEffort: String? {
-        normalized(runtime?.modelReasoningEffort) ?? defaultReasoningEffort(for: effectiveModel)
-    }
-
-    private var runtimePickerTitle: String {
-        let agent = normalized(model.selectedThreadAgentTarget?.title)
-        let modelLabel = GaryxThreadModelOverridePresentation.modelLabel(
-            providerModels: providerModels,
-            model: effectiveModel
-        )
-        let effortLabel = GaryxThreadModelOverridePresentation.reasoningEffortLabel(
-            providerModels: providerModels,
-            model: effectiveModel,
-            reasoningEffort: effectiveReasoningEffort
-        )
-        return [agent, modelLabel, effortLabel]
-            .compactMap { $0 }
-            .joined(separator: " · ")
-    }
-
     var body: some View {
         Button {
             showsRuntimeSheet = true
         } label: {
-            GaryxAgentPickerLabel(
-                target: model.selectedThreadAgentTarget,
-                title: runtimePickerTitle.isEmpty ? "Thread settings" : runtimePickerTitle,
-                showsChevron: true,
-                style: .compact
+            HStack(spacing: 8) {
+                if let target = model.selectedThreadAgentTarget {
+                    GaryxAgentAvatarView(
+                        agentId: target.id,
+                        avatarDataUrl: target.avatarDataUrl,
+                        kind: target.kind,
+                        label: target.title,
+                        providerType: target.providerType,
+                        builtIn: target.builtIn,
+                        diameter: 22
+                    )
+                }
+
+                Text(title)
+                    .font(GaryxFont.callout(weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .layoutPriority(1)
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 44, alignment: .leading)
+            .frame(maxWidth: 282, alignment: .leading)
+            .garyxAdaptiveGlass(
+                .regular,
+                isInteractive: false,
+                fallbackMaterial: .ultraThinMaterial,
+                in: Capsule()
             )
         }
         .buttonStyle(.plain)
-        .frame(height: 44, alignment: .center)
-        .frame(maxWidth: 220, alignment: .leading)
-        .contentShape(Rectangle())
+        .contentShape(Capsule())
+        .accessibilityLabel("\(title), thread settings")
+        .layoutPriority(1)
         .task(id: providerType) {
             guard !providerType.isEmpty,
                   model.providerModelsByType[providerType] == nil else {
@@ -731,16 +726,6 @@ private struct GaryxThreadRuntimeHeaderControl: View {
             return nil
         }
         return value
-    }
-
-    private func defaultReasoningEffort(for modelId: String?) -> String? {
-        if let modelId = normalized(modelId),
-           let modelOption = providerModels?.models.first(where: { $0.id == modelId }),
-           let effort = normalized(modelOption.defaultReasoningEffort) {
-            return effort
-        }
-        return providerModels?.reasoningEfforts.first(where: { $0.recommended }).flatMap { normalized($0.id) }
-            ?? providerModels?.reasoningEfforts.first.flatMap { normalized($0.id) }
     }
 }
 
@@ -818,7 +803,7 @@ private struct GaryxThreadRuntimeSettingsSheet: View {
     }
 
     private var canSelectReasoningEffort: Bool {
-        !reasoningEfforts.isEmpty && !reasoningEffortOptions.isEmpty
+        !reasoningEffortOptions.isEmpty
     }
 
     var body: some View {
@@ -1020,9 +1005,8 @@ private struct GaryxThreadRuntimeSettingsSheet: View {
         var seen = Set<String>()
         var options: [(id: String, label: String)] = []
         if let defaultModel = providerDefaultModel ?? effectiveModel,
-           let label = modelLabel(defaultModel),
            seen.insert("").inserted {
-            options.append((id: "", label: label))
+            options.append((id: "", label: modelLabel(defaultModel) ?? defaultModel))
             seen.insert(defaultModel)
         }
         for option in providerModels?.models ?? [] where seen.insert(option.id).inserted {
@@ -1047,9 +1031,8 @@ private struct GaryxThreadRuntimeSettingsSheet: View {
         var seen = Set<String>()
         var options: [(id: String, label: String)] = []
         if let defaultEffort = defaultReasoningEffort(for: effortFilterModel),
-           let label = reasoningEffortLabel(defaultEffort),
            seen.insert("").inserted {
-            options.append((id: "", label: label))
+            options.append((id: "", label: reasoningEffortLabel(defaultEffort) ?? defaultEffort))
             seen.insert(defaultEffort)
         }
         for option in reasoningEfforts where seen.insert(option.id).inserted {
@@ -1145,13 +1128,10 @@ private struct GaryxThreadRuntimeSettingsSheet: View {
     }
 
     private func defaultReasoningEffort(for modelId: String?) -> String? {
-        if let modelId = normalized(modelId),
-           let modelOption = providerModels?.models.first(where: { $0.id == modelId }),
-           let effort = normalized(modelOption.defaultReasoningEffort) {
-            return effort
-        }
-        return providerModels?.reasoningEfforts.first(where: { $0.recommended }).flatMap { normalized($0.id) }
-            ?? providerModels?.reasoningEfforts.first.flatMap { normalized($0.id) }
+        GaryxThreadModelOverridePresentation.defaultReasoningEffort(
+            providerModels: providerModels,
+            model: modelId
+        )
     }
 
     private func normalized(_ value: String?) -> String? {

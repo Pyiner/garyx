@@ -35,6 +35,21 @@ public enum GaryxThreadModelOverridePresentation {
         return providerModels.reasoningEfforts
     }
 
+    /// Default thinking level for a model: model-specific default first, then
+    /// the provider-recommended level, then the first advertised level.
+    public static func defaultReasoningEffort(
+        providerModels: GaryxProviderModels?,
+        model: String?
+    ) -> String? {
+        if let model = normalized(model),
+           let modelOption = providerModels?.models.first(where: { $0.id == model }),
+           let effort = normalized(modelOption.defaultReasoningEffort) {
+            return effort
+        }
+        return providerModels?.reasoningEfforts.first(where: { $0.recommended }).flatMap { normalized($0.id) }
+            ?? providerModels?.reasoningEfforts.first.flatMap { normalized($0.id) }
+    }
+
     /// Drops a thinking level the current model selection does not support.
     public static func sanitizedReasoningEffort(
         providerModels: GaryxProviderModels?,
