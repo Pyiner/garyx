@@ -322,6 +322,32 @@ public struct GaryxThreadRuntimeSummary: Decodable, Equatable, Sendable {
     public var sdkSessionId: String?
     public var activeRun: GaryxThreadActiveRunSummary?
 
+    public init(
+        agentId: String? = nil,
+        providerType: String? = nil,
+        providerLabel: String? = nil,
+        model: String? = nil,
+        modelReasoningEffort: String? = nil,
+        modelServiceTier: String? = nil,
+        modelOverride: String? = nil,
+        modelReasoningEffortOverride: String? = nil,
+        modelServiceTierOverride: String? = nil,
+        sdkSessionId: String? = nil,
+        activeRun: GaryxThreadActiveRunSummary? = nil
+    ) {
+        self.agentId = agentId
+        self.providerType = providerType
+        self.providerLabel = providerLabel
+        self.model = model
+        self.modelReasoningEffort = modelReasoningEffort
+        self.modelServiceTier = modelServiceTier
+        self.modelOverride = modelOverride
+        self.modelReasoningEffortOverride = modelReasoningEffortOverride
+        self.modelServiceTierOverride = modelServiceTierOverride
+        self.sdkSessionId = sdkSessionId
+        self.activeRun = activeRun
+    }
+
     enum CodingKeys: String, CodingKey {
         case agentId = "agent_id"
         case providerType = "provider_type"

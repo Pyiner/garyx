@@ -63,8 +63,8 @@ extension View {
     /// Hosts the floating panels published by `garyxInPlaceMessageMenu` rows
     /// below this view. Attach once at the scrollable surface root.
     /// `bottomInset` keeps panels above floating bottom chrome.
-    func garyxMessageMenuHost(bottomInset: CGFloat = 0) -> some View {
-        modifier(GaryxMessageMenuHostModifier(bottomInset: bottomInset))
+    func garyxMessageMenuHost(bottomInset: CGFloat = 0, dismissToken: String = "") -> some View {
+        modifier(GaryxMessageMenuHostModifier(bottomInset: bottomInset, dismissToken: dismissToken))
     }
 }
 
@@ -107,6 +107,7 @@ private struct GaryxInPlaceMessageMenuModifier: ViewModifier {
 
 private struct GaryxMessageMenuHostModifier: ViewModifier {
     var bottomInset: CGFloat = 0
+    var dismissToken = ""
 
     private static let menuWidth: CGFloat = 236
     private static let rowHeight: CGFloat = 46
@@ -128,6 +129,9 @@ private struct GaryxMessageMenuHostModifier: ViewModifier {
                     }
                 }
                 .animation(.easeOut(duration: 0.14), value: request?.token)
+                .onChange(of: dismissToken) { _, _ in
+                    request?.dismiss()
+                }
             }
         }
     }

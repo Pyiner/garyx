@@ -151,7 +151,10 @@ struct GaryxConversationView: View {
             // Floating long-press menus render here, outside the transcript
             // scroll, so panels are never clipped and the pressed message
             // itself stays untouched.
-            .garyxMessageMenuHost(bottomInset: bottomChromeHeight)
+            .garyxMessageMenuHost(
+                bottomInset: bottomChromeHeight,
+                dismissToken: messageMenuDismissToken
+            )
             // Scroll-to-bottom hovers directly above the composer. It lives
             // INSIDE the bottom chrome: hosting it in a content overlay made
             // the safe-area inset shift its visuals without its hit-test
@@ -497,6 +500,15 @@ struct GaryxConversationView: View {
         "tail-thinking-\(conversationScrollIdentity)"
     }
 
+    private var messageMenuDismissToken: String {
+        [
+            conversationScrollIdentity,
+            model.activePanel.rawValue,
+            model.sidebarVisible ? "sidebar" : "content",
+            model.showsSettings ? "settings" : "main",
+        ].joined(separator: "|")
+    }
+
     private func prefetchOlderHistoryIfNeeded(ignoreDistance: Bool = false) {
         guard let threadId = model.selectedThread?.id,
               scrollStateBox.state.shouldPrefetchOlderHistory(
@@ -821,6 +833,7 @@ private struct GaryxThreadRuntimeSettingsSheet: View {
                             options: modelOptions,
                             selectedId: selectedModelOptionId
                         ) { selected in
+                            page = .main
                             Task {
                                 await selectModel(selected)
                             }
@@ -830,9 +843,9 @@ private struct GaryxThreadRuntimeSettingsSheet: View {
                             options: reasoningEffortOptions,
                             selectedId: selectedReasoningEffortOptionId
                         ) { selected in
+                            page = .main
                             Task {
                                 await model.updateSelectedThreadRuntimeSettings(reasoningEffort: selected)
-                                page = .main
                             }
                         }
                     }
@@ -1068,7 +1081,6 @@ private struct GaryxThreadRuntimeSettingsSheet: View {
             model: selected,
             reasoningEffort: nextReasoningEffort
         )
-        page = .main
     }
 
     private var actualModelLabel: String {

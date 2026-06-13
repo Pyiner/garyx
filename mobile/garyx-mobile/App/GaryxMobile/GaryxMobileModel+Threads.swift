@@ -781,12 +781,23 @@ extension GaryxMobileModel {
     ) async {
         guard let selectedThread else { return }
         let threadId = selectedThread.id
+        let mutationId = UUID()
+        let previousSelectedRuntime = selectedThread.threadRuntime
+        let previousListRuntime = threads.first(where: { $0.id == threadId })?.threadRuntime
+        threadRuntimeMutationIds[threadId] = mutationId
+        applyOptimisticThreadRuntimeSettings(
+            threadId: threadId,
+            model: model,
+            reasoningEffort: reasoningEffort
+        )
         do {
             let updated = try await client().updateThread(
                 threadId: threadId,
                 model: model,
                 modelReasoningEffort: reasoningEffort
             )
+            guard threadRuntimeMutationIds[threadId] == mutationId else { return }
+            threadRuntimeMutationIds[threadId] = nil
             if self.selectedThread?.id == threadId {
                 var next = updated
                 next.threadRuntime = updated.threadRuntime ?? self.selectedThread?.threadRuntime
@@ -800,7 +811,60 @@ extension GaryxMobileModel {
             }
             await loadSelectedThreadHistory()
         } catch {
+            guard threadRuntimeMutationIds[threadId] == mutationId else { return }
+            threadRuntimeMutationIds[threadId] = nil
+            restoreThreadRuntimeSettings(
+                threadId: threadId,
+                selectedRuntime: previousSelectedRuntime,
+                listRuntime: previousListRuntime
+            )
             lastError = displayMessage(for: error)
+        }
+    }
+
+    private func applyOptimisticThreadRuntimeSettings(
+        threadId: String,
+        model: String?,
+        reasoningEffort: String?
+    ) {
+        let normalizedThreadId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedThreadId.isEmpty else { return }
+        guard let base = selectedThread?.id == normalizedThreadId
+            ? selectedThread
+            : threads.first(where: { $0.id == normalizedThreadId }) else {
+            return
+        }
+        var runtime = base.threadRuntime ?? GaryxThreadRuntimeSummary(
+            agentId: base.agentId,
+            providerType: base.providerType
+        )
+        if let model {
+            let value = model.garyxTrimmedNilIfEmpty
+            runtime.modelOverride = value
+            runtime.model = value
+        }
+        if let reasoningEffort {
+            let value = reasoningEffort.garyxTrimmedNilIfEmpty
+            runtime.modelReasoningEffortOverride = value
+            runtime.modelReasoningEffort = value
+        }
+        applyThreadRuntimeSummary(runtime, threadId: normalizedThreadId)
+    }
+
+    private func restoreThreadRuntimeSettings(
+        threadId: String,
+        selectedRuntime: GaryxThreadRuntimeSummary?,
+        listRuntime: GaryxThreadRuntimeSummary?
+    ) {
+        let normalizedThreadId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedThreadId.isEmpty else { return }
+        if selectedThread?.id == normalizedThreadId,
+           var selectedThread {
+            selectedThread.threadRuntime = selectedRuntime
+            self.selectedThread = selectedThread
+        }
+        if let index = threads.firstIndex(where: { $0.id == normalizedThreadId }) {
+            threads[index].threadRuntime = listRuntime
         }
     }
 
