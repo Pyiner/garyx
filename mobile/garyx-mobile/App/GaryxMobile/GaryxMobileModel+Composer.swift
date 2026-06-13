@@ -489,6 +489,7 @@ extension GaryxMobileModel {
     func advanceSelectedThreadDraftGeneration() {
         selectedThreadDraftGeneration = UUID()
         pendingBotDraftGeneration = nil
+        clearNewThreadModelOverride()
     }
 
     func ensureSelectedThread() async throws -> GaryxThreadSummary {
@@ -515,11 +516,16 @@ extension GaryxMobileModel {
             ? newThreadAgentTargetId()
             : pendingAgentId
         let workspaceMode = pendingWorkspace.isEmpty ? workspaceModeForNewThread(workspace: workspace) : "local"
+        let modelOverride = newThreadModelOverride.trimmingCharacters(in: .whitespacesAndNewlines)
+        let reasoningEffortOverride = newThreadReasoningEffortOverride
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let thread = try await client().createThread(
             GaryxCreateThreadRequest(
                 workspaceDir: workspace.isEmpty ? nil : workspace,
                 workspaceMode: workspaceMode,
                 agentId: agentId.isEmpty ? nil : agentId,
+                model: modelOverride.isEmpty ? nil : modelOverride,
+                modelReasoningEffort: reasoningEffortOverride.isEmpty ? nil : reasoningEffortOverride,
                 metadata: ["client": "garyx-mobile"]
             )
         )
@@ -531,6 +537,7 @@ extension GaryxMobileModel {
             selectedThread = thread
             draftThreadTitle = thread.title
             clearPendingNewThreadAgentTarget()
+            clearNewThreadModelOverride()
         }
         if !pendingBotIdForThread.isEmpty {
             _ = try await client().bindBot(botId: pendingBotIdForThread, threadId: thread.id)
