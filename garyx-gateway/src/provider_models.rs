@@ -364,6 +364,11 @@ fn apply_default_model_to_gpt_discovery(
     if let Some(model) = discovery.models.iter().find(|model| model.id == trimmed) {
         discovery.reasoning_efforts = model.supported_reasoning_efforts.clone();
         discovery.service_tiers = model.service_tiers.clone();
+    } else {
+        // A configured model can be newer than the built-in catalog. Avoid
+        // showing reasoning or tier options that belong to the previous default.
+        discovery.reasoning_efforts.clear();
+        discovery.service_tiers.clear();
     }
     discovery
 }
@@ -1121,6 +1126,18 @@ mod tests {
         assert_eq!(discovery.service_tiers[0].id, "priority");
         assert_eq!(discovery.reasoning_efforts[1].id, "medium");
         assert!(discovery.reasoning_efforts[1].recommended);
+    }
+
+    #[test]
+    fn gpt_configured_unknown_default_model_does_not_reuse_previous_options() {
+        let discovery = apply_default_model_to_gpt_discovery(
+            gpt_builtin_models(None),
+            Some("gpt-6-turbo".to_owned()),
+        );
+
+        assert_eq!(discovery.default_model.as_deref(), Some("gpt-6-turbo"));
+        assert!(discovery.reasoning_efforts.is_empty());
+        assert!(discovery.service_tiers.is_empty());
     }
 
     #[tokio::test]

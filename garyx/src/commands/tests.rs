@@ -762,6 +762,100 @@ async fn cmd_config_provider_model_puts_settings_patch() {
 }
 
 #[tokio::test]
+async fn cmd_config_provider_model_clears_native_provider_defaults() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_settings_update_http_test_server(requests.clone()).await;
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_test_gateway_config(&dir, &base_url);
+
+    cmd_config_provider_model(
+        config_path.to_str().expect("config path"),
+        "anthropic",
+        None,
+        true,
+        None,
+        true,
+        true,
+    )
+    .await
+    .expect("provider model clear should succeed");
+
+    handle.abort();
+
+    let records = requests.lock().expect("request lock");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].method, "PUT");
+    assert_eq!(records[0].path, "/api/settings?merge=true");
+    assert_eq!(
+        records[0].body["agents"]["anthropic"]["provider_type"],
+        "anthropic"
+    );
+    assert_eq!(records[0].body["agents"]["anthropic"]["default_model"], "");
+    assert_eq!(
+        records[0].body["agents"]["anthropic"]["model_reasoning_effort"],
+        ""
+    );
+}
+
+#[tokio::test]
+async fn cmd_config_provider_model_rejects_unknown_provider_without_request() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_settings_update_http_test_server(requests.clone()).await;
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_test_gateway_config(&dir, &base_url);
+
+    let error = cmd_config_provider_model(
+        config_path.to_str().expect("config path"),
+        "unknown_provider",
+        Some("model-x".to_owned()),
+        false,
+        None,
+        false,
+        true,
+    )
+    .await
+    .expect_err("unknown provider should fail");
+
+    handle.abort();
+
+    assert!(
+        error
+            .to_string()
+            .contains("unsupported provider type: unknown_provider")
+    );
+    assert!(requests.lock().expect("request lock").is_empty());
+}
+
+#[test]
+fn provider_model_config_key_maps_configurable_provider_types() {
+    assert_eq!(
+        provider_model_config_key(&ProviderType::ClaudeCode).unwrap(),
+        "claude"
+    );
+    assert_eq!(
+        provider_model_config_key(&ProviderType::CodexAppServer).unwrap(),
+        "codex"
+    );
+    assert_eq!(
+        provider_model_config_key(&ProviderType::GeminiCli).unwrap(),
+        "gemini"
+    );
+    assert_eq!(
+        provider_model_config_key(&ProviderType::Gpt).unwrap(),
+        "gpt"
+    );
+    assert_eq!(
+        provider_model_config_key(&ProviderType::ClaudeLlm).unwrap(),
+        "anthropic"
+    );
+    assert_eq!(
+        provider_model_config_key(&ProviderType::GeminiLlm).unwrap(),
+        "google"
+    );
+    assert!(provider_model_config_key(&ProviderType::AgentTeam).is_err());
+}
+
+#[tokio::test]
 async fn cmd_thread_create_posts_worktree_mode() {
     let requests = StdArc::new(Mutex::new(Vec::new()));
     let (base_url, handle) = spawn_thread_task_http_test_server(requests.clone()).await;

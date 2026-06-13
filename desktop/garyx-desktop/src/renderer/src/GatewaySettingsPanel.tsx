@@ -825,7 +825,7 @@ function providerAgentConfig(gatewayDraft: any, key: FixedModelProviderKey): Rec
   const agentsConfig = gatewayDraft && typeof gatewayDraft === 'object' && gatewayDraft.agents && typeof gatewayDraft.agents === 'object'
     ? gatewayDraft.agents
     : {};
-  const candidates = [row.agentId, ...(row.legacyAgentIds || []), row.key];
+  const candidates = Array.from(new Set([row.agentId, ...(row.legacyAgentIds || []), row.key]));
   for (const candidate of candidates) {
     const value = agentsConfig[candidate];
     if (value && typeof value === 'object' && !Array.isArray(value)) {
@@ -1631,6 +1631,8 @@ export function GatewaySettingsPanel({
   }, [providerConfigRow?.providerType, providerModelsByType, providerModelsLoading]);
 
   useEffect(() => {
+    // Only native provider rows derive draft defaults from catalog presets.
+    // CLI-backed provider rows read explicit defaults from gatewayDraft.
     if (!providerConfigRow || providerConfigRow.group !== 'native' || !activeProviderModels) {
       return;
     }
@@ -1785,6 +1787,8 @@ export function GatewaySettingsPanel({
     row: FixedModelProviderRow,
     draft: ModelProviderConfigDraft,
   ) {
+    // Optimistically updates the settings draft; handleSaveProviderConfig keeps
+    // the dialog open if the subsequent gateway save fails so the user can retry.
     onMutateGatewayDraft((next) => {
       next.agents = next.agents || {};
       const current = next.agents[row.agentId] && typeof next.agents[row.agentId] === 'object'
