@@ -6,7 +6,7 @@ use garyx_models::Principal;
 use garyx_models::provider::{
     AgentRunRequest, FORK_FROM_PROVIDER_TYPE_METADATA_KEY, FORK_FROM_SDK_SESSION_ID_METADATA_KEY,
     FilePayload, ImagePayload, PromptAttachment, PromptAttachmentKind, ProviderMessage,
-    ProviderRunOptions, ProviderRunResult, ProviderType, QueuedUserInput,
+    ProviderMessageRole, ProviderRunOptions, ProviderRunResult, ProviderType, QueuedUserInput,
     SDK_SESSION_FORK_METADATA_KEY, SDK_SESSION_ID_METADATA_KEY, StreamEvent,
     attachments_from_metadata, build_user_content_from_parts, stage_file_payloads_for_prompt,
     stage_image_payloads_for_prompt,
@@ -791,18 +791,49 @@ async fn render_streaming_user_message_for_provider(
     message.to_owned()
 }
 
+/// The last assistant text segment of a run, used as the task-ready
+/// notification body. A run's `session_messages` carry one assistant message per
+/// streamed segment, so the final assistant entry with visible text is the run's
+/// closing turn (the summary after the last tool call). Returns `None` when the
+/// run produced no assistant text (e.g. it ended on a tool call), which lets the
+/// gateway fall back to its own last-segment extraction from the transcript.
+///
+/// Note: the gateway fallback (`final_text_after_last_user`) concatenates the
+/// trailing contiguous run of assistant messages, so when a closing turn spans
+/// several adjacent assistant segments with no tool call between them this sends
+/// only the final segment while the fallback would join them. That is acceptable:
+/// segment boundaries normally coincide with tool calls.
+fn last_assistant_segment(messages: &[ProviderMessage]) -> Option<String> {
+    messages
+        .iter()
+        .rev()
+        .filter(|message| matches!(message.role, ProviderMessageRole::Assistant))
+        .find_map(|message| {
+            message
+                .text
+                .as_deref()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(ToOwned::to_owned)
+        })
+}
+
 async fn mark_task_ready_for_review_after_stopped_run(
     inner: &super::state::Inner,
     thread_id: &str,
     run_id: &str,
-    final_message: Option<&str>,
+    gate_response: Option<&str>,
+    notification_text: Option<&str>,
     thread_logs: Option<Arc<dyn ThreadLogSink>>,
     thread_log_id: Option<&str>,
 ) {
-    let Some(final_message) = final_message
+    // Gate on the full run response: a run that produced no output is not a
+    // result to review. The notification *body* uses only the last segment.
+    if gate_response
         .map(str::trim)
         .filter(|value| !value.is_empty())
-    else {
+        .is_none()
+    {
         record_thread_log(
             thread_logs,
             thread_log_id,
@@ -816,7 +847,7 @@ async fn mark_task_ready_for_review_after_stopped_run(
         )
         .await;
         return;
-    };
+    }
     let Some(store) = inner.thread_store.read().await.clone() else {
         return;
     };
@@ -838,7 +869,9 @@ async fn mark_task_ready_for_review_after_stopped_run(
                     "thread_id": thread_id,
                     "run_id": run_id,
                     "task_id": task_id,
-                    "final_message": final_message,
+                    "final_message": notification_text
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty()),
                 });
                 let _ = tx.send(event.to_string());
             }
@@ -1638,11 +1671,19 @@ impl MultiProviderBridge {
                     }
 
                     if res.success {
+                        let last_segment = last_assistant_segment(
+                            persistence_result
+                                .as_ref()
+                                .map(|value| value.session_messages.as_slice())
+                                .filter(|messages| !messages.is_empty())
+                                .unwrap_or(&res.session_messages),
+                        );
                         mark_task_ready_for_review_after_stopped_run(
                             &inner,
                             &thread_id_owned,
                             &run_id_owned,
                             Some(&res.response),
+                            last_segment.as_deref(),
                             thread_logs_for_task.clone(),
                             thread_log_id_owned.as_deref(),
                         )
