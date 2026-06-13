@@ -328,3 +328,42 @@ async fn dispatches_ready_notification_to_bot_target() {
     }
     assert!(persisted_notification);
 }
+
+#[test]
+fn parse_event_treats_null_final_message_as_absent() {
+    // Stage 1 contract: when the bridge has no last segment it emits a JSON null
+    // final_message; the gateway must read that as absent so dispatch falls back
+    // to `final_text_after_last_user`.
+    let payload = json!({
+        "type": "task_ready_for_review",
+        "thread_id": "thread::x",
+        "task_id": "#TASK-1",
+        "run_id": "run-1",
+        "final_message": Value::Null,
+    });
+    let event = parse_task_ready_for_review_event(&payload).expect("event parses");
+    assert_eq!(event.final_message, None);
+}
+
+#[test]
+fn parse_event_treats_missing_final_message_as_absent() {
+    let payload = json!({
+        "type": "task_ready_for_review",
+        "thread_id": "thread::x",
+        "task_id": "#TASK-1",
+    });
+    let event = parse_task_ready_for_review_event(&payload).expect("event parses");
+    assert_eq!(event.final_message, None);
+}
+
+#[test]
+fn parse_event_keeps_non_empty_final_message() {
+    let payload = json!({
+        "type": "task_ready_for_review",
+        "thread_id": "thread::x",
+        "task_id": "#TASK-1",
+        "final_message": "Done.",
+    });
+    let event = parse_task_ready_for_review_event(&payload).expect("event parses");
+    assert_eq!(event.final_message.as_deref(), Some("Done."));
+}

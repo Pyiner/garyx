@@ -265,3 +265,60 @@ fn test_resolve_persisted_sdk_session_id_for_provider_ignores_other_provider_leg
 
     assert!(resolved.is_none());
 }
+
+#[test]
+fn last_assistant_segment_returns_final_assistant_turn() {
+    // Narrate, run a tool, narrate, run a tool, then summarize: the notification
+    // body should be only the closing summary, not the whole run narration.
+    let messages = vec![
+        ProviderMessage::assistant_text("Let me check the code."),
+        ProviderMessage::tool_use(json!({ "cmd": "ls" }), Some("t1".into()), Some("Bash".into())),
+        ProviderMessage::tool_result(json!("ok"), Some("t1".into()), Some("Bash".into()), None),
+        ProviderMessage::assistant_text("Found it. Here is the summary."),
+    ];
+
+    assert_eq!(
+        last_assistant_segment(&messages).as_deref(),
+        Some("Found it. Here is the summary."),
+    );
+}
+
+#[test]
+fn last_assistant_segment_skips_trailing_tool_messages() {
+    // Run ends on a tool call: fall back to the last assistant text before it.
+    let messages = vec![
+        ProviderMessage::assistant_text("Working on it."),
+        ProviderMessage::tool_use(json!({ "cmd": "edit" }), Some("t1".into()), Some("Edit".into())),
+        ProviderMessage::tool_result(json!("done"), Some("t1".into()), Some("Edit".into()), None),
+    ];
+
+    assert_eq!(
+        last_assistant_segment(&messages).as_deref(),
+        Some("Working on it."),
+    );
+}
+
+#[test]
+fn last_assistant_segment_skips_blank_assistant_text() {
+    let messages = vec![
+        ProviderMessage::assistant_text("Real answer."),
+        ProviderMessage::assistant_text("   "),
+    ];
+
+    assert_eq!(
+        last_assistant_segment(&messages).as_deref(),
+        Some("Real answer."),
+    );
+}
+
+#[test]
+fn last_assistant_segment_none_without_assistant_text() {
+    // No assistant text at all (only tool activity): the gateway falls back to
+    // its own transcript extraction, so we return None here.
+    let messages = vec![
+        ProviderMessage::tool_use(json!({}), Some("t1".into()), Some("Bash".into())),
+        ProviderMessage::tool_result(json!("x"), Some("t1".into()), Some("Bash".into()), None),
+    ];
+
+    assert!(last_assistant_segment(&messages).is_none());
+}
