@@ -789,13 +789,13 @@ extension GaryxMobileModel {
             )
             if self.selectedThread?.id == threadId {
                 var next = updated
-                next.threadRuntime = self.selectedThread?.threadRuntime
+                next.threadRuntime = updated.threadRuntime ?? self.selectedThread?.threadRuntime
                 self.selectedThread = next
                 draftThreadTitle = next.title
             }
             if let index = threads.firstIndex(where: { $0.id == threadId }) {
                 var next = updated
-                next.threadRuntime = threads[index].threadRuntime
+                next.threadRuntime = updated.threadRuntime ?? threads[index].threadRuntime
                 threads[index] = next
             }
             await loadSelectedThreadHistory()
