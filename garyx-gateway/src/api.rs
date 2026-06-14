@@ -299,6 +299,11 @@ pub struct ThreadHistoryParams {
     /// Return a page containing this many human user query turns.
     #[serde(default, alias = "limit_user_queries", alias = "user_turn_limit")]
     pub user_query_limit: Option<usize>,
+    /// Return committed messages strictly after this zero-based global index
+    /// (forward / delta cursor). Takes precedence over before_index and
+    /// user_query_limit.
+    #[serde(default, alias = "after")]
+    pub after_index: Option<usize>,
     /// Whether detailed history should keep tool-related messages.
     #[serde(default = "default_include_tool_messages")]
     pub include_tool_messages: bool,
@@ -708,6 +713,7 @@ pub async fn thread_history(
             params.include_tool_messages,
             params.before_index,
             params.user_query_limit,
+            params.after_index,
         )
         .await;
         return Json(payload);
@@ -823,7 +829,7 @@ pub async fn thread_diagnostics(
         "thread": thread_value,
         "thread_runtime": build_thread_runtime_summary(&state, thread_value.as_ref()).await,
         "bindings": bindings,
-        "history": thread_history_for_key(&state, thread_id, limit, true, None, None).await,
+        "history": thread_history_for_key(&state, thread_id, limit, true, None, None, None).await,
         "message_ledger": ledger,
         "transcript_path": transcript_path,
     }))
@@ -1205,6 +1211,7 @@ pub(crate) async fn thread_history_for_key(
     include_tool_messages: bool,
     before_index: Option<usize>,
     user_query_limit: Option<usize>,
+    after_index: Option<usize>,
 ) -> Value {
     let key = thread_id.trim();
     if key.is_empty() {
@@ -1229,7 +1236,13 @@ pub(crate) async fn thread_history_for_key(
     if let Some(mut thread_value) = state.threads.thread_store.get(key).await {
         let _ = repair_inactive_active_run_snapshot(state, key, &mut thread_value).await;
     }
-    let snapshot_result = if let Some(user_query_limit) = bounded_user_query_limit {
+    let snapshot_result = if let Some(after_index) = after_index {
+        state
+            .threads
+            .history
+            .thread_snapshot_after_index(key, after_index, bounded_limit)
+            .await
+    } else if let Some(user_query_limit) = bounded_user_query_limit {
         state
             .threads
             .history
@@ -1380,6 +1393,15 @@ pub(crate) async fn thread_history_for_key(
     } else {
         Value::Null
     };
+    // An empty page means caught up: page_end_index falls back to page_start_index
+    // (0 when nothing is returned), so guard on a non-empty page or a caught-up
+    // client would be told "more after, resume at 0" → full re-fetch loop.
+    let has_more_after = !messages.is_empty() && page_end_index < total_messages;
+    let next_after_index = if has_more_after {
+        Value::Number(serde_json::Number::from(page_end_index.saturating_sub(1) as u64))
+    } else {
+        Value::Null
+    };
     let mut data_raw = snapshot.thread_data;
 
     let outbound_raw = data_raw
@@ -1498,6 +1520,8 @@ pub(crate) async fn thread_history_for_key(
             "returned_end_index": page_end_index,
             "has_more_before": has_more_before,
             "next_before_index": next_before_index,
+            "has_more_after": has_more_after,
+            "next_after_index": next_after_index,
             "user_query_limit": bounded_user_query_limit,
             "tool_related_count": tool_related_count,
             "likely_user_visible_count": likely_user_visible_count,

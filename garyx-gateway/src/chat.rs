@@ -497,6 +497,7 @@ async fn handle_chat_ws_recover(
         request.include_tool_messages,
         None,
         None,
+        None,
     )
     .await;
 

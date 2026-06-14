@@ -1379,6 +1379,110 @@ async fn test_thread_history_detail_pages_before_global_index() {
 }
 
 #[tokio::test]
+async fn test_thread_history_after_index_returns_newer_messages() {
+    let state = test_state();
+    seed_transcript_backed_thread(
+        &state,
+        "thread::fwd",
+        json!({
+            "messages": [
+                {"role": "user", "content": "m0"},
+                {"role": "assistant", "content": "m1"},
+                {"role": "user", "content": "m2"},
+                {"role": "assistant", "content": "m3"},
+                {"role": "user", "content": "m4"}
+            ]
+        }),
+    )
+    .await;
+    let router = api_router(state);
+    let req = Request::builder()
+        .uri("/api/threads/history?thread_id=thread%3A%3Afwd&after_index=1&limit=10")
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["message_stats"]["returned_messages"], 3);
+    assert_eq!(json["message_stats"]["returned_start_index"], 2);
+    assert_eq!(json["message_stats"]["has_more_after"], false);
+    assert_eq!(json["message_stats"]["next_after_index"], Value::Null);
+    assert_eq!(json["messages"][0]["index"], 2);
+    assert_eq!(json["messages"][0]["text"], "m2");
+    assert_eq!(json["messages"][2]["text"], "m4");
+}
+
+#[tokio::test]
+async fn test_thread_history_after_index_caught_up_reports_no_more() {
+    let state = test_state();
+    seed_transcript_backed_thread(
+        &state,
+        "thread::fwd-caught-up",
+        json!({
+            "messages": [
+                {"role": "user", "content": "m0"},
+                {"role": "assistant", "content": "m1"}
+            ]
+        }),
+    )
+    .await;
+    let router = api_router(state);
+    // Client already at the last index → empty page must report caught up,
+    // not has_more_after=true / next_after_index=0 (which would loop a full refetch).
+    let req = Request::builder()
+        .uri("/api/threads/history?thread_id=thread%3A%3Afwd-caught-up&after_index=1&limit=10")
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["message_stats"]["returned_messages"], 0);
+    assert_eq!(json["message_stats"]["has_more_after"], false);
+    assert_eq!(json["message_stats"]["next_after_index"], Value::Null);
+}
+
+#[tokio::test]
+async fn test_thread_history_after_index_has_more_when_bounded() {
+    let state = test_state();
+    seed_transcript_backed_thread(
+        &state,
+        "thread::fwd-bounded",
+        json!({
+            "messages": [
+                {"role": "user", "content": "m0"},
+                {"role": "assistant", "content": "m1"},
+                {"role": "user", "content": "m2"},
+                {"role": "assistant", "content": "m3"},
+                {"role": "user", "content": "m4"}
+            ]
+        }),
+    )
+    .await;
+    let router = api_router(state);
+    // after=0, limit=2 → m1,m2; more remain → has_more_after, next_after_index=2
+    let req = Request::builder()
+        .uri("/api/threads/history?thread_id=thread%3A%3Afwd-bounded&after_index=0&limit=2")
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["message_stats"]["returned_messages"], 2);
+    assert_eq!(json["message_stats"]["returned_start_index"], 1);
+    assert_eq!(json["message_stats"]["has_more_after"], true);
+    assert_eq!(json["message_stats"]["next_after_index"], 2);
+    assert_eq!(json["messages"][0]["text"], "m1");
+    assert_eq!(json["messages"][1]["text"], "m2");
+}
+
+#[tokio::test]
 async fn test_thread_history_detail_pages_by_user_queries() {
     let state = test_state();
     seed_transcript_backed_thread(
@@ -2917,7 +3021,8 @@ async fn thread_history_emits_null_team_for_standalone_agent_thread() {
     .await;
 
     let payload =
-        thread_history_for_key(&state, "thread::history-standalone", 10, true, None, None).await;
+        thread_history_for_key(&state, "thread::history-standalone", 10, true, None, None, None)
+            .await;
     assert_eq!(payload["ok"], true);
     assert_eq!(
         payload["team"],
@@ -2944,7 +3049,8 @@ async fn thread_history_emits_team_with_empty_child_map_when_group_missing() {
     .await;
 
     let payload =
-        thread_history_for_key(&state, "thread::history-team-fresh", 10, true, None, None).await;
+        thread_history_for_key(&state, "thread::history-team-fresh", 10, true, None, None, None)
+            .await;
     assert_eq!(payload["ok"], true);
     let team = &payload["team"];
     assert_eq!(team["team_id"], "product-ship");
@@ -2979,7 +3085,8 @@ async fn thread_history_projects_known_child_thread_ids_from_group_store() {
     state.ops.agent_team_group_store.save(&group).await;
 
     let payload =
-        thread_history_for_key(&state, "thread::history-team-partial", 10, true, None, None).await;
+        thread_history_for_key(&state, "thread::history-team-partial", 10, true, None, None, None)
+            .await;
     assert_eq!(payload["ok"], true);
     let child_map = payload["team"]["child_thread_ids"]
         .as_object()

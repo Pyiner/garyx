@@ -416,6 +416,26 @@ impl ThreadTranscriptStore {
         Ok((messages, total, start))
     }
 
+    /// Forward page: committed records with position strictly greater than
+    /// `after_index`, up to `limit`. Mirror of `page_before_index` for cursor
+    /// (delta) sync — "give me what's new since index N".
+    pub async fn page_after_index(
+        &self,
+        thread_id: &str,
+        after_index: usize,
+        limit: usize,
+    ) -> Result<(Vec<Value>, usize, usize), ThreadHistoryError> {
+        let records = self.read_records(thread_id).await?;
+        let total = records.len();
+        let start = after_index.saturating_add(1).min(total);
+        let end = start.saturating_add(limit).min(total);
+        let messages = records[start..end]
+            .iter()
+            .map(|record| record.message.clone())
+            .collect();
+        Ok((messages, total, start))
+    }
+
     pub async fn page_before_user_queries(
         &self,
         thread_id: &str,
@@ -740,6 +760,52 @@ impl ThreadHistoryRepository {
         })
     }
 
+    /// Forward delta snapshot: committed messages strictly after `after_index`,
+    /// plus the current in-flight overlay — but only once the committed tail is
+    /// fully drained, so a bounded committed page never leaves a gap before the
+    /// overlay. While more committed messages remain, the overlay is withheld and
+    /// the caller keeps paging forward (`next_after_index`).
+    pub async fn thread_snapshot_after_index(
+        &self,
+        thread_id: &str,
+        after_index: usize,
+        limit: usize,
+    ) -> Result<ThreadHistorySnapshot, ThreadHistoryError> {
+        let thread_data = self
+            .thread_store
+            .get(thread_id)
+            .await
+            .ok_or_else(|| ThreadHistoryError::ThreadNotFound(thread_id.to_owned()))?;
+        let overlay_messages = active_run_snapshot_messages(&thread_data);
+        let bounded_limit = limit.max(1);
+        let (committed_messages, total_committed_messages, committed_start_index) = self
+            .load_committed_messages_after_index(
+                thread_id,
+                &thread_data,
+                after_index,
+                bounded_limit,
+            )
+            .await?;
+        let reached_committed_end =
+            committed_start_index + committed_messages.len() >= total_committed_messages;
+        let overlay = if reached_committed_end {
+            overlay_messages
+        } else {
+            Vec::new()
+        };
+        let total_overlay_messages = overlay.len();
+        Ok(ThreadHistorySnapshot {
+            thread_id: thread_id.to_owned(),
+            thread_data,
+            committed_messages,
+            overlay_messages: overlay,
+            total_committed_messages,
+            total_overlay_messages,
+            committed_start_index,
+            overlay_start_index: total_committed_messages,
+        })
+    }
+
     pub async fn thread_snapshot_user_query_page(
         &self,
         thread_id: &str,
@@ -955,6 +1021,31 @@ impl ThreadHistoryRepository {
                 .await;
         }
 
+        Ok((Vec::new(), 0, 0))
+    }
+
+    async fn load_committed_messages_after_index(
+        &self,
+        thread_id: &str,
+        thread_data: &Value,
+        after_index: usize,
+        limit: usize,
+    ) -> Result<(Vec<Value>, usize, usize), ThreadHistoryError> {
+        let has_transcript = self.transcript_store.exists(thread_id).await;
+        let message_count = history_message_count(thread_data);
+        if !has_transcript && message_count > 0 {
+            return Err(ThreadHistoryError::MissingTranscript(thread_id.to_owned()));
+        }
+        if has_transcript {
+            let total = self.transcript_store.message_count(thread_id).await?;
+            if limit == 0 {
+                return Ok((Vec::new(), total, after_index.saturating_add(1).min(total)));
+            }
+            return self
+                .transcript_store
+                .page_after_index(thread_id, after_index, limit)
+                .await;
+        }
         Ok((Vec::new(), 0, 0))
     }
 
