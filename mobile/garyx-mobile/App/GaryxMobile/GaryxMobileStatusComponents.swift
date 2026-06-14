@@ -473,6 +473,55 @@ struct GaryxConnectionPill: View {
     }
 }
 
+/// Single-direction "ink in water" loading comet: a tapering trail of dots that
+/// sweeps clockwise, widest and most opaque at the head and dissolving into the
+/// tail. Used for the thread toolbar loading state in place of the ellipsis.
+struct GaryxInkSpinner: View {
+    var size: CGFloat = 22
+    var color: Color = .primary
+    /// Seconds per full clockwise revolution.
+    var period: Double = 1.05
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            let elapsed = context.date.timeIntervalSinceReferenceDate
+            let head = elapsed.truncatingRemainder(dividingBy: period) / period
+
+            Canvas { ctx, canvasSize in
+                let side = min(canvasSize.width, canvasSize.height)
+                let headRadius = side * 0.12
+                let ring = side / 2 - headRadius
+                let center = CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2)
+                let tailSpan = 0.82
+                let segments = 70
+                // Screen space has y pointing down, so an increasing angle
+                // sweeps clockwise; the trail lags behind the head angle.
+                let headAngle = head * 2 * .pi - .pi / 2
+
+                for index in 0..<segments {
+                    let f = Double(index) / Double(segments - 1)
+                    let angle = headAngle - f * tailSpan * 2 * .pi
+                    let dotRadius = headRadius * (1 - f * 0.9)
+                    let alpha = pow(1 - f, 1.3)
+                    let point = CGPoint(
+                        x: center.x + ring * cos(angle),
+                        y: center.y + ring * sin(angle)
+                    )
+                    let rect = CGRect(
+                        x: point.x - dotRadius,
+                        y: point.y - dotRadius,
+                        width: dotRadius * 2,
+                        height: dotRadius * 2
+                    )
+                    ctx.fill(Path(ellipseIn: rect), with: .color(color.opacity(alpha)))
+                }
+            }
+            .blur(radius: 0.3)
+        }
+        .frame(width: size, height: size)
+    }
+}
+
 struct GaryxToolbarIcon: View {
     var systemName: String?
     var customContent: (() -> AnyView)?

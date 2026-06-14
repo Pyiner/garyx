@@ -28,7 +28,13 @@ struct GaryxMarkdownParsedTable: Equatable {
 }
 
 enum GaryxMarkdownBlockParser {
-    static func blocks(from text: String) -> [GaryxMarkdownParsedBlock] {
+    static func blocks(from rawText: String) -> [GaryxMarkdownParsedBlock] {
+        // Carriage-return line endings reach here from the iOS composer (`\r`)
+        // and channels that forward `\r\n`. Normalize to `\n` so the block and
+        // line splitting below turns them into visible line breaks.
+        let text = rawText
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
         var blocks: [GaryxMarkdownParsedBlock] = []
         var markdownLines: [String] = []
         var codeLines: [String] = []

@@ -107,7 +107,14 @@ extension GaryxMobileModel {
 
     @discardableResult
     func sendDraft(text rawText: String) async -> Bool {
-        let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        // The iOS composer emits carriage returns (`\r`) for line breaks, and
+        // pasted text can carry `\r\n`. Downstream storage, the provider prompt,
+        // and the `\n`-based transcript renderer only understand `\n`, so collapse
+        // line endings before trimming the surrounding whitespace.
+        let text = rawText
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let attachments = composerAttachments
         guard canSendComposerPayload(text: text, attachments: attachments) else { return false }
         guard !text.isEmpty || !attachments.isEmpty else { return false }

@@ -269,7 +269,7 @@ struct GaryxConversationView: View {
                     }
 
                 if model.messages.isEmpty,
-                   model.isLoadingSelectedThreadHistory || model.isSelectedThreadAwaitingInitialHistory {
+                   model.isSelectedThreadLoadingInitialHistory {
                     GaryxThreadHistoryLoadingView()
                         .padding(.top, 12)
                 } else if model.messages.isEmpty {
@@ -591,10 +591,18 @@ struct GaryxConversationHeader: View {
                             Task { await model.deleteSelectedThread() }
                         }
                     } label: {
-                        GaryxToolbarIcon(systemName: "ellipsis")
+                        if model.isSelectedThreadLoadingInitialHistory {
+                            GaryxToolbarIcon {
+                                GaryxInkSpinner()
+                            }
+                        } else {
+                            GaryxToolbarIcon(systemName: "ellipsis")
+                        }
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("Thread actions")
+                    .accessibilityLabel(
+                        model.isSelectedThreadLoadingInitialHistory ? "Loading thread" : "Thread actions"
+                    )
                 }
             }
         }

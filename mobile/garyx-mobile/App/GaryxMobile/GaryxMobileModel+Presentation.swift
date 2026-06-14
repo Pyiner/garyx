@@ -71,6 +71,13 @@ extension GaryxMobileModel {
         return !threadHistoryLoadedIds.contains(threadId)
     }
 
+    /// True while the selected thread is fetching its initial transcript, either
+    /// during the in-flight request or before the first page has loaded. Drives
+    /// the empty-state loading view and the toolbar loading indicator together.
+    var isSelectedThreadLoadingInitialHistory: Bool {
+        isLoadingSelectedThreadHistory || isSelectedThreadAwaitingInitialHistory
+    }
+
     var hasComposerPayload: Bool {
         !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !composerAttachments.isEmpty
     }

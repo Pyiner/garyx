@@ -119,11 +119,22 @@ final class GaryxMarkdownBlockParserTests: XCTestCase {
         XCTAssertEqual(blocks[0].kind, .code(language: "sh", text: "echo hi"))
     }
 
-    func testCarriageReturnLineEndingsDoNotBreakFenceDetection() {
+    func testCarriageReturnLineEndingsNormalizeToNewlines() {
+        // CRLF normalizes to \n, so fence detection works and the code body has
+        // no stray carriage returns left dangling on each line.
         let blocks = GaryxMarkdownBlockParser.blocks(from: "```swift\r\nlet value = 1\r\n```\r\n")
 
         XCTAssertEqual(blocks.count, 1)
-        XCTAssertEqual(blocks[0].kind, .code(language: "swift", text: "let value = 1\r"))
+        XCTAssertEqual(blocks[0].kind, .code(language: "swift", text: "let value = 1"))
+    }
+
+    func testBareCarriageReturnParagraphBreaksBecomeNewlines() {
+        // The iOS composer emits bare \r between lines; they must normalize to
+        // \n so the rendered bubble shows separate lines instead of one run-on
+        // line and the blank line stays a paragraph break.
+        let blocks = GaryxMarkdownBlockParser.blocks(from: "first line\rsecond line\r\rthird")
+
+        XCTAssertEqual(blocks.map(\.kind), [.markdown("first line\nsecond line\n\nthird")])
     }
 
     func testTildeFenceUsesMatchingMarkerAndLength() {
