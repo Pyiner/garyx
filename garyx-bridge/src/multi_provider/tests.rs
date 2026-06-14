@@ -56,6 +56,21 @@ fn active_or_committed_messages(data: &serde_json::Value) -> Vec<serde_json::Val
         .unwrap_or_default()
 }
 
+/// The client-visible transcript = committed jsonl + the in-flight overlay. Under
+/// F1 the worker streams finalized rows into the committed transcript during the
+/// run, so mid-run state must be read through the repository, not the overlay
+/// alone (which now holds only the trailing in-flight assistant segment).
+async fn combined_thread_messages(
+    history: &Arc<ThreadHistoryRepository>,
+    thread_id: &str,
+) -> Vec<serde_json::Value> {
+    history
+        .thread_snapshot(thread_id, 1024)
+        .await
+        .map(|snapshot| snapshot.combined_messages())
+        .unwrap_or_default()
+}
+
 fn fork_thread_metadata(
     provider_type: ProviderType,
     parent_sdk_session_id: &str,
@@ -2137,7 +2152,8 @@ async fn test_thread_persistence_checkpoints_streaming_output_before_run_complet
 
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     bridge.set_thread_store(store.clone()).await;
-    bridge.set_thread_history(make_history(store.clone()));
+    let history = make_history(store.clone());
+    bridge.set_thread_history(history.clone());
 
     bridge
         .start_agent_run(
@@ -2163,7 +2179,7 @@ async fn test_thread_persistence_checkpoints_streaming_output_before_run_complet
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
                 continue;
             };
-            let messages = active_or_committed_messages(&data);
+            let messages = combined_thread_messages(&history, "sess::tg::checkpoint").await;
             if messages.iter().any(|message| {
                 message["role"] == "assistant" && message["content"] == "partial reply"
             }) {
@@ -2175,7 +2191,7 @@ async fn test_thread_persistence_checkpoints_streaming_output_before_run_complet
     .await
     .expect("thread store should receive a partial checkpoint before completion");
 
-    let checkpoint_messages = active_or_committed_messages(&checkpointed);
+    let checkpoint_messages = combined_thread_messages(&history, "sess::tg::checkpoint").await;
     assert_eq!(checkpoint_messages.len(), 2);
     assert_eq!(checkpoint_messages[0]["role"], "user");
     assert_eq!(checkpoint_messages[0]["content"], "keep this");
@@ -2490,7 +2506,8 @@ async fn test_thread_persistence_promotes_queued_input_after_user_ack() {
 
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     bridge.set_thread_store(store.clone()).await;
-    bridge.set_thread_history(make_history(store.clone()));
+    let history = make_history(store.clone());
+    bridge.set_thread_history(history.clone());
 
     bridge
         .start_agent_run(
@@ -2535,7 +2552,7 @@ async fn test_thread_persistence_promotes_queued_input_after_user_ack() {
                 .as_array()
                 .cloned()
                 .unwrap_or_default();
-            let messages = active_or_committed_messages(&data);
+            let messages = combined_thread_messages(&history, "sess::tg::queued-input").await;
             let has_follow_up_user = messages
                 .iter()
                 .any(|message| message["role"] == "user" && message["content"] == "follow-up");
@@ -2554,7 +2571,7 @@ async fn test_thread_persistence_promotes_queued_input_after_user_ack() {
 
     provider.release_ack();
 
-    let acked_checkpoint = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
         loop {
             let Some(data) = store.get("sess::tg::queued-input").await else {
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -2564,7 +2581,7 @@ async fn test_thread_persistence_promotes_queued_input_after_user_ack() {
                 .as_array()
                 .cloned()
                 .unwrap_or_default();
-            let messages = active_or_committed_messages(&data);
+            let messages = combined_thread_messages(&history, "sess::tg::queued-input").await;
             let has_follow_up_user = messages
                 .iter()
                 .any(|message| message["role"] == "user" && message["content"] == "follow-up");
@@ -2580,7 +2597,7 @@ async fn test_thread_persistence_promotes_queued_input_after_user_ack() {
     .await
     .expect("user_ack should promote the queued follow-up into the persisted transcript");
 
-    let acked_messages = active_or_committed_messages(&acked_checkpoint);
+    let acked_messages = combined_thread_messages(&history, "sess::tg::queued-input").await;
     let roles: Vec<&str> = acked_messages
         .iter()
         .filter_map(|message| message["role"].as_str())
@@ -2758,7 +2775,8 @@ async fn test_streaming_input_preserves_raw_task_follow_up_for_provider() {
         )
         .await;
     bridge.set_thread_store(store.clone()).await;
-    bridge.set_thread_history(make_history(store.clone()));
+    let history = make_history(store.clone());
+    bridge.set_thread_history(history.clone());
 
     bridge
         .start_agent_run(
@@ -2795,13 +2813,13 @@ async fn test_streaming_input_preserves_raw_task_follow_up_for_provider() {
 
     provider.release_ack();
 
-    let acked_checkpoint = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
         loop {
-            let Some(data) = store.get("sess::tg::queued-task").await else {
+            if store.get("sess::tg::queued-task").await.is_none() {
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
                 continue;
             };
-            let messages = active_or_committed_messages(&data);
+            let messages = combined_thread_messages(&history, "sess::tg::queued-task").await;
             let has_raw_user = messages
                 .iter()
                 .any(|message| message["role"] == "user" && message["content"] == "继续");
@@ -2809,7 +2827,7 @@ async fn test_streaming_input_preserves_raw_task_follow_up_for_provider() {
                 message["role"] == "assistant" && message["content"] == "follow-up reply: 继续"
             });
             if has_raw_user && has_provider_reply {
-                break data;
+                break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
@@ -2817,7 +2835,7 @@ async fn test_streaming_input_preserves_raw_task_follow_up_for_provider() {
     .await
     .expect("provider-facing queued input should preserve raw task follow-up after ack");
 
-    let messages = active_or_committed_messages(&acked_checkpoint);
+    let messages = combined_thread_messages(&history, "sess::tg::queued-task").await;
     assert!(
         !messages.iter().any(|message| message["role"] == "user"
             && message["content"]

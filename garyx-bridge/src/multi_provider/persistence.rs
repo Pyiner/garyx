@@ -432,6 +432,18 @@ impl StreamingRunSnapshot {
         }
         self.session_messages.push(message);
     }
+
+    /// Number of session messages that are finalized (durably appendable). The
+    /// trailing assistant segment is still in-flight while deltas may extend it
+    /// (`start_new_assistant_segment == false`); everything before it is final.
+    pub(super) fn finalized_len(&self) -> usize {
+        let in_flight = !self.start_new_assistant_segment
+            && matches!(
+                self.session_messages.last().map(|message| &message.role),
+                Some(ProviderMessageRole::Assistant)
+            );
+        self.session_messages.len() - usize::from(in_flight)
+    }
 }
 
 fn parse_agent_team_delta_prefix(text: &str) -> (Option<HashMap<String, Value>>, String) {
@@ -562,27 +574,6 @@ fn record_recent_committed_run_id(
         run_ids.drain(0..drop_count);
     }
     run_ids
-}
-
-fn build_active_run_snapshot_value(
-    run: &PersistedRun<'_>,
-    pending_user_inputs: &[PendingUserInput],
-) -> Value {
-    let provider_key = if run.provider_key.trim().is_empty() {
-        Value::Null
-    } else {
-        Value::String(run.provider_key.to_owned())
-    };
-    serde_json::json!({
-        "run_id": primary_run_identifier(run.metadata),
-        "provider_key": provider_key,
-        "provider_type": run.provider_type,
-        "sdk_session_id": run.sdk_session_id,
-        "assistant_response": (!run.assistant_response.trim().is_empty()).then_some(run.assistant_response.to_owned()),
-        "messages": build_run_messages(run),
-        "pending_user_inputs": serde_json::to_value(pending_user_inputs).unwrap_or(Value::Array(Vec::new())),
-        "updated_at": Utc::now().to_rfc3339(),
-    })
 }
 
 fn clear_active_run_snapshot(object: &mut serde_json::Map<String, Value>) {
@@ -783,27 +774,108 @@ fn run_message_metadata(run: &PersistedRun<'_>) -> HashMap<String, Value> {
     metadata
 }
 
-/// Save a partial streaming snapshot for the active run without clearing any
-/// previously persisted SDK session id unless this partial snapshot has already
-/// observed the provider-native session id.
-pub(super) async fn save_partial_thread_messages(
+/// Stream the run's messages to the committed transcript in real time (F1).
+///
+/// Appends the newly-finalized rows (`build_run_messages` of everything except
+/// the trailing in-flight assistant segment, beyond `already_appended`) to the
+/// jsonl with a seq, and stores ONLY the in-flight partial in the lightweight
+/// `active_run_snapshot` overlay — so a long run no longer rewrites a growing
+/// whole-record overlay, and a per-message `seq` exists during the run. Returns
+/// the running count of finalized rows now committed (the caller's cursor).
+pub(super) async fn save_streaming_partial(
     store: &Arc<dyn ThreadStore>,
     history: &Arc<ThreadHistoryRepository>,
     run: PersistedRun<'_>,
     pending_user_inputs: &[PendingUserInput],
-) {
+    finalized_len: usize,
+    already_appended: usize,
+) -> usize {
+    let run_id = primary_run_identifier(run.metadata);
+    let finalized_len = finalized_len.min(run.session_messages.len());
+    let finalized_run = PersistedRun {
+        thread_id: run.thread_id,
+        user_message: run.user_message,
+        user_timestamp: run.user_timestamp,
+        user_images: run.user_images,
+        assistant_response: "",
+        sdk_session_id: run.sdk_session_id,
+        provider_key: run.provider_key,
+        provider_type: run.provider_type.clone(),
+        session_messages: &run.session_messages[..finalized_len],
+        metadata: run.metadata,
+    };
+    let authoritative = build_run_messages(&finalized_run);
+
+    let mut appended = already_appended.min(authoritative.len());
+    let mut committed_total: Option<usize> = None;
+    if authoritative.len() > appended {
+        match history
+            .transcript_store()
+            .append_committed_messages(run.thread_id, run_id.as_deref(), &authoritative[appended..])
+            .await
+        {
+            Ok(result) => {
+                appended = authoritative.len();
+                committed_total = Some(result.total_messages);
+            }
+            Err(error) => {
+                warn!(thread_id = %run.thread_id, error = %error, "failed to append streaming transcript");
+            }
+        }
+    }
+
+    // Overlay carries ONLY the in-flight partial (not yet finalized), mapped like
+    // build_run_messages maps a session message but without the synthesized head
+    // user row — that row is already committed above.
+    let message_metadata = run_message_metadata(&run);
+    let partial_messages: Vec<Value> = run.session_messages[finalized_len..]
+        .iter()
+        .map(|entry| {
+            let mut object = entry.to_json_value().as_object().cloned().unwrap_or_default();
+            if object.get("timestamp").and_then(Value::as_str).is_none() {
+                object.insert(
+                    "timestamp".to_owned(),
+                    Value::String(Utc::now().to_rfc3339()),
+                );
+            }
+            for (key, value) in &message_metadata {
+                object.entry(key.clone()).or_insert_with(|| value.clone());
+            }
+            Value::Object(object)
+        })
+        .collect();
+
     let mut session_data = store
         .get(run.thread_id)
         .await
         .unwrap_or_else(|| serde_json::json!({}));
-    let current_message_count = history_message_count(&session_data);
+    let committed_total = match committed_total {
+        Some(total) => total,
+        None => history
+            .transcript_store()
+            .message_count(run.thread_id)
+            .await
+            .unwrap_or(appended),
+    };
+    let message_count = committed_total + partial_messages.len();
     let recent_run_ids = recent_committed_run_ids_from_value(&session_data);
     let merged_pending_inputs = merge_pending_inputs_for_persistence(
         &session_data,
-        primary_run_identifier(run.metadata).as_deref(),
+        run_id.as_deref(),
         pending_user_inputs,
         should_clear_abandoned_pending_inputs(&run),
     );
+    let overlay = serde_json::json!({
+        "run_id": run_id,
+        "provider_key": (!run.provider_key.trim().is_empty()).then(|| run.provider_key.to_owned()),
+        "provider_type": run.provider_type,
+        "sdk_session_id": run.sdk_session_id,
+        "assistant_response": (!run.assistant_response.trim().is_empty())
+            .then_some(run.assistant_response.to_owned()),
+        "messages": partial_messages,
+        "pending_user_inputs": serde_json::to_value(pending_user_inputs).unwrap_or(Value::Array(Vec::new())),
+        "updated_at": Utc::now().to_rfc3339(),
+    });
 
     if let Some(obj) = session_data.as_object_mut() {
         if !obj.contains_key("messages") {
@@ -827,29 +899,25 @@ pub(super) async fn save_partial_thread_messages(
                 Value::String(run.provider_key.to_owned()),
             );
         }
-        match sdk_session_update {
-            SdkSessionUpdate::Preserve => {}
-            SdkSessionUpdate::Set(sid) => {
-                obj.insert("sdk_session_id".to_owned(), Value::String(sid.to_owned()));
-            }
-            SdkSessionUpdate::Clear => {}
+        if let SdkSessionUpdate::Set(sid) = sdk_session_update {
+            obj.insert("sdk_session_id".to_owned(), Value::String(sid.to_owned()));
         }
         update_history_state(
             obj,
             history,
             run.thread_id,
-            current_message_count,
+            message_count,
             None,
             &recent_run_ids,
-            Some(build_active_run_snapshot_value(&run, pending_user_inputs)),
+            Some(overlay),
         );
         obj.insert(
             "updated_at".to_owned(),
             Value::String(Utc::now().to_rfc3339()),
         );
     }
-
     store.set(run.thread_id, session_data).await;
+    appended
 }
 
 /// Save user and provider-emitted messages to the thread store after a run completes.
@@ -889,11 +957,6 @@ async fn save_thread_messages_with_session_update(
     let run_ids = run_identifiers(run.metadata);
     let current_run_id = primary_run_identifier(run.metadata);
     let existing_recent_run_ids = recent_committed_run_ids_from_value(&session_data);
-    let already_committed = current_run_id.as_deref().is_some_and(|run_id| {
-        existing_recent_run_ids
-            .iter()
-            .any(|existing| existing == run_id)
-    });
 
     let mut snapshot_messages: Vec<Value> = session_data
         .get("messages")
@@ -915,20 +978,29 @@ async fn save_thread_messages_with_session_update(
         .and_then(|message| message.get("timestamp"))
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
-    if !already_committed {
-        match history
-            .transcript_store()
-            .append_committed_messages(run.thread_id, current_run_id.as_deref(), &run_messages)
-            .await
-        {
-            Ok(result) => {
-                message_count = result.total_messages;
-                last_message_at = result.last_message_at;
-                history.enqueue_conversation_index_for_thread(run.thread_id);
-            }
-            Err(error) => {
-                warn!(thread_id = %run.thread_id, error = %error, "failed to append thread transcript");
-            }
+    // The streaming worker (F1) already appended this run's finalized rows to the
+    // committed transcript during the run. Reconcile the run's tail to the final
+    // authoritative set instead of blindly appending again: this is idempotent —
+    // a no-op when nothing changed, a cheap suffix-append for the trailing segment
+    // that was still in flight at the last streaming flush, and a tail rewrite only
+    // when a retry re-streamed divergent content. An unconditional append here
+    // would now double-write every streamed row.
+    match history
+        .transcript_store()
+        .reconcile_run_tail(
+            run.thread_id,
+            current_run_id.as_deref().unwrap_or_default(),
+            &run_messages,
+        )
+        .await
+    {
+        Ok(result) => {
+            message_count = result.total_messages;
+            last_message_at = result.last_message_at;
+            history.enqueue_conversation_index_for_thread(run.thread_id);
+        }
+        Err(error) => {
+            warn!(thread_id = %run.thread_id, error = %error, "failed to reconcile thread transcript tail");
         }
     }
 

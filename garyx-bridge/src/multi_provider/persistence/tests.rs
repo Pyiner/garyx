@@ -262,7 +262,7 @@ fn test_streaming_run_snapshot_splits_on_agent_prefix_change_without_boundary() 
 }
 
 #[tokio::test]
-async fn test_save_partial_thread_messages_replaces_existing_snapshot_for_same_run() {
+async fn test_save_streaming_partial_commits_user_row_and_keeps_only_inflight_in_overlay() {
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     let history = make_history(store.clone());
     store
@@ -290,11 +290,12 @@ async fn test_save_partial_thread_messages_replaces_existing_snapshot_for_same_r
     metadata.insert("bridge_run_id".to_owned(), json!("bridge-partial"));
     let run_started_at = "2026-03-01T00:00:10Z";
 
+    let mut appended = 0usize;
     let mut snapshot = StreamingRunSnapshot::default();
     snapshot.apply_stream_event(&StreamEvent::Delta {
         text: "hel".to_owned(),
     });
-    save_partial_thread_messages(
+    appended = save_streaming_partial(
         &store,
         &history,
         PersistedRun {
@@ -310,13 +311,15 @@ async fn test_save_partial_thread_messages_replaces_existing_snapshot_for_same_r
             metadata: &metadata,
         },
         &[],
+        snapshot.finalized_len(),
+        appended,
     )
     .await;
 
     snapshot.apply_stream_event(&StreamEvent::Delta {
         text: "lo".to_owned(),
     });
-    save_partial_thread_messages(
+    appended = save_streaming_partial(
         &store,
         &history,
         PersistedRun {
@@ -332,8 +335,23 @@ async fn test_save_partial_thread_messages_replaces_existing_snapshot_for_same_r
             metadata: &metadata,
         },
         &[],
+        snapshot.finalized_len(),
+        appended,
     )
     .await;
+
+    // The in-flight assistant segment is not finalized, so only the synthesized
+    // user row is committed to the transcript (appended once, not twice).
+    assert_eq!(appended, 1);
+    let committed = history
+        .transcript_store()
+        .records("thread::partial")
+        .await
+        .expect("records should load");
+    assert_eq!(committed.len(), 1);
+    assert_eq!(committed[0].message["role"], "user");
+    assert_eq!(committed[0].message["content"], "hello");
+    assert_eq!(committed[0].seq, 1);
 
     let stored = store
         .get("thread::partial")
@@ -344,23 +362,26 @@ async fn test_save_partial_thread_messages_replaces_existing_snapshot_for_same_r
         stored["provider_sdk_session_ids"]["provider::partial"],
         "sdk-existing"
     );
+    // The legacy bounded `messages` cache is left untouched by streaming partials.
     let messages = stored["messages"]
         .as_array()
         .expect("messages should be an array");
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0]["content"], "older run");
+    // The overlay carries ONLY the trailing in-flight assistant segment now, not
+    // the whole run (the user row was committed above).
     let active_messages = stored["history"]["active_run_snapshot"]["messages"]
         .as_array()
         .expect("active snapshot messages should be an array");
-    assert_eq!(active_messages.len(), 2);
-    assert_eq!(active_messages[0]["role"], "user");
-    assert_eq!(active_messages[0]["timestamp"], run_started_at);
-    assert_eq!(active_messages[1]["role"], "assistant");
-    assert_eq!(active_messages[1]["content"], "hello");
+    assert_eq!(active_messages.len(), 1);
+    assert_eq!(active_messages[0]["role"], "assistant");
+    assert_eq!(active_messages[0]["content"], "hello");
+    // message_count reflects committed (1) + in-flight partial (1).
+    assert_eq!(stored["history"]["message_count"], 2);
 }
 
 #[tokio::test]
-async fn test_save_partial_thread_messages_clears_abandoned_pending_inputs_for_new_user_turn() {
+async fn test_save_streaming_partial_clears_abandoned_pending_inputs_for_new_user_turn() {
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     let history = make_history(store.clone());
     store
@@ -394,7 +415,7 @@ async fn test_save_partial_thread_messages_clears_abandoned_pending_inputs_for_n
         ("bridge_run_id".to_owned(), json!("bridge-new")),
     ]);
 
-    save_partial_thread_messages(
+    save_streaming_partial(
         &store,
         &history,
         PersistedRun {
@@ -410,6 +431,8 @@ async fn test_save_partial_thread_messages_clears_abandoned_pending_inputs_for_n
             metadata: &metadata,
         },
         &[],
+        0,
+        0,
     )
     .await;
 
@@ -425,7 +448,7 @@ async fn test_save_partial_thread_messages_clears_abandoned_pending_inputs_for_n
 }
 
 #[tokio::test]
-async fn test_save_partial_thread_messages_keeps_abandoned_pending_inputs_for_internal_dispatch() {
+async fn test_save_streaming_partial_keeps_abandoned_pending_inputs_for_internal_dispatch() {
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     let history = make_history(store.clone());
     store
@@ -456,7 +479,7 @@ async fn test_save_partial_thread_messages_keeps_abandoned_pending_inputs_for_in
         ),
     ]);
 
-    save_partial_thread_messages(
+    save_streaming_partial(
         &store,
         &history,
         PersistedRun {
@@ -472,6 +495,8 @@ async fn test_save_partial_thread_messages_keeps_abandoned_pending_inputs_for_in
             metadata: &metadata,
         },
         &[],
+        0,
+        0,
     )
     .await;
 
@@ -484,6 +509,142 @@ async fn test_save_partial_thread_messages_keeps_abandoned_pending_inputs_for_in
         .expect("pending inputs should be an array");
     assert_eq!(pending_inputs.len(), 1);
     assert_eq!(pending_inputs[0]["id"], "stale-abandoned");
+}
+
+/// F1 end-to-end: streaming flushes append finalized rows to the committed
+/// transcript in real time, and the terminal commit reconciles the tail to the
+/// authoritative set without duplicating any streamed row.
+#[tokio::test]
+async fn test_streaming_then_terminal_commit_does_not_duplicate_messages() {
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let history = make_history(store.clone());
+    let thread_id = "thread::stream-no-dup";
+    let metadata = HashMap::from([("client_run_id".to_owned(), json!("run-stream"))]);
+
+    let flush = |snapshot: &StreamingRunSnapshot, appended: usize| {
+        let store = store.clone();
+        let history = history.clone();
+        let metadata = metadata.clone();
+        let assistant_response = snapshot.assistant_response.clone();
+        let session_messages = snapshot.session_messages.clone();
+        let finalized_len = snapshot.finalized_len();
+        async move {
+            save_streaming_partial(
+                &store,
+                &history,
+                PersistedRun {
+                    thread_id,
+                    user_message: "do the thing",
+                    user_timestamp: Some("2026-03-01T00:00:00Z"),
+                    user_images: &[],
+                    assistant_response: &assistant_response,
+                    sdk_session_id: None,
+                    provider_key: "provider::stream",
+                    provider_type: ProviderType::ClaudeCode,
+                    session_messages: &session_messages,
+                    metadata: &metadata,
+                },
+                &[],
+                finalized_len,
+                appended,
+            )
+            .await
+        }
+    };
+
+    let mut snapshot = StreamingRunSnapshot::default();
+    let mut appended = 0usize;
+
+    // Initial flush commits just the synthesized user row.
+    appended = flush(&snapshot, appended).await;
+    assert_eq!(appended, 1);
+
+    snapshot.apply_stream_event(&StreamEvent::Delta {
+        text: "Working".to_owned(),
+    });
+    appended = flush(&snapshot, appended).await; // assistant still in flight
+    assert_eq!(appended, 1);
+
+    snapshot.apply_stream_event(&StreamEvent::ToolUse {
+        message: ProviderMessage::tool_use(
+            json!({"tool": "Bash", "input": {"command": "ls"}}),
+            None,
+            Some("Bash".to_owned()),
+        ),
+    });
+    appended = flush(&snapshot, appended).await; // assistant + tool_use finalized
+    assert_eq!(appended, 3);
+
+    snapshot.apply_stream_event(&StreamEvent::ToolResult {
+        message: ProviderMessage::tool_result(
+            json!({"result": "a\nb\n", "text": "a\nb\n"}),
+            None,
+            Some("Bash".to_owned()),
+            Some(false),
+        ),
+    });
+    appended = flush(&snapshot, appended).await;
+    assert_eq!(appended, 4);
+
+    snapshot.apply_stream_event(&StreamEvent::Delta {
+        text: "Done".to_owned(),
+    });
+    appended = flush(&snapshot, appended).await; // final assistant still in flight
+    assert_eq!(appended, 4);
+
+    // During the run, only the in-flight trailing assistant lives in the overlay.
+    let mid = store.get(thread_id).await.expect("session exists");
+    let overlay = mid["history"]["active_run_snapshot"]["messages"]
+        .as_array()
+        .expect("overlay messages");
+    assert_eq!(overlay.len(), 1);
+    assert_eq!(overlay[0]["content"], "Done");
+
+    // Terminal commit: reconcile the tail to the full authoritative set.
+    save_thread_messages(
+        &store,
+        &history,
+        PersistedRun {
+            thread_id,
+            user_message: "do the thing",
+            user_timestamp: Some("2026-03-01T00:00:00Z"),
+            user_images: &[],
+            assistant_response: &snapshot.assistant_response,
+            sdk_session_id: None,
+            provider_key: "provider::stream",
+            provider_type: ProviderType::ClaudeCode,
+            session_messages: &snapshot.session_messages,
+            metadata: &metadata,
+        },
+    )
+    .await;
+
+    let committed = history
+        .transcript_store()
+        .records(thread_id)
+        .await
+        .expect("records load");
+    let roles: Vec<&str> = committed
+        .iter()
+        .filter_map(|record| record.message.get("role").and_then(Value::as_str))
+        .collect();
+    assert_eq!(
+        roles,
+        vec!["user", "assistant", "tool_use", "tool_result", "assistant"],
+        "committed transcript should hold each run message exactly once"
+    );
+    let seqs: Vec<u64> = committed.iter().map(|record| record.seq).collect();
+    assert_eq!(seqs, vec![1, 2, 3, 4, 5], "seqs are monotonic with no gaps");
+    assert_eq!(committed[1].message["content"], "Working");
+    assert_eq!(committed[4].message["content"], "Done");
+
+    // Overlay is cleared once the run terminates.
+    let stored = store.get(thread_id).await.expect("session exists");
+    assert!(
+        stored["history"].get("active_run_snapshot").is_none()
+            || stored["history"]["active_run_snapshot"].is_null(),
+        "active_run_snapshot must be cleared at terminal"
+    );
 }
 
 #[tokio::test]

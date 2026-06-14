@@ -27,7 +27,7 @@ use crate::run_graph::{RunGraphState, execute_agent_run};
 use super::MultiProviderBridge;
 use super::persistence::{
     PendingUserInput, PendingUserInputStatus, PersistedRun, StreamingRunSnapshot,
-    ThreadPersistenceCommand, save_failed_thread_messages, save_partial_thread_messages,
+    ThreadPersistenceCommand, save_failed_thread_messages, save_streaming_partial,
     save_thread_messages,
 };
 use super::state::ActiveThreadPersistence;
@@ -391,8 +391,11 @@ fn spawn_partial_thread_persistence_worker(
     let task = tokio::spawn(async move {
         let mut snapshot = StreamingRunSnapshot::default();
         let mut pending_user_inputs = Vec::<PendingUserInput>::new();
+        // Running count of finalized rows already appended to the committed
+        // transcript for this run (F1 real-time append cursor).
+        let mut appended_finalized: usize = 0;
 
-        save_partial_thread_messages(
+        appended_finalized = save_streaming_partial(
             &store,
             &history,
             PersistedRun {
@@ -408,6 +411,8 @@ fn spawn_partial_thread_persistence_worker(
                 metadata: &metadata,
             },
             &pending_user_inputs,
+            0,
+            appended_finalized,
         )
         .await;
 
@@ -479,7 +484,7 @@ fn spawn_partial_thread_persistence_worker(
                 }
             }
             if dirty {
-                save_partial_thread_messages(
+                appended_finalized = save_streaming_partial(
                     &store,
                     &history,
                     PersistedRun {
@@ -495,6 +500,8 @@ fn spawn_partial_thread_persistence_worker(
                         metadata: &metadata,
                     },
                     &pending_user_inputs,
+                    snapshot.finalized_len(),
+                    appended_finalized,
                 )
                 .await;
             }
@@ -511,7 +518,10 @@ fn spawn_partial_thread_persistence_worker(
             }
         }
         if final_dirty {
-            save_partial_thread_messages(
+            // Terminal append of any rows finalized since the last flush; the
+            // returned cursor is not needed because the worker is about to return
+            // and the terminal commit reconciles the tail.
+            let _ = save_streaming_partial(
                 &store,
                 &history,
                 PersistedRun {
@@ -527,6 +537,8 @@ fn spawn_partial_thread_persistence_worker(
                     metadata: &metadata,
                 },
                 &pending_user_inputs,
+                snapshot.finalized_len(),
+                appended_finalized,
             )
             .await;
         }

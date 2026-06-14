@@ -230,3 +230,198 @@ async fn thread_snapshot_after_index_withholds_overlay_when_more_committed() {
     assert_eq!(combined.len(), 1);
     assert_eq!(combined[0]["content"], "b");
 }
+
+#[tokio::test]
+async fn reconcile_run_tail_is_noop_when_tail_already_matches() {
+    let store = ThreadTranscriptStore::memory();
+    let run = [
+        json!({"role": "user", "content": "u"}),
+        json!({"role": "assistant", "content": "a"}),
+    ];
+    store
+        .append_committed_messages("thread::rec-noop", Some("run-1"), &run)
+        .await
+        .unwrap();
+
+    let result = store
+        .reconcile_run_tail("thread::rec-noop", "run-1", &run)
+        .await
+        .unwrap();
+    assert_eq!(result.total_messages, 2);
+    assert_eq!(store.message_count("thread::rec-noop").await.unwrap(), 2);
+}
+
+#[tokio::test]
+async fn reconcile_run_tail_appends_grown_suffix_without_rewriting_prefix() {
+    let store = ThreadTranscriptStore::memory();
+    // The streaming worker committed the user row + first assistant segment.
+    store
+        .append_committed_messages(
+            "thread::rec-grow",
+            Some("run-1"),
+            &[
+                json!({"role": "user", "content": "u"}),
+                json!({"role": "assistant", "content": "first"}),
+            ],
+        )
+        .await
+        .unwrap();
+
+    // Terminal authoritative set adds the final assistant segment.
+    let authoritative = [
+        json!({"role": "user", "content": "u"}),
+        json!({"role": "assistant", "content": "first"}),
+        json!({"role": "assistant", "content": "final"}),
+    ];
+    let result = store
+        .reconcile_run_tail("thread::rec-grow", "run-1", &authoritative)
+        .await
+        .unwrap();
+    assert_eq!(result.total_messages, 3);
+
+    let records = store.records("thread::rec-grow").await.unwrap();
+    let contents: Vec<&str> = records
+        .iter()
+        .filter_map(|record| record.message["content"].as_str())
+        .collect();
+    assert_eq!(contents, vec!["u", "first", "final"]);
+    // Prefix seqs are preserved (suffix appended, not a full rewrite).
+    assert_eq!(
+        records.iter().map(|r| r.seq).collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
+}
+
+#[tokio::test]
+async fn reconcile_run_tail_rewrites_divergent_retry_without_duplication() {
+    let store = ThreadTranscriptStore::memory();
+    // A prior committed turn from a different run must be preserved untouched.
+    store
+        .append_committed_messages(
+            "thread::rec-diverge",
+            Some("run-old"),
+            &[json!({"role": "user", "content": "earlier turn"})],
+        )
+        .await
+        .unwrap();
+    // First attempt of run-1 streamed a wrong/aborted answer.
+    store
+        .append_committed_messages(
+            "thread::rec-diverge",
+            Some("run-1"),
+            &[
+                json!({"role": "user", "content": "u"}),
+                json!({"role": "assistant", "content": "aborted attempt"}),
+            ],
+        )
+        .await
+        .unwrap();
+
+    // The retry produced a different authoritative answer for the same run.
+    let authoritative = [
+        json!({"role": "user", "content": "u"}),
+        json!({"role": "assistant", "content": "correct answer"}),
+    ];
+    let result = store
+        .reconcile_run_tail("thread::rec-diverge", "run-1", &authoritative)
+        .await
+        .unwrap();
+    assert_eq!(result.total_messages, 3, "old turn + reconciled run tail");
+
+    let records = store.records("thread::rec-diverge").await.unwrap();
+    let contents: Vec<&str> = records
+        .iter()
+        .filter_map(|record| record.message["content"].as_str())
+        .collect();
+    assert_eq!(
+        contents,
+        vec!["earlier turn", "u", "correct answer"],
+        "the aborted attempt is replaced, the prior turn preserved, no duplicate run tail"
+    );
+}
+
+#[tokio::test]
+async fn reconcile_run_tail_suffix_appends_despite_sdk_divergence_no_rewrite() {
+    let store = ThreadTranscriptStore::memory();
+    // The initial streaming flush committed the user row before the SDK session
+    // bound, so its metadata.sdk_session_id is null.
+    store
+        .append_committed_messages(
+            "thread::rec-sdk",
+            Some("run-1"),
+            &[json!({"role":"user","content":"u","metadata":{"sdk_session_id":null}})],
+        )
+        .await
+        .unwrap();
+
+    // Terminal authoritative set rebuilds the user row WITH the now-bound session
+    // id and adds the assistant reply that was in flight.
+    let authoritative = [
+        json!({"role":"user","content":"u","metadata":{"sdk_session_id":"sess-9"}}),
+        json!({"role":"assistant","content":"hi","metadata":{}}),
+    ];
+    let result = store
+        .reconcile_run_tail("thread::rec-sdk", "run-1", &authoritative)
+        .await
+        .unwrap();
+    assert_eq!(result.total_messages, 2);
+
+    let records = store.records("thread::rec-sdk").await.unwrap();
+    // The user row was NOT rewritten: seq preserved, original (null) sdk kept —
+    // only the assistant suffix was appended (the cheap path, not a full rewrite).
+    assert_eq!(records[0].seq, 1);
+    assert!(records[0].message["metadata"]["sdk_session_id"].is_null());
+    assert_eq!(records[1].seq, 2);
+    assert_eq!(records[1].message["content"], "hi");
+}
+
+#[tokio::test]
+async fn reconcile_run_tail_noop_when_only_sdk_differs() {
+    let store = ThreadTranscriptStore::memory();
+    store
+        .append_committed_messages(
+            "thread::rec-sdk-noop",
+            Some("run-1"),
+            &[json!({"role":"user","content":"u","metadata":{"sdk_session_id":null}})],
+        )
+        .await
+        .unwrap();
+    let authoritative = [json!({"role":"user","content":"u","metadata":{"sdk_session_id":"sess-9"}})];
+    let result = store
+        .reconcile_run_tail("thread::rec-sdk-noop", "run-1", &authoritative)
+        .await
+        .unwrap();
+    assert_eq!(result.total_messages, 1);
+    let records = store.records("thread::rec-sdk-noop").await.unwrap();
+    assert_eq!(records.len(), 1, "no duplicate row");
+    assert!(records[0].message["metadata"]["sdk_session_id"].is_null());
+}
+
+#[tokio::test]
+async fn reconcile_run_tail_empty_run_id_is_noop_not_double_append() {
+    let store = ThreadTranscriptStore::memory();
+    // Worker already appended this run's rows (run_id-less is unreachable via the
+    // bridge, but the public primitive must not double-write).
+    store
+        .append_committed_messages(
+            "thread::rec-empty",
+            None,
+            &[
+                json!({"role":"user","content":"u"}),
+                json!({"role":"assistant","content":"a"}),
+            ],
+        )
+        .await
+        .unwrap();
+    let authoritative = [
+        json!({"role":"user","content":"u"}),
+        json!({"role":"assistant","content":"a"}),
+    ];
+    let result = store
+        .reconcile_run_tail("thread::rec-empty", "", &authoritative)
+        .await
+        .unwrap();
+    assert_eq!(result.total_messages, 2);
+    let records = store.records("thread::rec-empty").await.unwrap();
+    assert_eq!(records.len(), 2, "must not re-append the whole run without a run_id");
+}

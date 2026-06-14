@@ -386,6 +386,169 @@ impl ThreadTranscriptStore {
         }
     }
 
+    /// Overwrite the whole transcript with `records`, preserving each record's
+    /// `seq`/`run_id`/`timestamp`. Internal helper for tail reconciliation.
+    async fn write_records(
+        &self,
+        thread_id: &str,
+        records: &[ThreadTranscriptRecord],
+    ) -> Result<TranscriptAppendResult, ThreadHistoryError> {
+        match &self.mode {
+            TranscriptStoreMode::File { io_lock, .. } => {
+                let _guard = io_lock.lock().await;
+                let path = self.transcript_path(thread_id).ok_or_else(|| {
+                    ThreadHistoryError::TranscriptIo {
+                        thread_id: thread_id.to_owned(),
+                        message: "missing transcript path".to_owned(),
+                    }
+                })?;
+                let mut lines = Vec::with_capacity(records.len() + 1);
+                lines.push(
+                    serde_json::to_string(&TranscriptLine::Session {
+                        version: 1,
+                        thread_id: thread_id.to_owned(),
+                        created_at: chrono::Utc::now().to_rfc3339(),
+                    })
+                    .map_err(|error| ThreadHistoryError::InvalidTranscript {
+                        thread_id: thread_id.to_owned(),
+                        message: error.to_string(),
+                    })?,
+                );
+                for record in records {
+                    lines.push(
+                        serde_json::to_string(&TranscriptLine::from(record.clone())).map_err(
+                            |error| ThreadHistoryError::InvalidTranscript {
+                                thread_id: thread_id.to_owned(),
+                                message: error.to_string(),
+                            },
+                        )?,
+                    );
+                }
+                let payload = format!("{}\n", lines.join("\n"));
+                // Atomic replace: write to a temp file then rename, so a crash
+                // mid-write can never truncate the committed transcript.
+                let tmp = path.with_extension("jsonl.tmp");
+                tokio::fs::write(&tmp, payload).await.map_err(|error| {
+                    ThreadHistoryError::TranscriptIo {
+                        thread_id: thread_id.to_owned(),
+                        message: error.to_string(),
+                    }
+                })?;
+                tokio::fs::rename(&tmp, &path).await.map_err(|error| {
+                    ThreadHistoryError::TranscriptIo {
+                        thread_id: thread_id.to_owned(),
+                        message: error.to_string(),
+                    }
+                })?;
+                Ok(TranscriptAppendResult {
+                    total_messages: records.len(),
+                    last_message_at: records.last().map(|record| record.timestamp.clone()),
+                    transcript_file: Some(path),
+                })
+            }
+            TranscriptStoreMode::Memory { records: store } => {
+                let mut guard = store.lock().await;
+                guard.insert(thread_id.to_owned(), records.to_vec());
+                Ok(TranscriptAppendResult {
+                    total_messages: records.len(),
+                    last_message_at: records.last().map(|record| record.timestamp.clone()),
+                    transcript_file: None,
+                })
+            }
+        }
+    }
+
+    /// Ensure the trailing block of records tagged with `run_id` exactly equals
+    /// `authoritative`. No-op when they already match (the common path once a run
+    /// has been appended incrementally); otherwise rewrites that run's tail.
+    /// Because a `run_id` is reused across retries/resumes, this defines a run's
+    /// transcript contribution as its final authoritative message set without
+    /// duplicating earlier attempts.
+    pub async fn reconcile_run_tail(
+        &self,
+        thread_id: &str,
+        run_id: &str,
+        authoritative: &[Value],
+    ) -> Result<TranscriptAppendResult, ThreadHistoryError> {
+        let trimmed_run_id = run_id.trim();
+        let records = self.read_records(thread_id).await?;
+        // Without a run_id we cannot identify which trailing records belong to
+        // this run, so we cannot tell the worker's already-appended rows apart
+        // from earlier runs. Reconciling blindly would re-append the whole run
+        // (the empty tail is a prefix of everything). Make it a no-op and trust
+        // the worker's incremental appends; the bridge always supplies a run_id.
+        if trimmed_run_id.is_empty() {
+            if !authoritative.is_empty() {
+                tracing::warn!(
+                    thread_id = %thread_id,
+                    "reconcile_run_tail called without a run_id; skipping tail reconcile"
+                );
+            }
+            return Ok(TranscriptAppendResult {
+                total_messages: records.len(),
+                last_message_at: records.last().map(|record| record.timestamp.clone()),
+                transcript_file: self.transcript_path(thread_id),
+            });
+        }
+        let mut split = records.len();
+        while split > 0
+            && records[split - 1].run_id.as_deref().map(str::trim) == Some(trimmed_run_id)
+        {
+            split -= 1;
+        }
+        let existing_tail: Vec<Value> = records[split..]
+            .iter()
+            .map(|record| record.message.clone())
+            .collect();
+        // Compare on a normalized identity that ignores cosmetic, flush-time
+        // varying fields (the SDK session id is bound mid-run, so the user row
+        // committed by the first flush carries `None` while the terminal rebuild
+        // carries `Some`; timestamps can be backfilled). Without this the user
+        // row always "diverges" and every terminal commit falls to the O(file)
+        // rewrite below instead of the cheap no-op / suffix-append.
+        let existing_identity: Vec<Value> = existing_tail.iter().map(message_identity).collect();
+        let authoritative_identity: Vec<Value> =
+            authoritative.iter().map(message_identity).collect();
+        if existing_identity == authoritative_identity {
+            return Ok(TranscriptAppendResult {
+                total_messages: records.len(),
+                last_message_at: records.last().map(|record| record.timestamp.clone()),
+                transcript_file: self.transcript_path(thread_id),
+            });
+        }
+        // Fast path: the run only grew (the already-committed tail is a prefix of
+        // `authoritative`). This is the steady-state terminal case — the worker
+        // streamed every finalized row during the run, and the terminal just needs
+        // to append the trailing segment that was still in flight at the last
+        // flush. Append the suffix instead of rewriting the whole file, which on a
+        // large transcript would be an O(file) rewrite to add one message.
+        if authoritative_identity.len() > existing_identity.len()
+            && authoritative_identity[..existing_identity.len()] == existing_identity[..]
+        {
+            let suffix = &authoritative[existing_tail.len()..];
+            return self
+                .append_committed_messages(thread_id, Some(trimmed_run_id), suffix)
+                .await;
+        }
+        // Divergent (a retry re-streamed different content, or the run shrank):
+        // rewrite this run's tail so we keep only the final authoritative set.
+        let mut rebuilt: Vec<ThreadTranscriptRecord> = records[..split].to_vec();
+        let mut next_seq = rebuilt.last().map(|record| record.seq + 1).unwrap_or(1);
+        let run_id_value = (!trimmed_run_id.is_empty()).then(|| trimmed_run_id.to_owned());
+        for message in authoritative {
+            rebuilt.push(ThreadTranscriptRecord {
+                seq: next_seq,
+                thread_id: thread_id.to_owned(),
+                run_id: run_id_value.clone(),
+                timestamp: message_timestamp(message)
+                    .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+                message: message.clone(),
+            });
+            next_seq += 1;
+        }
+        self.write_records(thread_id, &rebuilt).await
+    }
+
     pub async fn tail(
         &self,
         thread_id: &str,
@@ -1219,6 +1382,25 @@ fn message_timestamp(message: &Value) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+/// A message's logical identity for run-tail reconciliation: everything except
+/// the cosmetic fields that legitimately differ between the streamed copy and
+/// the terminal rebuild of the same message. The SDK session id is bound mid-run
+/// (so the first-flush user row has `None` while the terminal rebuild has `Some`)
+/// and timestamps can be backfilled, so both are stripped. Role, content, and
+/// tool fields — the things that actually distinguish one message from another —
+/// are preserved, so a genuine content change still reads as a divergence.
+fn message_identity(value: &Value) -> Value {
+    let mut value = value.clone();
+    if let Some(object) = value.as_object_mut() {
+        object.remove("timestamp");
+        object.remove("sdk_session_id");
+        if let Some(metadata) = object.get_mut("metadata").and_then(Value::as_object_mut) {
+            metadata.remove("sdk_session_id");
+        }
+    }
+    value
 }
 
 #[cfg(test)]
