@@ -207,6 +207,14 @@ final class GaryxMobileModel: ObservableObject {
     var selectedThreadActivitySignatures: [String: String] = [:]
     var messagesByThread: [String: [GaryxMobileMessage]] = [:]
     var messageSignaturesByThread: [String: MessageListSignature] = [:]
+    /// Persistent committed-transcript cache (S2/S3): instant cold-start display
+    /// and incremental (`after_index`) opens. `cachedTranscriptSnapshots` is the
+    /// in-memory mirror of the on-disk window so the forward cursor is read
+    /// without touching disk on every delta fetch.
+    var transcriptCacheStore: GaryxTranscriptCacheStore = GaryxTranscriptFileCacheStore(
+        directory: GaryxTranscriptFileCacheStore.defaultDirectory()
+    )
+    var cachedTranscriptSnapshots: [String: GaryxCachedTranscript] = [:]
     var selectedMessagesSignature = MessageListSignature(count: 0, fingerprint: 0, sampled: false)
     var pendingSelectedMessagesSignature: MessageListSignature?
     var selectedThreadTurnRowsCacheKey: TurnRowsCacheKey?

@@ -280,6 +280,23 @@ public struct GaryxThreadTranscript: Decodable, Equatable, Sendable {
         case threadRuntime = "thread_runtime"
         case pageInfo = "message_stats"
     }
+
+    /// Public memberwise init so the app target can synthesize a transcript from a
+    /// cache-reconstructed committed window (cache ∪ delta) and feed it through the
+    /// existing render/merge path unchanged.
+    public init(
+        ok: Bool,
+        messages: [GaryxTranscriptMessage],
+        pendingUserInputs: [GaryxPendingUserInput],
+        threadRuntime: GaryxThreadRuntimeSummary?,
+        pageInfo: GaryxThreadTranscriptPageInfo?
+    ) {
+        self.ok = ok
+        self.messages = messages
+        self.pendingUserInputs = pendingUserInputs
+        self.threadRuntime = threadRuntime
+        self.pageInfo = pageInfo
+    }
 }
 
 

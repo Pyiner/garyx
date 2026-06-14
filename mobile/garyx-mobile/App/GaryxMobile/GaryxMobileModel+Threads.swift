@@ -582,7 +582,19 @@ extension GaryxMobileModel {
         setActivePanel(.chat, invalidatesPendingThreadOpen: invalidatesPendingThreadOpen)
         setSidebarVisible(false)
         if previousThreadId != thread.id {
-            messages = cachedMessages(for: thread.id)
+            let inMemory = cachedMessages(for: thread.id)
+            if inMemory.isEmpty {
+                // Cold start / first open this session: show the persisted committed
+                // window immediately instead of a blank screen, then refresh below.
+                let restored = restoredCachedMessages(for: thread.id)
+                if restored.isEmpty {
+                    messages = []
+                } else {
+                    setMessages(restored, for: thread.id)
+                }
+            } else {
+                messages = inMemory
+            }
         }
         await loadSelectedThreadHistory()
         startSelectedThreadReconcileLoop()
@@ -894,14 +906,11 @@ extension GaryxMobileModel {
             }
         }
         do {
-            // Single load of the most recent few turns (including tool messages).
-            // Any cached transcript is shown immediately by the caller while this
-            // one request refreshes it — there is no separate no-tools pre-pass.
-            let transcript = try await client().threadHistory(
-                threadId: threadId,
-                limit: Self.threadHistoryPageLimit,
-                userQueryLimit: Self.threadHistoryUserQueryLimit
-            )
+            // Incremental open: when a committed window is cached, fetch only the
+            // `after_index` delta and reconstruct the full window from cache ∪ delta;
+            // otherwise load the most recent few turns. The persisted window was
+            // already shown by the caller, so this just brings it current.
+            let transcript = try await fetchThreadTranscriptIncrementally(threadId: threadId)
             guard self.selectedThread?.id == threadId, selectedThreadHistoryRequestId == requestId else { return }
             applySelectedThreadTranscript(transcript, threadId: threadId)
         } catch {
@@ -1040,6 +1049,9 @@ extension GaryxMobileModel {
                 userQueryLimit: Self.threadHistoryUserQueryLimit
             )
             guard self.selectedThread?.id == threadId else { return }
+            // Extend the cached committed window backward so older pages persist
+            // and survive a cold start, not just this session's memory.
+            updateTranscriptCache(threadId: threadId, fetched: transcript, direction: .older)
             updateSelectedThreadHistoryPagination(threadId: threadId, transcript: transcript)
             prependOlderMessages(
                 mobileMessages(from: transcript.messages, live: false),
@@ -1225,11 +1237,7 @@ extension GaryxMobileModel {
         guard selectedThread?.id == threadId else { return }
         let observedHistoryRequestId = selectedThreadHistoryRequestId
         do {
-            let transcript = try await client().threadHistory(
-                threadId: threadId,
-                limit: Self.threadHistoryPageLimit,
-                userQueryLimit: Self.threadHistoryUserQueryLimit
-            )
+            let transcript = try await fetchThreadTranscriptIncrementally(threadId: threadId)
             guard selectedThread?.id == threadId,
                   selectedThreadHistoryRequestId == observedHistoryRequestId else { return }
             markThreadHistoryLoaded(threadId)
@@ -1305,11 +1313,9 @@ extension GaryxMobileModel {
         }
         let observedHistoryRequestId = selectedThreadHistoryRequestId
         do {
-            let transcript = try await client().threadHistory(
-                threadId: threadId,
-                limit: Self.threadHistoryPageLimit,
-                userQueryLimit: Self.threadHistoryUserQueryLimit
-            )
+            // Incremental reconcile: a forward `after_index` delta (usually empty
+            // when idle) instead of re-pulling the full window every 1.5s.
+            let transcript = try await fetchThreadTranscriptIncrementally(threadId: threadId)
             guard selectedThread?.id == threadId,
                   selectedThreadHistoryRequestId == observedHistoryRequestId else { return }
             markThreadHistoryLoaded(threadId)
