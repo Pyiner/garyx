@@ -700,6 +700,68 @@ async fn test_save_thread_messages_clears_only_current_provider_sdk_session_id()
 }
 
 #[tokio::test]
+async fn test_save_streaming_partial_does_not_commit_delivery_mirror() {
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let history = make_history(store.clone());
+    let metadata = HashMap::from([("client_run_id".to_owned(), json!("run-mirror"))]);
+    // A message-tool turn with no explicit assistant text: the terminal build
+    // would synthesize a delivery-mirror assistant, but the streaming commit must
+    // not — that synthesized row is unstable across the run.
+    let session_messages = vec![
+        ProviderMessage::tool_use(
+            json!({"tool": "message", "input": {"text": "sent"}}),
+            Some("tool-1".to_owned()),
+            Some("mcp:gary:message".to_owned()),
+        ),
+        ProviderMessage::tool_result(
+            json!({"result": {"tool": "message", "status": "ok", "text": "sent"}}),
+            Some("tool-1".to_owned()),
+            Some("mcp:gary:message".to_owned()),
+            Some(false),
+        ),
+    ];
+    save_streaming_partial(
+        &store,
+        &history,
+        PersistedRun {
+            thread_id: "thread::stream-mirror",
+            user_message: "sync it",
+            user_timestamp: Some("2026-03-01T00:00:00Z"),
+            user_images: &[],
+            assistant_response: "",
+            sdk_session_id: None,
+            provider_key: "provider::mirror",
+            provider_type: ProviderType::ClaudeCode,
+            session_messages: &session_messages,
+            metadata: &metadata,
+        },
+        &[],
+        session_messages.len(),
+        0,
+    )
+    .await;
+
+    let committed = history
+        .transcript_store()
+        .records("thread::stream-mirror")
+        .await
+        .expect("records load");
+    let roles: Vec<&str> = committed
+        .iter()
+        .filter_map(|record| record.message["role"].as_str())
+        .collect();
+    assert_eq!(
+        roles,
+        vec!["user", "tool_use", "tool_result"],
+        "streaming must not commit the synthesized delivery-mirror assistant"
+    );
+    assert!(
+        committed.iter().all(|record| record.message["metadata"]["delivery_mirror"] != json!(true)),
+        "no delivery_mirror row in the streamed transcript"
+    );
+}
+
+#[tokio::test]
 async fn test_save_thread_messages_synthesizes_message_tool_delivery_as_assistant_reply() {
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     let history = make_history(store.clone());

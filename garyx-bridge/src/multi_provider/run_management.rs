@@ -510,17 +510,19 @@ fn spawn_partial_thread_persistence_worker(
             }
         }
 
-        let mut final_dirty = false;
         for pending_input in &mut pending_user_inputs {
             if pending_input.status == PendingUserInputStatus::Queued {
                 pending_input.status = PendingUserInputStatus::Abandoned;
-                final_dirty = true;
             }
         }
-        if final_dirty {
-            // Terminal append of any rows finalized since the last flush; the
-            // returned cursor is not needed because the worker is about to return
-            // and the terminal commit reconciles the tail.
+        {
+            // Always do a final streaming flush at run end. A `Done`/boundary that
+            // closes the trailing assistant segment finalizes it but is not a
+            // `dirty` event, so without this the just-finalized segment would sit
+            // only in the overlay until the terminal commit — and a crash in that
+            // window would drop it. Flushing here commits everything finalized
+            // before the worker returns. The returned cursor is unused because the
+            // terminal commit reconciles the tail next.
             let _ = save_streaming_partial(
                 &store,
                 &history,
@@ -695,20 +697,29 @@ fn attach_provider_sdk_session_metadata(
 }
 
 fn persisted_provider_messages_from_thread(session_data: &Value) -> Vec<ProviderMessage> {
-    let active_messages = active_run_snapshot_messages(session_data);
-    let messages = if active_messages.is_empty() {
-        session_data
-            .get("messages")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default()
-    } else {
-        active_messages
-    };
+    // The committed `messages` cache is the base history; the active-run overlay
+    // extends it. Since F1 made the overlay only the in-flight trailing segment
+    // (not the whole run), it must be MERGED onto the committed cache rather than
+    // replacing it — otherwise a native provider resuming after a mid-run crash
+    // (stale overlay, not yet repaired) would see only the last partial row and
+    // lose all prior context. Dedup so a legacy whole-run overlay can't double up.
+    let committed = session_data
+        .get("messages")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let overlay = active_run_snapshot_messages(session_data);
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut messages = Vec::with_capacity(committed.len() + overlay.len());
+    for value in committed.iter().chain(overlay.iter()) {
+        let signature = serde_json::to_string(value).unwrap_or_default();
+        if seen.insert(signature) {
+            if let Some(message) = ProviderMessage::from_value(value) {
+                messages.push(message);
+            }
+        }
+    }
     messages
-        .iter()
-        .filter_map(ProviderMessage::from_value)
-        .collect()
 }
 
 fn attach_native_session_messages(

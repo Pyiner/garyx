@@ -804,7 +804,23 @@ pub(super) async fn save_streaming_partial(
         session_messages: &run.session_messages[..finalized_len],
         metadata: run.metadata,
     };
-    let authoritative = build_run_messages(&finalized_run);
+    // Drop synthesized delivery-mirror rows from the streaming commit. Whether a
+    // mirror is synthesized depends on `has_explicit_assistant_messages`, which
+    // can flip later in the same run (a message-tool turn that later emits real
+    // assistant text), so a streamed mirror is not a stable prefix of the final
+    // authoritative set. The terminal commit re-derives mirrors with full context
+    // and `reconcile_run_tail` rewrites the tail to match; streaming only commits
+    // the stable real session rows.
+    let authoritative: Vec<Value> = build_run_messages(&finalized_run)
+        .into_iter()
+        .filter(|message| {
+            message
+                .get("metadata")
+                .and_then(|metadata| metadata.get("delivery_mirror"))
+                .and_then(Value::as_bool)
+                != Some(true)
+        })
+        .collect();
 
     let mut appended = already_appended.min(authoritative.len());
     let mut committed_total: Option<usize> = None;
