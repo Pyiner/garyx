@@ -111,11 +111,11 @@ private struct GaryxToolCallRowLabel: View {
     let row: GaryxToolCallListRow
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
+        HStack(alignment: .center, spacing: 10) {
             Image(systemName: iconName)
-                .font(GaryxFont.system(size: 14, weight: .regular))
+                .font(GaryxFont.system(size: 15, weight: .semibold))
                 .foregroundStyle(row.isError ? GaryxTheme.danger : GaryxTheme.secondaryText)
-                .frame(width: 20, height: 20)
+                .frame(width: 24, height: 24)
 
             if row.isRunning {
                 GaryxShimmerText(
@@ -143,11 +143,11 @@ private struct GaryxToolCallRowLabel: View {
     private var iconName: String {
         switch row.icon {
         case .command: "terminal"
-        case .read: "eye"
-        case .edit: "square.and.pencil"
+        case .read: "doc.text"
+        case .edit: "pencil"
         case .search: "magnifyingglass"
         case .web: "globe"
-        case .generic: "wrench.and.screwdriver"
+        case .generic: "gearshape"
         }
     }
 }
@@ -435,4 +435,3 @@ private struct GaryxToolImageThumbnail: View {
         onLoaded?(loaded, resolvedDataUrl)
     }
 }
-
