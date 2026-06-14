@@ -1643,6 +1643,9 @@ struct GaryxMessageBubble: View {
                     if message.attachments.isEmpty {
                         GaryxThinkingLabel()
                     }
+                } else if let notification = taskNotification {
+                    GaryxTaskNotificationCard(notification: notification)
+                        .garyxMessageInteraction(text: taskNotificationCopyText(notification))
                 } else if !displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     GaryxMarkdownText(
                         text: displayText,
@@ -1696,6 +1699,22 @@ struct GaryxMessageBubble: View {
             return ""
         }
         return message.text
+    }
+
+    private var taskNotification: GaryxTaskNotification? {
+        guard message.role == .assistant else { return nil }
+        return GaryxTaskNotificationPresentation.parse(displayText)
+    }
+
+    private func taskNotificationCopyText(_ notification: GaryxTaskNotification) -> String {
+        [
+            notification.taskId,
+            notification.title,
+            notification.finalMessage,
+        ]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
     }
 
     private var messageCopyText: String {
@@ -1789,6 +1808,62 @@ struct GaryxMessageBubble: View {
                 .lineLimit(2)
                 .multilineTextAlignment(.trailing)
         }
+    }
+}
+
+private struct GaryxTaskNotificationCard: View {
+    let notification: GaryxTaskNotification
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 7) {
+                    if !notification.taskId.isEmpty {
+                        Text(notification.taskId)
+                            .font(GaryxFont.caption(weight: .semibold))
+                            .foregroundStyle(GaryxTheme.secondaryText)
+                    }
+
+                    Text(GaryxTaskNotificationPresentation.statusLabel(for: notification.status))
+                        .font(GaryxFont.caption(weight: .medium))
+                        .foregroundStyle(GaryxTheme.secondaryText)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(Color.primary.opacity(0.035), in: Capsule())
+                        .overlay {
+                            Capsule()
+                                .stroke(GaryxTheme.hairline, lineWidth: 1)
+                        }
+                }
+
+                Text(notification.title)
+                    .font(GaryxFont.subheadline(weight: .semibold))
+                    .foregroundStyle(GaryxTheme.primaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Rectangle()
+                .fill(GaryxTheme.hairline)
+                .frame(height: 1)
+
+            GaryxMarkdownText(
+                text: notification.finalMessage,
+                foreground: GaryxTheme.primaryText,
+                allowsRelativeFileLinks: true,
+                allowsTextSelection: false,
+                onFileLinkTap: nil,
+                onImageFilePreview: nil
+            )
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(GaryxTheme.surface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(GaryxTheme.hairline, lineWidth: 1)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Task ready for review")
     }
 }
 
