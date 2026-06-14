@@ -89,6 +89,7 @@ extension GaryxMobileModel {
         sceneRefreshTask?.cancel()
         sceneRefreshTask = nil
         cancelSelectedThreadReconcileLoop()
+        stopSelectedThreadStream()
         selectedThreadActivitySignatures = [:]
         cancelGlobalEventStream()
         clearActiveRunState()

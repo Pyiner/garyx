@@ -884,9 +884,20 @@ extension GaryxMobileModel {
         await handleGlobalStreamEvent(event, replay: replay)
     }
 
-    func handleGlobalStreamEvent(_ event: GaryxChatStreamEvent, replay: Bool = false) async {
+    func handleGlobalStreamEvent(
+        _ event: GaryxChatStreamEvent,
+        replay: Bool = false,
+        bypassStreamOwnership: Bool = false
+    ) async {
         let threadId = Self.threadId(from: event)
         guard !threadId.isEmpty else { return }
+        // S5: when the resumable per-thread stream owns this thread, it applies the
+        // thread's transcript events; the global stream must skip them to avoid
+        // double-applying deltas. The per-thread consumer calls this with
+        // bypassStreamOwnership: true.
+        if !bypassStreamOwnership, threadId == streamOwnedThreadId {
+            return
+        }
 
         if replay {
             updateRemoteBusyState(from: event)

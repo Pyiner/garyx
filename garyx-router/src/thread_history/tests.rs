@@ -425,3 +425,28 @@ async fn reconcile_run_tail_empty_run_id_is_noop_not_double_append() {
     let records = store.records("thread::rec-empty").await.unwrap();
     assert_eq!(records.len(), 2, "must not re-append the whole run without a run_id");
 }
+
+#[tokio::test]
+async fn records_after_seq_returns_delta_ascending_and_handles_overflow() {
+    let store = ThreadTranscriptStore::memory();
+    let msgs: Vec<_> = (0..10)
+        .map(|i| json!({"role":"assistant","content":format!("m{i}")}))
+        .collect();
+    store
+        .append_committed_messages("thread::seq", Some("run-1"), &msgs)
+        .await
+        .unwrap();
+    // seqs are 1..=10. after_seq=7 → seq 8,9,10 ascending.
+    let delta = store.records_after_seq("thread::seq", 7, 100).await.unwrap();
+    assert_eq!(delta.iter().map(|r| r.seq).collect::<Vec<_>>(), vec![8, 9, 10]);
+    assert_eq!(delta[0].message["content"], "m7");
+    // caught up → empty
+    assert!(store.records_after_seq("thread::seq", 10, 100).await.unwrap().is_empty());
+    // after_seq=0 → all
+    assert_eq!(store.records_after_seq("thread::seq", 0, 100).await.unwrap().len(), 10);
+    // limit smaller than delta → oldest `limit`, still ascending
+    let capped = store.records_after_seq("thread::seq", 0, 3).await.unwrap();
+    assert_eq!(capped.iter().map(|r| r.seq).collect::<Vec<_>>(), vec![1, 2, 3]);
+    // unknown thread → empty
+    assert!(store.records_after_seq("thread::nope", 0, 100).await.unwrap().is_empty());
+}

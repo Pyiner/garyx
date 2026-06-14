@@ -85,6 +85,10 @@ fn thread_routes() -> Router<Arc<AppState>> {
             axum::routing::get(routes::get_thread_logs),
         )
         .route(
+            "/api/threads/{key}/stream",
+            axum::routing::get(routes::thread_stream),
+        )
+        .route(
             "/api/threads/{key}/workflows",
             axum::routing::get(workflows::list_thread_workflows),
         )

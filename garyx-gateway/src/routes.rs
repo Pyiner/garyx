@@ -1,9 +1,16 @@
 use axum::{
     Json,
     extract::{Path, Query, State},
-    http::StatusCode,
-    response::IntoResponse,
+    http::{HeaderMap, StatusCode},
+    response::{
+        IntoResponse,
+        sse::{Event, KeepAlive, Sse},
+    },
 };
+use std::convert::Infallible;
+use std::time::Duration;
+use tokio_stream::StreamExt;
+use tokio_stream::wrappers::BroadcastStream;
 use chrono::Utc;
 use garyx_channels::plugin::{PluginAccountUi, PluginConversationEndpoint, PluginMainEndpoint};
 use garyx_models::config::ChannelsConfig;
@@ -1729,6 +1736,112 @@ pub async fn get_thread_logs(
             Json(json!({"error": error})),
         ),
     }
+}
+
+#[derive(Deserialize)]
+pub struct ThreadStreamParams {
+    /// Resume cursor: replay committed messages with seq strictly greater than this.
+    #[serde(default)]
+    pub after_seq: u64,
+}
+
+/// Upper bound on committed rows replayed on connect. The common (caught-up) case
+/// returns a handful via the tail-read; a far-behind cursor that exceeds this gets
+/// the oldest `REPLAY_CAP` and the client reconnects with the advanced cursor for
+/// the rest (or backfills older via before_index).
+const THREAD_STREAM_REPLAY_CAP: usize = 10_000;
+
+/// GET /api/threads/:key/stream - resumable per-thread transcript stream (S5).
+///
+/// Replays committed messages with `seq > after_seq` (or the `Last-Event-ID`
+/// header on reconnect), then streams that thread's live events. The bus is
+/// subscribed BEFORE the replay snapshot is read so no commit is missed in the
+/// gap, and `committed_message` events are deduped by `seq` so the resulting
+/// replay/live overlap is idempotent.
+pub async fn thread_stream(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    Query(params): Query<ThreadStreamParams>,
+    headers: HeaderMap,
+) -> axum::response::Response {
+    let Some(thread_id) = ensure_existing_thread_id(&state, &key).await else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "thread not found"})),
+        )
+            .into_response();
+    };
+
+    // Resume via Last-Event-ID (standard SSE) or the after_seq query param.
+    let after_seq = headers
+        .get("last-event-id")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(params.after_seq);
+
+    // Subscribe BEFORE reading the replay snapshot (no gap); seq dedup below makes
+    // the overlap idempotent.
+    let rx = state.ops.events.subscribe();
+
+    let replay = state
+        .threads
+        .history
+        .transcript_store()
+        .records_after_seq(&thread_id, after_seq, THREAD_STREAM_REPLAY_CAP)
+        .await
+        .unwrap_or_default();
+
+    let mut replay_max_seq = after_seq;
+    let mut replay_events: Vec<Result<Event, Infallible>> = Vec::with_capacity(replay.len());
+    for record in replay {
+        replay_max_seq = replay_max_seq.max(record.seq);
+        let payload = json!({
+            "type": "committed_message",
+            "thread_id": thread_id,
+            "run_id": record.run_id,
+            "seq": record.seq,
+            "message": record.message,
+        });
+        replay_events.push(Ok(Event::default()
+            .id(record.seq.to_string())
+            .data(payload.to_string())));
+    }
+
+    let thread_for_live = thread_id.clone();
+    let state_for_drops = state.clone();
+    let mut last_sent_seq = replay_max_seq;
+    let live = BroadcastStream::new(rx).filter_map(move |item| match item {
+        Ok(raw) => {
+            let value: Value = serde_json::from_str(&raw).ok()?;
+            if value.get("thread_id").and_then(Value::as_str) != Some(thread_for_live.as_str()) {
+                return None;
+            }
+            if value.get("type").and_then(Value::as_str) == Some("committed_message") {
+                let seq = value.get("seq").and_then(Value::as_u64).unwrap_or(0);
+                if seq <= last_sent_seq {
+                    return None; // replay/live overlap or duplicate
+                }
+                last_sent_seq = seq;
+                return Some(Ok(Event::default().id(seq.to_string()).data(raw)));
+            }
+            Some(Ok(Event::default().data(raw)))
+        }
+        Err(_) => {
+            // Lagged: a slow consumer dropped events; the client recovers by
+            // reconnecting with after_seq=cursor (file replay fills the gap).
+            state_for_drops.ops.events.record_drop();
+            None
+        }
+    });
+
+    let combined = tokio_stream::iter(replay_events).chain(live);
+    Sse::new(combined)
+        .keep_alive(
+            KeepAlive::new()
+                .interval(Duration::from_secs(30))
+                .text("ping"),
+        )
+        .into_response()
 }
 
 /// POST /api/threads - create a canonical thread

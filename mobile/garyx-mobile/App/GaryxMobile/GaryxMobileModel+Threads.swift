@@ -596,8 +596,15 @@ extension GaryxMobileModel {
                 messages = inMemory
             }
         }
-        await loadSelectedThreadHistory()
-        startSelectedThreadReconcileLoop()
+        // S5: seed the cache with a bounded newest window when nothing is cached
+        // (so a huge thread doesn't replay from seq 0), then drive live + incremental
+        // catch-up over the resumable per-thread stream. The stream supersedes the
+        // reconcile poll and falls back to it (and the after_index HTTP path) on
+        // failure.
+        if transcriptSnapshot(for: thread.id) == nil {
+            await loadSelectedThreadHistory()
+        }
+        startSelectedThreadStream(for: thread.id)
     }
 
     func openNewThreadDraft(agentTargetOverride: String? = nil) {
@@ -611,6 +618,7 @@ extension GaryxMobileModel {
         selectedThreadHistoryRetryThreadId = nil
         selectedThreadHistoryRetryCount = 0
         cancelSelectedThreadReconcileLoop()
+        stopSelectedThreadStream()
         selectedThreadHistoryRequestId = nil
         isLoadingSelectedThreadHistory = false
         resetSelectedThreadHistoryPagination()

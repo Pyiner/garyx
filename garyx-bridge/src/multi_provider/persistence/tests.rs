@@ -314,7 +314,8 @@ async fn test_save_streaming_partial_commits_user_row_and_keeps_only_inflight_in
         snapshot.finalized_len(),
         appended,
     )
-    .await;
+    .await
+    .0;
 
     snapshot.apply_stream_event(&StreamEvent::Delta {
         text: "lo".to_owned(),
@@ -338,7 +339,8 @@ async fn test_save_streaming_partial_commits_user_row_and_keeps_only_inflight_in
         snapshot.finalized_len(),
         appended,
     )
-    .await;
+    .await
+    .0;
 
     // The in-flight assistant segment is not finalized, so only the synthesized
     // user row is committed to the transcript (appended once, not twice).
@@ -549,6 +551,7 @@ async fn test_streaming_then_terminal_commit_does_not_duplicate_messages() {
                 appended,
             )
             .await
+            .0
         }
     };
 

@@ -789,7 +789,7 @@ pub(super) async fn save_streaming_partial(
     pending_user_inputs: &[PendingUserInput],
     finalized_len: usize,
     already_appended: usize,
-) -> usize {
+) -> (usize, Vec<(u64, Value)>) {
     let run_id = primary_run_identifier(run.metadata);
     let finalized_len = finalized_len.min(run.session_messages.len());
     let finalized_run = PersistedRun {
@@ -824,15 +824,30 @@ pub(super) async fn save_streaming_partial(
 
     let mut appended = already_appended.min(authoritative.len());
     let mut committed_total: Option<usize> = None;
+    // The (seq, message) rows this flush appended, for the per-thread stream's live
+    // `committed_message` events (S5). Derived from the post-append total: seq is
+    // gapless, so the K appended rows are the last K records, seqs (total-K+1)..=total.
+    let mut committed_pairs: Vec<(u64, Value)> = Vec::new();
     if authoritative.len() > appended {
+        let suffix_start = appended;
         match history
             .transcript_store()
-            .append_committed_messages(run.thread_id, run_id.as_deref(), &authoritative[appended..])
+            .append_committed_messages(
+                run.thread_id,
+                run_id.as_deref(),
+                &authoritative[suffix_start..],
+            )
             .await
         {
             Ok(result) => {
+                let total = result.total_messages;
+                let suffix = &authoritative[suffix_start..];
+                let k = suffix.len();
+                for (offset, message) in suffix.iter().enumerate() {
+                    committed_pairs.push(((total - k + 1 + offset) as u64, message.clone()));
+                }
                 appended = authoritative.len();
-                committed_total = Some(result.total_messages);
+                committed_total = Some(total);
             }
             Err(error) => {
                 warn!(thread_id = %run.thread_id, error = %error, "failed to append streaming transcript");
@@ -933,7 +948,7 @@ pub(super) async fn save_streaming_partial(
         );
     }
     store.set(run.thread_id, session_data).await;
-    appended
+    (appended, committed_pairs)
 }
 
 /// Save user and provider-emitted messages to the thread store after a run completes.

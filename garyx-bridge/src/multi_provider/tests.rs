@@ -2143,6 +2143,62 @@ async fn test_thread_persistence_after_run() {
 }
 
 #[tokio::test]
+async fn test_worker_emits_committed_message_events_with_seqs() {
+    // S5: the persistence worker publishes each committed jsonl row as a seq'd
+    // `committed_message` event on the gateway bus (write-then-emit).
+    let bridge = MultiProviderBridge::new();
+    let p = Arc::new(MockProvider::new(ProviderType::ClaudeCode));
+    bridge.register_provider("p1", p).await;
+    bridge.set_default_provider_key("p1").await;
+
+    let store: Arc<dyn garyx_router::ThreadStore> =
+        Arc::new(garyx_router::InMemoryThreadStore::new());
+    bridge.set_thread_store(store.clone()).await;
+    bridge.set_thread_history(make_history(store.clone()));
+    let (tx, mut rx) = tokio::sync::broadcast::channel::<String>(256);
+    bridge.set_event_tx(tx).await;
+
+    bridge
+        .start_agent_run(
+            run_request("sess::tg::s5", "hello bot", "run-s5", "telegram", "main"),
+            None,
+        )
+        .await
+        .unwrap();
+
+    let mut committed: Vec<(u64, String)> = Vec::new();
+    for _ in 0..40 {
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        while let Ok(raw) = rx.try_recv() {
+            let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            if value.get("type").and_then(serde_json::Value::as_str) == Some("committed_message") {
+                let seq = value.get("seq").and_then(serde_json::Value::as_u64).unwrap();
+                let role = value
+                    .pointer("/message/role")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .to_owned();
+                if !committed.iter().any(|(s, _)| *s == seq) {
+                    committed.push((seq, role));
+                }
+            }
+        }
+        if committed.len() >= 2 {
+            break;
+        }
+    }
+    committed.sort_by_key(|(seq, _)| *seq);
+    assert_eq!(
+        committed,
+        vec![(1, "user".to_owned()), (2, "assistant".to_owned())],
+        "committed_message events carry gapless seqs and the committed rows"
+    );
+    // The event carries the thread_id so the per-thread stream can filter.
+    // (Implicitly covered: the gateway filters on thread_id; here we assert the
+    // seq/role contract the client cursor depends on.)
+}
+
+#[tokio::test]
 async fn test_thread_persistence_checkpoints_streaming_output_before_run_completion() {
     let bridge = MultiProviderBridge::new();
     let provider = Arc::new(CheckpointingProvider::new());

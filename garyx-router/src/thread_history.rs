@@ -642,6 +642,101 @@ impl ThreadTranscriptStore {
         self.read_records(thread_id).await
     }
 
+    /// Committed records with `seq > after_seq`, ascending, up to `limit`. Drives
+    /// the resumable per-thread stream's replay (catch-up). Optimized for the
+    /// caught-up case: it scans the jsonl from the TAIL backward and stops at the
+    /// first `seq <= after_seq`, so a near-current cursor parses only the delta
+    /// instead of the whole file (seq is monotonic + gapless, so everything before
+    /// the boundary is older). If the delta exceeds `limit` (far-behind / cold
+    /// cursor) it falls back to a single forward scan.
+    pub async fn records_after_seq(
+        &self,
+        thread_id: &str,
+        after_seq: u64,
+        limit: usize,
+    ) -> Result<Vec<ThreadTranscriptRecord>, ThreadHistoryError> {
+        match &self.mode {
+            TranscriptStoreMode::File { .. } => {
+                let Some(path) = self.transcript_path(thread_id) else {
+                    return Ok(Vec::new());
+                };
+                if !path.exists() {
+                    return Ok(Vec::new());
+                }
+                let raw = tokio::fs::read_to_string(&path).await.map_err(|error| {
+                    ThreadHistoryError::TranscriptIo {
+                        thread_id: thread_id.to_owned(),
+                        message: error.to_string(),
+                    }
+                })?;
+                // Tail scan: parse backward only as far as the delta. Abort to a
+                // forward scan if the delta is larger than `limit`.
+                let mut tail: Vec<ThreadTranscriptRecord> = Vec::new();
+                let mut overflowed = false;
+                for line in raw.lines().rev() {
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    let parsed =
+                        serde_json::from_str::<TranscriptLine>(line).map_err(|error| {
+                            ThreadHistoryError::InvalidTranscript {
+                                thread_id: thread_id.to_owned(),
+                                message: error.to_string(),
+                            }
+                        })?;
+                    if let TranscriptLine::Message {
+                        seq,
+                        thread_id: tid,
+                        run_id,
+                        timestamp,
+                        message,
+                    } = parsed
+                    {
+                        if seq <= after_seq {
+                            break;
+                        }
+                        if tail.len() >= limit {
+                            overflowed = true;
+                            break;
+                        }
+                        tail.push(ThreadTranscriptRecord {
+                            seq,
+                            thread_id: tid,
+                            run_id,
+                            timestamp,
+                            message,
+                        });
+                    }
+                }
+                if !overflowed {
+                    tail.reverse();
+                    return Ok(tail);
+                }
+                // Far-behind: one forward pass, oldest-first, bounded.
+                let all = self.read_records_from_path(thread_id, &path).await?;
+                Ok(all
+                    .into_iter()
+                    .filter(|record| record.seq > after_seq)
+                    .take(limit)
+                    .collect())
+            }
+            TranscriptStoreMode::Memory { records } => {
+                let guard = records.lock().await;
+                Ok(guard
+                    .get(thread_id)
+                    .map(|entries| {
+                        entries
+                            .iter()
+                            .filter(|record| record.seq > after_seq)
+                            .take(limit)
+                            .cloned()
+                            .collect()
+                    })
+                    .unwrap_or_default())
+            }
+        }
+    }
+
     pub async fn find_latest_for_run(
         &self,
         thread_id: &str,

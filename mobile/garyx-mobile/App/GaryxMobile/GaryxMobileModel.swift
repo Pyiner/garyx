@@ -209,6 +209,12 @@ final class GaryxMobileModel: ObservableObject {
     var selectedThreadReconcileTask: Task<Void, Never>?
     var selectedThreadReconcileThreadId: String?
     var selectedThreadActivitySignatures: [String: String] = [:]
+    /// S5 resumable per-thread transcript stream for the open thread. While
+    /// `streamOwnedThreadId` is set, the global event stream skips that thread's
+    /// transcript events (the per-thread stream owns them) to avoid double-apply.
+    var selectedThreadStreamTask: Task<Void, Never>?
+    var selectedThreadStreamGeneration: UUID?
+    var streamOwnedThreadId: String?
     var messagesByThread: [String: [GaryxMobileMessage]] = [:]
     var messageSignaturesByThread: [String: MessageListSignature] = [:]
     /// Persistent committed-transcript cache (S2/S3): instant cold-start display

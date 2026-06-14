@@ -383,6 +383,7 @@ fn spawn_partial_thread_persistence_worker(
     provider_key: String,
     provider_type: ProviderType,
     metadata: HashMap<String, Value>,
+    gateway_event_tx: Option<tokio::sync::broadcast::Sender<String>>,
 ) -> (
     mpsc::UnboundedSender<ThreadPersistenceCommand>,
     JoinHandle<StreamingPersistenceWorkerResult>,
@@ -394,8 +395,32 @@ fn spawn_partial_thread_persistence_worker(
         // Running count of finalized rows already appended to the committed
         // transcript for this run (F1 real-time append cursor).
         let mut appended_finalized: usize = 0;
+        // Run id stamped on the live `committed_message` events (S5). The
+        // per-thread stream filters by thread_id; run_id is informational.
+        let committed_event_run_id = metadata
+            .get("bridge_run_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        // Publish each row this flush committed to the jsonl as a seq'd
+        // `committed_message` on the gateway bus, AFTER the append flushed
+        // (write-then-emit): the in-memory event never references a seq the file
+        // does not yet have, so a reconnect replay can never miss it.
+        let emit_committed = |committed: Vec<(u64, Value)>| {
+            for (seq, message) in committed {
+                emit_gateway_event(
+                    &gateway_event_tx,
+                    serde_json::json!({
+                        "type": "committed_message",
+                        "thread_id": thread_id,
+                        "run_id": committed_event_run_id,
+                        "seq": seq,
+                        "message": message,
+                    }),
+                );
+            }
+        };
 
-        appended_finalized = save_streaming_partial(
+        let (cursor, committed) = save_streaming_partial(
             &store,
             &history,
             PersistedRun {
@@ -415,6 +440,8 @@ fn spawn_partial_thread_persistence_worker(
             appended_finalized,
         )
         .await;
+        appended_finalized = cursor;
+        emit_committed(committed);
 
         while let Some(command) = event_rx.recv().await {
             let mut dirty = false;
@@ -484,7 +511,7 @@ fn spawn_partial_thread_persistence_worker(
                 }
             }
             if dirty {
-                appended_finalized = save_streaming_partial(
+                let (cursor, committed) = save_streaming_partial(
                     &store,
                     &history,
                     PersistedRun {
@@ -504,6 +531,8 @@ fn spawn_partial_thread_persistence_worker(
                     appended_finalized,
                 )
                 .await;
+                appended_finalized = cursor;
+                emit_committed(committed);
             }
             if finish {
                 break;
@@ -516,14 +545,13 @@ fn spawn_partial_thread_persistence_worker(
             }
         }
         {
-            // Always do a final streaming flush at run end. A `Done`/boundary that
-            // closes the trailing assistant segment finalizes it but is not a
-            // `dirty` event, so without this the just-finalized segment would sit
-            // only in the overlay until the terminal commit — and a crash in that
-            // window would drop it. Flushing here commits everything finalized
-            // before the worker returns. The returned cursor is unused because the
-            // terminal commit reconciles the tail next.
-            let _ = save_streaming_partial(
+            // Final flush at run end. The whole session is finalized now (the run
+            // ended, so the trailing assistant is no longer in-flight), so commit
+            // the FULL length — this commits + emits the last segment that the
+            // streaming flushes left in the overlay, closing the crash window AND
+            // delivering it as a seq'd `committed_message` so the client's cursor
+            // advances continuously rather than waiting for the next reconnect.
+            let (_, committed) = save_streaming_partial(
                 &store,
                 &history,
                 PersistedRun {
@@ -539,10 +567,11 @@ fn spawn_partial_thread_persistence_worker(
                     metadata: &metadata,
                 },
                 &pending_user_inputs,
-                snapshot.finalized_len(),
+                snapshot.session_messages.len(),
                 appended_finalized,
             )
             .await;
+            emit_committed(committed);
         }
 
         StreamingPersistenceWorkerResult {
@@ -1347,6 +1376,7 @@ impl MultiProviderBridge {
         let partial_metadata = options.metadata.clone();
         let partial_provider_key = provider_key_owned.clone();
         let partial_provider_type = provider.provider_type();
+        let partial_gateway_event_tx = self.inner.event_tx.read().await.clone();
         let partial_thread_store = self.inner.thread_store.read().await.clone();
         let partial_thread_history = self.inner.thread_history.read().await.clone();
         let (partial_persistence_tx, partial_persistence_task) = partial_thread_store
@@ -1362,6 +1392,7 @@ impl MultiProviderBridge {
                     partial_provider_key,
                     partial_provider_type,
                     partial_metadata,
+                    partial_gateway_event_tx,
                 )
             })
             .unzip();
@@ -1982,6 +2013,7 @@ impl MultiProviderBridge {
         let partial_metadata = options.metadata.clone();
         let partial_provider_key = provider_key.clone();
         let partial_provider_type = provider.provider_type();
+        let partial_gateway_event_tx = self.inner.event_tx.read().await.clone();
         let partial_thread_store = self.inner.thread_store.read().await.clone();
         let partial_thread_history = self.inner.thread_history.read().await.clone();
         let (partial_persistence_tx, partial_persistence_task) = partial_thread_store
@@ -1997,6 +2029,7 @@ impl MultiProviderBridge {
                     partial_provider_key,
                     partial_provider_type,
                     partial_metadata,
+                    partial_gateway_event_tx,
                 )
             })
             .unzip();
