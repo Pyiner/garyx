@@ -8456,6 +8456,21 @@ button.message-file-card {
   box-shadow: none;
 }
 
+.message-bubble.assistant.task-notification-message {
+  width: min(100%, 680px);
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.message-bubble.assistant.task-notification-message > .message-rich-content {
+  gap: 0;
+  width: 100%;
+}
+
 .message-bubble.system {
   align-self: center;
   max-width: min(100%, 720px);

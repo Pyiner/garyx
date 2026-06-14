@@ -39,6 +39,7 @@ import {
   buildOptimisticTranscriptContent,
   splitRichMessageContentIntoBubbleParts,
 } from "../../message-rich-content";
+import { parseTaskNotificationText } from "../../task-notification";
 import { deriveThreadTeamView } from "../../thread-model";
 import {
   buildRenderTranscriptBlocks,
@@ -717,10 +718,11 @@ export function ThreadPage({
               }
               const entry = block.entry;
               const loopContinuation = isLoopContinuationMessage(entry.message);
+              const displayText = displayTranscriptMessageText(entry.message);
               if (entry.message.role === "user" && !loopContinuation) {
                 return renderUserMessageBubbleParts({
                   keyPrefix: `${block.key}:body`,
-                  text: displayTranscriptMessageText(entry.message),
+                  text: displayText,
                   content: entry.message.content,
                   pending: entry.message.pending,
                   error: entry.message.error,
@@ -734,10 +736,15 @@ export function ThreadPage({
                   markUserTurnStart: options.markUserTurnStart !== false,
                 });
               }
+              const isTaskNotificationMessage =
+                entry.message.role === "assistant" &&
+                !entry.message.pending &&
+                !loopContinuation &&
+                parseTaskNotificationText(displayText) !== null;
               return (
                 <article
                   key={`${block.key}:body`}
-                  className={`message-bubble ${entry.message.role} ${entry.message.pending ? "pending" : ""} ${entry.message.error ? "error" : ""} ${loopContinuation ? "loop-continuation" : ""}`}
+                  className={`message-bubble ${entry.message.role} ${entry.message.pending ? "pending" : ""} ${entry.message.error ? "error" : ""} ${loopContinuation ? "loop-continuation" : ""} ${isTaskNotificationMessage ? "task-notification-message" : ""}`}
                 >
                   {entry.message.role === "assistant" &&
                   entry.message.pending ? (
@@ -758,7 +765,7 @@ export function ThreadPage({
                           : entry.message.content
                       }
                       onLocalFileLinkClick={onLocalWorkspaceFileLinkClick}
-                      text={displayTranscriptMessageText(entry.message)}
+                      text={displayText}
                     />
                   )}
                 </article>
