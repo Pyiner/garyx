@@ -311,6 +311,12 @@ public struct GaryxThreadTranscriptPageInfo: Decodable, Equatable, Sendable {
     /// beyond this page and the index to resume from. Drives incremental open.
     public var hasMoreAfter: Bool
     public var nextAfterIndex: Int?
+    /// Authoritative total committed message count for the thread, independent of
+    /// this page's bounds. Used to detect a server-side shrink/reset (cache cursor
+    /// at or beyond this means the cache is ahead of the server). Note an empty
+    /// `after_index` page reports `returned_end_index == 0`, so the totals — not
+    /// the page bounds — must drive shrink detection.
+    public var totalMessagesInThread: Int?
 
     enum CodingKeys: String, CodingKey {
         case returnedMessages = "returned_messages"
@@ -320,6 +326,8 @@ public struct GaryxThreadTranscriptPageInfo: Decodable, Equatable, Sendable {
         case nextBeforeIndex = "next_before_index"
         case hasMoreAfter = "has_more_after"
         case nextAfterIndex = "next_after_index"
+        case totalMessagesInThread = "total_messages_in_thread"
+        case totalMessagesInSession = "total_messages_in_session"
     }
 
     public init(from decoder: Decoder) throws {
@@ -331,6 +339,8 @@ public struct GaryxThreadTranscriptPageInfo: Decodable, Equatable, Sendable {
         nextBeforeIndex = try container.decodeIfPresent(Int.self, forKey: .nextBeforeIndex)
         hasMoreAfter = try container.decodeIfPresent(Bool.self, forKey: .hasMoreAfter) ?? false
         nextAfterIndex = try container.decodeIfPresent(Int.self, forKey: .nextAfterIndex)
+        totalMessagesInThread = try container.decodeIfPresent(Int.self, forKey: .totalMessagesInThread)
+            ?? container.decodeIfPresent(Int.self, forKey: .totalMessagesInSession)
     }
 
     public init(
@@ -340,8 +350,10 @@ public struct GaryxThreadTranscriptPageInfo: Decodable, Equatable, Sendable {
         hasMoreBefore: Bool,
         nextBeforeIndex: Int?,
         hasMoreAfter: Bool = false,
-        nextAfterIndex: Int? = nil
+        nextAfterIndex: Int? = nil,
+        totalMessagesInThread: Int? = nil
     ) {
+        self.totalMessagesInThread = totalMessagesInThread
         self.returnedMessages = returnedMessages
         self.returnedStartIndex = returnedStartIndex
         self.returnedEndIndex = returnedEndIndex

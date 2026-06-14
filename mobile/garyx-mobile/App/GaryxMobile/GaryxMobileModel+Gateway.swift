@@ -108,6 +108,11 @@ extension GaryxMobileModel {
         messages = []
         messagesByThread = [:]
         messageSignaturesByThread = [:]
+        // The persisted transcript cache is keyed by thread id only, so drop it on
+        // a gateway/profile switch to avoid showing another backend's cached thread
+        // (and to bound on-disk growth).
+        cachedTranscriptSnapshots = [:]
+        transcriptCacheStore.clearAll()
         activeAssistantMessageIdsByThread = [:]
         pendingAssistantDeltasByThread = [:]
         assistantDeltaFlushTasksByThread.values.forEach { $0.cancel() }
