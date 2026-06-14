@@ -289,6 +289,11 @@ public struct GaryxThreadTranscriptPageInfo: Decodable, Equatable, Sendable {
     public var returnedEndIndex: Int?
     public var hasMoreBefore: Bool
     public var nextBeforeIndex: Int?
+    /// Forward (newer) cursor mirror of `hasMoreBefore`/`nextBeforeIndex`: when a
+    /// page was requested with `after_index`, whether committed messages exist
+    /// beyond this page and the index to resume from. Drives incremental open.
+    public var hasMoreAfter: Bool
+    public var nextAfterIndex: Int?
 
     enum CodingKeys: String, CodingKey {
         case returnedMessages = "returned_messages"
@@ -296,6 +301,8 @@ public struct GaryxThreadTranscriptPageInfo: Decodable, Equatable, Sendable {
         case returnedEndIndex = "returned_end_index"
         case hasMoreBefore = "has_more_before"
         case nextBeforeIndex = "next_before_index"
+        case hasMoreAfter = "has_more_after"
+        case nextAfterIndex = "next_after_index"
     }
 
     public init(from decoder: Decoder) throws {
@@ -305,6 +312,26 @@ public struct GaryxThreadTranscriptPageInfo: Decodable, Equatable, Sendable {
         returnedEndIndex = try container.decodeIfPresent(Int.self, forKey: .returnedEndIndex)
         hasMoreBefore = try container.decodeIfPresent(Bool.self, forKey: .hasMoreBefore) ?? false
         nextBeforeIndex = try container.decodeIfPresent(Int.self, forKey: .nextBeforeIndex)
+        hasMoreAfter = try container.decodeIfPresent(Bool.self, forKey: .hasMoreAfter) ?? false
+        nextAfterIndex = try container.decodeIfPresent(Int.self, forKey: .nextAfterIndex)
+    }
+
+    public init(
+        returnedMessages: Int,
+        returnedStartIndex: Int?,
+        returnedEndIndex: Int?,
+        hasMoreBefore: Bool,
+        nextBeforeIndex: Int?,
+        hasMoreAfter: Bool = false,
+        nextAfterIndex: Int? = nil
+    ) {
+        self.returnedMessages = returnedMessages
+        self.returnedStartIndex = returnedStartIndex
+        self.returnedEndIndex = returnedEndIndex
+        self.hasMoreBefore = hasMoreBefore
+        self.nextBeforeIndex = nextBeforeIndex
+        self.hasMoreAfter = hasMoreAfter
+        self.nextAfterIndex = nextAfterIndex
     }
 }
 
@@ -408,7 +435,7 @@ public struct GaryxThreadActiveRunSummary: Decodable, Equatable, Sendable {
 }
 
 
-public struct GaryxTranscriptMessage: Decodable, Identifiable, Equatable, Sendable {
+public struct GaryxTranscriptMessage: Codable, Identifiable, Equatable, Sendable {
     public var id: String
     public var index: Int?
     public var role: GaryxTranscriptRole
@@ -445,6 +472,46 @@ public struct GaryxTranscriptMessage: Decodable, Identifiable, Equatable, Sendab
         toolRelated = try container.decodeIfPresent(Bool.self, forKey: .toolRelated) ?? false
         likelyUserVisible = try container.decodeIfPresent(Bool.self, forKey: .likelyUserVisible) ?? true
         id = index.map { "history:\($0)" } ?? UUID().uuidString
+    }
+
+    /// Symmetric encoder so committed transcript rows can be cached on device and
+    /// re-decoded identically (`id` is re-derived from `index` on decode, so it is
+    /// intentionally not encoded). Mirrors the gateway wire shape.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(index, forKey: .index)
+        try container.encode(role.rawValue, forKey: .role)
+        try container.encodeIfPresent(kind, forKey: .kind)
+        try container.encode(text, forKey: .text)
+        try container.encodeIfPresent(content, forKey: .content)
+        try container.encodeIfPresent(message, forKey: .message)
+        try container.encodeIfPresent(timestamp, forKey: .timestamp)
+        try container.encode(toolRelated, forKey: .toolRelated)
+        try container.encode(likelyUserVisible, forKey: .likelyUserVisible)
+    }
+
+    /// Direct member-wise initializer for tests and cache reconstruction.
+    public init(
+        index: Int?,
+        role: GaryxTranscriptRole,
+        kind: String? = nil,
+        text: String = "",
+        content: GaryxJSONValue? = nil,
+        message: GaryxJSONValue? = nil,
+        timestamp: String? = nil,
+        toolRelated: Bool = false,
+        likelyUserVisible: Bool = true
+    ) {
+        self.index = index
+        self.role = role
+        self.kind = kind
+        self.text = text
+        self.content = content
+        self.message = message
+        self.timestamp = timestamp
+        self.toolRelated = toolRelated
+        self.likelyUserVisible = likelyUserVisible
+        self.id = index.map { "history:\($0)" } ?? UUID().uuidString
     }
 }
 

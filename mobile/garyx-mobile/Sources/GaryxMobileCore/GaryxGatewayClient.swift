@@ -253,6 +253,7 @@ public final class GaryxGatewayClient {
         threadId: String,
         limit: Int = 100,
         beforeIndex: Int? = nil,
+        afterIndex: Int? = nil,
         userQueryLimit: Int? = nil,
         includeToolMessages: Bool = true
     ) async throws -> GaryxThreadTranscript {
@@ -264,7 +265,12 @@ public final class GaryxGatewayClient {
                 value: includeToolMessages ? "true" : "false"
             ),
         ]
-        if let beforeIndex {
+        // Forward (delta) cursor takes precedence on the gateway; only send one
+        // direction at a time. `after_index` returns committed messages with
+        // index > N for incremental catch-up; `before_index` loads older pages.
+        if let afterIndex {
+            queryItems.append(URLQueryItem(name: "after_index", value: String(afterIndex)))
+        } else if let beforeIndex {
             queryItems.append(URLQueryItem(name: "before_index", value: String(beforeIndex)))
         }
         if let userQueryLimit {
