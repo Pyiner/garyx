@@ -8360,19 +8360,8 @@ button.message-file-card {
 
 .task-notification-header {
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr);
-  align-items: start;
-  gap: 10px;
-}
-
-.task-notification-mark {
-  display: inline-grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  background: color-mix(in oklab, var(--color-token-text-primary) 6%, #f4f1eb);
-  color: color-mix(in oklab, var(--color-token-text-primary) 72%, #8a7a64);
+  gap: 0;
+  min-width: 0;
 }
 
 .task-notification-heading {
@@ -8425,18 +8414,12 @@ button.message-file-card {
 }
 
 .task-notification-body {
-  padding: 10px 0 0 42px;
+  padding: 10px 0 0;
   border-top: 1px solid color-mix(in oklab, var(--color-token-border) 70%, transparent);
 }
 
 .task-notification-body .message-rich {
   color: var(--color-token-text-primary);
-}
-
-@media (max-width: 640px) {
-  .task-notification-body {
-    padding-left: 0;
-  }
 }
 
 .message-rich-json {

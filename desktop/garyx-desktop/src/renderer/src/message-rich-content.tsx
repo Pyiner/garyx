@@ -1,5 +1,5 @@
 import { memo, useMemo, type ReactNode } from "react";
-import { CircleDot, ClipboardCheck, FileText } from "lucide-react";
+import { FileText } from "lucide-react";
 
 import type {
   MessageFileAttachment,
@@ -84,16 +84,12 @@ function TaskNotificationCard({
       aria-label={t("Task ready for review")}
     >
       <div className="task-notification-header">
-        <span className="task-notification-mark" aria-hidden="true">
-          <ClipboardCheck size={18} strokeWidth={1.8} />
-        </span>
         <div className="task-notification-heading">
           <div className="task-notification-kicker">
             <span className="task-notification-task-id">
               {notification.taskId || t("Task")}
             </span>
             <span className="task-notification-status">
-              <CircleDot size={12} strokeWidth={2} aria-hidden="true" />
               {taskNotificationStatusLabel(notification.status, t)}
             </span>
           </div>
