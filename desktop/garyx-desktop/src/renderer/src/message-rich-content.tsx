@@ -1,12 +1,5 @@
 import { memo, useMemo, type ReactNode } from "react";
-import {
-  CheckCircle2,
-  ClipboardCheck,
-  Eye,
-  FileText,
-  RotateCcw,
-  SquareTerminal,
-} from "lucide-react";
+import { CircleDot, ClipboardCheck, FileText } from "lucide-react";
 
 import type {
   MessageFileAttachment,
@@ -79,49 +72,12 @@ function taskNotificationStatusLabel(status: string, t: Translate): string {
     .join(" ");
 }
 
-function taskNotificationCommandLabel(command: string, t: Translate): string {
-  if (/\s--status\s+in_progress\b/.test(command)) {
-    return t("Request changes");
-  }
-  if (/\s--status\s+done\b/.test(command)) {
-    return t("Approve");
-  }
-  if (/^garyx task get\b/.test(command)) {
-    return t("View details");
-  }
-  return t("Run command");
-}
-
-function TaskNotificationCommand({
-  command,
-  label,
-  icon,
-}: {
-  command: string;
-  label: string;
-  icon: ReactNode;
-}) {
-  if (!command) {
-    return null;
-  }
-  return (
-    <div className="task-notification-command">
-      <span className="task-notification-command-icon" aria-hidden="true">
-        {icon}
-      </span>
-      <span className="task-notification-command-label">{label}</span>
-      <code className="task-notification-command-code">{command}</code>
-    </div>
-  );
-}
-
 function TaskNotificationCard({
   notification,
 }: {
   notification: ParsedTaskNotification;
 }) {
   const { t } = useI18n();
-  const reviewCommands = notification.reviewCommands.slice(0, 2);
   return (
     <section
       className="task-notification-card"
@@ -137,7 +93,7 @@ function TaskNotificationCard({
               {notification.taskId || t("Task")}
             </span>
             <span className="task-notification-status">
-              <CheckCircle2 size={12} strokeWidth={2} aria-hidden="true" />
+              <CircleDot size={12} strokeWidth={2} aria-hidden="true" />
               {taskNotificationStatusLabel(notification.status, t)}
             </span>
           </div>
@@ -151,26 +107,6 @@ function TaskNotificationCard({
           text={notification.finalMessage}
           tone="assistant"
         />
-      </div>
-
-      <div className="task-notification-actions" aria-label={t("Review actions")}>
-        <TaskNotificationCommand
-          command={notification.detailCommand}
-          icon={<Eye size={14} strokeWidth={1.8} />}
-          label={t("View details")}
-        />
-        {reviewCommands.map((command) => (
-          <TaskNotificationCommand
-            command={command}
-            icon={
-              /\s--status\s+in_progress\b/.test(command)
-                ? <RotateCcw size={14} strokeWidth={1.8} />
-                : <SquareTerminal size={14} strokeWidth={1.8} />
-            }
-            key={command}
-            label={taskNotificationCommandLabel(command, t)}
-          />
-        ))}
       </div>
     </section>
   );

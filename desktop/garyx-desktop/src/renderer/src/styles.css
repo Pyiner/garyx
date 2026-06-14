@@ -8347,13 +8347,13 @@ button.message-file-card {
 
 .task-notification-card {
   display: grid;
-  gap: 12px;
+  gap: 11px;
   width: min(100%, 680px);
   box-sizing: border-box;
-  padding: 12px;
-  border: 1px solid color-mix(in oklab, var(--color-token-border) 88%, #ffffff);
+  padding: 12px 12px 13px;
+  border: 1px solid color-mix(in oklab, var(--color-token-border) 84%, #ffffff);
   border-radius: 8px;
-  background: color-mix(in oklab, var(--color-token-bg-primary) 94%, #f4f4f2);
+  background: color-mix(in oklab, var(--color-token-bg-primary) 92%, #f4f1eb);
   color: var(--color-token-text-primary);
   box-shadow: 0 1px 0 rgba(15, 23, 42, 0.03);
 }
@@ -8371,8 +8371,8 @@ button.message-file-card {
   width: 32px;
   height: 32px;
   border-radius: 8px;
-  background: color-mix(in oklab, #00a240 11%, #ffffff);
-  color: #2e7d32;
+  background: color-mix(in oklab, var(--color-token-text-primary) 6%, #f4f1eb);
+  color: color-mix(in oklab, var(--color-token-text-primary) 72%, #8a7a64);
 }
 
 .task-notification-heading {
@@ -8407,8 +8407,9 @@ button.message-file-card {
 .task-notification-status {
   padding: 2px 6px;
   border-radius: 999px;
-  background: color-mix(in oklab, #00a240 8%, transparent);
-  color: #2e7d32;
+  border: 1px solid color-mix(in oklab, var(--color-token-border) 78%, transparent);
+  background: color-mix(in oklab, var(--color-token-text-primary) 4%, transparent);
+  color: color-mix(in oklab, var(--color-token-text-secondary) 88%, #8a7a64);
   font-weight: var(--font-weight-medium);
 }
 
@@ -8432,62 +8433,9 @@ button.message-file-card {
   color: var(--color-token-text-primary);
 }
 
-.task-notification-actions {
-  display: grid;
-  gap: 6px;
-  padding-top: 2px;
-}
-
-.task-notification-command {
-  display: grid;
-  grid-template-columns: 18px minmax(86px, max-content) minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  color: var(--color-token-text-secondary);
-}
-
-.task-notification-command-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: color-mix(in oklab, var(--color-token-text-secondary) 84%, #2e7d32);
-}
-
-.task-notification-command-label {
-  font-size: var(--text-xs-plus);
-  font-weight: var(--font-weight-medium);
-  line-height: 1.3;
-  white-space: nowrap;
-}
-
-.task-notification-command-code {
-  display: block;
-  min-width: 0;
-  padding: 3px 6px;
-  border-radius: 6px;
-  background: rgba(26, 28, 31, 0.04);
-  color: var(--color-token-text-primary);
-  font-family: var(--message-code-font);
-  font-size: var(--text-xs-plus);
-  font-weight: var(--message-body-weight);
-  line-height: 1.35;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 @media (max-width: 640px) {
   .task-notification-body {
     padding-left: 0;
-  }
-
-  .task-notification-command {
-    grid-template-columns: 18px minmax(0, 1fr);
-  }
-
-  .task-notification-command-code {
-    grid-column: 2;
   }
 }
 
