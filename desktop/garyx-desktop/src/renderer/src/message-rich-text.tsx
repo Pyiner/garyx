@@ -111,15 +111,21 @@ export const RichMessageText = memo(function RichMessageText({
   text,
   tone = 'default',
   onLocalFileLinkClick,
+  surfaceCustomXmlTags = true,
 }: {
   text: string;
   tone?: RichMessageTone;
   onLocalFileLinkClick?: LocalFileLinkHandler;
+  surfaceCustomXmlTags?: boolean;
 }) {
   const translations = useStreamdownTranslations();
-  // Surface custom XML tags as visible text and hide Garyx-internal injected
-  // tags before Streamdown sanitizes them away. Display-only.
-  const prepared = useMemo(() => prepareMessageMarkdown(text), [text]);
+  // Hide Garyx-internal injected tags before Streamdown renders. User text can
+  // opt into surfacing custom XML literally; agent output lets Streamdown
+  // sanitize unknown tags so protocol wrappers don't leak into chat.
+  const prepared = useMemo(
+    () => prepareMessageMarkdown(text, { surfaceCustomXmlTags }),
+    [surfaceCustomXmlTags, text],
+  );
   const components = useMemo<Components>(
     () => ({
       a({

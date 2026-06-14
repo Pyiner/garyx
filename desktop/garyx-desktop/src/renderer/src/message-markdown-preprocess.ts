@@ -2,11 +2,10 @@
 //
 // Garyx desktop renders messages with Streamdown, whose pipeline sanitizes
 // against an allowlist (hast-util-sanitize defaultSchema) and silently drops
-// any tag outside it — hiding meaningful custom XML an agent or upstream
-// protocol may emit. This module runs BEFORE Streamdown to (1) strip Garyx's
-// own injected internal tags (`garyx_*` family and `system_instructions`), and
-// (2) surface every remaining non-allowlisted tag as visible literal text,
-// leaving allowlisted HTML and code (fences/inline) untouched.
+// any tag outside it. This module runs BEFORE Streamdown to strip Garyx's own
+// injected internal tags (`garyx_*` family and `system_instructions`) and,
+// when requested, surface remaining non-allowlisted tags as visible literal
+// text, leaving allowlisted HTML and code (fences/inline) untouched.
 //
 // One left-to-right character scanner. Tags are parsed BEFORE inline code (so
 // backticks/`>` inside attributes don't break tag detection); on a malformed
@@ -316,4 +315,12 @@ function transform(text: string, opts: { strip: boolean; escape: boolean }): str
 
 export function stripGaryxInternalTags(text: string): string { return transform(text, { strip: true, escape: false }); }
 export function escapeNonHtmlTagsOutsideCode(text: string): string { return transform(text, { strip: false, escape: true }); }
-export function prepareMessageMarkdown(text: string): string { return transform(text, { strip: true, escape: true }); }
+export function prepareMessageMarkdown(
+  text: string,
+  options: { surfaceCustomXmlTags?: boolean } = {},
+): string {
+  return transform(text, {
+    strip: true,
+    escape: options.surfaceCustomXmlTags !== false,
+  });
+}

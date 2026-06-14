@@ -1,5 +1,12 @@
 import { memo, useMemo, type ReactNode } from "react";
-import { FileText } from "lucide-react";
+import {
+  CheckCircle2,
+  ClipboardCheck,
+  Eye,
+  FileText,
+  RotateCcw,
+  SquareTerminal,
+} from "lucide-react";
 
 import type {
   MessageFileAttachment,
@@ -18,6 +25,10 @@ import {
   type LocalFileLinkHandler,
 } from "./message-rich-text";
 import { useI18n, type Translate } from "./i18n";
+import {
+  parseTaskNotificationText,
+  type ParsedTaskNotification,
+} from "./task-notification";
 
 type TranscriptSegment =
   | {
@@ -55,6 +66,114 @@ export type RichMessageBubblePart = {
 
 function resolveMessageTone(role: string): "default" | "assistant" {
   return role === "assistant" ? "assistant" : "default";
+}
+
+function taskNotificationStatusLabel(status: string, t: Translate): string {
+  if (status === "in_review") {
+    return t("In review");
+  }
+  return status
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function taskNotificationCommandLabel(command: string, t: Translate): string {
+  if (/\s--status\s+in_progress\b/.test(command)) {
+    return t("Request changes");
+  }
+  if (/\s--status\s+done\b/.test(command)) {
+    return t("Approve");
+  }
+  if (/^garyx task get\b/.test(command)) {
+    return t("View details");
+  }
+  return t("Run command");
+}
+
+function TaskNotificationCommand({
+  command,
+  label,
+  icon,
+}: {
+  command: string;
+  label: string;
+  icon: ReactNode;
+}) {
+  if (!command) {
+    return null;
+  }
+  return (
+    <div className="task-notification-command">
+      <span className="task-notification-command-icon" aria-hidden="true">
+        {icon}
+      </span>
+      <span className="task-notification-command-label">{label}</span>
+      <code className="task-notification-command-code">{command}</code>
+    </div>
+  );
+}
+
+function TaskNotificationCard({
+  notification,
+}: {
+  notification: ParsedTaskNotification;
+}) {
+  const { t } = useI18n();
+  const reviewCommands = notification.reviewCommands.slice(0, 2);
+  return (
+    <section
+      className="task-notification-card"
+      aria-label={t("Task ready for review")}
+    >
+      <div className="task-notification-header">
+        <span className="task-notification-mark" aria-hidden="true">
+          <ClipboardCheck size={18} strokeWidth={1.8} />
+        </span>
+        <div className="task-notification-heading">
+          <div className="task-notification-kicker">
+            <span className="task-notification-task-id">
+              {notification.taskId || t("Task")}
+            </span>
+            <span className="task-notification-status">
+              <CheckCircle2 size={12} strokeWidth={2} aria-hidden="true" />
+              {taskNotificationStatusLabel(notification.status, t)}
+            </span>
+          </div>
+          <h3 className="task-notification-title">{notification.title}</h3>
+        </div>
+      </div>
+
+      <div className="task-notification-body">
+        <RichMessageText
+          surfaceCustomXmlTags={false}
+          text={notification.finalMessage}
+          tone="assistant"
+        />
+      </div>
+
+      <div className="task-notification-actions" aria-label={t("Review actions")}>
+        <TaskNotificationCommand
+          command={notification.detailCommand}
+          icon={<Eye size={14} strokeWidth={1.8} />}
+          label={t("View details")}
+        />
+        {reviewCommands.map((command) => (
+          <TaskNotificationCommand
+            command={command}
+            icon={
+              /\s--status\s+in_progress\b/.test(command)
+                ? <RotateCcw size={14} strokeWidth={1.8} />
+                : <SquareTerminal size={14} strokeWidth={1.8} />
+            }
+            key={command}
+            label={taskNotificationCommandLabel(command, t)}
+          />
+        ))}
+      </div>
+    </section>
+  );
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -643,10 +762,20 @@ export const RichMessageContent = memo(function RichMessageContent({
 
   const renderSegment = (segment: TranscriptSegment): ReactNode => {
     if (segment.kind === "text") {
+      const taskNotification = parseTaskNotificationText(segment.text);
+      if (taskNotification) {
+        return (
+          <TaskNotificationCard
+            key={segment.key}
+            notification={taskNotification}
+          />
+        );
+      }
       return (
         <RichMessageText
           key={segment.key}
           onLocalFileLinkClick={onLocalFileLinkClick}
+          surfaceCustomXmlTags={altPrefix === "user"}
           text={segment.text}
           tone={tone}
         />
