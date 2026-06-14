@@ -81,24 +81,18 @@ extension GaryxMobileModel {
                 }
                 guard selectedThreadStreamGeneration == generation else { break }
                 consecutiveFailures = 0
-                var dataLines: [String] = []
+                // Each gateway event is a single `data:` line (committed_message has
+                // a preceding `id:`; deltas have just `data:`). Process each `data:`
+                // line immediately rather than buffering until a blank separator —
+                // Swift's AsyncLineSequence does not yield the SSE blank lines, so a
+                // blank-line flush would never fire.
                 for try await line in bytes.lines {
                     if Task.isCancelled || selectedThreadStreamGeneration != generation { break }
-                    if line.isEmpty {
-                        if !dataLines.isEmpty {
-                            await handleSelectedThreadStreamPayload(
-                                dataLines.joined(separator: "\n"),
-                                threadId: threadId
-                            )
-                            dataLines.removeAll()
-                        }
-                        continue
-                    }
-                    if line.hasPrefix(":") { continue }
                     guard line.hasPrefix("data:") else { continue }
                     var value = String(line.dropFirst(5))
                     if value.hasPrefix(" ") { value.removeFirst() }
-                    dataLines.append(value)
+                    if value.isEmpty { continue }
+                    await handleSelectedThreadStreamPayload(value, threadId: threadId)
                 }
             } catch {
                 consecutiveFailures += 1
