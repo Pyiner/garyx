@@ -719,6 +719,25 @@ export function ThreadPage({
               const entry = block.entry;
               const loopContinuation = isLoopContinuationMessage(entry.message);
               const displayText = displayTranscriptMessageText(entry.message);
+              const isTaskNotificationMessage =
+                !entry.message.pending &&
+                !loopContinuation &&
+                parseTaskNotificationText(displayText) !== null;
+              if (isTaskNotificationMessage) {
+                return (
+                  <article
+                    key={`${block.key}:body`}
+                    className={`message-bubble task-notification-message ${entry.message.role} ${entry.message.error ? "error" : ""}`}
+                  >
+                    <RichMessageContent
+                      altPrefix={entry.message.role}
+                      content={entry.message.content}
+                      onLocalFileLinkClick={onLocalWorkspaceFileLinkClick}
+                      text={displayText}
+                    />
+                  </article>
+                );
+              }
               if (entry.message.role === "user" && !loopContinuation) {
                 return renderUserMessageBubbleParts({
                   keyPrefix: `${block.key}:body`,
@@ -736,15 +755,10 @@ export function ThreadPage({
                   markUserTurnStart: options.markUserTurnStart !== false,
                 });
               }
-              const isTaskNotificationMessage =
-                entry.message.role === "assistant" &&
-                !entry.message.pending &&
-                !loopContinuation &&
-                parseTaskNotificationText(displayText) !== null;
               return (
                 <article
                   key={`${block.key}:body`}
-                  className={`message-bubble ${entry.message.role} ${entry.message.pending ? "pending" : ""} ${entry.message.error ? "error" : ""} ${loopContinuation ? "loop-continuation" : ""} ${isTaskNotificationMessage ? "task-notification-message" : ""}`}
+                  className={`message-bubble ${entry.message.role} ${entry.message.pending ? "pending" : ""} ${entry.message.error ? "error" : ""} ${loopContinuation ? "loop-continuation" : ""}`}
                 >
                   {entry.message.role === "assistant" &&
                   entry.message.pending ? (
