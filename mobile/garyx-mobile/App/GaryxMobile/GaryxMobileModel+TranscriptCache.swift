@@ -24,6 +24,21 @@ extension GaryxMobileModel {
         transcriptSnapshot(for: threadId)?.afterCursor
     }
 
+    /// True when the cached committed window's newest index is more than
+    /// `threadHistoryFarBehindReseedThreshold` rows below the thread's live tail
+    /// (`messageCount`), so reopening should re-seed the bounded newest window instead
+    /// of replaying the whole delta over the per-thread stream. Unknown `messageCount`
+    /// → treated as not far behind (the stream catch-up is coalesced).
+    func transcriptCacheFarBehind(
+        _ thread: GaryxThreadSummary,
+        snapshot: GaryxCachedTranscript
+    ) -> Bool {
+        guard let total = thread.messageCount, total > 0 else { return false }
+        let cachedNewestIndex = snapshot.afterCursor ?? -1
+        let liveNewestIndex = total - 1
+        return liveNewestIndex - cachedNewestIndex > Self.threadHistoryFarBehindReseedThreshold
+    }
+
     /// Rendered committed window for instant cold-start display before the network
     /// fetch returns. Empty when nothing is cached.
     func restoredCachedMessages(for threadId: String) -> [GaryxMobileMessage] {

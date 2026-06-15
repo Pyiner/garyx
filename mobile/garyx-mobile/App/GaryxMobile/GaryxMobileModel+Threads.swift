@@ -596,12 +596,22 @@ extension GaryxMobileModel {
                 messages = inMemory
             }
         }
-        // S5: seed the cache with a bounded newest window when nothing is cached
-        // (so a huge thread doesn't replay from seq 0), then drive live + incremental
-        // catch-up over the resumable per-thread stream. The stream supersedes the
+        // Bound the open to a newest window (~threadHistoryUserQueryLimit user turns):
+        // - no cache → seed the bounded newest window (a huge thread never replays
+        //   from seq 0);
+        // - cache far behind the live tail → re-seed the newest window so the stream
+        //   resumes near the tail instead of replaying the whole delta (over-fetch +
+        //   flicker); older history pages in on scroll-up.
+        // A near-current cache keeps its window and catches up the small delta over
+        // the resumable per-thread stream (coalesced). The stream supersedes the
         // reconcile poll and falls back to it (and the after_index HTTP path) on
         // failure.
-        if transcriptSnapshot(for: thread.id) == nil {
+        if let snapshot = transcriptSnapshot(for: thread.id) {
+            if transcriptCacheFarBehind(thread, snapshot: snapshot) {
+                clearTranscriptCache(for: thread.id)
+                await loadSelectedThreadHistory()
+            }
+        } else {
             await loadSelectedThreadHistory()
         }
         startSelectedThreadStream(for: thread.id)

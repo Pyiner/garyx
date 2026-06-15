@@ -53,6 +53,8 @@ extension GaryxMobileModel {
         selectedThreadStreamGeneration = nil
         streamOwnedThreadId = nil
         selectedThreadStreamResumeOverride = nil
+        selectedThreadStreamFlushTask?.cancel()
+        selectedThreadStreamFlushTask = nil
     }
 
     /// Fall back to the S3 path (global stream + after_index + reconcile poll) when
@@ -179,12 +181,12 @@ extension GaryxMobileModel {
         return false
     }
 
-    /// Merge one durable committed row into the S2 cache and re-render the thread.
-    /// Disk persistence happens only when the thread's run is idle: during an active
-    /// run the in-memory window stays current (the cursor reads from it), and if the
-    /// app dies mid-run the rows are re-fetched via after_index from the last persisted
-    /// cursor — so we avoid a full-window disk write per streamed row (the run-end
-    /// reconcile and the next idle merge persist the final window).
+    /// Merge one durable committed row into the S2 cache (in-memory, cheap — keeps the
+    /// cursor current per row) and coalesce the view render + disk persist into one
+    /// flush per interval. A large catch-up replays many committed rows back-to-back;
+    /// rendering/persisting each one would rebuild the whole list and rewrite the whole
+    /// window per row, flickering the page. The flush shows the accumulated window a
+    /// few times instead of N.
     func applyStreamedCommittedMessage(_ message: GaryxTranscriptMessage, threadId: String) {
         guard selectedThread?.id == threadId else { return }
         let base = transcriptSnapshot(for: threadId)
@@ -197,7 +199,33 @@ extension GaryxMobileModel {
             savedAt: Date()
         )
         cachedTranscriptSnapshots[threadId] = window
+        scheduleSelectedThreadStreamFlush(for: threadId)
+    }
 
+    /// Leading-throttle (mirrors scheduleAssistantDeltaFlush): the first row schedules
+    /// a flush; rows arriving within the interval are absorbed (the flush reads the
+    /// latest window), so a catch-up burst folds into one render + persist. The final
+    /// row always lands in a flush because the last scheduled flush reads the latest
+    /// in-memory window.
+    private func scheduleSelectedThreadStreamFlush(for threadId: String) {
+        guard selectedThreadStreamFlushTask == nil else { return }
+        selectedThreadStreamFlushTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.streamedCommittedFlushDelayNanos)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                self?.flushSelectedThreadStreamWindow(for: threadId)
+            }
+        }
+    }
+
+    /// Render the accumulated committed window once and, when the run is idle, persist
+    /// it (the in-memory window already advanced the cursor per row; if the app dies
+    /// mid-run the rows are re-fetched via after_index from the last persisted cursor).
+    private func flushSelectedThreadStreamWindow(for threadId: String) {
+        selectedThreadStreamFlushTask?.cancel()
+        selectedThreadStreamFlushTask = nil
+        guard selectedThread?.id == threadId,
+              let window = cachedTranscriptSnapshots[threadId] else { return }
         let threadRunActive = remoteBusyThreadIds.contains(threadId)
         if !threadRunActive {
             transcriptCacheStore.save(window)

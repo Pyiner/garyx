@@ -39,13 +39,22 @@ final class GaryxMobileModel: ObservableObject {
     static let threadHistoryPageLimit = 100
     // Open a thread by loading the most recent few user-query turns (with tool
     // messages) in a single request — no separate fast/no-tools pre-pass.
-    static let threadHistoryUserQueryLimit = 5
+    static let threadHistoryUserQueryLimit = 3
+    // When reopening a thread whose cached window is more than this many committed
+    // rows behind the live tail (thread.messageCount), re-seed the bounded newest
+    // window instead of letting the per-thread stream replay the whole delta (which
+    // over-fetches and flickers). Smaller deltas catch up over the stream (coalesced).
+    static let threadHistoryFarBehindReseedThreshold = 100
     // Cap on forward `after_index` delta pages walked in one incremental open so a
     // far-behind or misbehaving cursor can't loop unbounded; the reconcile loop
     // catches up any remainder. 50 * 100 = 5000 committed rows per catch-up.
     static let threadHistoryMaxForwardPages = 50
     static let selectedThreadReconcileIntervalNanos: UInt64 = 1_500_000_000
     static let assistantDeltaFlushDelayNanos: UInt64 = 50_000_000
+    /// Coalescing window for streamed committed rows: a large catch-up replays many
+    /// committed messages back-to-back, so render + disk-persist are folded into one
+    /// flush per interval instead of running per row (which flickers the list).
+    static let streamedCommittedFlushDelayNanos: UInt64 = 80_000_000
     static let selectedThreadHistoryRetryLimit = 8
 
     struct MessageListSignature: Equatable {
@@ -224,6 +233,10 @@ final class GaryxMobileModel: ObservableObject {
     /// Drives mid-stream seq-gap detection and per-connection progress; reset on each
     /// (re)connect.
     var selectedThreadStreamConnectionLastSeq: Int = 0
+    /// Coalesces render + persist across a burst of streamed committed rows (a large
+    /// catch-up). Each row merges into the in-memory window immediately; this task
+    /// flushes the accumulated window to the view/disk once per interval.
+    var selectedThreadStreamFlushTask: Task<Void, Never>?
     var messagesByThread: [String: [GaryxMobileMessage]] = [:]
     var messageSignaturesByThread: [String: MessageListSignature] = [:]
     /// Persistent committed-transcript cache (S2/S3): instant cold-start display
