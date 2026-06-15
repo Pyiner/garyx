@@ -4863,6 +4863,10 @@ code {
   width: calc(100% - 20px);
 }
 
+.side-tool-chat-thread .thread-composer-status {
+  display: none;
+}
+
 .thread-main--side-chat .empty-state--side-chat {
   width: min(420px, calc(100% - 48px));
   margin: auto;
