@@ -1699,7 +1699,10 @@ struct GaryxMessageBubble: View {
                             .garyxMessageCopyContext(text: messageCopyText, edge: .trailing)
                     }
 
-                    if !displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    if let notification = taskNotification {
+                        GaryxTaskNotificationCard(notification: notification)
+                            .garyxMessageInteraction(text: taskNotificationCopyText(notification), edge: .trailing)
+                    } else if !displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         GaryxMarkdownText(
                             text: displayText,
                             foreground: .primary,
@@ -1793,7 +1796,7 @@ struct GaryxMessageBubble: View {
     }
 
     private var taskNotification: GaryxTaskNotification? {
-        guard message.role == .assistant else { return nil }
+        guard !message.isStreaming else { return nil }
         return GaryxTaskNotificationPresentation.parse(displayText)
     }
 
