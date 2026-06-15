@@ -10076,9 +10076,9 @@ export function AppShell() {
           setInspectorOpen(false);
         });
       }}
-      onOpenTaskThread={(threadId) =>
+      onOpenTaskThread={(task) =>
         measureUiAction("side_tasks.open_thread_in_side_panel", async () => {
-          await openTaskThreadInSidePanel(threadId);
+          await openTaskThreadInSidePanel(task.threadId);
           await waitForUiActionPaint();
         })
       }

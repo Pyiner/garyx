@@ -76,7 +76,7 @@ type ThreadSideToolsPanelProps = {
   onRevealSelectedWorkspaceFile?: () => Promise<void> | void;
   onAddBrowserAnnotationComment: (request: BrowserAnnotationCommentRequest) => void;
   onCloseSideTools: () => void;
-  onOpenTaskThread?: (threadId: string) => Promise<void> | void;
+  onOpenTaskThread?: (task: DesktopTaskSummary) => Promise<void> | void;
   onOpenSideChat: () => void;
   onWorkspaceFileFilterChange: (value: string) => void;
 };
@@ -156,12 +156,16 @@ function taskDisplayId(task: DesktopTaskSummary): string {
   return task.taskId || `#TASK-${task.number}`;
 }
 
+function taskTabLabel(task: DesktopTaskSummary): string {
+  return task.title.trim() || taskDisplayId(task);
+}
+
 function SideThreadTasksTool({
   sourceThreadId,
   onOpenTaskThread,
 }: {
   sourceThreadId?: string | null;
-  onOpenTaskThread?: (threadId: string) => Promise<void> | void;
+  onOpenTaskThread?: (task: DesktopTaskSummary) => Promise<void> | void;
 }) {
   const { t } = useI18n();
   const [tasks, setTasks] = useState<DesktopTaskSummary[]>([]);
@@ -290,7 +294,7 @@ function SideThreadTasksTool({
                   disabled={!canOpen}
                   onClick={() => {
                     if (task.threadId && onOpenTaskThread) {
-                      void onOpenTaskThread(task.threadId);
+                      void onOpenTaskThread(task);
                     }
                   }}
                   type="button"
@@ -311,7 +315,7 @@ function SideThreadTasksTool({
                     disabled={!onOpenTaskThread}
                     onClick={() => {
                       if (onOpenTaskThread) {
-                        void onOpenTaskThread(task.threadId);
+                        void onOpenTaskThread(task);
                       }
                     }}
                     type="button"
@@ -615,6 +619,9 @@ export function ThreadSideToolsPanel({
     null,
   );
   const [menuOpen, setMenuOpen] = useState(false);
+  const [taskThreadTabTitle, setTaskThreadTabTitle] = useState<string | null>(
+    null,
+  );
   const [filePathCopied, setFilePathCopied] = useState(false);
   const [fileDirectoryCollapsed, setFileDirectoryCollapsed] = useState(false);
   const [browserMenuObstructionBottom, setBrowserMenuObstructionBottom] =
@@ -652,6 +659,10 @@ export function ThreadSideToolsPanel({
   useEffect(() => {
     setFilePathCopied(false);
   }, [previewCopyPath]);
+
+  useEffect(() => {
+    setTaskThreadTabTitle(null);
+  }, [activeThreadId]);
 
   useEffect(() => {
     if (activeToolId === "browser") {
@@ -764,24 +775,28 @@ export function ThreadSideToolsPanel({
     onAddBrowserAnnotationComment(request);
   }
 
-  function openTool(toolId: ThreadSideToolId) {
+  function openTool(
+    toolId: ThreadSideToolId,
+    options?: { taskThreadTabTitle?: string | null },
+  ) {
     setOpenTools((current) =>
       current.includes(toolId) ? current : [...current, toolId],
     );
     setActiveToolId(toolId);
     setMenuOpen(false);
     if (toolId === "chat") {
+      setTaskThreadTabTitle(options?.taskThreadTabTitle || null);
       onOpenSideChat();
     }
   }
 
-  async function openTaskThreadInSideChat(threadId: string) {
+  async function openTaskThreadInSideChat(task: DesktopTaskSummary) {
     if (!onOpenTaskThread) {
       return;
     }
     try {
-      await onOpenTaskThread(threadId);
-      openTool("chat");
+      await onOpenTaskThread(task);
+      openTool("chat", { taskThreadTabTitle: taskTabLabel(task) });
     } catch {
       // AppShell owns the user-visible error state.
     }
@@ -822,6 +837,10 @@ export function ThreadSideToolsPanel({
             {openToolDescriptors.map((tool) => {
               const Icon = tool.icon;
               const selected = tool.id === activeToolId;
+              const tabLabel =
+                tool.id === "chat" && taskThreadTabTitle
+                  ? taskThreadTabTitle
+                  : tool.label;
               return (
                 <div
                   className={`side-tools-tab-shell ${selected ? "is-active" : ""}`}
@@ -832,15 +851,16 @@ export function ThreadSideToolsPanel({
                     className={`side-tools-tab ${selected ? "is-active" : ""}`}
                     onClick={() => {
                       setActiveToolId(tool.id);
-                      if (tool.id === "chat") {
+                      if (tool.id === "chat" && !taskThreadTabTitle) {
                         onOpenSideChat();
                       }
                     }}
                     role="tab"
+                    title={tabLabel}
                     type="button"
                   >
                     <Icon aria-hidden size={14} strokeWidth={1.8} />
-                    <span className="side-tools-tab-label">{tool.label}</span>
+                    <span className="side-tools-tab-label">{tabLabel}</span>
                   </button>
                   <button
                     aria-label={t("Close")}
