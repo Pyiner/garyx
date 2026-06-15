@@ -5073,6 +5073,10 @@ export async function listTasks(
   if (assignee) {
     query.set("assignee", assignee);
   }
+  const sourceThread = input.sourceThread?.trim() || "";
+  if (sourceThread) {
+    query.set("source_thread_id", sourceThread);
+  }
   const sourceBot = input.sourceBot?.trim() || "";
   if (sourceBot) {
     query.set("source_bot_id", sourceBot);

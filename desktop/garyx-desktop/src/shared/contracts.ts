@@ -278,6 +278,7 @@ export interface ScanDreamsInput extends ListDreamsInput {
 export interface ListTasksInput {
   status?: DesktopTaskStatus | null;
   assignee?: string | null;
+  sourceThread?: string | null;
   sourceBot?: string | null;
   includeDone?: boolean;
   limit?: number;

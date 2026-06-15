@@ -1,6 +1,7 @@
 import {
   lazy,
   Suspense,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -13,10 +14,12 @@ import {
   FileText,
   FolderOpen,
   Globe,
+  ListTodo,
   MessageSquare,
   PanelRightClose,
   PanelRightOpen,
   Plus,
+  RefreshCcw,
   Terminal as TerminalIcon,
   X,
 } from "lucide-react";
@@ -26,6 +29,9 @@ import "@xterm/xterm/css/xterm.css";
 
 import type {
   BrowserAnnotationCommentRequest,
+  DesktopTaskPrincipal,
+  DesktopTaskStatus,
+  DesktopTaskSummary,
   DesktopTerminalEvent,
   DesktopTerminalState,
   DesktopWorkspaceFilePreview,
@@ -41,7 +47,7 @@ const SidePanelBrowserPage = lazy(() =>
   import("../../BrowserPage").then((module) => ({ default: module.BrowserPage }))
 );
 
-export type ThreadSideToolId = "files" | "chat" | "browser" | "terminal";
+export type ThreadSideToolId = "files" | "tasks" | "chat" | "browser" | "terminal";
 
 export type SideToolWorkspaceFile = {
   name: string;
@@ -53,6 +59,7 @@ export type SideToolWorkspaceFile = {
 type ThreadSideToolsPanelProps = {
   activeWorkspaceName?: string | null;
   activeWorkspacePath?: string | null;
+  activeThreadId?: string | null;
   selectedWorkspaceFile?: SideToolWorkspaceFile | null;
   workspaceBranch?: string | null;
   workspaceDirectoryPanel: ReactNode;
@@ -69,6 +76,7 @@ type ThreadSideToolsPanelProps = {
   onRevealSelectedWorkspaceFile?: () => Promise<void> | void;
   onAddBrowserAnnotationComment: (request: BrowserAnnotationCommentRequest) => void;
   onCloseSideTools: () => void;
+  onOpenThread?: (threadId: string) => void;
   onOpenSideChat: () => void;
   onWorkspaceFileFilterChange: (value: string) => void;
 };
@@ -89,11 +97,236 @@ function activeTerminalSession(state: DesktopTerminalState | null) {
 
 const MAX_RENDERER_TERMINAL_OUTPUT_LENGTH = 160_000;
 
+const TASK_STATUS_LABELS: Record<DesktopTaskStatus, string> = {
+  todo: "Todo",
+  in_progress: "In Progress",
+  in_review: "In Review",
+  done: "Done",
+};
+
+const TASK_STATUS_TONES: Record<DesktopTaskStatus, string> = {
+  todo: "todo",
+  in_progress: "progress",
+  in_review: "review",
+  done: "done",
+};
+
 function appendTerminalOutput(output: string, data: string): string {
   const nextOutput = `${output}${data}`;
   return nextOutput.length > MAX_RENDERER_TERMINAL_OUTPUT_LENGTH
     ? nextOutput.slice(nextOutput.length - MAX_RENDERER_TERMINAL_OUTPUT_LENGTH)
     : nextOutput;
+}
+
+function formatTaskPrincipal(
+  principal: DesktopTaskPrincipal | null | undefined,
+  t: ReturnType<typeof useI18n>["t"],
+): string {
+  if (!principal) {
+    return t("Unassigned");
+  }
+  if (principal.kind === "human") {
+    return `@${principal.userId}`;
+  }
+  return principal.agentId;
+}
+
+function formatTaskTimestamp(value?: string | null): string {
+  if (!value) {
+    return "";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  const sameDay = date.toDateString() === new Date().toDateString();
+  return new Intl.DateTimeFormat(
+    undefined,
+    sameDay
+      ? { hour: "numeric", minute: "2-digit" }
+      : { month: "short", day: "numeric" },
+  ).format(date);
+}
+
+function isTasksDisabled(error: string | null): boolean {
+  return Boolean(error && /tasks are disabled|TasksDisabled/i.test(error));
+}
+
+function taskDisplayId(task: DesktopTaskSummary): string {
+  return task.taskId || `#TASK-${task.number}`;
+}
+
+function SideThreadTasksTool({
+  sourceThreadId,
+  onOpenThread,
+}: {
+  sourceThreadId?: string | null;
+  onOpenThread?: (threadId: string) => void;
+}) {
+  const { t } = useI18n();
+  const [tasks, setTasks] = useState<DesktopTaskSummary[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const requestIdRef = useRef(0);
+
+  const loadTasks = useCallback(async (options?: { silent?: boolean }) => {
+    const threadId = sourceThreadId?.trim() || "";
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+
+    if (!threadId) {
+      setTasks([]);
+      setTotal(0);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+
+    if (!options?.silent) {
+      setLoading(true);
+    }
+    setError(null);
+    try {
+      const page = await window.garyxDesktop.listTasks({
+        includeDone: true,
+        sourceThread: threadId,
+        limit: 200,
+      });
+      if (requestIdRef.current !== requestId) {
+        return;
+      }
+      setTasks(page.tasks);
+      setTotal(page.total);
+    } catch (loadError) {
+      if (requestIdRef.current !== requestId) {
+        return;
+      }
+      setTasks([]);
+      setTotal(0);
+      setError(
+        loadError instanceof Error
+          ? loadError.message
+          : String(loadError || "Failed to load tasks"),
+      );
+    } finally {
+      if (requestIdRef.current === requestId && !options?.silent) {
+        setLoading(false);
+      }
+    }
+  }, [sourceThreadId]);
+
+  useEffect(() => {
+    void loadTasks();
+  }, [loadTasks]);
+
+  const visibleCount = tasks.length;
+  const disabled = isTasksDisabled(error);
+  const countLabel = loading
+    ? t("Loading tasks…")
+    : t("{count} tasks", { count: total || visibleCount });
+
+  return (
+    <div className="side-tool-tasks" aria-busy={loading}>
+      <header className="side-tool-tasks-header">
+        <div className="side-tool-tasks-title-block">
+          <div className="side-tool-tasks-title-row">
+            <ListTodo aria-hidden size={16} strokeWidth={1.8} />
+            <strong>{t("Tasks")}</strong>
+          </div>
+          <span>{countLabel}</span>
+        </div>
+        <button
+          aria-label={t("Refresh")}
+          className="codex-icon-button side-tool-tasks-refresh"
+          disabled={!sourceThreadId || loading}
+          onClick={() => {
+            void loadTasks();
+          }}
+          title={t("Refresh")}
+          type="button"
+        >
+          <RefreshCcw aria-hidden size={14} strokeWidth={1.8} />
+        </button>
+      </header>
+
+      {error ? (
+        <div
+          className={`side-tool-tasks-state ${
+            disabled ? "is-warning" : "is-error"
+          }`}
+        >
+          {disabled ? t("Tasks are disabled in the gateway config.") : error}
+        </div>
+      ) : null}
+
+      {!sourceThreadId ? (
+        <div className="side-tool-tasks-empty">
+          {t("Open a thread to see its tasks.")}
+        </div>
+      ) : loading && !tasks.length ? (
+        <div className="side-tool-tasks-empty">{t("Loading tasks…")}</div>
+      ) : !error && !tasks.length ? (
+        <div className="side-tool-tasks-empty">
+          {t("No tasks from this thread yet.")}
+        </div>
+      ) : (
+        <div className="side-tool-tasks-list">
+          {tasks.map((task) => {
+            const taskId = taskDisplayId(task);
+            const canOpen = Boolean(task.threadId && onOpenThread);
+            return (
+              <article className="side-tool-task-card" key={task.taskId || taskId}>
+                <div className="side-tool-task-topline">
+                  <span className="side-tool-task-id">{taskId}</span>
+                  <span
+                    className={`tasks-status-chip tone-${TASK_STATUS_TONES[task.status]}`}
+                  >
+                    {t(TASK_STATUS_LABELS[task.status])}
+                  </span>
+                </div>
+                <button
+                  className="side-tool-task-title"
+                  disabled={!canOpen}
+                  onClick={() => {
+                    if (task.threadId && onOpenThread) {
+                      onOpenThread(task.threadId);
+                    }
+                  }}
+                  type="button"
+                >
+                  {task.title}
+                </button>
+                <div className="side-tool-task-meta">
+                  <span>
+                    {t("assignee")} {formatTaskPrincipal(task.assignee, t)}
+                  </span>
+                  {formatTaskTimestamp(task.updatedAt) ? (
+                    <span>{formatTaskTimestamp(task.updatedAt)}</span>
+                  ) : null}
+                </div>
+                {task.threadId ? (
+                  <button
+                    className="side-tool-task-open"
+                    disabled={!onOpenThread}
+                    onClick={() => {
+                      if (onOpenThread) {
+                        onOpenThread(task.threadId);
+                      }
+                    }}
+                    type="button"
+                  >
+                    <MessageSquare aria-hidden size={13} strokeWidth={1.8} />
+                    {t("Open thread")}
+                  </button>
+                ) : null}
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function SideTerminalTool({ cwd }: { cwd?: string | null }) {
@@ -344,6 +577,7 @@ function SideTerminalTool({ cwd }: { cwd?: string | null }) {
 }
 
 export function ThreadSideToolsPanel({
+  activeThreadId,
   activeWorkspacePath,
   selectedWorkspaceFile,
   sideChatPanel,
@@ -359,6 +593,7 @@ export function ThreadSideToolsPanel({
   onRevealSelectedWorkspaceFile,
   onAddBrowserAnnotationComment,
   onCloseSideTools,
+  onOpenThread,
   onOpenSideChat,
   onWorkspaceFileFilterChange,
 }: ThreadSideToolsPanelProps) {
@@ -366,6 +601,7 @@ export function ThreadSideToolsPanel({
   const tools = useMemo<ToolDescriptor[]>(
     () => [
       { id: "files", label: t("Files"), shortcut: "⌘P", icon: FileText },
+      { id: "tasks", label: t("Tasks"), shortcut: "", icon: ListTodo },
       { id: "chat", label: t("Side Chat"), shortcut: "", icon: MessageSquare },
       { id: "browser", label: t("Browser"), shortcut: "⌘T", icon: Globe },
       { id: "terminal", label: t("Terminal"), shortcut: "⌃`", icon: TerminalIcon },
@@ -800,6 +1036,12 @@ export function ThreadSideToolsPanel({
         ) : null}
         {activeTool?.id === "chat" ? (
           <div className="side-tool-chat-thread">{sideChatPanel}</div>
+        ) : null}
+        {activeTool?.id === "tasks" ? (
+          <SideThreadTasksTool
+            onOpenThread={onOpenThread}
+            sourceThreadId={activeThreadId}
+          />
         ) : null}
         {activeTool?.id === "browser" ? (
           <Suspense

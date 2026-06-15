@@ -9998,6 +9998,7 @@ export function AppShell() {
     <ThreadSideToolsPanel
       activeWorkspaceName={activeWorkspace?.name || null}
       activeWorkspacePath={activeWorkspacePath}
+      activeThreadId={selectedThreadId}
       selectedWorkspaceFile={selectedSideToolWorkspaceFile}
       sideChatPanel={sideChatPanel}
       workspaceBranch={composerWorkspaceBranch}
@@ -10016,6 +10017,11 @@ export function AppShell() {
       onCloseSideTools={() => {
         trackUiAction("thread.close_inspector", () => {
           setInspectorOpen(false);
+        });
+      }}
+      onOpenThread={(threadId) => {
+        trackUiAction("side_tasks.open_thread", async () => {
+          await openExistingThread(threadId);
         });
       }}
       onOpenSideChat={() => {
