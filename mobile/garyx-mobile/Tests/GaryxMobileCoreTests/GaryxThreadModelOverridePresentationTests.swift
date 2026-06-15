@@ -181,6 +181,26 @@ final class GaryxThreadModelOverridePresentationTests: XCTestCase {
         )
     }
 
+    func testSelectedOptionIdReflectsEffectiveValueNotDefault() {
+        // Effective equals the default -> the "use default" row ("") is selected.
+        XCTAssertEqual(
+            GaryxThreadModelOverridePresentation.selectedOptionId(effective: "high", default: "high"),
+            ""
+        )
+        // Effective differs from the default -> the effective value's own row is
+        // selected, so the picker checkmark matches the summary row instead of
+        // falling back to the default (the "Max outside, High in the picker" bug).
+        XCTAssertEqual(
+            GaryxThreadModelOverridePresentation.selectedOptionId(effective: "max", default: "high"),
+            "max"
+        )
+        // No effective value, or whitespace -> default row.
+        XCTAssertEqual(GaryxThreadModelOverridePresentation.selectedOptionId(effective: nil, default: "high"), "")
+        XCTAssertEqual(GaryxThreadModelOverridePresentation.selectedOptionId(effective: "  ", default: "high"), "")
+        // No default known -> any effective value selects its own row.
+        XCTAssertEqual(GaryxThreadModelOverridePresentation.selectedOptionId(effective: "max", default: nil), "max")
+    }
+
     private func decodeProviderModels(_ json: String) throws -> GaryxProviderModels {
         try JSONDecoder().decode(GaryxProviderModels.self, from: Data(json.utf8))
     }

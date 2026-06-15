@@ -466,7 +466,7 @@ function renderComposerModelControl({
       <FloatingActionMenuContent align="start" side="top">
         <FloatingActionMenuItem
           data-active={
-            !selectedModel || selectedModel.trim() === defaultModelId ? '' : undefined
+            !effectiveModelId || effectiveModelId === defaultModelId ? '' : undefined
           }
           onSelect={() => onSelectModel(null)}
         >
@@ -476,7 +476,7 @@ function renderComposerModelControl({
           .filter((option) => option.id !== defaultModelId)
           .map((option) => (
             <FloatingActionMenuItem
-              data-active={option.id === selectedModel ? '' : undefined}
+              data-active={option.id === effectiveModelId ? '' : undefined}
               key={option.id}
               onSelect={() => onSelectModel(option.id)}
             >
@@ -494,8 +494,8 @@ function renderComposerModelControl({
               <FloatingActionMenuSubContent>
                 <FloatingActionMenuItem
                   data-active={
-                    !selectedReasoningEffort ||
-                    selectedReasoningEffort.trim() === defaultReasoningEffortId
+                    !effectiveReasoningEffortId ||
+                    effectiveReasoningEffortId === defaultReasoningEffortId
                       ? ''
                       : undefined
                   }
@@ -508,7 +508,7 @@ function renderComposerModelControl({
                   .map((option) => (
                     <FloatingActionMenuItem
                       data-active={
-                        option.id === selectedReasoningEffort ? '' : undefined
+                        option.id === effectiveReasoningEffortId ? '' : undefined
                       }
                       key={option.id}
                       onSelect={() => onSelectReasoningEffort(option.id)}

@@ -1105,10 +1105,19 @@ private struct GaryxThreadRuntimeSettingsSheet: View {
         .disabled(!enabled)
     }
 
+    /// The model the empty "use default" row represents: the provider default,
+    /// or the effective model when the provider advertises no default (e.g.
+    /// `claude_code` reports `default_model: null`). `selectedModelOptionId` is
+    /// resolved against the same basis, so a missing provider default still maps
+    /// the running model to the default row instead of a phantom id with no row.
+    private var modelDefaultBasis: String? {
+        providerDefaultModel ?? effectiveModel
+    }
+
     private var modelOptions: [(id: String, label: String)] {
         var seen = Set<String>()
         var options: [(id: String, label: String)] = []
-        if let defaultModel = providerDefaultModel ?? effectiveModel,
+        if let defaultModel = modelDefaultBasis,
            seen.insert("").inserted {
             options.append((id: "", label: modelLabel(defaultModel) ?? defaultModel))
             seen.insert(defaultModel)
@@ -1116,19 +1125,21 @@ private struct GaryxThreadRuntimeSettingsSheet: View {
         for option in providerModels?.models ?? [] where seen.insert(option.id).inserted {
             options.append((id: option.id, label: option.label))
         }
-        if let override = modelOverride,
-           seen.insert(override).inserted {
-            options.append((id: override, label: modelLabel(override) ?? override))
+        if let effective = effectiveModel,
+           seen.insert(effective).inserted {
+            options.append((id: effective, label: modelLabel(effective) ?? effective))
         }
         return options
     }
 
     private var selectedModelOptionId: String {
-        guard let override = modelOverride else { return "" }
-        if override == providerDefaultModel {
-            return ""
-        }
-        return override
+        // Reflect the model the thread actually runs (the summary row's value),
+        // not just the per-thread override, so the picker checkmark agrees. The
+        // default basis matches the empty row in `modelOptions`.
+        GaryxThreadModelOverridePresentation.selectedOptionId(
+            effective: effectiveModel,
+            default: modelDefaultBasis
+        )
     }
 
     private var reasoningEffortOptions: [(id: String, label: String)] {
@@ -1142,19 +1153,21 @@ private struct GaryxThreadRuntimeSettingsSheet: View {
         for option in reasoningEfforts where seen.insert(option.id).inserted {
             options.append((id: option.id, label: option.label))
         }
-        if let override = reasoningEffortOverride,
-           seen.insert(override).inserted {
-            options.append((id: override, label: reasoningEffortLabel(override) ?? override))
+        if let effective = effectiveReasoningEffort,
+           seen.insert(effective).inserted {
+            options.append((id: effective, label: reasoningEffortLabel(effective) ?? effective))
         }
         return options
     }
 
     private var selectedReasoningEffortOptionId: String {
-        guard let override = reasoningEffortOverride else { return "" }
-        if override == defaultReasoningEffort(for: effortFilterModel) {
-            return ""
-        }
-        return override
+        // Check the level the thread actually runs (the summary row's value), not
+        // just the per-thread override, so "Max" outside no longer shows "High"
+        // checked in the picker.
+        GaryxThreadModelOverridePresentation.selectedOptionId(
+            effective: effectiveReasoningEffort,
+            default: defaultReasoningEffort(for: effortFilterModel)
+        )
     }
 
     private func selectModel(_ selected: String) async {

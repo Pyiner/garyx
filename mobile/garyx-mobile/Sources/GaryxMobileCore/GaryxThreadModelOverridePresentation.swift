@@ -52,6 +52,25 @@ public enum GaryxThreadModelOverridePresentation {
             ?? providerModels?.reasoningEfforts.first.flatMap { normalized($0.id) }
     }
 
+    /// The option id a model / thinking-level picker should mark as selected,
+    /// given the value the thread ACTUALLY runs at (`effective`) and the default
+    /// for the current model. The empty-id "use default" row is selected when the
+    /// effective value is the default; otherwise the effective value's own row is.
+    ///
+    /// The picker must reflect the effective value — the same value the summary
+    /// row shows — not just the per-thread override. Reading the override alone
+    /// made the picker fall back to the default row (e.g. "High") while the row
+    /// outside showed the real effective level (e.g. "Max").
+    public static func selectedOptionId(effective: String?, default defaultValue: String?) -> String {
+        guard let effective = normalized(effective) else {
+            return ""
+        }
+        if let defaultValue = normalized(defaultValue), effective == defaultValue {
+            return ""
+        }
+        return effective
+    }
+
     /// Drops a thinking level the current model selection does not support.
     public static func sanitizedReasoningEffort(
         providerModels: GaryxProviderModels?,
