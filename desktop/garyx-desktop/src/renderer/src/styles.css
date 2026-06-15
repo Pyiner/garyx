@@ -7278,6 +7278,7 @@ button.new-thread-mode-trigger[data-state="open"] {
   margin-inline: auto;
   box-sizing: border-box;
   overflow-y: auto;
+  gap: 16px;
   transform: translateY(-50%);
 }
 
