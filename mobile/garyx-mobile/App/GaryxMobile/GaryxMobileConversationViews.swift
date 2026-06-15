@@ -674,7 +674,7 @@ struct GaryxConversationHeader: View {
 
 private struct GaryxThreadRuntimeHeaderControl: View {
     @EnvironmentObject private var model: GaryxMobileModel
-    @State private var showsRuntimeSheet = false
+    @State private var showsRuntimePopover = false
 
     private var selectedThread: GaryxThreadSummary? { model.selectedThread }
     private var runtime: GaryxThreadRuntimeSummary? { selectedThread?.threadRuntime }
@@ -689,7 +689,7 @@ private struct GaryxThreadRuntimeHeaderControl: View {
 
     var body: some View {
         Button {
-            showsRuntimeSheet = true
+            openRuntimePopover()
         } label: {
             HStack(spacing: 8) {
                 if let target = model.selectedThreadAgentTarget {
@@ -733,12 +733,42 @@ private struct GaryxThreadRuntimeHeaderControl: View {
             await model.loadProviderModels(providerType: providerType)
         }
         .onChange(of: selectedThread?.id) { _, _ in
-            showsRuntimeSheet = false
+            showsRuntimePopover = false
         }
-        .sheet(isPresented: $showsRuntimeSheet) {
+        .onChange(of: model.sidebarVisible) { _, visible in
+            if visible {
+                showsRuntimePopover = false
+            }
+        }
+        .onChange(of: model.activePanel) { _, panel in
+            if panel != .chat {
+                showsRuntimePopover = false
+            }
+        }
+        .onChange(of: model.showsSettings) { _, visible in
+            if visible {
+                showsRuntimePopover = false
+            }
+        }
+        .onChange(of: showsRuntimePopover) { _, visible in
+            if visible {
+                garyxDismissKeyboard()
+            }
+        }
+        .popover(
+            isPresented: $showsRuntimePopover,
+            attachmentAnchor: .rect(.bounds),
+            arrowEdge: .top
+        ) {
             GaryxThreadRuntimeSettingsSheet()
                 .environmentObject(model)
+                .presentationCompactAdaptation(.popover)
         }
+    }
+
+    private func openRuntimePopover() {
+        garyxDismissKeyboard()
+        showsRuntimePopover.toggle()
     }
 
     private func normalized(_ value: String?) -> String? {
@@ -827,46 +857,59 @@ private struct GaryxThreadRuntimeSettingsSheet: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
+        GaryxGlassPanel(
+            cornerRadius: 28,
+            fallbackMaterial: .ultraThinMaterial,
+            tint: Color(.systemBackground).opacity(0.97),
+            shadowOpacity: 0.13
+        ) {
+            VStack(spacing: 0) {
+                header
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
-                    switch page {
-                    case .main:
-                        currentAgentSection
-                        runtimeSettingsSection
-                    case .model:
-                        GaryxAgentSheetOptionsPanel(
-                            options: modelOptions,
-                            selectedId: selectedModelOptionId
-                        ) { selected in
-                            page = .main
-                            Task {
-                                await selectModel(selected)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        switch page {
+                        case .main:
+                            currentAgentSection
+                            runtimeSettingsSection
+                        case .model:
+                            optionsCard {
+                                GaryxAgentSheetOptionsPanel(
+                                    options: modelOptions,
+                                    selectedId: selectedModelOptionId
+                                ) { selected in
+                                    page = .main
+                                    Task {
+                                        await selectModel(selected)
+                                    }
+                                }
                             }
-                        }
-                    case .thinkingLevel:
-                        GaryxAgentSheetOptionsPanel(
-                            options: reasoningEffortOptions,
-                            selectedId: selectedReasoningEffortOptionId
-                        ) { selected in
-                            page = .main
-                            Task {
-                                await model.updateSelectedThreadRuntimeSettings(reasoningEffort: selected)
+                        case .thinkingLevel:
+                            optionsCard {
+                                GaryxAgentSheetOptionsPanel(
+                                    options: reasoningEffortOptions,
+                                    selectedId: selectedReasoningEffortOptionId
+                                ) { selected in
+                                    page = .main
+                                    Task {
+                                        await model.updateSelectedThreadRuntimeSettings(reasoningEffort: selected)
+                                    }
+                                }
                             }
                         }
                     }
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 14)
+                    .garyxVerticalScrollContentWidth()
                 }
-                .padding(.horizontal, 22)
-                .padding(.bottom, 28)
-                .garyxVerticalScrollContentWidth()
+                .frame(maxHeight: panelMaxHeight)
+                .scrollIndicators(.hidden)
             }
-            .scrollIndicators(.hidden)
         }
-        .garyxWorkspacePickerSheetStyle()
-        .presentationDetents([.fraction(0.58), .large])
-        .presentationDragIndicator(.visible)
+        .frame(width: panelWidth)
+        .padding(2)
+        .presentationBackground(.clear)
+        .presentationBackgroundInteraction(.enabled)
         .task(id: providerType) {
             guard !providerType.isEmpty,
                   model.providerModelsByType[providerType] == nil else {
@@ -879,13 +922,26 @@ private struct GaryxThreadRuntimeSettingsSheet: View {
         }
     }
 
+    private var panelWidth: CGFloat {
+        min(UIScreen.main.bounds.width - 48, 348)
+    }
+
+    private var panelMaxHeight: CGFloat {
+        min(UIScreen.main.bounds.height * 0.62, 520)
+    }
+
     private var header: some View {
         HStack(alignment: .center, spacing: 12) {
             if page == .main {
-                Text(Page.main.title)
-                    .font(GaryxFont.callout(weight: .medium))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Thread")
+                        .font(GaryxFont.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    Text("Agent & model")
+                        .font(GaryxFont.callout(weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                }
             } else {
                 Button {
                     page = .main
@@ -910,18 +966,14 @@ private struct GaryxThreadRuntimeSettingsSheet: View {
             Button {
                 dismiss()
             } label: {
-                Image(systemName: "xmark")
-                    .font(GaryxFont.system(size: 12, weight: .bold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 30, height: 30)
-                    .background(.quaternary.opacity(0.5), in: Circle())
+                GaryxCompactGlassIcon(systemName: "xmark", diameter: 30, iconSize: 12)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Close")
         }
-        .padding(.horizontal, 22)
-        .padding(.top, 22)
-        .padding(.bottom, 14)
+        .padding(.horizontal, 18)
+        .padding(.top, 16)
+        .padding(.bottom, 12)
     }
 
     private var currentAgentSection: some View {
@@ -929,31 +981,38 @@ private struct GaryxThreadRuntimeSettingsSheet: View {
             Text("Agent")
                 .font(GaryxFont.footnote(weight: .semibold))
                 .foregroundStyle(.secondary)
-                .padding(.leading, 8)
+                .padding(.leading, 4)
 
-            HStack(spacing: 12) {
-                avatar(diameter: 30)
+            GaryxGlassPanel(
+                cornerRadius: 18,
+                fallbackMaterial: .thinMaterial,
+                tint: Color(.secondarySystemBackground).opacity(0.58),
+                shadowOpacity: 0.018
+            ) {
+                HStack(spacing: 12) {
+                    avatar(diameter: 32)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(agentTitle)
-                        .font(GaryxFont.callout(weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-
-                    if let subtitle = agentSubtitle {
-                        Text(subtitle)
-                            .font(GaryxFont.caption())
-                            .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(agentTitle)
+                            .font(GaryxFont.callout(weight: .semibold))
+                            .foregroundStyle(.primary)
                             .lineLimit(1)
-                    }
-                }
 
-                Spacer(minLength: 0)
-                GaryxSelectionCheckmark(size: 18)
+                        if let subtitle = agentSubtitle {
+                            Text(subtitle)
+                                .font(GaryxFont.caption())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+
+                    Spacer(minLength: 0)
+                    GaryxSelectionCheckmark(size: 16)
+                }
+                .padding(.horizontal, 12)
+                .frame(minHeight: 56)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 8)
-            .frame(minHeight: 52)
-            .contentShape(Rectangle())
         }
     }
 
@@ -962,30 +1021,54 @@ private struct GaryxThreadRuntimeSettingsSheet: View {
             Text("This thread")
                 .font(GaryxFont.footnote(weight: .semibold))
                 .foregroundStyle(.secondary)
-                .padding(.leading, 8)
+                .padding(.leading, 4)
                 .padding(.top, 10)
 
-            VStack(spacing: 0) {
-                settingsRow(
-                    title: "Model",
-                    value: actualModelLabel,
-                    enabled: canSelectModel
-                ) {
-                    page = .model
-                }
-
-                if canSelectReasoningEffort {
-                    Divider().padding(.leading, 18)
-
+            GaryxGlassPanel(
+                cornerRadius: 18,
+                fallbackMaterial: .thinMaterial,
+                tint: Color(.secondarySystemBackground).opacity(0.58),
+                shadowOpacity: 0.018
+            ) {
+                VStack(spacing: 0) {
                     settingsRow(
-                        title: "Thinking level",
-                        value: actualReasoningEffortLabel,
-                        enabled: true
+                        title: "Model",
+                        value: actualModelLabel,
+                        enabled: canSelectModel
                     ) {
-                        page = .thinkingLevel
+                        page = .model
+                    }
+
+                    if canSelectReasoningEffort {
+                        Divider().padding(.leading, 16)
+
+                        settingsRow(
+                            title: "Thinking level",
+                            value: actualReasoningEffortLabel,
+                            enabled: true
+                        ) {
+                            page = .thinkingLevel
+                        }
                     }
                 }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
             }
+        }
+    }
+
+    private func optionsCard<Content: View>(
+        @ViewBuilder content: @escaping () -> Content
+    ) -> some View {
+        GaryxGlassPanel(
+            cornerRadius: 18,
+            fallbackMaterial: .thinMaterial,
+            tint: Color(.secondarySystemBackground).opacity(0.58),
+            shadowOpacity: 0.018
+        ) {
+            content()
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
         }
     }
 
@@ -1651,6 +1734,9 @@ struct GaryxMessageBubble: View {
                     if message.attachments.isEmpty {
                         GaryxThinkingLabel()
                     }
+                } else if let notification = taskNotification {
+                    GaryxTaskNotificationCard(notification: notification)
+                        .garyxMessageInteraction(text: taskNotificationCopyText(notification))
                 } else if !displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     GaryxMarkdownText(
                         text: displayText,
@@ -1704,6 +1790,22 @@ struct GaryxMessageBubble: View {
             return ""
         }
         return message.text
+    }
+
+    private var taskNotification: GaryxTaskNotification? {
+        guard message.role == .assistant else { return nil }
+        return GaryxTaskNotificationPresentation.parse(displayText)
+    }
+
+    private func taskNotificationCopyText(_ notification: GaryxTaskNotification) -> String {
+        [
+            notification.taskId,
+            notification.title,
+            notification.finalMessage,
+        ]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
     }
 
     private var messageCopyText: String {
@@ -1797,6 +1899,62 @@ struct GaryxMessageBubble: View {
                 .lineLimit(2)
                 .multilineTextAlignment(.trailing)
         }
+    }
+}
+
+private struct GaryxTaskNotificationCard: View {
+    let notification: GaryxTaskNotification
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 7) {
+                    if !notification.taskId.isEmpty {
+                        Text(notification.taskId)
+                            .font(GaryxFont.caption(weight: .semibold))
+                            .foregroundStyle(GaryxTheme.secondaryText)
+                    }
+
+                    Text(GaryxTaskNotificationPresentation.statusLabel(for: notification.status))
+                        .font(GaryxFont.caption(weight: .medium))
+                        .foregroundStyle(GaryxTheme.secondaryText)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(Color.primary.opacity(0.035), in: Capsule())
+                        .overlay {
+                            Capsule()
+                                .stroke(GaryxTheme.hairline, lineWidth: 1)
+                        }
+                }
+
+                Text(notification.title)
+                    .font(GaryxFont.subheadline(weight: .semibold))
+                    .foregroundStyle(GaryxTheme.primaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Rectangle()
+                .fill(GaryxTheme.hairline)
+                .frame(height: 1)
+
+            GaryxMarkdownText(
+                text: notification.finalMessage,
+                foreground: GaryxTheme.primaryText,
+                allowsRelativeFileLinks: true,
+                allowsTextSelection: false,
+                onFileLinkTap: nil,
+                onImageFilePreview: nil
+            )
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(GaryxTheme.surface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(GaryxTheme.hairline, lineWidth: 1)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Task ready for review")
     }
 }
 

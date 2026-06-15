@@ -39,6 +39,7 @@ import {
   buildOptimisticTranscriptContent,
   splitRichMessageContentIntoBubbleParts,
 } from "../../message-rich-content";
+import { parseTaskNotificationText } from "../../task-notification";
 import { deriveThreadTeamView } from "../../thread-model";
 import {
   buildRenderTranscriptBlocks,
@@ -717,10 +718,30 @@ export function ThreadPage({
               }
               const entry = block.entry;
               const loopContinuation = isLoopContinuationMessage(entry.message);
+              const displayText = displayTranscriptMessageText(entry.message);
+              const isTaskNotificationMessage =
+                !entry.message.pending &&
+                !loopContinuation &&
+                parseTaskNotificationText(displayText) !== null;
+              if (isTaskNotificationMessage) {
+                return (
+                  <article
+                    key={`${block.key}:body`}
+                    className={`message-bubble task-notification-message ${entry.message.role} ${entry.message.error ? "error" : ""}`}
+                  >
+                    <RichMessageContent
+                      altPrefix={entry.message.role}
+                      content={entry.message.content}
+                      onLocalFileLinkClick={onLocalWorkspaceFileLinkClick}
+                      text={displayText}
+                    />
+                  </article>
+                );
+              }
               if (entry.message.role === "user" && !loopContinuation) {
                 return renderUserMessageBubbleParts({
                   keyPrefix: `${block.key}:body`,
-                  text: displayTranscriptMessageText(entry.message),
+                  text: displayText,
                   content: entry.message.content,
                   pending: entry.message.pending,
                   error: entry.message.error,
@@ -758,7 +779,7 @@ export function ThreadPage({
                           : entry.message.content
                       }
                       onLocalFileLinkClick={onLocalWorkspaceFileLinkClick}
-                      text={displayTranscriptMessageText(entry.message)}
+                      text={displayText}
                     />
                   )}
                 </article>

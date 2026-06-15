@@ -111,11 +111,9 @@ private struct GaryxToolCallRowLabel: View {
     let row: GaryxToolCallListRow
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Image(systemName: iconName)
-                .font(GaryxFont.system(size: 14, weight: .regular))
-                .foregroundStyle(row.isError ? GaryxTheme.danger : GaryxTheme.secondaryText)
-                .frame(width: 20, height: 20)
+        HStack(alignment: .center, spacing: 10) {
+            iconView
+                .frame(width: 24, height: 24)
 
             if row.isRunning {
                 GaryxShimmerText(
@@ -127,11 +125,14 @@ private struct GaryxToolCallRowLabel: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             } else {
-                (Text(row.verb).foregroundStyle(GaryxTheme.secondaryText)
-                    + Text(row.detail.map { " \($0)" } ?? "").foregroundStyle(.primary))
+                (Text(row.verb)
+                    .font(GaryxFont.subheadline(weight: .semibold))
+                    .foregroundStyle(row.isError ? GaryxTheme.danger : .primary)
+                    + Text(row.detail.map { " \($0)" } ?? "")
                     .font(GaryxFont.subheadline())
+                    .foregroundStyle(GaryxTheme.secondaryText))
                     .lineLimit(1)
-                    .truncationMode(.middle)
+                    .truncationMode(.tail)
             }
 
             Spacer(minLength: 0)
@@ -140,15 +141,58 @@ private struct GaryxToolCallRowLabel: View {
         .contentShape(Rectangle())
     }
 
+    @ViewBuilder
+    private var iconView: some View {
+        if row.icon == .command {
+            GaryxToolCallCommandIcon(color: row.isError ? GaryxTheme.danger : .primary)
+        } else {
+            Image(systemName: iconName)
+                .font(GaryxFont.system(size: 15, weight: .semibold))
+                .foregroundStyle(row.isError ? GaryxTheme.danger : .primary)
+        }
+    }
+
     private var iconName: String {
         switch row.icon {
         case .command: "terminal"
-        case .read: "eye"
-        case .edit: "square.and.pencil"
+        case .read: "doc.text"
+        case .edit: "pencil"
         case .search: "magnifyingglass"
         case .web: "globe"
-        case .generic: "wrench.and.screwdriver"
+        case .generic: "gearshape"
         }
+    }
+}
+
+private struct GaryxToolCallCommandIcon: View {
+    let color: Color
+
+    var body: some View {
+        GeometryReader { proxy in
+            let width = proxy.size.width
+            let height = proxy.size.height
+            let scale = min(width, height) / 24
+            Path { path in
+                path.move(to: CGPoint(x: 8 * scale, y: 6 * scale))
+                path.addLine(to: CGPoint(x: 5.5 * scale, y: 6 * scale))
+                path.addLine(to: CGPoint(x: 5.5 * scale, y: 18 * scale))
+                path.addLine(to: CGPoint(x: 8 * scale, y: 18 * scale))
+
+                path.move(to: CGPoint(x: 16 * scale, y: 6 * scale))
+                path.addLine(to: CGPoint(x: 18.5 * scale, y: 6 * scale))
+                path.addLine(to: CGPoint(x: 18.5 * scale, y: 18 * scale))
+                path.addLine(to: CGPoint(x: 16 * scale, y: 18 * scale))
+
+                path.move(to: CGPoint(x: 10 * scale, y: 12 * scale))
+                path.addLine(to: CGPoint(x: 14 * scale, y: 12 * scale))
+            }
+            .stroke(
+                color,
+                style: StrokeStyle(lineWidth: 1.8 * scale, lineCap: .round, lineJoin: .round)
+            )
+            .frame(width: width, height: height)
+        }
+        .accessibilityHidden(true)
     }
 }
 
@@ -435,4 +479,3 @@ private struct GaryxToolImageThumbnail: View {
         onLoaded?(loaded, resolvedDataUrl)
     }
 }
-

@@ -463,5 +463,51 @@ export function buildStories(): Story[] {
     ],
   };
 
-  return [happyPath, failurePath, steerPath, historyPath, longToolRun, richContent];
+  const taskNotification: Story = {
+    id: 'task-notification',
+    name: '任务通知 · 待审查卡片',
+    description: 'garyx_task_notification 结构化通知渲染为专用审查卡片，而不是裸 XML。',
+    steps: [
+      step('ready_for_review', '下游 task 进入 in_review 后回到主线程的通知形态。', {
+        messages: [
+          userMessage('等 528 也进 review 后提醒我一起验收。', {
+            localState: 'remote_final',
+          }),
+          assistantMessage(
+            [
+              '<garyx_task_notification event="ready_for_review" task_id="#TASK-528" status="in_review">',
+              'Task #TASK-528 is ready for review: MCP tool review',
+              '',
+              '528(MCP) 已经跑完：',
+              '',
+              '- MCP manifest、tool discovery、enable/disable 都过了',
+              '- 端到端验证覆盖了登录态 app 的真实调用路径',
+              '- 和 527 的 sandboxAgentService/contracts 改动没有新冲突',
+              '',
+              'View details:',
+              'garyx task get #TASK-528',
+              '',
+              'Review next:',
+              'If changes are needed, move the task back to in progress and send feedback to the task thread:',
+              'garyx task update #TASK-528 --status in_progress --note "needs changes: summary"',
+              '',
+              'If approved, mark it done:',
+              'garyx task update #TASK-528 --status done --note "approved by reviewer"',
+              '</garyx_task_notification>',
+            ].join('\n'),
+          ),
+        ],
+      }),
+    ],
+  };
+
+  return [
+    happyPath,
+    failurePath,
+    steerPath,
+    historyPath,
+    longToolRun,
+    richContent,
+    taskNotification,
+  ];
 }

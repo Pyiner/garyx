@@ -11,6 +11,83 @@ final class GaryxToolCallPresentationTests: XCTestCase {
         XCTAssertEqual(rows.map(\.icon), [.command])
     }
 
+    func testCommandRowPrefersInputLabelOverCommandAndOutputSummary() {
+        let rows = GaryxToolCallPresentation.listRows(from: [
+            entry(
+                toolName: "exec_command",
+                title: "Command",
+                inputText: "{\"label\": \"Run mobile tests\", \"command\": \"swift test\"}",
+                summaryText: "Executed 298 tests"
+            ),
+        ])
+        XCTAssertEqual(rows.map(\.verb), ["Ran"])
+        XCTAssertEqual(rows.map(\.detail), ["Run mobile tests"])
+    }
+
+    func testCommandRowReadsWrappedToolInputDescription() {
+        let rows = GaryxToolCallPresentation.listRows(from: [
+            entry(
+                toolName: "bash",
+                title: "Bash",
+                inputText: #"{"input":{"description":"Check public DNS","command":"dig example.test"},"tool":"Bash"}"#,
+                summaryText: "example.test. 60 IN A 192.0.2.10"
+            ),
+        ])
+        XCTAssertEqual(rows.map(\.verb), ["Ran"])
+        XCTAssertEqual(rows.map(\.detail), ["Check public DNS"])
+    }
+
+    func testCommandRowFallsBackToCommandInputInsteadOfOutputSummary() {
+        let rows = GaryxToolCallPresentation.listRows(from: [
+            entry(
+                toolName: "exec_command",
+                title: "Command",
+                inputText: "{\"command\": \"bash -lc 'swift test 2>&1'\"}",
+                summaryText: "Executed 298 tests"
+            ),
+        ])
+        XCTAssertEqual(rows.map(\.verb), ["Ran"])
+        XCTAssertEqual(rows.map(\.detail), ["swift test"])
+    }
+
+    func testCommandRowReadsWrappedToolInputCommandInsteadOfOutputSummary() {
+        let rows = GaryxToolCallPresentation.listRows(from: [
+            entry(
+                toolName: "bash",
+                title: "Bash",
+                inputText: #"{"input":{"command":"bash -lc 'swift test 2>&1'"},"tool":"Bash"}"#,
+                summaryText: "Executed 298 tests"
+            ),
+        ])
+        XCTAssertEqual(rows.map(\.verb), ["Ran"])
+        XCTAssertEqual(rows.map(\.detail), ["swift test"])
+    }
+
+    func testCommandRowUsesRawInputFromDebugSnapshotInsteadOfOutputSummary() {
+        let rows = GaryxToolCallPresentation.listRows(from: [
+            entry(
+                toolName: "exec_command",
+                title: "Bash",
+                inputText: "swift test",
+                summaryText: "swift test passed"
+            ),
+        ])
+        XCTAssertEqual(rows.map(\.verb), ["Ran"])
+        XCTAssertEqual(rows.map(\.detail), ["swift test"])
+    }
+
+    func testGenericToolRowPrefersInputNameOverOutputSummary() {
+        let rows = GaryxToolCallPresentation.listRows(from: [
+            entry(
+                toolName: "custom_tool",
+                title: "Custom Tool",
+                inputText: "{\"name\": \"Fetch candidate list\"}",
+                summaryText: "Returned 40 rows"
+            ),
+        ])
+        XCTAssertEqual(rows.map(\.detail), ["Fetch candidate list"])
+    }
+
     func testRunningCommandRowShowsRunningVerb() {
         let rows = GaryxToolCallPresentation.listRows(from: [
             entry(toolName: "bash", title: "Bash", summaryText: "等待点词测试结果", status: .running),
@@ -85,6 +162,17 @@ final class GaryxToolCallPresentationTests: XCTestCase {
             .codeCard("until [ -s output ]; do sleep 1; done")
         )
         XCTAssertEqual(detail.sections[1].content, .codeCard("Running…"))
+    }
+
+    func testCommandDetailShowsBareCommandFromWrappedToolInput() {
+        let detail = GaryxToolCallPresentation.detail(for: entry(
+            toolName: "bash",
+            title: "Bash",
+            inputText: #"{"input":{"description":"Run mobile tests","command":"swift test"},"tool":"Bash"}"#,
+            resultText: "Test Suite passed"
+        ))
+        XCTAssertEqual(detail.sections.map(\.label), ["Command", "Output"])
+        XCTAssertEqual(detail.sections[0].content, .codeCard("swift test"))
     }
 
     func testReadDetailOfImageShowsImagePreviewNotBase64() {

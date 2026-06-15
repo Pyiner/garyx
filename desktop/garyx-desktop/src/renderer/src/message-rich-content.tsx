@@ -18,6 +18,10 @@ import {
   type LocalFileLinkHandler,
 } from "./message-rich-text";
 import { useI18n, type Translate } from "./i18n";
+import {
+  parseTaskNotificationText,
+  type ParsedTaskNotification,
+} from "./task-notification";
 
 type TranscriptSegment =
   | {
@@ -55,6 +59,53 @@ export type RichMessageBubblePart = {
 
 function resolveMessageTone(role: string): "default" | "assistant" {
   return role === "assistant" ? "assistant" : "default";
+}
+
+function taskNotificationStatusLabel(status: string, t: Translate): string {
+  if (status === "in_review") {
+    return t("In review");
+  }
+  return status
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function TaskNotificationCard({
+  notification,
+}: {
+  notification: ParsedTaskNotification;
+}) {
+  const { t } = useI18n();
+  return (
+    <section
+      className="task-notification-card"
+      aria-label={t("Task ready for review")}
+    >
+      <div className="task-notification-header">
+        <div className="task-notification-heading">
+          <div className="task-notification-kicker">
+            <span className="task-notification-task-id">
+              {notification.taskId || t("Task")}
+            </span>
+            <span className="task-notification-status">
+              {taskNotificationStatusLabel(notification.status, t)}
+            </span>
+          </div>
+          <h3 className="task-notification-title">{notification.title}</h3>
+        </div>
+      </div>
+
+      <div className="task-notification-body">
+        <RichMessageText
+          surfaceCustomXmlTags={false}
+          text={notification.finalMessage}
+          tone="assistant"
+        />
+      </div>
+    </section>
+  );
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -643,10 +694,20 @@ export const RichMessageContent = memo(function RichMessageContent({
 
   const renderSegment = (segment: TranscriptSegment): ReactNode => {
     if (segment.kind === "text") {
+      const taskNotification = parseTaskNotificationText(segment.text);
+      if (taskNotification) {
+        return (
+          <TaskNotificationCard
+            key={segment.key}
+            notification={taskNotification}
+          />
+        );
+      }
       return (
         <RichMessageText
           key={segment.key}
           onLocalFileLinkClick={onLocalFileLinkClick}
+          surfaceCustomXmlTags={altPrefix === "user"}
           text={segment.text}
           tone={tone}
         />

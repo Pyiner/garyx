@@ -8345,6 +8345,83 @@ button.message-file-card {
   white-space: nowrap;
 }
 
+.task-notification-card {
+  display: grid;
+  gap: 11px;
+  width: min(100%, 680px);
+  box-sizing: border-box;
+  padding: 12px 12px 13px;
+  border: 1px solid color-mix(in oklab, var(--color-token-border) 84%, #ffffff);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--color-token-bg-primary) 92%, #f4f1eb);
+  color: var(--color-token-text-primary);
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.03);
+}
+
+.task-notification-header {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+}
+
+.task-notification-heading {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.task-notification-kicker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.task-notification-task-id,
+.task-notification-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  font-size: var(--text-xs-plus);
+  line-height: 1.25;
+}
+
+.task-notification-task-id {
+  color: var(--color-token-text-secondary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.task-notification-status {
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--color-token-border) 78%, transparent);
+  background: color-mix(in oklab, var(--color-token-text-primary) 4%, transparent);
+  color: color-mix(in oklab, var(--color-token-text-secondary) 88%, #8a7a64);
+  font-weight: var(--font-weight-medium);
+}
+
+.task-notification-title {
+  margin: 0;
+  color: var(--color-token-text-primary);
+  font-family: -apple-system, "system-ui", "Segoe UI", sans-serif;
+  font-size: var(--text-base);
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.35;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+}
+
+.task-notification-body {
+  padding: 10px 0 0;
+  border-top: 1px solid color-mix(in oklab, var(--color-token-border) 70%, transparent);
+}
+
+.task-notification-body .message-rich {
+  color: var(--color-token-text-primary);
+}
+
 .message-rich-json {
   margin: 0;
   padding: 8px 10px;
@@ -9255,6 +9332,26 @@ button.team-agent-speaker:focus-visible {
   );
   box-shadow: none;
   overflow-wrap: anywhere;
+}
+
+.message-bubble.task-notification-message {
+  align-self: flex-end;
+  width: min(77%, 680px);
+  max-width: 77%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.message-bubble.task-notification-message > .message-rich-content {
+  gap: 0;
+  width: 100%;
+}
+
+.message-bubble.task-notification-message .task-notification-card {
+  width: 100%;
 }
 
 .message-attachment-bubble {

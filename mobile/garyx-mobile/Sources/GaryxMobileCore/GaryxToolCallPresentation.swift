@@ -216,6 +216,14 @@ enum GaryxToolCallPresentation {
               case .object(let object) = decoded else {
             return nil
         }
+        for key in ["input", "arguments", "params"] {
+            if case .object(var nested)? = object[key] {
+                for passthroughKey in ["label", "name", "title", "description"] where nested[passthroughKey] == nil {
+                    nested[passthroughKey] = object[passthroughKey]
+                }
+                return nested
+            }
+        }
         return object
     }
 
@@ -328,6 +336,12 @@ enum GaryxToolCallPresentation {
            !path.isEmpty {
             return path
         }
+        if let inputPreview = inputPreviewDetail(for: entry) {
+            return inputPreview
+        }
+        if entry.isCommand {
+            return commandDetail(for: entry)
+        }
         if let summary = entry.summaryText?.trimmingCharacters(in: .whitespacesAndNewlines),
            !summary.isEmpty {
             return summary
@@ -338,5 +352,35 @@ enum GaryxToolCallPresentation {
         }
         if entry.isCommand { return nil }
         return entry.title
+    }
+
+    private static func inputPreviewDetail(for entry: GaryxMobileToolTraceEntry) -> String? {
+        guard let input = decodedInput(entry.inputText) else {
+            return nil
+        }
+        for key in ["label", "name", "title", "description"] {
+            if let value = input[key]?.garyxDetailStringValue {
+                return GaryxMobileToolSummaryFormatter.singleLineTruncated(value, limit: 112)
+            }
+        }
+        return nil
+    }
+
+    private static func commandDetail(for entry: GaryxMobileToolTraceEntry) -> String? {
+        let input = decodedInput(entry.inputText)
+        if let command = input?["command"]?.garyxDetailStringValue
+            ?? input?["cmd"]?.garyxDetailStringValue {
+            return GaryxMobileToolSummaryFormatter.shellSummary(command)
+        }
+        if input == nil,
+           let inputText = entry.inputText?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !inputText.isEmpty {
+            return GaryxMobileToolSummaryFormatter.shellSummary(inputText)
+        }
+        let summary = entry.summaryText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !summary.isEmpty {
+            return summary
+        }
+        return nil
     }
 }

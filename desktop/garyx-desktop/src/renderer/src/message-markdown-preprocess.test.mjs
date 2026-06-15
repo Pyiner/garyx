@@ -118,6 +118,14 @@ test('indented code limitation (tag still surfaced; exact whitespace is don\'t-c
 test('non-tag <', () => assert.equal(escapeNonHtmlTagsOutsideCode('a < b and 5 < 10'), 'a < b and 5 < 10'));
 test('no-op byte-identical', () => { assert.equal(prepareMessageMarkdown('\nhello\n'),'\nhello\n'); assert.equal(prepareMessageMarkdown('    code line'),'    code line'); assert.equal(prepareMessageMarkdown('hard break  \nnext'),'hard break  \nnext'); assert.equal(prepareMessageMarkdown('```\n\n\n\nx\n```'),'```\n\n\n\nx\n```'); });
 test('combined', () => { const o = prepareMessageMarkdown('<garyx_thread_metadata>x</garyx_thread_metadata>\n\n<custom>\n## Hi\n</custom>'); noGaryx(o); assert.match(o,/&lt;custom&gt;/); assert.match(o,/\n## Hi\n/); });
+test('assistant mode keeps custom XML raw for Streamdown sanitization', () => {
+  const o = prepareMessageMarkdown('<custom>\n## Hi\n</custom>', { surfaceCustomXmlTags: false });
+  assert.equal(o, '<custom>\n## Hi\n</custom>');
+});
+test('assistant mode still strips Garyx internal notification fallback', () => {
+  const o = prepareMessageMarkdown('<garyx_task_notification>hidden</garyx_task_notification>\n\nshown', { surfaceCustomXmlTags: false });
+  assert.equal(o.trim(), 'shown');
+});
 test('R-final P1 unmatched backtick run stays linear & unchanged', () => {
   const i = 'x ' + '`'.repeat(40000);
   assert.equal(escapeNonHtmlTagsOutsideCode(i), i); // must not hang (was O(n^2))

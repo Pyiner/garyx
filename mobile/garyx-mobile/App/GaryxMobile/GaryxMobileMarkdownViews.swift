@@ -34,9 +34,9 @@ struct GaryxMarkdownText: View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(GaryxMarkdownRenderCache.shared.blocks(from: text)) { block in
                 switch block.kind {
-                case .markdown(let markdown):
+                case .markdown(let lines):
                     GaryxMarkdownParagraphView(
-                        markdown: markdown,
+                        lines: lines,
                         foreground: foreground,
                         allowsRelativeFileLinks: allowsRelativeFileLinks,
                         allowsTextSelection: allowsTextSelection,
@@ -90,7 +90,7 @@ struct GaryxMarkdownText: View {
 }
 
 private struct GaryxMarkdownParagraphView: View {
-    let markdown: String
+    let lines: [GaryxMarkdownLine]
     let foreground: Color
     var allowsRelativeFileLinks = false
     var allowsTextSelection = true
@@ -99,23 +99,20 @@ private struct GaryxMarkdownParagraphView: View {
     // environment manually (the drawer disables content mid-drag).
     @Environment(\.isEnabled) private var isEnabled
 
-    private var lines: [String] {
-        markdown.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                if line.trimmingCharacters(in: .whitespaces).isEmpty {
+            ForEach(lines) { line in
+                switch line.kind {
+                case .blank:
                     Color.clear.frame(height: 10)
-                } else if let bullet = Self.bulletText(from: line) {
+                case .bullet(let text):
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Circle()
                             .fill(foreground)
                             .frame(width: 4, height: 4)
                             .offset(y: -2)
 
-                        Text(GaryxMarkdownText.attributedString(from: bullet, linkifyFilePaths: onFileLinkTap != nil))
+                        Text(GaryxMarkdownText.attributedString(from: text, linkifyFilePaths: onFileLinkTap != nil))
                             .font(GaryxFont.body())
                             .foregroundStyle(foreground)
                             .tint(GaryxTheme.link)
@@ -124,14 +121,14 @@ private struct GaryxMarkdownParagraphView: View {
                             .lineSpacing(5)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                } else if let numbered = Self.numberedList(from: line) {
+                case .numbered(let label, let text):
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(numbered.label)
+                        Text(label)
                             .font(GaryxFont.body(weight: .medium))
                             .foregroundStyle(foreground)
                             .garyxTextSelection(allowsTextSelection)
 
-                        Text(GaryxMarkdownText.attributedString(from: numbered.text, linkifyFilePaths: onFileLinkTap != nil))
+                        Text(GaryxMarkdownText.attributedString(from: text, linkifyFilePaths: onFileLinkTap != nil))
                             .font(GaryxFont.body())
                             .foregroundStyle(foreground)
                             .tint(GaryxTheme.link)
@@ -140,8 +137,8 @@ private struct GaryxMarkdownParagraphView: View {
                             .lineSpacing(5)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                } else {
-                    Text(GaryxMarkdownText.attributedString(from: line, linkifyFilePaths: onFileLinkTap != nil))
+                case .paragraph(let text):
+                    Text(GaryxMarkdownText.attributedString(from: text, linkifyFilePaths: onFileLinkTap != nil))
                         .font(GaryxFont.body())
                         .foregroundStyle(foreground)
                         .tint(GaryxTheme.link)
@@ -166,6 +163,40 @@ private struct GaryxMarkdownParagraphView: View {
             onFileLinkTap(target)
             return .handled
         }
+    }
+}
+
+private struct GaryxMarkdownLine: Identifiable {
+    enum Kind {
+        case blank
+        case bullet(String)
+        case numbered(label: String, text: String)
+        case paragraph(String)
+    }
+
+    let id: Int
+    let kind: Kind
+
+    static func lines(from markdown: String) -> [GaryxMarkdownLine] {
+        markdown
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .enumerated()
+            .map { index, line in
+                GaryxMarkdownLine(id: index, kind: kind(from: String(line)))
+            }
+    }
+
+    private static func kind(from line: String) -> Kind {
+        if line.trimmingCharacters(in: .whitespaces).isEmpty {
+            return .blank
+        }
+        if let bullet = bulletText(from: line) {
+            return .bullet(bullet)
+        }
+        if let numbered = numberedList(from: line) {
+            return .numbered(label: numbered.label, text: numbered.text)
+        }
+        return .paragraph(line)
     }
 
     private static func bulletText(from line: String) -> String? {
@@ -332,6 +363,20 @@ private struct GaryxMarkdownTable {
 
     let columns: [Column]
     let rows: [[String]]
+    let columnWidths: [CGFloat]
+
+    init(columns: [Column], rows: [[String]]) {
+        self.columns = columns
+        self.rows = rows
+        columnWidths = columns.indices.map { index in
+            let headerLength = columns[index].title.count
+            let rowLength = rows
+                .compactMap { index < $0.count ? $0[index].count : nil }
+                .max() ?? 0
+            let maxLength = max(headerLength, rowLength)
+            return min(max(CGFloat(maxLength) * 7.2 + 32, 86), 220)
+        }
+    }
 }
 
 private struct GaryxMarkdownTableView: View {
@@ -344,17 +389,6 @@ private struct GaryxMarkdownTableView: View {
     var allowsTextSelection = true
     var onFileLinkTap: ((String) -> Void)?
     @Environment(\.isEnabled) private var isEnabled
-
-    private var columnWidths: [CGFloat] {
-        table.columns.indices.map { index in
-            let headerLength = table.columns[index].title.count
-            let rowLength = table.rows
-                .compactMap { index < $0.count ? $0[index].count : nil }
-                .max() ?? 0
-            let maxLength = max(headerLength, rowLength)
-            return min(max(CGFloat(maxLength) * 7.2 + 32, 86), 220)
-        }
-    }
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: true) {
@@ -399,7 +433,7 @@ private struct GaryxMarkdownTableView: View {
                 cellView(
                     text: text,
                     column: column,
-                    width: columnWidths[columnIndex],
+                    width: table.columnWidths[columnIndex],
                     isHeader: isHeader
                 )
 
@@ -749,7 +783,7 @@ private struct GaryxMarkdownImageView: View {
 
 private struct GaryxMarkdownBlock: Identifiable {
     enum Kind {
-        case markdown(String)
+        case markdown([GaryxMarkdownLine])
         case code(language: String?, text: String)
         case image(alt: String, source: String)
         case table(GaryxMarkdownTable)
@@ -767,7 +801,7 @@ private struct GaryxMarkdownBlock: Identifiable {
     private static func kind(from parsed: GaryxMarkdownParsedBlock.Kind) -> Kind {
         switch parsed {
         case .markdown(let value):
-            return .markdown(value)
+            return .markdown(GaryxMarkdownLine.lines(from: value))
         case .code(let language, let text):
             return .code(language: language, text: text)
         case .image(let alt, let source):
