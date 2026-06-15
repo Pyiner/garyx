@@ -7918,6 +7918,63 @@ export function AppShell() {
     return creation;
   }
 
+  async function openTaskThreadInSidePanel(threadId: string): Promise<void> {
+    const sourceThreadId = sideChatSourceThreadId;
+    const targetThreadId = threadId.trim();
+    if (!sourceThreadId || !targetThreadId) {
+      return;
+    }
+
+    setSideChatCreatingBySource((current) => ({
+      ...current,
+      [sourceThreadId]: true,
+    }));
+    setSideChatErrorBySource((current) => {
+      if (!(sourceThreadId in current)) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[sourceThreadId];
+      return next;
+    });
+
+    try {
+      if (!(await ensureThreadOpenable(targetThreadId))) {
+        throw new Error(`Thread not found: ${targetThreadId}`);
+      }
+      rememberSideChatThreadId(targetThreadId);
+      setSideChatThreadBySource((current) =>
+        current[sourceThreadId] === targetThreadId
+          ? current
+          : {
+              ...current,
+              [sourceThreadId]: targetThreadId,
+            },
+      );
+      persistSideChatThreadId(sourceThreadId, targetThreadId);
+    } catch (openError) {
+      const message =
+        openError instanceof Error
+          ? openError.message
+          : `Failed to open thread: ${targetThreadId}`;
+      setSideChatErrorBySource((current) => ({
+        ...current,
+        [sourceThreadId]: message,
+      }));
+      setError(message);
+      throw openError;
+    } finally {
+      setSideChatCreatingBySource((current) => {
+        if (!current[sourceThreadId]) {
+          return current;
+        }
+        const next = { ...current };
+        delete next[sourceThreadId];
+        return next;
+      });
+    }
+  }
+
   async function handleSideComposerSubmit(options?: {
     useAlternateFollowUpBehavior?: boolean;
   }) {
@@ -10019,11 +10076,12 @@ export function AppShell() {
           setInspectorOpen(false);
         });
       }}
-      onOpenThread={(threadId) => {
-        trackUiAction("side_tasks.open_thread", async () => {
-          await openExistingThread(threadId);
-        });
-      }}
+      onOpenTaskThread={(threadId) =>
+        measureUiAction("side_tasks.open_thread_in_side_panel", async () => {
+          await openTaskThreadInSidePanel(threadId);
+          await waitForUiActionPaint();
+        })
+      }
       onOpenSideChat={() => {
         void ensureSideChatThread();
       }}

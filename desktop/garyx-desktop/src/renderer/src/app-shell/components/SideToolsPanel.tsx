@@ -76,7 +76,7 @@ type ThreadSideToolsPanelProps = {
   onRevealSelectedWorkspaceFile?: () => Promise<void> | void;
   onAddBrowserAnnotationComment: (request: BrowserAnnotationCommentRequest) => void;
   onCloseSideTools: () => void;
-  onOpenThread?: (threadId: string) => void;
+  onOpenTaskThread?: (threadId: string) => Promise<void> | void;
   onOpenSideChat: () => void;
   onWorkspaceFileFilterChange: (value: string) => void;
 };
@@ -158,10 +158,10 @@ function taskDisplayId(task: DesktopTaskSummary): string {
 
 function SideThreadTasksTool({
   sourceThreadId,
-  onOpenThread,
+  onOpenTaskThread,
 }: {
   sourceThreadId?: string | null;
-  onOpenThread?: (threadId: string) => void;
+  onOpenTaskThread?: (threadId: string) => Promise<void> | void;
 }) {
   const { t } = useI18n();
   const [tasks, setTasks] = useState<DesktopTaskSummary[]>([]);
@@ -274,7 +274,7 @@ function SideThreadTasksTool({
         <div className="side-tool-tasks-list">
           {tasks.map((task) => {
             const taskId = taskDisplayId(task);
-            const canOpen = Boolean(task.threadId && onOpenThread);
+            const canOpen = Boolean(task.threadId && onOpenTaskThread);
             return (
               <article className="side-tool-task-card" key={task.taskId || taskId}>
                 <div className="side-tool-task-topline">
@@ -289,8 +289,8 @@ function SideThreadTasksTool({
                   className="side-tool-task-title"
                   disabled={!canOpen}
                   onClick={() => {
-                    if (task.threadId && onOpenThread) {
-                      onOpenThread(task.threadId);
+                    if (task.threadId && onOpenTaskThread) {
+                      void onOpenTaskThread(task.threadId);
                     }
                   }}
                   type="button"
@@ -308,10 +308,10 @@ function SideThreadTasksTool({
                 {task.threadId ? (
                   <button
                     className="side-tool-task-open"
-                    disabled={!onOpenThread}
+                    disabled={!onOpenTaskThread}
                     onClick={() => {
-                      if (onOpenThread) {
-                        onOpenThread(task.threadId);
+                      if (onOpenTaskThread) {
+                        void onOpenTaskThread(task.threadId);
                       }
                     }}
                     type="button"
@@ -593,7 +593,7 @@ export function ThreadSideToolsPanel({
   onRevealSelectedWorkspaceFile,
   onAddBrowserAnnotationComment,
   onCloseSideTools,
-  onOpenThread,
+  onOpenTaskThread,
   onOpenSideChat,
   onWorkspaceFileFilterChange,
 }: ThreadSideToolsPanelProps) {
@@ -772,6 +772,18 @@ export function ThreadSideToolsPanel({
     setMenuOpen(false);
     if (toolId === "chat") {
       onOpenSideChat();
+    }
+  }
+
+  async function openTaskThreadInSideChat(threadId: string) {
+    if (!onOpenTaskThread) {
+      return;
+    }
+    try {
+      await onOpenTaskThread(threadId);
+      openTool("chat");
+    } catch {
+      // AppShell owns the user-visible error state.
     }
   }
 
@@ -1039,7 +1051,7 @@ export function ThreadSideToolsPanel({
         ) : null}
         {activeTool?.id === "tasks" ? (
           <SideThreadTasksTool
-            onOpenThread={onOpenThread}
+            onOpenTaskThread={openTaskThreadInSideChat}
             sourceThreadId={activeThreadId}
           />
         ) : null}
