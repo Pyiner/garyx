@@ -400,15 +400,30 @@ function renderComposerModelControl({
     return null;
   }
 
-  const models = providerModels.models || [];
-  const selectedModelOption = selectedModel
-    ? models.find((option) => option.id === selectedModel)
-    : undefined;
+  const catalogModels = providerModels.models || [];
   const effectiveModelId =
     selectedModel?.trim() ||
     effectiveModel?.trim() ||
     agentConfiguredModel?.trim() ||
     "";
+  // Include the running model even when the provider catalog omits it, so the
+  // picker can always mark the active row (mirrors the mobile thread sheet).
+  const models =
+    effectiveModelId && !catalogModels.some((option) => option.id === effectiveModelId)
+      ? [
+          ...catalogModels,
+          {
+            id: effectiveModelId,
+            label: effectiveModelId,
+            recommended: false,
+            supportedReasoningEfforts: providerModels.reasoningEfforts || [],
+            serviceTiers: providerModels.serviceTiers || [],
+          },
+        ]
+      : catalogModels;
+  const selectedModelOption = selectedModel
+    ? models.find((option) => option.id === selectedModel)
+    : undefined;
   const effectiveModelOption = effectiveModelId
     ? models.find((option) => option.id === effectiveModelId)
     : undefined;
@@ -421,15 +436,25 @@ function renderComposerModelControl({
   // Thinking options follow the model that will actually run: explicit
   // override first, then the resolved agent/provider default.
   const effortFilterModelOption = selectedModelOption || effectiveModelOption;
-  const reasoningEfforts =
+  const catalogReasoningEfforts =
     effortFilterModelOption?.supportedReasoningEfforts?.length
       ? effortFilterModelOption.supportedReasoningEfforts
       : providerModels.reasoningEfforts || [];
+  const effectiveReasoningEffortId =
+    selectedReasoningEffort?.trim() || effectiveReasoningEffort?.trim() || "";
+  // Include the running level even when the catalog omits it, so the picker can
+  // always mark the active row.
+  const reasoningEfforts =
+    effectiveReasoningEffortId &&
+    !catalogReasoningEfforts.some((option) => option.id === effectiveReasoningEffortId)
+      ? [
+          ...catalogReasoningEfforts,
+          { id: effectiveReasoningEffortId, label: effectiveReasoningEffortId, recommended: false },
+        ]
+      : catalogReasoningEfforts;
   const supportsReasoning =
     Boolean(providerModels.supportsReasoningEffortSelection) &&
     reasoningEfforts.length > 0;
-  const effectiveReasoningEffortId =
-    selectedReasoningEffort?.trim() || effectiveReasoningEffort?.trim() || "";
   const selectedEffortOption = effectiveReasoningEffortId
     ? reasoningEfforts.find((option) => option.id === effectiveReasoningEffortId)
     : undefined;

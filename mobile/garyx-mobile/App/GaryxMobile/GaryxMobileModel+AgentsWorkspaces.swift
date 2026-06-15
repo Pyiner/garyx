@@ -251,6 +251,12 @@ extension GaryxMobileModel {
         }
         // A model/thinking override only makes sense for the agent it was picked for.
         clearNewThreadModelOverride()
+        // The composer's target changed; bind to that target's own draft buffer so
+        // one new-thread target's text is never shown or sent under another. Covers
+        // both the pending and the selected-default branches above.
+        if selectedThread == nil {
+            switchComposerDraft(to: newThreadComposerDraftKey)
+        }
     }
 
     var newThreadAgentTarget: GaryxMobileAgentTarget? {
@@ -308,12 +314,6 @@ extension GaryxMobileModel {
         }
         pendingNewThreadAgentTargetId = targetId
         pendingNewThreadAgentTargetGeneration = selectedThreadDraftGeneration
-        // In the new-thread composer, switching the target switches to that
-        // target's own draft buffer (each preserved), so one target's text is
-        // never shown or sent under another.
-        if selectedThread == nil {
-            switchComposerDraft(to: newThreadComposerDraftKey)
-        }
     }
 
     func clearPendingNewThreadAgentTarget() {
