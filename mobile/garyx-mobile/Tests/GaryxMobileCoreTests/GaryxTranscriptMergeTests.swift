@@ -332,6 +332,144 @@ final class GaryxTranscriptMergeTests: XCTestCase {
         XCTAssertEqual(merged.count, 1, "a live row missing the id must still match its committed row by tool + input")
     }
 
+    func testRunningLiveCallNamesACommittedResultOnlyRow() {
+        // Dual-source skew: the resumable committed stream delivered a tool_RESULT
+        // whose tool_use landed before the window opened, so the committed row is a
+        // bare result-only entry (generic "tool"). The global stream's call for the
+        // same id is still RUNNING and carries the real name + input. The overlay
+        // must adopt that identity so the row reads "Ran 1 command" holding the
+        // result — never a stray "Used 1 tool" containing the prior result.
+        var resultOnly = GaryxMobileToolTraceEntry(
+            id: "r", toolUseId: "toolu_KILL", toolName: "tool", title: "Tool",
+            inputText: nil, inputLabel: "Input", resultLabel: "Result",
+            status: .completed, isError: false, timestamp: nil, primaryPathBadge: nil
+        )
+        resultOnly.resultText = "done"
+        let committedGroup = GaryxMobileToolTraceGroup(entries: [resultOnly], live: false)
+        let committed = GaryxMobileMessage(
+            id: "history:9", role: .tool, text: committedGroup.summary, timestamp: nil,
+            isStreaming: false, toolTraceGroup: committedGroup, localState: .remoteFinal, historyIndex: 9
+        )
+        let running = GaryxMobileToolTraceEntry(
+            id: "u", toolUseId: "toolu_KILL", toolName: "Bash", title: "Bash",
+            inputText: "kill %1 2>/dev/null; echo \"done\"", inputLabel: "Call", resultLabel: "Result",
+            status: .running, isError: false, timestamp: nil, primaryPathBadge: nil
+        )
+        let liveGroup = GaryxMobileToolTraceGroup(entries: [running], live: true)
+        let live = GaryxMobileMessage(
+            id: "tool-group:live", role: .tool, text: liveGroup.summary, timestamp: nil,
+            isStreaming: true, toolTraceGroup: liveGroup, localState: .remotePartial
+        )
+
+        let merged = GaryxTranscriptMerge.mergedMessages([committed], withLocal: [live], threadRunActive: true)
+
+        let toolRows = merged.filter { $0.role == .tool }
+        XCTAssertEqual(toolRows.count, 1, "the running call and its committed result are one row")
+        let entry = toolRows.first?.toolTraceGroup?.entries.first
+        XCTAssertEqual(entry?.toolName, "Bash", "the result-only row adopts the running call's name")
+        XCTAssertEqual(entry?.resultText, "done", "the committed result is preserved")
+        XCTAssertEqual(toolRows.first?.text, "Ran 1 command", "not a stray \"Used 1 tool\"")
+    }
+
+    func testLiveGroupSpanningCallsCommittedSplitDoesNotDuplicate() {
+        // The live builder kept calls A and B in one group (only an assistant
+        // boundary, no streamed text, arrived between them), but the committed
+        // window has an assistant text row between them and split them into two
+        // rows. The overlay routes each live entry to its own committed row, so B
+        // is never duplicated into A's row.
+        func call(_ id: String, _ input: String, status: GaryxMobileToolTraceStatus, result: String?) -> GaryxMobileToolTraceEntry {
+            var e = GaryxMobileToolTraceEntry(
+                id: "e-\(id)", toolUseId: id, toolName: "Bash", title: "Bash",
+                inputText: input, inputLabel: "Call", resultLabel: "Result",
+                status: status, isError: false, timestamp: nil, primaryPathBadge: nil
+            )
+            e.resultText = result
+            return e
+        }
+        func committedRow(_ id: String, _ input: String, _ result: String, index: Int) -> GaryxMobileMessage {
+            let group = GaryxMobileToolTraceGroup(entries: [call(id, input, status: .completed, result: result)], live: false)
+            return GaryxMobileMessage(
+                id: "history:\(index)", role: .tool, text: group.summary, timestamp: nil,
+                isStreaming: false, toolTraceGroup: group, localState: .remoteFinal, historyIndex: index
+            )
+        }
+        let committedA = committedRow("tu-A", "pwd", "/", index: 1)
+        let narration = GaryxMobileMessage(
+            id: "history:2", role: .assistant, text: "Checking the directory.", timestamp: nil,
+            isStreaming: false, localState: .remoteFinal, historyIndex: 2
+        )
+        let committedB = committedRow("tu-B", "ls", "file", index: 3)
+        let liveGroup = GaryxMobileToolTraceGroup(
+            entries: [
+                call("tu-A", "pwd", status: .running, result: nil),
+                call("tu-B", "ls", status: .running, result: nil),
+            ],
+            live: true
+        )
+        let live = GaryxMobileMessage(
+            id: "tool-group:live", role: .tool, text: liveGroup.summary, timestamp: nil,
+            isStreaming: true, toolTraceGroup: liveGroup, localState: .remotePartial
+        )
+
+        let merged = GaryxTranscriptMerge.mergedMessages(
+            [committedA, narration, committedB], withLocal: [live], threadRunActive: true
+        )
+
+        let toolRows = merged.filter { $0.role == .tool }
+        XCTAssertEqual(toolRows.count, 2, "A and B keep their own committed rows; neither folds into the other")
+        let entries = toolRows.flatMap { $0.toolTraceGroup?.entries ?? [] }
+        XCTAssertEqual(entries.filter { $0.toolUseId == "tu-B" }.count, 1, "tu-B renders exactly once")
+        XCTAssertEqual(entries.filter { $0.toolUseId == "tu-A" }.count, 1, "tu-A renders exactly once")
+    }
+
+    func testRepeatedMergeKeepsInFlightCallStable() {
+        // The flush feeds each merged result back as the next local input. A live
+        // group of [A (already committed) + B (the latest call, not yet committed)]
+        // must reconcile the same way on the second merge — A overlays its committed
+        // row, B trails once — so the in-flight row neither jumps position nor
+        // duplicates across flushes.
+        func call(_ id: String, status: GaryxMobileToolTraceStatus, result: String?) -> GaryxMobileToolTraceEntry {
+            var e = GaryxMobileToolTraceEntry(
+                id: "e-\(id)", toolUseId: id, toolName: "Bash", title: "Bash",
+                inputText: id, inputLabel: "Call", resultLabel: "Result",
+                status: status, isError: false, timestamp: nil, primaryPathBadge: nil
+            )
+            e.resultText = result
+            return e
+        }
+        let user = GaryxMobileMessage(
+            id: "history:0", role: .user, text: "go", timestamp: nil,
+            isStreaming: false, localState: .remoteFinal, historyIndex: 0
+        )
+        let committedAGroup = GaryxMobileToolTraceGroup(entries: [call("tu-A", status: .completed, result: "ok")], live: false)
+        let committedA = GaryxMobileMessage(
+            id: "history:1", role: .tool, text: committedAGroup.summary, timestamp: nil,
+            isStreaming: false, toolTraceGroup: committedAGroup, localState: .remoteFinal, historyIndex: 1
+        )
+        let remote = [user, committedA]
+        let liveGroup = GaryxMobileToolTraceGroup(
+            entries: [
+                call("tu-A", status: .running, result: nil),
+                call("tu-B", status: .running, result: nil),
+            ],
+            live: true
+        )
+        let live = GaryxMobileMessage(
+            id: "tool-group:e-tu-A", role: .tool, text: liveGroup.summary, timestamp: nil,
+            isStreaming: true, toolTraceGroup: liveGroup, localState: .remotePartial
+        )
+
+        func toolOrder(_ messages: [GaryxMobileMessage]) -> [String] {
+            messages.filter { $0.role == .tool }.flatMap { $0.toolTraceGroup?.entries.compactMap(\.toolUseId) ?? [] }
+        }
+        let merge1 = GaryxTranscriptMerge.mergedMessages(remote, withLocal: [live], threadRunActive: true)
+        let merge2 = GaryxTranscriptMerge.mergedMessages(remote, withLocal: merge1, threadRunActive: true)
+
+        XCTAssertEqual(toolOrder(merge1), ["tu-A", "tu-B"], "A overlays its committed row; the in-flight B trails once")
+        XCTAssertEqual(toolOrder(merge2), toolOrder(merge1), "re-merging the prior result is stable — no jump, no duplicate")
+        XCTAssertEqual(merge2.map(\.id), merge1.map(\.id), "row identities are stable across the feed-back flush")
+    }
+
     func testToolTraceEntriesSameCallSemantics() {
         func e(_ id: String?, input: String = "ls") -> GaryxMobileToolTraceEntry {
             GaryxMobileToolTraceEntry(

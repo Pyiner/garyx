@@ -237,34 +237,24 @@ enum GaryxTranscriptMerge {
                     }
                 }
             case .tool:
-                // A live local tool group only outranks the remote page while
-                // the run is actually active. Once the gateway reports the run
-                // finished, the canonical transcript already contains every
-                // tool row in order; a local group still claiming to run lost
-                // its terminal events (backgrounded stream, dropped socket).
-                // Keeping it would re-append it after the final assistant
-                // answer on every reconcile and pin the turn in a fake
-                // running state.
-                if threadRunActive, local.isStreaming || local.toolTraceGroup?.isActive == true {
-                    if let localGroup = local.toolTraceGroup,
-                       let remoteIndex = merged.indices.first(where: { remoteIndex in
-                           // Match a live group only against committed groups in the
-                           // SAME (current) turn, so a tool id reused across turns
-                           // cannot fold a new live call into an older committed row.
-                           guard isInCurrentTurn(index: remoteIndex, messages: merged) else { return false }
-                           guard let remoteGroup = merged[remoteIndex].toolTraceGroup else { return false }
-                           return toolTraceGroupsOverlap(remoteGroup, localGroup, allowFingerprint: true)
-                       }) {
-                        if var remoteGroup = merged[remoteIndex].toolTraceGroup {
-                            remoteGroup = mergedToolTraceGroup(remoteGroup, with: localGroup)
-                            merged[remoteIndex].toolTraceGroup = remoteGroup
-                            merged[remoteIndex].text = remoteGroup.summary
-                            merged[remoteIndex].isStreaming = remoteGroup.isActive
-                        }
-                        continue
-                    }
-                    merged.append(local)
-                }
+                // While the run is active a live tool group is an OVERLAY on the
+                // committed structure, not a row that owns its own grouping: each
+                // live entry updates the committed row that already holds that
+                // call, and only calls with no committed row yet stay as their own
+                // live row. The committed window thus stays the single source of
+                // grouping. Folding the whole live group into one committed row
+                // instead (the prior behavior) duplicated a later call the window
+                // had split into its own row, and stranded a running call's name on
+                // a result-only row as a generic "Used 1 tool".
+                //
+                // When the run is finished the canonical transcript already holds
+                // every tool row in order, so a live group still claiming to run
+                // (it lost its terminal events to a backgrounded stream or dropped
+                // socket) is dropped rather than pinned after the final answer.
+                guard threadRunActive,
+                      local.isStreaming || local.toolTraceGroup?.isActive == true,
+                      let liveGroup = local.toolTraceGroup else { break }
+                overlayLiveToolGroup(liveGroup, fallbackRow: local, into: &merged)
             case .system:
                 if local.statusText != nil
                     || (local.localState != nil && local.localState != .remoteFinal) {
@@ -312,38 +302,65 @@ enum GaryxTranscriptMerge {
         return index > lastUserIndex
     }
 
-    static func toolTraceGroupsOverlap(
-        _ left: GaryxMobileToolTraceGroup,
-        _ right: GaryxMobileToolTraceGroup,
-        allowFingerprint: Bool
-    ) -> Bool {
-        for leftEntry in left.entries {
-            for rightEntry in right.entries
-            where toolTraceEntriesSameCall(leftEntry, rightEntry, allowFingerprint: allowFingerprint) {
-                return true
-            }
-        }
-        return false
-    }
-
-    static func mergedToolTraceGroup(
-        _ remote: GaryxMobileToolTraceGroup,
-        with local: GaryxMobileToolTraceGroup
-    ) -> GaryxMobileToolTraceGroup {
-        var merged = remote
-        merged.live = remote.live || local.live
-        for localEntry in local.entries {
-            if let index = merged.entries.firstIndex(where: {
-                toolTraceEntriesSameCall($0, localEntry, allowFingerprint: true)
-            }) {
-                if localEntry.status != .running {
-                    merged.entries[index].absorb(result: localEntry)
-                }
+    /// Overlay a live (in-flight) tool group onto the already-merged committed
+    /// rows. Each live entry is reconciled against the committed row that already
+    /// holds that call — adopting a running call's name + input onto a bare
+    /// result-only row, or absorbing its result once the call ends — so the
+    /// committed window stays the single source of grouping. Entries with no
+    /// committed row yet are appended as one trailing live row.
+    ///
+    /// Appending (rather than splicing into live order) is both correct and
+    /// stable. Correct: committed rows arrive in strict seq order, so an
+    /// uncommitted call is always the most recent in the turn — any earlier call
+    /// has already committed and is matched above, never left behind in the
+    /// in-flight buffer. Stable: the flush feeds each merged result back as the
+    /// next local input, and a trailing row stays trailing on every re-merge,
+    /// whereas re-inserting at a recomputed index made an in-flight call jump
+    /// position once its neighbor committed.
+    static func overlayLiveToolGroup(
+        _ liveGroup: GaryxMobileToolTraceGroup,
+        fallbackRow: GaryxMobileMessage,
+        into merged: inout [GaryxMobileMessage]
+    ) {
+        var uncommittedEntries: [GaryxMobileToolTraceEntry] = []
+        for entry in liveGroup.entries {
+            // Reconcile only against committed rows in the current turn, so a tool
+            // id reused across turns cannot fold a new live call into an older row.
+            guard let rowIndex = merged.indices.first(where: { index in
+                isInCurrentTurn(index: index, messages: merged)
+                    && (merged[index].toolTraceGroup?.entries.contains {
+                        toolTraceEntriesSameCall($0, entry, allowFingerprint: true)
+                    } ?? false)
+            }),
+            var group = merged[rowIndex].toolTraceGroup,
+            let entryIndex = group.entries.firstIndex(where: {
+                toolTraceEntriesSameCall($0, entry, allowFingerprint: true)
+            }) else {
+                uncommittedEntries.append(entry)
                 continue
             }
-            merged.entries.append(localEntry)
+            if entry.status == .running {
+                // The committed side can be a bare result-only row (generic "tool")
+                // when the tool_use landed before the resumable window opened, so
+                // the name + input live only on the still-running entry. Adopt that
+                // identity without finalizing the not-yet-finished call.
+                group.entries[entryIndex].adoptCallIdentity(from: entry)
+            } else {
+                group.entries[entryIndex].absorb(result: entry)
+            }
+            group.live = group.live || liveGroup.live
+            merged[rowIndex].toolTraceGroup = group
+            merged[rowIndex].text = group.summary
+            merged[rowIndex].isStreaming = group.isActive
         }
-        return merged
+        guard !uncommittedEntries.isEmpty else { return }
+        var row = fallbackRow
+        var group = liveGroup
+        group.entries = uncommittedEntries
+        row.toolTraceGroup = group
+        row.text = group.summary
+        row.isStreaming = group.isActive
+        merged.append(row)
     }
 
     /// Whether two tool-trace entries are the same call. Entries that BOTH carry a
