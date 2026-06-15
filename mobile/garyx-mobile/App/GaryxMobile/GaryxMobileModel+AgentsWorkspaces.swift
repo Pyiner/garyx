@@ -165,7 +165,7 @@ extension GaryxMobileModel {
         let previousThreadId = selectedThread?.id
         if previousThreadId != threadId {
             advanceSelectedThreadDraftGeneration()
-            resetComposerDraft()
+            switchComposerDraft(to: threadId)
             selectedThreadRecoveryTask?.cancel()
             selectedThreadRecoveryTask = nil
             selectedThreadRecoveryThreadId = nil
@@ -308,6 +308,12 @@ extension GaryxMobileModel {
         }
         pendingNewThreadAgentTargetId = targetId
         pendingNewThreadAgentTargetGeneration = selectedThreadDraftGeneration
+        // In the new-thread composer, switching the target switches to that
+        // target's own draft buffer (each preserved), so one target's text is
+        // never shown or sent under another.
+        if selectedThread == nil {
+            switchComposerDraft(to: newThreadComposerDraftKey)
+        }
     }
 
     func clearPendingNewThreadAgentTarget() {

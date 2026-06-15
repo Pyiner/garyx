@@ -563,7 +563,7 @@ extension GaryxMobileModel {
         let previousThreadId = selectedThread?.id
         if previousThreadId != thread.id {
             advanceSelectedThreadDraftGeneration()
-            resetComposerDraft()
+            switchComposerDraft(to: thread.id)
             selectedThreadRecoveryTask?.cancel()
             selectedThreadRecoveryTask = nil
             selectedThreadRecoveryThreadId = nil
@@ -627,7 +627,7 @@ extension GaryxMobileModel {
         draftThreadTitle = ""
         setPendingNewThreadAgentTarget(agentTargetOverride)
         clearNewThreadModelOverride()
-        resetComposerDraft()
+        switchComposerDraft(to: newThreadComposerDraftKey)
         messages = []
         activePanel = .chat
         setSidebarVisible(false)
@@ -687,7 +687,7 @@ extension GaryxMobileModel {
             clearPendingNewThreadAgentTarget()
             clearNewThreadModelOverride()
             clearPendingBotDraft()
-            resetComposerDraft()
+            switchComposerDraft(to: thread.id)
             draftThreadTitle = thread.title
             activePanel = .chat
             clearMessages(for: thread.id)
@@ -732,7 +732,7 @@ extension GaryxMobileModel {
         selectedThread = nil
         resetSelectedThreadHistoryPagination()
         draftThreadTitle = ""
-        resetComposerDraft()
+        switchComposerDraft(to: newThreadComposerDraftKey)
         messages = []
         activePanel = .chat
         setSidebarVisible(false)
@@ -764,7 +764,7 @@ extension GaryxMobileModel {
             if selectedThread?.id == thread.id {
                 self.selectedThread = nil
                 draftThreadTitle = ""
-                resetComposerDraft()
+                discardComposerDraft(forThread: thread.id)
                 messages = []
                 cancelSelectedThreadReconcileLoop()
                 resetSelectedThreadHistoryPagination()

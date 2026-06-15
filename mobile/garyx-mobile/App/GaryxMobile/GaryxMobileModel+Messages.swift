@@ -101,10 +101,58 @@ extension GaryxMobileModel {
         setMessages(nextMessages, for: threadId)
     }
 
-    func resetComposerDraft() {
-        draft = ""
+    /// The unsent text bound to the current composer context (thread or new-thread).
+    var activeComposerDraft: String {
+        composerDraftStore.current
+    }
+
+    /// Persist the live composer text for the current context. Called on every
+    /// edit; cheap because the store is not `@Published`.
+    func setComposerDraft(_ text: String) {
+        composerDraftStore.setCurrent(text)
+    }
+
+    /// Switch the composer to another thread/new-thread context, preserving the
+    /// outgoing context's unsent draft and loading the incoming one. Bumps
+    /// `composerContextVersion` so the field reloads only when the key changes.
+    func switchComposerDraft(to key: String) {
+        guard composerDraftStore.switchTo(key) else { return }
         composerAttachments = []
         composerContextVersion &+= 1
+    }
+
+    /// Clear only the current context's draft — after a successful send.
+    func resetComposerDraft() {
+        composerDraftStore.reset()
+        composerAttachments = []
+        composerContextVersion &+= 1
+    }
+
+    /// Drop a thread's draft (it was deleted or unbound); reload the field only
+    /// when that thread was the active context.
+    func discardComposerDraft(forThread threadId: String) {
+        guard composerDraftStore.discard(threadId: threadId) else { return }
+        composerAttachments = []
+        composerContextVersion &+= 1
+    }
+
+    /// Drop every draft — the gateway changed, so the whole thread set is gone.
+    func clearAllComposerDrafts() {
+        composerDraftStore.clearAll()
+        composerAttachments = []
+        composerContextVersion &+= 1
+    }
+
+    /// Draft key for the current new-thread composer, scoped to the target it will
+    /// create a thread for (the pending bot, else the agent), so composing for one
+    /// target and then switching to another does not show or send the first
+    /// target's draft under the second.
+    var newThreadComposerDraftKey: String {
+        let botTarget = pendingBotId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let target = botTarget.isEmpty ? newThreadAgentTargetId() : botTarget
+        return target.isEmpty
+            ? GaryxComposerDraftStore.newThreadKey
+            : "\(GaryxComposerDraftStore.newThreadKey):\(target)"
     }
 
     static func messageListSignature(for messages: [GaryxMobileMessage]) -> MessageListSignature {

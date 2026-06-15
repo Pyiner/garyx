@@ -139,14 +139,14 @@ struct GaryxComposer: View {
         }
         .onAppear {
             draftContextVersion = model.composerContextVersion
-            draftText = model.draft
+            draftText = model.activeComposerDraft
             #if DEBUG
             presentDebugWorkspaceModeSheetIfNeeded()
             #endif
         }
         .onChange(of: model.composerContextVersion) { _, newValue in
             draftContextVersion = newValue
-            draftText = model.draft
+            draftText = model.activeComposerDraft
             let wasFocused = isFocused.wrappedValue
             draftFieldGeneration &+= 1
             if wasFocused {
@@ -158,9 +158,13 @@ struct GaryxComposer: View {
                 }
             }
         }
-        .onChange(of: model.draft) { _, newValue in
-            guard newValue != draftText else { return }
-            draftText = newValue
+        .onChange(of: draftText) { _, newValue in
+            // Bind the live text to the thread it is being typed in, so a thread
+            // switch preserves it. The store is not @Published, so this is cheap
+            // per keystroke. Skip the brief window before a context reload so the
+            // outgoing thread's text is never written onto the incoming one.
+            guard draftContextVersion == model.composerContextVersion else { return }
+            model.setComposerDraft(newValue)
         }
         .onChange(of: model.sidebarVisible) { _, visible in
             if visible {
@@ -189,9 +193,7 @@ struct GaryxComposer: View {
         #endif
         .onDisappear {
             guard draftContextVersion == model.composerContextVersion else { return }
-            if model.draft != draftText {
-                model.draft = draftText
-            }
+            model.setComposerDraft(draftText)
         }
     }
 
@@ -486,7 +488,7 @@ struct GaryxComposer: View {
     private func insertSlashCommand(_ command: GaryxSlashCommand) {
         let normalizedName = command.name.hasPrefix("/") ? command.name : "/\(command.name)"
         draftText = normalizedName + " "
-        model.draft = draftText
+        model.setComposerDraft(draftText)
         isFocused.wrappedValue = true
     }
 

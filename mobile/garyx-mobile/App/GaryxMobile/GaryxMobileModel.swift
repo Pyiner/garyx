@@ -95,7 +95,11 @@ final class GaryxMobileModel: ObservableObject {
             selectedThreadTurnRowsCacheKey = nil
         }
     }
-    @Published var draft = ""
+    /// Per-thread composer drafts. Not `@Published`: the composer view owns the
+    /// live text and reloads on `composerContextVersion`, so persisting a single
+    /// keystroke must not publish and re-render the transcript. Read the active
+    /// context's text through `activeComposerDraft`.
+    var composerDraftStore = GaryxComposerDraftStore()
     @Published var composerContextVersion = 0
     @Published var composerAttachments: [GaryxMobileComposerAttachment] = []
     @Published var isLoadingThreads = false

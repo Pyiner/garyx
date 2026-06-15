@@ -280,7 +280,7 @@ extension GaryxMobileModel {
             if selectedThread?.id == normalizedThreadId {
                 selectedThread = nil
                 draftThreadTitle = ""
-                resetComposerDraft()
+                discardComposerDraft(forThread: normalizedThreadId)
                 messages = []
                 cancelSelectedThreadReconcileLoop()
                 resetSelectedThreadHistoryPagination()

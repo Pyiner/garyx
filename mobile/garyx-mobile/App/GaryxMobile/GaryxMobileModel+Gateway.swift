@@ -118,7 +118,7 @@ extension GaryxMobileModel {
         pendingAssistantDeltasByThread = [:]
         assistantDeltaFlushTasksByThread.values.forEach { $0.cancel() }
         assistantDeltaFlushTasksByThread = [:]
-        resetComposerDraft()
+        clearAllComposerDrafts()
         draftThreadTitle = ""
         agents = []
         teams = []

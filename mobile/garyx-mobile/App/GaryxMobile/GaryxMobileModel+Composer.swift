@@ -102,7 +102,7 @@ extension GaryxMobileModel {
 
     @discardableResult
     func sendDraft() async -> Bool {
-        await sendDraft(text: draft)
+        await sendDraft(text: activeComposerDraft)
     }
 
     @discardableResult
@@ -169,6 +169,10 @@ extension GaryxMobileModel {
                 optimisticThreadId = thread.id
                 setMessages(draftOptimisticMessages, for: thread.id)
                 activeAssistantMessageIdsByThread[thread.id] = assistantId
+                // The thread was just created from the new-thread composer; bind
+                // the draft context to it so any follow-up text is saved against
+                // this thread instead of the new-thread buffer.
+                switchComposerDraft(to: thread.id)
             }
             guard runTracker.beginLocalDispatch(
                 threadId: thread.id,
