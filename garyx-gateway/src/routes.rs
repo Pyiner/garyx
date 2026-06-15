@@ -1747,8 +1747,8 @@ pub struct ThreadStreamParams {
 
 /// Upper bound on committed rows replayed on connect. The common (caught-up) case
 /// returns a handful via the tail-read; a far-behind cursor that exceeds this gets
-/// the oldest `REPLAY_CAP` and the client reconnects with the advanced cursor for
-/// the rest (or backfills older via before_index).
+/// the NEWEST `REPLAY_CAP` so the live handoff stays gapless (the most recent rows
+/// are always delivered) and the client pages older history via before_index.
 const THREAD_STREAM_REPLAY_CAP: usize = 10_000;
 
 /// GET /api/threads/:key/stream - resumable per-thread transcript stream (S5).

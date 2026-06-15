@@ -647,8 +647,10 @@ impl ThreadTranscriptStore {
     /// caught-up case: it scans the jsonl from the TAIL backward and stops at the
     /// first `seq <= after_seq`, so a near-current cursor parses only the delta
     /// instead of the whole file (seq is monotonic + gapless, so everything before
-    /// the boundary is older). If the delta exceeds `limit` (far-behind / cold
-    /// cursor) it falls back to a single forward scan.
+    /// the boundary is older). A far-behind cursor whose delta exceeds `limit`
+    /// yields the NEWEST `limit` (the tail), so the stream's live handoff stays
+    /// gapless — the most recent rows are always delivered and the client pages
+    /// older history via before_index.
     pub async fn records_after_seq(
         &self,
         thread_id: &str,
@@ -669,10 +671,14 @@ impl ThreadTranscriptStore {
                         message: error.to_string(),
                     }
                 })?;
-                // Tail scan: parse backward only as far as the delta. Abort to a
-                // forward scan if the delta is larger than `limit`.
+                // Tail scan: parse backward only as far as needed, collecting the
+                // newest `limit` records (newest-first) then reversing to ascending.
+                // A far-behind cursor whose delta exceeds `limit` thus yields the
+                // NEWEST `limit` (not the oldest), so the stream's live handoff stays
+                // gapless — the most recent rows are always delivered and the client
+                // pages older history via before_index. This also never reads the
+                // whole file: it stops after `limit` records.
                 let mut tail: Vec<ThreadTranscriptRecord> = Vec::new();
-                let mut overflowed = false;
                 for line in raw.lines().rev() {
                     if line.trim().is_empty() {
                         continue;
@@ -695,10 +701,6 @@ impl ThreadTranscriptStore {
                         if seq <= after_seq {
                             break;
                         }
-                        if tail.len() >= limit {
-                            overflowed = true;
-                            break;
-                        }
                         tail.push(ThreadTranscriptRecord {
                             seq,
                             thread_id: tid,
@@ -706,33 +708,32 @@ impl ThreadTranscriptStore {
                             timestamp,
                             message,
                         });
+                        if tail.len() >= limit {
+                            break;
+                        }
                     }
                 }
-                if !overflowed {
-                    tail.reverse();
-                    return Ok(tail);
-                }
-                // Far-behind: one forward pass, oldest-first, bounded.
-                let all = self.read_records_from_path(thread_id, &path).await?;
-                Ok(all
-                    .into_iter()
-                    .filter(|record| record.seq > after_seq)
-                    .take(limit)
-                    .collect())
+                tail.reverse();
+                Ok(tail)
             }
             TranscriptStoreMode::Memory { records } => {
                 let guard = records.lock().await;
-                Ok(guard
+                let mut filtered: Vec<ThreadTranscriptRecord> = guard
                     .get(thread_id)
                     .map(|entries| {
                         entries
                             .iter()
                             .filter(|record| record.seq > after_seq)
-                            .take(limit)
                             .cloned()
                             .collect()
                     })
-                    .unwrap_or_default())
+                    .unwrap_or_default();
+                // Newest `limit` (tail), matching the File mode so an over-limit
+                // delta keeps the stream's live handoff gapless.
+                if filtered.len() > limit {
+                    filtered.drain(0..filtered.len() - limit);
+                }
+                Ok(filtered)
             }
         }
     }

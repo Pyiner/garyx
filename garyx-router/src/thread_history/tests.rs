@@ -444,9 +444,10 @@ async fn records_after_seq_returns_delta_ascending_and_handles_overflow() {
     assert!(store.records_after_seq("thread::seq", 10, 100).await.unwrap().is_empty());
     // after_seq=0 → all
     assert_eq!(store.records_after_seq("thread::seq", 0, 100).await.unwrap().len(), 10);
-    // limit smaller than delta → oldest `limit`, still ascending
+    // limit smaller than delta → NEWEST `limit`, ascending (keeps the stream's
+    // live handoff gapless; older history pages in via before_index)
     let capped = store.records_after_seq("thread::seq", 0, 3).await.unwrap();
-    assert_eq!(capped.iter().map(|r| r.seq).collect::<Vec<_>>(), vec![1, 2, 3]);
+    assert_eq!(capped.iter().map(|r| r.seq).collect::<Vec<_>>(), vec![8, 9, 10]);
     // unknown thread → empty
     assert!(store.records_after_seq("thread::nope", 0, 100).await.unwrap().is_empty());
 }

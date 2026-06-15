@@ -280,6 +280,10 @@ extension GaryxMobileModel {
                     guard !Task.isCancelled else { return }
                     if let selectedThreadId, selectedThread?.id == selectedThreadId {
                         await loadSelectedThreadHistory()
+                        // Re-establish the resumable per-thread stream (it was stopped
+                        // on background); it resumes from the cursor and cancels the
+                        // baseline reconcile poll started above.
+                        startSelectedThreadStream(for: selectedThreadId)
                     }
                 case .checking:
                     break
@@ -295,6 +299,7 @@ extension GaryxMobileModel {
             sceneRefreshTask = nil
             cancelSelectedThreadReconcileLoop()
             cancelGlobalEventStream()
+            stopSelectedThreadStream()
         default:
             break
         }

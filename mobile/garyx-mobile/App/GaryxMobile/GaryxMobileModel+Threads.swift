@@ -1292,6 +1292,15 @@ extension GaryxMobileModel {
     }
 
     func startSelectedThreadReconcileLoop() {
+        // The resumable per-thread stream owns liveness for the thread it holds; don't
+        // run the 1.5s reconcile poll alongside it (that would re-fetch every 1.5s and
+        // again on every run-end). The stream falls back to this poll when it cannot be
+        // sustained (see fallBackFromSelectedThreadStream).
+        if let owned = streamOwnedThreadId,
+           let current = selectedThread?.id.trimmingCharacters(in: .whitespacesAndNewlines),
+           owned == current {
+            return
+        }
         guard hasGatewaySettings,
               case .ready = connectionState,
               let threadId = selectedThread?.id.trimmingCharacters(in: .whitespacesAndNewlines),
