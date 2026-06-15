@@ -450,4 +450,73 @@ enum GaryxTranscriptMerge {
         }
         return false
     }
+
+    /// Fold a live tool-trace event (from the global event stream) into the
+    /// displayed message list, grouping consecutive tool calls and keeping each
+    /// call exactly once.
+    ///
+    /// Tool data reaches a thread from TWO sources during a run — the real-time
+    /// committed stream (rendered into the window) and the global live stream
+    /// (this path). Both must converge on one row per call:
+    /// - `.toolResult` is absorbed into the matching open call by identity; an
+    ///   unmatched result is dropped (never a lone "Used 1 tool").
+    /// - `.toolUse` whose call is ALREADY shown in the current turn (the
+    ///   committed copy raced ahead, or a prior live group already has it) is
+    ///   ignored, instead of opening a second group for the same call — the gap
+    ///   that left a duplicate "Used 1 tool" beside a complete command.
+    /// Otherwise the entry extends the trailing tool group or opens a new one.
+    static func appendLiveToolTraceEntry(
+        _ entry: GaryxMobileToolTraceEntry,
+        kind: GaryxMobileTranscriptToolTraceKind,
+        into messages: inout [GaryxMobileMessage]
+    ) {
+        if kind == .toolResult {
+            for index in messages.indices.reversed() {
+                if messages[index].role == .user { break }
+                guard var group = messages[index].toolTraceGroup else { continue }
+                if absorbToolResult(entry, into: &group) {
+                    messages[index].toolTraceGroup = group
+                    messages[index].text = group.summary
+                    messages[index].isStreaming = group.isActive
+                    return
+                }
+            }
+            return
+        }
+
+        // A tool_use whose call is already represented in the current turn is a
+        // duplicate from the dual stream sources; ignore it rather than open a
+        // second group for the same call.
+        for index in messages.indices.reversed() {
+            if messages[index].role == .user { break }
+            guard let group = messages[index].toolTraceGroup else { continue }
+            if group.entries.contains(where: { toolTraceEntriesSameCall($0, entry, allowFingerprint: true) }) {
+                return
+            }
+        }
+
+        if let index = messages.indices.last,
+           messages[index].role == .tool,
+           var group = messages[index].toolTraceGroup {
+            group.live = true
+            group.entries.append(entry)
+            messages[index].toolTraceGroup = group
+            messages[index].text = group.summary
+            messages[index].isStreaming = group.isActive
+            return
+        }
+
+        let group = GaryxMobileToolTraceGroup(entries: [entry], live: true)
+        messages.append(
+            GaryxMobileMessage(
+                id: "tool-group:\(entry.id)",
+                role: .tool,
+                text: group.summary,
+                timestamp: entry.timestamp,
+                isStreaming: group.isActive,
+                toolTraceGroup: group,
+                localState: .remotePartial
+            )
+        )
+    }
 }

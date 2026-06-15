@@ -330,6 +330,25 @@ enum GaryxMobileTranscriptToolTraceClassifier {
         }
         return .toolUse
     }
+
+    /// Codex emits its private chain-of-thought as `reasoning` items, stored as
+    /// tool_use/tool_result pairs with empty content. They are not tool calls,
+    /// so the client skips them instead of rendering each one as a generic
+    /// "Used 1 tool" row. Detected across the shapes the gateway may use — the
+    /// message `kind`, or the trace object's `type` / tool-name fields.
+    static func isReasoningTrace(_ message: GaryxTranscriptMessage) -> Bool {
+        if message.kind?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "reasoning" {
+            return true
+        }
+        guard let object = message.garyxToolTraceObject else { return false }
+        for key in ["type", "item_type", "itemType", "toolName", "tool_name", "name", "tool"] {
+            if case let .string(value)? = object[key],
+               value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "reasoning" {
+                return true
+            }
+        }
+        return false
+    }
 }
 
 private extension GaryxTranscriptMessage {

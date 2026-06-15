@@ -643,47 +643,9 @@ extension GaryxMobileModel {
             return
         }
 
+        let kind: GaryxMobileTranscriptToolTraceKind = eventKind == .toolResult ? .toolResult : .toolUse
         mutateMessages(for: threadId) { messages in
-            if eventKind == .toolResult {
-                for index in messages.indices.reversed() {
-                    if messages[index].role == .user {
-                        break
-                    }
-                    guard var group = messages[index].toolTraceGroup else { continue }
-                    if GaryxTranscriptMerge.absorbToolResult(entry, into: &group) {
-                        messages[index].toolTraceGroup = group
-                        messages[index].text = group.summary
-                        messages[index].isStreaming = group.isActive
-                        return
-                    }
-                }
-                // A result that matches no live tool-use is a duplicate/late/out-of-
-                // window result; the committed transcript already carries it. Never
-                // render a lone result as its own tool row (the phantom "Used 1 tool").
-                return
-            }
-
-            if let index = messages.indices.last, messages[index].role == .tool, var group = messages[index].toolTraceGroup {
-                group.live = true
-                group.entries.append(entry)
-                messages[index].toolTraceGroup = group
-                messages[index].text = group.summary
-                messages[index].isStreaming = group.isActive
-                return
-            }
-
-            let group = GaryxMobileToolTraceGroup(entries: [entry], live: true)
-            messages.append(
-                GaryxMobileMessage(
-                    id: "tool-group:\(entry.id)",
-                    role: .tool,
-                    text: group.summary,
-                    timestamp: entry.timestamp,
-                    isStreaming: group.isActive,
-                    toolTraceGroup: group,
-                    localState: .remotePartial
-                )
-            )
+            GaryxTranscriptMerge.appendLiveToolTraceEntry(entry, kind: kind, into: &messages)
         }
     }
 
@@ -1180,6 +1142,9 @@ private struct GaryxMobileToolTracePayload {
 
 private extension GaryxMobileToolTraceEntry {
     init?(transcript message: GaryxTranscriptMessage) {
+        if GaryxMobileTranscriptToolTraceClassifier.isReasoningTrace(message) {
+            return nil
+        }
         let eventKind = GaryxMobileToolTracePayload.eventKind(fromTranscript: message)
         let payload = GaryxMobileToolTracePayload.fromTranscript(message)
         guard payload.shouldRender else {

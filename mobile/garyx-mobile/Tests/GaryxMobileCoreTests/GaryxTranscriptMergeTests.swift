@@ -466,6 +466,53 @@ final class GaryxTranscriptMergeTests: XCTestCase {
         XCTAssertEqual(group.entries.count, 1)
     }
 
+    func testLiveToolUseForAlreadyShownCallDoesNotDuplicate() {
+        // Dual-source transient: the committed copy of a command is already shown
+        // as a completed "Ran 1 command" (followed by assistant text). A late live
+        // tool_use + tool_result for the SAME call (normalized to a generic
+        // payload) must NOT open a second "Used 1 tool" group.
+        let committed = GaryxMobileToolTraceGroup(
+            entries: [toolTraceEntry(id: "tu-1", status: .completed, result: "done")],
+            live: false
+        )
+        var messages: [GaryxMobileMessage] = [
+            GaryxMobileMessage(
+                id: "tool-group:c", role: .tool, text: committed.summary, timestamp: nil,
+                isStreaming: false, toolTraceGroup: committed, localState: .remoteFinal
+            ),
+            GaryxMobileMessage(
+                id: "a1", role: .assistant, text: "running…", timestamp: nil,
+                isStreaming: false, localState: .remoteFinal
+            ),
+        ]
+        GaryxTranscriptMerge.appendLiveToolTraceEntry(
+            toolTraceEntry(id: "tu-1", toolName: "tool", input: nil, status: .running),
+            kind: .toolUse, into: &messages
+        )
+        XCTAssertEqual(
+            messages.filter { $0.role == .tool }.count, 1,
+            "a duplicate live tool_use for an already-shown call must not open a second group"
+        )
+        GaryxTranscriptMerge.appendLiveToolTraceEntry(
+            toolTraceEntry(id: "tu-1", toolName: "tool", input: nil, status: .completed, result: "done"),
+            kind: .toolResult, into: &messages
+        )
+        let toolRows = messages.filter { $0.role == .tool }
+        XCTAssertEqual(toolRows.count, 1, "still exactly one tool row after the late result")
+        XCTAssertEqual(toolRows.first?.toolTraceGroup?.summary, "Ran 1 command")
+    }
+
+    func testLiveToolUseForNewCallOpensAGroup() {
+        var messages: [GaryxMobileMessage] = [
+            GaryxMobileMessage(id: "a1", role: .assistant, text: "hi", timestamp: nil, isStreaming: false, localState: .remoteFinal),
+        ]
+        GaryxTranscriptMerge.appendLiveToolTraceEntry(
+            toolTraceEntry(id: "tu-9", toolName: "Bash", input: "ls", status: .running),
+            kind: .toolUse, into: &messages
+        )
+        XCTAssertEqual(messages.filter { $0.role == .tool }.count, 1, "a genuinely new call opens a group")
+    }
+
     func testLiveGroupMatchesCommittedOnlyWithinCurrentTurn() {
         func toolMessage(_ id: String, msgId: String, history: Int?, live: Bool) -> GaryxMobileMessage {
             let group = GaryxMobileToolTraceGroup(
