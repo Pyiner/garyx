@@ -215,6 +215,158 @@ final class GaryxTranscriptMergeTests: XCTestCase {
         XCTAssertEqual(merged[0].toolTraceGroup?.entries[0].resultText, "file.txt")
     }
 
+    func testActiveRunDedupesRunningVsCompletedWhenToolUseIdAbsent() {
+        // Same tool call with NO toolUseId (provider/stream omitted it): the live group
+        // shows it "running", the committed page shows it "completed". They are one call
+        // (same tool + input) and must collapse to ONE row, not show twice — the merge
+        // key must not hinge on the volatile summary/status that changes as a call ends.
+        func entry(summary: String, status: GaryxMobileToolTraceStatus, result: String?) -> GaryxMobileToolTraceEntry {
+            var e = GaryxMobileToolTraceEntry(
+                id: "e-\(summary)",
+                toolUseId: nil,
+                toolName: "Bash",
+                title: "Bash",
+                inputText: "ls",
+                inputLabel: "Call",
+                resultLabel: "Result",
+                status: status,
+                isError: false,
+                timestamp: nil,
+                primaryPathBadge: nil
+            )
+            e.summaryText = summary
+            e.resultText = result
+            return e
+        }
+        let liveGroup = GaryxMobileToolTraceGroup(
+            entries: [entry(summary: "Running command", status: .running, result: nil)],
+            live: true
+        )
+        let live = GaryxMobileMessage(
+            id: "tool-group:live",
+            role: .tool,
+            text: liveGroup.summary,
+            timestamp: nil,
+            isStreaming: true,
+            toolTraceGroup: liveGroup,
+            localState: .remotePartial
+        )
+        let committedGroup = GaryxMobileToolTraceGroup(
+            entries: [entry(summary: "Ran command", status: .completed, result: "file.txt")],
+            live: false
+        )
+        let committed = GaryxMobileMessage(
+            id: "history:5",
+            role: .tool,
+            text: committedGroup.summary,
+            timestamp: nil,
+            isStreaming: false,
+            toolTraceGroup: committedGroup,
+            localState: .remoteFinal,
+            historyIndex: 5
+        )
+
+        let merged = GaryxTranscriptMerge.mergedMessages(
+            [committed],
+            withLocal: [live],
+            threadRunActive: true
+        )
+
+        XCTAssertEqual(
+            merged.count,
+            1,
+            "running live + completed committed of the same call must not show twice when toolUseId is absent"
+        )
+    }
+
+    func testActiveRunDedupesWhenLiveLacksToolUseIdButCommittedHasIt() {
+        // The codex-style case: the committed row carries the call id, but the live
+        // event omitted it. Same call (tool + input) → one row, not two.
+        func entry(id: String?, summary: String, status: GaryxMobileToolTraceStatus, result: String?) -> GaryxMobileToolTraceEntry {
+            var e = GaryxMobileToolTraceEntry(
+                id: "e-\(summary)",
+                toolUseId: id,
+                toolName: "Bash",
+                title: "Bash",
+                inputText: "ls -la",
+                inputLabel: "Call",
+                resultLabel: "Result",
+                status: status,
+                isError: false,
+                timestamp: nil,
+                primaryPathBadge: nil
+            )
+            e.summaryText = summary
+            e.resultText = result
+            return e
+        }
+        let liveGroup = GaryxMobileToolTraceGroup(
+            entries: [entry(id: nil, summary: "Running command", status: .running, result: nil)],
+            live: true
+        )
+        let live = GaryxMobileMessage(
+            id: "tool-group:live",
+            role: .tool,
+            text: liveGroup.summary,
+            timestamp: nil,
+            isStreaming: true,
+            toolTraceGroup: liveGroup,
+            localState: .remotePartial
+        )
+        let committedGroup = GaryxMobileToolTraceGroup(
+            entries: [entry(id: "call_X", summary: "Ran command", status: .completed, result: "ok")],
+            live: false
+        )
+        let committed = GaryxMobileMessage(
+            id: "history:7",
+            role: .tool,
+            text: committedGroup.summary,
+            timestamp: nil,
+            isStreaming: false,
+            toolTraceGroup: committedGroup,
+            localState: .remoteFinal,
+            historyIndex: 7
+        )
+
+        let merged = GaryxTranscriptMerge.mergedMessages([committed], withLocal: [live], threadRunActive: true)
+        XCTAssertEqual(merged.count, 1, "a live row missing the id must still match its committed row by tool + input")
+    }
+
+    func testToolTraceEntriesSameCallSemantics() {
+        func e(_ id: String?, input: String = "ls") -> GaryxMobileToolTraceEntry {
+            GaryxMobileToolTraceEntry(
+                id: id ?? "x",
+                toolUseId: id,
+                toolName: "Bash",
+                title: "Bash",
+                inputText: input,
+                inputLabel: "Call",
+                resultLabel: "Result",
+                status: .running,
+                isError: false,
+                timestamp: nil,
+                primaryPathBadge: nil
+            )
+        }
+        // Both identified → match only on equal id.
+        XCTAssertTrue(GaryxTranscriptMerge.toolTraceEntriesSameCall(e("call_A"), e("call_A"), allowFingerprint: true))
+        XCTAssertFalse(
+            GaryxTranscriptMerge.toolTraceEntriesSameCall(e("call_A"), e("call_B"), allowFingerprint: true),
+            "distinct ids are distinct calls even with identical input"
+        )
+        // At least one unidentified → match on tool + input.
+        XCTAssertTrue(
+            GaryxTranscriptMerge.toolTraceEntriesSameCall(e("call_A"), e(nil), allowFingerprint: true),
+            "id + no-id of the same tool+input is the same call"
+        )
+        XCTAssertFalse(
+            GaryxTranscriptMerge.toolTraceEntriesSameCall(e("call_A"), e(nil, input: "pwd"), allowFingerprint: true),
+            "different input is a different call"
+        )
+        // Fingerprint disabled (older turn) → no fingerprint fallback.
+        XCTAssertFalse(GaryxTranscriptMerge.toolTraceEntriesSameCall(e(nil), e(nil), allowFingerprint: false))
+    }
+
     func testEmptyRemoteKeepsLocalUntouched() {
         let local = [optimisticUser("local-user-1", text: "hello")]
         XCTAssertEqual(GaryxTranscriptMerge.mergedMessages([], withLocal: local), local)

@@ -318,9 +318,13 @@ enum GaryxTranscriptMerge {
         _ right: GaryxMobileToolTraceGroup,
         allowFingerprint: Bool
     ) -> Bool {
-        let leftKeys = Set(left.entries.compactMap { toolTraceMergeKey($0, includeFingerprint: allowFingerprint) })
-        let rightKeys = Set(right.entries.compactMap { toolTraceMergeKey($0, includeFingerprint: allowFingerprint) })
-        return !leftKeys.isDisjoint(with: rightKeys)
+        for leftEntry in left.entries {
+            for rightEntry in right.entries
+            where toolTraceEntriesSameCall(leftEntry, rightEntry, allowFingerprint: allowFingerprint) {
+                return true
+            }
+        }
+        return false
     }
 
     static func mergedToolTraceGroup(
@@ -330,8 +334,9 @@ enum GaryxTranscriptMerge {
         var merged = remote
         merged.live = remote.live || local.live
         for localEntry in local.entries {
-            if let localKey = toolTraceMergeKey(localEntry),
-               let index = merged.entries.firstIndex(where: { toolTraceMergeKey($0) == localKey }) {
+            if let index = merged.entries.firstIndex(where: {
+                toolTraceEntriesSameCall($0, localEntry, allowFingerprint: true)
+            }) {
                 if localEntry.status != .running {
                     merged.entries[index].absorb(result: localEntry)
                 }
@@ -342,23 +347,40 @@ enum GaryxTranscriptMerge {
         return merged
     }
 
-    static func toolTraceMergeKey(
-        _ entry: GaryxMobileToolTraceEntry,
-        includeFingerprint: Bool = true
-    ) -> String? {
-        if let toolUseId = entry.toolUseId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !toolUseId.isEmpty {
-            return "id:\(toolUseId)"
+    /// Whether two tool-trace entries are the same call. Entries that BOTH carry a
+    /// stable `toolUseId` match only when those ids are equal (distinct ids are distinct
+    /// calls, even with identical input). When at least one lacks an id, fall back to
+    /// the call's identity — tool + input — which stays stable as the call goes running
+    /// → completed/failed. Summary/result/isError are deliberately excluded: they change
+    /// as a call ends, and including them stopped a live (running) row from matching its
+    /// own committed (completed) row, rendering the call twice until the run finished.
+    static func toolTraceEntriesSameCall(
+        _ a: GaryxMobileToolTraceEntry,
+        _ b: GaryxMobileToolTraceEntry,
+        allowFingerprint: Bool
+    ) -> Bool {
+        let idA = a.toolUseId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let idB = b.toolUseId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let idA, !idA.isEmpty, let idB, !idB.isEmpty {
+            return idA == idB
         }
-        guard includeFingerprint else {
-            return nil
+        guard allowFingerprint,
+              let fingerprintA = toolTraceCallFingerprint(a),
+              let fingerprintB = toolTraceCallFingerprint(b)
+        else {
+            return false
         }
-        let normalizedTool = entry.toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return fingerprintA == fingerprintB
+    }
+
+    /// Stable identity of a tool call absent a `toolUseId`: tool name + input. `nil`
+    /// when either is empty, so input-less calls are not collapsed by fingerprint.
+    static func toolTraceCallFingerprint(_ entry: GaryxMobileToolTraceEntry) -> String? {
+        let tool = entry.toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let input = entry.inputText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let summary = entry.summaryText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !normalizedTool.isEmpty, !input.isEmpty || !summary.isEmpty else {
+        guard !tool.isEmpty, !input.isEmpty else {
             return nil
         }
-        return "fp:\(normalizedTool):\(input):\(summary):\(entry.isError)"
+        return "\(tool):\(input)"
     }
 }
