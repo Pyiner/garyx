@@ -101,7 +101,7 @@ extension GaryxMobileModel {
         var lastPage: GaryxThreadTranscript?
         var window: GaryxCachedTranscript?
         var previousCursor = -1
-        for _ in 0..<Self.threadHistoryMaxForwardPages {
+        pageLoop: for _ in 0..<Self.threadHistoryMaxForwardPages {
             guard let cursor = transcriptAfterCursor(for: threadId), cursor != previousCursor else {
                 break
             }
@@ -115,10 +115,18 @@ extension GaryxMobileModel {
                 afterIndex: cursor,
                 userQueryLimit: Self.threadHistoryUserQueryLimit
             )
-            // Far behind: the server returned the bounded newest window instead of the
-            // whole delta. Overwrite the cache with it (older history pages in on
-            // scroll-up) rather than merging the skipped gap.
-            if page.pageInfo?.reset == true {
+            // Decide overwrite (reset) / shrink-refetch / forward-merge from the page
+            // metadata (pure logic in GaryxTranscriptFetchPlanner, unit-tested).
+            switch GaryxTranscriptFetchPlanner.pageAction(
+                cursor: cursor,
+                reset: page.pageInfo?.reset ?? false,
+                hasMoreAfter: page.pageInfo?.hasMoreAfter ?? false,
+                totalMessagesInThread: page.pageInfo?.totalMessagesInThread
+            ) {
+            case .reset:
+                // Far behind: the server returned the bounded newest window; overwrite
+                // the cache with it (older history pages in on scroll-up) rather than
+                // merging the skipped gap.
                 clearTranscriptCache(for: threadId)
                 window = updateTranscriptCache(
                     threadId: threadId,
@@ -127,32 +135,25 @@ extension GaryxMobileModel {
                     committedOnly: false
                 )
                 lastPage = page
-                break
-            }
-            // Server shrank below our cursor (thread cleared / truncated / reset):
-            // the cache is ahead of the server, so drop it and rebuild from a full
-            // fetch instead of showing the stale window forever. Uses the
-            // authoritative total (the cursor is the max cached index = total-1 when
-            // in sync, so `cursor >= total` means the cache holds an index the
-            // server no longer has). An empty page reports returned_end_index == 0,
-            // so the total — not the page bounds — must drive this.
-            if let total = page.pageInfo?.totalMessagesInThread, cursor >= total {
+                break pageLoop
+            case .shrinkRefetch:
+                // Cache is ahead of the server (thread cleared / truncated): drop it and
+                // rebuild from a full fetch instead of showing the stale window forever.
                 clearTranscriptCache(for: threadId)
                 return try await fullThreadTranscript(threadId: threadId)
+            case .mergeForward(let committedOnly, let continuePaging):
+                // A committed-only (has_more_after) page withholds the overlay until the
+                // committed tail drains, so it persists + advances the cursor even
+                // mid-run; the final overlay-bearing page persists only when idle.
+                window = updateTranscriptCache(
+                    threadId: threadId,
+                    fetched: page,
+                    direction: .forward,
+                    committedOnly: committedOnly
+                )
+                lastPage = page
+                if !continuePaging { break pageLoop }
             }
-            let hasMoreAfter = page.pageInfo?.hasMoreAfter == true
-            // A `has_more_after` page is pure committed (the overlay is withheld
-            // until the committed tail drains), so persist + advance the cursor even
-            // mid-run; the final page may carry the overlay and is persisted only
-            // when idle.
-            window = updateTranscriptCache(
-                threadId: threadId,
-                fetched: page,
-                direction: .forward,
-                committedOnly: hasMoreAfter
-            )
-            lastPage = page
-            if !hasMoreAfter { break }
         }
         if let window, let lastPage {
             return transcriptForDisplay(window: window, fetched: lastPage)

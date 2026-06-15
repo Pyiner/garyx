@@ -19,11 +19,10 @@ extension GaryxMobileModel {
     /// Cursor the per-thread stream resumes from: the highest committed index we
     /// already hold (cache window or rendered history), as a seq (index + 1).
     func selectedThreadStreamCursor(for threadId: String) -> Int {
-        if let afterCursor = transcriptSnapshot(for: threadId)?.afterCursor {
-            return afterCursor + 1
-        }
-        let maxIndex = cachedMessages(for: threadId).compactMap(\.historyIndex).max()
-        return maxIndex.map { $0 + 1 } ?? 0
+        GaryxStreamSeqPlanner.resumeCursor(
+            afterCursor: transcriptSnapshot(for: threadId)?.afterCursor,
+            fallbackMaxIndex: cachedMessages(for: threadId).compactMap(\.historyIndex).max()
+        )
     }
 
     func startSelectedThreadStream(for threadId: String) {
@@ -151,26 +150,29 @@ extension GaryxMobileModel {
             else {
                 return false
             }
-            // Mid-stream seq hole (a dropped broadcast event): resume the reconnect
-            // from the last contiguous seq so the file replay refills it. The first row
-            // of a connection (lastSeq == 0) is exempt — the replay may legitimately
-            // start above the cursor when the far-behind cap truncated older rows.
-            if selectedThreadStreamConnectionLastSeq > 0,
-               seq > selectedThreadStreamConnectionLastSeq + 1 {
-                selectedThreadStreamResumeOverride = selectedThreadStreamConnectionLastSeq
+            // Decide gap-reconnect / stale-skip / apply from the seq (pure logic in
+            // GaryxStreamSeqPlanner; the first row of a connection always applies since
+            // a reset replay can legitimately start above the cursor).
+            switch GaryxStreamSeqPlanner.decide(
+                incomingSeq: seq,
+                connectionLastSeq: selectedThreadStreamConnectionLastSeq
+            ) {
+            case .gapReconnect(let resumeAfterSeq):
+                // A dropped broadcast event left a hole; reconnect from the last
+                // contiguous seq so the file replay refills it.
+                selectedThreadStreamResumeOverride = resumeAfterSeq
                 return true
-            }
-            // Stale/duplicate already applied on this connection (replay/live overlap).
-            if seq <= selectedThreadStreamConnectionLastSeq {
+            case .stale:
+                return false
+            case .apply:
+                // The committed row carries no index in its body; derive it from the
+                // gapless seq so it dedups against history rows (id "history:N").
+                message.index = seq - 1
+                message.id = "history:\(seq - 1)"
+                applyStreamedCommittedMessage(message, threadId: threadId)
+                selectedThreadStreamConnectionLastSeq = seq
                 return false
             }
-            // The committed row carries no index in its body; derive it from the
-            // gapless seq so it dedups against history rows (id "history:N").
-            message.index = seq - 1
-            message.id = "history:\(seq - 1)"
-            applyStreamedCommittedMessage(message, threadId: threadId)
-            selectedThreadStreamConnectionLastSeq = seq
-            return false
         }
         if type == "ping" { return false }
         // Transient live events (deltas / tool / done / title) reuse the existing
