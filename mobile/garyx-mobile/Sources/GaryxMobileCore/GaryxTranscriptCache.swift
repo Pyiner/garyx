@@ -42,6 +42,13 @@ public struct GaryxCachedTranscript: Codable, Equatable, Sendable {
     public var firstIndex: Int? {
         messages.compactMap(\.index).min()
     }
+
+    /// True when this entry is older than `ttl` relative to `now` (`savedAt` is the
+    /// last refresh time). Drives the persistent cache's validity window so a very
+    /// stale window is re-fetched instead of shown on cold start.
+    public func isExpired(now: Date, ttl: TimeInterval) -> Bool {
+        now.timeIntervalSince(savedAt) > ttl
+    }
 }
 
 /// Which end of the cached window a freshly-fetched page extends.
@@ -140,14 +147,27 @@ public protocol GaryxTranscriptCacheStore: Sendable {
 /// file per thread keeps writes O(one thread) and avoids loading every thread's
 /// transcript to update one — important when a single thread can be tens of MB.
 public final class GaryxTranscriptFileCacheStore: GaryxTranscriptCacheStore, @unchecked Sendable {
+    /// Default validity window for persisted entries: one day. A window older than
+    /// this is treated as absent (re-fetched) rather than shown stale on cold start.
+    public static let defaultTTL: TimeInterval = 24 * 60 * 60
+
     private let directory: URL
     private let fileManager: FileManager
+    private let ttl: TimeInterval?
+    private let now: () -> Date
     private let lock = NSLock()
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
 
-    public init(directory: URL, fileManager: FileManager = .default) {
+    public init(
+        directory: URL,
+        ttl: TimeInterval? = nil,
+        now: @escaping () -> Date = { Date() },
+        fileManager: FileManager = .default
+    ) {
         self.directory = directory
+        self.ttl = ttl
+        self.now = now
         self.fileManager = fileManager
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -156,6 +176,9 @@ public final class GaryxTranscriptFileCacheStore: GaryxTranscriptCacheStore, @un
         decoder.dateDecodingStrategy = .iso8601
         self.decoder = decoder
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        // Sweep entries already past their validity window on startup so the cache
+        // never grows unbounded with stale threads.
+        pruneExpired()
     }
 
     /// Default location under the app caches directory. Cache (not Documents) so
@@ -184,6 +207,10 @@ public final class GaryxTranscriptFileCacheStore: GaryxTranscriptCacheStore, @un
               snapshot.version == GaryxCachedTranscript.currentVersion,
               snapshot.threadId == threadId
         else {
+            return nil
+        }
+        if let ttl, snapshot.isExpired(now: now(), ttl: ttl) {
+            try? fileManager.removeItem(at: url)
             return nil
         }
         return snapshot
@@ -224,6 +251,29 @@ public final class GaryxTranscriptFileCacheStore: GaryxTranscriptCacheStore, @un
         ) else { return }
         for entry in entries where entry.pathExtension == "json" {
             try? fileManager.removeItem(at: entry)
+        }
+    }
+
+    /// Remove entries past their validity window (`ttl`). No-op when no TTL is set.
+    /// Called on init; also reusable for an explicit sweep.
+    public func pruneExpired() {
+        guard let ttl else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        let nowValue = now()
+        guard let entries = try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil
+        ) else { return }
+        for entry in entries where entry.pathExtension == "json" {
+            guard let data = try? Data(contentsOf: entry),
+                  let snapshot = try? decoder.decode(GaryxCachedTranscript.self, from: data)
+            else {
+                continue
+            }
+            if snapshot.isExpired(now: nowValue, ttl: ttl) {
+                try? fileManager.removeItem(at: entry)
+            }
         }
     }
 }

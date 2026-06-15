@@ -239,7 +239,8 @@ final class GaryxMobileModel: ObservableObject {
     /// in-memory mirror of the on-disk window so the forward cursor is read
     /// without touching disk on every delta fetch.
     var transcriptCacheStore: GaryxTranscriptCacheStore = GaryxTranscriptFileCacheStore(
-        directory: GaryxTranscriptFileCacheStore.defaultDirectory()
+        directory: GaryxTranscriptFileCacheStore.defaultDirectory(),
+        ttl: GaryxTranscriptFileCacheStore.defaultTTL
     )
     var cachedTranscriptSnapshots: [String: GaryxCachedTranscript] = [:]
     var selectedMessagesSignature = MessageListSignature(count: 0, fingerprint: 0, sampled: false)
