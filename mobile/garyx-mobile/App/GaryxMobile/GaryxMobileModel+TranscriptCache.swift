@@ -24,21 +24,6 @@ extension GaryxMobileModel {
         transcriptSnapshot(for: threadId)?.afterCursor
     }
 
-    /// True when the cached committed window's newest index is more than
-    /// `threadHistoryFarBehindReseedThreshold` rows below the thread's live tail
-    /// (`messageCount`), so reopening should re-seed the bounded newest window instead
-    /// of replaying the whole delta over the per-thread stream. Unknown `messageCount`
-    /// → treated as not far behind (the stream catch-up is coalesced).
-    func transcriptCacheFarBehind(
-        _ thread: GaryxThreadSummary,
-        snapshot: GaryxCachedTranscript
-    ) -> Bool {
-        guard let total = thread.messageCount, total > 0 else { return false }
-        let cachedNewestIndex = snapshot.afterCursor ?? -1
-        let liveNewestIndex = total - 1
-        return liveNewestIndex - cachedNewestIndex > Self.threadHistoryFarBehindReseedThreshold
-    }
-
     /// Rendered committed window for instant cold-start display before the network
     /// fetch returns. Empty when nothing is cached.
     func restoredCachedMessages(for threadId: String) -> [GaryxMobileMessage] {
@@ -121,11 +106,29 @@ extension GaryxMobileModel {
                 break
             }
             previousCursor = cursor
+            // Send the cursor AND the user-turn bound: the gateway returns the forward
+            // delta when the cursor is within the newest threadHistoryUserQueryLimit
+            // turns, or the bounded newest window with `reset` when it is older.
             let page = try await client().threadHistory(
                 threadId: threadId,
                 limit: Self.threadHistoryPageLimit,
-                afterIndex: cursor
+                afterIndex: cursor,
+                userQueryLimit: Self.threadHistoryUserQueryLimit
             )
+            // Far behind: the server returned the bounded newest window instead of the
+            // whole delta. Overwrite the cache with it (older history pages in on
+            // scroll-up) rather than merging the skipped gap.
+            if page.pageInfo?.reset == true {
+                clearTranscriptCache(for: threadId)
+                window = updateTranscriptCache(
+                    threadId: threadId,
+                    fetched: page,
+                    direction: .replaceLatest,
+                    committedOnly: false
+                )
+                lastPage = page
+                break
+            }
             // Server shrank below our cursor (thread cleared / truncated / reset):
             // the cache is ahead of the server, so drop it and rebuild from a full
             // fetch instead of showing the stale window forever. Uses the

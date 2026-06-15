@@ -40,11 +40,6 @@ final class GaryxMobileModel: ObservableObject {
     // Open a thread by loading the most recent few user-query turns (with tool
     // messages) in a single request — no separate fast/no-tools pre-pass.
     static let threadHistoryUserQueryLimit = 3
-    // When reopening a thread whose cached window is more than this many committed
-    // rows behind the live tail (thread.messageCount), re-seed the bounded newest
-    // window instead of letting the per-thread stream replay the whole delta (which
-    // over-fetches and flickers). Smaller deltas catch up over the stream (coalesced).
-    static let threadHistoryFarBehindReseedThreshold = 100
     // Cap on forward `after_index` delta pages walked in one incremental open so a
     // far-behind or misbehaving cursor can't loop unbounded; the reconcile loop
     // catches up any remainder. 50 * 100 = 5000 committed rows per catch-up.

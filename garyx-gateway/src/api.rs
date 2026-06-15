@@ -1236,7 +1236,35 @@ pub(crate) async fn thread_history_for_key(
     if let Some(mut thread_value) = state.threads.thread_store.get(key).await {
         let _ = repair_inactive_active_run_snapshot(state, key, &mut thread_value).await;
     }
-    let snapshot_result = if let Some(after_index) = after_index {
+    // When the client sends both an `after_index` cursor and a `user_query_limit`,
+    // bound the catch-up to the newest N user turns: fetch that window once, then if
+    // the cursor is older than it, return the window and flag `reset` so the client
+    // overwrites its cache instead of replaying the whole delta; otherwise trim to the
+    // forward delta within the window.
+    let mut reset_to_newest = false;
+    let snapshot_result = if let (Some(after_index), Some(user_query_limit)) =
+        (after_index, bounded_user_query_limit)
+    {
+        match state
+            .threads
+            .history
+            .thread_snapshot_user_query_page(key, bounded_limit, None, user_query_limit)
+            .await
+        {
+            Ok(mut snapshot) => {
+                let floor = snapshot.committed_start_index;
+                if after_index + 1 < floor {
+                    reset_to_newest = true;
+                } else {
+                    let drop = (after_index + 1 - floor).min(snapshot.committed_messages.len());
+                    snapshot.committed_messages.drain(0..drop);
+                    snapshot.committed_start_index = after_index + 1;
+                }
+                Ok(snapshot)
+            }
+            Err(error) => Err(error),
+        }
+    } else if let Some(after_index) = after_index {
         state
             .threads
             .history
@@ -1522,6 +1550,7 @@ pub(crate) async fn thread_history_for_key(
             "next_before_index": next_before_index,
             "has_more_after": has_more_after,
             "next_after_index": next_after_index,
+            "reset": reset_to_newest,
             "user_query_limit": bounded_user_query_limit,
             "tool_related_count": tool_related_count,
             "likely_user_visible_count": likely_user_visible_count,

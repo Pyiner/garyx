@@ -317,6 +317,10 @@ public struct GaryxThreadTranscriptPageInfo: Decodable, Equatable, Sendable {
     /// `after_index` page reports `returned_end_index == 0`, so the totals — not
     /// the page bounds — must drive shrink detection.
     public var totalMessagesInThread: Int?
+    /// The server returned the bounded newest window because the requested
+    /// `after_index` cursor was older than the newest `user_query_limit` user turns;
+    /// the client should overwrite its cache with this window rather than merge it.
+    public var reset: Bool
 
     enum CodingKeys: String, CodingKey {
         case returnedMessages = "returned_messages"
@@ -328,6 +332,7 @@ public struct GaryxThreadTranscriptPageInfo: Decodable, Equatable, Sendable {
         case nextAfterIndex = "next_after_index"
         case totalMessagesInThread = "total_messages_in_thread"
         case totalMessagesInSession = "total_messages_in_session"
+        case reset
     }
 
     public init(from decoder: Decoder) throws {
@@ -341,6 +346,7 @@ public struct GaryxThreadTranscriptPageInfo: Decodable, Equatable, Sendable {
         nextAfterIndex = try container.decodeIfPresent(Int.self, forKey: .nextAfterIndex)
         totalMessagesInThread = try container.decodeIfPresent(Int.self, forKey: .totalMessagesInThread)
             ?? container.decodeIfPresent(Int.self, forKey: .totalMessagesInSession)
+        reset = try container.decodeIfPresent(Bool.self, forKey: .reset) ?? false
     }
 
     public init(
@@ -351,7 +357,8 @@ public struct GaryxThreadTranscriptPageInfo: Decodable, Equatable, Sendable {
         nextBeforeIndex: Int?,
         hasMoreAfter: Bool = false,
         nextAfterIndex: Int? = nil,
-        totalMessagesInThread: Int? = nil
+        totalMessagesInThread: Int? = nil,
+        reset: Bool = false
     ) {
         self.totalMessagesInThread = totalMessagesInThread
         self.returnedMessages = returnedMessages
@@ -361,6 +368,7 @@ public struct GaryxThreadTranscriptPageInfo: Decodable, Equatable, Sendable {
         self.nextBeforeIndex = nextBeforeIndex
         self.hasMoreAfter = hasMoreAfter
         self.nextAfterIndex = nextAfterIndex
+        self.reset = reset
     }
 }
 
