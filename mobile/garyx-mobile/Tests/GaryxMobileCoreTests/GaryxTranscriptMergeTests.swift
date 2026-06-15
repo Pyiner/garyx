@@ -513,6 +513,60 @@ final class GaryxTranscriptMergeTests: XCTestCase {
         XCTAssertEqual(messages.filter { $0.role == .tool }.count, 1, "a genuinely new call opens a group")
     }
 
+    func testStraddlingResultAbsorbsIntoFlushedGroupWithinTurn() {
+        // A tool_use was flushed into an earlier group (a parent text row split it
+        // from its result while a sub-agent ran). The straddling result must
+        // absorb into that group, not render as a standalone "Used 1 tool".
+        let flushed = GaryxMobileToolTraceGroup(entries: [toolTraceEntry(id: "tu-1", status: .running)], live: false)
+        var messages: [GaryxMobileMessage] = [
+            GaryxMobileMessage(id: "tool:1", role: .tool, text: flushed.summary, timestamp: nil,
+                               isStreaming: false, toolTraceGroup: flushed, localState: .remoteFinal),
+            GaryxMobileMessage(id: "a1", role: .assistant, text: "narrating…", timestamp: nil,
+                               isStreaming: false, localState: .remoteFinal),
+        ]
+        XCTAssertTrue(
+            GaryxTranscriptMerge.absorbResultIntoFlushedToolGroup(
+                toolTraceEntry(id: "tu-1", status: .completed, result: "done"), in: &messages
+            )
+        )
+        XCTAssertEqual(messages.filter { $0.role == .tool }.count, 1)
+        XCTAssertEqual(messages.first?.toolTraceGroup?.entries.first?.status, .completed)
+        XCTAssertEqual(messages.first?.toolTraceGroup?.entries.first?.resultText, "done")
+    }
+
+    func testStraddlingResultDoesNotCrossUserTurnBoundary() {
+        let prior = GaryxMobileToolTraceGroup(entries: [toolTraceEntry(id: "tu-1", status: .running)], live: false)
+        var messages: [GaryxMobileMessage] = [
+            GaryxMobileMessage(id: "tool:prior", role: .tool, text: prior.summary, timestamp: nil,
+                               isStreaming: false, toolTraceGroup: prior, localState: .remoteFinal),
+            GaryxMobileMessage(id: "u1", role: .user, text: "next question", timestamp: nil,
+                               isStreaming: false, localState: .remoteFinal),
+        ]
+        XCTAssertFalse(
+            GaryxTranscriptMerge.absorbResultIntoFlushedToolGroup(
+                toolTraceEntry(id: "tu-1", status: .completed, result: "late"), in: &messages
+            ),
+            "a result in a new turn must not reach back across the user row"
+        )
+    }
+
+    func testStraddlingResultRequiresStableIdAcrossGroups() {
+        // an id-less result must not attach to an unrelated generic group by the
+        // weak tool-name fallback when crossing flushed groups.
+        let group = GaryxMobileToolTraceGroup(entries: [toolTraceEntry(id: nil, status: .running)], live: false)
+        var messages: [GaryxMobileMessage] = [
+            GaryxMobileMessage(id: "tool:1", role: .tool, text: group.summary, timestamp: nil,
+                               isStreaming: false, toolTraceGroup: group, localState: .remoteFinal),
+            GaryxMobileMessage(id: "a1", role: .assistant, text: "x", timestamp: nil,
+                               isStreaming: false, localState: .remoteFinal),
+        ]
+        XCTAssertFalse(
+            GaryxTranscriptMerge.absorbResultIntoFlushedToolGroup(
+                toolTraceEntry(id: nil, toolName: "tool", input: nil, status: .completed, result: "y"), in: &messages
+            )
+        )
+    }
+
     func testLiveGroupMatchesCommittedOnlyWithinCurrentTurn() {
         func toolMessage(_ id: String, msgId: String, history: Int?, live: Bool) -> GaryxMobileMessage {
             let group = GaryxMobileToolTraceGroup(

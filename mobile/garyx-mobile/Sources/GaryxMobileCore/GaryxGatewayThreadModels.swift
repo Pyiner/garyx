@@ -483,6 +483,11 @@ public struct GaryxTranscriptMessage: Codable, Identifiable, Equatable, Sendable
     public var timestamp: String?
     public var toolRelated: Bool
     public var likelyUserVisible: Bool
+    /// Envelope tool identity the nested `content` omits, so committed tool rows
+    /// carry the same id/parent as live events. `metadata.parent_tool_use_id`
+    /// marks a sub-agent's nested tool call.
+    public var toolUseId: String?
+    public var metadata: GaryxJSONValue?
 
     enum CodingKeys: String, CodingKey {
         case index
@@ -494,6 +499,22 @@ public struct GaryxTranscriptMessage: Codable, Identifiable, Equatable, Sendable
         case timestamp
         case toolRelated = "tool_related"
         case likelyUserVisible = "likely_user_visible"
+        case toolUseId = "tool_use_id"
+        case metadata
+    }
+
+    /// The parent tool call id when this is a sub-agent's nested tool call (the
+    /// gateway stamps it into `metadata.parent_tool_use_id`); `nil` for top-level
+    /// calls such as the `Agent` spawn itself.
+    public var garyxParentToolUseId: String? {
+        guard case let .object(meta)? = metadata else { return nil }
+        for key in ["parent_tool_use_id", "parentToolUseId"] {
+            if case let .string(value)? = meta[key] {
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { return trimmed }
+            }
+        }
+        return nil
     }
 
     public init(from decoder: Decoder) throws {
@@ -508,6 +529,8 @@ public struct GaryxTranscriptMessage: Codable, Identifiable, Equatable, Sendable
         timestamp = try container.decodeIfPresent(String.self, forKey: .timestamp)
         toolRelated = try container.decodeIfPresent(Bool.self, forKey: .toolRelated) ?? false
         likelyUserVisible = try container.decodeIfPresent(Bool.self, forKey: .likelyUserVisible) ?? true
+        toolUseId = try container.decodeIfPresent(String.self, forKey: .toolUseId)
+        metadata = try container.decodeIfPresent(GaryxJSONValue.self, forKey: .metadata)
         id = index.map { "history:\($0)" } ?? UUID().uuidString
     }
 
@@ -525,6 +548,8 @@ public struct GaryxTranscriptMessage: Codable, Identifiable, Equatable, Sendable
         try container.encodeIfPresent(timestamp, forKey: .timestamp)
         try container.encode(toolRelated, forKey: .toolRelated)
         try container.encode(likelyUserVisible, forKey: .likelyUserVisible)
+        try container.encodeIfPresent(toolUseId, forKey: .toolUseId)
+        try container.encodeIfPresent(metadata, forKey: .metadata)
     }
 
     /// Direct member-wise initializer for tests and cache reconstruction.
@@ -537,7 +562,9 @@ public struct GaryxTranscriptMessage: Codable, Identifiable, Equatable, Sendable
         message: GaryxJSONValue? = nil,
         timestamp: String? = nil,
         toolRelated: Bool = false,
-        likelyUserVisible: Bool = true
+        likelyUserVisible: Bool = true,
+        toolUseId: String? = nil,
+        metadata: GaryxJSONValue? = nil
     ) {
         self.index = index
         self.role = role
@@ -548,6 +575,8 @@ public struct GaryxTranscriptMessage: Codable, Identifiable, Equatable, Sendable
         self.timestamp = timestamp
         self.toolRelated = toolRelated
         self.likelyUserVisible = likelyUserVisible
+        self.toolUseId = toolUseId
+        self.metadata = metadata
         self.id = index.map { "history:\($0)" } ?? UUID().uuidString
     }
 }

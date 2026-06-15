@@ -597,13 +597,22 @@ extension GaryxMobileModel {
                 guard let entry = GaryxMobileToolTraceEntry(transcript: item) else {
                     continue
                 }
+                if toolTraceKind == .toolResult {
+                    // Absorb into the open group, else into the earlier group the
+                    // matching tool_use was flushed to when an intervening text row
+                    // split them (a sub-agent runs while the parent narrates) — so a
+                    // straddling result is never rendered as a stray "Used 1 tool".
+                    if var group = pendingToolGroup, GaryxTranscriptMerge.absorbToolResult(entry, into: &group) {
+                        pendingToolGroup = group
+                        continue
+                    }
+                    if GaryxTranscriptMerge.absorbResultIntoFlushedToolGroup(entry, in: &rendered) {
+                        continue
+                    }
+                }
                 var group = pendingToolGroup ?? GaryxMobileToolTraceGroup(entries: [], live: false)
                 if pendingToolGroupHistoryIndex == nil {
                     pendingToolGroupHistoryIndex = item.index
-                }
-                if toolTraceKind == .toolResult, GaryxTranscriptMerge.absorbToolResult(entry, into: &group) {
-                    pendingToolGroup = group
-                    continue
                 }
                 group.entries.append(entry)
                 pendingToolGroup = group
@@ -968,7 +977,12 @@ private struct GaryxMobileToolTracePayload {
             eventKind: eventKind,
             fallbackText: message.text,
             fallbackToolName: message.kind,
-            fallbackTimestamp: message.timestamp
+            fallbackTimestamp: message.timestamp,
+            // The committed envelope carries the tool identity the nested content
+            // omits, so committed rows match live rows and sub-agent children can
+            // be filtered.
+            fallbackToolUseId: message.toolUseId,
+            fallbackParentToolUseId: message.garyxParentToolUseId
         )
     }
 
@@ -977,13 +991,15 @@ private struct GaryxMobileToolTracePayload {
         eventKind: GaryxMobileToolTraceEventKind,
         fallbackText: String?,
         fallbackToolName: String?,
-        fallbackTimestamp: String?
+        fallbackTimestamp: String?,
+        fallbackToolUseId: String? = nil,
+        fallbackParentToolUseId: String? = nil
     ) -> GaryxMobileToolTracePayload {
         let decodedValue = value?.jsonStringDecodedIfNeeded
         guard let object = decodedValue?.objectValue else {
             return GaryxMobileToolTracePayload(
-                toolUseId: nil,
-                parentToolUseId: nil,
+                toolUseId: fallbackToolUseId?.garyxTrimmedNilIfEmpty,
+                parentToolUseId: fallbackParentToolUseId?.garyxTrimmedNilIfEmpty,
                 toolName: fallbackToolName?.garyxTrimmedNilIfEmpty,
                 contentText: fallbackText?.garyxTrimmedNilIfEmpty,
                 summaryText: fallbackText.flatMap(GaryxMobileToolSummaryFormatter.safeSummary),
@@ -1009,10 +1025,12 @@ private struct GaryxMobileToolTracePayload {
         let toolUseId = object.stringValue(forKeys: ["toolUseId", "tool_use_id", "id"])
             ?? payloadObject?.stringValue(forKeys: ["toolUseId", "tool_use_id", "id"])
             ?? nestedContent?.stringValue(forKeys: ["toolUseId", "tool_use_id", "id"])
+            ?? fallbackToolUseId?.garyxTrimmedNilIfEmpty
         let parentToolUseId = object.stringValue(forKeys: ["parentToolUseId", "parent_tool_use_id"])
             ?? payloadObject?.stringValue(forKeys: ["parentToolUseId", "parent_tool_use_id"])
             ?? nestedContent?.stringValue(forKeys: ["parentToolUseId", "parent_tool_use_id"])
             ?? metadata?.stringValue(forKeys: ["parentToolUseId", "parent_tool_use_id"])
+            ?? fallbackParentToolUseId?.garyxTrimmedNilIfEmpty
         let toolName = object.stringValue(forKeys: ["toolName", "tool_name", "name", "tool", "title"])
             ?? payloadObject?.stringValue(forKeys: ["toolName", "tool_name", "name", "tool", "title", "type"])
             ?? nestedContent?.stringValue(forKeys: ["toolName", "tool_name", "name", "tool", "title"])
@@ -1223,6 +1241,18 @@ private extension GaryxMobileToolTracePayload {
         let normalizedItemType = itemType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let normalizedToolName = toolName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if normalizedItemType == "reasoning" || normalizedToolName == "reasoning" {
+            return false
+        }
+        // A sub-agent's nested tool call carries a parent tool-use id pointing to
+        // ANOTHER call (the Agent that spawned it). It is not rendered on its own —
+        // the parent `Agent` row represents that work — which also removes the
+        // sub-agent calls that straddle the parent's narration and otherwise
+        // duplicated as a stray "Used 1 tool". A normal top-level tool result may
+        // carry a parent id equal to its OWN tool-use id (the call it answers);
+        // that is kept so it can still absorb into its tool row.
+        let normalizedParent = parentToolUseId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let parent = normalizedParent, !parent.isEmpty,
+           parent != toolUseId?.trimmingCharacters(in: .whitespacesAndNewlines) {
             return false
         }
         return true

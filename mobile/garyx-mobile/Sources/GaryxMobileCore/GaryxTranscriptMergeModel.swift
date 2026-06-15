@@ -394,7 +394,8 @@ enum GaryxTranscriptMerge {
     /// the caller must then NOT render the result as a standalone tool row.
     static func absorbToolResult(
         _ result: GaryxMobileToolTraceEntry,
-        into group: inout GaryxMobileToolTraceGroup
+        into group: inout GaryxMobileToolTraceGroup,
+        allowIdlessFallback: Bool = true
     ) -> Bool {
         if let resultId = result.toolUseId?.trimmingCharacters(in: .whitespacesAndNewlines),
            !resultId.isEmpty {
@@ -409,6 +410,10 @@ enum GaryxTranscriptMerge {
             return false
         }
 
+        // The id-less tool-name fallback is too weak to cross group boundaries
+        // (it can attach a stray result to an unrelated generic group); callers
+        // crossing flushed groups disable it and match by stable id only.
+        guard allowIdlessFallback else { return false }
         if let index = group.entries.lastIndex(where: { canAbsorbToolResultFallback(result, into: $0) }) {
             group.entries[index].absorb(result: result)
             return true
@@ -447,6 +452,29 @@ enum GaryxTranscriptMerge {
            let candidateSummary = candidate.summaryText,
            resultSummary == candidateSummary {
             return true
+        }
+        return false
+    }
+
+    /// Absorb a `tool_result` into the most recent already-flushed tool group in
+    /// the CURRENT turn whose matching tool_use it belongs to (matched by stable
+    /// id). The committed builder uses this when an intervening text row flushed
+    /// the call's group before its result arrived (a sub-agent runs while the
+    /// parent narrates). Stops at the last `.user` so it never crosses turns, and
+    /// disables the weak tool-name fallback, which is unsafe across groups.
+    static func absorbResultIntoFlushedToolGroup(
+        _ entry: GaryxMobileToolTraceEntry,
+        in messages: inout [GaryxMobileMessage]
+    ) -> Bool {
+        for index in messages.indices.reversed() {
+            if messages[index].role == .user { break }
+            guard messages[index].role == .tool,
+                  var group = messages[index].toolTraceGroup else { continue }
+            if absorbToolResult(entry, into: &group, allowIdlessFallback: false) {
+                messages[index].toolTraceGroup = group
+                messages[index].text = group.summary
+                return true
+            }
         }
         return false
     }
