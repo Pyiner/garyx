@@ -601,7 +601,7 @@ extension GaryxMobileModel {
                 if pendingToolGroupHistoryIndex == nil {
                     pendingToolGroupHistoryIndex = item.index
                 }
-                if toolTraceKind == .toolResult, mergeToolResult(entry, into: &group) {
+                if toolTraceKind == .toolResult, GaryxTranscriptMerge.absorbToolResult(entry, into: &group) {
                     pendingToolGroup = group
                     continue
                 }
@@ -650,13 +650,17 @@ extension GaryxMobileModel {
                         break
                     }
                     guard var group = messages[index].toolTraceGroup else { continue }
-                    if mergeToolResult(entry, into: &group) {
+                    if GaryxTranscriptMerge.absorbToolResult(entry, into: &group) {
                         messages[index].toolTraceGroup = group
                         messages[index].text = group.summary
                         messages[index].isStreaming = group.isActive
                         return
                     }
                 }
+                // A result that matches no live tool-use is a duplicate/late/out-of-
+                // window result; the committed transcript already carries it. Never
+                // render a lone result as its own tool row (the phantom "Used 1 tool").
+                return
             }
 
             if let index = messages.indices.last, messages[index].role == .tool, var group = messages[index].toolTraceGroup {
@@ -696,64 +700,6 @@ extension GaryxMobileModel {
             messages.remove(at: index)
         }
     }
-
-    func mergeToolResult(
-        _ result: GaryxMobileToolTraceEntry,
-        into group: inout GaryxMobileToolTraceGroup
-    ) -> Bool {
-        if let toolUseId = result.toolUseId,
-           let match = group.entries.lastIndex(where: { $0.toolUseId == toolUseId && $0.resultText == nil }) {
-            group.entries[match].absorb(result: result)
-            return true
-        }
-        if result.toolUseId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-            return false
-        }
-
-        let fallbackMatches = group.entries.indices.filter {
-            canMergeToolResultFallback(result, into: group.entries[$0])
-        }
-        if let match = fallbackMatches.last {
-            group.entries[match].absorb(result: result)
-            return true
-        }
-
-        return false
-    }
-
-    func canMergeToolResultFallback(
-        _ result: GaryxMobileToolTraceEntry,
-        into candidate: GaryxMobileToolTraceEntry
-    ) -> Bool {
-        guard candidate.status == .running, candidate.resultText == nil else {
-            return false
-        }
-        if let resultToolUseId = result.toolUseId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !resultToolUseId.isEmpty,
-           let candidateToolUseId = candidate.toolUseId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !candidateToolUseId.isEmpty,
-           resultToolUseId != candidateToolUseId {
-            return false
-        }
-        let resultTool = result.toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let candidateTool = candidate.toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if !resultTool.isEmpty, resultTool == candidateTool {
-            return true
-        }
-        if candidateTool == "tool" || resultTool == "tool" {
-            return true
-        }
-        if result.title.caseInsensitiveCompare(candidate.title) == .orderedSame {
-            return true
-        }
-        if let resultSummary = result.summaryText,
-           let candidateSummary = candidate.summaryText,
-           resultSummary == candidateSummary {
-            return true
-        }
-        return false
-    }
-
 
     func startGlobalEventStream() {
         guard hasGatewaySettings, canConnectGateway else { return }

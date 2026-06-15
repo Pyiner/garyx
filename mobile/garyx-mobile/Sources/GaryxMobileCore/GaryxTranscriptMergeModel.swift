@@ -248,13 +248,12 @@ enum GaryxTranscriptMerge {
                 if threadRunActive, local.isStreaming || local.toolTraceGroup?.isActive == true {
                     if let localGroup = local.toolTraceGroup,
                        let remoteIndex = merged.indices.first(where: { remoteIndex in
-                           let remote = merged[remoteIndex]
-                           guard let remoteGroup = remote.toolTraceGroup else { return false }
-                           return toolTraceGroupsOverlap(
-                               remoteGroup,
-                               localGroup,
-                               allowFingerprint: isInCurrentTurn(index: remoteIndex, messages: merged)
-                           )
+                           // Match a live group only against committed groups in the
+                           // SAME (current) turn, so a tool id reused across turns
+                           // cannot fold a new live call into an older committed row.
+                           guard isInCurrentTurn(index: remoteIndex, messages: merged) else { return false }
+                           guard let remoteGroup = merged[remoteIndex].toolTraceGroup else { return false }
+                           return toolTraceGroupsOverlap(remoteGroup, localGroup, allowFingerprint: true)
                        }) {
                         if var remoteGroup = merged[remoteIndex].toolTraceGroup {
                             remoteGroup = mergedToolTraceGroup(remoteGroup, with: localGroup)
@@ -382,5 +381,73 @@ enum GaryxTranscriptMerge {
             return nil
         }
         return "\(tool):\(input)"
+    }
+
+    /// Absorb a `tool_result` entry into the tool-use entry it belongs to, by
+    /// stable identity. An id'd result matches its call by `toolUseId`
+    /// REGARDLESS of whether that call already carries a result: a duplicate or
+    /// late result — e.g. the committed copy that raced ahead of the live event
+    /// under the real-time committed stream — is absorbed idempotently, never
+    /// rendered as its own row. id-less results (Gemini unkeyed calls, Codex
+    /// empty ids) fall back to an open running entry matched by tool name. The
+    /// return value is `false` ONLY when no entry in the group is the same call;
+    /// the caller must then NOT render the result as a standalone tool row.
+    static func absorbToolResult(
+        _ result: GaryxMobileToolTraceEntry,
+        into group: inout GaryxMobileToolTraceGroup
+    ) -> Bool {
+        if let resultId = result.toolUseId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !resultId.isEmpty {
+            if let index = group.entries.lastIndex(where: { entry in
+                guard let entryId = entry.toolUseId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !entryId.isEmpty else { return false }
+                return entryId == resultId
+            }) {
+                group.entries[index].absorb(result: result)
+                return true
+            }
+            return false
+        }
+
+        if let index = group.entries.lastIndex(where: { canAbsorbToolResultFallback(result, into: $0) }) {
+            group.entries[index].absorb(result: result)
+            return true
+        }
+        return false
+    }
+
+    /// id-less fallback: a result with no usable `toolUseId` matches an OPEN
+    /// running entry by tool name / title / summary. Mirrors the call's identity
+    /// without an id; never matches an already-completed entry, so a second
+    /// id-less result does not overwrite a finished call.
+    static func canAbsorbToolResultFallback(
+        _ result: GaryxMobileToolTraceEntry,
+        into candidate: GaryxMobileToolTraceEntry
+    ) -> Bool {
+        guard candidate.status == .running, candidate.resultText == nil else {
+            return false
+        }
+        let resultId = result.toolUseId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let candidateId = candidate.toolUseId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !resultId.isEmpty, !candidateId.isEmpty, resultId != candidateId {
+            return false
+        }
+        let resultTool = result.toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let candidateTool = candidate.toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if !resultTool.isEmpty, resultTool == candidateTool {
+            return true
+        }
+        if candidateTool == "tool" || resultTool == "tool" {
+            return true
+        }
+        if result.title.caseInsensitiveCompare(candidate.title) == .orderedSame {
+            return true
+        }
+        if let resultSummary = result.summaryText,
+           let candidateSummary = candidate.summaryText,
+           resultSummary == candidateSummary {
+            return true
+        }
+        return false
     }
 }

@@ -367,6 +367,143 @@ final class GaryxTranscriptMergeTests: XCTestCase {
         XCTAssertFalse(GaryxTranscriptMerge.toolTraceEntriesSameCall(e(nil), e(nil), allowFingerprint: false))
     }
 
+    // MARK: absorbToolResult (write-time idempotency — the phantom fix)
+
+    private func toolTraceEntry(
+        id: String?,
+        toolName: String = "Bash",
+        input: String? = "ls",
+        status: GaryxMobileToolTraceStatus = .running,
+        result: String? = nil
+    ) -> GaryxMobileToolTraceEntry {
+        var e = GaryxMobileToolTraceEntry(
+            id: id ?? "entry",
+            toolUseId: id,
+            toolName: toolName,
+            title: toolName,
+            inputText: input,
+            inputLabel: "Call",
+            resultLabel: "Result",
+            status: status,
+            isError: false,
+            timestamp: nil,
+            primaryPathBadge: nil
+        )
+        e.resultText = result
+        return e
+    }
+
+    func testAbsorbResultConsumesDuplicateIdResultIdempotently() {
+        // The phantom case: the call ALREADY has its result (its committed copy
+        // raced ahead of the live event under the real-time stream). A late result
+        // with the same id must be absorbed in place — never spawn a second row.
+        var group = GaryxMobileToolTraceGroup(
+            entries: [toolTraceEntry(id: "tu-1", status: .completed, result: "done")],
+            live: false
+        )
+        let lateResult = toolTraceEntry(id: "tu-1", toolName: "tool", input: nil, status: .completed, result: "done")
+        XCTAssertTrue(
+            GaryxTranscriptMerge.absorbToolResult(lateResult, into: &group),
+            "a same-id result must be absorbed even when the call already has a result"
+        )
+        XCTAssertEqual(group.entries.count, 1, "no phantom result-only entry is created")
+        // Idempotent: absorbing again changes nothing.
+        XCTAssertTrue(GaryxTranscriptMerge.absorbToolResult(lateResult, into: &group))
+        XCTAssertEqual(group.entries.count, 1)
+        XCTAssertEqual(group.entries[0].resultText, "done")
+        XCTAssertEqual(group.entries[0].toolName, "Bash", "a generic late result must not clobber the real tool name")
+    }
+
+    func testAbsorbResultCompletesOpenCall() {
+        var group = GaryxMobileToolTraceGroup(entries: [toolTraceEntry(id: "tu-1", status: .running)], live: true)
+        XCTAssertTrue(
+            GaryxTranscriptMerge.absorbToolResult(
+                toolTraceEntry(id: "tu-1", status: .completed, result: "file.txt"),
+                into: &group
+            )
+        )
+        XCTAssertEqual(group.entries.count, 1)
+        XCTAssertEqual(group.entries[0].status, .completed)
+        XCTAssertEqual(group.entries[0].resultText, "file.txt")
+    }
+
+    func testAbsorbResultReturnsFalseWhenNoMatchingCall() {
+        // An id'd result whose call is not in this group: the live append path must
+        // DROP it, never render a lone result row.
+        var group = GaryxMobileToolTraceGroup(entries: [toolTraceEntry(id: "tu-1", status: .running)], live: true)
+        let orphan = toolTraceEntry(id: "tu-OTHER", toolName: "tool", input: nil, status: .completed, result: "x")
+        XCTAssertFalse(GaryxTranscriptMerge.absorbToolResult(orphan, into: &group))
+        XCTAssertEqual(group.entries.count, 1, "an unmatched result is never inserted as an entry")
+    }
+
+    func testAbsorbResultIdlessFallbackMatchesRunningEntry() {
+        // Gemini unkeyed: no ids on either side. The result matches the OPEN running
+        // entry by tool name (the required fingerprint/running fallback is kept).
+        var group = GaryxMobileToolTraceGroup(entries: [toolTraceEntry(id: nil, status: .running)], live: true)
+        XCTAssertTrue(
+            GaryxTranscriptMerge.absorbToolResult(
+                toolTraceEntry(id: nil, input: nil, status: .completed, result: "ok"),
+                into: &group
+            )
+        )
+        XCTAssertEqual(group.entries.count, 1)
+        XCTAssertEqual(group.entries[0].resultText, "ok")
+    }
+
+    func testAbsorbResultIdlessReturnsFalseWithoutRunningEntry() {
+        // No id and no OPEN call to attach to → drop (committed is authoritative);
+        // a finished id-less call is never re-opened by a stray result.
+        var group = GaryxMobileToolTraceGroup(
+            entries: [toolTraceEntry(id: nil, status: .completed, result: "done")],
+            live: false
+        )
+        XCTAssertFalse(
+            GaryxTranscriptMerge.absorbToolResult(
+                toolTraceEntry(id: nil, input: nil, status: .completed, result: "again"),
+                into: &group
+            )
+        )
+        XCTAssertEqual(group.entries.count, 1)
+    }
+
+    func testLiveGroupMatchesCommittedOnlyWithinCurrentTurn() {
+        func toolMessage(_ id: String, msgId: String, history: Int?, live: Bool) -> GaryxMobileMessage {
+            let group = GaryxMobileToolTraceGroup(
+                entries: [toolTraceEntry(id: id, status: live ? .running : .completed, result: live ? nil : "ok")],
+                live: live
+            )
+            return GaryxMobileMessage(
+                id: msgId, role: .tool, text: group.summary, timestamp: nil,
+                isStreaming: live, toolTraceGroup: group,
+                localState: live ? .remotePartial : .remoteFinal, historyIndex: history
+            )
+        }
+        func userRow(_ msgId: String, history: Int) -> GaryxMobileMessage {
+            GaryxMobileMessage(
+                id: msgId, role: .user, text: "q", timestamp: nil,
+                isStreaming: false, localState: .remoteFinal, historyIndex: history
+            )
+        }
+
+        // Cross-turn id reuse: committed tu-1 sits in a PRIOR turn (before the last
+        // user); the live tu-1 is a NEW call this turn → it must NOT fold into the
+        // old committed row.
+        let crossTurn = GaryxTranscriptMerge.mergedMessages(
+            [toolMessage("tu-1", msgId: "history:1", history: 1, live: false), userRow("history:2", history: 2)],
+            withLocal: [toolMessage("tu-1", msgId: "tool-group:live", history: nil, live: true)],
+            threadRunActive: true
+        )
+        XCTAssertEqual(crossTurn.count, 3, "a reused id in a new turn must not merge into the prior turn's committed row")
+
+        // Same-turn: committed tu-2 is after the user → the live tu-2 collapses into it.
+        let sameTurn = GaryxTranscriptMerge.mergedMessages(
+            [userRow("history:3", history: 3), toolMessage("tu-2", msgId: "history:4", history: 4, live: false)],
+            withLocal: [toolMessage("tu-2", msgId: "tool-group:live2", history: nil, live: true)],
+            threadRunActive: true
+        )
+        XCTAssertEqual(sameTurn.count, 2, "same-turn live + committed of one call collapse to one row")
+    }
+
     func testEmptyRemoteKeepsLocalUntouched() {
         let local = [optimisticUser("local-user-1", text: "hello")]
         XCTAssertEqual(GaryxTranscriptMerge.mergedMessages([], withLocal: local), local)
