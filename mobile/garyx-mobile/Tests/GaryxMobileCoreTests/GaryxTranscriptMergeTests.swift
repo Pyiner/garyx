@@ -470,6 +470,138 @@ final class GaryxTranscriptMergeTests: XCTestCase {
         XCTAssertEqual(merge2.map(\.id), merge1.map(\.id), "row identities are stable across the feed-back flush")
     }
 
+    func testMidRunSteerDoesNotDuplicateRunningTool() {
+        // Mid-run steer: while turn 1 is still running, the user sends a second
+        // message M2, appended as an OPTIMISTIC user row at the end of the list
+        // (queueRemoteInput). A turn-1 tool tu-2 then streams: its committed row is
+        // before M2, its live row lands after M2. They share a stable toolUseId, so
+        // they are the same call and must render once — the optimistic M2 between
+        // them must not split the turn into a duplicate.
+        func bashEntry(_ id: String, status: GaryxMobileToolTraceStatus, result: String?) -> GaryxMobileToolTraceEntry {
+            var e = GaryxMobileToolTraceEntry(
+                id: "e-\(id)", toolUseId: id, toolName: "Bash", title: "Bash",
+                inputText: "echo \(id)", inputLabel: "Call", resultLabel: "Result",
+                status: status, isError: false, timestamp: nil, primaryPathBadge: nil
+            )
+            e.resultText = result
+            return e
+        }
+        let u1 = GaryxMobileMessage(
+            id: "history:0", role: .user, text: "first", timestamp: nil,
+            isStreaming: false, localState: .remoteFinal, historyIndex: 0
+        )
+        let committedGroup = GaryxMobileToolTraceGroup(entries: [bashEntry("tu-2", status: .completed, result: "done")], live: false)
+        let committedTu2 = GaryxMobileMessage(
+            id: "history:1", role: .tool, text: committedGroup.summary, timestamp: nil,
+            isStreaming: false, toolTraceGroup: committedGroup, localState: .remoteFinal, historyIndex: 1
+        )
+        let remote = [u1, committedTu2]
+
+        let m2 = GaryxMobileMessage(
+            id: "local-user-M2", role: .user, text: "steer", timestamp: nil,
+            isStreaming: false, clientIntentId: "intent-M2", localState: .optimistic
+        )
+        let liveGroup = GaryxMobileToolTraceGroup(entries: [bashEntry("tu-2", status: .running, result: nil)], live: true)
+        let liveTu2 = GaryxMobileMessage(
+            id: "tool-group:e-tu-2", role: .tool, text: liveGroup.summary, timestamp: nil,
+            isStreaming: true, toolTraceGroup: liveGroup, localState: .remotePartial
+        )
+        // The local list as the flush sees it: prior merged rows + the optimistic
+        // steer + the live tool that streamed after it.
+        let local = [u1, committedTu2, m2, liveTu2]
+
+        let merged = GaryxTranscriptMerge.mergedMessages(remote, withLocal: local, threadRunActive: true)
+
+        let tu2Count = merged.flatMap { $0.toolTraceGroup?.entries ?? [] }.filter { $0.toolUseId == "tu-2" }.count
+        XCTAssertEqual(tu2Count, 1, "a steer message between the committed and live tu-2 must not duplicate the call")
+    }
+
+    func testPendingAckSteerDoesNotDuplicateRunningTool() {
+        // Once the gateway acks the queued steer, the mobile client maps the pending
+        // input to a user row with .remotePartial (no longer .optimistic). It is
+        // still a future turn the assistant has not started, so it must not bound the
+        // running turn either — otherwise the turn-1 tu-2 duplicates exactly as in
+        // the optimistic case.
+        func bashEntry(_ id: String, status: GaryxMobileToolTraceStatus, result: String?) -> GaryxMobileToolTraceEntry {
+            var e = GaryxMobileToolTraceEntry(
+                id: "e-\(id)", toolUseId: id, toolName: "Bash", title: "Bash",
+                inputText: "echo \(id)", inputLabel: "Call", resultLabel: "Result",
+                status: status, isError: false, timestamp: nil, primaryPathBadge: nil
+            )
+            e.resultText = result
+            return e
+        }
+        let u1 = GaryxMobileMessage(
+            id: "history:0", role: .user, text: "first", timestamp: nil,
+            isStreaming: false, localState: .remoteFinal, historyIndex: 0
+        )
+        let committedGroup = GaryxMobileToolTraceGroup(entries: [bashEntry("tu-2", status: .completed, result: "done")], live: false)
+        let committedTu2 = GaryxMobileMessage(
+            id: "history:1", role: .tool, text: committedGroup.summary, timestamp: nil,
+            isStreaming: false, toolTraceGroup: committedGroup, localState: .remoteFinal, historyIndex: 1
+        )
+        // The acked steer: a pending input mapped to a .remotePartial user row.
+        let pendingM2 = GaryxMobileMessage(
+            id: "queued:M2", role: .user, text: "steer", timestamp: nil,
+            isStreaming: false, pendingInputId: "queued_input:1", localState: .remotePartial
+        )
+        let remote = [u1, committedTu2, pendingM2]
+        let liveGroup = GaryxMobileToolTraceGroup(entries: [bashEntry("tu-2", status: .running, result: nil)], live: true)
+        let liveTu2 = GaryxMobileMessage(
+            id: "tool-group:e-tu-2", role: .tool, text: liveGroup.summary, timestamp: nil,
+            isStreaming: true, toolTraceGroup: liveGroup, localState: .remotePartial
+        )
+
+        let merged = GaryxTranscriptMerge.mergedMessages(remote, withLocal: [liveTu2], threadRunActive: true)
+
+        let tu2Count = merged.flatMap { $0.toolTraceGroup?.entries ?? [] }.filter { $0.toolUseId == "tu-2" }.count
+        XCTAssertEqual(tu2Count, 1, "an acked (.remotePartial) steer must not bound the turn and duplicate tu-2")
+    }
+
+    func testDistinctIdToolsAcrossSteerDoNotFold() {
+        // A steer makes the boundary transparent for STABLE-ID reconciliation, but a
+        // genuinely new turn-2 call has its own unique toolUseId (ids are unique per
+        // call), so it must NOT fold into a same-command turn-1 committed row across
+        // the steer — it gets its own row. Guards the id-reconciliation from
+        // over-merging two distinct calls.
+        func bashEntry(_ id: String, status: GaryxMobileToolTraceStatus, result: String?) -> GaryxMobileToolTraceEntry {
+            var e = GaryxMobileToolTraceEntry(
+                id: "e-\(id)", toolUseId: id, toolName: "Bash", title: "Bash",
+                inputText: "ls", inputLabel: "Call", resultLabel: "Result",
+                status: status, isError: false, timestamp: nil, primaryPathBadge: nil
+            )
+            e.resultText = result
+            return e
+        }
+        let u1 = GaryxMobileMessage(
+            id: "history:0", role: .user, text: "first", timestamp: nil,
+            isStreaming: false, localState: .remoteFinal, historyIndex: 0
+        )
+        // turn-1 ran `ls` as tu-A (committed).
+        let committedGroup = GaryxMobileToolTraceGroup(entries: [bashEntry("tu-A", status: .completed, result: "done")], live: false)
+        let committedA = GaryxMobileMessage(
+            id: "history:1", role: .tool, text: committedGroup.summary, timestamp: nil,
+            isStreaming: false, toolTraceGroup: committedGroup, localState: .remoteFinal, historyIndex: 1
+        )
+        let pendingM2 = GaryxMobileMessage(
+            id: "queued:M2", role: .user, text: "steer", timestamp: nil,
+            isStreaming: false, pendingInputId: "queued_input:1", localState: .remotePartial
+        )
+        let remote = [u1, committedA, pendingM2]
+        // turn-2 runs `ls` again, but as a DISTINCT call tu-B (new unique id).
+        let liveGroup = GaryxMobileToolTraceGroup(entries: [bashEntry("tu-B", status: .running, result: nil)], live: true)
+        let liveB = GaryxMobileMessage(
+            id: "tool-group:e-tu-B", role: .tool, text: liveGroup.summary, timestamp: nil,
+            isStreaming: true, toolTraceGroup: liveGroup, localState: .remotePartial
+        )
+
+        let merged = GaryxTranscriptMerge.mergedMessages(remote, withLocal: [liveB], threadRunActive: true)
+
+        let ids = merged.flatMap { $0.toolTraceGroup?.entries.compactMap(\.toolUseId) ?? [] }
+        XCTAssertEqual(ids.filter { $0 == "tu-A" }.count, 1, "turn-1 tu-A stays its own row")
+        XCTAssertEqual(ids.filter { $0 == "tu-B" }.count, 1, "the new turn-2 tu-B does not fold into tu-A")
+    }
+
     func testToolTraceEntriesSameCallSemantics() {
         func e(_ id: String?, input: String = "ls") -> GaryxMobileToolTraceEntry {
             GaryxMobileToolTraceEntry(

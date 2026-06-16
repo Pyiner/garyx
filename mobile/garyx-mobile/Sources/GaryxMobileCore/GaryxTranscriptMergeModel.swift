@@ -295,8 +295,22 @@ enum GaryxTranscriptMerge {
             .map { normalizedMergeText($0.text) }
     }
 
-    static func isInCurrentTurn(index: Int, messages: [GaryxMobileMessage]) -> Bool {
-        guard let lastUserIndex = messages.lastIndex(where: { $0.role == .user }) else {
+    /// Whether `index` falls in the running turn — after the last user boundary.
+    /// `ignoringPendingSteer` skips a steer the user queued mid-run (.optimistic
+    /// just-sent, or .remotePartial acked-and-pending): that is a future turn the
+    /// assistant has not started, so a stable-id call may reconcile across it. The
+    /// id-less fingerprint path leaves the default (a steer stays a boundary),
+    /// since it cannot prove two same-fingerprint calls are the same one.
+    static func isInCurrentTurn(
+        index: Int,
+        messages: [GaryxMobileMessage],
+        ignoringPendingSteer: Bool = false
+    ) -> Bool {
+        guard let lastUserIndex = messages.lastIndex(where: { message in
+            guard message.role == .user else { return false }
+            guard ignoringPendingSteer else { return true }
+            return message.localState != .optimistic && message.localState != .remotePartial
+        }) else {
             return true
         }
         return index > lastUserIndex
@@ -324,13 +338,20 @@ enum GaryxTranscriptMerge {
     ) {
         var uncommittedEntries: [GaryxMobileToolTraceEntry] = []
         for entry in liveGroup.entries {
-            // Reconcile only against committed rows in the current turn, so a tool
-            // id reused across turns cannot fold a new live call into an older row.
             guard let rowIndex = merged.indices.first(where: { index in
-                isInCurrentTurn(index: index, messages: merged)
-                    && (merged[index].toolTraceGroup?.entries.contains {
-                        toolTraceEntriesSameCall($0, entry, allowFingerprint: true)
-                    } ?? false)
+                guard let committed = merged[index].toolTraceGroup?.entries else { return false }
+                // A stable toolUseId is unique per call, so an id match is the same
+                // call: reconcile it within the committed turn — a queued steer is
+                // transparent (a future turn the assistant hasn't started), while a
+                // real committed user turn still bounds it.
+                if committed.contains(where: { toolTraceEntriesSameCall($0, entry, allowFingerprint: false) }) {
+                    return isInCurrentTurn(index: index, messages: merged, ignoringPendingSteer: true)
+                }
+                // Id-less providers fall back to the tool+input fingerprint, which
+                // can't tell two identical calls apart, so stay conservative: gate
+                // to the same turn by any user row, leaving a queued steer a boundary.
+                return isInCurrentTurn(index: index, messages: merged)
+                    && committed.contains { toolTraceEntriesSameCall($0, entry, allowFingerprint: true) }
             }),
             var group = merged[rowIndex].toolTraceGroup,
             let entryIndex = group.entries.firstIndex(where: {
