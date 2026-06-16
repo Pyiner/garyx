@@ -274,6 +274,27 @@ final class GaryxToolCallPresentationTests: XCTestCase {
         XCTAssertEqual(group.summary, "Read 1 file")
     }
 
+    // Reproduction (state-level, real tool names from a thread transcript): an Edit
+    // grouped with a non-file tool (Agent / TaskCreate / ToolSearch / Skill /
+    // mcp__*). None classify as command/read/edit, so the second folds into the
+    // generic "used N tools" — the unhelpful "Edited 1 file, used 1 tool" the user
+    // circled. The summary should name the tool by its title instead.
+    func testGroupSummaryNamesNonFileToolInsteadOfGenericUsedOneTool() {
+        let group = GaryxMobileToolTraceGroup(entries: [
+            entry(toolName: "Edit", title: "Edit", primaryPath: "/src/App.swift"),
+            entry(toolName: "Agent", title: "Agent"),
+        ])
+        XCTAssertEqual(group.summary, "Edited 1 file, used Agent")
+    }
+
+    func testGroupSummaryNamesTwoDistinctNonFileTools() {
+        let group = GaryxMobileToolTraceGroup(entries: [
+            entry(toolName: "TaskCreate", title: "TaskCreate"),
+            entry(toolName: "ToolSearch", title: "ToolSearch"),
+        ])
+        XCTAssertEqual(group.summary, "Used TaskCreate, ToolSearch")
+    }
+
     private func entry(
         id: String = UUID().uuidString,
         toolName: String,

@@ -179,10 +179,25 @@ struct GaryxMobileToolTraceGroup: Equatable {
         if editedFileCount > 0 {
             parts.append("edited \(editedFileCount) file\(editedFileCount == 1 ? "" : "s")")
         }
-        let otherCount = entries.count - commandEntries.count - readEntries.count - editEntries.count
-        if otherCount > 0 || parts.isEmpty {
-            let count = parts.isEmpty ? entries.count : otherCount
-            parts.append("used \(count) tool\(count == 1 ? "" : "s")")
+        // Non-file tools (Agent, TaskCreate, ToolSearch, Skill, mcp__*, …) don't
+        // fall into command/read/edit; name them by title rather than the opaque
+        // "used N tools" (the "Edited 1 file, used 1 tool" symptom). Distinct
+        // titles, input order preserved; fall back to a count if titles are blank.
+        let otherEntries = entries.filter { !$0.isCommand && !$0.isFileRead && !$0.isFileEdit }
+        if !otherEntries.isEmpty {
+            var seen = Set<String>()
+            let names = otherEntries.compactMap { entry -> String? in
+                let title = entry.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !title.isEmpty, seen.insert(title).inserted else { return nil }
+                return title
+            }
+            if names.isEmpty {
+                parts.append("used \(otherEntries.count) tool\(otherEntries.count == 1 ? "" : "s")")
+            } else {
+                parts.append("used \(names.joined(separator: ", "))")
+            }
+        } else if parts.isEmpty {
+            parts.append("used \(entries.count) tool\(entries.count == 1 ? "" : "s")")
         }
         let joined = parts.joined(separator: ", ")
         return joined.prefix(1).uppercased() + joined.dropFirst()
