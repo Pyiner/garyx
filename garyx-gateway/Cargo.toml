@@ -47,7 +47,6 @@ serde_yaml = "0.9"
 toml = "0.8"
 futures-util = "0.3"
 urlencoding = "2"
-lzma-rs = "0.3"
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -1,6 +1,4 @@
 use super::*;
-use garyx_models::local_paths::gary_home_dir;
-use std::io::{BufReader, Cursor};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
@@ -18,8 +16,6 @@ const GARYX_WORKFLOW_SDK_PACKAGE_JSON: &str = r#"{
   }
 }
 "#;
-
-include!(concat!(env!("OUT_DIR"), "/embedded_workflow_bun.rs"));
 
 pub fn spawn_workflow_task_entrypoint(
     state: Arc<AppState>,
@@ -298,9 +294,6 @@ pub(super) fn workflow_bun_command_from_values(
     {
         return Ok(path);
     }
-    if let Some(path) = embedded_workflow_bun_path()? {
-        return Ok(path);
-    }
     if let Some(path) = bundled_workflow_bun_path(current_exe.as_deref()) {
         return Ok(path);
     }
@@ -334,57 +327,6 @@ fn bun_on_path(path_var: &std::ffi::OsStr) -> Option<PathBuf> {
         // workflow process is spawned with its cwd changed to the package dir, and
         // a relative `bun` would otherwise resolve against the wrong directory.
         .and_then(|candidate| candidate.canonicalize().ok())
-}
-
-fn embedded_workflow_bun_path() -> Result<Option<PathBuf>, WorkflowError> {
-    let Some(compressed) = EMBEDDED_WORKFLOW_BUN_XZ else {
-        return Ok(None);
-    };
-    ensure_embedded_workflow_bun_extracted(
-        &gary_home_dir(),
-        compressed,
-        EMBEDDED_WORKFLOW_BUN_VERSION,
-        EMBEDDED_WORKFLOW_BUN_TARGET,
-    )
-    .map(Some)
-}
-
-pub(super) fn ensure_embedded_workflow_bun_extracted(
-    gary_home: &FsPath,
-    compressed: &[u8],
-    version: &str,
-    target: &str,
-) -> Result<PathBuf, WorkflowError> {
-    let runtime_dir = gary_home
-        .join("runtimes")
-        .join("bun")
-        .join(version)
-        .join(target);
-    let bun_path = runtime_dir.join("bun");
-    if executable_file_exists(&bun_path) {
-        return Ok(bun_path);
-    }
-
-    fs::create_dir_all(&runtime_dir).map_err(workflow_io_error)?;
-    let staging = runtime_dir.join(format!(".bun-{}.tmp", Uuid::new_v4().simple()));
-    let mut reader = BufReader::new(Cursor::new(compressed));
-    let mut decoded = Vec::new();
-    lzma_rs::xz_decompress(&mut reader, &mut decoded).map_err(|error| {
-        WorkflowError::Conflict(format!(
-            "Garyx embedded workflow runtime could not be decompressed: {error:?}"
-        ))
-    })?;
-    fs::write(&staging, decoded).map_err(workflow_io_error)?;
-    #[cfg(unix)]
-    {
-        let mut permissions = fs::metadata(&staging)
-            .map_err(workflow_io_error)?
-            .permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&staging, permissions).map_err(workflow_io_error)?;
-    }
-    fs::rename(&staging, &bun_path).map_err(workflow_io_error)?;
-    Ok(bun_path)
 }
 
 fn executable_file_exists(path: &FsPath) -> bool {
