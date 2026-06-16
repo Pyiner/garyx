@@ -138,6 +138,10 @@ extension GaryxMobileModel {
         pendingDirectFollowUpsByThread[threadId]?.contains { $0.assistantId == assistantId } ?? false
     }
 
+    func hasPendingDirectFollowUpUser(threadId: String, userId: String) -> Bool {
+        pendingDirectFollowUpsByThread[threadId]?.contains { $0.userId == userId } ?? false
+    }
+
     func appendAssistantDelta(_ delta: String, threadId: String, assistantMessageId: String) {
         guard !delta.isEmpty else { return }
         let targetId = activeAssistantMessageIdsByThread[threadId]
@@ -216,6 +220,9 @@ extension GaryxMobileModel {
                 && message.localState != .remoteFinal
                 && Self.normalizedMergeText(message.text) == Self.normalizedMergeText(visibleText)
         }
+        let materializedLocalUserIsPendingDirectFollowUp = materializedLocalUserIndex.map { index in
+            hasPendingDirectFollowUpUser(threadId: threadId, userId: existingMessages[index].id)
+        } ?? false
         let alreadyRendered = existingMessages.contains { $0.id == messageId || $0.remoteId == messageId }
         if !alreadyRendered {
             if let materializedLocalUserIndex {
@@ -223,7 +230,9 @@ extension GaryxMobileModel {
                 let activeAssistantIndex = activeAssistantId.flatMap { id in
                     existingMessages.firstIndex { $0.id == id || $0.remoteId == id }
                 }
-                if let activeAssistantIndex, activeAssistantIndex < materializedLocalUserIndex {
+                if let activeAssistantIndex,
+                   activeAssistantIndex < materializedLocalUserIndex,
+                   !materializedLocalUserIsPendingDirectFollowUp {
                     finishActiveAssistantSegmentBeforeUserTurn(for: threadId)
                 }
             } else {

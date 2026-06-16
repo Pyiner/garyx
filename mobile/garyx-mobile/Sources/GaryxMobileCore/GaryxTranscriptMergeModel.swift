@@ -248,6 +248,9 @@ enum GaryxTranscriptMerge {
                             && remoteText.count >= normalizedText.count
                             && remoteText.hasPrefix(normalizedText)
                     }
+                    // Defensive live-cache cleanup: if a previous-turn streaming
+                    // assistant was already committed remotely, do not keep the
+                    // stale local copy below a newly materialized user row.
                     let staleFromPreviousTurn = passedMaterializedLocalUser
                         && normalizedText.count >= 12
                         && remoteAssistantTexts.contains { remoteText in
