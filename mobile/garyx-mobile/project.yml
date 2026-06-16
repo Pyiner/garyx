@@ -50,6 +50,7 @@ targets:
       - path: Widget/GaryxRecentThreadsWidget
       - path: Sources/GaryxMobileCore/GaryxMobileIdentityPresentation.swift
       - path: Sources/GaryxMobileCore/GaryxMobileWidgetData.swift
+      - path: Sources/GaryxMobileCore/GaryxMobileUsageWidgetData.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.garyx.mobile.RecentThreadsWidget

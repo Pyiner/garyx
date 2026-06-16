@@ -8,6 +8,7 @@ mod auto_research;
 pub mod automation;
 mod channel_catalog;
 pub mod chat;
+pub mod coding_usage;
 pub mod commands;
 mod composition;
 pub mod cron;

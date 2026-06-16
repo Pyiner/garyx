@@ -4,14 +4,15 @@ use axum::{Router, extract::DefaultBodyLimit};
 
 use crate::server::AppState;
 use crate::{
-    api, app_db, automation, chat, commands, dashboard, dreams, gateway_auth, mcp, mcp_config,
-    routes, tasks, tool_image, workflows, workspace_files, workspaces,
+    api, app_db, automation, chat, coding_usage, commands, dashboard, dreams, gateway_auth, mcp,
+    mcp_config, routes, tasks, tool_image, workflows, workspace_files, workspaces,
 };
 
 pub fn build_router(state: Arc<AppState>) -> Router {
     let protected = Router::new()
         .merge(protected_runtime_routes())
         .merge(thread_routes())
+        .merge(usage_routes())
         .merge(chat_routes())
         .merge(observability_routes())
         .merge(operations_routes())
@@ -39,6 +40,13 @@ fn public_runtime_routes() -> Router<Arc<AppState>> {
 
 fn protected_runtime_routes() -> Router<Arc<AppState>> {
     Router::new().route("/runtime", axum::routing::get(routes::runtime_info))
+}
+
+fn usage_routes() -> Router<Arc<AppState>> {
+    Router::new().route(
+        "/api/usage/coding",
+        axum::routing::get(coding_usage::get_coding_usage),
+    )
 }
 
 fn thread_routes() -> Router<Arc<AppState>> {

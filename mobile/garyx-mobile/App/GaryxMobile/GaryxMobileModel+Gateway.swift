@@ -105,6 +105,8 @@ extension GaryxMobileModel {
         recentThreadIds = []
         GaryxMobileWidgetStore.clear()
         WidgetCenter.shared.reloadTimelines(ofKind: GaryxRecentThreadsWidgetConstants.kind)
+        GaryxUsageWidgetStore.clear()
+        WidgetCenter.shared.reloadTimelines(ofKind: GaryxCodingUsageWidgetConstants.kind)
         selectedThread = nil
         messages = []
         messagesByThread = [:]
@@ -286,6 +288,8 @@ extension GaryxMobileModel {
                         // baseline reconcile poll started above.
                         startSelectedThreadStream(for: selectedThreadId)
                     }
+                    guard !Task.isCancelled else { return }
+                    await refreshCodingUsageWidget()
                 case .checking:
                     break
                 case .disconnected, .failed:
@@ -400,6 +404,7 @@ extension GaryxMobileModel {
             guard isCurrentConnectRefresh(requestId, runtimeGeneration: runtimeGeneration, scopeId: gatewayScopeId) else {
                 return
             }
+            await refreshCodingUsageWidget()
             connectRefreshRequestId = nil
             await openPendingMobileRouteIfNeeded()
             startSelectedThreadReconcileLoop()

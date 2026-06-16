@@ -180,6 +180,10 @@ public final class GaryxGatewayClient {
         try await get("/api/status")
     }
 
+    public func codingUsage() async throws -> GaryxCodingUsage {
+        try await get("/api/usage/coding")
+    }
+
     public func chatHealth() async throws -> GaryxChatHealth {
         try await get("/api/chat/health")
     }

@@ -1,0 +1,9 @@
+# Xcode per-user state — never commit (contains local absolute paths / machine state)
+xcuserdata/
+*.xcuserstate
+*.xcuserdatad
+
+# Xcode / SwiftPM build output
+build/
+DerivedData/
+.build/

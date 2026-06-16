@@ -347,5 +347,6 @@ struct GaryxRecentThreadsWidget: Widget {
 struct GaryxRecentThreadsWidgetBundle: WidgetBundle {
     var body: some Widget {
         GaryxRecentThreadsWidget()
+        GaryxCodingUsageWidget()
     }
 }
