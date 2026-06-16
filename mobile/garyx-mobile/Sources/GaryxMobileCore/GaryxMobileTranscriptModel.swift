@@ -179,10 +179,9 @@ struct GaryxMobileToolTraceGroup: Equatable {
         if editedFileCount > 0 {
             parts.append("edited \(editedFileCount) file\(editedFileCount == 1 ? "" : "s")")
         }
-        // Non-file tools (Agent, TaskCreate, ToolSearch, Skill, mcp__*, …) don't
-        // fall into command/read/edit; name them by title rather than the opaque
-        // "used N tools" (the "Edited 1 file, used 1 tool" symptom). Distinct
-        // titles, input order preserved; fall back to a count if titles are blank.
+        // Non-file tools (Agent, TaskCreate, ToolSearch, Skill, mcp__*, ...) don't
+        // fall into command/read/edit. Name a small distinct set by title, but
+        // fall back to a count before the collapsed row becomes too long.
         let otherEntries = entries.filter { !$0.isCommand && !$0.isFileRead && !$0.isFileEdit }
         if !otherEntries.isEmpty {
             var seen = Set<String>()
@@ -191,7 +190,7 @@ struct GaryxMobileToolTraceGroup: Equatable {
                 guard !title.isEmpty, seen.insert(title).inserted else { return nil }
                 return title
             }
-            if names.isEmpty {
+            if names.isEmpty || names.count > 3 {
                 parts.append("used \(otherEntries.count) tool\(otherEntries.count == 1 ? "" : "s")")
             } else {
                 parts.append("used \(names.joined(separator: ", "))")
@@ -259,16 +258,6 @@ struct GaryxMobileToolTraceEntry: Identifiable, Equatable {
             || normalized == "apply_patch"
             || normalized.contains("edit")
             || normalized.contains("patch")
-    }
-
-    var groupSummary: String {
-        if status == .running {
-            return isCommand ? "Running command" : "Using \(title)"
-        }
-        if status == .failed {
-            return "\(title) failed"
-        }
-        return isCommand ? "Ran command" : "Used \(title)"
     }
 
     var previewText: String? {

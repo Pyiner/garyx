@@ -282,17 +282,28 @@ final class GaryxToolCallPresentationTests: XCTestCase {
     func testGroupSummaryNamesNonFileToolInsteadOfGenericUsedOneTool() {
         let group = GaryxMobileToolTraceGroup(entries: [
             entry(toolName: "Edit", title: "Edit", primaryPath: "/src/App.swift"),
-            entry(toolName: "Agent", title: "Agent"),
+            entry(toolName: "Agent"),
         ])
         XCTAssertEqual(group.summary, "Edited 1 file, used Agent")
     }
 
     func testGroupSummaryNamesTwoDistinctNonFileTools() {
         let group = GaryxMobileToolTraceGroup(entries: [
-            entry(toolName: "TaskCreate", title: "TaskCreate"),
-            entry(toolName: "ToolSearch", title: "ToolSearch"),
+            entry(toolName: "TaskCreate"),
+            entry(toolName: "ToolSearch"),
         ])
+        XCTAssertEqual(group.entries.map(\.title), ["TaskCreate", "ToolSearch"])
         XCTAssertEqual(group.summary, "Used TaskCreate, ToolSearch")
+    }
+
+    func testGroupSummaryCapsManyDistinctNonFileToolNames() {
+        let group = GaryxMobileToolTraceGroup(entries: [
+            entry(toolName: "TaskCreate"),
+            entry(toolName: "ToolSearch"),
+            entry(toolName: "Agent"),
+            entry(toolName: "Skill"),
+        ])
+        XCTAssertEqual(group.summary, "Used 4 tools")
     }
 
     func testExpandedRowVerbNamesNonFileToolDirectlyWithoutUsedPrefix() {
@@ -310,7 +321,7 @@ final class GaryxToolCallPresentationTests: XCTestCase {
 
     func testExpandedRowVerbForRunningNonFileToolIsJustTheName() {
         let rows = GaryxToolCallPresentation.listRows(from: [
-            entry(toolName: "ToolSearch", title: "ToolSearch", status: .running),
+            entry(toolName: "ToolSearch", status: .running),
         ])
         XCTAssertEqual(rows[0].verb, "ToolSearch")
     }
@@ -318,7 +329,7 @@ final class GaryxToolCallPresentationTests: XCTestCase {
     private func entry(
         id: String = UUID().uuidString,
         toolName: String,
-        title: String,
+        title: String? = nil,
         inputText: String? = nil,
         resultText: String? = nil,
         summaryText: String? = nil,
@@ -331,7 +342,7 @@ final class GaryxToolCallPresentationTests: XCTestCase {
             toolUseId: id,
             parentToolUseId: nil,
             toolName: toolName,
-            title: title,
+            title: title ?? GaryxMobileToolTraceEntry.title(for: toolName),
             inputText: inputText,
             resultText: resultText,
             summaryText: summaryText,
