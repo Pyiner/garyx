@@ -261,18 +261,21 @@ pub(crate) async fn repair_inactive_active_run_snapshot(
     let Some(run_id) = run_id else {
         return clear_active_run_snapshot(thread_value);
     };
-    if state.integration.bridge.is_run_active(run_id).await {
+    let run_id = run_id.to_owned();
+    if state.integration.bridge.is_run_active(&run_id).await {
         return false;
     }
-    let repaired = clear_active_run_snapshot(thread_value);
-    if repaired {
-        state
-            .threads
-            .thread_store
-            .set(thread_id, thread_value.clone())
-            .await;
+    // Atomic, run_id-owned clear in the store: if a run started since thread_value
+    // was read, it now owns the snapshot and is preserved (no get→set clobber).
+    let cleared = state
+        .threads
+        .thread_store
+        .clear_active_run_snapshot_if_owned(thread_id, &run_id)
+        .await;
+    if cleared {
+        clear_active_run_snapshot(thread_value);
     }
-    repaired
+    cleared
 }
 
 /// Startup data migration: clear stale `active_run_snapshot` overlays whose run

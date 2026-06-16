@@ -2455,10 +2455,25 @@ impl MultiProviderBridge {
             false
         };
 
-        // Cleanup tracking state.
-        let mut run_index = self.inner.run_index.write().await;
-        run_index.active_runs.remove(run_id);
-        run_index.run_sessions.remove(run_id);
+        // Cleanup tracking state. `run_sessions` maps run_id -> thread_id, so the
+        // removed value tells us which thread's overlay to clear.
+        let thread_id = {
+            let mut run_index = self.inner.run_index.write().await;
+            run_index.active_runs.remove(run_id);
+            run_index.run_sessions.remove(run_id)
+        };
+
+        // The aborted task is dropped, so its terminal persistence (which clears
+        // the active_run_snapshot) never runs. Clear the overlay now or the thread
+        // stays projected as running forever (the iOS tail "Thinking"). The
+        // run_id-owned, lock-held clear leaves a replacement run's snapshot intact.
+        if let Some(thread_id) = thread_id
+            && let Some(store) = self.inner.thread_store.read().await.clone()
+        {
+            store
+                .clear_active_run_snapshot_if_owned(&thread_id, run_id)
+                .await;
+        }
 
         task_cancelled || provider_aborted
     }

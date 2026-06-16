@@ -1428,6 +1428,24 @@ pub fn active_run_snapshot_run_id(thread_data: &Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+/// Remove the `history.active_run_snapshot` overlay from a thread blob, dropping
+/// an emptied `history` object. Returns true if a snapshot was present. Mirrors
+/// the bridge terminal's clear so a run that exits without reaching its terminal
+/// (e.g. an aborted/preempted run) does not leave the thread projected as running.
+pub fn remove_active_run_snapshot(thread_data: &mut Value) -> bool {
+    let Some(object) = thread_data.as_object_mut() else {
+        return false;
+    };
+    let Some(history) = object.get_mut("history").and_then(Value::as_object_mut) else {
+        return false;
+    };
+    let removed = history.remove("active_run_snapshot").is_some();
+    if history.is_empty() {
+        object.remove("history");
+    }
+    removed
+}
+
 pub fn message_text(message: &Value) -> Option<&str> {
     message
         .get("text")

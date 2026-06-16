@@ -457,3 +457,105 @@ async fn startup_repair_clears_stale_active_run_snapshot_but_keeps_live_runs() {
     .await
     .expect("held run should complete after release");
 }
+
+// Reproduction (state-driven, no UI): a streaming run that is ABORTED (preemption
+// by a follow-up the provider can't take mid-run, or an explicit cancel) drops the
+// run task, so its terminal persistence never runs and `active_run_snapshot` is
+// left behind — the recent projection then derives run_state=running forever (the
+// iOS tail "Thinking" that never clears). This asserts the thread returns to idle
+// after the abort.
+#[tokio::test]
+async fn aborting_a_streaming_run_clears_its_active_run_snapshot() {
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let bridge = Arc::new(MultiProviderBridge::new());
+    bridge
+        .register_provider(
+            "holding-provider",
+            Arc::new(HoldingProvider {
+                started: started.clone(),
+                release: release.clone(),
+            }),
+        )
+        .await;
+    bridge.set_default_provider_key("holding-provider").await;
+    let state = AppStateBuilder::new(crate::test_support::with_gateway_auth(
+        GaryxConfig::default(),
+    ))
+    .with_bridge(bridge.clone())
+    .build();
+
+    bridge
+        .start_agent_run(
+            AgentRunRequest::new(
+                "thread::aborted-run",
+                "do work",
+                "run::aborted",
+                "api",
+                "main",
+                HashMap::new(),
+            ),
+            None,
+        )
+        .await
+        .expect("run should start");
+
+    // The held provider streams a partial → the bridge persists active_run_snapshot.
+    tokio::time::timeout(std::time::Duration::from_secs(3), started.notified())
+        .await
+        .expect("provider should stream a partial");
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            if let Some(blob) = state.threads.thread_store.get("thread::aborted-run").await
+                && blob
+                    .pointer("/history/active_run_snapshot/run_id")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("run::aborted")
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("active_run_snapshot should persist while the run streams");
+
+    // Abort the run — its tokio task is dropped, so the terminal persistence that
+    // would clear the snapshot never runs.
+    assert!(
+        bridge.abort_run("run::aborted").await,
+        "abort should cancel the active run"
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while bridge.is_run_active("run::aborted").await {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("aborted run should leave the active set");
+
+    let blob = state
+        .threads
+        .thread_store
+        .get("thread::aborted-run")
+        .await
+        .unwrap();
+    assert!(
+        blob.pointer("/history/active_run_snapshot").is_none(),
+        "aborting a run must clear its active_run_snapshot (else run_state stays running)"
+    );
+    if let Some(record) = state
+        .ops
+        .garyx_db
+        .list_recent_threads(50, 0)
+        .unwrap()
+        .into_iter()
+        .find(|record| record.thread_id == "thread::aborted-run")
+    {
+        assert_ne!(
+            record.run_state, "running",
+            "an aborted run must not leave the thread projected as running"
+        );
+        assert_eq!(record.active_run_id, None);
+    }
+}

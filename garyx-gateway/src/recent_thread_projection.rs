@@ -249,6 +249,21 @@ impl ThreadStore for RecentThreadProjectingStore {
         }
         Ok(())
     }
+
+    async fn clear_active_run_snapshot_if_owned(&self, thread_id: &str, run_id: &str) -> bool {
+        let cleared = self
+            .inner
+            .clear_active_run_snapshot_if_owned(thread_id, run_id)
+            .await;
+        // Re-project from the cleaned blob so recent_threads drops run_state=running
+        // immediately (the home list and any already-open client reflect idle).
+        if cleared
+            && let Some(data) = self.inner.get(thread_id).await
+        {
+            self.project_thread(thread_id, &data);
+        }
+        cleared
+    }
 }
 
 pub(crate) fn recent_thread_draft_from_thread_data(
