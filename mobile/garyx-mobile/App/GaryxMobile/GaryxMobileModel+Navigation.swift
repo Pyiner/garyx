@@ -515,6 +515,7 @@ extension GaryxMobileModel {
         messageSignaturesByThread = [:]
         activeAssistantMessageIdsByThread = [:]
         pendingAssistantDeltasByThread = [:]
+        pendingDirectFollowUpsByThread = [:]
         assistantDeltaFlushTasksByThread.values.forEach { $0.cancel() }
         assistantDeltaFlushTasksByThread = [:]
 

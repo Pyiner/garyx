@@ -655,4 +655,70 @@ final class GaryxConversationRunTrackerDifferentialTests: XCTestCase {
         XCTAssertFalse(oracle.isThreadBusy("t1"), "documents the legacy bug")
         XCTAssertTrue(tracker.isThreadBusy("t1"), "transient errors keep the run busy on replay too")
     }
+
+    func testDirectFollowUpDispatchCanStartWhileThreadHasRemoteRun() {
+        var tracker = GaryxConversationRunTracker()
+        tracker.apply(streamEvent: .assistantDelta(
+            runId: "run-1",
+            threadId: "t1",
+            delta: "working",
+            metadata: nil
+        ))
+
+        XCTAssertTrue(tracker.isThreadBusy("t1"))
+        XCTAssertFalse(
+            tracker.beginLocalDispatch(threadId: "t1", intentId: "blocked", text: "follow-up"),
+            "default dispatch still protects accidental same-thread overlap"
+        )
+        XCTAssertTrue(tracker.beginLocalDispatch(
+            threadId: "t1",
+            intentId: "direct-follow-up",
+            text: "follow-up",
+            allowWhileBusy: true
+        ))
+        XCTAssertEqual(
+            tracker.machine.threadRuntimeByThread["t1"]?.remoteRunId,
+            "run-1",
+            "the active remote run remains known while the follow-up chat start is in flight"
+        )
+
+        tracker.confirmChatStartAccepted(
+            requestedThreadId: "t1",
+            acceptedThreadId: "t1",
+            intentId: "direct-follow-up",
+            runId: "run-2"
+        )
+
+        XCTAssertTrue(tracker.isThreadBusy("t1"))
+        XCTAssertEqual(tracker.machine.threadRuntimeByThread["t1"]?.remoteRunId, "run-2")
+        XCTAssertEqual(tracker.machine.threadRuntimeByThread["t1"]?.activeIntentId, "direct-follow-up")
+    }
+
+    func testFailedDirectFollowUpDispatchRestoresExistingRemoteRun() {
+        var tracker = GaryxConversationRunTracker()
+        tracker.apply(streamEvent: .assistantDelta(
+            runId: "run-1",
+            threadId: "t1",
+            delta: "working",
+            metadata: nil
+        ))
+
+        XCTAssertTrue(tracker.beginLocalDispatch(
+            threadId: "t1",
+            intentId: "direct-follow-up",
+            text: "follow-up",
+            allowWhileBusy: true
+        ))
+
+        tracker.failLocalDispatch(
+            threadId: "t1",
+            intentId: "direct-follow-up",
+            error: "network failed"
+        )
+
+        XCTAssertTrue(tracker.isThreadBusy("t1"))
+        XCTAssertEqual(tracker.machine.threadRuntimeByThread["t1"]?.state, .runningRemote)
+        XCTAssertEqual(tracker.machine.threadRuntimeByThread["t1"]?.remoteRunId, "run-1")
+        XCTAssertNil(tracker.machine.threadRuntimeByThread["t1"]?.activeIntentId)
+    }
 }

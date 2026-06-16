@@ -163,6 +163,9 @@ enum GaryxTranscriptMerge {
             }
         }
         let currentTurnRemoteAssistantTexts = currentTurnAssistantTexts(in: remoteMessages)
+        let remoteAssistantTexts = remoteMessages
+            .filter { $0.role == .assistant }
+            .map { normalizedMergeText($0.text) }
         let remoteClientIntentIds = Set(
             remoteMessages
                 .compactMap { $0.clientIntentId?.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -175,8 +178,13 @@ enum GaryxTranscriptMerge {
         )
 
         var isAfterUnmaterializedLocalUser = false
+        var passedMaterializedLocalUser = false
         for local in localMessages {
             if let remoteIndex = merged.firstIndex(where: { $0.id == local.id }) {
+                if local.role == .user {
+                    isAfterUnmaterializedLocalUser = false
+                    passedMaterializedLocalUser = true
+                }
                 if local.role == .assistant,
                    local.isStreaming,
                    merged[remoteIndex].role == .assistant,
@@ -197,11 +205,17 @@ enum GaryxTranscriptMerge {
             if !localClientIntentId.isEmpty,
                remoteClientIntentIds.contains(localClientIntentId) {
                 isAfterUnmaterializedLocalUser = false
+                if local.role == .user {
+                    passedMaterializedLocalUser = true
+                }
                 continue
             }
             if !localPendingInputId.isEmpty,
                remotePendingInputIds.contains(localPendingInputId) {
                 isAfterUnmaterializedLocalUser = false
+                if local.role == .user {
+                    passedMaterializedLocalUser = true
+                }
                 continue
             }
             let normalizedText = normalizedMergeText(local.text)
@@ -213,10 +227,12 @@ enum GaryxTranscriptMerge {
                        count > 0 {
                         remoteUserTextCounts[mergeKey] = count - 1
                         isAfterUnmaterializedLocalUser = false
+                        passedMaterializedLocalUser = true
                         continue
                     }
                     merged.append(local)
                     isAfterUnmaterializedLocalUser = true
+                    passedMaterializedLocalUser = false
                 } else {
                     isAfterUnmaterializedLocalUser = false
                 }
@@ -232,7 +248,14 @@ enum GaryxTranscriptMerge {
                             && remoteText.count >= normalizedText.count
                             && remoteText.hasPrefix(normalizedText)
                     }
-                    if !alreadyMaterialized {
+                    let staleFromPreviousTurn = passedMaterializedLocalUser
+                        && normalizedText.count >= 12
+                        && remoteAssistantTexts.contains { remoteText in
+                            !remoteText.isEmpty
+                                && remoteText.count >= normalizedText.count
+                                && remoteText.hasPrefix(normalizedText)
+                        }
+                    if !alreadyMaterialized && !staleFromPreviousTurn {
                         merged.append(local)
                     }
                 }

@@ -124,11 +124,6 @@ extension GaryxMobileModel {
     }
 
     func send(_ text: String, attachments: [GaryxMobileComposerAttachment] = []) async {
-        if let selectedThread, isThreadBusy(selectedThread.id) {
-            await queueRemoteInput(text, attachments: attachments, in: selectedThread)
-            return
-        }
-
         let visibleUserText = Self.visibleUserText(text: text, attachments: attachments)
         let clientIntentId = "mobile-\(UUID().uuidString)"
         let userMessage = GaryxMobileMessage(
@@ -143,21 +138,36 @@ extension GaryxMobileModel {
         )
         let assistantId = "local-assistant-\(UUID().uuidString)"
         var optimisticThreadId = selectedThread?.id
+        let allowBusyFollowUp = optimisticThreadId.map { isThreadBusy($0) } ?? false
         let draftOptimisticMessages = [userMessage]
         if let optimisticThreadId {
-            finishActiveAssistantSegmentBeforeUserTurn(for: optimisticThreadId)
+            if !allowBusyFollowUp {
+                finishActiveAssistantSegmentBeforeUserTurn(for: optimisticThreadId)
+            }
             mutateMessages(for: optimisticThreadId) { messages in
                 messages.append(userMessage)
             }
-            activeAssistantMessageIdsByThread[optimisticThreadId] = assistantId
-            // The run is active the instant the user sends: the tail
-            // thinking indicator must appear immediately, not after the
-            // gateway round-trips below. Failure paths clear this state.
-            runTracker.beginLocalDispatch(
+            if allowBusyFollowUp {
+                pendingDirectFollowUpsByThread[optimisticThreadId, default: []].append((
+                    userId: userMessage.id,
+                    assistantId: assistantId
+                ))
+            } else {
+                activeAssistantMessageIdsByThread[optimisticThreadId] = assistantId
+            }
+            // The run is active the instant the user sends. Non-busy sends
+            // also show the tail thinking indicator immediately; busy
+            // follow-ups wait until the provider ack defines the turn boundary.
+            guard runTracker.beginLocalDispatch(
                 threadId: optimisticThreadId,
                 intentId: clientIntentId,
-                text: visibleUserText
-            )
+                text: visibleUserText,
+                allowWhileBusy: allowBusyFollowUp
+            ) else {
+                markLatestLocalUserFailed(for: optimisticThreadId, message: "Thread is busy")
+                markStreamingAssistantComplete(for: optimisticThreadId, removeEmpty: true)
+                return
+            }
         } else {
             messages = draftOptimisticMessages
         }
@@ -177,7 +187,8 @@ extension GaryxMobileModel {
             guard runTracker.beginLocalDispatch(
                 threadId: thread.id,
                 intentId: clientIntentId,
-                text: visibleUserText
+                text: visibleUserText,
+                allowWhileBusy: allowBusyFollowUp && thread.id == optimisticThreadId
             ) else {
                 markLatestLocalUserFailed(for: thread.id, message: "Thread is busy")
                 markStreamingAssistantComplete(for: thread.id, removeEmpty: true)
@@ -189,7 +200,9 @@ extension GaryxMobileModel {
                 return
             }
             lastError = nil
-            activeAssistantMessageIdsByThread[thread.id] = assistantId
+            if !hasPendingDirectFollowUpAssistant(threadId: thread.id, assistantId: assistantId) {
+                activeAssistantMessageIdsByThread[thread.id] = assistantId
+            }
             let workspacePath = Self.firstNonEmpty(
                 thread.workspacePath,
                 newThreadWorkspace.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -205,7 +218,14 @@ extension GaryxMobileModel {
         } catch {
             if let optimisticThreadId {
                 markLatestLocalUserFailed(for: optimisticThreadId, message: displayMessage(for: error))
-                markStreamingAssistantComplete(for: optimisticThreadId, removeEmpty: true)
+                forgetPendingDirectFollowUp(
+                    threadId: optimisticThreadId,
+                    userId: userMessage.id,
+                    assistantId: assistantId
+                )
+                if !allowBusyFollowUp {
+                    markStreamingAssistantComplete(for: optimisticThreadId, removeEmpty: true)
+                }
             } else {
                 messages.removeAll { $0.id == assistantId }
                 if let index = messages.firstIndex(where: { $0.id == userMessage.id }) {
@@ -213,8 +233,10 @@ extension GaryxMobileModel {
                 }
             }
             if let optimisticThreadId {
-                flushPendingAssistantDelta(for: optimisticThreadId)
-                activeAssistantMessageIdsByThread[optimisticThreadId] = nil
+                if !allowBusyFollowUp {
+                    flushPendingAssistantDelta(for: optimisticThreadId)
+                    activeAssistantMessageIdsByThread[optimisticThreadId] = nil
+                }
                 runTracker.failLocalDispatch(
                     threadId: optimisticThreadId,
                     intentId: clientIntentId,
@@ -429,7 +451,9 @@ extension GaryxMobileModel {
             intentId: clientIntentId,
             runId: result.runId
         )
-        activeAssistantMessageIdsByThread[acceptedThreadId] = assistantMessageId
+        if !hasPendingDirectFollowUpAssistant(threadId: acceptedThreadId, assistantId: assistantMessageId) {
+            activeAssistantMessageIdsByThread[acceptedThreadId] = assistantMessageId
+        }
     }
 
     /// Re-send a user message that previously failed. Removes the failed user bubble +

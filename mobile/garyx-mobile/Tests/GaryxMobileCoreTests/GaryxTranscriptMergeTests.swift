@@ -472,8 +472,8 @@ final class GaryxTranscriptMergeTests: XCTestCase {
 
     func testMidRunSteerDoesNotDuplicateRunningTool() {
         // Mid-run steer: while turn 1 is still running, the user sends a second
-        // message M2, appended as an OPTIMISTIC user row at the end of the list
-        // (queueRemoteInput). A turn-1 tool tu-2 then streams: its committed row is
+        // message M2, appended as an OPTIMISTIC user row at the end of the list.
+        // A turn-1 tool tu-2 then streams: its committed row is
         // before M2, its live row lands after M2. They share a stable toolUseId, so
         // they are the same call and must render once — the optimistic M2 between
         // them must not split the turn into a duplicate.
@@ -556,6 +556,51 @@ final class GaryxTranscriptMergeTests: XCTestCase {
 
         let tu2Count = merged.flatMap { $0.toolTraceGroup?.entries ?? [] }.filter { $0.toolUseId == "tu-2" }.count
         XCTAssertEqual(tu2Count, 1, "an acked (.remotePartial) steer must not bound the turn and duplicate tu-2")
+    }
+
+    func testMaterializedMidRunUserDropsStaleStreamingAssistantFromPreviousTurn() {
+        let firstAssistantText = """
+        I already explained the active-run merge path and the prior live assistant row.
+        """
+        let remote = [
+            historyUser(0, text: "first"),
+            historyAssistant(1, text: firstAssistantText),
+            historyUser(2, text: "follow-up", clientIntentId: "mobile-follow-up"),
+            historyAssistant(3, text: "new answer"),
+        ]
+        let localFollowUp = optimisticUser(
+            "local-user-follow-up",
+            text: "follow-up",
+            clientIntentId: "mobile-follow-up"
+        )
+        let staleStreamingAssistant = GaryxMobileMessage(
+            id: "stream-assistant-old",
+            role: .assistant,
+            text: firstAssistantText,
+            timestamp: nil,
+            isStreaming: true,
+            localState: .remotePartial
+        )
+        let local = [
+            remote[0],
+            remote[1],
+            localFollowUp,
+            staleStreamingAssistant,
+        ]
+
+        let merged = GaryxTranscriptMerge.mergedMessages(remote, withLocal: local, threadRunActive: true)
+
+        XCTAssertEqual(merged.map(\.id), [
+            "history:0",
+            "history:1",
+            "local-user-follow-up",
+            "history:3",
+        ])
+        XCTAssertEqual(
+            merged.filter { $0.role == .assistant && $0.text == firstAssistantText }.count,
+            1,
+            "the previous turn's streaming assistant copy must not be pinned below the follow-up"
+        )
     }
 
     func testDistinctIdToolsAcrossSteerDoNotFold() {

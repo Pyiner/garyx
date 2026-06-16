@@ -31,8 +31,9 @@ extension GaryxMobileModel {
         case .toolResult(_, _, let message):
             appendToolTraceEvent(.toolResult, threadId: threadId, message: message)
         case .userAck where affectsActiveRun:
+            let nextAssistantId = moveNextPendingDirectFollowUpToAckBoundary(threadId: threadId)
             markActiveAssistantSegmentComplete(for: threadId)
-            activeAssistantMessageIdsByThread[threadId] = nil
+            activeAssistantMessageIdsByThread[threadId] = nextAssistantId
             if selectedThread?.id == eventThreadId {
                 Task { await loadSelectedThreadHistory() }
             }
@@ -61,9 +62,11 @@ extension GaryxMobileModel {
         case .threadTitleUpdated(_, let threadId, let title):
             applyThreadTitleUpdate(threadId: threadId, title: title)
         case .done where affectsActiveRun:
+            pendingDirectFollowUpsByThread[threadId] = nil
             clearActiveRun(threadId: eventThreadId.isEmpty ? threadId : eventThreadId)
             markStreamingAssistantComplete(for: threadId, removeEmpty: true)
         case .runComplete where affectsActiveRun:
+            pendingDirectFollowUpsByThread[threadId] = nil
             clearActiveRun(threadId: eventThreadId.isEmpty ? threadId : eventThreadId)
             markStreamingAssistantComplete(for: threadId, removeEmpty: true)
         case .error(_, _, let error) where affectsActiveRun:
@@ -75,10 +78,12 @@ extension GaryxMobileModel {
             } else {
                 lastError = error
                 markLatestLocalUserFailed(for: threadId, message: error)
+                pendingDirectFollowUpsByThread[threadId] = nil
                 markStreamingAssistantComplete(for: threadId, removeEmpty: true)
                 clearActiveRun(threadId: eventThreadId.isEmpty ? threadId : eventThreadId)
             }
         case .interrupt where affectsActiveRun:
+            pendingDirectFollowUpsByThread[threadId] = nil
             clearActiveRun(threadId: eventThreadId.isEmpty ? threadId : eventThreadId)
             markStreamingAssistantComplete(for: threadId, removeEmpty: true)
         case .snapshot(let threadId, let payload):
@@ -104,6 +109,33 @@ extension GaryxMobileModel {
         default:
             break
         }
+    }
+
+    func moveNextPendingDirectFollowUpToAckBoundary(threadId: String) -> String? {
+        guard var pendingFollowUps = pendingDirectFollowUpsByThread[threadId],
+              !pendingFollowUps.isEmpty else {
+            return nil
+        }
+        let followUp = pendingFollowUps.removeFirst()
+        pendingDirectFollowUpsByThread[threadId] = pendingFollowUps.isEmpty ? nil : pendingFollowUps
+        mutateMessages(for: threadId) { messages in
+            guard let index = messages.firstIndex(where: { $0.id == followUp.userId || $0.remoteId == followUp.userId }) else {
+                return
+            }
+            let message = messages.remove(at: index)
+            messages.append(message)
+        }
+        return followUp.assistantId
+    }
+
+    func forgetPendingDirectFollowUp(threadId: String, userId: String, assistantId: String) {
+        guard var pendingFollowUps = pendingDirectFollowUpsByThread[threadId] else { return }
+        pendingFollowUps.removeAll { $0.userId == userId || $0.assistantId == assistantId }
+        pendingDirectFollowUpsByThread[threadId] = pendingFollowUps.isEmpty ? nil : pendingFollowUps
+    }
+
+    func hasPendingDirectFollowUpAssistant(threadId: String, assistantId: String) -> Bool {
+        pendingDirectFollowUpsByThread[threadId]?.contains { $0.assistantId == assistantId } ?? false
     }
 
     func appendAssistantDelta(_ delta: String, threadId: String, assistantMessageId: String) {
@@ -179,14 +211,24 @@ extension GaryxMobileModel {
             : "remote-user-\(runId)"
         let visibleText = Self.remoteUserMessageText(text: text, imageCount: imageCount)
         let existingMessages = cachedMessages(for: threadId)
-        let materializesExistingLocalUser = existingMessages.contains { message in
+        let materializedLocalUserIndex = existingMessages.firstIndex { message in
             message.role == .user
                 && message.localState != .remoteFinal
                 && Self.normalizedMergeText(message.text) == Self.normalizedMergeText(visibleText)
         }
-        if !existingMessages.contains(where: { $0.id == messageId || $0.remoteId == messageId })
-            && !materializesExistingLocalUser {
-            finishActiveAssistantSegmentBeforeUserTurn(for: threadId)
+        let alreadyRendered = existingMessages.contains { $0.id == messageId || $0.remoteId == messageId }
+        if !alreadyRendered {
+            if let materializedLocalUserIndex {
+                let activeAssistantId = activeAssistantMessageIdsByThread[threadId]
+                let activeAssistantIndex = activeAssistantId.flatMap { id in
+                    existingMessages.firstIndex { $0.id == id || $0.remoteId == id }
+                }
+                if let activeAssistantIndex, activeAssistantIndex < materializedLocalUserIndex {
+                    finishActiveAssistantSegmentBeforeUserTurn(for: threadId)
+                }
+            } else {
+                finishActiveAssistantSegmentBeforeUserTurn(for: threadId)
+            }
         }
         mutateMessages(for: threadId) { messages in
             if messages.contains(where: { $0.id == messageId || $0.remoteId == messageId }) {

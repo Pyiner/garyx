@@ -130,14 +130,17 @@ public struct GaryxConversationRunTracker: Equatable, Sendable {
 
     /// Claims the thread for a local chat dispatch. Returns false (and leaves
     /// the tracker untouched) when the thread is already busy with another
-    /// run — the caller surfaces "Thread is busy".
+    /// run, unless the caller is intentionally sending a same-thread follow-up
+    /// through the normal chat-start path.
     @discardableResult
     public mutating func beginLocalDispatch(
         threadId: String,
         intentId: String,
-        text: String
+        text: String,
+        allowWhileBusy: Bool = false
     ) -> Bool {
-        if isThreadBusy(threadId, excludingIntentId: intentId) {
+        let currentRuntime = machine.threadRuntimeByThread[threadId]
+        if isThreadBusy(threadId, excludingIntentId: intentId), !allowWhileBusy {
             return false
         }
         if machine.intentsById[intentId] == nil {
@@ -164,7 +167,7 @@ public struct GaryxConversationRunTracker: Equatable, Sendable {
             threadId: threadId,
             state: .dispatchingSync,
             activeIntentId: intentId,
-            remoteRunId: nil,
+            remoteRunId: allowWhileBusy ? currentRuntime?.remoteRunId : nil,
             error: nil
         ))
         return true
@@ -214,11 +217,13 @@ public struct GaryxConversationRunTracker: Equatable, Sendable {
             return
         }
         let dropsRun = runtime.state == .dispatchingSync
+        let preservedRemoteRunId = runtime.remoteRunId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let restoresRemoteRun = dropsRun && !preservedRemoteRunId.isEmpty
         machine.apply(.threadRuntime(
             threadId: threadId,
-            state: dropsRun ? .idle : runtime.state,
+            state: dropsRun ? (restoresRemoteRun ? .runningRemote : .idle) : runtime.state,
             activeIntentId: nil,
-            remoteRunId: dropsRun ? nil : runtime.remoteRunId,
+            remoteRunId: dropsRun ? (restoresRemoteRun ? preservedRemoteRunId : nil) : runtime.remoteRunId,
             error: error
         ))
     }
@@ -231,11 +236,15 @@ public struct GaryxConversationRunTracker: Equatable, Sendable {
               runtime.activeIntentId != nil else {
             return
         }
+        let preservedRemoteRunId = runtime.remoteRunId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let restoresRemoteRun = runtime.state == .dispatchingSync && !preservedRemoteRunId.isEmpty
         machine.apply(.threadRuntime(
             threadId: threadId,
-            state: runtime.state == .dispatchingSync ? .idle : runtime.state,
+            state: runtime.state == .dispatchingSync
+                ? (restoresRemoteRun ? .runningRemote : .idle)
+                : runtime.state,
             activeIntentId: nil,
-            remoteRunId: runtime.remoteRunId,
+            remoteRunId: restoresRemoteRun ? preservedRemoteRunId : runtime.remoteRunId,
             error: nil
         ))
     }
