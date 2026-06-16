@@ -80,6 +80,12 @@ Detailed data and runtime contracts: @docs/agents/repository-contracts.md and
   add compatibility stripping for legacy prefixed IDs.
 - Mobile route state, presentation mapping, formatting, and business-rule
   transformations should live in `GaryxMobileCore` with SwiftPM tests.
+- Message, transcript, and tool-row display is state-first: the rendered state
+  (tool groups, activity labels, `run_state`/thinking) is a pure, testable
+  function in `GaryxMobileCore` / shared renderer logic, and the view only
+  renders it. Prioritize headless, no-UI tests for message-related work —
+  reproduce a display bug by driving that state from real captured
+  transcript/stream data and asserting the output, not by opening the app.
 - Keep mobile SwiftUI feature surfaces in feature-specific files.
 - Mobile page backgrounds and bottom floating controls should use the shared
   safe-area chrome helpers (`garyxPageBackground`, `garyxFloatingBottomChrome`)
