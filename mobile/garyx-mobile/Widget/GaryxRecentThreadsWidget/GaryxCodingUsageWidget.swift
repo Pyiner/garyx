@@ -299,7 +299,7 @@ struct GaryxCodingUsageWidgetView: View {
             Text("No usage yet")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.primary)
-            Text("Open Gary X to connect")
+            Text("Open Garyx to connect")
                 .font(.system(size: 11.5, weight: .medium))
                 .foregroundStyle(.secondary)
         }
@@ -314,7 +314,7 @@ struct GaryxCodingUsageWidget: Widget {
         StaticConfiguration(kind: kind, provider: GaryxCodingUsageProvider()) { entry in
             GaryxCodingUsageWidgetView(entry: entry)
         }
-        .configurationDisplayName("Gary X Quota")
+        .configurationDisplayName("Garyx Quota")
         .description("Weekly quota left for Claude Code and Codex.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
         .contentMarginsDisabled()
