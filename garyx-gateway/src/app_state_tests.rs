@@ -345,3 +345,115 @@ async fn test_app_state_builder_wires_bridge_thread_store_for_recent_projection(
     assert!(record.active_run_id.is_none());
     assert_eq!(record.run_state, "completed");
 }
+
+#[tokio::test]
+async fn startup_repair_clears_stale_active_run_snapshot_but_keeps_live_runs() {
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let bridge = Arc::new(MultiProviderBridge::new());
+    bridge
+        .register_provider(
+            "holding-provider",
+            Arc::new(HoldingProvider {
+                started: started.clone(),
+                release: release.clone(),
+            }),
+        )
+        .await;
+    bridge.set_default_provider_key("holding-provider").await;
+
+    let state = AppStateBuilder::new(crate::test_support::with_gateway_auth(
+        GaryxConfig::default(),
+    ))
+    .with_bridge(bridge.clone())
+    .build();
+
+    // (a) A thread whose active_run_snapshot references a run that is NOT live —
+    // the shape an abandoned run (gateway restart / a run that never reached its
+    // terminal) leaves behind, surfaced as a phantom "running"/tail "Thinking".
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::stale",
+            serde_json::json!({
+                "thread_id": "thread::stale",
+                "label": "Stale",
+                "updated_at": "2026-01-01T00:00:01Z",
+                "history": {
+                    "active_run_snapshot": { "run_id": "abandoned-run-1" },
+                    "recent_committed_run_ids": ["earlier-run"]
+                }
+            }),
+        )
+        .await;
+
+    // (b) A thread with a genuinely live run, held open so its snapshot is real.
+    bridge
+        .start_agent_run(
+            AgentRunRequest::new(
+                "thread::live-run",
+                "hold",
+                "run::live",
+                "api",
+                "main",
+                HashMap::new(),
+            ),
+            None,
+        )
+        .await
+        .expect("run should start");
+    tokio::time::timeout(std::time::Duration::from_secs(3), started.notified())
+        .await
+        .expect("provider should stream a partial reply");
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            if let Some(blob) = state.threads.thread_store.get("thread::live-run").await
+                && blob
+                    .pointer("/history/active_run_snapshot/run_id")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("run::live")
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("live run snapshot should persist");
+
+    let repaired = crate::api::repair_stale_active_run_snapshots(&state).await;
+
+    assert_eq!(repaired, 1, "only the stale (non-live) snapshot should repair");
+    let stale = state
+        .threads
+        .thread_store
+        .get("thread::stale")
+        .await
+        .unwrap();
+    assert!(
+        stale.pointer("/history/active_run_snapshot").is_none(),
+        "the stale active_run_snapshot must be cleared"
+    );
+    let live = state
+        .threads
+        .thread_store
+        .get("thread::live-run")
+        .await
+        .unwrap();
+    assert_eq!(
+        live.pointer("/history/active_run_snapshot/run_id")
+            .and_then(serde_json::Value::as_str),
+        Some("run::live"),
+        "a genuinely live run's snapshot must be preserved"
+    );
+
+    release.notify_waiters();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while bridge.is_run_active("run::live").await {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("held run should complete after release");
+}

@@ -275,6 +275,46 @@ pub(crate) async fn repair_inactive_active_run_snapshot(
     repaired
 }
 
+/// Startup data migration: clear stale `active_run_snapshot` overlays whose run
+/// is no longer live — a run abandoned by a gateway restart, or (before the
+/// "deliver, do not run" task-notification fix) a synthetic notification run that
+/// recorded a snapshot but never reached the bridge terminal that clears it.
+/// Steady-state correctness still comes from the bridge terminal and the
+/// read-path `repair_inactive_active_run_snapshot`; this only repairs rows that
+/// are ALREADY stale at startup, so a thread does not keep showing a phantom
+/// `running` (the iOS tail "Thinking") until it is reopened. Runs before the
+/// active-run projection reconcile so the reconcile re-derives idle drafts from
+/// the cleaned blobs. Returns the number of threads repaired.
+pub(crate) async fn repair_stale_active_run_snapshots(state: &Arc<AppState>) -> usize {
+    let records = match state.ops.garyx_db.list_recent_threads(usize::MAX, 0) {
+        Ok(records) => records,
+        Err(error) => {
+            tracing::warn!(error = %error, "failed to list recent threads before active-run snapshot repair");
+            return 0;
+        }
+    };
+    let mut repaired = 0;
+    for record in records {
+        let projection_is_active = record
+            .active_run_id
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+            || record.run_state == "running";
+        if !projection_is_active {
+            continue;
+        }
+        let Some(mut thread_value) = state.threads.thread_store.get(&record.thread_id).await
+        else {
+            continue;
+        };
+        if repair_inactive_active_run_snapshot(state, &record.thread_id, &mut thread_value).await {
+            repaired += 1;
+        }
+    }
+    repaired
+}
+
 // ---------------------------------------------------------------------------
 // GET /api/threads/history
 // ---------------------------------------------------------------------------

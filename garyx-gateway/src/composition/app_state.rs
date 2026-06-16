@@ -277,6 +277,8 @@ impl AppState {
                 &state.ops.garyx_db,
             )
             .await;
+            let repaired_active_run_snapshots =
+                crate::api::repair_stale_active_run_snapshots(&state).await;
             let reconciled_recent_threads = reconcile_active_recent_thread_projection(
                 &state.threads.thread_store,
                 &state.ops.garyx_db,
@@ -300,6 +302,7 @@ impl AppState {
                 endpoint_count = endpoints,
                 recent_thread_backfill_count = recent_threads,
                 recent_thread_prune_count = pruned_recent_threads,
+                recent_thread_active_repair_count = repaired_active_run_snapshots,
                 recent_thread_active_reconcile_count = reconciled_recent_threads,
                 thread_meta_projection_threads = thread_meta_projection.threads_scanned,
                 thread_meta_projection_endpoints = thread_meta_projection.channel_endpoints,
