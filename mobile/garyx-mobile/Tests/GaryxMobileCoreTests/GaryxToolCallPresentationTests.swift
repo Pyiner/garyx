@@ -118,11 +118,11 @@ final class GaryxToolCallPresentationTests: XCTestCase {
         XCTAssertEqual(rows.map(\.icon), [.read])
     }
 
-    func testGenericToolRowFallsBackToUsedTitle() {
+    func testGenericToolRowUsesToolNameAsVerbWithoutUsedPrefix() {
         let rows = GaryxToolCallPresentation.listRows(from: [
             entry(toolName: "todowrite", title: "Todowrite", summaryText: "3 todo items"),
         ])
-        XCTAssertEqual(rows.map(\.verb), ["Used Todowrite"])
+        XCTAssertEqual(rows.map(\.verb), ["Todowrite"])
         XCTAssertEqual(rows.map(\.detail), ["3 todo items"])
     }
 
@@ -293,6 +293,26 @@ final class GaryxToolCallPresentationTests: XCTestCase {
             entry(toolName: "ToolSearch", title: "ToolSearch"),
         ])
         XCTAssertEqual(group.summary, "Used TaskCreate, ToolSearch")
+    }
+
+    func testExpandedRowVerbNamesNonFileToolDirectlyWithoutUsedPrefix() {
+        // The expanded tool-list rows name the tool directly (no "Used"/"Using"
+        // prefix); file/command verbs are unchanged.
+        let rows = GaryxToolCallPresentation.listRows(from: [
+            entry(toolName: "Agent", title: "Agent"),
+            entry(toolName: "edit", title: "Edit", primaryPath: "/src/App.swift"),
+            entry(toolName: "bash", title: "Bash", summaryText: "git status"),
+        ])
+        XCTAssertEqual(rows[0].verb, "Agent")
+        XCTAssertEqual(rows[1].verb, "Edited")
+        XCTAssertEqual(rows[2].verb, "Ran")
+    }
+
+    func testExpandedRowVerbForRunningNonFileToolIsJustTheName() {
+        let rows = GaryxToolCallPresentation.listRows(from: [
+            entry(toolName: "ToolSearch", title: "ToolSearch", status: .running),
+        ])
+        XCTAssertEqual(rows[0].verb, "ToolSearch")
     }
 
     private func entry(

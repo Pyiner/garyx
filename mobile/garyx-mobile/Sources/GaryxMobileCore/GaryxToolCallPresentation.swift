@@ -324,7 +324,10 @@ enum GaryxToolCallPresentation {
         if entry.isFileRead { return running ? "Reading" : "Read" }
         if entry.isFileWrite { return running ? "Writing" : "Wrote" }
         if entry.isFileEdit { return running ? "Editing" : "Edited" }
-        return running ? "Using \(entry.title)" : "Used \(entry.title)"
+        // Non-file tools (Agent, TaskCreate, ToolSearch, Skill, mcp__*, …) name the
+        // tool directly, with no "Used"/"Using" prefix — the running state is shown
+        // by the row's shimmer, not the verb.
+        return entry.title
     }
 
     /// The concise per-call line: prefer the full file path for file-style
