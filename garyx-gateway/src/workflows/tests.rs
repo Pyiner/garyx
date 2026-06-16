@@ -211,6 +211,7 @@ fn workflow_bun_command_uses_overrides_or_bundled_sibling() {
             Some(exe.clone()),
             Some("/Users/test/custom-bun"),
             Some("/Users/test/generic-bun"),
+            None,
         )
         .expect("workflow override"),
         PathBuf::from("/Users/test/custom-bun")
@@ -220,14 +221,67 @@ fn workflow_bun_command_uses_overrides_or_bundled_sibling() {
             Some(exe.clone()),
             Some("  "),
             Some("/Users/test/generic-bun"),
+            None,
         )
         .expect("generic override"),
         PathBuf::from("/Users/test/generic-bun")
     );
     assert_eq!(
-        entrypoint::workflow_bun_command_from_values(Some(exe), None, None)
+        entrypoint::workflow_bun_command_from_values(Some(exe), None, None, None)
             .expect("bundled sibling"),
         bundled_bun
+    );
+}
+
+#[test]
+fn workflow_bun_command_resolves_system_path_then_errors_with_install_hint() {
+    // No override, no embedded runtime, no bundled sibling: the gateway resolves
+    // `bun` from PATH (the release binary no longer ships Bun), and otherwise
+    // tells the user to install it.
+    let temp = tempdir().expect("runtime root");
+    let exe = temp.path().join("garyx"); // dir has no `garyx-bun` sibling
+    std::fs::write(&exe, "").expect("fake garyx");
+
+    let bun_dir = temp.path().join("pathdir");
+    std::fs::create_dir_all(&bun_dir).expect("path dir");
+    let path_bun = bun_dir.join("bun");
+    std::fs::write(&path_bun, "#!/bin/sh\n").expect("fake bun");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = std::fs::metadata(&path_bun)
+            .expect("fake bun metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&path_bun, permissions).expect("fake bun executable");
+    }
+
+    // Found on PATH.
+    assert_eq!(
+        entrypoint::workflow_bun_command_from_values(
+            Some(exe.clone()),
+            None,
+            None,
+            Some(bun_dir.as_os_str()),
+        )
+        .expect("system path bun"),
+        path_bun.canonicalize().expect("canonicalize fake bun")
+    );
+
+    // Nothing anywhere -> a clear install error.
+    let empty_path = temp.path().join("empty");
+    std::fs::create_dir_all(&empty_path).expect("empty path dir");
+    let error = entrypoint::workflow_bun_command_from_values(
+        Some(exe),
+        None,
+        None,
+        Some(empty_path.as_os_str()),
+    )
+    .expect_err("missing bun must error");
+    let message = format!("{error:?}");
+    assert!(
+        message.contains("Bun is required") && message.contains("bun.sh"),
+        "error should tell the user to install Bun: {message}"
     );
 }
 

@@ -8,8 +8,8 @@ TARGET_BINARY="${REPO_ROOT}/target/release/garyx"
 
 cd "$REPO_ROOT"
 
-runtime_xz="${REPO_ROOT}/target/embedded-runtimes/host/garyx-bun.xz"
-bash scripts/prepare-embedded-bun-runtime.sh host "$runtime_xz"
-GARYX_EMBED_WORKFLOW_BUN_XZ="$runtime_xz" cargo build --release -p garyx
+# Garyx no longer bundles a Bun runtime; workflows resolve `bun` from PATH and
+# error with install instructions when it is missing.
+cargo build --release -p garyx
 bash scripts/codesign-macos-cli.sh "$TARGET_BINARY"
 "$TARGET_BINARY" --version

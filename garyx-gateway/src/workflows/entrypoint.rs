@@ -282,6 +282,7 @@ pub(super) fn workflow_bun_command() -> Result<PathBuf, WorkflowError> {
         std::env::current_exe().ok(),
         std::env::var("GARYX_WORKFLOW_BUN_BIN").ok().as_deref(),
         std::env::var("GARYX_BUN_BIN").ok().as_deref(),
+        std::env::var_os("PATH").as_deref(),
     )
 }
 
@@ -289,6 +290,7 @@ pub(super) fn workflow_bun_command_from_values(
     current_exe: Option<PathBuf>,
     workflow_bin_override: Option<&str>,
     bun_bin_override: Option<&str>,
+    path_var: Option<&std::ffi::OsStr>,
 ) -> Result<PathBuf, WorkflowError> {
     if let Some(path) = normalized_optional_string(workflow_bin_override)
         .or_else(|| normalized_optional_string(bun_bin_override))
@@ -302,8 +304,14 @@ pub(super) fn workflow_bun_command_from_values(
     if let Some(path) = bundled_workflow_bun_path(current_exe.as_deref()) {
         return Ok(path);
     }
+    if let Some(path) = path_var.and_then(bun_on_path) {
+        return Ok(path);
+    }
     Err(WorkflowError::Conflict(
-        "Garyx workflow runtime is missing; reinstall Garyx or set GARYX_WORKFLOW_BUN_BIN for development".to_owned(),
+        "Bun is required to run Garyx workflows but was not found. Install Bun \
+         (https://bun.sh — e.g. `brew install bun` or `curl -fsSL https://bun.sh/install | bash`) \
+         so that `bun` is on your PATH, or set GARYX_WORKFLOW_BUN_BIN to a Bun binary."
+            .to_owned(),
     ))
 }
 
@@ -311,6 +319,21 @@ fn bundled_workflow_bun_path(current_exe: Option<&FsPath>) -> Option<PathBuf> {
     let exe_dir = current_exe?.parent()?;
     let sibling = exe_dir.join("garyx-bun");
     executable_file_exists(&sibling).then_some(sibling)
+}
+
+/// Find an executable `bun` on a `PATH`-formatted value. The release binary no
+/// longer bundles a Bun runtime, so workflows run on the user's installed Bun;
+/// when it is absent `workflow_bun_command_from_values` returns install
+/// instructions. Takes the PATH value so it can be unit-tested without mutating
+/// the process environment.
+fn bun_on_path(path_var: &std::ffi::OsStr) -> Option<PathBuf> {
+    std::env::split_paths(path_var)
+        .map(|dir| dir.join("bun"))
+        .find(|candidate| executable_file_exists(candidate))
+        // Canonicalize so a relative PATH entry resolves to an absolute path: the
+        // workflow process is spawned with its cwd changed to the package dir, and
+        // a relative `bun` would otherwise resolve against the wrong directory.
+        .and_then(|candidate| candidate.canonicalize().ok())
 }
 
 fn embedded_workflow_bun_path() -> Result<Option<PathBuf>, WorkflowError> {

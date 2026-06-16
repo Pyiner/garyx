@@ -10,8 +10,6 @@ permissions:
 
 env:
   GARYX_RELEASE_BINARY_MAX_BYTES: "55000000"
-  GARYX_WORKFLOW_BUN_VERSION: "1.3.14"
-  BUN_VERSION: "1.3.14"
 
 jobs:
   build:
@@ -66,13 +64,6 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-zigbuild
-
-      - name: Prepare embedded workflow runtime
-        shell: bash
-        run: |
-          mkdir -p "$RUNNER_TEMP/garyx-runtime"
-          bash scripts/prepare-embedded-bun-runtime.sh "${{ matrix.target }}" "$RUNNER_TEMP/garyx-runtime/garyx-bun.xz"
-          echo "GARYX_EMBED_WORKFLOW_BUN_XZ=$RUNNER_TEMP/garyx-runtime/garyx-bun.xz" >> "$GITHUB_ENV"
 
       - name: Build (macOS — native)
         if: contains(matrix.target, 'apple-darwin')
