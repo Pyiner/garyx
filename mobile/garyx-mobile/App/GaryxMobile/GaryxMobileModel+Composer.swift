@@ -234,7 +234,6 @@ extension GaryxMobileModel {
             }
             if let optimisticThreadId {
                 if !allowBusyFollowUp {
-                    flushPendingAssistantDelta(for: optimisticThreadId)
                     activeAssistantMessageIdsByThread[optimisticThreadId] = nil
                 }
                 runTracker.failLocalDispatch(
@@ -405,7 +404,6 @@ extension GaryxMobileModel {
                 message: displayMessage(for: error)
             )
             markStreamingAssistantComplete(for: queued.threadId, removeEmpty: true)
-            flushPendingAssistantDelta(for: queued.threadId)
             activeAssistantMessageIdsByThread[queued.threadId] = nil
             runTracker.failLocalDispatch(
                 threadId: queued.threadId,

@@ -285,27 +285,6 @@ struct GaryxMobileToolTraceEntry: Identifiable, Equatable {
         primaryPath = primaryPath ?? result.primaryPath
     }
 
-    /// Copy a still-running call's stable identity (id, name, input, path) onto a
-    /// row that currently only carries the call's result. Such a row is generic
-    /// ("tool") because its tool_use landed before the resumable window opened, so
-    /// the name + input live only on the running entry. Result, status, and error
-    /// are left untouched — the call has not ended yet.
-    mutating func adoptCallIdentity(from call: GaryxMobileToolTraceEntry) {
-        if toolUseId == nil { toolUseId = call.toolUseId }
-        if parentToolUseId == nil { parentToolUseId = call.parentToolUseId }
-        if toolName == "tool", call.toolName != "tool" {
-            toolName = call.toolName
-            title = call.title
-        }
-        if inputText == nil {
-            inputText = call.inputText
-            inputLabel = call.inputLabel
-        }
-        summaryText = summaryText ?? call.summaryText
-        primaryPathBadge = primaryPathBadge ?? call.primaryPathBadge
-        primaryPath = primaryPath ?? call.primaryPath
-    }
-
     private static func singleLineTruncated(_ value: String, limit: Int) -> String {
         let normalized = value
             .replacingOccurrences(of: "\r", with: "\n")

@@ -8,12 +8,9 @@ extension GaryxMobileModel {
         runTracker.apply(streamEvent: event)
     }
 
-    func handle(_ event: GaryxChatStreamEvent, threadId: String, assistantMessageId: String, affectsActiveRun: Bool) {
+    func handle(_ event: GaryxChatStreamEvent, threadId: String, affectsActiveRun: Bool) {
         let eventThreadId = Self.threadId(from: event)
         updateRemoteBusyState(from: event)
-        if !Self.isAssistantDeltaEvent(event) {
-            flushPendingAssistantDelta(for: threadId)
-        }
         switch event {
         case .userMessage(let runId, _, let text, let imageCount):
             appendRemoteUserMessage(
@@ -22,14 +19,14 @@ extension GaryxMobileModel {
                 text: text,
                 imageCount: imageCount
             )
-        case .assistantDelta(_, _, let delta, _):
-            appendAssistantDelta(delta, threadId: threadId, assistantMessageId: assistantMessageId)
+        case .assistantDelta:
+            break
         case .assistantBoundary:
-            appendAssistantBoundary(threadId: threadId, assistantMessageId: assistantMessageId)
-        case .toolUse(_, _, let message):
-            appendToolTraceEvent(.toolUse, threadId: threadId, message: message)
-        case .toolResult(_, _, let message):
-            appendToolTraceEvent(.toolResult, threadId: threadId, message: message)
+            break
+        case .toolUse:
+            break
+        case .toolResult:
+            break
         case .userAck where affectsActiveRun:
             let nextAssistantId = moveNextPendingDirectFollowUpToAckBoundary(threadId: threadId)
             markActiveAssistantSegmentComplete(for: threadId)
@@ -100,8 +97,7 @@ extension GaryxMobileModel {
                 mergedMessages(
                     remoteMessages,
                     withLocal: cachedMessages(for: threadId),
-                    preserveRemoteBeforeIndex: preserveRemoteBeforeIndex(from: transcript),
-                    threadRunActive: threadRunActive
+                    preserveRemoteBeforeIndex: preserveRemoteBeforeIndex(from: transcript)
                 ),
                 for: threadId,
                 reconcileActiveAssistant: true
@@ -140,66 +136,6 @@ extension GaryxMobileModel {
 
     func hasPendingDirectFollowUpUser(threadId: String, userId: String) -> Bool {
         pendingDirectFollowUpsByThread[threadId]?.contains { $0.userId == userId } ?? false
-    }
-
-    func appendAssistantDelta(_ delta: String, threadId: String, assistantMessageId: String) {
-        guard !delta.isEmpty else { return }
-        let targetId = activeAssistantMessageIdsByThread[threadId]
-            ?? "stream-assistant-\(threadId)-\(UUID().uuidString)"
-        activeAssistantMessageIdsByThread[threadId] = targetId
-        if var pending = pendingAssistantDeltasByThread[threadId],
-           pending.targetId == targetId {
-            pending.text += delta
-            pendingAssistantDeltasByThread[threadId] = pending
-        } else {
-            pendingAssistantDeltasByThread[threadId] = PendingAssistantDelta(targetId: targetId, text: delta)
-        }
-        scheduleAssistantDeltaFlush(for: threadId)
-    }
-
-    func scheduleAssistantDeltaFlush(for threadId: String) {
-        guard assistantDeltaFlushTasksByThread[threadId] == nil else { return }
-        assistantDeltaFlushTasksByThread[threadId] = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: Self.assistantDeltaFlushDelayNanos)
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                self?.flushPendingAssistantDelta(for: threadId)
-            }
-        }
-    }
-
-    func flushPendingAssistantDelta(for threadId: String) {
-        assistantDeltaFlushTasksByThread[threadId]?.cancel()
-        assistantDeltaFlushTasksByThread[threadId] = nil
-        guard let pending = pendingAssistantDeltasByThread.removeValue(forKey: threadId),
-              !pending.text.isEmpty else {
-            return
-        }
-        let targetId = pending.targetId
-        var resolvedAssistantId: String?
-        mutateMessages(for: threadId) { messages in
-            resolvedAssistantId = GaryxTranscriptMerge.appendLiveAssistantText(
-                pending.text,
-                targetId: targetId,
-                into: &messages
-            )
-        }
-        if let resolvedAssistantId {
-            activeAssistantMessageIdsByThread[threadId] = resolvedAssistantId
-        }
-    }
-
-    func discardPendingAssistantDelta(for threadId: String) {
-        assistantDeltaFlushTasksByThread[threadId]?.cancel()
-        assistantDeltaFlushTasksByThread[threadId] = nil
-        pendingAssistantDeltasByThread[threadId] = nil
-    }
-
-    static func isAssistantDeltaEvent(_ event: GaryxChatStreamEvent) -> Bool {
-        if case .assistantDelta = event {
-            return true
-        }
-        return false
     }
 
     func appendRemoteUserMessage(runId: String, threadId: String, text: String, imageCount: Int) {
@@ -263,22 +199,6 @@ extension GaryxMobileModel {
         }
     }
 
-    func appendAssistantBoundary(threadId: String, assistantMessageId: String) {
-        guard let targetId = activeAssistantMessageIdsByThread[threadId] else {
-            return
-        }
-        mutateMessages(for: threadId) { messages in
-            guard let index = messages.firstIndex(where: { $0.id == targetId }) else {
-                return
-            }
-            let hasText = !messages[index].text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            guard hasText else { return }
-            messages[index].text += "\n\n"
-            messages[index].isStreaming = true
-            activeAssistantMessageIdsByThread[threadId] = messages[index].id
-        }
-    }
-
     func markStreamingAssistantComplete(for threadId: String, removeEmpty: Bool = false) {
         mutateMessages(for: threadId) { messages in
             if removeEmpty {
@@ -308,14 +228,12 @@ extension GaryxMobileModel {
     }
 
     func finishActiveAssistantSegmentBeforeUserTurn(for threadId: String) {
-        flushPendingAssistantDelta(for: threadId)
         markActiveAssistantSegmentComplete(for: threadId)
         removeEmptyActiveAssistantPlaceholder(for: threadId)
         activeAssistantMessageIdsByThread[threadId] = nil
     }
 
     func suspendStreamingAssistantForBackground(threadId: String) -> String? {
-        flushPendingAssistantDelta(for: threadId)
         let activeAssistantMessageId = activeAssistantMessageIdsByThread[threadId]
         var preservedAssistantId: String?
         mutateMessages(for: threadId) { messages in
@@ -428,14 +346,12 @@ extension GaryxMobileModel {
     func mergedMessages(
         _ remoteMessages: [GaryxMobileMessage],
         withLocal localMessages: [GaryxMobileMessage],
-        preserveRemoteBeforeIndex: Int? = nil,
-        threadRunActive: Bool = true
+        preserveRemoteBeforeIndex: Int? = nil
     ) -> [GaryxMobileMessage] {
         GaryxTranscriptMerge.mergedMessages(
             remoteMessages,
             withLocal: localMessages,
-            preserveRemoteBeforeIndex: preserveRemoteBeforeIndex,
-            threadRunActive: threadRunActive
+            preserveRemoteBeforeIndex: preserveRemoteBeforeIndex
         )
     }
 
@@ -564,20 +480,6 @@ extension GaryxMobileModel {
 
     func mobileMessages(from transcript: [GaryxTranscriptMessage], live: Bool = false) -> [GaryxMobileMessage] {
         GaryxMobileTranscriptMapper.mobileMessages(from: transcript, live: live)
-    }
-
-    private func appendToolTraceEvent(_ eventKind: GaryxMobileToolTraceEventKind, threadId: String, message: GaryxJSONValue?) {
-        flushPendingAssistantDelta(for: threadId)
-        removeEmptyActiveAssistantPlaceholder(for: threadId)
-        activeAssistantMessageIdsByThread[threadId] = nil
-        guard let entry = GaryxMobileToolTraceEntry(eventKind: eventKind, value: message) else {
-            return
-        }
-
-        let kind: GaryxMobileTranscriptToolTraceKind = eventKind == .toolResult ? .toolResult : .toolUse
-        mutateMessages(for: threadId) { messages in
-            GaryxTranscriptMerge.appendLiveToolTraceEntry(entry, kind: kind, into: &messages)
-        }
     }
 
     func removeEmptyActiveAssistantPlaceholder(for threadId: String) {
@@ -749,9 +651,7 @@ extension GaryxMobileModel {
             return
         }
 
-        let assistantMessageId = activeAssistantMessageIdsByThread[threadId]
-            ?? "stream-assistant-\(threadId)-\(UUID().uuidString)"
-        handle(event, threadId: threadId, assistantMessageId: assistantMessageId, affectsActiveRun: true)
+        handle(event, threadId: threadId, affectsActiveRun: true)
 
         switch event {
         case .threadTitleUpdated(_, let threadId, let title):
@@ -772,9 +672,6 @@ extension GaryxMobileModel {
 
     /// Full reset of all tracked run state (gateway switch, debug snapshot).
     func clearActiveRunState() {
-        for threadId in Array(pendingAssistantDeltasByThread.keys) {
-            flushPendingAssistantDelta(for: threadId)
-        }
         if let activeRunThreadId {
             activeAssistantMessageIdsByThread[activeRunThreadId] = nil
         }
@@ -782,7 +679,6 @@ extension GaryxMobileModel {
     }
 
     func clearActiveRunState(for threadId: String) {
-        flushPendingAssistantDelta(for: threadId)
         activeAssistantMessageIdsByThread[threadId] = nil
         runTracker.clearLocalRun(threadId: threadId)
     }
@@ -796,7 +692,6 @@ extension GaryxMobileModel {
             return
         }
 
-        flushPendingAssistantDelta(for: resolvedThreadId)
         activeAssistantMessageIdsByThread[resolvedThreadId] = nil
         runTracker.clearLocalRun(threadId: resolvedThreadId)
         cancelSelectedThreadRecoveryIfNeeded(threadId: resolvedThreadId)

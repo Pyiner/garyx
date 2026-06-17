@@ -772,7 +772,6 @@ extension GaryxMobileModel {
                 cancelSelectedThreadReconcileLoop()
                 resetSelectedThreadHistoryPagination()
             }
-            discardPendingAssistantDelta(for: thread.id)
             messagesByThread[thread.id] = nil
             messageSignaturesByThread[thread.id] = nil
             activeAssistantMessageIdsByThread[thread.id] = nil
@@ -978,8 +977,7 @@ extension GaryxMobileModel {
             mergedMessages(
                 remoteMessages,
                 withLocal: cachedMessages(for: threadId),
-                preserveRemoteBeforeIndex: preserveRemoteBeforeIndex(from: transcript),
-                threadRunActive: threadRunActive
+                preserveRemoteBeforeIndex: preserveRemoteBeforeIndex(from: transcript)
             ),
             for: threadId,
             reconcileActiveAssistant: true
@@ -1113,7 +1111,6 @@ extension GaryxMobileModel {
             // stop button. The tracker reconciled it — unless a chat start
             // is still in flight, where "no active run yet" is expected.
             if clearedLocalRun {
-                flushPendingAssistantDelta(for: threadId)
                 activeAssistantMessageIdsByThread[threadId] = nil
                 markStreamingAssistantComplete(for: threadId, removeEmpty: true)
             }
@@ -1282,8 +1279,7 @@ extension GaryxMobileModel {
                 mergedMessages(
                     remoteMessages,
                     withLocal: cachedMessages(for: threadId),
-                    preserveRemoteBeforeIndex: preserveRemoteBeforeIndex(from: transcript),
-                    threadRunActive: threadRunActive
+                    preserveRemoteBeforeIndex: preserveRemoteBeforeIndex(from: transcript)
                 ),
                 for: threadId,
                 reconcileActiveAssistant: true
@@ -1374,8 +1370,7 @@ extension GaryxMobileModel {
                 mergedMessages(
                     remoteMessages,
                     withLocal: cachedMessages(for: threadId),
-                    preserveRemoteBeforeIndex: preserveRemoteBeforeIndex(from: transcript),
-                    threadRunActive: threadRunActive
+                    preserveRemoteBeforeIndex: preserveRemoteBeforeIndex(from: transcript)
                 ),
                 for: threadId,
                 reconcileActiveAssistant: true

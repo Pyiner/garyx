@@ -117,10 +117,7 @@ extension GaryxMobileModel {
         cachedTranscriptSnapshots = [:]
         transcriptCacheStore.clearAll()
         activeAssistantMessageIdsByThread = [:]
-        pendingAssistantDeltasByThread = [:]
         pendingDirectFollowUpsByThread = [:]
-        assistantDeltaFlushTasksByThread.values.forEach { $0.cancel() }
-        assistantDeltaFlushTasksByThread = [:]
         clearAllComposerDrafts()
         draftThreadTitle = ""
         agents = []

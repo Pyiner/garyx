@@ -45,7 +45,6 @@ final class GaryxMobileModel: ObservableObject {
     // catches up any remainder. 50 * 100 = 5000 committed rows per catch-up.
     static let threadHistoryMaxForwardPages = 50
     static let selectedThreadReconcileIntervalNanos: UInt64 = 1_500_000_000
-    static let assistantDeltaFlushDelayNanos: UInt64 = 50_000_000
     /// Coalescing window for streamed committed rows: a large catch-up replays many
     /// committed messages back-to-back, so render + disk-persist are folded into one
     /// flush per interval instead of running per row (which flickers the list).
@@ -61,11 +60,6 @@ final class GaryxMobileModel: ObservableObject {
     struct TurnRowsCacheKey: Equatable {
         let isRunning: Bool
         let messages: MessageListSignature
-    }
-
-    struct PendingAssistantDelta {
-        var targetId: String
-        var text: String
     }
 
     struct WidgetAgentIdentity {
@@ -253,8 +247,6 @@ final class GaryxMobileModel: ObservableObject {
     var selectedThreadTurnRowsCacheKey: TurnRowsCacheKey?
     var selectedThreadTurnRowsCache: [GaryxMobileTurnRow] = []
     var activeAssistantMessageIdsByThread: [String: String] = [:]
-    var pendingAssistantDeltasByThread: [String: PendingAssistantDelta] = [:]
-    var assistantDeltaFlushTasksByThread: [String: Task<Void, Never>] = [:]
     var pendingDirectFollowUpsByThread: [String: [(userId: String, assistantId: String)]] = [:]
     var pendingQueuedInputsByIntentId: [String: GaryxPendingQueuedInput] = [:]
     var gatewayRuntimeGeneration = UUID()

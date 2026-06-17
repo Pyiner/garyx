@@ -237,8 +237,7 @@ extension GaryxMobileModel {
             mergedMessages(
                 remoteMessages,
                 withLocal: cachedMessages(for: threadId),
-                preserveRemoteBeforeIndex: window.firstIndex,
-                threadRunActive: threadRunActive
+                preserveRemoteBeforeIndex: window.firstIndex
             ),
             for: threadId,
             reconcileActiveAssistant: true

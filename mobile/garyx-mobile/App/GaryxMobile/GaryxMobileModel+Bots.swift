@@ -285,7 +285,6 @@ extension GaryxMobileModel {
                 cancelSelectedThreadReconcileLoop()
                 resetSelectedThreadHistoryPagination()
             }
-            discardPendingAssistantDelta(for: normalizedThreadId)
             messagesByThread[normalizedThreadId] = nil
             messageSignaturesByThread[normalizedThreadId] = nil
             activeAssistantMessageIdsByThread[normalizedThreadId] = nil

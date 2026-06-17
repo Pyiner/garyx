@@ -47,11 +47,11 @@ extension GaryxMobileTranscriptMapper {
                     // matching tool_use was flushed to when an intervening text row
                     // split them (a sub-agent runs while the parent narrates) - so a
                     // straddling result is never rendered as a stray "Used 1 tool".
-                    if var group = pendingToolGroup, GaryxTranscriptMerge.absorbToolResult(entry, into: &group) {
+                    if var group = pendingToolGroup, absorbToolResult(entry, into: &group) {
                         pendingToolGroup = group
                         continue
                     }
-                    if GaryxTranscriptMerge.absorbResultIntoFlushedToolGroup(entry, in: &rendered) {
+                    if absorbResultIntoFlushedToolGroup(entry, in: &rendered) {
                         continue
                     }
                     continue
@@ -89,6 +89,86 @@ extension GaryxMobileTranscriptMapper {
 
         flushToolGroup()
         return rendered
+    }
+
+    /// Absorb a committed `tool_result` entry into the tool-use entry it belongs
+    /// to. An identified result matches by `toolUseId`; id-less provider results
+    /// can only complete an open running entry in the current pending group.
+    private static func absorbToolResult(
+        _ result: GaryxMobileToolTraceEntry,
+        into group: inout GaryxMobileToolTraceGroup,
+        allowIdlessFallback: Bool = true
+    ) -> Bool {
+        if let resultId = result.toolUseId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !resultId.isEmpty {
+            if let index = group.entries.lastIndex(where: { entry in
+                guard let entryId = entry.toolUseId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !entryId.isEmpty else { return false }
+                return entryId == resultId
+            }) {
+                group.entries[index].absorb(result: result)
+                return true
+            }
+            return false
+        }
+
+        guard allowIdlessFallback else { return false }
+        if let index = group.entries.lastIndex(where: { canAbsorbToolResultFallback(result, into: $0) }) {
+            group.entries[index].absorb(result: result)
+            return true
+        }
+        return false
+    }
+
+    private static func canAbsorbToolResultFallback(
+        _ result: GaryxMobileToolTraceEntry,
+        into candidate: GaryxMobileToolTraceEntry
+    ) -> Bool {
+        guard candidate.status == .running, candidate.resultText == nil else {
+            return false
+        }
+        let resultId = result.toolUseId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let candidateId = candidate.toolUseId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !resultId.isEmpty, !candidateId.isEmpty, resultId != candidateId {
+            return false
+        }
+        let resultTool = result.toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let candidateTool = candidate.toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if !resultTool.isEmpty, resultTool == candidateTool {
+            return true
+        }
+        if candidateTool == "tool" || resultTool == "tool" {
+            return true
+        }
+        if result.title.caseInsensitiveCompare(candidate.title) == .orderedSame {
+            return true
+        }
+        if let resultSummary = result.summaryText,
+           let candidateSummary = candidate.summaryText,
+           resultSummary == candidateSummary {
+            return true
+        }
+        return false
+    }
+
+    /// Absorb a committed `tool_result` into the most recent already-flushed tool
+    /// group in the current turn. The stable-id-only match avoids attaching a
+    /// stray id-less result across text or group boundaries.
+    private static func absorbResultIntoFlushedToolGroup(
+        _ entry: GaryxMobileToolTraceEntry,
+        in messages: inout [GaryxMobileMessage]
+    ) -> Bool {
+        for index in messages.indices.reversed() {
+            if messages[index].role == .user { break }
+            guard messages[index].role == .tool,
+                  var group = messages[index].toolTraceGroup else { continue }
+            if absorbToolResult(entry, into: &group, allowIdlessFallback: false) {
+                messages[index].toolTraceGroup = group
+                messages[index].text = group.summary
+                return true
+            }
+        }
+        return false
     }
 
     static func transcriptStructuredContent(_ item: GaryxTranscriptMessage) -> GaryxJSONValue? {

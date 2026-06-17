@@ -67,7 +67,6 @@ extension GaryxMobileModel {
     }
 
     func clearMessages(for threadId: String) {
-        discardPendingAssistantDelta(for: threadId)
         messagesByThread[threadId] = []
         messageSignaturesByThread[threadId] = Self.messageListSignature(for: [])
         activeAssistantMessageIdsByThread[threadId] = nil
