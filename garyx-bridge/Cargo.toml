@@ -34,4 +34,5 @@ http = "1"
 serde_yaml = "0.9"
 
 [dev-dependencies]
+cctty = { workspace = true }
 tempfile = { workspace = true }

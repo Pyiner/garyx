@@ -296,7 +296,7 @@ dependencies = [
 [[package]]
 name = "cctty"
 version = "0.2.6"
-source = "git+https://github.com/Pyiner/cctty.git?rev=a708ef4bf7a33247a5d944144693941cf84e2693#a708ef4bf7a33247a5d944144693941cf84e2693"
+source = "git+https://github.com/Pyiner/cctty.git?rev=fa5d8a4dcbda4a40d34318094d752064452dff04#fa5d8a4dcbda4a40d34318094d752064452dff04"
 dependencies = [
  "libc",
  "serde",
@@ -897,6 +897,7 @@ name = "garyx-bridge"
 version = "0.1.27"
 dependencies = [
  "async-trait",
+ "cctty",
  "chrono",
  "claude-agent-sdk",
  "codex-sdk",
