@@ -341,6 +341,10 @@ impl ClaudeSDKClient {
             self.reset_message_channel();
             return Ok(());
         };
+        let process_grace_timeout = self
+            .options
+            .finish_process_grace_timeout
+            .unwrap_or(FINISH_PROCESS_GRACE_TIMEOUT);
 
         if let Some(handle) = self.stream_handle.take() {
             handle.abort();
@@ -350,12 +354,12 @@ impl ClaudeSDKClient {
         transport.end_input().await?;
 
         if !transport
-            .wait_for_exit_timeout(FINISH_PROCESS_GRACE_TIMEOUT)
+            .wait_for_exit_timeout(process_grace_timeout)
             .await?
         {
             tracing::warn!(
                 "Claude CLI did not exit within {}s after stdin closed; terminating",
-                FINISH_PROCESS_GRACE_TIMEOUT.as_secs()
+                process_grace_timeout.as_secs()
             );
             transport.terminate().await?;
         }

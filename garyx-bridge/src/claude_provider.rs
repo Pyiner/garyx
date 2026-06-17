@@ -34,6 +34,7 @@ const MAX_BUFFER_SIZE: usize = 10 * 1024 * 1024; // 10 MB
 const ABORT_TIMEOUT_SECS: u64 = 10;
 const STREAM_IDLE_TIMEOUT_SECS: u64 = 3600; // 1 hour
 const POST_RESULT_DRAIN_TIMEOUT_SECS: u64 = 2;
+const NATIVE_FINISH_PROCESS_GRACE_TIMEOUT_SECS: u64 = 10;
 const CLAUDE_MISSING_RESULT_ERROR: &str = "claude SDK stream ended without a result message";
 const GARYX_CCTTY_PATH_ENV: &str = "GARYX_CCTTY_PATH";
 const GARYX_CLAUDE_CLI_PATH_ENV: &str = "GARYX_CLAUDE_CLI_PATH";
@@ -252,6 +253,11 @@ fn claude_sdk_cli_mode_label(config: &ClaudeCodeConfig) -> &'static str {
         CLAUDE_CLI_MODE_NATIVE => CLAUDE_CLI_MODE_NATIVE,
         _ => CLAUDE_CLI_MODE_CCTTY,
     }
+}
+
+fn finish_process_grace_timeout(config: &ClaudeCodeConfig) -> Option<Duration> {
+    (claude_sdk_cli_mode(config) == CLAUDE_CLI_MODE_NATIVE)
+        .then(|| Duration::from_secs(NATIVE_FINISH_PROCESS_GRACE_TIMEOUT_SECS))
 }
 
 #[cfg(test)]
@@ -1090,6 +1096,7 @@ impl ClaudeCliProvider {
             setting_sources: (!self.config.setting_sources.is_empty())
                 .then(|| self.config.setting_sources.clone()),
             fork_session,
+            finish_process_grace_timeout: finish_process_grace_timeout(&self.config),
             ..Default::default()
         }
     }

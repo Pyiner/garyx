@@ -2,18 +2,121 @@ use super::*;
 use crate::gary_prompt::GARY_BASE_INSTRUCTIONS;
 use crate::native_slash::build_native_skill_prompt;
 use claude_agent_sdk::{
-    AssistantMessage, ResultMessage, SystemMessage, ToolResultBlock, ToolUseBlock, UserContent,
-    UserInput, UserMessage,
+    AssistantMessage, OutboundUserMessage, ResultMessage, SystemMessage, ToolResultBlock,
+    ToolUseBlock, UserContent, UserInput, UserMessage, run_streaming as sdk_run_streaming,
 };
 use garyx_models::provider::{ClaudeCodeConfig, QueuedUserInput};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::process::{Command as StdCommand, Stdio};
 use std::sync::Arc;
 
 fn make_provider() -> ClaudeCliProvider {
     ClaudeCliProvider::new(ClaudeCodeConfig::default())
+}
+
+fn synthetic_temp_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "garyx-claude-{name}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&dir).expect("failed to create synthetic temp dir");
+    dir
+}
+
+fn write_executable_script(path: &Path, body: &str) {
+    fs::write(path, body).expect("failed to write synthetic cli");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(path)
+            .expect("failed to stat synthetic cli")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms).expect("failed to chmod synthetic cli");
+    }
+}
+
+fn wait_for_pid_file(path: &Path, timeout: Duration) -> u32 {
+    let started = Instant::now();
+    loop {
+        if let Ok(text) = fs::read_to_string(path)
+            && let Ok(pid) = text.trim().parse::<u32>()
+        {
+            return pid;
+        }
+        assert!(
+            started.elapsed() < timeout,
+            "timed out waiting for pid file {}",
+            path.display()
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[cfg(unix)]
+fn process_alive(pid: u32) -> bool {
+    StdCommand::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(unix)]
+fn terminate_process(pid: u32) {
+    let _ = StdCommand::new("kill")
+        .arg("-TERM")
+        .arg(pid.to_string())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    std::thread::sleep(Duration::from_millis(100));
+    if process_alive(pid) {
+        let _ = StdCommand::new("kill")
+            .arg("-KILL")
+            .arg(pid.to_string())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+#[cfg(unix)]
+struct ProcessGuard {
+    pid: Option<u32>,
+}
+
+#[cfg(unix)]
+impl ProcessGuard {
+    fn new(pid: u32) -> Self {
+        Self { pid: Some(pid) }
+    }
+
+    fn terminate(mut self) {
+        if let Some(pid) = self.pid.take() {
+            terminate_process(pid);
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ProcessGuard {
+    fn drop(&mut self) {
+        if let Some(pid) = self.pid {
+            terminate_process(pid);
+        }
+    }
 }
 
 #[tokio::test]
@@ -487,6 +590,198 @@ fn test_build_sdk_options_native_mode_uses_sdk_default_cli_discovery() {
     let sdk_opts = provider.build_sdk_options(&opts, None, "run-1");
     assert!(sdk_opts.cli_path.is_none());
     assert!(sdk_opts.cli_prefix_args.is_empty());
+    assert_eq!(
+        sdk_opts.finish_process_grace_timeout,
+        Some(Duration::from_secs(
+            NATIVE_FINISH_PROCESS_GRACE_TIMEOUT_SECS
+        ))
+    );
+}
+
+#[cfg(unix)]
+fn write_native_shutdown_probe_cli(cli_path: &Path) {
+    write_executable_script(
+        cli_path,
+        r#"#!/bin/sh
+set -eu
+
+IFS= read -r line || exit 1
+request_id=$(printf '%s\n' "$line" | sed -E 's/.*"request_id":"([^"]+)".*/\1/')
+printf '%s\n' "{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"$request_id\",\"response\":{}}}"
+
+IFS= read -r _user_message || exit 1
+parent=$$
+(
+  while kill -0 "$parent" 2>/dev/null; do
+    sleep 0.05
+  done
+  if [ -f "$DETACHED_READY_MARKER" ]; then
+    while :; do
+      sleep 1
+    done
+  fi
+  exit 0
+) >/dev/null 2>&1 < /dev/null &
+service_pid=$!
+printf '%s\n' "$service_pid" > "$DETACHED_PID_FILE"
+
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"synthetic native service started"}],"model":"synthetic"}}'
+printf '%s\n' '{"type":"result","subtype":"success","duration_ms":1,"duration_api_ms":1,"is_error":false,"num_turns":1,"session_id":"synthetic-session","result":"ok"}'
+
+while IFS= read -r _line; do
+  :
+done
+sleep 4
+printf done > "$DETACHED_READY_MARKER"
+"#,
+    );
+}
+
+#[cfg(unix)]
+async fn sdk_shutdown_probe_child_alive_after_finish(
+    cli_path: PathBuf,
+    cwd: PathBuf,
+    pid_file: &Path,
+    graceful_marker: &Path,
+    finish_grace: Duration,
+) -> bool {
+    let mut run = sdk_run_streaming(ClaudeAgentOptions {
+        cli_path: Some(cli_path),
+        cwd: Some(cwd),
+        env: HashMap::from([
+            (
+                "DETACHED_PID_FILE".to_owned(),
+                pid_file.to_string_lossy().into_owned(),
+            ),
+            (
+                "DETACHED_READY_MARKER".to_owned(),
+                graceful_marker.to_string_lossy().into_owned(),
+            ),
+        ]),
+        finish_process_grace_timeout: Some(finish_grace),
+        ..ClaudeAgentOptions::default()
+    })
+    .await
+    .expect("sdk run should start");
+    run.control()
+        .send_user_message(OutboundUserMessage::text(
+            "start a synthetic detached background service",
+            "",
+        ))
+        .await
+        .expect("user message should send");
+
+    let mut saw_result = false;
+    while let Some(message) = run.next_message().await {
+        match message.expect("sdk message should parse") {
+            Message::Result(result) => {
+                assert!(!result.is_error, "synthetic result should succeed");
+                saw_result = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_result, "synthetic cli should emit result");
+
+    let service_pid = wait_for_pid_file(pid_file, Duration::from_secs(1));
+    let service_guard = ProcessGuard::new(service_pid);
+    run.finish().await.expect("finish should succeed");
+    std::thread::sleep(Duration::from_millis(500));
+    let alive = process_alive(service_pid);
+    if alive {
+        service_guard.terminate();
+    }
+    alive
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn test_short_finish_grace_interrupts_native_cli_shutdown_before_child_lifetime_marker() {
+    let dir = synthetic_temp_dir("native-short-grace-child");
+    let cli_path = dir.join("claude");
+    let pid_file = dir.join("detached.pid");
+    let graceful_marker = dir.join("graceful-exit-ready");
+    write_native_shutdown_probe_cli(&cli_path);
+
+    let child_alive = sdk_shutdown_probe_child_alive_after_finish(
+        cli_path,
+        dir.clone(),
+        &pid_file,
+        &graceful_marker,
+        Duration::from_secs(1),
+    )
+    .await;
+    assert!(
+        !child_alive,
+        "short finish grace should interrupt cli shutdown before child survival marker"
+    );
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn test_native_finish_waits_for_cli_graceful_shutdown_before_child_lifetime_check() {
+    let dir = synthetic_temp_dir("native-graceful-shutdown-child");
+    let cli_path = dir.join("claude");
+    let pid_file = dir.join("detached.pid");
+    let graceful_marker = dir.join("graceful-exit-ready");
+    write_native_shutdown_probe_cli(&cli_path);
+
+    let mut provider = ClaudeCliProvider::new(ClaudeCodeConfig {
+        claude_cli_mode: "native".to_owned(),
+        claude_cli_path: Some(cli_path.to_string_lossy().into_owned()),
+        env: HashMap::from([
+            (
+                GARYX_CLAUDE_CLI_MODE_ENV.to_owned(),
+                CLAUDE_CLI_MODE_NATIVE.to_owned(),
+            ),
+            (
+                "DETACHED_PID_FILE".to_owned(),
+                pid_file.to_string_lossy().into_owned(),
+            ),
+            (
+                "DETACHED_READY_MARKER".to_owned(),
+                graceful_marker.to_string_lossy().into_owned(),
+            ),
+        ]),
+        ..ClaudeCodeConfig::default()
+    });
+    provider
+        .initialize()
+        .await
+        .expect("provider should initialize");
+
+    let result = provider
+        .run_streaming(
+            &ProviderRunOptions {
+                thread_id: "thread::synthetic-native".to_owned(),
+                message: "start a synthetic detached background service".to_owned(),
+                workspace_dir: Some(dir.to_string_lossy().into_owned()),
+                images: None,
+                metadata: HashMap::new(),
+            },
+            Box::new(|_| {}),
+        )
+        .await
+        .expect("native provider run should succeed");
+    assert!(result.success, "provider run should complete successfully");
+
+    let service_pid = wait_for_pid_file(&pid_file, Duration::from_secs(1));
+    let service_guard = ProcessGuard::new(service_pid);
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(
+        process_alive(service_pid),
+        "native finish should let cli graceful shutdown publish the child survival marker"
+    );
+
+    service_guard.terminate();
+    provider
+        .shutdown()
+        .await
+        .expect("provider should shut down");
+    let _ = fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -507,6 +802,7 @@ fn test_build_sdk_options_cctty_mode_uses_embedded_runner() {
     let sdk_opts = provider.build_sdk_options(&opts, None, "run-1");
     assert_eq!(sdk_opts.cli_path, std::env::current_exe().ok());
     assert_eq!(sdk_opts.cli_prefix_args, vec!["__cctty"]);
+    assert_eq!(sdk_opts.finish_process_grace_timeout, None);
 }
 
 #[test]

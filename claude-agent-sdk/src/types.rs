@@ -3,6 +3,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::control::CanUseToolRequest;
 use crate::error::Result;
@@ -306,6 +307,7 @@ pub struct ClaudeAgentOptions {
     pub output_format: Option<Value>,
     pub enable_file_checkpointing: bool,
     pub can_use_tool: Option<CanUseToolCallback>,
+    pub finish_process_grace_timeout: Option<Duration>,
 }
 
 impl std::fmt::Debug for ClaudeAgentOptions {
@@ -344,6 +346,10 @@ impl std::fmt::Debug for ClaudeAgentOptions {
             .field(
                 "can_use_tool",
                 &self.can_use_tool.as_ref().map(|_| "<handler>"),
+            )
+            .field(
+                "finish_process_grace_timeout",
+                &self.finish_process_grace_timeout,
             )
             .finish()
     }
@@ -384,6 +390,7 @@ impl Default for ClaudeAgentOptions {
             output_format: None,
             enable_file_checkpointing: false,
             can_use_tool: None,
+            finish_process_grace_timeout: None,
         }
     }
 }
