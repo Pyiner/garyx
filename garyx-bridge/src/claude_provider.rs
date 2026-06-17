@@ -158,6 +158,16 @@ fn update_claude_background_tasks(
     }
 }
 
+fn claude_background_task_event_should_resume_after_result(sys_msg: &SystemMessage) -> bool {
+    match sys_msg.subtype.as_str() {
+        "task_notification" => true,
+        "task_updated" => claude_background_task_status(&sys_msg.data)
+            .map(is_terminal_claude_background_task_status)
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Error classification helpers
 // ---------------------------------------------------------------------------
@@ -1530,8 +1540,10 @@ impl ClaudeCliProvider {
                         });
                     }
                     Ok(Message::System(sys_msg)) => {
+                        let should_resume_after_result =
+                            claude_background_task_event_should_resume_after_result(&sys_msg);
                         update_claude_background_tasks(&sys_msg, &mut active_background_tasks);
-                        if sys_msg.subtype == "task_notification" {
+                        if should_resume_after_result {
                             result_seen = false;
                         }
                         // Eagerly capture the session_id from the `init` system

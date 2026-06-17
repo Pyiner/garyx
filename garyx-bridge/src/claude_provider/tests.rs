@@ -159,6 +159,39 @@ fn test_claude_background_task_tracking_accepts_camel_case_fallbacks() {
     );
 }
 
+#[test]
+fn test_claude_background_task_resume_after_result_detection_does_not_require_task_key() {
+    assert!(claude_background_task_event_should_resume_after_result(
+        &SystemMessage {
+            subtype: "task_notification".to_owned(),
+            data: json!({
+                "status": "completed",
+                "summary": "result file generated",
+            }),
+        }
+    ));
+    assert!(claude_background_task_event_should_resume_after_result(
+        &SystemMessage {
+            subtype: "task_updated".to_owned(),
+            data: json!({
+                "patch": {
+                    "status": "completed"
+                }
+            }),
+        }
+    ));
+    assert!(!claude_background_task_event_should_resume_after_result(
+        &SystemMessage {
+            subtype: "task_updated".to_owned(),
+            data: json!({
+                "patch": {
+                    "status": "running"
+                }
+            }),
+        }
+    ));
+}
+
 #[tokio::test]
 async fn test_is_ready_before_init() {
     let provider = make_provider();
@@ -1571,6 +1604,154 @@ async fn test_process_messages_streaming_waits_for_background_task_notification_
         .expect("processing task should not panic")
         .expect("stream should process");
     assert_eq!(response_text, "started\n\ncompleted");
+    assert_eq!(
+        result_data.expect("expected final result").session_id,
+        "sdk-session-2"
+    );
+}
+
+#[tokio::test]
+async fn test_process_messages_streaming_keeps_monitor_wake_open_after_terminal_task_update() {
+    let provider = Arc::new(make_provider());
+    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+
+    provider.set_pending_inputs("run-monitor-wake", 1).await;
+
+    let provider_for_task = provider.clone();
+    let cb: StreamCallback = Box::new(|_| {});
+    let task = tokio::spawn(async move {
+        provider_for_task
+            .process_messages_streaming("run-monitor-wake", "thread::test", &mut rx, &cb)
+            .await
+    });
+
+    tx.send(Ok(Message::User(UserMessage {
+        content: UserContent::Text("start monitor".to_owned()),
+        uuid: None,
+        parent_tool_use_id: None,
+        tool_use_result: None,
+    })))
+    .await
+    .unwrap();
+    tx.send(Ok(Message::System(SystemMessage {
+        subtype: "task_started".to_owned(),
+        data: json!({
+            "type": "system",
+            "subtype": "task_started",
+            "task_id": "monitor-1",
+            "tool_use_id": "toolu_monitor",
+            "task_type": "local_bash"
+        }),
+    })))
+    .await
+    .unwrap();
+    tx.send(Ok(Message::Assistant(AssistantMessage {
+        content: vec![ContentBlock::Text(TextBlock {
+            text: "watching".to_owned(),
+        })],
+        model: "claude-test".to_owned(),
+        parent_tool_use_id: None,
+        error: None,
+    })))
+    .await
+    .unwrap();
+    tx.send(Ok(Message::Result(ResultMessage {
+        subtype: "success".to_owned(),
+        duration_ms: 1,
+        duration_api_ms: 1,
+        is_error: false,
+        num_turns: 1,
+        session_id: "sdk-session-1".to_owned(),
+        total_cost_usd: Some(0.0),
+        usage: None,
+        result: None,
+        structured_output: None,
+    })))
+    .await
+    .unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        provider
+            .run_pending_inputs
+            .lock()
+            .await
+            .contains_key("run-monitor-wake"),
+        "monitor task should keep the stream input queue open after the first result"
+    );
+
+    tx.send(Ok(Message::System(SystemMessage {
+        subtype: "task_updated".to_owned(),
+        data: json!({
+            "type": "system",
+            "subtype": "task_updated",
+            "task_id": "monitor-1",
+            "tool_use_id": "toolu_monitor",
+            "patch": {
+                "status": "completed"
+            }
+        }),
+    })))
+    .await
+    .unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(
+        POST_RESULT_DRAIN_TIMEOUT_SECS * 1000 + 250,
+    ))
+    .await;
+    assert!(
+        provider
+            .run_pending_inputs
+            .lock()
+            .await
+            .contains_key("run-monitor-wake"),
+        "terminal monitor update should keep the run open long enough for the wake notification"
+    );
+
+    tx.send(Ok(Message::System(SystemMessage {
+        subtype: "task_notification".to_owned(),
+        data: json!({
+            "type": "system",
+            "subtype": "task_notification",
+            "task_id": "monitor-1",
+            "tool_use_id": "toolu_monitor",
+            "status": "completed",
+            "summary": "result file generated"
+        }),
+    })))
+    .await
+    .expect("monitor wake notification should still be accepted");
+    tx.send(Ok(Message::Assistant(AssistantMessage {
+        content: vec![ContentBlock::Text(TextBlock {
+            text: "condition satisfied".to_owned(),
+        })],
+        model: "claude-test".to_owned(),
+        parent_tool_use_id: None,
+        error: None,
+    })))
+    .await
+    .expect("assistant wake response should still be accepted");
+    tx.send(Ok(Message::Result(ResultMessage {
+        subtype: "success".to_owned(),
+        duration_ms: 1,
+        duration_api_ms: 1,
+        is_error: false,
+        num_turns: 1,
+        session_id: "sdk-session-2".to_owned(),
+        total_cost_usd: Some(0.0),
+        usage: None,
+        result: None,
+        structured_output: None,
+    })))
+    .await
+    .unwrap();
+    drop(tx);
+
+    let (response_text, result_data) = task
+        .await
+        .expect("processing task should not panic")
+        .expect("stream should process");
+    assert_eq!(response_text, "watching\n\ncondition satisfied");
     assert_eq!(
         result_data.expect("expected final result").session_id,
         "sdk-session-2"
