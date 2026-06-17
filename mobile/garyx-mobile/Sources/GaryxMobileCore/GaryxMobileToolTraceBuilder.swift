@@ -241,10 +241,6 @@ struct GaryxMobileToolTracePayload {
     var itemType: String?
     var isError: Bool
 
-    static func fromEvent(_ value: GaryxJSONValue?, eventKind: GaryxMobileToolTraceEventKind) -> GaryxMobileToolTracePayload {
-        from(value: value, eventKind: eventKind, fallbackText: nil, fallbackToolName: nil, fallbackTimestamp: nil)
-    }
-
     static func fromTranscript(_ message: GaryxTranscriptMessage) -> GaryxMobileToolTracePayload {
         let eventKind = eventKind(fromTranscript: message)
         return from(
@@ -455,31 +451,6 @@ extension GaryxMobileToolTraceEntry {
             inputLabel: "Call",
             resultLabel: "Result",
             status: eventKind == .toolResult ? (payload.isError ? .failed : .completed) : .running,
-            isError: payload.isError,
-            timestamp: payload.timestamp,
-            primaryPathBadge: payload.primaryPathBadge,
-            primaryPath: payload.primaryPath
-        )
-    }
-
-    init?(eventKind: GaryxMobileToolTraceEventKind, value: GaryxJSONValue?) {
-        let payload = GaryxMobileToolTracePayload.fromEvent(value, eventKind: eventKind)
-        guard payload.shouldRender else {
-            return nil
-        }
-        let generatedId = payload.toolUseId ?? UUID().uuidString
-        self.init(
-            id: "\(eventKind.idSuffix):\(generatedId):\(UUID().uuidString)",
-            toolUseId: payload.toolUseId,
-            parentToolUseId: payload.parentToolUseId,
-            toolName: payload.normalizedToolName,
-            title: GaryxMobileToolTraceEntry.title(for: payload.normalizedToolName),
-            inputText: eventKind == .toolUse ? payload.contentText : nil,
-            resultText: eventKind == .toolResult ? payload.contentText : nil,
-            summaryText: payload.summaryText,
-            inputLabel: "Call",
-            resultLabel: "Result",
-            status: eventKind == .toolUse ? .running : (payload.isError ? .failed : .completed),
             isError: payload.isError,
             timestamp: payload.timestamp,
             primaryPathBadge: payload.primaryPathBadge,

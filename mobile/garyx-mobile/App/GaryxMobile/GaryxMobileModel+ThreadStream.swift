@@ -16,6 +16,21 @@ import Foundation
 // (URLSession surfaces it as an error / request timeout), and persistent failure
 // falls back to the S3 global-stream + reconcile-poll path.
 extension GaryxMobileModel {
+    func applySelectedThreadStreamPolicy(previousThreadId: String?, selectedThreadId: String?) {
+        switch GaryxSelectedThreadStreamPolicy.action(
+            previousThreadId: previousThreadId,
+            selectedThreadId: selectedThreadId
+        ) {
+        case .none:
+            break
+        case .start(let threadId):
+            startSelectedThreadStream(for: threadId)
+        case .stop:
+            cancelSelectedThreadReconcileLoop()
+            stopSelectedThreadStream()
+        }
+    }
+
     /// Cursor the per-thread stream resumes from: the highest committed index we
     /// already hold (cache window or rendered history), as a seq (index + 1).
     func selectedThreadStreamCursor(for threadId: String) -> Int {

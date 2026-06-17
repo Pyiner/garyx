@@ -77,7 +77,11 @@ final class GaryxMobileModel: ObservableObject {
     @Published var gatewaySettingsStatus: String?
     @Published var connectionState: GaryxMobileConnectionState = .disconnected
     @Published var threads: [GaryxThreadSummary] = []
-    @Published var selectedThread: GaryxThreadSummary?
+    @Published var selectedThread: GaryxThreadSummary? {
+        didSet {
+            applySelectedThreadStreamPolicy(previousThreadId: oldValue?.id, selectedThreadId: selectedThread?.id)
+        }
+    }
     @Published var messages: [GaryxMobileMessage] = [] {
         didSet {
             if let pendingSelectedMessagesSignature {

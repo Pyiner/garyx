@@ -604,7 +604,6 @@ extension GaryxMobileModel {
         // pages in on scroll-up. The stream supersedes the reconcile poll and falls
         // back to it (and the after_index HTTP path) on failure.
         await loadSelectedThreadHistory()
-        startSelectedThreadStream(for: thread.id)
     }
 
     func openNewThreadDraft(agentTargetOverride: String? = nil) {
