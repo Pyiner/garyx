@@ -73,18 +73,6 @@ export function PinnedThreadsSidebar({
               }}
             >
               <button
-                aria-label={t('Unpin {title}', { title: thread.title })}
-                className="pinned-thread-unpin"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onUnpinThread(thread.id);
-                }}
-                title={t('Unpin thread')}
-                type="button"
-              >
-                <IconPin aria-hidden className="pinned-thread-icon" size={16} stroke={1.55} />
-              </button>
-              <button
                 aria-current={isActive ? 'page' : undefined}
                 className="pinned-thread-row"
                 onClick={() => {
@@ -114,6 +102,18 @@ export function PinnedThreadsSidebar({
                 </span>
                 <span className="pinned-thread-title">{thread.title}</span>
                 <span className="pinned-thread-time">{timeLabel}</span>
+              </button>
+              <button
+                aria-label={t('Unpin {title}', { title: thread.title })}
+                className="pinned-thread-unpin"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onUnpinThread(thread.id);
+                }}
+                title={t('Unpin thread')}
+                type="button"
+              >
+                <IconPin aria-hidden className="pinned-thread-icon" size={15} stroke={1.55} />
               </button>
               <button
                 aria-label={

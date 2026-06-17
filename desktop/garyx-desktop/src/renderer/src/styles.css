@@ -1061,12 +1061,10 @@ code {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
-  min-height: 40px;
-  /* Extra left padding leaves room for the absolute-positioned pin (unpin)
-     button which always renders at the left edge of the shell. */
-  padding: 5px 8px 5px 32px;
+  min-height: 31px;
+  padding: 5px 8px;
   border: 0;
   border-radius: 12.5px;
   background: transparent;
@@ -1115,13 +1113,11 @@ code {
   opacity: 0;
 }
 
-/* Left unpin (pin) button. Always visible as the pinned-row glyph; on
-   direct hover the chip gets a soft background and the icon deepens so
-   the affordance reads as clickable. Matches the right
-   `.pinned-thread-archive` chip styling. */
+/* Hover-revealed row-end unpin button. It mirrors the right archive chip
+   so pinned rows keep a clean leading edge until the user needs actions. */
 .pinned-thread-unpin {
   position: absolute;
-  left: 4px;
+  right: 30px;
   top: 50%;
   display: inline-flex;
   align-items: center;
@@ -1133,11 +1129,20 @@ code {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--sidebar-text-muted);
+  opacity: 0;
+  pointer-events: none;
   cursor: pointer;
   transform: translateY(-50%);
   transition:
     background var(--duration-fast) var(--ease-standard),
-    color var(--duration-fast) var(--ease-standard);
+    color var(--duration-fast) var(--ease-standard),
+    opacity var(--duration-fast) var(--ease-standard);
+}
+
+.pinned-thread-row-shell:hover .pinned-thread-unpin,
+.pinned-thread-unpin:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .pinned-thread-unpin:hover {
@@ -1176,7 +1181,8 @@ code {
     opacity var(--duration-fast) var(--ease-standard);
 }
 
-.pinned-thread-row-shell:hover .pinned-thread-archive {
+.pinned-thread-row-shell:hover .pinned-thread-archive,
+.pinned-thread-archive:focus-visible {
   opacity: 1;
   pointer-events: auto;
 }
@@ -1472,9 +1478,7 @@ code {
 
 .bot-conversation-row.with-avatar {
   grid-template-columns: auto minmax(0, 1fr) auto;
-  min-height: 42px;
-  padding-top: 5px;
-  padding-bottom: 5px;
+  min-height: 34px;
 }
 
 .bot-conversation-row-shell:hover .bot-conversation-row {
@@ -1536,12 +1540,18 @@ code {
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  width: 32px;
-  height: 32px;
+  width: 20px;
+  height: 20px;
 }
 
 .thread-row-agent-avatar {
+  width: 18px;
+  height: 18px;
   border-color: color-mix(in oklab, var(--color-token-text-primary) 10%, transparent);
+}
+
+.thread-row-agent-avatar [data-slot="avatar-fallback"] {
+  font-size: 7px;
 }
 
 .pinned-thread-avatar-wrap {
@@ -1550,24 +1560,24 @@ code {
 
 .thread-row-typing-badge {
   position: absolute;
-  right: -3px;
-  bottom: -3px;
+  right: -2px;
+  bottom: -2px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 2.2px;
-  width: 21px;
-  height: 14px;
+  gap: 1.5px;
+  width: 13px;
+  height: 9px;
   border-radius: 999px;
   background: #f2f2f2;
   box-shadow:
-    0 0 0 2px #ffffff,
+    0 0 0 1.5px #ffffff,
     0 1px 2px rgba(15, 23, 42, 0.08);
 }
 
 .thread-row-typing-badge > span {
-  width: 3px;
-  height: 3px;
+  width: 2px;
+  height: 2px;
   border-radius: 999px;
   background: color-mix(in oklab, var(--color-token-text-primary) 56%, transparent);
   animation: thread-row-typing-dot 1.05s ease-in-out infinite;
