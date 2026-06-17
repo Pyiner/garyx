@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use garyx_models::Principal;
+use chrono::{DateTime, Utc};
 use garyx_models::provider::{
     AgentRunRequest, FORK_FROM_PROVIDER_TYPE_METADATA_KEY, FORK_FROM_SDK_SESSION_ID_METADATA_KEY,
     FilePayload, ImagePayload, PromptAttachment, PromptAttachmentKind, ProviderMessage,
@@ -12,6 +12,7 @@ use garyx_models::provider::{
     stage_image_payloads_for_prompt,
 };
 use garyx_models::thread_logs::{ThreadLogEvent, ThreadLogSink, resolve_thread_log_thread_id};
+use garyx_models::{Principal, TaskEventKind, TaskStatus, ThreadTask, is_tool_related_message};
 use garyx_router::{
     ThreadHistoryRepository, ThreadStore, active_run_snapshot_messages,
     mark_thread_task_in_review_if_in_progress, thread_metadata_from_value,
@@ -843,51 +844,185 @@ async fn render_streaming_user_message_for_provider(
     message.to_owned()
 }
 
-/// The last assistant text segment of a run, used as the task-ready
-/// notification body. A run's `session_messages` carry one assistant message per
-/// streamed segment, so the final assistant entry with visible text is the run's
-/// closing turn (the summary after the last tool call). Returns `None` when the
-/// run produced no assistant text (e.g. it ended on a tool call), which lets the
-/// gateway fall back to its own last-segment extraction from the transcript.
+/// Best assistant text for a task-ready notification body.
 ///
-/// Note: the gateway fallback (`final_text_after_last_user`) concatenates the
-/// trailing contiguous run of assistant messages, so when a closing turn spans
-/// several adjacent assistant segments with no tool call between them this sends
-/// only the final segment while the fallback would join them. That is acceptable:
-/// segment boundaries normally coincide with tool calls.
+/// Provider `session_messages` usually carry only assistant/tool output; the
+/// triggering user row is synthesized later when the run is persisted. When a
+/// human-user boundary is present, collect the final assistant turn across
+/// transparent tool traces. Without that boundary, preserve the historical
+/// provider-session behavior: use the trailing assistant island after the last
+/// tool call, so early narration is not pulled into the notification.
 fn last_assistant_segment(messages: &[ProviderMessage]) -> Option<String> {
-    messages
-        .iter()
-        .rev()
-        .filter(|message| matches!(message.role, ProviderMessageRole::Assistant))
-        .find_map(|message| {
-            message
-                .text
-                .as_deref()
+    if let Some(last_user_index) = messages.iter().rposition(is_human_user_provider_message) {
+        return assistant_text_after_provider_user(&messages[last_user_index + 1..]);
+    }
+    trailing_assistant_text_island(messages)
+}
+
+fn assistant_text_after_provider_user(messages: &[ProviderMessage]) -> Option<String> {
+    let mut current_group: Vec<String> = Vec::new();
+    let mut last_group: Vec<String> = Vec::new();
+
+    for message in messages {
+        if is_human_user_provider_message(message) {
+            current_group.clear();
+            last_group.clear();
+            continue;
+        }
+        if matches!(message.role, ProviderMessageRole::Assistant)
+            && !is_tool_related_provider_message(message)
+        {
+            if let Some(text) = trimmed_provider_text(message) {
+                current_group.push(text);
+                last_group = current_group.clone();
+            }
+            continue;
+        }
+        if is_tool_related_provider_message(message) {
+            continue;
+        }
+        current_group.clear();
+    }
+
+    (!last_group.is_empty()).then(|| last_group.join("\n\n"))
+}
+
+fn trailing_assistant_text_island(messages: &[ProviderMessage]) -> Option<String> {
+    let mut segments: Vec<String> = Vec::new();
+
+    for message in messages.iter().rev() {
+        if matches!(message.role, ProviderMessageRole::Assistant)
+            && !is_tool_related_provider_message(message)
+        {
+            if let Some(text) = trimmed_provider_text(message) {
+                segments.push(text);
+            }
+            continue;
+        }
+        if segments.is_empty() && is_tool_related_provider_message(message) {
+            continue;
+        }
+        if segments.is_empty()
+            && matches!(message.role, ProviderMessageRole::Assistant)
+            && trimmed_provider_text(message).is_none()
+        {
+            continue;
+        }
+        break;
+    }
+
+    if segments.is_empty() {
+        return None;
+    }
+    segments.reverse();
+    Some(segments.join("\n\n"))
+}
+
+fn trimmed_provider_text(message: &ProviderMessage) -> Option<String> {
+    message
+        .text
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn is_human_user_provider_message(message: &ProviderMessage) -> bool {
+    matches!(message.role, ProviderMessageRole::User) && !is_tool_related_provider_message(message)
+}
+
+fn is_tool_related_provider_message(message: &ProviderMessage) -> bool {
+    if matches!(
+        message.role,
+        ProviderMessageRole::ToolUse | ProviderMessageRole::ToolResult
+    ) {
+        return true;
+    }
+    message
+        .to_json_value()
+        .as_object()
+        .is_some_and(|object| is_tool_related_message(message.role_str(), object))
+}
+
+fn task_latest_in_review_transition_after(task: &ThreadTask, run_started_at: &str) -> bool {
+    if task.status != TaskStatus::InReview {
+        return false;
+    }
+    let Ok(run_started_at) =
+        DateTime::parse_from_rfc3339(run_started_at).map(|value| value.with_timezone(&Utc))
+    else {
+        return false;
+    };
+    task.events.last().is_some_and(|event| {
+        event.at >= run_started_at
+            && matches!(
+                event.kind,
+                TaskEventKind::StatusChanged {
+                    from: TaskStatus::InProgress,
+                    to: TaskStatus::InReview,
+                    ..
+                }
+            )
+    })
+}
+
+async fn task_already_ready_for_review_during_run(
+    store: &Arc<dyn ThreadStore>,
+    thread_id: &str,
+    run_started_at: &str,
+) -> Result<Option<ThreadTask>, garyx_router::TaskServiceError> {
+    let Some(record) = store.get(thread_id).await else {
+        return Ok(None);
+    };
+    let Some(task) = garyx_router::tasks::task_from_record(&record)? else {
+        return Ok(None);
+    };
+    if task_latest_in_review_transition_after(&task, run_started_at) {
+        Ok(Some(task))
+    } else {
+        Ok(None)
+    }
+}
+
+async fn emit_task_ready_for_review_event(
+    inner: &super::state::Inner,
+    thread_id: &str,
+    run_id: &str,
+    task_id: &str,
+    notification_text: Option<&str>,
+) {
+    if let Some(tx) = &*inner.event_tx.read().await {
+        let event = serde_json::json!({
+            "type": "task_ready_for_review",
+            "thread_id": thread_id,
+            "run_id": run_id,
+            "task_id": task_id,
+            "final_message": notification_text
                 .map(str::trim)
-                .filter(|text| !text.is_empty())
-                .map(ToOwned::to_owned)
-        })
+                .filter(|value| !value.is_empty()),
+        });
+        let _ = tx.send(event.to_string());
+    }
 }
 
 async fn mark_task_ready_for_review_after_stopped_run(
     inner: &super::state::Inner,
     thread_id: &str,
     run_id: &str,
+    run_started_at: &str,
     gate_response: Option<&str>,
     notification_text: Option<&str>,
+    allow_transition: bool,
     thread_logs: Option<Arc<dyn ThreadLogSink>>,
     thread_log_id: Option<&str>,
 ) {
-    // Gate on the full run response: a run that produced no output is not a
-    // result to review. The notification *body* uses only the last segment.
-    if gate_response
+    let has_gate_response = gate_response
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .is_none()
-    {
+        .is_some();
+    if allow_transition && !has_gate_response {
         record_thread_log(
-            thread_logs,
+            thread_logs.clone(),
             thread_log_id,
             ThreadLogEvent::info(
                 "",
@@ -898,41 +1033,78 @@ async fn mark_task_ready_for_review_after_stopped_run(
             .with_field("thread_id", json!(thread_id)),
         )
         .await;
-        return;
     }
     let Some(store) = inner.thread_store.read().await.clone() else {
         return;
     };
-    match mark_thread_task_in_review_if_in_progress(
-        &store,
-        thread_id,
-        Principal::Agent {
-            agent_id: "garyx".to_owned(),
-        },
-        Some("agent run stopped".to_owned()),
-    )
-    .await
-    {
+
+    if allow_transition && has_gate_response {
+        match mark_thread_task_in_review_if_in_progress(
+            &store,
+            thread_id,
+            Principal::Agent {
+                agent_id: "garyx".to_owned(),
+            },
+            Some("agent run stopped".to_owned()),
+        )
+        .await
+        {
+            Ok(Some(task)) => {
+                let task_id = garyx_router::tasks::canonical_task_id(&task);
+                emit_task_ready_for_review_event(
+                    inner,
+                    thread_id,
+                    run_id,
+                    &task_id,
+                    notification_text,
+                )
+                .await;
+                record_thread_log(
+                    thread_logs.clone(),
+                    thread_log_id,
+                    ThreadLogEvent::info("", "task", "task moved to review after run stopped")
+                        .with_run_id(run_id.to_owned())
+                        .with_field("task_id", json!(task_id)),
+                )
+                .await;
+                return;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(
+                    thread_id = %thread_id,
+                    run_id = %run_id,
+                    error = %error,
+                    "failed to move stopped task to review"
+                );
+                record_thread_log(
+                    thread_logs.clone(),
+                    thread_log_id,
+                    ThreadLogEvent::warn("", "task", "failed to move stopped task to review")
+                        .with_run_id(run_id.to_owned())
+                        .with_field("error", json!(error.to_string())),
+                )
+                .await;
+                return;
+            }
+        }
+    }
+
+    match task_already_ready_for_review_during_run(&store, thread_id, run_started_at).await {
         Ok(Some(task)) => {
             let task_id = garyx_router::tasks::canonical_task_id(&task);
-            if let Some(tx) = &*inner.event_tx.read().await {
-                let event = serde_json::json!({
-                    "type": "task_ready_for_review",
-                    "thread_id": thread_id,
-                    "run_id": run_id,
-                    "task_id": task_id,
-                    "final_message": notification_text
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty()),
-                });
-                let _ = tx.send(event.to_string());
-            }
+            emit_task_ready_for_review_event(inner, thread_id, run_id, &task_id, notification_text)
+                .await;
             record_thread_log(
-                thread_logs,
+                thread_logs.clone(),
                 thread_log_id,
-                ThreadLogEvent::info("", "task", "task moved to review after run stopped")
-                    .with_run_id(run_id.to_owned())
-                    .with_field("task_id", json!(task_id)),
+                ThreadLogEvent::info(
+                    "",
+                    "task",
+                    "task ready notification emitted after run stopped",
+                )
+                .with_run_id(run_id.to_owned())
+                .with_field("task_id", json!(task_id)),
             )
             .await;
         }
@@ -942,14 +1114,18 @@ async fn mark_task_ready_for_review_after_stopped_run(
                 thread_id = %thread_id,
                 run_id = %run_id,
                 error = %error,
-                "failed to move stopped task to review"
+                "failed to inspect stopped task review transition"
             );
             record_thread_log(
-                thread_logs,
+                thread_logs.clone(),
                 thread_log_id,
-                ThreadLogEvent::warn("", "task", "failed to move stopped task to review")
-                    .with_run_id(run_id.to_owned())
-                    .with_field("error", json!(error.to_string())),
+                ThreadLogEvent::warn(
+                    "",
+                    "task",
+                    "failed to inspect stopped task review transition",
+                )
+                .with_run_id(run_id.to_owned())
+                .with_field("error", json!(error.to_string())),
             )
             .await;
         }
@@ -1724,25 +1900,27 @@ impl MultiProviderBridge {
                         let _ = tx.send(event.to_string());
                     }
 
-                    if res.success {
-                        let last_segment = last_assistant_segment(
-                            persistence_result
-                                .as_ref()
-                                .map(|value| value.session_messages.as_slice())
-                                .filter(|messages| !messages.is_empty())
-                                .unwrap_or(&res.session_messages),
-                        );
-                        mark_task_ready_for_review_after_stopped_run(
-                            &inner,
-                            &thread_id_owned,
-                            &run_id_owned,
-                            Some(&res.response),
-                            last_segment.as_deref(),
-                            thread_logs_for_task.clone(),
-                            thread_log_id_owned.as_deref(),
-                        )
-                        .await;
-                    } else if !res.success {
+                    let last_segment = last_assistant_segment(
+                        persistence_result
+                            .as_ref()
+                            .map(|value| value.session_messages.as_slice())
+                            .filter(|messages| !messages.is_empty())
+                            .unwrap_or(&res.session_messages),
+                    );
+                    mark_task_ready_for_review_after_stopped_run(
+                        &inner,
+                        &thread_id_owned,
+                        &run_id_owned,
+                        &run_started_at,
+                        Some(&res.response),
+                        last_segment.as_deref(),
+                        res.success,
+                        thread_logs_for_task.clone(),
+                        thread_log_id_owned.as_deref(),
+                    )
+                    .await;
+
+                    if !res.success {
                         record_thread_log(
                             thread_logs_for_task.clone(),
                             thread_log_id_owned.as_deref(),
@@ -1831,6 +2009,19 @@ impl MultiProviderBridge {
                             .with_run_id(run_id_owned.clone())
                             .with_field("phase", json!(format!("{:?}", graph_state.phase)))
                             .with_field("error", json!(e.to_string())),
+                    )
+                    .await;
+
+                    mark_task_ready_for_review_after_stopped_run(
+                        &inner,
+                        &thread_id_owned,
+                        &run_id_owned,
+                        &run_started_at,
+                        None,
+                        None,
+                        false,
+                        thread_logs_for_task.clone(),
+                        thread_log_id_owned.as_deref(),
                     )
                     .await;
 

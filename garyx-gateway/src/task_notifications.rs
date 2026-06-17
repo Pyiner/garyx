@@ -5,7 +5,7 @@ use garyx_channels::{OutboundMessage, SendMessageResult};
 use garyx_models::thread_logs::ThreadLogEvent;
 use garyx_models::{
     ChannelOutboundContent, MessageLifecycleStatus, MessageTerminalReason, TaskEventKind,
-    TaskNotificationTarget, TaskStatus, ThreadTask,
+    TaskNotificationTarget, TaskStatus, ThreadTask, is_tool_related_message,
 };
 use garyx_router::tasks::task_from_record;
 use serde_json::{Value, json};
@@ -129,9 +129,29 @@ pub(crate) async fn dispatch_task_ready_notification(
         return Ok(());
     }
 
-    let final_message = match event.final_message.as_deref().map(str::trim) {
-        Some(value) if !value.is_empty() => value.to_owned(),
-        _ => final_message_from_task_thread(state, &event.thread_id)
+    let event_final_message = event
+        .final_message
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if event_final_message.is_none() && thread_has_active_run_snapshot(&record) {
+        record_api_thread_log(
+            state,
+            ThreadLogEvent::info(
+                &event.thread_id,
+                "task",
+                "task ready notification deferred until active run stops",
+            )
+            .with_run_id(event.run_id.clone().unwrap_or_default())
+            .with_field("task_id", json!(event.task_id)),
+        )
+        .await;
+        return Ok(());
+    }
+
+    let final_message = match event_final_message {
+        Some(value) => value.to_owned(),
+        None => final_message_from_task_thread(state, &event.thread_id)
             .await
             .unwrap_or_default(),
     };
@@ -157,6 +177,13 @@ fn latest_event_is_ready_for_review(task: &ThreadTask) -> bool {
             ..
         })
     )
+}
+
+fn thread_has_active_run_snapshot(record: &Value) -> bool {
+    record
+        .get("history")
+        .and_then(|history| history.get("active_run_snapshot"))
+        .is_some_and(|snapshot| !snapshot.is_null())
 }
 
 pub(crate) fn format_task_ready_notification(
@@ -202,29 +229,28 @@ fn final_text_after_last_user(messages: &[Value]) -> Option<String> {
     let mut after_user = false;
     let mut current_group: Vec<String> = Vec::new();
     let mut last_group: Vec<String> = Vec::new();
-    let mut previous_was_assistant = false;
 
     for message in messages {
-        match message.get("role").and_then(Value::as_str) {
-            Some("user") => {
+        let role = message.get("role").and_then(Value::as_str);
+        let tool_related = message
+            .as_object()
+            .is_some_and(|object| is_tool_related_message(role.unwrap_or_default(), object));
+        match role {
+            Some("user") if !tool_related => {
                 after_user = true;
                 current_group.clear();
                 last_group.clear();
-                previous_was_assistant = false;
             }
-            Some("assistant") if after_user => {
+            Some("assistant") if after_user && !tool_related => {
                 let text = message_text(message);
-                if !previous_was_assistant {
-                    current_group.clear();
-                }
                 if let Some(text) = text {
                     current_group.push(text);
                     last_group = current_group.clone();
                 }
-                previous_was_assistant = true;
             }
+            _ if after_user && tool_related => {}
             _ if after_user => {
-                previous_was_assistant = false;
+                current_group.clear();
             }
             _ => {}
         }

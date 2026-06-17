@@ -212,6 +212,133 @@ fn final_text_uses_last_assistant_group_after_last_user() {
     );
 }
 
+#[test]
+fn final_text_keeps_tool_split_final_answer_together() {
+    let messages = vec![
+        json!({"role": "user", "content": "Finish the task and report the final result."}),
+        json!({"role": "assistant", "content": "CONFIRMED: the task is complete.\n\nValidation: focused tests passed."}),
+        json!({
+            "role": "assistant",
+            "content": [{
+                "type": "tool_use",
+                "id": "toolu_synthetic_review",
+                "name": "Bash",
+                "input": {"cmd": "garyx task create --title review"}
+            }]
+        }),
+        json!({
+            "role": "user",
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": "toolu_synthetic_review",
+                "content": "queued"
+            }]
+        }),
+        json!({"role": "assistant", "content": "The code review is queued; stopping for review."}),
+    ];
+
+    assert_eq!(
+        final_text_after_last_user(&messages).as_deref(),
+        Some(
+            "CONFIRMED: the task is complete.\n\nValidation: focused tests passed.\n\nThe code review is queued; stopping for review."
+        )
+    );
+}
+
+#[tokio::test]
+async fn dispatch_defers_snapshot_notification_while_task_run_is_active() {
+    let dispatcher = Arc::new(RecordingDispatcher::default());
+    let provider = Arc::new(RecordingProvider::default());
+    let bridge = Arc::new(MultiProviderBridge::new());
+    bridge
+        .register_provider("recording-provider", provider.clone())
+        .await;
+    bridge.set_default_provider_key("recording-provider").await;
+    let state = crate::app_bootstrap::AppStateBuilder::new(telegram_owner_config())
+        .with_bridge(bridge.clone())
+        .with_channel_dispatcher(dispatcher.clone())
+        .build();
+    bridge
+        .set_thread_store(state.threads.thread_store.clone())
+        .await;
+    bridge.set_event_tx(state.ops.events.sender()).await;
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::task-active",
+            json!({
+                "thread_id": "thread::task-active",
+                "task": task_for_notification(TaskNotificationTarget::Bot {
+                    channel: "telegram".to_owned(),
+                    account_id: "main".to_owned(),
+                }),
+                "history": {
+                    "message_count": 1,
+                    "active_run_snapshot": {
+                        "run_id": "run-active-task",
+                        "messages": [
+                            {"role": "assistant", "content": "Interim handoff text before the run is done."}
+                        ]
+                    }
+                }
+            }),
+        )
+        .await;
+    state
+        .threads
+        .history
+        .transcript_store()
+        .append_committed_messages(
+            "thread::task-active",
+            Some("run-active-task"),
+            &[json!({"role": "user", "content": "Please finish the implementation."})],
+        )
+        .await
+        .expect("append transcript");
+
+    dispatch_task_ready_notification(
+        &state,
+        TaskReadyForReviewEvent {
+            thread_id: "thread::task-active".to_owned(),
+            task_id: "#TASK-42".to_owned(),
+            run_id: None,
+            final_message: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        dispatcher.calls().is_empty(),
+        "manual status transition must not snapshot an active run"
+    );
+    assert!(
+        provider.calls().is_empty(),
+        "manual status transition must not notify the target agent while the task run is active"
+    );
+
+    dispatch_task_ready_notification(
+        &state,
+        TaskReadyForReviewEvent {
+            thread_id: "thread::task-active".to_owned(),
+            task_id: "#TASK-42".to_owned(),
+            run_id: Some("run-active-task".to_owned()),
+            final_message: Some(
+                "CONFIRMED: the task is complete.\n\nValidation: focused tests passed.".to_owned(),
+            ),
+        },
+    )
+    .await
+    .unwrap();
+
+    let calls = dispatcher.calls();
+    assert_eq!(calls.len(), 1);
+    let text = calls[0].content.as_text().expect("notification text");
+    assert!(text.contains("CONFIRMED: the task is complete."));
+    assert!(!text.contains("Interim handoff text before the run is done."));
+}
+
 #[tokio::test]
 async fn dispatches_ready_notification_to_bot_target() {
     let dispatcher = Arc::new(RecordingDispatcher::default());

@@ -272,7 +272,11 @@ fn last_assistant_segment_returns_final_assistant_turn() {
     // body should be only the closing summary, not the whole run narration.
     let messages = vec![
         ProviderMessage::assistant_text("Let me check the code."),
-        ProviderMessage::tool_use(json!({ "cmd": "ls" }), Some("t1".into()), Some("Bash".into())),
+        ProviderMessage::tool_use(
+            json!({ "cmd": "ls" }),
+            Some("t1".into()),
+            Some("Bash".into()),
+        ),
         ProviderMessage::tool_result(json!("ok"), Some("t1".into()), Some("Bash".into()), None),
         ProviderMessage::assistant_text("Found it. Here is the summary."),
     ];
@@ -284,11 +288,44 @@ fn last_assistant_segment_returns_final_assistant_turn() {
 }
 
 #[test]
+fn last_assistant_segment_keeps_tool_split_final_answer_together() {
+    let messages = vec![
+        ProviderMessage::user_text("Finish the task and report the final result."),
+        ProviderMessage::assistant_text(
+            "CONFIRMED: the task is complete.\n\nValidation: focused tests passed.",
+        ),
+        ProviderMessage::tool_use(
+            json!({ "cmd": "garyx task create --title review" }),
+            Some("t1".into()),
+            Some("Bash".into()),
+        ),
+        ProviderMessage::tool_result(
+            json!("queued"),
+            Some("t1".into()),
+            Some("Bash".into()),
+            None,
+        ),
+        ProviderMessage::assistant_text("The code review is queued; stopping for review."),
+    ];
+
+    assert_eq!(
+        last_assistant_segment(&messages).as_deref(),
+        Some(
+            "CONFIRMED: the task is complete.\n\nValidation: focused tests passed.\n\nThe code review is queued; stopping for review."
+        ),
+    );
+}
+
+#[test]
 fn last_assistant_segment_skips_trailing_tool_messages() {
     // Run ends on a tool call: fall back to the last assistant text before it.
     let messages = vec![
         ProviderMessage::assistant_text("Working on it."),
-        ProviderMessage::tool_use(json!({ "cmd": "edit" }), Some("t1".into()), Some("Edit".into())),
+        ProviderMessage::tool_use(
+            json!({ "cmd": "edit" }),
+            Some("t1".into()),
+            Some("Edit".into()),
+        ),
         ProviderMessage::tool_result(json!("done"), Some("t1".into()), Some("Edit".into()), None),
     ];
 
@@ -340,7 +377,11 @@ fn persisted_provider_messages_merges_committed_cache_and_overlay_tail() {
         }
     });
     let merged = persisted_provider_messages_from_thread(&session_data);
-    assert_eq!(merged.len(), 3, "committed cache + overlay tail, not overlay alone");
+    assert_eq!(
+        merged.len(),
+        3,
+        "committed cache + overlay tail, not overlay alone"
+    );
 
     // Empty overlay falls back to the committed cache unchanged.
     let idle = serde_json::json!({"messages": [{"role": "user", "content": "q1"}]});
@@ -351,5 +392,9 @@ fn persisted_provider_messages_merges_committed_cache_and_overlay_tail() {
         "messages": [{"role": "user", "content": "q1"}],
         "history": {"active_run_snapshot": {"messages": [{"role": "user", "content": "q1"}]}}
     });
-    assert_eq!(persisted_provider_messages_from_thread(&legacy).len(), 1, "dedup prevents double-count");
+    assert_eq!(
+        persisted_provider_messages_from_thread(&legacy).len(),
+        1,
+        "dedup prevents double-count"
+    );
 }
