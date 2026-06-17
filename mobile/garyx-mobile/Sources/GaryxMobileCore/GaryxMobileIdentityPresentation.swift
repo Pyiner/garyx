@@ -110,7 +110,7 @@ public struct GaryxProviderPresentation: Equatable {
         case "codex_app_server":
             return "Codex"
         case "traex":
-            return "Trae"
+            return "Traex"
         case "claude_code":
             return "Claude Code"
         case "gemini_cli":
@@ -136,7 +136,7 @@ public struct GaryxProviderPresentation: Equatable {
             case .codex:
                 return "Codex"
             case .traex:
-                return "Trae"
+                return "Traex"
             case .openAI:
                 return "OpenAI"
             case .claude:

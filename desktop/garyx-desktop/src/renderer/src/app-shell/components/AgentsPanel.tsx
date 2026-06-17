@@ -84,7 +84,7 @@ function providerLabel(value: ProviderType): string {
     return 'Codex';
   }
   if (value === 'traex') {
-    return 'Trae';
+    return 'Traex';
   }
   if (value === 'gemini_cli') {
     return 'Gemini';

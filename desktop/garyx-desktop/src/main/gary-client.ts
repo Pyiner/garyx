@@ -1036,7 +1036,7 @@ function providerLabelForThread(
     case "codex_app_server":
       return "Codex";
     case "traex":
-      return "Trae";
+      return "Traex";
     case "gemini_cli":
       return "Gemini";
     case "gpt":

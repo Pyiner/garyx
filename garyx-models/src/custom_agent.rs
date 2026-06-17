@@ -168,7 +168,7 @@ pub fn builtin_provider_agent_profiles() -> Vec<CustomAgentProfile> {
         },
         CustomAgentProfile {
             agent_id: "traex".to_owned(),
-            display_name: "Trae".to_owned(),
+            display_name: "Traex".to_owned(),
             provider_type: ProviderType::Traex,
             model: String::new(),
             model_reasoning_effort: String::new(),

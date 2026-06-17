@@ -9119,7 +9119,7 @@ struct AgentReferenceOption {
 fn provider_type_label(provider_type: &ProviderType) -> &'static str {
     match provider_type {
         ProviderType::CodexAppServer => "Codex",
-        ProviderType::Traex => "Trae",
+        ProviderType::Traex => "Traex",
         ProviderType::GeminiCli => "Gemini",
         ProviderType::Gpt => "GPT",
         ProviderType::ClaudeLlm => "Claude",

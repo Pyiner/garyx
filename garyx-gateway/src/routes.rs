@@ -697,7 +697,7 @@ fn provider_hint_label(value: &ProviderType) -> &'static str {
     match value {
         ProviderType::ClaudeCode => "Claude",
         ProviderType::CodexAppServer => "Codex",
-        ProviderType::Traex => "Trae",
+        ProviderType::Traex => "Traex",
         ProviderType::GeminiCli => "Gemini",
         ProviderType::Gpt => "GPT",
         ProviderType::ClaudeLlm => "Claude",

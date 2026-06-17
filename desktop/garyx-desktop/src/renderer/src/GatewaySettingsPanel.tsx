@@ -266,7 +266,7 @@ const MODEL_PROVIDER_ROWS: FixedModelProviderRow[] = [
   {
     key: 'traex',
     agentId: 'traex',
-    label: 'Trae',
+    label: 'Traex',
     providerType: 'traex',
     group: 'default',
     defaultModel: '(provider default)',

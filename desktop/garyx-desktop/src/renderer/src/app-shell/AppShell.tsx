@@ -1692,7 +1692,7 @@ function presentProviderReadyError(
     return "Codex is not ready on this Mac. Check that the codex CLI is installed, logged in, and available on the Garyx gateway PATH.";
   }
   if (providerType === "traex") {
-    return "Trae is not ready on this Mac. Check that the traex CLI is installed, logged in, and available on the Garyx gateway PATH.";
+    return "Traex is not ready on this Mac. Check that the traex CLI is installed, logged in, and available on the Garyx gateway PATH.";
   }
   if (providerType === "gemini_cli") {
     return "Gemini CLI is not ready on this Mac. Check that the gemini CLI is installed and available on the Garyx gateway PATH.";

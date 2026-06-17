@@ -77,7 +77,7 @@ fn provider_icon_descriptor(provider_type: &ProviderType) -> Option<Value> {
     let (key, label) = match provider_type {
         ProviderType::ClaudeCode | ProviderType::ClaudeLlm => ("claude", "Claude"),
         ProviderType::CodexAppServer => ("codex", "Codex"),
-        ProviderType::Traex => ("traex", "Trae"),
+        ProviderType::Traex => ("traex", "Traex"),
         ProviderType::GeminiCli | ProviderType::GeminiLlm => ("gemini", "Gemini"),
         ProviderType::Gpt | ProviderType::AgentTeam => return None,
     };
