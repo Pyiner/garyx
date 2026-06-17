@@ -358,6 +358,77 @@ enum GaryxTranscriptMerge {
             .map { normalizedMergeText($0.text) }
     }
 
+    @discardableResult
+    static func appendLiveAssistantText(
+        _ text: String,
+        targetId: String,
+        into messages: inout [GaryxMobileMessage]
+    ) -> String? {
+        guard !text.isEmpty else { return nil }
+        if let index = messages.firstIndex(where: { $0.id == targetId || $0.remoteId == targetId }) {
+            messages[index].text += text
+            messages[index].isStreaming = true
+            return messages[index].id
+        }
+        if let index = currentTurnAssistantIndexMaterializingLiveText(text, in: messages) {
+            let existingText = normalizedMergeText(messages[index].text)
+            let pendingText = normalizedMergeText(text)
+            if pendingText.count > existingText.count,
+               pendingText.hasPrefix(existingText) {
+                messages[index].text = text
+                messages[index].isStreaming = true
+            }
+            return messages[index].id
+        }
+        messages.append(
+            GaryxMobileMessage(
+                id: targetId,
+                role: .assistant,
+                text: text,
+                timestamp: nil,
+                isStreaming: true,
+                localState: .remotePartial
+            )
+        )
+        return targetId
+    }
+
+    private static func currentTurnAssistantIndexMaterializingLiveText(
+        _ text: String,
+        in messages: [GaryxMobileMessage]
+    ) -> Int? {
+        let pendingText = normalizedMergeText(text)
+        guard !pendingText.isEmpty else { return nil }
+        let startIndex: Int
+        if let lastUserIndex = messages.lastIndex(where: { $0.role == .user }) {
+            startIndex = messages.index(after: lastUserIndex)
+        } else {
+            startIndex = messages.startIndex
+        }
+        guard startIndex < messages.endIndex else { return nil }
+        return messages[startIndex...].indices.reversed().first { index in
+            let message = messages[index]
+            guard message.role == .assistant,
+                  message.attachments.isEmpty else {
+                return false
+            }
+            let existingText = normalizedMergeText(message.text)
+            guard !existingText.isEmpty else { return false }
+            if existingText == pendingText {
+                return true
+            }
+            if existingText.count >= pendingText.count,
+               existingText.hasPrefix(pendingText) {
+                return true
+            }
+            if pendingText.count > existingText.count,
+               pendingText.hasPrefix(existingText) {
+                return true
+            }
+            return pendingText.count >= 4 && existingText.contains(pendingText)
+        }
+    }
+
     /// Whether `index` falls in the running turn — after the last user boundary.
     /// `ignoringPendingSteer` skips a steer the user queued mid-run (.optimistic
     /// just-sent, or .remotePartial acked-and-pending): that is a future turn the

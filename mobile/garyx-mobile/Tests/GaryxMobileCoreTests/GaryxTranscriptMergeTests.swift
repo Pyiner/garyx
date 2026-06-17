@@ -666,6 +666,105 @@ final class GaryxTranscriptMergeTests: XCTestCase {
         XCTAssertEqual(renderedTextCount(finalAnswer, in: rows), 1)
     }
 
+    func testCodexInterToolTextSurvivesDelayedLiveFlushAfterCommittedMerge() throws {
+        let interToolText = "The first batch finished; I am checking the remaining generated files."
+        let committed = codexInterToolCommittedMessages(interToolText: interToolText)
+        let committedSignature = renderedActivitySignature(messages: committed, isRunningThread: true)
+        XCTAssertEqual(
+            committedSignature,
+            [
+                "tool:Ran 3 commands",
+                "assistant:\(interToolText)",
+                "tool:Ran 2 commands",
+            ],
+            "pure committed rendering is the canonical group/text/group order"
+        )
+
+        var liveAdjacentToolState = Array(committed.prefix(2))
+        liveAdjacentToolState.append(
+            GaryxMobileMessage(
+                id: "stream-assistant-placeholder",
+                role: .assistant,
+                text: "",
+                timestamp: nil,
+                isStreaming: true,
+                localState: .remotePartial
+            )
+        )
+        GaryxTranscriptMerge.appendLiveToolTraceEntry(
+            toolTraceEntry(id: "call-4", status: .running),
+            kind: .toolUse,
+            into: &liveAdjacentToolState
+        )
+        GaryxTranscriptMerge.appendLiveToolTraceEntry(
+            toolTraceEntry(id: "call-5", status: .running),
+            kind: .toolUse,
+            into: &liveAdjacentToolState
+        )
+        XCTAssertEqual(
+            renderedActivitySignature(messages: liveAdjacentToolState, isRunningThread: true),
+            [
+                "tool:Ran 3 commands",
+                "tool:Ran 2 commands",
+            ],
+            "the live-only state reproduces the adjacent tool groups: the assistant delta is still buffered"
+        )
+
+        var merged = GaryxTranscriptMerge.mergedMessages(
+            committed,
+            withLocal: liveAdjacentToolState,
+            threadRunActive: true
+        )
+        XCTAssertEqual(
+            renderedActivitySignature(messages: merged, isRunningThread: true),
+            committedSignature,
+            "committed rows restore the group/text/group structure before the delayed assistant delta flushes"
+        )
+
+        GaryxTranscriptMerge.appendLiveAssistantText(
+            interToolText,
+            targetId: "stream-assistant-inter-tool",
+            into: &merged
+        )
+
+        XCTAssertEqual(renderedActivitySignature(messages: merged, isRunningThread: true), committedSignature)
+        XCTAssertEqual(renderedTextCount(interToolText, in: GaryxMobileTurnRenderer.buildTurnRows(messages: merged, isRunningThread: true)), 1)
+    }
+
+    func testCodexFinalAssistantTextSurvivesDelayedLiveFlushAfterCommittedMerge() throws {
+        let finalAnswer = """
+        The preview lane has been validated with synthetic data; keep real user identifiers out of fixtures.
+        """
+        let committed = GaryxMobileTranscriptMapper.mobileMessages(from: [
+            GaryxTranscriptMessage(index: 664, role: .user, text: "Summarize the validation."),
+            GaryxTranscriptMessage(
+                index: 665,
+                role: .toolUse,
+                content: json(#"{"type":"reasoning","id":"rs_synthetic_final","content":[],"summary":[]}"#)
+            ),
+            GaryxTranscriptMessage(
+                index: 666,
+                role: .toolResult,
+                content: json(#"{"type":"reasoning","id":"rs_synthetic_final","content":[],"summary":[]}"#)
+            ),
+            GaryxTranscriptMessage(index: 667, role: .assistant, text: finalAnswer),
+        ])
+        var merged = GaryxTranscriptMerge.mergedMessages(
+            committed,
+            withLocal: [optimisticUser("local-user-final", text: "Summarize the validation.")],
+            threadRunActive: true
+        )
+
+        GaryxTranscriptMerge.appendLiveAssistantText(
+            finalAnswer,
+            targetId: "stream-assistant-final",
+            into: &merged
+        )
+
+        let rows = GaryxMobileTurnRenderer.buildTurnRows(messages: merged, isRunningThread: false)
+        XCTAssertEqual(renderedTextCount(finalAnswer, in: rows), 1)
+    }
+
     func testDistinctIdToolsAcrossSteerDoNotFold() {
         // A steer makes the boundary transparent for STABLE-ID reconciliation, but a
         // genuinely new turn-2 call has its own unique toolUseId (ids are unique per
@@ -1022,6 +1121,98 @@ final class GaryxTranscriptMergeTests: XCTestCase {
             toolTraceGroup: group,
             localState: .remotePartial
         )
+    }
+
+    private func codexInterToolCommittedMessages(interToolText: String) -> [GaryxMobileMessage] {
+        var transcript: [GaryxTranscriptMessage] = [
+            GaryxTranscriptMessage(index: 100, role: .user, text: "Run the synthetic validation."),
+        ]
+        for offset in 1...3 {
+            transcript.append(commandTranscript(index: 100 + offset * 2 - 1, toolUseId: "call-\(offset)", command: "cmd-\(offset)"))
+            transcript.append(commandResultTranscript(index: 100 + offset * 2, toolUseId: "call-\(offset)"))
+        }
+        transcript.append(
+            GaryxTranscriptMessage(
+                index: 107,
+                role: .toolUse,
+                content: json(#"{"type":"reasoning","id":"rs_synthetic_inter_tool","content":[],"summary":[]}"#)
+            )
+        )
+        transcript.append(
+            GaryxTranscriptMessage(
+                index: 108,
+                role: .toolResult,
+                content: json(#"{"type":"reasoning","id":"rs_synthetic_inter_tool","content":[],"summary":[]}"#)
+            )
+        )
+        transcript.append(GaryxTranscriptMessage(index: 109, role: .assistant, text: interToolText))
+        for offset in 4...5 {
+            transcript.append(commandTranscript(index: 110 + (offset - 4) * 2, toolUseId: "call-\(offset)", command: "cmd-\(offset)"))
+            transcript.append(commandResultTranscript(index: 111 + (offset - 4) * 2, toolUseId: "call-\(offset)"))
+        }
+        return GaryxMobileTranscriptMapper.mobileMessages(from: transcript)
+    }
+
+    private func commandTranscript(index: Int, toolUseId: String, command: String) -> GaryxTranscriptMessage {
+        GaryxTranscriptMessage(
+            index: index,
+            role: .toolUse,
+            content: json(#"{"tool":"Bash","input":{"command":"\#(command)"}}"#),
+            toolUseId: toolUseId
+        )
+    }
+
+    private func commandResultTranscript(index: Int, toolUseId: String) -> GaryxTranscriptMessage {
+        GaryxTranscriptMessage(
+            index: index,
+            role: .toolResult,
+            content: json(#"{"result":{"stdout":"ok"}}"#),
+            toolUseId: toolUseId
+        )
+    }
+
+    private func renderedActivitySignature(
+        messages: [GaryxMobileMessage],
+        isRunningThread: Bool
+    ) -> [String] {
+        let rows = GaryxMobileTurnRenderer.buildTurnRows(
+            messages: messages,
+            isRunningThread: isRunningThread
+        )
+        return rows.flatMap { row in
+            row.activityRows.flatMap { activity -> [String] in
+                switch activity {
+                case .flat(let block):
+                    return [renderedSignature(for: block)]
+                case .turn(let turn):
+                    let steps = turn.steps.map(renderedSignature(for:))
+                    if let finalBlock = turn.finalBlock {
+                        return steps + [renderedSignature(for: finalBlock)]
+                    }
+                    return steps
+                }
+            }
+        }
+    }
+
+    private func renderedSignature(for block: GaryxMobileTranscriptBlock) -> String {
+        switch block {
+        case .toolGroup(let message):
+            return "tool:\(message.text)"
+        case .message(let message):
+            let role: String
+            switch message.role {
+            case .user:
+                role = "user"
+            case .assistant:
+                role = "assistant"
+            case .system:
+                role = "system"
+            case .tool:
+                role = "tool"
+            }
+            return "\(role):\(message.text)"
+        }
     }
 
     private func renderedTextCount(_ text: String, in rows: [GaryxMobileTurnRow]) -> Int {

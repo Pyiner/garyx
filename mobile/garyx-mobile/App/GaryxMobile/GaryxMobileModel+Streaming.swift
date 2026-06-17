@@ -176,23 +176,16 @@ extension GaryxMobileModel {
             return
         }
         let targetId = pending.targetId
+        var resolvedAssistantId: String?
         mutateMessages(for: threadId) { messages in
-            guard let index = messages.firstIndex(where: { $0.id == targetId }) else {
-                activeAssistantMessageIdsByThread[threadId] = targetId
-                messages.append(
-                    GaryxMobileMessage(
-                        id: targetId,
-                        role: .assistant,
-                        text: pending.text,
-                        timestamp: nil,
-                        isStreaming: true,
-                        localState: .remotePartial
-                    )
-                )
-                return
-            }
-            messages[index].text += pending.text
-            messages[index].isStreaming = true
+            resolvedAssistantId = GaryxTranscriptMerge.appendLiveAssistantText(
+                pending.text,
+                targetId: targetId,
+                into: &messages
+            )
+        }
+        if let resolvedAssistantId {
+            activeAssistantMessageIdsByThread[threadId] = resolvedAssistantId
         }
     }
 
@@ -574,6 +567,7 @@ extension GaryxMobileModel {
     }
 
     private func appendToolTraceEvent(_ eventKind: GaryxMobileToolTraceEventKind, threadId: String, message: GaryxJSONValue?) {
+        flushPendingAssistantDelta(for: threadId)
         removeEmptyActiveAssistantPlaceholder(for: threadId)
         activeAssistantMessageIdsByThread[threadId] = nil
         guard let entry = GaryxMobileToolTraceEntry(eventKind: eventKind, value: message) else {
