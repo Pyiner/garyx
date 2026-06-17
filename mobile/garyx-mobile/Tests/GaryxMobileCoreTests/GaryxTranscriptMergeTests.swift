@@ -106,7 +106,10 @@ final class GaryxTranscriptMergeTests: XCTestCase {
 
         let merged = GaryxTranscriptMerge.mergedMessages(remote, withLocal: local)
 
-        XCTAssertEqual(merged.map(\.id), ["history:0", "history:1"])
+        XCTAssertEqual(merged.map(\.id), ["history:0", "stream-assistant-t1-1"])
+        XCTAssertEqual(merged[1].remoteId, "history:1")
+        XCTAssertEqual(merged[1].localState, .remoteFinal)
+        XCTAssertFalse(merged[1].isStreaming)
     }
 
     func testPreserveRemoteBeforeIndexKeepsOlderLoadedPages() {
@@ -603,6 +606,66 @@ final class GaryxTranscriptMergeTests: XCTestCase {
         )
     }
 
+    func testCodexTrailingAssistantCopyKeepsLiveIdentityWhenCommitted() throws {
+        let finalAnswer = """
+        The deployment target should be selected from the preview environment. \
+        Use a synthetic host in tests and keep production credentials out of fixtures.
+        """
+        let committed = GaryxMobileTranscriptMapper.mobileMessages(from: [
+            GaryxTranscriptMessage(
+                index: 664,
+                role: .user,
+                text: "Why was this validated in environment A instead of environment B?"
+            ),
+            GaryxTranscriptMessage(
+                index: 665,
+                role: .toolUse,
+                content: json(#"{"type":"reasoning","id":"rs_synthetic","content":[],"summary":[]}"#)
+            ),
+            GaryxTranscriptMessage(
+                index: 666,
+                role: .toolResult,
+                content: json(#"{"type":"reasoning","id":"rs_synthetic","content":[],"summary":[]}"#)
+            ),
+            GaryxTranscriptMessage(index: 667, role: .assistant, text: finalAnswer),
+        ])
+        XCTAssertEqual(
+            committed.filter { $0.role == .assistant && $0.text == finalAnswer }.count,
+            1,
+            "the committed-only mapper should render the Codex final answer once"
+        )
+        XCTAssertTrue(committed.filter { $0.role == .tool }.isEmpty, "reasoning records stay hidden")
+
+        let liveUser = optimisticUser(
+            "local-user-codex",
+            text: "Why was this validated in environment A instead of environment B?"
+        )
+        let liveAssistant = GaryxMobileMessage(
+            id: "local-assistant-codex",
+            role: .assistant,
+            text: finalAnswer,
+            timestamp: nil,
+            isStreaming: true,
+            localState: .remotePartial
+        )
+
+        var merged = GaryxTranscriptMerge.mergedMessages(
+            committed,
+            withLocal: [liveUser, liveAssistant],
+            threadRunActive: true
+        )
+
+        if !merged.contains(where: { $0.id == liveAssistant.id }) {
+            // Mirrors GaryxMobileModel+Streaming: once the committed reload loses
+            // the active assistant row id, a late live copy is appended as a new
+            // remote_partial assistant row instead of reconciling with history:667.
+            merged.append(liveAssistant)
+        }
+
+        let rows = GaryxMobileTurnRenderer.buildTurnRows(messages: merged, isRunningThread: false)
+        XCTAssertEqual(renderedTextCount(finalAnswer, in: rows), 1)
+    }
+
     func testDistinctIdToolsAcrossSteerDoNotFold() {
         // A steer makes the boundary transparent for STABLE-ID reconciliation, but a
         // genuinely new turn-2 call has its own unique toolUseId (ids are unique per
@@ -959,6 +1022,25 @@ final class GaryxTranscriptMergeTests: XCTestCase {
             toolTraceGroup: group,
             localState: .remotePartial
         )
+    }
+
+    private func renderedTextCount(_ text: String, in rows: [GaryxMobileTurnRow]) -> Int {
+        rows.reduce(0) { count, row in
+            count + row.activityRows.reduce(0) { activityCount, activityRow in
+                switch activityRow {
+                case .flat(let block):
+                    return activityCount + (block.message.text == text ? 1 : 0)
+                case .turn(let turn):
+                    let stepCount = turn.steps.filter { $0.message.text == text }.count
+                    let finalCount = turn.finalBlock?.message.text == text ? 1 : 0
+                    return activityCount + stepCount + finalCount
+                }
+            }
+        }
+    }
+
+    private func json(_ raw: String) -> GaryxJSONValue {
+        try! JSONDecoder().decode(GaryxJSONValue.self, from: Data(raw.utf8))
     }
 
     func testCompletedRunDropsStaleLiveToolGroupInsteadOfTrailingFinalAnswer() {

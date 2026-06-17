@@ -23,7 +23,9 @@ enum GaryxTranscriptMerge {
     /// Rewrites remote rows that materialize a known local message so they
     /// adopt the local row's id. Matching mirrors the legacy semantics:
     /// `clientIntentId` or `pendingInputId` first, then normalized user text
-    /// for optimistic local sends. Each local row is consumed at most once.
+    /// for optimistic local sends. A committed assistant row in the current turn
+    /// also adopts the matching live assistant row id once the committed text
+    /// materializes that streamed prefix. Each local row is consumed at most once.
     static func remoteReusingLocalIdentities(
         _ remoteMessages: [GaryxMobileMessage],
         local localMessages: [GaryxMobileMessage]
@@ -44,8 +46,40 @@ enum GaryxTranscriptMerge {
             by: { $0 }
         )
         .mapValues(\.count)
+        let lastRemoteUserIndex = remoteMessages.lastIndex { $0.role == .user }
+        let lastLocalUserIndex = localMessages.lastIndex { $0.role == .user }
 
-        func reusableLocal(for remote: GaryxMobileMessage) -> GaryxMobileMessage? {
+        func reusableLiveAssistant(for remote: GaryxMobileMessage, remoteIndex: Int) -> GaryxMobileMessage? {
+            guard remote.role == .assistant else { return nil }
+            if let lastRemoteUserIndex, remoteIndex <= lastRemoteUserIndex {
+                return nil
+            }
+            let remoteText = normalizedMergeText(remote.text)
+            guard !remoteText.isEmpty else { return nil }
+            guard let localIndex = localMessages.indices.first(where: { index in
+                let local = localMessages[index]
+                guard !consumedLocalIds.contains(local.id),
+                      local.id != remote.id,
+                      !remoteIds.contains(local.id),
+                      local.role == .assistant,
+                      local.localState != .remoteFinal,
+                      local.isStreaming || local.localState == .remotePartial else {
+                    return false
+                }
+                if let lastLocalUserIndex, index <= lastLocalUserIndex {
+                    return false
+                }
+                let localText = normalizedMergeText(local.text)
+                return !localText.isEmpty
+                    && remoteText.count >= localText.count
+                    && remoteText.hasPrefix(localText)
+            }) else {
+                return nil
+            }
+            return localMessages[localIndex]
+        }
+
+        func reusableLocal(for remote: GaryxMobileMessage, remoteIndex: Int) -> GaryxMobileMessage? {
             let remoteClientIntentId = remote.clientIntentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let remotePendingInputId = remote.pendingInputId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if let identityMatch = localMessages.first(where: { local in
@@ -65,6 +99,9 @@ enum GaryxTranscriptMerge {
             }) {
                 return identityMatch
             }
+            if let assistantMatch = reusableLiveAssistant(for: remote, remoteIndex: remoteIndex) {
+                return assistantMatch
+            }
             guard remote.role == .user else { return nil }
             let remoteKey = userMergeKey(remote)
             if let claims = nonOptimisticUserClaims[remoteKey], claims > 0 {
@@ -83,9 +120,9 @@ enum GaryxTranscriptMerge {
             }
         }
 
-        return remoteMessages.map { remote in
+        return remoteMessages.enumerated().map { remoteIndex, remote in
             guard remote.role == .user || remote.role == .assistant,
-                  let local = reusableLocal(for: remote) else {
+                  let local = reusableLocal(for: remote, remoteIndex: remoteIndex) else {
                 return remote
             }
             consumedLocalIds.insert(local.id)
