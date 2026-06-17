@@ -84,6 +84,48 @@ public enum GaryxThreadModelOverridePresentation {
         return options.contains(where: { $0.id == effort }) ? effort : nil
     }
 
+    /// Service tiers valid for the current selection: the chosen model's own
+    /// list when it constrains tiers, otherwise the provider-level list.
+    public static func serviceTierOptions(
+        providerModels: GaryxProviderModels?,
+        model: String?
+    ) -> [GaryxProviderModelOption] {
+        guard let providerModels, providerModels.supportsServiceTierSelection else {
+            return []
+        }
+        if let model = normalized(model),
+           let modelOption = providerModels.models.first(where: { $0.id == model }),
+           !modelOption.serviceTiers.isEmpty {
+            return modelOption.serviceTiers
+        }
+        return providerModels.serviceTiers
+    }
+
+    /// Drops a service tier the current model selection does not support.
+    public static func sanitizedServiceTier(
+        providerModels: GaryxProviderModels?,
+        model: String?,
+        serviceTier: String?
+    ) -> String? {
+        guard let tier = normalized(serviceTier) else {
+            return nil
+        }
+        let options = serviceTierOptions(providerModels: providerModels, model: model)
+        return options.contains(where: { $0.id == tier }) ? tier : nil
+    }
+
+    public static func serviceTierLabel(
+        providerModels: GaryxProviderModels?,
+        model: String?,
+        serviceTier: String?
+    ) -> String? {
+        guard let tier = normalized(serviceTier) else {
+            return nil
+        }
+        let options = serviceTierOptions(providerModels: providerModels, model: model)
+        return options.first(where: { $0.id == tier })?.label ?? tier
+    }
+
     public static func modelLabel(
         providerModels: GaryxProviderModels?,
         model: String?

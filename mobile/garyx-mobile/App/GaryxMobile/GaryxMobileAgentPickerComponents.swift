@@ -211,7 +211,7 @@ struct GaryxAgentAvatarView: View {
 
     private var providerBackground: Color {
         switch providerPresentation.kind {
-        case .codex:
+        case .codex, .traex:
             Color(red: 0.08, green: 0.10, blue: 0.12)
         case .openAI:
             Color(red: 0.10, green: 0.47, blue: 0.40)
@@ -226,7 +226,7 @@ struct GaryxAgentAvatarView: View {
 
     private var providerIconSize: CGFloat {
         switch providerPresentation.kind {
-        case .codex:
+        case .codex, .traex:
             diameter * 0.32
         case .openAI:
             diameter * 0.42
@@ -629,6 +629,7 @@ struct GaryxNewThreadAgentSheet: View {
         case allAgents
         case model
         case thinkingLevel
+        case speed
 
         var title: String {
             switch self {
@@ -636,6 +637,7 @@ struct GaryxNewThreadAgentSheet: View {
             case .allAgents: "All Agents"
             case .model: "Model"
             case .thinkingLevel: "Thinking level"
+            case .speed: "Speed"
             }
         }
     }
@@ -658,6 +660,8 @@ struct GaryxNewThreadAgentSheet: View {
                         modelOptionsPage
                     case .thinkingLevel:
                         thinkingLevelOptionsPage
+                    case .speed:
+                        serviceTierOptionsPage
                     }
                 }
                 .padding(.horizontal, 22)
@@ -849,6 +853,10 @@ struct GaryxNewThreadAgentSheet: View {
                 providerModels: providerModels,
                 model: model.newThreadEffortFilterModel
             )
+            let serviceTiers = GaryxThreadModelOverridePresentation.serviceTierOptions(
+                providerModels: providerModels,
+                model: model.newThreadEffortFilterModel
+            )
 
             Text("This thread")
                 .font(GaryxFont.footnote(weight: .semibold))
@@ -879,6 +887,21 @@ struct GaryxNewThreadAgentSheet: View {
                         ) ?? "Agent default"
                     ) {
                         page = .thinkingLevel
+                    }
+                }
+
+                if !serviceTiers.isEmpty {
+                    Divider().padding(.leading, 18)
+
+                    overrideRow(
+                        title: "Speed",
+                        value: GaryxThreadModelOverridePresentation.serviceTierLabel(
+                            providerModels: providerModels,
+                            model: model.newThreadEffortFilterModel,
+                            serviceTier: model.newThreadServiceTierOverride
+                        ) ?? "Standard"
+                    ) {
+                        page = .speed
                     }
                 }
             }
@@ -939,6 +962,22 @@ struct GaryxNewThreadAgentSheet: View {
             selectedId: model.newThreadReasoningEffortOverride
         ) { selected in
             model.setNewThreadReasoningEffortOverride(selected)
+            page = .main
+        }
+    }
+
+    @ViewBuilder
+    private var serviceTierOptionsPage: some View {
+        let tiers = GaryxThreadModelOverridePresentation.serviceTierOptions(
+            providerModels: model.newThreadProviderModels,
+            model: model.newThreadEffortFilterModel
+        )
+        GaryxAgentSheetOptionsPanel(
+            options: [(id: "", label: "Standard")]
+                + tiers.map { (id: $0.id, label: $0.label) },
+            selectedId: model.newThreadServiceTierOverride
+        ) { selected in
+            model.setNewThreadServiceTierOverride(selected)
             page = .main
         }
     }

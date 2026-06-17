@@ -671,6 +671,8 @@ extension GaryxMobileModel {
             let modelOverride = newThreadModelOverride.trimmingCharacters(in: .whitespacesAndNewlines)
             let reasoningEffortOverride = newThreadReasoningEffortOverride
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            let serviceTierOverride = newThreadServiceTierOverride
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             let thread = try await client().createThread(
                 GaryxCreateThreadRequest(
                     workspaceDir: workspace.isEmpty ? nil : workspace,
@@ -678,6 +680,7 @@ extension GaryxMobileModel {
                     agentId: agentId.isEmpty ? nil : agentId,
                     model: modelOverride.isEmpty ? nil : modelOverride,
                     modelReasoningEffort: reasoningEffortOverride.isEmpty ? nil : reasoningEffortOverride,
+                    modelServiceTier: serviceTierOverride.isEmpty ? nil : serviceTierOverride,
                     metadata: ["client": "garyx-mobile"]
                 )
             )
@@ -798,7 +801,8 @@ extension GaryxMobileModel {
 
     func updateSelectedThreadRuntimeSettings(
         model: String? = nil,
-        reasoningEffort: String? = nil
+        reasoningEffort: String? = nil,
+        serviceTier: String? = nil
     ) async {
         guard let selectedThread else { return }
         let threadId = selectedThread.id
@@ -809,13 +813,15 @@ extension GaryxMobileModel {
         applyOptimisticThreadRuntimeSettings(
             threadId: threadId,
             model: model,
-            reasoningEffort: reasoningEffort
+            reasoningEffort: reasoningEffort,
+            serviceTier: serviceTier
         )
         do {
             let updated = try await client().updateThread(
                 threadId: threadId,
                 model: model,
-                modelReasoningEffort: reasoningEffort
+                modelReasoningEffort: reasoningEffort,
+                modelServiceTier: serviceTier
             )
             guard threadRuntimeMutationIds[threadId] == mutationId else { return }
             threadRuntimeMutationIds[threadId] = nil
@@ -846,7 +852,8 @@ extension GaryxMobileModel {
     private func applyOptimisticThreadRuntimeSettings(
         threadId: String,
         model: String?,
-        reasoningEffort: String?
+        reasoningEffort: String?,
+        serviceTier: String? = nil
     ) {
         let normalizedThreadId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedThreadId.isEmpty else { return }
@@ -868,6 +875,11 @@ extension GaryxMobileModel {
             let value = reasoningEffort.garyxTrimmedNilIfEmpty
             runtime.modelReasoningEffortOverride = value
             runtime.modelReasoningEffort = value
+        }
+        if let serviceTier {
+            let value = serviceTier.garyxTrimmedNilIfEmpty
+            runtime.modelServiceTierOverride = value
+            runtime.modelServiceTier = value
         }
         applyThreadRuntimeSummary(runtime, threadId: normalizedThreadId)
     }

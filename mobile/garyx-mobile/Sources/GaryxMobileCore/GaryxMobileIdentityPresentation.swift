@@ -2,6 +2,7 @@ import Foundation
 
 public enum GaryxProviderIdentityKind: String, Equatable {
     case codex
+    case traex
     case openAI
     case claude
     case gemini
@@ -68,6 +69,11 @@ public struct GaryxProviderPresentation: Equatable {
         if source.contains("codex") {
             return .codex
         }
+        // TRAE CLI is a Codex fork; match before the generic fallback. Its
+        // identifiers ("traex"/"trae") never contain "codex", so order is safe.
+        if source.contains("traex") || source.contains("trae") {
+            return .traex
+        }
         if source.contains("openai") || source.contains("gpt") {
             return .openAI
         }
@@ -83,6 +89,9 @@ public struct GaryxProviderPresentation: Equatable {
     private static func symbolName(for kind: GaryxProviderIdentityKind) -> String? {
         switch kind {
         case .codex:
+            "chevron.left.forwardslash.chevron.right"
+        case .traex:
+            // Reuse the Codex glyph; TRAE CLI is a Codex fork.
             "chevron.left.forwardslash.chevron.right"
         case .openAI:
             "circle.hexagongrid.fill"
@@ -100,6 +109,8 @@ public struct GaryxProviderPresentation: Equatable {
         switch normalized {
         case "codex_app_server":
             return "Codex"
+        case "traex":
+            return "Trae"
         case "claude_code":
             return "Claude Code"
         case "gemini_cli":
@@ -124,6 +135,8 @@ public struct GaryxProviderPresentation: Equatable {
             switch kind {
             case .codex:
                 return "Codex"
+            case .traex:
+                return "Trae"
             case .openAI:
                 return "OpenAI"
             case .claude:

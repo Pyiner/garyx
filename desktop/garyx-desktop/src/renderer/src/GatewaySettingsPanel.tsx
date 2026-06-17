@@ -207,6 +207,7 @@ type McpServerDraft = {
 type FixedModelProviderKey =
   | 'claude_code'
   | 'codex_app_server'
+  | 'traex'
   | 'gemini_cli'
   | 'gpt'
   | 'anthropic'
@@ -259,6 +260,14 @@ const MODEL_PROVIDER_ROWS: FixedModelProviderRow[] = [
     agentId: 'codex',
     label: 'Codex',
     providerType: 'codex_app_server',
+    group: 'default',
+    defaultModel: '(provider default)',
+  },
+  {
+    key: 'traex',
+    agentId: 'traex',
+    label: 'Trae',
+    providerType: 'traex',
     group: 'default',
     defaultModel: '(provider default)',
   },
@@ -432,6 +441,9 @@ function providerTypeLabel(provider: any): string {
   if (value === 'codex_app_server') {
     return 'codex';
   }
+  if (value === 'traex') {
+    return 'traex';
+  }
   if (value === 'gemini_cli') {
     return 'gemini';
   }
@@ -469,6 +481,8 @@ function preferredStandaloneAgentId(
   let normalizedProviderType: DesktopCustomAgent['providerType'] = 'claude_code';
   if (providerType === 'codex_app_server') {
     normalizedProviderType = 'codex_app_server';
+  } else if (providerType === 'traex') {
+    normalizedProviderType = 'traex';
   } else if (providerType === 'gemini_cli') {
     normalizedProviderType = 'gemini_cli';
   } else if (providerType === 'gpt') {
@@ -482,6 +496,8 @@ function preferredStandaloneAgentId(
   let builtInId = 'claude';
   if (normalizedProviderType === 'codex_app_server') {
     builtInId = 'codex';
+  } else if (normalizedProviderType === 'traex') {
+    builtInId = 'traex';
   } else if (normalizedProviderType === 'gemini_cli') {
     builtInId = 'gemini';
   } else if (normalizedProviderType === 'gpt') {
@@ -1370,6 +1386,7 @@ function AgentProviderFields({
                 <SelectGroup>
                   <SelectItem value="claude_code">claude_code</SelectItem>
                   <SelectItem value="codex_app_server">codex_app_server</SelectItem>
+                  <SelectItem value="traex">traex</SelectItem>
                   <SelectItem value="gemini_cli">gemini_cli</SelectItem>
                 </SelectGroup>
               </SelectContent>
@@ -1793,6 +1810,14 @@ export function GatewaySettingsPanel({
         model: configuredDefaultModel || row.defaultModel,
       };
     }
+    if (row.key === 'traex') {
+      // TRAE CLI authenticates via `traex login`; no desktop-managed auth.
+      return {
+        status: t('Default'),
+        auth: t('CLI'),
+        model: configuredDefaultModel || row.defaultModel,
+      };
+    }
     if (row.key === 'gemini_cli') {
       return {
         status: t('Default'),
@@ -1955,6 +1980,14 @@ export function GatewaySettingsPanel({
         if (!savedLocal) {
           return;
         }
+        mutateGatewayProviderModelDefaults(providerConfigRow, providerConfigDraft);
+        if (await onSaveGatewaySettings({ refreshDesktopState: 'background' })) {
+          closeProviderConfigDialog();
+        }
+        return;
+      }
+      if (providerConfigRow.key === 'traex') {
+        // TRAE CLI has no desktop-managed auth/env; persist model defaults only.
         mutateGatewayProviderModelDefaults(providerConfigRow, providerConfigDraft);
         if (await onSaveGatewaySettings({ refreshDesktopState: 'background' })) {
           closeProviderConfigDialog();

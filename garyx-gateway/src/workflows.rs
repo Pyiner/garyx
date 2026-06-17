@@ -85,7 +85,10 @@ fn workflow_error_response(error: WorkflowError) -> axum::response::Response {
 fn provider_supports_workflow_structured_results(provider_type: &ProviderType) -> bool {
     matches!(
         provider_type,
-        ProviderType::ClaudeCode | ProviderType::CodexAppServer | ProviderType::GeminiCli
+        ProviderType::ClaudeCode
+            | ProviderType::CodexAppServer
+            | ProviderType::Traex
+            | ProviderType::GeminiCli
     )
 }
 

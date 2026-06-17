@@ -7,11 +7,13 @@ import type {
   DesktopProviderIconDescriptor,
 } from '@shared/contracts';
 
-type BuiltInAgentIconKey = 'claude' | 'codex' | 'gemini';
+type BuiltInAgentIconKey = 'claude' | 'codex' | 'traex' | 'gemini';
 
 const BUILT_IN_AGENT_ICONS = {
   claude: ClaudeCodeColor,
   codex: CodexColor,
+  // TRAE CLI is a Codex fork; reuse the Codex glyph until a dedicated icon exists.
+  traex: CodexColor,
   gemini: GeminiCliColor,
 };
 
@@ -25,6 +27,9 @@ function normalizeAgentIconKey(value?: string | null): BuiltInAgentIconKey | nul
   }
   if (normalized === 'codex' || normalized === 'codex_app_server') {
     return 'codex';
+  }
+  if (normalized === 'traex' || normalized === 'trae' || normalized === 'trae_cli' || normalized === 'traecli') {
+    return 'traex';
   }
   if (normalized === 'gemini' || normalized === 'gemini_cli' || normalized === 'google' || normalized === 'gemini_llm') {
     return 'gemini';

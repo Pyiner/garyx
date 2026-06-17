@@ -948,6 +948,9 @@ function normalizeDesktopProviderType(value: unknown): DesktopApiProviderType {
   if (value === "codex_app_server") {
     return "codex_app_server";
   }
+  if (value === "traex" || value === "trae" || value === "trae_cli" || value === "traecli") {
+    return "traex";
+  }
   if (value === "gemini_cli") {
     return "gemini_cli";
   }
@@ -964,7 +967,7 @@ function normalizeDesktopProviderType(value: unknown): DesktopApiProviderType {
 }
 
 function normalizeProviderIconKey(value: unknown): DesktopProviderIconKey | null {
-  if (value === "claude" || value === "codex" || value === "gemini") {
+  if (value === "claude" || value === "codex" || value === "traex" || value === "gemini") {
     return value;
   }
   return null;
@@ -997,6 +1000,7 @@ function parseThreadProviderType(
     value === "claude_code" ||
     value === "claude_tty" ||
     value === "codex_app_server" ||
+    value === "traex" ||
     value === "gemini_cli" ||
     value === "gpt" ||
     value === "anthropic" ||
@@ -1031,6 +1035,8 @@ function providerLabelForThread(
       return "Claude";
     case "codex_app_server":
       return "Codex";
+    case "traex":
+      return "Trae";
     case "gemini_cli":
       return "Gemini";
     case "gpt":

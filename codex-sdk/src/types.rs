@@ -103,6 +103,8 @@ pub struct ThreadStartParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_reasoning_effort: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub approval_policy: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sandbox: Option<String>,
@@ -122,6 +124,8 @@ pub struct ThreadResumeParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_reasoning_effort: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub approval_policy: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sandbox: Option<String>,
@@ -140,6 +144,8 @@ pub struct ThreadForkParams {
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_reasoning_effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approval_policy: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

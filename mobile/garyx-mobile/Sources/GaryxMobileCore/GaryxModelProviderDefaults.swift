@@ -17,6 +17,7 @@ public enum GaryxModelProviderDefaults {
     public static let providers: [GaryxModelProviderDefault] = [
         GaryxModelProviderDefault(providerType: "claude_code", configKey: "claude", fallbackDefaultModel: ""),
         GaryxModelProviderDefault(providerType: "codex_app_server", configKey: "codex", fallbackDefaultModel: ""),
+        GaryxModelProviderDefault(providerType: "traex", configKey: "traex", fallbackDefaultModel: ""),
         GaryxModelProviderDefault(providerType: "gemini_cli", configKey: "gemini", fallbackDefaultModel: "gemini-3-flash-preview"),
         GaryxModelProviderDefault(providerType: "gpt", configKey: "gpt", fallbackDefaultModel: "gpt-5.5"),
         GaryxModelProviderDefault(providerType: "anthropic", configKey: "anthropic", fallbackDefaultModel: "claude-sonnet-4-6"),

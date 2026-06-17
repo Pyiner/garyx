@@ -108,6 +108,7 @@ fn test_thread_start_params_serialization() {
         config: None,
         model: Some("o3-mini".to_owned()),
         model_reasoning_effort: Some("xhigh".to_owned()),
+        service_tier: Some("priority".to_owned()),
         approval_policy: None,
         sandbox: None,
     };
@@ -115,6 +116,7 @@ fn test_thread_start_params_serialization() {
     assert_eq!(val["cwd"], "/tmp");
     assert_eq!(val["model"], "o3-mini");
     assert_eq!(val["modelReasoningEffort"], "xhigh");
+    assert_eq!(val["serviceTier"], "priority");
     assert!(val.get("approvalPolicy").is_none());
     assert!(val.get("sandbox").is_none());
 }
@@ -127,6 +129,7 @@ fn test_thread_resume_params_serialization() {
         config: None,
         model: None,
         model_reasoning_effort: Some("high".to_owned()),
+        service_tier: None,
         approval_policy: Some("never".to_owned()),
         sandbox: Some("off".to_owned()),
     };
@@ -145,6 +148,7 @@ fn test_thread_fork_params_serialization() {
         config: Some(json!({"mcpServers": {}})),
         model: Some("gpt-5".to_owned()),
         model_reasoning_effort: Some("high".to_owned()),
+        service_tier: None,
         approval_policy: Some("never".to_owned()),
         sandbox: Some("off".to_owned()),
     };

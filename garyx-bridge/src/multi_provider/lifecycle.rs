@@ -126,10 +126,30 @@ impl MultiProviderBridge {
             }
         };
 
+        let traex_default_agent_cfg = configured_default_provider_config(
+            config,
+            ProviderType::Traex,
+            &["traex", "trae", "trae_cli", "traecli"],
+        );
+        let traex_default_key = match self
+            .get_or_create_provider(&traex_default_agent_cfg, &default_workspace)
+            .await
+        {
+            Ok(key) => {
+                tracing::info!(provider_key = %key, "registered traex default provider");
+                Some(key)
+            }
+            Err(error) => {
+                tracing::debug!(error = %error, "optional traex provider unavailable");
+                None
+            }
+        };
+
         let mut default_provider_configs = vec![
             default_agent_cfg.clone(),
             codex_default_agent_cfg.clone(),
             gemini_default_agent_cfg.clone(),
+            traex_default_agent_cfg.clone(),
         ];
         default_provider_configs.extend(
             [
@@ -203,6 +223,9 @@ impl MultiProviderBridge {
             desired_provider_keys.insert(key.clone());
         }
         if let Some(ref key) = gemini_default_key {
+            desired_provider_keys.insert(key.clone());
+        }
+        if let Some(ref key) = traex_default_key {
             desired_provider_keys.insert(key.clone());
         }
         desired_provider_keys.extend(configured_model_provider_keys);
@@ -386,6 +409,10 @@ impl MultiProviderBridge {
         match normalized {
             "codex" => Some(
                 self.default_provider_config_for_type(ProviderType::CodexAppServer)
+                    .await,
+            ),
+            "traex" | "trae" | "trae_cli" | "traecli" => Some(
+                self.default_provider_config_for_type(ProviderType::Traex)
                     .await,
             ),
             "claude" | "claude-tty" | "claude_tty" => Some(
@@ -616,6 +643,7 @@ impl MultiProviderBridge {
         }
         match normalized {
             "codex" => Some(ProviderType::CodexAppServer),
+            "traex" | "trae" | "trae_cli" | "traecli" => Some(ProviderType::Traex),
             "claude" | "claude-tty" | "claude_tty" => Some(ProviderType::ClaudeCode),
             "gemini" => Some(ProviderType::GeminiCli),
             "gpt" | "openai" | "garyx" | "garyx_native" | "native" => self

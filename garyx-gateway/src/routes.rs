@@ -697,6 +697,7 @@ fn provider_hint_label(value: &ProviderType) -> &'static str {
     match value {
         ProviderType::ClaudeCode => "Claude",
         ProviderType::CodexAppServer => "Codex",
+        ProviderType::Traex => "Trae",
         ProviderType::GeminiCli => "Gemini",
         ProviderType::Gpt => "GPT",
         ProviderType::ClaudeLlm => "Claude",
@@ -706,6 +707,9 @@ fn provider_hint_label(value: &ProviderType) -> &'static str {
 }
 
 fn is_resume_provider(value: &ProviderType) -> bool {
+    // Traex is intentionally excluded: garyx does not support disk-based session
+    // recovery / fork-from-session for TRAE CLI (its sessions live under
+    // ~/.trae and are not wired into the provider session locator).
     matches!(
         value,
         ProviderType::ClaudeCode | ProviderType::CodexAppServer | ProviderType::GeminiCli

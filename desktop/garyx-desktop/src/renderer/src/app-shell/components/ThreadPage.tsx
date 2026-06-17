@@ -291,11 +291,14 @@ type ThreadPageProps = {
   newThreadAgentConfiguredModel?: string | null;
   newThreadSelectedModel?: string | null;
   newThreadSelectedReasoningEffort?: string | null;
+  newThreadSelectedServiceTier?: string | null;
   threadProviderModels?: DesktopProviderModels | null;
   threadEffectiveModel?: string | null;
   threadEffectiveReasoningEffort?: string | null;
+  threadEffectiveServiceTier?: string | null;
   threadSelectedModel?: string | null;
   threadSelectedReasoningEffort?: string | null;
+  threadSelectedServiceTier?: string | null;
   newThreadWorkspaceEntry: DesktopWorkspace | null;
   newThreadWorkspaceMode: DesktopWorkspaceMode;
   queueDropTarget: QueueDropTarget;
@@ -352,8 +355,10 @@ type ThreadPageProps = {
   onSelectNewThreadAgent: (agentId: string) => void;
   onSelectNewThreadModel?: (model: string | null) => void;
   onSelectNewThreadReasoningEffort?: (effort: string | null) => void;
+  onSelectNewThreadServiceTier?: (tier: string | null) => void;
   onSelectThreadModel?: (model: string | null) => void;
   onSelectThreadReasoningEffort?: (effort: string | null) => void;
+  onSelectThreadServiceTier?: (tier: string | null) => void;
   onSelectNewThreadWorkflow: (workflowId: string) => void;
   onSelectNewThreadWorkspaceMode: (mode: DesktopWorkspaceMode) => void;
   onResumeProviderSession: (sessionId: string) => Promise<void>;
@@ -430,11 +435,14 @@ export function ThreadPage({
   newThreadAgentConfiguredModel,
   newThreadSelectedModel,
   newThreadSelectedReasoningEffort,
+  newThreadSelectedServiceTier,
   threadProviderModels,
   threadEffectiveModel,
   threadEffectiveReasoningEffort,
+  threadEffectiveServiceTier,
   threadSelectedModel,
   threadSelectedReasoningEffort,
+  threadSelectedServiceTier,
   newThreadWorkspaceEntry,
   newThreadWorkspaceMode,
   onAddWorkspace,
@@ -458,8 +466,10 @@ export function ThreadPage({
   onSelectNewThreadAgent,
   onSelectNewThreadModel,
   onSelectNewThreadReasoningEffort,
+  onSelectNewThreadServiceTier,
   onSelectThreadModel,
   onSelectThreadReasoningEffort,
+  onSelectThreadServiceTier,
   onSelectNewThreadWorkflow,
   onSelectNewThreadWorkspaceMode,
   onResumeProviderSession,
@@ -1039,6 +1049,9 @@ export function ThreadPage({
               newThreadSelectedReasoningEffort={
                 !selectedThreadId ? newThreadSelectedReasoningEffort : null
               }
+              newThreadSelectedServiceTier={
+                !selectedThreadId ? newThreadSelectedServiceTier : null
+              }
               threadProviderModels={
                 selectedThreadId ? threadProviderModels : null
               }
@@ -1048,11 +1061,17 @@ export function ThreadPage({
               threadEffectiveReasoningEffort={
                 selectedThreadId ? threadEffectiveReasoningEffort : null
               }
+              threadEffectiveServiceTier={
+                selectedThreadId ? threadEffectiveServiceTier : null
+              }
               threadSelectedModel={
                 selectedThreadId ? threadSelectedModel : null
               }
               threadSelectedReasoningEffort={
                 selectedThreadId ? threadSelectedReasoningEffort : null
+              }
+              threadSelectedServiceTier={
+                selectedThreadId ? threadSelectedServiceTier : null
               }
               onSelectNewThreadModel={
                 !selectedThreadId ? onSelectNewThreadModel : undefined
@@ -1060,11 +1079,17 @@ export function ThreadPage({
               onSelectNewThreadReasoningEffort={
                 !selectedThreadId ? onSelectNewThreadReasoningEffort : undefined
               }
+              onSelectNewThreadServiceTier={
+                !selectedThreadId ? onSelectNewThreadServiceTier : undefined
+              }
               onSelectThreadModel={
                 selectedThreadId ? onSelectThreadModel : undefined
               }
               onSelectThreadReasoningEffort={
                 selectedThreadId ? onSelectThreadReasoningEffort : undefined
+              }
+              onSelectThreadServiceTier={
+                selectedThreadId ? onSelectThreadServiceTier : undefined
               }
               isActiveSendingThread={isActiveSendingThread}
               onAppendComposerAttachments={onAppendComposerAttachments}

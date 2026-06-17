@@ -148,22 +148,53 @@ pub(crate) async fn list_provider_models(
                 error: None,
             }
         }
-        ProviderType::CodexAppServer => {
-            let mut discovery = gpt_builtin_models(None);
-            if let Some(default_model) = configured_default_model(
-                config,
-                ProviderType::CodexAppServer,
-                &["codex", "codex_app_server"],
-            ) {
-                discovery = apply_default_model_to_gpt_discovery(discovery, Some(default_model));
+        ProviderType::CodexAppServer | ProviderType::Traex => {
+            let aliases: &[&str] = if provider_type == ProviderType::Traex {
+                &["traex", "trae", "trae_cli", "traecli"]
             } else {
+                &["codex", "codex_app_server"]
+            };
+            // Discover models dynamically from the app-server's `model/list`
+            // (reflects the real backend catalog); fall back to the static
+            // preset list if the binary is unavailable or discovery fails.
+            let source: &'static str = if provider_type == ProviderType::Traex {
+                "traex_app_server"
+            } else {
+                "codex_app_server"
+            };
+            let bin = app_server_model_bin(&provider_type);
+            let mut discovery = match fetch_app_server_models(bin, source).await {
+                Ok(discovery) => discovery,
+                // Traex has no static catalog: report empty/unavailable rather
+                // than falling back to Codex's GPT presets (which would show
+                // wrong models and reasoning/tier options for Trae).
+                Err(error) if provider_type == ProviderType::Traex => GptModelDiscovery {
+                    models: Vec::new(),
+                    default_model: None,
+                    reasoning_efforts: Vec::new(),
+                    service_tiers: Vec::new(),
+                    source: "traex_app_server",
+                    error: Some(error),
+                },
+                Err(_) => gpt_builtin_models(None),
+            };
+            if let Some(default_model) =
+                configured_default_model(config, provider_type.clone(), aliases)
+            {
+                discovery = apply_default_model_to_gpt_discovery(discovery, Some(default_model));
+            } else if discovery.source == "codex_builtin" {
+                // Builtin presets have no meaningful default; dynamic discovery
+                // keeps the backend-reported default.
                 discovery.default_model = None;
             }
             ProviderModelsResponse {
                 provider_type,
-                supports_model_selection: true,
+                supports_model_selection: !discovery.models.is_empty(),
                 models: discovery.models,
-                supports_reasoning_effort_selection: true,
+                // Derive from the discovered catalog: some backends (e.g. the
+                // Traex `trae` provider) advertise models with no selectable
+                // reasoning efforts, so we must not claim a reasoning picker.
+                supports_reasoning_effort_selection: !discovery.reasoning_efforts.is_empty(),
                 reasoning_efforts: discovery.reasoning_efforts,
                 supports_service_tier_selection: !discovery.service_tiers.is_empty(),
                 service_tiers: discovery.service_tiers,
@@ -295,6 +326,7 @@ pub(crate) fn builtin_provider_catalog_default(
         }
         ProviderType::ClaudeCode
         | ProviderType::CodexAppServer
+        | ProviderType::Traex
         | ProviderType::GeminiCli
         | ProviderType::AgentTeam => ProviderCatalogDefault::default(),
     }
@@ -924,6 +956,269 @@ async fn fetch_gemini_acp_models(config: &GaryxConfig) -> Result<GeminiModelDisc
     result
 }
 
+/// Resolve the app-server binary for a Codex-family provider (Codex or Traex).
+/// Mirrors the binary defaulting in the bridge provider factory.
+fn app_server_model_bin(provider_type: &ProviderType) -> &'static str {
+    match provider_type {
+        ProviderType::Traex => "traex",
+        _ => "codex",
+    }
+}
+
+/// Dynamically discover models from a Codex-family app-server (Codex or Traex)
+/// by spawning `<bin> app-server` and calling the `model/list` JSON-RPC method.
+/// This reflects the real backend catalog (e.g. Traex exposes Doubao/GLM/Gemini/
+/// GPT/etc.) instead of a hardcoded preset list.
+async fn fetch_app_server_models(
+    codex_bin: &str,
+    source: &'static str,
+) -> Result<GptModelDiscovery, String> {
+    #[cfg(test)]
+    if std::env::var_os("GARYX_ALLOW_REAL_APP_SERVER_MODEL_FETCH").is_none() {
+        return Err("app-server model fetch disabled in tests".to_owned());
+    }
+
+    let mut child = Command::new(codex_bin)
+        // Mirror the SDK transport invocation (codex-sdk transport.rs) so we
+        // pin the stdio transport instead of relying on the default, which a
+        // user config or future build could change.
+        .args(["app-server", "--listen", "stdio://"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("failed to start `{codex_bin} app-server`: {error}"))?;
+
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "app-server stdin was unavailable".to_owned())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "app-server stdout was unavailable".to_owned())?;
+    let mut lines = BufReader::new(stdout).lines();
+
+    let result = async {
+        send_acp_request(
+            &mut stdin,
+            1,
+            "initialize",
+            json!({
+                "clientInfo": {
+                    "name": "garyx-provider-models",
+                    "version": env!("CARGO_PKG_VERSION"),
+                },
+                "capabilities": { "experimentalApi": true },
+            }),
+        )
+        .await?;
+        let initialize = read_acp_response(&mut lines, 1, Duration::from_secs(10)).await?;
+        if let Some(message) = acp_error_message(&initialize) {
+            return Err(format!("app-server initialize failed: {message}"));
+        }
+        send_jsonrpc_notification(&mut stdin, "initialized", json!({})).await?;
+
+        send_acp_request(&mut stdin, 2, "model/list", json!({})).await?;
+        let response = read_acp_response(&mut lines, 2, Duration::from_secs(15)).await?;
+        if acp_error_code(&response) == Some(-32601) {
+            return Err("app-server does not expose model/list".to_owned());
+        }
+        if let Some(message) = acp_error_message(&response) {
+            return Err(format!("app-server model/list failed: {message}"));
+        }
+        let result = response
+            .get("result")
+            .ok_or_else(|| "app-server model/list returned no result".to_owned())?;
+        let discovery = parse_app_server_models(result, source);
+        if discovery.models.is_empty() {
+            return Err("app-server model/list returned no models".to_owned());
+        }
+        Ok(discovery)
+    }
+    .await;
+
+    shutdown_child(&mut child).await;
+    result
+}
+
+/// Parse a `model/list` response (`{ data: [Model] }`) into a model discovery.
+fn parse_app_server_models(result: &Value, source: &'static str) -> GptModelDiscovery {
+    let entries = result
+        .get("data")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    let mut models = Vec::new();
+    let mut default_model: Option<String> = None;
+    let mut default_reasoning: Vec<ProviderReasoningEffortOption> = Vec::new();
+    let mut first_reasoning: Vec<ProviderReasoningEffortOption> = Vec::new();
+    let mut default_service_tiers: Vec<ProviderModelOption> = Vec::new();
+    let mut first_service_tiers: Vec<ProviderModelOption> = Vec::new();
+
+    for entry in entries {
+        if entry.get("hidden").and_then(Value::as_bool).unwrap_or(false) {
+            continue;
+        }
+        let Some(id) = entry
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let label = entry
+            .get("displayName")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(id)
+            .to_owned();
+        let description = entry
+            .get("description")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let default_effort = entry
+            .get("defaultReasoningEffort")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let supported = parse_app_server_reasoning_efforts(&entry, default_effort.as_deref());
+        // Service tiers are plumbed through to thread/start (serviceTier), so we
+        // advertise whatever the backend reports per model.
+        let service_tiers = parse_app_server_service_tiers(&entry);
+        let is_default = entry
+            .get("isDefault")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+
+        if first_reasoning.is_empty() && !supported.is_empty() {
+            first_reasoning = supported.clone();
+        }
+        if first_service_tiers.is_empty() && !service_tiers.is_empty() {
+            first_service_tiers = service_tiers.clone();
+        }
+        if is_default {
+            default_model = Some(id.to_owned());
+            default_reasoning = supported.clone();
+            default_service_tiers = service_tiers.clone();
+        }
+
+        models.push(ProviderModelOption {
+            id: id.to_owned(),
+            label,
+            description,
+            recommended: is_default,
+            default_reasoning_effort: default_effort,
+            supported_reasoning_efforts: supported,
+            service_tiers,
+        });
+    }
+
+    let reasoning_efforts = if default_reasoning.is_empty() {
+        first_reasoning
+    } else {
+        default_reasoning
+    };
+    let service_tiers = if default_service_tiers.is_empty() {
+        first_service_tiers
+    } else {
+        default_service_tiers
+    };
+
+    GptModelDiscovery {
+        models,
+        default_model,
+        reasoning_efforts,
+        service_tiers,
+        source,
+        error: None,
+    }
+}
+
+fn parse_app_server_service_tiers(entry: &Value) -> Vec<ProviderModelOption> {
+    entry
+        .get("serviceTiers")
+        .and_then(Value::as_array)
+        .map(|tiers| {
+            tiers
+                .iter()
+                .filter_map(|tier| {
+                    let id = tier
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())?;
+                    let label = tier
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or(id)
+                        .to_owned();
+                    let description = tier
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned);
+                    Some(ProviderModelOption {
+                        id: id.to_owned(),
+                        label,
+                        description,
+                        recommended: false,
+                        default_reasoning_effort: None,
+                        supported_reasoning_efforts: Vec::new(),
+                        service_tiers: Vec::new(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_app_server_reasoning_efforts(
+    entry: &Value,
+    default_effort: Option<&str>,
+) -> Vec<ProviderReasoningEffortOption> {
+    entry
+        .get("supportedReasoningEfforts")
+        .and_then(Value::as_array)
+        .map(|options| {
+            options
+                .iter()
+                .filter_map(|option| {
+                    let effort = option
+                        .get("reasoningEffort")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())?;
+                    let metadata = native_reasoning_effort_metadata(effort);
+                    let label = metadata
+                        .map(|(_, label, _)| label.to_owned())
+                        .unwrap_or_else(|| effort.to_owned());
+                    let description = option
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned)
+                        .or_else(|| metadata.map(|(_, _, description)| description.to_owned()));
+                    Some(ProviderReasoningEffortOption {
+                        id: effort.to_owned(),
+                        label,
+                        description,
+                        recommended: Some(effort) == default_effort,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn configured_gemini_bin(config: &GaryxConfig) -> String {
     for key in ["gemini", "gemini_cli"] {
         if let Some(value) = config.agents.get(key)
@@ -973,6 +1268,30 @@ async fn send_acp_request(
         .flush()
         .await
         .map_err(|error| format!("failed to flush Gemini ACP request: {error}"))
+}
+
+async fn send_jsonrpc_notification(
+    stdin: &mut ChildStdin,
+    method: &str,
+    params: Value,
+) -> Result<(), String> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "method": method,
+        "params": params,
+    });
+    stdin
+        .write_all(payload.to_string().as_bytes())
+        .await
+        .map_err(|error| format!("failed to write {method} notification: {error}"))?;
+    stdin
+        .write_all(b"\n")
+        .await
+        .map_err(|error| format!("failed to finish {method} notification: {error}"))?;
+    stdin
+        .flush()
+        .await
+        .map_err(|error| format!("failed to flush {method} notification: {error}"))
 }
 
 async fn read_acp_response(
@@ -1329,6 +1648,102 @@ mod tests {
         let response = list_provider_models(&config, ProviderType::CodexAppServer).await;
 
         assert_eq!(response.default_model.as_deref(), Some("gpt-5.4"));
+    }
+
+    #[test]
+    fn parse_app_server_models_maps_catalog_and_reasoning() {
+        let result = json!({
+            "data": [
+                {
+                    "id": "glm-5", "model": "glm-5", "displayName": "GLM-5",
+                    "description": "smart", "defaultReasoningEffort": "medium",
+                    "isDefault": false, "hidden": false,
+                    "supportedReasoningEfforts": [
+                        {"reasoningEffort": "low", "description": "lo"},
+                        {"reasoningEffort": "medium", "description": "med"}
+                    ]
+                },
+                {
+                    "id": "gpt-5.5", "model": "gpt-5.5", "displayName": "GPT-5.5",
+                    "description": "", "defaultReasoningEffort": "high",
+                    "isDefault": true, "hidden": false,
+                    "supportedReasoningEfforts": [
+                        {"reasoningEffort": "high", "description": "hi"}
+                    ]
+                },
+                {
+                    "id": "secret", "model": "secret", "displayName": "Secret",
+                    "hidden": true, "defaultReasoningEffort": "low",
+                    "isDefault": false, "supportedReasoningEfforts": []
+                }
+            ]
+        });
+
+        let discovery = parse_app_server_models(&result, "traex_app_server");
+
+        assert_eq!(discovery.source, "traex_app_server");
+        // Hidden models are filtered out.
+        assert_eq!(discovery.models.len(), 2);
+        assert!(!discovery.models.iter().any(|model| model.id == "secret"));
+        // Default comes from the `isDefault` flag.
+        assert_eq!(discovery.default_model.as_deref(), Some("gpt-5.5"));
+        // Top-level reasoning efforts come from the default model.
+        assert_eq!(discovery.reasoning_efforts.len(), 1);
+        assert_eq!(discovery.reasoning_efforts[0].id, "high");
+        assert!(discovery.reasoning_efforts[0].recommended);
+        // Per-model reasoning options are mapped with the default marked.
+        let glm = discovery
+            .models
+            .iter()
+            .find(|model| model.id == "glm-5")
+            .expect("glm-5 present");
+        assert_eq!(glm.label, "GLM-5");
+        assert_eq!(glm.default_reasoning_effort.as_deref(), Some("medium"));
+        assert_eq!(glm.supported_reasoning_efforts.len(), 2);
+        assert!(
+            glm.supported_reasoning_efforts
+                .iter()
+                .any(|effort| effort.id == "medium" && effort.recommended)
+        );
+    }
+
+    // Real end-to-end discovery against the local `traex` binary. Opt-in via
+    // GARYX_ALLOW_REAL_APP_SERVER_MODEL_FETCH=1 (mirrors the Codex fetch guard)
+    // because it spawns `traex app-server`.
+    #[tokio::test]
+    async fn traex_app_server_real_discovery_lists_models() {
+        if std::env::var_os("GARYX_ALLOW_REAL_APP_SERVER_MODEL_FETCH").is_none() {
+            return;
+        }
+        let response = list_provider_models(&GaryxConfig::default(), ProviderType::Traex).await;
+        assert_eq!(response.provider_type, ProviderType::Traex);
+        assert_eq!(response.source, "traex_app_server");
+        assert!(
+            !response.models.is_empty(),
+            "expected dynamically discovered traex models"
+        );
+        assert!(response.supports_model_selection);
+        // The Traex backend advertises models with no selectable reasoning
+        // efforts, so the reasoning picker must be off.
+        assert!(!response.supports_reasoning_effort_selection);
+    }
+
+    #[tokio::test]
+    async fn codex_app_server_real_discovery_lists_models_with_reasoning() {
+        if std::env::var_os("GARYX_ALLOW_REAL_APP_SERVER_MODEL_FETCH").is_none() {
+            return;
+        }
+        let response =
+            list_provider_models(&GaryxConfig::default(), ProviderType::CodexAppServer).await;
+        assert_eq!(response.provider_type, ProviderType::CodexAppServer);
+        assert_eq!(response.source, "codex_app_server");
+        assert!(!response.models.is_empty());
+        // Codex models advertise reasoning efforts; the picker should be on.
+        assert!(response.supports_reasoning_effort_selection);
+        // Service tiers are now plumbed to thread/start, so Codex advertises
+        // them (e.g. Fast/priority).
+        assert!(response.supports_service_tier_selection);
+        assert!(!response.service_tiers.is_empty());
     }
 
     #[tokio::test]

@@ -88,11 +88,20 @@ mod tests {
 }
 
 /// Build a `CodexAppServerConfig` from an agent runtime config.
+///
+/// Shared by the Codex and Traex providers: TRAE CLI (`traex`) is forked from
+/// Codex and speaks the identical app-server protocol, so both reuse the same
+/// config and provider implementation and differ only by `provider_type` and
+/// the launched `codex_bin` binary (`codex` vs `traex`).
 fn build_codex_config(
     agent_cfg: &AgentProviderConfig,
     default_workspace: &Option<String>,
+    provider_type: ProviderType,
+    default_bin: &str,
 ) -> CodexAppServerConfig {
     CodexAppServerConfig {
+        provider_type,
+        codex_bin: default_bin.to_owned(),
         workspace_dir: agent_cfg
             .workspace_dir
             .clone()
@@ -105,6 +114,7 @@ fn build_codex_config(
             agent_cfg.model.clone()
         },
         model_reasoning_effort: agent_cfg.model_reasoning_effort.clone(),
+        model_service_tier: agent_cfg.model_service_tier.clone(),
         max_turns: agent_cfg.max_turns,
         timeout_seconds: agent_cfg.timeout_seconds,
         experimental_api: agent_cfg.experimental_api,
@@ -243,7 +253,17 @@ pub(super) async fn create_provider(
             Ok(Arc::new(provider))
         }
         ProviderType::CodexAppServer => {
-            let config = build_codex_config(agent_cfg, default_workspace);
+            let config =
+                build_codex_config(agent_cfg, default_workspace, ProviderType::CodexAppServer, "codex");
+            let mut provider = CodexAgentProvider::new(config);
+            provider.initialize().await?;
+            Ok(Arc::new(provider))
+        }
+        ProviderType::Traex => {
+            // TRAE CLI reuses the entire Codex app-server pipeline; only the
+            // launched binary differs.
+            let config =
+                build_codex_config(agent_cfg, default_workspace, ProviderType::Traex, "traex");
             let mut provider = CodexAgentProvider::new(config);
             provider.initialize().await?;
             Ok(Arc::new(provider))

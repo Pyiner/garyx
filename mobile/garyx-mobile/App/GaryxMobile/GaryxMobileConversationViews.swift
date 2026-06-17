@@ -787,12 +787,14 @@ private struct GaryxThreadRuntimeSettingsSheet: View {
         case main
         case model
         case thinkingLevel
+        case speed
 
         var title: String {
             switch self {
             case .main: "Thread settings"
             case .model: "Model"
             case .thinkingLevel: "Thinking level"
+            case .speed: "Speed"
             }
         }
     }
@@ -856,6 +858,25 @@ private struct GaryxThreadRuntimeSettingsSheet: View {
         !reasoningEffortOptions.isEmpty
     }
 
+    private var serviceTierOverride: String? {
+        normalized(runtime?.modelServiceTierOverride)
+    }
+
+    private var effectiveServiceTier: String? {
+        normalized(runtime?.modelServiceTier)
+    }
+
+    private var serviceTiers: [GaryxProviderModelOption] {
+        GaryxThreadModelOverridePresentation.serviceTierOptions(
+            providerModels: providerModels,
+            model: effortFilterModel
+        )
+    }
+
+    private var canSelectServiceTier: Bool {
+        !serviceTierOptions.isEmpty
+    }
+
     var body: some View {
         GaryxGlassPanel(
             cornerRadius: 28,
@@ -893,6 +914,18 @@ private struct GaryxThreadRuntimeSettingsSheet: View {
                                     page = .main
                                     Task {
                                         await model.updateSelectedThreadRuntimeSettings(reasoningEffort: selected)
+                                    }
+                                }
+                            }
+                        case .speed:
+                            optionsCard {
+                                GaryxAgentSheetOptionsPanel(
+                                    options: serviceTierOptions,
+                                    selectedId: selectedServiceTierOptionId
+                                ) { selected in
+                                    page = .main
+                                    Task {
+                                        await model.updateSelectedThreadRuntimeSettings(serviceTier: selected)
                                     }
                                 }
                             }
@@ -1050,6 +1083,18 @@ private struct GaryxThreadRuntimeSettingsSheet: View {
                             page = .thinkingLevel
                         }
                     }
+
+                    if canSelectServiceTier {
+                        Divider().padding(.leading, 16)
+
+                        settingsRow(
+                            title: "Speed",
+                            value: actualServiceTierLabel,
+                            enabled: true
+                        ) {
+                            page = .speed
+                        }
+                    }
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
@@ -1170,6 +1215,43 @@ private struct GaryxThreadRuntimeSettingsSheet: View {
         )
     }
 
+    private var serviceTierOptions: [(id: String, label: String)] {
+        let tiers = serviceTiers
+        guard !tiers.isEmpty else { return [] }
+        var seen = Set<String>()
+        var options: [(id: String, label: String)] = [(id: "", label: "Standard")]
+        seen.insert("")
+        for option in tiers where seen.insert(option.id).inserted {
+            options.append((id: option.id, label: option.label))
+        }
+        if let effective = effectiveServiceTier, seen.insert(effective).inserted {
+            options.append((id: effective, label: serviceTierLabel(effective) ?? effective))
+        }
+        return options
+    }
+
+    private var selectedServiceTierOptionId: String {
+        // No provider-default tier ("Standard" = no explicit tier), so the
+        // default basis is nil: an effective tier marks its own row, otherwise
+        // the empty "Standard" row is selected.
+        GaryxThreadModelOverridePresentation.selectedOptionId(
+            effective: effectiveServiceTier,
+            default: nil
+        )
+    }
+
+    private var actualServiceTierLabel: String {
+        effectiveServiceTier.flatMap { serviceTierLabel($0) } ?? "Standard"
+    }
+
+    private func serviceTierLabel(_ tier: String) -> String? {
+        GaryxThreadModelOverridePresentation.serviceTierLabel(
+            providerModels: providerModels,
+            model: effortFilterModel,
+            serviceTier: tier
+        )
+    }
+
     private func selectModel(_ selected: String) async {
         let selectedModel = selected.isEmpty ? providerDefaultModel : selected
         var nextReasoningEffort: String?
@@ -1181,9 +1263,19 @@ private struct GaryxThreadRuntimeSettingsSheet: View {
            ) == nil {
             nextReasoningEffort = ""
         }
+        var nextServiceTier: String?
+        if let currentTier = serviceTierOverride,
+           GaryxThreadModelOverridePresentation.sanitizedServiceTier(
+            providerModels: providerModels,
+            model: selectedModel,
+            serviceTier: currentTier
+           ) == nil {
+            nextServiceTier = ""
+        }
         await model.updateSelectedThreadRuntimeSettings(
             model: selected,
-            reasoningEffort: nextReasoningEffort
+            reasoningEffort: nextReasoningEffort,
+            serviceTier: nextServiceTier
         )
     }
 

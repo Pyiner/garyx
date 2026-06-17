@@ -267,6 +267,7 @@ async fn test_resume_thread() {
             config: None,
             model: None,
             model_reasoning_effort: None,
+            service_tier: None,
             approval_policy: None,
             sandbox: None,
         })

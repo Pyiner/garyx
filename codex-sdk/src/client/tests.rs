@@ -40,6 +40,7 @@ async fn test_fork_thread_before_init() {
             config: None,
             model: None,
             model_reasoning_effort: None,
+            service_tier: None,
             approval_policy: None,
             sandbox: None,
         })

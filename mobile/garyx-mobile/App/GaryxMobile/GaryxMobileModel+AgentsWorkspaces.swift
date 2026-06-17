@@ -288,15 +288,25 @@ extension GaryxMobileModel {
             model: newThreadEffortFilterModel,
             reasoningEffort: newThreadReasoningEffortOverride
         ) ?? ""
+        newThreadServiceTierOverride = GaryxThreadModelOverridePresentation.sanitizedServiceTier(
+            providerModels: newThreadProviderModels,
+            model: newThreadEffortFilterModel,
+            serviceTier: newThreadServiceTierOverride
+        ) ?? ""
     }
 
     func setNewThreadReasoningEffortOverride(_ effort: String) {
         newThreadReasoningEffortOverride = effort.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    func setNewThreadServiceTierOverride(_ tier: String) {
+        newThreadServiceTierOverride = tier.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     func clearNewThreadModelOverride() {
         newThreadModelOverride = ""
         newThreadReasoningEffortOverride = ""
+        newThreadServiceTierOverride = ""
     }
 
     func ensureNewThreadProviderModelsLoaded() async {

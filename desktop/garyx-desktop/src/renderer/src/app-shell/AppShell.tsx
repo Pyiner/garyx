@@ -1691,6 +1691,9 @@ function presentProviderReadyError(
   if (providerType === "codex_app_server") {
     return "Codex is not ready on this Mac. Check that the codex CLI is installed, logged in, and available on the Garyx gateway PATH.";
   }
+  if (providerType === "traex") {
+    return "Trae is not ready on this Mac. Check that the traex CLI is installed, logged in, and available on the Garyx gateway PATH.";
+  }
   if (providerType === "gemini_cli") {
     return "Gemini CLI is not ready on this Mac. Check that the gemini CLI is installed and available on the Garyx gateway PATH.";
   }
@@ -1719,6 +1722,7 @@ function inferProviderTypeForThread(
   if (
     runtimeProvider === "claude_code" ||
     runtimeProvider === "codex_app_server" ||
+    runtimeProvider === "traex" ||
     runtimeProvider === "gemini_cli" ||
     runtimeProvider === "gpt" ||
     runtimeProvider === "anthropic" ||
@@ -1742,6 +1746,9 @@ function inferProviderTypeForThread(
   }
   if (agentId === "codex") {
     return "codex_app_server";
+  }
+  if (agentId === "traex") {
+    return "traex";
   }
   if (agentId === "gemini") {
     return "gemini_cli";
@@ -1810,6 +1817,8 @@ export function AppShell() {
   );
   const [pendingModel, setPendingModel] = useState<string | null>(null);
   const [pendingModelReasoningEffort, setPendingModelReasoningEffort] =
+    useState<string | null>(null);
+  const [pendingModelServiceTier, setPendingModelServiceTier] =
     useState<string | null>(null);
   const [providerModelsByType, setProviderModelsByType] = useState<
     Record<string, DesktopProviderModels | null>
@@ -2772,9 +2781,10 @@ export function AppShell() {
     : null;
 
   useEffect(() => {
-    // A model/thinking override only makes sense for the agent it was picked for.
+    // A model/thinking/tier override only makes sense for the agent it was picked for.
     setPendingModel(null);
     setPendingModelReasoningEffort(null);
+    setPendingModelServiceTier(null);
   }, [pendingAgentId]);
 
   useEffect(() => {
@@ -7610,6 +7620,7 @@ export function AppShell() {
       pendingAgentId,
       pendingModel,
       pendingModelReasoningEffort,
+      pendingModelServiceTier,
       preferredWorkspacePath: preferredWorkspaceForNewThread?.available
         ? preferredWorkspaceForNewThread.path
         : null,
@@ -7631,6 +7642,7 @@ export function AppShell() {
       setPendingAgentId,
       setPendingModel,
       setPendingModelReasoningEffort,
+      setPendingModelServiceTier,
       setError,
     });
   }
@@ -10993,14 +11005,21 @@ export function AppShell() {
                 newThreadAgentConfiguredModel={pendingAgent?.model || null}
                 newThreadSelectedModel={pendingModel}
                 newThreadSelectedReasoningEffort={pendingModelReasoningEffort}
+                newThreadSelectedServiceTier={pendingModelServiceTier}
                 threadProviderModels={activeThreadProviderModels}
                 threadEffectiveModel={activeThreadInfo?.model || null}
                 threadEffectiveReasoningEffort={
                   activeThreadInfo?.modelReasoningEffort || null
                 }
+                threadEffectiveServiceTier={
+                  activeThreadInfo?.modelServiceTier || null
+                }
                 threadSelectedModel={activeThreadInfo?.modelOverride || null}
                 threadSelectedReasoningEffort={
                   activeThreadInfo?.modelReasoningEffortOverride || null
+                }
+                threadSelectedServiceTier={
+                  activeThreadInfo?.modelServiceTierOverride || null
                 }
                 newThreadWorkspaceEntry={newThreadWorkspaceEntry}
                 newThreadWorkspaceMode={pendingWorkspaceMode}
@@ -11081,12 +11100,18 @@ export function AppShell() {
                 }}
                 onSelectNewThreadModel={setPendingModel}
                 onSelectNewThreadReasoningEffort={setPendingModelReasoningEffort}
+                onSelectNewThreadServiceTier={setPendingModelServiceTier}
                 onSelectThreadModel={(model) => {
                   void handleUpdateActiveThreadRuntimeSettings({ model });
                 }}
                 onSelectThreadReasoningEffort={(modelReasoningEffort) => {
                   void handleUpdateActiveThreadRuntimeSettings({
                     modelReasoningEffort,
+                  });
+                }}
+                onSelectThreadServiceTier={(modelServiceTier) => {
+                  void handleUpdateActiveThreadRuntimeSettings({
+                    modelServiceTier,
                   });
                 }}
                 onSelectNewThreadWorkflow={(workflowId) => {

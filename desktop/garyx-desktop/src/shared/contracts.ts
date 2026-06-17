@@ -27,6 +27,7 @@ export interface DesktopGatewayProfile {
 export type DesktopApiProviderType =
   | "claude_code"
   | "codex_app_server"
+  | "traex"
   | "gemini_cli"
   | "gpt"
   | "anthropic"
@@ -34,7 +35,7 @@ export type DesktopApiProviderType =
   | "claude_llm"
   | "gemini_llm";
 
-export type DesktopProviderIconKey = "claude" | "codex" | "gemini";
+export type DesktopProviderIconKey = "claude" | "codex" | "traex" | "gemini";
 
 export interface DesktopProviderIconDescriptor {
   key: DesktopProviderIconKey;

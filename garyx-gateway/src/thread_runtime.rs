@@ -30,6 +30,7 @@ pub(crate) fn provider_label(provider_type: &ProviderType) -> &'static str {
     match provider_type {
         ProviderType::ClaudeCode => "Claude",
         ProviderType::CodexAppServer => "Codex",
+        ProviderType::Traex => "Trae",
         ProviderType::GeminiCli => "Gemini",
         ProviderType::Gpt => "GPT",
         ProviderType::ClaudeLlm => "Claude",
@@ -60,6 +61,7 @@ fn provider_default_config_keys(provider_type: &ProviderType) -> &'static [&'sta
     match provider_type {
         ProviderType::ClaudeCode => &["claude", "claude_code", "claude_tty"],
         ProviderType::CodexAppServer => &["codex", "codex_app_server"],
+        ProviderType::Traex => &["traex", "trae", "trae_cli", "traecli"],
         ProviderType::GeminiCli => &["gemini", "gemini_cli"],
         ProviderType::Gpt => &["gpt", "openai", "garyx", "garyx_native", "native"],
         ProviderType::ClaudeLlm => &["anthropic", "claude_llm"],

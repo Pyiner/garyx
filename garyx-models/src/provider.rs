@@ -16,6 +16,11 @@ pub enum ProviderType {
     #[serde(alias = "claude", alias = "claude_tty", alias = "claude-tty")]
     ClaudeCode,
     CodexAppServer,
+    /// TRAE CLI (`traex`) app-server backend. Forked from Codex and speaks the
+    /// identical app-server JSON-RPC protocol, so it reuses the entire Codex
+    /// provider pipeline with the `traex` binary.
+    #[serde(rename = "traex", alias = "trae", alias = "trae_cli", alias = "traecli")]
+    Traex,
     GeminiCli,
     /// OpenAI GPT model backend served through Garyx's in-process agent loop.
     #[serde(alias = "garyx_native", alias = "garyx", alias = "native")]
@@ -42,6 +47,7 @@ impl ProviderType {
         match self {
             Self::ClaudeCode => "claude_code",
             Self::CodexAppServer => "codex_app_server",
+            Self::Traex => "traex",
             Self::GeminiCli => "gemini_cli",
             Self::Gpt => "gpt",
             Self::ClaudeLlm => "anthropic",
@@ -54,6 +60,7 @@ impl ProviderType {
         match value.trim() {
             "claude" | "claude_code" | "claude-tty" | "claude_tty" => Some(Self::ClaudeCode),
             "codex" | "codex_app_server" => Some(Self::CodexAppServer),
+            "traex" | "trae" | "trae_cli" | "traecli" => Some(Self::Traex),
             "gemini" | "gemini_cli" => Some(Self::GeminiCli),
             "gpt" | "openai" | "openai_gpt" | "garyx" | "garyx_native" | "native" => {
                 Some(Self::Gpt)
@@ -520,6 +527,8 @@ pub struct CodexAppServerConfig {
     pub model: String,
     #[serde(default)]
     pub model_reasoning_effort: String,
+    #[serde(default)]
+    pub model_service_tier: String,
     #[serde(default = "default_request_timeout")]
     pub request_timeout_seconds: f64,
     #[serde(default = "default_startup_timeout")]
@@ -560,6 +569,7 @@ impl Default for CodexAppServerConfig {
             sandbox_mode: default_sandbox_mode(),
             model: String::new(),
             model_reasoning_effort: String::new(),
+            model_service_tier: String::new(),
             request_timeout_seconds: default_request_timeout(),
             startup_timeout_seconds: default_startup_timeout(),
             experimental_api: false,

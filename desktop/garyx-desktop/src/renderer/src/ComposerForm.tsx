@@ -115,15 +115,20 @@ type ComposerFormProps = {
   newThreadAgentConfiguredModel?: string | null;
   newThreadSelectedModel?: string | null;
   newThreadSelectedReasoningEffort?: string | null;
+  newThreadSelectedServiceTier?: string | null;
   onSelectNewThreadModel?: (model: string | null) => void;
   onSelectNewThreadReasoningEffort?: (effort: string | null) => void;
+  onSelectNewThreadServiceTier?: (tier: string | null) => void;
   threadProviderModels?: DesktopProviderModels | null;
   threadEffectiveModel?: string | null;
   threadEffectiveReasoningEffort?: string | null;
+  threadEffectiveServiceTier?: string | null;
   threadSelectedModel?: string | null;
   threadSelectedReasoningEffort?: string | null;
+  threadSelectedServiceTier?: string | null;
   onSelectThreadModel?: (model: string | null) => void;
   onSelectThreadReasoningEffort?: (effort: string | null) => void;
+  onSelectThreadServiceTier?: (tier: string | null) => void;
   isActiveSendingThread: boolean;
   onAppendComposerAttachments: (files: File[]) => void;
   onComposerChange: (value: string) => void;
@@ -148,6 +153,9 @@ const COMPOSER_EDITOR_MAX_LINES = 10;
 function providerOptionLabel(providerType: DesktopApiProviderType): string {
   if (providerType === 'codex_app_server') {
     return 'Codex';
+  }
+  if (providerType === 'traex') {
+    return 'Trae';
   }
   if (providerType === 'gemini_cli') {
     return 'Gemini';
@@ -381,20 +389,26 @@ function renderComposerModelControl({
   agentConfiguredModel,
   effectiveModel,
   effectiveReasoningEffort,
+  effectiveServiceTier,
   selectedModel,
   selectedReasoningEffort,
+  selectedServiceTier,
   onSelectModel,
   onSelectReasoningEffort,
+  onSelectServiceTier,
   t,
 }: {
   providerModels?: DesktopProviderModels | null;
   agentConfiguredModel?: string | null;
   effectiveModel?: string | null;
   effectiveReasoningEffort?: string | null;
+  effectiveServiceTier?: string | null;
   selectedModel?: string | null;
   selectedReasoningEffort?: string | null;
+  selectedServiceTier?: string | null;
   onSelectModel?: (model: string | null) => void;
   onSelectReasoningEffort?: (effort: string | null) => void;
+  onSelectServiceTier?: (tier: string | null) => void;
   t: Translate;
 }) {
   if (!onSelectModel || !providerModels?.supportsModelSelection) {
@@ -469,6 +483,26 @@ function renderComposerModelControl({
     : undefined;
   const defaultEffortLabel =
     defaultEffortOption?.label || defaultReasoningEffortId || t("Thinking level");
+  // Service tier (speed) follows the same model as thinking level.
+  const catalogServiceTiers =
+    effortFilterModelOption?.serviceTiers?.length
+      ? effortFilterModelOption.serviceTiers
+      : providerModels.serviceTiers || [];
+  const effectiveServiceTierId =
+    selectedServiceTier?.trim() || effectiveServiceTier?.trim() || "";
+  const serviceTiers =
+    effectiveServiceTierId &&
+    !catalogServiceTiers.some((option) => option.id === effectiveServiceTierId)
+      ? [
+          ...catalogServiceTiers,
+          { id: effectiveServiceTierId, label: effectiveServiceTierId, recommended: false },
+        ]
+      : catalogServiceTiers;
+  const supportsServiceTier =
+    Boolean(providerModels.supportsServiceTierSelection) && serviceTiers.length > 0;
+  // The provider default tier is "standard" (no explicit tier); represented as
+  // clearing the override.
+  const defaultServiceTierLabel = t("Standard");
   const triggerLabel = effectiveModelOption
     ? selectedEffortOption
       ? `${effectiveModelOption.label} · ${selectedEffortOption.label}`
@@ -542,6 +576,34 @@ function renderComposerModelControl({
                       <span className="composer-menu-label">{option.label}</span>
                     </FloatingActionMenuItem>
                   ))}
+              </FloatingActionMenuSubContent>
+            </DropdownMenuSub>
+          </>
+        ) : null}
+        {supportsServiceTier && onSelectServiceTier ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuSub>
+              <FloatingActionMenuSubTrigger>
+                <IconBolt aria-hidden size={15} stroke={1.75} />
+                {t("Speed")}
+              </FloatingActionMenuSubTrigger>
+              <FloatingActionMenuSubContent>
+                <FloatingActionMenuItem
+                  data-active={!effectiveServiceTierId ? '' : undefined}
+                  onSelect={() => onSelectServiceTier(null)}
+                >
+                  <span className="composer-menu-label">{defaultServiceTierLabel}</span>
+                </FloatingActionMenuItem>
+                {serviceTiers.map((option) => (
+                  <FloatingActionMenuItem
+                    data-active={option.id === effectiveServiceTierId ? '' : undefined}
+                    key={option.id}
+                    onSelect={() => onSelectServiceTier(option.id)}
+                  >
+                    <span className="composer-menu-label">{option.label}</span>
+                  </FloatingActionMenuItem>
+                ))}
               </FloatingActionMenuSubContent>
             </DropdownMenuSub>
           </>
@@ -826,15 +888,20 @@ export function ComposerForm({
   newThreadAgentConfiguredModel,
   newThreadSelectedModel,
   newThreadSelectedReasoningEffort,
+  newThreadSelectedServiceTier,
   onSelectNewThreadModel,
   onSelectNewThreadReasoningEffort,
+  onSelectNewThreadServiceTier,
   threadProviderModels,
   threadEffectiveModel,
   threadEffectiveReasoningEffort,
+  threadEffectiveServiceTier,
   threadSelectedModel,
   threadSelectedReasoningEffort,
+  threadSelectedServiceTier,
   onSelectThreadModel,
   onSelectThreadReasoningEffort,
+  onSelectThreadServiceTier,
   isActiveSendingThread,
   onAppendComposerAttachments,
   onComposerChange,
@@ -1302,12 +1369,17 @@ export function ComposerForm({
             agentConfiguredModel: newThreadAgentConfiguredModel,
             effectiveModel: threadEffectiveModel ?? newThreadAgentConfiguredModel,
             effectiveReasoningEffort: threadEffectiveReasoningEffort,
+            effectiveServiceTier: threadEffectiveServiceTier,
             selectedModel: threadSelectedModel ?? newThreadSelectedModel,
             selectedReasoningEffort:
               threadSelectedReasoningEffort ?? newThreadSelectedReasoningEffort,
+            selectedServiceTier:
+              threadSelectedServiceTier ?? newThreadSelectedServiceTier,
             onSelectModel: onSelectThreadModel ?? onSelectNewThreadModel,
             onSelectReasoningEffort:
               onSelectThreadReasoningEffort ?? onSelectNewThreadReasoningEffort,
+            onSelectServiceTier:
+              onSelectThreadServiceTier ?? onSelectNewThreadServiceTier,
             t,
           })}
           {renderComposerProviderControl({

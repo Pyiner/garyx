@@ -554,6 +554,8 @@ extension GaryxMobileModel {
         let modelOverride = newThreadModelOverride.trimmingCharacters(in: .whitespacesAndNewlines)
         let reasoningEffortOverride = newThreadReasoningEffortOverride
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        let serviceTierOverride = newThreadServiceTierOverride
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let thread = try await client().createThread(
             GaryxCreateThreadRequest(
                 workspaceDir: workspace.isEmpty ? nil : workspace,
@@ -561,6 +563,7 @@ extension GaryxMobileModel {
                 agentId: agentId.isEmpty ? nil : agentId,
                 model: modelOverride.isEmpty ? nil : modelOverride,
                 modelReasoningEffort: reasoningEffortOverride.isEmpty ? nil : reasoningEffortOverride,
+                modelServiceTier: serviceTierOverride.isEmpty ? nil : serviceTierOverride,
                 metadata: ["client": "garyx-mobile"]
             )
         )

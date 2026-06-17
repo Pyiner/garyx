@@ -215,6 +215,33 @@ fn test_resolve_runtime_codex_env_merges_desktop_auth_env() {
 }
 
 #[test]
+fn test_resolve_runtime_codex_env_skips_desktop_codex_env_for_traex() {
+    // Traex shares the Codex provider impl but authenticates via `traex login`;
+    // it must not inherit Codex's desktop auth env (e.g. an empty OPENAI_API_KEY
+    // override would otherwise leak in).
+    let config = CodexAppServerConfig {
+        provider_type: ProviderType::Traex,
+        env: HashMap::from([("TRAE_FROM_CONFIG".to_owned(), "keep".to_owned())]),
+        ..Default::default()
+    };
+    let metadata = HashMap::from([(
+        "desktop_codex_env".to_owned(),
+        json!({
+            "OPENAI_API_KEY": "",
+            "OPENAI_ORG_ID": "org_123",
+        }),
+    )]);
+
+    let env = resolve_runtime_codex_env(&config, &metadata);
+    assert_eq!(env.get("TRAE_FROM_CONFIG").map(String::as_str), Some("keep"));
+    assert!(
+        !env.contains_key("OPENAI_API_KEY"),
+        "traex must not inherit desktop_codex_env"
+    );
+    assert!(!env.contains_key("OPENAI_ORG_ID"));
+}
+
+#[test]
 fn test_resolve_runtime_codex_env_keeps_blank_desktop_api_key_override() {
     let config = CodexAppServerConfig {
         env: HashMap::from([("OPENAI_API_KEY".to_owned(), "from-config".to_owned())]),
@@ -884,6 +911,7 @@ fn test_build_thread_start_params_full() {
         workspace_dir: Some("/tmp/work".to_owned()),
         model: "o3-mini".to_owned(),
         model_reasoning_effort: "xhigh".to_owned(),
+        model_service_tier: "priority".to_owned(),
         approval_policy: "never".to_owned(),
         sandbox_mode: "danger-full-access".to_owned(),
         mcp_base_url: String::new(),
@@ -893,6 +921,7 @@ fn test_build_thread_start_params_full() {
     assert_eq!(params.cwd.as_deref(), Some("/tmp/work"));
     assert_eq!(params.model.as_deref(), Some("o3-mini"));
     assert_eq!(params.model_reasoning_effort.as_deref(), Some("xhigh"));
+    assert_eq!(params.service_tier.as_deref(), Some("priority"));
     assert_eq!(params.approval_policy.as_deref(), Some("never"));
     assert_eq!(params.sandbox.as_deref(), Some("danger-full-access"));
     let config = params.config.expect("thread config should exist");
@@ -915,6 +944,20 @@ fn test_build_thread_start_params_metadata_reasoning_effort_override() {
     let params = build_thread_start_params(&config, None, "thread::test", "run-1", &metadata);
 
     assert_eq!(params.model_reasoning_effort.as_deref(), Some("xhigh"));
+}
+
+#[test]
+fn test_build_thread_start_params_metadata_service_tier_override() {
+    let config = CodexAppServerConfig {
+        model_service_tier: "standard".to_owned(),
+        ..Default::default()
+    };
+    // The per-thread override (run metadata) wins over the provider default.
+    let metadata = HashMap::from([("model_service_tier".to_owned(), json!("priority"))]);
+
+    let params = build_thread_start_params(&config, None, "thread::test", "run-1", &metadata);
+
+    assert_eq!(params.service_tier.as_deref(), Some("priority"));
 }
 
 #[test]
@@ -1513,6 +1556,7 @@ async fn test_resume_or_start_thread_falls_back_to_start_after_resume_error() {
         config: None,
         model: Some("gpt-5".to_owned()),
         model_reasoning_effort: Some("xhigh".to_owned()),
+        service_tier: None,
         approval_policy: Some("never".to_owned()),
         sandbox: Some("danger-full-access".to_owned()),
     };
@@ -1613,6 +1657,7 @@ async fn test_resume_or_start_thread_forks_existing_thread_without_resume_or_sta
             config: Some(json!({"mcpServers": {}})),
             model: Some("gpt-5".to_owned()),
             model_reasoning_effort: Some("high".to_owned()),
+            service_tier: None,
             approval_policy: Some("never".to_owned()),
             sandbox: Some("off".to_owned()),
         },

@@ -151,6 +151,7 @@ final class GaryxMobileModel: ObservableObject {
     /// Per-thread overrides for the new-thread draft; empty means agent default.
     @Published var newThreadModelOverride = ""
     @Published var newThreadReasoningEffortOverride = ""
+    @Published var newThreadServiceTierOverride = ""
     @Published var workspaceCatalogState = GaryxMobileResourceState(value: [String]())
     @Published var draftTaskTitle = ""
     @Published var draftTaskBody = ""

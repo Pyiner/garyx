@@ -217,7 +217,14 @@ fn resolve_codex_actual_model(
     config: &CodexAppServerConfig,
     metadata: &HashMap<String, Value>,
 ) -> Option<String> {
-    let config_path = default_codex_config_path();
+    // Only fall back to `~/.codex/config.toml` for the real Codex provider.
+    // Traex stores its config under `~/.trae`, so reading Codex's config here
+    // would leak Codex's default model into Traex run metadata/logs.
+    let config_path = if config.provider_type == ProviderType::CodexAppServer {
+        default_codex_config_path()
+    } else {
+        None
+    };
     resolve_codex_actual_model_with_config_path(config, metadata, config_path.as_deref())
 }
 
@@ -349,7 +356,13 @@ fn resolve_runtime_codex_env(
 ) -> HashMap<String, String> {
     let mut env = config.env.clone();
     env.extend(task_cli_env(metadata));
-    env.extend(metadata_string_map(metadata, "desktop_codex_env"));
+    // `desktop_codex_env` carries Codex-specific desktop settings (e.g. the
+    // Codex OPENAI_API_KEY auth toggle). Traex shares this provider impl but
+    // authenticates via `traex login` against `~/.trae`, so it must not inherit
+    // Codex's env — otherwise an empty/overriding OPENAI_API_KEY could leak in.
+    if config.provider_type == ProviderType::CodexAppServer {
+        env.extend(metadata_string_map(metadata, "desktop_codex_env"));
+    }
     env
 }
 
@@ -743,6 +756,16 @@ fn build_thread_start_params(
             (!config.model_reasoning_effort.trim().is_empty())
                 .then(|| config.model_reasoning_effort.clone())
         });
+    let service_tier = metadata
+        .get("model_service_tier")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            (!config.model_service_tier.trim().is_empty())
+                .then(|| config.model_service_tier.clone())
+        });
 
     ThreadStartParams {
         cwd: cwd.clone(),
@@ -755,6 +778,7 @@ fn build_thread_start_params(
         ),
         model,
         model_reasoning_effort,
+        service_tier,
         approval_policy: if config.approval_policy.is_empty() {
             None
         } else {
@@ -794,6 +818,7 @@ fn thread_fork_params_from_start(
         config: thread_params.config.clone(),
         model: thread_params.model.clone(),
         model_reasoning_effort: thread_params.model_reasoning_effort.clone(),
+        service_tier: thread_params.service_tier.clone(),
         approval_policy: thread_params.approval_policy.clone(),
         sandbox: thread_params.sandbox.clone(),
     }
@@ -830,6 +855,7 @@ where
             config: thread_params.config.clone(),
             model: thread_params.model.clone(),
             model_reasoning_effort: thread_params.model_reasoning_effort.clone(),
+            service_tier: thread_params.service_tier.clone(),
             approval_policy: thread_params.approval_policy.clone(),
             sandbox: thread_params.sandbox.clone(),
         };
@@ -1703,7 +1729,10 @@ impl CodexAgentProvider {
 #[async_trait]
 impl AgentLoopProvider for CodexAgentProvider {
     fn provider_type(&self) -> ProviderType {
-        ProviderType::CodexAppServer
+        // Codex and Traex share this provider implementation; report the
+        // configured identity so thread affinity, presentation, and session
+        // persistence treat them as distinct providers.
+        self.config.provider_type.clone()
     }
 
     fn is_ready(&self) -> bool {

@@ -167,6 +167,29 @@ pub fn builtin_provider_agent_profiles() -> Vec<CustomAgentProfile> {
             updated_at: now.clone(),
         },
         CustomAgentProfile {
+            agent_id: "traex".to_owned(),
+            display_name: "Trae".to_owned(),
+            provider_type: ProviderType::Traex,
+            model: String::new(),
+            model_reasoning_effort: String::new(),
+            model_service_tier: String::new(),
+            provider_env: HashMap::new(),
+            auth_source: String::new(),
+            base_url: String::new(),
+            codex_home: String::new(),
+            max_tool_iterations: default_garyx_native_max_tool_iterations(),
+            request_timeout_seconds: default_native_request_timeout_u32(),
+            default_workspace_dir: None,
+            // TRAE CLI is a Codex fork; reuse the Codex avatar until a dedicated
+            // Trae asset is provided.
+            avatar_data_url: Some(builtin_avatar_data_url(BUILTIN_CODEX_AVATAR_PNG)),
+            system_prompt: String::new(),
+            built_in: true,
+            standalone: true,
+            created_at: now.clone(),
+            updated_at: now.clone(),
+        },
+        CustomAgentProfile {
             agent_id: "gemini".to_owned(),
             display_name: "Gemini".to_owned(),
             provider_type: ProviderType::GeminiCli,
@@ -191,7 +214,7 @@ pub fn builtin_provider_agent_profiles() -> Vec<CustomAgentProfile> {
 }
 
 pub fn is_builtin_provider_agent_id(agent_id: &str) -> bool {
-    matches!(agent_id.trim(), "claude" | "codex" | "gemini")
+    matches!(agent_id.trim(), "claude" | "codex" | "traex" | "gemini")
 }
 
 #[cfg(test)]

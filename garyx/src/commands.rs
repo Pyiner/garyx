@@ -826,6 +826,7 @@ fn provider_model_config_key(provider_type: &ProviderType) -> Result<&'static st
     match provider_type {
         ProviderType::ClaudeCode => Ok("claude"),
         ProviderType::CodexAppServer => Ok("codex"),
+        ProviderType::Traex => Ok("traex"),
         ProviderType::GeminiCli => Ok("gemini"),
         ProviderType::Gpt => Ok("gpt"),
         ProviderType::ClaudeLlm => Ok("anthropic"),
@@ -9118,6 +9119,7 @@ struct AgentReferenceOption {
 fn provider_type_label(provider_type: &ProviderType) -> &'static str {
     match provider_type {
         ProviderType::CodexAppServer => "Codex",
+        ProviderType::Traex => "Trae",
         ProviderType::GeminiCli => "Gemini",
         ProviderType::Gpt => "GPT",
         ProviderType::ClaudeLlm => "Claude",

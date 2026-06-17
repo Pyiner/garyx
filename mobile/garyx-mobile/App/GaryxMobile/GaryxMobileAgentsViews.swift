@@ -1324,6 +1324,7 @@ private struct GaryxAgentProviderOption: Identifiable, Equatable {
 private let garyxAgentProviderOptions: [GaryxAgentProviderOption] = [
     GaryxAgentProviderOption(id: "claude_code", label: "Claude Code"),
     GaryxAgentProviderOption(id: "codex_app_server", label: "Codex"),
+    GaryxAgentProviderOption(id: "traex", label: "Trae"),
     GaryxAgentProviderOption(id: "gemini_cli", label: "Gemini CLI"),
     GaryxAgentProviderOption(id: "gpt", label: "OpenAI"),
     GaryxAgentProviderOption(id: "anthropic", label: "Anthropic"),
