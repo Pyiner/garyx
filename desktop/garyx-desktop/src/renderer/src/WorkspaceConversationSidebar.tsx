@@ -8,11 +8,16 @@ import {
   type WorkspaceThreadGroup,
 } from './thread-model';
 import { ThreadConversationSidebar } from './ThreadConversationSidebar';
+import {
+  resolveThreadAvatarIdentity,
+  type ThreadAvatarCatalog,
+} from './thread-avatar';
 import { useI18n } from './i18n';
 
 type WorkspaceConversationSidebarProps = {
   desktopState: DesktopState | null;
   group: WorkspaceThreadGroup;
+  threadAvatarCatalog: ThreadAvatarCatalog;
   selectedThreadId: string | null;
   deletingThreadId: string | null;
   formatThreadTimestamp: (value?: string | null) => string;
@@ -27,6 +32,7 @@ type WorkspaceConversationSidebarProps = {
 export function WorkspaceConversationSidebar({
   desktopState,
   group,
+  threadAvatarCatalog,
   selectedThreadId,
   deletingThreadId,
   formatThreadTimestamp,
@@ -51,7 +57,9 @@ export function WorkspaceConversationSidebar({
       key: row.thread.id,
       title: row.thread.title,
       time: row.thread.updatedAt,
+      avatar: resolveThreadAvatarIdentity(row.thread, threadAvatarCatalog),
       isActive: row.isActive,
+      isBusy: row.isBusy,
       onOpen: () => onOpenThread(row.thread.id),
       onArchive: row.isBusy ? undefined : () => onArchiveThread(row.thread.id),
     }));

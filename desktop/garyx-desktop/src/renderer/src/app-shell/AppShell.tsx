@@ -151,6 +151,10 @@ import {
   workspaceSuggestionFromPath,
 } from "../thread-model";
 import {
+  buildThreadAvatarCatalog,
+  resolveThreadAvatarIdentity,
+} from "../thread-avatar";
+import {
   bindEndpointToThread,
   detachEndpointFromThread,
   ensureWorkspaceForNewThread,
@@ -2734,6 +2738,10 @@ export function AppShell() {
   const desktopTeamMap = new Map(
     desktopTeams.map((team) => [team.teamId, team] as const),
   );
+  const threadAvatarCatalog = useMemo(
+    () => buildThreadAvatarCatalog(desktopAgents, desktopTeams),
+    [desktopAgents, desktopTeams],
+  );
   const activeAgentId = activeThread?.agentId || null;
   const activeThreadInfo = selectedThreadId
     ? threadInfoByThread[selectedThreadId] || null
@@ -3429,6 +3437,7 @@ export function AppShell() {
         .filter((thread): thread is DesktopThreadSummary => Boolean(thread))
         .map((thread) => ({
           thread,
+          avatar: resolveThreadAvatarIdentity(thread, threadAvatarCatalog),
           isActive:
             visibleThreadEntrySelectionSource === "pinned" &&
             visibleSelectedThreadId === thread.id,
@@ -3437,6 +3446,7 @@ export function AppShell() {
     [
       messageState,
       pinnedThreadIds,
+      threadAvatarCatalog,
       threadSummaryById,
       visibleSelectedThreadId,
       visibleThreadEntrySelectionSource,
@@ -10485,6 +10495,7 @@ export function AppShell() {
           onRailResizeStart={handleRailResizeStart}
           railResizing={railResizing}
           selectedThreadId={workspaceConversationSelectedThreadId}
+          threadAvatarCatalog={threadAvatarCatalog}
         />
       ) : shouldShowConversationRail && recentThreadsRailOpen ? (
         <ThreadConversationSidebar
@@ -10508,7 +10519,9 @@ export function AppShell() {
             key: row.thread.id,
             title: row.thread.title,
             time: row.thread.updatedAt,
+            avatar: resolveThreadAvatarIdentity(row.thread, threadAvatarCatalog),
             isActive: row.isActive,
+            isBusy: row.isBusy,
             onOpen: () => {
               void openExistingThread(row.thread.id, "recent");
             },

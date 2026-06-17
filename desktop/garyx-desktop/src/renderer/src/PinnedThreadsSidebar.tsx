@@ -4,12 +4,15 @@ import { Archive } from 'lucide-react';
 
 import type { DesktopThreadSummary } from '@shared/contracts';
 
+import { AgentOptionAvatar } from './app-shell/components/AgentOptionAvatar';
 import { useI18n } from './i18n';
+import type { ThreadAvatarIdentity } from './thread-avatar';
 
 export type PinnedThreadRow = {
   thread: DesktopThreadSummary;
   isActive: boolean;
   isBusy: boolean;
+  avatar: ThreadAvatarIdentity;
 };
 
 type PinnedThreadsSidebarProps = {
@@ -56,7 +59,7 @@ export function PinnedThreadsSidebar({
       </div>
 
       <div className="pinned-thread-list">
-        {rows.map(({ thread, isActive, isBusy }) => {
+        {rows.map(({ thread, isActive, isBusy, avatar }) => {
           const timeLabel = formatThreadTimestamp(thread.updatedAt);
           const isConfirming = confirmThreadId === thread.id;
           return (
@@ -90,12 +93,27 @@ export function PinnedThreadsSidebar({
                 title={thread.title}
                 type="button"
               >
+                <span className="thread-row-avatar-wrap pinned-thread-avatar-wrap">
+                  <AgentOptionAvatar
+                    agentId={avatar.agentId}
+                    avatarDataUrl={avatar.avatarDataUrl}
+                    className="thread-row-agent-avatar"
+                    kind={avatar.kind}
+                    label={avatar.label}
+                    providerIcon={avatar.providerIcon}
+                    providerType={avatar.providerType}
+                    size="default"
+                  />
+                  {isBusy ? (
+                    <span aria-label={t('Loading')} className="thread-row-typing-badge" role="status">
+                      <span />
+                      <span />
+                      <span />
+                    </span>
+                  ) : null}
+                </span>
                 <span className="pinned-thread-title">{thread.title}</span>
-                {isBusy ? (
-                  <span aria-label={t('Loading')} className="pinned-thread-spinner" />
-                ) : (
-                  <span className="pinned-thread-time">{timeLabel}</span>
-                )}
+                <span className="pinned-thread-time">{timeLabel}</span>
               </button>
               <button
                 aria-label={

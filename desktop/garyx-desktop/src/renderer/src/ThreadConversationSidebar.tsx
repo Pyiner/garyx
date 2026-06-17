@@ -7,7 +7,9 @@ import {
 } from 'react';
 import { Archive, PanelLeftClose } from 'lucide-react';
 
+import { AgentOptionAvatar } from './app-shell/components/AgentOptionAvatar';
 import { useI18n } from './i18n';
+import type { ThreadAvatarIdentity } from './thread-avatar';
 
 export type ThreadRailRow = {
   /** Stable React key and inline-confirm key. */
@@ -15,9 +17,11 @@ export type ThreadRailRow = {
   title: string;
   titleTooltip?: string;
   time?: string | null;
+  avatar?: ThreadAvatarIdentity | null;
   /** Translation key for an inline status badge (e.g. bot thread state). */
   badge?: string | null;
   isActive: boolean;
+  isBusy?: boolean;
   /** Defaults to true; when false the row is rendered disabled. */
   openable?: boolean;
   onOpen: () => void;
@@ -124,7 +128,7 @@ export function ThreadConversationSidebar({
               >
                 <button
                   aria-current={row.isActive ? 'page' : undefined}
-                  className="bot-conversation-row"
+                  className={`bot-conversation-row ${row.avatar ? 'with-avatar' : ''}`.trim()}
                   disabled={!openable}
                   onClick={() => {
                     if (openable) {
@@ -133,6 +137,27 @@ export function ThreadConversationSidebar({
                   }}
                   type="button"
                 >
+                  {row.avatar ? (
+                    <span className="thread-row-avatar-wrap">
+                      <AgentOptionAvatar
+                        agentId={row.avatar.agentId}
+                        avatarDataUrl={row.avatar.avatarDataUrl}
+                        className="thread-row-agent-avatar"
+                        kind={row.avatar.kind}
+                        label={row.avatar.label}
+                        providerIcon={row.avatar.providerIcon}
+                        providerType={row.avatar.providerType}
+                        size="default"
+                      />
+                      {row.isBusy ? (
+                        <span aria-label={t('Loading')} className="thread-row-typing-badge" role="status">
+                          <span />
+                          <span />
+                          <span />
+                        </span>
+                      ) : null}
+                    </span>
+                  ) : null}
                   <div className="bot-conversation-row-main">
                     <span className="bot-conversation-row-title" title={row.titleTooltip ?? row.title}>
                       {row.title}
