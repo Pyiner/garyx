@@ -50,10 +50,18 @@ private enum GaryxComposerLayout {
 
 
 struct GaryxComposer: View {
+    @Environment(\.isEnabled) private var isEnabled
     @EnvironmentObject private var model: GaryxMobileModel
     let isFocused: FocusState<Bool>.Binding
     @State private var draftText = ""
     @State private var draftContextVersion = 0
+    /// Identity generation for the draft field. While a CJK keyboard still
+    /// reports an input session, SwiftUI can skip pushing a programmatic
+    /// clear into the focused vertical-axis `TextField`, leaving the sent
+    /// text visible until the next layout pass. Re-assigning the same empty
+    /// string cannot dirty state, so the only deterministic flush is
+    /// recreating the field when the draft context resets.
+    @State private var draftFieldGeneration = 0
     @State private var isPickingAttachments = false
     @State private var isPickingPhotos = false
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
@@ -68,7 +76,7 @@ struct GaryxComposer: View {
     }
 
     private var showsSendButton: Bool {
-        !model.isSelectedThreadVisiblyRunning || hasLocalPayload
+        !model.isSelectedThreadSending || hasLocalPayload
     }
 
     private var canChangeWorkspaceMode: Bool {
@@ -79,16 +87,13 @@ struct GaryxComposer: View {
     }
 
     private var showsWorkspaceModeStrip: Bool {
-        canChangeWorkspaceMode && model.newThreadWorkspaceCanUseWorktree
+        canChangeWorkspaceMode
     }
 
     var body: some View {
         GaryxAdaptiveGlassContainer(spacing: GaryxComposerLayout.composerSpacing) {
             composerStack
         }
-        // No drop shadow: the input box is a bare glass card, defined only by its
-        // thin glass-edge border. Nothing extends below the card to clip against
-        // the home-indicator safe area.
         .padding(.horizontal, 12)
         .padding(.top, 10)
         .padding(.bottom, 6)
@@ -134,18 +139,32 @@ struct GaryxComposer: View {
         }
         .onAppear {
             draftContextVersion = model.composerContextVersion
-            draftText = model.draft
+            draftText = model.activeComposerDraft
             #if DEBUG
             presentDebugWorkspaceModeSheetIfNeeded()
             #endif
         }
         .onChange(of: model.composerContextVersion) { _, newValue in
             draftContextVersion = newValue
-            draftText = model.draft
+            draftText = model.activeComposerDraft
+            let wasFocused = isFocused.wrappedValue
+            draftFieldGeneration &+= 1
+            if wasFocused {
+                // The recreated field starts unfocused; re-attach the
+                // keyboard on the next runloop so sending keeps the
+                // composer ready for a follow-up message.
+                DispatchQueue.main.async {
+                    isFocused.wrappedValue = true
+                }
+            }
         }
-        .onChange(of: model.draft) { _, newValue in
-            guard newValue != draftText else { return }
-            draftText = newValue
+        .onChange(of: draftText) { _, newValue in
+            // Bind the live text to the thread it is being typed in, so a thread
+            // switch preserves it. The store is not @Published, so this is cheap
+            // per keystroke. Skip the brief window before a context reload so the
+            // outgoing thread's text is never written onto the incoming one.
+            guard draftContextVersion == model.composerContextVersion else { return }
+            model.setComposerDraft(newValue)
         }
         .onChange(of: model.sidebarVisible) { _, visible in
             if visible {
@@ -174,9 +193,7 @@ struct GaryxComposer: View {
         #endif
         .onDisappear {
             guard draftContextVersion == model.composerContextVersion else { return }
-            if model.draft != draftText {
-                model.draft = draftText
-            }
+            model.setComposerDraft(draftText)
         }
     }
 
@@ -205,46 +222,32 @@ struct GaryxComposer: View {
     }
 
     private var newThreadComposerCard: some View {
-        // Keep the card above the workspace strip in the overlapping deck.
         composerCard
             .zIndex(1)
+            .shadow(color: GaryxComposerLayout.composerShadow, radius: 22, x: 0, y: 12)
+            .shadow(color: GaryxComposerLayout.composerLiftShadow, radius: 12, x: 0, y: 7)
+            .shadow(color: Color.black.opacity(0.035), radius: 2, x: 0, y: 1)
     }
 
     private var composerCard: some View {
         composerCardContent
             .frame(maxWidth: .infinity, alignment: .leading)
-            // Opaque backing in all cases so the skirt never bleeds through, then
-            // the real Liquid Glass material on top — genuine glassification of
-            // the input box rather than a faux border.
+            .background(GaryxComposerLayout.composerMaterialTint, in: composerCardShape)
             .background(GaryxComposerLayout.composerOcclusionFill, in: composerCardShape)
             .garyxAdaptiveGlass(.regular, isInteractive: false, fallbackMaterial: .ultraThinMaterial, in: composerCardShape)
-    }
-
-    private var composerGlassEdgeGradient: LinearGradient {
-        LinearGradient(
-            colors: [
-                Color.primary.opacity(0.13),
-                Color.primary.opacity(0.045),
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
+            .overlay {
+                composerCardShape
+                    .stroke(GaryxComposerLayout.composerMaterialHighlight, lineWidth: 0.7)
+                    .blendMode(.plusLighter)
+            }
+            .overlay {
+                composerCardShape
+                    .stroke(GaryxComposerLayout.composerMaterialStroke, lineWidth: 0.7)
+            }
     }
 
     private var composerCardShape: RoundedRectangle {
         RoundedRectangle(cornerRadius: GaryxComposerLayout.composerCornerRadius, style: .continuous)
-    }
-
-    private var composerTopEdgeMask: some View {
-        LinearGradient(
-            stops: [
-                .init(color: .white, location: 0),
-                .init(color: .white, location: 0.45),
-                .init(color: .clear, location: 0.82),
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
     }
 
     private var composerCardContent: some View {
@@ -259,8 +262,8 @@ struct GaryxComposer: View {
     }
 
     private var workspaceModeStrip: some View {
-        // The gray strip is a non-interactive backdrop; only the leading "Local"
-        // control is tappable, not the whole apron width.
+        // The gray apron is a non-interactive backdrop; only the leading Local
+        // select control (icon + label + chevron) is tappable, not the whole strip.
         HStack(spacing: 0) {
             Button {
                 guard canChangeWorkspaceMode else { return }
@@ -292,6 +295,7 @@ struct GaryxComposer: View {
         .padding(.top, GaryxComposerLayout.workspaceBaseTopPadding)
         .padding(.bottom, GaryxComposerLayout.workspaceBaseBottomPadding)
         .background(GaryxComposerLayout.workspaceBaseFill, in: workspaceBaseShape)
+        .garyxAdaptiveGlass(.regular, isInteractive: false, fallbackMaterial: .ultraThinMaterial, in: workspaceBaseShape)
         .overlay {
             workspaceBaseShape
                 .stroke(GaryxComposerLayout.workspaceBaseHighlight, lineWidth: 0.6)
@@ -314,6 +318,7 @@ struct GaryxComposer: View {
             .clipShape(workspaceBaseShape)
             .allowsHitTesting(false)
         }
+        .shadow(color: Color.black.opacity(0.07), radius: 28, x: 0, y: 10)
     }
 
     private var workspaceBaseShape: UnevenRoundedRectangle {
@@ -366,7 +371,7 @@ struct GaryxComposer: View {
             }
 
             TextField("", text: $draftText, axis: .vertical)
-                .id(GaryxComposerLayout.draftFieldIdentity)
+                .id("\(GaryxComposerLayout.draftFieldIdentity)-\(draftFieldGeneration)")
                 .font(GaryxFont.subheadline())
                 .foregroundStyle(.primary)
                 .focused(isFocused)
@@ -382,6 +387,9 @@ struct GaryxComposer: View {
         .padding(.bottom, GaryxComposerLayout.inputBottomPadding)
         .contentShape(Rectangle())
         .onTapGesture {
+            // `.onTapGesture` ignores `.disabled`; do not pop the keyboard
+            // from a finger-up while the drawer drag has content disabled.
+            guard isEnabled else { return }
             isFocused.wrappedValue = true
         }
     }
@@ -396,7 +404,7 @@ struct GaryxComposer: View {
 
             Spacer(minLength: 0)
 
-            if model.isSelectedThreadVisiblyRunning {
+            if model.isSelectedThreadSending {
                 Button {
                     Task { await model.interruptActiveRun() }
                 } label: {
@@ -480,7 +488,7 @@ struct GaryxComposer: View {
     private func insertSlashCommand(_ command: GaryxSlashCommand) {
         let normalizedName = command.name.hasPrefix("/") ? command.name : "/\(command.name)"
         draftText = normalizedName + " "
-        model.draft = draftText
+        model.setComposerDraft(draftText)
         isFocused.wrappedValue = true
     }
 
