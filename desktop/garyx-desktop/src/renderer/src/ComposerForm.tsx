@@ -511,6 +511,25 @@ function renderComposerModelControl({
       ? `${t("Model")} · ${selectedEffortOption.label}`
       : t("Model");
 
+  // Selecting a model also clears a service tier the target model does not
+  // support, so the thread never runs with an unsupported speed tier (mirrors
+  // the iOS `selectModel` sanitize).
+  const selectModelSanitizingTier = (modelId: string | null) => {
+    onSelectModel(modelId);
+    if (!onSelectServiceTier || !effectiveServiceTierId) {
+      return;
+    }
+    const targetOption = modelId
+      ? models.find((option) => option.id === modelId)
+      : defaultModelOption;
+    const targetTiers = targetOption?.serviceTiers?.length
+      ? targetOption.serviceTiers
+      : providerModels.serviceTiers || [];
+    if (!targetTiers.some((tier) => tier.id === effectiveServiceTierId)) {
+      onSelectServiceTier(null);
+    }
+  };
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -528,7 +547,7 @@ function renderComposerModelControl({
           data-active={
             !effectiveModelId || effectiveModelId === defaultModelId ? '' : undefined
           }
-          onSelect={() => onSelectModel(null)}
+          onSelect={() => selectModelSanitizingTier(null)}
         >
           <span className="composer-menu-label">{defaultModelLabel}</span>
         </FloatingActionMenuItem>
@@ -538,7 +557,7 @@ function renderComposerModelControl({
             <FloatingActionMenuItem
               data-active={option.id === effectiveModelId ? '' : undefined}
               key={option.id}
-              onSelect={() => onSelectModel(option.id)}
+              onSelect={() => selectModelSanitizingTier(option.id)}
             >
               <span className="composer-menu-label">{option.label}</span>
             </FloatingActionMenuItem>
