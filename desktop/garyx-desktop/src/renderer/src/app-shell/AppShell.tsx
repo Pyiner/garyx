@@ -1840,13 +1840,15 @@ export function AppShell() {
   const [composerBrowserAnnotations, setComposerBrowserAnnotations] = useState<
     BrowserAnnotationCommentRequest[]
   >([]);
-  const [composerAttachmentUploadPending, setComposerAttachmentUploadPending] =
-    useState(false);
+  const [composerAttachmentUploadCount, setComposerAttachmentUploadCount] =
+    useState(0);
+  const composerAttachmentUploadPending = composerAttachmentUploadCount > 0;
   const [sideComposerBySource, setSideComposerBySource] = useState<
     Record<string, SideComposerDraft>
   >({});
-  const [sideComposerAttachmentUploadPending, setSideComposerAttachmentUploadPending] =
-    useState(false);
+  const [sideComposerAttachmentUploadCount, setSideComposerAttachmentUploadCount] =
+    useState(0);
+  const sideComposerAttachmentUploadPending = sideComposerAttachmentUploadCount > 0;
   const [sideChatThreadBySource, setSideChatThreadBySource] = useState<
     Record<string, string>
   >({});
@@ -3273,6 +3275,7 @@ export function AppShell() {
     composerAttachmentUploadPending ||
     isDraftSendingThread ||
     workflowThreadStarting;
+  const composerEditingLocked = isDraftSendingThread || workflowThreadStarting;
   const botGroups = useMemo(
     () =>
       buildBotGroups(
@@ -3791,6 +3794,7 @@ export function AppShell() {
     sideComposerDraft.browserAnnotations.length > 0;
   const sideChatComposerLocked =
     sideComposerAttachmentUploadPending || sideChatCreating;
+  const sideChatComposerEditingLocked = sideChatCreating;
   const sideChatComposerPlaceholder =
     sideChatIsSendingThread || sideChatQueue.length > 0
       ? "Queue another follow-up for Garyx..."
@@ -4241,7 +4245,7 @@ export function AppShell() {
       return;
     }
 
-    setSideComposerAttachmentUploadPending(true);
+    setSideComposerAttachmentUploadCount((count) => count + 1);
     try {
       const prepared = await prepareAttachmentUploads(files);
       if (!prepared.length) {
@@ -4301,7 +4305,7 @@ export function AppShell() {
           : "Failed to load attachment",
       );
     } finally {
-      setSideComposerAttachmentUploadPending(false);
+      setSideComposerAttachmentUploadCount((count) => count - 1);
       resetSideComposerAttachmentPicker();
     }
   }
@@ -4471,7 +4475,7 @@ export function AppShell() {
       return;
     }
 
-    setComposerAttachmentUploadPending(true);
+    setComposerAttachmentUploadCount((count) => count + 1);
     try {
       const prepared = await prepareAttachmentUploads(files);
       if (!prepared.length) {
@@ -4532,7 +4536,7 @@ export function AppShell() {
           : "Failed to load attachment",
       );
     } finally {
-      setComposerAttachmentUploadPending(false);
+      setComposerAttachmentUploadCount((count) => count - 1);
       resetComposerAttachmentPicker();
     }
   }
@@ -9902,6 +9906,7 @@ export function AppShell() {
       composerFiles={sideComposerDraft.files}
       composerHasPayload={sideChatComposerHasPayload}
       composerImages={sideComposerDraft.images}
+      composerEditingLocked={sideChatComposerEditingLocked}
       composerLocked={sideChatComposerLocked}
       composerPlaceholder={sideChatComposerPlaceholder}
       composerProviderType={sideChatComposerProviderType}
@@ -10954,6 +10959,7 @@ export function AppShell() {
                 composerFiles={composerFiles}
                 composerHasPayload={composerHasPayload}
                 composerImages={composerImages}
+                composerEditingLocked={composerEditingLocked}
                 composerLocked={composerLocked}
                 composerPlaceholder={composerPlaceholder}
                 composerProviderType={composerProviderType}

@@ -72,6 +72,7 @@ function ThreadStage({ step }: { step: StoryStep }) {
       composerFiles={[]}
       composerHasPayload={false}
       composerImages={[]}
+      composerEditingLocked={false}
       composerLocked={false}
       composerPlaceholder="Describe what you want Garyx to build…"
       composerProviderType="claude_code"

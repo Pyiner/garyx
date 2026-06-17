@@ -89,6 +89,7 @@ type ComposerFormProps = {
   composerFiles: MessageFileAttachment[];
   composerHasPayload: boolean;
   composerImages: MessageImageAttachment[];
+  composerEditingLocked: boolean;
   composerLocked: boolean;
   composerPlaceholder: string;
   composerProviderType: DesktopApiProviderType;
@@ -803,6 +804,7 @@ export function ComposerForm({
   composerFiles,
   composerHasPayload,
   composerImages,
+  composerEditingLocked,
   composerLocked,
   composerPlaceholder,
   composerProviderType,
@@ -1237,7 +1239,7 @@ export function ComposerForm({
       <textarea
         className="composer-editor"
         ref={composerTextareaRef}
-        disabled={composerLocked}
+        disabled={composerEditingLocked}
         value={draft}
         onChange={(event) => {
           const nextValue = event.target.value;
@@ -1273,7 +1275,7 @@ export function ComposerForm({
           >
             <FloatingActionMenuItem
               className="composer-menu-item"
-              disabled={composerLocked || workflowSelected}
+              disabled={composerEditingLocked || workflowSelected}
               onSelect={() => {
                 composerAttachmentInputRef.current?.click();
               }}

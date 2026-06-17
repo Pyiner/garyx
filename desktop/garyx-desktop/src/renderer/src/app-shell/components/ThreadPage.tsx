@@ -262,6 +262,7 @@ type ThreadPageProps = {
   composerFiles: MessageFileAttachment[];
   composerHasPayload: boolean;
   composerImages: MessageImageAttachment[];
+  composerEditingLocked: boolean;
   composerLocked: boolean;
   composerPlaceholder: string;
   composerProviderType: DesktopApiProviderType;
@@ -397,6 +398,7 @@ export function ThreadPage({
   composerFiles,
   composerHasPayload,
   composerImages,
+  composerEditingLocked,
   composerLocked,
   composerPlaceholder,
   composerProviderType,
@@ -1001,6 +1003,7 @@ export function ThreadPage({
               composerFiles={composerFiles}
               composerHasPayload={composerHasPayload}
               composerImages={composerImages}
+              composerEditingLocked={composerEditingLocked}
               composerLocked={composerLocked}
               composerPlaceholder={composerPlaceholder}
               composerProviderType={composerProviderType}
