@@ -3129,6 +3129,43 @@ fn enrich_message_content_for_history_inlines_image_path_blocks() {
 }
 
 #[test]
+fn enrich_message_content_for_history_inlines_image_generation_saved_path() {
+    let temp = tempdir().expect("tempdir");
+    let image_path = temp.path().join("generated.png");
+    std::fs::write(&image_path, b"png-bytes").expect("write image");
+    let long_result = "x".repeat(20_000);
+
+    let enriched = enrich_message_content_for_history(&json!({
+        "type": "imageGeneration",
+        "id": "ig-test",
+        "savedPath": image_path.to_string_lossy().to_string(),
+        "result": long_result,
+    }));
+
+    let source = enriched
+        .get("source")
+        .and_then(Value::as_object)
+        .expect("inline image generation source");
+    assert_eq!(source.get("type").and_then(Value::as_str), Some("base64"));
+    assert_eq!(
+        source.get("media_type").and_then(Value::as_str),
+        Some("image/png")
+    );
+    assert!(
+        source
+            .get("data")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty())
+    );
+    let result = enriched
+        .get("result")
+        .and_then(Value::as_str)
+        .expect("capped result");
+    assert!(result.contains("[truncated:"));
+    assert!(result.chars().count() <= MAX_HISTORY_CONTENT_TEXT_CHARS + 80);
+}
+
+#[test]
 fn enrich_history_caps_long_string_content() {
     let long = "x".repeat(20_000);
     let enriched = enrich_message_content_for_history(&json!(long));

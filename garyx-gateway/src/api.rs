@@ -1715,61 +1715,114 @@ fn summarize_content_block(content: &Value, parts: &mut Vec<String>, image_count
 
 const HISTORY_IMAGE_INLINE_MAX_BYTES: u64 = 12 * 1024 * 1024;
 
-fn enrich_image_block_for_history(block: &serde_json::Map<String, Value>) -> Value {
-    if block.get("url").and_then(Value::as_str).is_some()
+fn trimmed_string_field<'a>(
+    block: &'a serde_json::Map<String, Value>,
+    keys: &[&str],
+) -> Option<&'a str> {
+    keys.iter()
+        .filter_map(|key| block.get(*key).and_then(Value::as_str).map(str::trim))
+        .find(|value| !value.is_empty())
+}
+
+fn has_inline_image_source(block: &serde_json::Map<String, Value>) -> bool {
+    block.get("url").and_then(Value::as_str).is_some()
         || block
             .get("source")
             .and_then(Value::as_object)
             .and_then(|source| source.get("data"))
             .and_then(Value::as_str)
             .is_some()
-    {
+}
+
+fn history_image_media_type(block: &serde_json::Map<String, Value>, path: &str) -> String {
+    trimmed_string_field(
+        block,
+        &[
+            "media_type",
+            "mediaType",
+            "mime_type",
+            "mimeType",
+            "contentType",
+        ],
+    )
+    .map(str::to_owned)
+    .or_else(|| {
+        FsPath::new(path)
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(|ext| match ext.to_ascii_lowercase().as_str() {
+                "png" => "image/png".to_owned(),
+                "gif" => "image/gif".to_owned(),
+                "webp" => "image/webp".to_owned(),
+                _ => "image/jpeg".to_owned(),
+            })
+    })
+    .unwrap_or_else(|| "image/jpeg".to_owned())
+}
+
+fn image_source_for_history_path(
+    block: &serde_json::Map<String, Value>,
+    path: &str,
+) -> Option<Value> {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return None;
+    };
+    if !metadata.is_file() || metadata.len() > HISTORY_IMAGE_INLINE_MAX_BYTES {
+        return None;
+    }
+    let Ok(bytes) = std::fs::read(path) else {
+        return None;
+    };
+
+    let media_type = history_image_media_type(block, path);
+    Some(json!({
+        "type": "base64",
+        "media_type": media_type,
+        "data": BASE64.encode(bytes),
+    }))
+}
+
+fn enrich_image_block_for_history(block: &serde_json::Map<String, Value>) -> Value {
+    if has_inline_image_source(block) {
         return Value::Object(block.clone());
     }
 
-    let Some(path) = block.get("path").and_then(Value::as_str).map(str::trim) else {
+    let Some(path) = trimmed_string_field(block, &["path"]) else {
         return Value::Object(block.clone());
     };
-    if path.is_empty() {
-        return Value::Object(block.clone());
-    }
-    let Ok(metadata) = std::fs::metadata(path) else {
-        return Value::Object(block.clone());
-    };
-    if !metadata.is_file() || metadata.len() > HISTORY_IMAGE_INLINE_MAX_BYTES {
-        return Value::Object(block.clone());
-    }
-    let Ok(bytes) = std::fs::read(path) else {
+    let Some(source) = image_source_for_history_path(block, path) else {
         return Value::Object(block.clone());
     };
 
     let mut hydrated = block.clone();
-    let media_type = hydrated
-        .get("media_type")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .or_else(|| {
-            FsPath::new(path)
-                .extension()
-                .and_then(|value| value.to_str())
-                .map(|ext| match ext.to_ascii_lowercase().as_str() {
-                    "png" => "image/png".to_owned(),
-                    "gif" => "image/gif".to_owned(),
-                    "webp" => "image/webp".to_owned(),
-                    _ => "image/jpeg".to_owned(),
-                })
+    hydrated.insert("source".to_owned(), source);
+    Value::Object(hydrated)
+}
+
+fn enrich_image_generation_block_for_history(block: &serde_json::Map<String, Value>) -> Value {
+    let mut hydrated: serde_json::Map<String, Value> = block
+        .iter()
+        .map(|(key, value)| {
+            if key == "source" {
+                (key.clone(), value.clone())
+            } else {
+                (key.clone(), enrich_message_content_for_history(value))
+            }
         })
-        .unwrap_or_else(|| "image/jpeg".to_owned());
-    hydrated.insert(
-        "source".to_owned(),
-        json!({
-            "type": "base64",
-            "media_type": media_type,
-            "data": BASE64.encode(bytes),
-        }),
-    );
+        .collect();
+
+    if has_inline_image_source(&hydrated) {
+        return Value::Object(hydrated);
+    }
+
+    let Some(path) = trimmed_string_field(block, &["savedPath", "saved_path", "path", "filePath"])
+    else {
+        return Value::Object(hydrated);
+    };
+    let Some(source) = image_source_for_history_path(&hydrated, path) else {
+        return Value::Object(hydrated);
+    };
+    hydrated.insert("source".to_owned(), source);
     Value::Object(hydrated)
 }
 
@@ -1806,6 +1859,7 @@ fn enrich_message_content_for_history(content: &Value) -> Value {
         {
             // Images are hydrated to inline base64 and must not be length-capped.
             "image" => enrich_image_block_for_history(block),
+            "imageGeneration" => enrich_image_generation_block_for_history(block),
             // Recurse into other objects so nested tool text is capped too.
             _ => Value::Object(
                 block

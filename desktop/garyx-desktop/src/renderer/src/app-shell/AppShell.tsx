@@ -115,6 +115,7 @@ import {
   deriveThreadActivityModel,
   threadActivitySignature,
 } from "./thread-activity";
+import { extractImageGenerationImageContent } from "./image-generation-content";
 import {
   getRendererPerformanceSnapshot,
   measureUiAction,
@@ -1167,100 +1168,7 @@ function extractMessageToolImageBlocks(
   }
 }
 
-type GeneratedImageToolMessage = Pick<
-  TranscriptMessage,
-  "content" | "metadata" | "toolName" | "toolUseId"
->;
-
 const GENERATED_IMAGE_TOOL_USE_METADATA_KEY = "generated_image_tool_use_id";
-
-function recordString(
-  record: Record<string, unknown> | null | undefined,
-  ...keys: string[]
-): string {
-  for (const key of keys) {
-    const value = record?.[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return "";
-}
-
-function codexItemTypeFromToolMessage(
-  message: GeneratedImageToolMessage,
-): string {
-  const content = asRecord(message.content);
-  const metadata = asRecord(message.metadata);
-  return (
-    recordString(metadata, "item_type", "itemType") ||
-    recordString(content, "type") ||
-    message.toolName?.trim() ||
-    ""
-  );
-}
-
-function isImageGenerationToolMessage(
-  message: GeneratedImageToolMessage,
-): boolean {
-  return codexItemTypeFromToolMessage(message).toLowerCase() === "imagegeneration";
-}
-
-function mediaTypeFromGeneratedImageResult(
-  result: string,
-  content: Record<string, unknown> | null,
-): string {
-  const explicit =
-    recordString(content, "media_type", "mediaType", "mime_type", "mimeType", "contentType") ||
-    "";
-  if (explicit) {
-    return explicit;
-  }
-  const match = result.match(/^data:([^;,]+)(?:;[^,]*)?,/i);
-  return match?.[1]?.trim() || "image/png";
-}
-
-function base64FromGeneratedImageResult(result: string): string {
-  const match = result.match(/^data:[^,]*,(.*)$/is);
-  return (match?.[1] || result).trim();
-}
-
-function generatedImageName(message: GeneratedImageToolMessage): string {
-  const content = asRecord(message.content);
-  const id =
-    recordString(content, "id") ||
-    message.toolUseId?.trim() ||
-    "generated-image";
-  return `${id}.png`;
-}
-
-function extractImageGenerationImageContent(
-  message: GeneratedImageToolMessage,
-): unknown[] | null {
-  if (!isImageGenerationToolMessage(message)) {
-    return null;
-  }
-  const content = asRecord(message.content);
-  const result = recordString(content, "result");
-  if (!result) {
-    return null;
-  }
-  const data = base64FromGeneratedImageResult(result);
-  if (!data) {
-    return null;
-  }
-  return [
-    {
-      type: "image",
-      name: generatedImageName(message),
-      source: {
-        type: "base64",
-        media_type: mediaTypeFromGeneratedImageResult(result, content),
-        data,
-      },
-    },
-  ];
-}
 
 function extractStreamingMessageToolImageContent(
   event: Extract<DesktopChatStreamEvent, { type: "tool_result" }>,
