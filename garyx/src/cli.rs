@@ -1196,7 +1196,7 @@ pub(crate) enum AgentAction {
         json: bool,
     },
     /// Create a custom agent
-    #[command(visible_alias = "add")]
+    #[command(visible_alias = "add", arg_required_else_help = true)]
     Create {
         /// Agent id (slug, e.g. spec-review)
         #[arg(long)]
@@ -1233,6 +1233,7 @@ pub(crate) enum AgentAction {
         json: bool,
     },
     /// Update a custom agent
+    #[command(arg_required_else_help = true)]
     Update {
         /// Agent id (slug, e.g. spec-review)
         #[arg(long)]
@@ -1269,6 +1270,7 @@ pub(crate) enum AgentAction {
         json: bool,
     },
     /// Create or update a custom agent
+    #[command(arg_required_else_help = true)]
     Upsert {
         /// Agent id (slug, e.g. spec-review)
         #[arg(long)]

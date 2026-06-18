@@ -1594,6 +1594,28 @@ fn parse_agent_create() {
 }
 
 #[test]
+fn parse_agent_create_without_args_prints_full_help() {
+    let error = match Cli::try_parse_from(["garyx", "agent", "create"]) {
+        Ok(_) => panic!("expected help output"),
+        Err(error) => error,
+    };
+
+    assert_eq!(
+        error.kind(),
+        clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+    );
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains("--model <MODEL>"),
+        "expected full help with model flag, got:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("--model-service-tier <MODEL_SERVICE_TIER>"),
+        "expected full help with service tier flag, got:\n{rendered}"
+    );
+}
+
+#[test]
 fn parse_tool_image() {
     let cli = Cli::parse_from([
         "garyx",
