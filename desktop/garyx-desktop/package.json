@@ -104,6 +104,8 @@
       "gatekeeperAssess": true,
       "entitlements": "resources/entitlements.mac.plist",
       "entitlementsInherit": "resources/entitlements.mac.plist",
+      "singleArchFiles": "**/node_modules/node-pty/prebuilds/darwin-*/*",
+      "x64ArchFiles": "**/node_modules/node-pty/prebuilds/darwin-*/*",
       "protocols": [
         {
           "name": "Garyx Deep Link",

@@ -406,7 +406,7 @@ checksum = "3a822ea5bc7590f9d40f1ba12c0dc3c2760f3482c6984db1573ad11031420831"
 
 [[package]]
 name = "claude-agent-sdk"
-version = "0.1.27"
+version = "0.1.28"
 dependencies = [
  "serde",
  "serde_json",
@@ -419,7 +419,7 @@ dependencies = [
 
 [[package]]
 name = "codex-sdk"
-version = "0.1.27"
+version = "0.1.28"
 dependencies = [
  "serde",
  "serde_json",
@@ -847,7 +847,7 @@ dependencies = [
 
 [[package]]
 name = "garyx"
-version = "0.1.27"
+version = "0.1.28"
 dependencies = [
  "async-trait",
  "axum",
@@ -881,7 +881,7 @@ dependencies = [
 
 [[package]]
 name = "garyx-agent-loop"
-version = "0.1.27"
+version = "0.1.28"
 dependencies = [
  "async-trait",
  "reqwest 0.12.28",
@@ -894,7 +894,7 @@ dependencies = [
 
 [[package]]
 name = "garyx-bridge"
-version = "0.1.27"
+version = "0.1.28"
 dependencies = [
  "async-trait",
  "chrono",
@@ -921,7 +921,7 @@ dependencies = [
 
 [[package]]
 name = "garyx-channels"
-version = "0.1.27"
+version = "0.1.28"
 dependencies = [
  "aes",
  "arc-swap",
@@ -955,7 +955,7 @@ dependencies = [
 
 [[package]]
 name = "garyx-core"
-version = "0.1.27"
+version = "0.1.28"
 dependencies = [
  "garyx-models",
  "once_cell",
@@ -967,7 +967,7 @@ dependencies = [
 
 [[package]]
 name = "garyx-gateway"
-version = "0.1.27"
+version = "0.1.28"
 dependencies = [
  "async-trait",
  "axum",
@@ -1006,7 +1006,7 @@ dependencies = [
 
 [[package]]
 name = "garyx-models"
-version = "0.1.27"
+version = "0.1.28"
 dependencies = [
  "async-trait",
  "base64",
@@ -1020,7 +1020,7 @@ dependencies = [
 
 [[package]]
 name = "garyx-router"
-version = "0.1.27"
+version = "0.1.28"
 dependencies = [
  "async-trait",
  "chrono",
