@@ -20,6 +20,7 @@ pub mod thread_logs;
 pub mod thread_record;
 pub mod threading;
 pub mod transcript_kind;
+pub mod transcript_run_state;
 pub mod wiki;
 
 // Re-export commonly used types at the crate root.
@@ -82,5 +83,11 @@ pub use thread_record::{
 pub use threading::{
     GroupActivation, QueueDrop, QueueMode, SendPolicy, ThreadOrigin, ThreadTokenUsage,
 };
-pub use transcript_kind::{is_tool_related_message, resolve_message_kind};
+pub use transcript_kind::{
+    is_control_message, is_tool_related_message, resolve_message_kind,
+    resolve_message_kind_for_object,
+};
+pub use transcript_run_state::{
+    TranscriptRunActivity, TranscriptRunState, apply_transcript_record, reduce_transcript_run_state,
+};
 pub use wiki::WikiEntry;

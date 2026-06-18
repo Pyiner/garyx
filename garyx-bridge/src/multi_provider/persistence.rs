@@ -7,8 +7,8 @@ use garyx_models::provider::{
     attachments_from_metadata, build_user_content_from_parts,
 };
 use garyx_router::{
-    DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, RECENT_COMMITTED_RUN_IDS_LIMIT, ThreadHistoryRepository,
-    ThreadStore, history_message_count,
+    DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, RECENT_COMMITTED_RUN_IDS_LIMIT,
+    RunTranscriptRecordDraft, ThreadHistoryRepository, ThreadStore, history_message_count,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -255,11 +255,53 @@ pub(super) struct PendingUserInput {
     pub status: PendingUserInputStatus,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(super) struct RunControlRecord {
+    pub after_content_count: usize,
+    pub timestamp: String,
+    pub message: Value,
+}
+
+impl RunControlRecord {
+    pub fn new(
+        kind: &str,
+        thread_id: &str,
+        run_id: &str,
+        at: String,
+        mut payload: serde_json::Map<String, Value>,
+        after_content_count: usize,
+    ) -> Self {
+        payload.insert("kind".to_owned(), Value::String(kind.to_owned()));
+        payload.insert("thread_id".to_owned(), Value::String(thread_id.to_owned()));
+        payload.insert("run_id".to_owned(), Value::String(run_id.to_owned()));
+        payload.insert("at".to_owned(), Value::String(at.clone()));
+        Self {
+            after_content_count,
+            timestamp: at,
+            message: serde_json::json!({
+                "role": "system",
+                "kind": "control",
+                "internal": true,
+                "internal_kind": "control",
+                "control": Value::Object(payload),
+            }),
+        }
+    }
+}
+
 pub(super) enum ThreadPersistenceCommand {
-    Stream(StreamEvent),
+    Stream {
+        event: StreamEvent,
+        after_commit: Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
+    },
     QueuePendingInput(PendingUserInput),
-    DropPendingInput { pending_input_id: String },
+    DropPendingInput {
+        pending_input_id: String,
+    },
+    AbortTerminal {
+        error: Option<String>,
+        ack: tokio::sync::oneshot::Sender<()>,
+    },
     Finish,
 }
 
@@ -360,7 +402,11 @@ impl StreamingRunSnapshot {
                 false
             }
             StreamEvent::ThreadTitleUpdated { .. } => false,
-            StreamEvent::Done => false,
+            StreamEvent::Done => {
+                self.start_new_assistant_segment = true;
+                self.current_assistant_metadata = None;
+                true
+            }
         }
     }
 
@@ -480,6 +526,14 @@ pub(super) struct PersistedRun<'a> {
     pub provider_type: ProviderType,
     pub session_messages: &'a [ProviderMessage],
     pub metadata: &'a HashMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(super) struct TerminalRunControl {
+    pub duration_ms: Option<i64>,
+    pub success: Option<bool>,
+    pub error: Option<String>,
+    pub thread_title: Option<String>,
 }
 
 enum SdkSessionUpdate<'a> {
@@ -754,6 +808,63 @@ fn build_run_messages(run: &PersistedRun<'_>) -> Vec<Value> {
     messages
 }
 
+fn build_run_record_drafts(
+    content_messages: Vec<Value>,
+    transcript_controls: &[RunControlRecord],
+) -> Vec<RunTranscriptRecordDraft> {
+    let mut controls = transcript_controls.to_vec();
+    controls.sort_by_key(|control| control.after_content_count);
+    let mut control_index = 0usize;
+    let mut drafts = Vec::with_capacity(content_messages.len() + controls.len());
+
+    while control_index < controls.len() && controls[control_index].after_content_count == 0 {
+        drafts.push(RunTranscriptRecordDraft::with_timestamp(
+            controls[control_index].message.clone(),
+            controls[control_index].timestamp.clone(),
+        ));
+        control_index += 1;
+    }
+
+    for (offset, message) in content_messages.into_iter().enumerate() {
+        let content_count = offset + 1;
+        drafts.push(RunTranscriptRecordDraft::from_message(message));
+        while control_index < controls.len()
+            && controls[control_index].after_content_count <= content_count
+        {
+            drafts.push(RunTranscriptRecordDraft::with_timestamp(
+                controls[control_index].message.clone(),
+                controls[control_index].timestamp.clone(),
+            ));
+            control_index += 1;
+        }
+    }
+
+    while control_index < controls.len() {
+        drafts.push(RunTranscriptRecordDraft::with_timestamp(
+            controls[control_index].message.clone(),
+            controls[control_index].timestamp.clone(),
+        ));
+        control_index += 1;
+    }
+
+    drafts
+}
+
+fn transcript_controls_from_session_data(value: &Value) -> Vec<RunControlRecord> {
+    value
+        .get("history")
+        .and_then(|history| history.get("active_run_snapshot"))
+        .and_then(|snapshot| snapshot.get("transcript_controls"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| serde_json::from_value(item.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn run_message_metadata(run: &PersistedRun<'_>) -> HashMap<String, Value> {
     let mut metadata = run.metadata.clone();
     match run
@@ -787,6 +898,7 @@ pub(super) async fn save_streaming_partial(
     history: &Arc<ThreadHistoryRepository>,
     run: PersistedRun<'_>,
     pending_user_inputs: &[PendingUserInput],
+    transcript_controls: &[RunControlRecord],
     finalized_len: usize,
     already_appended: usize,
 ) -> (usize, Vec<(u64, Value)>) {
@@ -811,7 +923,7 @@ pub(super) async fn save_streaming_partial(
     // authoritative set. The terminal commit re-derives mirrors with full context
     // and `reconcile_run_tail` rewrites the tail to match; streaming only commits
     // the stable real session rows.
-    let authoritative: Vec<Value> = build_run_messages(&finalized_run)
+    let authoritative_content: Vec<Value> = build_run_messages(&finalized_run)
         .into_iter()
         .filter(|message| {
             message
@@ -821,6 +933,15 @@ pub(super) async fn save_streaming_partial(
                 != Some(true)
         })
         .collect();
+    let content_count = authoritative_content.len();
+    let authoritative = build_run_record_drafts(
+        authoritative_content,
+        &transcript_controls
+            .iter()
+            .filter(|control| control.after_content_count <= content_count)
+            .cloned()
+            .collect::<Vec<_>>(),
+    );
 
     let mut appended = already_appended.min(authoritative.len());
     let mut committed_total: Option<usize> = None;
@@ -832,7 +953,7 @@ pub(super) async fn save_streaming_partial(
         let suffix_start = appended;
         match history
             .transcript_store()
-            .append_committed_messages(
+            .append_run_records(
                 run.thread_id,
                 run_id.as_deref(),
                 &authoritative[suffix_start..],
@@ -843,8 +964,8 @@ pub(super) async fn save_streaming_partial(
                 let total = result.total_messages;
                 let suffix = &authoritative[suffix_start..];
                 let k = suffix.len();
-                for (offset, message) in suffix.iter().enumerate() {
-                    committed_pairs.push(((total - k + 1 + offset) as u64, message.clone()));
+                for (offset, draft) in suffix.iter().enumerate() {
+                    committed_pairs.push(((total - k + 1 + offset) as u64, draft.message.clone()));
                 }
                 appended = authoritative.len();
                 committed_total = Some(total);
@@ -862,7 +983,11 @@ pub(super) async fn save_streaming_partial(
     let partial_messages: Vec<Value> = run.session_messages[finalized_len..]
         .iter()
         .map(|entry| {
-            let mut object = entry.to_json_value().as_object().cloned().unwrap_or_default();
+            let mut object = entry
+                .to_json_value()
+                .as_object()
+                .cloned()
+                .unwrap_or_default();
             if object.get("timestamp").and_then(Value::as_str).is_none() {
                 object.insert(
                     "timestamp".to_owned(),
@@ -905,6 +1030,7 @@ pub(super) async fn save_streaming_partial(
             .then_some(run.assistant_response.to_owned()),
         "messages": partial_messages,
         "pending_user_inputs": serde_json::to_value(pending_user_inputs).unwrap_or(Value::Array(Vec::new())),
+        "transcript_controls": serde_json::to_value(transcript_controls).unwrap_or(Value::Array(Vec::new())),
         "updated_at": Utc::now().to_rfc3339(),
     });
 
@@ -952,26 +1078,51 @@ pub(super) async fn save_streaming_partial(
 }
 
 /// Save user and provider-emitted messages to the thread store after a run completes.
+#[cfg(test)]
 pub(super) async fn save_thread_messages(
     store: &Arc<dyn ThreadStore>,
     history: &Arc<ThreadHistoryRepository>,
     run: PersistedRun<'_>,
-) {
+) -> Vec<(u64, Value)> {
+    save_thread_messages_with_terminal_control(store, history, run, None).await
+}
+
+pub(super) async fn save_thread_messages_with_terminal_control(
+    store: &Arc<dyn ThreadStore>,
+    history: &Arc<ThreadHistoryRepository>,
+    run: PersistedRun<'_>,
+    terminal_control: Option<TerminalRunControl>,
+) -> Vec<(u64, Value)> {
     let sdk_session_update = match run.sdk_session_id {
         Some(sid) => SdkSessionUpdate::Set(sid),
         None => SdkSessionUpdate::Clear,
     };
-    save_thread_messages_with_session_update(store, history, run, sdk_session_update).await;
+    save_thread_messages_with_session_update(
+        store,
+        history,
+        run,
+        sdk_session_update,
+        terminal_control,
+    )
+    .await
 }
 
 /// Save messages produced by a failed run, clearing the active snapshot while
 /// preserving any previously committed provider SDK session id for the thread.
-pub(super) async fn save_failed_thread_messages(
+pub(super) async fn save_failed_thread_messages_with_terminal_control(
     store: &Arc<dyn ThreadStore>,
     history: &Arc<ThreadHistoryRepository>,
     run: PersistedRun<'_>,
-) {
-    save_thread_messages_with_session_update(store, history, run, SdkSessionUpdate::Preserve).await;
+    terminal_control: Option<TerminalRunControl>,
+) -> Vec<(u64, Value)> {
+    save_thread_messages_with_session_update(
+        store,
+        history,
+        run,
+        SdkSessionUpdate::Preserve,
+        terminal_control,
+    )
+    .await
 }
 
 async fn save_thread_messages_with_session_update(
@@ -979,7 +1130,8 @@ async fn save_thread_messages_with_session_update(
     history: &Arc<ThreadHistoryRepository>,
     run: PersistedRun<'_>,
     sdk_session_update: SdkSessionUpdate<'_>,
-) {
+    terminal_control: Option<TerminalRunControl>,
+) -> Vec<(u64, Value)> {
     let mut session_data = store
         .get(run.thread_id)
         .await
@@ -1009,6 +1161,60 @@ async fn save_thread_messages_with_session_update(
         .and_then(|message| message.get("timestamp"))
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
+    let mut committed_pairs = Vec::new();
+    let mut transcript_controls = transcript_controls_from_session_data(&session_data);
+    if let Some(terminal_control) = terminal_control
+        && let Some(run_id) = current_run_id.as_deref()
+    {
+        let after_content_count = run_messages.len();
+        if let Some(title) = terminal_control
+            .thread_title
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let mut payload = serde_json::Map::new();
+            payload.insert("title".to_owned(), Value::String(title.to_owned()));
+            transcript_controls.push(RunControlRecord::new(
+                "thread_title_updated",
+                run.thread_id,
+                run_id,
+                Utc::now().to_rfc3339(),
+                payload,
+                after_content_count,
+            ));
+        }
+
+        let mut payload = serde_json::Map::new();
+        if let Some(duration_ms) = terminal_control.duration_ms {
+            payload.insert(
+                "duration_ms".to_owned(),
+                Value::Number(serde_json::Number::from(duration_ms)),
+            );
+        }
+        let status = match terminal_control.success {
+            Some(true) => "completed",
+            Some(false) => "failed",
+            None => "completed",
+        };
+        payload.insert("status".to_owned(), Value::String(status.to_owned()));
+        if let Some(error) = terminal_control
+            .error
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            payload.insert("error".to_owned(), Value::String(error.to_owned()));
+        }
+        transcript_controls.push(RunControlRecord::new(
+            "run_complete",
+            run.thread_id,
+            run_id,
+            Utc::now().to_rfc3339(),
+            payload,
+            after_content_count,
+        ));
+    }
     // The streaming worker (F1) already appended this run's finalized rows to the
     // committed transcript during the run. Reconcile the run's tail to the final
     // authoritative set instead of blindly appending again: this is idempotent —
@@ -1016,18 +1222,24 @@ async fn save_thread_messages_with_session_update(
     // that was still in flight at the last streaming flush, and a tail rewrite only
     // when a retry re-streamed divergent content. An unconditional append here
     // would now double-write every streamed row.
+    let authoritative_records = build_run_record_drafts(run_messages.clone(), &transcript_controls);
     match history
         .transcript_store()
-        .reconcile_run_tail(
+        .reconcile_run_records_tail(
             run.thread_id,
             current_run_id.as_deref().unwrap_or_default(),
-            &run_messages,
+            &authoritative_records,
         )
         .await
     {
         Ok(result) => {
             message_count = result.total_messages;
             last_message_at = result.last_message_at;
+            committed_pairs = result
+                .appended_records
+                .into_iter()
+                .map(|record| (record.seq, record.message))
+                .collect();
             history.enqueue_conversation_index_for_thread(run.thread_id);
         }
         Err(error) => {
@@ -1086,6 +1298,7 @@ async fn save_thread_messages_with_session_update(
     }
 
     store.set(run.thread_id, session_data).await;
+    committed_pairs
 }
 
 #[cfg(test)]

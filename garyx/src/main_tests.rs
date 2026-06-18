@@ -2825,11 +2825,12 @@ async fn startup_runtime_assembles_without_rebuilding_thread_indexes_from_canoni
     assert_eq!(thread["workspace_dir"], "/tmp/runtime-assembler-ws");
 
     let mut router = assembly.state.threads.router.lock().await;
-    assert!(
+    assert_eq!(
         router
             .resolve_endpoint_thread_id("telegram", "main", "alice")
             .await
-            .is_none()
+            .as_deref(),
+        Some("thread::startup-alice")
     );
     drop(router);
 

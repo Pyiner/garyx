@@ -38,6 +38,78 @@ fn authed_request() -> axum::http::request::Builder {
     crate::test_support::authed_request()
 }
 
+#[test]
+fn committed_stream_dedupe_allows_same_seq_overwrite() {
+    let mut sent_payloads = HashMap::from([(
+        3,
+        json!({
+            "type": "committed_message",
+            "thread_id": "thread::stream-dedupe",
+            "seq": 3,
+            "message": {"role": "assistant", "content": "old"}
+        })
+        .to_string(),
+    )]);
+    let mut last_sent_seq = 3;
+
+    let duplicate = json!({
+        "type": "committed_message",
+        "thread_id": "thread::stream-dedupe",
+        "seq": 3,
+        "message": {"role": "assistant", "content": "old"}
+    })
+    .to_string();
+    assert!(!should_forward_committed_payload(
+        &mut sent_payloads,
+        &mut last_sent_seq,
+        3,
+        &duplicate
+    ));
+    assert_eq!(last_sent_seq, 3);
+
+    let overwrite = json!({
+        "type": "committed_message",
+        "thread_id": "thread::stream-dedupe",
+        "seq": 3,
+        "message": {
+            "role": "system",
+            "kind": "control",
+            "internal": true,
+            "internal_kind": "control",
+            "control": {"kind": "range_rewrite", "tombstone": true}
+        }
+    })
+    .to_string();
+    assert!(should_forward_committed_payload(
+        &mut sent_payloads,
+        &mut last_sent_seq,
+        3,
+        &overwrite
+    ));
+    assert_eq!(last_sent_seq, 3);
+
+    let suffix = json!({
+        "type": "committed_message",
+        "thread_id": "thread::stream-dedupe",
+        "seq": 4,
+        "message": {
+            "role": "system",
+            "kind": "control",
+            "internal": true,
+            "internal_kind": "control",
+            "control": {"kind": "range_rewrite", "tombstone": false}
+        }
+    })
+    .to_string();
+    assert!(should_forward_committed_payload(
+        &mut sent_payloads,
+        &mut last_sent_seq,
+        4,
+        &suffix
+    ));
+    assert_eq!(last_sent_seq, 4);
+}
+
 fn run_git(repo: &Path, args: &[&str]) {
     let output = Command::new("git")
         .arg("-C")

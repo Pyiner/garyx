@@ -20,7 +20,7 @@ use garyx_models::config_loader::{
     ConfigLoadOptions, ConfigWriteOptions, load_config, write_config_value_atomic,
 };
 use garyx_models::provider::{ProviderMessage, ProviderType};
-use garyx_models::transcript_kind::{is_tool_related_message, resolve_message_kind};
+use garyx_models::transcript_kind::is_tool_related_message;
 use garyx_models::{ChannelOutboundContent, CustomAgentProfile};
 use garyx_router::{
     ChannelBinding, ThreadHistoryError, bindings_from_value, count_user_query_messages,
@@ -308,8 +308,7 @@ pub(crate) async fn repair_stale_active_run_snapshots(state: &Arc<AppState>) -> 
         if !projection_is_active {
             continue;
         }
-        let Some(mut thread_value) = state.threads.thread_store.get(&record.thread_id).await
-        else {
+        let Some(mut thread_value) = state.threads.thread_store.get(&record.thread_id).await else {
             continue;
         };
         if repair_inactive_active_run_snapshot(state, &record.thread_id, &mut thread_value).await {
@@ -1397,12 +1396,17 @@ pub(crate) async fn thread_history_for_key(
             .trim()
             .to_ascii_lowercase();
 
-        let tool_related = is_tool_related_message(&role, obj);
+        let is_control = garyx_models::is_control_message(obj);
+        let tool_related = if is_control {
+            false
+        } else {
+            is_tool_related_message(&role, obj)
+        };
         if !include_tool_messages && tool_related {
             continue;
         }
 
-        let kind = resolve_message_kind(&role, tool_related);
+        let kind = garyx_models::resolve_message_kind_for_object(&role, obj, tool_related);
         let likely_user_visible = matches!(kind, "user_input" | "assistant_reply");
         if tool_related {
             tool_related_count += 1;
@@ -1413,16 +1417,24 @@ pub(crate) async fn thread_history_for_key(
         increment_counter(&mut kind_counts, kind);
         increment_counter(&mut role_counts, &role);
 
-        let normalized_message = ProviderMessage::from_value(message);
+        let normalized_message = (!is_control)
+            .then(|| ProviderMessage::from_value(message))
+            .flatten();
         let raw_content = normalized_message
             .as_ref()
             .map(|entry| entry.content.clone())
             .or_else(|| obj.get("content").cloned())
             .unwrap_or(Value::Null);
-        let content = enrich_message_content_for_history(&raw_content);
+        let content = if is_control {
+            Value::String(String::new())
+        } else {
+            enrich_message_content_for_history(&raw_content)
+        };
         let message_value = if let Some(mut entry) = normalized_message.clone() {
             entry.content = content.clone();
             entry.to_json_value()
+        } else if is_control {
+            message.clone()
         } else {
             let mut value = message.clone();
             if let Some(map) = value.as_object_mut() {
@@ -1430,10 +1442,14 @@ pub(crate) async fn thread_history_for_key(
             }
             value
         };
-        let text = normalized_message
-            .as_ref()
-            .and_then(|entry| entry.text.clone())
-            .unwrap_or_else(|| stringify_message_content(&content));
+        let text = if is_control {
+            String::new()
+        } else {
+            normalized_message
+                .as_ref()
+                .and_then(|entry| entry.text.clone())
+                .unwrap_or_else(|| stringify_message_content(&content))
+        };
         history_messages.push(json!({
             "index": global_index,
             "role": if role.is_empty() { "unknown" } else { role.as_str() },
@@ -1470,7 +1486,9 @@ pub(crate) async fn thread_history_for_key(
     // client would be told "more after, resume at 0" → full re-fetch loop.
     let has_more_after = !messages.is_empty() && page_end_index < total_messages;
     let next_after_index = if has_more_after {
-        Value::Number(serde_json::Number::from(page_end_index.saturating_sub(1) as u64))
+        Value::Number(serde_json::Number::from(
+            page_end_index.saturating_sub(1) as u64
+        ))
     } else {
         Value::Null
     };
@@ -1836,9 +1854,7 @@ fn enrich_message_content_for_history(content: &Value) -> Value {
             _ => Value::Object(
                 block
                     .iter()
-                    .map(|(key, value)| {
-                        (key.clone(), enrich_message_content_for_history(value))
-                    })
+                    .map(|(key, value)| (key.clone(), enrich_message_content_for_history(value)))
                     .collect(),
             ),
         },

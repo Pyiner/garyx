@@ -9,6 +9,18 @@
 
 use serde_json::{Map, Value};
 
+/// Returns true when a transcript message is a persisted control record.
+pub fn is_control_message(message: &Map<String, Value>) -> bool {
+    message
+        .get("kind")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| kind.eq_ignore_ascii_case("control"))
+        || message
+            .get("internal_kind")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| kind.eq_ignore_ascii_case("control"))
+}
+
 /// Returns true when a transcript message represents tool activity (a tool call
 /// or tool result) rather than human-visible user/assistant text.
 ///
@@ -109,6 +121,20 @@ pub fn resolve_message_kind(role: &str, tool_related: bool) -> &'static str {
     }
 }
 
+/// Maps a full transcript message object to the coarse `kind` reported to
+/// clients, with persisted control records taking precedence over role fallback.
+pub fn resolve_message_kind_for_object(
+    role: &str,
+    message: &Map<String, Value>,
+    tool_related: bool,
+) -> &'static str {
+    if is_control_message(message) {
+        "control"
+    } else {
+        resolve_message_kind(role, tool_related)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,6 +171,37 @@ mod tests {
         assert!(is_tool_related_message("tool", &Map::new()));
         assert!(is_tool_related_message("tool_use", &Map::new()));
         assert!(is_tool_related_message("tool_result", &Map::new()));
+    }
+
+    #[test]
+    fn control_kind_takes_precedence_over_system_role() {
+        let message = obj(json!({
+            "role": "system",
+            "kind": "control",
+            "internal": true,
+            "internal_kind": "control",
+            "control": { "kind": "run_start" },
+        }));
+        assert!(is_control_message(&message));
+        assert_eq!(
+            resolve_message_kind_for_object("system", &message, false),
+            "control"
+        );
+    }
+
+    #[test]
+    fn internal_kind_control_is_control_even_without_top_level_kind() {
+        let message = obj(json!({
+            "role": "system",
+            "internal": true,
+            "internal_kind": "control",
+            "control": { "kind": "done" },
+        }));
+        assert!(is_control_message(&message));
+        assert_eq!(
+            resolve_message_kind_for_object("system", &message, true),
+            "control"
+        );
     }
 
     #[test]

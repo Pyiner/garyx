@@ -184,6 +184,11 @@ extension GaryxMobileModel {
                 // gapless seq so it dedups against history rows (id "history:N").
                 message.index = seq - 1
                 message.id = "history:\(seq - 1)"
+                if GaryxTranscriptControlRewritePlanner.action(for: message) == .refetchAuthoritativeTranscript {
+                    selectedThreadStreamConnectionLastSeq = max(selectedThreadStreamConnectionLastSeq, seq)
+                    await refetchSelectedThreadAfterTranscriptRewrite(threadId: threadId)
+                    return true
+                }
                 applyStreamedCommittedMessage(message, threadId: threadId)
                 selectedThreadStreamConnectionLastSeq = seq
                 return false
@@ -196,6 +201,17 @@ extension GaryxMobileModel {
             await handleGlobalStreamEvent(event, replay: false, bypassStreamOwnership: true)
         }
         return false
+    }
+
+    private func refetchSelectedThreadAfterTranscriptRewrite(threadId: String) async {
+        selectedThreadStreamFlushTask?.cancel()
+        selectedThreadStreamFlushTask = nil
+        selectedThreadStreamResumeOverride = 0
+        clearTranscriptCache(for: threadId)
+        resetSelectedThreadHistoryPagination()
+        clearMessages(for: threadId)
+        await loadSelectedThreadHistory()
+        selectedThreadStreamResumeOverride = selectedThreadStreamCursor(for: threadId)
     }
 
     /// Merge one durable committed row into the S2 cache (in-memory, cheap — keeps the

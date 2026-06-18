@@ -45,7 +45,8 @@ public enum GaryxStreamSeqDecision: Equatable, Sendable {
     case gapReconnect(resumeAfterSeq: Int)
     /// Already applied on this connection (replay/live overlap, or out-of-order): skip.
     case stale
-    /// Contiguous with what was applied: apply and advance the connection cursor.
+    /// Contiguous with what was applied, or a same-seq authoritative replacement:
+    /// apply and advance or keep the connection cursor.
     case apply
 }
 
@@ -58,7 +59,7 @@ public enum GaryxStreamSeqPlanner {
         if connectionLastSeq > 0, incomingSeq > connectionLastSeq + 1 {
             return .gapReconnect(resumeAfterSeq: connectionLastSeq)
         }
-        if incomingSeq <= connectionLastSeq {
+        if incomingSeq < connectionLastSeq {
             return .stale
         }
         return .apply
@@ -75,5 +76,50 @@ public enum GaryxStreamSeqPlanner {
             return fallbackMaxIndex + 1
         }
         return 0
+    }
+}
+
+public enum GaryxTranscriptControlRewriteAction: Equatable, Sendable {
+    /// Ordinary content/control row: merge it through the normal committed path.
+    case none
+    /// The row declares that earlier transcript indexes changed. The mobile
+    /// `after_index` cursor cannot replay those lower indexes, so the reader must
+    /// discard its local window and fetch the authoritative transcript again.
+    case refetchAuthoritativeTranscript
+}
+
+public enum GaryxTranscriptControlRewritePlanner {
+    public static func action(for message: GaryxTranscriptMessage) -> GaryxTranscriptControlRewriteAction {
+        switch controlKind(for: message) {
+        case "range_rewrite", "transcript_reset":
+            return .refetchAuthoritativeTranscript
+        default:
+            return .none
+        }
+    }
+
+    public static func controlKind(for message: GaryxTranscriptMessage) -> String? {
+        guard message.kind == "control" || message.role == .system else { return nil }
+        if let kind = controlKind(in: message.message) {
+            return kind
+        }
+        return controlKind(in: message.content)
+    }
+
+    private static func controlKind(in value: GaryxJSONValue?) -> String? {
+        guard case let .object(object)? = value else { return nil }
+        if case let .object(control)? = object["control"],
+           case let .string(kind)? = control["kind"] {
+            return normalizedControlKind(kind)
+        }
+        if case let .string(kind)? = object["kind"] {
+            return normalizedControlKind(kind)
+        }
+        return nil
+    }
+
+    private static func normalizedControlKind(_ kind: String) -> String? {
+        let normalized = kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized.isEmpty ? nil : normalized
     }
 }

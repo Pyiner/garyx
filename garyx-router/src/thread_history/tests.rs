@@ -133,7 +133,12 @@ async fn page_after_index_returns_messages_after_cursor() {
     let (msgs, total, start) = store.page_after_index("thread::fa", 1, 10).await.unwrap();
     assert_eq!(total, 4);
     assert_eq!(start, 2);
-    assert_eq!(msgs.iter().map(|m| m["content"].as_str().unwrap()).collect::<Vec<_>>(), ["c", "d"]);
+    assert_eq!(
+        msgs.iter()
+            .map(|m| m["content"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["c", "d"]
+    );
 
     // bounded by limit
     let (msgs2, _, start2) = store.page_after_index("thread::fa", 1, 1).await.unwrap();
@@ -386,7 +391,8 @@ async fn reconcile_run_tail_noop_when_only_sdk_differs() {
         )
         .await
         .unwrap();
-    let authoritative = [json!({"role":"user","content":"u","metadata":{"sdk_session_id":"sess-9"}})];
+    let authoritative =
+        [json!({"role":"user","content":"u","metadata":{"sdk_session_id":"sess-9"}})];
     let result = store
         .reconcile_run_tail("thread::rec-sdk-noop", "run-1", &authoritative)
         .await
@@ -423,7 +429,192 @@ async fn reconcile_run_tail_empty_run_id_is_noop_not_double_append() {
         .unwrap();
     assert_eq!(result.total_messages, 2);
     let records = store.records("thread::rec-empty").await.unwrap();
-    assert_eq!(records.len(), 2, "must not re-append the whole run without a run_id");
+    assert_eq!(
+        records.len(),
+        2,
+        "must not re-append the whole run without a run_id"
+    );
+}
+
+fn draft(message: serde_json::Value) -> RunTranscriptRecordDraft {
+    RunTranscriptRecordDraft::from_message(message)
+}
+
+fn control_draft(kind: &str, at: &str) -> RunTranscriptRecordDraft {
+    RunTranscriptRecordDraft::with_timestamp(
+        json!({
+            "role": "system",
+            "kind": "control",
+            "internal": true,
+            "internal_kind": "control",
+            "control": {
+                "kind": kind,
+                "thread_id": "thread::control-aware",
+                "run_id": "run-1",
+                "at": at,
+            }
+        }),
+        at,
+    )
+}
+
+#[tokio::test]
+async fn append_run_records_persists_control_and_content_gaplessly() {
+    let store = ThreadTranscriptStore::memory();
+    let result = store
+        .append_run_records(
+            "thread::control-aware",
+            Some("run-1"),
+            &[
+                control_draft("run_start", "2026-06-18T12:00:00Z"),
+                draft(json!({"role": "user", "content": "hello"})),
+                control_draft("done", "2026-06-18T12:00:01Z"),
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.appended_records.len(), 3);
+
+    let records = store.records("thread::control-aware").await.unwrap();
+    assert_eq!(
+        records.iter().map(|record| record.seq).collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
+    assert_eq!(records[0].message["kind"], "control");
+    assert_eq!(records[2].message["control"]["kind"], "done");
+}
+
+#[tokio::test]
+async fn reconcile_run_records_tail_preserves_control_records_and_appends_terminal() {
+    let store = ThreadTranscriptStore::memory();
+    store
+        .append_run_records(
+            "thread::control-aware",
+            Some("run-1"),
+            &[
+                control_draft("run_start", "2026-06-18T12:00:00Z"),
+                draft(json!({"role": "user", "content": "hello"})),
+                control_draft("done", "2026-06-18T12:00:01Z"),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let result = store
+        .reconcile_run_records_tail(
+            "thread::control-aware",
+            "run-1",
+            &[
+                control_draft("run_start", "2026-06-18T12:00:09Z"),
+                draft(json!({"role": "user", "content": "hello"})),
+                control_draft("done", "2026-06-18T12:00:10Z"),
+                control_draft("run_complete", "2026-06-18T12:00:11Z"),
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        result
+            .appended_records
+            .iter()
+            .map(|record| record.seq)
+            .collect::<Vec<_>>(),
+        vec![1, 3, 4, 5],
+        "control payload changes are same-seq overwrites, terminal is a suffix append, and a marker makes overwrites reconnect-visible"
+    );
+
+    let records = store.records("thread::control-aware").await.unwrap();
+    assert_eq!(records.len(), 5);
+    assert_eq!(
+        records.iter().map(|record| record.seq).collect::<Vec<_>>(),
+        vec![1, 2, 3, 4, 5]
+    );
+    assert_eq!(records[0].message["control"]["at"], "2026-06-18T12:00:09Z");
+    assert_eq!(records[2].message["control"]["at"], "2026-06-18T12:00:10Z");
+    assert_eq!(records[3].message["control"]["kind"], "run_complete");
+    assert_eq!(records[4].message["control"]["kind"], "range_rewrite");
+    assert_eq!(records[4].message["control"]["start_seq"], 1);
+    assert_eq!(records[4].message["control"]["end_seq"], 3);
+    assert_eq!(
+        records[4].message["control"]["reason"],
+        "same_seq_overwrite"
+    );
+}
+
+#[tokio::test]
+async fn reconcile_run_records_tail_marks_shrink_with_range_rewrite_not_renumber() {
+    let store = ThreadTranscriptStore::memory();
+    store
+        .append_run_records(
+            "thread::control-shrink",
+            Some("run-1"),
+            &[
+                control_draft("run_start", "2026-06-18T12:00:00Z"),
+                draft(json!({"role": "user", "content": "hello"})),
+                draft(json!({"role": "assistant", "content": "extra"})),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let result = store
+        .reconcile_run_records_tail(
+            "thread::control-shrink",
+            "run-1",
+            &[
+                control_draft("run_start", "2026-06-18T12:00:00Z"),
+                draft(json!({"role": "user", "content": "hello"})),
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        result
+            .appended_records
+            .iter()
+            .map(|record| record.seq)
+            .collect::<Vec<_>>(),
+        vec![3, 4],
+        "removed content is same-seq overwritten, then a higher-seq marker notifies caught-up readers"
+    );
+
+    let records = store.records("thread::control-shrink").await.unwrap();
+    assert_eq!(
+        records.iter().map(|record| record.seq).collect::<Vec<_>>(),
+        vec![1, 2, 3, 4],
+        "shrink keeps already-issued seqs and appends an explicit control marker"
+    );
+    assert_eq!(records[2].message["kind"], "control");
+    assert_eq!(records[2].message["control"]["kind"], "range_rewrite");
+    assert_eq!(records[2].message["control"]["tombstone"], true);
+    assert_eq!(records[2].message["control"]["start_seq"], 3);
+    assert_eq!(records[2].message["control"]["end_seq"], 3);
+    assert_eq!(records[3].message["control"]["kind"], "range_rewrite");
+    assert_eq!(records[3].message["control"]["tombstone"], false);
+
+    let second = store
+        .reconcile_run_records_tail(
+            "thread::control-shrink",
+            "run-1",
+            &[
+                control_draft("run_start", "2026-06-18T12:00:00Z"),
+                draft(json!({"role": "user", "content": "hello"})),
+            ],
+        )
+        .await
+        .unwrap();
+    assert!(
+        second.appended_records.is_empty(),
+        "an already-materialized rewrite must not append another marker"
+    );
+    let after_second = store.records("thread::control-shrink").await.unwrap();
+    assert_eq!(
+        after_second
+            .iter()
+            .map(|record| record.seq)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3, 4]
+    );
 }
 
 #[tokio::test]
@@ -437,17 +628,45 @@ async fn records_after_seq_returns_delta_ascending_and_handles_overflow() {
         .await
         .unwrap();
     // seqs are 1..=10. after_seq=7 → seq 8,9,10 ascending.
-    let delta = store.records_after_seq("thread::seq", 7, 100).await.unwrap();
-    assert_eq!(delta.iter().map(|r| r.seq).collect::<Vec<_>>(), vec![8, 9, 10]);
+    let delta = store
+        .records_after_seq("thread::seq", 7, 100)
+        .await
+        .unwrap();
+    assert_eq!(
+        delta.iter().map(|r| r.seq).collect::<Vec<_>>(),
+        vec![8, 9, 10]
+    );
     assert_eq!(delta[0].message["content"], "m7");
     // caught up → empty
-    assert!(store.records_after_seq("thread::seq", 10, 100).await.unwrap().is_empty());
+    assert!(
+        store
+            .records_after_seq("thread::seq", 10, 100)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     // after_seq=0 → all
-    assert_eq!(store.records_after_seq("thread::seq", 0, 100).await.unwrap().len(), 10);
+    assert_eq!(
+        store
+            .records_after_seq("thread::seq", 0, 100)
+            .await
+            .unwrap()
+            .len(),
+        10
+    );
     // limit smaller than delta → NEWEST `limit`, ascending (keeps the stream's
     // live handoff gapless; older history pages in via before_index)
     let capped = store.records_after_seq("thread::seq", 0, 3).await.unwrap();
-    assert_eq!(capped.iter().map(|r| r.seq).collect::<Vec<_>>(), vec![8, 9, 10]);
+    assert_eq!(
+        capped.iter().map(|r| r.seq).collect::<Vec<_>>(),
+        vec![8, 9, 10]
+    );
     // unknown thread → empty
-    assert!(store.records_after_seq("thread::nope", 0, 100).await.unwrap().is_empty());
+    assert!(
+        store
+            .records_after_seq("thread::nope", 0, 100)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }

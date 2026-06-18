@@ -67,7 +67,19 @@ async fn combined_thread_messages(
     history
         .thread_snapshot(thread_id, 1024)
         .await
-        .map(|snapshot| snapshot.combined_messages())
+        .map(|snapshot| {
+            snapshot
+                .combined_messages()
+                .into_iter()
+                .filter(|message| {
+                    message.get("kind").and_then(serde_json::Value::as_str) != Some("control")
+                        && message
+                            .get("internal_kind")
+                            .and_then(serde_json::Value::as_str)
+                            != Some("control")
+                })
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -1697,7 +1709,13 @@ async fn run_subagent_streaming_rederives_leaf_metadata_and_persists_history() {
         .thread_snapshot("thread::child-coder", 10)
         .await
         .expect("child history");
-    let combined = snapshot.combined_messages();
+    let combined: Vec<_> = snapshot
+        .combined_messages()
+        .into_iter()
+        .filter(|message| {
+            message.get("kind").and_then(serde_json::Value::as_str) != Some("control")
+        })
+        .collect();
     assert_eq!(combined.len(), 2);
     assert_eq!(combined[0]["role"], "user");
     assert_eq!(combined[0]["content"], "hello child");
@@ -2165,6 +2183,116 @@ async fn test_abort_run() {
 }
 
 #[tokio::test]
+async fn test_abort_run_persists_interrupted_terminal_control() {
+    let bridge = MultiProviderBridge::new();
+    let p = Arc::new(MockProvider::with_delay(ProviderType::ClaudeCode, 5_000));
+    bridge.register_provider("p1", p).await;
+    bridge.set_default_provider_key("p1").await;
+
+    let store: Arc<dyn garyx_router::ThreadStore> =
+        Arc::new(garyx_router::InMemoryThreadStore::new());
+    let history = make_history(store.clone());
+    bridge.set_thread_store(store.clone()).await;
+    bridge.set_thread_history(history.clone());
+
+    bridge
+        .start_agent_run(
+            run_request("sess::abort", "hello", "run-abort", "telegram", "main"),
+            None,
+        )
+        .await
+        .unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let records = history
+                .transcript_store()
+                .records("sess::abort")
+                .await
+                .unwrap();
+            if records.iter().any(|record| {
+                record
+                    .message
+                    .pointer("/control/kind")
+                    .and_then(|value| value.as_str())
+                    == Some("run_start")
+            }) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("run_start control should be persisted before abort");
+
+    assert!(bridge.abort_run("run-abort").await);
+
+    let records = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let records = history
+                .transcript_store()
+                .records("sess::abort")
+                .await
+                .unwrap();
+            if records.iter().any(|record| {
+                record
+                    .message
+                    .pointer("/control/kind")
+                    .and_then(|value| value.as_str())
+                    == Some("run_complete")
+            }) {
+                break records;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("abort terminal control should be persisted");
+    let terminal = records
+        .iter()
+        .find(|record| {
+            record
+                .message
+                .pointer("/control/kind")
+                .and_then(|value| value.as_str())
+                == Some("run_complete")
+        })
+        .expect("run_complete control");
+    assert_eq!(
+        terminal
+            .message
+            .pointer("/control/status")
+            .and_then(|value| value.as_str()),
+        Some("interrupted")
+    );
+    assert_eq!(
+        terminal
+            .message
+            .pointer("/control/error")
+            .and_then(|value| value.as_str()),
+        Some("aborted")
+    );
+    assert!(
+        records
+            .iter()
+            .map(|record| record.seq)
+            .eq(1..=records.len() as u64)
+    );
+
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let data = store.get("sess::abort").await.expect("thread data");
+            if data.pointer("/history/active_run_snapshot").is_none() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("abort worker should clear active snapshot");
+}
+
+#[tokio::test]
 async fn test_thread_persistence_after_run() {
     // P0-C: after agent run, thread store should contain user+assistant messages.
     let bridge = MultiProviderBridge::new();
@@ -2249,29 +2377,113 @@ async fn test_worker_emits_committed_message_events_with_seqs() {
                     .get("seq")
                     .and_then(serde_json::Value::as_u64)
                     .unwrap();
-                let role = value
-                    .pointer("/message/role")
+                let label = value
+                    .pointer("/message/control/kind")
+                    .or_else(|| value.pointer("/message/role"))
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("")
                     .to_owned();
                 if !committed.iter().any(|(s, _)| *s == seq) {
-                    committed.push((seq, role));
+                    committed.push((seq, label));
                 }
             }
         }
-        if committed.len() >= 2 {
+        if committed.len() >= 5 {
             break;
         }
     }
     committed.sort_by_key(|(seq, _)| *seq);
     assert_eq!(
         committed,
-        vec![(1, "user".to_owned()), (2, "assistant".to_owned())],
-        "committed_message events carry gapless seqs and the committed rows"
+        vec![
+            (1, "run_start".to_owned()),
+            (2, "user".to_owned()),
+            (3, "assistant".to_owned()),
+            (4, "done".to_owned()),
+            (5, "run_complete".to_owned())
+        ],
+        "committed_message events carry gapless seqs for control and content rows"
     );
     // The event carries the thread_id so the per-thread stream can filter.
     // (Implicitly covered: the gateway filters on thread_id; here we assert the
     // seq/role contract the client cursor depends on.)
+}
+
+#[tokio::test]
+async fn done_callback_observes_done_control_record_committed() {
+    let bridge = MultiProviderBridge::new();
+    let p = Arc::new(MockProvider::new(ProviderType::ClaudeCode));
+    bridge.register_provider("p1", p).await;
+    bridge.set_default_provider_key("p1").await;
+
+    let store: Arc<dyn garyx_router::ThreadStore> =
+        Arc::new(garyx_router::InMemoryThreadStore::new());
+    bridge.set_thread_store(store.clone()).await;
+    let history = make_history(store.clone());
+    bridge.set_thread_history(history.clone());
+
+    let done = Arc::new(Notify::new());
+    let callback_saw_done_control = Arc::new(AtomicBool::new(false));
+    let history_for_callback = history.clone();
+    let done_for_callback = done.clone();
+    let seen_for_callback = callback_saw_done_control.clone();
+    let callback: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(move |event| {
+        if !matches!(event, StreamEvent::Done) {
+            return;
+        }
+
+        let history = history_for_callback.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("callback inspection runtime");
+            let saw_done = runtime.block_on(async move {
+                history
+                    .transcript_store()
+                    .records_after_seq("thread::done-callback-order", 0, 128)
+                    .await
+                    .expect("transcript records")
+                    .iter()
+                    .any(|record| {
+                        record
+                            .message
+                            .pointer("/control/kind")
+                            .and_then(serde_json::Value::as_str)
+                            == Some("done")
+                    })
+            });
+            tx.send(saw_done).expect("send callback inspection result");
+        });
+        let saw_done = rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("callback transcript inspection should finish");
+        seen_for_callback.store(saw_done, Ordering::SeqCst);
+        done_for_callback.notify_one();
+    });
+
+    bridge
+        .start_agent_run(
+            run_request(
+                "thread::done-callback-order",
+                "hello bot",
+                "run-done-callback-order",
+                "api",
+                "main",
+            ),
+            Some(callback),
+        )
+        .await
+        .unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), done.notified())
+        .await
+        .expect("done should be forwarded");
+    assert!(
+        callback_saw_done_control.load(Ordering::SeqCst),
+        "Done callback must run only after control.kind=done is committed"
+    );
 }
 
 #[tokio::test]

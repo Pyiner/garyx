@@ -1,0 +1,349 @@
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::transcript_kind::{is_tool_related_message, resolve_message_kind_for_object};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptRunActivity {
+    Idle,
+    Thinking,
+    UsingTool,
+    Reconciling,
+}
+
+impl Default for TranscriptRunActivity {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct TranscriptRewriteRange {
+    pub notice_seq: Option<u64>,
+    pub start_seq: u64,
+    pub end_seq: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct TranscriptRunState {
+    pub busy: bool,
+    pub active_run_id: Option<String>,
+    pub activity: TranscriptRunActivity,
+    pub terminal_status: Option<String>,
+    pub last_user_ack_seq: Option<u64>,
+    pub last_user_ack_pending_input_id: Option<String>,
+    pub title: Option<String>,
+    pub rewrite_ranges: Vec<TranscriptRewriteRange>,
+    pub last_transcript_reset_seq: Option<u64>,
+}
+
+pub fn reduce_transcript_run_state<'a>(
+    records: impl IntoIterator<Item = &'a Value>,
+) -> TranscriptRunState {
+    let mut state = TranscriptRunState::default();
+    for record in records {
+        apply_transcript_record(&mut state, record);
+    }
+    state
+}
+
+pub fn apply_transcript_record(state: &mut TranscriptRunState, record: &Value) {
+    let seq = record.get("seq").and_then(Value::as_u64);
+    let Some(message) = record.get("message").and_then(Value::as_object) else {
+        return;
+    };
+    let role = message
+        .get("role")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .trim()
+        .to_ascii_lowercase();
+    let tool_related = is_tool_related_message(&role, message);
+    let kind = resolve_message_kind_for_object(&role, message, tool_related);
+
+    match kind {
+        "control" => apply_control_record(state, seq, message.get("control")),
+        "tool_trace" => {
+            if state.busy {
+                state.activity = TranscriptRunActivity::UsingTool;
+            }
+        }
+        "assistant_reply" | "user_input" => {
+            if state.busy && state.activity != TranscriptRunActivity::Reconciling {
+                state.activity = TranscriptRunActivity::Thinking;
+            }
+        }
+        _ => {}
+    }
+}
+
+fn apply_control_record(state: &mut TranscriptRunState, seq: Option<u64>, control: Option<&Value>) {
+    let Some(control) = control.and_then(Value::as_object) else {
+        return;
+    };
+    let Some(kind) = control.get("kind").and_then(Value::as_str) else {
+        return;
+    };
+
+    match kind {
+        "run_start" => {
+            state.busy = true;
+            state.active_run_id = control_string(control.get("run_id"));
+            state.terminal_status = None;
+            state.activity = TranscriptRunActivity::Thinking;
+        }
+        "user_ack" => {
+            state.last_user_ack_seq = seq;
+            state.last_user_ack_pending_input_id = control_string(control.get("pending_input_id"))
+                .or_else(|| control_string(control.get("pendingInputId")));
+        }
+        "assistant_boundary" => {
+            if state.busy && state.activity != TranscriptRunActivity::Reconciling {
+                state.activity = TranscriptRunActivity::Thinking;
+            }
+        }
+        "done" => {
+            if state.busy {
+                state.activity = TranscriptRunActivity::Reconciling;
+            }
+        }
+        "run_complete" => {
+            state.busy = false;
+            state.active_run_id = None;
+            state.activity = TranscriptRunActivity::Idle;
+            state.terminal_status =
+                control_string(control.get("status")).or_else(|| Some("completed".to_owned()));
+        }
+        "run_interrupted" | "interrupt_confirmed" => {
+            state.busy = false;
+            state.active_run_id = None;
+            state.activity = TranscriptRunActivity::Idle;
+            state.terminal_status = Some("interrupted".to_owned());
+        }
+        "thread_title_updated" => {
+            state.title = control_string(control.get("title"));
+        }
+        "transcript_reset" => {
+            state.last_transcript_reset_seq = seq;
+        }
+        "range_rewrite" => {
+            let start_seq = control_u64(control.get("start_seq")).or(seq).unwrap_or(0);
+            let end_seq = control_u64(control.get("end_seq")).unwrap_or(start_seq);
+            state.rewrite_ranges.push(TranscriptRewriteRange {
+                notice_seq: seq,
+                start_seq,
+                end_seq,
+            });
+        }
+        _ => {}
+    }
+}
+
+fn control_string(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn control_u64(value: Option<&Value>) -> Option<u64> {
+    value.and_then(|value| {
+        value.as_u64().or_else(|| {
+            value
+                .as_str()
+                .and_then(|text| text.trim().parse::<u64>().ok())
+        })
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{Map, json};
+
+    fn parse_jsonl(raw: &str) -> Vec<Value> {
+        raw.lines()
+            .filter_map(|line| {
+                let trimmed = line.trim();
+                (!trimmed.is_empty()).then(|| serde_json::from_str(trimmed).unwrap())
+            })
+            .collect()
+    }
+
+    fn control_record(seq: u64, event: &Value) -> Value {
+        let event_type = event.get("type").and_then(Value::as_str).unwrap();
+        let thread_id = field_string(event, "thread_id")
+            .or_else(|| field_string(event, "threadId"))
+            .unwrap_or_else(|| "thread::fixture".to_owned());
+        let run_id = field_string(event, "run_id")
+            .or_else(|| field_string(event, "runId"))
+            .unwrap_or_else(|| "run::fixture".to_owned());
+        let mut control = Map::new();
+        control.insert("kind".to_owned(), json!(event_type));
+        control.insert("thread_id".to_owned(), json!(thread_id));
+        control.insert("run_id".to_owned(), json!(run_id));
+        control.insert("at".to_owned(), json!("2026-06-18T12:00:00Z"));
+        if let Some(value) = event
+            .get("pending_input_id")
+            .or_else(|| event.get("pendingInputId"))
+        {
+            control.insert("pending_input_id".to_owned(), value.clone());
+        }
+        if let Some(value) = event.get("duration_ms").or_else(|| event.get("durationMs")) {
+            control.insert("duration_ms".to_owned(), value.clone());
+        }
+        if let Some(value) = event.get("title") {
+            control.insert("title".to_owned(), value.clone());
+        }
+        json!({
+            "seq": seq,
+            "thread_id": thread_id,
+            "run_id": run_id,
+            "timestamp": "2026-06-18T12:00:00Z",
+            "message": {
+                "role": "system",
+                "kind": "control",
+                "internal": true,
+                "internal_kind": "control",
+                "control": Value::Object(control),
+            }
+        })
+    }
+
+    fn field_string(event: &Value, key: &str) -> Option<String> {
+        event
+            .get(key)
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+    }
+
+    #[test]
+    fn lifecycle_fixture_replays_to_idle_terminal_state() {
+        let events = parse_jsonl(include_str!(
+            "../../test-fixtures/stream-sync/stream-lifecycle.jsonl"
+        ));
+        let mut next_seq = 1_u64;
+        let mut records = Vec::new();
+        for event in &events {
+            match event.get("type").and_then(Value::as_str) {
+                Some("committed_message") => records.push(event.clone()),
+                Some("run_start" | "done" | "run_complete") => {
+                    records.push(control_record(next_seq, event));
+                    next_seq += 1;
+                }
+                _ => {}
+            }
+        }
+
+        let state = reduce_transcript_run_state(&records);
+        assert!(!state.busy);
+        assert_eq!(state.activity, TranscriptRunActivity::Idle);
+        assert_eq!(state.terminal_status.as_deref(), Some("completed"));
+        assert_eq!(state.active_run_id, None);
+    }
+
+    #[test]
+    fn user_ack_fixture_replays_ack_position_and_tool_activity() {
+        let events = parse_jsonl(include_str!(
+            "../../test-fixtures/stream-sync/stream-events-with-user-ack.jsonl"
+        ));
+        let mut next_seq = 1_u64;
+        let mut records = Vec::new();
+        records.push(control_record(
+            next_seq,
+            &json!({
+                "type": "run_start",
+                "threadId": "thread::fixture-stream-sync-ack",
+                "runId": "run::fixture-ack",
+            }),
+        ));
+        next_seq += 1;
+        for event in &events {
+            match event.get("type").and_then(Value::as_str) {
+                Some("tool_use" | "tool_result") => {
+                    records.push(json!({
+                        "seq": next_seq,
+                        "thread_id": event.get("threadId").and_then(Value::as_str),
+                        "run_id": event.get("runId").and_then(Value::as_str),
+                        "timestamp": "2026-06-18T12:00:00Z",
+                        "message": event.get("message").cloned().unwrap_or(Value::Null),
+                    }));
+                    next_seq += 1;
+                }
+                Some("user_ack" | "assistant_boundary" | "done") => {
+                    records.push(control_record(next_seq, event));
+                    next_seq += 1;
+                }
+                _ => {}
+            }
+        }
+
+        let state = reduce_transcript_run_state(&records);
+        assert!(state.busy, "fixture has done but no run_complete terminal");
+        assert_eq!(state.activity, TranscriptRunActivity::Reconciling);
+        assert_eq!(
+            state.last_user_ack_pending_input_id.as_deref(),
+            Some("pending-fixture-followup")
+        );
+        assert!(state.last_user_ack_seq.is_some());
+    }
+
+    #[test]
+    fn rewrite_controls_surface_replay_invalidation_windows() {
+        let records = vec![
+            control_record(
+                1,
+                &json!({
+                    "type": "run_start",
+                    "threadId": "thread::fixture-rewrite",
+                    "runId": "run::fixture-rewrite",
+                }),
+            ),
+            json!({
+                "seq": 2,
+                "thread_id": "thread::fixture-rewrite",
+                "run_id": "run::fixture-rewrite",
+                "timestamp": "2026-06-18T12:00:00Z",
+                "message": {
+                    "role": "system",
+                    "kind": "control",
+                    "internal": true,
+                    "internal_kind": "control",
+                    "control": {
+                        "kind": "range_rewrite",
+                        "start_seq": 1,
+                        "end_seq": 1,
+                    }
+                }
+            }),
+            json!({
+                "seq": 3,
+                "thread_id": "thread::fixture-rewrite",
+                "run_id": "run::fixture-rewrite",
+                "timestamp": "2026-06-18T12:00:00Z",
+                "message": {
+                    "role": "system",
+                    "kind": "control",
+                    "internal": true,
+                    "internal_kind": "control",
+                    "control": {
+                        "kind": "transcript_reset",
+                    }
+                }
+            }),
+        ];
+
+        let state = reduce_transcript_run_state(&records);
+        assert_eq!(
+            state.rewrite_ranges,
+            vec![TranscriptRewriteRange {
+                notice_seq: Some(2),
+                start_seq: 1,
+                end_seq: 1,
+            }]
+        );
+        assert_eq!(state.last_transcript_reset_seq, Some(3));
+    }
+}

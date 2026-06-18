@@ -424,7 +424,25 @@ async fn test_api_channel_ws_real_http_call() {
             .unwrap_or(0)
             >= 2
     );
-    assert_eq!(history["message_stats"]["returned_messages"], 2);
+    assert_eq!(history["message_stats"]["returned_messages"], 5);
+    assert_eq!(
+        history["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|message| message["kind"] == "control")
+            .count(),
+        3
+    );
+    assert_eq!(
+        history["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|message| message["likely_user_visible"] == true)
+            .count(),
+        2
+    );
 
     {
         let calls = provider.calls.lock().expect("calls mutex poisoned");
@@ -524,7 +542,25 @@ async fn test_thread_lifecycle_real_http_api_e2e() {
 
     let auto_history = fetch_thread_history(&client, &base_url, &auto_thread_id).await;
     assert_eq!(auto_history["ok"], true);
-    assert_eq!(auto_history["message_stats"]["returned_messages"], 2);
+    assert_eq!(auto_history["message_stats"]["returned_messages"], 5);
+    assert_eq!(
+        auto_history["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|message| message["kind"] == "control")
+            .count(),
+        3
+    );
+    assert_eq!(
+        auto_history["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|message| message["likely_user_visible"] == true)
+            .count(),
+        2
+    );
     assert_eq!(
         auto_history["thread"]["workspace_dir"],
         Value::String("/tmp/api-thread-lifecycle".to_owned())

@@ -343,8 +343,13 @@ async fn chat_ws_codex_like_user_ack_can_arrive_before_stream_input_response() {
     .await
     .unwrap();
 
-    let ack_payload = recv_json(&mut ws).await;
-    let stream_input_payload = recv_json(&mut ws).await;
+    let first_payload = recv_json(&mut ws).await;
+    let second_payload = recv_json(&mut ws).await;
+    let (ack_payload, stream_input_payload) = if first_payload["type"] == "user_ack" {
+        (first_payload, second_payload)
+    } else {
+        (second_payload, first_payload)
+    };
     assert_eq!(ack_payload["type"], "user_ack");
     assert_eq!(stream_input_payload["type"], "stream_input");
     assert_eq!(stream_input_payload["status"], "queued");

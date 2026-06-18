@@ -27,9 +27,10 @@ use crate::run_graph::{RunGraphState, execute_agent_run};
 
 use super::MultiProviderBridge;
 use super::persistence::{
-    PendingUserInput, PendingUserInputStatus, PersistedRun, StreamingRunSnapshot,
-    ThreadPersistenceCommand, save_failed_thread_messages, save_streaming_partial,
-    save_thread_messages,
+    PendingUserInput, PendingUserInputStatus, PersistedRun, RunControlRecord, StreamingRunSnapshot,
+    TerminalRunControl, ThreadPersistenceCommand,
+    save_failed_thread_messages_with_terminal_control, save_streaming_partial,
+    save_thread_messages_with_terminal_control,
 };
 use super::state::ActiveThreadPersistence;
 use crate::garyx_native_provider::SESSION_MESSAGES_METADATA_KEY;
@@ -306,6 +307,159 @@ fn build_stream_event_payload(thread_id: &str, run_id: &str, event: &StreamEvent
     }
 }
 
+fn is_persistent_control_stream_event(event: &StreamEvent) -> bool {
+    matches!(event, StreamEvent::Boundary { .. } | StreamEvent::Done)
+}
+
+fn legacy_control_event_payload(thread_id: &str, run_id: &str, message: &Value) -> Option<Value> {
+    let control = message.get("control").and_then(Value::as_object)?;
+    let kind = control.get("kind").and_then(Value::as_str)?;
+    let event_thread_id = control
+        .get("thread_id")
+        .and_then(Value::as_str)
+        .unwrap_or(thread_id);
+    let event_run_id = control
+        .get("run_id")
+        .and_then(Value::as_str)
+        .unwrap_or(run_id);
+    match kind {
+        "run_start" => Some(json!({
+            "type": "run_start",
+            "thread_id": event_thread_id,
+            "run_id": event_run_id,
+        })),
+        "assistant_boundary" => Some(json!({
+            "type": "assistant_boundary",
+            "thread_id": event_thread_id,
+            "run_id": event_run_id,
+            "pending_input_id": control.get("pending_input_id").cloned().unwrap_or(Value::Null),
+        })),
+        "user_ack" => Some(json!({
+            "type": "user_ack",
+            "thread_id": event_thread_id,
+            "run_id": event_run_id,
+            "pending_input_id": control.get("pending_input_id").cloned().unwrap_or(Value::Null),
+        })),
+        "done" => Some(json!({
+            "type": "done",
+            "thread_id": event_thread_id,
+            "run_id": event_run_id,
+        })),
+        "thread_title_updated" => Some(json!({
+            "type": "thread_title_updated",
+            "thread_id": event_thread_id,
+            "run_id": event_run_id,
+            "title": control.get("title").cloned().unwrap_or(Value::Null),
+        })),
+        _ => None,
+    }
+}
+
+fn emit_committed_records(
+    event_tx: &Option<tokio::sync::broadcast::Sender<String>>,
+    thread_id: &str,
+    run_id: Option<&str>,
+    committed: Vec<(u64, Value)>,
+    emit_legacy_controls: bool,
+) {
+    let event_run_id = run_id.map(str::to_owned);
+    for (seq, message) in committed {
+        emit_gateway_event(
+            event_tx,
+            serde_json::json!({
+                "type": "committed_message",
+                "thread_id": thread_id,
+                "run_id": event_run_id.clone(),
+                "seq": seq,
+                "message": message,
+            }),
+        );
+        if emit_legacy_controls
+            && let Some(payload) = legacy_control_event_payload(
+                thread_id,
+                event_run_id.as_deref().unwrap_or_default(),
+                &message,
+            )
+        {
+            emit_gateway_event(event_tx, payload);
+        }
+    }
+}
+
+fn control_record_for_stream_event(
+    thread_id: &str,
+    run_id: &str,
+    event: &StreamEvent,
+    after_content_count: usize,
+) -> Option<RunControlRecord> {
+    let mut payload = serde_json::Map::new();
+    let kind = match event {
+        StreamEvent::Boundary {
+            kind: garyx_models::provider::StreamBoundaryKind::AssistantSegment,
+            pending_input_id,
+        } => {
+            if let Some(pending_input_id) = pending_input_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                payload.insert(
+                    "pending_input_id".to_owned(),
+                    Value::String(pending_input_id.to_owned()),
+                );
+            }
+            "assistant_boundary"
+        }
+        StreamEvent::Boundary {
+            kind: garyx_models::provider::StreamBoundaryKind::UserAck,
+            pending_input_id,
+        } => {
+            if let Some(pending_input_id) = pending_input_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                payload.insert(
+                    "pending_input_id".to_owned(),
+                    Value::String(pending_input_id.to_owned()),
+                );
+            }
+            "user_ack"
+        }
+        StreamEvent::Done => "done",
+        _ => return None,
+    };
+    Some(RunControlRecord::new(
+        kind,
+        thread_id,
+        run_id,
+        Utc::now().to_rfc3339(),
+        payload,
+        after_content_count,
+    ))
+}
+
+fn abort_terminal_control_record(
+    thread_id: &str,
+    run_id: &str,
+    after_content_count: usize,
+    error: Option<&str>,
+) -> RunControlRecord {
+    let mut payload = serde_json::Map::new();
+    payload.insert("status".to_owned(), Value::String("interrupted".to_owned()));
+    if let Some(error) = error.map(str::trim).filter(|value| !value.is_empty()) {
+        payload.insert("error".to_owned(), Value::String(error.to_owned()));
+    }
+    RunControlRecord::new(
+        "run_complete",
+        thread_id,
+        run_id,
+        Utc::now().to_rfc3339(),
+        payload,
+        after_content_count,
+    )
+}
+
 fn forward_stream_event(
     event_tx: &Option<tokio::sync::broadcast::Sender<String>>,
     external_callback: Option<&Arc<dyn Fn(StreamEvent) + Send + Sync>>,
@@ -402,23 +556,40 @@ fn spawn_partial_thread_persistence_worker(
             .get("bridge_run_id")
             .and_then(Value::as_str)
             .map(str::to_owned);
+        let mut transcript_controls = Vec::<RunControlRecord>::new();
+        if let Some(run_id) = committed_event_run_id.as_deref() {
+            let mut payload = serde_json::Map::new();
+            if !provider_key.trim().is_empty() {
+                payload.insert(
+                    "provider_key".to_owned(),
+                    Value::String(provider_key.clone()),
+                );
+            }
+            payload.insert(
+                "provider_type".to_owned(),
+                serde_json::to_value(&provider_type).unwrap_or(Value::Null),
+            );
+            transcript_controls.push(RunControlRecord::new(
+                "run_start",
+                &thread_id,
+                run_id,
+                user_timestamp.clone(),
+                payload,
+                0,
+            ));
+        }
         // Publish each row this flush committed to the jsonl as a seq'd
         // `committed_message` on the gateway bus, AFTER the append flushed
         // (write-then-emit): the in-memory event never references a seq the file
         // does not yet have, so a reconnect replay can never miss it.
         let emit_committed = |committed: Vec<(u64, Value)>| {
-            for (seq, message) in committed {
-                emit_gateway_event(
-                    &gateway_event_tx,
-                    serde_json::json!({
-                        "type": "committed_message",
-                        "thread_id": thread_id,
-                        "run_id": committed_event_run_id,
-                        "seq": seq,
-                        "message": message,
-                    }),
-                );
-            }
+            emit_committed_records(
+                &gateway_event_tx,
+                &thread_id,
+                committed_event_run_id.as_deref(),
+                committed,
+                true,
+            );
         };
 
         let (cursor, committed) = save_streaming_partial(
@@ -437,6 +608,7 @@ fn spawn_partial_thread_persistence_worker(
                 metadata: &metadata,
             },
             &pending_user_inputs,
+            &transcript_controls,
             0,
             appended_finalized,
         )
@@ -444,43 +616,21 @@ fn spawn_partial_thread_persistence_worker(
         appended_finalized = cursor;
         emit_committed(committed);
 
+        let mut abort_terminal_requested = false;
+        let mut abort_terminal_ack: Option<tokio::sync::oneshot::Sender<()>> = None;
         while let Some(command) = event_rx.recv().await {
             let mut dirty = false;
             let mut finish = false;
+            let mut after_commit_callbacks = Vec::new();
             match command {
-                ThreadPersistenceCommand::Stream(event) => match event {
-                    StreamEvent::Boundary {
-                        kind: garyx_models::provider::StreamBoundaryKind::UserAck,
-                        ref pending_input_id,
-                    } => {
-                        snapshot.apply_stream_event(&event);
-                        if let Some(pending_input) = take_pending_input_for_ack(
-                            &mut pending_user_inputs,
-                            pending_input_id.as_deref(),
-                        ) {
-                            dirty |= snapshot.acknowledge_pending_input(&pending_input);
-                        }
+                ThreadPersistenceCommand::Stream {
+                    event,
+                    after_commit,
+                } => {
+                    if let Some(callback) = after_commit {
+                        after_commit_callbacks.push((callback, event.clone()));
                     }
-                    other => {
-                        dirty |= snapshot.apply_stream_event(&other);
-                    }
-                },
-                ThreadPersistenceCommand::QueuePendingInput(pending_input) => {
-                    pending_user_inputs.push(pending_input);
-                    dirty = true;
-                }
-                ThreadPersistenceCommand::DropPendingInput { pending_input_id } => {
-                    let before = pending_user_inputs.len();
-                    pending_user_inputs.retain(|input| input.id != pending_input_id);
-                    dirty = pending_user_inputs.len() != before;
-                }
-                ThreadPersistenceCommand::Finish => {
-                    finish = true;
-                }
-            }
-            while let Ok(pending) = event_rx.try_recv() {
-                match pending {
-                    ThreadPersistenceCommand::Stream(event) => match event {
+                    match event {
                         StreamEvent::Boundary {
                             kind: garyx_models::provider::StreamBoundaryKind::UserAck,
                             ref pending_input_id,
@@ -492,11 +642,110 @@ fn spawn_partial_thread_persistence_worker(
                             ) {
                                 dirty |= snapshot.acknowledge_pending_input(&pending_input);
                             }
+                            if let Some(run_id) = committed_event_run_id.as_deref()
+                                && let Some(control) = control_record_for_stream_event(
+                                    &thread_id,
+                                    run_id,
+                                    &event,
+                                    1 + snapshot.session_messages.len(),
+                                )
+                            {
+                                transcript_controls.push(control);
+                                dirty = true;
+                            }
                         }
                         other => {
                             dirty |= snapshot.apply_stream_event(&other);
+                            if let Some(run_id) = committed_event_run_id.as_deref()
+                                && let Some(control) = control_record_for_stream_event(
+                                    &thread_id,
+                                    run_id,
+                                    &other,
+                                    1 + snapshot.session_messages.len(),
+                                )
+                            {
+                                transcript_controls.push(control);
+                                dirty = true;
+                            }
                         }
-                    },
+                    }
+                }
+                ThreadPersistenceCommand::QueuePendingInput(pending_input) => {
+                    pending_user_inputs.push(pending_input);
+                    dirty = true;
+                }
+                ThreadPersistenceCommand::DropPendingInput { pending_input_id } => {
+                    let before = pending_user_inputs.len();
+                    pending_user_inputs.retain(|input| input.id != pending_input_id);
+                    dirty = pending_user_inputs.len() != before;
+                }
+                ThreadPersistenceCommand::AbortTerminal { error, ack } => {
+                    if let Some(run_id) = committed_event_run_id.as_deref() {
+                        transcript_controls.push(abort_terminal_control_record(
+                            &thread_id,
+                            run_id,
+                            1 + snapshot.session_messages.len(),
+                            error.as_deref(),
+                        ));
+                        dirty = true;
+                    }
+                    abort_terminal_requested = true;
+                    abort_terminal_ack = Some(ack);
+                    finish = true;
+                }
+                ThreadPersistenceCommand::Finish => {
+                    finish = true;
+                }
+            }
+            while let Ok(pending) = event_rx.try_recv() {
+                match pending {
+                    ThreadPersistenceCommand::Stream {
+                        event,
+                        after_commit,
+                    } => {
+                        if let Some(callback) = after_commit {
+                            after_commit_callbacks.push((callback, event.clone()));
+                        }
+                        match event {
+                            StreamEvent::Boundary {
+                                kind: garyx_models::provider::StreamBoundaryKind::UserAck,
+                                ref pending_input_id,
+                            } => {
+                                snapshot.apply_stream_event(&event);
+                                if let Some(pending_input) = take_pending_input_for_ack(
+                                    &mut pending_user_inputs,
+                                    pending_input_id.as_deref(),
+                                ) {
+                                    dirty |= snapshot.acknowledge_pending_input(&pending_input);
+                                }
+                                if let Some(run_id) = committed_event_run_id.as_deref()
+                                    && let Some(control) = control_record_for_stream_event(
+                                        &thread_id,
+                                        run_id,
+                                        &event,
+                                        1 + snapshot.session_messages.len(),
+                                    )
+                                {
+                                    transcript_controls.push(control);
+                                    dirty = true;
+                                }
+                            }
+                            other => {
+                                dirty |= snapshot.apply_stream_event(&other);
+                                if let Some(run_id) = committed_event_run_id.as_deref()
+                                    && let Some(control) = control_record_for_stream_event(
+                                        &thread_id,
+                                        run_id,
+                                        &other,
+                                        1 + snapshot.session_messages.len(),
+                                    )
+                                {
+                                    transcript_controls.push(control);
+                                    dirty = true;
+                                }
+                            }
+                        }
+                    }
                     ThreadPersistenceCommand::QueuePendingInput(pending_input) => {
                         pending_user_inputs.push(pending_input);
                         dirty = true;
@@ -505,6 +754,20 @@ fn spawn_partial_thread_persistence_worker(
                         let before = pending_user_inputs.len();
                         pending_user_inputs.retain(|input| input.id != pending_input_id);
                         dirty |= pending_user_inputs.len() != before;
+                    }
+                    ThreadPersistenceCommand::AbortTerminal { error, ack } => {
+                        if let Some(run_id) = committed_event_run_id.as_deref() {
+                            transcript_controls.push(abort_terminal_control_record(
+                                &thread_id,
+                                run_id,
+                                1 + snapshot.session_messages.len(),
+                                error.as_deref(),
+                            ));
+                            dirty = true;
+                        }
+                        abort_terminal_requested = true;
+                        abort_terminal_ack = Some(ack);
+                        finish = true;
                     }
                     ThreadPersistenceCommand::Finish => {
                         finish = true;
@@ -528,12 +791,16 @@ fn spawn_partial_thread_persistence_worker(
                         metadata: &metadata,
                     },
                     &pending_user_inputs,
+                    &transcript_controls,
                     snapshot.finalized_len(),
                     appended_finalized,
                 )
                 .await;
                 appended_finalized = cursor;
                 emit_committed(committed);
+            }
+            for (callback, event) in after_commit_callbacks {
+                callback(event);
             }
             if finish {
                 break;
@@ -568,11 +835,20 @@ fn spawn_partial_thread_persistence_worker(
                     metadata: &metadata,
                 },
                 &pending_user_inputs,
+                &transcript_controls,
                 snapshot.session_messages.len(),
                 appended_finalized,
             )
             .await;
             emit_committed(committed);
+        }
+        if abort_terminal_requested && let Some(run_id) = committed_event_run_id.as_deref() {
+            store
+                .clear_active_run_snapshot_if_owned(&thread_id, run_id)
+                .await;
+        }
+        if let Some(ack) = abort_terminal_ack {
+            let _ = ack.send(());
         }
 
         StreamingPersistenceWorkerResult {
@@ -1608,9 +1884,29 @@ impl MultiProviderBridge {
                 let first_token_logged = first_token_logged.clone();
                 let event_for_log = event.clone();
                 let event_for_emit = event.clone();
-                let _ = partial_persistence_tx
-                    .as_ref()
-                    .map(|tx| tx.send(ThreadPersistenceCommand::Stream(event.clone())));
+                let persistent_control = is_persistent_control_stream_event(&event);
+                let callback_after_commit = if persistent_control {
+                    if let Some(tx) = partial_persistence_tx.as_ref() {
+                        let callback = external_callback.clone();
+                        let sent = tx
+                            .send(ThreadPersistenceCommand::Stream {
+                                event: event.clone(),
+                                after_commit: callback.clone(),
+                            })
+                            .is_ok();
+                        sent.then_some(callback).flatten()
+                    } else {
+                        None
+                    }
+                } else {
+                    let _ = partial_persistence_tx.as_ref().map(|tx| {
+                        tx.send(ThreadPersistenceCommand::Stream {
+                            event: event.clone(),
+                            after_commit: None,
+                        })
+                    });
+                    None
+                };
                 tokio::spawn(async move {
                     match event_for_log {
                         StreamEvent::Delta { text } => {
@@ -1667,12 +1963,16 @@ impl MultiProviderBridge {
                     return;
                 }
 
-                if let Some(payload) =
-                    build_stream_event_payload(&thread_id, &event_run_id, &event_for_emit)
+                if (!is_persistent_control_stream_event(&event_for_emit)
+                    || partial_persistence_tx.is_none())
+                    && let Some(payload) =
+                        build_stream_event_payload(&thread_id, &event_run_id, &event_for_emit)
                 {
                     emit_gateway_event(&gateway_event_tx, payload);
                 }
-                if let Some(callback) = external_callback {
+                if callback_after_commit.is_none()
+                    && let Some(callback) = external_callback
+                {
                     callback(event);
                 }
             }) as Arc<dyn Fn(StreamEvent) + Send + Sync>)
@@ -1696,8 +1996,11 @@ impl MultiProviderBridge {
             )
             .await;
 
-            // Emit run_start event.
-            if let Some(tx) = &*inner.event_tx.read().await {
+            // The persistence worker emits run_start after the control record is
+            // flushed. Without a worker, preserve the legacy transient event.
+            if partial_persistence_tx.is_none()
+                && let Some(tx) = &*inner.event_tx.read().await
+            {
                 let event = serde_json::json!({
                     "type": "run_start",
                     "run_id": run_id_owned,
@@ -1827,7 +2130,7 @@ impl MultiProviderBridge {
                             res.thread_title.as_deref(),
                         )
                         .await;
-                        save_thread_messages(
+                        let terminal_committed = save_thread_messages_with_terminal_control(
                             store,
                             history,
                             PersistedRun {
@@ -1842,8 +2145,21 @@ impl MultiProviderBridge {
                                 session_messages: persisted_session_messages,
                                 metadata: &graph_state.run_options.metadata,
                             },
+                            Some(TerminalRunControl {
+                                duration_ms: Some(graph_state.metrics.duration_ms()),
+                                success: Some(res.success),
+                                error: res.error.clone(),
+                                thread_title: applied_thread_title.clone(),
+                            }),
                         )
                         .await;
+                        emit_committed_records(
+                            &final_gateway_event_tx,
+                            &thread_id_owned,
+                            Some(&run_id_owned),
+                            terminal_committed,
+                            false,
+                        );
                         record_thread_log(
                             thread_logs_for_task.clone(),
                             thread_log_id_owned.as_deref(),
@@ -1967,7 +2283,7 @@ impl MultiProviderBridge {
                     ) {
                         let user_images =
                             graph_state.run_options.images.clone().unwrap_or_default();
-                        save_failed_thread_messages(
+                        let terminal_committed = save_failed_thread_messages_with_terminal_control(
                             store,
                             history,
                             PersistedRun {
@@ -1982,8 +2298,21 @@ impl MultiProviderBridge {
                                 session_messages: failed_session_messages,
                                 metadata: &graph_state.run_options.metadata,
                             },
+                            Some(TerminalRunControl {
+                                duration_ms: Some(graph_state.metrics.duration_ms()),
+                                success: Some(false),
+                                error: Some(e.to_string()),
+                                thread_title: None,
+                            }),
                         )
                         .await;
+                        emit_committed_records(
+                            &final_gateway_event_tx,
+                            &thread_id_owned,
+                            Some(&run_id_owned),
+                            terminal_committed,
+                            false,
+                        );
                         record_thread_log(
                             thread_logs_for_task.clone(),
                             thread_log_id_owned.as_deref(),
@@ -2252,9 +2581,29 @@ impl MultiProviderBridge {
                 let run_id = run_id.clone();
                 let first_token_logged = first_token_logged.clone();
                 let event_for_log = event.clone();
-                let _ = partial_persistence_tx
-                    .as_ref()
-                    .map(|tx| tx.send(ThreadPersistenceCommand::Stream(event.clone())));
+                let persistent_control = is_persistent_control_stream_event(&event);
+                let callback_after_commit = if persistent_control {
+                    if let Some(tx) = partial_persistence_tx.as_ref() {
+                        let callback = external_callback.clone();
+                        let sent = tx
+                            .send(ThreadPersistenceCommand::Stream {
+                                event: event.clone(),
+                                after_commit: callback.clone(),
+                            })
+                            .is_ok();
+                        sent.then_some(callback).flatten()
+                    } else {
+                        None
+                    }
+                } else {
+                    let _ = partial_persistence_tx.as_ref().map(|tx| {
+                        tx.send(ThreadPersistenceCommand::Stream {
+                            event: event.clone(),
+                            after_commit: None,
+                        })
+                    });
+                    None
+                };
                 tokio::spawn(async move {
                     match event_for_log {
                         StreamEvent::Delta { text } => {
@@ -2313,7 +2662,9 @@ impl MultiProviderBridge {
                 if matches!(event, StreamEvent::ThreadTitleUpdated { .. }) {
                     return;
                 }
-                if let Some(callback) = external_callback.as_ref() {
+                if callback_after_commit.is_none()
+                    && let Some(callback) = external_callback.as_ref()
+                {
                     callback(event);
                 }
             }) as Arc<dyn Fn(StreamEvent) + Send + Sync>)
@@ -2415,7 +2766,7 @@ impl MultiProviderBridge {
                         res.thread_title.as_deref(),
                     )
                     .await;
-                    save_thread_messages(
+                    let terminal_committed = save_thread_messages_with_terminal_control(
                         store,
                         history,
                         PersistedRun {
@@ -2430,8 +2781,22 @@ impl MultiProviderBridge {
                             session_messages: persisted_session_messages,
                             metadata: &graph_state.run_options.metadata,
                         },
+                        Some(TerminalRunControl {
+                            duration_ms: Some(graph_state.metrics.duration_ms()),
+                            success: Some(res.success),
+                            error: res.error.clone(),
+                            thread_title: applied_thread_title.clone(),
+                        }),
                     )
                     .await;
+                    let terminal_event_tx = self.inner.event_tx.read().await.clone();
+                    emit_committed_records(
+                        &terminal_event_tx,
+                        thread_id,
+                        Some(&run_id),
+                        terminal_committed,
+                        false,
+                    );
                 }
                 forward_applied_thread_title_update(
                     &None,
@@ -2463,7 +2828,7 @@ impl MultiProviderBridge {
                         .as_ref()
                         .map(|value| value.session_messages.as_slice())
                         .unwrap_or(&[]);
-                    save_failed_thread_messages(
+                    let terminal_committed = save_failed_thread_messages_with_terminal_control(
                         store,
                         history,
                         PersistedRun {
@@ -2478,8 +2843,22 @@ impl MultiProviderBridge {
                             session_messages: failed_session_messages,
                             metadata: &graph_state.run_options.metadata,
                         },
+                        Some(TerminalRunControl {
+                            duration_ms: Some(graph_state.metrics.duration_ms()),
+                            success: Some(false),
+                            error: Some(error.to_string()),
+                            thread_title: None,
+                        }),
                     )
                     .await;
+                    let terminal_event_tx = self.inner.event_tx.read().await.clone();
+                    emit_committed_records(
+                        &terminal_event_tx,
+                        thread_id,
+                        Some(&run_id),
+                        terminal_committed,
+                        false,
+                    );
                 }
 
                 Err(error.clone())
@@ -2609,6 +2988,43 @@ impl MultiProviderBridge {
 
     /// Abort a running agent request.
     pub async fn abort_run(&self, run_id: &str) -> bool {
+        let (provider_key, thread_id_for_run) = {
+            let run_index = self.inner.run_index.read().await;
+            (
+                run_index.active_runs.get(run_id).cloned(),
+                run_index.run_sessions.get(run_id).cloned(),
+            )
+        };
+
+        let persistence_handle = if let Some(thread_id) = thread_id_for_run.as_deref() {
+            let mut persistence = self.inner.active_thread_persistence.lock().await;
+            let should_remove = persistence
+                .get(thread_id)
+                .map(|handle| handle.run_id == run_id)
+                .unwrap_or(false);
+            if should_remove {
+                persistence.remove(thread_id)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let mut abort_terminal_ack = None;
+        if let Some(handle) = persistence_handle.as_ref() {
+            let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+            if handle
+                .tx
+                .send(ThreadPersistenceCommand::AbortTerminal {
+                    error: Some("aborted".to_owned()),
+                    ack: ack_tx,
+                })
+                .is_ok()
+            {
+                abort_terminal_ack = Some(ack_rx);
+            }
+        }
+
         // Cancel the tokio task.
         let task_cancelled = {
             let mut tasks = self.inner.active_tasks.lock().await;
@@ -2621,14 +3037,6 @@ impl MultiProviderBridge {
         };
 
         // Also try provider-level abort.
-        let provider_key = self
-            .inner
-            .run_index
-            .read()
-            .await
-            .active_runs
-            .get(run_id)
-            .cloned();
         let provider = match provider_key {
             Some(provider_key) => self
                 .inner
@@ -2654,11 +3062,19 @@ impl MultiProviderBridge {
             run_index.run_sessions.remove(run_id)
         };
 
-        // The aborted task is dropped, so its terminal persistence (which clears
-        // the active_run_snapshot) never runs. Clear the overlay now or the thread
-        // stays projected as running forever (the iOS tail "Thinking"). The
-        // run_id-owned, lock-held clear leaves a replacement run's snapshot intact.
-        if let Some(thread_id) = thread_id
+        drop(persistence_handle);
+        let worker_acknowledged = if let Some(ack) = abort_terminal_ack {
+            ack.await.is_ok()
+        } else {
+            false
+        };
+
+        // If there was no persistence worker to receive and flush the abort
+        // terminal, preserve the old safety net: clear the overlay so the thread
+        // does not stay projected as running forever. The run_id ownership check
+        // leaves a replacement run's snapshot intact.
+        if !worker_acknowledged
+            && let Some(thread_id) = thread_id.or(thread_id_for_run)
             && let Some(store) = self.inner.thread_store.read().await.clone()
         {
             store

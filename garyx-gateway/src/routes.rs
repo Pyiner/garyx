@@ -7,10 +7,6 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
     },
 };
-use std::convert::Infallible;
-use std::time::Duration;
-use tokio_stream::StreamExt;
-use tokio_stream::wrappers::BroadcastStream;
 use chrono::Utc;
 use garyx_channels::plugin::{PluginAccountUi, PluginConversationEndpoint, PluginMainEndpoint};
 use garyx_models::config::ChannelsConfig;
@@ -32,7 +28,11 @@ use garyx_router::{
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio_stream::StreamExt;
+use tokio_stream::wrappers::BroadcastStream;
 
 use crate::agent_identity::create_thread_for_agent_reference;
 use crate::garyx_db::{GaryxDbError, PinnedThreadRecord, RecentThreadRecord, ThreadMetaRecord};
@@ -1760,8 +1760,9 @@ const THREAD_STREAM_REPLAY_CAP: usize = 10_000;
 /// Replays committed messages with `seq > after_seq` (or the `Last-Event-ID`
 /// header on reconnect), then streams that thread's live events. The bus is
 /// subscribed BEFORE the replay snapshot is read so no commit is missed in the
-/// gap, and `committed_message` events are deduped by `seq` so the resulting
-/// replay/live overlap is idempotent.
+/// gap, and exact duplicate `committed_message` payloads are deduped so the
+/// resulting replay/live overlap is idempotent while same-seq overwrite events
+/// still reach clients.
 pub async fn thread_stream(
     State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
@@ -1796,6 +1797,7 @@ pub async fn thread_stream(
         .unwrap_or_default();
 
     let mut replay_max_seq = after_seq;
+    let mut sent_committed_payloads = HashMap::new();
     let mut replay_events: Vec<Result<Event, Infallible>> = Vec::with_capacity(replay.len());
     for record in replay {
         replay_max_seq = replay_max_seq.max(record.seq);
@@ -1806,9 +1808,11 @@ pub async fn thread_stream(
             "seq": record.seq,
             "message": record.message,
         });
+        let payload = payload.to_string();
+        sent_committed_payloads.insert(record.seq, payload.clone());
         replay_events.push(Ok(Event::default()
             .id(record.seq.to_string())
-            .data(payload.to_string())));
+            .data(payload)));
     }
 
     let thread_for_live = thread_id.clone();
@@ -1822,10 +1826,14 @@ pub async fn thread_stream(
             }
             if value.get("type").and_then(Value::as_str) == Some("committed_message") {
                 let seq = value.get("seq").and_then(Value::as_u64).unwrap_or(0);
-                if seq <= last_sent_seq {
-                    return None; // replay/live overlap or duplicate
+                if !should_forward_committed_payload(
+                    &mut sent_committed_payloads,
+                    &mut last_sent_seq,
+                    seq,
+                    &raw,
+                ) {
+                    return None;
                 }
-                last_sent_seq = seq;
                 return Some(Ok(Event::default().id(seq.to_string()).data(raw)));
             }
             Some(Ok(Event::default().data(raw)))
@@ -1846,6 +1854,23 @@ pub async fn thread_stream(
                 .text("ping"),
         )
         .into_response()
+}
+
+fn should_forward_committed_payload(
+    sent_payloads: &mut HashMap<u64, String>,
+    last_sent_seq: &mut u64,
+    seq: u64,
+    raw: &str,
+) -> bool {
+    if seq == 0 {
+        return false;
+    }
+    if sent_payloads.get(&seq).is_some_and(|sent| sent == raw) {
+        return false;
+    }
+    sent_payloads.insert(seq, raw.to_owned());
+    *last_sent_seq = (*last_sent_seq).max(seq);
+    true
 }
 
 /// POST /api/threads - create a canonical thread

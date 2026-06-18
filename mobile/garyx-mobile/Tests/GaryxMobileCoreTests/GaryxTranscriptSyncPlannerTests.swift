@@ -91,8 +91,60 @@ final class GaryxTranscriptSyncPlannerTests: XCTestCase {
     }
 
     func testStreamSeqStaleSkips() {
-        XCTAssertEqual(GaryxStreamSeqPlanner.decide(incomingSeq: 5, connectionLastSeq: 5), .stale)
         XCTAssertEqual(GaryxStreamSeqPlanner.decide(incomingSeq: 3, connectionLastSeq: 5), .stale)
+    }
+
+    func testStreamSeqSameSeqReplacementApplies() {
+        XCTAssertEqual(GaryxStreamSeqPlanner.decide(incomingSeq: 5, connectionLastSeq: 5), .apply)
+    }
+
+    // MARK: - Rewrite control action
+
+    func testRangeRewriteControlRequiresAuthoritativeRefetch() {
+        let old = GaryxTranscriptMessage(index: 2, role: .assistant, text: "old answer")
+        let tombstone = controlMessage(index: 2, controlKind: "range_rewrite")
+        let marker = controlMessage(index: 3, controlKind: "range_rewrite")
+
+        XCTAssertEqual(GaryxStreamSeqPlanner.decide(incomingSeq: 3, connectionLastSeq: 3), .apply)
+
+        let window = GaryxTranscriptCacheLogic.merged(
+            into: GaryxCachedTranscript(
+                threadId: "thread::rewrite",
+                savedAt: Date(timeIntervalSince1970: 0),
+                messages: [old],
+                hasMoreBefore: false,
+                nextBeforeIndex: nil
+            ),
+            threadId: "thread::rewrite",
+            fetched: [tombstone],
+            pageInfo: nil,
+            direction: .forward,
+            savedAt: Date(timeIntervalSince1970: 1)
+        )
+        XCTAssertEqual(window.messages.map(\.kind), ["control"])
+        XCTAssertTrue(GaryxMobileTranscriptMapper.mobileMessages(from: window.messages).isEmpty)
+        XCTAssertEqual(
+            GaryxTranscriptControlRewritePlanner.action(for: marker),
+            .refetchAuthoritativeTranscript
+        )
+    }
+
+    func testTranscriptResetControlRequiresAuthoritativeRefetch() {
+        XCTAssertEqual(
+            GaryxTranscriptControlRewritePlanner.action(
+                for: controlMessage(index: 9, controlKind: "transcript_reset")
+            ),
+            .refetchAuthoritativeTranscript
+        )
+    }
+
+    func testOrdinaryControlDoesNotForceRefetch() {
+        XCTAssertEqual(
+            GaryxTranscriptControlRewritePlanner.action(
+                for: controlMessage(index: 9, controlKind: "done")
+            ),
+            .none
+        )
     }
 
     // MARK: - Resume cursor
@@ -112,5 +164,30 @@ final class GaryxTranscriptSyncPlannerTests: XCTestCase {
 
     func testResumeCursorZeroWhenNothingCached() {
         XCTAssertEqual(GaryxStreamSeqPlanner.resumeCursor(afterCursor: nil, fallbackMaxIndex: nil), 0)
+    }
+
+    private func controlMessage(index: Int, controlKind: String) -> GaryxTranscriptMessage {
+        GaryxTranscriptMessage(
+            index: index,
+            role: .system,
+            kind: "control",
+            text: "",
+            content: .object([
+                "control": .object([
+                    "kind": .string(controlKind)
+                ])
+            ]),
+            message: .object([
+                "role": .string("system"),
+                "kind": .string("control"),
+                "internal": .bool(true),
+                "internal_kind": .string("control"),
+                "control": .object([
+                    "kind": .string(controlKind)
+                ])
+            ]),
+            toolRelated: false,
+            likelyUserVisible: false
+        )
     }
 }

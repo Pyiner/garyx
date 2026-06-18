@@ -311,6 +311,7 @@ async fn test_save_streaming_partial_commits_user_row_and_keeps_only_inflight_in
             metadata: &metadata,
         },
         &[],
+        &[],
         snapshot.finalized_len(),
         appended,
     )
@@ -335,6 +336,7 @@ async fn test_save_streaming_partial_commits_user_row_and_keeps_only_inflight_in
             session_messages: &snapshot.session_messages,
             metadata: &metadata,
         },
+        &[],
         &[],
         snapshot.finalized_len(),
         appended,
@@ -433,6 +435,7 @@ async fn test_save_streaming_partial_clears_abandoned_pending_inputs_for_new_use
             metadata: &metadata,
         },
         &[],
+        &[],
         0,
         0,
     )
@@ -497,6 +500,7 @@ async fn test_save_streaming_partial_keeps_abandoned_pending_inputs_for_internal
             metadata: &metadata,
         },
         &[],
+        &[],
         0,
         0,
     )
@@ -546,6 +550,7 @@ async fn test_streaming_then_terminal_commit_does_not_duplicate_messages() {
                     session_messages: &session_messages,
                     metadata: &metadata,
                 },
+                &[],
                 &[],
                 finalized_len,
                 appended,
@@ -627,19 +632,29 @@ async fn test_streaming_then_terminal_commit_does_not_duplicate_messages() {
         .records(thread_id)
         .await
         .expect("records load");
-    let roles: Vec<&str> = committed
+    let content_roles: Vec<&str> = committed
         .iter()
+        .filter(|record| record.message.get("kind").and_then(Value::as_str) != Some("control"))
         .filter_map(|record| record.message.get("role").and_then(Value::as_str))
         .collect();
     assert_eq!(
-        roles,
+        content_roles,
         vec!["user", "assistant", "tool_use", "tool_result", "assistant"],
         "committed transcript should hold each run message exactly once"
     );
     let seqs: Vec<u64> = committed.iter().map(|record| record.seq).collect();
-    assert_eq!(seqs, vec![1, 2, 3, 4, 5], "seqs are monotonic with no gaps");
+    assert_eq!(
+        seqs,
+        vec![1, 2, 3, 4, 5, 6],
+        "seqs are monotonic with no gaps"
+    );
     assert_eq!(committed[1].message["content"], "Working");
     assert_eq!(committed[4].message["content"], "Done");
+    assert_eq!(committed[5].message["control"]["kind"], "range_rewrite");
+    assert_eq!(
+        committed[5].message["control"]["reason"],
+        "same_seq_overwrite"
+    );
 
     // Overlay is cleared once the run terminates.
     let stored = store.get(thread_id).await.expect("session exists");
@@ -647,6 +662,107 @@ async fn test_streaming_then_terminal_commit_does_not_duplicate_messages() {
         stored["history"].get("active_run_snapshot").is_none()
             || stored["history"]["active_run_snapshot"].is_null(),
         "active_run_snapshot must be cleared at terminal"
+    );
+}
+
+#[tokio::test]
+async fn test_control_records_stream_and_terminal_commit_to_transcript() {
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let history = make_history(store.clone());
+    let thread_id = "thread::control-records";
+    let metadata = HashMap::from([("bridge_run_id".to_owned(), json!("run-control"))]);
+    let controls = vec![
+        RunControlRecord::new(
+            "run_start",
+            thread_id,
+            "run-control",
+            "2026-06-18T12:00:00Z".to_owned(),
+            serde_json::Map::new(),
+            0,
+        ),
+        RunControlRecord::new(
+            "done",
+            thread_id,
+            "run-control",
+            "2026-06-18T12:00:01Z".to_owned(),
+            serde_json::Map::new(),
+            1,
+        ),
+    ];
+
+    let (appended, committed) = save_streaming_partial(
+        &store,
+        &history,
+        PersistedRun {
+            thread_id,
+            user_message: "persist controls",
+            user_timestamp: Some("2026-06-18T12:00:00Z"),
+            user_images: &[],
+            assistant_response: "",
+            sdk_session_id: None,
+            provider_key: "provider::control",
+            provider_type: ProviderType::ClaudeCode,
+            session_messages: &[],
+            metadata: &metadata,
+        },
+        &[],
+        &controls,
+        0,
+        0,
+    )
+    .await;
+    assert_eq!(appended, 3);
+    assert_eq!(committed.len(), 3);
+
+    let terminal = save_thread_messages_with_terminal_control(
+        &store,
+        &history,
+        PersistedRun {
+            thread_id,
+            user_message: "persist controls",
+            user_timestamp: Some("2026-06-18T12:00:00Z"),
+            user_images: &[],
+            assistant_response: "",
+            sdk_session_id: None,
+            provider_key: "provider::control",
+            provider_type: ProviderType::ClaudeCode,
+            session_messages: &[],
+            metadata: &metadata,
+        },
+        Some(TerminalRunControl {
+            duration_ms: Some(42),
+            success: Some(true),
+            error: None,
+            thread_title: Some("Control Fixture".to_owned()),
+        }),
+    )
+    .await;
+    assert_eq!(
+        terminal.iter().map(|(seq, _)| *seq).collect::<Vec<_>>(),
+        vec![4, 5]
+    );
+
+    let records = history
+        .transcript_store()
+        .records(thread_id)
+        .await
+        .expect("records load");
+    let control_kinds: Vec<&str> = records
+        .iter()
+        .filter_map(|record| {
+            record
+                .message
+                .pointer("/control/kind")
+                .and_then(Value::as_str)
+        })
+        .collect();
+    assert_eq!(
+        control_kinds,
+        vec!["run_start", "done", "thread_title_updated", "run_complete"]
+    );
+    assert_eq!(
+        records.iter().map(|record| record.seq).collect::<Vec<_>>(),
+        vec![1, 2, 3, 4, 5]
     );
 }
 
@@ -739,6 +855,7 @@ async fn test_save_streaming_partial_does_not_commit_delivery_mirror() {
             metadata: &metadata,
         },
         &[],
+        &[],
         session_messages.len(),
         0,
     )
@@ -759,7 +876,9 @@ async fn test_save_streaming_partial_does_not_commit_delivery_mirror() {
         "streaming must not commit the synthesized delivery-mirror assistant"
     );
     assert!(
-        committed.iter().all(|record| record.message["metadata"]["delivery_mirror"] != json!(true)),
+        committed
+            .iter()
+            .all(|record| record.message["metadata"]["delivery_mirror"] != json!(true)),
         "no delivery_mirror row in the streamed transcript"
     );
 }
