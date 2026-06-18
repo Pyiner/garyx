@@ -10743,6 +10743,12 @@ button.team-agent-speaker:focus-visible {
   white-space: nowrap;
 }
 
+.composer-model-menu-options {
+  max-height: calc(34px * 5);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 .composer-bot-menu-item.muted {
   color: var(--color-token-description-foreground);
 }

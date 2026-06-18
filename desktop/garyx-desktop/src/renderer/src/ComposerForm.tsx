@@ -51,6 +51,7 @@ import type {
 
 import {
   DropdownMenu,
+  DropdownMenuGroup,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuTrigger,
@@ -543,25 +544,27 @@ function renderComposerModelControl({
         {PROVIDER_CHEVRON_GLYPH}
       </DropdownMenuTrigger>
       <FloatingActionMenuContent align="start" side="top">
-        <FloatingActionMenuItem
-          data-active={
-            !effectiveModelId || effectiveModelId === defaultModelId ? '' : undefined
-          }
-          onSelect={() => selectModelSanitizingTier(null)}
-        >
-          <span className="composer-menu-label">{defaultModelLabel}</span>
-        </FloatingActionMenuItem>
-        {models
-          .filter((option) => option.id !== defaultModelId)
-          .map((option) => (
-            <FloatingActionMenuItem
-              data-active={option.id === effectiveModelId ? '' : undefined}
-              key={option.id}
-              onSelect={() => selectModelSanitizingTier(option.id)}
-            >
-              <span className="composer-menu-label">{option.label}</span>
-            </FloatingActionMenuItem>
-          ))}
+        <DropdownMenuGroup className="composer-model-menu-options">
+          <FloatingActionMenuItem
+            data-active={
+              !effectiveModelId || effectiveModelId === defaultModelId ? '' : undefined
+            }
+            onSelect={() => selectModelSanitizingTier(null)}
+          >
+            <span className="composer-menu-label">{defaultModelLabel}</span>
+          </FloatingActionMenuItem>
+          {models
+            .filter((option) => option.id !== defaultModelId)
+            .map((option) => (
+              <FloatingActionMenuItem
+                data-active={option.id === effectiveModelId ? '' : undefined}
+                key={option.id}
+                onSelect={() => selectModelSanitizingTier(option.id)}
+              >
+                <span className="composer-menu-label">{option.label}</span>
+              </FloatingActionMenuItem>
+            ))}
+        </DropdownMenuGroup>
         {supportsReasoning && onSelectReasoningEffort ? (
           <>
             <DropdownMenuSeparator />
