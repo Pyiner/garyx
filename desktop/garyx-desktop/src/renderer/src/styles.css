@@ -1019,8 +1019,8 @@ code {
 }
 
 .workspace-thread-block .workspace-action-icon-button {
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   border-radius: var(--radius-sm);
 }
 
@@ -1292,7 +1292,7 @@ code {
   width: 26px;
   height: 24px;
   border: 0;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-sm);
   background: transparent;
   color: color-mix(in srgb, var(--color-token-text-primary) 48%, transparent);
   cursor: pointer;
@@ -1369,7 +1369,7 @@ code {
      the conversation's `.conversation-header` instead of sitting below an
      empty white strip. */
   min-height: var(--inset-toolbar);
-  padding: 0 2px 10px 14px;
+  padding: 0 2px 0 14px;
 }
 
 .bot-conversation-heading {
@@ -1420,10 +1420,10 @@ code {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   border: 0;
-  border-radius: var(--radius-lg);
+  border-radius: 10px;
   background: transparent;
   color: color-mix(in srgb, var(--color-token-text-primary) 58%, transparent);
   cursor: pointer;
@@ -1433,7 +1433,7 @@ code {
 }
 
 .bot-conversation-collapse:hover {
-  background: var(--color-token-row-hover);
+  background: rgba(15, 23, 42, 0.055);
   color: var(--color-token-text-primary);
 }
 
@@ -2426,21 +2426,21 @@ code {
 
 .left-rail
   :is(.sidebar-action, .workspace-row, .thread-item, .settings-rail-item) {
-  border-radius: 12.5px;
+  border-radius: 10px;
   color: var(--color-token-text-primary);
   opacity: 0.82;
 }
 
 .left-rail .workspace-row {
-  min-height: 31px;
-  padding: 0 8px;
+  min-height: 32px;
+  padding: 0 5px 0 8px;
   font-size: var(--text-base);
   font-weight: 430;
   line-height: 18.5714px;
 }
 
 .left-rail .workspace-row-main {
-  min-height: 29px;
+  min-height: 30px;
 }
 
 .left-rail .workspace-name {
