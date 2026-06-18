@@ -8,11 +8,13 @@ use futures_util::{SinkExt, StreamExt};
 use garyx_bridge::MultiProviderBridge;
 use garyx_bridge::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
 use garyx_gateway::api::thread_history;
+use garyx_gateway::app_db::AppDbService;
 use garyx_gateway::automation::{
     automation_activity, create_automation, delete_automation, get_automation, list_automations,
     run_automation_now, update_automation,
 };
 use garyx_gateway::chat::{chat_health, chat_ws};
+use garyx_gateway::garyx_db::GaryxDbService;
 use garyx_gateway::routes::{
     bind_channel_endpoint, create_thread, delete_thread, detach_channel_endpoint, get_thread,
     list_channel_endpoints, list_threads, update_thread,
@@ -316,11 +318,17 @@ async fn make_state_with_recording_provider(provider: Arc<RecordingProvider>) ->
     tokio::fs::create_dir_all(cron_data_dir.join("cron").join("jobs"))
         .await
         .expect("create cron jobs dir");
+    let app_db = Arc::new(
+        AppDbService::open(cron_data_dir.join("app.sqlite3")).expect("create isolated app db"),
+    );
     let cron_service = Arc::new(garyx_gateway::CronService::new(cron_data_dir));
+    let garyx_db = Arc::new(GaryxDbService::memory().expect("create in-memory garyx db"));
 
     let state = AppStateBuilder::new(config)
         .with_bridge(bridge)
         .with_cron_service(cron_service)
+        .with_app_db(app_db)
+        .with_garyx_db(garyx_db)
         .build();
     state
         .ops
@@ -548,7 +556,8 @@ async fn test_thread_lifecycle_real_http_api_e2e() {
     let created_thread: Value = client
         .post(format!("{base_url}/api/threads"))
         .json(&json!({
-            "label": "Manual Thread"
+            "label": "Manual Thread",
+            "workspaceDir": "/tmp/manual-thread"
         }))
         .send()
         .await
@@ -564,6 +573,10 @@ async fn test_thread_lifecycle_real_http_api_e2e() {
     assert_eq!(
         created_thread["label"],
         Value::String("Manual Thread".to_owned())
+    );
+    assert_eq!(
+        created_thread["workspace_dir"],
+        Value::String("/tmp/manual-thread".to_owned())
     );
 
     let updated_thread: Value = client

@@ -1,0 +1,8 @@
+{"type":"accepted","threadId":"thread::fixture-stream-sync-ack","runId":"run::fixture-ack"}
+{"type":"assistant_delta","threadId":"thread::fixture-stream-sync-ack","runId":"run::fixture-ack","delta":"I started the long-running response."}
+{"type":"tool_use","threadId":"thread::fixture-stream-sync-ack","runId":"run::fixture-ack","message":{"role":"tool_use","tool_name":"commandExecution","tool_use_id":"call_fixture_wait","content":{"type":"commandExecution","status":"inProgress","command":"/bin/zsh -lc 'sleep 1'","cwd":"/Users/test/repo","id":"call_fixture_wait","processId":"1000000002"}}}
+{"type":"user_ack","threadId":"thread::fixture-stream-sync-ack","runId":"run::fixture-ack","pendingInputId":"pending-fixture-followup"}
+{"type":"stream_input","threadId":"thread::fixture-stream-sync-ack","status":"queued","threadStatus":"running","clientIntentId":"intent-fixture-followup","pendingInputId":"pending-fixture-followup"}
+{"type":"assistant_boundary","threadId":"thread::fixture-stream-sync-ack","runId":"run::fixture-ack"}
+{"type":"tool_result","threadId":"thread::fixture-stream-sync-ack","runId":"run::fixture-ack","message":{"role":"tool_result","tool_name":"commandExecution","tool_use_id":"call_fixture_wait","is_error":false,"content":{"type":"commandExecution","status":"completed","command":"/bin/zsh -lc 'sleep 1'","cwd":"/Users/test/repo","id":"call_fixture_wait","processId":"1000000002","exitCode":0,"durationMs":1000,"aggregatedOutput":""}}}
+{"type":"done","threadId":"thread::fixture-stream-sync-ack","runId":"run::fixture-ack"}

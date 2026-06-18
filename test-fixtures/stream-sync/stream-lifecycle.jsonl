@@ -1,0 +1,6 @@
+{"type":"run_start","thread_id":"thread::fixture-stream-sync-life","run_id":"run::fixture-life"}
+{"type":"committed_message","thread_id":"thread::fixture-stream-sync-life","run_id":"run::fixture-life","seq":1,"message":{"role":"user","content":"Fixture lifecycle request.","text":"Fixture lifecycle request.","timestamp":"2026-06-18T12:10:00Z"}}
+{"type":"assistant_delta","thread_id":"thread::fixture-stream-sync-life","run_id":"run::fixture-life","delta":"Lifecycle response"}
+{"type":"committed_message","thread_id":"thread::fixture-stream-sync-life","run_id":"run::fixture-life","seq":2,"message":{"role":"assistant","content":"Lifecycle response complete.","text":"Lifecycle response complete.","timestamp":"2026-06-18T12:10:01Z"}}
+{"type":"done","thread_id":"thread::fixture-stream-sync-life","run_id":"run::fixture-life"}
+{"type":"run_complete","thread_id":"thread::fixture-stream-sync-life","run_id":"run::fixture-life","duration_ms":1234}
