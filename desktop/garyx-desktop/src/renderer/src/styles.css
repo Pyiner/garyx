@@ -22810,7 +22810,12 @@ button.new-thread-dreams-scan:hover {
 .workspace-picker-dialog {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 16px;
+}
+
+.workspace-picker-dialog [data-slot="dialog-close"] {
+  top: 8px;
+  right: 14px;
 }
 
 .workspace-picker-search {
