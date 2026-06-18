@@ -145,21 +145,6 @@ export function extractImageGenerationImageContent(
   }
   const content = asRecord(message.content);
   const path = generatedImagePath(content);
-  const source = hydratedSourceFromContent(content);
-  if (source) {
-    return [
-      {
-        type: "image",
-        name: generatedImageName(message, path),
-        ...(path ? { path } : {}),
-        media_type:
-          recordString(source, "media_type", "mediaType") ||
-          (path ? mediaTypeFromImagePath(path) : "image/png"),
-        source,
-      },
-    ];
-  }
-
   if (path) {
     const url = fileUrlFromAbsolutePath(path);
     return [
@@ -170,6 +155,19 @@ export function extractImageGenerationImageContent(
         media_type:
           explicitGeneratedImageMediaType(content) || mediaTypeFromImagePath(path),
         ...(url ? { url } : {}),
+      },
+    ];
+  }
+
+  const source = hydratedSourceFromContent(content);
+  if (source) {
+    return [
+      {
+        type: "image",
+        name: generatedImageName(message),
+        media_type:
+          recordString(source, "media_type", "mediaType") || "image/png",
+        source,
       },
     ];
   }

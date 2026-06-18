@@ -1799,33 +1799,6 @@ fn enrich_image_block_for_history(block: &serde_json::Map<String, Value>) -> Val
     Value::Object(hydrated)
 }
 
-fn enrich_image_generation_block_for_history(block: &serde_json::Map<String, Value>) -> Value {
-    let mut hydrated: serde_json::Map<String, Value> = block
-        .iter()
-        .map(|(key, value)| {
-            if key == "source" {
-                (key.clone(), value.clone())
-            } else {
-                (key.clone(), enrich_message_content_for_history(value))
-            }
-        })
-        .collect();
-
-    if has_inline_image_source(&hydrated) {
-        return Value::Object(hydrated);
-    }
-
-    let Some(path) = trimmed_string_field(block, &["savedPath", "saved_path", "path", "filePath"])
-    else {
-        return Value::Object(hydrated);
-    };
-    let Some(source) = image_source_for_history_path(&hydrated, path) else {
-        return Value::Object(hydrated);
-    };
-    hydrated.insert("source".to_owned(), source);
-    Value::Object(hydrated)
-}
-
 /// Upper bound on any single text/string segment embedded in a thread-history
 /// `message` payload. Large tool inputs/outputs (file reads, command output,
 /// agent reports) can be hundreds of KB each; clipping them here keeps the
@@ -1859,7 +1832,6 @@ fn enrich_message_content_for_history(content: &Value) -> Value {
         {
             // Images are hydrated to inline base64 and must not be length-capped.
             "image" => enrich_image_block_for_history(block),
-            "imageGeneration" => enrich_image_generation_block_for_history(block),
             // Recurse into other objects so nested tool text is capped too.
             _ => Value::Object(
                 block

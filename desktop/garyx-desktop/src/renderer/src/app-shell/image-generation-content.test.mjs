@@ -37,7 +37,7 @@ test('image generation display prefers savedPath over result payload', () => {
   );
 });
 
-test('image generation display uses hydrated source from savedPath history', () => {
+test('image generation display still prefers savedPath when a source is present', () => {
   assert.deepEqual(
     extractImageGenerationImageContent(
       generatedImageMessage({
@@ -57,6 +57,31 @@ test('image generation display uses hydrated source from savedPath history', () 
         type: 'image',
         name: 'generated.png',
         path: '/tmp/generated.png',
+        media_type: 'image/png',
+        url: 'file:///tmp/generated.png',
+      },
+    ],
+  );
+});
+
+test('image generation display falls back to hydrated source without savedPath', () => {
+  assert.deepEqual(
+    extractImageGenerationImageContent(
+      generatedImageMessage({
+        id: 'ig-test',
+        type: 'imageGeneration',
+        result: 'truncated-result',
+        source: {
+          type: 'base64',
+          media_type: 'image/png',
+          data: 'full-image-data',
+        },
+      }),
+    ),
+    [
+      {
+        type: 'image',
+        name: 'ig-test.png',
         media_type: 'image/png',
         source: {
           type: 'base64',
