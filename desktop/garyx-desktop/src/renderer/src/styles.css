@@ -3519,7 +3519,7 @@ code {
   height: 30px;
   padding: 0 10px;
   border: none;
-  border-radius: 999px;
+  border-radius: 10px;
   background: transparent;
   color: var(--color-token-text-secondary);
   font-size: var(--text-sm);
