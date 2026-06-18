@@ -1102,20 +1102,71 @@ fn parse_app_server_models(result: &Value, source: &'static str) -> GptModelDisc
             first_service_tiers = service_tiers.clone();
         }
         if is_default {
-            default_model = Some(id.to_owned());
             default_reasoning = supported.clone();
             default_service_tiers = service_tiers.clone();
         }
 
-        models.push(ProviderModelOption {
-            id: id.to_owned(),
-            label,
-            description,
-            recommended: is_default,
-            default_reasoning_effort: default_effort,
-            supported_reasoning_efforts: supported,
-            service_tiers,
-        });
+        // Expand context-window variants the backend advertises under
+        // businessMetadata.variants (e.g. TRAE's "Standard" 272K vs "Max" 1M)
+        // into separate selectable models, matching the TRAE picker. Only expand
+        // when a distinct Max variant exists; single-variant models stay as the
+        // plain base model.
+        let variants = entry
+            .get("businessMetadata")
+            .and_then(|meta| meta.get("variants"));
+        let standard_key = variants
+            .and_then(|v| v.get("standard_key"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let max_key = variants
+            .and_then(|v| v.get("max_key"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+
+        if let (Some(standard_key), Some(max_key)) = (standard_key, max_key) {
+            let context_label = |key: &str| {
+                variants
+                    .and_then(|v| v.get(key))
+                    .and_then(Value::as_u64)
+                    .map(|ctx| format!("{} context window", format_context_window(ctx)))
+            };
+            if is_default {
+                default_model = Some(standard_key.to_owned());
+            }
+            models.push(ProviderModelOption {
+                id: standard_key.to_owned(),
+                label: format!("{label} / Standard"),
+                description: context_label("standard_context_window"),
+                recommended: is_default,
+                default_reasoning_effort: default_effort.clone(),
+                supported_reasoning_efforts: supported.clone(),
+                service_tiers: service_tiers.clone(),
+            });
+            models.push(ProviderModelOption {
+                id: max_key.to_owned(),
+                label: format!("{label} / Max"),
+                description: context_label("max_context_window"),
+                recommended: false,
+                default_reasoning_effort: default_effort,
+                supported_reasoning_efforts: supported,
+                service_tiers,
+            });
+        } else {
+            if is_default {
+                default_model = Some(id.to_owned());
+            }
+            models.push(ProviderModelOption {
+                id: id.to_owned(),
+                label,
+                description,
+                recommended: is_default,
+                default_reasoning_effort: default_effort,
+                supported_reasoning_efforts: supported,
+                service_tiers,
+            });
+        }
     }
 
     let reasoning_efforts = if default_reasoning.is_empty() {
@@ -1136,6 +1187,21 @@ fn parse_app_server_models(result: &Value, source: &'static str) -> GptModelDisc
         service_tiers,
         source,
         error: None,
+    }
+}
+
+/// Render a token count as a compact context-window label (e.g. 272000 -> "272K",
+/// 1000000 -> "1M").
+fn format_context_window(tokens: u64) -> String {
+    if tokens >= 1_000_000 {
+        let millions = tokens as f64 / 1_000_000.0;
+        if millions.fract().abs() < f64::EPSILON {
+            format!("{}M", millions as u64)
+        } else {
+            format!("{millions:.1}M")
+        }
+    } else {
+        format!("{}K", (tokens as f64 / 1000.0).round() as u64)
     }
 }
 
@@ -1705,6 +1771,45 @@ mod tests {
                 .iter()
                 .any(|effort| effort.id == "medium" && effort.recommended)
         );
+    }
+
+    #[test]
+    fn parse_app_server_models_expands_context_window_variants() {
+        let result = json!({
+            "data": [
+                {
+                    "id": "gpt-5.5", "model": "GPT-5.5", "displayName": "GPT-5.5",
+                    "description": "frontier", "defaultReasoningEffort": "medium",
+                    "isDefault": false, "hidden": false, "supportedReasoningEfforts": [],
+                    "businessMetadata": { "variants": {
+                        "standard_key": "gpt-5.5__dev", "standard_context_window": 272000,
+                        "max_key": "gpt-5.5__max", "max_context_window": 1000000
+                    }}
+                },
+                {
+                    "id": "glm-5", "model": "glm-5", "displayName": "GLM-5",
+                    "description": "", "defaultReasoningEffort": "medium",
+                    "isDefault": false, "hidden": false, "supportedReasoningEfforts": [],
+                    "businessMetadata": { "variants": {
+                        "standard_key": "glm-5__dev", "standard_context_window": 200000,
+                        "max_key": null, "max_context_window": null
+                    }}
+                }
+            ]
+        });
+
+        let discovery = parse_app_server_models(&result, "traex_app_server");
+        let ids: Vec<&str> = discovery.models.iter().map(|m| m.id.as_str()).collect();
+        // gpt-5.5 has a Max variant -> two options; glm-5 has only Standard -> one.
+        assert_eq!(ids, vec!["gpt-5.5__dev", "gpt-5.5__max", "glm-5"]);
+        let std = &discovery.models[0];
+        assert_eq!(std.label, "GPT-5.5 / Standard");
+        assert_eq!(std.description.as_deref(), Some("272K context window"));
+        let max = &discovery.models[1];
+        assert_eq!(max.label, "GPT-5.5 / Max");
+        assert_eq!(max.description.as_deref(), Some("1M context window"));
+        // Single-variant model keeps its plain display name.
+        assert_eq!(discovery.models[2].label, "GLM-5");
     }
 
     // Real end-to-end discovery against the local `traex` binary. Opt-in via
