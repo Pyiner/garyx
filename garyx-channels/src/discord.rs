@@ -1681,10 +1681,22 @@ impl DiscordChannel {
                 thread_binding_key: thread_binding_key.clone(),
                 reply_to_message_id: Some(reply_to.clone()),
             });
+
+        // Read this run's stream from the durable committed transcript instead
+        // of the live external_callback: subscribe before dispatch and let the
+        // replay adapter drive the Discord sender. `None` is then passed to
+        // dispatch so the bridge does not double-drive the same callback.
+        let dispatch_callback = crate::committed_replay::committed_or_live_callback(
+            &runtime.bridge,
+            &request.run_id,
+            response_callback,
+        )
+        .await;
+
         let dispatch_result = {
             let mut router = runtime.router.lock().await;
             router
-                .route_and_dispatch(request, runtime.bridge.as_ref(), Some(response_callback))
+                .route_and_dispatch(request, runtime.bridge.as_ref(), dispatch_callback)
                 .await
         };
         match dispatch_result {

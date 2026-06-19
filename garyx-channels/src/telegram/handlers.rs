@@ -798,6 +798,17 @@ impl TelegramChannel {
             file_paths,
         };
 
+        // Read this run's stream from the durable committed transcript instead
+        // of the live external_callback: subscribe before dispatch and let the
+        // replay adapter drive the Telegram sender. `None` is then passed to
+        // dispatch so the bridge does not double-drive the same callback.
+        let dispatch_callback = crate::committed_replay::committed_or_live_callback(
+            &context.bridge,
+            &request.run_id,
+            response_callback,
+        )
+        .await;
+
         let dispatch_result = {
             let mut router_guard = context.router.lock().await;
             router_guard
@@ -826,7 +837,7 @@ impl TelegramChannel {
                 })
                 .await;
             router_guard
-                .route_and_dispatch(request, context.bridge.as_ref(), Some(response_callback))
+                .route_and_dispatch(request, context.bridge.as_ref(), dispatch_callback)
                 .await
         };
 

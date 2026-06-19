@@ -137,8 +137,11 @@ fn committed_assistant_text(object: &Map<String, Value>) -> Option<String> {
 /// provider. Returns the thread's records with `seq > after_seq`.
 #[async_trait]
 pub trait CommittedTailReader: Send + Sync {
-    async fn records_after_seq(&self, thread_id: &str, after_seq: u64)
-    -> Vec<ThreadTranscriptRecord>;
+    async fn records_after_seq(
+        &self,
+        thread_id: &str,
+        after_seq: u64,
+    ) -> Vec<ThreadTranscriptRecord>;
 }
 
 #[async_trait]
@@ -218,7 +221,11 @@ impl CommittedReplayState {
                 };
                 let seq = object.get("seq").and_then(Value::as_u64).unwrap_or(0);
                 let payload = message.to_string();
-                if self.forwarded.get(&seq).is_some_and(|prev| prev == &payload) {
+                if self
+                    .forwarded
+                    .get(&seq)
+                    .is_some_and(|prev| prev == &payload)
+                {
                     return BusOutcome::default();
                 }
                 self.forwarded.insert(seq, payload);
@@ -281,7 +288,10 @@ impl CommittedReplayState {
     }
 
     fn note_done(&mut self, events: &[StreamEvent]) {
-        if events.iter().any(|event| matches!(event, StreamEvent::Done)) {
+        if events
+            .iter()
+            .any(|event| matches!(event, StreamEvent::Done))
+        {
             self.done_emitted = true;
         }
     }
@@ -336,11 +346,41 @@ async fn finish_replay(
     consumer: &(dyn Fn(StreamEvent) + Send + Sync),
 ) {
     let tail = match state.thread_id.as_deref() {
-        Some(thread_id) => reader.records_after_seq(thread_id, state.last_emitted_seq).await,
+        Some(thread_id) => {
+            reader
+                .records_after_seq(thread_id, state.last_emitted_seq)
+                .await
+        }
         None => Vec::new(),
     };
     for event in state.reconcile_events(&tail) {
         consumer(event);
+    }
+}
+
+/// Wire a channel `consumer` to the committed stream and decide what callback to
+/// hand `route_and_dispatch`.
+///
+/// When the bridge event bus is available this subscribes BEFORE dispatch and
+/// spawns [`spawn_committed_channel_replay`] to drive `consumer` from the
+/// durable committed stream, returning `None` so the bridge does not *also*
+/// drive `consumer` with the live `external_callback` (no double delivery). When
+/// the bus is not wired it falls back to returning `Some(consumer)` so the
+/// channel still streams via the live callback.
+///
+/// Call this immediately before `route_and_dispatch` so no committed record is
+/// missed between subscribe and the run's first emit.
+pub async fn committed_or_live_callback(
+    bridge: &Arc<MultiProviderBridge>,
+    run_id: &str,
+    consumer: Arc<dyn Fn(StreamEvent) + Send + Sync>,
+) -> Option<Arc<dyn Fn(StreamEvent) + Send + Sync>> {
+    match bridge.subscribe_events().await {
+        Some(rx) => {
+            spawn_committed_channel_replay(rx, bridge.clone(), run_id.to_owned(), consumer);
+            None
+        }
+        None => Some(consumer),
     }
 }
 
@@ -637,7 +677,10 @@ mod tests {
     }
 
     /// Drain a list of bus lines through the pure live reduction.
-    fn drive_live(run_id: &str, lines: &[String]) -> (Vec<StreamEvent>, bool, CommittedReplayState) {
+    fn drive_live(
+        run_id: &str,
+        lines: &[String],
+    ) -> (Vec<StreamEvent>, bool, CommittedReplayState) {
         let mut state = CommittedReplayState::new(run_id.to_owned());
         let mut events = Vec::new();
         let mut terminal = false;
@@ -775,7 +818,11 @@ mod tests {
     fn reconcile_skips_records_from_other_runs() {
         let mut state = CommittedReplayState::new(FIXTURE_RUN.to_owned());
         let tail = vec![
-            transcript_record(5, "run::other", json!({"role": "assistant", "text": "theirs"})),
+            transcript_record(
+                5,
+                "run::other",
+                json!({"role": "assistant", "text": "theirs"}),
+            ),
             transcript_record(6, FIXTURE_RUN, json!({"role": "assistant", "text": "mine"})),
         ];
         assert_eq!(
@@ -808,8 +855,7 @@ mod tests {
             records: vec![transcript_record(8, FIXTURE_RUN, done_control_message())],
         });
 
-        let handle =
-            spawn_committed_channel_replay(rx, reader, FIXTURE_RUN.to_owned(), consumer);
+        let handle = spawn_committed_channel_replay(rx, reader, FIXTURE_RUN.to_owned(), consumer);
 
         // Emit seq 1..7 (drop the seq-8 done control), then the run_complete
         // lifecycle event that terminates and triggers the reconcile.

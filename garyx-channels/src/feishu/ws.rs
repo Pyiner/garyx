@@ -1338,6 +1338,17 @@ pub(super) async fn handle_im_message_event(
         file_paths,
     };
 
+    // Read this run's stream from the durable committed transcript instead of
+    // the live external_callback: subscribe before dispatch and let the replay
+    // adapter drive the Feishu sender. `None` is then passed to dispatch so the
+    // bridge does not double-drive the same callback.
+    let dispatch_callback = crate::committed_replay::committed_or_live_callback(
+        runtime.bridge,
+        &request.run_id,
+        response_callback,
+    )
+    .await;
+
     let dispatch_result = {
         let mut router_guard = runtime.router.lock().await;
         router_guard
@@ -1367,7 +1378,7 @@ pub(super) async fn handle_im_message_event(
             })
             .await;
         router_guard
-            .route_and_dispatch(request, runtime.bridge.as_ref(), Some(response_callback))
+            .route_and_dispatch(request, runtime.bridge.as_ref(), dispatch_callback)
             .await
     };
 
