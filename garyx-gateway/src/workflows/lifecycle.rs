@@ -114,17 +114,25 @@ pub(super) async fn mark_workflow_task_in_review(
     .await
     .map_err(|error| WorkflowError::BadRequest(error.to_string()))?;
     if let Some(transition) = transition {
-        deliver_task_review_handoff(
+        let task_id = canonical_task_id(&transition.task);
+        if let Err(error) = deliver_task_review_handoff(
             state,
             TaskReadyForReviewEvent {
                 thread_id: task_thread_id.to_owned(),
-                task_id: canonical_task_id(&transition.task),
+                task_id: task_id.clone(),
                 run_id: None,
                 handoff: transition.handoff,
             },
         )
         .await
-        .map_err(|error| WorkflowError::BadRequest(format!("{error:?}")))?;
+        {
+            tracing::warn!(
+                error = ?error,
+                task_thread_id = %task_thread_id,
+                task_id = %task_id,
+                "failed to deliver workflow task review handoff"
+            );
+        }
     }
     Ok(())
 }

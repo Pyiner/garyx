@@ -1515,6 +1515,37 @@ async fn sdk_finish_delivers_output_text_as_task_handoff() {
 }
 
 #[tokio::test]
+async fn sdk_finish_with_output_text_without_notification_target_still_succeeds() {
+    let state = workflow_test_state().await;
+    let (task_thread_id, task_id, workflow_id) = start_linked_workflow_task_for_test(&state).await;
+
+    WorkflowRuntime::new(state.clone())
+        .finish_sdk(
+            &workflow_id,
+            WorkflowSdkFinishRequest {
+                status: Some("succeeded".to_owned()),
+                result: Some(json!({"ok": true})),
+                output_text: Some("Workflow output handoff.".to_owned()),
+                error: None,
+            },
+        )
+        .await
+        .expect("finish workflow should not fail when no notification target exists");
+
+    let stored = state
+        .threads
+        .thread_store
+        .get(&task_thread_id)
+        .await
+        .expect("task thread");
+    let task = task_from_record(&stored)
+        .expect("task parse")
+        .expect("task record");
+    assert_eq!(canonical_task_id(&task), task_id);
+    assert_eq!(task.status, TaskStatus::InReview);
+}
+
+#[tokio::test]
 async fn workflow_cancel_moves_linked_task_to_review() {
     let state = workflow_test_state().await;
     let (task_thread_id, task_id, workflow_id) = start_linked_workflow_task_for_test(&state).await;
