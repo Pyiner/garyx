@@ -2,7 +2,7 @@ use garyx_channels::StreamingDispatchTarget;
 use serde_json::json;
 
 use super::buffer::BoundThreadDeliveryBuffer;
-use super::images::extract_markdown_image_refs;
+use super::images::{extract_markdown_image_refs, strip_deliverable_markdown_images};
 use super::plan::{bound_thread_delivery_targets, targets_except_streaming_target};
 
 #[test]
@@ -103,6 +103,24 @@ fn extracts_only_existing_local_markdown_images_with_supported_extensions() {
 }
 
 #[test]
+fn strips_only_deliverable_local_markdown_images_from_text() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let png = temp.path().join("shot.png");
+    std::fs::write(&png, b"png").expect("png");
+    let text = format!(
+        "before ![shot]({}) middle ![remote](https://example.com/a.png) after",
+        png.display(),
+    );
+
+    let stripped = strip_deliverable_markdown_images(&text);
+
+    assert_eq!(
+        stripped,
+        "before  middle ![remote](https://example.com/a.png) after"
+    );
+}
+
+#[test]
 fn skips_missing_relative_and_non_image_markdown_targets() {
     let temp = tempfile::tempdir().expect("temp dir");
     let txt = temp.path().join("notes.txt");
@@ -121,12 +139,15 @@ fn skips_missing_relative_and_non_image_markdown_targets() {
 }
 
 #[test]
-fn streaming_image_scan_collects_without_text_delivery_pending() {
+fn assistant_delta_collects_text_and_image_scan() {
     let buffer = BoundThreadDeliveryBuffer::default();
 
-    buffer.push_image_scan_delta("![shot](/tmp/shot.png)", "test");
+    buffer.push_delta("![shot](/tmp/shot.png)", "test");
 
-    assert!(buffer.take_pending_text("test").is_none());
+    assert_eq!(
+        buffer.take_pending_text("test").as_deref(),
+        Some("![shot](/tmp/shot.png)")
+    );
     assert_eq!(
         buffer.take_image_scan_text("test").as_deref(),
         Some("![shot](/tmp/shot.png)")
@@ -134,12 +155,12 @@ fn streaming_image_scan_collects_without_text_delivery_pending() {
 }
 
 #[test]
-fn streaming_image_scan_preserves_assistant_segment_boundary() {
+fn assistant_delta_scan_preserves_assistant_segment_boundary() {
     let buffer = BoundThreadDeliveryBuffer::default();
 
-    buffer.push_image_scan_delta("first", "test");
-    buffer.push_image_scan_separator("test");
-    buffer.push_image_scan_delta("second", "test");
+    buffer.push_delta("first", "test");
+    buffer.push_separator("test");
+    buffer.push_delta("second", "test");
 
     assert_eq!(
         buffer.take_image_scan_text("test").as_deref(),

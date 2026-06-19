@@ -12,12 +12,12 @@ use super::sender::{
 use crate::server::AppState;
 
 #[cfg(test)]
-pub(crate) const LOOP_BOUND_DELIVERY_FLUSH_DELAY: Duration = Duration::from_millis(20);
+const LOOP_BOUND_DELIVERY_FLUSH_DELAY: Duration = Duration::from_millis(20);
 #[cfg(not(test))]
-pub(crate) const LOOP_BOUND_DELIVERY_FLUSH_DELAY: Duration = Duration::from_secs(10);
+const LOOP_BOUND_DELIVERY_FLUSH_DELAY: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Default)]
-pub(crate) struct BoundThreadDeliveryBuffer {
+pub(super) struct BoundThreadDeliveryBuffer {
     pending: Arc<std::sync::Mutex<String>>,
     image_scan: Arc<std::sync::Mutex<String>>,
     targets: Arc<Vec<BoundThreadDeliveryTarget>>,
@@ -39,7 +39,7 @@ impl BoundThreadDeliveryBuffer {
         (*self.targets).clone()
     }
 
-    pub(crate) fn push_delta(&self, text: &str, warn_context: &str) -> bool {
+    pub(super) fn push_delta(&self, text: &str, warn_context: &str) -> bool {
         if text.is_empty() {
             return false;
         }
@@ -61,20 +61,7 @@ impl BoundThreadDeliveryBuffer {
         }
     }
 
-    pub(crate) fn push_image_scan_delta(&self, text: &str, warn_context: &str) {
-        if text.is_empty() {
-            return;
-        }
-        if let Ok(mut image_scan) = self.image_scan.lock() {
-            image_scan.push_str(text);
-        } else {
-            tracing::warn!(
-                "{warn_context}: image scan lock poisoned while collecting streaming assistant delta"
-            );
-        }
-    }
-
-    pub(crate) fn suppress(&self) {
+    pub(super) fn suppress(&self) {
         let should_suppress = match self.pending.lock() {
             Ok(pending) => pending.trim().is_empty(),
             Err(_) => {
@@ -89,7 +76,7 @@ impl BoundThreadDeliveryBuffer {
         }
     }
 
-    pub(crate) fn push_separator(&self, warn_context: &str) {
+    pub(super) fn push_separator(&self, warn_context: &str) {
         if let Ok(mut pending) = self.pending.lock() {
             if !pending.trim().is_empty() && !pending.ends_with("\n\n") {
                 if pending.ends_with('\n') {
@@ -106,7 +93,7 @@ impl BoundThreadDeliveryBuffer {
         self.push_image_scan_separator(warn_context);
     }
 
-    pub(crate) fn push_image_scan_separator(&self, warn_context: &str) {
+    fn push_image_scan_separator(&self, warn_context: &str) {
         if let Ok(mut image_scan) = self.image_scan.lock() {
             if image_scan.trim().is_empty() || image_scan.ends_with("\n\n") {
                 return;
@@ -157,7 +144,7 @@ impl BoundThreadDeliveryBuffer {
         (!merged.trim().is_empty()).then_some(merged)
     }
 
-    pub(crate) fn flush(
+    pub(super) fn flush(
         &self,
         state: Arc<AppState>,
         thread_id: String,
@@ -183,7 +170,7 @@ impl BoundThreadDeliveryBuffer {
         });
     }
 
-    pub(crate) fn dispatch_content_after_flush(
+    pub(super) fn dispatch_content_after_flush(
         &self,
         state: Arc<AppState>,
         thread_id: String,
@@ -219,7 +206,7 @@ impl BoundThreadDeliveryBuffer {
         });
     }
 
-    pub(crate) fn finish(
+    pub(super) fn finish(
         &self,
         state: Arc<AppState>,
         thread_id: String,
@@ -253,37 +240,6 @@ impl BoundThreadDeliveryBuffer {
                 deliver_markdown_images_to_bound_channels(state, thread_id, run_id, &text, targets)
                     .await;
             }
-            if inflight.fetch_sub(1, Ordering::Relaxed) == 1 {
-                idle_notify.notify_waiters();
-            }
-        });
-    }
-
-    pub(crate) fn finish_markdown_images_after(
-        &self,
-        state: Arc<AppState>,
-        thread_id: String,
-        run_id: String,
-        warn_context: &'static str,
-        delay: Duration,
-    ) {
-        let image_scan_text = self.take_image_scan_text(warn_context);
-        let Some(text) = image_scan_text else {
-            return;
-        };
-
-        let delivery_gate = self.delivery_gate.clone();
-        let inflight = self.inflight.clone();
-        let idle_notify = self.idle_notify.clone();
-        let targets = self.targets_snapshot();
-        inflight.fetch_add(1, Ordering::Relaxed);
-        tokio::spawn(async move {
-            if !delay.is_zero() {
-                tokio::time::sleep(delay).await;
-            }
-            let _guard = delivery_gate.lock().await;
-            deliver_markdown_images_to_bound_channels(state, thread_id, run_id, &text, targets)
-                .await;
             if inflight.fetch_sub(1, Ordering::Relaxed) == 1 {
                 idle_notify.notify_waiters();
             }

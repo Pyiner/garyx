@@ -7,7 +7,7 @@ use garyx_models::{MessageLifecycleStatus, MessageTerminalReason};
 use garyx_router::detach_endpoint_from_thread;
 use serde_json::json;
 
-use super::images::extract_markdown_image_refs;
+use super::images::{extract_markdown_image_refs, strip_deliverable_markdown_images};
 use super::plan::BoundThreadDeliveryTarget;
 use crate::chat_shared::record_api_thread_log;
 use crate::server::AppState;
@@ -84,6 +84,7 @@ pub(super) async fn deliver_assistant_reply_to_bound_channels(
     text: String,
     targets: Vec<BoundThreadDeliveryTarget>,
 ) {
+    let text = strip_deliverable_markdown_images(&text);
     if text.trim().is_empty() {
         return;
     }

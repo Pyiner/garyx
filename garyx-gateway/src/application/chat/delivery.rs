@@ -1,6 +1,5 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::time::Duration;
 
 mod buffer;
 mod images;
@@ -18,11 +17,6 @@ use garyx_models::provider::{ProviderMessage, StreamBoundaryKind, StreamEvent};
 use serde_json::Value;
 
 use crate::server::AppState;
-
-#[cfg(test)]
-const STREAMING_MARKDOWN_IMAGE_FORWARD_DELAY: Duration = Duration::from_millis(1);
-#[cfg(not(test))]
-const STREAMING_MARKDOWN_IMAGE_FORWARD_DELAY: Duration = Duration::from_millis(500);
 
 fn is_message_tool_name(tool_name: &str) -> bool {
     let trimmed = tool_name.trim();
@@ -109,10 +103,6 @@ pub async fn build_bound_response_callback(
             .channel_dispatcher()
             .build_streaming_callback(target.clone(), state.threads.router.clone())
     {
-        let image_scan = BoundThreadDeliveryBuffer::with_targets(targets.clone());
-        let image_scan_state = state.clone();
-        let image_scan_thread_id = thread_id.to_owned();
-        let image_scan_run_id = run_id.to_owned();
         let bound_consumer = build_bound_delivery_consumer(
             state.clone(),
             thread_id.to_owned(),
@@ -120,52 +110,13 @@ pub async fn build_bound_response_callback(
             targets_except_streaming_target(&targets, target),
         );
 
-        let streaming_consumer: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(move |event| {
-            match &event {
-                StreamEvent::Delta { text } => {
-                    image_scan.push_image_scan_delta(text, "streaming markdown image delivery");
-                }
-                StreamEvent::Boundary { kind, .. } => match kind {
-                    StreamBoundaryKind::AssistantSegment => {
-                        image_scan.push_image_scan_separator("streaming markdown image delivery");
-                    }
-                    StreamBoundaryKind::UserAck => {
-                        callback(event.clone());
-                        image_scan.finish_markdown_images_after(
-                            image_scan_state.clone(),
-                            image_scan_thread_id.clone(),
-                            image_scan_run_id.clone(),
-                            "streaming markdown image delivery",
-                            STREAMING_MARKDOWN_IMAGE_FORWARD_DELAY,
-                        );
-                        return;
-                    }
-                },
-                StreamEvent::Done => {
-                    callback(event.clone());
-                    image_scan.finish_markdown_images_after(
-                        image_scan_state.clone(),
-                        image_scan_thread_id.clone(),
-                        image_scan_run_id.clone(),
-                        "streaming markdown image delivery",
-                        STREAMING_MARKDOWN_IMAGE_FORWARD_DELAY,
-                    );
-                    return;
-                }
-                StreamEvent::SessionBound { .. }
-                | StreamEvent::ToolUse { .. }
-                | StreamEvent::ToolResult { .. }
-                | StreamEvent::ThreadTitleUpdated { .. } => {}
-            }
-            callback(event);
-        });
         let consumer = if let Some(bound_consumer) = bound_consumer {
             Arc::new(move |event: StreamEvent| {
-                streaming_consumer(event.clone());
+                callback(event.clone());
                 bound_consumer(event);
             }) as Arc<dyn Fn(StreamEvent) + Send + Sync>
         } else {
-            streaming_consumer
+            callback
         };
         // Read this run's stream from the durable committed transcript. The
         // streaming sender is unchanged; only the source changes.
