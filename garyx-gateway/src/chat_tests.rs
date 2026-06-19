@@ -6,9 +6,10 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use garyx_bridge::MultiProviderBridge;
 use garyx_bridge::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
+use garyx_channels::{ChannelDispatcher, ChannelInfo, OutboundMessage, SendMessageResult};
 use garyx_models::config::{ApiAccount, GaryxConfig};
 use garyx_models::provider::{
-    AgentRunRequest, ProviderRunOptions, ProviderRunResult, ProviderType,
+    AgentRunRequest, ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent,
 };
 use serde_json::{Value, json};
 use std::path::Path;
@@ -24,8 +25,51 @@ struct ReadyProvider;
 struct SlowProvider {
     delay_ms: u64,
 }
+struct BlockingReplyProvider {
+    started: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+    text: String,
+}
 struct WorkspaceRecordingProvider {
     observed_workspace_dir: Arc<Mutex<Option<Option<String>>>>,
+}
+
+#[derive(Default)]
+struct RecordingDispatcher {
+    calls: Mutex<Vec<OutboundMessage>>,
+}
+
+impl RecordingDispatcher {
+    fn calls(&self) -> Vec<OutboundMessage> {
+        self.calls
+            .lock()
+            .expect("recording dispatcher lock poisoned")
+            .clone()
+    }
+}
+
+#[async_trait]
+impl ChannelDispatcher for RecordingDispatcher {
+    async fn send_message(
+        &self,
+        request: OutboundMessage,
+    ) -> Result<SendMessageResult, garyx_channels::ChannelError> {
+        self.calls
+            .lock()
+            .expect("recording dispatcher lock poisoned")
+            .push(request);
+        Ok(SendMessageResult {
+            message_ids: vec!["msg-bound-http".to_owned()],
+        })
+    }
+
+    fn available_channels(&self) -> Vec<ChannelInfo> {
+        vec![ChannelInfo {
+            channel: "telegram".to_owned(),
+            account_id: "bot1".to_owned(),
+            is_running: true,
+        }]
+    }
 }
 
 #[async_trait]
@@ -55,6 +99,57 @@ impl AgentLoopProvider for ReadyProvider {
             run_id: "ready-provider".to_owned(),
             thread_id: options.thread_id.clone(),
             response: String::new(),
+            session_messages: Vec::new(),
+            sdk_session_id: None,
+            actual_model: None,
+            thread_title: None,
+            success: true,
+            error: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            cost: 0.0,
+            duration_ms: 1,
+        })
+    }
+
+    async fn get_or_create_session(&self, thread_id: &str) -> Result<String, BridgeError> {
+        Ok(format!("sdk-{thread_id}"))
+    }
+}
+
+#[async_trait]
+impl AgentLoopProvider for BlockingReplyProvider {
+    fn provider_type(&self) -> ProviderType {
+        ProviderType::ClaudeCode
+    }
+
+    fn is_ready(&self) -> bool {
+        true
+    }
+
+    async fn initialize(&mut self) -> Result<(), BridgeError> {
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> Result<(), BridgeError> {
+        Ok(())
+    }
+
+    async fn run_streaming(
+        &self,
+        options: &ProviderRunOptions,
+        on_chunk: StreamCallback,
+    ) -> Result<ProviderRunResult, BridgeError> {
+        self.started.notify_one();
+        self.release.notified().await;
+        on_chunk(StreamEvent::Delta {
+            text: self.text.clone(),
+        });
+        on_chunk(StreamEvent::Done);
+        Ok(ProviderRunResult {
+            run_id: "blocking-reply-provider".to_owned(),
+            thread_id: options.thread_id.clone(),
+            response: self.text.clone(),
             session_messages: Vec::new(),
             sdk_session_id: None,
             actual_model: None,
@@ -262,6 +357,136 @@ async fn test_chat_start_http_returns_accepted() {
     assert_eq!(json["threadId"], "thread::chat-start-http");
     let run_id = json["runId"].as_str().expect("run id");
     assert!(!run_id.is_empty());
+}
+
+#[tokio::test]
+async fn test_chat_start_http_forwards_bound_reply_using_run_start_binding_snapshot() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let dispatcher = Arc::new(RecordingDispatcher::default());
+    let mut config = GaryxConfig::default();
+    config.channels.api.accounts.insert(
+        "main".to_owned(),
+        ApiAccount {
+            enabled: true,
+            name: None,
+            agent_id: "claude".to_owned(),
+            workspace_dir: None,
+            workspace_mode: None,
+        },
+    );
+
+    let bridge = Arc::new(MultiProviderBridge::new());
+    bridge
+        .register_provider(
+            "blocking-reply-provider",
+            Arc::new(BlockingReplyProvider {
+                started: started.clone(),
+                release: release.clone(),
+                text: "reply for bound channel".to_owned(),
+            }),
+        )
+        .await;
+    bridge
+        .set_route("api", "main", "blocking-reply-provider")
+        .await;
+    bridge
+        .set_default_provider_key("blocking-reply-provider")
+        .await;
+
+    let state = AppStateBuilder::new(config)
+        .with_bridge(bridge.clone())
+        .build();
+    bridge.set_event_tx(state.ops.events.sender()).await;
+    state.replace_channel_dispatcher(dispatcher.clone());
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::bound-http",
+            json!({
+                "thread_id": "thread::bound-http",
+                "channel": "api",
+                "account_id": "main",
+                "from_id": "api-user",
+                "workspace_dir": "/tmp/garyx-bound-http",
+                "messages": [],
+                "channel_bindings": [{
+                    "channel": "telegram",
+                    "account_id": "bot1",
+                    "binding_key": "test-user",
+                    "chat_id": "old-chat",
+                    "delivery_target_type": "chat_id",
+                    "delivery_target_id": "old-chat",
+                    "display_label": "Test User"
+                }]
+            }),
+        )
+        .await;
+
+    let router = test_router(state.clone());
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/chat/start")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "threadId": "thread::bound-http",
+                "message": "hello",
+                "waitForResponse": false
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    started.notified().await;
+
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::bound-http",
+            json!({
+                "thread_id": "thread::bound-http",
+                "channel": "api",
+                "account_id": "main",
+                "from_id": "api-user",
+                "workspace_dir": "/tmp/garyx-bound-http",
+                "messages": [],
+                "channel_bindings": [{
+                    "channel": "telegram",
+                    "account_id": "bot1",
+                    "binding_key": "test-user",
+                    "chat_id": "new-chat",
+                    "delivery_target_type": "chat_id",
+                    "delivery_target_id": "new-chat",
+                    "display_label": "Test User"
+                }]
+            }),
+        )
+        .await;
+    release.notify_one();
+
+    let calls = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let calls = dispatcher.calls();
+            if !calls.is_empty() {
+                break calls;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("bound channel should receive reply");
+
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].channel, "telegram");
+    assert_eq!(calls[0].account_id, "bot1");
+    assert_eq!(calls[0].chat_id, "old-chat");
+    assert_eq!(calls[0].delivery_target_id, "old-chat");
+    assert_eq!(calls[0].content.as_text(), Some("reply for bound channel"));
 }
 
 #[tokio::test]
