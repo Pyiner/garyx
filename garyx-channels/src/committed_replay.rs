@@ -10,7 +10,6 @@
 //! changes. This module is the pure, testable seam between a committed record's
 //! `message` value and that [`StreamEvent`] sequence.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -162,33 +161,41 @@ impl CommittedTailReader for MultiProviderBridge {
     }
 }
 
-/// What a single gateway-bus line yields for the run being replayed.
-#[derive(Debug, Default, PartialEq)]
-struct BusOutcome {
-    events: Vec<StreamEvent>,
-    terminal: bool,
+/// What a single committed/lifecycle bus line means for the run being replayed.
+#[derive(Debug, PartialEq)]
+enum BusSignal {
+    /// Forward these events to the consumer now.
+    Deliver(Vec<StreamEvent>),
+    /// A committed row arrived ahead of the contiguous frontier (a broadcast
+    /// drop). It must not be forwarded out of order; the durable transcript fills
+    /// the hole in order instead. The async loop owns the I/O.
+    GapFill,
+    /// The run ended (`run_complete`/`run_error`): backfill the tail and stop.
+    Terminal,
+    /// Nothing to do for this line.
+    Ignore,
 }
 
 /// Pure per-run reduction of the gateway committed/lifecycle bus into the
 /// `StreamEvent` sequence a channel consumer expects.
 ///
-/// Live phase: each `committed_message{seq}` for this run maps through
-/// [`committed_record_to_stream_events`], deduped so an exact same-seq re-emit
-/// is dropped while a same-seq *overwrite* (changed payload) still flows (the
-/// snapshot-aware merge in `plugin_tools` keeps that idempotent for text).
-///
-/// Terminal phase: a `run_complete`/`run_error` for this run triggers a one-shot
-/// transcript reconcile — any tail records the live broadcast dropped are
-/// replayed, and a synthetic [`StreamEvent::Done`] is emitted if the run ended
-/// without a `done` control (interrupts/errors) so the consumer still flushes
-/// the final whole message.
+/// The cursor is a **contiguous** frontier (highest in-order delivered seq), not
+/// a high-water mark. A committed record is forwarded only when it is the next
+/// contiguous seq; a hole (a broadcast drop) is never forwarded out of order,
+/// because re-feeding a missed middle row after later rows would corrupt the
+/// merged text. Holes are backfilled in order from the durable jsonl — which is
+/// gapless and authoritative — on a broadcast `Lagged` (a drop always raises
+/// one) and once more at terminal, so the final whole message stays complete and
+/// ordered ("不丢、顺序对"). A same-seq overwrite (terminal tail rewrite) still
+/// flows; an exact duplicate is dropped.
 struct CommittedReplayState {
     run_id: String,
     thread_id: Option<String>,
-    /// `seq -> last forwarded message payload`, mirroring the per-thread SSE
-    /// forward-dedup so exact duplicates are dropped but overwrites still flow.
-    forwarded: HashMap<u64, String>,
-    last_emitted_seq: u64,
+    /// Highest contiguously-delivered seq, or `None` before the first record.
+    frontier: Option<u64>,
+    /// Payload last delivered at `frontier`, to tell a same-seq overwrite (flow)
+    /// from an exact duplicate (drop).
+    frontier_payload: Option<String>,
     done_emitted: bool,
 }
 
@@ -197,81 +204,103 @@ impl CommittedReplayState {
         Self {
             run_id,
             thread_id: None,
-            forwarded: HashMap::new(),
-            last_emitted_seq: 0,
+            frontier: None,
+            frontier_payload: None,
             done_emitted: false,
         }
     }
 
-    fn on_bus_message(&mut self, raw: &str) -> BusOutcome {
+    fn on_bus_message(&mut self, raw: &str) -> BusSignal {
         let Ok(value) = serde_json::from_str::<Value>(raw) else {
-            return BusOutcome::default();
+            return BusSignal::Ignore;
         };
         let Some(object) = value.as_object() else {
-            return BusOutcome::default();
+            return BusSignal::Ignore;
         };
         if object.get("run_id").and_then(Value::as_str) != Some(self.run_id.as_str()) {
-            return BusOutcome::default();
+            return BusSignal::Ignore;
         }
         match object.get("type").and_then(Value::as_str) {
             Some("committed_message") => {
                 self.capture_thread_id(object);
                 let Some(message) = object.get("message") else {
-                    return BusOutcome::default();
+                    return BusSignal::Ignore;
                 };
                 let seq = object.get("seq").and_then(Value::as_u64).unwrap_or(0);
-                let payload = message.to_string();
-                if self
-                    .forwarded
-                    .get(&seq)
-                    .is_some_and(|prev| prev == &payload)
-                {
-                    return BusOutcome::default();
-                }
-                self.forwarded.insert(seq, payload);
-                self.last_emitted_seq = self.last_emitted_seq.max(seq);
-                let events = committed_record_to_stream_events(message);
-                self.note_done(&events);
-                BusOutcome {
-                    events,
-                    terminal: false,
+                match self.frontier {
+                    // First record, or the next contiguous one: deliver in order.
+                    None => BusSignal::Deliver(self.deliver_record(seq, message)),
+                    Some(frontier) if seq == frontier + 1 => {
+                        BusSignal::Deliver(self.deliver_record(seq, message))
+                    }
+                    // Same-seq overwrite (terminal tail rewrite / snapshot growth):
+                    // flow it when the payload changed, drop an exact duplicate.
+                    Some(frontier) if seq == frontier => {
+                        let payload = message.to_string();
+                        if self.frontier_payload.as_deref() == Some(payload.as_str()) {
+                            BusSignal::Ignore
+                        } else {
+                            BusSignal::Deliver(self.deliver_record(seq, message))
+                        }
+                    }
+                    // Already delivered: an older duplicate, drop it.
+                    Some(frontier) if seq < frontier => BusSignal::Ignore,
+                    // A hole ahead of the frontier: recover from the durable
+                    // transcript rather than forwarding out of order.
+                    Some(_) => BusSignal::GapFill,
                 }
             }
             Some("run_complete") | Some("run_error") => {
                 self.capture_thread_id(object);
-                BusOutcome {
-                    events: Vec::new(),
-                    terminal: true,
-                }
+                BusSignal::Terminal
             }
-            _ => BusOutcome::default(),
+            _ => BusSignal::Ignore,
         }
     }
 
-    /// Terminal reconcile: replay any durable tail records past what was
-    /// forwarded live, then synthesize `Done` if the run never emitted one.
-    fn reconcile_events(&mut self, tail: &[ThreadTranscriptRecord]) -> Vec<StreamEvent> {
+    /// Deliver durable records past the contiguous frontier, in seq order.
+    ///
+    /// Input is the gapless `records_after_seq` tail, so a hole left by a dropped
+    /// broadcast row is recovered in its correct position. Run-mismatched and
+    /// already-delivered rows are skipped, so it is safe to call repeatedly
+    /// (`Lagged`, then terminal).
+    fn reconcile_from_records(&mut self, records: &[ThreadTranscriptRecord]) -> Vec<StreamEvent> {
         let mut events = Vec::new();
-        for record in tail {
+        for record in records {
             if record.run_id.as_deref() != Some(self.run_id.as_str()) {
                 continue;
             }
-            // `records_after_seq` already returns seq > last_emitted_seq; the
-            // guard keeps the reconcile append-only even if a caller passes a
-            // looser cursor, so a record is never forwarded twice.
-            if record.seq <= self.last_emitted_seq {
+            if self.frontier.is_some_and(|frontier| record.seq <= frontier) {
                 continue;
             }
-            self.last_emitted_seq = record.seq;
-            let mapped = committed_record_to_stream_events(&record.message);
-            self.note_done(&mapped);
-            events.extend(mapped);
-        }
-        if !self.done_emitted {
-            self.done_emitted = true;
-            events.push(StreamEvent::Done);
+            events.extend(self.deliver_record(record.seq, &record.message));
         }
         events
+    }
+
+    /// Map one record, advance the frontier, and remember whether `done` passed.
+    fn deliver_record(&mut self, seq: u64, message: &Value) -> Vec<StreamEvent> {
+        self.frontier = Some(seq);
+        self.frontier_payload = Some(message.to_string());
+        let events = committed_record_to_stream_events(message);
+        self.note_done(&events);
+        events
+    }
+
+    /// A synthetic terminal `Done` for runs that ended without a `done` control
+    /// (interrupts/errors), so the consumer still flushes the final whole message.
+    fn synthetic_done(&mut self) -> Option<StreamEvent> {
+        if self.done_emitted {
+            None
+        } else {
+            self.done_emitted = true;
+            Some(StreamEvent::Done)
+        }
+    }
+
+    /// Cursor for the next durable read: returns records with `seq > read_cursor`.
+    fn read_cursor(&self) -> u64 {
+        self.frontier.unwrap_or(0)
     }
 
     fn capture_thread_id(&mut self, object: &Map<String, Value>) {
@@ -303,9 +332,9 @@ impl CommittedReplayState {
 /// committed record is not missed). Every `committed_message{seq}` for `run_id`
 /// is mapped to the `StreamEvent` sequence the consumer already understands and
 /// handed to `consumer`; the consumer (telegram/discord/feishu/weixin sender or
-/// the subprocess plugin host) is unchanged. On `run_complete`/`run_error` the
-/// adapter runs a one-shot transcript reconcile through `reader` to backfill any
-/// dropped tail and flush the final whole message, then returns.
+/// the subprocess plugin host) is unchanged. Holes from a lagging broadcast and
+/// the run's tail are backfilled in order from the durable transcript via
+/// `reader`; the adapter returns on `run_complete`/`run_error`.
 pub fn spawn_committed_channel_replay(
     rx: broadcast::Receiver<String>,
     reader: Arc<dyn CommittedTailReader>,
@@ -317,22 +346,36 @@ pub fn spawn_committed_channel_replay(
         let mut state = CommittedReplayState::new(run_id);
         loop {
             match rx.recv().await {
-                Ok(raw) => {
-                    let outcome = state.on_bus_message(&raw);
-                    for event in outcome.events {
-                        consumer(event);
+                Ok(raw) => match state.on_bus_message(&raw) {
+                    BusSignal::Deliver(events) => {
+                        for event in events {
+                            consumer(event);
+                        }
                     }
-                    if outcome.terminal {
-                        finish_replay(&mut state, reader.as_ref(), consumer.as_ref()).await;
+                    BusSignal::GapFill => {
+                        backfill(&mut state, reader.as_ref(), consumer.as_ref()).await;
+                    }
+                    BusSignal::Terminal => {
+                        backfill(&mut state, reader.as_ref(), consumer.as_ref()).await;
+                        if let Some(done) = state.synthetic_done() {
+                            consumer(done);
+                        }
                         break;
                     }
+                    BusSignal::Ignore => {}
+                },
+                // A drop always raises `Lagged` before the receiver resumes; pull
+                // the durable transcript to fill any of this run's missed rows in
+                // order, then keep draining live.
+                Err(broadcast::error::RecvError::Lagged(_)) => {
+                    backfill(&mut state, reader.as_ref(), consumer.as_ref()).await;
                 }
-                // A slow consumer dropped events; the terminal reconcile backfills
-                // the tail from the durable transcript, so keep draining.
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
                 // The bus closed (shutdown); reconcile what we can and stop.
                 Err(broadcast::error::RecvError::Closed) => {
-                    finish_replay(&mut state, reader.as_ref(), consumer.as_ref()).await;
+                    backfill(&mut state, reader.as_ref(), consumer.as_ref()).await;
+                    if let Some(done) = state.synthetic_done() {
+                        consumer(done);
+                    }
                     break;
                 }
             }
@@ -340,20 +383,20 @@ pub fn spawn_committed_channel_replay(
     })
 }
 
-async fn finish_replay(
+/// Read the durable transcript from the contiguous frontier and deliver any
+/// run-matching rows past it, in order. A no-op until the thread id is known.
+async fn backfill(
     state: &mut CommittedReplayState,
     reader: &dyn CommittedTailReader,
     consumer: &(dyn Fn(StreamEvent) + Send + Sync),
 ) {
-    let tail = match state.thread_id.as_deref() {
-        Some(thread_id) => {
-            reader
-                .records_after_seq(thread_id, state.last_emitted_seq)
-                .await
-        }
-        None => Vec::new(),
+    let Some(thread_id) = state.thread_id.clone() else {
+        return;
     };
-    for event in state.reconcile_events(&tail) {
+    let records = reader
+        .records_after_seq(&thread_id, state.read_cursor())
+        .await;
+    for event in state.reconcile_from_records(&records) {
         consumer(event);
     }
 }
@@ -657,6 +700,21 @@ mod tests {
         RunControlMessage::new("done").build()
     }
 
+    fn committed_line(seq: u64, message: Value) -> String {
+        json!({
+            "type": "committed_message",
+            "thread_id": FIXTURE_THREAD,
+            "run_id": FIXTURE_RUN,
+            "seq": seq,
+            "message": message,
+        })
+        .to_string()
+    }
+
+    fn assistant(text: &str) -> Value {
+        json!({"role": "assistant", "text": text})
+    }
+
     struct MockTailReader {
         records: Vec<ThreadTranscriptRecord>,
     }
@@ -676,36 +734,42 @@ mod tests {
         }
     }
 
-    /// Drain a list of bus lines through the pure live reduction.
+    /// Drain bus lines through the pure live reduction, collecting forwarded
+    /// events and which signals were seen.
     fn drive_live(
         run_id: &str,
         lines: &[String],
-    ) -> (Vec<StreamEvent>, bool, CommittedReplayState) {
+    ) -> (Vec<StreamEvent>, bool, bool, CommittedReplayState) {
         let mut state = CommittedReplayState::new(run_id.to_owned());
         let mut events = Vec::new();
         let mut terminal = false;
+        let mut gap = false;
         for line in lines {
-            let outcome = state.on_bus_message(line);
-            events.extend(outcome.events);
-            terminal |= outcome.terminal;
+            match state.on_bus_message(line) {
+                BusSignal::Deliver(forwarded) => events.extend(forwarded),
+                BusSignal::Terminal => terminal = true,
+                BusSignal::GapFill => gap = true,
+                BusSignal::Ignore => {}
+            }
         }
-        (events, terminal, state)
+        (events, terminal, gap, state)
     }
 
     #[test]
-    fn live_bus_replay_matches_direct_mapping_and_detects_terminal() {
+    fn contiguous_live_replay_matches_direct_mapping_and_detects_terminal() {
         let raw = include_str!("../../test-fixtures/stream-sync/transcript-with-control.jsonl");
         let mut lines = committed_bus_lines(raw);
         lines.push(run_lifecycle_line("run_complete"));
 
-        let (events, terminal, state) = drive_live(FIXTURE_RUN, &lines);
+        let (events, terminal, gap, state) = drive_live(FIXTURE_RUN, &lines);
 
         assert!(terminal, "run_complete must terminate the replay");
+        assert!(!gap, "a contiguous stream never needs a gap fill");
         assert!(state.done_emitted, "the done control sets done_emitted");
         assert_eq!(
             events,
             replay(&transcript_messages(raw)),
-            "the bus reduction equals the direct per-record mapping"
+            "the contiguous reduction equals the direct per-record mapping"
         );
     }
 
@@ -720,87 +784,135 @@ mod tests {
             "message": {"role": "assistant", "text": "not mine"},
         })
         .to_string();
-        assert_eq!(state.on_bus_message(&other), BusOutcome::default());
-        assert_eq!(state.last_emitted_seq, 0);
+        assert_eq!(state.on_bus_message(&other), BusSignal::Ignore);
+        assert_eq!(state.frontier, None);
     }
 
     #[test]
-    fn exact_duplicate_seq_is_deduped_but_overwrite_flows() {
+    fn same_seq_overwrite_flows_but_exact_duplicate_is_dropped() {
         let mut state = CommittedReplayState::new(FIXTURE_RUN.to_owned());
-        let line = |text: &str| {
-            json!({
-                "type": "committed_message",
-                "thread_id": FIXTURE_THREAD,
-                "run_id": FIXTURE_RUN,
-                "seq": 3,
-                "message": {"role": "assistant", "text": text},
-            })
-            .to_string()
-        };
 
         assert_eq!(
-            state.on_bus_message(&line("Hello")).events,
-            vec![StreamEvent::Delta {
+            state.on_bus_message(&committed_line(3, assistant("Hello"))),
+            BusSignal::Deliver(vec![StreamEvent::Delta {
                 text: "Hello".to_owned()
-            }]
-        );
-        assert!(
-            state.on_bus_message(&line("Hello")).events.is_empty(),
-            "an exact same-seq re-emit is deduped"
+            }])
         );
         assert_eq!(
-            state.on_bus_message(&line("Hello world")).events,
-            vec![StreamEvent::Delta {
+            state.on_bus_message(&committed_line(3, assistant("Hello"))),
+            BusSignal::Ignore,
+            "an exact same-seq re-emit is dropped"
+        );
+        assert_eq!(
+            state.on_bus_message(&committed_line(3, assistant("Hello world"))),
+            BusSignal::Deliver(vec![StreamEvent::Delta {
                 text: "Hello world".to_owned()
-            }],
+            }]),
             "a same-seq overwrite still flows (merge keeps it idempotent)"
         );
     }
 
     #[test]
-    fn terminal_reconcile_backfills_dropped_tail_and_synthesizes_done() {
-        // Live only saw the first segment; the rest of the run was dropped.
+    fn dropped_middle_row_is_recovered_in_order() {
+        // Reviewer regression (#TASK-852): live delivers seq 3, the broadcast
+        // drops seq 4, then live sees seq 5 — a hole. The old high-water cursor
+        // advanced past seq 4 and lost it forever. The contiguous frontier leaves
+        // the hole for the gapless durable transcript to fill in its correct
+        // position.
         let mut state = CommittedReplayState::new(FIXTURE_RUN.to_owned());
-        let _ = state.on_bus_message(
-            &json!({
-                "type": "committed_message",
-                "thread_id": FIXTURE_THREAD,
-                "run_id": FIXTURE_RUN,
-                "seq": 3,
-                "message": {"role": "assistant", "text": "Looking into the fixtures now."},
-            })
-            .to_string(),
-        );
-        assert_eq!(state.last_emitted_seq, 3);
-
-        // The durable tail has a later assistant segment but no done control
-        // (an interrupt/error run).
-        let tail = vec![transcript_record(
-            7,
-            FIXTURE_RUN,
-            json!({"role": "assistant", "text": "All fixture checks passed."}),
-        )];
         assert_eq!(
-            state.reconcile_events(&tail),
+            state.on_bus_message(&committed_line(3, assistant("first "))),
+            BusSignal::Deliver(vec![StreamEvent::Delta {
+                text: "first ".to_owned()
+            }])
+        );
+        assert_eq!(
+            state.on_bus_message(&committed_line(5, assistant("third "))),
+            BusSignal::GapFill,
+            "a row ahead of the frontier is never forwarded out of order"
+        );
+        assert_eq!(
+            state.frontier,
+            Some(3),
+            "the hole did not advance the frontier"
+        );
+
+        // The durable tail past the frontier (seq 3) is gapless: seq 4 then seq 5.
+        let tail = vec![
+            transcript_record(4, FIXTURE_RUN, assistant("second ")),
+            transcript_record(5, FIXTURE_RUN, assistant("third ")),
+        ];
+        assert_eq!(
+            state.reconcile_from_records(&tail),
             vec![
                 StreamEvent::Delta {
-                    text: "All fixture checks passed.".to_owned()
+                    text: "second ".to_owned()
                 },
-                StreamEvent::Done,
+                StreamEvent::Delta {
+                    text: "third ".to_owned()
+                },
             ],
-            "the dropped tail is replayed and Done is synthesized"
+            "the missed middle row is recovered in its correct position"
         );
     }
 
     #[test]
-    fn terminal_reconcile_with_done_in_tail_does_not_double_emit_done() {
+    fn reconcile_skips_already_delivered_and_other_runs() {
+        let mut state = CommittedReplayState::new(FIXTURE_RUN.to_owned());
+        let _ = state.on_bus_message(&committed_line(4, assistant("a")));
+        assert_eq!(state.frontier, Some(4));
+
+        let tail = vec![
+            // Already delivered (<= frontier): skip.
+            transcript_record(4, FIXTURE_RUN, assistant("a")),
+            // Another run on the same thread: skip.
+            transcript_record(5, "run::other", assistant("theirs")),
+            // New row for this run: deliver.
+            transcript_record(6, FIXTURE_RUN, assistant("mine")),
+        ];
+        assert_eq!(
+            state.reconcile_from_records(&tail),
+            vec![StreamEvent::Delta {
+                text: "mine".to_owned()
+            }]
+        );
+    }
+
+    #[test]
+    fn terminal_synthesizes_done_when_run_ends_without_a_done_control() {
+        // Interrupt/error: the tail has more content but no `done` control.
+        let mut state = CommittedReplayState::new(FIXTURE_RUN.to_owned());
+        let _ = state.on_bus_message(&committed_line(3, assistant("partial")));
+
+        let tail = vec![transcript_record(4, FIXTURE_RUN, assistant("final tail"))];
+        let mut events = state.reconcile_from_records(&tail);
+        events.extend(state.synthetic_done());
+
+        assert_eq!(
+            events,
+            vec![
+                StreamEvent::Delta {
+                    text: "final tail".to_owned()
+                },
+                StreamEvent::Done,
+            ],
+            "the dropped tail is recovered and Done is synthesized"
+        );
+        assert!(
+            state.synthetic_done().is_none(),
+            "Done is synthesized at most once"
+        );
+    }
+
+    #[test]
+    fn done_control_in_backfill_suppresses_synthetic_done() {
         let mut state = CommittedReplayState::new(FIXTURE_RUN.to_owned());
         let tail = vec![
-            transcript_record(1, FIXTURE_RUN, json!({"role": "assistant", "text": "hi"})),
+            transcript_record(1, FIXTURE_RUN, assistant("hi")),
             transcript_record(2, FIXTURE_RUN, done_control_message()),
         ];
         assert_eq!(
-            state.reconcile_events(&tail),
+            state.reconcile_from_records(&tail),
             vec![
                 StreamEvent::Delta {
                     text: "hi".to_owned()
@@ -809,39 +921,14 @@ mod tests {
             ]
         );
         assert!(
-            state.reconcile_events(&[]).is_empty(),
-            "Done is not re-emitted once observed"
-        );
-    }
-
-    #[test]
-    fn reconcile_skips_records_from_other_runs() {
-        let mut state = CommittedReplayState::new(FIXTURE_RUN.to_owned());
-        let tail = vec![
-            transcript_record(
-                5,
-                "run::other",
-                json!({"role": "assistant", "text": "theirs"}),
-            ),
-            transcript_record(6, FIXTURE_RUN, json!({"role": "assistant", "text": "mine"})),
-        ];
-        assert_eq!(
-            state.reconcile_events(&tail),
-            vec![
-                StreamEvent::Delta {
-                    text: "mine".to_owned()
-                },
-                StreamEvent::Done,
-            ]
+            state.synthetic_done().is_none(),
+            "a done control observed in the backfill suppresses the synthetic Done"
         );
     }
 
     #[tokio::test]
-    async fn spawn_replays_live_and_recovers_dropped_done_on_terminal() {
+    async fn spawn_recovers_dropped_middle_row_via_gap_fill_in_order() {
         use std::sync::Mutex as StdMutex;
-
-        let raw = include_str!("../../test-fixtures/stream-sync/transcript-with-control.jsonl");
-        let bus_lines = committed_bus_lines(raw);
 
         let (tx, rx) = broadcast::channel(64);
         let collected: Arc<StdMutex<Vec<StreamEvent>>> = Arc::new(StdMutex::new(Vec::new()));
@@ -849,37 +936,86 @@ mod tests {
             let collected = collected.clone();
             Arc::new(move |event| collected.lock().unwrap().push(event))
         };
-        // The durable transcript still has the seq-8 done control the live
-        // broadcast will "drop" below.
+        // The durable transcript holds all three segments in order.
         let reader = Arc::new(MockTailReader {
-            records: vec![transcript_record(8, FIXTURE_RUN, done_control_message())],
+            records: vec![
+                transcript_record(1, FIXTURE_RUN, assistant("first ")),
+                transcript_record(2, FIXTURE_RUN, assistant("second ")),
+                transcript_record(3, FIXTURE_RUN, assistant("third ")),
+            ],
         });
 
         let handle = spawn_committed_channel_replay(rx, reader, FIXTURE_RUN.to_owned(), consumer);
 
-        // Emit seq 1..7 (drop the seq-8 done control), then the run_complete
-        // lifecycle event that terminates and triggers the reconcile.
-        for line in bus_lines.iter().take(7) {
-            tx.send(line.clone()).unwrap();
-        }
+        // Live delivers seq 1, the broadcast drops seq 2, live sees seq 3 (a
+        // hole), then the run completes.
+        tx.send(committed_line(1, assistant("first "))).unwrap();
+        tx.send(committed_line(3, assistant("third "))).unwrap();
         tx.send(run_lifecycle_line("run_complete")).unwrap();
 
         handle.await.unwrap();
 
         let events = collected.lock().unwrap().clone();
+        let deltas: Vec<String> = events
+            .iter()
+            .filter_map(|event| match event {
+                StreamEvent::Delta { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            deltas,
+            vec!["first ", "second ", "third "],
+            "the dropped middle row is recovered in order: {events:?}"
+        );
         assert_eq!(
             events
                 .iter()
                 .filter(|event| matches!(event, StreamEvent::Done))
                 .count(),
             1,
-            "exactly one Done, recovered from the durable tail after the drop"
+            "exactly one Done"
         );
-        assert!(
-            events.contains(&StreamEvent::Delta {
-                text: "All fixture checks passed.".to_owned()
-            }),
-            "the final assistant segment is delivered: {events:?}"
+    }
+
+    #[tokio::test]
+    async fn spawn_recovers_dropped_tail_done_on_terminal() {
+        use std::sync::Mutex as StdMutex;
+
+        let (tx, rx) = broadcast::channel(64);
+        let collected: Arc<StdMutex<Vec<StreamEvent>>> = Arc::new(StdMutex::new(Vec::new()));
+        let consumer: Arc<dyn Fn(StreamEvent) + Send + Sync> = {
+            let collected = collected.clone();
+            Arc::new(move |event| collected.lock().unwrap().push(event))
+        };
+        // Durable transcript: the assistant reply plus a seq-2 done control the
+        // live broadcast will "drop".
+        let reader = Arc::new(MockTailReader {
+            records: vec![
+                transcript_record(1, FIXTURE_RUN, assistant("only reply")),
+                transcript_record(2, FIXTURE_RUN, done_control_message()),
+            ],
+        });
+
+        let handle = spawn_committed_channel_replay(rx, reader, FIXTURE_RUN.to_owned(), consumer);
+
+        // Live sees the reply but the broadcast drops the done control; the
+        // run_complete lifecycle event triggers the terminal backfill.
+        tx.send(committed_line(1, assistant("only reply"))).unwrap();
+        tx.send(run_lifecycle_line("run_complete")).unwrap();
+
+        handle.await.unwrap();
+
+        let events = collected.lock().unwrap().clone();
+        assert_eq!(
+            events,
+            vec![
+                StreamEvent::Delta {
+                    text: "only reply".to_owned()
+                },
+                StreamEvent::Done,
+            ],
+            "the dropped tail done is recovered from the transcript, not double-emitted"
         );
     }
 
