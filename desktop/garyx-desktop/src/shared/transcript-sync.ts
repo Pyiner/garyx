@@ -26,6 +26,8 @@ export interface TranscriptRunState {
   title?: string | null;
   rewriteRanges: TranscriptRewriteRange[];
   lastTranscriptResetSeq?: number | null;
+  pendingToolCallIds: Record<string, number>;
+  pendingAnonymousToolCallCount: number;
 }
 
 export type TranscriptFetchPageAction =
@@ -510,6 +512,8 @@ export function initialTranscriptRunState(): TranscriptRunState {
     title: null,
     rewriteRanges: [],
     lastTranscriptResetSeq: null,
+    pendingToolCallIds: {},
+    pendingAnonymousToolCallCount: 0,
   };
 }
 
@@ -531,6 +535,8 @@ export function applyTranscriptRunStateRecord(
   const next: TranscriptRunState = {
     ...state,
     rewriteRanges: [...state.rewriteRanges],
+    pendingToolCallIds: { ...state.pendingToolCallIds },
+    pendingAnonymousToolCallCount: state.pendingAnonymousToolCallCount,
   };
   const index = transcriptMessageIndex(message);
   const seq = options && "seq" in options
@@ -544,8 +550,8 @@ export function applyTranscriptRunStateRecord(
     return next;
   }
   if (kind === "tool_trace") {
-    if (next.busy) {
-      next.activity = "using_tool";
+    if (next.busy && next.activity !== "reconciling") {
+      applyToolTraceMessage(next, message);
     }
     return next;
   }
@@ -554,7 +560,7 @@ export function applyTranscriptRunStateRecord(
     next.busy &&
     next.activity !== "reconciling"
   ) {
-    next.activity = "thinking";
+    next.activity = activityForPendingTools(next);
   }
   return next;
 }
@@ -574,6 +580,7 @@ function applyControlMessage(
       state.busy = true;
       state.activeRunId = normalizedString(control.run_id) || null;
       state.terminalStatus = null;
+      clearPendingTools(state);
       state.activity = "thinking";
       break;
     case "user_ack":
@@ -585,17 +592,19 @@ function applyControlMessage(
       break;
     case "assistant_boundary":
       if (state.busy && state.activity !== "reconciling") {
-        state.activity = "thinking";
+        state.activity = activityForPendingTools(state);
       }
       break;
     case "done":
       if (state.busy) {
+        clearPendingTools(state);
         state.activity = "reconciling";
       }
       break;
     case "run_complete":
       state.busy = false;
       state.activeRunId = null;
+      clearPendingTools(state);
       state.activity = "idle";
       state.terminalStatus = normalizedString(control.status) || "completed";
       break;
@@ -603,6 +612,7 @@ function applyControlMessage(
     case "interrupt_confirmed":
       state.busy = false;
       state.activeRunId = null;
+      clearPendingTools(state);
       state.activity = "idle";
       state.terminalStatus = "interrupted";
       break;
@@ -625,6 +635,127 @@ function applyControlMessage(
     default:
       break;
   }
+}
+
+function applyToolTraceMessage(
+  state: TranscriptRunState,
+  message: Pick<
+    TranscriptMessage,
+    "role" | "content" | "input" | "result" | "toolUseId" | "toolUseResult"
+  >,
+): void {
+  if (isToolResultTrace(message)) {
+    markToolResult(state, toolCallId(message));
+  } else {
+    markToolUse(state, toolCallId(message));
+  }
+  state.activity = activityForPendingTools(state);
+}
+
+function isToolResultTrace(
+  message: Pick<
+    TranscriptMessage,
+    "role" | "content" | "result" | "toolUseResult"
+  >,
+): boolean {
+  if (message.role === "tool" || message.role === "tool_result") {
+    return true;
+  }
+  if (message.toolUseResult) {
+    return true;
+  }
+  if (message.result !== undefined && message.result !== null) {
+    return true;
+  }
+  return toolTraceTypeIsResult(message.content);
+}
+
+function toolTraceTypeIsResult(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return normalizedKind(value.type) === "tool_result" ||
+    normalizedKind(value.kind) === "tool_result";
+}
+
+function markToolUse(
+  state: TranscriptRunState,
+  toolCallId: string | null,
+): void {
+  if (toolCallId) {
+    state.pendingToolCallIds[toolCallId] =
+      (state.pendingToolCallIds[toolCallId] ?? 0) + 1;
+  } else {
+    state.pendingAnonymousToolCallCount += 1;
+  }
+}
+
+function markToolResult(
+  state: TranscriptRunState,
+  toolCallId: string | null,
+): void {
+  if (toolCallId) {
+    decrementPendingToolId(state, toolCallId);
+    return;
+  }
+  if (state.pendingAnonymousToolCallCount > 0) {
+    state.pendingAnonymousToolCallCount -= 1;
+  } else if (Object.keys(state.pendingToolCallIds).length === 1) {
+    state.pendingToolCallIds = {};
+  }
+}
+
+function decrementPendingToolId(
+  state: TranscriptRunState,
+  toolCallId: string,
+): boolean {
+  const count = state.pendingToolCallIds[toolCallId];
+  if (!count) {
+    return false;
+  }
+  if (count <= 1) {
+    delete state.pendingToolCallIds[toolCallId];
+  } else {
+    state.pendingToolCallIds[toolCallId] = count - 1;
+  }
+  return true;
+}
+
+function toolCallId(
+  message: Pick<TranscriptMessage, "toolUseId" | "content" | "input" | "result">,
+): string | null {
+  return normalizedString(message.toolUseId) ||
+    nestedToolCallId(message.content) ||
+    nestedToolCallId(message.input) ||
+    nestedToolCallId(message.result);
+}
+
+function nestedToolCallId(value: unknown): string | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  return normalizedString(value.tool_use_id) ||
+    normalizedString(value.toolUseId) ||
+    normalizedString(value.tool_call_id) ||
+    normalizedString(value.toolCallId) ||
+    normalizedString(value.id);
+}
+
+function activityForPendingTools(
+  state: Pick<
+    TranscriptRunState,
+    "pendingToolCallIds" | "pendingAnonymousToolCallCount"
+  >,
+): TranscriptRunActivity {
+  return state.pendingAnonymousToolCallCount > 0 ||
+      Object.keys(state.pendingToolCallIds).length > 0
+    ? "using_tool"
+    : "thinking";
+}
+
+function clearPendingTools(state: TranscriptRunState): void {
+  state.pendingToolCallIds = {};
+  state.pendingAnonymousToolCallCount = 0;
 }
 
 export function transcriptRewriteAction(

@@ -164,6 +164,79 @@ final class GaryxTranscriptRunStateConformanceTests: XCTestCase {
         XCTAssertEqual(state.lastUserAckSeq, 4)
     }
 
+    func testMultiToolLullFixtureReplaysFinishedToolGapAsThinking() throws {
+        let records = try readJSONL("multi-tool-lull.jsonl")
+            .filter { $0["type"] as? String == "committed_message" }
+            .map(decodeTranscriptMessage(fromRecord:))
+
+        let firstToolLull = GaryxTranscriptRunStateReducer.reduce(records.filter { ($0.index ?? -1) <= 3 })
+        XCTAssertTrue(firstToolLull.busy)
+        XCTAssertEqual(firstToolLull.activity, .thinking)
+
+        let secondToolRunning = GaryxTranscriptRunStateReducer.reduce(records.filter { ($0.index ?? -1) <= 4 })
+        XCTAssertTrue(secondToolRunning.busy)
+        XCTAssertEqual(secondToolRunning.activity, .usingTool)
+
+        let finalToolLull = GaryxTranscriptRunStateReducer.reduce(records.filter { ($0.index ?? -1) <= 5 })
+        XCTAssertTrue(finalToolLull.busy)
+        XCTAssertEqual(finalToolLull.activity, .thinking)
+    }
+
+    func testParallelToolLullFixtureWaitsForAllResultsBeforeThinking() throws {
+        let records = try readJSONL("parallel-tool-lull.jsonl")
+            .filter { $0["type"] as? String == "committed_message" }
+            .map(decodeTranscriptMessage(fromRecord:))
+
+        let bothToolsRunning = GaryxTranscriptRunStateReducer.reduce(records.filter { ($0.index ?? -1) <= 3 })
+        XCTAssertTrue(bothToolsRunning.busy)
+        XCTAssertEqual(bothToolsRunning.activity, .usingTool)
+
+        let oneToolStillRunning = GaryxTranscriptRunStateReducer.reduce(records.filter { ($0.index ?? -1) <= 4 })
+        XCTAssertTrue(oneToolStillRunning.busy)
+        XCTAssertEqual(oneToolStillRunning.activity, .usingTool)
+
+        let allToolsFinished = GaryxTranscriptRunStateReducer.reduce(records.filter { ($0.index ?? -1) <= 5 })
+        XCTAssertTrue(allToolsFinished.busy)
+        XCTAssertEqual(allToolsFinished.activity, .thinking)
+    }
+
+    func testToolResultDetectionMatchesClientEdgeCases() throws {
+        let runStart = try controlMessage(seq: 1, event: [
+            "type": "run_start",
+            "threadId": "thread::fixture-tool-result-edges",
+            "runId": "run::fixture-tool-result-edges",
+        ])
+        let nullResultToolUse = GaryxTranscriptMessage(
+            index: 1,
+            role: .toolUse,
+            kind: "tool_trace",
+            content: .object([
+                "type": .string("commandExecution"),
+                "id": .string("call_fixture_null_result"),
+            ]),
+            result: .null,
+            toolUseId: "call_fixture_null_result"
+        )
+        let nullResultState = GaryxTranscriptRunStateReducer.reduce([runStart, nullResultToolUse])
+        XCTAssertTrue(nullResultState.busy)
+        XCTAssertEqual(nullResultState.activity, .usingTool)
+
+        let kindResultTrace = GaryxTranscriptMessage(
+            index: 1,
+            role: .toolUse,
+            kind: "tool_trace",
+            content: .object([
+                "type": .string("commandExecution"),
+                "kind": .string("tool_result"),
+                "id": .string("call_fixture_kind_result"),
+            ]),
+            toolUseId: "call_fixture_kind_result"
+        )
+        let kindResultState = GaryxTranscriptRunStateReducer.reduce([runStart, kindResultTrace])
+        XCTAssertTrue(kindResultState.busy)
+        XCTAssertEqual(kindResultState.activity, .thinking)
+    }
+
     func testTranscriptWithControlFixtureReplaysCommittedControlState() throws {
         let records = try readJSONL("transcript-with-control.jsonl")
             .map(decodeTranscriptMessage(fromRecord:))

@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -36,6 +38,10 @@ pub struct TranscriptRunState {
     pub title: Option<String>,
     pub rewrite_ranges: Vec<TranscriptRewriteRange>,
     pub last_transcript_reset_seq: Option<u64>,
+    #[serde(skip)]
+    pending_tool_call_ids: BTreeMap<String, usize>,
+    #[serde(skip)]
+    pending_anonymous_tool_call_count: usize,
 }
 
 pub fn reduce_transcript_run_state<'a>(
@@ -65,13 +71,13 @@ pub fn apply_transcript_record(state: &mut TranscriptRunState, record: &Value) {
     match kind {
         "control" => apply_control_record(state, seq, message.get("control")),
         "tool_trace" => {
-            if state.busy {
-                state.activity = TranscriptRunActivity::UsingTool;
+            if state.busy && state.activity != TranscriptRunActivity::Reconciling {
+                apply_tool_trace_record(state, &role, message);
             }
         }
         "assistant_reply" | "user_input" => {
             if state.busy && state.activity != TranscriptRunActivity::Reconciling {
-                state.activity = TranscriptRunActivity::Thinking;
+                state.activity = activity_for_pending_tools(state);
             }
         }
         _ => {}
@@ -91,6 +97,7 @@ fn apply_control_record(state: &mut TranscriptRunState, seq: Option<u64>, contro
             state.busy = true;
             state.active_run_id = control_string(control.get("run_id"));
             state.terminal_status = None;
+            clear_pending_tools(state);
             state.activity = TranscriptRunActivity::Thinking;
         }
         "user_ack" => {
@@ -100,17 +107,19 @@ fn apply_control_record(state: &mut TranscriptRunState, seq: Option<u64>, contro
         }
         "assistant_boundary" => {
             if state.busy && state.activity != TranscriptRunActivity::Reconciling {
-                state.activity = TranscriptRunActivity::Thinking;
+                state.activity = activity_for_pending_tools(state);
             }
         }
         "done" => {
             if state.busy {
+                clear_pending_tools(state);
                 state.activity = TranscriptRunActivity::Reconciling;
             }
         }
         "run_complete" => {
             state.busy = false;
             state.active_run_id = None;
+            clear_pending_tools(state);
             state.activity = TranscriptRunActivity::Idle;
             state.terminal_status =
                 control_string(control.get("status")).or_else(|| Some("completed".to_owned()));
@@ -118,6 +127,7 @@ fn apply_control_record(state: &mut TranscriptRunState, seq: Option<u64>, contro
         "run_interrupted" | "interrupt_confirmed" => {
             state.busy = false;
             state.active_run_id = None;
+            clear_pending_tools(state);
             state.activity = TranscriptRunActivity::Idle;
             state.terminal_status = Some("interrupted".to_owned());
         }
@@ -156,6 +166,103 @@ fn control_u64(value: Option<&Value>) -> Option<u64> {
                 .and_then(|text| text.trim().parse::<u64>().ok())
         })
     })
+}
+
+fn apply_tool_trace_record(
+    state: &mut TranscriptRunState,
+    role: &str,
+    message: &serde_json::Map<String, Value>,
+) {
+    if is_tool_result_trace(role, message) {
+        mark_tool_result(state, tool_call_id(message));
+    } else {
+        mark_tool_use(state, tool_call_id(message));
+    }
+    state.activity = activity_for_pending_tools(state);
+}
+
+fn is_tool_result_trace(role: &str, message: &serde_json::Map<String, Value>) -> bool {
+    matches!(role, "tool" | "tool_result")
+        || message
+            .get("tool_use_result")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        || message.get("result").is_some_and(|value| !value.is_null())
+        || tool_trace_type_is_result(message.get("content"))
+}
+
+fn tool_trace_type_is_result(value: Option<&Value>) -> bool {
+    let Some(object) = value.and_then(Value::as_object) else {
+        return false;
+    };
+    ["type", "kind"].iter().any(|field| {
+        object
+            .get(*field)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .is_some_and(|value| value.eq_ignore_ascii_case("tool_result"))
+    })
+}
+
+fn mark_tool_use(state: &mut TranscriptRunState, tool_call_id: Option<String>) {
+    if let Some(tool_call_id) = tool_call_id {
+        *state.pending_tool_call_ids.entry(tool_call_id).or_insert(0) += 1;
+    } else {
+        state.pending_anonymous_tool_call_count += 1;
+    }
+}
+
+fn mark_tool_result(state: &mut TranscriptRunState, tool_call_id: Option<String>) {
+    if let Some(tool_call_id) = tool_call_id {
+        let _ = decrement_pending_tool_id(state, &tool_call_id);
+        return;
+    }
+    if state.pending_anonymous_tool_call_count > 0 {
+        state.pending_anonymous_tool_call_count -= 1;
+    } else if state.pending_tool_call_ids.len() == 1 {
+        state.pending_tool_call_ids.clear();
+    }
+}
+
+fn decrement_pending_tool_id(state: &mut TranscriptRunState, tool_call_id: &str) -> bool {
+    let Some(count) = state.pending_tool_call_ids.get_mut(tool_call_id) else {
+        return false;
+    };
+    *count -= 1;
+    if *count == 0 {
+        state.pending_tool_call_ids.remove(tool_call_id);
+    }
+    true
+}
+
+fn tool_call_id(message: &serde_json::Map<String, Value>) -> Option<String> {
+    control_string(message.get("tool_use_id"))
+        .or_else(|| control_string(message.get("toolUseId")))
+        .or_else(|| nested_tool_call_id(message.get("content")))
+        .or_else(|| nested_tool_call_id(message.get("input")))
+        .or_else(|| nested_tool_call_id(message.get("result")))
+}
+
+fn nested_tool_call_id(value: Option<&Value>) -> Option<String> {
+    let object = value.and_then(Value::as_object)?;
+    control_string(object.get("tool_use_id"))
+        .or_else(|| control_string(object.get("toolUseId")))
+        .or_else(|| control_string(object.get("tool_call_id")))
+        .or_else(|| control_string(object.get("toolCallId")))
+        .or_else(|| control_string(object.get("id")))
+}
+
+fn activity_for_pending_tools(state: &TranscriptRunState) -> TranscriptRunActivity {
+    if state.pending_anonymous_tool_call_count > 0 || !state.pending_tool_call_ids.is_empty() {
+        TranscriptRunActivity::UsingTool
+    } else {
+        TranscriptRunActivity::Thinking
+    }
+}
+
+fn clear_pending_tools(state: &mut TranscriptRunState) {
+    state.pending_tool_call_ids.clear();
+    state.pending_anonymous_tool_call_count = 0;
 }
 
 #[cfg(test)]
@@ -292,6 +399,126 @@ mod tests {
             Some("pending-fixture-followup")
         );
         assert!(state.last_user_ack_seq.is_some());
+    }
+
+    #[test]
+    fn multi_tool_lull_fixture_replays_finished_tool_gap_as_thinking() {
+        let records = parse_jsonl(include_str!(
+            "../../test-fixtures/stream-sync/multi-tool-lull.jsonl"
+        ));
+        let committed_records: Vec<Value> = records
+            .into_iter()
+            .filter(|event| {
+                event
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .is_some_and(|event_type| event_type == "committed_message")
+            })
+            .collect();
+
+        let first_tool_lull = reduce_transcript_run_state(
+            committed_records
+                .iter()
+                .filter(|record| record.get("seq").and_then(Value::as_u64).unwrap_or(0) <= 4),
+        );
+        assert!(first_tool_lull.busy);
+        assert_eq!(first_tool_lull.activity, TranscriptRunActivity::Thinking);
+
+        let second_tool_running = reduce_transcript_run_state(
+            committed_records
+                .iter()
+                .filter(|record| record.get("seq").and_then(Value::as_u64).unwrap_or(0) <= 5),
+        );
+        assert!(second_tool_running.busy);
+        assert_eq!(
+            second_tool_running.activity,
+            TranscriptRunActivity::UsingTool
+        );
+
+        let final_tool_lull = reduce_transcript_run_state(
+            committed_records
+                .iter()
+                .filter(|record| record.get("seq").and_then(Value::as_u64).unwrap_or(0) <= 6),
+        );
+        assert!(final_tool_lull.busy);
+        assert_eq!(final_tool_lull.activity, TranscriptRunActivity::Thinking);
+    }
+
+    #[test]
+    fn parallel_tool_lull_fixture_waits_for_all_results_before_thinking() {
+        let records = parse_jsonl(include_str!(
+            "../../test-fixtures/stream-sync/parallel-tool-lull.jsonl"
+        ));
+        let committed_records: Vec<Value> = records
+            .into_iter()
+            .filter(|event| {
+                event
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .is_some_and(|event_type| event_type == "committed_message")
+            })
+            .collect();
+
+        let both_tools_running = reduce_transcript_run_state(
+            committed_records
+                .iter()
+                .filter(|record| record.get("seq").and_then(Value::as_u64).unwrap_or(0) <= 4),
+        );
+        assert!(both_tools_running.busy);
+        assert_eq!(
+            both_tools_running.activity,
+            TranscriptRunActivity::UsingTool
+        );
+
+        let one_tool_still_running = reduce_transcript_run_state(
+            committed_records
+                .iter()
+                .filter(|record| record.get("seq").and_then(Value::as_u64).unwrap_or(0) <= 5),
+        );
+        assert!(one_tool_still_running.busy);
+        assert_eq!(
+            one_tool_still_running.activity,
+            TranscriptRunActivity::UsingTool
+        );
+
+        let all_tools_finished = reduce_transcript_run_state(
+            committed_records
+                .iter()
+                .filter(|record| record.get("seq").and_then(Value::as_u64).unwrap_or(0) <= 6),
+        );
+        assert!(all_tools_finished.busy);
+        assert_eq!(all_tools_finished.activity, TranscriptRunActivity::Thinking);
+    }
+
+    #[test]
+    fn tool_result_detection_matches_client_edge_cases() {
+        let null_result_message = json!({
+            "role": "tool_use",
+            "kind": "tool_trace",
+            "result": null,
+            "content": {
+                "type": "commandExecution",
+                "id": "call_fixture_null_result",
+            },
+        });
+        assert!(!is_tool_result_trace(
+            "tool_use",
+            null_result_message.as_object().unwrap()
+        ));
+
+        let kind_result_message = json!({
+            "role": "tool_use",
+            "kind": "tool_trace",
+            "content": {
+                "type": "commandExecution",
+                "kind": "tool_result",
+                "id": "call_fixture_kind_result",
+            },
+        });
+        assert!(is_tool_result_trace(
+            "tool_use",
+            kind_result_message.as_object().unwrap()
+        ));
     }
 
     #[test]

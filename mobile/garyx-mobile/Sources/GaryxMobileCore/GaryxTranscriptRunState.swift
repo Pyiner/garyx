@@ -38,6 +38,8 @@ public struct GaryxTranscriptRunState: Equatable, Sendable {
     public var title: String?
     public var rewriteRanges: [GaryxTranscriptRewriteRange]
     public var lastTranscriptResetSeq: Int?
+    var pendingToolCallIds: [String: Int]
+    var pendingAnonymousToolCallCount: Int
 
     public init(
         busy: Bool = false,
@@ -59,6 +61,8 @@ public struct GaryxTranscriptRunState: Equatable, Sendable {
         self.title = title
         self.rewriteRanges = rewriteRanges
         self.lastTranscriptResetSeq = lastTranscriptResetSeq
+        self.pendingToolCallIds = [:]
+        self.pendingAnonymousToolCallCount = 0
     }
 }
 
@@ -165,12 +169,12 @@ public enum GaryxTranscriptRunStateReducer {
         case .control:
             applyControl(message.control ?? nestedControl(from: message.content), seq: seq, to: &state)
         case .toolTrace:
-            if state.busy {
-                state.activity = .usingTool
+            if state.busy && state.activity != .reconciling {
+                applyToolTrace(message, to: &state)
             }
         case .assistantReply, .userInput:
             if state.busy && state.activity != .reconciling {
-                state.activity = .thinking
+                state.activity = activityForPendingTools(state)
             }
         case .internalMessage, .system:
             break
@@ -188,26 +192,30 @@ public enum GaryxTranscriptRunStateReducer {
             state.busy = true
             state.activeRunId = control.runStateStringValue(forKeys: ["run_id", "runId"])
             state.terminalStatus = nil
+            clearPendingTools(in: &state)
             state.activity = .thinking
         case "user_ack":
             state.lastUserAckSeq = seq
             state.lastUserAckPendingInputId = control.runStateStringValue(forKeys: ["pending_input_id", "pendingInputId"])
         case "assistant_boundary":
             if state.busy && state.activity != .reconciling {
-                state.activity = .thinking
+                state.activity = activityForPendingTools(state)
             }
         case "done":
             if state.busy {
+                clearPendingTools(in: &state)
                 state.activity = .reconciling
             }
         case "run_complete":
             state.busy = false
             state.activeRunId = nil
+            clearPendingTools(in: &state)
             state.activity = .idle
             state.terminalStatus = control.runStateStringValue(forKeys: ["status"]) ?? "completed"
         case "run_interrupted", "interrupt_confirmed":
             state.busy = false
             state.activeRunId = nil
+            clearPendingTools(in: &state)
             state.activity = .idle
             state.terminalStatus = "interrupted"
         case "thread_title_updated":
@@ -230,6 +238,95 @@ public enum GaryxTranscriptRunStateReducer {
     private static func nestedControl(from value: GaryxJSONValue?) -> GaryxJSONValue? {
         guard case let .object(object)? = value else { return nil }
         return object["control"]
+    }
+
+    private static func applyToolTrace(_ message: GaryxTranscriptMessage, to state: inout GaryxTranscriptRunState) {
+        if isToolResultTrace(message) {
+            markToolResult(toolCallId(message), in: &state)
+        } else {
+            markToolUse(toolCallId(message), in: &state)
+        }
+        state.activity = activityForPendingTools(state)
+    }
+
+    private static func isToolResultTrace(_ message: GaryxTranscriptMessage) -> Bool {
+        if message.role == .tool || message.role == .toolResult {
+            return true
+        }
+        if message.toolUseResult {
+            return true
+        }
+        if let result = message.result, result != .null {
+            return true
+        }
+        return toolTraceTypeIsResult(message.content)
+    }
+
+    private static func toolTraceTypeIsResult(_ value: GaryxJSONValue?) -> Bool {
+        guard case let .object(object)? = value else { return false }
+        return ["type", "kind"].contains { field in
+            object.runStateStringValue(forKeys: [field])?.lowercased() == "tool_result"
+        }
+    }
+
+    private static func markToolUse(_ toolCallId: String?, in state: inout GaryxTranscriptRunState) {
+        guard let toolCallId else {
+            state.pendingAnonymousToolCallCount += 1
+            return
+        }
+        state.pendingToolCallIds[toolCallId, default: 0] += 1
+    }
+
+    private static func markToolResult(_ toolCallId: String?, in state: inout GaryxTranscriptRunState) {
+        if let toolCallId {
+            _ = decrementPendingToolId(toolCallId, in: &state)
+            return
+        }
+        if state.pendingAnonymousToolCallCount > 0 {
+            state.pendingAnonymousToolCallCount -= 1
+        } else if state.pendingToolCallIds.count == 1 {
+            state.pendingToolCallIds.removeAll()
+        }
+    }
+
+    private static func decrementPendingToolId(_ toolCallId: String, in state: inout GaryxTranscriptRunState) -> Bool {
+        guard let count = state.pendingToolCallIds[toolCallId] else { return false }
+        if count <= 1 {
+            state.pendingToolCallIds.removeValue(forKey: toolCallId)
+        } else {
+            state.pendingToolCallIds[toolCallId] = count - 1
+        }
+        return true
+    }
+
+    private static func toolCallId(_ message: GaryxTranscriptMessage) -> String? {
+        trimmedString(message.toolUseId)
+            ?? nestedToolCallId(message.content)
+            ?? nestedToolCallId(message.input)
+            ?? nestedToolCallId(message.result)
+    }
+
+    private static func nestedToolCallId(_ value: GaryxJSONValue?) -> String? {
+        guard case let .object(object)? = value else { return nil }
+        return object.runStateStringValue(forKeys: [
+            "tool_use_id",
+            "toolUseId",
+            "tool_call_id",
+            "toolCallId",
+            "id",
+        ])
+    }
+
+    private static func activityForPendingTools(_ state: GaryxTranscriptRunState) -> GaryxTranscriptRunActivity {
+        if state.pendingAnonymousToolCallCount > 0 || !state.pendingToolCallIds.isEmpty {
+            return .usingTool
+        }
+        return .thinking
+    }
+
+    private static func clearPendingTools(in state: inout GaryxTranscriptRunState) {
+        state.pendingToolCallIds.removeAll()
+        state.pendingAnonymousToolCallCount = 0
     }
 }
 

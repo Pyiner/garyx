@@ -196,6 +196,7 @@ function committedPayloadToTranscriptMessage(payload) {
       metadata?.itemType ??
       null,
     isError: rawMessage.is_error ?? rawMessage.isError,
+    toolUseResult: rawMessage.tool_use_result ?? rawMessage.toolUseResult ?? null,
     metadata,
     kind: isControlRecord ? "control" : kind,
     internal: isControlRecord || Boolean(rawMessage.internal),
@@ -327,12 +328,48 @@ test("incremental run-state apply matches full reducer on committed messages", (
     "thinking",
     "thinking",
     "using_tool",
-    "using_tool",
+    "thinking",
     "reconciling",
     "reconciling",
     "idle",
   ]);
   assert.deepEqual(incremental, reduceTranscriptRunState(messages));
+});
+
+test("multi-tool lull fixture replays finished tool gaps as thinking", () => {
+  const messages = readJsonl("multi-tool-lull.jsonl")
+    .filter((record) => record.type === "committed_message")
+    .map(committedPayloadToTranscriptMessage);
+
+  const firstToolLull = reduceTranscriptRunState(messages.slice(0, 4));
+  assert.equal(firstToolLull.busy, true);
+  assert.equal(firstToolLull.activity, "thinking");
+
+  const secondToolRunning = reduceTranscriptRunState(messages.slice(0, 5));
+  assert.equal(secondToolRunning.busy, true);
+  assert.equal(secondToolRunning.activity, "using_tool");
+
+  const finalToolLull = reduceTranscriptRunState(messages.slice(0, 6));
+  assert.equal(finalToolLull.busy, true);
+  assert.equal(finalToolLull.activity, "thinking");
+});
+
+test("parallel tool lull fixture waits for all results before thinking", () => {
+  const messages = readJsonl("parallel-tool-lull.jsonl")
+    .filter((record) => record.type === "committed_message")
+    .map(committedPayloadToTranscriptMessage);
+
+  const bothToolsRunning = reduceTranscriptRunState(messages.slice(0, 4));
+  assert.equal(bothToolsRunning.busy, true);
+  assert.equal(bothToolsRunning.activity, "using_tool");
+
+  const oneToolStillRunning = reduceTranscriptRunState(messages.slice(0, 5));
+  assert.equal(oneToolStillRunning.busy, true);
+  assert.equal(oneToolStillRunning.activity, "using_tool");
+
+  const allToolsFinished = reduceTranscriptRunState(messages.slice(0, 6));
+  assert.equal(allToolsFinished.busy, true);
+  assert.equal(allToolsFinished.activity, "thinking");
 });
 
 test("transcript kind resolver matches control and tool fixture semantics", () => {
