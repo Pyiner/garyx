@@ -1122,6 +1122,7 @@ export type TranscriptRole =
   | "assistant"
   | "system"
   | "user"
+  | "tool"
   | "tool_use"
   | "tool_result";
 
@@ -1130,6 +1131,8 @@ export interface TranscriptMessage {
   role: TranscriptRole;
   text: string;
   content?: unknown;
+  input?: unknown;
+  result?: unknown;
   toolUseId?: string | null;
   toolName?: string | null;
   toolRelated?: boolean | null;

@@ -484,6 +484,8 @@ public struct GaryxTranscriptMessage: Codable, Identifiable, Equatable, Sendable
     public var content: GaryxJSONValue?
     public var message: GaryxJSONValue?
     public var control: GaryxJSONValue?
+    public var input: GaryxJSONValue?
+    public var result: GaryxJSONValue?
     public var timestamp: String?
     public var toolRelated: Bool
     public var toolName: String?
@@ -507,6 +509,8 @@ public struct GaryxTranscriptMessage: Codable, Identifiable, Equatable, Sendable
         case content
         case message
         case control
+        case input
+        case result
         case timestamp
         case toolRelated = "tool_related"
         case toolRelatedCamel = "toolRelated"
@@ -549,6 +553,8 @@ public struct GaryxTranscriptMessage: Codable, Identifiable, Equatable, Sendable
         content = try container.decodeIfPresent(GaryxJSONValue.self, forKey: .content)
         message = try container.decodeIfPresent(GaryxJSONValue.self, forKey: .message)
         control = try container.decodeIfPresent(GaryxJSONValue.self, forKey: .control)
+        input = try container.decodeIfPresent(GaryxJSONValue.self, forKey: .input)
+        result = try container.decodeIfPresent(GaryxJSONValue.self, forKey: .result)
         timestamp = try container.decodeIfPresent(String.self, forKey: .timestamp)
         toolRelated = try container.decodeIfPresent(Bool.self, forKey: .toolRelated)
             ?? container.decodeIfPresent(Bool.self, forKey: .toolRelatedCamel)
@@ -583,6 +589,8 @@ public struct GaryxTranscriptMessage: Codable, Identifiable, Equatable, Sendable
         try container.encodeIfPresent(content, forKey: .content)
         try container.encodeIfPresent(message, forKey: .message)
         try container.encodeIfPresent(control, forKey: .control)
+        try container.encodeIfPresent(input, forKey: .input)
+        try container.encodeIfPresent(result, forKey: .result)
         try container.encodeIfPresent(timestamp, forKey: .timestamp)
         try container.encode(toolRelated, forKey: .toolRelated)
         try container.encodeIfPresent(toolName, forKey: .toolName)
@@ -606,6 +614,8 @@ public struct GaryxTranscriptMessage: Codable, Identifiable, Equatable, Sendable
         content: GaryxJSONValue? = nil,
         message: GaryxJSONValue? = nil,
         control: GaryxJSONValue? = nil,
+        input: GaryxJSONValue? = nil,
+        result: GaryxJSONValue? = nil,
         timestamp: String? = nil,
         toolRelated: Bool = false,
         toolName: String? = nil,
@@ -624,6 +634,8 @@ public struct GaryxTranscriptMessage: Codable, Identifiable, Equatable, Sendable
         self.content = content
         self.message = message
         self.control = control
+        self.input = input
+        self.result = result
         self.timestamp = timestamp
         self.toolRelated = toolRelated
         self.toolName = toolName

@@ -32,6 +32,8 @@ final class GaryxTranscriptCacheTests: XCTestCase {
             kind: "tool_use",
             text: "echo hi",
             content: .object(["command": .string("echo hi")]),
+            input: .object(["tool_calls": .array([.object(["id": .string("call-cache")])])]),
+            result: .object(["tool_use_id": .string("call-cache")]),
             timestamp: "2026-06-14T00:00:00Z",
             toolRelated: true,
             likelyUserVisible: false
@@ -42,6 +44,8 @@ final class GaryxTranscriptCacheTests: XCTestCase {
         XCTAssertEqual(decoded.id, "history:7", "id re-derived from index on decode")
         XCTAssertEqual(decoded.role, .toolUse)
         XCTAssertEqual(decoded.content, .object(["command": .string("echo hi")]))
+        XCTAssertEqual(decoded.input, .object(["tool_calls": .array([.object(["id": .string("call-cache")])])]))
+        XCTAssertEqual(decoded.result, .object(["tool_use_id": .string("call-cache")]))
     }
 
     func testCachedTranscriptCodableRoundTrip() throws {

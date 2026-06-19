@@ -115,10 +115,17 @@ function containsToolHint(value: unknown): boolean {
 function isToolRelatedTranscriptMessage(
   message: Pick<
     TranscriptMessage,
-    "role" | "content" | "toolName" | "toolRelated" | "metadata"
+    | "role"
+    | "content"
+    | "input"
+    | "result"
+    | "toolName"
+    | "toolRelated"
+    | "metadata"
   >,
 ): boolean {
   if (
+    message.role === "tool" ||
     message.role === "tool_use" ||
     message.role === "tool_result"
   ) {
@@ -130,7 +137,10 @@ function isToolRelatedTranscriptMessage(
   if (normalizedString(message.toolName)) {
     return true;
   }
-  return containsToolHint(message.content) || containsToolHint(message.metadata);
+  return containsToolHint(message.content) ||
+    containsToolHint(message.metadata) ||
+    containsToolHint(message.input) ||
+    containsToolHint(message.result);
 }
 
 function controlObject(message: Pick<TranscriptMessage, "content">): Record<
@@ -459,6 +469,8 @@ export function deriveTranscriptKind(
     | "kind"
     | "role"
     | "content"
+    | "input"
+    | "result"
     | "toolName"
     | "toolRelated"
     | "metadata"
@@ -469,6 +481,7 @@ export function deriveTranscriptKind(
   }
   const toolRelated = isToolRelatedTranscriptMessage(message);
   if (
+    message.role === "tool" ||
     message.role === "tool_use" ||
     message.role === "tool_result" ||
     toolRelated
@@ -481,7 +494,10 @@ export function deriveTranscriptKind(
   if (message.role === "user") {
     return "user_input";
   }
-  return message.role || "unknown";
+  if (message.role === "system") {
+    return "system";
+  }
+  return "internal";
 }
 
 function numericControlValue(value: unknown): number | null {

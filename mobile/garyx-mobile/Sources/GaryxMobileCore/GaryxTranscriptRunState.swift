@@ -105,6 +105,8 @@ public enum GaryxTranscriptKindResolver {
 
         return containsToolHint(message.content)
             || containsToolHint(message.metadata)
+            || containsToolHint(message.input)
+            || containsToolHint(message.result)
     }
 
     private static func isControlText(_ value: String?) -> Bool {

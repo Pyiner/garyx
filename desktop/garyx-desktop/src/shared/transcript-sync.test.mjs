@@ -298,6 +298,40 @@ test("transcript kind resolver matches control and tool fixture semantics", () =
     "tool_trace",
   );
   assert.equal(
+    deriveTranscriptKind({
+      id: "thread::kind:2",
+      role: "assistant",
+      text: "",
+      input: { tool_calls: [{ id: "call-2" }] },
+    }),
+    "tool_trace",
+  );
+  assert.equal(
+    deriveTranscriptKind({
+      id: "thread::kind:3",
+      role: "assistant",
+      text: "",
+      result: { tool_use_id: "call-3" },
+    }),
+    "tool_trace",
+  );
+  assert.equal(
+    deriveTranscriptKind({
+      id: "thread::kind:4",
+      role: "tool",
+      text: "",
+    }),
+    "tool_trace",
+  );
+  assert.equal(
+    deriveTranscriptKind({
+      id: "thread::kind:5",
+      role: "developer",
+      text: "internal provider note",
+    }),
+    "internal",
+  );
+  assert.equal(
     deriveTranscriptKind(controlMessage(0, {
       type: "run_start",
       threadId: "thread::kind",

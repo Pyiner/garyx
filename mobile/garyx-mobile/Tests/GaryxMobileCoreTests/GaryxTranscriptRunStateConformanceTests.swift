@@ -118,6 +118,25 @@ final class GaryxTranscriptRunStateConformanceTests: XCTestCase {
         )
         XCTAssertEqual(GaryxTranscriptKindResolver.kind(for: structuredTool), .toolTrace)
 
+        let structuredToolInput = GaryxTranscriptMessage(
+            index: 2,
+            role: .assistant,
+            input: .object(["tool_calls": .array([.object(["id": .string("call-2")])])])
+        )
+        XCTAssertEqual(GaryxTranscriptKindResolver.kind(for: structuredToolInput), .toolTrace)
+
+        let structuredToolResult = GaryxTranscriptMessage(
+            index: 3,
+            role: .assistant,
+            result: .object(["tool_use_id": .string("call-3")])
+        )
+        XCTAssertEqual(GaryxTranscriptKindResolver.kind(for: structuredToolResult), .toolTrace)
+
+        let internalRole = try decoder.decode(GaryxTranscriptMessage.self, from: Data("""
+        {"index":4,"role":"developer","text":"internal note"}
+        """.utf8))
+        XCTAssertEqual(GaryxTranscriptKindResolver.kind(for: internalRole), .internalMessage)
+
         let control = try controlMessage(seq: 1, event: [
             "type": "run_start",
             "threadId": "thread::kind",
