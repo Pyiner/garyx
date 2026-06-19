@@ -5,9 +5,8 @@ import Foundation
 // events) is the catch-up, the live tail follows on the same channel, and a
 // reconnect resumes from the cursor (transfers only seq > cursor). committed_message
 // rows are durable (the gateway emits them after the jsonl flush), so they advance
-// the cursor; transient deltas/tool events are rendered via the existing handler.
-// While this stream owns a thread, the global stream skips that thread's transcript
-// events (see handleGlobalStreamEvent).
+// the cursor. Non-committed passthrough frames are ignored; content and run-state
+// both come from committed transcript rows.
 //
 // Self-heal: the broadcast bus is best-effort, so a slow consumer can miss events
 // (tokio broadcast Lagged). committed_message carries a gapless seq; if a live row
@@ -50,9 +49,8 @@ extension GaryxMobileModel {
         stopSelectedThreadStream()
         // The resumable stream supersedes the 1.5s reconcile poll for this thread.
         cancelSelectedThreadReconcileLoop()
-        // Take ownership immediately so the global stream stops applying this
-        // thread's transcript events; the stream's replay backfills anything that
-        // raced the handoff.
+        // Take ownership immediately; the stream's replay backfills anything that
+        // raced the selected-thread handoff.
         streamOwnedThreadId = trimmed
         let generation = UUID()
         selectedThreadStreamGeneration = generation
@@ -71,8 +69,8 @@ extension GaryxMobileModel {
         selectedThreadStreamFlushTask = nil
     }
 
-    /// Fall back to the S3 path (global stream + after_index + reconcile poll) when
-    /// the per-thread stream cannot be sustained, so we never lose live updates.
+    /// Fall back to the after_index + reconcile poll path when the per-thread stream
+    /// cannot be sustained, so we still converge from committed transcript history.
     private func fallBackFromSelectedThreadStream(threadId: String) async {
         guard selectedThread?.id == threadId else { return }
         streamOwnedThreadId = nil
@@ -195,11 +193,6 @@ extension GaryxMobileModel {
             }
         }
         if type == "ping" { return false }
-        // Transient live events (deltas / tool / done / title) reuse the existing
-        // per-event handler, bypassing the global-stream ownership gate.
-        if let event = try? client().decodeStreamEvent(trimmed) {
-            await handleGlobalStreamEvent(event, replay: false, bypassStreamOwnership: true)
-        }
         return false
     }
 
@@ -222,6 +215,7 @@ extension GaryxMobileModel {
     /// few times instead of N.
     func applyStreamedCommittedMessage(_ message: GaryxTranscriptMessage, threadId: String) {
         guard selectedThread?.id == threadId else { return }
+        applyCommittedTranscriptMessage(message, threadId: threadId)
         let base = transcriptSnapshot(for: threadId)
         let window = GaryxTranscriptCacheLogic.merged(
             into: base,
@@ -259,7 +253,7 @@ extension GaryxMobileModel {
         selectedThreadStreamFlushTask = nil
         guard selectedThread?.id == threadId,
               let window = cachedTranscriptSnapshots[threadId] else { return }
-        let threadRunActive = remoteBusyThreadIds.contains(threadId)
+        let threadRunActive = isThreadBusy(threadId)
         if !threadRunActive {
             transcriptCacheStore.save(window)
         }

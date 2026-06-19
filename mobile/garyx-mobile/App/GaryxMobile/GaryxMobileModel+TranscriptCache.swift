@@ -56,8 +56,8 @@ extension GaryxMobileModel {
             direction: direction,
             savedAt: Date()
         )
-        let idle = !remoteBusyThreadIds.contains(threadId)
-            && fetched.threadRuntime?.activeRun == nil
+        let fetchedRunState = GaryxTranscriptRunStateReducer.reduce(fetched.messages)
+        let idle = !fetchedRunState.busy
         if committedOnly || idle {
             cachedTranscriptSnapshots[threadId] = window
             transcriptCacheStore.save(window)

@@ -6,7 +6,7 @@ final class GaryxMobilePresentationModelsTests: XCTestCase {
         let thread = makeThread(
             title: "",
             workspacePath: "/workspace/project-alpha",
-            activeRunId: "run-1"
+            runState: "running"
         )
 
         let presentation = GaryxSidebarThreadRowPresentation(

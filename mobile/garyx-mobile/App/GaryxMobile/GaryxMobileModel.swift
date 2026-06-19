@@ -107,14 +107,22 @@ final class GaryxMobileModel: ObservableObject {
     @Published var isLoadingOlderThreadHistory = false
     @Published var selectedThreadHasMoreHistoryBefore = false
     /// Conversation run/send lifecycle state. Owns what used to be the
-    /// scattered `isSending` / `activeRunThreadId` / `remoteBusyThreadIds` /
+    /// scattered `isSending` / `activeRunThreadId` /
     /// `pendingChatStartThreadIds` / `terminatedActiveRunIdsByThread` flags;
     /// see docs/agents/conversation-state.md.
     @Published var runTracker = GaryxConversationRunTracker()
+    /// Server run-state rebuilt from committed transcript control records.
+    @Published var runStateByThread: [String: GaryxTranscriptRunState] = [:]
     /// Legacy-shaped read bridges over `runTracker`.
     var isSending: Bool { runTracker.hasLocalActiveRun }
     var activeRunThreadId: String? { runTracker.localActiveRunThreadId }
-    var remoteBusyThreadIds: Set<String> { runTracker.busyThreadIds }
+    var remoteBusyThreadIds: Set<String> {
+        runTracker.busyThreadIds.union(
+            Set(runStateByThread.compactMap { threadId, state in
+                state.busy ? threadId : nil
+            })
+        )
+    }
     @Published var navigationState = GaryxMobileNavigationState()
     @Published var pendingMobileRoute: GaryxMobileRoute?
     @Published var storedLastError: String?
@@ -202,15 +210,11 @@ final class GaryxMobileModel: ObservableObject {
     @Published var draftMcpHeaders = ""
     let defaults: UserDefaults
     let keychain: GaryxMobileKeychain
-    var globalEventStreamTask: Task<Void, Never>?
-    var globalEventStreamGeneration: UUID?
-    var globalEventStreamActive = false
+    var backgroundCommittedRunReconcileTask: Task<Void, Never>?
     var selectedThreadReconcileTask: Task<Void, Never>?
     var selectedThreadReconcileThreadId: String?
     var selectedThreadActivitySignatures: [String: String] = [:]
-    /// S5 resumable per-thread transcript stream for the open thread. While
-    /// `streamOwnedThreadId` is set, the global event stream skips that thread's
-    /// transcript events (the per-thread stream owns them) to avoid double-apply.
+    /// S5 resumable per-thread transcript stream for the open thread.
     var selectedThreadStreamTask: Task<Void, Never>?
     var selectedThreadStreamGeneration: UUID?
     var streamOwnedThreadId: String?

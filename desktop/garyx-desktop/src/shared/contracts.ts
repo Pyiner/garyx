@@ -1132,6 +1132,7 @@ export interface TranscriptMessage {
   content?: unknown;
   toolUseId?: string | null;
   toolName?: string | null;
+  toolRelated?: boolean | null;
   isError?: boolean;
   metadata?: Record<string, unknown> | null;
   timestamp?: string | null;

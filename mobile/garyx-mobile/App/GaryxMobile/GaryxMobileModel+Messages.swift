@@ -48,8 +48,7 @@ extension GaryxMobileModel {
     }
 
     func reconcileActiveAssistantMessageId(threadId: String, messages: inout [GaryxMobileMessage]) {
-        let isBusy = runTracker.isThreadBusy(threadId)
-        guard isBusy else {
+        guard isThreadBusy(threadId) else {
             activeAssistantMessageIdsByThread[threadId] = nil
             return
         }

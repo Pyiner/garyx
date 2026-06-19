@@ -41,35 +41,19 @@ public enum GaryxGatewayStreamStatusClassifier {
 
 // MARK: - Run tracker
 
-/// Outcome of reconciling an authoritative transcript snapshot against the
-/// tracked thread runtime.
-public enum GaryxTranscriptRuntimeReconciliation: Equatable, Sendable {
-    /// The transcript reports an active run; the thread stays busy.
-    case active
-    /// The transcript reports no active run. `clearedLocalRun` is true when a
-    /// locally tracked run was released (its streaming UI state should be
-    /// cleaned up); false when there was nothing local to release or a chat
-    /// start is still in flight (where "no active run yet" is expected).
-    case inactive(clearedLocalRun: Bool)
-}
-
 /// Conversation run tracking for the iOS app: a thin operations layer over
-/// `GaryxConversationMachineState` that owns every run/send lifecycle
-/// transition the app model performs. It replaces the legacy scattered flags
-/// (`isSending`, `activeRunThreadId`, `remoteBusyThreadIds`,
-/// `pendingChatStartThreadIds`, `terminatedActiveRunIdsByThread`) with the
-/// cross-platform conversation state contract
-/// (docs/agents/conversation-state.md).
+/// `GaryxConversationMachineState` that owns local send, queued-input, and
+/// interrupt intent transitions. Server run-state is deliberately not derived
+/// here: it is rebuilt from committed transcript control records by
+/// `GaryxTranscriptRunStateReducer`.
 ///
 /// Mapping onto the contract:
 /// - a chat-start in flight is the thread runtime in `dispatching_sync`
-/// - remote busy is the thread runtime in `running_remote`
+/// - an accepted local dispatch is the thread runtime in `running_remote` with
+///   an `activeIntentId`
 /// - queued steer inputs are intents in `awaiting_provider_ack`
-/// - terminal stream events the client observed win over racing stale
-///   `active_run` snapshots via `lastTerminatedRunIdsByThread`
 public struct GaryxConversationRunTracker: Equatable, Sendable {
     public private(set) var machine = GaryxConversationMachineState()
-    public private(set) var lastTerminatedRunIdsByThread: [String: String] = [:]
     public private(set) var pendingAckIntentIdsByThread: [String: [String]] = [:]
 
     public init() {}
@@ -117,13 +101,16 @@ public struct GaryxConversationRunTracker: Equatable, Sendable {
         machine.threadRuntimeByThread[threadId]?.state == .dispatchingSync
     }
 
-    /// Whether a thread-list summary's `activeRunId` should count as an
-    /// active run: terminal events the client already observed win over a
-    /// stale summary projection.
-    public func isSummaryRunConsideredActive(threadId: String, activeRunId: String?) -> Bool {
-        let normalized = activeRunId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !normalized.isEmpty else { return false }
-        return lastTerminatedRunIdsByThread[threadId] != normalized
+    public var locallyTrackedThreadIds: Set<String> {
+        Set(machine.intentsById.values.compactMap { intent in
+            switch intent.state {
+            case .completed, .failed, .interrupted, .cancelled:
+                return nil
+            case .queuedLocal, .dispatchRequested, .dispatching, .remoteAccepted,
+                 .awaitingProviderAck, .awaitingResponse, .awaitingHistory:
+                return intent.threadId
+            }
+        })
     }
 
     // MARK: Send lifecycle
@@ -327,161 +314,27 @@ public struct GaryxConversationRunTracker: Equatable, Sendable {
         ))
     }
 
-    // MARK: Stream events
+    // MARK: Committed control outcomes
 
-    /// Applies a gateway stream event. This is the single busy-state
-    /// derivation for live and replayed events (the legacy replay path
-    /// dropped busy state on transient errors; this one classifies errors
-    /// uniformly).
-    public mutating func apply(streamEvent event: GaryxChatStreamEvent) {
-        let threadId = Self.threadId(from: event)
-        guard !threadId.isEmpty else { return }
-
-        switch event {
-        case .accepted, .runStart, .userMessage, .assistantDelta, .assistantBoundary, .toolUse, .toolResult:
-            markRemoteActivity(threadId: threadId, runId: Self.runId(from: event))
-
-        case .userAck(_, _, let pendingInputId):
-            markRemoteActivity(threadId: threadId, runId: Self.runId(from: event))
-            acknowledgePendingInput(
-                threadId: threadId,
-                pendingInputId: pendingInputId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            )
-
-        case .streamInput(let status, _, _, _):
-            if GaryxGatewayStreamStatusClassifier.isSuccessfulStreamInput(status) {
-                markRemoteActivity(threadId: threadId, runId: "")
-            } else if let runtime = machine.threadRuntimeByThread[threadId],
-                      runtime.state == .runningRemote,
-                      runtime.activeIntentId == nil {
-                // A remotely observed run whose queued input was rejected: the
-                // gateway is the only busy signal and it just said no.
-                machine.apply(.threadRuntime(
-                    threadId: threadId,
-                    state: .idle,
-                    activeIntentId: nil,
-                    remoteRunId: nil,
-                    error: nil
-                ))
-            }
-
-        case .done, .runComplete:
-            recordTerminatedRun(threadId: threadId, runId: Self.runId(from: event))
-            closeThreadRun(threadId: threadId, intentOutcome: .completed)
-
-        case .runError(_, _, let message):
-            recordTerminatedRun(threadId: threadId, runId: Self.runId(from: event))
-            closeThreadRun(threadId: threadId, intentOutcome: .failed(message))
-
-        case .interrupt(_, _, let abortedRuns):
-            if let aborted = abortedRuns
-                .map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) })
-                .last(where: { !$0.isEmpty }) {
-                lastTerminatedRunIdsByThread[threadId] = aborted
-            }
-            closeThreadRun(threadId: threadId, intentOutcome: .interrupted)
-
-        case .error(_, _, let message):
-            if GaryxGatewayStreamStatusClassifier.isTransientGatewayErrorMessage(message) {
-                markRemoteActivity(threadId: threadId, runId: Self.runId(from: event))
-            } else {
-                recordTerminatedRun(threadId: threadId, runId: Self.runId(from: event))
-                closeThreadRun(threadId: threadId, intentOutcome: .failed(message))
-            }
-
-        case .ping, .snapshot, .threadTitleUpdated, .unknown:
-            break
-        }
+    public mutating func acknowledgeProviderInput(threadId: String, pendingInputId: String?) {
+        acknowledgePendingInput(
+            threadId: threadId,
+            pendingInputId: pendingInputId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        )
     }
 
-    /// The user-initiated interrupt was accepted by the gateway.
+    public mutating func completeCommittedRun(threadId: String) {
+        closeThreadRun(threadId: threadId, intentOutcome: .completed)
+    }
+
+    public mutating func failCommittedRun(threadId: String, error: String) {
+        closeThreadRun(threadId: threadId, intentOutcome: .failed(error))
+    }
+
+    /// The user-initiated interrupt was accepted by the gateway or a committed
+    /// control record reported an interrupted run.
     public mutating func interruptConfirmed(threadId: String) {
         closeThreadRun(threadId: threadId, intentOutcome: .interrupted)
-    }
-
-    // MARK: Reconciliation
-
-    /// Reconciles an authoritative transcript snapshot. Terminal events the
-    /// client already observed win over a racing stale `active_run`; a chat
-    /// start still in flight keeps its claim even though the transcript does
-    /// not know the run yet.
-    public mutating func reconcileTranscriptRuntime(
-        threadId: String,
-        activeRunPresent: Bool,
-        activeRunId: String?,
-        hasActivePendingInput: Bool
-    ) -> GaryxTranscriptRuntimeReconciliation {
-        let treatActive = GaryxMobileThreadActivityModel.shouldTreatThreadRuntimeAsActive(
-            activeRunPresent: activeRunPresent,
-            activeRunId: activeRunId,
-            hasActivePendingInput: hasActivePendingInput,
-            lastTerminatedRunId: lastTerminatedRunIdsByThread[threadId]
-        )
-        if treatActive {
-            markRemoteActivity(threadId: threadId, runId: activeRunId ?? "")
-            return .active
-        }
-        guard let runtime = machine.threadRuntimeByThread[threadId],
-              garyxIsRuntimeBusy(runtime.state) else {
-            return .inactive(clearedLocalRun: false)
-        }
-        if isChatStartClaim(runtime) {
-            // The chat start has not produced its HTTP result yet; "no active
-            // run" is the expected transcript answer in this window, even when
-            // early stream activity already upgraded the runtime. The
-            // authoritative transcript did disprove any remote run though, so
-            // the runtime downgrades back to the bare dispatch claim — a
-            // later dispatch failure then releases the thread instead of
-            // leaving a stale remote-run state behind.
-            if runtime.state != .dispatchingSync {
-                machine.apply(.threadRuntime(
-                    threadId: threadId,
-                    state: .dispatchingSync,
-                    activeIntentId: runtime.activeIntentId,
-                    remoteRunId: nil,
-                    error: nil
-                ))
-            }
-            return .inactive(clearedLocalRun: false)
-        }
-        let hadLocalRun = runtime.activeIntentId != nil
-        closeThreadRun(threadId: threadId, intentOutcome: .completed)
-        return .inactive(clearedLocalRun: hadLocalRun)
-    }
-
-    /// Reconciles refreshed thread-list summaries (`activeRunId` per thread).
-    /// Unlike the legacy `refreshRemoteBusyIdsForVisibleThreads`, a summary
-    /// that still advertises a run the client already saw terminate does not
-    /// resurrect the busy state.
-    public mutating func syncThreadSummaries(_ summaries: [(threadId: String, activeRunId: String?)]) {
-        for summary in summaries {
-            let threadId = summary.threadId
-            let activeRunId = summary.activeRunId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let summaryActive = isSummaryRunConsideredActive(
-                threadId: threadId,
-                activeRunId: activeRunId
-            )
-            if summaryActive {
-                if !isThreadBusy(threadId) {
-                    markRemoteActivity(threadId: threadId, runId: activeRunId)
-                }
-                continue
-            }
-            guard let runtime = machine.threadRuntimeByThread[threadId],
-                  runtime.state == .runningRemote,
-                  runtime.activeIntentId == nil else {
-                // Local dispatches and chat starts in flight keep their claim
-                // regardless of a (possibly stale) summary.
-                continue
-            }
-            machine.apply(.threadRuntime(
-                threadId: threadId,
-                state: .idle,
-                activeIntentId: nil,
-                remoteRunId: nil,
-                error: nil
-            ))
-        }
     }
 
     // MARK: Internals
@@ -493,10 +346,7 @@ public struct GaryxConversationRunTracker: Equatable, Sendable {
     }
 
     /// True while a locally started chat dispatch has not produced its HTTP
-    /// result yet — either the runtime still sits in `dispatching_sync`, or
-    /// early stream activity upgraded it to `running_remote` while the
-    /// dispatching intent is still awaiting `confirmChatStartAccepted` /
-    /// `failLocalDispatch`.
+    /// result yet.
     private func isChatStartClaim(_ runtime: GaryxThreadRuntime) -> Bool {
         if runtime.state == .dispatchingSync {
             return true
@@ -518,12 +368,6 @@ public struct GaryxConversationRunTracker: Equatable, Sendable {
             remoteRunId: normalizedRunId.isEmpty ? current?.remoteRunId : normalizedRunId,
             error: nil
         ))
-    }
-
-    private mutating func recordTerminatedRun(threadId: String, runId: String) {
-        let normalized = runId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalized.isEmpty else { return }
-        lastTerminatedRunIdsByThread[threadId] = normalized
     }
 
     private mutating func closeThreadRun(threadId: String, intentOutcome: IntentOutcome) {
@@ -577,48 +421,4 @@ public struct GaryxConversationRunTracker: Equatable, Sendable {
         pendingAckIntentIdsByThread[threadId] = pendingAck.isEmpty ? nil : pendingAck
     }
 
-    private static func threadId(from event: GaryxChatStreamEvent) -> String {
-        switch event {
-        case .accepted(_, let threadId),
-             .runStart(_, let threadId),
-             .assistantDelta(_, let threadId, _, _),
-             .assistantBoundary(_, let threadId),
-             .toolUse(_, let threadId, _),
-             .toolResult(_, let threadId, _),
-             .userMessage(_, let threadId, _, _),
-             .userAck(_, let threadId, _),
-             .threadTitleUpdated(_, let threadId, _),
-             .done(_, let threadId),
-             .runComplete(_, let threadId),
-             .runError(_, let threadId, _),
-             .streamInput(_, let threadId, _, _),
-             .interrupt(_, let threadId, _),
-             .snapshot(let threadId, _),
-             .error(_, let threadId, _):
-            return threadId
-        case .ping, .unknown:
-            return ""
-        }
-    }
-
-    private static func runId(from event: GaryxChatStreamEvent) -> String {
-        switch event {
-        case .accepted(let runId, _),
-             .runStart(let runId, _),
-             .assistantDelta(let runId, _, _, _),
-             .assistantBoundary(let runId, _),
-             .toolUse(let runId, _, _),
-             .toolResult(let runId, _, _),
-             .userMessage(let runId, _, _, _),
-             .userAck(let runId, _, _),
-             .threadTitleUpdated(let runId, _, _),
-             .done(let runId, _),
-             .runComplete(let runId, _),
-             .runError(let runId, _, _),
-             .error(let runId, _, _):
-            return runId
-        case .streamInput, .interrupt, .snapshot, .ping, .unknown:
-            return ""
-        }
-    }
 }

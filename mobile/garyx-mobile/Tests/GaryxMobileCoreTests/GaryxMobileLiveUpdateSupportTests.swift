@@ -54,7 +54,7 @@ final class GaryxMobileLiveUpdateSupportTests: XCTestCase {
         )
     }
 
-    func testThreadActivitySignatureTracksPassiveTranscriptChanges() throws {
+    func testThreadActivitySignatureTracksCommittedTranscriptChanges() throws {
         let base = try decodeTranscript(
             """
             {
@@ -127,7 +127,7 @@ final class GaryxMobileLiveUpdateSupportTests: XCTestCase {
             """
         )
 
-        XCTAssertNotEqual(
+        XCTAssertEqual(
             GaryxThreadActivitySignature.make(from: base),
             GaryxThreadActivitySignature.make(from: updatedResponse)
         )

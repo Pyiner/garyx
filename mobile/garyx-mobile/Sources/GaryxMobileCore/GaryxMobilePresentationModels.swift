@@ -51,11 +51,7 @@ struct GaryxSidebarThreadRowPresentation: Equatable {
 
     private static func isRunning(_ thread: GaryxThreadSummary) -> Bool {
         let state = thread.runState?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let activeRunId = thread.activeRunId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if state == "running" {
-            return true
-        }
-        return !activeRunId.isEmpty
+        return state == "running"
     }
 }
 

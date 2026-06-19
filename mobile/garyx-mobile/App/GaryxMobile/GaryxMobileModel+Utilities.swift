@@ -107,7 +107,7 @@ extension GaryxMobileModel {
             .assistant
         case .user:
             .user
-        case .toolUse, .toolResult:
+        case .tool, .toolUse, .toolResult:
             .tool
         case .system, .unknown:
             .system

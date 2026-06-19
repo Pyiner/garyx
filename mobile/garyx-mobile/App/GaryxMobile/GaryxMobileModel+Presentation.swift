@@ -104,7 +104,7 @@ extension GaryxMobileModel {
 
     var isSelectedThreadRemoteBusy: Bool {
         guard let selectedThread else { return false }
-        return runTracker.isThreadBusy(selectedThread.id)
+        return isThreadBusy(selectedThread.id)
     }
 
     var showsTailThinkingIndicator: Bool {
@@ -116,13 +116,7 @@ extension GaryxMobileModel {
 
     func isThreadBusy(_ threadId: String) -> Bool {
         runTracker.isThreadBusy(threadId)
-            || threads.contains { thread in
-                thread.id == threadId
-                    && runTracker.isSummaryRunConsideredActive(
-                        threadId: threadId,
-                        activeRunId: thread.activeRunId
-                    )
-            }
+            || runStateByThread[threadId]?.busy == true
     }
 
     func canDeleteThread(_ thread: GaryxThreadSummary) -> Bool {

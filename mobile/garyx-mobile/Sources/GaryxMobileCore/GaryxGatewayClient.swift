@@ -787,22 +787,6 @@ public final class GaryxGatewayClient {
         return url
     }
 
-    public func eventStreamRequest(historyLimit: Int = 50) throws -> URLRequest {
-        var request = try makeRequest(
-            path: "/api/stream",
-            method: "GET",
-            queryItems: [
-                URLQueryItem(name: "history_limit", value: String(historyLimit)),
-            ]
-        )
-        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-        return request
-    }
-
-    public func decodeStreamEvent(_ text: String) throws -> GaryxChatStreamEvent {
-        try decoder.decode(GaryxChatStreamEvent.self, from: Data(text.utf8))
-    }
-
     /// Resumable per-thread transcript stream (S5): replays committed messages with
     /// `seq > afterSeq`, then streams that thread's live events.
     public func threadStreamRequest(threadId: String, afterSeq: Int) throws -> URLRequest {

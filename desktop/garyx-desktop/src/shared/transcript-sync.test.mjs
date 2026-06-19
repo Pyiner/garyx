@@ -7,6 +7,7 @@ import {
   committedTranscriptMessages,
   decideStreamSeq,
   decideTranscriptFetchPageAction,
+  deriveTranscriptKind,
   isThreadStreamGapError,
   mergeForwardTranscriptPage,
   reduceTranscriptRunState,
@@ -169,7 +170,7 @@ test("stream seq planner applies first replay row, skips stale rows, and reconne
   );
 });
 
-test("selected-thread global stream events are suppressed while per-thread stream owns them", () => {
+test("selected-thread live events are suppressed while per-thread stream owns them", () => {
   assert.equal(
     shouldForwardGlobalStreamEvent({
       selectedThreadId: "thread::selected",
@@ -265,6 +266,44 @@ test("user_ack fixture replays ack position and reconciling activity", () => {
   assert.equal(state.activity, "reconciling");
   assert.equal(state.lastUserAckPendingInputId, "pending-fixture-followup");
   assert.equal(state.lastUserAckSeq, 3);
+});
+
+test("transcript kind resolver matches control and tool fixture semantics", () => {
+  const toolRecords = readJsonl("transcript-with-tool.jsonl");
+  const messages = toolRecords.map((record, index) =>
+    contentMessage(index, record.thread_id, record),
+  );
+  assert.equal(deriveTranscriptKind(messages[0]), "user_input");
+  assert.equal(deriveTranscriptKind(messages[1]), "assistant_reply");
+  assert.equal(deriveTranscriptKind(messages[2]), "tool_trace");
+  assert.equal(deriveTranscriptKind(messages[3]), "tool_trace");
+  assert.equal(deriveTranscriptKind(messages[4]), "assistant_reply");
+
+  assert.equal(
+    deriveTranscriptKind({
+      id: "thread::kind:0",
+      role: "assistant",
+      text: "this text mentions tool_use and mcp__ without a structured payload",
+      content: "this text mentions tool_use and mcp__ without a structured payload",
+    }),
+    "assistant_reply",
+  );
+  assert.equal(
+    deriveTranscriptKind({
+      id: "thread::kind:1",
+      role: "assistant",
+      text: "",
+      content: { tool_use_id: "call-1", input: {} },
+    }),
+    "tool_trace",
+  );
+  assert.equal(
+    deriveTranscriptKind(controlMessage(0, {
+      type: "run_start",
+      threadId: "thread::kind",
+    })),
+    "control",
+  );
 });
 
 test("rewrite controls surface invalidation windows", () => {

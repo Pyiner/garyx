@@ -74,6 +74,65 @@ function normalizedKind(value: unknown): string | null {
   return text || null;
 }
 
+function containsToolHint(value: unknown): boolean {
+  function inspect(candidate: unknown, depth: number): boolean {
+    if (depth > 64) {
+      return false;
+    }
+    if (typeof candidate === "string") {
+      if (depth === 0) {
+        return false;
+      }
+      const lower = candidate.toLowerCase();
+      return (
+        lower.includes("tool_use") ||
+        lower.includes("tool_result") ||
+        lower.includes("tool_call") ||
+        lower.includes("mcp__")
+      );
+    }
+    if (Array.isArray(candidate)) {
+      return candidate.some((item) => inspect(item, depth + 1));
+    }
+    if (isRecord(candidate)) {
+      return Object.entries(candidate).some(([key, item]) => {
+        const lower = key.toLowerCase();
+        return (
+          lower === "tool_use_id" ||
+          lower === "tool_call_id" ||
+          lower === "tool_calls" ||
+          lower.includes("mcp__") ||
+          lower.includes("tool_") ||
+          inspect(item, depth + 1)
+        );
+      });
+    }
+    return false;
+  }
+  return inspect(value, 0);
+}
+
+function isToolRelatedTranscriptMessage(
+  message: Pick<
+    TranscriptMessage,
+    "role" | "content" | "toolName" | "toolRelated" | "metadata"
+  >,
+): boolean {
+  if (
+    message.role === "tool_use" ||
+    message.role === "tool_result"
+  ) {
+    return true;
+  }
+  if (message.toolRelated) {
+    return true;
+  }
+  if (normalizedString(message.toolName)) {
+    return true;
+  }
+  return containsToolHint(message.content) || containsToolHint(message.metadata);
+}
+
 function controlObject(message: Pick<TranscriptMessage, "content">): Record<
   string,
   unknown
@@ -394,19 +453,25 @@ export function isThreadStreamGapError(input: {
   );
 }
 
-function deriveTranscriptKind(
-  message: Pick<TranscriptMessage, "kind" | "role" | "content" | "toolUseId">,
+export function deriveTranscriptKind(
+  message: Pick<
+    TranscriptMessage,
+    | "kind"
+    | "role"
+    | "content"
+    | "toolName"
+    | "toolRelated"
+    | "metadata"
+  >,
 ): string {
   if (isControlTranscriptMessage(message)) {
     return "control";
   }
-  if (message.kind) {
-    return message.kind;
-  }
+  const toolRelated = isToolRelatedTranscriptMessage(message);
   if (
     message.role === "tool_use" ||
     message.role === "tool_result" ||
-    message.toolUseId
+    toolRelated
   ) {
     return "tool_trace";
   }

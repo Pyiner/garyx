@@ -38,19 +38,16 @@ public enum GaryxThreadActivitySignature {
     public static func make(from transcript: GaryxThreadTranscript) -> String {
         make(
             messages: transcript.messages,
-            pendingUserInputs: transcript.pendingUserInputs,
-            threadRuntime: transcript.threadRuntime
+            pendingUserInputs: transcript.pendingUserInputs
         )
     }
 
     public static func make(
         messages: [GaryxTranscriptMessage],
-        pendingUserInputs: [GaryxPendingUserInput],
-        threadRuntime: GaryxThreadRuntimeSummary?
+        pendingUserInputs: [GaryxPendingUserInput]
     ) -> String {
         let lastMessage = messages.last
         let lastPendingInput = pendingUserInputs.last
-        let activeRun = threadRuntime?.activeRun
         return [
             "messageCount=\(messages.count)",
             "lastMessage.id=\(lastMessage?.id ?? "")",
@@ -63,10 +60,6 @@ public enum GaryxThreadActivitySignature {
             "lastPendingInput.status=\(lastPendingInput?.status ?? "")",
             "lastPendingInput.active=\(lastPendingInput?.active == true ? "true" : "false")",
             "lastPendingInput.text=\(lastPendingInput?.text ?? "")",
-            "activeRun.runId=\(activeRun?.runId ?? "")",
-            "activeRun.updatedAt=\(activeRun?.updatedAt ?? "")",
-            "activeRun.assistantResponse=\(activeRun?.assistantResponse ?? "")",
-            "activeRun.pendingUserInputCount=\(activeRun?.pendingUserInputCount ?? 0)",
         ].joined(separator: "\u{1F}")
     }
 }

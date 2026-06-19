@@ -89,9 +89,9 @@ extension GaryxMobileModel {
         sceneRefreshTask?.cancel()
         sceneRefreshTask = nil
         cancelSelectedThreadReconcileLoop()
+        cancelBackgroundCommittedRunReconcileLoop()
         stopSelectedThreadStream()
         selectedThreadActivitySignatures = [:]
-        cancelGlobalEventStream()
         clearActiveRunState()
         connectRefreshRequestId = nil
         remoteStateRefreshRequestId = nil
@@ -268,7 +268,7 @@ extension GaryxMobileModel {
                 guard let self else { return }
                 switch connectionState {
                 case .ready:
-                    startGlobalEventStream()
+                    startBackgroundCommittedRunReconcileLoop()
                     startSelectedThreadReconcileLoop()
                     async let agentTargetsRefresh: Void = refreshAgentTargets()
                     await refreshThreads()
@@ -296,7 +296,7 @@ extension GaryxMobileModel {
             sceneRefreshTask?.cancel()
             sceneRefreshTask = nil
             cancelSelectedThreadReconcileLoop()
-            cancelGlobalEventStream()
+            cancelBackgroundCommittedRunReconcileLoop()
             stopSelectedThreadStream()
         default:
             break
@@ -379,7 +379,7 @@ extension GaryxMobileModel {
             rememberCurrentGatewayProfile()
             gatewaySettingsStatus = "Saved and connected"
             connectionState = .ready(version: status.version)
-            startGlobalEventStream()
+            startBackgroundCommittedRunReconcileLoop()
             if threadOpenState.hasPendingIntent {
                 await openPendingThreadLinkIfNeeded()
                 guard isCurrentConnectRefresh(requestId, runtimeGeneration: runtimeGeneration, scopeId: gatewayScopeId) else {
@@ -400,13 +400,14 @@ extension GaryxMobileModel {
             await refreshCodingUsageWidget()
             connectRefreshRequestId = nil
             await openPendingMobileRouteIfNeeded()
+            startBackgroundCommittedRunReconcileLoop()
             startSelectedThreadReconcileLoop()
         } catch {
             guard isCurrentConnectRefresh(requestId, runtimeGeneration: runtimeGeneration, scopeId: gatewayScopeId) else {
                 return
             }
             connectRefreshRequestId = nil
-            cancelGlobalEventStream()
+            cancelBackgroundCommittedRunReconcileLoop()
             cancelSelectedThreadReconcileLoop()
             let message = displayMessage(for: error)
             connectionState = .failed(message)

@@ -14,7 +14,7 @@ desktop app.
 | Thread transcript | `GET /api/threads/history?thread_id=...` |
 | Start chat run | `POST /api/chat/start` |
 | Queue follow-up input | `POST /api/chat/stream-input` |
-| Live chat events | `GET /api/stream` Server-Sent Events |
+| Selected-thread transcript stream | `GET /api/threads/{thread_id}/stream?after_seq=...` Server-Sent Events |
 | Stop active run | `POST /api/chat/interrupt` |
 | Agent/team selection | `GET /api/custom-agents`, `GET /api/teams` |
 | Skills visibility | `GET /api/skills` |
@@ -62,8 +62,7 @@ POST /api/chat/interrupt
 { "threadId": "thread::<id>" }
 ```
 
-`GET /api/stream` emits live run events with a `type` field such as
-`accepted`, `assistant_delta`, `tool_use`, `tool_result`, `user_ack`,
-`thread_title_updated`, `done`, `snapshot`, `error`, and `ping`. Command
-statuses for `stream_input` and `interrupt` are returned by their HTTP
-endpoints; the mobile decoder still accepts those event shapes for compatibility.
+Selected-thread streaming emits committed transcript/control records for a
+single thread. Mobile derives busy, thinking, terminal status, and title from
+those committed control rows; background threads are reconciled by refetching
+committed thread history for tracked run candidates.

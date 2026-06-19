@@ -259,6 +259,7 @@ private struct GaryxThreadWorktreeSummary: Decodable, Equatable, Sendable {
 public enum GaryxTranscriptRole: String, Codable, Equatable, Sendable {
     case assistant
     case system
+    case tool
     case user
     case toolUse = "tool_use"
     case toolResult = "tool_result"
@@ -477,11 +478,17 @@ public struct GaryxTranscriptMessage: Codable, Identifiable, Equatable, Sendable
     public var index: Int?
     public var role: GaryxTranscriptRole
     public var kind: String?
+    public var internalKind: String?
+    public var internalMessage: Bool
     public var text: String
     public var content: GaryxJSONValue?
     public var message: GaryxJSONValue?
+    public var control: GaryxJSONValue?
     public var timestamp: String?
     public var toolRelated: Bool
+    public var toolName: String?
+    public var toolUseResult: Bool
+    public var isError: Bool?
     public var likelyUserVisible: Bool
     /// Envelope tool identity the nested `content` omits, so committed tool rows
     /// carry the same id/parent as live events. `metadata.parent_tool_use_id`
@@ -493,13 +500,26 @@ public struct GaryxTranscriptMessage: Codable, Identifiable, Equatable, Sendable
         case index
         case role
         case kind
+        case internalKind = "internal_kind"
+        case internalKindCamel = "internalKind"
+        case internalMessage = "internal"
         case text
         case content
         case message
+        case control
         case timestamp
         case toolRelated = "tool_related"
+        case toolRelatedCamel = "toolRelated"
+        case toolName = "tool_name"
+        case toolNameCamel = "toolName"
+        case toolUseResult = "tool_use_result"
+        case toolUseResultCamel = "toolUseResult"
+        case isError = "is_error"
+        case isErrorCamel = "isError"
         case likelyUserVisible = "likely_user_visible"
+        case likelyUserVisibleCamel = "likelyUserVisible"
         case toolUseId = "tool_use_id"
+        case toolUseIdCamel = "toolUseId"
         case metadata
     }
 
@@ -523,13 +543,26 @@ public struct GaryxTranscriptMessage: Codable, Identifiable, Equatable, Sendable
         let roleValue = try container.decodeIfPresent(String.self, forKey: .role) ?? ""
         role = GaryxTranscriptRole(rawValue: roleValue) ?? .unknown
         kind = try container.decodeIfPresent(String.self, forKey: .kind)
+        internalKind = try container.garyxDecodeFirstString(.internalKind, .internalKindCamel)
+        internalMessage = try container.decodeIfPresent(Bool.self, forKey: .internalMessage) ?? false
         text = try container.decodeIfPresent(String.self, forKey: .text) ?? ""
         content = try container.decodeIfPresent(GaryxJSONValue.self, forKey: .content)
         message = try container.decodeIfPresent(GaryxJSONValue.self, forKey: .message)
+        control = try container.decodeIfPresent(GaryxJSONValue.self, forKey: .control)
         timestamp = try container.decodeIfPresent(String.self, forKey: .timestamp)
-        toolRelated = try container.decodeIfPresent(Bool.self, forKey: .toolRelated) ?? false
-        likelyUserVisible = try container.decodeIfPresent(Bool.self, forKey: .likelyUserVisible) ?? true
-        toolUseId = try container.decodeIfPresent(String.self, forKey: .toolUseId)
+        toolRelated = try container.decodeIfPresent(Bool.self, forKey: .toolRelated)
+            ?? container.decodeIfPresent(Bool.self, forKey: .toolRelatedCamel)
+            ?? false
+        toolName = try container.garyxDecodeFirstString(.toolName, .toolNameCamel)
+        toolUseResult = try container.decodeIfPresent(Bool.self, forKey: .toolUseResult)
+            ?? container.decodeIfPresent(Bool.self, forKey: .toolUseResultCamel)
+            ?? false
+        isError = try container.decodeIfPresent(Bool.self, forKey: .isError)
+            ?? container.decodeIfPresent(Bool.self, forKey: .isErrorCamel)
+        likelyUserVisible = try container.decodeIfPresent(Bool.self, forKey: .likelyUserVisible)
+            ?? container.decodeIfPresent(Bool.self, forKey: .likelyUserVisibleCamel)
+            ?? true
+        toolUseId = try container.garyxDecodeFirstString(.toolUseId, .toolUseIdCamel)
         metadata = try container.decodeIfPresent(GaryxJSONValue.self, forKey: .metadata)
         id = index.map { "history:\($0)" } ?? UUID().uuidString
     }
@@ -542,11 +575,21 @@ public struct GaryxTranscriptMessage: Codable, Identifiable, Equatable, Sendable
         try container.encodeIfPresent(index, forKey: .index)
         try container.encode(role.rawValue, forKey: .role)
         try container.encodeIfPresent(kind, forKey: .kind)
+        try container.encodeIfPresent(internalKind, forKey: .internalKind)
+        if internalMessage {
+            try container.encode(internalMessage, forKey: .internalMessage)
+        }
         try container.encode(text, forKey: .text)
         try container.encodeIfPresent(content, forKey: .content)
         try container.encodeIfPresent(message, forKey: .message)
+        try container.encodeIfPresent(control, forKey: .control)
         try container.encodeIfPresent(timestamp, forKey: .timestamp)
         try container.encode(toolRelated, forKey: .toolRelated)
+        try container.encodeIfPresent(toolName, forKey: .toolName)
+        if toolUseResult {
+            try container.encode(toolUseResult, forKey: .toolUseResult)
+        }
+        try container.encodeIfPresent(isError, forKey: .isError)
         try container.encode(likelyUserVisible, forKey: .likelyUserVisible)
         try container.encodeIfPresent(toolUseId, forKey: .toolUseId)
         try container.encodeIfPresent(metadata, forKey: .metadata)
@@ -557,11 +600,17 @@ public struct GaryxTranscriptMessage: Codable, Identifiable, Equatable, Sendable
         index: Int?,
         role: GaryxTranscriptRole,
         kind: String? = nil,
+        internalKind: String? = nil,
+        internalMessage: Bool = false,
         text: String = "",
         content: GaryxJSONValue? = nil,
         message: GaryxJSONValue? = nil,
+        control: GaryxJSONValue? = nil,
         timestamp: String? = nil,
         toolRelated: Bool = false,
+        toolName: String? = nil,
+        toolUseResult: Bool = false,
+        isError: Bool? = nil,
         likelyUserVisible: Bool = true,
         toolUseId: String? = nil,
         metadata: GaryxJSONValue? = nil
@@ -569,11 +618,17 @@ public struct GaryxTranscriptMessage: Codable, Identifiable, Equatable, Sendable
         self.index = index
         self.role = role
         self.kind = kind
+        self.internalKind = internalKind
+        self.internalMessage = internalMessage
         self.text = text
         self.content = content
         self.message = message
+        self.control = control
         self.timestamp = timestamp
         self.toolRelated = toolRelated
+        self.toolName = toolName
+        self.toolUseResult = toolUseResult
+        self.isError = isError
         self.likelyUserVisible = likelyUserVisible
         self.toolUseId = toolUseId
         self.metadata = metadata

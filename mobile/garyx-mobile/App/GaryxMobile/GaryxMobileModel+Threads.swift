@@ -192,23 +192,23 @@ extension GaryxMobileModel {
                     return (thread.id, runtime)
                 }
             )
-            let refreshedThreads = Self.mergedThreadSummaries(nextThreads).map { thread in
+            let refreshedGatewayThreads = Self.mergedThreadSummaries(nextThreads).map { thread in
                 var next = thread
                 if next.threadRuntime == nil {
                     next.threadRuntime = previousRuntimeByThreadId[next.id]
                 }
                 return next
             }
+            let refreshedThreads = refreshedGatewayThreads.map(summaryWithCommittedRunState)
             let mergedThreads = Self.mergedThreadSummaries(existingThreads + refreshedThreads)
             if threads != mergedThreads {
                 threads = mergedThreads
             }
             persistRecentThreadsWidgetSnapshot()
-            refreshRemoteBusyIdsForVisibleThreads()
             hydrateCompletedRecentThreadHistories(
                 previousThreads: previousThreadSummaries,
                 previouslyRemoteBusyThreadIds: previouslyRemoteBusyThreadIds,
-                refreshedThreads: refreshedThreads,
+                refreshedThreads: refreshedGatewayThreads,
                 runtimeGeneration: runtimeGeneration
             )
             let currentSelectedId = selectedThread?.id
@@ -219,6 +219,7 @@ extension GaryxMobileModel {
                 if nextSelection.threadRuntime == nil {
                     nextSelection.threadRuntime = selectedThread?.threadRuntime
                 }
+                nextSelection = summaryWithCommittedRunState(nextSelection)
                 if selectedThread != nextSelection {
                     selectedThread = nextSelection
                 }
@@ -398,9 +399,8 @@ extension GaryxMobileModel {
             recentThreadIds += page.threads.compactMap { thread in
                 seenRecentIds.insert(thread.id).inserted ? thread.id : nil
             }
-            threads = Self.mergedThreadSummaries(threads + page.threads)
+            threads = Self.mergedThreadSummaries(threads + page.threads.map(summaryWithCommittedRunState))
             persistRecentThreadsWidgetSnapshot()
-            refreshRemoteBusyIdsForVisibleThreads()
         } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             lastError = displayMessage(for: error)
@@ -440,29 +440,16 @@ extension GaryxMobileModel {
                 offset = nextOffset
             }
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            threads = Self.mergedThreadSummaries(threads + allThreads)
+            threads = Self.mergedThreadSummaries(threads + allThreads.map(summaryWithCommittedRunState))
             await mergeMissingSidebarRequiredThreads(
                 using: gatewayClient,
                 extraThreadIds: [selectedThread?.id],
                 runtimeGeneration: runtimeGeneration
             )
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            refreshRemoteBusyIdsForVisibleThreads()
         } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             lastError = displayMessage(for: error)
-        }
-    }
-
-    func refreshRemoteBusyIdsForVisibleThreads() {
-        // Mutating the @Published tracker in place publishes even when the
-        // sync is a no-op, so reconcile on a copy and only assign on change.
-        var syncedTracker = runTracker
-        syncedTracker.syncThreadSummaries(
-            threads.map { (threadId: $0.id, activeRunId: $0.activeRunId) }
-        )
-        if syncedTracker != runTracker {
-            runTracker = syncedTracker
         }
     }
 
@@ -547,10 +534,68 @@ extension GaryxMobileModel {
         }
     }
 
+    func startBackgroundCommittedRunReconcileLoop() {
+        guard hasGatewaySettings,
+              case .ready = connectionState else {
+            cancelBackgroundCommittedRunReconcileLoop()
+            return
+        }
+        guard backgroundCommittedRunReconcileTask == nil else { return }
+        let runtimeGeneration = gatewayRuntimeGeneration
+        backgroundCommittedRunReconcileTask = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: Self.selectedThreadReconcileIntervalNanos)
+                if Task.isCancelled { break }
+                await reconcileBackgroundCommittedRunStates(runtimeGeneration: runtimeGeneration)
+            }
+        }
+    }
+
+    func cancelBackgroundCommittedRunReconcileLoop() {
+        backgroundCommittedRunReconcileTask?.cancel()
+        backgroundCommittedRunReconcileTask = nil
+    }
+
+    func reconcileBackgroundCommittedRunStates(runtimeGeneration: UUID) async {
+        guard runtimeGeneration == gatewayRuntimeGeneration,
+              hasGatewaySettings,
+              case .ready = connectionState else {
+            cancelBackgroundCommittedRunReconcileLoop()
+            return
+        }
+        await refreshThreads(silent: true)
+        guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+        for threadId in backgroundCommittedRunCandidateThreadIds() {
+            if Task.isCancelled { break }
+            if completedThreadHistoryHydrationTasks[threadId] != nil {
+                continue
+            }
+            await hydrateCompletedRecentThreadHistoryNow(
+                threadId: threadId,
+                runtimeGeneration: runtimeGeneration
+            )
+        }
+    }
+
+    func backgroundCommittedRunCandidateThreadIds() -> [String] {
+        let selectedThreadId = selectedThread?.id.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        var ids = runTracker.locallyTrackedThreadIds
+        ids.formUnion(runStateByThread.compactMap { threadId, state in
+            state.busy ? threadId : nil
+        })
+        ids.formUnion(threads.compactMap { thread in
+            isThreadSummaryRunning(thread) ? thread.id : nil
+        })
+        return ids
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && $0 != selectedThreadId }
+            .sorted()
+    }
+
     func isThreadSummaryRunning(_ thread: GaryxThreadSummary) -> Bool {
         let runState = thread.runState?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let activeRunId = thread.activeRunId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return runState == "running" || !activeRunId.isEmpty
+        return runState == "running"
     }
 
     func selectThread(
@@ -959,7 +1004,7 @@ extension GaryxMobileModel {
     ) {
         markThreadHistoryLoaded(threadId)
         selectedThreadActivitySignatures[threadId] = GaryxThreadActivitySignature.make(from: transcript)
-        updateThreadRuntimeState(threadId: threadId, transcript: transcript)
+        rebuildThreadRunState(threadId: threadId, messages: transcript.messages)
         if let runtime = transcript.threadRuntime {
             applyThreadRuntimeSummary(runtime, threadId: threadId)
         }
@@ -970,7 +1015,7 @@ extension GaryxMobileModel {
                 preservingLoadedOlderPages: preservingLoadedOlderPages
             )
         }
-        let threadRunActive = remoteBusyThreadIds.contains(threadId)
+        let threadRunActive = isThreadBusy(threadId)
         let remoteMessages = mobileMessages(from: transcript, threadId: threadId, live: threadRunActive)
         setMessages(
             mergedMessages(
@@ -1088,63 +1133,106 @@ extension GaryxMobileModel {
         }
     }
 
-    func updateThreadRuntimeState(threadId: String, transcript: GaryxThreadTranscript) {
-        let hasActivePendingInput = transcript.pendingUserInputs.contains { input in
-            input.active && (input.status ?? "awaiting_ack").lowercased() != "abandoned"
+    func rebuildThreadRunState(threadId: String, messages: [GaryxTranscriptMessage]) {
+        let state = GaryxTranscriptRunStateReducer.reduce(messages)
+        applyTranscriptRunState(state, threadId: threadId)
+    }
+
+    func applyCommittedTranscriptMessage(_ message: GaryxTranscriptMessage, threadId: String) {
+        var state = runStateByThread[threadId] ?? GaryxTranscriptRunState()
+        GaryxTranscriptRunStateReducer.apply(message: message, to: &state)
+        applyTranscriptRunState(state, threadId: threadId)
+    }
+
+    func applyTranscriptRunState(_ state: GaryxTranscriptRunState, threadId: String) {
+        let previous = runStateByThread[threadId] ?? GaryxTranscriptRunState()
+        if previous == state {
+            return
         }
-        let outcome = runTracker.reconcileTranscriptRuntime(
-            threadId: threadId,
-            activeRunPresent: transcript.threadRuntime?.activeRun != nil,
-            activeRunId: transcript.threadRuntime?.activeRun?.runId,
-            hasActivePendingInput: hasActivePendingInput
-        )
-        switch outcome {
-        case .active:
-            break
-        case .inactive(let clearedLocalRun):
-            markThreadSummaryRuntimeInactive(threadId)
-            // The authoritative transcript reports no active run. If the
-            // terminal stream event never reached this client (dropped
-            // connection or a race), the local send state would stay
-            // "sending" forever, pinning the thinking indicator and the
-            // stop button. The tracker reconciled it — unless a chat start
-            // is still in flight, where "no active run yet" is expected.
-            if clearedLocalRun {
-                activeAssistantMessageIdsByThread[threadId] = nil
-                markStreamingAssistantComplete(for: threadId, removeEmpty: true)
-            }
+        runStateByThread[threadId] = state
+        applyThreadRunStateSummary(threadId: threadId, state: state)
+
+        if previous.lastUserAckSeq != state.lastUserAckSeq
+            || previous.lastUserAckPendingInputId != state.lastUserAckPendingInputId {
+            runTracker.acknowledgeProviderInput(
+                threadId: threadId,
+                pendingInputId: state.lastUserAckPendingInputId
+            )
+            let nextAssistantId = moveNextPendingDirectFollowUpToAckBoundary(threadId: threadId)
+            markActiveAssistantSegmentComplete(for: threadId)
+            activeAssistantMessageIdsByThread[threadId] = nextAssistantId
+        }
+
+        if previous.title != state.title,
+           let title = state.title?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !title.isEmpty {
+            applyThreadTitleUpdate(threadId: threadId, title: title)
+        }
+
+        let observedTerminal = !(state.terminalStatus?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        guard !state.busy, (previous.busy || observedTerminal) else { return }
+        pendingDirectFollowUpsByThread[threadId] = nil
+        activeAssistantMessageIdsByThread[threadId] = nil
+        markStreamingAssistantComplete(for: threadId, removeEmpty: true)
+        cancelSelectedThreadRecoveryIfNeeded(threadId: threadId)
+        if state.terminalStatus == "interrupted" {
+            runTracker.interruptConfirmed(threadId: threadId)
+        } else {
+            runTracker.completeCommittedRun(threadId: threadId)
         }
     }
 
-    func markThreadSummaryRuntimeInactive(_ threadId: String) {
+    func summaryWithCommittedRunState(_ thread: GaryxThreadSummary) -> GaryxThreadSummary {
+        guard let state = runStateByThread[thread.id] else {
+            var updated = thread
+            if var runtime = updated.threadRuntime {
+                runtime.activeRun = nil
+                updated.threadRuntime = runtime
+            }
+            updated.activeRunId = nil
+            let runState = updated.runState?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if runState == "running" {
+                let recentRunId = updated.recentRunId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                updated.runState = recentRunId.isEmpty ? "idle" : "completed"
+            }
+            return updated
+        }
+        return summary(thread, applying: state)
+    }
+
+    func summary(_ thread: GaryxThreadSummary, applying state: GaryxTranscriptRunState) -> GaryxThreadSummary {
+        var updated = thread
+        if var runtime = updated.threadRuntime {
+            runtime.activeRun = nil
+            updated.threadRuntime = runtime
+        }
+        updated.activeRunId = state.busy ? state.activeRunId : nil
+        if state.busy {
+            updated.runState = "running"
+        } else if let terminal = state.terminalStatus?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !terminal.isEmpty {
+            updated.runState = terminal
+        } else {
+            let recentRunId = updated.recentRunId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            updated.runState = recentRunId.isEmpty ? "idle" : "completed"
+        }
+        if let title = state.title?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !title.isEmpty {
+            updated.title = title
+        }
+        return updated
+    }
+
+    func applyThreadRunStateSummary(threadId: String, state: GaryxTranscriptRunState) {
         let normalizedThreadId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedThreadId.isEmpty else { return }
 
-        func inactiveSummary(_ thread: GaryxThreadSummary) -> GaryxThreadSummary {
-            var updated = thread
-            updated.activeRunId = nil
-            let recentRunId = updated.recentRunId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            updated.runState = recentRunId.isEmpty ? "idle" : "completed"
-            return updated
-        }
-
-        var changed = false
         threads = threads.map { thread in
-            guard thread.id == normalizedThreadId,
-                  !(thread.activeRunId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) else {
-                return thread
-            }
-            changed = true
-            return inactiveSummary(thread)
+            thread.id == normalizedThreadId ? summary(thread, applying: state) : thread
         }
         if selectedThread?.id == normalizedThreadId,
-           let selectedThread,
-           !(selectedThread.activeRunId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
-            self.selectedThread = inactiveSummary(selectedThread)
-            changed = true
-        }
-        if changed {
-            refreshRemoteBusyIdsForVisibleThreads()
+           let selectedThread {
+            self.selectedThread = summary(selectedThread, applying: state)
         }
     }
 
@@ -1154,7 +1242,9 @@ extension GaryxMobileModel {
 
         func mergedRuntimeSummary(_ thread: GaryxThreadSummary) -> GaryxThreadSummary {
             var updated = thread
-            updated.threadRuntime = runtime
+            var runtimeMetadata = runtime
+            runtimeMetadata.activeRun = nil
+            updated.threadRuntime = runtimeMetadata
             if let agentId = runtime.agentId?.trimmingCharacters(in: .whitespacesAndNewlines),
                !agentId.isEmpty {
                 updated.agentId = agentId
@@ -1162,15 +1252,6 @@ extension GaryxMobileModel {
             if let providerType = runtime.providerType?.trimmingCharacters(in: .whitespacesAndNewlines),
                !providerType.isEmpty {
                 updated.providerType = providerType
-            }
-            if let activeRunId = runtime.activeRun?.runId?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !activeRunId.isEmpty {
-                updated.activeRunId = activeRunId
-                updated.runState = "running"
-            } else if updated.activeRunId != nil {
-                updated.activeRunId = nil
-                let recentRunId = updated.recentRunId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                updated.runState = recentRunId.isEmpty ? "idle" : "completed"
             }
             return updated
         }
@@ -1266,13 +1347,13 @@ extension GaryxMobileModel {
                   selectedThreadHistoryRequestId == observedHistoryRequestId else { return }
             markThreadHistoryLoaded(threadId)
             selectedThreadActivitySignatures[threadId] = GaryxThreadActivitySignature.make(from: transcript)
-            updateThreadRuntimeState(threadId: threadId, transcript: transcript)
+            rebuildThreadRunState(threadId: threadId, messages: transcript.messages)
             updateSelectedThreadHistoryPagination(
                 threadId: threadId,
                 transcript: transcript,
                 preservingLoadedOlderPages: true
             )
-            let threadRunActive = remoteBusyThreadIds.contains(threadId)
+            let threadRunActive = isThreadBusy(threadId)
             let remoteMessages = mobileMessages(from: transcript, threadId: threadId, live: threadRunActive)
             setMessages(
                 mergedMessages(
@@ -1353,17 +1434,17 @@ extension GaryxMobileModel {
             markThreadHistoryLoaded(threadId)
             let signature = GaryxThreadActivitySignature.make(from: transcript)
             if selectedThreadActivitySignatures[threadId] == signature {
-                updateThreadRuntimeState(threadId: threadId, transcript: transcript)
+                rebuildThreadRunState(threadId: threadId, messages: transcript.messages)
                 return
             }
             selectedThreadActivitySignatures[threadId] = signature
-            updateThreadRuntimeState(threadId: threadId, transcript: transcript)
+            rebuildThreadRunState(threadId: threadId, messages: transcript.messages)
             updateSelectedThreadHistoryPagination(
                 threadId: threadId,
                 transcript: transcript,
                 preservingLoadedOlderPages: true
             )
-            let threadRunActive = remoteBusyThreadIds.contains(threadId)
+            let threadRunActive = isThreadBusy(threadId)
             let remoteMessages = mobileMessages(from: transcript, threadId: threadId, live: threadRunActive)
             setMessages(
                 mergedMessages(

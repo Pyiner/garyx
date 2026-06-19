@@ -475,7 +475,7 @@ extension GaryxMobileModel {
 
     func loadDebugSnapshot() {
         debugSnapshotActive = true
-        cancelGlobalEventStream()
+        cancelBackgroundCommittedRunReconcileLoop()
         clearActiveRunState()
 
         gatewayURL = "http://127.0.0.1:31337"
