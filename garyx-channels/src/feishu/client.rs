@@ -5,7 +5,7 @@ use std::time::Duration;
 use reqwest::Client as HttpClient;
 use serde::Deserialize;
 use serde_json::Value;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tokio::time::Instant;
 use tracing::debug;
 
@@ -124,7 +124,7 @@ struct FeishuUser {
 
 /// Per-account Feishu API client with token management.
 #[derive(Clone)]
-pub(super) struct FeishuClient {
+pub(crate) struct FeishuClient {
     pub(super) app_id: String,
     pub(super) app_secret: String,
     pub(super) domain: FeishuDomain,
@@ -146,6 +146,25 @@ impl FeishuClient {
             token_state: Arc::new(RwLock::new(None)),
             refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
             api_base_override: None,
+        }
+    }
+
+    pub(crate) fn from_sender_parts(
+        app_id: String,
+        app_secret: String,
+        api_base: String,
+        http: HttpClient,
+        token_state: Arc<RwLock<Option<(String, Instant)>>>,
+        refresh_lock: Arc<Mutex<()>>,
+    ) -> Self {
+        Self {
+            app_id,
+            app_secret,
+            domain: FeishuDomain::Feishu,
+            http,
+            token_state,
+            refresh_lock,
+            api_base_override: Some(api_base),
         }
     }
 
@@ -428,14 +447,16 @@ impl FeishuClient {
         Ok(image_key.to_owned())
     }
 
-    pub(super) async fn send_image(
+    pub(super) async fn send_image_to_target(
         &self,
-        chat_id: &str,
+        receive_id_type: &str,
+        receive_id: &str,
         image_path: &Path,
     ) -> Result<String, FeishuError> {
         let image_key = self.upload_message_image(image_path).await?;
         let content = serde_json::json!({ "image_key": image_key }).to_string();
-        self.send_message(chat_id, &content, "image").await
+        self.send_message_to_target(receive_id_type, receive_id, &content, "image")
+            .await
     }
 
     pub(super) async fn reply_image_ext(

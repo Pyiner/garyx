@@ -11,10 +11,10 @@ use garyx_models::provider::{
     StreamBoundaryKind, StreamEvent, attachments_to_metadata_value,
 };
 use garyx_models::{MessageLedgerEvent, MessageLifecycleStatus, MessageTerminalReason};
-use garyx_router::{InboundRequest, MessageRouter};
+use garyx_router::{InboundRequest, MessageRouter, endpoint_key};
 use prost::Message as ProstMessage;
 use serde_json::{Value, json};
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, mpsc, watch};
 use tokio::time::Instant;
 use tracing::{debug, error, info, warn};
 
@@ -32,13 +32,15 @@ use super::{
     prune_sender_name_cache_locked, record_policy_block, requires_group_mention,
     resolve_topic_session_mode, send_native_command_reply, sender_name_cache, strip_mention_tokens,
 };
+use crate::dispatcher::ChannelDispatcher;
 use crate::generated_images::{extract_image_generation_result, write_generated_image_temp};
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(super) struct FeishuRuntimeContext<'a> {
     pub(super) account_id: &'a str,
     pub(super) router: &'a Arc<Mutex<MessageRouter>>,
     pub(super) bridge: &'a Arc<MultiProviderBridge>,
+    pub(super) dispatcher: &'a Arc<dyn ChannelDispatcher>,
     pub(super) client: &'a FeishuClient,
     pub(super) account: &'a FeishuAccount,
     pub(super) bot_open_id: &'a str,
@@ -49,6 +51,7 @@ impl<'a> FeishuRuntimeContext<'a> {
         account_id: &'a str,
         router: &'a Arc<Mutex<MessageRouter>>,
         bridge: &'a Arc<MultiProviderBridge>,
+        dispatcher: &'a Arc<dyn ChannelDispatcher>,
         client: &'a FeishuClient,
         account: &'a FeishuAccount,
         bot_open_id: &'a str,
@@ -57,11 +60,410 @@ impl<'a> FeishuRuntimeContext<'a> {
             account_id,
             router,
             bridge,
+            dispatcher,
             client,
             account,
             bot_open_id,
         }
     }
+}
+
+pub(crate) struct FeishuStreamingCallbackConfig {
+    pub(crate) client: FeishuClient,
+    pub(crate) router: Arc<Mutex<MessageRouter>>,
+    pub(crate) account_id: String,
+    pub(crate) receive_id_type: String,
+    pub(crate) chat_id: String,
+    pub(crate) reply_message_id: Option<String>,
+    pub(crate) reply_in_thread: bool,
+    pub(crate) is_group_reply: bool,
+    pub(crate) mention_prefix: String,
+    pub(crate) native_thread_scope: Option<String>,
+    pub(crate) processing_reaction_id: Option<String>,
+}
+
+async fn notify_feishu_stream_error(
+    client: &FeishuClient,
+    account_id: &str,
+    chat_id: &str,
+    reply_message_id: Option<&str>,
+    error: &FeishuError,
+) {
+    let Some(reply_message_id) = reply_message_id else {
+        return;
+    };
+    notify_permission_error_if_needed(
+        client,
+        account_id,
+        chat_id,
+        reply_message_id,
+        &error.to_string(),
+    )
+    .await;
+}
+
+async fn record_feishu_stream_outbound(
+    router: &Arc<Mutex<MessageRouter>>,
+    canonical_thread_id: &str,
+    account_id: &str,
+    chat_id: &str,
+    native_thread_scope: Option<&str>,
+    outbound_msg_id: &str,
+) {
+    if outbound_msg_id.is_empty() || canonical_thread_id.is_empty() {
+        return;
+    }
+    let mut router = router.lock().await;
+    router
+        .record_outbound_message_with_persistence(
+            canonical_thread_id,
+            "feishu",
+            account_id,
+            chat_id,
+            native_thread_scope,
+            outbound_msg_id,
+        )
+        .await;
+}
+
+async fn send_feishu_stream_text(
+    cfg: &FeishuStreamingCallbackConfig,
+    canonical_thread_id: &str,
+    text: &str,
+) -> Result<String, FeishuError> {
+    let content = build_card_content(text);
+    let result = if let Some(reply_message_id) = cfg.reply_message_id.as_deref() {
+        if cfg.is_group_reply {
+            cfg.client
+                .reply_message_ext(
+                    reply_message_id,
+                    &content,
+                    "interactive",
+                    cfg.reply_in_thread,
+                )
+                .await
+        } else {
+            cfg.client
+                .send_message_to_target(&cfg.receive_id_type, &cfg.chat_id, &content, "interactive")
+                .await
+        }
+    } else {
+        cfg.client
+            .send_message_to_target(&cfg.receive_id_type, &cfg.chat_id, &content, "interactive")
+            .await
+    };
+
+    if let Ok(outbound_msg_id) = result.as_ref() {
+        record_feishu_stream_outbound(
+            &cfg.router,
+            canonical_thread_id,
+            &cfg.account_id,
+            &cfg.chat_id,
+            cfg.native_thread_scope.as_deref(),
+            outbound_msg_id,
+        )
+        .await;
+    }
+    result
+}
+
+async fn send_feishu_stream_image(
+    cfg: &FeishuStreamingCallbackConfig,
+    canonical_thread_id: &str,
+    image_path: &std::path::Path,
+) -> Result<String, FeishuError> {
+    let result = if let Some(reply_message_id) = cfg.reply_message_id.as_deref() {
+        if cfg.is_group_reply {
+            cfg.client
+                .reply_image_ext(reply_message_id, image_path, cfg.reply_in_thread)
+                .await
+        } else {
+            cfg.client
+                .send_image_to_target(&cfg.receive_id_type, &cfg.chat_id, image_path)
+                .await
+        }
+    } else {
+        cfg.client
+            .send_image_to_target(&cfg.receive_id_type, &cfg.chat_id, image_path)
+            .await
+    };
+
+    if let Ok(outbound_msg_id) = result.as_ref() {
+        record_feishu_stream_outbound(
+            &cfg.router,
+            canonical_thread_id,
+            &cfg.account_id,
+            &cfg.chat_id,
+            cfg.native_thread_scope.as_deref(),
+            outbound_msg_id,
+        )
+        .await;
+    }
+    result
+}
+
+pub(crate) fn build_feishu_response_callback(
+    cfg: FeishuStreamingCallbackConfig,
+) -> (
+    Arc<dyn Fn(StreamEvent) + Send + Sync>,
+    watch::Sender<String>,
+) {
+    let state = Arc::new(tokio::sync::Mutex::new(FeishuResponseStreamState {
+        processing_reaction_id: cfg.processing_reaction_id.clone(),
+        ..FeishuResponseStreamState::default()
+    }));
+    let (thread_id_tx, thread_id_rx) = watch::channel(String::new());
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<StreamEvent>();
+    let cfg = Arc::new(cfg);
+    let worker_state = state.clone();
+
+    tokio::spawn(async move {
+        let mut thread_id_rx = thread_id_rx;
+        while let Some(event) = event_rx.recv().await {
+            let mut canonical_thread_id = thread_id_rx.borrow().clone();
+            while canonical_thread_id.is_empty() {
+                if thread_id_rx.changed().await.is_err() {
+                    break;
+                }
+                canonical_thread_id = thread_id_rx.borrow().clone();
+            }
+            if canonical_thread_id.is_empty() {
+                continue;
+            }
+
+            let mut state = worker_state.lock().await;
+            let mut text_to_send = String::new();
+            let mut send_result: Option<Result<String, FeishuError>> = None;
+            match event {
+                StreamEvent::SessionBound { .. } => {
+                    continue;
+                }
+                StreamEvent::Boundary { kind, .. } => match kind {
+                    StreamBoundaryKind::UserAck => {
+                        let mut boundary_text = state.stream_text.clone();
+                        if !cfg.mention_prefix.is_empty() {
+                            boundary_text = format!("{} {boundary_text}", cfg.mention_prefix);
+                        }
+                        boundary_text = boundary_text.trim().to_owned();
+                        crate::streaming_core::apply_stream_boundary_text(
+                            &mut state.stream_text,
+                            StreamBoundaryKind::UserAck,
+                        );
+                        drop(state);
+
+                        if !boundary_text.is_empty()
+                            && let Err(error) =
+                                send_feishu_stream_text(&cfg, &canonical_thread_id, &boundary_text)
+                                    .await
+                        {
+                            error!(
+                                account_id = %cfg.account_id,
+                                error = %error,
+                                "Failed to send Feishu boundary reply"
+                            );
+                            notify_feishu_stream_error(
+                                &cfg.client,
+                                &cfg.account_id,
+                                &cfg.chat_id,
+                                cfg.reply_message_id.as_deref(),
+                                &error,
+                            )
+                            .await;
+                        }
+                        continue;
+                    }
+                    StreamBoundaryKind::AssistantSegment => {
+                        crate::streaming_core::apply_stream_boundary_text(
+                            &mut state.stream_text,
+                            StreamBoundaryKind::AssistantSegment,
+                        );
+                        continue;
+                    }
+                },
+                StreamEvent::Delta { text } => {
+                    if text.is_empty() {
+                        continue;
+                    }
+                    state.stream_text = merge_stream_text(&state.stream_text, &text);
+                    continue;
+                }
+                StreamEvent::ToolUse { message } => {
+                    if let Some(reply_message_id) = cfg.reply_message_id.as_deref() {
+                        send_pending_stream_text_cot_events(
+                            &cfg.client,
+                            &mut state,
+                            &cfg.account_id,
+                            &cfg.chat_id,
+                            &canonical_thread_id,
+                            reply_message_id,
+                        )
+                        .await;
+                        send_tool_use_cot_events(
+                            &cfg.client,
+                            &mut state,
+                            &cfg.account_id,
+                            &cfg.chat_id,
+                            &canonical_thread_id,
+                            reply_message_id,
+                            &message,
+                        )
+                        .await;
+                    }
+                    continue;
+                }
+                StreamEvent::ToolResult { message } => {
+                    if let Some(reply_message_id) = cfg.reply_message_id.as_deref() {
+                        send_pending_stream_text_cot_events(
+                            &cfg.client,
+                            &mut state,
+                            &cfg.account_id,
+                            &cfg.chat_id,
+                            &canonical_thread_id,
+                            reply_message_id,
+                        )
+                        .await;
+                        send_tool_result_cot_events(
+                            &cfg.client,
+                            &mut state,
+                            &cfg.account_id,
+                            &cfg.chat_id,
+                            &canonical_thread_id,
+                            reply_message_id,
+                            &message,
+                        )
+                        .await;
+                    }
+                    let Some(image) = extract_image_generation_result(&message) else {
+                        continue;
+                    };
+                    drop(state);
+
+                    let image_path = match write_generated_image_temp("feishu", &image).await {
+                        Ok(path) => path,
+                        Err(error) => {
+                            warn!(
+                                account_id = %cfg.account_id,
+                                error = %error,
+                                "failed to write Feishu generated image temp file"
+                            );
+                            continue;
+                        }
+                    };
+                    let image_send_result =
+                        send_feishu_stream_image(&cfg, &canonical_thread_id, &image_path).await;
+                    let _ = tokio::fs::remove_file(&image_path).await;
+
+                    match image_send_result {
+                        Ok(outbound_msg_id) => {
+                            info!(
+                                account_id = %cfg.account_id,
+                                outbound_message_id = %outbound_msg_id,
+                                "Feishu generated image sent"
+                            );
+                        }
+                        Err(error) => {
+                            error!(
+                                account_id = %cfg.account_id,
+                                error = %error,
+                                "Failed to send Feishu generated image"
+                            );
+                            notify_feishu_stream_error(
+                                &cfg.client,
+                                &cfg.account_id,
+                                &cfg.chat_id,
+                                cfg.reply_message_id.as_deref(),
+                                &error,
+                            )
+                            .await;
+                        }
+                    }
+                    continue;
+                }
+                StreamEvent::ThreadTitleUpdated { .. } => {}
+                StreamEvent::Done => {
+                    finish_cot_run(
+                        &cfg.client,
+                        &mut state,
+                        &cfg.account_id,
+                        &canonical_thread_id,
+                    )
+                    .await;
+                }
+            }
+
+            let mut final_text = state.stream_text.clone();
+            state.stream_text.clear();
+
+            if !cfg.mention_prefix.is_empty() {
+                final_text = format!("{} {final_text}", cfg.mention_prefix);
+            }
+            final_text = final_text.trim().to_owned();
+            if !final_text.is_empty() {
+                text_to_send = final_text;
+            }
+
+            if !text_to_send.is_empty() {
+                send_result =
+                    Some(send_feishu_stream_text(&cfg, &canonical_thread_id, &text_to_send).await);
+            }
+
+            if !state.processing_reaction_removed {
+                if let (Some(reply_message_id), Some(reaction_id)) = (
+                    cfg.reply_message_id.as_deref(),
+                    state.processing_reaction_id.take(),
+                ) && let Err(error) = cfg
+                    .client
+                    .remove_reaction(reply_message_id, &reaction_id)
+                    .await
+                {
+                    debug!(
+                        account_id = %cfg.account_id,
+                        message_id = %reply_message_id,
+                        reaction_id = %reaction_id,
+                        error = %error,
+                        "Feishu remove processing reaction skipped"
+                    );
+                }
+                state.processing_reaction_removed = true;
+            }
+
+            drop(state);
+
+            if let Some(send_result) = send_result {
+                match send_result {
+                    Ok(outbound_msg_id) => {
+                        info!(
+                            account_id = %cfg.account_id,
+                            outbound_message_id = %outbound_msg_id,
+                            "Feishu reply sent"
+                        );
+                    }
+                    Err(error) => {
+                        error!(
+                            account_id = %cfg.account_id,
+                            error = %error,
+                            "Failed to send Feishu reply"
+                        );
+                        notify_feishu_stream_error(
+                            &cfg.client,
+                            &cfg.account_id,
+                            &cfg.chat_id,
+                            cfg.reply_message_id.as_deref(),
+                            &error,
+                        )
+                        .await;
+                    }
+                }
+            }
+        }
+    });
+
+    let response_callback: Arc<dyn Fn(StreamEvent) + Send + Sync> =
+        Arc::new(move |event: StreamEvent| {
+            let _ = event_tx.send(event);
+        });
+
+    (response_callback, thread_id_tx)
 }
 
 fn resolve_native_thread_scope(
@@ -378,6 +780,7 @@ pub(super) async fn ws_listen_loop(
     running: Arc<AtomicBool>,
     router: Arc<Mutex<MessageRouter>>,
     bridge: Arc<MultiProviderBridge>,
+    dispatcher: Arc<dyn ChannelDispatcher>,
     _public_url: &str,
 ) {
     let mut reconnect_delay = WS_RECONNECT_DELAY;
@@ -444,8 +847,15 @@ pub(super) async fn ws_listen_loop(
         );
         let reconnect_base_delay = Duration::from_secs(connect_info.reconnect_interval_secs.max(1));
         reconnect_delay = reconnect_delay.max(reconnect_base_delay);
-        let runtime =
-            FeishuRuntimeContext::new(account_id, &router, &bridge, client, account, &bot_open_id);
+        let runtime = FeishuRuntimeContext::new(
+            account_id,
+            &router,
+            &bridge,
+            &dispatcher,
+            client,
+            account,
+            &bot_open_id,
+        );
 
         match ws_connect_and_listen(&connect_info, &running, runtime).await {
             Ok(()) => {
@@ -557,7 +967,7 @@ async fn ws_connect_and_listen(
 
                         // The payload is the event JSON
                         if let Some(payload) = frame.payload_str() {
-                            handle_ws_event_payload(payload, runtime).await;
+                            handle_ws_event_payload(payload, runtime.clone()).await;
                         }
 
                         debug!(account_id = %runtime.account_id, elapsed_ms = start.elapsed().as_millis(), "Event processed");
@@ -572,7 +982,7 @@ async fn ws_connect_and_listen(
             }
             tokio_tungstenite::tungstenite::Message::Text(text) => {
                 // Fallback: some versions may send JSON text
-                handle_ws_event_payload(&text, runtime).await;
+                handle_ws_event_payload(&text, runtime.clone()).await;
             }
             tokio_tungstenite::tungstenite::Message::Ping(data) => {
                 if let Err(e) = ws_write
@@ -945,379 +1355,19 @@ pub(super) async fn handle_im_message_event(
         }
     }
 
-    // Set up response callback that sends the reply via Feishu API and
-    // records the outbound message for reply routing.
-    //
-    // Reply target: always reply to the user's inbound message, but keep the
-    // delivery in the main group chat. Feishu does not currently give us a
-    // reliable inbound signal to distinguish a normal reply chain from a user
-    // intentionally opening a separate topic.
-    let reply_in_thread = false;
-
-    let reply_client = runtime.client.clone();
-    let reply_message_id = message.message_id.clone();
-    let reply_chat_id = message.chat_id.clone();
-    let reply_is_group = is_group;
-    let router_cb = runtime.router.clone();
-    let account_id_cb = runtime.account_id.to_owned();
-    let canonical_thread_id_holder = Arc::new(std::sync::Mutex::new(String::new()));
-    let canonical_thread_id_for_stream = canonical_thread_id_holder.clone();
-    let stream_state = Arc::new(tokio::sync::Mutex::new(FeishuResponseStreamState {
-        processing_reaction_id,
-        ..FeishuResponseStreamState::default()
-    }));
-    let mention_prefix_cb = mention_prefix.clone();
-
-    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<StreamEvent>();
-    let worker_client = reply_client.clone();
-    let worker_msg_id = reply_message_id.clone();
-    let worker_reply_in_thread = reply_in_thread;
-    let worker_chat_id = reply_chat_id.clone();
-    let worker_router = router_cb.clone();
-    let worker_account_id = account_id_cb.clone();
-    let worker_is_group = reply_is_group;
-    let worker_mention_prefix = mention_prefix_cb.clone();
-    let worker_native_thread_scope = native_thread_scope.clone();
-    let worker_state = stream_state.clone();
-    tokio::spawn(async move {
-        while let Some(event) = event_rx.recv().await {
-            let canonical_thread_id = loop {
-                let current = match canonical_thread_id_for_stream.lock() {
-                    Ok(holder) => holder.clone(),
-                    Err(_) => {
-                        warn!(
-                            account_id = %worker_account_id,
-                            "thread id holder mutex poisoned"
-                        );
-                        String::new()
-                    }
-                };
-                if !current.is_empty() {
-                    break current;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            };
-
-            let mut state = worker_state.lock().await;
-            let mut text_to_send = String::new();
-            let mut send_interactive_fallback = false;
-            let mut send_result: Option<Result<String, FeishuError>> = None;
-            match event {
-                StreamEvent::SessionBound { .. } => {
-                    continue;
-                }
-                StreamEvent::Boundary { kind, .. } => match kind {
-                    StreamBoundaryKind::UserAck => {
-                        let mut boundary_text = state.stream_text.clone();
-                        if !worker_mention_prefix.is_empty() {
-                            boundary_text = format!("{worker_mention_prefix} {boundary_text}");
-                        }
-                        boundary_text = boundary_text.trim().to_owned();
-                        crate::streaming_core::apply_stream_boundary_text(
-                            &mut state.stream_text,
-                            StreamBoundaryKind::UserAck,
-                        );
-                        drop(state);
-
-                        if !boundary_text.is_empty() {
-                            let content = build_card_content(&boundary_text);
-                            let boundary_result = if worker_is_group {
-                                worker_client
-                                    .reply_message_ext(
-                                        &worker_msg_id,
-                                        &content,
-                                        "interactive",
-                                        worker_reply_in_thread,
-                                    )
-                                    .await
-                            } else {
-                                worker_client
-                                    .send_message(&worker_chat_id, &content, "interactive")
-                                    .await
-                            };
-                            match boundary_result {
-                                Ok(outbound_msg_id) => {
-                                    if !outbound_msg_id.is_empty()
-                                        && !canonical_thread_id.is_empty()
-                                    {
-                                        let mut r = worker_router.lock().await;
-                                        r.record_outbound_message_with_persistence(
-                                            &canonical_thread_id,
-                                            "feishu",
-                                            &worker_account_id,
-                                            &worker_chat_id,
-                                            worker_native_thread_scope.as_deref(),
-                                            &outbound_msg_id,
-                                        )
-                                        .await;
-                                    }
-                                }
-                                Err(e) => {
-                                    error!(
-                                        account_id = %worker_account_id,
-                                        error = %e,
-                                        "Failed to send Feishu boundary reply"
-                                    );
-                                    notify_permission_error_if_needed(
-                                        &worker_client,
-                                        &worker_account_id,
-                                        &worker_chat_id,
-                                        &worker_msg_id,
-                                        &e.to_string(),
-                                    )
-                                    .await;
-                                }
-                            }
-                        }
-                        continue;
-                    }
-                    StreamBoundaryKind::AssistantSegment => {
-                        crate::streaming_core::apply_stream_boundary_text(
-                            &mut state.stream_text,
-                            StreamBoundaryKind::AssistantSegment,
-                        );
-                        continue;
-                    }
-                },
-                StreamEvent::Delta { text } => {
-                    if text.is_empty() {
-                        continue;
-                    }
-                    state.stream_text = merge_stream_text(&state.stream_text, &text);
-                    continue;
-                }
-                StreamEvent::ToolUse { message } => {
-                    send_pending_stream_text_cot_events(
-                        &worker_client,
-                        &mut state,
-                        &worker_account_id,
-                        &worker_chat_id,
-                        &canonical_thread_id,
-                        &worker_msg_id,
-                    )
-                    .await;
-                    send_tool_use_cot_events(
-                        &worker_client,
-                        &mut state,
-                        &worker_account_id,
-                        &worker_chat_id,
-                        &canonical_thread_id,
-                        &worker_msg_id,
-                        &message,
-                    )
-                    .await;
-                    continue;
-                }
-                StreamEvent::ToolResult { message } => {
-                    send_pending_stream_text_cot_events(
-                        &worker_client,
-                        &mut state,
-                        &worker_account_id,
-                        &worker_chat_id,
-                        &canonical_thread_id,
-                        &worker_msg_id,
-                    )
-                    .await;
-                    send_tool_result_cot_events(
-                        &worker_client,
-                        &mut state,
-                        &worker_account_id,
-                        &worker_chat_id,
-                        &canonical_thread_id,
-                        &worker_msg_id,
-                        &message,
-                    )
-                    .await;
-                    let Some(image) = extract_image_generation_result(&message) else {
-                        continue;
-                    };
-                    drop(state);
-
-                    let image_path = match write_generated_image_temp("feishu", &image).await {
-                        Ok(path) => path,
-                        Err(err) => {
-                            warn!(
-                                account_id = %worker_account_id,
-                                error = %err,
-                                "failed to write Feishu generated image temp file"
-                            );
-                            continue;
-                        }
-                    };
-
-                    let image_send_result = if worker_is_group {
-                        worker_client
-                            .reply_image_ext(&worker_msg_id, &image_path, worker_reply_in_thread)
-                            .await
-                    } else {
-                        worker_client.send_image(&worker_chat_id, &image_path).await
-                    };
-                    let _ = tokio::fs::remove_file(&image_path).await;
-
-                    match image_send_result {
-                        Ok(outbound_msg_id) => {
-                            info!(
-                                account_id = %worker_account_id,
-                                outbound_message_id = %outbound_msg_id,
-                                "Feishu generated image sent"
-                            );
-                            if !outbound_msg_id.is_empty() && !canonical_thread_id.is_empty() {
-                                let mut r = worker_router.lock().await;
-                                r.record_outbound_message_with_persistence(
-                                    &canonical_thread_id,
-                                    "feishu",
-                                    &worker_account_id,
-                                    &worker_chat_id,
-                                    worker_native_thread_scope.as_deref(),
-                                    &outbound_msg_id,
-                                )
-                                .await;
-                            } else if canonical_thread_id.is_empty() {
-                                warn!(
-                                    account_id = %worker_account_id,
-                                    outbound_message_id = %outbound_msg_id,
-                                    "Feishu generated image not indexed: thread key unavailable"
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            error!(
-                                account_id = %worker_account_id,
-                                error = %e,
-                                "Failed to send Feishu generated image"
-                            );
-                            notify_permission_error_if_needed(
-                                &worker_client,
-                                &worker_account_id,
-                                &worker_chat_id,
-                                &worker_msg_id,
-                                &e.to_string(),
-                            )
-                            .await;
-                        }
-                    }
-                    continue;
-                }
-                StreamEvent::ThreadTitleUpdated { .. } => {}
-                StreamEvent::Done => {
-                    finish_cot_run(
-                        &worker_client,
-                        &mut state,
-                        &worker_account_id,
-                        &canonical_thread_id,
-                    )
-                    .await;
-                }
-            }
-
-            let mut final_text = state.stream_text.clone();
-            state.stream_text.clear();
-
-            if !worker_mention_prefix.is_empty() {
-                final_text = format!("{worker_mention_prefix} {final_text}");
-            }
-            final_text = final_text.trim().to_owned();
-            if !final_text.is_empty() {
-                text_to_send = final_text;
-            }
-
-            if !text_to_send.is_empty() {
-                send_interactive_fallback = true;
-            }
-
-            if send_interactive_fallback && !text_to_send.is_empty() {
-                let content = build_card_content(&text_to_send);
-                debug!(
-                    account_id = %worker_account_id,
-                    reply_to = %worker_msg_id,
-                    is_group = worker_is_group,
-                    "Feishu fallback card: sending reply"
-                );
-                send_result = Some(if worker_is_group {
-                    worker_client
-                        .reply_message_ext(
-                            &worker_msg_id,
-                            &content,
-                            "interactive",
-                            worker_reply_in_thread,
-                        )
-                        .await
-                } else {
-                    worker_client
-                        .send_message(&worker_chat_id, &content, "interactive")
-                        .await
-                });
-            }
-
-            if !state.processing_reaction_removed {
-                if let Some(reaction_id) = state.processing_reaction_id.take()
-                    && let Err(err) = worker_client
-                        .remove_reaction(&worker_msg_id, &reaction_id)
-                        .await
-                {
-                    debug!(
-                        account_id = %worker_account_id,
-                        message_id = %worker_msg_id,
-                        reaction_id = %reaction_id,
-                        error = %err,
-                        "Feishu remove processing reaction skipped"
-                    );
-                }
-                state.processing_reaction_removed = true;
-            }
-
-            drop(state);
-
-            if let Some(send_result) = send_result {
-                match send_result {
-                    Ok(outbound_msg_id) => {
-                        info!(
-                            account_id = %worker_account_id,
-                            outbound_message_id = %outbound_msg_id,
-                            "Feishu reply sent"
-                        );
-                        if !outbound_msg_id.is_empty() && !canonical_thread_id.is_empty() {
-                            let mut r = worker_router.lock().await;
-                            r.record_outbound_message_with_persistence(
-                                &canonical_thread_id,
-                                "feishu",
-                                &worker_account_id,
-                                &worker_chat_id,
-                                worker_native_thread_scope.as_deref(),
-                                &outbound_msg_id,
-                            )
-                            .await;
-                        } else if canonical_thread_id.is_empty() {
-                            warn!(
-                                account_id = %worker_account_id,
-                                outbound_message_id = %outbound_msg_id,
-                                "Feishu outbound message not indexed: thread key unavailable"
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        error!(
-                            account_id = %worker_account_id,
-                            error = %e,
-                            "Failed to send Feishu reply"
-                        );
-                        notify_permission_error_if_needed(
-                            &worker_client,
-                            &worker_account_id,
-                            &worker_chat_id,
-                            &worker_msg_id,
-                            &e.to_string(),
-                        )
-                        .await;
-                    }
-                }
-            }
-        }
-    });
-
-    let response_callback: Arc<dyn Fn(StreamEvent) + Send + Sync> =
-        Arc::new(move |event: StreamEvent| {
-            let _ = event_tx.send(event);
+    let (response_callback, thread_id_tx) =
+        build_feishu_response_callback(FeishuStreamingCallbackConfig {
+            client: runtime.client.clone(),
+            router: runtime.router.clone(),
+            account_id: runtime.account_id.to_owned(),
+            receive_id_type: "chat_id".to_owned(),
+            chat_id: message.chat_id.clone(),
+            reply_message_id: Some(message.message_id.clone()),
+            reply_in_thread: false,
+            is_group_reply: is_group,
+            mention_prefix: mention_prefix.clone(),
+            native_thread_scope: native_thread_scope.clone(),
+            processing_reaction_id,
         });
 
     let request = InboundRequest {
@@ -1338,14 +1388,24 @@ pub(super) async fn handle_im_message_event(
         file_paths,
     };
 
+    let origin_endpoint_identity =
+        endpoint_key("feishu", runtime.account_id, &request.thread_binding_key);
+    let deferred_fanout = crate::bound_fanout::DeferredBoundStreamFanout::new(
+        runtime.router.clone(),
+        runtime.dispatcher.clone(),
+        request.run_id.clone(),
+        origin_endpoint_identity,
+    );
+    let fanout_consumer = deferred_fanout.consumer(response_callback);
+
     // Read this run's stream from the durable committed transcript: subscribe
-    // before dispatch and let the replay adapter drive the Feishu sender. `None`
-    // is then passed to dispatch so the bridge does not double-drive the same
-    // callback.
+    // before dispatch and let the replay adapter drive the Feishu sender.
+    // Bound non-origin endpoints attach after route_and_dispatch resolves the
+    // canonical thread id.
     let dispatch_callback = match crate::committed_replay::committed_callback(
         runtime.bridge,
         &request.run_id,
-        response_callback,
+        fanout_consumer,
     )
     .await
     {
@@ -1355,6 +1415,16 @@ pub(super) async fn handle_im_message_event(
             return;
         }
     };
+
+    let thread_store = {
+        let router_guard = runtime.router.lock().await;
+        router_guard.thread_store()
+    };
+    let dispatch_delegate = crate::bound_fanout::DeferredFanoutAgentDispatcher::new(
+        runtime.bridge.as_ref(),
+        deferred_fanout.clone(),
+        thread_store,
+    );
 
     let dispatch_result = {
         let mut router_guard = runtime.router.lock().await;
@@ -1385,20 +1455,14 @@ pub(super) async fn handle_im_message_event(
             })
             .await;
         router_guard
-            .route_and_dispatch(request, runtime.bridge.as_ref(), dispatch_callback)
+            .route_and_dispatch(request, &dispatch_delegate, dispatch_callback)
             .await
     };
 
     match dispatch_result {
         Ok(result) => {
-            if let Ok(mut holder) = canonical_thread_id_holder.lock() {
-                *holder = result.thread_id.clone();
-            } else {
-                warn!(
-                    account_id = %runtime.account_id,
-                    "thread id holder mutex poisoned"
-                );
-            }
+            deferred_fanout.attach_thread(&result.thread_id).await;
+            let _ = thread_id_tx.send(result.thread_id.clone());
             if let Some(local_reply) = result.local_reply {
                 match send_native_command_reply(runtime.client, &message.message_id, &local_reply)
                     .await

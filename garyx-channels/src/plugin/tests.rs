@@ -1138,6 +1138,7 @@ mod manifest_compat {
                 outbound: true,
                 inbound: true,
                 streaming: false,
+                dispatch_stream_event: false,
                 images: false,
                 files: false,
                 hot_reload_accounts: false,

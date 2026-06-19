@@ -1,4 +1,5 @@
 pub mod auth_flow;
+pub mod bound_fanout;
 pub mod builtin_catalog;
 pub mod channel_trait;
 pub mod committed_replay;
@@ -44,8 +45,9 @@ pub use channel_trait::{Channel, ChannelError};
 pub use discord::DiscordChannel;
 pub use dispatcher::{
     ChannelDispatcher, ChannelDispatcherImpl, ChannelInfo, DiscordSender, FeishuChatSummary,
-    FeishuSender, OutboundMessage, SendMessageResult, StreamingDispatchTarget, SwappableDispatcher,
-    TelegramSender, build_outbound_stream_callback,
+    FeishuSender, OutboundMessage, SendMessageResult, StreamDispatchCallback,
+    StreamDispatchEnvelope, StreamDispatchRole, StreamingDispatchTarget, SwappableDispatcher,
+    TelegramSender, build_outbound_stream_callback, build_stream_dispatch_callback,
 };
 pub use feishu::FeishuChannel;
 pub use garyx_models::ChannelOutboundContent;

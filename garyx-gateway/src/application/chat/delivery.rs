@@ -6,7 +6,7 @@ use self::plan::{
     BoundThreadDeliveryTarget, snapshot_bound_thread_delivery_targets,
     targets_except_streaming_target,
 };
-use garyx_channels::{StreamingDispatchTarget, build_outbound_stream_callback};
+use garyx_channels::{StreamDispatchRole, StreamingDispatchTarget, build_stream_dispatch_callback};
 use garyx_models::provider::StreamEvent;
 
 use crate::server::AppState;
@@ -21,24 +21,29 @@ pub async fn build_bound_response_callback(
     garyx_channels::committed_replay::CommittedReplayError,
 > {
     let targets = snapshot_bound_thread_delivery_targets(state, thread_id).await;
-    if let Some(target) = streaming_target.as_ref()
-        && let Some(callback) = state
-            .channel_dispatcher()
-            .build_streaming_callback(target.clone(), state.threads.router.clone())
-    {
+    if let Some(target) = streaming_target.as_ref() {
+        let callback = build_stream_dispatch_callback(
+            state.channel_dispatcher(),
+            target.clone(),
+            state.threads.router.clone(),
+            StreamDispatchRole::Origin,
+        );
         let bound_consumer = build_bound_delivery_consumer(
             state.clone(),
             thread_id.to_owned(),
+            run_id.to_owned(),
             targets_except_streaming_target(&targets, target),
         );
 
-        let consumer = if let Some(bound_consumer) = bound_consumer {
-            Arc::new(move |event: StreamEvent| {
+        let consumer = match (callback, bound_consumer) {
+            (Some(callback), Some(bound_consumer)) => Arc::new(move |event: StreamEvent| {
                 callback(event.clone());
                 bound_consumer(event);
-            }) as Arc<dyn Fn(StreamEvent) + Send + Sync>
-        } else {
-            callback
+            })
+                as Arc<dyn Fn(StreamEvent) + Send + Sync>,
+            (Some(callback), None) => callback,
+            (None, Some(bound_consumer)) => bound_consumer,
+            (None, None) => return Ok(None),
         };
         // Read this run's stream from the durable committed transcript. The
         // streaming sender is unchanged; only the source changes.
@@ -50,9 +55,12 @@ pub async fn build_bound_response_callback(
         .await;
     }
 
-    let Some(bound_consumer) =
-        build_bound_delivery_consumer(state.clone(), thread_id.to_owned(), targets)
-    else {
+    let Some(bound_consumer) = build_bound_delivery_consumer(
+        state.clone(),
+        thread_id.to_owned(),
+        run_id.to_owned(),
+        targets,
+    ) else {
         return Ok(None);
     };
 
@@ -68,10 +76,13 @@ pub async fn build_bound_response_callback(
 
 fn delivery_target_to_streaming_target(
     target_thread_id: &str,
+    run_id: &str,
     target: BoundThreadDeliveryTarget,
 ) -> StreamingDispatchTarget {
     StreamingDispatchTarget {
         target_thread_id: target_thread_id.to_owned(),
+        endpoint_identity: target.endpoint_identity,
+        run_id: run_id.to_owned(),
         channel: target.channel,
         account_id: target.account_id,
         chat_id: target.chat_id,
@@ -84,6 +95,7 @@ fn delivery_target_to_streaming_target(
 fn build_bound_delivery_consumer(
     state: Arc<AppState>,
     thread_id: String,
+    run_id: String,
     targets: Vec<BoundThreadDeliveryTarget>,
 ) -> Option<Arc<dyn Fn(StreamEvent) + Send + Sync>> {
     if targets.is_empty() {
@@ -94,13 +106,23 @@ fn build_bound_delivery_consumer(
     let dispatcher = state.channel_dispatcher();
     let callbacks: Vec<Arc<dyn Fn(StreamEvent) + Send + Sync>> = targets
         .into_iter()
-        .map(|target| delivery_target_to_streaming_target(&thread_id, target))
-        .map(|target| {
-            dispatcher
-                .build_streaming_callback(target.clone(), router.clone())
-                .unwrap_or_else(|| {
-                    build_outbound_stream_callback(dispatcher.clone(), target, router.clone())
-                })
+        .map(|target| delivery_target_to_streaming_target(&thread_id, &run_id, target))
+        .filter_map(|target| {
+            let callback = build_stream_dispatch_callback(
+                dispatcher.clone(),
+                target.clone(),
+                router.clone(),
+                StreamDispatchRole::BoundTarget,
+            );
+            if callback.is_none() {
+                tracing::warn!(
+                    channel = %target.channel,
+                    account_id = %target.account_id,
+                    endpoint_identity = %target.endpoint_identity,
+                    "no stream dispatch callback available for bound delivery target"
+                );
+            }
+            callback
         })
         .collect();
 

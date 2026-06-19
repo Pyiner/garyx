@@ -49,6 +49,11 @@ pub struct ManifestCapabilities {
     pub inbound: bool,
     #[serde(default)]
     pub streaming: bool,
+    /// Host -> plugin outbound stream-event fanout. This is intentionally
+    /// narrower than `streaming`, which describes the plugin inbound progress
+    /// path (`stream_frame` / `stream_end`).
+    #[serde(default)]
+    pub dispatch_stream_event: bool,
     #[serde(default)]
     pub images: bool,
     #[serde(default)]

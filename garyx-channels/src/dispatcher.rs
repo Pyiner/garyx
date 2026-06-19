@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -24,7 +25,7 @@ use tracing::{debug, info, warn};
 use garyx_models::config::{ChannelsConfig, FeishuDomain};
 
 use crate::channel_trait::ChannelError;
-use crate::plugin_host::{DispatchOutbound, PluginSenderHandle};
+use crate::plugin_host::{DispatchOutbound, DispatchStreamEvent, PluginSenderHandle};
 use crate::weixin;
 
 // ---------------------------------------------------------------------------
@@ -70,12 +71,77 @@ pub struct ChannelInfo {
 #[derive(Debug, Clone)]
 pub struct StreamingDispatchTarget {
     pub target_thread_id: String,
+    pub endpoint_identity: String,
+    pub run_id: String,
     pub channel: String,
     pub account_id: String,
     pub chat_id: String,
     pub delivery_target_type: String,
     pub delivery_target_id: String,
     pub thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StreamDispatchEnvelope {
+    pub account_id: String,
+    pub chat_id: String,
+    pub delivery_target_type: String,
+    pub delivery_target_id: String,
+    pub endpoint_identity: String,
+    pub thread_id: String,
+    pub run_id: String,
+    pub event: StreamEvent,
+    pub delivery_thread_id: Option<String>,
+}
+
+impl StreamDispatchEnvelope {
+    pub fn from_target(target: &StreamingDispatchTarget, event: StreamEvent) -> Self {
+        Self {
+            account_id: target.account_id.clone(),
+            chat_id: target.chat_id.clone(),
+            delivery_target_type: target.delivery_target_type.clone(),
+            delivery_target_id: target.delivery_target_id.clone(),
+            endpoint_identity: target.endpoint_identity.clone(),
+            thread_id: target.target_thread_id.clone(),
+            run_id: target.run_id.clone(),
+            event,
+            delivery_thread_id: target.thread_id.clone(),
+        }
+    }
+}
+
+impl From<StreamDispatchEnvelope> for DispatchStreamEvent {
+    fn from(envelope: StreamDispatchEnvelope) -> Self {
+        Self {
+            account_id: envelope.account_id,
+            chat_id: envelope.chat_id,
+            delivery_target_type: envelope.delivery_target_type,
+            delivery_target_id: envelope.delivery_target_id,
+            endpoint_identity: envelope.endpoint_identity,
+            thread_id: envelope.thread_id,
+            run_id: envelope.run_id,
+            event: envelope.event.into(),
+            delivery_thread_id: envelope.delivery_thread_id,
+        }
+    }
+}
+
+pub type StreamDispatchCallback = Arc<dyn Fn(StreamDispatchEnvelope) + Send + Sync>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamDispatchRole {
+    Origin,
+    BoundTarget,
+}
+
+impl StreamDispatchRole {
+    fn legacy_adapter_flushes_user_ack(self) -> bool {
+        matches!(self, Self::Origin)
+    }
+
+    fn dispatches_user_ack(self) -> bool {
+        matches!(self, Self::Origin)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,11 +167,19 @@ pub trait ChannelDispatcher: Send + Sync {
     /// List available channels and their status.
     fn available_channels(&self) -> Vec<ChannelInfo>;
 
-    fn build_streaming_callback(
+    fn build_stream_event_callback(
         &self,
         _target: StreamingDispatchTarget,
         _router: Arc<Mutex<MessageRouter>>,
-    ) -> Option<Arc<dyn Fn(StreamEvent) + Send + Sync>> {
+    ) -> Option<StreamDispatchCallback> {
+        None
+    }
+
+    fn supports_legacy_stream_adapter(&self, _target: &StreamingDispatchTarget) -> bool {
+        false
+    }
+
+    fn channel_running_handle(&self, _channel: &str) -> Option<Arc<AtomicBool>> {
         None
     }
 }
@@ -135,6 +209,79 @@ struct OutboundStreamCallbackShared {
     router: Arc<Mutex<MessageRouter>>,
     state: std::sync::Mutex<OutboundStreamState>,
     delivery_gate: Mutex<()>,
+    flush_user_ack_boundary: bool,
+}
+
+struct PluginStreamEventCallbackShared {
+    sender: PluginSenderHandle,
+    target: StreamingDispatchTarget,
+    router: Arc<Mutex<MessageRouter>>,
+    delivery_gate: Mutex<()>,
+}
+
+impl PluginStreamEventCallbackShared {
+    async fn dispatch_event(&self, envelope: StreamDispatchEnvelope) {
+        let _guard = self.delivery_gate.lock().await;
+        let request = DispatchStreamEvent::from(envelope);
+
+        match self.sender.dispatch_stream_event(request).await {
+            Ok(result) => {
+                self.record_outbound_messages(&result.message_ids).await;
+            }
+            Err(error) => {
+                warn!(
+                    plugin_id = %self.sender.plugin_id(),
+                    account_id = %self.target.account_id,
+                    chat_id = %self.target.chat_id,
+                    endpoint_identity = %self.target.endpoint_identity,
+                    target_thread_id = %self.target.target_thread_id,
+                    run_id = %self.target.run_id,
+                    error = %error,
+                    "plugin dispatch_stream_event failed"
+                );
+            }
+        }
+    }
+
+    async fn record_outbound_messages(&self, message_ids: &[String]) {
+        if self.target.target_thread_id.trim().is_empty() || message_ids.is_empty() {
+            return;
+        }
+
+        let mut router = self.router.lock().await;
+        for message_id in message_ids {
+            router
+                .record_outbound_message_with_persistence(
+                    &self.target.target_thread_id,
+                    &self.target.channel,
+                    &self.target.account_id,
+                    &self.target.chat_id,
+                    self.target.thread_id.as_deref(),
+                    message_id,
+                )
+                .await;
+        }
+    }
+}
+
+fn build_plugin_stream_event_callback(
+    sender: PluginSenderHandle,
+    target: StreamingDispatchTarget,
+    router: Arc<Mutex<MessageRouter>>,
+) -> StreamDispatchCallback {
+    let shared = Arc::new(PluginStreamEventCallbackShared {
+        sender,
+        target,
+        router,
+        delivery_gate: Mutex::new(()),
+    });
+
+    Arc::new(move |envelope| {
+        let shared = shared.clone();
+        tokio::spawn(async move {
+            shared.dispatch_event(envelope).await;
+        });
+    })
 }
 
 impl OutboundStreamCallbackShared {
@@ -148,14 +295,35 @@ impl OutboundStreamCallbackShared {
         };
 
         match event {
-            StreamEvent::SessionBound { .. } | StreamEvent::ThreadTitleUpdated { .. } => Vec::new(),
+            StreamEvent::SessionBound { .. } | StreamEvent::ThreadTitleUpdated { .. } => {
+                debug!(
+                    channel = %self.target.channel,
+                    account_id = %self.target.account_id,
+                    endpoint_identity = %self.target.endpoint_identity,
+                    target_thread_id = %self.target.target_thread_id,
+                    "legacy outbound stream adapter deliberately ignored metadata event"
+                );
+                Vec::new()
+            }
             StreamEvent::Delta { text } => {
                 state.push_text(&text);
                 Vec::new()
             }
             StreamEvent::Boundary { kind, .. } => match kind {
-                StreamBoundaryKind::AssistantSegment | StreamBoundaryKind::UserAck => {
-                    state.take_text().into_iter().collect()
+                StreamBoundaryKind::AssistantSegment => state.take_text().into_iter().collect(),
+                StreamBoundaryKind::UserAck => {
+                    if self.flush_user_ack_boundary {
+                        state.take_text().into_iter().collect()
+                    } else {
+                        debug!(
+                            channel = %self.target.channel,
+                            account_id = %self.target.account_id,
+                            endpoint_identity = %self.target.endpoint_identity,
+                            target_thread_id = %self.target.target_thread_id,
+                            "legacy outbound stream adapter ignored non-origin user_ack boundary"
+                        );
+                        Vec::new()
+                    }
                 }
             },
             StreamEvent::Done => state.take_text().into_iter().collect(),
@@ -231,15 +399,15 @@ impl OutboundStreamCallbackShared {
 
 /// Build a generic channel-layer consumer for committed provider stream events.
 ///
-/// Native channel runtimes can provide richer callbacks through
-/// [`ChannelDispatcher::build_streaming_callback`]. This fallback keeps the
-/// gateway out of presentation concerns: it accepts provider events, applies the
-/// channel-invariant stream text rules, and sends structured outbound content
-/// through the dispatcher.
+/// Legacy subprocess plugins can still receive best-effort structured outbound
+/// content through this adapter while they migrate to native stream-event
+/// dispatch. Native channels and new plugins should use
+/// [`build_stream_dispatch_callback`] instead.
 pub fn build_outbound_stream_callback(
     dispatcher: Arc<dyn ChannelDispatcher>,
     target: StreamingDispatchTarget,
     router: Arc<Mutex<MessageRouter>>,
+    role: StreamDispatchRole,
 ) -> Arc<dyn Fn(StreamEvent) + Send + Sync> {
     let shared = Arc::new(OutboundStreamCallbackShared {
         dispatcher,
@@ -247,6 +415,7 @@ pub fn build_outbound_stream_callback(
         router,
         state: std::sync::Mutex::new(OutboundStreamState::default()),
         delivery_gate: Mutex::new(()),
+        flush_user_ack_boundary: role.legacy_adapter_flushes_user_ack(),
     });
 
     Arc::new(move |event| {
@@ -259,6 +428,44 @@ pub fn build_outbound_stream_callback(
             shared.dispatch_contents(contents).await;
         });
     })
+}
+
+pub fn build_stream_dispatch_callback(
+    dispatcher: Arc<dyn ChannelDispatcher>,
+    target: StreamingDispatchTarget,
+    router: Arc<Mutex<MessageRouter>>,
+    role: StreamDispatchRole,
+) -> Option<Arc<dyn Fn(StreamEvent) + Send + Sync>> {
+    if let Some(callback) = dispatcher.build_stream_event_callback(target.clone(), router.clone()) {
+        return Some(Arc::new(move |event| {
+            if matches!(
+                event,
+                StreamEvent::Boundary {
+                    kind: StreamBoundaryKind::UserAck,
+                    ..
+                }
+            ) && !role.dispatches_user_ack()
+            {
+                debug!(
+                    channel = %target.channel,
+                    account_id = %target.account_id,
+                    endpoint_identity = %target.endpoint_identity,
+                    target_thread_id = %target.target_thread_id,
+                    "stream event fanout ignored non-origin user_ack boundary"
+                );
+                return;
+            }
+            callback(StreamDispatchEnvelope::from_target(&target, event));
+        }));
+    }
+
+    if !dispatcher.supports_legacy_stream_adapter(&target) {
+        return None;
+    }
+
+    Some(build_outbound_stream_callback(
+        dispatcher, target, router, role,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -1161,6 +1368,17 @@ impl FeishuSender {
         }
     }
 
+    pub(crate) fn stream_client(&self) -> crate::feishu::FeishuClient {
+        crate::feishu::FeishuClient::from_sender_parts(
+            self.app_id.clone(),
+            self.app_secret.clone(),
+            self.api_base.clone(),
+            self.http.clone(),
+            self.token_state.clone(),
+            self.refresh_lock.clone(),
+        )
+    }
+
     /// Refresh access token if needed then send a message.
     pub async fn send_text(
         &self,
@@ -1730,6 +1948,7 @@ pub struct ChannelDispatcherImpl {
     discord_senders: HashMap<String, DiscordSender>,
     feishu_senders: HashMap<String, FeishuSender>,
     weixin_senders: HashMap<String, WeixinSender>,
+    weixin_running: Arc<AtomicBool>,
     /// Plugin-backed senders keyed by their manifest `plugin.id`. The
     /// manager registers one entry per plugin whose lifecycle state is
     /// `Running` and unregisters on stop/respawn (§9.4). The entry's
@@ -1745,6 +1964,7 @@ impl ChannelDispatcherImpl {
             discord_senders: HashMap::new(),
             feishu_senders: HashMap::new(),
             weixin_senders: HashMap::new(),
+            weixin_running: Arc::new(AtomicBool::new(false)),
             plugin_senders: HashMap::new(),
         }
     }
@@ -1755,7 +1975,15 @@ impl ChannelDispatcherImpl {
     /// outbound delivery even though the channels themselves are started
     /// separately via the plugin manager.
     pub fn from_config(channels: &ChannelsConfig) -> Self {
+        Self::from_config_with_weixin_running(channels, Arc::new(AtomicBool::new(false)))
+    }
+
+    pub fn from_config_with_weixin_running(
+        channels: &ChannelsConfig,
+        weixin_running: Arc<AtomicBool>,
+    ) -> Self {
         let mut dispatcher = Self::new();
+        dispatcher.weixin_running = weixin_running;
         let http = Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
@@ -1833,10 +2061,18 @@ impl ChannelDispatcherImpl {
                 account: account.clone(),
                 http: http.clone(),
                 is_running: true,
+                running: dispatcher.weixin_running.clone(),
             });
         }
 
         dispatcher
+    }
+
+    pub fn channel_running_handle(&self, channel: &str) -> Option<Arc<AtomicBool>> {
+        match channel {
+            "weixin" | "wechat" => Some(self.weixin_running.clone()),
+            _ => None,
+        }
     }
 
     pub fn register_telegram(&mut self, sender: TelegramSender) {
@@ -1866,7 +2102,12 @@ impl ChannelDispatcherImpl {
             .insert(sender.account_id.clone(), sender);
     }
 
-    pub fn register_weixin(&mut self, sender: WeixinSender) {
+    pub fn register_weixin(&mut self, mut sender: WeixinSender) {
+        if self.weixin_senders.is_empty() && !Arc::ptr_eq(&sender.running, &self.weixin_running) {
+            self.weixin_running = sender.running.clone();
+        } else {
+            sender.running = self.weixin_running.clone();
+        }
         info!(
             account_id = %sender.account_id,
             "Registered Weixin sender for dispatch"
@@ -2276,11 +2517,11 @@ impl ChannelDispatcher for ChannelDispatcherImpl {
         channels
     }
 
-    fn build_streaming_callback(
+    fn build_stream_event_callback(
         &self,
         target: StreamingDispatchTarget,
         router: Arc<Mutex<MessageRouter>>,
-    ) -> Option<Arc<dyn Fn(StreamEvent) + Send + Sync>> {
+    ) -> Option<StreamDispatchCallback> {
         match target.channel.as_str() {
             "telegram" => {
                 let sender = self.telegram_senders.get(&target.account_id)?;
@@ -2288,7 +2529,7 @@ impl ChannelDispatcher for ChannelDispatcherImpl {
                 let outbound_thread_id =
                     normalize_telegram_thread_id(chat_id, target.thread_id.as_deref());
 
-                Some(crate::telegram::build_bound_response_callback(
+                let stream_callback = crate::telegram::build_bound_response_callback(
                     crate::telegram::StreamingCallbackConfig {
                         http: sender.http.clone(),
                         token: sender.token.clone(),
@@ -2302,10 +2543,100 @@ impl ChannelDispatcher for ChannelDispatcherImpl {
                         outbound_thread_scope: target.thread_id,
                     },
                     target.target_thread_id,
-                ))
+                );
+                Some(Arc::new(move |envelope| {
+                    stream_callback(envelope.event);
+                }))
             }
-            _ => None,
+            "feishu" => {
+                let sender = self.feishu_senders.get(&target.account_id)?;
+                let (stream_callback, thread_id_tx) = crate::feishu::build_feishu_response_callback(
+                    crate::feishu::FeishuStreamingCallbackConfig {
+                        client: sender.stream_client(),
+                        router,
+                        account_id: sender.account_id.clone(),
+                        receive_id_type: target.delivery_target_type.clone(),
+                        chat_id: target.delivery_target_id.clone(),
+                        reply_message_id: None,
+                        reply_in_thread: false,
+                        is_group_reply: false,
+                        mention_prefix: String::new(),
+                        native_thread_scope: target.thread_id.clone(),
+                        processing_reaction_id: None,
+                    },
+                );
+                let _ = thread_id_tx.send(target.target_thread_id.clone());
+                Some(Arc::new(move |envelope| {
+                    stream_callback(envelope.event);
+                }))
+            }
+            "discord" => {
+                let sender = self.discord_senders.get(&target.account_id)?;
+                let thread_binding_key = target
+                    .thread_id
+                    .clone()
+                    .unwrap_or_else(|| target.chat_id.clone());
+                let (stream_callback, thread_id_tx) =
+                    crate::discord::build_discord_response_callback(
+                        crate::discord::DiscordStreamingCallbackConfig {
+                            sender: sender.clone(),
+                            router,
+                            chat_id: target.chat_id.clone(),
+                            thread_binding_key,
+                            reply_to_message_id: None,
+                        },
+                    );
+                let _ = thread_id_tx.send(target.target_thread_id.clone());
+                Some(Arc::new(move |envelope| {
+                    stream_callback(envelope.event);
+                }))
+            }
+            "weixin" => {
+                let sender = self.weixin_senders.get(&target.account_id)?;
+                let stream_callback = crate::weixin::build_weixin_response_callback(
+                    crate::weixin::WeixinStreamingCallbackConfig {
+                        http: sender.http.clone(),
+                        account: sender.account.clone(),
+                        account_id: sender.account_id.clone(),
+                        user_id: target.delivery_target_id.clone(),
+                        context_token: String::new(),
+                        router,
+                        thread_id: target.target_thread_id.clone(),
+                        typing_ticket: None,
+                        running: sender.running.clone(),
+                    },
+                );
+                Some(Arc::new(move |envelope| {
+                    stream_callback(envelope.event);
+                }))
+            }
+            other => {
+                let sender = self.plugin_senders.get(other)?;
+                if sender.capabilities().dispatch_stream_event {
+                    Some(build_plugin_stream_event_callback(
+                        sender.clone(),
+                        target,
+                        router,
+                    ))
+                } else {
+                    None
+                }
+            }
         }
+    }
+
+    fn supports_legacy_stream_adapter(&self, target: &StreamingDispatchTarget) -> bool {
+        self.plugin_senders
+            .get(target.channel.as_str())
+            .map(|sender| {
+                let capabilities = sender.capabilities();
+                capabilities.outbound && !capabilities.dispatch_stream_event
+            })
+            .unwrap_or(false)
+    }
+
+    fn channel_running_handle(&self, channel: &str) -> Option<Arc<AtomicBool>> {
+        ChannelDispatcherImpl::channel_running_handle(self, channel)
     }
 }
 
@@ -2381,12 +2712,22 @@ impl ChannelDispatcher for SwappableDispatcher {
         self.inner.load().available_channels()
     }
 
-    fn build_streaming_callback(
+    fn build_stream_event_callback(
         &self,
         target: StreamingDispatchTarget,
         router: Arc<Mutex<MessageRouter>>,
-    ) -> Option<Arc<dyn Fn(StreamEvent) + Send + Sync>> {
-        self.inner.load().build_streaming_callback(target, router)
+    ) -> Option<StreamDispatchCallback> {
+        self.inner
+            .load()
+            .build_stream_event_callback(target, router)
+    }
+
+    fn supports_legacy_stream_adapter(&self, target: &StreamingDispatchTarget) -> bool {
+        self.inner.load().supports_legacy_stream_adapter(target)
+    }
+
+    fn channel_running_handle(&self, channel: &str) -> Option<Arc<AtomicBool>> {
+        self.inner.load().channel_running_handle(channel)
     }
 }
 
@@ -2397,6 +2738,7 @@ pub struct WeixinSender {
     pub account: garyx_models::config::WeixinAccount,
     pub http: Client,
     pub is_running: bool,
+    pub running: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl WeixinSender {

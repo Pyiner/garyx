@@ -15,7 +15,8 @@ use garyx_models::provider::{
 };
 use garyx_models::{MessageLedgerEvent, MessageLifecycleStatus, MessageTerminalReason};
 use garyx_router::{
-    InboundRequest, MessageRouter, NATIVE_COMMAND_TEXT_METADATA_KEY, is_native_command_text,
+    InboundRequest, MessageRouter, NATIVE_COMMAND_TEXT_METADATA_KEY, endpoint_key,
+    is_native_command_text,
 };
 
 use super::api::send_chat_action;
@@ -29,12 +30,14 @@ use super::{
     extract_message_content, is_mentioned, resolve_forum_thread_id, resolve_outbound_thread_id,
     resolve_reply_to, resolve_typing_thread_id, send_response,
 };
+use crate::dispatcher::ChannelDispatcher;
 
 #[derive(Clone)]
 pub(crate) struct TelegramChannelResources<'a> {
     pub(crate) http: &'a Client,
     pub(crate) router: &'a Arc<Mutex<MessageRouter>>,
     pub(crate) bridge: &'a Arc<MultiProviderBridge>,
+    pub(crate) dispatcher: &'a Arc<dyn ChannelDispatcher>,
     pub(crate) api_base: &'a str,
 }
 
@@ -57,6 +60,7 @@ pub(crate) struct TelegramUpdateContext {
     pub(crate) account: TelegramAccount,
     pub(crate) router: Arc<Mutex<MessageRouter>>,
     pub(crate) bridge: Arc<MultiProviderBridge>,
+    pub(crate) dispatcher: Arc<dyn ChannelDispatcher>,
     pub(crate) api_base: String,
 }
 
@@ -74,6 +78,7 @@ impl TelegramUpdateContext {
             account: bot.account.clone(),
             router: resources.router.clone(),
             bridge: resources.bridge.clone(),
+            dispatcher: resources.dispatcher.clone(),
             api_base: resources.api_base.to_owned(),
         }
     }
@@ -798,14 +803,24 @@ impl TelegramChannel {
             file_paths,
         };
 
+        let origin_endpoint_identity =
+            endpoint_key("telegram", &context.account_id, &request.thread_binding_key);
+        let deferred_fanout = crate::bound_fanout::DeferredBoundStreamFanout::new(
+            context.router.clone(),
+            context.dispatcher.clone(),
+            request.run_id.clone(),
+            origin_endpoint_identity,
+        );
+        let fanout_consumer = deferred_fanout.consumer(response_callback);
+
         // Read this run's stream from the durable committed transcript:
         // subscribe before dispatch and let the replay adapter drive the
-        // Telegram sender. `None` is then passed to dispatch so the bridge does
-        // not double-drive the same callback.
+        // Telegram sender. Bound non-origin endpoints attach after
+        // route_and_dispatch resolves the canonical thread id.
         let dispatch_callback = match crate::committed_replay::committed_callback(
             &context.bridge,
             &request.run_id,
-            response_callback,
+            fanout_consumer,
         )
         .await
         {
@@ -815,6 +830,16 @@ impl TelegramChannel {
                 return;
             }
         };
+
+        let thread_store = {
+            let router_guard = context.router.lock().await;
+            router_guard.thread_store()
+        };
+        let dispatch_delegate = crate::bound_fanout::DeferredFanoutAgentDispatcher::new(
+            context.bridge.as_ref(),
+            deferred_fanout.clone(),
+            thread_store,
+        );
 
         let dispatch_result = {
             let mut router_guard = context.router.lock().await;
@@ -844,12 +869,13 @@ impl TelegramChannel {
                 })
                 .await;
             router_guard
-                .route_and_dispatch(request, context.bridge.as_ref(), dispatch_callback)
+                .route_and_dispatch(request, &dispatch_delegate, dispatch_callback)
                 .await
         };
 
         match dispatch_result {
             Ok(result) => {
+                deferred_fanout.attach_thread(&result.thread_id).await;
                 if let Some(local_reply) = result.local_reply {
                     if let Err(e) = send_response(
                         TelegramSendTarget::new(

@@ -41,9 +41,53 @@ impl ChannelDispatcher for RecordingStreamDispatcher {
     }
 }
 
+#[derive(Default)]
+struct RecordingNativeStreamDispatcher {
+    envelopes: Arc<std::sync::Mutex<Vec<StreamDispatchEnvelope>>>,
+}
+
+impl RecordingNativeStreamDispatcher {
+    fn envelopes(&self) -> Vec<StreamDispatchEnvelope> {
+        self.envelopes
+            .lock()
+            .expect("recording native stream dispatcher lock poisoned")
+            .clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl ChannelDispatcher for RecordingNativeStreamDispatcher {
+    async fn send_message(
+        &self,
+        _request: OutboundMessage,
+    ) -> Result<SendMessageResult, ChannelError> {
+        unreachable!("native stream test should not call send_message")
+    }
+
+    fn available_channels(&self) -> Vec<ChannelInfo> {
+        Vec::new()
+    }
+
+    fn build_stream_event_callback(
+        &self,
+        _target: StreamingDispatchTarget,
+        _router: Arc<Mutex<MessageRouter>>,
+    ) -> Option<StreamDispatchCallback> {
+        let envelopes = self.envelopes.clone();
+        Some(Arc::new(move |envelope| {
+            envelopes
+                .lock()
+                .expect("recording native stream dispatcher lock poisoned")
+                .push(envelope);
+        }))
+    }
+}
+
 fn test_stream_target() -> StreamingDispatchTarget {
     StreamingDispatchTarget {
         target_thread_id: "thread::bound".to_owned(),
+        endpoint_identity: "test-channel::bot1::chat1".to_owned(),
+        run_id: "run-1".to_owned(),
         channel: "test-channel".to_owned(),
         account_id: "bot1".to_owned(),
         chat_id: "chat1".to_owned(),
@@ -59,6 +103,33 @@ fn test_message_router() -> Arc<Mutex<MessageRouter>> {
         store,
         garyx_models::config::GaryxConfig::default(),
     )))
+}
+
+#[test]
+fn stream_dispatch_envelope_is_the_plugin_stream_event_contract() {
+    let target = test_stream_target();
+    let envelope = StreamDispatchEnvelope::from_target(
+        &target,
+        StreamEvent::Delta {
+            text: "hello".to_owned(),
+        },
+    );
+    let request = DispatchStreamEvent::from(envelope);
+
+    assert_eq!(request.account_id, target.account_id);
+    assert_eq!(request.chat_id, target.chat_id);
+    assert_eq!(request.delivery_target_type, target.delivery_target_type);
+    assert_eq!(request.delivery_target_id, target.delivery_target_id);
+    assert_eq!(request.endpoint_identity, target.endpoint_identity);
+    assert_eq!(request.thread_id, target.target_thread_id);
+    assert_eq!(request.run_id, target.run_id);
+    assert_eq!(request.delivery_thread_id, target.thread_id);
+    match request.event {
+        crate::plugin_host::protocol::StreamEventFrame::Delta { text } => {
+            assert_eq!(text, "hello");
+        }
+        other => panic!("expected delta frame, got {other:?}"),
+    }
 }
 
 async fn wait_for_stream_calls(
@@ -85,6 +156,7 @@ async fn outbound_stream_callback_flushes_assistant_segments() {
         dispatcher.clone(),
         test_stream_target(),
         test_message_router(),
+        StreamDispatchRole::Origin,
     );
 
     callback(StreamEvent::Delta {
@@ -114,6 +186,7 @@ async fn outbound_stream_callback_flushes_text_before_structured_events() {
         dispatcher.clone(),
         test_stream_target(),
         test_message_router(),
+        StreamDispatchRole::Origin,
     );
     let message = ProviderMessage::tool_use(
         serde_json::json!({"name": "shell"}),
@@ -136,6 +209,77 @@ async fn outbound_stream_callback_flushes_text_before_structured_events() {
         calls[1].content,
         ChannelOutboundContent::ToolUse { message }
     );
+}
+
+#[tokio::test]
+async fn outbound_stream_callback_ignores_user_ack_for_bound_targets() {
+    let dispatcher = Arc::new(RecordingStreamDispatcher::default());
+    let callback = build_outbound_stream_callback(
+        dispatcher.clone(),
+        test_stream_target(),
+        test_message_router(),
+        StreamDispatchRole::BoundTarget,
+    );
+
+    callback(StreamEvent::Delta {
+        text: "queued text".to_owned(),
+    });
+    callback(StreamEvent::Boundary {
+        kind: StreamBoundaryKind::UserAck,
+        pending_input_id: Some("input-1".to_owned()),
+    });
+    callback(StreamEvent::Done);
+
+    let calls = wait_for_stream_calls(&dispatcher, 1).await;
+
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].content.as_text(), Some("queued text"));
+}
+
+#[test]
+fn stream_dispatch_callback_ignores_user_ack_for_bound_native_targets() {
+    let dispatcher = Arc::new(RecordingNativeStreamDispatcher::default());
+    let callback = build_stream_dispatch_callback(
+        dispatcher.clone(),
+        test_stream_target(),
+        test_message_router(),
+        StreamDispatchRole::BoundTarget,
+    )
+    .expect("native stream callback");
+
+    callback(StreamEvent::Boundary {
+        kind: StreamBoundaryKind::UserAck,
+        pending_input_id: Some("input-1".to_owned()),
+    });
+
+    assert!(dispatcher.envelopes().is_empty());
+}
+
+#[test]
+fn stream_dispatch_callback_sends_user_ack_for_origin_native_targets() {
+    let dispatcher = Arc::new(RecordingNativeStreamDispatcher::default());
+    let callback = build_stream_dispatch_callback(
+        dispatcher.clone(),
+        test_stream_target(),
+        test_message_router(),
+        StreamDispatchRole::Origin,
+    )
+    .expect("native stream callback");
+
+    callback(StreamEvent::Boundary {
+        kind: StreamBoundaryKind::UserAck,
+        pending_input_id: Some("input-1".to_owned()),
+    });
+
+    let envelopes = dispatcher.envelopes();
+    assert_eq!(envelopes.len(), 1);
+    assert!(matches!(
+        envelopes[0].event,
+        StreamEvent::Boundary {
+            kind: StreamBoundaryKind::UserAck,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -196,6 +340,7 @@ fn test_register_weixin_sender() {
         },
         http: Client::new(),
         is_running: true,
+        running: Arc::new(std::sync::atomic::AtomicBool::new(true)),
     });
 
     let channels = dispatcher.available_channels();
@@ -222,6 +367,70 @@ fn test_register_discord_sender() {
     assert!(channels[0].is_running);
 }
 
+fn builtin_stream_target(channel: &str, account_id: &str) -> StreamingDispatchTarget {
+    StreamingDispatchTarget {
+        target_thread_id: format!("thread::{channel}"),
+        endpoint_identity: format!("{channel}::{account_id}::chat-1"),
+        run_id: "run-1".to_owned(),
+        channel: channel.to_owned(),
+        account_id: account_id.to_owned(),
+        chat_id: "chat-1".to_owned(),
+        delivery_target_type: DELIVERY_TARGET_TYPE_CHAT_ID.to_owned(),
+        delivery_target_id: "chat-1".to_owned(),
+        thread_id: None,
+    }
+}
+
+#[tokio::test]
+async fn builtin_channels_have_native_stream_event_callbacks() {
+    let mut dispatcher = ChannelDispatcherImpl::new();
+    dispatcher.register_feishu(FeishuSender::new(
+        "feishu-main".to_owned(),
+        "app123".to_owned(),
+        "secret".to_owned(),
+        "https://open.feishu.cn/open-apis".to_owned(),
+        true,
+    ));
+    dispatcher.register_discord(DiscordSender {
+        account_id: "discord-main".to_owned(),
+        token: "test-token".to_owned(),
+        http: Client::new(),
+        api_base: "https://discord.com/api/v10".to_owned(),
+        is_running: true,
+    });
+    dispatcher.register_weixin(WeixinSender {
+        account_id: "weixin-main".to_owned(),
+        account: garyx_models::config::WeixinAccount {
+            token: "token".to_owned(),
+            uin: "MTIz".to_owned(),
+            enabled: true,
+            base_url: "https://ilinkai.weixin.qq.com".to_owned(),
+            name: None,
+            agent_id: "claude".to_owned(),
+            workspace_dir: None,
+            streaming_update: true,
+        },
+        http: Client::new(),
+        is_running: true,
+        running: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+    });
+
+    for (channel, account_id) in [
+        ("feishu", "feishu-main"),
+        ("discord", "discord-main"),
+        ("weixin", "weixin-main"),
+    ] {
+        let callback = dispatcher.build_stream_event_callback(
+            builtin_stream_target(channel, account_id),
+            test_message_router(),
+        );
+        assert!(
+            callback.is_some(),
+            "{channel} must expose a native StreamEvent callback"
+        );
+    }
+}
+
 #[test]
 fn test_from_config_registers_weixin_account() {
     let mut channels = ChannelsConfig::default();
@@ -241,11 +450,35 @@ fn test_from_config_registers_weixin_account() {
         ),
     );
 
-    let dispatcher = ChannelDispatcherImpl::from_config(&channels);
+    let running = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let dispatcher =
+        ChannelDispatcherImpl::from_config_with_weixin_running(&channels, running.clone());
     let available = dispatcher.available_channels();
     assert_eq!(available.len(), 1);
     assert_eq!(available[0].channel, "weixin");
     assert_eq!(available[0].account_id, "wx-main");
+    assert!(Arc::ptr_eq(
+        &dispatcher
+            .channel_running_handle("weixin")
+            .expect("weixin running handle"),
+        &running
+    ));
+}
+
+#[test]
+fn test_from_config_preserves_weixin_running_handle_without_accounts() {
+    let channels = ChannelsConfig::default();
+    let running = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let dispatcher =
+        ChannelDispatcherImpl::from_config_with_weixin_running(&channels, running.clone());
+
+    assert!(dispatcher.available_channels().is_empty());
+    assert!(Arc::ptr_eq(
+        &dispatcher
+            .channel_running_handle("weixin")
+            .expect("weixin running handle"),
+        &running
+    ));
 }
 
 #[test]
@@ -1205,6 +1438,19 @@ mod plugin_routing {
             outbound: true,
             inbound: false,
             streaming: false,
+            dispatch_stream_event: false,
+            images: false,
+            files: false,
+            survives_respawn: false,
+        }
+    }
+
+    fn caps_stream_event() -> CapabilitiesResponse {
+        CapabilitiesResponse {
+            outbound: true,
+            inbound: false,
+            streaming: false,
+            dispatch_stream_event: true,
             images: false,
             files: false,
             survives_respawn: false,
@@ -1280,6 +1526,73 @@ mod plugin_routing {
         (handle, plugin_keep)
     }
 
+    fn stub_stream_event_plugin_sender(
+        plugin_id: &str,
+        calls: Arc<std::sync::Mutex<Vec<String>>>,
+    ) -> (PluginSenderHandle, PluginRpcClient) {
+        struct HostDrop;
+        #[async_trait]
+        impl InboundHandler for HostDrop {
+            async fn on_request(
+                &self,
+                _method: String,
+                _params: Value,
+            ) -> Result<Value, (i32, String)> {
+                Err((-32601, "none".into()))
+            }
+            async fn on_notification(&self, _: String, _: Value) {}
+        }
+
+        struct StubPlugin {
+            calls: Arc<std::sync::Mutex<Vec<String>>>,
+        }
+        #[async_trait]
+        impl InboundHandler for StubPlugin {
+            async fn on_request(
+                &self,
+                method: String,
+                params: Value,
+            ) -> Result<Value, (i32, String)> {
+                self.calls.lock().expect("calls lock").push(method.clone());
+                match method.as_str() {
+                    "dispatch_stream_event" => {
+                        assert_eq!(params["endpoint_identity"], "mino::acct::chat-1");
+                        assert_eq!(params["event"]["type"], "delta");
+                        Ok(json!({"message_ids": ["stream-msg-1"]}))
+                    }
+                    other => Err((-32601, format!("no {other}"))),
+                }
+            }
+            async fn on_notification(&self, _: String, _: Value) {}
+        }
+
+        let (host_rw, plugin_rw) = duplex(64 * 1024);
+        let (host_r, host_w) = tokio::io::split(host_rw);
+        let (plugin_r, plugin_w) = tokio::io::split(plugin_rw);
+
+        let (host_rpc, _host_handles) = Transport::spawn(
+            host_r,
+            host_w,
+            TransportConfig {
+                plugin_id: plugin_id.to_owned(),
+                default_rpc_timeout: Duration::from_secs(10),
+                ..Default::default()
+            },
+            Arc::new(HostDrop),
+        );
+        let (plugin_keep, _plugin_handles) = Transport::spawn(
+            plugin_r,
+            plugin_w,
+            TransportConfig {
+                plugin_id: format!("{plugin_id}-peer"),
+                ..Default::default()
+            },
+            Arc::new(StubPlugin { calls }),
+        );
+        let handle = PluginSenderHandle::new(plugin_id.to_owned(), host_rpc, caps_stream_event());
+        (handle, plugin_keep)
+    }
+
     fn outbound(channel: &str) -> OutboundMessage {
         OutboundMessage {
             channel: channel.to_owned(),
@@ -1303,6 +1616,37 @@ mod plugin_routing {
             .await
             .expect("plugin send");
         assert_eq!(result.message_ids, vec!["plug-msg-1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn plugin_streaming_callback_uses_native_dispatch_stream_event_when_capable() {
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (handle, _keep) = stub_stream_event_plugin_sender("mino", calls.clone());
+        let mut dispatcher = ChannelDispatcherImpl::new();
+        dispatcher.register_plugin(handle).expect("register");
+        let callback = build_stream_dispatch_callback(
+            Arc::new(dispatcher),
+            StreamingDispatchTarget {
+                target_thread_id: "thread::bound".to_owned(),
+                endpoint_identity: "mino::acct::chat-1".to_owned(),
+                run_id: "run-1".to_owned(),
+                channel: "mino".to_owned(),
+                account_id: "acct".to_owned(),
+                chat_id: "chat-1".to_owned(),
+                delivery_target_type: DELIVERY_TARGET_TYPE_CHAT_ID.to_owned(),
+                delivery_target_id: "chat-1".to_owned(),
+                thread_id: None,
+            },
+            test_message_router(),
+            StreamDispatchRole::Origin,
+        )
+        .expect("native stream callback");
+
+        callback(StreamEvent::Delta { text: "hi".into() });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let calls = calls.lock().expect("calls lock").clone();
+        assert_eq!(calls, vec!["dispatch_stream_event".to_owned()]);
     }
 
     #[tokio::test]

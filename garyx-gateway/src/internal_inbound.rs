@@ -4,7 +4,7 @@ use std::sync::Arc;
 use garyx_models::MessageLifecycleStatus;
 use garyx_models::provider::ProviderType;
 use garyx_models::routing::DeliveryContext;
-use garyx_router::{ChannelBinding, MessageRouter, ThreadMessageRequest};
+use garyx_router::{ChannelBinding, MessageRouter, ThreadMessageRequest, bindings_from_value};
 use serde_json::Value;
 
 use crate::chat_delivery::build_bound_response_callback;
@@ -28,10 +28,14 @@ fn thread_string_field(thread: &Value, key: &str) -> Option<String> {
 
 fn delivery_streaming_target(
     target_thread_id: &str,
+    run_id: &str,
+    endpoint_identity: String,
     delivery: &DeliveryContext,
 ) -> garyx_channels::StreamingDispatchTarget {
     garyx_channels::StreamingDispatchTarget {
         target_thread_id: target_thread_id.to_owned(),
+        endpoint_identity,
+        run_id: run_id.to_owned(),
         channel: delivery.channel.clone(),
         account_id: delivery.account_id.clone(),
         chat_id: delivery.chat_id.clone(),
@@ -82,6 +86,24 @@ fn missing_thread_binding(thread: &Value, delivery: &DeliveryContext) -> Option<
     })
 }
 
+fn single_bound_endpoint_identity(thread: &Value) -> Option<String> {
+    let mut identities = bindings_from_value(thread)
+        .into_iter()
+        .filter(|binding| {
+            !binding.channel.trim().is_empty()
+                && !binding.account_id.trim().is_empty()
+                && !binding.channel.eq_ignore_ascii_case("api")
+        })
+        .map(|binding| binding.endpoint_key());
+
+    let identity = identities.next()?;
+    if identities.next().is_some() {
+        None
+    } else {
+        Some(identity)
+    }
+}
+
 pub(crate) async fn dispatch_internal_message_to_thread(
     state: &Arc<AppState>,
     target_thread_id: &str,
@@ -107,15 +129,19 @@ pub(crate) async fn dispatch_internal_message_to_thread(
     .await
     .map(|(_, ctx)| ctx);
 
-    if let Some(binding) = delivery_context
+    let inserted_binding = delivery_context
         .as_ref()
-        .and_then(|delivery| missing_thread_binding(&thread_data, delivery))
-    {
+        .and_then(|delivery| missing_thread_binding(&thread_data, delivery));
+    if let Some(binding) = inserted_binding.clone() {
         let mut router = state.threads.router.lock().await;
         let _ = router
             .bind_endpoint_runtime(target_thread_id, binding)
             .await;
     }
+    let origin_endpoint_identity = inserted_binding
+        .as_ref()
+        .map(ChannelBinding::endpoint_key)
+        .or_else(|| single_bound_endpoint_identity(&thread_data));
 
     let channel = thread_string_field(&thread_data, "channel")
         .or_else(|| delivery_context.as_ref().map(|ctx| ctx.channel.clone()))
@@ -142,9 +168,15 @@ pub(crate) async fn dispatch_internal_message_to_thread(
         state,
         target_thread_id,
         run_id,
-        delivery_context
-            .as_ref()
-            .map(|delivery| delivery_streaming_target(target_thread_id, delivery)),
+        delivery_context.as_ref().and_then(|delivery| {
+            let origin_endpoint_identity = origin_endpoint_identity.clone()?;
+            Some(delivery_streaming_target(
+                target_thread_id,
+                run_id,
+                origin_endpoint_identity,
+                delivery,
+            ))
+        }),
     )
     .await
     .map_err(|error| format!("failed to attach committed response stream: {error}"))?;

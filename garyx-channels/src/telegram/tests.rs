@@ -22,11 +22,14 @@ async fn dispatch_update(
     bridge: &Arc<MultiProviderBridge>,
     api_base: &str,
 ) {
+    let dispatcher: Arc<dyn crate::dispatcher::ChannelDispatcher> =
+        Arc::new(crate::dispatcher::ChannelDispatcherImpl::new());
     let context = handlers::TelegramUpdateContext::new(
         handlers::TelegramChannelResources {
             http,
             router,
             bridge,
+            dispatcher: &dispatcher,
             api_base,
         },
         handlers::TelegramBotRuntime {

@@ -28,10 +28,12 @@ use garyx_models::provider::{
     StreamEvent, attachments_to_metadata_value,
 };
 use garyx_router::{
-    InboundRequest, MessageRouter, NATIVE_COMMAND_TEXT_METADATA_KEY, is_native_command_text,
+    InboundRequest, MessageRouter, NATIVE_COMMAND_TEXT_METADATA_KEY, endpoint_key,
+    is_native_command_text,
 };
 
 use crate::channel_trait::{Channel, ChannelError};
+use crate::dispatcher::ChannelDispatcher;
 use crate::generated_images::extract_image_generation_result;
 use crate::streaming_core::merge_stream_text;
 
@@ -2466,6 +2468,7 @@ struct WeixinInboundRuntime {
     account: WeixinAccount,
     router: Arc<Mutex<MessageRouter>>,
     bridge: Arc<MultiProviderBridge>,
+    dispatcher: Arc<dyn ChannelDispatcher>,
     notify_started: Arc<AtomicBool>,
     running: Arc<AtomicBool>,
 }
@@ -2477,6 +2480,7 @@ pub struct WeixinChannel {
     poll_tasks: Vec<JoinHandle<()>>,
     router: Arc<Mutex<MessageRouter>>,
     bridge: Arc<MultiProviderBridge>,
+    dispatcher: Arc<dyn ChannelDispatcher>,
 }
 
 #[derive(Clone)]
@@ -3097,11 +3101,323 @@ async fn run_streaming_update_consumer(
     let _ = stream_done_tx.send(());
 }
 
+pub(crate) struct WeixinStreamingCallbackConfig {
+    pub(crate) http: Client,
+    pub(crate) account: WeixinAccount,
+    pub(crate) account_id: String,
+    pub(crate) user_id: String,
+    pub(crate) context_token: String,
+    pub(crate) router: Arc<Mutex<MessageRouter>>,
+    pub(crate) thread_id: String,
+    pub(crate) typing_ticket: Option<String>,
+    pub(crate) running: Arc<AtomicBool>,
+}
+
+pub(crate) fn build_weixin_response_callback(
+    cfg: WeixinStreamingCallbackConfig,
+) -> Arc<dyn Fn(StreamEvent) + Send + Sync> {
+    let (event_tx, event_rx) = mpsc::unbounded_channel::<StreamEvent>();
+    let (stream_done_tx, _stream_done_rx) = oneshot::channel::<()>();
+    let use_streaming_update = cfg.account.streaming_update;
+    let ctx = WeixinStreamConsumerContext {
+        http: cfg.http,
+        account: cfg.account,
+        account_id: cfg.account_id,
+        user_id: cfg.user_id,
+        context_token: cfg.context_token,
+        router: cfg.router,
+        thread_id: Arc::new(std::sync::Mutex::new(cfg.thread_id)),
+        typing_ticket: cfg.typing_ticket,
+        running: cfg.running,
+    };
+    if use_streaming_update {
+        tokio::spawn(run_streaming_update_consumer(
+            ctx,
+            event_rx,
+            stream_done_tx,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        ));
+    } else {
+        tokio::spawn(run_non_streaming_update_consumer(
+            ctx,
+            event_rx,
+            stream_done_tx,
+        ));
+    }
+
+    Arc::new(move |event: StreamEvent| {
+        let _ = event_tx.send(event);
+    })
+}
+
+async fn flush_non_streaming_weixin_text(
+    ctx: &WeixinStreamConsumerContext,
+    text: &str,
+    extra_media_refs: &[OutboundMediaRef],
+    sent_media_refs: &mut HashSet<String>,
+) {
+    if !ctx.running.load(Ordering::Relaxed) {
+        return;
+    }
+
+    let outbound = text.trim().to_owned();
+    let thread_id = current_stream_thread_id(ctx);
+    let mut media_refs = extract_markdown_media_refs(&outbound);
+    media_refs.extend(extra_media_refs.iter().cloned());
+    if outbound.is_empty() && media_refs.is_empty() {
+        return;
+    }
+
+    let token = get_context_token_for_thread(
+        &ctx.account_id,
+        &ctx.user_id,
+        if thread_id.is_empty() {
+            None
+        } else {
+            Some(thread_id.as_str())
+        },
+    )
+    .await
+    .or_else(|| {
+        let token = ctx.context_token.trim();
+        (!token.is_empty()).then(|| token.to_owned())
+    });
+
+    if let Some(token) = token.as_deref()
+        && token_sends_remaining(token).await == 0
+    {
+        let mut queue_text = outbound.clone();
+        for media_ref in &media_refs {
+            let dedupe_key = media_ref.dedupe_key();
+            if sent_media_refs.contains(&dedupe_key) {
+                continue;
+            }
+            let media_text = match media_ref {
+                OutboundMediaRef::RemoteUrl(url) => url.clone(),
+                OutboundMediaRef::LocalPath(path) => path.clone(),
+                OutboundMediaRef::InlineImage { file_name, .. } => {
+                    format!("[generated image: {file_name}]")
+                }
+            };
+            if !queue_text.is_empty() {
+                queue_text.push('\n');
+            }
+            queue_text.push_str(&media_text);
+        }
+        let plain = markdown_to_plain_text(&queue_text).trim().to_owned();
+        if !plain.is_empty() {
+            queue_pending_outbound(&ctx.account_id, &ctx.user_id, &plain).await;
+        }
+        return;
+    }
+
+    let plain_text = markdown_to_plain_text(&outbound).trim().to_owned();
+    let mut maybe_message_id: Option<String> = None;
+    for media_ref in media_refs {
+        let dedupe_key = media_ref.dedupe_key();
+        if sent_media_refs.contains(&dedupe_key) {
+            continue;
+        }
+        let media_bytes = match load_media_bytes(&ctx.http, &media_ref).await {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                warn!(
+                    account_id = %ctx.account_id,
+                    user_id = %ctx.user_id,
+                    error = %error,
+                    "failed to load weixin media reference"
+                );
+                continue;
+            }
+        };
+        let uploaded = match upload_media_to_cdn(
+            &ctx.http,
+            &ctx.account,
+            &ctx.user_id,
+            &media_bytes,
+            media_ref.classify_media_type(),
+            media_ref.file_name(),
+        )
+        .await
+        {
+            Ok(value) => value,
+            Err(error) => {
+                warn!(
+                    account_id = %ctx.account_id,
+                    user_id = %ctx.user_id,
+                    error = %error,
+                    "failed to upload weixin media reference"
+                );
+                continue;
+            }
+        };
+        match send_media_message(
+            &ctx.http,
+            &ctx.account,
+            &ctx.user_id,
+            &uploaded,
+            &plain_text,
+            token.as_deref(),
+        )
+        .await
+        {
+            Ok(message_id) => {
+                sent_media_refs.insert(dedupe_key);
+                maybe_message_id = Some(message_id);
+                break;
+            }
+            Err(error) => {
+                warn!(
+                    account_id = %ctx.account_id,
+                    user_id = %ctx.user_id,
+                    error = %error,
+                    "failed to send weixin media message"
+                );
+            }
+        }
+    }
+
+    let message_id = if let Some(message_id) = maybe_message_id {
+        message_id
+    } else if !plain_text.is_empty() {
+        match send_text_message(
+            &ctx.http,
+            &ctx.account,
+            &ctx.user_id,
+            &plain_text,
+            token.as_deref(),
+        )
+        .await
+        {
+            Ok(message_id) => message_id,
+            Err(error) => {
+                error!(
+                    account_id = %ctx.account_id,
+                    user_id = %ctx.user_id,
+                    error = %error,
+                    "failed to send weixin non-streaming response"
+                );
+                let error_text = error.to_string();
+                if error_text.contains("ret=")
+                    || error_text.contains("ret!=0")
+                    || error_text.contains("context_token")
+                    || error_text.contains("send limit")
+                {
+                    queue_pending_outbound(&ctx.account_id, &ctx.user_id, &plain_text).await;
+                }
+                return;
+            }
+        }
+    } else {
+        return;
+    };
+
+    record_stream_outbound(ctx, &message_id).await;
+}
+
+async fn run_non_streaming_update_consumer(
+    ctx: WeixinStreamConsumerContext,
+    mut event_rx: mpsc::UnboundedReceiver<StreamEvent>,
+    stream_done_tx: oneshot::Sender<()>,
+) {
+    let mut stream_text = String::new();
+    let mut sent_media_refs = HashSet::<String>::new();
+    let mut pending_media_refs = Vec::<OutboundMediaRef>::new();
+
+    loop {
+        if !ctx.running.load(Ordering::Relaxed) {
+            break;
+        }
+        let event = tokio::select! {
+            event = event_rx.recv() => event,
+            _ = tokio::time::sleep(Duration::from_millis(250)) => continue,
+        };
+        let Some(event) = event else {
+            break;
+        };
+        if !ctx.running.load(Ordering::Relaxed) {
+            break;
+        }
+        match event {
+            StreamEvent::SessionBound { .. } | StreamEvent::ThreadTitleUpdated { .. } => {}
+            StreamEvent::Delta { text } => {
+                stream_text = merge_stream_text(&stream_text, &text);
+            }
+            StreamEvent::Boundary { kind, .. } => match kind {
+                StreamBoundaryKind::UserAck => {
+                    if !stream_text.trim().is_empty() {
+                        info!(
+                            account_id = %ctx.account_id,
+                            user_id = %ctx.user_id,
+                            dropped_len = stream_text.len(),
+                            "dropping buffered weixin stream text on user_ack boundary"
+                        );
+                    }
+                    apply_weixin_stream_boundary(&mut stream_text, StreamBoundaryKind::UserAck);
+                }
+                StreamBoundaryKind::AssistantSegment => {
+                    apply_weixin_stream_boundary(
+                        &mut stream_text,
+                        StreamBoundaryKind::AssistantSegment,
+                    );
+                }
+            },
+            StreamEvent::ToolUse { .. } => {
+                let remaining = token_sends_remaining(&ctx.context_token).await;
+                if remaining > 2 && !stream_text.trim().is_empty() {
+                    flush_non_streaming_weixin_text(
+                        &ctx,
+                        &stream_text,
+                        &pending_media_refs,
+                        &mut sent_media_refs,
+                    )
+                    .await;
+                    stream_text.clear();
+                    pending_media_refs.clear();
+                }
+            }
+            StreamEvent::ToolResult { message } => {
+                pending_media_refs.extend(extract_media_refs_from_provider_message(&message));
+            }
+            StreamEvent::Done => {
+                flush_non_streaming_weixin_text(
+                    &ctx,
+                    &stream_text,
+                    &pending_media_refs,
+                    &mut sent_media_refs,
+                )
+                .await;
+                break;
+            }
+        }
+    }
+
+    let _ = stream_done_tx.send(());
+}
+
 impl WeixinChannel {
     pub fn new(
         config: WeixinConfig,
         router: Arc<Mutex<MessageRouter>>,
         bridge: Arc<MultiProviderBridge>,
+        dispatcher: Arc<dyn ChannelDispatcher>,
+    ) -> Self {
+        Self::with_running(
+            config,
+            router,
+            bridge,
+            dispatcher,
+            Arc::new(AtomicBool::new(false)),
+        )
+    }
+
+    pub fn with_running(
+        config: WeixinConfig,
+        router: Arc<Mutex<MessageRouter>>,
+        bridge: Arc<MultiProviderBridge>,
+        dispatcher: Arc<dyn ChannelDispatcher>,
+        running: Arc<AtomicBool>,
     ) -> Self {
         let http = Client::builder()
             .timeout(Duration::from_millis(DEFAULT_LONG_POLL_TIMEOUT_MS + 15_000))
@@ -3111,10 +3427,11 @@ impl WeixinChannel {
         Self {
             config,
             http,
-            running: Arc::new(AtomicBool::new(false)),
+            running,
             poll_tasks: Vec::new(),
             router,
             bridge,
+            dispatcher,
         }
     }
 
@@ -3921,14 +4238,24 @@ impl WeixinChannel {
             file_paths: file_paths_for_agent,
         };
 
+        let origin_endpoint_identity =
+            endpoint_key("weixin", &runtime.account_id, &request.thread_binding_key);
+        let deferred_fanout = crate::bound_fanout::DeferredBoundStreamFanout::new(
+            runtime.router.clone(),
+            runtime.dispatcher.clone(),
+            request.run_id.clone(),
+            origin_endpoint_identity,
+        );
+        let fanout_consumer = deferred_fanout.consumer(response_callback);
+
         // Read this run's stream from the durable committed transcript:
         // subscribe before dispatch and let the replay adapter drive the Weixin
-        // sender. `None` is then passed to dispatch so the bridge does not
-        // double-drive the same callback.
+        // sender. Bound non-origin endpoints attach after route_and_dispatch
+        // resolves the canonical thread id.
         let dispatch_callback = match crate::committed_replay::committed_callback(
             &runtime.bridge,
             &request.run_id,
-            response_callback,
+            fanout_consumer,
         )
         .await
         {
@@ -3939,15 +4266,26 @@ impl WeixinChannel {
             }
         };
 
+        let thread_store = {
+            let router_guard = runtime.router.lock().await;
+            router_guard.thread_store()
+        };
+        let dispatch_delegate = crate::bound_fanout::DeferredFanoutAgentDispatcher::new(
+            runtime.bridge.as_ref(),
+            deferred_fanout.clone(),
+            thread_store,
+        );
+
         let result = {
             let mut router_guard = runtime.router.lock().await;
             router_guard
-                .route_and_dispatch(request, runtime.bridge.as_ref(), dispatch_callback)
+                .route_and_dispatch(request, &dispatch_delegate, dispatch_callback)
                 .await
         };
 
         match result {
             Ok(result) => {
+                deferred_fanout.attach_thread(&result.thread_id).await;
                 if let Ok(mut holder) = thread_id_holder.lock() {
                     *holder = result.thread_id.clone();
                 }
@@ -4096,6 +4434,7 @@ impl Channel for WeixinChannel {
                 account: account.clone(),
                 router: self.router.clone(),
                 bridge: self.bridge.clone(),
+                dispatcher: self.dispatcher.clone(),
                 notify_started: Arc::new(AtomicBool::new(false)),
                 running: self.running.clone(),
             };

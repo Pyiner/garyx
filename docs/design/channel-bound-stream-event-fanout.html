@@ -220,9 +220,9 @@
 <body>
   <main>
     <header>
-      <div class="kicker">Garyx Design Review</div>
+      <div class="kicker">Garyx Implemented Design</div>
       <h1>绑定 Channel 的 StreamEvent 扇出设计</h1>
-      <p class="subtitle">目标是把线程运行产生的 committed <code>StreamEvent</code>，按线程绑定关系统一扇出到所有 channel 端点；gateway/router 不再承担 Markdown、图片、工具调用或平台特殊规则的渲染职责。</p>
+      <p class="subtitle">当前实现把线程运行产生的 committed <code>StreamEvent</code>，按线程绑定关系统一扇出到所有 channel 端点；内置 channel 和新外部 plugin 使用同一个 <code>StreamDispatchEnvelope</code> outbound 契约，gateway/router 不承担 Markdown、图片、工具调用或平台特殊规则的渲染职责。</p>
     </header>
 
     <section class="grid">
@@ -232,17 +232,17 @@
       </div>
       <div class="panel">
         <strong>主路径</strong>
-        内置 channel 和新外部 plugin 都消费同语义 <code>StreamEvent</code>。
+        内置 channel 和新外部 plugin 都消费 <code>StreamDispatchEnvelope</code>。
       </div>
       <div class="panel">
         <strong>兼容路径</strong>
-        旧 subprocess plugin 由 adapter 降级到 <code>dispatch_outbound</code>，内容仍是 <code>ChannelOutboundContent</code>。
+        旧 subprocess plugin 才由 adapter 降级到 <code>dispatch_outbound(ChannelOutboundContent)</code>。
       </div>
     </section>
 
     <section>
       <h2>1. 目标架构</h2>
-      <div class="note">共享 fanout 是唯一 committed-replay 挂载点。无论 run 从哪里触发，只要有稳定的 <code>thread_id</code> 和 <code>run_id</code>，都进入同一条分发链路。</div>
+      <div class="note">API/gateway 入口在已有稳定 <code>thread_id</code> 后直接 snapshot；channel/plugin inbound 入口先用 <code>DeferredBoundStreamFanout</code> 缓冲事件，等 router 解析出 canonical <code>thread_id</code> 后，通过 <code>DeferredFanoutAgentDispatcher</code> 在 provider dispatch 前 snapshot、排除 origin、flush 缓冲。<code>route_and_dispatch</code> 返回后的 attach 只是幂等兜底。内部入口只是 run 来源，不是另一套 outbound 协议。</div>
       <div class="diagram">
         <div class="diagram-title">
           <h3>统一 StreamEvent 扇出</h3>
@@ -263,12 +263,12 @@
           <text class="small" x="115" y="154" text-anchor="middle">Feishu / Telegram 等</text>
 
           <rect class="box box-blue" x="30" y="190" width="170" height="54"></rect>
-          <text class="label" x="115" y="214" text-anchor="middle">Workflow / cron</text>
-          <text class="small" x="115" y="232" text-anchor="middle">scheduled / automation</text>
+          <text class="label" x="115" y="214" text-anchor="middle">Internal / plugin</text>
+          <text class="small" x="115" y="232" text-anchor="middle">内部入口 / 外部插件入口</text>
 
           <rect class="box box-blue" x="30" y="268" width="170" height="54"></rect>
-          <text class="label" x="115" y="292" text-anchor="middle">Restart recovery</text>
-          <text class="small" x="115" y="310" text-anchor="middle">in-flight run reattach</text>
+          <text class="label" x="115" y="292" text-anchor="middle">Other run source</text>
+          <text class="small" x="115" y="310" text-anchor="middle">复用同一挂载链路</text>
 
           <rect class="box box-cyan" x="270" y="134" width="180" height="96"></rect>
           <text class="label" x="360" y="168" text-anchor="middle">Provider run</text>
@@ -276,14 +276,14 @@
           <text class="small" x="360" y="208" text-anchor="middle">StreamEvent</text>
 
           <rect class="box box-green" x="520" y="124" width="190" height="116"></rect>
-          <text class="label" x="615" y="158" text-anchor="middle">BoundEventFanout</text>
+          <text class="label" x="615" y="158" text-anchor="middle">Bound / Deferred Fanout</text>
           <text class="small" x="615" y="180" text-anchor="middle">按 thread_id 查绑定</text>
           <text class="small" x="615" y="198" text-anchor="middle">snapshot target set</text>
-          <text class="small" x="615" y="216" text-anchor="middle">按 seq 扇出事件</text>
+          <text class="small" x="615" y="216" text-anchor="middle">按事件顺序扇出</text>
 
           <rect class="box box-violet" x="790" y="42" width="220" height="68"></rect>
           <text class="label" x="900" y="70" text-anchor="middle">内置 channel</text>
-          <text class="small" x="900" y="90" text-anchor="middle">native dispatch_stream_event</text>
+          <text class="small" x="900" y="90" text-anchor="middle">native StreamDispatchEnvelope</text>
 
           <rect class="box box-violet" x="790" y="144" width="220" height="68"></rect>
           <text class="label" x="900" y="172" text-anchor="middle">新 subprocess plugin</text>
@@ -330,7 +330,7 @@
 
           <rect class="box box-cyan" x="500" y="78" width="180" height="70"></rect>
           <text class="label" x="590" y="108" text-anchor="middle">Stream events</text>
-          <text class="small" x="590" y="128" text-anchor="middle">按 committed seq 扇出</text>
+          <text class="small" x="590" y="128" text-anchor="middle">保持单目标顺序</text>
 
           <rect class="box box-violet" x="740" y="78" width="160" height="70"></rect>
           <text class="label" x="820" y="108" text-anchor="middle">Done</text>
@@ -398,43 +398,55 @@
     </section>
 
     <section>
-      <h2>4. Dispatcher Contract</h2>
+      <h2>4. Dispatcher Contract 和数据</h2>
+      <p>主路径 callback 接收 <code>StreamDispatchEnvelope</code>。新 subprocess plugin 的 JSON-RPC <code>DispatchStreamEvent</code> 由这个 envelope 直接转换出来，避免内部和外部插件协议字段漂移。当前主路径不伪造 per-target sequence；如果后续需要 replay recovery，sequence 必须来自 committed per-run replay。</p>
       <table>
         <thead>
           <tr>
-            <th>事件/字段</th>
-            <th>设计约束</th>
-            <th>原因</th>
+            <th>字段</th>
+            <th>含义</th>
+            <th>归属边界</th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td><code>ToolUse</code> / <code>ToolResult</code></td>
+            <td><code>endpoint_identity</code></td>
+            <td>端点唯一 key，用于去重、origin 排除、outbound id 关联</td>
+            <td>channel 生成；gateway/router 只做 equality</td>
+          </tr>
+          <tr>
+            <td><code>thread_id</code> / <code>run_id</code></td>
+            <td>canonical thread 和当前 run</td>
+            <td>fanout snapshot 和 committed replay 使用</td>
+          </tr>
+          <tr>
+            <td><code>account_id</code> / <code>chat_id</code></td>
+            <td>channel 账号和主要投递目标</td>
+            <td>channel renderer 使用，gateway 不解析</td>
+          </tr>
+          <tr>
+            <td><code>delivery_target_type</code> / <code>delivery_target_id</code></td>
+            <td>typed target，例如 chat_id/open_id 等</td>
+            <td>channel 自己解释</td>
+          </tr>
+          <tr>
+            <td><code>delivery_thread_id</code></td>
+            <td>平台 thread/topic/scope</td>
+            <td>channel 自己解释；router 只保存关联</td>
+          </tr>
+          <tr>
+            <td><code>event</code></td>
+            <td>原始 <code>StreamEvent</code>，包含 Delta、Boundary、ToolUse、ToolResult、Done 等</td>
             <td>保持结构化直到 channel renderer</td>
-            <td>Feishu、Telegram、Discord 可以有不同呈现，gateway 不做降级文本</td>
-          </tr>
-          <tr>
-            <td><code>UserAck</code></td>
-            <td>只投 origin endpoint，或带 origin <code>Endpoint Identity</code> 让非 origin 忽略</td>
-            <td>ack 是端点相关事件，不是所有绑定端点都应切分输出</td>
-          </tr>
-          <tr>
-            <td><code>seq</code></td>
-            <td>来自 committed per-run replay sequence</td>
-            <td>用于 replay gap recovery 和 restart reattach 后幂等</td>
-          </tr>
-          <tr>
-            <td>delivery outcome</td>
-            <td>返回 <code>Endpoint Identity</code>、run id、seq、message id、状态</td>
-            <td>保留 router outbound id persistence 和诊断能力</td>
           </tr>
         </tbody>
       </table>
+      <div class="note">当前内置 native callback：Telegram、Feishu、Discord、Weixin。Feishu 的非 origin 目标没有原始 Feishu message id，因此无法把 COT thread 挂回用户那条消息，但仍然收到完整 <code>StreamEvent</code>，由 Feishu renderer 自己退化为普通卡片/图片。</div>
     </section>
 
     <section>
       <h2>5. Plugin 协议和 Legacy Adapter</h2>
-      <p>新外部 plugin 和内置 channel 对齐同一套 outbound 事件语义：目标消费 <code>StreamEvent</code>。差异只在传输形态，内置 channel 是 Rust callback，新 subprocess plugin 是 host -> plugin 的 <code>dispatch_stream_event</code> RPC。</p>
+      <p>新外部 plugin 和内置 channel 对齐同一套 outbound 事件语义：目标消费 <code>StreamDispatchEnvelope</code>。差异只在传输形态，内置 channel 是 Rust callback，新 subprocess plugin 是 host -> plugin 的 <code>dispatch_stream_event</code> RPC。唯一允许不同的是旧 subprocess plugin adapter，它只是兼容旧协议的临时路径。</p>
       <p>host 只通过注册或初始化 capability 识别新旧协议：声明 <code>capabilities.dispatch_stream_event = true</code> 的 plugin 走 native RPC；没有声明的旧 plugin 才走 adapter。</p>
       <div class="diagram">
         <div class="diagram-title">
@@ -448,7 +460,7 @@
             </marker>
           </defs>
           <rect class="box box-blue" x="52" y="90" width="180" height="72"></rect>
-          <text class="label" x="142" y="120" text-anchor="middle">StreamEvent</text>
+          <text class="label" x="142" y="120" text-anchor="middle">StreamDispatchEnvelope</text>
           <text class="small" x="142" y="140" text-anchor="middle">结构化事件输入</text>
 
           <rect class="box box-cyan" x="304" y="80" width="210" height="92"></rect>
@@ -488,12 +500,12 @@
         <tbody>
           <tr>
             <td>内置 channel</td>
-            <td>dispatcher callback 接收 <code>StreamEvent</code></td>
+            <td>dispatcher callback 接收 <code>StreamDispatchEnvelope</code></td>
             <td>保持结构化，交给 channel renderer</td>
           </tr>
           <tr>
             <td>新 subprocess plugin</td>
-            <td><code>dispatch_stream_event(StreamEvent)</code></td>
+            <td><code>dispatch_stream_event(StreamDispatchEnvelope)</code></td>
             <td>与内置 channel 同语义</td>
           </tr>
           <tr>
@@ -506,21 +518,16 @@
     </section>
 
     <section>
-      <h2>6. 迁移和验收</h2>
+      <h2>6. 当前代码落点和验收</h2>
       <div class="two">
         <div class="panel">
-          <h3>迁移顺序</h3>
+          <h3>代码落点</h3>
           <ol>
-            <li>补 opaque <code>Endpoint Identity</code> equality 测试。</li>
-            <li>channel 侧补 identity 生成契约测试。</li>
-            <li>新增 dispatcher-level <code>dispatch_stream_event</code>。</li>
-            <li>内置 channel 先接入 native dispatch。</li>
-            <li>补 delivery outcome 和 router outbound id 回流。</li>
-            <li>对子进程 plugin 增加 <code>dispatch_stream_event</code> capability detection。</li>
-            <li>新 plugin host 协议增加 <code>dispatch_stream_event</code> RPC。</li>
-            <li>旧 plugin 走 <code>dispatch_outbound(ChannelOutboundContent)</code> adapter。</li>
-            <li>所有 run origin 切到共享 fanout。</li>
-            <li>删除 gateway 渲染和 channel 特判。</li>
+            <li><code>garyx-channels/src/dispatcher.rs</code>：统一 envelope、native callback、legacy adapter fallback。</li>
+            <li><code>garyx-channels/src/bound_fanout.rs</code>：deferred fanout、provider-dispatch 前挂载 wrapper、origin endpoint 排除、缓冲 flush。</li>
+            <li><code>garyx-channels/src/plugin_host/*</code>：外部 plugin capability 和 <code>dispatch_stream_event</code> RPC。</li>
+            <li><code>garyx-gateway/src/application/chat/delivery.rs</code>：gateway/API 入口 bound delivery。</li>
+            <li><code>garyx/src/channel_plugin_host.rs</code> 和内置 channel handlers：入口 unknown thread 时使用 deferred fanout。</li>
           </ol>
         </div>
         <div class="panel">
@@ -529,37 +536,39 @@
             <li>run 来源无关，所有绑定端点都能收到 committed event。</li>
             <li>gateway/router 只按 <code>Endpoint Identity</code> equality 去重。</li>
             <li>结构化 tool event 不在 gateway 降级。</li>
-            <li>新 plugin 和内置 channel 对齐 <code>StreamEvent</code> 语义。</li>
+            <li>新 plugin 和内置 channel 对齐 <code>StreamDispatchEnvelope</code> 语义。</li>
             <li>旧 plugin adapter 保留 <code>ToolUse</code> / <code>ToolResult</code> 结构化透传。</li>
-            <li>restart reattach 后不重复投递。</li>
-            <li>unsupported 或 deliberately ignored event 可观测。</li>
+            <li>内置 Feishu、Discord、Weixin、Telegram 都有 native stream-event callback。</li>
+            <li>outbound message id 继续回写 router。</li>
+            <li>deferred fanout 在 provider dispatch 前 snapshot，运行中绑定变更不进入当前 run。</li>
+            <li>当前不伪造 event seq；restart recovery / per-event diagnostics 后续补 typed outcome。</li>
           </ul>
         </div>
       </div>
     </section>
 
     <section>
-      <h2>7. 已拍板和仍待确认</h2>
+      <h2>7. 已落地和剩余债务</h2>
       <div class="two">
         <div class="panel">
-          <h3>已拍板</h3>
+          <h3>已落地</h3>
           <ul>
-            <li>内置 channel 和新外部 plugin 都消费 <code>StreamEvent</code>。</li>
+            <li>内置 channel 和新外部 plugin 都消费同一套 stream-event envelope。</li>
             <li>新旧 plugin 用 <code>dispatch_stream_event</code> capability 识别。</li>
             <li>旧 plugin 走 <code>dispatch_outbound(ChannelOutboundContent)</code> adapter。</li>
-            <li>共享 fanout 放在 gateway runtime assembly 附近。</li>
+            <li>运行中修改绑定不影响当前 run，下一次 run 生效。</li>
           </ul>
         </div>
         <div class="panel">
-          <h3>仍待确认</h3>
-          <p><span class="tag">Q1</span><code>dispatch_stream_event</code> 的 delivery outcome 是每个 event 阻塞等待 per-target ack，还是先发送、再异步上报 diagnostics。</p>
-          <p>当前倾向：普通事件不阻塞 run 主流程；<code>Done</code> / flush 边界可以等待短 timeout，以保留失败诊断和 outbound id persistence。</p>
+          <h3>剩余债务</h3>
+          <p><span class="tag">TODO</span>旧 subprocess plugin adapter 只为兼容旧协议保留；所有插件升级到 <code>dispatch_stream_event</code> 后删除。</p>
+          <p><span class="tag">Diagnostics</span>当前可观测性以 outbound message id persistence 和日志为主；独立 per-event delivery outcome 可后续补。</p>
         </div>
       </div>
     </section>
 
     <footer>
-      <p>状态：提案中。本文是 `docs/design/channel-bound-stream-event-fanout.md` 的 HTML 审阅版。</p>
+      <p>状态：主路径已实现。本文是 `docs/design/channel-bound-stream-event-fanout.md` 的 HTML 审阅版。</p>
     </footer>
   </main>
 </body>

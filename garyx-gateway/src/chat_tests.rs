@@ -6,7 +6,10 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use garyx_bridge::MultiProviderBridge;
 use garyx_bridge::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
-use garyx_channels::{ChannelDispatcher, ChannelInfo, OutboundMessage, SendMessageResult};
+use garyx_channels::{
+    ChannelDispatcher, ChannelInfo, OutboundMessage, SendMessageResult, StreamDispatchCallback,
+    StreamingDispatchTarget,
+};
 use garyx_models::config::{ApiAccount, GaryxConfig};
 use garyx_models::provider::{
     AgentRunRequest, ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent,
@@ -36,7 +39,7 @@ struct WorkspaceRecordingProvider {
 
 #[derive(Default)]
 struct RecordingDispatcher {
-    calls: Mutex<Vec<OutboundMessage>>,
+    calls: Arc<Mutex<Vec<OutboundMessage>>>,
 }
 
 impl RecordingDispatcher {
@@ -69,6 +72,31 @@ impl ChannelDispatcher for RecordingDispatcher {
             account_id: "bot1".to_owned(),
             is_running: true,
         }]
+    }
+
+    fn build_stream_event_callback(
+        &self,
+        target: StreamingDispatchTarget,
+        _router: Arc<tokio::sync::Mutex<garyx_router::MessageRouter>>,
+    ) -> Option<StreamDispatchCallback> {
+        let calls = self.calls.clone();
+        Some(Arc::new(move |envelope| {
+            if let StreamEvent::Delta { text } = envelope.event {
+                let mut message = OutboundMessage::text(
+                    target.channel.clone(),
+                    target.account_id.clone(),
+                    target.chat_id.clone(),
+                    target.delivery_target_type.clone(),
+                    target.delivery_target_id.clone(),
+                    text,
+                );
+                message.thread_id = target.thread_id.clone();
+                calls
+                    .lock()
+                    .expect("recording dispatcher lock poisoned")
+                    .push(message);
+            }
+        }))
     }
 }
 

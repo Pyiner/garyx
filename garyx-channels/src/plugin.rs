@@ -23,7 +23,10 @@ use garyx_router::{KnownChannelEndpoint, endpoint_key};
 
 use crate::auth_flow::AuthFlowExecutor;
 use crate::channel_trait::{Channel, ChannelError};
-use crate::dispatcher::{OutboundMessage, SendMessageResult, SwappableDispatcher};
+use crate::dispatcher::{
+    ChannelDispatcher, ChannelDispatcherImpl, OutboundMessage, SendMessageResult,
+    SwappableDispatcher,
+};
 use crate::plugin_host::manifest::ManifestCapabilities;
 use crate::plugin_host::{
     AccountDescriptor, AccountRootBehavior, HostContext, InboundHandler, InitializeParams,
@@ -672,6 +675,7 @@ impl ChannelPlugin for ManagedChannelPlugin {
                             account: parsed,
                             http: reqwest::Client::new(),
                             is_running: false,
+                            running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                         });
                     out.insert(acc.id.clone(), sender);
                 }
@@ -2311,7 +2315,14 @@ impl ChannelPluginManager {
                 "telegram" => build_telegram_senders(&telegram),
                 "discord" => build_discord_senders(&discord),
                 "feishu" => build_feishu_senders(&feishu),
-                "weixin" => build_weixin_senders(&weixin),
+                "weixin" => {
+                    let running = self
+                        .dispatcher
+                        .as_ref()
+                        .and_then(|dispatcher| dispatcher.channel_running_handle("weixin"))
+                        .unwrap_or_else(|| Arc::new(std::sync::atomic::AtomicBool::new(false)));
+                    build_weixin_senders(&weixin, running)
+                }
                 _ => continue, // unknown built-in id — don't touch
             };
             managed.replace_outbound_senders(new_map);
@@ -3434,6 +3445,7 @@ fn build_feishu_senders(
 
 fn build_weixin_senders(
     cfg: &garyx_models::config::WeixinConfig,
+    running: Arc<std::sync::atomic::AtomicBool>,
 ) -> HashMap<String, Arc<dyn crate::dispatcher::OutboundSender>> {
     let mut out: HashMap<String, Arc<dyn crate::dispatcher::OutboundSender>> = HashMap::new();
     for (id, acc) in &cfg.accounts {
@@ -3446,6 +3458,7 @@ fn build_weixin_senders(
                 account: acc.clone(),
                 http: reqwest::Client::new(),
                 is_running: false,
+                running: running.clone(),
             });
         out.insert(id.clone(), sender);
     }
@@ -3541,6 +3554,7 @@ pub struct BuiltInPluginDiscoverer {
     channels: ChannelsConfig,
     router: Arc<Mutex<MessageRouter>>,
     bridge: Arc<MultiProviderBridge>,
+    dispatcher: Arc<dyn ChannelDispatcher>,
     public_url: String,
 }
 
@@ -3551,10 +3565,23 @@ impl BuiltInPluginDiscoverer {
         bridge: Arc<MultiProviderBridge>,
         public_url: String,
     ) -> Self {
+        let dispatcher: Arc<dyn ChannelDispatcher> =
+            Arc::new(ChannelDispatcherImpl::from_config(&channels));
+        Self::with_dispatcher(channels, router, bridge, dispatcher, public_url)
+    }
+
+    pub fn with_dispatcher(
+        channels: ChannelsConfig,
+        router: Arc<Mutex<MessageRouter>>,
+        bridge: Arc<MultiProviderBridge>,
+        dispatcher: Arc<dyn ChannelDispatcher>,
+        public_url: String,
+    ) -> Self {
         Self {
             channels,
             router,
             bridge,
+            dispatcher,
             public_url,
         }
     }
@@ -3587,8 +3614,12 @@ impl PluginDiscoverer for BuiltInPluginDiscoverer {
         // validation. Empty-account runtimes are inert: senders / poll loops
         // iterate over accounts and no-op when the map is empty.
         {
-            let channel =
-                TelegramChannel::new(telegram.clone(), self.router.clone(), self.bridge.clone());
+            let channel = TelegramChannel::new(
+                telegram.clone(),
+                self.router.clone(),
+                self.bridge.clone(),
+                self.dispatcher.clone(),
+            );
             // Build one `TelegramSender` per enabled account so the
             // plugin's trait-level `dispatch_outbound` can route
             // without consulting the dispatcher's legacy map.
@@ -3610,8 +3641,12 @@ impl PluginDiscoverer for BuiltInPluginDiscoverer {
         }
 
         {
-            let channel =
-                DiscordChannel::new(discord.clone(), self.router.clone(), self.bridge.clone());
+            let channel = DiscordChannel::new(
+                discord.clone(),
+                self.router.clone(),
+                self.bridge.clone(),
+                self.dispatcher.clone(),
+            );
             let discord_senders = build_discord_senders(&discord);
             let descriptor = crate::builtin_catalog::builtin_channel_descriptor("discord")
                 .expect("builtin discord descriptor");
@@ -3634,6 +3669,7 @@ impl PluginDiscoverer for BuiltInPluginDiscoverer {
                 feishu.clone(),
                 self.router.clone(),
                 self.bridge.clone(),
+                self.dispatcher.clone(),
                 self.public_url.clone(),
             );
             let feishu_senders = build_feishu_senders(&feishu);
@@ -3654,9 +3690,18 @@ impl PluginDiscoverer for BuiltInPluginDiscoverer {
         }
 
         {
-            let channel =
-                WeixinChannel::new(weixin.clone(), self.router.clone(), self.bridge.clone());
-            let weixin_senders = build_weixin_senders(&weixin);
+            let weixin_running = self
+                .dispatcher
+                .channel_running_handle("weixin")
+                .unwrap_or_else(|| Arc::new(std::sync::atomic::AtomicBool::new(false)));
+            let channel = WeixinChannel::with_running(
+                weixin.clone(),
+                self.router.clone(),
+                self.bridge.clone(),
+                self.dispatcher.clone(),
+                weixin_running.clone(),
+            );
+            let weixin_senders = build_weixin_senders(&weixin, weixin_running);
             let descriptor = crate::builtin_catalog::builtin_channel_descriptor("weixin")
                 .expect("builtin weixin descriptor");
             plugins.push(Box::new(ManagedChannelPlugin::with_options(

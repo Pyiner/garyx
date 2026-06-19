@@ -15,6 +15,7 @@ use garyx_models::config::{TelegramAccount, TelegramConfig};
 use garyx_router::MessageRouter;
 
 use crate::channel_trait::{Channel, ChannelError};
+use crate::dispatcher::ChannelDispatcher;
 #[cfg(test)]
 use media::resolve_document_image_media_type;
 #[cfg(test)]
@@ -100,6 +101,7 @@ pub struct TelegramInboundRuntime {
     account: TelegramAccount,
     router: Arc<Mutex<MessageRouter>>,
     bridge: Arc<MultiProviderBridge>,
+    dispatcher: Arc<dyn ChannelDispatcher>,
 }
 
 #[derive(Clone)]
@@ -116,6 +118,7 @@ pub struct TelegramChannel {
     poll_tasks: Vec<JoinHandle<()>>,
     router: Arc<Mutex<MessageRouter>>,
     bridge: Arc<MultiProviderBridge>,
+    dispatcher: Arc<dyn ChannelDispatcher>,
 }
 
 impl TelegramChannel {
@@ -125,6 +128,7 @@ impl TelegramChannel {
         account: &TelegramAccount,
         router: &Arc<Mutex<MessageRouter>>,
         bridge: &Arc<MultiProviderBridge>,
+        dispatcher: &Arc<dyn ChannelDispatcher>,
     ) -> TelegramInboundRuntime {
         TelegramInboundRuntime {
             http: http.clone(),
@@ -132,6 +136,7 @@ impl TelegramChannel {
             account: account.clone(),
             router: router.clone(),
             bridge: bridge.clone(),
+            dispatcher: dispatcher.clone(),
         }
     }
 
@@ -139,6 +144,7 @@ impl TelegramChannel {
         config: TelegramConfig,
         router: Arc<Mutex<MessageRouter>>,
         bridge: Arc<MultiProviderBridge>,
+        dispatcher: Arc<dyn ChannelDispatcher>,
     ) -> Self {
         let http = Client::builder()
             .timeout(std::time::Duration::from_secs(LONG_POLL_TIMEOUT_SECS + 10))
@@ -158,6 +164,7 @@ impl TelegramChannel {
             poll_tasks: Vec::new(),
             router,
             bridge,
+            dispatcher,
         }
     }
 
@@ -371,6 +378,7 @@ impl TelegramChannel {
                         http: &runtime.http,
                         router: &runtime.router,
                         bridge: &runtime.bridge,
+                        dispatcher: &runtime.dispatcher,
                         api_base: TELEGRAM_API_BASE,
                     },
                     handlers::TelegramBotRuntime {
@@ -419,8 +427,14 @@ impl Channel for TelegramChannel {
                 "verified bot"
             );
 
-            let runtime =
-                Self::inbound_runtime(&self.http, account_id, account, &self.router, &self.bridge);
+            let runtime = Self::inbound_runtime(
+                &self.http,
+                account_id,
+                account,
+                &self.router,
+                &self.bridge,
+                &self.dispatcher,
+            );
             let bot = TelegramBotIdentity {
                 token: account.token.clone(),
                 username: bot_username,

@@ -392,6 +392,7 @@ fn minimal_manifest(binary_path: &Path) -> PluginManifest {
             outbound: false,
             inbound: false,
             streaming: false,
+            dispatch_stream_event: false,
             images: false,
             files: false,
             hot_reload_accounts: false,

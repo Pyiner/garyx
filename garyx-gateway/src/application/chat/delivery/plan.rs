@@ -9,6 +9,7 @@ use crate::server::AppState;
 
 #[derive(Clone)]
 pub(super) struct BoundThreadDeliveryTarget {
+    pub(super) endpoint_identity: String,
     pub(super) channel: String,
     pub(super) account_id: String,
     pub(super) chat_id: String,
@@ -51,6 +52,7 @@ pub(super) fn bound_thread_delivery_targets(value: &Value) -> Vec<BoundThreadDel
             crate::routes::binding_delivery_thread_id(&binding.binding_key, &binding.chat_id);
 
         targets.push(BoundThreadDeliveryTarget {
+            endpoint_identity: endpoint_key,
             channel: channel.to_owned(),
             account_id: account_id.to_owned(),
             chat_id: resolved_chat_id,
@@ -80,30 +82,9 @@ fn same_delivery_target(
     target: &BoundThreadDeliveryTarget,
     streaming_target: &StreamingDispatchTarget,
 ) -> bool {
-    if !target
-        .channel
-        .trim()
-        .eq_ignore_ascii_case(streaming_target.channel.trim())
-        || target.account_id.trim() != streaming_target.account_id.trim()
-    {
-        return false;
-    }
-
-    let target_delivery_id = target.delivery_target_id.trim();
-    let streaming_delivery_id = streaming_target.delivery_target_id.trim();
-    if !target_delivery_id.is_empty()
-        && !streaming_delivery_id.is_empty()
-        && target.delivery_target_type.trim() == streaming_target.delivery_target_type.trim()
-        && target_delivery_id == streaming_delivery_id
-    {
-        return true;
-    }
-
-    let target_chat_id = target.chat_id.trim();
-    let streaming_chat_id = streaming_target.chat_id.trim();
-    !target_chat_id.is_empty()
-        && !streaming_chat_id.is_empty()
-        && target_chat_id == streaming_chat_id
+    let target_identity = target.endpoint_identity.trim();
+    let streaming_identity = streaming_target.endpoint_identity.trim();
+    !target_identity.is_empty() && target_identity == streaming_identity
 }
 
 pub(super) fn targets_except_streaming_target(

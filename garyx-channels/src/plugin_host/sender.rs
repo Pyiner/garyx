@@ -16,7 +16,8 @@ use std::time::Duration;
 use tracing::warn;
 
 use super::protocol::{
-    CapabilitiesResponse, DispatchOutbound, DispatchOutboundResult, PluginErrorCode,
+    CapabilitiesResponse, DispatchOutbound, DispatchOutboundResult, DispatchStreamEvent,
+    DispatchStreamEventResult, PluginErrorCode,
 };
 use super::transport::{PluginRpcClient, RpcError};
 use crate::channel_trait::ChannelError;
@@ -133,12 +134,53 @@ impl PluginSenderHandle {
         }
     }
 
-    fn map_rpc_error(&self, err: RpcError) -> ChannelError {
-        match err {
-            RpcError::Timeout(_) => ChannelError::Connection(format!(
-                "plugin '{}' dispatch_outbound timed out",
+    /// Send one native host -> plugin stream event. This is the new outbound
+    /// fanout protocol; callers should use it only when
+    /// `capabilities.dispatch_stream_event` is true.
+    pub async fn dispatch_stream_event(
+        &self,
+        req: DispatchStreamEvent,
+    ) -> Result<DispatchStreamEventResult, ChannelError> {
+        if !self.capabilities.dispatch_stream_event {
+            return Err(ChannelError::Config(format!(
+                "plugin '{}' does not advertise dispatch_stream_event capability",
                 self.plugin_id
-            )),
+            )));
+        }
+
+        let params = serde_json::to_value(&req).map_err(|err| {
+            ChannelError::SendFailed(format!(
+                "encoding dispatch_stream_event for '{}' failed: {err}",
+                self.plugin_id
+            ))
+        })?;
+
+        match self
+            .rpc
+            .call_value_with_timeout("dispatch_stream_event", params, Some(self.timeout))
+            .await
+        {
+            Ok(value) => {
+                serde_json::from_value::<DispatchStreamEventResult>(value).map_err(|err| {
+                    ChannelError::SendFailed(format!(
+                        "decoding dispatch_stream_event reply from '{}' failed: {err}",
+                        self.plugin_id
+                    ))
+                })
+            }
+            Err(err) => Err(self.map_rpc_error_for_method("dispatch_stream_event", err)),
+        }
+    }
+
+    fn map_rpc_error(&self, err: RpcError) -> ChannelError {
+        self.map_rpc_error_for_method("dispatch_outbound", err)
+    }
+
+    fn map_rpc_error_for_method(&self, method: &str, err: RpcError) -> ChannelError {
+        match err {
+            RpcError::Timeout(_) => {
+                ChannelError::Connection(format!("plugin '{}' {method} timed out", self.plugin_id,))
+            }
             RpcError::Disconnected => {
                 ChannelError::Connection(format!("plugin '{}' unavailable", self.plugin_id))
             }
@@ -153,8 +195,8 @@ impl PluginSenderHandle {
                     | PluginErrorCode::AccountNotFound
                     | PluginErrorCode::ChannelConfigRejected,
                 ) => ChannelError::Config(format!(
-                    "plugin '{}' rejected dispatch_outbound ({code}): {message}",
-                    self.plugin_id
+                    "plugin '{}' rejected {method} ({code}): {message}",
+                    self.plugin_id,
                 )),
                 Some(PluginErrorCode::ConfigRejected) => {
                     // §9.4: ConfigRejected is lifecycle-only. If a
@@ -167,29 +209,29 @@ impl PluginSenderHandle {
                         "plugin emitted ConfigRejected from dispatch_outbound; this is a plugin bug (garyx doctor advisory)"
                     );
                     ChannelError::Config(format!(
-                        "plugin '{}' reported ConfigRejected from dispatch_outbound (plugin bug): {message}",
+                        "plugin '{}' reported ConfigRejected from {method} (plugin bug): {message}",
                         self.plugin_id
                     ))
                 }
                 _ => ChannelError::SendFailed(format!(
-                    "plugin '{}' dispatch_outbound error ({code}): {message}",
-                    self.plugin_id
+                    "plugin '{}' {method} error ({code}): {message}",
+                    self.plugin_id,
                 )),
             },
             RpcError::MalformedResponse(msg) => ChannelError::SendFailed(format!(
-                "plugin '{}' returned malformed dispatch_outbound response: {msg}",
-                self.plugin_id
+                "plugin '{}' returned malformed {method} response: {msg}",
+                self.plugin_id,
             )),
             // A codec error bubbling to the caller means the transport
             // itself is broken (framing / I/O). Map to Connection so
             // retry policies do the right thing.
             RpcError::Codec(err) => ChannelError::Connection(format!(
-                "plugin '{}' codec error during dispatch_outbound: {err}",
-                self.plugin_id
+                "plugin '{}' codec error during {method}: {err}",
+                self.plugin_id,
             )),
             RpcError::Serialization(err) => ChannelError::SendFailed(format!(
-                "plugin '{}' serialization error in dispatch_outbound: {err}",
-                self.plugin_id
+                "plugin '{}' serialization error in {method}: {err}",
+                self.plugin_id,
             )),
         }
     }

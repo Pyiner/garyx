@@ -304,10 +304,11 @@ async fn rebuild_channel_plugins(
         replacement.attach_dispatcher(state.channel_dispatcher_swap());
 
         if !no_channels {
-            let built_in_discoverer = BuiltInPluginDiscoverer::new(
+            let built_in_discoverer = BuiltInPluginDiscoverer::with_dispatcher(
                 config.channels.clone(),
                 state.threads.router.clone(),
                 bridge.clone(),
+                state.channel_dispatcher(),
                 config.gateway.public_url.clone(),
             );
             replacement.discover_and_register(&built_in_discoverer)?;
