@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::Utc;
+use garyx_models::Principal;
 use garyx_models::provider::{
     AgentRunRequest, FORK_FROM_PROVIDER_TYPE_METADATA_KEY, FORK_FROM_SDK_SESSION_ID_METADATA_KEY,
     FilePayload, ImagePayload, PromptAttachment, ProviderMessage, ProviderRunOptions,
@@ -11,7 +12,6 @@ use garyx_models::provider::{
     build_user_content_from_parts, stage_file_payloads_for_prompt, stage_image_payloads_for_prompt,
 };
 use garyx_models::thread_logs::{ThreadLogEvent, ThreadLogSink, resolve_thread_log_thread_id};
-use garyx_models::Principal;
 use garyx_router::{
     ThreadHistoryRepository, ThreadStore, mark_thread_task_in_progress_on_wake,
     mark_thread_task_in_review_if_in_progress, thread_metadata_from_value,
@@ -925,10 +925,7 @@ async fn render_streaming_user_message_for_provider(
 }
 
 fn metadata_bool(metadata: &HashMap<String, Value>, key: &str) -> bool {
-    metadata
-        .get(key)
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
+    metadata.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
 fn metadata_string_is_present(metadata: &HashMap<String, Value>, key: &str) -> bool {

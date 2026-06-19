@@ -2746,7 +2746,10 @@ async fn test_work_run_wake_revives_in_review_task_before_completion() {
     .expect("revived task run should finish");
 
     assert_eq!(status_during_run.as_deref(), Some("in_progress"));
-    let final_data = store.get(thread_id).await.expect("thread data should exist");
+    let final_data = store
+        .get(thread_id)
+        .await
+        .expect("thread data should exist");
     assert_eq!(final_data["task"]["status"], "in_review");
 
     let ready_event = tokio::time::timeout(std::time::Duration::from_secs(2), async {
@@ -2873,7 +2876,10 @@ async fn test_work_run_wake_revives_done_task_before_completion() {
     .expect("revived task run should finish");
 
     assert_eq!(status_during_run.as_deref(), Some("in_progress"));
-    let final_data = store.get(thread_id).await.expect("thread data should exist");
+    let final_data = store
+        .get(thread_id)
+        .await
+        .expect("thread data should exist");
     assert_eq!(final_data["task"]["status"], "in_review");
 
     let ready_event = tokio::time::timeout(std::time::Duration::from_secs(2), async {

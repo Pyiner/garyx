@@ -14,8 +14,8 @@ use garyx_models::{
     ThreadTask,
 };
 use garyx_router::{
-    CreateTaskInput, FileTaskCounterStore, TaskListFilter, TaskRuntimeInput,
-    TaskService, TaskServiceError, UpdateTaskStatusInput, WorkspaceMode,
+    CreateTaskInput, FileTaskCounterStore, TaskListFilter, TaskRuntimeInput, TaskService,
+    TaskServiceError, UpdateTaskStatusInput, WorkspaceMode,
     mark_thread_task_in_review_if_in_progress, workspace_dir_from_value,
 };
 use serde::Deserialize;
@@ -1508,8 +1508,9 @@ fn task_error_response(error: TaskServiceError) -> (StatusCode, Json<Value>) {
     };
     let status = match code {
         "NotFound" => StatusCode::NOT_FOUND,
-        "NotATask" | "InvalidTransition" | "BadRequest" | "UnknownPrincipal"
-        | "UnknownAgent" => StatusCode::BAD_REQUEST,
+        "NotATask" | "InvalidTransition" | "BadRequest" | "UnknownPrincipal" | "UnknownAgent" => {
+            StatusCode::BAD_REQUEST
+        }
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (

@@ -98,7 +98,11 @@ pub(crate) async fn deliver_task_review_handoff(
     state: &Arc<AppState>,
     event: TaskReadyForReviewEvent,
 ) -> Result<(), TaskNotificationError> {
-    let Some(handoff) = event.handoff.as_deref().map(str::trim).filter(|value| !value.is_empty())
+    let Some(handoff) = event
+        .handoff
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
     else {
         return Ok(());
     };
