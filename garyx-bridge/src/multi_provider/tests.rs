@@ -2902,6 +2902,131 @@ async fn test_work_run_wake_revives_done_task_before_completion() {
     assert_eq!(ready_event["handoff"], "partial reply");
 }
 
+async fn assert_non_work_run_does_not_revive_task(
+    thread_id: &str,
+    run_id: &str,
+    metadata: HashMap<String, serde_json::Value>,
+    initial_status: TaskStatus,
+    expected_status: &str,
+) {
+    let bridge = MultiProviderBridge::new();
+    let provider = Arc::new(CheckpointingProvider::new());
+    let delta_sent = provider.delta_sent();
+    bridge.register_provider("p1", provider.clone()).await;
+    bridge.set_default_provider_key("p1").await;
+
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let now = Utc::now();
+    let task = ThreadTask {
+        schema_version: 1,
+        number: 14,
+        title: "Do not revive from internal wake".to_owned(),
+        status: initial_status,
+        creator: Principal::Human {
+            user_id: "user42".to_owned(),
+        },
+        assignee: Some(Principal::Agent {
+            agent_id: "codex".to_owned(),
+        }),
+        notification_target: None,
+        executor: None,
+        source: None,
+        body: None,
+        created_at: now,
+        updated_at: now,
+        updated_by: Principal::Agent {
+            agent_id: "codex".to_owned(),
+        },
+        events: Vec::new(),
+    };
+    store
+        .set(
+            thread_id,
+            json!({
+                "task": task
+            }),
+        )
+        .await;
+    bridge.set_thread_store(store.clone()).await;
+    bridge.set_thread_history(make_history(store.clone()));
+
+    bridge
+        .start_agent_run(
+            AgentRunRequest::new(
+                thread_id,
+                "internal wake should not revive task",
+                run_id,
+                "telegram",
+                "main",
+                metadata,
+            ),
+            None,
+        )
+        .await
+        .unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(3), delta_sent.notified())
+        .await
+        .expect("provider should emit a partial response");
+
+    let status_during_run = store
+        .get(thread_id)
+        .await
+        .and_then(|data| data["task"]["status"].as_str().map(ToOwned::to_owned));
+    assert_eq!(status_during_run.as_deref(), Some(expected_status));
+
+    provider.release_run();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while bridge.is_run_active(run_id).await {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("non-work wake run should finish");
+
+    let final_data = store
+        .get(thread_id)
+        .await
+        .expect("thread data should exist");
+    assert_eq!(final_data["task"]["status"], expected_status);
+}
+
+#[tokio::test]
+async fn test_non_work_run_wake_does_not_revive_reviewed_or_done_task() {
+    assert_non_work_run_does_not_revive_task(
+        "sess::tg::notify-wake-reviewed-task",
+        "task-notify-14",
+        HashMap::new(),
+        TaskStatus::InReview,
+        "in_review",
+    )
+    .await;
+    assert_non_work_run_does_not_revive_task(
+        "sess::tg::internal-wake-done-task",
+        "run-internal-dispatch",
+        HashMap::from([("internal_dispatch".to_owned(), json!(true))]),
+        TaskStatus::Done,
+        "done",
+    )
+    .await;
+    assert_non_work_run_does_not_revive_task(
+        "sess::tg::system-wake-done-task",
+        "run-system",
+        HashMap::from([("system".to_owned(), json!(true))]),
+        TaskStatus::Done,
+        "done",
+    )
+    .await;
+    assert_non_work_run_does_not_revive_task(
+        "sess::tg::workflow-child-wake-reviewed-task",
+        "run-workflow-child",
+        HashMap::from([("workflow_child_run_id".to_owned(), json!("child-1"))]),
+        TaskStatus::InReview,
+        "in_review",
+    )
+    .await;
+}
+
 #[tokio::test]
 async fn test_thread_persistence_promotes_queued_input_after_user_ack() {
     let bridge = MultiProviderBridge::new();
