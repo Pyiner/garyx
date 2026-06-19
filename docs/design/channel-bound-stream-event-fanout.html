@@ -232,11 +232,11 @@
       </div>
       <div class="panel">
         <strong>主路径</strong>
-        内置 channel 和新 plugin 都实现 <code>dispatch_stream_event</code>。
+        内置 channel 和新外部 plugin 都消费同语义 <code>StreamEvent</code>。
       </div>
       <div class="panel">
         <strong>兼容路径</strong>
-        旧 subprocess plugin 由 channels 层 adapter 降级到 <code>dispatch_outbound</code>。
+        旧 subprocess plugin 由 adapter 降级到 <code>dispatch_outbound</code>，内容仍是 <code>ChannelOutboundContent</code>。
       </div>
     </section>
 
@@ -433,11 +433,13 @@
     </section>
 
     <section>
-      <h2>5. Legacy Plugin Adapter</h2>
+      <h2>5. Plugin 协议和 Legacy Adapter</h2>
+      <p>新外部 plugin 和内置 channel 对齐同一套 outbound 事件语义：目标消费 <code>StreamEvent</code>。差异只在传输形态，内置 channel 是 Rust callback，新 subprocess plugin 是 host -> plugin 的 <code>dispatch_stream_event</code> RPC。</p>
+      <p>host 只通过注册或初始化 capability 识别新旧协议：声明 <code>capabilities.dispatch_stream_event = true</code> 的 plugin 走 native RPC；没有声明的旧 plugin 才走 adapter。</p>
       <div class="diagram">
         <div class="diagram-title">
-          <h3>旧插件兼容降级</h3>
-          <span>adapter 是临时债，不是最终协议</span>
+          <h3>插件协议选择</h3>
+          <span>新插件对齐 StreamEvent，旧插件走临时兼容 adapter</span>
         </div>
         <svg viewBox="0 0 1080 350" role="img" aria-label="Legacy plugin adapter 流程图">
           <defs>
@@ -451,17 +453,17 @@
 
           <rect class="box box-cyan" x="304" y="80" width="210" height="92"></rect>
           <text class="label" x="409" y="112" text-anchor="middle">Capability detection</text>
-          <text class="small" x="409" y="134" text-anchor="middle">支持 dispatch_stream_event?</text>
-          <text class="small" x="409" y="152" text-anchor="middle">支持则走 native</text>
+          <text class="small" x="409" y="134" text-anchor="middle">dispatch_stream_event = true</text>
+          <text class="small" x="409" y="152" text-anchor="middle">只看能力位，不看来源</text>
 
           <rect class="box box-green" x="610" y="42" width="220" height="70"></rect>
-          <text class="label" x="720" y="72" text-anchor="middle">Native plugin</text>
-          <text class="small" x="720" y="92" text-anchor="middle">dispatch_stream_event</text>
+          <text class="label" x="720" y="72" text-anchor="middle">新 plugin</text>
+          <text class="small" x="720" y="92" text-anchor="middle">dispatch_stream_event RPC</text>
 
           <rect class="box box-amber" x="610" y="182" width="220" height="92"></rect>
           <text class="label" x="720" y="214" text-anchor="middle">Legacy adapter</text>
-          <text class="small" x="720" y="236" text-anchor="middle">text/boundary flush</text>
-          <text class="small" x="720" y="254" text-anchor="middle">structured -> fallback/unsupported</text>
+          <text class="small" x="720" y="236" text-anchor="middle">ChannelOutboundContent</text>
+          <text class="small" x="720" y="254" text-anchor="middle">ToolUse/ToolResult 透传</text>
 
           <rect class="box box-violet" x="892" y="192" width="150" height="72"></rect>
           <text class="label" x="967" y="222" text-anchor="middle">旧 plugin</text>
@@ -475,6 +477,32 @@
           <text class="small" x="560" y="205" text-anchor="middle">no</text>
         </svg>
       </div>
+      <table>
+        <thead>
+          <tr>
+            <th>目标类型</th>
+            <th>协议选择</th>
+            <th>工具调用语义</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>内置 channel</td>
+            <td>dispatcher callback 接收 <code>StreamEvent</code></td>
+            <td>保持结构化，交给 channel renderer</td>
+          </tr>
+          <tr>
+            <td>新 subprocess plugin</td>
+            <td><code>dispatch_stream_event(StreamEvent)</code></td>
+            <td>与内置 channel 同语义</td>
+          </tr>
+          <tr>
+            <td>旧 subprocess plugin</td>
+            <td>adapter 输出 <code>dispatch_outbound(ChannelOutboundContent)</code></td>
+            <td><code>ToolUse</code> / <code>ToolResult</code> 走旧协议已有结构化类型</td>
+          </tr>
+        </tbody>
+      </table>
     </section>
 
     <section>
@@ -488,7 +516,9 @@
             <li>新增 dispatcher-level <code>dispatch_stream_event</code>。</li>
             <li>内置 channel 先接入 native dispatch。</li>
             <li>补 delivery outcome 和 router outbound id 回流。</li>
-            <li>对子进程 plugin 做 capability detection 和 legacy adapter。</li>
+            <li>对子进程 plugin 增加 <code>dispatch_stream_event</code> capability detection。</li>
+            <li>新 plugin host 协议增加 <code>dispatch_stream_event</code> RPC。</li>
+            <li>旧 plugin 走 <code>dispatch_outbound(ChannelOutboundContent)</code> adapter。</li>
             <li>所有 run origin 切到共享 fanout。</li>
             <li>删除 gateway 渲染和 channel 特判。</li>
           </ol>
@@ -499,18 +529,33 @@
             <li>run 来源无关，所有绑定端点都能收到 committed event。</li>
             <li>gateway/router 只按 <code>Endpoint Identity</code> equality 去重。</li>
             <li>结构化 tool event 不在 gateway 降级。</li>
+            <li>新 plugin 和内置 channel 对齐 <code>StreamEvent</code> 语义。</li>
+            <li>旧 plugin adapter 保留 <code>ToolUse</code> / <code>ToolResult</code> 结构化透传。</li>
             <li>restart reattach 后不重复投递。</li>
-            <li>unsupported structured event 可观测。</li>
+            <li>unsupported 或 deliberately ignored event 可观测。</li>
           </ul>
         </div>
       </div>
     </section>
 
     <section>
-      <h2>7. 待审问题</h2>
-      <p><span class="tag">Q1</span><code>dispatch_stream_event</code> 是 fire-and-forget 加异步 diagnostics，还是每个 event 都要求 per-target ack？</p>
-      <p><span class="tag">Q2</span>legacy plugin 对 <code>ToolUse</code> / <code>ToolResult</code> 的最低可接受可见 fallback 是什么？</p>
-      <p><span class="tag">Q3</span>共享 fanout 最终落在 gateway runtime assembly、router run orchestration，还是 bridge/gateway glue code？</p>
+      <h2>7. 已拍板和仍待确认</h2>
+      <div class="two">
+        <div class="panel">
+          <h3>已拍板</h3>
+          <ul>
+            <li>内置 channel 和新外部 plugin 都消费 <code>StreamEvent</code>。</li>
+            <li>新旧 plugin 用 <code>dispatch_stream_event</code> capability 识别。</li>
+            <li>旧 plugin 走 <code>dispatch_outbound(ChannelOutboundContent)</code> adapter。</li>
+            <li>共享 fanout 放在 gateway runtime assembly 附近。</li>
+          </ul>
+        </div>
+        <div class="panel">
+          <h3>仍待确认</h3>
+          <p><span class="tag">Q1</span><code>dispatch_stream_event</code> 的 delivery outcome 是每个 event 阻塞等待 per-target ack，还是先发送、再异步上报 diagnostics。</p>
+          <p>当前倾向：普通事件不阻塞 run 主流程；<code>Done</code> / flush 边界可以等待短 timeout，以保留失败诊断和 outbound id persistence。</p>
+        </div>
+      </div>
     </section>
 
     <footer>
