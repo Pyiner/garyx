@@ -670,89 +670,6 @@ export interface DeleteSlashCommandInput {
   name: string;
 }
 
-export type AutoResearchRunState =
-  | "queued"
-  | "researching"
-  | "judging"
-  | "budget_exhausted"
-  | "blocked"
-  | "user_stopped";
-
-export interface CandidateVerdict {
-  score: number;
-  feedback: string;
-}
-
-export interface ResearchCandidate {
-  candidate_id: string;
-  iteration: number;
-  output: string;
-  verdict?: CandidateVerdict | null;
-  duration_secs: number;
-}
-
-export interface DesktopAutoResearchRun {
-  runId: string;
-  state: AutoResearchRunState;
-  stateStartedAt?: string | null;
-  goal: string;
-  workspaceDir?: string | null;
-  maxIterations: number;
-  timeBudgetSecs: number;
-  iterationsUsed: number;
-  createdAt: string;
-  updatedAt: string;
-  terminalReason?: string | null;
-  candidates: ResearchCandidate[];
-  selectedCandidate?: string | null;
-}
-
-export interface DesktopAutoResearchIteration {
-  runId: string;
-  iterationIndex: number;
-  state: "researching" | "judging" | "completed";
-  workThreadId?: string | null;
-  verifyThreadId?: string | null;
-  startedAt: string;
-  completedAt?: string | null;
-}
-
-export interface DesktopAutoResearchRunDetail {
-  run: DesktopAutoResearchRun;
-  latestIteration?: DesktopAutoResearchIteration | null;
-  activeThreadId?: string | null;
-}
-
-export interface CandidatesResponse {
-  candidates: ResearchCandidate[];
-  bestCandidateId: string | null;
-}
-
-export interface CreateAutoResearchRunInput {
-  goal: string;
-  workspaceDir?: string;
-  maxIterations?: number;
-  timeBudgetSecs?: number;
-}
-
-export interface SelectCandidateInput {
-  runId: string;
-  candidateId: string;
-}
-
-export interface ListCandidatesInput {
-  runId: string;
-}
-
-export interface StopAutoResearchRunInput {
-  runId: string;
-  reason?: string;
-}
-
-export interface ListAutoResearchRunsInput {
-  limit?: number;
-}
-
 export type McpTransportType = "stdio" | "streamable_http";
 
 export interface DesktopMcpServer {
@@ -2052,26 +1969,6 @@ export interface GaryxDesktopApi {
   createSlashCommand: (input: UpsertSlashCommandInput) => Promise<SlashCommand>;
   updateSlashCommand: (input: UpdateSlashCommandInput) => Promise<SlashCommand>;
   deleteSlashCommand: (input: DeleteSlashCommandInput) => Promise<void>;
-  listAutoResearchRuns: (
-    input?: ListAutoResearchRunsInput,
-  ) => Promise<DesktopAutoResearchRun[]>;
-  createAutoResearchRun: (
-    input: CreateAutoResearchRunInput,
-  ) => Promise<DesktopAutoResearchRun>;
-  getAutoResearchRun: (runId: string) => Promise<DesktopAutoResearchRunDetail>;
-  listAutoResearchIterations: (
-    runId: string,
-  ) => Promise<DesktopAutoResearchIteration[]>;
-  stopAutoResearchRun: (
-    input: StopAutoResearchRunInput,
-  ) => Promise<DesktopAutoResearchRun>;
-  deleteAutoResearchRun: (runId: string) => Promise<void>;
-  listAutoResearchCandidates: (
-    input: ListCandidatesInput,
-  ) => Promise<CandidatesResponse>;
-  selectAutoResearchCandidate: (
-    input: SelectCandidateInput,
-  ) => Promise<DesktopAutoResearchRun>;
   listMcpServers: () => Promise<DesktopMcpServer[]>;
   createMcpServer: (input: UpsertMcpServerInput) => Promise<DesktopMcpServer>;
   updateMcpServer: (input: UpdateMcpServerInput) => Promise<DesktopMcpServer>;

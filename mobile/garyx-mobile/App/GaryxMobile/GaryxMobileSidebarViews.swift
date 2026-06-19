@@ -77,8 +77,6 @@ private struct GaryxRootRouteContentView: View {
             GaryxCommandsView()
         case .mcp:
             GaryxMcpServersView()
-        case .autoResearch:
-            GaryxAutoResearchView()
         case .bots:
             GaryxWorkspaceBotsView()
         case .settings:

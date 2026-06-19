@@ -1248,13 +1248,13 @@ fn test_build_thread_start_params_merges_garyx_mcp_headers_from_metadata() {
         &HashMap::from([(
             "garyx_mcp_headers".to_owned(),
             json!({
-                "X-Gary-AutoResearch-Role": "verifier"
+                "X-Gary-Test-Role": "verifier"
             }),
         )]),
     );
     let config = params.config.expect("thread config");
     assert_eq!(
-        config["mcp_servers"]["garyx"]["http_headers"]["X-Gary-AutoResearch-Role"].as_str(),
+        config["mcp_servers"]["garyx"]["http_headers"]["X-Gary-Test-Role"].as_str(),
         Some("verifier")
     );
 }

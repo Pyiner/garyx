@@ -461,18 +461,31 @@ fn hot_reload_keeps_last_good_on_invalid_update() {
         thread::sleep(Duration::from_millis(40));
     }
 
+    // Ensure the invalid write is visible as a distinct mtime change before
+    // waiting for the reload failure.
+    thread::sleep(Duration::from_millis(1100));
     fs::write(&config_path, "[1,2,3]").unwrap();
-    thread::sleep(Duration::from_millis(280));
+    let failure_deadline = Instant::now() + Duration::from_millis(2000);
+    while Instant::now() < failure_deadline {
+        if reloader.metrics().failures >= 1 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(40));
+    }
 
     reloader.stop();
     let hosts = seen_hosts.lock().unwrap().clone();
+    let metrics = reloader.metrics();
     assert!(
         hosts.iter().any(|h| h == "0.0.0.0"),
         "hosts={hosts:?} metrics={:?}",
-        reloader.metrics()
+        metrics
     );
     assert_eq!(hosts.iter().filter(|h| *h == "0.0.0.0").count(), 1);
-    assert!(reloader.metrics().failures >= 1);
+    assert!(
+        metrics.failures >= 1,
+        "hosts={hosts:?} metrics={metrics:?}"
+    );
 }
 
 // -----------------------------------------------------------------------

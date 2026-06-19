@@ -11,7 +11,6 @@ use std::time::{Duration, Instant};
 
 #[cfg(test)]
 use garyx_channels::OutboundMessage;
-use garyx_models::Verdict;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::tool::ToolCallContext;
 use rmcp::handler::server::wrapper::Parameters;
@@ -133,15 +132,6 @@ pub struct ConversationSearchParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct AutoResearchVerdictParams {
-    /// Score from 0 to 10
-    pub score: f32,
-    /// Free-text evaluation: what's good, what's bad, suggestions for next iteration.
-    /// Required — the verifier must provide qualitative guidance.
-    pub feedback: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
 pub struct ScheduleFollowupParams {
     /// Wall-clock delay in seconds before the assistant is re-woken on the
     /// current thread. Must be in `60..=86400`; out-of-range requests are
@@ -156,15 +146,6 @@ pub struct ScheduleFollowupParams {
     /// for the agent's own bookkeeping and surfaced in telemetry.
     #[serde(default)]
     pub reason: Option<String>,
-}
-
-impl From<AutoResearchVerdictParams> for Verdict {
-    fn from(value: AutoResearchVerdictParams) -> Self {
-        Self {
-            score: value.score,
-            feedback: value.feedback,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -218,7 +199,6 @@ struct RunContext {
     delivery_thread_id: Option<String>,
     #[allow(dead_code)]
     auth_token: Option<String>,
-    auto_research_role: Option<String>,
 }
 
 impl RunContext {
@@ -270,7 +250,6 @@ impl RunContext {
             from_id: h("x-from-id"),
             delivery_thread_id: h("x-thread-scope"),
             auth_token,
-            auto_research_role: h("x-gary-auto-research-role"),
         };
         tracing::info!(
             run_id = ?ctx.run_id,
@@ -390,17 +369,6 @@ impl GaryMcpServer {
         Parameters(params): Parameters<ConversationSearchParams>,
     ) -> Result<String, String> {
         tools::conversation_search::run(self, params).await
-    }
-
-    #[tool(
-        description = "Internal AutoResearch verifier tool. Submit a structured verdict for the current verifier thread. Only callable when the request carries the AutoResearch verifier header."
-    )]
-    async fn auto_research_verdict(
-        &self,
-        ctx: RequestContext<RoleServer>,
-        Parameters(params): Parameters<AutoResearchVerdictParams>,
-    ) -> Result<String, String> {
-        tools::auto_research::run_verdict(self, ctx, params).await
     }
 
     #[tool(

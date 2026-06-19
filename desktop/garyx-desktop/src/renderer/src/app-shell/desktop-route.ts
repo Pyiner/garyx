@@ -19,8 +19,6 @@ export type DesktopRoute =
 const SIMPLE_VIEW_SEGMENTS: Record<string, Exclude<ContentView, 'thread' | 'workflow' | 'automation' | 'settings'>> = {
   browser: 'browser',
   bots: 'bots',
-  'auto-research': 'auto_research',
-  auto_research: 'auto_research',
   agents: 'agents',
   teams: 'teams',
   skills: 'skills',
@@ -217,8 +215,7 @@ export function buildDesktopRouteHash(route: DesktopRoute): string {
         ? `#/settings/${encodeSegment(route.tabId)}`
         : '#/settings';
     case 'view': {
-      const segment = route.view === 'auto_research' ? 'auto-research' : route.view;
-      return `#/${segment}`;
+      return `#/${route.view}`;
     }
   }
 }

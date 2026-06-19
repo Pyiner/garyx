@@ -245,22 +245,6 @@ const api: GaryxDesktopApi = {
     ipcRenderer.invoke("garyx:update-slash-command", input),
   deleteSlashCommand: (input) =>
     ipcRenderer.invoke("garyx:delete-slash-command", input),
-  listAutoResearchRuns: (input) =>
-    ipcRenderer.invoke("garyx:list-auto-research-runs", input),
-  createAutoResearchRun: (input) =>
-    ipcRenderer.invoke("garyx:create-auto-research-run", input),
-  getAutoResearchRun: (runId) =>
-    ipcRenderer.invoke("garyx:get-auto-research-run", runId),
-  listAutoResearchIterations: (runId) =>
-    ipcRenderer.invoke("garyx:list-auto-research-iterations", runId),
-  stopAutoResearchRun: (input) =>
-    ipcRenderer.invoke("garyx:stop-auto-research-run", input),
-  deleteAutoResearchRun: (runId: string) =>
-    ipcRenderer.invoke("garyx:delete-auto-research-run", runId),
-  listAutoResearchCandidates: (input) =>
-    ipcRenderer.invoke("garyx:list-auto-research-candidates", input),
-  selectAutoResearchCandidate: (input) =>
-    ipcRenderer.invoke("garyx:select-auto-research-candidate", input),
   listMcpServers: () => ipcRenderer.invoke("garyx:list-mcp-servers"),
   createMcpServer: (input) =>
     ipcRenderer.invoke("garyx:create-mcp-server", input),

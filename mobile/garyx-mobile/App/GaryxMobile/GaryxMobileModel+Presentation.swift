@@ -320,16 +320,9 @@ extension GaryxMobileModel {
             threadWorkspacePaths: threads.map(\.workspacePath),
             threadWorktreePaths: threads.map(\.worktreePath),
             automationWorkspacePaths: automations.map(\.workspacePath),
-            autoResearchWorkspaceDirs: autoResearchRuns.map(\.workspaceDir),
             savedWorkspacePaths: userWorkspacePaths,
             additionalPaths: [newThreadWorkspace, selectedWorkspacePath]
         )
-    }
-
-    var runningResearchCount: Int {
-        autoResearchRuns.filter { run in
-            !garyxAutoResearchIsTerminal(run.state)
-        }.count
     }
 
     var pinnedThreads: [GaryxThreadSummary] {

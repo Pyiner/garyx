@@ -12,7 +12,6 @@ enum GaryxMobileWorkspacePresentation {
         threadWorkspacePaths: [String?],
         threadWorktreePaths: [String?],
         automationWorkspacePaths: [String],
-        autoResearchWorkspaceDirs: [String?],
         savedWorkspacePaths: [String],
         additionalPaths: [String]
     ) -> [String] {
@@ -20,7 +19,6 @@ enum GaryxMobileWorkspacePresentation {
         let values = savedWorkspacePaths
             + threadWorkspacePaths.compactMap { $0 }
             + automationWorkspacePaths
-            + autoResearchWorkspaceDirs.compactMap { $0 }
             + additionalPaths
         return uniqueSortedWorkspacePaths(values, filtersDynamicPaths: true)
             .filter { !worktreePaths.contains(normalizedWorkspacePathKey($0)) }

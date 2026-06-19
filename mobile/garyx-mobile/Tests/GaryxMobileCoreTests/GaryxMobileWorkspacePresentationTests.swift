@@ -20,10 +20,6 @@ final class GaryxMobileWorkspacePresentationTests: XCTestCase {
                 "/workspace/project-alpha",
                 "/workspace/project-gamma",
             ],
-            autoResearchWorkspaceDirs: [
-                "/workspace/.codex/worktrees/hidden",
-                "C:/workspace/generated-worktree",
-            ],
             savedWorkspacePaths: [
                 "/workspace/project-saved",
             ],

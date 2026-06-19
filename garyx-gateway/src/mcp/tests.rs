@@ -349,7 +349,6 @@ async fn test_status_current_context_includes_workspace_for_thread() {
             from_id: Some("user-1".to_owned()),
             delivery_thread_id: Some("topic-1".to_owned()),
             auth_token: None,
-            auto_research_role: None,
         })
         .await
         .unwrap();
@@ -360,91 +359,6 @@ async fn test_status_current_context_includes_workspace_for_thread() {
         v["current_context"]["workspace_dir"],
         "/tmp/status-workspace"
     );
-}
-
-#[tokio::test]
-async fn test_auto_research_verdict_payload_stores_verdict_for_verify_thread() {
-    let server = test_server();
-    let payload = tools::auto_research::verdict_payload(
-        &server,
-        RunContext {
-            thread_id: Some("thread::auto-research::ar_test::verify::1".to_owned()),
-            auto_research_role: Some("verifier".to_owned()),
-            ..Default::default()
-        },
-        AutoResearchVerdictParams {
-            score: 8.8,
-            feedback: "Grounded, all constraints satisfied. Ship it.".to_owned(),
-        },
-    )
-    .await
-    .expect("verdict payload should succeed");
-
-    assert_eq!(payload["status"], "ok");
-    let stored = server
-        .app_state
-        .ops
-        .auto_research
-        .take_verifier_verdict("thread::auto-research::ar_test::verify::1")
-        .await
-        .expect("stored verdict");
-    assert_eq!(stored.score, 8.8);
-    assert!(stored.feedback.contains("Grounded"));
-}
-
-#[tokio::test]
-async fn test_auto_research_verdict_payload_rejects_missing_verifier_role() {
-    let server = test_server();
-    let error = tools::auto_research::verdict_payload(
-        &server,
-        RunContext {
-            thread_id: Some("thread::auto-research::ar_test::verify::1".to_owned()),
-            ..Default::default()
-        },
-        AutoResearchVerdictParams {
-            score: 8.8,
-            feedback: "Looks good".to_owned(),
-        },
-    )
-    .await
-    .unwrap_err();
-
-    assert!(error.contains("only available"));
-}
-
-#[tokio::test]
-async fn test_auto_research_verdict_payload_accepts_authorized_verify_thread_without_role_header() {
-    let server = test_server();
-    server
-        .app_state
-        .ops
-        .auto_research
-        .authorize_verifier_thread("thread::auto-research::ar_test::verify::1")
-        .await;
-
-    let payload = tools::auto_research::verdict_payload(
-        &server,
-        RunContext {
-            thread_id: Some("thread::auto-research::ar_test::verify::1".to_owned()),
-            ..Default::default()
-        },
-        AutoResearchVerdictParams {
-            score: 9.1,
-            feedback: "Auth fallback works. Keep tool path.".to_owned(),
-        },
-    )
-    .await
-    .expect("authorized verify thread should be accepted");
-
-    assert_eq!(payload["status"], "ok");
-    let stored = server
-        .app_state
-        .ops
-        .auto_research
-        .take_verifier_verdict("thread::auto-research::ar_test::verify::1")
-        .await
-        .expect("stored verdict");
-    assert_eq!(stored.score, 9.1);
 }
 
 #[tokio::test]
@@ -2727,7 +2641,6 @@ fn test_server_info() {
     assert!(!instructions.contains("garyx automation"));
     assert!(!instructions.contains("restart"));
     assert!(!instructions.contains("speak_to_agent"));
-    assert!(!instructions.contains("auto_research_verdict"));
     assert!(!instructions.contains("update_team_status"));
 }
 

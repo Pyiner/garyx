@@ -43,8 +43,6 @@ The package currently covers:
   upload.
 - Slash command shortcuts via `/api/commands/shortcuts`.
 - MCP server list/create/update/delete/toggle via `/api/mcp-servers`.
-- Auto Research run list/create/detail/iterations/candidates/select/stop/delete
-  helpers.
 - Channel plugin catalog/auth/validation helpers, channel endpoints,
   configured bots, bot status/bind/unbind, and bot console summaries.
 - Chat command requests for `POST /api/chat/start`,
@@ -55,7 +53,7 @@ The package currently covers:
 
 The app shell uses an iOS drawer: chat stays as the primary surface, and the
 left sidebar owns conversation search plus entry points for tasks, automation
-runs, files, agents, skills, commands, MCP, research, bots, and settings.
+runs, files, agents, skills, commands, MCP, bots, and settings.
 Provider credentials, model keys, local provider homes, and gateway-side runtime
 configuration remain gateway-owned; mobile reuses the LAN gateway token and
 sends the same HTTP command and Server-Sent Event operations the Mac app uses.

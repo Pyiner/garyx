@@ -30,7 +30,6 @@ public enum GaryxMobilePanel: String, CaseIterable, Identifiable, Sendable {
     case skills
     case commands
     case mcp
-    case autoResearch
     case workspaceBots
     case bots
     case settings
@@ -57,8 +56,6 @@ public enum GaryxMobilePanel: String, CaseIterable, Identifiable, Sendable {
             "Commands"
         case .mcp:
             "MCP"
-        case .autoResearch:
-            "Auto Research"
         case .workspaceBots:
             "Workspaces"
         case .bots:
@@ -88,8 +85,6 @@ public enum GaryxMobilePanel: String, CaseIterable, Identifiable, Sendable {
             "command"
         case .mcp:
             "point.3.connected.trianglepath.dotted"
-        case .autoResearch:
-            "atom"
         case .workspaceBots:
             "folder.fill"
         case .bots:

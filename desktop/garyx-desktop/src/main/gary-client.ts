@@ -1,7 +1,6 @@
 import type {
   CreateCustomAgentInput,
   CreateTeamInput,
-  CreateAutoResearchRunInput,
   CreateSkillInput,
   CreateTaskInput,
   DeleteCustomAgentInput,
@@ -13,9 +12,6 @@ import type {
   DesktopAutomationSchedule,
   DesktopAutomationStatus,
   DesktopApiProviderType,
-  DesktopAutoResearchIteration,
-  DesktopAutoResearchRun,
-  DesktopAutoResearchRunDetail,
   DesktopAutomationSummary,
   ChannelPluginCatalogEntry,
   ChatStreamToolMessage,
@@ -73,10 +69,6 @@ import type {
   GatewaySettingsSource,
   GetThreadHistoryInput,
   InterruptResult,
-  CandidatesResponse,
-  CandidateVerdict,
-  ListAutoResearchRunsInput,
-  ListCandidatesInput,
   ListDreamsInput,
   ListTasksInput,
   ListWorkspaceFilesInput,
@@ -88,10 +80,7 @@ import type {
   SendMessageInput,
   SendStreamingInputResult,
   SlashCommand,
-  ResearchCandidate,
-  SelectCandidateInput,
   ScanDreamsInput,
-  StopAutoResearchRunInput,
   StopTaskInput,
   ThreadActiveRunInfo,
   ThreadLogChunk,
@@ -664,52 +653,6 @@ interface SkillPayload {
 
 interface SkillsPayload {
   skills?: SkillPayload[];
-}
-
-interface AutoResearchRunPayload {
-  run_id?: string;
-  state?: string;
-  state_started_at?: string | null;
-  goal?: string;
-  workspace_dir?: string | null;
-  max_iterations?: number;
-  time_budget_secs?: number;
-  iterations_used?: number;
-  created_at?: string;
-  updated_at?: string;
-  terminal_reason?: string | null;
-  candidates?: CandidatePayload[];
-  selected_candidate?: string | null;
-}
-
-interface CandidatePayload {
-  candidate_id?: string;
-  iteration?: number;
-  output?: string;
-  verdict?: VerdictPayload | null;
-  duration_secs?: number;
-}
-
-interface VerdictPayload {
-  score?: number;
-  feedback?: string;
-  error?: string; // verifier failure
-}
-
-interface AutoResearchIterationPayload {
-  run_id?: string;
-  iteration_index?: number;
-  state?: string;
-  work_thread_id?: string | null;
-  verify_thread_id?: string | null;
-  started_at?: string;
-  completed_at?: string | null;
-}
-
-interface AutoResearchRunDetailPayload {
-  run?: AutoResearchRunPayload;
-  latest_iteration?: AutoResearchIterationPayload | null;
-  active_thread_id?: string | null;
 }
 
 interface SkillEntryPayload {
@@ -2447,86 +2390,6 @@ function mapAutomationActivityEntry(
   };
 }
 
-function mapAutoResearchRun(
-  value: AutoResearchRunPayload,
-): DesktopAutoResearchRun {
-  return {
-    runId: value.run_id || "",
-    state: (value.state as DesktopAutoResearchRun["state"]) || "queued",
-    stateStartedAt: value.state_started_at ?? null,
-    goal: value.goal || "",
-    workspaceDir: value.workspace_dir ?? null,
-    maxIterations:
-      typeof value.max_iterations === "number" &&
-      Number.isFinite(value.max_iterations)
-        ? value.max_iterations
-        : 0,
-    timeBudgetSecs:
-      typeof value.time_budget_secs === "number" &&
-      Number.isFinite(value.time_budget_secs)
-        ? value.time_budget_secs
-        : 0,
-    iterationsUsed:
-      typeof value.iterations_used === "number" &&
-      Number.isFinite(value.iterations_used)
-        ? value.iterations_used
-        : 0,
-    createdAt: value.created_at || new Date(0).toISOString(),
-    updatedAt: value.updated_at || new Date(0).toISOString(),
-    terminalReason: value.terminal_reason ?? null,
-    candidates: Array.isArray(value.candidates)
-      ? value.candidates.map(mapCandidate)
-      : [],
-    selectedCandidate: value.selected_candidate ?? null,
-  };
-}
-
-function mapVerdict(value?: VerdictPayload | null): CandidateVerdict | null {
-  if (!value) return null;
-
-  // Handle verifier error verdicts — surface the error as feedback with score 0
-  if (typeof value.error === "string" && value.error) {
-    return { score: 0, feedback: `Verifier error: ${value.error}` };
-  }
-
-  if (typeof value.score !== "number") return null;
-
-  return {
-    score: value.score,
-    feedback: typeof value.feedback === "string" ? value.feedback : "",
-  };
-}
-
-function mapCandidate(value: CandidatePayload): ResearchCandidate {
-  return {
-    candidate_id: value.candidate_id || "",
-    iteration: typeof value.iteration === "number" ? value.iteration : 0,
-    output: value.output || "",
-    verdict: mapVerdict(value.verdict),
-    duration_secs:
-      typeof value.duration_secs === "number" ? value.duration_secs : 0,
-  };
-}
-
-function mapAutoResearchIteration(
-  value: AutoResearchIterationPayload,
-): DesktopAutoResearchIteration {
-  return {
-    runId: value.run_id || "",
-    iterationIndex:
-      typeof value.iteration_index === "number" &&
-      Number.isFinite(value.iteration_index)
-        ? value.iteration_index
-        : 0,
-    state:
-      (value.state as DesktopAutoResearchIteration["state"]) || "researching",
-    workThreadId: value.work_thread_id ?? null,
-    verifyThreadId: value.verify_thread_id ?? null,
-    startedAt: value.started_at || new Date(0).toISOString(),
-    completedAt: value.completed_at ?? null,
-  };
-}
-
 function mapSkill(value: SkillPayload): DesktopSkillInfo {
   return {
     id: value.id || "",
@@ -4048,153 +3911,6 @@ export async function deleteSlashCommand(
       signal: AbortSignal.timeout(8000),
     },
   );
-}
-
-export async function createAutoResearchRun(
-  settings: DesktopSettings,
-  input: CreateAutoResearchRunInput,
-): Promise<DesktopAutoResearchRun> {
-  const providerMetadata = buildProviderMetadata(settings);
-  const payload = await requestJson<AutoResearchRunPayload>(
-    settings,
-    "/api/auto-research/runs",
-    {
-      method: "POST",
-      signal: AbortSignal.timeout(8000),
-      body: JSON.stringify({
-        goal: input.goal,
-        workspace_dir: input.workspaceDir,
-        max_iterations: input.maxIterations,
-        time_budget_secs: input.timeBudgetSecs,
-        provider_metadata: providerMetadata,
-      }),
-    },
-  );
-  return mapAutoResearchRun(payload);
-}
-
-export async function listAutoResearchRuns(
-  settings: DesktopSettings,
-  input: ListAutoResearchRunsInput = {},
-): Promise<DesktopAutoResearchRun[]> {
-  const search = new URLSearchParams();
-  if (input.limit) {
-    search.set("limit", String(input.limit));
-  }
-  const suffix = search.toString() ? `?${search.toString()}` : "";
-  const payload = await requestJson<{ items?: AutoResearchRunPayload[] }>(
-    settings,
-    `/api/auto-research/runs${suffix}`,
-    {
-      signal: AbortSignal.timeout(8000),
-    },
-  );
-  return Array.isArray(payload.items)
-    ? payload.items.map(mapAutoResearchRun)
-    : [];
-}
-
-export async function getAutoResearchRun(
-  settings: DesktopSettings,
-  runId: string,
-): Promise<DesktopAutoResearchRunDetail> {
-  const payload = await requestJson<AutoResearchRunDetailPayload>(
-    settings,
-    `/api/auto-research/runs/${encodeURIComponent(runId)}`,
-    {
-      signal: AbortSignal.timeout(8000),
-    },
-  );
-  return {
-    run: mapAutoResearchRun(payload.run || {}),
-    latestIteration: payload.latest_iteration
-      ? mapAutoResearchIteration(payload.latest_iteration)
-      : null,
-    activeThreadId: payload.active_thread_id ?? null,
-  };
-}
-
-export async function listAutoResearchIterations(
-  settings: DesktopSettings,
-  runId: string,
-): Promise<DesktopAutoResearchIteration[]> {
-  const payload = await requestJson<{ items?: AutoResearchIterationPayload[] }>(
-    settings,
-    `/api/auto-research/runs/${encodeURIComponent(runId)}/iterations`,
-    {
-      signal: AbortSignal.timeout(8000),
-    },
-  );
-  return Array.isArray(payload.items)
-    ? payload.items.map(mapAutoResearchIteration)
-    : [];
-}
-
-export async function stopAutoResearchRun(
-  settings: DesktopSettings,
-  input: StopAutoResearchRunInput,
-): Promise<DesktopAutoResearchRun> {
-  const payload = await requestJson<AutoResearchRunPayload>(
-    settings,
-    `/api/auto-research/runs/${encodeURIComponent(input.runId)}/stop`,
-    {
-      method: "POST",
-      signal: AbortSignal.timeout(8000),
-      body: JSON.stringify({
-        reason: input.reason,
-      }),
-    },
-  );
-  return mapAutoResearchRun(payload);
-}
-
-export async function deleteAutoResearchRun(
-  settings: DesktopSettings,
-  runId: string,
-): Promise<void> {
-  await requestJson(
-    settings,
-    `/api/auto-research/runs/${encodeURIComponent(runId)}`,
-    {
-      method: "DELETE",
-      signal: AbortSignal.timeout(8000),
-    },
-  );
-}
-
-export async function listAutoResearchCandidates(
-  settings: DesktopSettings,
-  input: ListCandidatesInput,
-): Promise<CandidatesResponse> {
-  const payload = await requestJson<{
-    candidates?: CandidatePayload[];
-    best_candidate_id?: string | null;
-  }>(
-    settings,
-    `/api/auto-research/runs/${encodeURIComponent(input.runId)}/candidates`,
-    { signal: AbortSignal.timeout(8000) },
-  );
-  return {
-    candidates: Array.isArray(payload.candidates)
-      ? payload.candidates.map(mapCandidate)
-      : [],
-    bestCandidateId: payload.best_candidate_id ?? null,
-  };
-}
-
-export async function selectAutoResearchCandidate(
-  settings: DesktopSettings,
-  input: SelectCandidateInput,
-): Promise<DesktopAutoResearchRun> {
-  const payload = await requestJson<AutoResearchRunPayload>(
-    settings,
-    `/api/auto-research/runs/${encodeURIComponent(input.runId)}/select/${encodeURIComponent(input.candidateId)}`,
-    {
-      method: "POST",
-      signal: AbortSignal.timeout(8000),
-    },
-  );
-  return mapAutoResearchRun(payload);
 }
 
 export async function listMcpServers(

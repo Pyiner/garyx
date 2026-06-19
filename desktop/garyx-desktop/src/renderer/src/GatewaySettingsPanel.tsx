@@ -3799,23 +3799,6 @@ export function GatewaySettingsPanel({
           <SettingsControlRow
             control={
               <SettingsSwitch
-                checked={Boolean(gatewayDraft?.desktop?.labs?.auto_research)}
-                label="desktop.labs.auto_research"
-                onChange={(nextValue) => {
-                  onMutateGatewayDraft((next) => {
-                    next.desktop ||= {};
-                    next.desktop.labs ||= {};
-                    next.desktop.labs.auto_research = nextValue;
-                  });
-                }}
-              />
-            }
-            description={t('Show or hide the Auto Research entry in the desktop client. Disabling it only hides the desktop surface.')}
-            label={t('Auto Research')}
-          />
-          <SettingsControlRow
-            control={
-              <SettingsSwitch
                 checked={Boolean(gatewayDraft?.dreams?.enabled)}
                 disabled={gatewaySaving}
                 label="dreams.enabled"

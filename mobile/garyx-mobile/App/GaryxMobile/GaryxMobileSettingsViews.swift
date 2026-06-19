@@ -117,7 +117,6 @@ struct GaryxSettingsOverviewContent: View {
         [
             model.dreamsAutoScanEnabled ? .dreams : nil,
             .tasks,
-            .autoResearch,
             .skills,
         ].compactMap { $0 }
     }
@@ -218,8 +217,6 @@ struct GaryxSettingsPanelLinkRow: View {
             "\(model.dreams.count) topics"
         case .tasks:
             "\(model.activeTaskCount) active / \(model.tasks.count) total"
-        case .autoResearch:
-            "\(model.runningResearchCount) active / \(model.autoResearchRuns.count) total"
         case .workspaceBots:
             "\(model.mobileBotGroups.count) bots / \(visibleWorkspaceCount) workspaces"
         case .agents:

@@ -148,17 +148,6 @@ export function AutomationIcon() {
   );
 }
 
-export function AutoResearchIcon() {
-  return (
-    <svg aria-hidden width="16" height="16" viewBox={vb} fill="none" className="icon" style={sw}>
-      <g transform="translate(2.38,2.38) scale(0.938)">
-        <path d="M11.9753 6.38162C11.6501 6.01483 11.3067 5.64985 10.9462 5.28936C7.04097 1.38411 2.60881 -0.515381 1.04672 1.04672C0.0593048 2.03413 0.455003 4.1683 1.86612 6.59128M4.26031 9.85394C4.58547 10.2207 4.92887 10.5857 5.28936 10.9462C9.1946 14.8515 13.6268 16.7509 15.1889 15.1889C16.1763 14.2014 15.7806 12.0673 14.3695 9.64429M9.85394 11.9753C10.2207 11.6501 10.5857 11.3067 10.9462 10.9462C14.8515 7.04097 16.7509 2.60881 15.1889 1.04672C14.2014 0.0593033 12.0673 0.455002 9.64429 1.86612M6.38163 4.2603C6.01483 4.58547 5.64985 4.92887 5.28936 5.28936C1.38411 9.1946 -0.515381 13.6268 1.04672 15.1889C2.03413 16.1763 4.1683 15.7806 6.59127 14.3694" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"/>
-      </g>
-      <circle cx="10" cy="10" r="1.2" fill="currentColor"/>
-    </svg>
-  );
-}
-
 export function DreamsIcon() {
   return (
     <SettingsRailIcon glyph={MoonStar} />

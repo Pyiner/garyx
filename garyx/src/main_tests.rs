@@ -3,7 +3,7 @@ use std::sync::Arc;
 use clap::{CommandFactory, Parser};
 
 use crate::cli::{
-    AgentAction, AutoResearchAction, AutomationAction, AutomationDataTriggerAction,
+    AgentAction, AutomationAction, AutomationDataTriggerAction,
     AutomationTriggerAction, BotAction, BotEndpointAction, ChannelsAction, Cli, CommandAction,
     Commands, ConfigAction, DbAction, DbRecordAction, DbTableAction, DreamAction, GatewayAction,
     LogsAction, TaskAction, TeamAction, ThreadAction, ToolAction,
@@ -824,41 +824,6 @@ fn parse_endpoint_detach_alias() {
             assert!(!json);
         }
         _ => panic!("expected Bot::Endpoint::Detach"),
-    }
-}
-
-#[test]
-fn parse_auto_research_create() {
-    let cli = Cli::parse_from([
-        "garyx",
-        "auto-research",
-        "create",
-        "--goal",
-        "Compare two options",
-        "--json",
-    ]);
-    match cli.command {
-        Some(Commands::AutoResearch {
-            action: AutoResearchAction::Create { goal, json, .. },
-        }) => {
-            assert_eq!(goal, "Compare two options");
-            assert!(json);
-        }
-        _ => panic!("expected AutoResearch::Create"),
-    }
-}
-
-#[test]
-fn parse_auto_research_get() {
-    let cli = Cli::parse_from(["garyx", "autoresearch", "get", "ar_123", "--json"]);
-    match cli.command {
-        Some(Commands::AutoResearch {
-            action: AutoResearchAction::Get { run_id, json },
-        }) => {
-            assert_eq!(run_id, "ar_123");
-            assert!(json);
-        }
-        _ => panic!("expected AutoResearch::Get"),
     }
 }
 

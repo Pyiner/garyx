@@ -22,7 +22,6 @@ use tracing::{debug, warn};
 use crate::agent_teams::AgentTeamStore;
 use crate::api::RestartTracker;
 use crate::app_db::AppDbService;
-use crate::auto_research::AutoResearchStore;
 use crate::cron::CronService;
 use crate::custom_agents::CustomAgentStore;
 use crate::event_stream_hub::EventStreamHub;
@@ -64,7 +63,6 @@ pub struct OpsState {
     pub mcp_tool_metrics: Arc<McpToolMetrics>,
     pub thread_logs: Arc<dyn ThreadLogSink>,
     pub skills: Arc<SkillsService>,
-    pub auto_research: Arc<AutoResearchStore>,
     pub custom_agents: Arc<CustomAgentStore>,
     pub agent_teams: Arc<AgentTeamStore>,
     /// Read-only handle to the AgentTeam provider's Group store. Sharing
@@ -437,7 +435,6 @@ impl AppState {
                 mcp_tool_metrics: self.ops.mcp_tool_metrics.clone(),
                 thread_logs: self.ops.thread_logs.clone(),
                 skills: self.ops.skills.clone(),
-                auto_research: self.ops.auto_research.clone(),
                 custom_agents: self.ops.custom_agents.clone(),
                 agent_teams: self.ops.agent_teams.clone(),
                 agent_team_group_store: self.ops.agent_team_group_store.clone(),

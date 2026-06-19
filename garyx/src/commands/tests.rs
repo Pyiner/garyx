@@ -1275,45 +1275,6 @@ fn workflow_package_install_copies_manifest_and_code_into_config_root() {
 }
 
 #[test]
-fn build_provider_metadata_only_for_local_gateway() {
-    let _guard = ENV_LOCK.lock().expect("env lock");
-    unsafe {
-        std::env::set_var(CLAUDE_OAUTH_ENV, "claude-token");
-        std::env::set_var(CODEX_API_KEY_ENV, "codex-key");
-    }
-
-    let local = build_provider_metadata_for_local_gateway("http://127.0.0.1:31337")
-        .expect("local gateway should inject metadata");
-    assert_eq!(
-        local[CLAUDE_ENV_METADATA_KEY][CLAUDE_OAUTH_ENV],
-        "claude-token"
-    );
-    assert_eq!(
-        local[CODEX_ENV_METADATA_KEY][CODEX_API_KEY_ENV],
-        "codex-key"
-    );
-    assert!(
-        build_provider_metadata_for_local_gateway("https://gary.example.com").is_none(),
-        "remote gateway should not receive local auth metadata"
-    );
-
-    unsafe {
-        std::env::remove_var(CLAUDE_OAUTH_ENV);
-        std::env::remove_var(CODEX_API_KEY_ENV);
-    }
-}
-
-#[test]
-fn build_provider_metadata_omits_empty_values() {
-    let _guard = ENV_LOCK.lock().expect("env lock");
-    unsafe {
-        std::env::remove_var(CLAUDE_OAUTH_ENV);
-        std::env::remove_var(CODEX_API_KEY_ENV);
-    }
-    assert!(build_provider_metadata_for_local_gateway("http://127.0.0.1:31337").is_none());
-}
-
-#[test]
 fn cli_actor_header_uses_agent_identity_from_env() {
     let _guard = ENV_LOCK.lock().expect("env lock");
     let _actor = ScopedEnvVar::remove("GARYX_ACTOR");

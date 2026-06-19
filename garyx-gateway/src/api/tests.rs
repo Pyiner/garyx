@@ -16,7 +16,6 @@ fn test_state_with_config(config: GaryxConfig) -> Arc<AppState> {
     use crate::composition::app_bootstrap::AppStateBuilder;
     // Use in-memory stores to avoid filesystem races between concurrent tests.
     AppStateBuilder::new(config)
-        .with_auto_research_store(Arc::new(crate::auto_research::AutoResearchStore::new()))
         .with_agent_team_store(Arc::new(crate::agent_teams::AgentTeamStore::new()))
         .with_custom_agent_store(Arc::new(crate::custom_agents::CustomAgentStore::new()))
         .build()
@@ -63,30 +62,6 @@ fn api_router(state: Arc<AppState>) -> Router {
         .route("/api/bot/status", axum::routing::get(bot_status))
         .route("/api/bot/bind", axum::routing::post(bot_bind))
         .route("/api/bot/unbind", axum::routing::post(bot_unbind))
-        .route(
-            "/api/auto-research/runs",
-            axum::routing::post(create_auto_research_run),
-        )
-        .route(
-            "/api/auto-research/runs/{run_id}",
-            axum::routing::get(get_auto_research_run).delete(delete_auto_research_run),
-        )
-        .route(
-            "/api/auto-research/runs/{run_id}/iterations",
-            axum::routing::get(list_auto_research_iterations),
-        )
-        .route(
-            "/api/auto-research/runs/{run_id}/stop",
-            axum::routing::post(stop_auto_research_run),
-        )
-        .route(
-            "/api/auto-research/runs/{run_id}/candidates",
-            axum::routing::get(list_auto_research_candidates),
-        )
-        .route(
-            "/api/auto-research/runs/{run_id}/select/{candidate_id}",
-            axum::routing::post(select_auto_research_candidate),
-        )
         .route(
             "/api/custom-agents",
             axum::routing::get(list_custom_agents).post(create_custom_agent),
@@ -682,129 +657,6 @@ async fn test_bot_unbind_clears_main_endpoint_binding() {
 }
 
 #[tokio::test]
-async fn test_create_auto_research_run() {
-    let state = test_state();
-    let router = api_router(state);
-
-    let req = Request::builder()
-        .method("POST")
-        .uri("/api/auto-research/runs")
-        .header("content-type", "application/json")
-        .body(Body::from(
-            serde_json::to_vec(&json!({
-                "goal": "Compare two options",
-                "workspace_dir": "/tmp/example-workspace",
-                "max_iterations": 10,
-                "time_budget_secs": 60
-            }))
-            .unwrap(),
-        ))
-        .unwrap();
-
-    let resp = router.oneshot(req).await.unwrap();
-    let status = resp.status();
-    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
-        .await
-        .unwrap();
-    assert_eq!(
-        status,
-        StatusCode::CREATED,
-        "unexpected auto research create response: {}",
-        String::from_utf8_lossy(&body)
-    );
-    let json: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["state"], "queued");
-    assert_eq!(json["goal"], "Compare two options");
-    assert_eq!(json["workspace_dir"], "/tmp/example-workspace");
-    assert_eq!(json["max_iterations"], 10);
-    assert!(json["state_started_at"].as_str().is_some());
-    assert!(json["run_id"].as_str().unwrap().starts_with("ar_"));
-}
-
-#[tokio::test]
-async fn test_get_auto_research_run_with_latest_iteration() {
-    let state = test_state();
-    let run = state
-        .ops
-        .auto_research
-        .create_run(crate::auto_research::CreateAutoResearchRunRequest {
-            goal: Some("Compare two options".to_owned()),
-            workspace_dir: Some("/tmp/garyx".to_owned()),
-            provider_metadata: std::collections::HashMap::new(),
-            max_iterations: 10,
-            time_budget_secs: 60,
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    state
-        .ops
-        .auto_research
-        .seed_iteration(
-            &run.run_id,
-            1,
-            garyx_models::AutoResearchIterationState::Judging,
-            Some("thread::auto-research::seeded::work::1".to_owned()),
-            Some("thread::auto-research::seeded::verify::1".to_owned()),
-        )
-        .await
-        .unwrap();
-
-    let router = api_router(state);
-    let req = Request::builder()
-        .uri(format!("/api/auto-research/runs/{}", run.run_id))
-        .body(Body::empty())
-        .unwrap();
-
-    let resp = router.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
-        .await
-        .unwrap();
-    let json: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["run"]["run_id"], run.run_id);
-    assert_eq!(json["latest_iteration"]["iteration_index"], 1);
-    assert!(json["run"]["state_started_at"].as_str().is_some());
-}
-
-#[tokio::test]
-async fn test_stop_auto_research_run() {
-    let state = test_state();
-    let run = state
-        .ops
-        .auto_research
-        .create_run(crate::auto_research::CreateAutoResearchRunRequest {
-            goal: Some("Compare two options".to_owned()),
-            workspace_dir: Some("/tmp/garyx".to_owned()),
-            provider_metadata: std::collections::HashMap::new(),
-            max_iterations: 10,
-            time_budget_secs: 60,
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    let router = api_router(state);
-
-    let req = Request::builder()
-        .method("POST")
-        .uri(format!("/api/auto-research/runs/{}/stop", run.run_id))
-        .header("content-type", "application/json")
-        .body(Body::from(
-            serde_json::to_vec(&json!({"reason":"user_requested"})).unwrap(),
-        ))
-        .unwrap();
-
-    let resp = router.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
-        .await
-        .unwrap();
-    let json: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["state"], "user_stopped");
-    assert_eq!(json["terminal_reason"], "user_requested");
-}
-
-#[tokio::test]
 async fn test_create_and_list_custom_agents() {
     let state = test_state();
     let router = api_router(state);
@@ -1190,65 +1042,6 @@ async fn test_create_team_accepts_canonical_payload() {
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["team_id"], "product-ship-camel");
     assert_eq!(json["display_name"], "Product Ship Camel");
-}
-
-#[tokio::test]
-async fn test_create_auto_research_run_progresses_to_terminal_state() {
-    let state = test_state();
-    let router = api_router(state.clone());
-
-    let req = Request::builder()
-        .method("POST")
-        .uri("/api/auto-research/runs")
-        .header("content-type", "application/json")
-        .body(Body::from(
-            serde_json::to_vec(&json!({
-                "goal": "Compare two options",
-                "workspace_dir": "/tmp/example-workspace",
-                "max_iterations": 10,
-                "time_budget_secs": 60
-            }))
-            .unwrap(),
-        ))
-        .unwrap();
-
-    let resp = router.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::CREATED);
-    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
-        .await
-        .unwrap();
-    let json: Value = serde_json::from_slice(&body).unwrap();
-    let run_id = json["run_id"].as_str().unwrap().to_owned();
-
-    // Poll until the run reaches a terminal state.
-    // Use a generous timeout (8s) to avoid flaky failures under CI load.
-    let mut terminal_state = None;
-    for _ in 0..160 {
-        if let Some(run) = state.ops.auto_research.get_run(&run_id).await
-            && run.state.is_terminal()
-        {
-            terminal_state = Some(run.state);
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
-
-    // Without real provider keys, the run is immediately Blocked
-    // (no scaffold fallback). Accept either terminal state.
-    assert!(
-        terminal_state.as_ref().is_some_and(|s| s.is_terminal()),
-        "run should reach a terminal state within the polling window, got: {terminal_state:?}"
-    );
-    // Blocked runs (no provider keys) may have 0 iterations.
-    // Only check iteration details if any exist.
-    let iterations = state
-        .ops
-        .auto_research
-        .list_iterations(&run_id)
-        .await
-        .unwrap_or_default();
-    // iterations exist but content/verdict now lives on Candidate, not Iteration
-    let _ = iterations;
 }
 
 #[tokio::test]

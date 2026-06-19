@@ -308,11 +308,6 @@ export function ensureGatewayConfig(raw: unknown): any {
   config.sessions.data_dir = coerceOptionalString(config.sessions.data_dir);
 
   config.desktop = ensureRecord(config.desktop);
-  config.desktop.labs = ensureRecord(config.desktop.labs);
-  config.desktop.labs.auto_research =
-    typeof config.desktop.labs.auto_research === 'boolean'
-      ? config.desktop.labs.auto_research
-      : true;
 
   config.cron = ensureRecord(config.cron);
   delete config.cron.enabled;

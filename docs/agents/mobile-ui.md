@@ -37,8 +37,8 @@
   thread; `Use` owns default agent selection.
 - The navigation drawer shows Automation and Agents entries with Bots and
   Workspaces expanded inline as flat children, the gateway identity control as
-  the drawer header, and a floating Settings pill at the drawer bottom; Tasks,
-  Auto Research, and Skills live under Settings. A thread-mode automation's
+  the drawer header, and a floating Settings pill at the drawer bottom; Tasks
+  and Skills live under Settings. A thread-mode automation's
   triggered threads open from that automation's row actions.
 - Keep workspace and bot conversations inside drilldown layers rather than
   dumping raw sessions inline.

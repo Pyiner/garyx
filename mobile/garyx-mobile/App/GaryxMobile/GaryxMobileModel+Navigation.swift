@@ -800,22 +800,6 @@ extension GaryxMobileModel {
           ]
         }
         """)?.servers ?? []
-        autoResearchRuns = Self.decodeDebugFixture(GaryxAutoResearchRunsPage.self, from: """
-        {
-          "items": [
-            {
-              "run_id": "research-parity",
-              "state": "running",
-              "goal": "Compare navigation and transcript behavior.",
-              "workspace_dir": "/workspace/garyx",
-              "max_iterations": 3,
-              "iterations_used": 2,
-              "created_at": "2026-05-19T07:50:00Z",
-              "updated_at": "2026-05-19T08:22:00Z"
-            }
-          ]
-        }
-        """)?.items ?? []
         channelEndpoints = Self.decodeDebugFixture(GaryxChannelEndpointsPage.self, from: """
         {
           "endpoints": [
@@ -877,7 +861,6 @@ extension GaryxMobileModel {
         skillFileLoadRequestId = nil
         selectedSkillEditor = nil
         selectedSkillDocument = nil
-        researchCandidatesByRunId = [:]
     }
 
     static func decodeDebugFixture<T: Decodable>(_ type: T.Type, from json: String) -> T? {

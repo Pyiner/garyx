@@ -22,7 +22,7 @@ const EMBEDDED_CCTTY_MCP_PROXY_ARG: &str = "__cctty-mcp-proxy";
 mod main_tests;
 
 use cli::{
-    AgentAction, AutoResearchAction, AutoUpdateAction, AutomationAction,
+    AgentAction, AutoUpdateAction, AutomationAction,
     AutomationDataTriggerAction, AutomationTriggerAction, BotAction, BotEndpointAction,
     ChannelsAction, Cli, CommandAction, Commands, ConfigAction, DbAction, DbFieldAction,
     DbRecordAction, DbTableAction, DreamAction, GatewayAction, LogsAction, PluginsAction,
@@ -31,10 +31,7 @@ use cli::{
 use commands::{
     cmd_agent_create, cmd_agent_delete, cmd_agent_get, cmd_agent_list, cmd_agent_team_create,
     cmd_agent_team_delete, cmd_agent_team_get, cmd_agent_team_list, cmd_agent_team_update,
-    cmd_agent_update, cmd_agent_upsert, cmd_auto_research_candidates, cmd_auto_research_create,
-    cmd_auto_research_feedback, cmd_auto_research_get, cmd_auto_research_iterations,
-    cmd_auto_research_list, cmd_auto_research_patch, cmd_auto_research_reverify,
-    cmd_auto_research_select, cmd_auto_research_stop, cmd_automation_activity,
+    cmd_agent_update, cmd_agent_upsert, cmd_automation_activity,
     cmd_automation_create, cmd_automation_data_trigger_create, cmd_automation_data_trigger_delete,
     cmd_automation_data_trigger_list, cmd_automation_data_trigger_set_enabled,
     cmd_automation_delete, cmd_automation_get, cmd_automation_list, cmd_automation_pause,
@@ -537,74 +534,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     cmd_endpoint_detach(config_path, &endpoint, json).await
                 }
             },
-        },
-        Some(Commands::AutoResearch { action }) => match action {
-            AutoResearchAction::Create {
-                goal,
-                workspace_dir,
-                max_iterations,
-                time_budget_secs,
-                json,
-            } => {
-                cmd_auto_research_create(
-                    config_path,
-                    goal,
-                    workspace_dir,
-                    max_iterations,
-                    time_budget_secs,
-                    json,
-                )
-                .await
-            }
-            AutoResearchAction::Get { run_id, json } => {
-                cmd_auto_research_get(config_path, &run_id, json).await
-            }
-            AutoResearchAction::Iterations { run_id, json } => {
-                cmd_auto_research_iterations(config_path, &run_id, json).await
-            }
-            AutoResearchAction::Stop {
-                run_id,
-                reason,
-                json,
-            } => cmd_auto_research_stop(config_path, &run_id, reason, json).await,
-            AutoResearchAction::List { json } => cmd_auto_research_list(config_path, json).await,
-            AutoResearchAction::Candidates { run_id, json } => {
-                cmd_auto_research_candidates(config_path, &run_id, json).await
-            }
-            AutoResearchAction::Patch {
-                run_id,
-                max_iterations,
-                time_budget_secs,
-                json,
-            } => {
-                cmd_auto_research_patch(
-                    config_path,
-                    &run_id,
-                    max_iterations,
-                    time_budget_secs,
-                    json,
-                )
-                .await
-            }
-            AutoResearchAction::Feedback {
-                run_id,
-                message,
-                json,
-            } => cmd_auto_research_feedback(config_path, &run_id, message, json).await,
-            AutoResearchAction::Reverify {
-                run_id,
-                candidate_id,
-                guidance,
-                json,
-            } => {
-                cmd_auto_research_reverify(config_path, &run_id, &candidate_id, guidance, json)
-                    .await
-            }
-            AutoResearchAction::Select {
-                run_id,
-                candidate_id,
-                json,
-            } => cmd_auto_research_select(config_path, &run_id, &candidate_id, json).await,
         },
         Some(Commands::Automation { action }) => match action {
             AutomationAction::List { json } => cmd_automation_list(config_path, json).await,

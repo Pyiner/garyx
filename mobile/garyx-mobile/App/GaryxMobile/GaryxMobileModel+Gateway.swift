@@ -128,7 +128,6 @@ extension GaryxMobileModel {
         automations = []
         slashCommands = []
         mcpServers = []
-        autoResearchRuns = []
         channelEndpoints = []
         configuredBots = []
         botConsoles = []
@@ -158,9 +157,6 @@ extension GaryxMobileModel {
         selectedAgentDetail = nil
         selectedTeamDetail = nil
         selectedRouteNotFound = nil
-        researchCandidatesByRunId = [:]
-        autoResearchDetailsByRunId = [:]
-        autoResearchIterationsByRunId = [:]
         isLoadingThreads = false
         remoteStateLoadPhase = .idle
         isLoadingSelectedThreadHistory = false
@@ -519,7 +515,6 @@ extension GaryxMobileModel {
             async let automationsResult = garyxCaptureCatalog { try await gateway.listAutomations() }
             async let slashCommandsResult = garyxCaptureCatalog { try await gateway.listSlashCommands() }
             async let mcpServersResult = garyxCaptureCatalog { try await gateway.listMcpServers() }
-            async let autoResearchRunsResult: [GaryxAutoResearchRun]? = try? gateway.listAutoResearchRuns()
             async let channelEndpointsResult = garyxCaptureCatalog { try await gateway.listChannelEndpoints() }
             async let workspacesResult = garyxCaptureCatalog { try await gateway.listWorkspaces() }
             async let configuredBotsResult = garyxCaptureCatalog { try await gateway.listConfiguredBots() }
@@ -554,7 +549,6 @@ extension GaryxMobileModel {
             let nextAutomations = await automationsResult
             let nextSlashCommands = await slashCommandsResult
             let nextMcpServers = await mcpServersResult
-            let nextAutoResearchRuns = await autoResearchRunsResult
             let nextChannelEndpoints = await channelEndpointsResult
             let nextConfiguredBots = await configuredBotsResult
             let nextBotConsoles = await botConsolesResult
@@ -600,7 +594,6 @@ extension GaryxMobileModel {
             if case let .success(value) = nextMcpServers {
                 mcpServers = value
             }
-            autoResearchRuns = nextAutoResearchRuns ?? autoResearchRuns
             if case let .success(value) = nextChannelEndpoints {
                 channelEndpoints = value
             }

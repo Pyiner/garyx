@@ -1437,28 +1437,6 @@ final class GaryxGatewayClientTests: XCTestCase {
                 """.utf8
             )
         )
-        let research = try JSONDecoder().decode(
-            GaryxAutoResearchRunsPage.self,
-            from: Data(
-                """
-                {
-                  "items": [
-                    {
-                      "run_id": "research-test",
-                      "state": "running",
-                      "goal": "Find a safe implementation path.",
-                      "workspace_dir": "/workspace/project",
-                      "max_iterations": 3,
-                      "time_budget_secs": 1200,
-                      "iterations_used": 1,
-                      "created_at": "2026-03-01T09:00:00Z",
-                      "updated_at": "2026-03-01T09:05:00Z"
-                    }
-                  ]
-                }
-                """.utf8
-            )
-        )
         let bots = try JSONDecoder().decode(
             GaryxBotConsolesPage.self,
             from: Data(
@@ -1493,7 +1471,6 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(directoryListing.entries.first?.path, "/workspace/project")
         XCTAssertEqual(commands.commands.first?.prompt, "Finish and verify.")
         XCTAssertEqual(mcp.servers.first?.args, ["server.js"])
-        XCTAssertEqual(research.items.first?.runId, "research-test")
         XCTAssertEqual(bots.bots.first?.boundEndpointCount, 1)
         XCTAssertEqual(bots.bots.first?.mainThreadId, "thread::main")
     }
@@ -1556,29 +1533,6 @@ final class GaryxGatewayClientTests: XCTestCase {
 
         XCTAssertEqual(mcpObject?["working_dir"] as? String, "/workspace/project")
         XCTAssertEqual(mcpObject?["args"] as? [String], ["server.js"])
-
-        let research = GaryxAutoResearchCreateRequest(
-            goal: "Find a safe implementation path.",
-            workspaceDir: "/workspace/project",
-            maxIterations: 3,
-            timeBudgetSecs: 1200
-        )
-        let researchObject = try JSONSerialization.jsonObject(
-            with: JSONEncoder().encode(research)
-        ) as? [String: Any]
-
-        XCTAssertEqual(researchObject?["workspace_dir"] as? String, "/workspace/project")
-        XCTAssertEqual(researchObject?["max_iterations"] as? Int, 3)
-        XCTAssertEqual(researchObject?["time_budget_secs"] as? Int, 1200)
-
-        let researchFeedback = GaryxAutoResearchFeedbackRequest(message: "Use stronger sources.")
-        let researchFeedbackObject = try JSONSerialization.jsonObject(
-            with: JSONEncoder().encode(researchFeedback)
-        ) as? [String: Any]
-
-        XCTAssertEqual(researchFeedbackObject?["message"] as? String, "Use stronger sources.")
-        XCTAssertNil(researchFeedbackObject?["feedback"])
-        XCTAssertNil(researchFeedbackObject?["candidate_id"])
 
         let thread = GaryxCreateThreadRequest(
             workspaceDir: "/workspace/project",
@@ -1893,31 +1847,8 @@ final class GaryxGatewayClientTests: XCTestCase {
                 """.utf8
             )
         )
-        let candidates = try JSONDecoder().decode(
-            GaryxAutoResearchCandidatesPage.self,
-            from: Data(
-                """
-                {
-                  "run_id": "research-test",
-                  "best_candidate_id": "candidate-test",
-                  "selected_candidate": null,
-                  "candidates": [
-                    {
-                      "candidate_id": "candidate-test",
-                      "iteration": 1,
-                      "thread_id": "thread::test",
-                      "output": "Candidate output.",
-                      "verdict": { "score": 8.5, "feedback": "Good candidate." }
-                    }
-                  ]
-                }
-                """.utf8
-            )
-        )
-
         XCTAssertEqual(upload.files.first?.mediaType, "image/png")
         XCTAssertEqual(logs.cursor, 14)
-        XCTAssertEqual(candidates.candidates.first?.verdict?.score, 8.5)
 
         let botRequest = GaryxBotBindingRequest(botId: "telegram:main", threadId: "thread::test")
         let botObject = try JSONSerialization.jsonObject(

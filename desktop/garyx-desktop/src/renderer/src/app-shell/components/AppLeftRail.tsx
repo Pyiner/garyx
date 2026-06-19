@@ -12,7 +12,6 @@ import { buildWorkspaceThreadGroups } from '../../thread-model';
 import {
   AgentsIcon,
   AutomationIcon,
-  AutoResearchIcon,
   BackIcon,
   DreamsIcon,
   NewThreadIcon,
@@ -28,7 +27,6 @@ type AppLeftRailProps = {
   gatewayIdentitySlot?: React.ReactNode;
   isSettingsView: boolean;
   isAutomationView: boolean;
-  isAutoResearchView: boolean;
   isAgentsView: boolean;
   isTeamsView: boolean;
   isSkillsView: boolean;
@@ -36,7 +34,6 @@ type AppLeftRailProps = {
   isDreamsView: boolean;
   isBrowserView: boolean;
   recentRailOpen: boolean;
-  showAutoResearch: boolean;
   showDreams: boolean;
   settingsActiveTab: SettingsTabId;
   selectedAutomationId: string | null;
@@ -53,7 +50,6 @@ type AppLeftRailProps = {
   onNewThread: () => void;
   onOpenRecent: () => void;
   onSelectAutomation: (automationId: string | null) => void;
-  onOpenAutoResearch: () => void;
   onOpenAgents: () => void;
   onOpenSkills: () => void;
   onOpenTasks: () => void;
@@ -79,7 +75,6 @@ export function AppLeftRail({
   gatewayIdentitySlot,
   isSettingsView,
   isAutomationView,
-  isAutoResearchView,
   isAgentsView,
   isTeamsView,
   isSkillsView,
@@ -87,7 +82,6 @@ export function AppLeftRail({
   isDreamsView,
   isBrowserView,
   recentRailOpen,
-  showAutoResearch,
   showDreams,
   settingsActiveTab,
   selectedAutomationId,
@@ -104,7 +98,6 @@ export function AppLeftRail({
   onNewThread,
   onOpenRecent,
   onSelectAutomation,
-  onOpenAutoResearch,
   onOpenAgents,
   onOpenSkills,
   onOpenTasks,
@@ -126,7 +119,7 @@ export function AppLeftRail({
   formatThreadTimestamp,
 }: AppLeftRailProps) {
   const { t } = useI18n();
-  const isThreadView = !isSettingsView && !isAutomationView && !isAutoResearchView && !isAgentsView && !isTeamsView && !isSkillsView && !isTasksView && !isDreamsView && !isBrowserView;
+  const isThreadView = !isSettingsView && !isAutomationView && !isAgentsView && !isTeamsView && !isSkillsView && !isTasksView && !isDreamsView && !isBrowserView;
   const visibleSelectedThreadId = isThreadView ? selectedThreadId : null;
   return (
     <aside className={`left-rail ${isSettingsView ? 'settings-rail-shell' : ''}`}>
@@ -207,16 +200,6 @@ export function AppLeftRail({
               <TasksIcon />
               <span>{t('Tasks')}</span>
             </button>
-            {showAutoResearch ? (
-              <button
-                className={`sidebar-action ${isAutoResearchView ? 'active' : ''}`}
-                onClick={onOpenAutoResearch}
-                type="button"
-              >
-                <AutoResearchIcon />
-                <span>{t('Auto Research')}</span>
-              </button>
-            ) : null}
             <button
               className={`sidebar-action ${isAgentsView || isTeamsView ? 'active' : ''}`}
               onClick={onOpenAgents}

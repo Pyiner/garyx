@@ -27,8 +27,6 @@ implementation:
 - Slash commands: list/create/edit/delete.
 - MCP servers: list/create/edit/delete/toggle with stdio args, env, working
   directory, streamable HTTP URL, and headers.
-- Auto Research: list/create/detail/iterations/stop/delete, candidate list, and
-  candidate selection.
 - Bots and channels: channel plugin catalog, configured bot summaries, bot
   status/bind/unbind, endpoint list, endpoint bind/detach, and thread open
   affordances.

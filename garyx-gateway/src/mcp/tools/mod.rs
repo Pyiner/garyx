@@ -1,4 +1,3 @@
-pub(super) mod auto_research;
 pub(super) mod conversation_search;
 pub(super) mod history;
 // `pub(crate)` so cross-module tests (e.g. `cron::tests`) can reach

@@ -36,7 +36,6 @@ import {
 } from "./updater";
 
 import type {
-  CreateAutoResearchRunInput,
   CreateCustomAgentInput,
   CreateTeamInput,
   CreateSkillEntryInput,
@@ -62,8 +61,6 @@ import type {
   GatewayConfigDocument,
   GatewaySettingsSaveRequestOptions,
   DeleteTaskInput,
-  ListAutoResearchRunsInput,
-  ListCandidatesInput,
   ListDreamsInput,
   ListProviderRecentSessionsInput,
   ListTasksInput,
@@ -84,8 +81,6 @@ import type {
   SelectWorkspaceInput,
   SendMessageInput,
   DeleteSlashCommandInput,
-  SelectCandidateInput,
-  StopAutoResearchRunInput,
   StopTaskInput,
   StartWorkflowThreadInput,
   ToggleSkillInput,
@@ -115,7 +110,6 @@ import {
   createSkill,
   createSkillEntry,
   createTask,
-  createAutoResearchRun,
   createMcpServer,
   createSlashCommand,
   bindRemoteChannelEndpoint,
@@ -141,16 +135,12 @@ import {
   getWorkflowDefinitionSource,
   getWorkflowRun,
   getWorkspaceGitStatus,
-  getAutoResearchRun,
   interruptThread,
   listDreams,
   listTasks,
   listWorkflowDefinitions,
   listProviderRecentSessions,
   listTaskWorkflowRuns,
-  listAutoResearchCandidates,
-  listAutoResearchRuns,
-  listAutoResearchIterations,
   listCustomAgents,
   listProviderModels,
   listTeams,
@@ -168,10 +158,7 @@ import {
   saveSkillFile,
   sendStreamingInput,
   streamGatewayEvents,
-  deleteAutoResearchRun,
-  selectAutoResearchCandidate,
   scanDreams,
-  stopAutoResearchRun,
   stopTask,
   toggleMcpServer,
   toggleSkill,
@@ -1126,70 +1113,6 @@ function registerIpcHandlers(): void {
     async (_event, input: DeleteSlashCommandInput) => {
       const settings = await resolveSettings();
       return deleteSlashCommand(settings, input);
-    },
-  );
-
-  ipcMain.handle(
-    "garyx:create-auto-research-run",
-    async (_event, input: CreateAutoResearchRunInput) => {
-      const settings = await resolveSettings();
-      return createAutoResearchRun(settings, input);
-    },
-  );
-
-  ipcMain.handle(
-    "garyx:list-auto-research-runs",
-    async (_event, input?: ListAutoResearchRunsInput) => {
-      const settings = await resolveSettings();
-      return listAutoResearchRuns(settings, input);
-    },
-  );
-
-  ipcMain.handle(
-    "garyx:get-auto-research-run",
-    async (_event, runId: string) => {
-      const settings = await resolveSettings();
-      return getAutoResearchRun(settings, runId);
-    },
-  );
-
-  ipcMain.handle(
-    "garyx:list-auto-research-iterations",
-    async (_event, runId: string) => {
-      const settings = await resolveSettings();
-      return listAutoResearchIterations(settings, runId);
-    },
-  );
-
-  ipcMain.handle(
-    "garyx:stop-auto-research-run",
-    async (_event, input: StopAutoResearchRunInput) => {
-      const settings = await resolveSettings();
-      return stopAutoResearchRun(settings, input);
-    },
-  );
-
-  ipcMain.handle(
-    "garyx:delete-auto-research-run",
-    async (_event, runId: string) => {
-      const settings = await resolveSettings();
-      return deleteAutoResearchRun(settings, runId);
-    },
-  );
-
-  ipcMain.handle(
-    "garyx:list-auto-research-candidates",
-    async (_event, input: ListCandidatesInput) => {
-      const settings = await resolveSettings();
-      return listAutoResearchCandidates(settings, input);
-    },
-  );
-
-  ipcMain.handle(
-    "garyx:select-auto-research-candidate",
-    async (_event, input: SelectCandidateInput) => {
-      const settings = await resolveSettings();
-      return selectAutoResearchCandidate(settings, input);
     },
   );
 

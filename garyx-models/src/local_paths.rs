@@ -46,14 +46,6 @@ pub fn default_message_ledger_dir() -> PathBuf {
     message_ledger_dir_for_data_dir(&default_session_data_dir())
 }
 
-pub fn auto_research_state_path_for_data_dir(data_dir: &Path) -> PathBuf {
-    data_dir.join("auto-research-state.json")
-}
-
-pub fn default_auto_research_state_path() -> PathBuf {
-    auto_research_state_path_for_data_dir(&default_session_data_dir())
-}
-
 pub fn custom_agents_state_path_for_data_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("custom-agents.json")
 }

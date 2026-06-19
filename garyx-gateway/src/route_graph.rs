@@ -275,40 +275,6 @@ fn thread_routes() -> Router<Arc<AppState>> {
         .route("/api/db/sql", axum::routing::post(app_db::sql_query))
         .route("/api/db/events", axum::routing::get(app_db::list_events))
         .route(
-            "/api/auto-research/runs",
-            axum::routing::get(api::list_auto_research_runs).post(api::create_auto_research_run),
-        )
-        .route(
-            "/api/auto-research/runs/{run_id}",
-            axum::routing::get(api::get_auto_research_run)
-                .patch(api::patch_auto_research_run)
-                .delete(api::delete_auto_research_run),
-        )
-        .route(
-            "/api/auto-research/runs/{run_id}/iterations",
-            axum::routing::get(api::list_auto_research_iterations),
-        )
-        .route(
-            "/api/auto-research/runs/{run_id}/stop",
-            axum::routing::post(api::stop_auto_research_run),
-        )
-        .route(
-            "/api/auto-research/runs/{run_id}/candidates",
-            axum::routing::get(api::list_auto_research_candidates),
-        )
-        .route(
-            "/api/auto-research/runs/{run_id}/select/{candidate_id}",
-            axum::routing::post(api::select_auto_research_candidate),
-        )
-        .route(
-            "/api/auto-research/runs/{run_id}/feedback",
-            axum::routing::post(api::inject_auto_research_feedback),
-        )
-        .route(
-            "/api/auto-research/runs/{run_id}/reverify",
-            axum::routing::post(api::reverify_auto_research_candidate),
-        )
-        .route(
             "/api/custom-agents",
             axum::routing::get(api::list_custom_agents).post(api::create_custom_agent),
         )

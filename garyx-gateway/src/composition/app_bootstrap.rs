@@ -12,7 +12,6 @@ use garyx_models::config::GaryxConfig;
 use garyx_models::local_paths::default_agent_team_groups_dir;
 use garyx_models::local_paths::default_agent_teams_state_path;
 use garyx_models::local_paths::default_app_database_path;
-use garyx_models::local_paths::default_auto_research_state_path;
 use garyx_models::local_paths::default_custom_agents_state_path;
 use garyx_models::local_paths::default_wikis_state_path;
 use garyx_models::thread_logs::{NoopThreadLogSink, ThreadLogSink};
@@ -35,7 +34,6 @@ use crate::agent_teams::AgentTeamStore;
 use crate::api::RestartTracker;
 use crate::app_db::AppDbService;
 use crate::app_state::{AppState, IntegrationState, OpsState, RuntimeState, ThreadState};
-use crate::auto_research::AutoResearchStore;
 use crate::cron::CronService;
 use crate::custom_agents::CustomAgentStore;
 use crate::event_stream_hub::EventStreamHub;
@@ -104,7 +102,6 @@ pub struct AppStateBuilder {
     channel_plugin_manager: Arc<Mutex<ChannelPluginManager>>,
     thread_logs: Arc<dyn ThreadLogSink>,
     skills: Arc<SkillsService>,
-    auto_research: Arc<AutoResearchStore>,
     custom_agents: Arc<CustomAgentStore>,
     agent_teams: Arc<AgentTeamStore>,
     wikis: Arc<WikiStore>,
@@ -159,12 +156,6 @@ impl AppStateBuilder {
             channel_plugin_manager,
             thread_logs: Arc::new(NoopThreadLogSink),
             skills,
-            auto_research: Arc::new(load_store_or_warn(
-                "auto_research",
-                default_auto_research_state_path(),
-                AutoResearchStore::file,
-                AutoResearchStore::new,
-            )),
             custom_agents: Arc::new(load_store_or_warn(
                 "custom_agents",
                 default_custom_agents_state_path(),
@@ -279,11 +270,6 @@ impl AppStateBuilder {
         self
     }
 
-    pub fn with_auto_research_store(mut self, auto_research: Arc<AutoResearchStore>) -> Self {
-        self.auto_research = auto_research;
-        self
-    }
-
     pub fn with_custom_agent_store(mut self, custom_agents: Arc<CustomAgentStore>) -> Self {
         self.custom_agents = custom_agents;
         self
@@ -310,15 +296,6 @@ impl AppStateBuilder {
     }
 
     pub fn build(self) -> Arc<AppState> {
-        if let Ok(recovered) = self.auto_research.recover_interrupted_runs_blocking()
-            && !recovered.is_empty()
-        {
-            warn!(
-                recovered_count = recovered.len(),
-                "recovered interrupted auto research runs during startup"
-            );
-        }
-
         // Teams and standalone agents share one agent_id namespace — a team_id
         // collision with an existing agent_id would make `agent_id` ambiguous
         // on threads. Surface the conflict fatally at boot instead of silently
@@ -368,8 +345,7 @@ impl AppStateBuilder {
         //
         // Registration goes through `register_provider_blocking` because
         // `AppStateBuilder::build` is synchronous (see the same pattern used
-        // by `auto_research::recover_interrupted_runs_blocking` above and
-        // `MultiProviderBridge::set_thread_history` in `multi_provider.rs`).
+        // by `MultiProviderBridge::set_thread_history` in `multi_provider.rs`).
         // At boot the topology lock is uncontended; any contention here
         // indicates a wiring bug and should be surfaced loudly.
         // Share ONE Group store instance between the AgentTeam provider
@@ -486,7 +462,6 @@ impl AppStateBuilder {
                 mcp_tool_metrics: Arc::new(McpToolMetrics::default()),
                 thread_logs: self.thread_logs,
                 skills: self.skills,
-                auto_research: self.auto_research,
                 custom_agents: self.custom_agents,
                 agent_teams: self.agent_teams,
                 agent_team_group_store: group_store,

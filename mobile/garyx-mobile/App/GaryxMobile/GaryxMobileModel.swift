@@ -168,7 +168,6 @@ final class GaryxMobileModel: ObservableObject {
     @Published var workspaceUploadStatus: String?
     @Published var slashCommands: [GaryxSlashCommand] = []
     @Published var mcpServers: [GaryxMcpServer] = []
-    @Published var autoResearchRuns: [GaryxAutoResearchRun] = []
     @Published var channelEndpoints: [GaryxChannelEndpoint] = []
     @Published var configuredBots: [GaryxConfiguredBot] = []
     @Published var botConsoles: [GaryxBotConsoleSummary] = []
@@ -186,9 +185,6 @@ final class GaryxMobileModel: ObservableObject {
     @Published var selectedRouteNotFound: GaryxMobileRouteNotFound?
     var skillEditorLoadRequestId: UUID?
     var skillFileLoadRequestId: UUID?
-    @Published var researchCandidatesByRunId: [String: GaryxAutoResearchCandidatesPage] = [:]
-    @Published var autoResearchDetailsByRunId: [String: GaryxAutoResearchDetail] = [:]
-    @Published var autoResearchIterationsByRunId: [String: [GaryxAutoResearchIteration]] = [:]
     @Published var draftThreadTitle = ""
     @Published var draftSkillId = ""
     @Published var draftSkillName = ""
@@ -204,10 +200,6 @@ final class GaryxMobileModel: ObservableObject {
     @Published var draftMcpWorkingDir = ""
     @Published var draftMcpUrl = ""
     @Published var draftMcpHeaders = ""
-    @Published var draftAutoResearchGoal = ""
-    @Published var draftAutoResearchIterations = "3"
-    @Published var draftAutoResearchTimeBudgetMinutes = "15"
-
     let defaults: UserDefaults
     let keychain: GaryxMobileKeychain
     var globalEventStreamTask: Task<Void, Never>?

@@ -563,7 +563,7 @@ fn test_build_sdk_options_merges_garyx_mcp_headers_from_metadata() {
         metadata: HashMap::from([(
             "garyx_mcp_headers".to_owned(),
             serde_json::json!({
-                "X-Gary-AutoResearch-Role": "verifier"
+                "X-Gary-Test-Role": "verifier"
             }),
         )]),
     };
@@ -573,7 +573,7 @@ fn test_build_sdk_options_merges_garyx_mcp_headers_from_metadata() {
     match &sdk_opts.mcp_servers["garyx"] {
         McpServerConfig::Http { headers, .. } => {
             assert_eq!(
-                headers.get("X-Gary-AutoResearch-Role").map(String::as_str),
+                headers.get("X-Gary-Test-Role").map(String::as_str),
                 Some("verifier")
             );
         }

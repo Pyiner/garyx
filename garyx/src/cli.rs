@@ -142,12 +142,6 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         action: BotAction,
     },
-    /// Auto Research run management
-    #[command(name = "auto-research", visible_alias = "autoresearch", alias = "ar")]
-    AutoResearch {
-        #[command(subcommand)]
-        action: AutoResearchAction,
-    },
     /// Automation management
     #[command(name = "automation")]
     Automation {
@@ -693,116 +687,6 @@ pub(crate) enum BotEndpointAction {
         /// Endpoint key like telegram::main::123 or discord::main::456
         #[arg(long)]
         endpoint: String,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(Subcommand)]
-pub(crate) enum AutoResearchAction {
-    /// Create a new Auto Research run
-    Create {
-        /// Research goal — what you want to accomplish
-        #[arg(long)]
-        goal: String,
-        /// Workspace directory to hand to the worker agent; defaults to the current directory
-        #[arg(long)]
-        workspace_dir: Option<String>,
-        /// Maximum iterations (min: 1)
-        #[arg(long, default_value_t = 3)]
-        max_iterations: u32,
-        /// Time budget in seconds
-        #[arg(long, default_value_t = 15 * 60)]
-        time_budget_secs: u64,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// Get a run and its latest iteration
-    Get {
-        /// Auto Research run id
-        run_id: String,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// List all iterations for a run
-    Iterations {
-        /// Auto Research run id
-        run_id: String,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// Stop a running Auto Research run
-    Stop {
-        /// Auto Research run id
-        run_id: String,
-        /// Optional stop reason
-        #[arg(long)]
-        reason: Option<String>,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// List all Auto Research runs
-    List {
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// List candidates for a run (sorted by score)
-    Candidates {
-        /// Auto Research run id
-        run_id: String,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// Patch a running Auto Research run (update parameters on-the-fly)
-    Patch {
-        /// Auto Research run id
-        run_id: String,
-        /// New max iterations
-        #[arg(long)]
-        max_iterations: Option<u32>,
-        /// New time budget in seconds
-        #[arg(long)]
-        time_budget_secs: Option<u64>,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// Inject human feedback into a running run
-    Feedback {
-        /// Auto Research run id
-        run_id: String,
-        /// Feedback message for the next worker iteration
-        message: String,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// Force re-verify a candidate
-    Reverify {
-        /// Auto Research run id
-        run_id: String,
-        /// Candidate id to re-verify (e.g. c_3)
-        candidate_id: String,
-        /// Optional guidance for the verifier
-        #[arg(long)]
-        guidance: Option<String>,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// Select a candidate as the final result
-    Select {
-        /// Auto Research run id
-        run_id: String,
-        /// Candidate id to select (e.g. c_3)
-        candidate_id: String,
         /// Output as JSON
         #[arg(long)]
         json: bool,

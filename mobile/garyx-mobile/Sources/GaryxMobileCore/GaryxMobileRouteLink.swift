@@ -170,8 +170,6 @@ public enum GaryxMobileRouteLink {
             return .workspaceFile(workspaceDir: workspace, path: path)
         case "dreams":
             return .panel(.dreams)
-        case "auto-research", "autoresearch":
-            return .panel(.autoResearch)
         default:
             return nil
         }
@@ -218,8 +216,6 @@ public enum GaryxMobileRouteLink {
             "settings/commands"
         case .mcp:
             "settings/mcp"
-        case .autoResearch:
-            "auto-research"
         case .settings:
             "settings"
         }

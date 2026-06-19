@@ -1926,7 +1926,6 @@ async fn test_internal_dispatch_followup_fires_and_injects_synthetic_user_turn()
     let state = AppStateBuilder::new(GaryxConfig::default())
         .with_bridge(bridge.clone())
         .with_cron_service(cron.clone())
-        .with_auto_research_store(Arc::new(crate::auto_research::AutoResearchStore::new()))
         .with_agent_team_store(Arc::new(crate::agent_teams::AgentTeamStore::new()))
         .with_custom_agent_store(Arc::new(crate::custom_agents::CustomAgentStore::new()))
         .build();
@@ -2171,7 +2170,6 @@ async fn test_internal_dispatch_drops_when_thread_missing() {
     let state = crate::server::AppStateBuilder::new(GaryxConfig::default())
         .with_bridge(bridge.clone())
         .with_cron_service(cron.clone())
-        .with_auto_research_store(Arc::new(crate::auto_research::AutoResearchStore::new()))
         .with_agent_team_store(Arc::new(crate::agent_teams::AgentTeamStore::new()))
         .with_custom_agent_store(Arc::new(crate::custom_agents::CustomAgentStore::new()))
         .build();

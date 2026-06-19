@@ -70,10 +70,6 @@ test('builds stable hash routes', () => {
 });
 
 test('parses utility views', () => {
-  assert.deepEqual(parseDesktopRoute('file:///Garyx.app/index.html#/auto-research'), {
-    kind: 'view',
-    view: 'auto_research',
-  });
   assert.deepEqual(parseDesktopRoute('file:///Garyx.app/index.html#/automation/job-1'), {
     kind: 'automation',
     automationId: 'job-1',

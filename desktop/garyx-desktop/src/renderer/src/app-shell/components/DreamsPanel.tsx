@@ -4,11 +4,28 @@ import { RefreshCw, Sparkles } from 'lucide-react';
 import type { DesktopDreamTopic, DesktopDreamsPage } from '@shared/contracts';
 
 import { useI18n } from '../../i18n';
-import { formatTimestamp } from './auto-research/helpers';
 
 type DreamsPanelProps = {
   onOpenThread: (threadId: string) => void;
 };
+
+function formatTimestamp(value?: string | null): string {
+  if (!value) {
+    return 'Unknown';
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(parsed);
+}
 
 function confidenceLabel(value: number): string {
   return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;

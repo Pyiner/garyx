@@ -181,16 +181,6 @@ as `{"kind":"monthly","day":24,"time":"08:00","timezone":"Asia/Shanghai"}`.
 The database is global for the Garyx installation and is stored at
 `~/.garyx/data/app-database.sqlite3` by default.
 
-## Auto Research
-
-| Command | Use it for |
-| --- | --- |
-| `garyx auto-research create --goal <goal>` | Start an Auto Research run. |
-| `garyx auto-research list / get / iterations / candidates` | Inspect runs, iterations, and candidate outputs. |
-| `garyx auto-research stop / patch / feedback / reverify / select` | Steer or finish an active run. |
-
-`garyx ar` is a short alias for `garyx auto-research`.
-
 ## Diagnostics
 
 | Command | Use it for |

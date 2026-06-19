@@ -169,7 +169,6 @@ import {
 } from "../thread-controller";
 import {
   AutomationIcon,
-  AutoResearchIcon,
   BackIcon,
   NewThreadIcon,
   RecentIcon,
@@ -200,7 +199,6 @@ import { ThreadLogPanel } from "./components/ThreadLogPanel";
 import { AppLeftRail } from "./components/AppLeftRail";
 import { ThreadPage } from "./components/ThreadPage";
 import { useAutomationController } from "./useAutomationController";
-import { useAutoResearchController } from "./useAutoResearchController";
 import {
   MAX_CLIENT_STREAM_LOG_ENTRIES,
   appendClientStreamLogEntry,
@@ -308,11 +306,6 @@ const MemoryDialog = lazy(() =>
 const AgentsHubPanel = lazy(() =>
   import("./components/AgentsHubPanel").then((module) => ({
     default: module.AgentsHubPanel,
-  })),
-);
-const AutoResearchPanel = lazy(() =>
-  import("./components/auto-research").then((module) => ({
-    default: module.AutoResearchPanel,
   })),
 );
 const TasksPanel = lazy(() =>
@@ -1467,7 +1460,6 @@ function savedContentView(): ContentView {
     "browser",
     "bots",
     "automation",
-    "auto_research",
     "agents",
     "teams",
     "skills",
@@ -2068,19 +2060,6 @@ export function AppShell() {
     setPendingAutomationRun,
     reconcilePendingAutomationRun,
   });
-  const {
-    loading: autoResearchLoading,
-    saving: autoResearchSaving,
-    runs: autoResearchRuns,
-    runDetail: autoResearchRunDetail,
-    iterations: autoResearchIterations,
-    candidatesResponse: autoResearchCandidatesResponse,
-    createRun: createAutoResearchRun,
-    loadRun: loadAutoResearchRun,
-    stopRun: stopAutoResearchRun,
-    deleteRun: deleteAutoResearchRun,
-    selectCandidate: selectAutoResearchCandidate,
-  } = useAutoResearchController(contentView === "auto_research", setError);
   const {
     commands,
     commandsLoaded,
@@ -3295,11 +3274,6 @@ export function AppShell() {
   const isBrowserView = contentView === "browser";
   const isBotsView = contentView === "bots";
   const isAutomationView = contentView === "automation";
-  const isAutoResearchView = contentView === "auto_research";
-  const showAutoResearchLab =
-    typeof gatewaySettingsDraft?.desktop?.labs?.auto_research === "boolean"
-      ? gatewaySettingsDraft.desktop.labs.auto_research
-      : true;
   const showDreamsFeature = Boolean(gatewaySettingsDraft?.dreams?.enabled);
   const isAgentsView = contentView === "agents";
   const isTeamsView = contentView === "teams";
@@ -3509,7 +3483,6 @@ export function AppShell() {
   const showStaticWindowToolbar =
     isSettingsView ||
     isAutomationView ||
-    isAutoResearchView ||
     isAgentsView ||
     isTeamsView ||
     isSkillsView;
@@ -3545,11 +3518,6 @@ export function AppShell() {
   const activeToolTraceLoadingKey = threadActivity.runActive
     ? activeTailToolTraceBlockKey
     : null;
-  useEffect(() => {
-    if (contentView === "auto_research" && !showAutoResearchLab) {
-      setContentView("thread");
-    }
-  }, [contentView, setContentView, showAutoResearchLab]);
   const showHistoryLoadingPlaceholder = Boolean(
     historyLoading &&
     !activeMessages.length &&
@@ -10240,8 +10208,6 @@ export function AppShell() {
         botGroups={visibleBotGroups}
         formatThreadTimestamp={formatThreadTimestamp}
         isAutomationView={isAutomationView}
-        isAutoResearchView={isAutoResearchView}
-        showAutoResearch={showAutoResearchLab}
         showDreams={showDreamsFeature}
         isAgentsView={isAgentsView}
         isBrowserView={isBrowserView}
@@ -10327,11 +10293,6 @@ export function AppShell() {
         }}
         onSidebarResizeStart={handleSidebarResizeStart}
         sidebarResizing={sidebarResizing}
-        onOpenAutoResearch={() => {
-          trackUiAction("nav.open_auto_research", () => {
-            setContentView("auto_research");
-          });
-        }}
         onOpenAgents={() => {
           trackUiAction("nav.open_agents", () => {
             setContentView("agents");
@@ -10724,39 +10685,6 @@ export function AppShell() {
                     openAutomationDialog("create");
                   });
                 }}
-              />
-            ) : isAutoResearchView ? (
-              <AutoResearchPanel
-                currentWorkspace={selectedWorkspaceEntry}
-                loading={autoResearchLoading}
-                onCreateRun={async (input) => {
-                  await createAutoResearchRun(input);
-                }}
-                onRefresh={async (runId) => {
-                  await loadAutoResearchRun(runId);
-                }}
-                onOpenThread={(threadId) => {
-                  void openExistingThread(threadId);
-                }}
-                onSelectRun={async (runId) => {
-                  await loadAutoResearchRun(runId);
-                }}
-                onStop={async (runId) => {
-                  await stopAutoResearchRun(runId);
-                }}
-                onDelete={async (runId) => {
-                  await deleteAutoResearchRun(runId);
-                }}
-                onSelectCandidate={async (runId, candidateId) => {
-                  await selectAutoResearchCandidate(runId, candidateId);
-                }}
-                iterations={autoResearchIterations}
-                candidatesResponse={autoResearchCandidatesResponse}
-                workspaces={desktopState?.workspaces || []}
-                onAddWorkspace={addWorkspacePathFromPicker}
-                runs={autoResearchRuns}
-                runDetail={autoResearchRunDetail}
-                saving={autoResearchSaving}
               />
             ) : isAgentsView ? (
               <AgentsHubPanel

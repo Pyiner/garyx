@@ -1104,25 +1104,8 @@ pub struct SessionConfig {
     pub data_dir: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct DesktopLabsConfig {
-    #[serde(default = "default_true")]
-    pub auto_research: bool,
-}
-
-impl Default for DesktopLabsConfig {
-    fn default() -> Self {
-        Self {
-            auto_research: true,
-        }
-    }
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
-pub struct DesktopConfig {
-    #[serde(default)]
-    pub labs: DesktopLabsConfig,
-}
+pub struct DesktopConfig {}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TasksConfig {

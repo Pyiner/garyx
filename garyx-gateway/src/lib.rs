@@ -4,7 +4,6 @@ mod agent_teams;
 pub mod api;
 pub mod app_db;
 mod application;
-mod auto_research;
 pub mod automation;
 mod channel_catalog;
 pub mod chat;
