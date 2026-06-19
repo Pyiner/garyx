@@ -378,6 +378,16 @@ impl HostInboundHandler {
             live_streams: self.live_streams.clone(),
         });
 
+        // Ensure a stable, non-empty run id so the committed-stream replay
+        // adapter can filter this run's records (plugins may omit run_id). The
+        // subprocess protocol frames carry the local stream_id/seq, not run_id,
+        // so this stays invisible to the plugin.
+        let run_id = if parsed.run_id.trim().is_empty() {
+            uuid::Uuid::new_v4().to_string()
+        } else {
+            parsed.run_id.clone()
+        };
+
         let inbound_request = InboundRequest {
             channel: self.plugin_id.clone(),
             account_id: parsed.account_id.clone(),
@@ -389,25 +399,34 @@ impl HostInboundHandler {
             is_group: parsed.is_group,
             thread_binding_key: parsed.thread_binding_key.clone(),
             message: parsed.message,
-            run_id: parsed.run_id,
+            run_id: run_id.clone(),
             reply_to_message_id: parsed.reply_to_message_id,
             images: inline_images,
             extra_metadata,
             file_paths: parsed.file_paths,
         };
 
+        // Read this run's stream from the durable committed transcript instead
+        // of the live external_callback (block 5). The frame-emitting worker is
+        // unchanged; it still produces inbound/stream_frame + inbound/stream_end
+        // with local stream_id/seq, so the plugin protocol is unaffected. The
+        // worker's stream lifecycle (live_streams) still ends when its mpsc
+        // closes — now when the replay adapter drops the callback on terminal.
+        let dispatch_callback = garyx_channels::committed_replay::committed_or_live_callback(
+            &self.bridge,
+            &run_id,
+            response_callback,
+        )
+        .await;
+
         // `route_and_dispatch` resolves the thread and kicks off the
-        // agent run. The callback streams events back in; we pin the
-        // thread id so the Done-handler can tag its outbound back
-        // through the dispatcher with the right chat.
+        // agent run. The committed replay adapter streams events back in; we pin
+        // the thread id so the Done-handler can tag its outbound back through the
+        // dispatcher with the right chat.
         let result = {
             let mut router = self.router.lock().await;
             router
-                .route_and_dispatch(
-                    inbound_request,
-                    self.bridge.as_ref(),
-                    Some(response_callback),
-                )
+                .route_and_dispatch(inbound_request, self.bridge.as_ref(), dispatch_callback)
                 .await
         };
 
