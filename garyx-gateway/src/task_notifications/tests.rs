@@ -314,6 +314,77 @@ async fn dispatch_uses_committed_thread_final_message() {
 }
 
 #[tokio::test]
+async fn dispatch_does_not_replay_ready_notification_without_handoff() {
+    let dispatcher = Arc::new(RecordingDispatcher::default());
+    let provider = Arc::new(RecordingProvider::default());
+    let bridge = Arc::new(MultiProviderBridge::new());
+    bridge
+        .register_provider("recording-provider", provider)
+        .await;
+    bridge.set_default_provider_key("recording-provider").await;
+    let state = crate::app_bootstrap::AppStateBuilder::new(telegram_owner_config())
+        .with_bridge(bridge.clone())
+        .with_channel_dispatcher(dispatcher.clone())
+        .build();
+    bridge
+        .set_thread_store(state.threads.thread_store.clone())
+        .await;
+    bridge.set_event_tx(state.ops.events.sender()).await;
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::task-replay",
+            json!({
+                "thread_id": "thread::task-replay",
+                "task": task_for_notification(TaskNotificationTarget::Bot {
+                    channel: "telegram".to_owned(),
+                    account_id: "main".to_owned(),
+                }),
+            }),
+        )
+        .await;
+
+    dispatch_task_ready_notification(
+        &state,
+        TaskReadyForReviewEvent {
+            thread_id: "thread::task-replay".to_owned(),
+            task_id: "#TASK-42".to_owned(),
+            run_id: Some("run-handoff".to_owned()),
+            final_message: Some("First handoff.".to_owned()),
+        },
+    )
+    .await
+    .unwrap();
+
+    dispatch_task_ready_notification(
+        &state,
+        TaskReadyForReviewEvent {
+            thread_id: "thread::task-replay".to_owned(),
+            task_id: "#TASK-42".to_owned(),
+            run_id: None,
+            final_message: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let ready_notifications = dispatcher
+        .calls()
+        .into_iter()
+        .filter(|call| {
+            call.content.as_text().is_some_and(|text| {
+                text.contains("<garyx_task_notification event=\"ready_for_review\"")
+            })
+        })
+        .count();
+    assert_eq!(
+        ready_notifications, 1,
+        "a state replay without handoff must not send another ready notification"
+    );
+}
+
+#[tokio::test]
 async fn dispatches_ready_notification_to_bot_target() {
     let dispatcher = Arc::new(RecordingDispatcher::default());
     let provider = Arc::new(RecordingProvider::default());

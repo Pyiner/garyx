@@ -2850,6 +2850,246 @@ async fn test_unsuccessful_task_run_notifies_if_task_moved_to_review_during_run(
 }
 
 #[tokio::test]
+async fn test_work_run_wake_revives_in_review_task_before_completion() {
+    let bridge = MultiProviderBridge::new();
+    let provider = Arc::new(CheckpointingProvider::new());
+    let delta_sent = provider.delta_sent();
+    bridge.register_provider("p1", provider.clone()).await;
+    bridge.set_default_provider_key("p1").await;
+
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let now = Utc::now();
+    let task = ThreadTask {
+        schema_version: 1,
+        number: 12,
+        title: "Revive reviewed task".to_owned(),
+        status: TaskStatus::InReview,
+        creator: Principal::Human {
+            user_id: "user42".to_owned(),
+        },
+        assignee: Some(Principal::Agent {
+            agent_id: "codex".to_owned(),
+        }),
+        notification_target: None,
+        executor: None,
+        source: None,
+        body: None,
+        created_at: now,
+        updated_at: now,
+        updated_by: Principal::Agent {
+            agent_id: "codex".to_owned(),
+        },
+        events: vec![TaskEvent {
+            event_id: "evt-ready-before-wake".to_owned(),
+            at: now,
+            actor: Principal::Agent {
+                agent_id: "codex".to_owned(),
+            },
+            kind: TaskEventKind::StatusChanged {
+                from: TaskStatus::InProgress,
+                to: TaskStatus::InReview,
+                note: Some("ready before wake".to_owned()),
+            },
+        }],
+    };
+    let thread_id = "sess::tg::wake-reviewed-task";
+    store
+        .set(
+            thread_id,
+            json!({
+                "task": task
+            }),
+        )
+        .await;
+    bridge.set_thread_store(store.clone()).await;
+    bridge.set_thread_history(make_history(store.clone()));
+    let (tx, mut rx) = tokio::sync::broadcast::channel::<String>(128);
+    bridge.set_event_tx(tx).await;
+
+    bridge
+        .start_agent_run(
+            run_request(
+                thread_id,
+                "continue reviewed task",
+                "run-wake-reviewed",
+                "telegram",
+                "main",
+            ),
+            None,
+        )
+        .await
+        .unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(3), delta_sent.notified())
+        .await
+        .expect("provider should emit a partial response");
+
+    let status_during_run = store
+        .get(thread_id)
+        .await
+        .and_then(|data| data["task"]["status"].as_str().map(ToOwned::to_owned));
+
+    provider.release_run();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while bridge.is_run_active("run-wake-reviewed").await {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("revived task run should finish");
+
+    assert_eq!(status_during_run.as_deref(), Some("in_progress"));
+    let final_data = store.get(thread_id).await.expect("thread data should exist");
+    assert_eq!(final_data["task"]["status"], "in_review");
+
+    let ready_event = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let raw = rx.recv().await.expect("event channel should stay open");
+            let event: serde_json::Value = serde_json::from_str(&raw).expect("event parses");
+            if event.get("type").and_then(serde_json::Value::as_str)
+                == Some("task_ready_for_review")
+            {
+                break event;
+            }
+        }
+    })
+    .await
+    .expect("revived task should emit a fresh task-ready event");
+
+    assert_eq!(ready_event["thread_id"], thread_id);
+    assert_eq!(ready_event["task_id"], "#TASK-12");
+    assert_eq!(ready_event["run_id"], "run-wake-reviewed");
+    assert_eq!(ready_event["final_message"], "partial reply");
+}
+
+#[tokio::test]
+async fn test_work_run_wake_revives_done_task_before_completion() {
+    let bridge = MultiProviderBridge::new();
+    let provider = Arc::new(CheckpointingProvider::new());
+    let delta_sent = provider.delta_sent();
+    bridge.register_provider("p1", provider.clone()).await;
+    bridge.set_default_provider_key("p1").await;
+
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let now = Utc::now();
+    let task = ThreadTask {
+        schema_version: 1,
+        number: 13,
+        title: "Revive done task".to_owned(),
+        status: TaskStatus::Done,
+        creator: Principal::Human {
+            user_id: "user42".to_owned(),
+        },
+        assignee: Some(Principal::Agent {
+            agent_id: "codex".to_owned(),
+        }),
+        notification_target: None,
+        executor: None,
+        source: None,
+        body: None,
+        created_at: now,
+        updated_at: now,
+        updated_by: Principal::Human {
+            user_id: "reviewer".to_owned(),
+        },
+        events: vec![
+            TaskEvent {
+                event_id: "evt-ready-before-done-wake".to_owned(),
+                at: now,
+                actor: Principal::Agent {
+                    agent_id: "codex".to_owned(),
+                },
+                kind: TaskEventKind::StatusChanged {
+                    from: TaskStatus::InProgress,
+                    to: TaskStatus::InReview,
+                    note: Some("ready before approval".to_owned()),
+                },
+            },
+            TaskEvent {
+                event_id: "evt-done-before-wake".to_owned(),
+                at: now,
+                actor: Principal::Human {
+                    user_id: "reviewer".to_owned(),
+                },
+                kind: TaskEventKind::StatusChanged {
+                    from: TaskStatus::InReview,
+                    to: TaskStatus::Done,
+                    note: Some("approved".to_owned()),
+                },
+            },
+        ],
+    };
+    let thread_id = "sess::tg::wake-done-task";
+    store
+        .set(
+            thread_id,
+            json!({
+                "task": task
+            }),
+        )
+        .await;
+    bridge.set_thread_store(store.clone()).await;
+    bridge.set_thread_history(make_history(store.clone()));
+    let (tx, mut rx) = tokio::sync::broadcast::channel::<String>(128);
+    bridge.set_event_tx(tx).await;
+
+    bridge
+        .start_agent_run(
+            run_request(
+                thread_id,
+                "continue done task",
+                "run-wake-done",
+                "telegram",
+                "main",
+            ),
+            None,
+        )
+        .await
+        .unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(3), delta_sent.notified())
+        .await
+        .expect("provider should emit a partial response");
+
+    let status_during_run = store
+        .get(thread_id)
+        .await
+        .and_then(|data| data["task"]["status"].as_str().map(ToOwned::to_owned));
+
+    provider.release_run();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while bridge.is_run_active("run-wake-done").await {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("revived task run should finish");
+
+    assert_eq!(status_during_run.as_deref(), Some("in_progress"));
+    let final_data = store.get(thread_id).await.expect("thread data should exist");
+    assert_eq!(final_data["task"]["status"], "in_review");
+
+    let ready_event = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let raw = rx.recv().await.expect("event channel should stay open");
+            let event: serde_json::Value = serde_json::from_str(&raw).expect("event parses");
+            if event.get("type").and_then(serde_json::Value::as_str)
+                == Some("task_ready_for_review")
+            {
+                break event;
+            }
+        }
+    })
+    .await
+    .expect("revived task should emit a fresh task-ready event");
+
+    assert_eq!(ready_event["thread_id"], thread_id);
+    assert_eq!(ready_event["task_id"], "#TASK-13");
+    assert_eq!(ready_event["run_id"], "run-wake-done");
+    assert_eq!(ready_event["final_message"], "partial reply");
+}
+
+#[tokio::test]
 async fn test_thread_persistence_promotes_queued_input_after_user_ack() {
     let bridge = MultiProviderBridge::new();
     let provider = Arc::new(QueuedInputProvider::new());
