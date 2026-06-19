@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use codex_sdk::types::{coerce_f64, coerce_i64};
 use codex_sdk::{
     CodexClient, CodexClientConfig, CodexError, InputItem, JsonRpcNotification, ThreadForkParams,
-    ThreadResumeParams, ThreadStartParams,
+    ThreadResumeParams, ThreadStartParams, TurnStartOptions,
 };
 use garyx_models::provider::{
     CodexAppServerConfig, ImagePayload, PromptAttachment, ProviderMessage, ProviderMessageRole,
@@ -466,6 +466,60 @@ fn build_input_items(options: &ProviderRunOptions, include_memory: bool) -> Vec<
     )
 }
 
+fn metadata_string(metadata: &HashMap<String, Value>, key: &str) -> Option<String> {
+    metadata
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn resolve_codex_request_model(
+    config: &CodexAppServerConfig,
+    metadata: &HashMap<String, Value>,
+) -> Option<String> {
+    metadata_string(metadata, "model").or_else(|| {
+        if !config.model.trim().is_empty() {
+            Some(config.model.clone())
+        } else if !config.default_model.trim().is_empty() {
+            Some(config.default_model.clone())
+        } else {
+            None
+        }
+    })
+}
+
+fn resolve_codex_request_reasoning_effort(
+    config: &CodexAppServerConfig,
+    metadata: &HashMap<String, Value>,
+) -> Option<String> {
+    metadata_string(metadata, "model_reasoning_effort").or_else(|| {
+        (!config.model_reasoning_effort.trim().is_empty())
+            .then(|| config.model_reasoning_effort.clone())
+    })
+}
+
+fn resolve_codex_request_service_tier(
+    config: &CodexAppServerConfig,
+    metadata: &HashMap<String, Value>,
+) -> Option<String> {
+    metadata_string(metadata, "model_service_tier").or_else(|| {
+        (!config.model_service_tier.trim().is_empty()).then(|| config.model_service_tier.clone())
+    })
+}
+
+fn build_turn_start_options(
+    config: &CodexAppServerConfig,
+    metadata: &HashMap<String, Value>,
+) -> TurnStartOptions {
+    TurnStartOptions {
+        model: resolve_codex_request_model(config, metadata),
+        effort: resolve_codex_request_reasoning_effort(config, metadata),
+        service_tier: resolve_codex_request_service_tier(config, metadata),
+    }
+}
+
 fn append_codex_assistant_session_message(
     session_messages: &mut Vec<ProviderMessage>,
     item_id: Option<&str>,
@@ -731,41 +785,9 @@ fn build_thread_start_params(
                 .filter(|d| !d.is_empty())
                 .cloned()
         });
-    let model = metadata
-        .get("model")
-        .and_then(|value| value.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            if !config.model.is_empty() {
-                Some(config.model.clone())
-            } else if !config.default_model.is_empty() {
-                Some(config.default_model.clone())
-            } else {
-                None
-            }
-        });
-    let model_reasoning_effort = metadata
-        .get("model_reasoning_effort")
-        .and_then(|value| value.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            (!config.model_reasoning_effort.trim().is_empty())
-                .then(|| config.model_reasoning_effort.clone())
-        });
-    let service_tier = metadata
-        .get("model_service_tier")
-        .and_then(|value| value.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            (!config.model_service_tier.trim().is_empty())
-                .then(|| config.model_service_tier.clone())
-        });
+    let model = resolve_codex_request_model(config, metadata);
+    let model_reasoning_effort = resolve_codex_request_reasoning_effort(config, metadata);
+    let service_tier = resolve_codex_request_service_tier(config, metadata);
 
     ThreadStartParams {
         cwd: cwd.clone(),
@@ -1471,9 +1493,10 @@ impl CodexAgentProvider {
         });
 
         // Start turn
+        let turn_options = build_turn_start_options(&self.config, &options.metadata);
         let input_items = build_input_items(options, include_memory);
         let turn_id = client
-            .start_turn(&thread_id, input_items)
+            .start_turn_with_options(&thread_id, input_items, turn_options)
             .await
             .map_err(|e| map_codex_error("turn/start failed", e))?;
 

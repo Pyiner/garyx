@@ -193,11 +193,18 @@ fn test_turn_start_params_serialization() {
         input: vec![InputItem::Text {
             text: "hi".to_owned(),
         }],
+        model: Some("gpt-5.4".to_owned()),
+        effort: Some("medium".to_owned()),
+        service_tier: Some("priority".to_owned()),
     };
     let val = serde_json::to_value(&params).unwrap();
     assert_eq!(val["threadId"], "th_1");
     assert_eq!(val["input"][0]["type"], "text");
     assert_eq!(val["input"][0]["text"], "hi");
+    assert_eq!(val["model"], "gpt-5.4");
+    assert_eq!(val["effort"], "medium");
+    assert_eq!(val["serviceTier"], "priority");
+    assert!(val.get("modelReasoningEffort").is_none());
 }
 
 #[test]

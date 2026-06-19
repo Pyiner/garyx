@@ -9,8 +9,8 @@ use crate::error::CodexError;
 use crate::transport::CodexTransport;
 use crate::types::{
     Capabilities, ClientInfo, InitializeParams, InputItem, JsonRpcNotification, ThreadForkParams,
-    ThreadResumeParams, ThreadStartParams, TurnInterruptParams, TurnStartParams, TurnSteerParams,
-    extract_thread_id, extract_turn_id,
+    ThreadResumeParams, ThreadStartParams, TurnInterruptParams, TurnStartOptions, TurnStartParams,
+    TurnSteerParams, extract_thread_id, extract_turn_id,
 };
 
 // ---------------------------------------------------------------------------
@@ -174,11 +174,25 @@ impl CodexClient {
         thread_id: &str,
         input: Vec<InputItem>,
     ) -> Result<String, CodexError> {
+        self.start_turn_with_options(thread_id, input, TurnStartOptions::default())
+            .await
+    }
+
+    /// Start a turn with optional sticky execution settings.
+    pub async fn start_turn_with_options(
+        &self,
+        thread_id: &str,
+        input: Vec<InputItem>,
+        options: TurnStartOptions,
+    ) -> Result<String, CodexError> {
         self.require_initialized()?;
 
         let params = TurnStartParams {
             thread_id: thread_id.to_owned(),
             input,
+            model: options.model,
+            effort: options.effort,
+            service_tier: options.service_tier,
         };
         let value = serde_json::to_value(&params)
             .map_err(|e| CodexError::Fatal(format!("serialize error: {e}")))?;
