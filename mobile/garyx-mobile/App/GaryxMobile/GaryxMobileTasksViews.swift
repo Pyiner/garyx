@@ -11,16 +11,19 @@ struct GaryxTasksView: View {
         GaryxPanelScaffold(
             title: "Tasks",
             subtitle: model.tasksPanelSubtitle,
-            onRefresh: { await model.refreshVisibleTasks() }
+            onRefresh: { await model.refreshVisibleTasks() },
+            contentHorizontalPadding: model.tasksPanelState.isSourceThreadFilterActive ? 0 : 16
         ) {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: model.tasksPanelState.isSourceThreadFilterActive ? 8 : 14) {
                 if model.tasksPanelState.isSourceThreadFilterActive {
                     GaryxTaskSourceThreadFilterRow(
+                        title: sourceThreadFilterTitle,
                         threadId: model.tasksPanelState.sourceThreadFilterId ?? "",
-                        count: model.visibleTaskCount
+                        count: childThreadRows(for: model.visibleTasks).count
                     ) {
                         model.clearTaskSourceThreadFilter()
                     }
+                    .padding(.horizontal, 16)
                 }
                 taskContent
             }
@@ -46,15 +49,7 @@ struct GaryxTasksView: View {
             case .idle, .loading:
                 GaryxLoadingPanelView(title: "Loading source tasks...")
             case .loaded:
-                if model.visibleTasks.isEmpty {
-                    GaryxEmptyPanelView(
-                        icon: "checklist",
-                        title: "No tasks dispatched from this thread.",
-                        text: ""
-                    )
-                } else {
-                    taskListSection(tasks: model.visibleTasks)
-                }
+                sourceThreadContent(tasks: model.visibleTasks)
             case .failed(let message):
                 GaryxEmptyPanelView(
                     icon: "exclamationmark.triangle",
@@ -75,6 +70,21 @@ struct GaryxTasksView: View {
         }
     }
 
+    @ViewBuilder
+    private func sourceThreadContent(tasks: [GaryxTaskSummary]) -> some View {
+        let rows = childThreadRows(for: tasks)
+        if rows.isEmpty {
+            GaryxEmptyPanelView(
+                icon: "bubble.left.and.text.bubble.right",
+                title: "No child threads yet.",
+                text: ""
+            )
+            .padding(.horizontal, 16)
+        } else {
+            childThreadListSection(rows: rows)
+        }
+    }
+
     private func taskListSection(tasks: [GaryxTaskSummary]) -> some View {
         GaryxSectionBlock(title: "Tasks") {
             GaryxCompactListGroup {
@@ -82,51 +92,223 @@ struct GaryxTasksView: View {
             }
         }
     }
+
+    private func childThreadListSection(rows: [GaryxTaskThreadRowModel]) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            GaryxTaskThreadSectionHeader(title: "Threads")
+                .padding(.horizontal, GaryxTaskThreadListMetrics.sectionHorizontalPadding)
+                .padding(.bottom, 4)
+
+            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                if index > 0 {
+                    GaryxTaskThreadRowDivider()
+                }
+                GaryxTaskThreadButton(
+                    thread: row.thread,
+                    isSelected: model.selectedThread?.id == row.thread.id,
+                    isPinned: model.isThreadPinned(row.thread.id),
+                    trailingTimestamp: row.trailingTimestamp
+                ) {
+                    Task { await model.openThread(id: row.thread.id) }
+                }
+            }
+        }
+    }
+
+    private func childThreadRows(for tasks: [GaryxTaskSummary]) -> [GaryxTaskThreadRowModel] {
+        var seenThreadIds = Set<String>()
+        return tasks.compactMap { task in
+            guard let thread = childThreadSummary(for: task),
+                  seenThreadIds.insert(thread.id).inserted else {
+                return nil
+            }
+            return GaryxTaskThreadRowModel(
+                thread: thread,
+                trailingTimestamp: task.formattedUpdatedAt
+            )
+        }
+    }
+
+    private func childThreadSummary(for task: GaryxTaskSummary) -> GaryxThreadSummary? {
+        let threadId = task.threadId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !threadId.isEmpty else { return nil }
+        if let thread = model.sidebarThreadSummary(for: threadId) {
+            return thread
+        }
+
+        let title = task.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let runtimeAgentId = task.runtimeAgentId.trimmingCharacters(in: .whitespacesAndNewlines)
+        return GaryxThreadSummary(
+            id: threadId,
+            title: title.isEmpty ? "Task thread" : title,
+            createdAt: nil,
+            updatedAt: task.updatedAt,
+            lastMessagePreview: "",
+            workspacePath: nil,
+            messageCount: nil,
+            agentId: runtimeAgentId.isEmpty ? nil : runtimeAgentId,
+            teamId: nil,
+            teamName: nil,
+            providerType: nil,
+            recentRunId: nil,
+            activeRunId: nil,
+            runState: task.status == .inProgress ? "running" : nil,
+            worktreePath: nil
+        )
+    }
+
+    private var sourceThreadFilterTitle: String {
+        guard let threadId = model.tasksPanelState.sourceThreadFilterId,
+              let thread = model.sidebarThreadSummary(for: threadId) else {
+            return "Current thread"
+        }
+        let title = thread.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return title.isEmpty ? "Current thread" : title
+    }
 }
 
 
 private struct GaryxTaskSourceThreadFilterRow: View {
+    let title: String
     let threadId: String
     let count: Int
     let onClear: () -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "line.3.horizontal.decrease.circle")
-                .font(GaryxFont.callout(weight: .semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 26, height: 26)
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: "line.3.horizontal.decrease.circle.fill")
+                .font(GaryxFont.system(size: 18, weight: .semibold))
+                .foregroundStyle(GaryxTheme.accent)
+                .frame(width: 34, height: 34)
+                .background(GaryxTheme.accent.opacity(0.10), in: Circle())
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("Source thread")
+                Text("Child threads from")
                     .font(GaryxFont.caption(weight: .medium))
                     .foregroundStyle(.secondary)
-                Text(threadId)
-                    .font(GaryxFont.caption())
+                Text(title)
+                    .font(GaryxFont.subheadline(weight: .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                    .truncationMode(.middle)
+                    .truncationMode(.tail)
+                if !threadId.isEmpty {
+                    Text(threadId)
+                        .font(GaryxFont.system(size: 11, weight: .regular))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
             }
 
             Spacer(minLength: 8)
 
-            Text("\(count)")
+            Text(countLabel)
                 .font(GaryxFont.caption(weight: .semibold))
                 .foregroundStyle(.secondary)
-                .monospacedDigit()
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.primary.opacity(0.06), in: Capsule())
 
             Button(action: onClear) {
-                GaryxToolbarIcon(systemName: "xmark")
+                GaryxCompactGlassIcon(systemName: "xmark", diameter: 30, iconSize: 12)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Clear source thread filter")
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.vertical, 11)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(GaryxTheme.surface)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(GaryxTheme.hairline, lineWidth: 1)
+        }
+    }
+
+    private var countLabel: String {
+        count == 1 ? "1 thread" : "\(count) threads"
+    }
+}
+
+private enum GaryxTaskThreadListMetrics {
+    static let sectionHorizontalPadding: CGFloat = 24
+    static let rowOuterPadding: CGFloat = 18
+    static let rowInnerHorizontalPadding: CGFloat = 7
+}
+
+private struct GaryxTaskThreadRowModel: Identifiable {
+    let thread: GaryxThreadSummary
+    let trailingTimestamp: String
+
+    var id: String { thread.id }
+}
+
+private struct GaryxTaskThreadSectionHeader: View {
+    let title: String
+
+    var body: some View {
+        Text(title)
+            .font(GaryxFont.caption(weight: .medium))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+    }
+}
+
+private struct GaryxTaskThreadRowDivider: View {
+    var body: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(0.06))
+            .frame(height: 1.0 / UIScreen.main.scale)
+            .padding(
+                .leading,
+                (GaryxTaskThreadListMetrics.rowOuterPadding - 4)
+                    + GaryxTaskThreadListMetrics.rowInnerHorizontalPadding
+                    + 38
+                    + 10
+            )
+            .padding(.trailing, GaryxTaskThreadListMetrics.rowOuterPadding)
+            .accessibilityHidden(true)
+    }
+}
+
+private struct GaryxTaskThreadButton: View {
+    @EnvironmentObject private var model: GaryxMobileModel
+    let thread: GaryxThreadSummary
+    let isSelected: Bool
+    let isPinned: Bool
+    let trailingTimestamp: String
+    let onSelect: () -> Void
+
+    var body: some View {
+        GaryxSidebarThreadRowView(
+            model: GaryxSidebarThreadRowPresentation(
+                thread: thread,
+                isSelected: isSelected,
+                isPinned: isPinned,
+                trailingTimestamp: trailingTimestamp
+            ),
+            avatar: rowAvatar,
+            onSelect: onSelect,
+            onUnpin: {
+                model.unpinThread(thread.id)
+            }
+        )
+    }
+
+    private var rowAvatar: GaryxSidebarThreadRowAvatar {
+        let identity = model.widgetAgentIdentity(for: thread)
+        return GaryxSidebarThreadRowAvatar(
+            agentId: identity.id ?? "",
+            avatarDataUrl: identity.avatarDataUrl ?? "",
+            kind: identity.isTeam ? .team : .agent,
+            label: identity.name ?? thread.title,
+            providerType: identity.providerType ?? "",
+            builtIn: identity.builtIn
         )
     }
 }
