@@ -186,11 +186,6 @@ struct EmptyResponseProvider;
 
 struct FailedResultProvider;
 
-struct DelayedFailedResultProvider {
-    delta_sent: Arc<Notify>,
-    release_run: Arc<Notify>,
-}
-
 struct TitleProvider {
     title: String,
 }
@@ -265,23 +260,6 @@ impl FailingCheckpointProvider {
 
     fn delta_sent(&self) -> Arc<Notify> {
         self.delta_sent.clone()
-    }
-}
-
-impl DelayedFailedResultProvider {
-    fn new() -> Self {
-        Self {
-            delta_sent: Arc::new(Notify::new()),
-            release_run: Arc::new(Notify::new()),
-        }
-    }
-
-    fn delta_sent(&self) -> Arc<Notify> {
-        self.delta_sent.clone()
-    }
-
-    fn release_run(&self) {
-        self.release_run.notify_waiters();
     }
 }
 
@@ -856,57 +834,6 @@ impl AgentLoopProvider for FailedResultProvider {
             thread_title: None,
             success: false,
             error: Some("process interrupted".to_owned()),
-            input_tokens: 1,
-            output_tokens: 1,
-            cost: 0.0,
-            duration_ms: 1,
-        })
-    }
-
-    async fn get_or_create_session(&self, session_key: &str) -> Result<String, BridgeError> {
-        Ok(format!("sdk-{session_key}"))
-    }
-}
-
-#[async_trait::async_trait]
-impl AgentLoopProvider for DelayedFailedResultProvider {
-    fn provider_type(&self) -> ProviderType {
-        ProviderType::ClaudeCode
-    }
-
-    fn is_ready(&self) -> bool {
-        true
-    }
-
-    async fn initialize(&mut self) -> Result<(), BridgeError> {
-        Ok(())
-    }
-
-    async fn shutdown(&mut self) -> Result<(), BridgeError> {
-        Ok(())
-    }
-
-    async fn run_streaming(
-        &self,
-        options: &ProviderRunOptions,
-        on_chunk: StreamCallback,
-    ) -> Result<ProviderRunResult, BridgeError> {
-        on_chunk(StreamEvent::Delta {
-            text: "Partial failed summary.".to_owned(),
-        });
-        self.delta_sent.notify_waiters();
-        self.release_run.notified().await;
-        on_chunk(StreamEvent::Done);
-        Ok(ProviderRunResult {
-            run_id: "delayed-failed-result-run".to_owned(),
-            thread_id: options.thread_id.clone(),
-            response: "Partial failed summary.".to_owned(),
-            session_messages: vec![ProviderMessage::assistant_text("Partial failed summary.")],
-            sdk_session_id: Some(format!("sdk-{}", options.thread_id)),
-            actual_model: None,
-            thread_title: None,
-            success: false,
-            error: Some("synthetic failure".to_owned()),
             input_tokens: 1,
             output_tokens: 1,
             cost: 0.0,
@@ -2727,126 +2654,6 @@ async fn test_unsuccessful_task_run_with_partial_response_does_not_move_to_revie
                 && message["content"] == "I'll continue by editing files."),
         "partial response should be preserved for diagnosis"
     );
-}
-
-#[tokio::test]
-async fn test_unsuccessful_task_run_notifies_if_task_moved_to_review_during_run() {
-    let bridge = MultiProviderBridge::new();
-    let provider = Arc::new(DelayedFailedResultProvider::new());
-    let delta_sent = provider.delta_sent();
-    bridge.register_provider("p1", provider.clone()).await;
-    bridge.set_default_provider_key("p1").await;
-
-    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
-    let now = Utc::now();
-    let task = ThreadTask {
-        schema_version: 1,
-        number: 11,
-        title: "Notify after failed stopped run".to_owned(),
-        status: TaskStatus::InProgress,
-        creator: Principal::Human {
-            user_id: "user42".to_owned(),
-        },
-        assignee: Some(Principal::Agent {
-            agent_id: "codex".to_owned(),
-        }),
-        notification_target: None,
-        executor: None,
-        source: None,
-        body: None,
-        created_at: now,
-        updated_at: now,
-        updated_by: Principal::Agent {
-            agent_id: "codex".to_owned(),
-        },
-        events: Vec::new(),
-    };
-    let thread_id = "sess::tg::failed-ready";
-    store
-        .set(
-            thread_id,
-            json!({
-                "task": task
-            }),
-        )
-        .await;
-    bridge.set_thread_store(store.clone()).await;
-    bridge.set_thread_history(make_history(store.clone()));
-    let (tx, mut rx) = tokio::sync::broadcast::channel::<String>(128);
-    bridge.set_event_tx(tx).await;
-
-    bridge
-        .start_agent_run(
-            run_request(
-                thread_id,
-                "start failed ready task",
-                "run-failed-ready",
-                "telegram",
-                "main",
-            ),
-            None,
-        )
-        .await
-        .unwrap();
-
-    tokio::time::timeout(std::time::Duration::from_secs(3), delta_sent.notified())
-        .await
-        .expect("provider should emit a partial response");
-
-    let mut task = task;
-    let review_at = Utc::now();
-    task.status = TaskStatus::InReview;
-    task.updated_at = review_at;
-    task.updated_by = Principal::Agent {
-        agent_id: "codex".to_owned(),
-    };
-    task.events.push(TaskEvent {
-        event_id: "evt-synthetic-ready".to_owned(),
-        at: review_at,
-        actor: Principal::Agent {
-            agent_id: "codex".to_owned(),
-        },
-        kind: TaskEventKind::StatusChanged {
-            from: TaskStatus::InProgress,
-            to: TaskStatus::InReview,
-            note: Some("synthetic manual ready".to_owned()),
-        },
-    });
-    let mut record = store
-        .get(thread_id)
-        .await
-        .expect("thread data should exist");
-    record["task"] = serde_json::to_value(&task).expect("task serializes");
-    store.set(thread_id, record).await;
-
-    provider.release_run();
-
-    tokio::time::timeout(std::time::Duration::from_secs(3), async {
-        while bridge.is_run_active("run-failed-ready").await {
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("failed ready task run should finish");
-
-    let ready_event = tokio::time::timeout(std::time::Duration::from_secs(2), async {
-        loop {
-            let raw = rx.recv().await.expect("event channel should stay open");
-            let event: serde_json::Value = serde_json::from_str(&raw).expect("event parses");
-            if event.get("type").and_then(serde_json::Value::as_str)
-                == Some("task_ready_for_review")
-            {
-                break event;
-            }
-        }
-    })
-    .await
-    .expect("failed run should emit deferred task-ready event");
-
-    assert_eq!(ready_event["thread_id"], thread_id);
-    assert_eq!(ready_event["task_id"], "#TASK-11");
-    assert_eq!(ready_event["run_id"], "run-failed-ready");
-    assert_eq!(ready_event["final_message"], "Partial failed summary.");
 }
 
 #[tokio::test]

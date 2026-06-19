@@ -2,6 +2,28 @@ use super::*;
 use garyx_models::provider::ProviderMessage;
 use garyx_router::InMemoryThreadStore;
 
+#[test]
+fn task_work_run_wake_excludes_notification_internal_system_and_workflow_runs() {
+    assert!(is_task_work_run_wake("run-1", &HashMap::new()));
+    assert!(!is_task_work_run_wake("task-notify-42", &HashMap::new()));
+    assert!(!is_task_work_run_wake(
+        "run-1",
+        &HashMap::from([("task_notification".to_owned(), json!(true))])
+    ));
+    assert!(!is_task_work_run_wake(
+        "run-1",
+        &HashMap::from([("internal_dispatch".to_owned(), json!(true))])
+    ));
+    assert!(!is_task_work_run_wake(
+        "run-1",
+        &HashMap::from([("system".to_owned(), json!(true))])
+    ));
+    assert!(!is_task_work_run_wake(
+        "run-1",
+        &HashMap::from([("workflow_child_run_id".to_owned(), json!("child-1"))])
+    ));
+}
+
 #[tokio::test]
 async fn provider_thread_title_replaces_prompt_fallback_label() {
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
@@ -264,100 +286,6 @@ fn test_resolve_persisted_sdk_session_id_for_provider_ignores_other_provider_leg
     let resolved = resolve_persisted_sdk_session_id_for_provider(&session_data, "claude", None);
 
     assert!(resolved.is_none());
-}
-
-#[test]
-fn last_assistant_segment_returns_final_assistant_turn() {
-    // Narrate, run a tool, narrate, run a tool, then summarize: the notification
-    // body should be only the closing summary, not the whole run narration.
-    let messages = vec![
-        ProviderMessage::assistant_text("Let me check the code."),
-        ProviderMessage::tool_use(
-            json!({ "cmd": "ls" }),
-            Some("t1".into()),
-            Some("Bash".into()),
-        ),
-        ProviderMessage::tool_result(json!("ok"), Some("t1".into()), Some("Bash".into()), None),
-        ProviderMessage::assistant_text("Found it. Here is the summary."),
-    ];
-
-    assert_eq!(
-        last_assistant_segment(&messages).as_deref(),
-        Some("Found it. Here is the summary."),
-    );
-}
-
-#[test]
-fn last_assistant_segment_keeps_tool_split_final_answer_together() {
-    let messages = vec![
-        ProviderMessage::user_text("Finish the task and report the final result."),
-        ProviderMessage::assistant_text(
-            "CONFIRMED: the task is complete.\n\nValidation: focused tests passed.",
-        ),
-        ProviderMessage::tool_use(
-            json!({ "cmd": "garyx task create --title review" }),
-            Some("t1".into()),
-            Some("Bash".into()),
-        ),
-        ProviderMessage::tool_result(
-            json!("queued"),
-            Some("t1".into()),
-            Some("Bash".into()),
-            None,
-        ),
-        ProviderMessage::assistant_text("The code review is queued; stopping for review."),
-    ];
-
-    assert_eq!(
-        last_assistant_segment(&messages).as_deref(),
-        Some(
-            "CONFIRMED: the task is complete.\n\nValidation: focused tests passed.\n\nThe code review is queued; stopping for review."
-        ),
-    );
-}
-
-#[test]
-fn last_assistant_segment_skips_trailing_tool_messages() {
-    // Run ends on a tool call: fall back to the last assistant text before it.
-    let messages = vec![
-        ProviderMessage::assistant_text("Working on it."),
-        ProviderMessage::tool_use(
-            json!({ "cmd": "edit" }),
-            Some("t1".into()),
-            Some("Edit".into()),
-        ),
-        ProviderMessage::tool_result(json!("done"), Some("t1".into()), Some("Edit".into()), None),
-    ];
-
-    assert_eq!(
-        last_assistant_segment(&messages).as_deref(),
-        Some("Working on it."),
-    );
-}
-
-#[test]
-fn last_assistant_segment_skips_blank_assistant_text() {
-    let messages = vec![
-        ProviderMessage::assistant_text("Real answer."),
-        ProviderMessage::assistant_text("   "),
-    ];
-
-    assert_eq!(
-        last_assistant_segment(&messages).as_deref(),
-        Some("Real answer."),
-    );
-}
-
-#[test]
-fn last_assistant_segment_none_without_assistant_text() {
-    // No assistant text at all (only tool activity): the gateway falls back to
-    // its own transcript extraction, so we return None here.
-    let messages = vec![
-        ProviderMessage::tool_use(json!({}), Some("t1".into()), Some("Bash".into())),
-        ProviderMessage::tool_result(json!("x"), Some("t1".into()), Some("Bash".into()), None),
-    ];
-
-    assert!(last_assistant_segment(&messages).is_none());
 }
 
 #[test]
