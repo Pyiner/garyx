@@ -117,6 +117,88 @@ async fn transcript_run_state_reports_dangling_run_as_busy() {
 }
 
 #[tokio::test]
+async fn render_snapshot_at_seq_uses_committed_records_up_to_bound() {
+    let store = ThreadTranscriptStore::memory();
+    store
+        .append_run_records(
+            "thread::render-bound",
+            Some("run-render"),
+            &[
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "user", "content": "question"}),
+                    "2026-06-18T12:00:00Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "answer"}),
+                    "2026-06-18T12:00:01Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "future"}),
+                    "2026-06-18T12:00:02Z",
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let snapshot = store
+        .render_snapshot_at_seq("thread::render-bound", 2)
+        .await
+        .unwrap();
+
+    assert_eq!(snapshot.based_on_seq, 2);
+    assert_eq!(snapshot.visible_message_ids, vec!["seq:1", "seq:2"]);
+    assert!(
+        !snapshot.visible_message_ids.iter().any(|id| id == "seq:3"),
+        "render snapshot must not include future records beyond the frame seq"
+    );
+}
+
+#[tokio::test]
+async fn render_snapshot_at_seq_reports_dangling_run_activity() {
+    let store = ThreadTranscriptStore::memory();
+    store
+        .append_run_records(
+            "thread::render-live",
+            Some("run-render-live"),
+            &[
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({
+                        "role": "system",
+                        "kind": "control",
+                        "internal": true,
+                        "internal_kind": "control",
+                        "control": {
+                            "kind": "run_start",
+                            "thread_id": "thread::render-live",
+                            "run_id": "run-render-live",
+                            "at": "2026-06-18T12:00:00Z"
+                        }
+                    }),
+                    "2026-06-18T12:00:00Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "user", "content": "live"}),
+                    "2026-06-18T12:00:01Z",
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let snapshot = store
+        .render_snapshot_at_seq("thread::render-live", 2)
+        .await
+        .unwrap();
+
+    assert_eq!(snapshot.based_on_seq, 2);
+    assert_eq!(
+        snapshot.tail_activity,
+        garyx_models::RenderTailActivity::Thinking
+    );
+}
+
+#[tokio::test]
 async fn repository_rejects_stale_history_count_without_transcript() {
     let thread_store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     thread_store

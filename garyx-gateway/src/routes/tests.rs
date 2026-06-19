@@ -231,6 +231,7 @@ fn thread_stream_live_payload_only_forwards_committed_messages() {
         "message": {"role": "assistant", "content": "ok"}
     })
     .to_string();
+    let committed_value: Value = serde_json::from_str(&committed).unwrap();
     assert_eq!(
         committed_thread_stream_live_payload(
             &committed,
@@ -239,7 +240,7 @@ fn thread_stream_live_payload_only_forwards_committed_messages() {
             &mut last_sent_seq,
         )
         .expect("committed payload should forward"),
-        Some((1, committed.clone()))
+        Some((1, committed_value))
     );
     assert_eq!(last_sent_seq, 1);
 }
@@ -279,9 +280,33 @@ async fn thread_stream_replay_pages_when_tail_cap_overflows() {
         .unwrap();
 
     let replay = build_thread_stream_replay(&state, &thread_id, 0).await;
-    assert_eq!(replay.events.len(), THREAD_TRANSCRIPT_REPLAY_CAP + 2);
+    assert_eq!(replay.events.len(), 1);
     assert_eq!(replay.sent_payloads.len(), THREAD_TRANSCRIPT_REPLAY_CAP + 2);
     assert_eq!(replay.max_seq, (THREAD_TRANSCRIPT_REPLAY_CAP + 2) as u64);
+    let event = replay.events[0].as_ref().unwrap();
+    assert_eq!(event.id, replay.max_seq);
+    let frame: Value = serde_json::from_str(&event.payload).unwrap();
+    assert_eq!(
+        frame.get("type").and_then(Value::as_str),
+        Some("thread_render_frame")
+    );
+    assert_eq!(
+        frame
+            .get("render_state")
+            .and_then(|state| state.get("based_on_seq"))
+            .and_then(Value::as_u64),
+        Some(replay.max_seq)
+    );
+    let events = frame.get("events").and_then(Value::as_array).unwrap();
+    assert_eq!(events.len(), THREAD_TRANSCRIPT_REPLAY_CAP + 2);
+    assert_eq!(events[0].get("seq").and_then(Value::as_u64), Some(1));
+    assert_eq!(
+        events
+            .last()
+            .and_then(|event| event.get("seq"))
+            .and_then(Value::as_u64),
+        Some(replay.max_seq)
+    );
     assert!(
         replay.sent_payloads.contains_key(&1),
         "overflow replay must include the oldest missing page, not only the newest tail"
@@ -290,6 +315,132 @@ async fn thread_stream_replay_pages_when_tail_cap_overflows() {
         replay
             .sent_payloads
             .contains_key(&u64::try_from(THREAD_TRANSCRIPT_REPLAY_CAP + 2).unwrap())
+    );
+}
+
+#[tokio::test]
+async fn thread_stream_replay_after_seq_emits_one_aligned_render_frame() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::render-replay";
+    state
+        .threads
+        .history
+        .transcript_store()
+        .append_run_records(
+            thread_id,
+            Some("run::render-replay"),
+            &[
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "user", "content": "one"}),
+                    "2026-06-18T12:00:00Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "two"}),
+                    "2026-06-18T12:00:01Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "three"}),
+                    "2026-06-18T12:00:02Z",
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let replay = build_thread_stream_replay(&state, thread_id, 1).await;
+
+    assert_eq!(replay.events.len(), 1);
+    assert_eq!(replay.max_seq, 3);
+    assert_eq!(replay.sent_payloads.len(), 2);
+    assert!(replay.sent_payloads.contains_key(&2));
+    assert!(replay.sent_payloads.contains_key(&3));
+    let event = replay.events[0].as_ref().unwrap();
+    assert_eq!(event.id, 3);
+    let frame: Value = serde_json::from_str(&event.payload).unwrap();
+    let events = frame.get("events").and_then(Value::as_array).unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.get("seq").and_then(Value::as_u64).unwrap())
+            .collect::<Vec<_>>(),
+        vec![2, 3]
+    );
+    assert_eq!(
+        frame
+            .get("render_state")
+            .and_then(|state| state.get("based_on_seq"))
+            .and_then(Value::as_u64),
+        Some(3)
+    );
+    assert_eq!(
+        frame
+            .get("render_state")
+            .and_then(|state| state.get("visibleMessageIds"))
+            .and_then(Value::as_array)
+            .map(|items| { items.iter().filter_map(Value::as_str).collect::<Vec<_>>() })
+            .unwrap(),
+        vec!["seq:1", "seq:2", "seq:3"]
+    );
+}
+
+#[tokio::test]
+async fn thread_stream_live_event_carries_committed_payload_and_render_snapshot() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::render-live-frame";
+    let append = state
+        .threads
+        .history
+        .transcript_store()
+        .append_run_records(
+            thread_id,
+            Some("run::render-live-frame"),
+            &[
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "user", "content": "question"}),
+                    "2026-06-18T12:00:00Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "answer"}),
+                    "2026-06-18T12:00:01Z",
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+    let live_record = append.appended_records.last().unwrap();
+    let payload = committed_thread_stream_replay_payload_value(thread_id, live_record);
+
+    let event = committed_thread_stream_live_event(&state, thread_id, live_record.seq, payload)
+        .await
+        .unwrap();
+
+    assert_eq!(event.id, live_record.seq);
+    let frame: Value = serde_json::from_str(&event.payload).unwrap();
+    let events = frame.get("events").and_then(Value::as_array).unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0].get("type").and_then(Value::as_str),
+        Some("committed_message")
+    );
+    assert_eq!(
+        events[0].get("seq").and_then(Value::as_u64),
+        Some(live_record.seq)
+    );
+    assert_eq!(
+        frame
+            .get("render_state")
+            .and_then(|state| state.get("based_on_seq"))
+            .and_then(Value::as_u64),
+        Some(live_record.seq)
+    );
+    assert_eq!(
+        frame
+            .get("render_state")
+            .and_then(|state| state.get("visibleMessageIds"))
+            .and_then(Value::as_array)
+            .map(|items| { items.iter().filter_map(Value::as_str).collect::<Vec<_>>() })
+            .unwrap(),
+        vec!["seq:1", "seq:2"]
     );
 }
 

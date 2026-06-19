@@ -3,7 +3,9 @@ use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use garyx_models::{TranscriptRunState, reduce_transcript_run_state};
+use garyx_models::{
+    RenderSnapshot, TranscriptRunState, reduce_transcript_render_state, reduce_transcript_run_state,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader};
@@ -1154,6 +1156,20 @@ impl ThreadTranscriptStore {
             .filter_map(|record| serde_json::to_value(record).ok())
             .collect::<Vec<_>>();
         Ok(reduce_transcript_run_state(&values))
+    }
+
+    pub async fn render_snapshot_at_seq(
+        &self,
+        thread_id: &str,
+        based_on_seq: u64,
+    ) -> Result<RenderSnapshot, ThreadHistoryError> {
+        let records = self.read_records(thread_id).await?;
+        let values = records
+            .iter()
+            .filter(|record| record.seq <= based_on_seq)
+            .filter_map(|record| serde_json::to_value(record).ok())
+            .collect::<Vec<_>>();
+        Ok(reduce_transcript_render_state(&values))
     }
 
     /// Committed records with `seq > after_seq`, ascending, up to `limit`. Drives

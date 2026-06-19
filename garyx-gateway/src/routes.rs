@@ -8,7 +8,9 @@ use axum::{
     },
 };
 use chrono::Utc;
+use futures_util::StreamExt;
 use garyx_channels::plugin::{PluginAccountUi, PluginConversationEndpoint, PluginMainEndpoint};
+use garyx_models::RenderSnapshot;
 use garyx_models::config::ChannelsConfig;
 #[cfg(test)]
 use garyx_models::config::TelegramAccount;
@@ -31,7 +33,7 @@ use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio_stream::StreamExt;
+use tokio_stream;
 use tokio_stream::wrappers::BroadcastStream;
 
 use crate::agent_identity::create_thread_for_agent_reference;
@@ -1755,34 +1757,54 @@ pub async fn thread_stream(
     let rx = state.ops.events.subscribe();
 
     let replay = build_thread_stream_replay(&state, &thread_id, after_seq).await;
-    let replay_events = replay.events;
+    let replay_events = replay
+        .events
+        .into_iter()
+        .map(|event| event.map(ThreadStreamEvent::into_sse_event));
     let mut sent_committed_payloads = replay.sent_payloads;
 
     let thread_for_live = thread_id.clone();
+    let state_for_live = state.clone();
     let state_for_drops = state.clone();
     let mut last_sent_seq = replay.max_seq;
-    let live = BroadcastStream::new(rx).filter_map(move |item| match item {
-        Ok(raw) => {
-            let event = match committed_thread_stream_live_payload(
-                &raw,
-                &thread_for_live,
-                &mut sent_committed_payloads,
-                &mut last_sent_seq,
-            ) {
-                Ok(Some((seq, payload))) => Ok(Event::default().id(seq.to_string()).data(payload)),
-                Ok(None) => return None,
-                Err(error) => Err(error),
+    let live = BroadcastStream::new(rx)
+        .then(move |item| {
+            let state_for_live = state_for_live.clone();
+            let thread_for_live = thread_for_live.clone();
+            let forwarded = match item {
+                Ok(raw) => committed_thread_stream_live_payload(
+                    &raw,
+                    &thread_for_live,
+                    &mut sent_committed_payloads,
+                    &mut last_sent_seq,
+                ),
+                Err(_) => {
+                    // Lagged: a slow consumer dropped events. Terminate this SSE
+                    // response so the client reconnects from the last delivered seq and
+                    // the file-backed replay fills the gap.
+                    state_for_drops.ops.events.record_drop();
+                    Err(thread_stream_reconnect_error("broadcast lagged"))
+                }
             };
-            Some(event)
-        }
-        Err(_) => {
-            // Lagged: a slow consumer dropped events. Terminate this SSE
-            // response so the client reconnects from the last delivered seq and
-            // the file-backed replay fills the gap.
-            state_for_drops.ops.events.record_drop();
-            Some(Err(thread_stream_reconnect_error("broadcast lagged")))
-        }
-    });
+            async move {
+                match forwarded {
+                    Ok(Some((seq, payload))) => Some(
+                        committed_thread_stream_live_event(
+                            &state_for_live,
+                            &thread_for_live,
+                            seq,
+                            payload,
+                        )
+                        .await,
+                    ),
+                    Ok(None) => None,
+                    Err(error) => Some(Err(error)),
+                }
+            }
+        })
+        .filter_map(|event| async move {
+            event.map(|event| event.map(ThreadStreamEvent::into_sse_event))
+        });
 
     let combined = tokio_stream::iter(replay_events).chain(live);
     Sse::new(combined)
@@ -1795,9 +1817,26 @@ pub async fn thread_stream(
 }
 
 struct ThreadStreamReplay {
-    events: Vec<Result<Event, io::Error>>,
+    events: Vec<Result<ThreadStreamEvent, io::Error>>,
     max_seq: u64,
     sent_payloads: HashMap<u64, String>,
+}
+
+struct ThreadStreamReplayBuilder {
+    event_payloads: Vec<Value>,
+    max_seq: u64,
+    sent_payloads: HashMap<u64, String>,
+}
+
+struct ThreadStreamEvent {
+    id: u64,
+    payload: String,
+}
+
+impl ThreadStreamEvent {
+    fn into_sse_event(self) -> Event {
+        Event::default().id(self.id.to_string()).data(self.payload)
+    }
 }
 
 async fn build_thread_stream_replay(
@@ -1817,12 +1856,12 @@ async fn build_thread_stream_replay(
         .first()
         .is_some_and(|record| record.seq > after_seq.saturating_add(1));
     if !tail_has_gap {
-        return thread_stream_replay_from_records(thread_id, after_seq, tail);
+        return thread_stream_replay_from_records(state, thread_id, after_seq, tail).await;
     }
 
     let mut cursor = after_seq;
-    let mut replay = ThreadStreamReplay {
-        events: Vec::new(),
+    let mut replay = ThreadStreamReplayBuilder {
+        event_payloads: Vec::new(),
         max_seq: after_seq,
         sent_payloads: HashMap::new(),
     };
@@ -1844,42 +1883,60 @@ async fn build_thread_stream_replay(
         }
         cursor = replay.max_seq;
     }
-    replay
+    finalize_thread_stream_replay(state, thread_id, replay).await
 }
 
-fn thread_stream_replay_from_records(
+async fn thread_stream_replay_from_records(
+    state: &Arc<AppState>,
     thread_id: &str,
     after_seq: u64,
     records: Vec<ThreadTranscriptRecord>,
 ) -> ThreadStreamReplay {
-    let mut replay = ThreadStreamReplay {
-        events: Vec::with_capacity(records.len()),
+    let mut replay = ThreadStreamReplayBuilder {
+        event_payloads: Vec::with_capacity(records.len()),
         max_seq: after_seq,
         sent_payloads: HashMap::new(),
     };
     append_thread_stream_replay_records(&mut replay, thread_id, records);
-    replay
+    finalize_thread_stream_replay(state, thread_id, replay).await
+}
+
+async fn finalize_thread_stream_replay(
+    state: &Arc<AppState>,
+    thread_id: &str,
+    replay: ThreadStreamReplayBuilder,
+) -> ThreadStreamReplay {
+    let mut events = Vec::new();
+    if !replay.event_payloads.is_empty() {
+        let event =
+            thread_stream_frame_event(state, thread_id, replay.max_seq, replay.event_payloads)
+                .await;
+        events.push(event);
+    }
+    ThreadStreamReplay {
+        events,
+        max_seq: replay.max_seq,
+        sent_payloads: replay.sent_payloads,
+    }
 }
 
 fn append_thread_stream_replay_records(
-    replay: &mut ThreadStreamReplay,
+    replay: &mut ThreadStreamReplayBuilder,
     thread_id: &str,
     records: Vec<ThreadTranscriptRecord>,
 ) {
     for record in records {
         replay.max_seq = replay.max_seq.max(record.seq);
-        let payload = committed_thread_stream_replay_payload(thread_id, &record);
-        replay.sent_payloads.insert(record.seq, payload.clone());
-        replay.events.push(Ok(Event::default()
-            .id(record.seq.to_string())
-            .data(payload)));
+        let payload = committed_thread_stream_replay_payload_value(thread_id, &record);
+        replay.sent_payloads.insert(record.seq, payload.to_string());
+        replay.event_payloads.push(payload);
     }
 }
 
-fn committed_thread_stream_replay_payload(
+fn committed_thread_stream_replay_payload_value(
     thread_id: &str,
     record: &ThreadTranscriptRecord,
-) -> String {
+) -> Value {
     json!({
         "type": "committed_message",
         "thread_id": thread_id,
@@ -1887,7 +1944,6 @@ fn committed_thread_stream_replay_payload(
         "seq": record.seq,
         "message": &record.message,
     })
-    .to_string()
 }
 
 fn committed_thread_stream_live_payload(
@@ -1895,7 +1951,7 @@ fn committed_thread_stream_live_payload(
     thread_id: &str,
     sent_payloads: &mut HashMap<u64, String>,
     last_sent_seq: &mut u64,
-) -> Result<Option<(u64, String)>, io::Error> {
+) -> Result<Option<(u64, Value)>, io::Error> {
     let value: Value = match serde_json::from_str(raw) {
         Ok(value) => value,
         Err(_) => return Ok(None),
@@ -1908,12 +1964,72 @@ fn committed_thread_stream_live_payload(
     }
     let seq = value.get("seq").and_then(Value::as_u64).unwrap_or(0);
     match should_forward_committed_payload(sent_payloads, last_sent_seq, seq, raw) {
-        CommittedPayloadAction::Forward => Ok(Some((seq, raw.to_owned()))),
+        CommittedPayloadAction::Forward => Ok(Some((seq, value))),
         CommittedPayloadAction::Skip => Ok(None),
         CommittedPayloadAction::Reconnect => Err(thread_stream_reconnect_error(
             "non-contiguous committed seq",
         )),
     }
+}
+
+async fn committed_thread_stream_live_event(
+    state: &Arc<AppState>,
+    thread_id: &str,
+    seq: u64,
+    payload: Value,
+) -> Result<ThreadStreamEvent, io::Error> {
+    thread_stream_frame_event(state, thread_id, seq, vec![payload]).await
+}
+
+async fn thread_stream_frame_event(
+    state: &Arc<AppState>,
+    thread_id: &str,
+    seq: u64,
+    event_payloads: Vec<Value>,
+) -> Result<ThreadStreamEvent, io::Error> {
+    let render_state = thread_render_snapshot_at_seq(state, thread_id, seq).await?;
+    if render_state.based_on_seq != seq {
+        return Err(thread_stream_reconnect_error(
+            "render snapshot seq mismatch",
+        ));
+    }
+    Ok(ThreadStreamEvent {
+        id: seq,
+        payload: thread_stream_frame_payload(thread_id, event_payloads, &render_state),
+    })
+}
+
+async fn thread_render_snapshot_at_seq(
+    state: &Arc<AppState>,
+    thread_id: &str,
+    seq: u64,
+) -> Result<RenderSnapshot, io::Error> {
+    state
+        .threads
+        .history
+        .transcript_store()
+        .render_snapshot_at_seq(thread_id, seq)
+        .await
+        .map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                format!("failed to derive render snapshot: {error}"),
+            )
+        })
+}
+
+fn thread_stream_frame_payload(
+    thread_id: &str,
+    event_payloads: Vec<Value>,
+    render_state: &RenderSnapshot,
+) -> String {
+    json!({
+        "type": "thread_render_frame",
+        "thread_id": thread_id,
+        "events": event_payloads,
+        "render_state": render_state,
+    })
+    .to_string()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
