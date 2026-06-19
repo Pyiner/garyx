@@ -1,6 +1,7 @@
 pub mod auth_flow;
 pub mod builtin_catalog;
 pub mod channel_trait;
+pub mod committed_replay;
 pub mod discord;
 pub mod dispatcher;
 pub mod feishu;
