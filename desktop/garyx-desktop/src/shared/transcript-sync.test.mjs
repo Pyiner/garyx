@@ -121,26 +121,128 @@ function controlMessage(index, event, overrides = {}) {
   };
 }
 
-function transcriptFromLifecycleFixture() {
-  const events = readJsonl("stream-lifecycle.jsonl");
-  const threadId = "thread::fixture-stream-sync-life";
-  const messages = [];
-  for (const event of events) {
-    const index = messages.length;
-    switch (event.type) {
-      case "run_start":
-      case "done":
-      case "run_complete":
-        messages.push(controlMessage(index, event));
-        break;
-      case "committed_message":
-        messages.push(contentMessage(index, threadId, event));
-        break;
-      default:
-        break;
-    }
-  }
-  return messages;
+const COMMITTED_THREAD_ID = "thread::fixture-committed-run-state";
+const COMMITTED_RUN_ID = "run::fixture-committed-run-state";
+const COMMITTED_TIMESTAMP = "2026-06-18T12:00:00Z";
+
+function committedMessagePayload(seq, message, overrides = {}) {
+  return {
+    type: "committed_message",
+    thread_id: overrides.threadId ?? COMMITTED_THREAD_ID,
+    run_id: overrides.runId ?? COMMITTED_RUN_ID,
+    seq,
+    timestamp: overrides.timestamp ?? COMMITTED_TIMESTAMP,
+    message: {
+      timestamp: overrides.timestamp ?? COMMITTED_TIMESTAMP,
+      ...message,
+    },
+  };
+}
+
+function committedControlPayload(seq, kind, control = {}) {
+  return committedMessagePayload(seq, {
+    role: "system",
+    kind: "control",
+    internal: true,
+    internal_kind: "control",
+    control: {
+      kind,
+      thread_id: COMMITTED_THREAD_ID,
+      run_id: COMMITTED_RUN_ID,
+      at: COMMITTED_TIMESTAMP,
+      ...control,
+    },
+  });
+}
+
+function committedPayloadToTranscriptMessage(payload) {
+  const rawMessage = payload.message;
+  const role = normalizeRole(rawMessage.role);
+  const metadata = rawMessage.metadata && typeof rawMessage.metadata === "object"
+    ? rawMessage.metadata
+    : null;
+  const kind =
+    rawMessage.kind ??
+    (rawMessage.internal_kind === "control"
+      ? "control"
+      : role === "tool_use" || role === "tool_result"
+        ? "tool_trace"
+        : role === "assistant"
+          ? "assistant_reply"
+          : role === "user"
+            ? "user_input"
+            : undefined);
+  const isControlRecord =
+    kind === "control" || rawMessage.internal_kind === "control";
+  return {
+    id: `${payload.thread_id}:${payload.seq - 1}`,
+    role: isControlRecord ? "system" : role,
+    text: isControlRecord
+      ? ""
+      : typeof rawMessage.text === "string"
+        ? rawMessage.text
+        : typeof rawMessage.content === "string"
+          ? rawMessage.content
+          : "",
+    content: isControlRecord ? rawMessage : rawMessage.content,
+    input: rawMessage.input,
+    result: rawMessage.result,
+    timestamp: rawMessage.timestamp ?? payload.timestamp ?? null,
+    toolUseId: rawMessage.tool_use_id ?? rawMessage.toolUseId ?? null,
+    toolName:
+      rawMessage.tool_name ??
+      rawMessage.toolName ??
+      metadata?.item_type ??
+      metadata?.itemType ??
+      null,
+    isError: rawMessage.is_error ?? rawMessage.isError,
+    metadata,
+    kind: isControlRecord ? "control" : kind,
+    internal: isControlRecord || Boolean(rawMessage.internal),
+    internalKind:
+      rawMessage.internal_kind ??
+      rawMessage.internalKind ??
+      (isControlRecord ? "control" : null),
+  };
+}
+
+function committedRunStateMessages() {
+  return [
+    committedControlPayload(1, "run_start"),
+    committedControlPayload(2, "user_ack", {
+      pending_input_id: "pending-fixture-followup",
+    }),
+    committedMessagePayload(3, {
+      role: "tool_use",
+      kind: "tool_trace",
+      content: {
+        type: "tool_use",
+        tool_use_id: "call-read-design",
+        input: { path: "docs/design.md" },
+      },
+      tool_use_id: "call-read-design",
+      tool_name: "Read",
+    }),
+    committedMessagePayload(4, {
+      role: "tool_result",
+      kind: "tool_trace",
+      content: {
+        type: "tool_result",
+        tool_use_id: "call-read-design",
+        result: "Read 334 lines",
+      },
+      tool_use_id: "call-read-design",
+      tool_name: "Read",
+    }),
+    committedControlPayload(5, "done"),
+    committedControlPayload(6, "thread_title_updated", {
+      title: "Committed run title",
+    }),
+    committedControlPayload(7, "run_complete", {
+      status: "completed",
+      duration_ms: 1234,
+    }),
+  ].map(committedPayloadToTranscriptMessage);
 }
 
 test("stream seq planner applies first replay row, skips stale rows, and reconnects gaps", () => {
@@ -200,51 +302,37 @@ test("after_index planner resets, refetches shrink, and pages forward", () => {
   );
 });
 
-test("lifecycle fixture replay reaches idle terminal state from control records", () => {
-  const state = reduceTranscriptRunState(transcriptFromLifecycleFixture());
+test("committed message records replay to idle terminal state", () => {
+  const state = reduceTranscriptRunState(committedRunStateMessages());
   assert.equal(state.busy, false);
   assert.equal(state.activity, "idle");
   assert.equal(state.terminalStatus, "completed");
   assert.equal(state.activeRunId, null);
-});
-
-test("incremental run-state apply matches full reducer on lifecycle fixture", () => {
-  const messages = transcriptFromLifecycleFixture();
-  const incremental = messages.reduce(
-    (state, message, index) =>
-      applyTranscriptRunStateRecord(state, message, { seq: index + 1 }),
-    reduceTranscriptRunState([]),
-  );
-  assert.deepEqual(incremental, reduceTranscriptRunState(messages));
-});
-
-test("user_ack fixture replays ack position and reconciling activity", () => {
-  const events = readJsonl("stream-events-with-user-ack.jsonl");
-  const threadId = "thread::fixture-stream-sync-ack";
-  const messages = [
-    controlMessage(0, {
-      type: "run_start",
-      threadId,
-      runId: "run::fixture-ack",
-    }),
-  ];
-  for (const event of events) {
-    const index = messages.length;
-    if (event.type === "tool_use" || event.type === "tool_result") {
-      messages.push(contentMessage(index, threadId, event));
-    } else if (
-      event.type === "user_ack" ||
-      event.type === "assistant_boundary" ||
-      event.type === "done"
-    ) {
-      messages.push(controlMessage(index, event));
-    }
-  }
-  const state = reduceTranscriptRunState(messages);
-  assert.equal(state.busy, true);
-  assert.equal(state.activity, "reconciling");
+  assert.equal(state.title, "Committed run title");
   assert.equal(state.lastUserAckPendingInputId, "pending-fixture-followup");
-  assert.equal(state.lastUserAckSeq, 3);
+  assert.equal(state.lastUserAckSeq, 2);
+});
+
+test("incremental run-state apply matches full reducer on committed messages", () => {
+  const messages = committedRunStateMessages();
+  let incremental = reduceTranscriptRunState([]);
+  const activities = [];
+  for (let index = 0; index < messages.length; index += 1) {
+    incremental = applyTranscriptRunStateRecord(incremental, messages[index], {
+      seq: index + 1,
+    });
+    activities.push(incremental.activity);
+  }
+  assert.deepEqual(activities, [
+    "thinking",
+    "thinking",
+    "using_tool",
+    "using_tool",
+    "reconciling",
+    "reconciling",
+    "idle",
+  ]);
+  assert.deepEqual(incremental, reduceTranscriptRunState(messages));
 });
 
 test("transcript kind resolver matches control and tool fixture semantics", () => {

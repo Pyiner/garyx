@@ -1,24 +1,18 @@
 //! Dashboard / observability endpoints.
 //!
-//! Provides system overview, agent view, log tailing, settings, and SSE
-//! event streaming for the Garyx gateway.
+//! Provides system overview, agent view, log tailing, and settings for the
+//! Garyx gateway.
 
-use std::convert::Infallible;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use axum::Json;
 use axum::extract::{Query, State};
 use axum::response::IntoResponse;
-use axum::response::sse::{Event, KeepAlive, Sse};
 use garyx_channels::feishu::policy_block_counters_snapshot;
 use garyx_models::local_paths::default_log_file_path;
 use serde::Deserialize;
-use serde_json::Value;
 use serde_json::json;
-use tokio_stream::StreamExt;
-use tokio_stream::wrappers::BroadcastStream;
 
 use crate::agent_team_provider::AGENT_TEAM_PROVIDER_KEY;
 use crate::delivery_target::metrics_snapshot as delivery_target_metrics_snapshot;
@@ -250,121 +244,6 @@ pub async fn logs_tail(
 pub async fn settings(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let live_config = (*state.config_snapshot()).clone();
     Json(serde_json::to_value(&live_config).unwrap_or_default())
-}
-
-// ---------------------------------------------------------------------------
-// GET /api/stream  (Server-Sent Events)
-// ---------------------------------------------------------------------------
-
-/// SSE endpoint for real-time gateway events.
-///
-/// Protocol: snapshot envelope -> history replay -> live events.
-/// Uses bounded broadcast channel with drop strategy for slow consumers.
-/// Drop count is surfaced via `state.ops.events`.
-#[derive(Deserialize)]
-pub struct EventStreamParams {
-    /// Number of buffered events replayed before live stream.
-    #[serde(default = "default_stream_history_limit")]
-    pub history_limit: usize,
-}
-
-fn default_stream_history_limit() -> usize {
-    50
-}
-
-const MAX_STREAM_HISTORY_LIMIT: usize = 200;
-
-fn is_retired_global_stream_content_event(raw: &str) -> bool {
-    let Ok(value) = serde_json::from_str::<Value>(raw) else {
-        return false;
-    };
-    match value.get("type").and_then(Value::as_str) {
-        Some("assistant_delta" | "tool_use" | "tool_result" | "user_message") => true,
-        Some("committed_message") => value
-            .get("message")
-            .is_some_and(|message| !is_committed_control_message(message)),
-        _ => false,
-    }
-}
-
-fn is_committed_control_message(message: &Value) -> bool {
-    message.get("kind").and_then(Value::as_str) == Some("control")
-        || message.get("internal_kind").and_then(Value::as_str) == Some("control")
-        || message
-            .get("control")
-            .and_then(|control| control.get("kind"))
-            .and_then(Value::as_str)
-            .is_some()
-}
-
-pub async fn event_stream(
-    State(state): State<Arc<AppState>>,
-    Query(params): Query<EventStreamParams>,
-) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
-    // Build the snapshot envelope with current system state.
-    let uptime_secs = state.runtime.start_time.elapsed().as_secs();
-    let thread_count = state.threads.thread_store.list_keys(None).await.len();
-    let snapshot = json!({
-        "type": "snapshot",
-        "status": "running",
-        "uptime_seconds": uptime_secs,
-        "threads": { "active": thread_count },
-        "version": env!("CARGO_PKG_VERSION"),
-    });
-
-    // Emit snapshot as the first event.
-    let snapshot_event = Event::default()
-        .event("snapshot")
-        .data(snapshot.to_string());
-
-    // Replay a bounded in-memory backlog before switching to live stream.
-    let history_limit = params.history_limit.min(MAX_STREAM_HISTORY_LIMIT);
-    let history_events = state
-        .ops
-        .events
-        .history_snapshot(history_limit)
-        .await
-        .into_iter()
-        .filter(|event| !is_retired_global_stream_content_event(event))
-        .collect::<Vec<_>>();
-    let history_event = Event::default().event("history").data(
-        json!({
-            "type": "history",
-            "count": history_events.len(),
-            "events": history_events,
-        })
-        .to_string(),
-    );
-
-    let rx = state.ops.events.subscribe();
-    let stream = BroadcastStream::new(rx);
-
-    // Clone the Arc so the closure owns a reference to AppState for drop counting.
-    let state_for_drops = state.clone();
-    let mapped = stream.filter_map(move |item| match item {
-        Ok(event_data) => {
-            if is_retired_global_stream_content_event(&event_data) {
-                return None;
-            }
-            Some(Ok(Event::default().data(event_data)))
-        }
-        Err(_) => {
-            // Lagged: slow consumer. Count the drop.
-            state_for_drops.ops.events.record_drop();
-            None
-        }
-    });
-
-    // Chain: snapshot first, then replayed history, then live events.
-    let snapshot_stream = tokio_stream::once(Ok::<Event, Infallible>(snapshot_event));
-    let history_stream = tokio_stream::once(Ok::<Event, Infallible>(history_event));
-    let combined = snapshot_stream.chain(history_stream).chain(mapped);
-
-    Sse::new(combined).keep_alive(
-        KeepAlive::new()
-            .interval(Duration::from_secs(30))
-            .text("ping"),
-    )
 }
 
 // ---------------------------------------------------------------------------

@@ -1142,15 +1142,8 @@ async fn test_legacy_web_page_routes_are_removed() {
 }
 
 #[tokio::test]
-async fn test_stream_emits_snapshot_first() {
+async fn test_global_stream_route_is_removed() {
     let state = test_state();
-    // Add a thread so snapshot reflects it
-    state
-        .threads
-        .thread_store
-        .set("test::key", serde_json::json!({}))
-        .await;
-
     let gw = Gateway::new(state);
     let req = authed_request()
         .uri("/api/stream")
@@ -1158,24 +1151,7 @@ async fn test_stream_emits_snapshot_first() {
         .unwrap();
 
     let resp = gw.router.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), 200);
-
-    // Read the SSE body. The first event should be the snapshot.
-    // We read a chunk and parse the SSE text.
-    let body = resp.into_body();
-    // Use a timeout to avoid hanging if no data.
-    let _bytes = tokio::time::timeout(
-        std::time::Duration::from_millis(500),
-        axum::body::to_bytes(body, 1024 * 1024),
-    )
-    .await;
-
-    // The stream won't end (it's live), so the timeout will trigger.
-    // But the first chunk should have been sent immediately.
-    // In axum SSE, data is flushed per-event. Let's just check
-    // that the endpoint returns 200 and the content type is text/event-stream.
-    // A more thorough test would use a streaming client.
-    // For now, the compilation + 200 status validates the snapshot protocol.
+    assert_eq!(resp.status(), 404);
 }
 
 #[tokio::test]

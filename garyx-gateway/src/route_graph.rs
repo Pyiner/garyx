@@ -414,7 +414,6 @@ fn observability_routes() -> Router<Arc<AppState>> {
             "/api/settings/reload",
             axum::routing::post(api::settings_reload),
         )
-        .route("/api/stream", axum::routing::get(dashboard::event_stream))
 }
 
 fn operations_routes() -> Router<Arc<AppState>> {
