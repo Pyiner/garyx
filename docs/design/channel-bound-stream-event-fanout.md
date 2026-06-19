@@ -82,13 +82,24 @@ The snapshot behavior is intentional. If a user changes bot/channel binding
 while a run is already active, the change applies to the next run. This keeps a
 single run's delivery set deterministic.
 
+For streaming input appended to an already-running run, the fanout target set
+also stays unchanged. A newly added binding starts receiving output from the
+next run, not from the middle of the current run.
+
 All run origins call the same attachment point:
 
 - API chat.
 - Internal/plugin-created runs.
 - Built-in channel inbound handlers.
 - Subprocess plugin inbound handlers.
-- Future workflow or automation entry paths that create thread runs.
+- Workflow, cron, dream, automation, and scheduled entry paths.
+- Tool-image and other tool-triggered assistant runs.
+- Gateway restart recovery for in-flight runs that need callbacks reattached.
+
+The shared fanout service should be the only committed-replay attachment point
+for bound channel delivery. Channel inbound handlers should start or append to a
+thread run, then rely on the shared fanout. They should not also attach their
+own committed-replay delivery callback for the origin endpoint.
 
 ### Dispatch Target Identity
 
@@ -99,20 +110,28 @@ Required fields should include:
 
 - `channel_id` or channel kind.
 - `account_id`.
-- `thread_id`.
-- `target_thread_id` when the channel has a mapped Garyx thread target.
+- Garyx `thread_id`.
+- Target endpoint key.
+- Native destination scope, such as chat, topic, thread, or conversation scope.
 - Channel delivery target type and id.
 - Channel-native chat or conversation id.
-- Channel-native topic/thread scope when the channel has one.
 - `run_id`.
 
-De-duplication must use an exact endpoint identity, not just a chat id. Two
-bindings in the same chat but different native topics must not collapse into
-one target.
+There must be one canonical endpoint identity for all de-duplication decisions.
+Binding de-duplication and origin-callback exclusion must derive from the same
+identity. The identity must include the native scope that distinguishes channel
+destinations, not just `chat_id` or `delivery_target_id`. Two bindings in the
+same chat but different native topics must not collapse into one target.
 
-The origin target is not semantically special. The only special handling is
-practical duplicate prevention if an existing direct channel callback for the
-same exact endpoint is already attached to the run.
+The origin target is not semantically special. If a direct callback still exists
+during migration, duplicate prevention is allowed only when the exact endpoint
+identity matches, including native topic/thread scope. The target implementation
+must not compare a coarser `delivery_target_id` and accidentally exclude another
+bound endpoint in the same chat.
+
+Hidden child threads and workflow child threads must not inherit parent channel
+bindings implicitly. Fanout is keyed by the child thread's own persisted
+bindings only.
 
 ### Dispatcher Contract
 
@@ -131,7 +150,14 @@ It must preserve:
 - Event order for a single target.
 - Boundaries such as segment flushes and `Done`.
 - Structured `ToolUse` and `ToolResult` events.
+- Non-rendered events such as `SessionBound` and `ThreadTitleUpdated`, either by
+  explicitly handling them or by reporting a deliberate ignore outcome.
 - Channel-specific acknowledgement behavior.
+
+`UserAck` is origin-sensitive. It acknowledges queued user input from one
+endpoint, not from every bound endpoint. The fanout contract must either send
+`UserAck` only to the originating endpoint or include the originating endpoint
+identity so non-origin channels can ignore it instead of splitting their output.
 
 For subprocess plugins with a new protocol capability, the host forwards events
 with a host-to-plugin RPC such as:
@@ -151,8 +177,10 @@ with a host-to-plugin RPC such as:
 }
 ```
 
-`seq` is per target and monotonic. It gives channels and plugins a simple hook
-for ordering, idempotency, and diagnostics.
+`seq` should be derived from the committed per-run replay sequence, not from a
+best-effort per-target counter. A target can use `(target_endpoint_key, run_id,
+seq)` as an idempotency key across replay gap recovery and gateway restart
+reattachment.
 
 ### Built-In Channels
 
@@ -173,6 +201,8 @@ adapter, but the adapter is deliberately a downgrade path.
 
 The adapter lives in `garyx-channels`, receives the same `StreamEvent` callback
 as every other target, and converts only what the old protocol can represent.
+It must be selected only after plugin capability detection determines that the
+plugin does not support native `dispatch_stream_event`.
 
 Adapter rules:
 
@@ -182,6 +212,9 @@ Adapter rules:
 - `ToolUse` and `ToolResult` must not be silently dropped as successful sends.
   The adapter should either convert them into an explicit visible fallback,
   report them as unsupported, or use a declared structured capability.
+- Until a plugin declares structured event support, the adapter must not forward
+  structured `ToolUse` or `ToolResult` variants as if the old protocol could
+  faithfully render them.
 - `UserAck` behavior must be documented. It can be treated as a boundary for
   old plugins only if that matches the old plugin contract.
 
@@ -198,20 +231,39 @@ sink owned by `garyx-channels`. The important rule is that observability moves
 with delivery ownership; it does not justify putting channel rendering logic
 back in gateway.
 
+Delivery outcomes must include enough information to preserve router state that
+currently depends on send results, including outbound message ids, target
+identity, run id, and event seq. The router persistence point can stay outside
+channel rendering, but it must receive these outcomes through a typed path.
+
+## Rollout
+
+This change increases delivery coverage because channel-originated and scheduled
+runs will start fanning out to every bound endpoint. Rollout should be staged:
+
+- Add the new fanout path behind a runtime flag or narrow origin allowlist.
+- Shadow-compare target plans against the old path before enabling sends.
+- Enable built-in channels before legacy subprocess plugins.
+- Keep a backout switch that returns a run origin to the old callback path until
+  delivery outcome metrics are healthy.
+
 ## Migration Plan
 
 1. Add tests for exact endpoint identity, especially same chat with different
-   native thread/topic scopes.
+   native thread/topic scopes. Cover both binding de-duplication and origin
+   callback exclusion.
 2. Add the dispatcher-level `dispatch_stream_event` contract in
    `garyx-channels`.
 3. Implement native stream-event dispatch for built-in channels through that
    contract.
-4. Add subprocess plugin capability detection for native `dispatch_stream_event`.
-5. Add the legacy subprocess adapter from `StreamEvent` to `dispatch_outbound`.
-6. Move all run origins to the shared bound fanout attachment point.
-7. Remove gateway-side message rendering, markdown parsing, image stripping, and
+4. Add delivery outcome reporting, including router outbound id persistence.
+5. Add subprocess plugin capability detection for native `dispatch_stream_event`.
+6. Add the legacy subprocess adapter from `StreamEvent` to `dispatch_outbound`.
+7. Move all run origins to the shared bound fanout attachment point, including
+   channel-originated, scheduled, tool-triggered, and restart recovery paths.
+8. Remove gateway-side message rendering, markdown parsing, image stripping, and
    channel-specific branching from bound delivery paths.
-8. Delete the compatibility TODO once all supported plugin paths are
+9. Delete the compatibility TODO once all supported plugin paths are
    stream-event native.
 
 ## Acceptance Criteria
@@ -228,13 +280,21 @@ back in gateway.
 - Unsupported structured events are observable and are not reported as silent
   successful sends.
 - Same-chat different-topic bindings are not accidentally de-duplicated.
+- Same-chat different-topic bindings are not excluded by origin duplicate
+  prevention.
 - Per-target event order is preserved.
+- Restarted in-flight runs reattach fanout without changing their snapshotted
+  target set or duplicating delivery.
+- Scheduled and tool-triggered runs no longer silently drop structured events in
+  a gateway text-only callback.
 
 ## Test Plan
 
 - Unit tests for exact target identity and de-duplication keys.
+- Unit tests for origin exclusion using exact target identity.
 - Gateway or orchestration tests proving every run entry path attaches the same
   bound fanout service.
+- Restart recovery tests proving fanout reattachment preserves idempotency.
 - Channel tests proving built-in stream callbacks receive structured tool
   events instead of fallback text conversion.
 - Legacy plugin adapter tests for ordering, flush behavior, and unsupported
