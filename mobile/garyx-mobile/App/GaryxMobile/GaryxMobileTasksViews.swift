@@ -285,19 +285,40 @@ private struct GaryxTaskThreadButton: View {
     let onSelect: () -> Void
 
     var body: some View {
-        GaryxSidebarThreadRowView(
-            model: GaryxSidebarThreadRowPresentation(
-                thread: thread,
-                isSelected: isSelected,
-                isPinned: isPinned,
-                trailingTimestamp: trailingTimestamp
-            ),
-            avatar: rowAvatar,
-            onSelect: onSelect,
-            onUnpin: {
-                model.unpinThread(thread.id)
-            }
-        )
+        GaryxSwipeActionRow(actions: threadSwipeActions) {
+            GaryxSidebarThreadRowView(
+                model: GaryxSidebarThreadRowPresentation(
+                    thread: thread,
+                    isSelected: isSelected,
+                    isPinned: isPinned,
+                    trailingTimestamp: trailingTimestamp
+                ),
+                avatar: rowAvatar,
+                onSelect: onSelect,
+                onUnpin: {
+                    model.unpinThread(thread.id)
+                }
+            )
+        }
+    }
+
+    private var threadSwipeActions: [GaryxRowAction] {
+        [
+            GaryxRowAction(
+                title: isPinned ? "Unpin thread" : "Pin thread",
+                systemImage: isPinned ? "pin.slash" : "pin",
+                tone: .neutral
+            ) {
+                model.togglePinnedThread(thread.id)
+            },
+            GaryxRowAction(
+                title: "Archive thread",
+                systemImage: "archivebox",
+                tone: .destructive
+            ) {
+                Task { await model.archiveThread(thread) }
+            },
+        ]
     }
 
     private var rowAvatar: GaryxSidebarThreadRowAvatar {

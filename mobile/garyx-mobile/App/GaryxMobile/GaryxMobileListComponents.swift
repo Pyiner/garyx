@@ -257,6 +257,111 @@ struct GaryxRowActionMenu<Content: View>: View {
     }
 }
 
+struct GaryxSwipeActionRow<Content: View>: View {
+    let actions: [GaryxRowAction]
+    let content: Content
+    @GestureState private var dragTranslation: CGFloat = 0
+    @State private var settledOffset: CGFloat = 0
+
+    private let actionButtonDiameter: CGFloat = 38
+    private let actionButtonSpacing: CGFloat = 10
+    private let actionTrailingPadding: CGFloat = 10
+
+    init(actions: [GaryxRowAction], @ViewBuilder content: () -> Content) {
+        self.actions = actions
+        self.content = content()
+    }
+
+    var body: some View {
+        if actions.isEmpty {
+            content
+        } else {
+            ZStack(alignment: .trailing) {
+                actionButtons
+
+                content
+                    .background(GaryxTheme.surface)
+                    .offset(x: currentOffset)
+            }
+            .contentShape(Rectangle())
+            .clipped()
+            .simultaneousGesture(rowDragGesture)
+            .accessibilityHint("Swipe left for thread actions.")
+            .modifier(GaryxRowMenuAccessibilityActions(actions: actions, onAction: perform))
+        }
+    }
+
+    private var actionButtons: some View {
+        HStack(spacing: actionButtonSpacing) {
+            ForEach(Array(actions.enumerated()), id: \.offset) { _, action in
+                Button(role: action.menuRole) {
+                    perform(action)
+                } label: {
+                    Image(systemName: action.systemImage)
+                        .font(GaryxFont.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Color.white)
+                        .frame(width: actionButtonDiameter, height: actionButtonDiameter)
+                        .background(action.tone.background, in: Circle())
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(action.title)
+            }
+        }
+        .padding(.trailing, actionTrailingPadding)
+        .frame(width: maxRevealWidth)
+    }
+
+    private var rowDragGesture: some Gesture {
+        DragGesture(minimumDistance: 12, coordinateSpace: .local)
+            .updating($dragTranslation) { value, state, _ in
+                state = horizontalSwipeTranslation(value.translation)
+            }
+            .onEnded { value in
+                let translation = horizontalSwipeTranslation(value.translation)
+                guard translation != 0 || settledOffset != 0 else { return }
+                let predicted = horizontalSwipeTranslation(value.predictedEndTranslation)
+                let projectedOffset = clampedOffset(settledOffset + (predicted == 0 ? translation : predicted))
+                withAnimation(GaryxMobileMotion.rowSwipe) {
+                    settledOffset = projectedOffset < -maxRevealWidth * 0.35 ? -maxRevealWidth : 0
+                }
+            }
+    }
+
+    private var currentOffset: CGFloat {
+        clampedOffset(settledOffset + dragTranslation)
+    }
+
+    private var maxRevealWidth: CGFloat {
+        CGFloat(actions.count) * actionButtonDiameter
+            + CGFloat(max(0, actions.count - 1)) * actionButtonSpacing
+            + actionTrailingPadding
+    }
+
+    private func horizontalSwipeTranslation(_ translation: CGSize) -> CGFloat {
+        let horizontal = translation.width
+        let vertical = translation.height
+        let horizontalMagnitude = abs(horizontal)
+        let verticalMagnitude = abs(vertical)
+        guard horizontalMagnitude > verticalMagnitude * 1.15 else { return 0 }
+        if settledOffset == 0 {
+            return min(0, horizontal)
+        }
+        return horizontal
+    }
+
+    private func clampedOffset(_ value: CGFloat) -> CGFloat {
+        min(0, max(-maxRevealWidth, value))
+    }
+
+    private func perform(_ action: GaryxRowAction) {
+        withAnimation(GaryxMobileMotion.rowSwipe) {
+            settledOffset = 0
+        }
+        action.action()
+    }
+}
+
 struct GaryxItemActionMenuButtonStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
