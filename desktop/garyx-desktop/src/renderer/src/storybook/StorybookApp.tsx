@@ -24,14 +24,6 @@ function ThreadStage({ step }: { step: StoryStep }) {
 
   const activity = deriveThreadActivityModel({
     messages: state.messages,
-    threadInfo: state.activeRunId ? { activeRun: { runId: state.activeRunId } } : null,
-    liveStream: state.liveStreamStatus
-      ? {
-          threadId: 'storybook-thread',
-          pendingAckIntentIds: state.pendingAckIntents.map((entry) => entry.intentId),
-          streamStatus: state.liveStreamStatus,
-        }
-      : null,
     runtimeBusy: isRuntimeBusy(state.runtimeState),
     pendingAckIntentCount: state.pendingAckIntents.length,
     remoteAwaitingAckInputCount: 0,
@@ -134,7 +126,7 @@ function ThreadStage({ step }: { step: StoryStep }) {
       showAutomationRunInitialPlaceholder={false}
       showDreams={false}
       showHistoryLoadingPlaceholder={state.showHistoryLoadingPlaceholder}
-      showTailThinking={activity.showRunLoading || activity.showPendingAckLoading}
+      showTailThinking={activity.showPendingAckLoading}
       threadLayoutRef={threadLayoutRef}
       threadLogsActiveTab="client"
       threadLogsError={null}
@@ -157,14 +149,6 @@ function MachineBadges({ step }: { step: StoryStep }) {
   const state = step.state;
   const activity = deriveThreadActivityModel({
     messages: state.messages,
-    threadInfo: state.activeRunId ? { activeRun: { runId: state.activeRunId } } : null,
-    liveStream: state.liveStreamStatus
-      ? {
-          threadId: 'storybook-thread',
-          pendingAckIntentIds: state.pendingAckIntents.map((entry) => entry.intentId),
-          streamStatus: state.liveStreamStatus,
-        }
-      : null,
     runtimeBusy: isRuntimeBusy(state.runtimeState),
     pendingAckIntentCount: state.pendingAckIntents.length,
     remoteAwaitingAckInputCount: 0,
@@ -178,11 +162,6 @@ function MachineBadges({ step }: { step: StoryStep }) {
       label: 'runActive',
       value: String(activity.runActive),
       tone: activity.runActive ? 'derived-on' : 'derived-off',
-    },
-    {
-      label: 'showRunLoading',
-      value: String(activity.showRunLoading),
-      tone: activity.showRunLoading ? 'derived-on' : 'derived-off',
     },
     {
       label: 'showPendingAckLoading',

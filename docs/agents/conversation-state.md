@@ -66,8 +66,10 @@ Per-run stream lifecycle: `connecting`, `streaming`, `reconciling`,
 `disconnected` (transient, recovery scheduled), `failed` (permanent),
 `interrupted`.
 
-A stream counts as active when its status is `connecting`, `streaming`, or
-`reconciling`.
+This is a transport/recovery state only. It must not drive transcript rows,
+tail thinking, active tool groups, final-answer visibility, or composer/steer
+business gates. Remote rendered activity comes from the server
+`render_state`; local business gates use `ThreadRuntimeState`.
 
 ### TranscriptEntryState (message local state)
 
@@ -142,31 +144,46 @@ Provider-ack helpers (also fixture-covered):
   intent is in `awaiting_history`, `completed`, `failed`, `interrupted`, or
   `cancelled`.
 
-## Derived Activity Model
+## Activity And Render State
 
-UI activity indicators must come from one pure derivation
-(`deriveThreadActivityModel` on desktop, `GaryxThreadActivityModel.derive`
-on iOS), never from ad-hoc flags:
+The conversation-state activity derivation is intentionally narrow. It drives
+only local business gates: composer send/lock affordances, steer affordance, and
+the optimistic pending-ack loading window.
 
-Inputs: transcript messages (role, pending, loop-continuation marker),
-active run id from thread runtime info, live stream status, `runtimeBusy`,
-`pendingAckIntentCount`, `remoteAwaitingAckInputCount`,
+Inputs: transcript messages (role and loop-continuation marker), `runtimeBusy`,
+`pendingAckIntentCount`, `remoteAwaitingAckInputCount`, and
 `pendingHistoryIntent`.
 
 Outputs:
 
-- `runActive` = stream active ∨ runtime busy ∨ server reports an active run.
+- `runActive` = `runtimeBusy`.
 - `showPendingAckLoading` = pending-ack intents > 0 ∨ remote awaiting-ack
   inputs > 0 ∨ (an intent awaits history ∧ the latest non-loop-continuation
   user message has no assistant/tool progress after it).
-- `showRunLoading` = `runActive` ∧ ¬`showPendingAckLoading` ∧ no assistant
-  message is pending (streaming text counts as visible progress).
-- `canSteerQueuedPrompt` = `showPendingAckLoading` ∨ stream active ∨
-  `runActive`.
+- `canSteerQueuedPrompt` = `showPendingAckLoading` ∨ `runActive`.
 
-Render-layer refinements (e.g. iOS `showsTailThinkingIndicator`, which also
-hides the indicator while a tool group is live) sit on top of
-`showRunLoading`; they must not re-derive `runActive` from transport state.
+Everything that is rendered inside the transcript comes from the server
+`render_state` reducer:
+
+- `render_state.rows` owns user-turn rows, assistant steps, tool groups, final
+  message placement, and filtered empty placeholders.
+- `render_state.tailActivity` owns thinking / assistant-streaming / tool-active
+  tail presentation.
+- `render_state.activeToolGroupId` owns active tool highlighting.
+- `render_state.based_on_seq` is the committed ledger sequence the snapshot was
+  derived from.
+
+The per-thread SSE protocol sends one frame:
+
+```
+{ "type": "thread_render_frame", "events": [...], "render_state": { ... } }
+```
+
+`events` are the sync channel for cache, run-state, and cursor maintenance.
+`render_state` is the render channel. Clients may keep optimistic local user
+rows and pending-ack chrome, but must not derive transcript rows, tail thinking,
+tool grouping, or final-answer visibility from live stream state, active-run
+projection rows, or raw committed messages.
 
 ## Platform Mapping
 
@@ -175,7 +192,7 @@ Legacy iOS constructs and their canonical replacements:
 | Legacy iOS construct | Canonical replacement |
 | --- | --- |
 | `isSending` + `activeRunThreadId` | `threadRuntimeByThread[threadId].state` (`dispatching_sync` / `running_remote`) |
-| `remoteBusyThreadIds` | `runActive` from the derived activity model |
+| `remoteBusyThreadIds` | `runtimeBusy` for business gates; `render_state.tailActivity` for rendered transcript activity |
 | `pendingChatStartThreadIds` | intent in `dispatch_requested` / `dispatching` |
 | `statusText` on a message | intent `failed` + message `TranscriptEntryState.error` |
 | id prefixes (`local-user-*`, …) | `TranscriptEntryState` |
@@ -204,7 +221,7 @@ Actions use the reducer action shapes with string enum values from
 
 `scenarios/activity.json` — `{ "cases": [ { "name", "input", "expect" } ] }`
 for the derived activity model. `input.messages` entries are
-`{ role, pending?, internal?, internalKind? }` with transcript role strings
+`{ role, internal?, internalKind? }` with transcript role strings
 (`user`, `assistant`, `tool_use`, `tool_result`, `system`).
 
 `scenarios/function-cases.json` — table cases for `findPendingAckIntentIndex`,

@@ -2,13 +2,17 @@
 
 ## Transcript And Threads
 
-- Treat transcript history as user-turn based: one user message plus the
-  following agent activity until the next user message.
-- Pagination, prefetch, folding, and final-answer visibility should use the
-  user-turn unit rather than raw provider messages or tool-call counts.
-- Keep completed user-turn final answers visible when turns collapse.
+- Render transcript history from server `render_state.rows`. User-turn
+  grouping, assistant steps, tool groups, filtered placeholders, and final
+  answer placement are reducer output, not desktop heuristics.
+- Pagination and cache sync may read committed ledger events and cursors, but
+  folding and visible row structure must follow `render_state`.
+- Tail thinking uses `render_state.tailActivity`; active tool highlighting uses
+  `render_state.activeToolGroupId`.
+- Keep completed user-turn final answers visible when `render_state` places them
+  in a collapsed turn.
 - While a thread is still running, keep active turn containers stable and
-  reserve Working/Worked rows for real tool activity.
+  reserve Working/Worked rows for real tool activity from `render_state`.
 - Pure assistant/reasoning text remains normal assistant text.
 - Desktop interruption controls must be gateway-backed.
 - The local Mac app process may not own the active WebSocket for runs started

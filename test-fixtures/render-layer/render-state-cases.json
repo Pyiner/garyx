@@ -1398,6 +1398,260 @@
     {
       "expected": {
         "activeToolGroupId": null,
+        "based_on_seq": 4,
+        "filtered_placeholders": [],
+        "progress_locus": "tail",
+        "rows": [
+          {
+            "activity": [
+              {
+                "final_message": null,
+                "finished_at": null,
+                "id": "step:tool_group:call_fixture_failed",
+                "kind": "step",
+                "running": true,
+                "started_at": "2026-06-19T13:05:01Z",
+                "steps": [
+                  {
+                    "entries": [
+                      {
+                        "id": "tool_entry:call_fixture_failed",
+                        "status": "failed",
+                        "tool_result": {
+                          "id": "seq:4",
+                          "role": "tool_result",
+                          "seq": 4
+                        },
+                        "tool_use": {
+                          "id": "seq:3",
+                          "role": "tool_use",
+                          "seq": 3
+                        },
+                        "tool_use_id": "call_fixture_failed"
+                      }
+                    ],
+                    "finished_at": "2026-06-19T13:05:03Z",
+                    "id": "tool_group:call_fixture_failed",
+                    "kind": "tool_group",
+                    "started_at": "2026-06-19T13:05:02Z",
+                    "status": "completed"
+                  }
+                ]
+              }
+            ],
+            "finished_at": null,
+            "id": "user_turn:seq:2",
+            "kind": "user_turn",
+            "started_at": "2026-06-19T13:05:01Z",
+            "user": {
+              "id": "seq:2",
+              "role": "user",
+              "seq": 2
+            }
+          }
+        ],
+        "tailActivity": "thinking",
+        "visibleMessageIds": [
+          "seq:2",
+          "seq:3",
+          "seq:4"
+        ]
+      },
+      "expected_run_state": {
+        "activity": "thinking",
+        "busy": true
+      },
+      "name": "failed tool result",
+      "records": [
+        {
+          "message": {
+            "control": {
+              "kind": "run_start",
+              "run_id": "run::fixture-failed-tool",
+              "thread_id": "thread::fixture-failed-tool"
+            },
+            "internal": true,
+            "internal_kind": "control",
+            "kind": "control",
+            "role": "system"
+          },
+          "run_id": "run::fixture-failed-tool",
+          "seq": 1,
+          "thread_id": "thread::fixture-failed-tool",
+          "timestamp": "2026-06-19T13:05:00Z"
+        },
+        {
+          "message": {
+            "role": "user",
+            "text": "Run the failing check.",
+            "timestamp": "2026-06-19T13:05:01Z"
+          },
+          "run_id": "run::fixture-failed-tool",
+          "seq": 2,
+          "thread_id": "thread::fixture-failed-tool",
+          "timestamp": "2026-06-19T13:05:01Z"
+        },
+        {
+          "message": {
+            "content": {
+              "command": "/bin/zsh -lc 'exit 1'",
+              "cwd": "/Users/test/repo",
+              "id": "call_fixture_failed",
+              "processId": "1000000005",
+              "status": "inProgress",
+              "type": "commandExecution"
+            },
+            "kind": "tool_trace",
+            "role": "tool_use",
+            "timestamp": "2026-06-19T13:05:02Z",
+            "tool_name": "Bash",
+            "tool_use_id": "call_fixture_failed"
+          },
+          "run_id": "run::fixture-failed-tool",
+          "seq": 3,
+          "thread_id": "thread::fixture-failed-tool",
+          "timestamp": "2026-06-19T13:05:02Z"
+        },
+        {
+          "message": {
+            "content": {
+              "aggregatedOutput": "failed",
+              "command": "/bin/zsh -lc 'exit 1'",
+              "cwd": "/Users/test/repo",
+              "durationMs": 4,
+              "exitCode": 1,
+              "id": "call_fixture_failed",
+              "processId": "1000000005",
+              "status": "failed",
+              "type": "commandExecution"
+            },
+            "is_error": true,
+            "kind": "tool_trace",
+            "role": "tool_result",
+            "timestamp": "2026-06-19T13:05:03Z",
+            "tool_name": "Bash",
+            "tool_use_id": "call_fixture_failed"
+          },
+          "run_id": "run::fixture-failed-tool",
+          "seq": 4,
+          "thread_id": "thread::fixture-failed-tool",
+          "timestamp": "2026-06-19T13:05:03Z"
+        }
+      ],
+      "run_state": null,
+      "source": null
+    },
+    {
+      "expected": {
+        "activeToolGroupId": null,
+        "based_on_seq": 4,
+        "filtered_placeholders": [
+          {
+            "message": {
+              "id": "seq:4",
+              "role": "assistant",
+              "seq": 4
+            },
+            "reason": "empty_streaming_assistant"
+          }
+        ],
+        "progress_locus": "tail",
+        "rows": [
+          {
+            "activity": [
+              {
+                "id": "assistant_reply:seq:3",
+                "kind": "assistant_reply",
+                "message": {
+                  "id": "seq:3",
+                  "role": "assistant",
+                  "seq": 3
+                },
+                "streaming": false
+              }
+            ],
+            "finished_at": null,
+            "id": "user_turn:seq:2",
+            "kind": "user_turn",
+            "started_at": "2026-06-19T13:06:01Z",
+            "user": {
+              "id": "seq:2",
+              "role": "user",
+              "seq": 2
+            }
+          }
+        ],
+        "tailActivity": "thinking",
+        "visibleMessageIds": [
+          "seq:2",
+          "seq:3"
+        ]
+      },
+      "expected_run_state": {
+        "activity": "thinking",
+        "busy": true
+      },
+      "name": "completed assistant then trailing empty placeholder",
+      "records": [
+        {
+          "message": {
+            "control": {
+              "kind": "run_start",
+              "run_id": "run::fixture-text-then-placeholder",
+              "thread_id": "thread::fixture-text-then-placeholder"
+            },
+            "internal": true,
+            "internal_kind": "control",
+            "kind": "control",
+            "role": "system"
+          },
+          "run_id": "run::fixture-text-then-placeholder",
+          "seq": 1,
+          "thread_id": "thread::fixture-text-then-placeholder",
+          "timestamp": "2026-06-19T13:06:00Z"
+        },
+        {
+          "message": {
+            "role": "user",
+            "text": "Explain the result.",
+            "timestamp": "2026-06-19T13:06:01Z"
+          },
+          "run_id": "run::fixture-text-then-placeholder",
+          "seq": 2,
+          "thread_id": "thread::fixture-text-then-placeholder",
+          "timestamp": "2026-06-19T13:06:01Z"
+        },
+        {
+          "message": {
+            "role": "assistant",
+            "text": "The check passed.",
+            "timestamp": "2026-06-19T13:06:02Z"
+          },
+          "run_id": "run::fixture-text-then-placeholder",
+          "seq": 3,
+          "thread_id": "thread::fixture-text-then-placeholder",
+          "timestamp": "2026-06-19T13:06:02Z"
+        },
+        {
+          "message": {
+            "attachments": [],
+            "pending": true,
+            "role": "assistant",
+            "text": "",
+            "timestamp": "2026-06-19T13:06:03Z"
+          },
+          "run_id": "run::fixture-text-then-placeholder",
+          "seq": 4,
+          "thread_id": "thread::fixture-text-then-placeholder",
+          "timestamp": "2026-06-19T13:06:03Z"
+        }
+      ],
+      "run_state": null,
+      "source": null
+    },
+    {
+      "expected": {
+        "activeToolGroupId": null,
         "based_on_seq": 6,
         "filtered_placeholders": [],
         "progress_locus": "none",

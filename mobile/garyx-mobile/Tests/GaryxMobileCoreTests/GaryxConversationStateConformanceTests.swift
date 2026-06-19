@@ -96,16 +96,12 @@ final class GaryxConversationStateConformanceTests: XCTestCase {
                     && (raw["internalKind"] as? String) == "loop_continuation"
                 return GaryxActivityMessage(
                     role: role,
-                    pending: raw["pending"] as? Bool ?? false,
                     isLoopContinuation: isLoopContinuation
                 )
             }
 
             let model = GaryxThreadActivityModel.derive(
                 messages: messages,
-                activeRunId: input["activeRunId"] as? String,
-                liveStreamStatus: (input["liveStreamStatus"] as? String)
-                    .flatMap(GaryxLiveStreamStatus.init(rawValue:)),
                 runtimeBusy: input["runtimeBusy"] as? Bool ?? false,
                 pendingAckIntentCount: input["pendingAckIntentCount"] as? Int ?? 0,
                 remoteAwaitingAckInputCount: input["remoteAwaitingAckInputCount"] as? Int ?? 0,
@@ -113,7 +109,6 @@ final class GaryxConversationStateConformanceTests: XCTestCase {
             )
 
             XCTAssertEqual(model.runActive, expect["runActive"] as? Bool, "\(name): runActive")
-            XCTAssertEqual(model.showRunLoading, expect["showRunLoading"] as? Bool, "\(name): showRunLoading")
             XCTAssertEqual(
                 model.showPendingAckLoading,
                 expect["showPendingAckLoading"] as? Bool,

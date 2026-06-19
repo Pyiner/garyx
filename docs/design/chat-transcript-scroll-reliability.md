@@ -1,5 +1,14 @@
 # Chat Transcript Scroll Reliability
 
+> Historical note: this document records the pre-Block-5 scroll reliability
+> design. The transcript architecture is now server-rendered: the gateway sends
+> per-thread `thread_render_frame` SSE containing `{ events, render_state }`;
+> `events` synchronize caches/cursors/run state and `render_state` owns visible
+> rows, tool grouping, active tool state, final-answer placement, and tail
+> thinking. Older references below to `applyRemoteTranscript`, run snapshots, or
+> passive selected-thread polling describe the legacy context this design
+> replaced.
+
 ## Scope
 
 This design covers the macOS desktop transcript in
@@ -8,17 +17,17 @@ This design covers the macOS desktop transcript in
 plus the iOS transcript in
 `mobile/garyx-mobile/App/GaryxMobile/GaryxMobileConversationViews.swift`.
 
-The goal is to make tail updates deterministic:
+The pre-SSR goal was to make tail updates deterministic:
 
 - Sending a message keeps the transcript pinned to the newest visible content.
 - Receiving remote input, assistant deltas, run snapshots, or history reconcile
-  while the selected thread is visible keeps the transcript pinned to the newest
-  content unless the user is intentionally browsing older history.
+  while the selected thread was visible kept the transcript pinned to the newest
+  content unless the user was intentionally browsing older history.
 - Opening or switching to an iOS thread renders the first selected transcript
   frame with visible content instead of an empty LazyVStack viewport that only
   repairs after a manual drag.
 
-## Current macOS Behavior
+## Historical macOS Behavior
 
 `AppShell.tsx` has the right primitives but applies them inconsistently:
 
@@ -51,7 +60,7 @@ transcript without scrolling because the pending snap is non-forced. The user
 then sees a half-way position and must scroll manually to reach the newest
 message.
 
-## Current iOS Behavior
+## Historical iOS Behavior
 
 `GaryxMobileConversationViews.swift` already uses `ScrollViewReader`, a bottom
 anchor, a tail-thinking anchor, geometry preferences, and a retrying

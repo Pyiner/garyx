@@ -1907,15 +1907,22 @@ async fn finalize_thread_stream_replay(
     replay: ThreadStreamReplayBuilder,
 ) -> ThreadStreamReplay {
     let mut events = Vec::new();
+    let mut max_seq = replay.max_seq;
     if !replay.event_payloads.is_empty() {
         let event =
             thread_stream_frame_event(state, thread_id, replay.max_seq, replay.event_payloads)
                 .await;
         events.push(event);
+    } else {
+        let event = thread_stream_snapshot_only_frame_event(state, thread_id, replay.max_seq).await;
+        if let Ok(event) = &event {
+            max_seq = event.id;
+        }
+        events.push(event);
     }
     ThreadStreamReplay {
         events,
-        max_seq: replay.max_seq,
+        max_seq,
         sent_payloads: replay.sent_payloads,
     }
 }
@@ -1979,6 +1986,19 @@ async fn committed_thread_stream_live_event(
     payload: Value,
 ) -> Result<ThreadStreamEvent, io::Error> {
     thread_stream_frame_event(state, thread_id, seq, vec![payload]).await
+}
+
+async fn thread_stream_snapshot_only_frame_event(
+    state: &Arc<AppState>,
+    thread_id: &str,
+    requested_seq: u64,
+) -> Result<ThreadStreamEvent, io::Error> {
+    let render_state = thread_render_snapshot_at_seq(state, thread_id, requested_seq).await?;
+    let id = render_state.based_on_seq;
+    Ok(ThreadStreamEvent {
+        id,
+        payload: thread_stream_frame_payload(thread_id, Vec::new(), &render_state),
+    })
 }
 
 async fn thread_stream_frame_event(

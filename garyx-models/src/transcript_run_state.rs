@@ -453,37 +453,6 @@ mod tests {
     }
 
     #[test]
-    fn tool_result_detection_matches_client_edge_cases() {
-        let null_result_message = json!({
-            "role": "tool_use",
-            "kind": "tool_trace",
-            "result": null,
-            "content": {
-                "type": "commandExecution",
-                "id": "call_fixture_null_result",
-            },
-        });
-        assert!(!is_tool_result_trace(
-            "tool_use",
-            null_result_message.as_object().unwrap()
-        ));
-
-        let kind_result_message = json!({
-            "role": "tool_use",
-            "kind": "tool_trace",
-            "content": {
-                "type": "commandExecution",
-                "kind": "tool_result",
-                "id": "call_fixture_kind_result",
-            },
-        });
-        assert!(is_tool_result_trace(
-            "tool_use",
-            kind_result_message.as_object().unwrap()
-        ));
-    }
-
-    #[test]
     fn rewrite_controls_surface_replay_invalidation_windows() {
         let records = vec![
             control_record(

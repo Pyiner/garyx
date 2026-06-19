@@ -1,16 +1,8 @@
 import type {
-  PendingThreadInput,
-  ThreadRuntimeInfo,
   TranscriptMessage,
 } from "@shared/contracts";
 
-import type { LiveStreamState, UiTranscriptMessage } from "./types";
-
-type ActivityMessage = Pick<
-  TranscriptMessage,
-  "id" | "role" | "text" | "timestamp" | "kind" | "internalKind"
-> &
-  Partial<Pick<TranscriptMessage, "internal">>;
+import type { UiTranscriptMessage } from "./types";
 
 function isLoopContinuationActivityMessage(
   message: Pick<TranscriptMessage, "internal" | "internalKind">,
@@ -22,27 +14,6 @@ function isLoopContinuationActivityMessage(
 
 function isAssistantProgressRole(role: TranscriptMessage["role"]): boolean {
   return role === "assistant" || role === "tool_use" || role === "tool_result";
-}
-
-function isLiveStreamActive(liveStream: LiveStreamState | null | undefined): boolean {
-  return Boolean(
-    liveStream &&
-      ["connecting", "streaming", "reconciling"].includes(
-        liveStream.streamStatus,
-      ),
-  );
-}
-
-function canSteerActiveRun(input: {
-  liveStream: LiveStreamState | null | undefined;
-  runActive: boolean;
-  showPendingAckLoading: boolean;
-}): boolean {
-  return Boolean(
-    input.showPendingAckLoading ||
-      isLiveStreamActive(input.liveStream) ||
-      input.runActive,
-  );
 }
 
 export function latestUserMessageAwaitsAssistant(
@@ -61,35 +32,18 @@ export function latestUserMessageAwaitsAssistant(
   return latestUserIndex >= 0 && latestAssistantOrToolIndex < latestUserIndex;
 }
 
-export function activeRunAwaitsAssistant(input: {
-  threadInfo: Pick<ThreadRuntimeInfo, "activeRun"> | null | undefined;
-  messages: UiTranscriptMessage[];
-  suppressForPendingAck?: boolean;
-}): boolean {
-  return Boolean(
-    input.threadInfo?.activeRun?.runId &&
-      latestUserMessageAwaitsAssistant(input.messages) &&
-      !input.suppressForPendingAck,
-  );
-}
-
 export type ThreadActivityModel = {
   runActive: boolean;
   canSteerQueuedPrompt: boolean;
   showPendingAckLoading: boolean;
-  showRunLoading: boolean;
 };
 
 // Cross-platform conversation-state contract (spec/conversation-state +
-// iOS conformance twin). Block 4 leaves this derivation intact: it drives the
-// non-render business gates (composer lock, steer, optimistic pre-ack) and is
-// shared with iOS. The rendered thinking/tool indicators no longer read
-// `showRunLoading` — they come from the server `render_state` (tailActivity /
-// activeToolGroupId), so the AppShell loading-boolean bypasses are gone.
+// iOS conformance twin). This drives only non-render business gates: composer
+// lock, steer affordance, and optimistic pre-ack loading. Rendered rows,
+// thinking, and tool activity come from the server `render_state`.
 export function deriveThreadActivityModel(input: {
   messages: UiTranscriptMessage[];
-  threadInfo: Pick<ThreadRuntimeInfo, "activeRun"> | null | undefined;
-  liveStream: LiveStreamState | null | undefined;
   runtimeBusy: boolean;
   pendingAckIntentCount: number;
   remoteAwaitingAckInputCount: number;
@@ -101,64 +55,10 @@ export function deriveThreadActivityModel(input: {
       input.remoteAwaitingAckInputCount > 0 ||
       (input.pendingHistoryIntent && latestUserAwaitsAssistant),
   );
-  const runActive = Boolean(
-    isLiveStreamActive(input.liveStream) ||
-      input.runtimeBusy ||
-      input.threadInfo?.activeRun?.runId,
-  );
-  const hasPendingAssistant = input.messages.some(
-    (message) => message.role === "assistant" && Boolean(message.pending),
-  );
-  const model = {
+  const runActive = Boolean(input.runtimeBusy);
+  return {
     runActive,
     showPendingAckLoading,
-    showRunLoading:
-      runActive &&
-      !showPendingAckLoading &&
-      !hasPendingAssistant,
+    canSteerQueuedPrompt: showPendingAckLoading || runActive,
   };
-  return {
-    ...model,
-    canSteerQueuedPrompt: canSteerActiveRun({
-      liveStream: input.liveStream,
-      runActive: model.runActive,
-      showPendingAckLoading: model.showPendingAckLoading,
-    }),
-  };
-}
-
-export function threadActivitySignature(
-  messages: ActivityMessage[],
-  pendingInputs: PendingThreadInput[],
-  threadInfo?: Pick<ThreadRuntimeInfo, "activeRun"> | null,
-): string {
-  const lastMessage = messages[messages.length - 1];
-  const lastPendingInput = pendingInputs[pendingInputs.length - 1];
-  const activeRun = threadInfo?.activeRun || null;
-  return JSON.stringify({
-    messageCount: messages.length,
-    lastMessage: {
-      id: lastMessage?.id || "",
-      role: lastMessage?.role || "",
-      text: lastMessage?.text || "",
-      timestamp: lastMessage?.timestamp || "",
-      kind: lastMessage?.kind || "",
-      internalKind: lastMessage?.internalKind || "",
-    },
-    pendingInputCount: pendingInputs.length,
-    lastPendingInput: {
-      id: lastPendingInput?.id || "",
-      status: lastPendingInput?.status || "",
-      active: Boolean(lastPendingInput?.active),
-      text: lastPendingInput?.text || "",
-    },
-    activeRun: activeRun
-      ? {
-          runId: activeRun.runId || "",
-          updatedAt: activeRun.updatedAt || "",
-          assistantResponse: activeRun.assistantResponse || "",
-          pendingUserInputCount: activeRun.pendingUserInputCount ?? null,
-        }
-      : null,
-  });
 }

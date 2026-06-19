@@ -481,16 +481,13 @@ public func garyxShouldTrackProviderAckAfterStreamInputResponse(
 
 public struct GaryxActivityMessage: Equatable, Sendable {
     public var role: GaryxTranscriptRole
-    public var pending: Bool
     public var isLoopContinuation: Bool
 
     public init(
         role: GaryxTranscriptRole,
-        pending: Bool = false,
         isLoopContinuation: Bool = false
     ) {
         self.role = role
-        self.pending = pending
         self.isLoopContinuation = isLoopContinuation
     }
 }
@@ -499,7 +496,6 @@ public struct GaryxThreadActivityModel: Equatable, Sendable {
     public var runActive: Bool
     public var canSteerQueuedPrompt: Bool
     public var showPendingAckLoading: Bool
-    public var showRunLoading: Bool
 
     public static func latestUserMessageAwaitsAssistant(
         _ messages: [GaryxActivityMessage]
@@ -517,19 +513,8 @@ public struct GaryxThreadActivityModel: Equatable, Sendable {
         return latestUserIndex >= 0 && latestAssistantOrToolIndex < latestUserIndex
     }
 
-    private static func isLiveStreamActive(_ status: GaryxLiveStreamStatus?) -> Bool {
-        switch status {
-        case .connecting, .streaming, .reconciling:
-            return true
-        case .disconnected, .failed, .interrupted, nil:
-            return false
-        }
-    }
-
     public static func derive(
         messages: [GaryxActivityMessage],
-        activeRunId: String?,
-        liveStreamStatus: GaryxLiveStreamStatus?,
         runtimeBusy: Bool,
         pendingAckIntentCount: Int,
         remoteAwaitingAckInputCount: Int,
@@ -539,17 +524,11 @@ public struct GaryxThreadActivityModel: Equatable, Sendable {
         let showPendingAckLoading = pendingAckIntentCount > 0
             || remoteAwaitingAckInputCount > 0
             || (pendingHistoryIntent && latestUserAwaitsAssistant)
-        let runActive = isLiveStreamActive(liveStreamStatus)
-            || runtimeBusy
-            || !(activeRunId ?? "").isEmpty
-        let hasPendingAssistant = messages.contains { $0.role == .assistant && $0.pending }
+        let runActive = runtimeBusy
         return GaryxThreadActivityModel(
             runActive: runActive,
-            canSteerQueuedPrompt: showPendingAckLoading
-                || isLiveStreamActive(liveStreamStatus)
-                || runActive,
-            showPendingAckLoading: showPendingAckLoading,
-            showRunLoading: runActive && !showPendingAckLoading && !hasPendingAssistant
+            canSteerQueuedPrompt: showPendingAckLoading || runActive,
+            showPendingAckLoading: showPendingAckLoading
         )
     }
 }

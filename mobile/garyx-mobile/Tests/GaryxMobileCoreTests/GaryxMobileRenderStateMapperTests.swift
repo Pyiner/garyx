@@ -62,6 +62,34 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
         XCTAssertEqual(frame.renderState.filteredPlaceholders.only?.reason, .emptyStreamingAssistant)
     }
 
+    func testFrameDecodesSnapshotOnlyInitialFrame() throws {
+        let json = """
+        {
+          "type": "thread_render_frame",
+          "thread_id": "thread::1",
+          "events": [],
+          "render_state": {
+            "based_on_seq": 7,
+            "rows": [],
+            "tailActivity": "none",
+            "activeToolGroupId": null,
+            "progress_locus": "none",
+            "visibleMessageIds": [],
+            "filtered_placeholders": []
+          }
+        }
+        """
+
+        let frame = try JSONDecoder().decode(GaryxThreadRenderFrame.self, from: Data(json.utf8))
+
+        XCTAssertEqual(frame.type, "thread_render_frame")
+        XCTAssertEqual(frame.threadId, "thread::1")
+        XCTAssertTrue(frame.events.isEmpty)
+        XCTAssertEqual(frame.renderState.basedOnSeq, 7)
+        XCTAssertEqual(frame.renderState.rows, [])
+        XCTAssertEqual(frame.renderState.tailActivity, .none)
+    }
+
     func testMapsAssistantReplyFromServerRowsUsingSeqPrimaryRefs() throws {
         let messages = [
             mobileMessage(index: 0, role: .user, text: "Question", id: "local-user"),

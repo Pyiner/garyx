@@ -10,7 +10,7 @@ import Foundation
 // arrives non-contiguously we reconnect from the last contiguous seq and the file
 // replay refills the hole. A dropped connection is recovered by the reconnect loop
 // (URLSession surfaces it as an error / request timeout), and persistent failure
-// falls back to the S3 global-stream + reconcile-poll path.
+// falls back to after_index history plus the selected-thread reconcile loop.
 extension GaryxMobileModel {
     func applySelectedThreadStreamPolicy(previousThreadId: String?, selectedThreadId: String?) {
         switch GaryxSelectedThreadStreamPolicy.action(

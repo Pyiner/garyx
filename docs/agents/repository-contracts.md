@@ -31,6 +31,31 @@ reinterpreted in feature code.
   rows as a data migration, but steady-state correctness must come from the
   thread-store write path.
 
+## Transcript Rendering
+
+- The committed/control transcript ledger is the only source for rendered chat
+  structure. `garyx-models` owns the `TranscriptRenderState` reducer; desktop
+  and mobile must not reimplement user-turn grouping, tool grouping, tail
+  thinking, filtered placeholders, or final-answer placement.
+- Gateway per-thread SSE sends `thread_render_frame`:
+  `{ events, render_state }`. `events` synchronize caches, run state, and
+  cursors; `render_state` renders rows.
+- The sequence rule is write-then-derive: commit transcript records first, then
+  derive `render_state` from committed records up to the frame sequence.
+  `render_state.based_on_seq` must match the frame sequence for normal replay
+  and live frames.
+- A caught-up per-thread stream connection still sends a snapshot-only frame
+  with `events: []`; its SSE id and replay cursor are
+  `render_state.based_on_seq`, clamped to the actual committed ledger tail.
+- Desktop and mobile may keep optimistic local user rows, pending-ack chrome,
+  local selection state, pagination cursors, and presentation adapters. They
+  must dumb-render `render_state.rows`, `render_state.tailActivity`, and
+  `render_state.activeToolGroupId`.
+- Transport state (`LiveStreamStatus`, WebSocket/SSE connection state, cached
+  `activeRun` projections) is not a transcript render source. It may only drive
+  retry/reconnect behavior or local business gates defined in
+  `docs/agents/conversation-state.md`.
+
 ## Provider And Channel Behavior
 
 - Telegram uses the throttled plugin stream policy: assistant text can stream

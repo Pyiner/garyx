@@ -191,7 +191,7 @@ export function buildStories(): Story[] {
       step('空线程 · idle', '没有任何消息，runtime idle。', { messages: [] }),
       step(
         'optimistic · dispatching_sync',
-        '用户消息以 optimistic 本地态立即上屏；运行指示同步出现（showRunLoading 由 runtime busy 推导）。',
+        '用户消息以 optimistic 本地态立即上屏；发送态由 runtime busy 驱动，远端 tail 渲染交给 render_state。',
         {
           messages: [q1],
           runtimeState: 'dispatching_sync',
@@ -211,7 +211,7 @@ export function buildStories(): Story[] {
       ),
       step(
         'streaming · remote_partial',
-        '助手增量文本以 remote_partial 流入；流式文本可见时 showRunLoading 必须熄灭。',
+        '助手增量文本以 remote_partial 流入；可见 rows/tail/tool 状态由 server render_state 决定。',
         {
           messages: [q1, a1Partial],
           runtimeState: 'running_remote',
@@ -325,7 +325,7 @@ export function buildStories(): Story[] {
       ),
       step(
         'awaiting_provider_ack',
-        '队列项已发往网关等待 user_ack；composer 显示等待回执的加载态（showPendingAckLoading 优先于 showRunLoading）。',
+        '队列项已发往网关等待 user_ack；composer 显示等待回执的本地加载态。',
         {
           messages: [q3, a3Partial],
           runtimeState: 'running_remote',

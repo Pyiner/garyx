@@ -384,6 +384,111 @@ async fn thread_stream_replay_after_seq_emits_one_aligned_render_frame() {
 }
 
 #[tokio::test]
+async fn thread_stream_replay_caught_up_emits_snapshot_only_frame() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::render-replay-caught-up";
+    state
+        .threads
+        .history
+        .transcript_store()
+        .append_run_records(
+            thread_id,
+            Some("run::render-replay-caught-up"),
+            &[
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "user", "content": "one"}),
+                    "2026-06-18T12:00:00Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "two"}),
+                    "2026-06-18T12:00:01Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "three"}),
+                    "2026-06-18T12:00:02Z",
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let replay = build_thread_stream_replay(&state, thread_id, 3).await;
+
+    assert_eq!(replay.events.len(), 1);
+    assert_eq!(replay.max_seq, 3);
+    assert!(replay.sent_payloads.is_empty());
+    let event = replay.events[0].as_ref().unwrap();
+    assert_eq!(event.id, 3);
+    let frame: Value = serde_json::from_str(&event.payload).unwrap();
+    let events = frame.get("events").and_then(Value::as_array).unwrap();
+    assert!(events.is_empty());
+    assert_eq!(
+        frame
+            .get("render_state")
+            .and_then(|state| state.get("based_on_seq"))
+            .and_then(Value::as_u64),
+        Some(3)
+    );
+    assert_eq!(
+        frame
+            .get("render_state")
+            .and_then(|state| state.get("visibleMessageIds"))
+            .and_then(Value::as_array)
+            .map(|items| { items.iter().filter_map(Value::as_str).collect::<Vec<_>>() })
+            .unwrap(),
+        vec!["seq:1", "seq:2", "seq:3"]
+    );
+}
+
+#[tokio::test]
+async fn thread_stream_replay_caught_up_clamps_overlarge_cursor_to_snapshot_seq() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::render-replay-overlarge-cursor";
+    state
+        .threads
+        .history
+        .transcript_store()
+        .append_run_records(
+            thread_id,
+            Some("run::render-replay-overlarge-cursor"),
+            &[
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "user", "content": "one"}),
+                    "2026-06-18T12:00:00Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "two"}),
+                    "2026-06-18T12:00:01Z",
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let replay = build_thread_stream_replay(&state, thread_id, 99).await;
+
+    assert_eq!(replay.events.len(), 1);
+    assert_eq!(replay.max_seq, 2);
+    assert!(replay.sent_payloads.is_empty());
+    let event = replay.events[0].as_ref().unwrap();
+    assert_eq!(event.id, 2);
+    let frame: Value = serde_json::from_str(&event.payload).unwrap();
+    assert_eq!(
+        frame
+            .get("render_state")
+            .and_then(|state| state.get("based_on_seq"))
+            .and_then(Value::as_u64),
+        Some(2)
+    );
+    assert!(
+        frame
+            .get("events")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty)
+    );
+}
+
+#[tokio::test]
 async fn thread_stream_live_event_carries_committed_payload_and_render_snapshot() {
     let state = AppStateBuilder::new(test_config()).build();
     let thread_id = "thread::render-live-frame";

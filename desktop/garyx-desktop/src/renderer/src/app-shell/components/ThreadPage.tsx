@@ -801,8 +801,9 @@ export function ThreadPage({
 
             // Team mode keeps the per-block iteration so we can still emit
             // speaker headers between consecutive agents. Solo threads route
-            // through `buildTurnRows` so each multi-step assistant turn ends
-            // up behind a Codex-style "Worked for X" collapsible.
+            // server render_state rows through `buildThreadViewRows`, keeping
+            // multi-step assistant turns behind a Codex-style "Worked for X"
+            // collapsible without client-side regrouping.
             if (teamView.isTeam) {
               return teamBlocks.map((block, index) => {
                 const speaker = teamBlockSpeakers[index] || null;
@@ -868,7 +869,7 @@ export function ThreadPage({
 
             // Running/elapsed state comes from render_state (`step.running`,
             // which already defers the final answer while the run is busy), so
-            // the view only maps — no client-side run-active bridging.
+            // the view only maps the server view model.
             const renderActivityRow = (
               activityRow: UserTurnActivityRow,
             ): ReactNode => {

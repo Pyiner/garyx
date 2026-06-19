@@ -20,8 +20,7 @@ import type {
  */
 
 // View-model types consumed by the presentation layer (TurnSummary,
-// ToolTraceGroup, ThreadPage). Moved here from the now-deleted turn-render.ts /
-// transcript-render.ts so the components keep speaking the same prop contracts.
+// ToolTraceGroup, ThreadPage) while the semantic structure remains server-owned.
 export type RenderTranscriptEntry =
   | {
       kind: 'message';

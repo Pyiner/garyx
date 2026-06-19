@@ -55,6 +55,11 @@
 - Provider, agent, team, bot, and channel identity presentation must resolve
   through shared Core presentation helpers.
 - Do not add local switch tables in views, widgets, or settings.
+- Mobile chat transcript rows, tool groups, tail thinking, and active tool
+  state must render from server `render_state`. Keep
+  `GaryxMobileRenderStateMapper` as a dumb mapper from snapshot refs to local
+  message bodies; do not re-add Swift user-turn grouping, tool pairing, or
+  tail-thinking derivation.
 - Mobile chat, transcript, automation, widget, and workspace/bot visual details
   live in the `garyx-product-ui` skill. Use that skill for non-trivial mobile UI
   implementation or review.

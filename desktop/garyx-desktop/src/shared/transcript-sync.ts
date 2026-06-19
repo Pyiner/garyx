@@ -767,8 +767,7 @@ export function transcriptRewriteAction(
     : "none";
 }
 
-// Tool-message identity helpers. Moved here from the deleted render-fold module
-// (transcript-render.ts) because they're transport/reconciliation utilities,
+// Tool-message identity helpers. These are transport/reconciliation utilities,
 // not rendering logic: optimistic and gateway-recovery reconciliation use them
 // to match tool messages across local and remote copies.
 

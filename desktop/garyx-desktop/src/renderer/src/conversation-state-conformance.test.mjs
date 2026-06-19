@@ -152,10 +152,6 @@ for (const fixture of activityFixtures.cases) {
     }));
     const model = deriveThreadActivityModel({
       messages,
-      threadInfo: input.activeRunId ? { activeRun: { runId: input.activeRunId } } : null,
-      liveStream: input.liveStreamStatus
-        ? { threadId: 't', pendingAckIntentIds: [], streamStatus: input.liveStreamStatus }
-        : null,
       runtimeBusy: input.runtimeBusy,
       pendingAckIntentCount: input.pendingAckIntentCount,
       remoteAwaitingAckInputCount: input.remoteAwaitingAckInputCount,

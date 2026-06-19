@@ -127,7 +127,6 @@ import {
 } from "../message-rich-content";
 import {
   deriveThreadActivityModel,
-  threadActivitySignature,
 } from "./thread-activity";
 import { extractImageGenerationImageContent } from "./image-generation-content";
 import {
@@ -1890,9 +1889,6 @@ export function AppShell() {
   }, []);
   const lastRenderedMessageCountRef = useRef(0);
   const lastRenderedMessageTailSignatureRef = useRef("0");
-  const remoteTranscriptSignatureByThreadRef = useRef<Record<string, string>>(
-    {},
-  );
   const shouldFocusComposerRef = useRef(false);
   const memoryDialogRequestIdRef = useRef(0);
   const [memoryDialogTarget, setMemoryDialogTarget] =
@@ -2922,8 +2918,6 @@ export function AppShell() {
     : false;
   const threadActivity = deriveThreadActivityModel({
     messages: activeMessages,
-    threadInfo: activeThreadInfo,
-    liveStream: activeLiveStream,
     runtimeBusy: Boolean(activeRuntime && isRuntimeBusy(activeRuntime.state)),
     pendingAckIntentCount: visiblePendingAckIntents.length,
     remoteAwaitingAckInputCount: visibleRemoteAwaitingAckInputs.length,
@@ -3505,8 +3499,6 @@ export function AppShell() {
     : false;
   const sideChatThreadActivity = deriveThreadActivityModel({
     messages: sideChatMessages,
-    threadInfo: sideChatThreadInfo,
-    liveStream: sideChatLiveStream,
     runtimeBusy: Boolean(
       sideChatRuntime && isRuntimeBusy(sideChatRuntime.state),
     ),
@@ -6132,14 +6124,6 @@ export function AppShell() {
       [threadId]: resolvedTranscript.threadInfo ?? null,
     }));
     const visibleMessages = visibleTranscriptMessages(resolvedTranscript.messages);
-    remoteTranscriptSignatureByThreadRef.current = {
-      ...remoteTranscriptSignatureByThreadRef.current,
-      [threadId]: threadActivitySignature(
-        visibleMessages,
-        resolvedTranscript.pendingInputs,
-        resolvedTranscript.threadInfo,
-      ),
-    };
     setRemotePendingInputs(threadId, resolvedTranscript.pendingInputs);
     startTransition(() => {
       updateMessagesByThread((current) => {
@@ -6685,14 +6669,6 @@ export function AppShell() {
       [threadId]: resolvedTranscript.threadInfo ?? null,
     }));
     const visibleMessages = visibleTranscriptMessages(resolvedTranscript.messages);
-    remoteTranscriptSignatureByThreadRef.current = {
-      ...remoteTranscriptSignatureByThreadRef.current,
-      [threadId]: threadActivitySignature(
-        visibleMessages,
-        resolvedTranscript.pendingInputs,
-        resolvedTranscript.threadInfo,
-      ),
-    };
     setRemotePendingInputs(threadId, resolvedTranscript.pendingInputs);
     startTransition(() => {
       updateMessagesByThread((current) => {
