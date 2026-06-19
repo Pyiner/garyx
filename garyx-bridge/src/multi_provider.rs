@@ -78,6 +78,24 @@ impl MultiProviderBridge {
         *self.inner.event_tx.write().await = Some(tx);
     }
 
+    /// Subscribe to the gateway event bus this bridge emits onto.
+    ///
+    /// The bus carries `committed_message{seq}` records (content + control) plus
+    /// run lifecycle events (`run_complete`/`run_error`). Channel consumers use
+    /// this to read the durable committed stream instead of draining the live
+    /// `external_callback`. Returns `None` before the event bus is wired.
+    ///
+    /// Subscribe BEFORE dispatching the run so no committed record is missed in
+    /// the gap between subscribe and the first emit.
+    pub async fn subscribe_events(&self) -> Option<broadcast::Receiver<String>> {
+        self.inner
+            .event_tx
+            .read()
+            .await
+            .as_ref()
+            .map(broadcast::Sender::subscribe)
+    }
+
     pub fn set_thread_log_sink(&self, sink: Arc<dyn ThreadLogSink>) {
         if let Ok(mut guard) = self.inner.thread_logs.write() {
             *guard = Some(sink);
