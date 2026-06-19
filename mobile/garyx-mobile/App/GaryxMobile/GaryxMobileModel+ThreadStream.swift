@@ -1,12 +1,9 @@
 import Foundation
 
 // S5 — resumable per-thread transcript stream for the open thread. Connects
-// `/api/threads/{id}/stream?after_seq=<cursor>`: the replay (committed_message
-// events) is the catch-up, the live tail follows on the same channel, and a
-// reconnect resumes from the cursor (transfers only seq > cursor). committed_message
-// rows are durable (the gateway emits them after the jsonl flush), so they advance
-// the cursor. Non-committed passthrough frames are ignored; content and run-state
-// both come from committed transcript rows.
+// `/api/threads/{id}/stream?after_seq=<cursor>`: each data frame carries committed
+// transcript events plus a server-rendered snapshot. Events are the catch-up/sync
+// channel (cache, after_seq, run-state); render_state owns visible transcript rows.
 //
 // Self-heal: the broadcast bus is best-effort, so a slow consumer can miss events
 // (tokio broadcast Lagged). committed_message carries a gapless seq; if a live row
@@ -33,8 +30,13 @@ extension GaryxMobileModel {
     /// Cursor the per-thread stream resumes from: the highest committed index we
     /// already hold (cache window or rendered history), as a seq (index + 1).
     func selectedThreadStreamCursor(for threadId: String) -> Int {
-        GaryxStreamSeqPlanner.resumeCursor(
-            afterCursor: transcriptSnapshot(for: threadId)?.afterCursor,
+        let snapshot = transcriptSnapshot(for: threadId)
+        let hasRenderSnapshot = renderSnapshotsByThread[threadId] != nil || snapshot?.renderSnapshot != nil
+        guard hasRenderSnapshot else {
+            return 0
+        }
+        return GaryxStreamSeqPlanner.resumeCursor(
+            afterCursor: snapshot?.afterCursor,
             fallbackMaxIndex: cachedMessages(for: threadId).compactMap(\.historyIndex).max()
         )
     }
@@ -108,7 +110,7 @@ extension GaryxMobileModel {
                 }
                 guard selectedThreadStreamGeneration == generation else { break }
                 // The gateway emits each event as one compact-JSON `data:` line
-                // (committed_message has a preceding `id:`; deltas have just `data:`).
+                // (thread_render_frame has a preceding `id:`; pings have just `data:`).
                 // Process each `data:` line immediately rather than buffering until a
                 // blank separator — Swift's AsyncLineSequence does not yield the SSE
                 // blank lines, and the `:` keepalive / `id:` lines are skipped by the
@@ -155,31 +157,40 @@ extension GaryxMobileModel {
             return false
         }
         let type = object["type"] as? String
-        if type == "committed_message" {
-            guard let seq = (object["seq"] as? NSNumber)?.intValue ?? (object["seq"] as? Int),
-                  let messageObject = object["message"],
-                  let messageData = try? JSONSerialization.data(withJSONObject: messageObject),
-                  var message = try? JSONDecoder().decode(GaryxTranscriptMessage.self, from: messageData)
-            else {
+        if type == "thread_render_frame" {
+            guard let frame = try? JSONDecoder().decode(GaryxThreadRenderFrame.self, from: data) else {
                 return false
             }
-            // Decide gap-reconnect / stale-skip / apply from the seq (pure logic in
-            // GaryxStreamSeqPlanner; the first row of a connection always applies since
-            // a reset replay can legitimately start above the cursor).
+            return await handleSelectedThreadRenderFrame(frame, threadId: threadId)
+        }
+        if type == "committed_message" {
+            // Block 3 requires render_state for rendering. A bare legacy event is not
+            // a UI fallback; the reconnect/reconcile paths remain the sync fallback.
+            return false
+        }
+        if type == "ping" { return false }
+        return false
+    }
+
+    private func handleSelectedThreadRenderFrame(_ frame: GaryxThreadRenderFrame, threadId: String) async -> Bool {
+        let frameThreadId = frame.threadId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard frameThreadId.isEmpty || frameThreadId == threadId else { return false }
+        for event in frame.events {
+            guard event.type == "committed_message",
+                  let seq = event.seq,
+                  var message = event.message else {
+                continue
+            }
             switch GaryxStreamSeqPlanner.decide(
                 incomingSeq: seq,
                 connectionLastSeq: selectedThreadStreamConnectionLastSeq
             ) {
             case .gapReconnect(let resumeAfterSeq):
-                // A dropped broadcast event left a hole; reconnect from the last
-                // contiguous seq so the file replay refills it.
                 selectedThreadStreamResumeOverride = resumeAfterSeq
                 return true
             case .stale:
-                return false
+                continue
             case .apply:
-                // The committed row carries no index in its body; derive it from the
-                // gapless seq so it dedups against history rows (id "history:N").
                 message.index = seq - 1
                 message.id = "history:\(seq - 1)"
                 if GaryxTranscriptControlRewritePlanner.action(for: message) == .refetchAuthoritativeTranscript {
@@ -189,10 +200,13 @@ extension GaryxMobileModel {
                 }
                 applyStreamedCommittedMessage(message, threadId: threadId)
                 selectedThreadStreamConnectionLastSeq = seq
-                return false
             }
         }
-        if type == "ping" { return false }
+        selectedThreadStreamConnectionLastSeq = max(
+            selectedThreadStreamConnectionLastSeq,
+            frame.renderState.basedOnSeq
+        )
+        applyThreadRenderSnapshot(frame.renderState, threadId: threadId)
         return false
     }
 
@@ -226,6 +240,26 @@ extension GaryxMobileModel {
             savedAt: Date()
         )
         cachedTranscriptSnapshots[threadId] = window
+        scheduleSelectedThreadStreamFlush(for: threadId)
+    }
+
+    private func applyThreadRenderSnapshot(_ snapshot: GaryxRenderSnapshot, threadId: String) {
+        guard selectedThread?.id == threadId else { return }
+        setRenderSnapshot(snapshot, for: threadId)
+        let base = transcriptSnapshot(for: threadId)
+        let window = GaryxCachedTranscript(
+            threadId: threadId,
+            savedAt: Date(),
+            messages: base?.messages ?? [],
+            renderSnapshot: snapshot,
+            hasMoreBefore: base?.hasMoreBefore ?? false,
+            nextBeforeIndex: base?.nextBeforeIndex
+        )
+        cachedTranscriptSnapshots[threadId] = window
+        if !isThreadBusy(threadId) {
+            transcriptCacheStore.save(window)
+        }
+        markThreadHistoryLoaded(threadId)
         scheduleSelectedThreadStreamFlush(for: threadId)
     }
 

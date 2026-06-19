@@ -13,6 +13,7 @@ public struct GaryxCachedTranscript: Codable, Equatable, Sendable {
     public var threadId: String
     public var savedAt: Date
     public var messages: [GaryxTranscriptMessage]
+    public var renderSnapshot: GaryxRenderSnapshot?
     public var hasMoreBefore: Bool
     public var nextBeforeIndex: Int?
 
@@ -21,6 +22,7 @@ public struct GaryxCachedTranscript: Codable, Equatable, Sendable {
         threadId: String,
         savedAt: Date,
         messages: [GaryxTranscriptMessage],
+        renderSnapshot: GaryxRenderSnapshot? = nil,
         hasMoreBefore: Bool,
         nextBeforeIndex: Int?
     ) {
@@ -28,6 +30,7 @@ public struct GaryxCachedTranscript: Codable, Equatable, Sendable {
         self.threadId = threadId
         self.savedAt = savedAt
         self.messages = messages
+        self.renderSnapshot = renderSnapshot
         self.hasMoreBefore = hasMoreBefore
         self.nextBeforeIndex = nextBeforeIndex
     }
@@ -89,6 +92,7 @@ public enum GaryxTranscriptCacheLogic {
         into cache: GaryxCachedTranscript?,
         threadId: String,
         fetched: [GaryxTranscriptMessage],
+        renderSnapshot: GaryxRenderSnapshot? = nil,
         pageInfo: GaryxThreadTranscriptPageInfo?,
         direction: GaryxTranscriptCacheMergeDirection,
         savedAt: Date
@@ -126,6 +130,7 @@ public enum GaryxTranscriptCacheLogic {
             threadId: threadId,
             savedAt: savedAt,
             messages: messages,
+            renderSnapshot: renderSnapshot ?? cache?.renderSnapshot,
             hasMoreBefore: hasMoreBefore,
             nextBeforeIndex: nextBeforeIndex
         )

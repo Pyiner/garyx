@@ -11,18 +11,15 @@ extension AnyTransition {
 
 struct GaryxMobileTurnRowsView: View {
     let rows: [GaryxMobileTurnRow]
-    let forceRunningLastTurn: Bool
     let prefetchBoundaryRowCount: Int
     let onNearHistoryBoundary: () -> Void
 
     init(
         rows: [GaryxMobileTurnRow],
-        forceRunningLastTurn: Bool,
         prefetchBoundaryRowCount: Int = 0,
         onNearHistoryBoundary: @escaping () -> Void = {}
     ) {
         self.rows = rows
-        self.forceRunningLastTurn = forceRunningLastTurn
         self.prefetchBoundaryRowCount = prefetchBoundaryRowCount
         self.onNearHistoryBoundary = onNearHistoryBoundary
     }
@@ -44,32 +41,22 @@ struct GaryxMobileTurnRowsView: View {
                 .transition(.garyxTranscriptAppear)
         }
 
-        ForEach(Array(row.activityRows.enumerated()), id: \.element.id) { activityIndex, activityRow in
-            let forceRunning = forceRunningLastTurn
-                && rowIndex == rows.count - 1
-                && activityIndex == row.activityRows.count - 1
-            GaryxMobileTurnActivityRowView(
-                row: activityRow,
-                forceRunning: forceRunning
-            )
-            .transition(.garyxTranscriptAppear)
+        ForEach(Array(row.activityRows.enumerated()), id: \.element.id) { _, activityRow in
+            GaryxMobileTurnActivityRowView(row: activityRow)
+                .transition(.garyxTranscriptAppear)
         }
     }
 }
 
 struct GaryxMobileTurnActivityRowView: View {
     let row: GaryxMobileTurnRow.ActivityRow
-    let forceRunning: Bool
 
     var body: some View {
         switch row {
         case .flat(let block):
             GaryxMobileTranscriptBlockView(block: block)
         case .turn(let turn):
-            GaryxTurnSummaryView(
-                turn: turn,
-                forceRunning: forceRunning && turn.finalBlock == nil
-            ) {
+            GaryxTurnSummaryView(turn: turn) {
                 ForEach(turn.steps) { step in
                     GaryxMobileTranscriptBlockView(block: step)
                 }
@@ -95,7 +82,6 @@ struct GaryxMobileTranscriptBlockView: View {
 
 struct GaryxTurnSummaryView<Content: View>: View {
     let turn: GaryxMobileAgentTurn
-    let forceRunning: Bool
     let content: Content
 
     @State private var expanded: Bool
@@ -104,13 +90,11 @@ struct GaryxTurnSummaryView<Content: View>: View {
 
     init(
         turn: GaryxMobileAgentTurn,
-        forceRunning: Bool,
         @ViewBuilder content: () -> Content
     ) {
         self.turn = turn
-        self.forceRunning = forceRunning
         self.content = content()
-        _expanded = State(initialValue: turn.isRunning || forceRunning)
+        _expanded = State(initialValue: turn.isRunning)
     }
 
     var body: some View {
@@ -156,7 +140,7 @@ struct GaryxTurnSummaryView<Content: View>: View {
     }
 
     private var isRunning: Bool {
-        turn.isRunning || forceRunning
+        turn.isRunning
     }
 
     @ViewBuilder

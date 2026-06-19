@@ -23,6 +23,26 @@ final class GaryxTranscriptCacheTests: XCTestCase {
         )
     }
 
+    private func renderSnapshot(basedOnSeq: Int = 2) -> GaryxRenderSnapshot {
+        GaryxRenderSnapshot(
+            basedOnSeq: basedOnSeq,
+            rows: [
+                .userTurn(GaryxRenderUserTurnRow(
+                    id: "turn:1",
+                    user: GaryxRenderMessageRef(id: "seq:1", seq: 1, role: "user"),
+                    activity: [
+                        .assistantReply(GaryxRenderAssistantReplyRow(
+                            id: "reply:2",
+                            message: GaryxRenderMessageRef(id: "seq:2", seq: 2, role: "assistant")
+                        )),
+                    ]
+                )),
+            ],
+            tailActivity: .none,
+            visibleMessageIds: ["seq:1", "seq:2"]
+        )
+    }
+
     // MARK: - GaryxTranscriptMessage Codable round-trip
 
     func testTranscriptMessageCodableRoundTripPreservesFieldsAndDerivesId() throws {
@@ -53,6 +73,7 @@ final class GaryxTranscriptCacheTests: XCTestCase {
             threadId: "thread::abc",
             savedAt: Date(timeIntervalSince1970: 1_000_000),
             messages: [msg(0, .user, "hi"), msg(1, .assistant, "yo")],
+            renderSnapshot: renderSnapshot(),
             hasMoreBefore: true,
             nextBeforeIndex: 0
         )
@@ -62,6 +83,7 @@ final class GaryxTranscriptCacheTests: XCTestCase {
         decoder.dateDecodingStrategy = .iso8601
         let decoded = try decoder.decode(GaryxCachedTranscript.self, from: encoder.encode(snapshot))
         XCTAssertEqual(decoded, snapshot)
+        XCTAssertEqual(decoded.renderSnapshot?.basedOnSeq, 2)
         XCTAssertEqual(decoded.afterCursor, 1)
         XCTAssertEqual(decoded.firstIndex, 0)
     }
@@ -127,6 +149,40 @@ final class GaryxTranscriptCacheTests: XCTestCase {
         )
         XCTAssertEqual(merged.messages.map(\.index), [0, 1, 2])
         XCTAssertEqual(merged.messages.first { $0.index == 1 }?.text, "partial finalized")
+    }
+
+    func testMergePreservesCachedRenderSnapshotUnlessNewSnapshotProvided() {
+        let existingSnapshot = renderSnapshot(basedOnSeq: 2)
+        let cache = GaryxCachedTranscript(
+            threadId: "t",
+            savedAt: Date(timeIntervalSince1970: 0),
+            messages: [msg(0, .user, "u"), msg(1, .assistant, "a")],
+            renderSnapshot: existingSnapshot,
+            hasMoreBefore: false,
+            nextBeforeIndex: nil
+        )
+
+        let preserved = GaryxTranscriptCacheLogic.merged(
+            into: cache,
+            threadId: "t",
+            fetched: [msg(2, .assistant, "next")],
+            pageInfo: pageInfo(),
+            direction: .forward,
+            savedAt: Date(timeIntervalSince1970: 1)
+        )
+        XCTAssertEqual(preserved.renderSnapshot, existingSnapshot)
+
+        let newerSnapshot = renderSnapshot(basedOnSeq: 3)
+        let replaced = GaryxTranscriptCacheLogic.merged(
+            into: cache,
+            threadId: "t",
+            fetched: [msg(2, .assistant, "next")],
+            renderSnapshot: newerSnapshot,
+            pageInfo: pageInfo(),
+            direction: .forward,
+            savedAt: Date(timeIntervalSince1970: 1)
+        )
+        XCTAssertEqual(replaced.renderSnapshot, newerSnapshot)
     }
 
     func testOlderPrependsAndTakesPageOlderBoundary() {

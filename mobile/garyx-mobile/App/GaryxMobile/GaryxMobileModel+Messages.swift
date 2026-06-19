@@ -8,20 +8,28 @@ extension GaryxMobileModel {
         messagesByThread[threadId] ?? []
     }
 
+    func renderSnapshot(for threadId: String) -> GaryxRenderSnapshot? {
+        renderSnapshotsByThread[threadId] ?? cachedTranscriptSnapshots[threadId]?.renderSnapshot
+    }
+
+    func setRenderSnapshot(_ snapshot: GaryxRenderSnapshot?, for threadId: String) {
+        guard renderSnapshotsByThread[threadId] != snapshot else { return }
+        renderSnapshotsByThread[threadId] = snapshot
+    }
+
     func selectedThreadTurnRows() -> [GaryxMobileTurnRow] {
-        let isRunning = isSelectedThreadSending
-        let key = TurnRowsCacheKey(
-            isRunning: isRunning,
-            messages: selectedMessagesSignature
-        )
-        if selectedThreadTurnRowsCacheKey != key {
-            selectedThreadTurnRowsCache = GaryxMobileTurnRenderer.buildTurnRows(
+        guard let threadId = selectedThread?.id else {
+            return GaryxMobileRenderStateMapper.rows(
+                snapshot: nil,
                 messages: messages,
-                isRunningThread: isRunning
+                transcriptMessages: []
             )
-            selectedThreadTurnRowsCacheKey = key
         }
-        return selectedThreadTurnRowsCache
+        return GaryxMobileRenderStateMapper.rows(
+            snapshot: renderSnapshot(for: threadId),
+            messages: messages,
+            transcriptMessages: cachedTranscriptSnapshots[threadId]?.messages ?? []
+        )
     }
 
     func setMessages(
@@ -69,6 +77,7 @@ extension GaryxMobileModel {
         messagesByThread[threadId] = []
         messageSignaturesByThread[threadId] = Self.messageListSignature(for: [])
         activeAssistantMessageIdsByThread[threadId] = nil
+        renderSnapshotsByThread[threadId] = nil
         if selectedThread?.id == threadId {
             pendingSelectedMessagesSignature = messageSignaturesByThread[threadId]
             messages = []

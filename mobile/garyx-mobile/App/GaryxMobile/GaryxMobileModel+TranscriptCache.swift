@@ -27,9 +27,13 @@ extension GaryxMobileModel {
     /// Rendered committed window for instant cold-start display before the network
     /// fetch returns. Empty when nothing is cached.
     func restoredCachedMessages(for threadId: String) -> [GaryxMobileMessage] {
-        guard let snapshot = transcriptSnapshot(for: threadId), !snapshot.messages.isEmpty else {
+        guard let snapshot = transcriptSnapshot(for: threadId) else {
             return []
         }
+        if let renderSnapshot = snapshot.renderSnapshot {
+            setRenderSnapshot(renderSnapshot, for: threadId)
+        }
+        guard !snapshot.messages.isEmpty else { return [] }
         return mobileMessages(from: snapshot.messages, live: false)
     }
 
@@ -178,6 +182,7 @@ extension GaryxMobileModel {
 
     func clearTranscriptCache(for threadId: String) {
         cachedTranscriptSnapshots[threadId] = nil
+        renderSnapshotsByThread[threadId] = nil
         transcriptCacheStore.remove(threadId: threadId)
     }
 }

@@ -268,11 +268,12 @@ struct GaryxConversationView: View {
                         }
                     }
 
-                if model.messages.isEmpty,
+                let turnRows = model.selectedThreadTurnRows()
+                if turnRows.isEmpty,
                    model.isSelectedThreadLoadingInitialHistory {
                     GaryxThreadHistoryLoadingView()
                         .padding(.top, 12)
-                } else if model.messages.isEmpty {
+                } else if turnRows.isEmpty {
                     if model.showsTailThinkingIndicator {
                         GaryxThinkingLabel()
                             .padding(.top, 96)
@@ -292,12 +293,7 @@ struct GaryxConversationView: View {
                         }
                     }
                     GaryxMobileTurnRowsView(
-                        rows: model.selectedThreadTurnRows(),
-                        // The run-level sending flag, not per-block pending
-                        // state: a lull between steps must not flip the
-                        // trailing turn to "Worked" and auto-collapse it
-                        // while the run is still going.
-                        forceRunningLastTurn: model.isSelectedThreadSending,
+                        rows: turnRows,
                         prefetchBoundaryRowCount: garyxHistoryPrefetchBoundaryRows
                     ) {
                         prefetchOlderHistoryIfNeeded(ignoreDistance: true)

@@ -57,11 +57,6 @@ final class GaryxMobileModel: ObservableObject {
         let sampled: Bool
     }
 
-    struct TurnRowsCacheKey: Equatable {
-        let isRunning: Bool
-        let messages: MessageListSignature
-    }
-
     struct WidgetAgentIdentity {
         var id: String?
         var name: String?
@@ -90,7 +85,6 @@ final class GaryxMobileModel: ObservableObject {
             } else {
                 selectedMessagesSignature = Self.messageListSignature(for: messages)
             }
-            selectedThreadTurnRowsCacheKey = nil
         }
     }
     /// Per-thread composer drafts. Not `@Published`: the composer view owns the
@@ -113,6 +107,10 @@ final class GaryxMobileModel: ObservableObject {
     @Published var runTracker = GaryxConversationRunTracker()
     /// Server run-state rebuilt from committed transcript control records.
     @Published var runStateByThread: [String: GaryxTranscriptRunState] = [:]
+    /// Server-rendered transcript snapshots keyed by thread. These snapshots own
+    /// visible transcript rows; committed messages remain only the data pool they
+    /// reference.
+    @Published var renderSnapshotsByThread: [String: GaryxRenderSnapshot] = [:]
     /// Legacy-shaped read bridges over `runTracker`.
     var isSending: Bool { runTracker.hasLocalActiveRun }
     var activeRunThreadId: String? { runTracker.localActiveRunThreadId }
@@ -244,8 +242,6 @@ final class GaryxMobileModel: ObservableObject {
     var cachedTranscriptSnapshots: [String: GaryxCachedTranscript] = [:]
     var selectedMessagesSignature = MessageListSignature(count: 0, fingerprint: 0, sampled: false)
     var pendingSelectedMessagesSignature: MessageListSignature?
-    var selectedThreadTurnRowsCacheKey: TurnRowsCacheKey?
-    var selectedThreadTurnRowsCache: [GaryxMobileTurnRow] = []
     var activeAssistantMessageIdsByThread: [String: String] = [:]
     var pendingDirectFollowUpsByThread: [String: [(userId: String, assistantId: String)]] = [:]
     var pendingQueuedInputsByIntentId: [String: GaryxPendingQueuedInput] = [:]

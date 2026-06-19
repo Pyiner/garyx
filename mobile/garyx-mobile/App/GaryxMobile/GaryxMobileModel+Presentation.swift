@@ -64,8 +64,11 @@ extension GaryxMobileModel {
 
     var isSelectedThreadAwaitingInitialHistory: Bool {
         guard let threadId = selectedThread?.id.trimmingCharacters(in: .whitespacesAndNewlines),
-              !threadId.isEmpty,
-              cachedMessages(for: threadId).isEmpty else {
+              !threadId.isEmpty else {
+            return false
+        }
+        if renderSnapshotsByThread[threadId] != nil
+            || cachedTranscriptSnapshots[threadId]?.renderSnapshot != nil {
             return false
         }
         return !threadHistoryLoadedIds.contains(threadId)
@@ -108,10 +111,8 @@ extension GaryxMobileModel {
     }
 
     var showsTailThinkingIndicator: Bool {
-        GaryxMobileThreadActivityModel.showsTailThinkingIndicator(
-            messages: messages,
-            runActive: isSelectedThreadSending
-        )
+        guard let threadId = selectedThread?.id else { return false }
+        return renderSnapshot(for: threadId)?.tailActivity == .thinking
     }
 
     func isThreadBusy(_ threadId: String) -> Bool {

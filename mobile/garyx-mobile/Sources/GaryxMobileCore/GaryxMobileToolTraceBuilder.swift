@@ -2,173 +2,27 @@ import Foundation
 
 extension GaryxMobileTranscriptMapper {
     static func mobileMessages(from transcript: [GaryxTranscriptMessage], live: Bool = false) -> [GaryxMobileMessage] {
-        var rendered: [GaryxMobileMessage] = []
-        var pendingToolGroup: GaryxMobileToolTraceGroup?
-        var pendingToolGroupHistoryIndex: Int?
-
-        func flushToolGroup() {
-            guard let group = pendingToolGroup, !group.entries.isEmpty else {
-                pendingToolGroup = nil
-                pendingToolGroupHistoryIndex = nil
-                return
+        transcript.compactMap { item in
+            if item.role == .tool || GaryxMobileTranscriptToolTraceClassifier.kind(for: item) != nil {
+                return nil
             }
-            let firstEntry = group.entries[0]
-            let groupIsLive = live && group.entries.contains { $0.status == .running }
-            rendered.append(
-                GaryxMobileMessage(
-                    id: "tool-group:\(firstEntry.id)",
-                    role: .tool,
-                    text: group.summary,
-                    timestamp: firstEntry.timestamp,
-                    isStreaming: groupIsLive,
-                    toolTraceGroup: GaryxMobileToolTraceGroup(
-                        entries: group.entries,
-                        live: groupIsLive
-                    ),
-                    localState: groupIsLive ? .remotePartial : .remoteFinal,
-                    // Carry the first grouped row's transcript index so the
-                    // merge's older-page preservation keeps tool groups like
-                    // it keeps text rows instead of silently dropping them.
-                    historyIndex: pendingToolGroupHistoryIndex
-                )
-            )
-            pendingToolGroup = nil
-            pendingToolGroupHistoryIndex = nil
-        }
-
-        for item in transcript {
-            let toolTraceKind = GaryxMobileTranscriptToolTraceClassifier.kind(for: item)
-            if toolTraceKind != nil {
-                guard let entry = GaryxMobileToolTraceEntry(transcript: item) else {
-                    continue
-                }
-                if toolTraceKind == .toolResult {
-                    // Absorb into the open group, else into the earlier group the
-                    // matching tool_use was flushed to when an intervening text row
-                    // split them (a sub-agent runs while the parent narrates) - so a
-                    // straddling result is never rendered as a stray "Used 1 tool".
-                    if var group = pendingToolGroup, absorbToolResult(entry, into: &group) {
-                        pendingToolGroup = group
-                        continue
-                    }
-                    if absorbResultIntoFlushedToolGroup(entry, in: &rendered) {
-                        continue
-                    }
-                    continue
-                }
-                var group = pendingToolGroup ?? GaryxMobileToolTraceGroup(entries: [], live: false)
-                if pendingToolGroupHistoryIndex == nil {
-                    pendingToolGroupHistoryIndex = item.index
-                }
-                group.entries.append(entry)
-                pendingToolGroup = group
-                continue
-            }
-
-            flushToolGroup()
-
             let attachments = messageAttachments(fromTranscript: item)
             let displayText = transcriptMessageText(item, attachments: attachments)
             let trimmed = displayText.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty, attachments.isEmpty, item.role != .user, item.role != .assistant {
-                continue
+                return nil
             }
-            rendered.append(
-                GaryxMobileMessage(
-                    id: item.id,
-                    role: mobileRole(for: item.role),
-                    text: displayText,
-                    attachments: attachments,
-                    timestamp: item.timestamp,
-                    isStreaming: false,
-                    localState: .remoteFinal,
-                    historyIndex: item.index
-                )
+            return GaryxMobileMessage(
+                id: item.id,
+                role: mobileRole(for: item.role),
+                text: displayText,
+                attachments: attachments,
+                timestamp: item.timestamp,
+                isStreaming: false,
+                localState: .remoteFinal,
+                historyIndex: item.index
             )
         }
-
-        flushToolGroup()
-        return rendered
-    }
-
-    /// Absorb a committed `tool_result` entry into the tool-use entry it belongs
-    /// to. An identified result matches by `toolUseId`; id-less provider results
-    /// can only complete an open running entry in the current pending group.
-    private static func absorbToolResult(
-        _ result: GaryxMobileToolTraceEntry,
-        into group: inout GaryxMobileToolTraceGroup,
-        allowIdlessFallback: Bool = true
-    ) -> Bool {
-        if let resultId = result.toolUseId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !resultId.isEmpty {
-            if let index = group.entries.lastIndex(where: { entry in
-                guard let entryId = entry.toolUseId?.trimmingCharacters(in: .whitespacesAndNewlines),
-                      !entryId.isEmpty else { return false }
-                return entryId == resultId
-            }) {
-                group.entries[index].absorb(result: result)
-                return true
-            }
-            return false
-        }
-
-        guard allowIdlessFallback else { return false }
-        if let index = group.entries.lastIndex(where: { canAbsorbToolResultFallback(result, into: $0) }) {
-            group.entries[index].absorb(result: result)
-            return true
-        }
-        return false
-    }
-
-    private static func canAbsorbToolResultFallback(
-        _ result: GaryxMobileToolTraceEntry,
-        into candidate: GaryxMobileToolTraceEntry
-    ) -> Bool {
-        guard candidate.status == .running, candidate.resultText == nil else {
-            return false
-        }
-        let resultId = result.toolUseId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let candidateId = candidate.toolUseId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !resultId.isEmpty, !candidateId.isEmpty, resultId != candidateId {
-            return false
-        }
-        let resultTool = result.toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let candidateTool = candidate.toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if !resultTool.isEmpty, resultTool == candidateTool {
-            return true
-        }
-        if candidateTool == "tool" || resultTool == "tool" {
-            return true
-        }
-        if result.title.caseInsensitiveCompare(candidate.title) == .orderedSame {
-            return true
-        }
-        if let resultSummary = result.summaryText,
-           let candidateSummary = candidate.summaryText,
-           resultSummary == candidateSummary {
-            return true
-        }
-        return false
-    }
-
-    /// Absorb a committed `tool_result` into the most recent already-flushed tool
-    /// group in the current turn. The stable-id-only match avoids attaching a
-    /// stray id-less result across text or group boundaries.
-    private static func absorbResultIntoFlushedToolGroup(
-        _ entry: GaryxMobileToolTraceEntry,
-        in messages: inout [GaryxMobileMessage]
-    ) -> Bool {
-        for index in messages.indices.reversed() {
-            if messages[index].role == .user { break }
-            guard messages[index].role == .tool,
-                  var group = messages[index].toolTraceGroup else { continue }
-            if absorbToolResult(entry, into: &group, allowIdlessFallback: false) {
-                messages[index].toolTraceGroup = group
-                messages[index].text = group.summary
-                return true
-            }
-        }
-        return false
     }
 
     static func transcriptStructuredContent(_ item: GaryxTranscriptMessage) -> GaryxJSONValue? {
@@ -430,34 +284,6 @@ struct GaryxMobileToolTracePayload {
 }
 
 extension GaryxMobileToolTraceEntry {
-    init?(transcript message: GaryxTranscriptMessage) {
-        if GaryxMobileTranscriptToolTraceClassifier.isReasoningTrace(message) {
-            return nil
-        }
-        let eventKind = GaryxMobileToolTracePayload.eventKind(fromTranscript: message)
-        let payload = GaryxMobileToolTracePayload.fromTranscript(message)
-        guard payload.shouldRender else {
-            return nil
-        }
-        self.init(
-            id: "\(message.id):\(eventKind.idSuffix)",
-            toolUseId: payload.toolUseId,
-            parentToolUseId: payload.parentToolUseId,
-            toolName: payload.normalizedToolName,
-            title: GaryxMobileToolTraceEntry.title(for: payload.normalizedToolName),
-            inputText: eventKind == .toolUse ? payload.contentText : nil,
-            resultText: eventKind == .toolResult ? payload.contentText : nil,
-            summaryText: payload.summaryText,
-            inputLabel: "Call",
-            resultLabel: "Result",
-            status: eventKind == .toolResult ? (payload.isError ? .failed : .completed) : .running,
-            isError: payload.isError,
-            timestamp: payload.timestamp,
-            primaryPathBadge: payload.primaryPathBadge,
-            primaryPath: payload.primaryPath
-        )
-    }
-
     static func title(for toolName: String) -> String {
         let trimmed = toolName.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalized = trimmed.lowercased()
@@ -501,41 +327,6 @@ extension GaryxMobileToolTraceEntry {
 }
 
 extension GaryxMobileToolTracePayload {
-    var shouldRender: Bool {
-        let normalizedItemType = itemType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let normalizedToolName = toolName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if Self.shouldHideDisplayIdentifier(normalizedItemType)
-            || Self.shouldHideDisplayIdentifier(normalizedToolName) {
-            return false
-        }
-        // A sub-agent's nested tool call carries a parent tool-use id pointing to
-        // ANOTHER call (the Agent that spawned it). It is not rendered on its own -
-        // the parent `Agent` row represents that work - which also removes the
-        // sub-agent calls that straddle the parent's narration and otherwise
-        // duplicated as a stray "Used 1 tool". A normal top-level tool result may
-        // carry a parent id equal to its OWN tool-use id (the call it answers);
-        // that is kept so it can still absorb into its tool row.
-        let normalizedParent = parentToolUseId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let parent = normalizedParent, !parent.isEmpty,
-           parent != toolUseId?.trimmingCharacters(in: .whitespacesAndNewlines) {
-            return false
-        }
-        return true
-    }
-
-    private static func shouldHideDisplayIdentifier(_ value: String?) -> Bool {
-        guard let value, !value.isEmpty else { return false }
-        return [
-            "contextcompaction",
-            "enteredreviewmode",
-            "exitedreviewmode",
-            "filechange",
-            "hookprompt",
-            "plan",
-            "reasoning",
-        ].contains(value)
-    }
-
     static func eventKind(fromTranscript message: GaryxTranscriptMessage) -> GaryxMobileToolTraceEventKind {
         switch GaryxMobileTranscriptToolTraceClassifier.kind(for: message) {
         case .toolResult:
