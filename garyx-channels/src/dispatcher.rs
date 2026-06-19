@@ -12,7 +12,7 @@ use std::time::Duration;
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use garyx_models::ChannelOutboundContent;
-use garyx_models::provider::StreamEvent;
+use garyx_models::provider::{StreamBoundaryKind, StreamEvent};
 use garyx_models::routing::{infer_delivery_target_id, infer_delivery_target_type};
 use garyx_router::MessageRouter;
 use regex::Regex;
@@ -108,6 +108,157 @@ pub trait ChannelDispatcher: Send + Sync {
     ) -> Option<Arc<dyn Fn(StreamEvent) + Send + Sync>> {
         None
     }
+}
+
+#[derive(Default)]
+struct OutboundStreamState {
+    pending_text: String,
+}
+
+impl OutboundStreamState {
+    fn push_text(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        self.pending_text = crate::streaming_core::merge_stream_text(&self.pending_text, text);
+    }
+
+    fn take_text(&mut self) -> Option<ChannelOutboundContent> {
+        let text = std::mem::take(&mut self.pending_text);
+        (!text.trim().is_empty()).then(|| ChannelOutboundContent::text(text))
+    }
+}
+
+struct OutboundStreamCallbackShared {
+    dispatcher: Arc<dyn ChannelDispatcher>,
+    target: StreamingDispatchTarget,
+    router: Arc<Mutex<MessageRouter>>,
+    state: std::sync::Mutex<OutboundStreamState>,
+    delivery_gate: Mutex<()>,
+}
+
+impl OutboundStreamCallbackShared {
+    fn contents_for_event(&self, event: StreamEvent) -> Vec<ChannelOutboundContent> {
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(_) => {
+                warn!("outbound stream callback state lock poisoned");
+                return Vec::new();
+            }
+        };
+
+        match event {
+            StreamEvent::SessionBound { .. } | StreamEvent::ThreadTitleUpdated { .. } => Vec::new(),
+            StreamEvent::Delta { text } => {
+                state.push_text(&text);
+                Vec::new()
+            }
+            StreamEvent::Boundary { kind, .. } => match kind {
+                StreamBoundaryKind::AssistantSegment | StreamBoundaryKind::UserAck => {
+                    state.take_text().into_iter().collect()
+                }
+            },
+            StreamEvent::Done => state.take_text().into_iter().collect(),
+            StreamEvent::ToolUse { message } => {
+                let mut contents: Vec<_> = state.take_text().into_iter().collect();
+                contents.push(ChannelOutboundContent::ToolUse { message });
+                contents
+            }
+            StreamEvent::ToolResult { message } => {
+                let mut contents: Vec<_> = state.take_text().into_iter().collect();
+                contents.push(ChannelOutboundContent::ToolResult { message });
+                contents
+            }
+        }
+    }
+
+    async fn dispatch_contents(self: Arc<Self>, contents: Vec<ChannelOutboundContent>) {
+        let _guard = self.delivery_gate.lock().await;
+        for content in contents {
+            self.dispatch_content(content).await;
+        }
+    }
+
+    async fn dispatch_content(&self, content: ChannelOutboundContent) {
+        let request = OutboundMessage {
+            channel: self.target.channel.clone(),
+            account_id: self.target.account_id.clone(),
+            chat_id: self.target.chat_id.clone(),
+            delivery_target_type: self.target.delivery_target_type.clone(),
+            delivery_target_id: self.target.delivery_target_id.clone(),
+            content,
+            reply_to: None,
+            thread_id: self.target.thread_id.clone(),
+        };
+
+        match self.dispatcher.send_message(request).await {
+            Ok(SendMessageResult { message_ids }) => {
+                self.record_outbound_messages(&message_ids).await;
+            }
+            Err(error) => {
+                warn!(
+                    channel = %self.target.channel,
+                    account_id = %self.target.account_id,
+                    chat_id = %self.target.chat_id,
+                    target_thread_id = %self.target.target_thread_id,
+                    error = %error,
+                    "outbound stream callback failed to send channel message"
+                );
+            }
+        }
+    }
+
+    async fn record_outbound_messages(&self, message_ids: &[String]) {
+        if self.target.target_thread_id.trim().is_empty() || message_ids.is_empty() {
+            return;
+        }
+
+        let mut router = self.router.lock().await;
+        for message_id in message_ids {
+            router
+                .record_outbound_message_with_persistence(
+                    &self.target.target_thread_id,
+                    &self.target.channel,
+                    &self.target.account_id,
+                    &self.target.chat_id,
+                    self.target.thread_id.as_deref(),
+                    message_id,
+                )
+                .await;
+        }
+    }
+}
+
+/// Build a generic channel-layer consumer for committed provider stream events.
+///
+/// Native channel runtimes can provide richer callbacks through
+/// [`ChannelDispatcher::build_streaming_callback`]. This fallback keeps the
+/// gateway out of presentation concerns: it accepts provider events, applies the
+/// channel-invariant stream text rules, and sends structured outbound content
+/// through the dispatcher.
+pub fn build_outbound_stream_callback(
+    dispatcher: Arc<dyn ChannelDispatcher>,
+    target: StreamingDispatchTarget,
+    router: Arc<Mutex<MessageRouter>>,
+) -> Arc<dyn Fn(StreamEvent) + Send + Sync> {
+    let shared = Arc::new(OutboundStreamCallbackShared {
+        dispatcher,
+        target,
+        router,
+        state: std::sync::Mutex::new(OutboundStreamState::default()),
+        delivery_gate: Mutex::new(()),
+    });
+
+    Arc::new(move |event| {
+        let contents = shared.contents_for_event(event);
+        if contents.is_empty() {
+            return;
+        }
+        let shared = shared.clone();
+        tokio::spawn(async move {
+            shared.dispatch_contents(contents).await;
+        });
+    })
 }
 
 // ---------------------------------------------------------------------------

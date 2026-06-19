@@ -1,92 +1,15 @@
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 
-mod buffer;
-mod images;
 mod plan;
-mod sender;
 
-use self::buffer::{BoundThreadDeliveryBuffer, schedule_loop_bound_delivery_flush};
 use self::plan::{
     BoundThreadDeliveryTarget, snapshot_bound_thread_delivery_targets,
     targets_except_streaming_target,
 };
-use garyx_channels::StreamingDispatchTarget;
-use garyx_models::ChannelOutboundContent;
-use garyx_models::provider::{ProviderMessage, StreamBoundaryKind, StreamEvent};
-use serde_json::Value;
+use garyx_channels::{StreamingDispatchTarget, build_outbound_stream_callback};
+use garyx_models::provider::StreamEvent;
 
 use crate::server::AppState;
-
-fn is_message_tool_name(tool_name: &str) -> bool {
-    let trimmed = tool_name.trim();
-    !trimmed.is_empty()
-        && trimmed
-            .rsplit(':')
-            .next()
-            .is_some_and(|value| value.eq_ignore_ascii_case("message"))
-}
-
-fn non_empty_string(value: Option<&Value>) -> Option<String> {
-    value
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .filter(|text| !text.trim().is_empty())
-}
-
-fn value_marks_message_tool(value: &Value) -> bool {
-    match value {
-        Value::Object(map) => {
-            non_empty_string(map.get("tool"))
-                .or_else(|| non_empty_string(map.get("tool_name")))
-                .or_else(|| non_empty_string(map.get("toolName")))
-                .or_else(|| non_empty_string(map.get("name")))
-                .is_some_and(|name| is_message_tool_name(&name))
-                || map.values().any(value_marks_message_tool)
-        }
-        Value::Array(items) => items.iter().any(value_marks_message_tool),
-        _ => false,
-    }
-}
-
-fn extract_message_tool_text(content: &Value) -> Option<String> {
-    const POINTERS: &[&str] = &[
-        "/text",
-        "/input/text",
-        "/input/params/text",
-        "/arguments/text",
-        "/args/text",
-        "/params/text",
-        "/result/text",
-        "/result/input/text",
-        "/result/input/params/text",
-        "/result/arguments/text",
-        "/result/args/text",
-        "/result/params/text",
-    ];
-
-    for pointer in POINTERS {
-        if let Some(text) = non_empty_string(content.pointer(pointer)) {
-            return Some(text);
-        }
-    }
-    None
-}
-
-pub(crate) fn message_tool_mirror_text(message: &ProviderMessage) -> Option<String> {
-    if message.is_error.unwrap_or(false) {
-        return None;
-    }
-    let marked = message
-        .tool_name
-        .as_deref()
-        .is_some_and(is_message_tool_name)
-        || value_marks_message_tool(&message.content);
-    if !marked {
-        return None;
-    }
-    extract_message_tool_text(&message.content)
-}
 
 pub async fn build_bound_response_callback(
     state: &Arc<AppState>,
@@ -106,7 +29,6 @@ pub async fn build_bound_response_callback(
         let bound_consumer = build_bound_delivery_consumer(
             state.clone(),
             thread_id.to_owned(),
-            run_id.to_owned(),
             targets_except_streaming_target(&targets, target),
         );
 
@@ -128,12 +50,9 @@ pub async fn build_bound_response_callback(
         .await;
     }
 
-    let Some(bound_consumer) = build_bound_delivery_consumer(
-        state.clone(),
-        thread_id.to_owned(),
-        run_id.to_owned(),
-        targets,
-    ) else {
+    let Some(bound_consumer) =
+        build_bound_delivery_consumer(state.clone(), thread_id.to_owned(), targets)
+    else {
         return Ok(None);
     };
 
@@ -147,87 +66,53 @@ pub async fn build_bound_response_callback(
     .await
 }
 
+fn delivery_target_to_streaming_target(
+    target_thread_id: &str,
+    target: BoundThreadDeliveryTarget,
+) -> StreamingDispatchTarget {
+    StreamingDispatchTarget {
+        target_thread_id: target_thread_id.to_owned(),
+        channel: target.channel,
+        account_id: target.account_id,
+        chat_id: target.chat_id,
+        delivery_target_type: target.delivery_target_type,
+        delivery_target_id: target.delivery_target_id,
+        thread_id: target.thread_id,
+    }
+}
+
 fn build_bound_delivery_consumer(
     state: Arc<AppState>,
     thread_id: String,
-    run_id: String,
     targets: Vec<BoundThreadDeliveryTarget>,
 ) -> Option<Arc<dyn Fn(StreamEvent) + Send + Sync>> {
     if targets.is_empty() {
         return None;
     }
-    let bound_delivery = BoundThreadDeliveryBuffer::with_targets(targets);
-    let callback_state = state;
-    let callback_thread_id = thread_id;
-    let callback_run_id = run_id;
-    let callback_delivery = bound_delivery.clone();
-    let delayed_flush_scheduled = Arc::new(AtomicBool::new(false));
-    let callback_flush_scheduled = delayed_flush_scheduled.clone();
 
-    let bound_consumer: Arc<dyn Fn(StreamEvent) + Send + Sync> =
-        Arc::new(move |event| match event {
-            StreamEvent::SessionBound { .. } => {}
-            StreamEvent::Delta { text } => {
-                if callback_delivery.push_delta(&text, "bound delivery") {
-                    schedule_loop_bound_delivery_flush(
-                        callback_delivery.clone(),
-                        callback_flush_scheduled.clone(),
-                        callback_state.clone(),
-                        callback_thread_id.clone(),
-                        callback_run_id.clone(),
-                    );
-                }
-            }
-            StreamEvent::ToolResult { message } => {
-                callback_delivery.dispatch_content_after_flush(
-                    callback_state.clone(),
-                    callback_thread_id.clone(),
-                    callback_run_id.clone(),
-                    ChannelOutboundContent::ToolResult {
-                        message: message.clone(),
-                    },
-                    "bound delivery",
-                );
-                if message_tool_mirror_text(&message).is_some() {
-                    callback_delivery.suppress();
-                }
-            }
-            StreamEvent::Boundary { kind, .. } => match kind {
-                StreamBoundaryKind::AssistantSegment => {
-                    callback_delivery.push_separator("bound delivery");
-                }
-                StreamBoundaryKind::UserAck => {
-                    callback_delivery.finish(
-                        callback_state.clone(),
-                        callback_thread_id.clone(),
-                        callback_run_id.clone(),
-                        "bound delivery",
-                    );
-                }
-            },
-            StreamEvent::Done => {
-                callback_delivery.finish(
-                    callback_state.clone(),
-                    callback_thread_id.clone(),
-                    callback_run_id.clone(),
-                    "bound delivery",
-                );
-            }
-            StreamEvent::ThreadTitleUpdated { .. } => {}
-            StreamEvent::ToolUse { message } => {
-                // Flush any accumulated assistant text before a tool call so that
-                // channels without native streaming (e.g. WeChat) deliver messages
-                // incrementally between tool invocations instead of batching
-                // everything until the run completes.
-                callback_delivery.dispatch_content_after_flush(
-                    callback_state.clone(),
-                    callback_thread_id.clone(),
-                    callback_run_id.clone(),
-                    ChannelOutboundContent::ToolUse { message },
-                    "bound delivery",
-                );
-            }
-        });
+    let router = state.threads.router.clone();
+    let dispatcher = state.channel_dispatcher();
+    let callbacks: Vec<Arc<dyn Fn(StreamEvent) + Send + Sync>> = targets
+        .into_iter()
+        .map(|target| delivery_target_to_streaming_target(&thread_id, target))
+        .map(|target| {
+            dispatcher
+                .build_streaming_callback(target.clone(), router.clone())
+                .unwrap_or_else(|| {
+                    build_outbound_stream_callback(dispatcher.clone(), target, router.clone())
+                })
+        })
+        .collect();
+
+    if callbacks.is_empty() {
+        return None;
+    }
+
+    let bound_consumer: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(move |event| {
+        for callback in &callbacks {
+            callback(event.clone());
+        }
+    });
     Some(bound_consumer)
 }
 

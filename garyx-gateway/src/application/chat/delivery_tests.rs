@@ -1,8 +1,6 @@
 use garyx_channels::StreamingDispatchTarget;
 use serde_json::json;
 
-use super::buffer::BoundThreadDeliveryBuffer;
-use super::images::{extract_markdown_image_refs, strip_deliverable_markdown_images};
 use super::plan::{bound_thread_delivery_targets, targets_except_streaming_target};
 
 #[test]
@@ -72,98 +70,4 @@ fn bound_delivery_targets_exclude_only_direct_streaming_target() {
     assert_eq!(filtered.len(), 1);
     assert_eq!(filtered[0].account_id, "bot2");
     assert_eq!(filtered[0].chat_id, "chat-b");
-}
-
-#[test]
-fn extracts_only_existing_local_markdown_images_with_supported_extensions() {
-    let temp = tempfile::tempdir().expect("temp dir");
-    let png = temp.path().join("shot.png");
-    let webp = temp.path().join("preview.webp");
-    let pdf = temp.path().join("brief.pdf");
-    std::fs::write(&png, b"png").expect("png");
-    std::fs::write(&webp, b"webp").expect("webp");
-    std::fs::write(&pdf, b"pdf").expect("pdf");
-
-    let text = format!(
-        "Inline stays markdown ![shot]({}) and ![same]({}) and \
-         ![doc]({}) and ![remote](https://example.com/a.png) and ![webp](<{}>).",
-        png.display(),
-        png.display(),
-        pdf.display(),
-        webp.display(),
-    );
-
-    let refs = extract_markdown_image_refs(&text);
-
-    assert_eq!(refs.len(), 2);
-    assert_eq!(refs[0].path, png);
-    assert_eq!(refs[0].alt.as_deref(), Some("shot"));
-    assert_eq!(refs[1].path, webp);
-    assert_eq!(refs[1].alt.as_deref(), Some("webp"));
-}
-
-#[test]
-fn strips_only_deliverable_local_markdown_images_from_text() {
-    let temp = tempfile::tempdir().expect("temp dir");
-    let png = temp.path().join("shot.png");
-    std::fs::write(&png, b"png").expect("png");
-    let text = format!(
-        "before ![shot]({}) middle ![remote](https://example.com/a.png) after",
-        png.display(),
-    );
-
-    let stripped = strip_deliverable_markdown_images(&text);
-
-    assert_eq!(
-        stripped,
-        "before  middle ![remote](https://example.com/a.png) after"
-    );
-}
-
-#[test]
-fn skips_missing_relative_and_non_image_markdown_targets() {
-    let temp = tempfile::tempdir().expect("temp dir");
-    let txt = temp.path().join("notes.txt");
-    let bmp = temp.path().join("legacy.bmp");
-    std::fs::write(&txt, b"text").expect("text");
-    std::fs::write(&bmp, b"bmp").expect("bmp");
-    let missing = temp.path().join("missing.jpg");
-    let text = format!(
-        "![relative](relative.png) ![txt]({}) ![bmp]({}) ![missing]({})",
-        txt.display(),
-        bmp.display(),
-        missing.display(),
-    );
-
-    assert!(extract_markdown_image_refs(&text).is_empty());
-}
-
-#[test]
-fn assistant_delta_collects_text_and_image_scan() {
-    let buffer = BoundThreadDeliveryBuffer::default();
-
-    buffer.push_delta("![shot](/tmp/shot.png)", "test");
-
-    assert_eq!(
-        buffer.take_pending_text("test").as_deref(),
-        Some("![shot](/tmp/shot.png)")
-    );
-    assert_eq!(
-        buffer.take_image_scan_text("test").as_deref(),
-        Some("![shot](/tmp/shot.png)")
-    );
-}
-
-#[test]
-fn assistant_delta_scan_preserves_assistant_segment_boundary() {
-    let buffer = BoundThreadDeliveryBuffer::default();
-
-    buffer.push_delta("first", "test");
-    buffer.push_separator("test");
-    buffer.push_delta("second", "test");
-
-    assert_eq!(
-        buffer.take_image_scan_text("test").as_deref(),
-        Some("first\n\nsecond")
-    );
 }

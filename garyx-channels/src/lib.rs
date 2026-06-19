@@ -45,7 +45,7 @@ pub use discord::DiscordChannel;
 pub use dispatcher::{
     ChannelDispatcher, ChannelDispatcherImpl, ChannelInfo, DiscordSender, FeishuChatSummary,
     FeishuSender, OutboundMessage, SendMessageResult, StreamingDispatchTarget, SwappableDispatcher,
-    TelegramSender,
+    TelegramSender, build_outbound_stream_callback,
 };
 pub use feishu::FeishuChannel;
 pub use garyx_models::ChannelOutboundContent;

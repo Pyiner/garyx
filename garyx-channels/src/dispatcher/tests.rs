@@ -1,9 +1,142 @@
 use super::*;
 use garyx_models::ChannelOutboundContent;
 use garyx_models::config::{DiscordAccount, discord_account_to_plugin_entry};
+use garyx_models::provider::{ProviderMessage, StreamBoundaryKind};
 use garyx_models::routing::DELIVERY_TARGET_TYPE_CHAT_ID;
+use garyx_router::{InMemoryThreadStore, MessageRouter};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+#[derive(Default)]
+struct RecordingStreamDispatcher {
+    calls: std::sync::Mutex<Vec<OutboundMessage>>,
+}
+
+impl RecordingStreamDispatcher {
+    fn calls(&self) -> Vec<OutboundMessage> {
+        self.calls
+            .lock()
+            .expect("recording stream dispatcher lock poisoned")
+            .clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl ChannelDispatcher for RecordingStreamDispatcher {
+    async fn send_message(
+        &self,
+        request: OutboundMessage,
+    ) -> Result<SendMessageResult, ChannelError> {
+        self.calls
+            .lock()
+            .expect("recording stream dispatcher lock poisoned")
+            .push(request);
+        Ok(SendMessageResult {
+            message_ids: vec!["msg-1".to_owned()],
+        })
+    }
+
+    fn available_channels(&self) -> Vec<ChannelInfo> {
+        Vec::new()
+    }
+}
+
+fn test_stream_target() -> StreamingDispatchTarget {
+    StreamingDispatchTarget {
+        target_thread_id: "thread::bound".to_owned(),
+        channel: "test-channel".to_owned(),
+        account_id: "bot1".to_owned(),
+        chat_id: "chat1".to_owned(),
+        delivery_target_type: "chat_id".to_owned(),
+        delivery_target_id: "chat1".to_owned(),
+        thread_id: Some("topic1".to_owned()),
+    }
+}
+
+fn test_message_router() -> Arc<Mutex<MessageRouter>> {
+    let store = Arc::new(InMemoryThreadStore::new());
+    Arc::new(Mutex::new(MessageRouter::new(
+        store,
+        garyx_models::config::GaryxConfig::default(),
+    )))
+}
+
+async fn wait_for_stream_calls(
+    dispatcher: &RecordingStreamDispatcher,
+    expected: usize,
+) -> Vec<OutboundMessage> {
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let calls = dispatcher.calls();
+            if calls.len() >= expected {
+                break calls;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("stream callback should send outbound messages")
+}
+
+#[tokio::test]
+async fn outbound_stream_callback_flushes_assistant_segments() {
+    let dispatcher = Arc::new(RecordingStreamDispatcher::default());
+    let callback = build_outbound_stream_callback(
+        dispatcher.clone(),
+        test_stream_target(),
+        test_message_router(),
+    );
+
+    callback(StreamEvent::Delta {
+        text: "first".to_owned(),
+    });
+    callback(StreamEvent::Boundary {
+        kind: StreamBoundaryKind::AssistantSegment,
+        pending_input_id: None,
+    });
+    callback(StreamEvent::Delta {
+        text: "second".to_owned(),
+    });
+    callback(StreamEvent::Done);
+
+    let calls = wait_for_stream_calls(&dispatcher, 2).await;
+
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].content.as_text(), Some("first"));
+    assert_eq!(calls[1].content.as_text(), Some("second"));
+    assert_eq!(calls[0].thread_id.as_deref(), Some("topic1"));
+}
+
+#[tokio::test]
+async fn outbound_stream_callback_flushes_text_before_structured_events() {
+    let dispatcher = Arc::new(RecordingStreamDispatcher::default());
+    let callback = build_outbound_stream_callback(
+        dispatcher.clone(),
+        test_stream_target(),
+        test_message_router(),
+    );
+    let message = ProviderMessage::tool_use(
+        serde_json::json!({"name": "shell"}),
+        Some("tool-1".to_owned()),
+        Some("shell".to_owned()),
+    );
+
+    callback(StreamEvent::Delta {
+        text: "before tool".to_owned(),
+    });
+    callback(StreamEvent::ToolUse {
+        message: message.clone(),
+    });
+
+    let calls = wait_for_stream_calls(&dispatcher, 2).await;
+
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].content.as_text(), Some("before tool"));
+    assert_eq!(
+        calls[1].content,
+        ChannelOutboundContent::ToolUse { message }
+    );
+}
 
 #[test]
 fn test_empty_dispatcher_has_no_channels() {

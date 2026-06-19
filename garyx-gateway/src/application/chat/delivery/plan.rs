@@ -9,7 +9,6 @@ use crate::server::AppState;
 
 #[derive(Clone)]
 pub(super) struct BoundThreadDeliveryTarget {
-    pub(super) endpoint_key: String,
     pub(super) channel: String,
     pub(super) account_id: String,
     pub(super) chat_id: String,
@@ -52,7 +51,6 @@ pub(super) fn bound_thread_delivery_targets(value: &Value) -> Vec<BoundThreadDel
             crate::routes::binding_delivery_thread_id(&binding.binding_key, &binding.chat_id);
 
         targets.push(BoundThreadDeliveryTarget {
-            endpoint_key,
             channel: channel.to_owned(),
             account_id: account_id.to_owned(),
             chat_id: resolved_chat_id,
