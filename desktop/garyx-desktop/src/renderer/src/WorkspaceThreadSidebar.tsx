@@ -127,7 +127,7 @@ export function WorkspaceThreadSidebar({
             title={t('Add workspace…')}
             type="button"
           >
-            <svg aria-hidden width="14" height="14" viewBox="0 0 15 15" fill="none" style={{ strokeWidth: 1.21 }}>
+            <svg aria-hidden width="12" height="12" viewBox="0 0 15 15" fill="none" style={{ strokeWidth: 1.21 }}>
               <path d="M0.5 7.5H14.5M7.5 0.5V14.5" stroke="currentColor" strokeLinecap="round"/>
             </svg>
           </button>
