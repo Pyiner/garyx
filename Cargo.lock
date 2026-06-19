@@ -1027,8 +1027,6 @@ dependencies = [
  "filetime",
  "garyx-core",
  "garyx-models",
- "reqwest 0.12.28",
- "rusqlite",
  "serde",
  "serde_json",
  "sha2",
@@ -1037,7 +1035,6 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
- "wiremock",
 ]
 
 [[package]]

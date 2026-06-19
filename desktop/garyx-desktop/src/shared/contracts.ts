@@ -1263,6 +1263,7 @@ export type DesktopChatStreamEvent =
       threadId: string;
       sessionId?: string;
       error: string;
+      terminal?: boolean;
     };
 
 export type DesktopChatStreamListener = (event: DesktopChatStreamEvent) => void;

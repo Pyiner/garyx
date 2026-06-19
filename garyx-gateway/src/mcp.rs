@@ -92,46 +92,6 @@ pub struct SearchParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct ConversationHistoryParams {
-    /// Optional thread id to restrict the history search to a single conversation
-    #[serde(default, alias = "threadId")]
-    pub thread_id: Option<String>,
-    /// Optional workspace path to restrict matching threads
-    #[serde(default, alias = "workspaceDir")]
-    pub workspace_dir: Option<String>,
-    /// Inclusive lower time bound. Accepts RFC3339, YYYY-MM-DD, YYYY-MM-DD HH:MM, or YYYY-MM-DDTHH:MM
-    #[serde(default)]
-    pub from: Option<String>,
-    /// Inclusive upper time bound. Accepts RFC3339, YYYY-MM-DD, YYYY-MM-DD HH:MM, or YYYY-MM-DDTHH:MM
-    #[serde(default)]
-    pub to: Option<String>,
-    /// Maximum number of text messages to return after filtering. Defaults to 200.
-    #[serde(default)]
-    pub limit: Option<usize>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct ConversationSearchParams {
-    /// Search query for recalling relevant past conversations
-    pub query: String,
-    /// Optional thread id to restrict search to a single conversation
-    #[serde(default, alias = "threadId")]
-    pub thread_id: Option<String>,
-    /// Optional workspace path to restrict matching threads
-    #[serde(default, alias = "workspaceDir")]
-    pub workspace_dir: Option<String>,
-    /// Inclusive lower time bound. Accepts RFC3339, YYYY-MM-DD, YYYY-MM-DD HH:MM, or YYYY-MM-DDTHH:MM
-    #[serde(default)]
-    pub from: Option<String>,
-    /// Inclusive upper time bound. Accepts RFC3339, YYYY-MM-DD, YYYY-MM-DD HH:MM, or YYYY-MM-DDTHH:MM
-    #[serde(default)]
-    pub to: Option<String>,
-    /// Maximum number of search results to return. Defaults to 5.
-    #[serde(default)]
-    pub limit: Option<usize>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
 pub struct ScheduleFollowupParams {
     /// Wall-clock delay in seconds before the assistant is re-woken on the
     /// current thread. Must be in `60..=86400`; out-of-range requests are
@@ -352,26 +312,6 @@ impl GaryMcpServer {
     }
 
     #[tool(
-        description = "Fetch user/assistant text transcript lines from stored conversations. Use this for questions like '最近我们聊了啥', '这个线程里聊了啥', or '这个 workspace 我们聊了啥'. Supports filtering by thread_id, workspace_dir, from, to, and limit. Tool messages are removed."
-    )]
-    async fn conversation_history(
-        &self,
-        Parameters(params): Parameters<ConversationHistoryParams>,
-    ) -> Result<String, String> {
-        tools::history::run(self, params).await
-    }
-
-    #[tool(
-        description = "Search stored conversations for relevant user/assistant transcript snippets. Use this for semantic recall like '我们之前聊过 once 协议吗' or '找一下 workspace 里关于自动化的讨论'. Supports filtering by thread_id, workspace_dir, from, to, and limit."
-    )]
-    async fn conversation_search(
-        &self,
-        Parameters(params): Parameters<ConversationSearchParams>,
-    ) -> Result<String, String> {
-        tools::conversation_search::run(self, params).await
-    }
-
-    #[tool(
         description = "Schedule a delayed re-wake of the current thread. After `delay_seconds` (60..=86400) elapses, the gateway injects a synthetic user turn carrying the supplied `prompt` so the agent can continue work that depends on background progress. Multiple calls from the same (thread, run) replace each other and the response reports `replaced_previous` so the agent can see if it just bumped its own earlier schedule."
     )]
     async fn schedule_followup(
@@ -404,7 +344,7 @@ impl ServerHandler for GaryMcpServer {
                 website_url: None,
             },
             instructions: Some(
-                "Garyx MCP server. Tools: status, search, conversation_history, conversation_search, schedule_followup. Threads that require a structured result also expose a dynamic submit_result tool."
+                "Garyx MCP server. Tools: status, search, schedule_followup. Threads that require a structured result also expose a dynamic submit_result tool."
                     .to_owned(),
             ),
         }

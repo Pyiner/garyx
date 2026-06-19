@@ -452,40 +452,17 @@ fn parse_onboard_flags() {
         "gateway",
         "--search-api-key",
         "search-key",
-        "--conversation-index-api-key",
-        "openai-key",
-        "--enable-conversation-index",
-        "--conversation-index-model",
-        "text-embedding-3-large",
-        "--conversation-index-base-url",
-        "https://example.invalid/v1",
         "--run-gateway",
     ]);
     match cli.command {
         Some(Commands::Onboard {
             api_account,
             search_api_key,
-            conversation_index_api_key,
-            enable_conversation_index,
-            disable_conversation_index,
-            conversation_index_model,
-            conversation_index_base_url,
             run_gateway,
             ..
         }) => {
             assert_eq!(api_account, "gateway");
             assert_eq!(search_api_key.as_deref(), Some("search-key"));
-            assert_eq!(conversation_index_api_key.as_deref(), Some("openai-key"));
-            assert!(enable_conversation_index);
-            assert!(!disable_conversation_index);
-            assert_eq!(
-                conversation_index_model.as_deref(),
-                Some("text-embedding-3-large")
-            );
-            assert_eq!(
-                conversation_index_base_url.as_deref(),
-                Some("https://example.invalid/v1")
-            );
             assert!(run_gateway);
         }
         _ => panic!("expected Onboard"),
@@ -1773,11 +1750,6 @@ async fn onboard_writes_gateway_keys_and_api_account() {
             json: true,
             api_account: "main".to_owned(),
             search_api_key: Some("search-key".to_owned()),
-            conversation_index_api_key: Some("openai-key".to_owned()),
-            enable_conversation_index: false,
-            disable_conversation_index: false,
-            conversation_index_model: Some("text-embedding-3-large".to_owned()),
-            conversation_index_base_url: Some("https://example.invalid/v1".to_owned()),
             run_gateway: false,
             port_override: None,
             host_override: None,
@@ -1796,16 +1768,6 @@ async fn onboard_writes_gateway_keys_and_api_account() {
     let api_account = config.channels.api.accounts.get("main").unwrap();
     assert!(api_account.enabled);
     assert_eq!(config.gateway.search.api_key, "search-key");
-    assert_eq!(config.gateway.conversation_index.api_key, "openai-key");
-    assert!(config.gateway.conversation_index.enabled);
-    assert_eq!(
-        config.gateway.conversation_index.model,
-        "text-embedding-3-large"
-    );
-    assert_eq!(
-        config.gateway.conversation_index.base_url,
-        "https://example.invalid/v1"
-    );
 }
 
 #[tokio::test]
@@ -1816,8 +1778,6 @@ async fn onboard_updates_existing_config_without_resetting_other_fields() {
     let config_path = tmp.path().join("gary.json");
     let mut initial = GaryxConfig::default();
     initial.gateway.search.api_key = "keep-search-key".to_owned();
-    initial.gateway.conversation_index.api_key = "keep-openai-key".to_owned();
-    initial.gateway.conversation_index.enabled = true;
     initial.channels.api.accounts.insert(
         "custom".to_owned(),
         ApiAccount {
@@ -1837,11 +1797,6 @@ async fn onboard_updates_existing_config_without_resetting_other_fields() {
             json: true,
             api_account: "custom".to_owned(),
             search_api_key: None,
-            conversation_index_api_key: None,
-            enable_conversation_index: false,
-            disable_conversation_index: true,
-            conversation_index_model: None,
-            conversation_index_base_url: None,
             run_gateway: false,
             port_override: None,
             host_override: None,
@@ -1860,8 +1815,6 @@ async fn onboard_updates_existing_config_without_resetting_other_fields() {
     let api_account = config.channels.api.accounts.get("custom").unwrap();
     assert!(api_account.enabled);
     assert_eq!(config.gateway.search.api_key, "keep-search-key");
-    assert_eq!(config.gateway.conversation_index.api_key, "keep-openai-key");
-    assert!(!config.gateway.conversation_index.enabled);
 }
 
 // -------------------------------------------------------------------------

@@ -7,7 +7,6 @@ use serde_json::Value;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 
-use crate::conversation_index::ConversationIndexManager;
 use crate::file_store::thread_storage_file_name;
 use crate::store::ThreadStore;
 
@@ -1414,7 +1413,6 @@ impl From<ThreadTranscriptRecord> for TranscriptLine {
 pub struct ThreadHistoryRepository {
     thread_store: Arc<dyn ThreadStore>,
     transcript_store: Arc<ThreadTranscriptStore>,
-    conversation_index: Option<Arc<ConversationIndexManager>>,
 }
 
 impl ThreadHistoryRepository {
@@ -1425,45 +1423,11 @@ impl ThreadHistoryRepository {
         Self {
             thread_store,
             transcript_store,
-            conversation_index: None,
         }
-    }
-
-    pub fn with_conversation_index(
-        mut self,
-        conversation_index: Arc<ConversationIndexManager>,
-    ) -> Self {
-        self.conversation_index = Some(conversation_index);
-        self
     }
 
     pub fn transcript_store(&self) -> Arc<ThreadTranscriptStore> {
         self.transcript_store.clone()
-    }
-
-    pub fn conversation_index(&self) -> Option<Arc<ConversationIndexManager>> {
-        self.conversation_index.clone()
-    }
-
-    pub fn update_conversation_index_config(
-        &self,
-        config: garyx_models::config::ConversationIndexConfig,
-    ) {
-        if let Some(index) = &self.conversation_index {
-            index.update_config(config);
-        }
-    }
-
-    pub fn enqueue_conversation_index_for_thread(&self, thread_id: &str) {
-        if let Some(index) = &self.conversation_index {
-            index.enqueue_thread(thread_id);
-        }
-    }
-
-    pub fn schedule_full_conversation_index_backfill(&self) {
-        if let Some(index) = &self.conversation_index {
-            index.schedule_full_backfill();
-        }
     }
 
     pub async fn thread_snapshot(

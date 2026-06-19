@@ -128,6 +128,39 @@ test("maps camelCase websocket-shaped per-thread passthrough payloads", () => {
   assert.equal(events[0].message.toolName, "search");
 });
 
+test("maps gateway run_error into terminal desktop error event", () => {
+  const [event] = mapThreadStreamPassthroughPayload(
+    JSON.stringify({
+      type: "run_error",
+      thread_id: "thread::failed",
+      run_id: "run-failed",
+      error: "request timed out",
+    }),
+  );
+
+  assert.equal(event.type, "error");
+  assert.equal(event.threadId, "thread::failed");
+  assert.equal(event.runId, "run-failed");
+  assert.equal(event.sessionId, "thread::failed");
+  assert.equal(event.error, "request timed out");
+  assert.equal(event.terminal, true);
+});
+
+test("maps gateway run_start into desktop accepted event", () => {
+  const [event] = mapThreadStreamPassthroughPayload(
+    JSON.stringify({
+      type: "run_start",
+      thread_id: "thread::started",
+      run_id: "run-started",
+    }),
+  );
+
+  assert.equal(event.type, "accepted");
+  assert.equal(event.threadId, "thread::started");
+  assert.equal(event.runId, "run-started");
+  assert.equal(event.sessionId, "thread::started");
+});
+
 test("maps committed_message payloads into desktop transcript stream events", () => {
   const [event] = mapThreadStreamPassthroughPayload(
     JSON.stringify({
@@ -262,6 +295,48 @@ test("streamThreadEvents rejects first replay gap relative to requested cursor",
       },
     );
     assert.equal(events.length, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("streamThreadEvents forwards terminal run_error passthrough events", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    const payload = JSON.stringify({
+      type: "run_error",
+      thread_id: "thread::per-thread-failed",
+      run_id: "run-per-thread-failed",
+      error: "timeout",
+    });
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(`data: ${payload}\n\n`));
+          controller.close();
+        },
+      }),
+      { status: 200, statusText: "OK" },
+    );
+  };
+
+  try {
+    const events = [];
+    await streamThreadEvents(
+      {
+        gatewayUrl: "http://127.0.0.1:31337",
+        gatewayAuthToken: "",
+      },
+      "thread::per-thread-failed",
+      (event) => events.push(event),
+    );
+
+    assert.equal(events.length, 1);
+    assert.equal(events[0].type, "error");
+    assert.equal(events[0].threadId, "thread::per-thread-failed");
+    assert.equal(events[0].runId, "run-per-thread-failed");
+    assert.equal(events[0].error, "timeout");
+    assert.equal(events[0].terminal, true);
   } finally {
     globalThis.fetch = originalFetch;
   }

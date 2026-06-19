@@ -1126,6 +1126,7 @@ function mapGatewayStreamEventPayload(
       }
       return mapCommittedMessageEvent(payload);
     case "accepted":
+    case "run_start":
       return {
         type: "accepted",
         ...base,
@@ -1183,6 +1184,13 @@ function mapGatewayStreamEventPayload(
         type: "error",
         ...base,
         error: asString(payload.error) || "Gateway stream error",
+      };
+    case "run_error":
+      return {
+        type: "error",
+        ...base,
+        error: asString(payload.error) || "Gateway stream error",
+        terminal: true,
       };
     default:
       return null;
@@ -1376,6 +1384,9 @@ export class ThreadStreamGapError extends Error {
 }
 
 function shouldForwardThreadPassthroughEvent(event: DesktopChatStreamEvent): boolean {
+  if (event.type === "error" && event.terminal === true) {
+    return true;
+  }
   return ![
     "accepted",
     "assistant_boundary",

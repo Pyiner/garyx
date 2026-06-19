@@ -12,6 +12,8 @@ extension GaryxMobileModel {
         let eventThreadId = Self.threadId(from: event)
         updateRemoteBusyState(from: event)
         switch event {
+        case .runStart:
+            break
         case .userMessage(let runId, _, let text, let imageCount):
             appendRemoteUserMessage(
                 runId: runId,
@@ -66,6 +68,12 @@ extension GaryxMobileModel {
             pendingDirectFollowUpsByThread[threadId] = nil
             clearActiveRun(threadId: eventThreadId.isEmpty ? threadId : eventThreadId)
             markStreamingAssistantComplete(for: threadId, removeEmpty: true)
+        case .runError(_, _, let error) where affectsActiveRun:
+            lastError = error
+            markLatestLocalUserFailed(for: threadId, message: error)
+            pendingDirectFollowUpsByThread[threadId] = nil
+            markStreamingAssistantComplete(for: threadId, removeEmpty: true)
+            clearActiveRun(threadId: eventThreadId.isEmpty ? threadId : eventThreadId)
         case .error(_, _, let error) where affectsActiveRun:
             if Self.isTransientGatewayErrorMessage(error) {
                 // The tracker keeps the run busy through transient gateway
@@ -597,7 +605,7 @@ extension GaryxMobileModel {
                         }
                         if selectedThread?.id == Self.threadId(from: event) {
                             switch event {
-                            case .done, .runComplete, .error, .interrupt:
+                            case .done, .runComplete, .runError, .error, .interrupt:
                                 shouldReloadSelectedHistory = true
                             default:
                                 break
@@ -656,7 +664,7 @@ extension GaryxMobileModel {
         switch event {
         case .threadTitleUpdated(_, let threadId, let title):
             applyThreadTitleUpdate(threadId: threadId, title: title)
-        case .done, .runComplete:
+        case .done, .runComplete, .runError:
             await refreshThreads()
             if selectedThread?.id == threadId {
                 await loadSelectedThreadHistory()
@@ -725,6 +733,7 @@ extension GaryxMobileModel {
     static func threadId(from event: GaryxChatStreamEvent) -> String {
         switch event {
         case .accepted(_, let threadId),
+             .runStart(_, let threadId),
              .assistantDelta(_, let threadId, _, _),
              .assistantBoundary(_, let threadId),
              .toolUse(_, let threadId, _),
@@ -734,6 +743,7 @@ extension GaryxMobileModel {
              .threadTitleUpdated(_, let threadId, _),
              .done(_, let threadId),
              .runComplete(_, let threadId),
+             .runError(_, let threadId, _),
              .streamInput(_, let threadId, _, _),
              .interrupt(_, let threadId, _),
              .snapshot(let threadId, _),
@@ -747,6 +757,7 @@ extension GaryxMobileModel {
     static func runId(from event: GaryxChatStreamEvent) -> String {
         switch event {
         case .accepted(let runId, _),
+             .runStart(let runId, _),
              .assistantDelta(let runId, _, _, _),
              .assistantBoundary(let runId, _),
              .toolUse(let runId, _, _),
@@ -756,6 +767,7 @@ extension GaryxMobileModel {
              .threadTitleUpdated(let runId, _, _),
              .done(let runId, _),
              .runComplete(let runId, _),
+             .runError(let runId, _, _),
              .error(let runId, _, _):
             return runId
         case .streamInput, .interrupt, .snapshot, .ping, .unknown:

@@ -69,37 +69,6 @@ impl Default for SearchConfig {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct ConversationIndexConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub api_key: String,
-    #[serde(default = "default_conversation_index_model")]
-    pub model: String,
-    #[serde(default = "default_conversation_index_base_url")]
-    pub base_url: String,
-}
-
-fn default_conversation_index_model() -> String {
-    "text-embedding-3-small".to_owned()
-}
-
-fn default_conversation_index_base_url() -> String {
-    "https://api.openai.com/v1".to_owned()
-}
-
-impl Default for ConversationIndexConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            api_key: String::new(),
-            model: default_conversation_index_model(),
-            base_url: default_conversation_index_base_url(),
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct GatewayConfig {
     #[serde(default = "default_port")]
     pub port: u16,
@@ -111,8 +80,6 @@ pub struct GatewayConfig {
     pub auth_token: String,
     #[serde(default)]
     pub search: SearchConfig,
-    #[serde(default)]
-    pub conversation_index: ConversationIndexConfig,
     #[serde(default)]
     pub auto_update: GatewayAutoUpdateConfig,
 }
@@ -132,7 +99,6 @@ impl Default for GatewayConfig {
             public_url: String::new(),
             auth_token: String::new(),
             search: SearchConfig::default(),
-            conversation_index: ConversationIndexConfig::default(),
             auto_update: GatewayAutoUpdateConfig::default(),
         }
     }

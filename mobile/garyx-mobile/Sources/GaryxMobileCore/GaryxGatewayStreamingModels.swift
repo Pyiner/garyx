@@ -146,6 +146,7 @@ public struct GaryxInterruptResult: Decodable, Equatable, Sendable {
 public enum GaryxChatStreamEvent: Decodable, Equatable, Sendable {
     case ping
     case accepted(runId: String, threadId: String)
+    case runStart(runId: String, threadId: String)
     case assistantDelta(runId: String, threadId: String, delta: String, metadata: [String: GaryxJSONValue]?)
     case assistantBoundary(runId: String, threadId: String)
     case toolUse(runId: String, threadId: String, message: GaryxJSONValue?)
@@ -155,6 +156,7 @@ public enum GaryxChatStreamEvent: Decodable, Equatable, Sendable {
     case threadTitleUpdated(runId: String, threadId: String, title: String)
     case done(runId: String, threadId: String)
     case runComplete(runId: String, threadId: String)
+    case runError(runId: String, threadId: String, error: String)
     case streamInput(status: String, threadId: String, clientIntentId: String?, pendingInputId: String?)
     case interrupt(status: String, threadId: String, abortedRuns: [String])
     case snapshot(threadId: String, payload: [String: GaryxJSONValue])
@@ -197,6 +199,8 @@ public enum GaryxChatStreamEvent: Decodable, Equatable, Sendable {
             self = .ping
         case "accepted":
             self = .accepted(runId: runId, threadId: threadId)
+        case "run_start":
+            self = .runStart(runId: runId, threadId: threadId)
         case "assistant_delta":
             let metadata = try container.decodeIfPresent([String: GaryxJSONValue].self, forKey: .metadata)
             self = .assistantDelta(
@@ -264,6 +268,12 @@ public enum GaryxChatStreamEvent: Decodable, Equatable, Sendable {
             self = .snapshot(threadId: threadId, payload: payload)
         case "error":
             self = .error(
+                runId: runId,
+                threadId: threadId,
+                error: try container.garyxDecodeFirstString(.error) ?? "agent run failed"
+            )
+        case "run_error":
+            self = .runError(
                 runId: runId,
                 threadId: threadId,
                 error: try container.garyxDecodeFirstString(.error) ?? "agent run failed"

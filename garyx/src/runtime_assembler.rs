@@ -6,12 +6,11 @@ use garyx_gateway::server::{AppState, AppStateBuilder};
 use garyx_gateway::{CronService, ThreadFileLogger, default_thread_log_dir};
 use garyx_models::config::GaryxConfig;
 use garyx_models::local_paths::{
-    conversation_index_db_path_for_data_dir, default_session_data_dir,
-    message_ledger_dir_for_data_dir, thread_transcripts_dir_for_data_dir,
+    default_session_data_dir, message_ledger_dir_for_data_dir, thread_transcripts_dir_for_data_dir,
 };
 use garyx_router::{
-    ConversationIndexManager, FileThreadStore, InMemoryThreadStore, MessageLedgerStore,
-    ThreadHistoryRepository, ThreadStore, ThreadTranscriptStore,
+    FileThreadStore, InMemoryThreadStore, MessageLedgerStore, ThreadHistoryRepository, ThreadStore,
+    ThreadTranscriptStore,
 };
 
 pub struct RuntimeAssembly {
@@ -62,26 +61,10 @@ impl RuntimeAssembler {
             )))
             .await?,
         );
-        let conversation_index = match ConversationIndexManager::new(
+        let thread_history = Arc::new(ThreadHistoryRepository::new(
             thread_store.clone(),
-            transcript_store.clone(),
-            conversation_index_db_path_for_data_dir(Path::new(&session_data_dir)),
-            self.config.gateway.conversation_index.clone(),
-        )
-        .await
-        {
-            Ok(index) => Some(index),
-            Err(error) => {
-                tracing::warn!(error = %error, "Conversation index init failed, continuing without vector recall");
-                None
-            }
-        };
-        let mut thread_history =
-            ThreadHistoryRepository::new(thread_store.clone(), transcript_store);
-        if let Some(conversation_index) = conversation_index {
-            thread_history = thread_history.with_conversation_index(conversation_index);
-        }
-        let thread_history = Arc::new(thread_history);
+            transcript_store,
+        ));
 
         let bridge = Arc::new(MultiProviderBridge::new());
         match bridge.initialize_from_config(&self.config).await {
@@ -167,11 +150,6 @@ impl RuntimeAssembler {
                 state.ops.agent_teams.clone(),
             )
             .await;
-        state
-            .threads
-            .history
-            .schedule_full_conversation_index_backfill();
-
         Ok(RuntimeAssembly {
             state,
             bridge,

@@ -6918,9 +6918,11 @@ export function AppShell() {
               [currentStream?.assistantEntryId],
             )
           : { entries: [] as UiTranscriptMessage[], matched: false };
+        const isTerminalRunError = event.terminal === true;
         if (
-          isTransientGatewayErrorMessage(event.error) ||
-          recoveryResult.matched
+          !isTerminalRunError &&
+          (isTransientGatewayErrorMessage(event.error) ||
+            recoveryResult.matched)
         ) {
           const recoveryStatusLabel = "Waiting to sync with gateway…";
           recordGatewayStatusObservation(

@@ -3,9 +3,9 @@
 //! These helpers decide whether a stored transcript message is a tool-related
 //! trace (versus human-visible user/assistant text) and what coarse `kind` the
 //! gateway history projection reports to clients. The exact same logic is
-//! consumed by the gateway HTTP history endpoint, the MCP `history` tool, and
-//! the router conversation index, so it lives here as the single source of
-//! truth instead of being copy-pasted into each.
+//! consumed by gateway HTTP history projection and transcript-stream readers,
+//! so it lives here as the single source of truth instead of being copy-pasted
+//! into each.
 
 use serde_json::{Map, Value};
 

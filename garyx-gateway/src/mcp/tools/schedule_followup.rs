@@ -32,9 +32,8 @@ pub(crate) const MIN_DELAY_SECONDS: u64 = 60;
 /// automation, not an ad-hoc followup.
 pub(crate) const MAX_DELAY_SECONDS: u64 = 86_400;
 
-/// Stable FNV-1a 64-bit hash. Local copy of the helper in
-/// `conversation_search.rs` so the followup tool doesn't drag in that
-/// module's vector-search dependencies just to dedupe a string.
+/// Stable FNV-1a 64-bit hash. Kept local so followup dedupe does not pull in
+/// unrelated tool dependencies.
 fn stable_hash64(bytes: &[u8]) -> u64 {
     let mut hash = 0xcbf29ce484222325_u64;
     for byte in bytes {

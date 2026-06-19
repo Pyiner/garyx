@@ -15,7 +15,6 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use garyx_channels::feishu::policy_block_counters_snapshot;
 use garyx_models::local_paths::default_log_file_path;
 use serde::Deserialize;
-#[cfg(test)]
 use serde_json::Value;
 use serde_json::json;
 use tokio_stream::StreamExt;
@@ -275,6 +274,29 @@ fn default_stream_history_limit() -> usize {
 
 const MAX_STREAM_HISTORY_LIMIT: usize = 200;
 
+fn is_retired_global_stream_content_event(raw: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(raw) else {
+        return false;
+    };
+    match value.get("type").and_then(Value::as_str) {
+        Some("assistant_delta" | "tool_use" | "tool_result" | "user_message") => true,
+        Some("committed_message") => value
+            .get("message")
+            .is_some_and(|message| !is_committed_control_message(message)),
+        _ => false,
+    }
+}
+
+fn is_committed_control_message(message: &Value) -> bool {
+    message.get("kind").and_then(Value::as_str) == Some("control")
+        || message.get("internal_kind").and_then(Value::as_str) == Some("control")
+        || message
+            .get("control")
+            .and_then(|control| control.get("kind"))
+            .and_then(Value::as_str)
+            .is_some()
+}
+
 pub async fn event_stream(
     State(state): State<Arc<AppState>>,
     Query(params): Query<EventStreamParams>,
@@ -297,7 +319,14 @@ pub async fn event_stream(
 
     // Replay a bounded in-memory backlog before switching to live stream.
     let history_limit = params.history_limit.min(MAX_STREAM_HISTORY_LIMIT);
-    let history_events = state.ops.events.history_snapshot(history_limit).await;
+    let history_events = state
+        .ops
+        .events
+        .history_snapshot(history_limit)
+        .await
+        .into_iter()
+        .filter(|event| !is_retired_global_stream_content_event(event))
+        .collect::<Vec<_>>();
     let history_event = Event::default().event("history").data(
         json!({
             "type": "history",
@@ -313,7 +342,12 @@ pub async fn event_stream(
     // Clone the Arc so the closure owns a reference to AppState for drop counting.
     let state_for_drops = state.clone();
     let mapped = stream.filter_map(move |item| match item {
-        Ok(event_data) => Some(Ok(Event::default().data(event_data))),
+        Ok(event_data) => {
+            if is_retired_global_stream_content_event(&event_data) {
+                return None;
+            }
+            Some(Ok(Event::default().data(event_data)))
+        }
         Err(_) => {
             // Lagged: slow consumer. Count the drop.
             state_for_drops.ops.events.record_drop();

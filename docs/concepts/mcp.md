@@ -37,10 +37,10 @@ for an in-flight provider run:
 
 - `status` — gateway uptime, active threads, provider and channel info.
 - `search` — web search through the configured Gemini grounding backend.
-- `conversation_history` — stored user/assistant transcript lines, with
-  filters for thread, workspace, and time window.
-- `conversation_search` — semantic recall over stored conversation snippets.
 - `schedule_followup` — delayed re-wake of the current thread.
+
+Stored transcript inspection is intentionally handled by the CLI
+(`garyx thread history`) rather than the in-run MCP tool surface.
 
 The MCP surface intentionally does not expose outbound message sending,
 automation management, or image generation tools.

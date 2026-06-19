@@ -1282,6 +1282,26 @@ final class GaryxGatewayClientTests: XCTestCase {
         )
     }
 
+    func testStreamEventDecodesRunStart() throws {
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://127.0.0.1:31337"))
+            )
+        )
+
+        let event = try client.decodeStreamEvent(
+            """
+            {
+              "type": "run_start",
+              "run_id": "run-test",
+              "thread_id": "thread::test"
+            }
+            """
+        )
+
+        XCTAssertEqual(event, .runStart(runId: "run-test", threadId: "thread::test"))
+    }
+
     func testStreamEventDecodesUserMessage() throws {
         let client = GaryxGatewayClient(
             configuration: GaryxGatewayConfiguration(
@@ -1330,6 +1350,30 @@ final class GaryxGatewayClientTests: XCTestCase {
         )
 
         XCTAssertEqual(event, .runComplete(runId: "run-test", threadId: "thread::test"))
+    }
+
+    func testStreamEventDecodesRunErrorAsTerminalError() throws {
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://127.0.0.1:31337"))
+            )
+        )
+
+        let event = try client.decodeStreamEvent(
+            """
+            {
+              "type": "run_error",
+              "run_id": "run-test",
+              "thread_id": "thread::test",
+              "error": "request timed out"
+            }
+            """
+        )
+
+        XCTAssertEqual(
+            event,
+            .runError(runId: "run-test", threadId: "thread::test", error: "request timed out")
+        )
     }
 
     func testMacParityPayloadsDecodeGatewayShapes() throws {

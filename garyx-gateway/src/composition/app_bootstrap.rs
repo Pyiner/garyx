@@ -310,13 +310,10 @@ impl AppStateBuilder {
             self.thread_store.clone(),
             self.garyx_db.clone(),
         ));
-        let mut thread_history = ThreadHistoryRepository::new(
+        let thread_history = ThreadHistoryRepository::new(
             thread_store.clone(),
             self.thread_history.transcript_store(),
         );
-        if let Some(conversation_index) = self.thread_history.conversation_index() {
-            thread_history = thread_history.with_conversation_index(conversation_index);
-        }
         let thread_history = Arc::new(thread_history);
         let mut router = MessageRouter::new(thread_store.clone(), self.config.clone());
         let thread_creator: Arc<dyn ThreadCreator> = Arc::new(GatewayThreadCreator::new(

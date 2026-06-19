@@ -19,6 +19,62 @@ fn dashboard_router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
+#[test]
+fn test_global_stream_content_filter_is_conservative() {
+    for payload in [
+        serde_json::json!({"type": "assistant_delta", "thread_id": "thread::test"}),
+        serde_json::json!({"type": "tool_use", "thread_id": "thread::test"}),
+        serde_json::json!({"type": "tool_result", "thread_id": "thread::test"}),
+        serde_json::json!({"type": "user_message", "thread_id": "thread::test"}),
+        serde_json::json!({
+            "type": "committed_message",
+            "thread_id": "thread::test",
+            "seq": 1,
+            "message": {"role": "assistant", "content": "hello"}
+        }),
+    ] {
+        assert!(
+            is_retired_global_stream_content_event(&payload.to_string()),
+            "expected content frame to be filtered: {payload}"
+        );
+    }
+
+    for payload in [
+        serde_json::json!({"type": "run_start", "thread_id": "thread::test"}),
+        serde_json::json!({"type": "done", "thread_id": "thread::test"}),
+        serde_json::json!({"type": "run_complete", "thread_id": "thread::test"}),
+        serde_json::json!({"type": "thread_title_updated", "thread_id": "thread::test"}),
+        serde_json::json!({"type": "task_ready_for_review", "thread_id": "thread::test"}),
+        serde_json::json!({"type": "ops_debug", "thread_id": "thread::test"}),
+        serde_json::json!({
+            "type": "committed_message",
+            "thread_id": "thread::test",
+            "seq": 2,
+            "message": {"role": "system", "kind": "control", "control": {"kind": "range_rewrite"}}
+        }),
+        serde_json::json!({
+            "type": "committed_message",
+            "thread_id": "thread::test",
+            "seq": 3,
+            "message": {"role": "system", "internal_kind": "control", "control": {"kind": "run_complete"}}
+        }),
+        serde_json::json!({
+            "type": "committed_message",
+            "thread_id": "thread::test",
+            "seq": 4,
+            "message": {"role": "system", "control": {"kind": "transcript_reset"}}
+        }),
+        serde_json::json!({"type": "committed_message", "thread_id": "thread::test", "seq": 5}),
+    ] {
+        assert!(
+            !is_retired_global_stream_content_event(&payload.to_string()),
+            "expected non-content frame to stay on global stream: {payload}"
+        );
+    }
+
+    assert!(!is_retired_global_stream_content_event("not-json"));
+}
+
 #[tokio::test]
 async fn test_overview() {
     let state = test_state();

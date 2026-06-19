@@ -1,4 +1,3 @@
-pub mod conversation_index;
 pub mod file_store;
 pub mod memory_store;
 pub mod message_ledger;
@@ -26,10 +25,6 @@ pub mod routing {
 }
 
 pub mod storage {
-    pub use crate::conversation_index::{
-        ConversationIndexManager, ConversationIndexResult, ConversationIndexSearchHit,
-        ConversationIndexSearchRequest,
-    };
     pub use crate::file_store::FileThreadStore;
     pub use crate::memory_store::InMemoryThreadStore;
     pub use crate::message_ledger::{
@@ -63,10 +58,6 @@ pub mod threading {
     };
 }
 
-pub use conversation_index::{
-    ConversationIndexManager, ConversationIndexResult, ConversationIndexSearchHit,
-    ConversationIndexSearchRequest,
-};
 pub use file_store::FileThreadStore;
 pub use memory_store::InMemoryThreadStore;
 pub use message_ledger::{MessageLedgerError, MessageLedgerStore, SharedMessageLedgerStore};

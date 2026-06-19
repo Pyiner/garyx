@@ -18,11 +18,8 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
-reqwest = { workspace = true }
-rusqlite = { version = "0.32", features = ["bundled"] }
 sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = { workspace = true }
 filetime = { workspace = true }
-wiremock = "0.6"

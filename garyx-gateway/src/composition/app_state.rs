@@ -379,9 +379,6 @@ impl AppState {
             let mut router = self.threads.router.lock().await;
             router.update_config(config.clone());
         }
-        self.threads
-            .history
-            .update_conversation_index_config(config.gateway.conversation_index.clone());
         if let Some(cron_service) = &self.ops.cron_service {
             cron_service
                 .set_dispatch_runtime(

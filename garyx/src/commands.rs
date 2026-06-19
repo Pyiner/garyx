@@ -79,11 +79,6 @@ pub(crate) struct OnboardCommandOptions {
     pub json: bool,
     pub api_account: String,
     pub search_api_key: Option<String>,
-    pub conversation_index_api_key: Option<String>,
-    pub enable_conversation_index: bool,
-    pub disable_conversation_index: bool,
-    pub conversation_index_model: Option<String>,
-    pub conversation_index_base_url: Option<String>,
     pub run_gateway: bool,
     pub port_override: Option<u16>,
     pub host_override: Option<String>,
@@ -7346,10 +7341,6 @@ struct OnboardSummary {
     api_account: String,
     api_account_created: bool,
     search_api_key_configured: bool,
-    conversation_index_enabled: bool,
-    conversation_index_api_key_configured: bool,
-    conversation_index_model: String,
-    conversation_index_base_url: String,
     gateway_run_requested: bool,
     /// `channel.account` identifiers bound during this onboarding session.
     channels_bound: Vec<String>,
@@ -7479,21 +7470,6 @@ fn print_onboard_summary(summary: &OnboardSummary) {
             "missing"
         }
     );
-    println!(
-        "Conversation index: {} ({}, model={}, base_url={})",
-        if summary.conversation_index_enabled {
-            "enabled"
-        } else {
-            "disabled"
-        },
-        if summary.conversation_index_api_key_configured {
-            "key configured"
-        } else {
-            "key missing"
-        },
-        summary.conversation_index_model,
-        summary.conversation_index_base_url,
-    );
     if summary.channels_bound.is_empty() {
         println!(
             "User-facing channels: {} configured (none bound this session)",
@@ -7536,23 +7512,6 @@ pub(crate) async fn cmd_onboard(
     if let Some(value) = trim_to_option(options.search_api_key.as_deref()) {
         cfg.gateway.search.api_key = value;
     }
-    let explicit_conversation_key = trim_to_option(options.conversation_index_api_key.as_deref());
-    if let Some(value) = explicit_conversation_key.clone() {
-        cfg.gateway.conversation_index.api_key = value;
-        cfg.gateway.conversation_index.enabled = true;
-    }
-    if let Some(value) = trim_to_option(options.conversation_index_model.as_deref()) {
-        cfg.gateway.conversation_index.model = value;
-    }
-    if let Some(value) = trim_to_option(options.conversation_index_base_url.as_deref()) {
-        cfg.gateway.conversation_index.base_url = value;
-    }
-    if options.enable_conversation_index {
-        cfg.gateway.conversation_index.enabled = true;
-    }
-    if options.disable_conversation_index {
-        cfg.gateway.conversation_index.enabled = false;
-    }
 
     let interactive = !options.json && stdin_is_interactive();
     let mut channels_bound: Vec<String> = Vec::new();
@@ -7578,41 +7537,6 @@ pub(crate) async fn cmd_onboard(
                         cfg.gateway.search.api_key = value;
                     }
                 }
-            }
-        }
-
-        let mut conversation_key_changed = explicit_conversation_key.is_some();
-        if options.conversation_index_api_key.is_none() {
-            let (action, value) = prompt_secret_update(
-                "Conversation index OpenAI API key",
-                !cfg.gateway.conversation_index.api_key.trim().is_empty(),
-            )?;
-            match action {
-                SecretPromptUpdate::Keep => {}
-                SecretPromptUpdate::Clear => {
-                    cfg.gateway.conversation_index.api_key.clear();
-                    cfg.gateway.conversation_index.enabled = false;
-                    conversation_key_changed = true;
-                }
-                SecretPromptUpdate::Set => {
-                    if let Some(value) = value {
-                        cfg.gateway.conversation_index.api_key = value;
-                        cfg.gateway.conversation_index.enabled = true;
-                        conversation_key_changed = true;
-                    }
-                }
-            }
-        }
-
-        if !options.enable_conversation_index && !options.disable_conversation_index {
-            let should_prompt = conversation_key_changed
-                || cfg.gateway.conversation_index.enabled
-                || !cfg.gateway.conversation_index.api_key.trim().is_empty();
-            if should_prompt {
-                cfg.gateway.conversation_index.enabled = prompt_yes_no(
-                    "Enable conversation vector index now?",
-                    cfg.gateway.conversation_index.enabled,
-                )?;
             }
         }
 
@@ -7667,15 +7591,6 @@ pub(crate) async fn cmd_onboard(
         api_account: api_account.clone(),
         api_account_created,
         search_api_key_configured: !cfg.gateway.search.api_key.trim().is_empty(),
-        conversation_index_enabled: cfg.gateway.conversation_index.enabled,
-        conversation_index_api_key_configured: !cfg
-            .gateway
-            .conversation_index
-            .api_key
-            .trim()
-            .is_empty(),
-        conversation_index_model: cfg.gateway.conversation_index.model.clone(),
-        conversation_index_base_url: cfg.gateway.conversation_index.base_url.clone(),
         gateway_run_requested: options.run_gateway,
         channels_bound,
         total_user_channel_accounts: user_channel_account_count(&cfg),

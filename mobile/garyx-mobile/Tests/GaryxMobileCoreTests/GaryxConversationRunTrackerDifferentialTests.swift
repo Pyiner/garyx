@@ -79,6 +79,10 @@ final class GaryxConversationRunTrackerDifferentialTests: XCTestCase {
                 recordTerminated(threadId: threadId, runId: runId)
                 remoteBusyThreadIds.remove(threadId)
                 clearActiveRunState(for: threadId)
+            case .runError(let runId, _, _):
+                recordTerminated(threadId: threadId, runId: runId)
+                remoteBusyThreadIds.remove(threadId)
+                clearActiveRunState(for: threadId)
             case .interrupt(_, _, let abortedRuns):
                 if let aborted = abortedRuns
                     .map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) })
@@ -111,7 +115,7 @@ final class GaryxConversationRunTrackerDifferentialTests: XCTestCase {
             let threadId = Self.threadId(from: event)
             guard !threadId.isEmpty else { return }
             switch event {
-            case .accepted, .userMessage, .assistantDelta, .assistantBoundary,
+            case .accepted, .runStart, .userMessage, .assistantDelta, .assistantBoundary,
                  .userAck, .toolUse, .toolResult:
                 remoteBusyThreadIds.insert(threadId)
             case .streamInput(let status, _, _, _):
@@ -122,7 +126,7 @@ final class GaryxConversationRunTrackerDifferentialTests: XCTestCase {
                     // a local run claim.
                     remoteBusyThreadIds.remove(threadId)
                 }
-            case .done, .runComplete, .error, .interrupt:
+            case .done, .runComplete, .runError, .error, .interrupt:
                 remoteBusyThreadIds.remove(threadId)
             default:
                 break
@@ -175,6 +179,7 @@ final class GaryxConversationRunTrackerDifferentialTests: XCTestCase {
         private static func threadId(from event: GaryxChatStreamEvent) -> String {
             switch event {
             case .accepted(_, let threadId),
+                 .runStart(_, let threadId),
                  .assistantDelta(_, let threadId, _, _),
                  .assistantBoundary(_, let threadId),
                  .toolUse(_, let threadId, _),
@@ -184,6 +189,7 @@ final class GaryxConversationRunTrackerDifferentialTests: XCTestCase {
                  .threadTitleUpdated(_, let threadId, _),
                  .done(_, let threadId),
                  .runComplete(_, let threadId),
+                 .runError(_, let threadId, _),
                  .streamInput(_, let threadId, _, _),
                  .interrupt(_, let threadId, _),
                  .snapshot(let threadId, _),
@@ -654,6 +660,21 @@ final class GaryxConversationRunTrackerDifferentialTests: XCTestCase {
 
         XCTAssertFalse(oracle.isThreadBusy("t1"), "documents the legacy bug")
         XCTAssertTrue(tracker.isThreadBusy("t1"), "transient errors keep the run busy on replay too")
+    }
+
+    func testRunStartThenRunErrorClearsRemoteBusyState() {
+        var tracker = GaryxConversationRunTracker()
+
+        tracker.apply(streamEvent: .runStart(runId: "run-1", threadId: "t1"))
+        XCTAssertTrue(tracker.isThreadBusy("t1"))
+
+        tracker.apply(streamEvent: .runError(
+            runId: "run-1",
+            threadId: "t1",
+            error: "request timed out"
+        ))
+
+        XCTAssertFalse(tracker.isThreadBusy("t1"), "run_error maps to terminal error and releases busy")
     }
 
     func testDirectFollowUpDispatchCanStartWhileThreadHasRemoteRun() {

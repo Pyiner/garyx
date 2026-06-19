@@ -1240,7 +1240,6 @@ async fn save_thread_messages_with_session_update(
                 .into_iter()
                 .map(|record| (record.seq, record.message))
                 .collect();
-            history.enqueue_conversation_index_for_thread(run.thread_id);
         }
         Err(error) => {
             warn!(thread_id = %run.thread_id, error = %error, "failed to reconcile thread transcript tail");

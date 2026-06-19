@@ -338,7 +338,7 @@ public struct GaryxConversationRunTracker: Equatable, Sendable {
         guard !threadId.isEmpty else { return }
 
         switch event {
-        case .accepted, .userMessage, .assistantDelta, .assistantBoundary, .toolUse, .toolResult:
+        case .accepted, .runStart, .userMessage, .assistantDelta, .assistantBoundary, .toolUse, .toolResult:
             markRemoteActivity(threadId: threadId, runId: Self.runId(from: event))
 
         case .userAck(_, _, let pendingInputId):
@@ -368,6 +368,10 @@ public struct GaryxConversationRunTracker: Equatable, Sendable {
         case .done, .runComplete:
             recordTerminatedRun(threadId: threadId, runId: Self.runId(from: event))
             closeThreadRun(threadId: threadId, intentOutcome: .completed)
+
+        case .runError(_, _, let message):
+            recordTerminatedRun(threadId: threadId, runId: Self.runId(from: event))
+            closeThreadRun(threadId: threadId, intentOutcome: .failed(message))
 
         case .interrupt(_, _, let abortedRuns):
             if let aborted = abortedRuns
@@ -576,6 +580,7 @@ public struct GaryxConversationRunTracker: Equatable, Sendable {
     private static func threadId(from event: GaryxChatStreamEvent) -> String {
         switch event {
         case .accepted(_, let threadId),
+             .runStart(_, let threadId),
              .assistantDelta(_, let threadId, _, _),
              .assistantBoundary(_, let threadId),
              .toolUse(_, let threadId, _),
@@ -585,6 +590,7 @@ public struct GaryxConversationRunTracker: Equatable, Sendable {
              .threadTitleUpdated(_, let threadId, _),
              .done(_, let threadId),
              .runComplete(_, let threadId),
+             .runError(_, let threadId, _),
              .streamInput(_, let threadId, _, _),
              .interrupt(_, let threadId, _),
              .snapshot(let threadId, _),
@@ -598,6 +604,7 @@ public struct GaryxConversationRunTracker: Equatable, Sendable {
     private static func runId(from event: GaryxChatStreamEvent) -> String {
         switch event {
         case .accepted(let runId, _),
+             .runStart(let runId, _),
              .assistantDelta(let runId, _, _, _),
              .assistantBoundary(let runId, _),
              .toolUse(let runId, _, _),
@@ -607,6 +614,7 @@ public struct GaryxConversationRunTracker: Equatable, Sendable {
              .threadTitleUpdated(let runId, _, _),
              .done(let runId, _),
              .runComplete(let runId, _),
+             .runError(let runId, _, _),
              .error(let runId, _, _):
             return runId
         case .streamInput, .interrupt, .snapshot, .ping, .unknown:

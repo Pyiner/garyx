@@ -105,14 +105,6 @@ pub fn default_run_terminal_dir() -> PathBuf {
     run_terminal_dir_for_data_dir(&default_session_data_dir())
 }
 
-pub fn conversation_index_dir_for_data_dir(data_dir: &Path) -> PathBuf {
-    data_dir.join("conversation-index")
-}
-
-pub fn conversation_index_db_path_for_data_dir(data_dir: &Path) -> PathBuf {
-    conversation_index_dir_for_data_dir(data_dir).join("index.sqlite3")
-}
-
 pub fn default_skills_dir() -> PathBuf {
     gary_home_dir().join("skills")
 }

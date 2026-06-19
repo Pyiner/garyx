@@ -879,10 +879,6 @@ async fn seed_imported_thread_history(
         .thread_store
         .set(thread_id, thread_data.clone())
         .await;
-    state
-        .threads
-        .history
-        .enqueue_conversation_index_for_thread(thread_id);
     Ok(())
 }
 
@@ -2209,10 +2205,6 @@ pub async fn update_thread(
                     .thread_store
                     .set(&thread_id, data.clone())
                     .await;
-                state
-                    .threads
-                    .history
-                    .enqueue_conversation_index_for_thread(&thread_id);
             }
             state
                 .integration

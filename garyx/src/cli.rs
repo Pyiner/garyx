@@ -80,21 +80,6 @@ pub(crate) enum Commands {
         /// Search API key to persist in gateway.search.api_key
         #[arg(long)]
         search_api_key: Option<String>,
-        /// OpenAI API key to persist in gateway.conversation_index.api_key
-        #[arg(long)]
-        conversation_index_api_key: Option<String>,
-        /// Enable conversation vector indexing
-        #[arg(long, conflicts_with = "disable_conversation_index")]
-        enable_conversation_index: bool,
-        /// Disable conversation vector indexing
-        #[arg(long, conflicts_with = "enable_conversation_index")]
-        disable_conversation_index: bool,
-        /// Override conversation index model
-        #[arg(long)]
-        conversation_index_model: Option<String>,
-        /// Override conversation index base URL
-        #[arg(long)]
-        conversation_index_base_url: Option<String>,
         /// Start the gateway after onboarding completes
         #[arg(long)]
         run_gateway: bool,
