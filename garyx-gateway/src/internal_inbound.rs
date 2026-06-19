@@ -146,7 +146,8 @@ pub(crate) async fn dispatch_internal_message_to_thread(
             .as_ref()
             .map(|delivery| delivery_streaming_target(target_thread_id, delivery)),
     )
-    .await;
+    .await
+    .map_err(|error| format!("failed to attach committed response stream: {error}"))?;
 
     crate::runtime_diagnostics::record_message_ledger_event(
         state,

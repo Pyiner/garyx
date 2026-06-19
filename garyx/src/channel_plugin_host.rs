@@ -406,18 +406,18 @@ impl HostInboundHandler {
             file_paths: parsed.file_paths,
         };
 
-        // Read this run's stream from the durable committed transcript instead
-        // of the live external_callback (block 5). The frame-emitting worker is
-        // unchanged; it still produces inbound/stream_frame + inbound/stream_end
-        // with local stream_id/seq, so the plugin protocol is unaffected. The
-        // worker's stream lifecycle (live_streams) still ends when its mpsc
-        // closes — now when the replay adapter drops the callback on terminal.
-        let dispatch_callback = garyx_channels::committed_replay::committed_or_live_callback(
+        // Read this run's stream from the durable committed transcript. The
+        // frame-emitting worker is unchanged; it still produces
+        // inbound/stream_frame + inbound/stream_end with local stream_id/seq, so
+        // the plugin protocol is unaffected. The worker's stream lifecycle
+        // (live_streams) still ends when its mpsc closes.
+        let dispatch_callback = garyx_channels::committed_replay::committed_callback(
             &self.bridge,
             &run_id,
             response_callback,
         )
-        .await;
+        .await
+        .map_err(|error| (PluginErrorCode::InternalError.as_i32(), error.to_string()))?;
 
         // `route_and_dispatch` resolves the thread and kicks off the
         // agent run. The committed replay adapter streams events back in; we pin

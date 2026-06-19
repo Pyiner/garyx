@@ -902,7 +902,10 @@ pub async fn build_bound_response_callback(
     thread_id: &str,
     run_id: &str,
     streaming_target: Option<StreamingDispatchTarget>,
-) -> Option<Arc<dyn Fn(StreamEvent) + Send + Sync>> {
+) -> Result<
+    Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
+    garyx_channels::committed_replay::CommittedReplayError,
+> {
     if let Some(target) = streaming_target
         && let Some(callback) = state
             .channel_dispatcher()
@@ -952,10 +955,9 @@ pub async fn build_bound_response_callback(
             }
             callback(event);
         });
-        // Read this run's stream from the durable committed transcript instead
-        // of the live external_callback (block 5). The streaming sender is
-        // unchanged; only the source changes.
-        return garyx_channels::committed_replay::committed_or_live_callback(
+        // Read this run's stream from the durable committed transcript. The
+        // streaming sender is unchanged; only the source changes.
+        return garyx_channels::committed_replay::committed_callback(
             &state.integration.bridge,
             run_id,
             streaming_consumer,
@@ -1035,10 +1037,9 @@ pub async fn build_bound_response_callback(
                 );
             }
         });
-    // Read this run's stream from the durable committed transcript instead of
-    // the live external_callback (block 5). The bound delivery buffer is
-    // unchanged; only the source changes.
-    garyx_channels::committed_replay::committed_or_live_callback(
+    // Read this run's stream from the durable committed transcript. The bound
+    // delivery buffer is unchanged; only the source changes.
+    garyx_channels::committed_replay::committed_callback(
         &state.integration.bridge,
         run_id,
         bound_consumer,

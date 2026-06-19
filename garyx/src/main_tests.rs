@@ -3,10 +3,10 @@ use std::sync::Arc;
 use clap::{CommandFactory, Parser};
 
 use crate::cli::{
-    AgentAction, AutomationAction, AutomationDataTriggerAction,
-    AutomationTriggerAction, BotAction, BotEndpointAction, ChannelsAction, Cli, CommandAction,
-    Commands, ConfigAction, DbAction, DbRecordAction, DbTableAction, DreamAction, GatewayAction,
-    LogsAction, TaskAction, TeamAction, ThreadAction, ToolAction,
+    AgentAction, AutomationAction, AutomationDataTriggerAction, AutomationTriggerAction, BotAction,
+    BotEndpointAction, ChannelsAction, Cli, CommandAction, Commands, ConfigAction, DbAction,
+    DbRecordAction, DbTableAction, DreamAction, GatewayAction, LogsAction, TaskAction, TeamAction,
+    ThreadAction, ToolAction,
 };
 use crate::commands::{
     OnboardCommandOptions, SearchStreamState, apply_search_stream_event, canonical_channel_id,
@@ -162,10 +162,12 @@ fn search_stream_event_collects_provider_sources() {
     apply_search_stream_event(
         &mut state,
         &serde_json::json!({
-            "type": "tool_result",
-            "threadId": "thread::search",
-            "runId": "run-search",
+            "type": "committed_message",
+            "thread_id": "thread::search",
+            "run_id": "run-search",
+            "seq": 1,
             "message": {
+                "role": "tool_result",
                 "tool_use_id": "call-1",
                 "tool_name": "google_web_search",
                 "metadata": {
@@ -182,8 +184,14 @@ fn search_stream_event_collects_provider_sources() {
     apply_search_stream_event(
         &mut state,
         &serde_json::json!({
-            "type": "assistant_delta",
-            "delta": "A concise answer."
+            "type": "committed_message",
+            "thread_id": "thread::search",
+            "run_id": "run-search",
+            "seq": 2,
+            "message": {
+                "role": "assistant",
+                "text": "A concise answer."
+            }
         }),
     );
 

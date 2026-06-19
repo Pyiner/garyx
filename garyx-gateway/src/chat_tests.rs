@@ -567,12 +567,3 @@ fn test_stream_input_request_accepts_thread_id_alias() {
     assert_eq!(req.thread_id.as_deref(), Some("thread::custom"));
     assert_eq!(req.client_intent_id.as_deref(), Some("intent-1"));
 }
-
-#[test]
-fn test_parse_agent_team_delta_prefix_extracts_speaker_metadata() {
-    let (speaker, delta) =
-        super::parse_agent_team_delta_prefix("[junie] say hi back").expect("speaker prefix");
-    assert_eq!(speaker.agent_id, "junie");
-    assert_eq!(speaker.agent_display_name, "junie");
-    assert_eq!(delta, "say hi back");
-}

@@ -249,40 +249,44 @@ mod tests {
         let events = parse_jsonl(include_str!(
             "../../test-fixtures/stream-sync/stream-events-with-user-ack.jsonl"
         ));
-        let mut next_seq = 1_u64;
-        let mut records = Vec::new();
-        records.push(control_record(
-            next_seq,
-            &json!({
-                "type": "run_start",
-                "threadId": "thread::fixture-stream-sync-ack",
-                "runId": "run::fixture-ack",
-            }),
-        ));
-        next_seq += 1;
-        for event in &events {
-            match event.get("type").and_then(Value::as_str) {
-                Some("tool_use" | "tool_result") => {
-                    records.push(json!({
-                        "seq": next_seq,
-                        "thread_id": event.get("threadId").and_then(Value::as_str),
-                        "run_id": event.get("runId").and_then(Value::as_str),
-                        "timestamp": "2026-06-18T12:00:00Z",
-                        "message": event.get("message").cloned().unwrap_or(Value::Null),
-                    }));
-                    next_seq += 1;
-                }
-                Some("user_ack" | "assistant_boundary" | "done") => {
-                    records.push(control_record(next_seq, event));
-                    next_seq += 1;
-                }
-                _ => {}
-            }
-        }
+        let records: Vec<Value> = events
+            .into_iter()
+            .filter(|event| {
+                event
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .is_some_and(|event_type| event_type == "committed_message")
+            })
+            .collect();
+
+        let tool_state = reduce_transcript_run_state(
+            records
+                .iter()
+                .filter(|record| record.get("seq").and_then(Value::as_u64).unwrap_or(0) <= 3),
+        );
+        assert!(tool_state.busy);
+        assert_eq!(tool_state.activity, TranscriptRunActivity::UsingTool);
+
+        let reconciling_state = reduce_transcript_run_state(
+            records
+                .iter()
+                .filter(|record| record.get("seq").and_then(Value::as_u64).unwrap_or(0) <= 7),
+        );
+        assert!(reconciling_state.busy);
+        assert_eq!(
+            reconciling_state.activity,
+            TranscriptRunActivity::Reconciling
+        );
+        assert_eq!(
+            reconciling_state.last_user_ack_pending_input_id.as_deref(),
+            Some("pending-fixture-followup")
+        );
+        assert!(reconciling_state.last_user_ack_seq.is_some());
 
         let state = reduce_transcript_run_state(&records);
-        assert!(state.busy, "fixture has done but no run_complete terminal");
-        assert_eq!(state.activity, TranscriptRunActivity::Reconciling);
+        assert!(!state.busy);
+        assert_eq!(state.activity, TranscriptRunActivity::Idle);
+        assert_eq!(state.terminal_status.as_deref(), Some("completed"));
         assert_eq!(
             state.last_user_ack_pending_input_id.as_deref(),
             Some("pending-fixture-followup")

@@ -16,7 +16,7 @@ use garyx_router::{
     InMemoryThreadStore, MessageRouter, ThreadHistoryRepository, ThreadStore, ThreadTranscriptStore,
 };
 use serde_json::Value;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, broadcast};
 
 // ---------------------------------------------------------------------------
 // ConfigurableTestProvider
@@ -177,6 +177,7 @@ pub fn make_router() -> Arc<Mutex<MessageRouter>> {
 /// Create a bridge with a given provider registered as default.
 pub async fn make_bridge_with(provider: Arc<dyn AgentLoopProvider>) -> Arc<MultiProviderBridge> {
     let bridge = Arc::new(MultiProviderBridge::new());
+    attach_test_bridge_runtime(&bridge).await;
     bridge.register_provider("test-provider", provider).await;
     bridge.set_default_provider_key("test-provider").await;
     bridge
@@ -188,6 +189,7 @@ pub async fn make_bridge_with_store(
     store: Arc<dyn ThreadStore>,
 ) -> Arc<MultiProviderBridge> {
     let bridge = Arc::new(MultiProviderBridge::new());
+    attach_test_event_bus(&bridge).await;
     bridge.register_provider("test-provider", provider).await;
     bridge.set_default_provider_key("test-provider").await;
     bridge.set_thread_store(store.clone()).await;
@@ -196,6 +198,21 @@ pub async fn make_bridge_with_store(
         Arc::new(ThreadTranscriptStore::memory()),
     )));
     bridge
+}
+
+pub async fn attach_test_event_bus(bridge: &Arc<MultiProviderBridge>) {
+    let (tx, _) = broadcast::channel(128);
+    bridge.set_event_tx(tx).await;
+}
+
+pub async fn attach_test_bridge_runtime(bridge: &Arc<MultiProviderBridge>) {
+    attach_test_event_bus(bridge).await;
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    bridge.set_thread_store(store.clone()).await;
+    bridge.set_thread_history(Arc::new(ThreadHistoryRepository::new(
+        store,
+        Arc::new(ThreadTranscriptStore::memory()),
+    )));
 }
 
 // ---------------------------------------------------------------------------

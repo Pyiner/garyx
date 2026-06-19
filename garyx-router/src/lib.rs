@@ -36,10 +36,11 @@ pub mod storage {
     pub use crate::scrub::{cleanup_legacy_team_runs_dir, scrub_legacy_team_fields};
     pub use crate::store::{ThreadStore, ThreadStoreError};
     pub use crate::thread_history::{
-        DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, RECENT_COMMITTED_RUN_IDS_LIMIT, ThreadHistoryError,
-        ThreadHistoryRepository, ThreadHistorySnapshot, ThreadTranscriptRecord,
-        ThreadTranscriptStore, count_user_query_messages, extract_run_id, history_message_count,
-        is_user_query_message, message_text,
+        DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, RECENT_COMMITTED_RUN_IDS_LIMIT,
+        THREAD_TRANSCRIPT_REPLAY_CAP, ThreadHistoryError, ThreadHistoryRepository,
+        ThreadHistorySnapshot, ThreadTranscriptRecord, ThreadTranscriptStore,
+        count_user_query_messages, extract_run_id, history_message_count, is_user_query_message,
+        message_text,
     };
 }
 
@@ -79,10 +80,10 @@ pub use tasks::{
 };
 pub use thread_history::{
     DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, RECENT_COMMITTED_RUN_IDS_LIMIT,
-    RunTranscriptRecordDraft, ThreadHistoryError, ThreadHistoryRepository, ThreadHistorySnapshot,
-    ThreadTranscriptRecord, ThreadTranscriptStore, TranscriptAppendRecordsResult,
-    count_user_query_messages, extract_run_id, history_message_count, is_user_query_message,
-    message_text,
+    RunTranscriptRecordDraft, THREAD_TRANSCRIPT_REPLAY_CAP, ThreadHistoryError,
+    ThreadHistoryRepository, ThreadHistorySnapshot, ThreadTranscriptRecord, ThreadTranscriptStore,
+    TranscriptAppendRecordsResult, count_user_query_messages, extract_run_id,
+    history_message_count, is_user_query_message, message_text,
 };
 pub use threads::{
     ChannelBinding, KnownChannelEndpoint, ThreadEnsureOptions, ThreadIndexStats,

@@ -2124,8 +2124,14 @@ fn search_stream_event_does_not_count_direct_answer_as_search() {
     apply_search_stream_event(
         &mut state,
         &json!({
-            "type": "assistant_delta",
-            "delta": "I can answer this from memory without searching."
+            "type": "committed_message",
+            "thread_id": "thread::search",
+            "run_id": "run-search",
+            "seq": 1,
+            "message": {
+                "role": "assistant",
+                "text": "I can answer this from memory without searching."
+            }
         }),
     );
 
@@ -2808,11 +2814,14 @@ async fn spawn_task_get_server(
         get(move |AxumPath(task_id): AxumPath<String>| {
             let requests = requests.clone();
             async move {
-                requests.lock().expect("request lock").push(RecordedRequest {
-                    method: "GET".to_owned(),
-                    path: format!("/api/tasks/{task_id}"),
-                    body: Value::Null,
-                });
+                requests
+                    .lock()
+                    .expect("request lock")
+                    .push(RecordedRequest {
+                        method: "GET".to_owned(),
+                        path: format!("/api/tasks/{task_id}"),
+                        body: Value::Null,
+                    });
                 Json(json!({ "task": { "status": status } }))
             }
         }),

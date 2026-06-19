@@ -578,6 +578,7 @@ mod dispatch_tests {
 
     async fn make_bridge() -> (Arc<MultiProviderBridge>, Arc<TestProvider>) {
         let bridge = Arc::new(MultiProviderBridge::new());
+        crate::test_helpers::attach_test_bridge_runtime(&bridge).await;
         let provider = Arc::new(TestProvider::new());
         bridge
             .register_provider("test-provider", provider.clone())

@@ -240,6 +240,28 @@ async fn recv_ws_json(ws: &mut TestWebSocket) -> Value {
     serde_json::from_str(&text).expect("expected json frame")
 }
 
+fn committed_control_kind(payload: &Value) -> Option<&str> {
+    (payload.get("type").and_then(Value::as_str) == Some("committed_message"))
+        .then(|| {
+            payload
+                .pointer("/message/control/kind")
+                .and_then(Value::as_str)
+        })
+        .flatten()
+}
+
+fn committed_assistant_text(payload: &Value) -> Option<&str> {
+    if payload.get("type").and_then(Value::as_str) != Some("committed_message")
+        || payload.pointer("/message/role").and_then(Value::as_str) != Some("assistant")
+    {
+        return None;
+    }
+    payload
+        .pointer("/message/text")
+        .and_then(Value::as_str)
+        .or_else(|| payload.pointer("/message/content").and_then(Value::as_str))
+}
+
 async fn run_chat_start(ws: &mut TestWebSocket, payload: Value) -> (String, Vec<Value>) {
     let initial_thread_id = payload
         .get("threadId")
@@ -259,10 +281,8 @@ async fn run_chat_start(ws: &mut TestWebSocket, payload: Value) -> (String, Vec<
         {
             thread_id = value.to_owned();
         }
-        let done = matches!(
-            event.get("type").and_then(Value::as_str),
-            Some("done" | "error")
-        );
+        let done = event.get("type").and_then(Value::as_str) == Some("error")
+            || committed_control_kind(&event) == Some("run_complete");
         events.push(event);
         if done {
             break;
@@ -383,9 +403,16 @@ async fn test_api_channel_ws_real_http_call() {
             .iter()
             .any(|event| event["type"] == "accepted" && event["threadId"] == thread_id)
     );
-    assert!(events.iter().any(|event| event["type"] == "assistant_delta"
-        && event["delta"] == Value::String("provider-e2e: hello api".to_owned())));
-    assert!(events.iter().any(|event| event["type"] == "done"));
+    assert!(
+        events
+            .iter()
+            .any(|event| committed_assistant_text(event) == Some("provider-e2e: hello api"))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| committed_control_kind(event) == Some("run_complete"))
+    );
 
     let history_ready = wait_until(std::time::Duration::from_secs(5), || {
         let client = client.clone();
@@ -496,13 +523,9 @@ async fn test_thread_lifecycle_real_http_api_e2e() {
     )
     .await;
     assert!(auto_thread_id.starts_with("thread::"));
-    assert!(
-        auto_events
-            .iter()
-            .any(|event| event["type"] == "assistant_delta"
-                && event["delta"]
-                    == Value::String("provider-e2e: hello thread lifecycle".to_owned()))
-    );
+    assert!(auto_events.iter().any(
+        |event| committed_assistant_text(event) == Some("provider-e2e: hello thread lifecycle")
+    ));
 
     let threads_after_chat: Value = client
         .get(format!("{base_url}/api/threads"))

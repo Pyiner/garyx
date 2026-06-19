@@ -4383,6 +4383,7 @@ async fn cmd_thread_send_start(
     tokio::pin!(deadline);
 
     let mut response_started = false;
+    let mut printed_committed_seqs = HashSet::new();
 
     loop {
         tokio::select! {
@@ -4405,18 +4406,34 @@ async fn cmd_thread_send_start(
                         let event_type = event["type"].as_str().unwrap_or("");
                         if json_output {
                             println!("{}", serde_json::to_string(&event)?);
-                            if matches!(event_type, "done" | "complete" | "error") {
+                            if matches!(event_type, "complete" | "error")
+                                || committed_control_kind(&event).is_some_and(|kind| {
+                                    matches!(kind, "run_complete" | "run_error")
+                                })
+                            {
                                 break;
                             }
                             continue;
                         }
                         match event_type {
-                            "assistant_delta" => {
-                                if !response_started {
-                                    response_started = true;
+                            "committed_message" => {
+                                if let Some(kind) = committed_control_kind(&event)
+                                    && matches!(kind, "run_complete" | "run_error")
+                                {
+                                    if response_started {
+                                        println!();
+                                    }
+                                    break;
                                 }
-                                if let Some(delta) = event["delta"].as_str() {
-                                    print!("{delta}");
+                                let seq = event.get("seq").and_then(Value::as_u64).unwrap_or(0);
+                                if seq != 0
+                                    && printed_committed_seqs.insert(seq)
+                                    && let Some(text) = committed_assistant_text(&event)
+                                {
+                                    if !response_started {
+                                        response_started = true;
+                                    }
+                                    print!("{text}");
                                     let _ = io::stdout().flush();
                                 }
                             }
@@ -4607,6 +4624,31 @@ pub(crate) fn extract_search_sources_from_text(text: &str) -> Vec<SearchSource> 
     sources
 }
 
+fn committed_message(event: &Value) -> Option<&Value> {
+    (event.get("type").and_then(Value::as_str) == Some("committed_message"))
+        .then(|| event.get("message"))
+        .flatten()
+}
+
+fn committed_assistant_text(event: &Value) -> Option<&str> {
+    let message = committed_message(event)?;
+    (message.get("role").and_then(Value::as_str) == Some("assistant"))
+        .then(|| {
+            message
+                .get("text")
+                .and_then(Value::as_str)
+                .or_else(|| message.get("content").and_then(Value::as_str))
+        })
+        .flatten()
+}
+
+fn committed_control_kind(event: &Value) -> Option<&str> {
+    committed_message(event)?
+        .get("control")
+        .and_then(|control| control.get("kind"))
+        .and_then(Value::as_str)
+}
+
 #[cfg(test)]
 fn value_search_sources(value: &Value) -> Vec<SearchSource> {
     value
@@ -4648,6 +4690,7 @@ pub(crate) fn apply_search_stream_event(state: &mut SearchStreamState, event: &V
     let event_type = event.get("type").and_then(Value::as_str).unwrap_or("");
     if let Some(thread_id) = event
         .get("threadId")
+        .or_else(|| event.get("thread_id"))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -4656,6 +4699,7 @@ pub(crate) fn apply_search_stream_event(state: &mut SearchStreamState, event: &V
     }
     if let Some(run_id) = event
         .get("runId")
+        .or_else(|| event.get("run_id"))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -4664,66 +4708,84 @@ pub(crate) fn apply_search_stream_event(state: &mut SearchStreamState, event: &V
     }
 
     match event_type {
-        "assistant_delta" => {
-            if let Some(delta) = event.get("delta").and_then(Value::as_str) {
-                state.answer.push_str(delta);
+        "committed_message" => {
+            let Some(message) = event.get("message") else {
+                return;
+            };
+            match message.get("role").and_then(Value::as_str).unwrap_or("") {
+                "assistant" => {
+                    if let Some(text) = message
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .or_else(|| message.get("content").and_then(Value::as_str))
+                    {
+                        state.answer.push_str(text);
+                    }
+                }
+                "tool_use" | "tool_result" => apply_search_tool_message(state, message),
+                _ => {}
             }
         }
         "tool_use" | "tool_result" => {
             let Some(message) = event.get("message") else {
                 return;
             };
-            let tool_name = message
-                .get("tool_name")
-                .and_then(Value::as_str)
-                .or_else(|| message.get("toolName").and_then(Value::as_str))
-                .or_else(|| {
-                    message
-                        .get("content")
-                        .and_then(|content| content.get("rawInput"))
-                        .and_then(|raw| raw.get("name"))
-                        .and_then(Value::as_str)
-                })
-                .or_else(|| {
-                    message
-                        .get("content")
-                        .and_then(|content| content.get("title"))
-                        .and_then(Value::as_str)
-                })
-                .unwrap_or("");
-            let search_metadata = message
-                .get("metadata")
-                .and_then(|metadata| metadata.get("gemini_search"));
-            if is_search_like_tool_name(tool_name) || search_metadata.is_some() {
-                state.searched = true;
-            }
-            let Some(search_metadata) = search_metadata else {
-                return;
-            };
-            let mut sources = value_search_sources(&search_metadata["sources"]);
-            if sources.is_empty()
-                && let Some(output) = search_metadata.get("output").and_then(Value::as_str)
-            {
-                sources = extract_search_sources_from_text(output);
-            }
-            for source in &sources {
-                push_source_unique(&mut state.sources, source.clone());
-            }
-            state.tool_metadata.push(SearchToolMetadata {
-                tool_name: tool_name.to_owned(),
-                tool_use_id: message
-                    .get("tool_use_id")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned),
-                sources,
-                output: search_metadata
-                    .get("output")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned),
-            });
+            apply_search_tool_message(state, message);
         }
         _ => {}
     }
+}
+
+#[cfg(test)]
+fn apply_search_tool_message(state: &mut SearchStreamState, message: &Value) {
+    let tool_name = message
+        .get("tool_name")
+        .and_then(Value::as_str)
+        .or_else(|| message.get("toolName").and_then(Value::as_str))
+        .or_else(|| {
+            message
+                .get("content")
+                .and_then(|content| content.get("rawInput"))
+                .and_then(|raw| raw.get("name"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            message
+                .get("content")
+                .and_then(|content| content.get("title"))
+                .and_then(Value::as_str)
+        })
+        .unwrap_or("");
+    let search_metadata = message
+        .get("metadata")
+        .and_then(|metadata| metadata.get("gemini_search"));
+    if is_search_like_tool_name(tool_name) || search_metadata.is_some() {
+        state.searched = true;
+    }
+    let Some(search_metadata) = search_metadata else {
+        return;
+    };
+    let mut sources = value_search_sources(&search_metadata["sources"]);
+    if sources.is_empty()
+        && let Some(output) = search_metadata.get("output").and_then(Value::as_str)
+    {
+        sources = extract_search_sources_from_text(output);
+    }
+    for source in &sources {
+        push_source_unique(&mut state.sources, source.clone());
+    }
+    state.tool_metadata.push(SearchToolMetadata {
+        tool_name: tool_name.to_owned(),
+        tool_use_id: message
+            .get("tool_use_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        sources,
+        output: search_metadata
+            .get("output")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+    });
 }
 
 fn apply_gemini_cli_search_event(

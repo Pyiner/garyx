@@ -28,6 +28,16 @@ fn assert_public_fixture(raw: &str) {
     );
 }
 
+fn committed_control_kind(event: &Value) -> Option<&str> {
+    (event.get("type").and_then(Value::as_str) == Some("committed_message"))
+        .then(|| {
+            event
+                .pointer("/message/control/kind")
+                .and_then(Value::as_str)
+        })
+        .flatten()
+}
+
 #[test]
 fn stream_sync_transcript_fixture_is_gapless_and_has_tool_pair() {
     let raw = include_str!("../../test-fixtures/stream-sync/transcript-with-tool.jsonl");
@@ -72,7 +82,7 @@ fn stream_sync_event_fixtures_cover_user_ack_and_lifecycle_seq_split() {
     let ack_events = parse_jsonl("stream-events-with-user-ack.jsonl", ack_raw);
     let ack_index = ack_events
         .iter()
-        .position(|event| event.get("type").and_then(Value::as_str) == Some("user_ack"))
+        .position(|event| committed_control_kind(event) == Some("user_ack"))
         .expect("fixture should include user_ack");
     let stream_input_index = ack_events
         .iter()
@@ -84,7 +94,7 @@ fn stream_sync_event_fixtures_cover_user_ack_and_lifecycle_seq_split() {
     );
     assert_eq!(
         ack_events[ack_index]
-            .get("pendingInputId")
+            .pointer("/message/control/pending_input_id")
             .and_then(Value::as_str),
         Some("pending-fixture-followup"),
         "user_ack fixture should retain the pending input id"
@@ -103,19 +113,12 @@ fn stream_sync_event_fixtures_cover_user_ack_and_lifecycle_seq_split() {
         Some("intent-fixture-followup"),
         "stream_input should retain the client intent id"
     );
-    assert!(
-        ack_events
-            .iter()
-            .all(|event| event.get("pending_input_id").is_none()
-                && event.get("client_intent_id").is_none()
-                && event.get("thread_id").is_none()
-                && event.get("run_id").is_none()),
-        "chat WS fixture should use camelCase frame fields"
-    );
-    assert!(
-        ack_events.iter().all(|event| event.get("seq").is_none()),
-        "chat WS stream/control events in this fixture are intentionally unseqed"
-    );
+    let ack_committed_seqs: Vec<u64> = ack_events
+        .iter()
+        .filter(|event| event.get("type").and_then(Value::as_str) == Some("committed_message"))
+        .filter_map(|event| event.get("seq").and_then(Value::as_u64))
+        .collect();
+    assert_eq!(ack_committed_seqs, vec![1, 2, 3, 4, 5, 6, 7, 8]);
 
     let lifecycle_events = parse_jsonl("stream-lifecycle.jsonl", lifecycle_raw);
     let event_types: Vec<&str> = lifecycle_events
@@ -125,12 +128,11 @@ fn stream_sync_event_fixtures_cover_user_ack_and_lifecycle_seq_split() {
     assert_eq!(
         event_types,
         vec![
-            "run_start",
             "committed_message",
-            "assistant_delta",
             "committed_message",
-            "done",
-            "run_complete"
+            "committed_message",
+            "committed_message",
+            "committed_message",
         ]
     );
 
@@ -139,12 +141,16 @@ fn stream_sync_event_fixtures_cover_user_ack_and_lifecycle_seq_split() {
         .filter(|event| event.get("type").and_then(Value::as_str) == Some("committed_message"))
         .filter_map(|event| event.get("seq").and_then(Value::as_u64))
         .collect();
-    assert_eq!(committed_seqs, vec![1, 2]);
+    assert_eq!(committed_seqs, vec![1, 2, 3, 4, 5]);
     assert!(
         lifecycle_events
             .iter()
-            .filter(|event| event.get("type").and_then(Value::as_str) != Some("committed_message"))
-            .all(|event| event.get("seq").is_none()),
-        "only committed_message carries seq before v3 control-record landing"
+            .all(|event| event.get("type").and_then(Value::as_str) == Some("committed_message")),
+        "lifecycle fixture should be committed/control-only"
     );
+    let control_kinds: Vec<&str> = lifecycle_events
+        .iter()
+        .filter_map(committed_control_kind)
+        .collect();
+    assert_eq!(control_kinds, vec!["run_start", "done", "run_complete"]);
 }

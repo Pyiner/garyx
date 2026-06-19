@@ -1,11 +1,12 @@
 use std::collections::HashMap;
+use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use garyx_models::{TranscriptRunState, reduce_transcript_run_state};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 
 use crate::file_store::thread_storage_file_name;
@@ -13,6 +14,9 @@ use crate::store::ThreadStore;
 
 pub const DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT: usize = 100;
 pub const RECENT_COMMITTED_RUN_IDS_LIMIT: usize = 256;
+pub const THREAD_TRANSCRIPT_REPLAY_CAP: usize = 10_000;
+
+const TAIL_SCAN_CHUNK_BYTES: u64 = 64 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ThreadHistoryError {
@@ -489,7 +493,17 @@ impl ThreadTranscriptStore {
                         message: "missing transcript path".to_owned(),
                     }
                 })?;
-                let mut lines = Vec::with_capacity(messages.len() + 1);
+                let existing = self.read_records_from_path(thread_id, &path).await?;
+                let records = reconcile_rewrite_records(thread_id, &existing, messages);
+                if records == existing {
+                    return Ok(TranscriptAppendResult {
+                        total_messages: existing.len(),
+                        last_message_at: existing.last().map(|record| record.timestamp.clone()),
+                        transcript_file: Some(path),
+                    });
+                }
+
+                let mut lines = Vec::with_capacity(records.len() + 1);
                 lines.push(
                     serde_json::to_string(&TranscriptLine::Session {
                         version: 1,
@@ -504,23 +518,15 @@ impl ThreadTranscriptStore {
                     })?,
                 );
                 let mut last_message_at = None;
-                for (idx, message) in messages.iter().enumerate() {
-                    let record = ThreadTranscriptRecord {
-                        seq: idx as u64 + 1,
-                        thread_id: thread_id.to_owned(),
-                        run_id: extract_run_id(message),
-                        timestamp: message_timestamp(message)
-                            .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
-                        message: message.clone(),
-                    };
+                for record in &records {
                     last_message_at = Some(record.timestamp.clone());
                     lines.push(
-                        serde_json::to_string(&TranscriptLine::from(record)).map_err(|error| {
-                            ThreadHistoryError::InvalidTranscript {
+                        serde_json::to_string(&TranscriptLine::from(record.clone())).map_err(
+                            |error| ThreadHistoryError::InvalidTranscript {
                                 thread_id: thread_id.to_owned(),
                                 message: error.to_string(),
-                            }
-                        })?,
+                            },
+                        )?,
                     );
                 }
                 let payload = format!("{}\n", lines.join("\n"));
@@ -531,7 +537,7 @@ impl ThreadTranscriptStore {
                     }
                 })?;
                 Ok(TranscriptAppendResult {
-                    total_messages: messages.len(),
+                    total_messages: records.len(),
                     last_message_at,
                     transcript_file: Some(path),
                 })
@@ -539,17 +545,7 @@ impl ThreadTranscriptStore {
             TranscriptStoreMode::Memory { records } => {
                 let mut guard = records.lock().await;
                 let entries = guard.entry(thread_id.to_owned()).or_default();
-                entries.clear();
-                for (idx, message) in messages.iter().enumerate() {
-                    entries.push(ThreadTranscriptRecord {
-                        seq: idx as u64 + 1,
-                        thread_id: thread_id.to_owned(),
-                        run_id: extract_run_id(message),
-                        timestamp: message_timestamp(message)
-                            .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
-                        message: message.clone(),
-                    });
-                }
+                *entries = reconcile_rewrite_records(thread_id, entries, messages);
                 Ok(TranscriptAppendResult {
                     total_messages: entries.len(),
                     last_message_at: entries.last().map(|record| record.timestamp.clone()),
@@ -802,7 +798,7 @@ impl ThreadTranscriptStore {
                 &mut rebuilt,
                 &mut changed,
                 thread_id,
-                trimmed_run_id,
+                Some(trimmed_run_id),
                 changed_same_seqs.iter().copied().min().unwrap_or(1),
                 changed_same_seqs.iter().copied().max().unwrap_or(1),
                 authoritative.len(),
@@ -897,7 +893,7 @@ impl ThreadTranscriptStore {
                     &mut rebuilt,
                     &mut changed,
                     thread_id,
-                    trimmed_run_id,
+                    Some(trimmed_run_id),
                     start_seq,
                     end_seq,
                     authoritative.len(),
@@ -956,7 +952,7 @@ impl ThreadTranscriptStore {
                     &mut rebuilt,
                     &mut changed,
                     thread_id,
-                    trimmed_run_id,
+                    Some(trimmed_run_id),
                     start_seq,
                     end_seq,
                     authoritative.len(),
@@ -1004,7 +1000,7 @@ impl ThreadTranscriptStore {
             } else {
                 let rewrite = build_range_rewrite_record(
                     thread_id,
-                    trimmed_run_id,
+                    Some(trimmed_run_id),
                     existing.seq,
                     first_rewritten_seq,
                     last_rewritten_seq,
@@ -1034,7 +1030,7 @@ impl ThreadTranscriptStore {
             .unwrap_or(last_rewritten_seq);
         let rewrite = build_range_rewrite_record(
             thread_id,
-            trimmed_run_id,
+            Some(trimmed_run_id),
             rebuilt.last().map(|record| record.seq + 1).unwrap_or(1),
             first_rewritten_seq,
             last_rewritten_seq,
@@ -1183,55 +1179,7 @@ impl ThreadTranscriptStore {
                 if !path.exists() {
                     return Ok(Vec::new());
                 }
-                let raw = tokio::fs::read_to_string(&path).await.map_err(|error| {
-                    ThreadHistoryError::TranscriptIo {
-                        thread_id: thread_id.to_owned(),
-                        message: error.to_string(),
-                    }
-                })?;
-                // Tail scan: parse backward only as far as needed, collecting the
-                // newest `limit` records (newest-first) then reversing to ascending.
-                // A far-behind cursor whose delta exceeds `limit` thus yields the
-                // NEWEST `limit` (not the oldest), so the stream's live handoff stays
-                // gapless — the most recent rows are always delivered and the client
-                // pages older history via before_index. This also never reads the
-                // whole file: it stops after `limit` records.
-                let mut tail: Vec<ThreadTranscriptRecord> = Vec::new();
-                for line in raw.lines().rev() {
-                    if line.trim().is_empty() {
-                        continue;
-                    }
-                    let parsed = serde_json::from_str::<TranscriptLine>(line).map_err(|error| {
-                        ThreadHistoryError::InvalidTranscript {
-                            thread_id: thread_id.to_owned(),
-                            message: error.to_string(),
-                        }
-                    })?;
-                    if let TranscriptLine::Message {
-                        seq,
-                        thread_id: tid,
-                        run_id,
-                        timestamp,
-                        message,
-                    } = parsed
-                    {
-                        if seq <= after_seq {
-                            break;
-                        }
-                        tail.push(ThreadTranscriptRecord {
-                            seq,
-                            thread_id: tid,
-                            run_id,
-                            timestamp,
-                            message,
-                        });
-                        if tail.len() >= limit {
-                            break;
-                        }
-                    }
-                }
-                tail.reverse();
-                Ok(tail)
+                read_tail_records_after_seq_from_path(thread_id, &path, after_seq, limit).await
             }
             TranscriptStoreMode::Memory { records } => {
                 let guard = records.lock().await;
@@ -1251,6 +1199,94 @@ impl ThreadTranscriptStore {
                     filtered.drain(0..filtered.len() - limit);
                 }
                 Ok(filtered)
+            }
+        }
+    }
+
+    /// Oldest committed records with `seq > after_seq`, ascending, up to `limit`.
+    /// This is the explicit pagination companion to `records_after_seq`: callers
+    /// use the tail scan for the caught-up fast path, then fall back to this
+    /// forward page only when the tail page proves the delta exceeded the replay
+    /// cap.
+    pub async fn records_after_seq_page(
+        &self,
+        thread_id: &str,
+        after_seq: u64,
+        limit: usize,
+    ) -> Result<Vec<ThreadTranscriptRecord>, ThreadHistoryError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        match &self.mode {
+            TranscriptStoreMode::File { .. } => {
+                let Some(path) = self.transcript_path(thread_id) else {
+                    return Ok(Vec::new());
+                };
+                if !path.exists() {
+                    return Ok(Vec::new());
+                }
+                read_forward_records_after_seq_from_path(thread_id, &path, after_seq, limit).await
+            }
+            TranscriptStoreMode::Memory { records } => {
+                let guard = records.lock().await;
+                Ok(guard
+                    .get(thread_id)
+                    .map(|entries| {
+                        entries
+                            .iter()
+                            .filter(|record| record.seq > after_seq)
+                            .take(limit)
+                            .cloned()
+                            .collect()
+                    })
+                    .unwrap_or_default())
+            }
+        }
+    }
+
+    pub async fn records_for_run_after_seq(
+        &self,
+        thread_id: &str,
+        run_id: &str,
+        after_seq: u64,
+        limit: usize,
+    ) -> Result<Vec<ThreadTranscriptRecord>, ThreadHistoryError> {
+        let trimmed_run_id = run_id.trim();
+        if trimmed_run_id.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        match &self.mode {
+            TranscriptStoreMode::File { .. } => {
+                let Some(path) = self.transcript_path(thread_id) else {
+                    return Ok(Vec::new());
+                };
+                read_run_records_after_seq_from_path(
+                    thread_id,
+                    &path,
+                    trimmed_run_id,
+                    after_seq,
+                    limit,
+                )
+                .await
+            }
+            TranscriptStoreMode::Memory { records } => {
+                let guard = records.lock().await;
+                Ok(guard
+                    .get(thread_id)
+                    .map(|entries| {
+                        entries
+                            .iter()
+                            .filter(|record| {
+                                record.seq > after_seq
+                                    && (record.run_id.as_deref() == Some(trimmed_run_id)
+                                        || (record.run_id.is_none()
+                                            && is_control_record_message(&record.message)))
+                            })
+                            .take(limit)
+                            .cloned()
+                            .collect()
+                    })
+                    .unwrap_or_default())
             }
         }
     }
@@ -1390,6 +1426,222 @@ impl ThreadTranscriptStore {
         }
         Ok(records)
     }
+}
+
+fn transcript_io_error(thread_id: &str, error: impl std::fmt::Display) -> ThreadHistoryError {
+    ThreadHistoryError::TranscriptIo {
+        thread_id: thread_id.to_owned(),
+        message: error.to_string(),
+    }
+}
+
+fn parse_transcript_record_line(
+    thread_id: &str,
+    line: &str,
+    location: impl std::fmt::Display,
+) -> Result<Option<ThreadTranscriptRecord>, ThreadHistoryError> {
+    if line.trim().is_empty() {
+        return Ok(None);
+    }
+    let parsed = serde_json::from_str::<TranscriptLine>(line).map_err(|error| {
+        ThreadHistoryError::InvalidTranscript {
+            thread_id: thread_id.to_owned(),
+            message: format!("{location}: {error}"),
+        }
+    })?;
+    Ok(match parsed {
+        TranscriptLine::Message {
+            seq,
+            thread_id,
+            run_id,
+            timestamp,
+            message,
+        } => Some(ThreadTranscriptRecord {
+            seq,
+            thread_id,
+            run_id,
+            timestamp,
+            message,
+        }),
+        TranscriptLine::Session { .. } => None,
+    })
+}
+
+fn parse_transcript_record_bytes(
+    thread_id: &str,
+    line: &[u8],
+    location: impl std::fmt::Display,
+) -> Result<Option<ThreadTranscriptRecord>, ThreadHistoryError> {
+    if line.iter().all(|byte| byte.is_ascii_whitespace()) {
+        return Ok(None);
+    }
+    let line =
+        std::str::from_utf8(line).map_err(|error| ThreadHistoryError::InvalidTranscript {
+            thread_id: thread_id.to_owned(),
+            message: format!("{location}: {error}"),
+        })?;
+    parse_transcript_record_line(thread_id, line, location)
+}
+
+fn collect_tail_scan_line(
+    thread_id: &str,
+    line: &[u8],
+    after_seq: u64,
+    limit: usize,
+    tail: &mut Vec<ThreadTranscriptRecord>,
+) -> Result<bool, ThreadHistoryError> {
+    let Some(record) = parse_transcript_record_bytes(thread_id, line, "tail scan")? else {
+        return Ok(false);
+    };
+    if record.seq <= after_seq {
+        return Ok(true);
+    }
+    tail.push(record);
+    Ok(tail.len() >= limit)
+}
+
+async fn read_tail_records_after_seq_from_path(
+    thread_id: &str,
+    path: &Path,
+    after_seq: u64,
+    limit: usize,
+) -> Result<Vec<ThreadTranscriptRecord>, ThreadHistoryError> {
+    if limit == 0 || !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .map_err(|error| transcript_io_error(thread_id, error))?;
+    let mut position = file
+        .metadata()
+        .await
+        .map_err(|error| transcript_io_error(thread_id, error))?
+        .len();
+    let mut carry = Vec::new();
+    let mut tail = Vec::new();
+
+    while position > 0 && tail.len() < limit {
+        let read_len = position.min(TAIL_SCAN_CHUNK_BYTES) as usize;
+        position -= read_len as u64;
+        file.seek(SeekFrom::Start(position))
+            .await
+            .map_err(|error| transcript_io_error(thread_id, error))?;
+        let mut chunk = vec![0; read_len];
+        file.read_exact(&mut chunk)
+            .await
+            .map_err(|error| transcript_io_error(thread_id, error))?;
+        if !carry.is_empty() {
+            chunk.extend_from_slice(&carry);
+        }
+
+        let mut end = chunk.len();
+        while end > 0 {
+            let Some(newline_index) = chunk[..end].iter().rposition(|byte| *byte == b'\n') else {
+                break;
+            };
+            if collect_tail_scan_line(
+                thread_id,
+                &chunk[newline_index + 1..end],
+                after_seq,
+                limit,
+                &mut tail,
+            )? {
+                tail.reverse();
+                return Ok(tail);
+            }
+            end = newline_index;
+        }
+        carry.clear();
+        carry.extend_from_slice(&chunk[..end]);
+    }
+
+    if tail.len() < limit
+        && !carry.is_empty()
+        && collect_tail_scan_line(thread_id, &carry, after_seq, limit, &mut tail)?
+    {
+        tail.reverse();
+        return Ok(tail);
+    }
+
+    tail.reverse();
+    Ok(tail)
+}
+
+async fn read_forward_records_after_seq_from_path(
+    thread_id: &str,
+    path: &Path,
+    after_seq: u64,
+    limit: usize,
+) -> Result<Vec<ThreadTranscriptRecord>, ThreadHistoryError> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let file = tokio::fs::File::open(path)
+        .await
+        .map_err(|error| transcript_io_error(thread_id, error))?;
+    let mut lines = BufReader::new(file).lines();
+    let mut line_no = 0_usize;
+    let mut records = Vec::new();
+    while let Some(line) = lines
+        .next_line()
+        .await
+        .map_err(|error| transcript_io_error(thread_id, error))?
+    {
+        line_no += 1;
+        let Some(record) = parse_transcript_record_line(thread_id, &line, line_no)? else {
+            continue;
+        };
+        if record.seq <= after_seq {
+            continue;
+        }
+        records.push(record);
+        if records.len() >= limit {
+            break;
+        }
+    }
+    Ok(records)
+}
+
+async fn read_run_records_after_seq_from_path(
+    thread_id: &str,
+    path: &Path,
+    run_id: &str,
+    after_seq: u64,
+    limit: usize,
+) -> Result<Vec<ThreadTranscriptRecord>, ThreadHistoryError> {
+    if limit == 0 || !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let file = tokio::fs::File::open(path)
+        .await
+        .map_err(|error| transcript_io_error(thread_id, error))?;
+    let mut lines = BufReader::new(file).lines();
+    let mut records = Vec::new();
+    let mut line_no = 0usize;
+    while let Some(line) = lines
+        .next_line()
+        .await
+        .map_err(|error| transcript_io_error(thread_id, error))?
+    {
+        line_no += 1;
+        let Some(record) =
+            parse_transcript_record_line(thread_id, &line, format!("line {line_no}"))?
+        else {
+            continue;
+        };
+        if record.seq > after_seq
+            && (record.run_id.as_deref() == Some(run_id)
+                || (record.run_id.is_none() && is_control_record_message(&record.message)))
+        {
+            records.push(record);
+            if records.len() >= limit {
+                break;
+            }
+        }
+    }
+    Ok(records)
 }
 
 impl Default for ThreadTranscriptStore {
@@ -1824,6 +2076,29 @@ fn message_timestamp(message: &Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn record_from_message(thread_id: &str, seq: u64, message: &Value) -> ThreadTranscriptRecord {
+    ThreadTranscriptRecord {
+        seq,
+        thread_id: thread_id.to_owned(),
+        run_id: extract_run_id(message),
+        timestamp: message_timestamp(message).unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+        message: message.clone(),
+    }
+}
+
+fn record_from_message_replacing(
+    thread_id: &str,
+    seq: u64,
+    message: &Value,
+    existing: &ThreadTranscriptRecord,
+) -> ThreadTranscriptRecord {
+    let mut record = record_from_message(thread_id, seq, message);
+    if message_timestamp(message).is_none() {
+        record.timestamp = existing.timestamp.clone();
+    }
+    record
+}
+
 fn record_from_draft(
     thread_id: &str,
     run_id: Option<&str>,
@@ -1859,9 +2134,221 @@ fn record_from_draft_replacing(
     record
 }
 
+fn reconcile_rewrite_records(
+    thread_id: &str,
+    existing: &[ThreadTranscriptRecord],
+    messages: &[Value],
+) -> Vec<ThreadTranscriptRecord> {
+    if existing.is_empty() {
+        return messages
+            .iter()
+            .enumerate()
+            .map(|(offset, message)| record_from_message(thread_id, offset as u64 + 1, message))
+            .collect();
+    }
+
+    let existing_identity: Vec<Value> = existing
+        .iter()
+        .map(|record| message_identity(&record.message))
+        .collect();
+    let authoritative_identity: Vec<Value> = messages.iter().map(message_identity).collect();
+
+    if existing_identity == authoritative_identity {
+        let mut rebuilt = existing.to_vec();
+        let mut changed_same_seqs = Vec::new();
+        for (offset, message) in messages.iter().enumerate() {
+            let current = &existing[offset];
+            let replacement =
+                record_from_message_replacing(thread_id, current.seq, message, current);
+            if replacement.timestamp != current.timestamp || replacement.message != current.message
+            {
+                changed_same_seqs.push(replacement.seq);
+                rebuilt[offset] = replacement;
+            }
+        }
+        append_thread_rewrite_marker_if_needed(
+            &mut rebuilt,
+            &changed_same_seqs,
+            thread_id,
+            messages.len(),
+            existing.len(),
+            "same_seq_overwrite",
+        );
+        return rebuilt;
+    }
+
+    if authoritative_identity.len() > existing_identity.len()
+        && authoritative_identity[..existing_identity.len()] == existing_identity[..]
+    {
+        let mut rebuilt = existing.to_vec();
+        let mut next_seq = rebuilt.last().map(|record| record.seq + 1).unwrap_or(1);
+        for message in &messages[existing.len()..] {
+            rebuilt.push(record_from_message(thread_id, next_seq, message));
+            next_seq += 1;
+        }
+        return rebuilt;
+    }
+
+    if authoritative_identity.len() <= existing_identity.len()
+        && existing_identity[..authoritative_identity.len()] == authoritative_identity[..]
+        && existing[authoritative_identity.len()..]
+            .iter()
+            .all(|record| is_range_rewrite_control(&record.message))
+    {
+        let mut rebuilt = existing.to_vec();
+        let mut changed_same_seqs = Vec::new();
+        for (offset, message) in messages.iter().enumerate() {
+            let current = &existing[offset];
+            let replacement =
+                record_from_message_replacing(thread_id, current.seq, message, current);
+            if replacement.timestamp != current.timestamp || replacement.message != current.message
+            {
+                changed_same_seqs.push(replacement.seq);
+                rebuilt[offset] = replacement;
+            }
+        }
+        append_thread_rewrite_marker_if_needed(
+            &mut rebuilt,
+            &changed_same_seqs,
+            thread_id,
+            messages.len(),
+            existing.len(),
+            "same_seq_overwrite",
+        );
+        return rebuilt;
+    }
+
+    if messages.len() >= existing.len() {
+        let mut rebuilt = Vec::with_capacity(messages.len() + 1);
+        let mut changed_same_seqs = Vec::new();
+        let mut next_seq = existing.first().map(|record| record.seq).unwrap_or(1);
+        for (offset, message) in messages.iter().enumerate() {
+            let seq = existing
+                .get(offset)
+                .map(|record| record.seq)
+                .unwrap_or(next_seq);
+            let replacement = if let Some(current) = existing.get(offset) {
+                record_from_message_replacing(thread_id, seq, message, current)
+            } else {
+                record_from_message(thread_id, seq, message)
+            };
+            if let Some(current) = existing.get(offset)
+                && (replacement.timestamp != current.timestamp
+                    || replacement.message != current.message)
+            {
+                changed_same_seqs.push(replacement.seq);
+            }
+            rebuilt.push(replacement);
+            next_seq = seq + 1;
+        }
+        append_thread_rewrite_marker_if_needed(
+            &mut rebuilt,
+            &changed_same_seqs,
+            thread_id,
+            messages.len(),
+            existing.len(),
+            "same_seq_overwrite",
+        );
+        return rebuilt;
+    }
+
+    let mut rebuilt = Vec::with_capacity(existing.len() + 1);
+    let mut changed_same_seqs = Vec::new();
+    let first_rewritten_seq = existing
+        .get(messages.len())
+        .map(|record| record.seq)
+        .unwrap_or_else(|| existing.first().map(|record| record.seq).unwrap_or(1));
+    let last_rewritten_seq = existing
+        .last()
+        .map(|record| record.seq)
+        .unwrap_or(first_rewritten_seq);
+    let rewrite_at = chrono::Utc::now().to_rfc3339();
+    for (offset, current) in existing.iter().enumerate() {
+        if let Some(message) = messages.get(offset) {
+            let replacement =
+                record_from_message_replacing(thread_id, current.seq, message, current);
+            if replacement.timestamp != current.timestamp || replacement.message != current.message
+            {
+                changed_same_seqs.push(replacement.seq);
+            }
+            rebuilt.push(replacement);
+        } else {
+            let rewrite = build_range_rewrite_record(
+                thread_id,
+                None,
+                current.seq,
+                first_rewritten_seq,
+                last_rewritten_seq,
+                messages.len(),
+                existing.len(),
+                true,
+                "rewrite_from_messages_shrink",
+                &rewrite_at,
+            );
+            if rewrite.timestamp != current.timestamp || rewrite.message != current.message {
+                changed_same_seqs.push(rewrite.seq);
+            }
+            rebuilt.push(rewrite);
+        }
+    }
+
+    let first_rewritten_seq = changed_same_seqs
+        .iter()
+        .copied()
+        .min()
+        .unwrap_or(first_rewritten_seq);
+    let last_rewritten_seq = changed_same_seqs
+        .iter()
+        .copied()
+        .max()
+        .unwrap_or(last_rewritten_seq);
+    let marker = build_range_rewrite_record(
+        thread_id,
+        None,
+        rebuilt.last().map(|record| record.seq + 1).unwrap_or(1),
+        first_rewritten_seq,
+        last_rewritten_seq,
+        messages.len(),
+        existing.len(),
+        false,
+        "rewrite_from_messages_shrink",
+        &rewrite_at,
+    );
+    rebuilt.push(marker);
+    rebuilt
+}
+
+fn append_thread_rewrite_marker_if_needed(
+    records: &mut Vec<ThreadTranscriptRecord>,
+    changed_same_seqs: &[u64],
+    thread_id: &str,
+    authoritative_len: usize,
+    existing_len: usize,
+    reason: &str,
+) {
+    let (Some(start_seq), Some(end_seq)) = (
+        changed_same_seqs.iter().copied().min(),
+        changed_same_seqs.iter().copied().max(),
+    ) else {
+        return;
+    };
+    let mut ignored_changed = Vec::new();
+    append_range_rewrite_marker(
+        records,
+        &mut ignored_changed,
+        thread_id,
+        None,
+        start_seq,
+        end_seq,
+        authoritative_len,
+        existing_len,
+        reason,
+    );
+}
+
 fn build_range_rewrite_record(
     thread_id: &str,
-    run_id: &str,
+    run_id: Option<&str>,
     seq: u64,
     start_seq: u64,
     end_seq: u64,
@@ -1871,7 +2358,7 @@ fn build_range_rewrite_record(
     reason: &str,
     at: &str,
 ) -> ThreadTranscriptRecord {
-    let message = serde_json::json!({
+    let mut message = serde_json::json!({
         "role": "system",
         "kind": "control",
         "internal": true,
@@ -1879,7 +2366,6 @@ fn build_range_rewrite_record(
         "control": {
             "kind": "range_rewrite",
             "thread_id": thread_id,
-            "run_id": run_id,
             "start_seq": start_seq,
             "end_seq": end_seq,
             "tombstone": tombstone,
@@ -1890,10 +2376,15 @@ fn build_range_rewrite_record(
             "at": at,
         }
     });
+    if let Some(run_id) = run_id
+        && let Some(control) = message.get_mut("control").and_then(Value::as_object_mut)
+    {
+        control.insert("run_id".to_owned(), Value::String(run_id.to_owned()));
+    }
     ThreadTranscriptRecord {
         seq,
         thread_id: thread_id.to_owned(),
-        run_id: Some(run_id.to_owned()),
+        run_id: trim_non_empty(run_id),
         timestamp: at.to_owned(),
         message,
     }
@@ -1904,7 +2395,7 @@ fn append_range_rewrite_marker(
     records: &mut Vec<ThreadTranscriptRecord>,
     changed: &mut Vec<ThreadTranscriptRecord>,
     thread_id: &str,
-    run_id: &str,
+    run_id: Option<&str>,
     start_seq: u64,
     end_seq: u64,
     authoritative_len: usize,
@@ -1934,6 +2425,14 @@ fn is_range_rewrite_control(value: &Value) -> bool {
         .and_then(|control| control.get("kind"))
         .and_then(Value::as_str)
         == Some("range_rewrite")
+}
+
+fn is_control_record_message(value: &Value) -> bool {
+    value
+        .get("control")
+        .and_then(|control| control.get("kind"))
+        .and_then(Value::as_str)
+        .is_some()
 }
 
 /// A message's logical identity for run-tail reconciliation: everything except

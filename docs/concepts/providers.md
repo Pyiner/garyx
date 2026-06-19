@@ -27,8 +27,8 @@ When a message lands on a thread:
    provider, with optional fallbacks.
 3. Spawn the provider CLI. Claude uses the Agent SDK transport; the configured
    SDK executable is either the embedded `cctty` runner or native `claude`.
-4. Stream `assistant_delta` events back to the channel that triggered the
-   run.
+4. Persist committed transcript records, then stream `committed_message`
+   content/control frames back to the channel that triggered the run.
 
 Resume tokens (Claude Code / Codex SDK session ids) are kept per-thread, so
 a single Telegram chat preserves context across many runs without you

@@ -244,6 +244,55 @@ fn thread_stream_live_payload_only_forwards_committed_messages() {
     assert_eq!(last_sent_seq, 1);
 }
 
+#[tokio::test]
+async fn thread_stream_replay_pages_when_tail_cap_overflows() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let (thread_id, _) = create_thread_record(
+        &state.threads.thread_store,
+        ThreadEnsureOptions {
+            label: Some("Replay cap".to_owned()),
+            workspace_dir: None,
+            workspace_mode: Default::default(),
+            worktree_base_dir: None,
+            agent_id: None,
+            metadata: HashMap::new(),
+            provider_type: None,
+            sdk_session_id: None,
+            thread_kind: None,
+            origin_channel: None,
+            origin_account_id: None,
+            origin_from_id: None,
+            is_group: None,
+        },
+    )
+    .await
+    .unwrap();
+    let messages: Vec<Value> = (1..=THREAD_TRANSCRIPT_REPLAY_CAP + 2)
+        .map(|seq| json!({"role": "assistant", "content": format!("m{seq}")}))
+        .collect();
+    state
+        .threads
+        .history
+        .transcript_store()
+        .append_committed_messages(&thread_id, Some("run::replay-cap"), &messages)
+        .await
+        .unwrap();
+
+    let replay = build_thread_stream_replay(&state, &thread_id, 0).await;
+    assert_eq!(replay.events.len(), THREAD_TRANSCRIPT_REPLAY_CAP + 2);
+    assert_eq!(replay.sent_payloads.len(), THREAD_TRANSCRIPT_REPLAY_CAP + 2);
+    assert_eq!(replay.max_seq, (THREAD_TRANSCRIPT_REPLAY_CAP + 2) as u64);
+    assert!(
+        replay.sent_payloads.contains_key(&1),
+        "overflow replay must include the oldest missing page, not only the newest tail"
+    );
+    assert!(
+        replay
+            .sent_payloads
+            .contains_key(&u64::try_from(THREAD_TRANSCRIPT_REPLAY_CAP + 2).unwrap())
+    );
+}
+
 fn run_git(repo: &Path, args: &[&str]) {
     let output = Command::new("git")
         .arg("-C")

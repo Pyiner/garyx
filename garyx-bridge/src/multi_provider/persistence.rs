@@ -380,7 +380,7 @@ impl StreamingRunSnapshot {
                 }
                 self.assistant_response.push_str(&clean_text);
                 let current_metadata = self.current_assistant_metadata.clone();
-                self.append_assistant_delta(&clean_text, current_metadata.as_ref());
+                self.append_assistant_text(&clean_text, current_metadata.as_ref());
                 self.start_new_assistant_segment = false;
                 true
             }
@@ -439,28 +439,32 @@ impl StreamingRunSnapshot {
         true
     }
 
-    fn append_assistant_delta(&mut self, delta: &str, metadata: Option<&HashMap<String, Value>>) {
+    fn append_assistant_text(
+        &mut self,
+        text_fragment: &str,
+        metadata: Option<&HashMap<String, Value>>,
+    ) {
         if !self.start_new_assistant_segment
             && let Some(last_message) = self.session_messages.last_mut()
             && last_message.role == ProviderMessageRole::Assistant
         {
             if let Some(text) = last_message.text.as_mut() {
-                text.push_str(delta);
+                text.push_str(text_fragment);
             } else {
-                last_message.text = Some(delta.to_owned());
+                last_message.text = Some(text_fragment.to_owned());
             }
 
             match &mut last_message.content {
-                Value::String(text) => text.push_str(delta),
+                Value::String(text) => text.push_str(text_fragment),
                 Value::Null => {
-                    last_message.content = Value::String(delta.to_owned());
+                    last_message.content = Value::String(text_fragment.to_owned());
                 }
                 other => {
                     let mut content = other
                         .as_str()
                         .map(ToOwned::to_owned)
                         .unwrap_or_else(|| serde_json::to_string(other).unwrap_or_default());
-                    content.push_str(delta);
+                    content.push_str(text_fragment);
                     *other = Value::String(content);
                 }
             }
@@ -472,7 +476,7 @@ impl StreamingRunSnapshot {
         // assistant rows to the latest flush moment and destroys their real
         // ordering against tool rows.
         let mut message =
-            ProviderMessage::assistant_text(delta).with_timestamp(Utc::now().to_rfc3339());
+            ProviderMessage::assistant_text(text_fragment).with_timestamp(Utc::now().to_rfc3339());
         if let Some(metadata) = metadata {
             message.metadata = metadata.clone();
         }

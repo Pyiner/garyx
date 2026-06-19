@@ -16,16 +16,16 @@ use async_trait::async_trait;
 use garyx_bridge::MultiProviderBridge;
 use garyx_models::provider::{ProviderMessage, StreamBoundaryKind, StreamEvent};
 use garyx_models::transcript_kind::is_control_message;
-use garyx_router::ThreadTranscriptRecord;
+use garyx_router::{THREAD_TRANSCRIPT_REPLAY_CAP, ThreadTranscriptRecord};
 use serde_json::{Map, Value};
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
-/// Cap on records pulled during the terminal reconcile. The reconcile only
-/// fetches the tail beyond what was forwarded live, so this is generous; it only
-/// matters as an upper bound when the live stream observed nothing (extreme lag)
-/// and the whole run must be recovered from the durable tail.
-const COMMITTED_REPLAY_RECONCILE_CAP: usize = 1024;
+#[derive(Debug, thiserror::Error)]
+pub enum CommittedReplayError {
+    #[error("gateway committed event bus is not wired")]
+    MissingEventBus,
+}
 
 /// Map a single committed transcript record `message` payload to the
 /// [`StreamEvent`]s a channel consumer would have observed live.
@@ -141,6 +141,13 @@ pub trait CommittedTailReader: Send + Sync {
         thread_id: &str,
         after_seq: u64,
     ) -> Vec<ThreadTranscriptRecord>;
+
+    async fn records_for_run_after_seq(
+        &self,
+        thread_id: &str,
+        run_id: &str,
+        after_seq: u64,
+    ) -> Vec<ThreadTranscriptRecord>;
 }
 
 #[async_trait]
@@ -155,7 +162,23 @@ impl CommittedTailReader for MultiProviderBridge {
         };
         history
             .transcript_store()
-            .records_after_seq(thread_id, after_seq, COMMITTED_REPLAY_RECONCILE_CAP)
+            .records_after_seq(thread_id, after_seq, THREAD_TRANSCRIPT_REPLAY_CAP)
+            .await
+            .unwrap_or_default()
+    }
+
+    async fn records_for_run_after_seq(
+        &self,
+        thread_id: &str,
+        run_id: &str,
+        after_seq: u64,
+    ) -> Vec<ThreadTranscriptRecord> {
+        let Some(history) = self.thread_history().await else {
+            return Vec::new();
+        };
+        history
+            .transcript_store()
+            .records_for_run_after_seq(thread_id, run_id, after_seq, THREAD_TRANSCRIPT_REPLAY_CAP)
             .await
             .unwrap_or_default()
     }
@@ -229,11 +252,11 @@ impl CommittedReplayState {
         let Some(object) = value.as_object() else {
             return BusSignal::Ignore;
         };
-        if object.get("run_id").and_then(Value::as_str) != Some(self.run_id.as_str()) {
-            return BusSignal::Ignore;
-        }
         match object.get("type").and_then(Value::as_str) {
             Some("committed_message") => {
+                if !self.accepts_committed_object(object) {
+                    return BusSignal::Ignore;
+                }
                 self.capture_thread_id(object);
                 let Some(message) = object.get("message") else {
                     return BusSignal::Ignore;
@@ -268,6 +291,9 @@ impl CommittedReplayState {
                 }
             }
             Some("run_complete") | Some("run_error") => {
+                if object.get("run_id").and_then(Value::as_str) != Some(self.run_id.as_str()) {
+                    return BusSignal::Ignore;
+                }
                 self.capture_thread_id(object);
                 BusSignal::Terminal
             }
@@ -284,7 +310,9 @@ impl CommittedReplayState {
     fn reconcile_from_records(&mut self, records: &[ThreadTranscriptRecord]) -> Vec<StreamEvent> {
         let mut events = Vec::new();
         for record in records {
-            if record.run_id.as_deref() != Some(self.run_id.as_str()) {
+            if record.run_id.as_deref() != Some(self.run_id.as_str())
+                && !is_thread_scoped_control_message(&record.message)
+            {
                 continue;
             }
             if self.frontier.is_some_and(|frontier| record.seq <= frontier) {
@@ -329,6 +357,17 @@ impl CommittedReplayState {
         }
     }
 
+    fn needs_run_scoped_page(&self, tail: &[ThreadTranscriptRecord]) -> bool {
+        if self.frontier.is_none() && self.lagged_before_frontier {
+            return true;
+        }
+        let Some(first) = tail.first() else {
+            return false;
+        };
+        let cursor = self.read_cursor();
+        cursor > 0 && first.seq > cursor + 1
+    }
+
     fn capture_thread_id(&mut self, object: &Map<String, Value>) {
         if self.thread_id.is_some() {
             return;
@@ -342,6 +381,24 @@ impl CommittedReplayState {
         }
     }
 
+    fn accepts_committed_object(&self, object: &Map<String, Value>) -> bool {
+        if object.get("run_id").and_then(Value::as_str) == Some(self.run_id.as_str()) {
+            return true;
+        }
+        if object.get("run_id").is_some() {
+            return false;
+        }
+        if !object
+            .get("message")
+            .is_some_and(is_thread_scoped_control_message)
+        {
+            return false;
+        }
+        self.thread_id.as_deref().is_none_or(|thread_id| {
+            object.get("thread_id").and_then(Value::as_str) == Some(thread_id)
+        })
+    }
+
     fn note_done(&mut self, events: &[StreamEvent]) {
         if events
             .iter()
@@ -350,6 +407,14 @@ impl CommittedReplayState {
             self.done_emitted = true;
         }
     }
+}
+
+fn is_thread_scoped_control_message(message: &Value) -> bool {
+    message
+        .get("control")
+        .and_then(|control| control.get("kind"))
+        .and_then(Value::as_str)
+        .is_some()
 }
 
 /// Drive a channel consumer from the durable per-thread committed stream.
@@ -427,35 +492,59 @@ async fn backfill(
     let records = reader
         .records_after_seq(&thread_id, state.read_cursor())
         .await;
+    if state.needs_run_scoped_page(&records) {
+        backfill_run_pages(state, reader, consumer, &thread_id).await;
+        return;
+    }
     for event in state.reconcile_from_records(&records) {
         consumer(event);
+    }
+}
+
+async fn backfill_run_pages(
+    state: &mut CommittedReplayState,
+    reader: &dyn CommittedTailReader,
+    consumer: &(dyn Fn(StreamEvent) + Send + Sync),
+    thread_id: &str,
+) {
+    loop {
+        let cursor = state.read_cursor();
+        let page = reader
+            .records_for_run_after_seq(thread_id, &state.run_id, cursor)
+            .await;
+        if page.is_empty() {
+            break;
+        }
+        for event in state.reconcile_from_records(&page) {
+            consumer(event);
+        }
+        if page.len() < THREAD_TRANSCRIPT_REPLAY_CAP || state.read_cursor() == cursor {
+            break;
+        }
     }
 }
 
 /// Wire a channel `consumer` to the committed stream and decide what callback to
 /// hand `route_and_dispatch`.
 ///
-/// When the bridge event bus is available this subscribes BEFORE dispatch and
-/// spawns [`spawn_committed_channel_replay`] to drive `consumer` from the
-/// durable committed stream, returning `None` so the bridge does not *also*
-/// drive `consumer` with the live `external_callback` (no double delivery). When
-/// the bus is not wired it falls back to returning `Some(consumer)` so the
-/// channel still streams via the live callback.
+/// This subscribes BEFORE dispatch and spawns [`spawn_committed_channel_replay`]
+/// to drive `consumer` from the durable committed stream, returning `None` so
+/// the bridge does not also drive `consumer` with the live `external_callback`.
+/// Missing bus wiring is a configuration error: without the committed bus there
+/// is no secondary content source to fall back to.
 ///
 /// Call this immediately before `route_and_dispatch` so no committed record is
 /// missed between subscribe and the run's first emit.
-pub async fn committed_or_live_callback(
+pub async fn committed_callback(
     bridge: &Arc<MultiProviderBridge>,
     run_id: &str,
     consumer: Arc<dyn Fn(StreamEvent) + Send + Sync>,
-) -> Option<Arc<dyn Fn(StreamEvent) + Send + Sync>> {
-    match bridge.subscribe_events().await {
-        Some(rx) => {
-            spawn_committed_channel_replay(rx, bridge.clone(), run_id.to_owned(), consumer);
-            None
-        }
-        None => Some(consumer),
-    }
+) -> Result<Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>, CommittedReplayError> {
+    let Some(rx) = bridge.subscribe_events().await else {
+        return Err(CommittedReplayError::MissingEventBus);
+    };
+    spawn_committed_channel_replay(rx, bridge.clone(), run_id.to_owned(), consumer);
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -501,6 +590,19 @@ mod tests {
             !raw.contains('@'),
             "fixture must not contain email-like personal identifiers"
         );
+    }
+
+    #[tokio::test]
+    async fn committed_callback_fails_closed_without_event_bus() {
+        let bridge = Arc::new(MultiProviderBridge::new());
+        let consumer = Arc::new(|_event: StreamEvent| {});
+
+        let error = match committed_callback(&bridge, "run-missing-bus", consumer).await {
+            Ok(_) => panic!("committed replay requires a configured event bus"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(error, CommittedReplayError::MissingEventBus));
     }
 
     #[test]
@@ -760,6 +862,24 @@ mod tests {
             self.records
                 .iter()
                 .filter(|record| record.seq > after_seq)
+                .cloned()
+                .collect()
+        }
+
+        async fn records_for_run_after_seq(
+            &self,
+            _thread_id: &str,
+            run_id: &str,
+            after_seq: u64,
+        ) -> Vec<ThreadTranscriptRecord> {
+            self.records
+                .iter()
+                .filter(|record| {
+                    record.seq > after_seq
+                        && (record.run_id.as_deref() == Some(run_id)
+                            || (record.run_id.is_none()
+                                && is_thread_scoped_control_message(&record.message)))
+                })
                 .cloned()
                 .collect()
         }

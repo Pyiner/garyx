@@ -40,19 +40,6 @@ final class GaryxTranscriptRunStateConformanceTests: XCTestCase {
         return message
     }
 
-    private func contentRecord(from event: [String: Any], seq: Int) throws -> GaryxTranscriptMessage {
-        let threadId = (event["thread_id"] as? String)
-            ?? (event["threadId"] as? String)
-            ?? "thread::fixture"
-        var record = event
-        if record["message"] == nil {
-            record["message"] = event
-        }
-        record["seq"] = seq
-        record["thread_id"] = threadId
-        return try decodeTranscriptMessage(fromRecord: record)
-    }
-
     private func controlMessage(seq: Int, event: [String: Any]) throws -> GaryxTranscriptMessage {
         let eventType = try XCTUnwrap(event["type"] as? String)
         let threadId = (event["thread_id"] as? String)
@@ -147,17 +134,9 @@ final class GaryxTranscriptRunStateConformanceTests: XCTestCase {
     func testLifecycleFixtureReplaysToRustGoldenIdleTerminalState() throws {
         let events = try readJSONL("stream-lifecycle.jsonl")
         var records: [GaryxTranscriptMessage] = []
-        var nextSeq = 1
         for event in events {
-            switch event["type"] as? String {
-            case "committed_message":
-                records.append(try contentRecord(from: event, seq: nextSeq))
-                nextSeq += 1
-            case "run_start", "done", "run_complete":
-                records.append(try controlMessage(seq: nextSeq, event: event))
-                nextSeq += 1
-            default:
-                break
+            if event["type"] as? String == "committed_message" {
+                records.append(try decodeTranscriptMessage(fromRecord: event))
             }
         }
 
@@ -170,32 +149,19 @@ final class GaryxTranscriptRunStateConformanceTests: XCTestCase {
 
     func testUserAckFixtureReplaysAckPositionAndToolActivity() throws {
         let events = try readJSONL("stream-events-with-user-ack.jsonl")
-        var records = [
-            try controlMessage(seq: 1, event: [
-                "type": "run_start",
-                "threadId": "thread::fixture-stream-sync-ack",
-                "runId": "run::fixture-ack",
-            ]),
-        ]
-        var nextSeq = 2
+        var records: [GaryxTranscriptMessage] = []
         for event in events {
-            switch event["type"] as? String {
-            case "tool_use", "tool_result":
-                records.append(try contentRecord(from: event, seq: nextSeq))
-                nextSeq += 1
-            case "user_ack", "assistant_boundary", "done":
-                records.append(try controlMessage(seq: nextSeq, event: event))
-                nextSeq += 1
-            default:
-                break
+            if event["type"] as? String == "committed_message" {
+                records.append(try decodeTranscriptMessage(fromRecord: event))
             }
         }
 
         let state = GaryxTranscriptRunStateReducer.reduce(records)
-        XCTAssertTrue(state.busy, "fixture has done but no run_complete terminal")
-        XCTAssertEqual(state.activity, .reconciling)
+        XCTAssertFalse(state.busy)
+        XCTAssertEqual(state.activity, .idle)
+        XCTAssertEqual(state.terminalStatus, "completed")
         XCTAssertEqual(state.lastUserAckPendingInputId, "pending-fixture-followup")
-        XCTAssertEqual(state.lastUserAckSeq, 3)
+        XCTAssertEqual(state.lastUserAckSeq, 4)
     }
 
     func testTranscriptWithControlFixtureReplaysCommittedControlState() throws {

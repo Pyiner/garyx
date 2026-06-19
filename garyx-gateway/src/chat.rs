@@ -3,7 +3,8 @@
 //! Rust port of `src/garyx/plugins/channels/api.py`.
 //! Provides HTTP endpoints for sending messages and receiving responses.
 
-use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::application::chat::contracts::{
     ChatRequest, InterruptRequest, StartChatResponse, StreamInputRequest,
@@ -11,7 +12,6 @@ use crate::application::chat::contracts::{
 };
 use crate::chat_application::{ChatPreparationError, prepare_chat_request};
 use crate::chat_control::{execute_chat_interrupt, execute_chat_stream_input};
-use crate::chat_delivery::{BoundThreadDeliveryBuffer, message_tool_mirror_text};
 use axum::Json;
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -19,7 +19,8 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use futures_util::{SinkExt, StreamExt};
 use garyx_models::MessageLifecycleStatus;
-use garyx_models::provider::{AgentRunRequest, StreamBoundaryKind, StreamEvent};
+use garyx_models::provider::{AgentRunRequest, StreamEvent};
+use garyx_router::{THREAD_TRANSCRIPT_REPLAY_CAP, ThreadTranscriptRecord};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -62,9 +63,8 @@ pub async fn chat_health(State(state): State<Arc<AppState>>) -> impl IntoRespons
 /// - `{ "op": "recover", "threadId": "...", "limit": 200 }`
 ///
 /// Server responds with JSON events:
-/// - `accepted`, `assistant_delta`, `assistant_boundary`, `tool_use`, `tool_result`,
-///   `user_ack`, `thread_title_updated`, `done`, `stream_input`, `interrupt`,
-///   `snapshot`, `error`.
+/// - `accepted`, `committed_message`, `stream_input`, `interrupt`, `snapshot`,
+///   `error`.
 pub async fn chat_ws(
     State(state): State<Arc<AppState>>,
     ws: WebSocketUpgrade,
@@ -220,47 +220,57 @@ async fn handle_chat_ws_start(
             return;
         }
     };
-    let callback_state = state.clone();
-    let callback_out_tx = out_tx.clone();
-    let callback_builder = move |run_id: &str, thread_id: &str| {
-        build_chat_ws_stream_callback(callback_out_tx.clone(), &callback_state, run_id, thread_id)
-    };
-    match start_chat_run(state, request, Some(Box::new(callback_builder))).await {
-        Ok(response) => {
-            let _ = out_tx.send(json!({
-                "type": "accepted",
-                "runId": response.run_id,
-                "threadId": response.thread_id
-            }));
+    let run_state = state.clone();
+    let run_out_tx = out_tx.clone();
+    tokio::spawn(async move {
+        let callback_state = run_state.clone();
+        let callback_out_tx = run_out_tx.clone();
+        let callback_builder = move |run_id: &str, thread_id: &str| {
+            spawn_chat_ws_committed_stream(
+                callback_state.clone(),
+                callback_out_tx.clone(),
+                thread_id.to_owned(),
+                run_id.to_owned(),
+            );
+            None
+        };
+        match start_chat_run(&run_state, request, Some(Box::new(callback_builder))).await {
+            Ok(response) => {
+                let _ = run_out_tx.send(json!({
+                    "type": "accepted",
+                    "runId": response.run_id,
+                    "threadId": response.thread_id
+                }));
+            }
+            Err((_status, payload)) => {
+                let body = payload.0;
+                let error = body
+                    .get("error")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("agent run failed");
+                let run_id = body
+                    .get("runId")
+                    .or_else(|| body.get("run_id"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                let thread_id = body
+                    .get("threadId")
+                    .or_else(|| body.get("thread_id"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                let _ = run_out_tx.send(json!({
+                    "type": "error",
+                    "runId": run_id,
+                    "threadId": thread_id,
+                    "error": error
+                }));
+            }
         }
-        Err((_status, payload)) => {
-            let body = payload.0;
-            let error = body
-                .get("error")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("agent run failed");
-            let run_id = body
-                .get("runId")
-                .or_else(|| body.get("run_id"))
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default();
-            let thread_id = body
-                .get("threadId")
-                .or_else(|| body.get("thread_id"))
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default();
-            let _ = out_tx.send(json!({
-                "type": "error",
-                "runId": run_id,
-                "threadId": thread_id,
-                "error": error
-            }));
-        }
-    }
+    });
 }
 
 type ChatStreamCallbackBuilder =
-    Box<dyn Fn(&str, &str) -> Arc<dyn Fn(StreamEvent) + Send + Sync> + Send + Sync>;
+    Box<dyn Fn(&str, &str) -> Option<Arc<dyn Fn(StreamEvent) + Send + Sync>> + Send + Sync>;
 
 async fn start_chat_run(
     state: &Arc<AppState>,
@@ -296,7 +306,7 @@ async fn start_chat_run(
         &run_id,
     );
 
-    let callback = callback_builder.map(|builder| builder(&run_id, &thread_id));
+    let callback = callback_builder.and_then(|builder| builder(&run_id, &thread_id));
     state.sync_external_user_skills_before_run("api_chat_start", &thread_id);
     let start_result = state
         .integration
@@ -493,194 +503,180 @@ async fn handle_chat_ws_recover(
     }));
 }
 
-#[derive(Clone, Debug)]
-struct AssistantSpeaker {
-    agent_id: String,
-    agent_display_name: String,
-}
-
-impl AssistantSpeaker {
-    fn to_metadata_value(&self) -> Value {
-        json!({
-            "agent_id": self.agent_id,
-            "agent_display_name": self.agent_display_name,
-        })
-    }
-}
-
-fn parse_agent_team_delta_prefix(text: &str) -> Option<(AssistantSpeaker, String)> {
-    let stripped = text.strip_prefix('[')?;
-    let close_index = stripped.find(']')?;
-    let label = stripped[..close_index].trim();
-    if label.is_empty() {
-        return None;
-    }
-    let delta = stripped[close_index + 1..].trim_start().to_owned();
-    Some((
-        AssistantSpeaker {
-            agent_id: label.to_owned(),
-            agent_display_name: label.to_owned(),
-        },
-        delta,
-    ))
-}
-
-fn build_chat_ws_stream_callback(
-    out_tx: mpsc::UnboundedSender<serde_json::Value>,
-    state: &Arc<AppState>,
-    run_id: &str,
-    thread_id: &str,
-) -> Arc<dyn Fn(StreamEvent) + Send + Sync> {
-    let callback_run_id = run_id.to_owned();
-    let callback_thread_id = thread_id.to_owned();
-    let callback_state = state.clone();
-    let bound_delivery = BoundThreadDeliveryBuffer::default();
-    let bound_delivery_state = state.clone();
-    let bound_delivery_thread_id = thread_id.to_owned();
-    let bound_delivery_run_id = run_id.to_owned();
-    let bound_delivery_callback = bound_delivery.clone();
-    let current_speaker: Arc<Mutex<Option<AssistantSpeaker>>> = Arc::new(Mutex::new(None));
-    let current_speaker_for_delta = Arc::clone(&current_speaker);
-    let current_speaker_for_tool = Arc::clone(&current_speaker);
-    let current_speaker_for_done = Arc::clone(&current_speaker);
-
-    Arc::new(move |event| match event {
-        StreamEvent::SessionBound { .. } => {}
-        StreamEvent::Delta { text } => {
-            if !text.is_empty() {
-                bound_delivery_callback.push_delta(&text, "api ws bound delivery");
-                let (delta, metadata) =
-                    if let Some((speaker, cleaned_delta)) = parse_agent_team_delta_prefix(&text) {
-                        *current_speaker_for_delta.lock().unwrap() = Some(speaker.clone());
-                        (cleaned_delta, Some(speaker.to_metadata_value()))
-                    } else {
-                        let speaker = current_speaker_for_delta.lock().unwrap().clone();
-                        (text, speaker.map(|entry| entry.to_metadata_value()))
+fn spawn_chat_ws_committed_stream(
+    state: Arc<AppState>,
+    out_tx: mpsc::UnboundedSender<Value>,
+    thread_id: String,
+    run_id: String,
+) {
+    let mut rx = state.ops.events.subscribe();
+    let transcript_store = state.threads.history.transcript_store();
+    tokio::spawn(async move {
+        let mut sent_payloads: HashMap<u64, String> = HashMap::new();
+        let mut last_sent_seq = 0u64;
+        loop {
+            match rx.recv().await {
+                Ok(raw) => {
+                    let Ok(value) = serde_json::from_str::<Value>(&raw) else {
+                        continue;
                     };
-                if delta.is_empty() {
-                    return;
+                    if is_committed_ws_record_for_run(&value, &thread_id, &run_id) {
+                        if forward_chat_ws_committed_value(
+                            &out_tx,
+                            &value,
+                            &mut sent_payloads,
+                            &mut last_sent_seq,
+                        ) {
+                            continue;
+                        }
+                        backfill_chat_ws_committed(
+                            transcript_store.clone(),
+                            &out_tx,
+                            &thread_id,
+                            &run_id,
+                            &mut sent_payloads,
+                            &mut last_sent_seq,
+                        )
+                        .await;
+                        let _ = forward_chat_ws_committed_value(
+                            &out_tx,
+                            &value,
+                            &mut sent_payloads,
+                            &mut last_sent_seq,
+                        );
+                    } else if is_terminal_bus_record_for_run(&value, &run_id) {
+                        backfill_chat_ws_committed(
+                            transcript_store.clone(),
+                            &out_tx,
+                            &thread_id,
+                            &run_id,
+                            &mut sent_payloads,
+                            &mut last_sent_seq,
+                        )
+                        .await;
+                        break;
+                    }
                 }
-                let _ = out_tx.send(json!({
-                    "type": "assistant_delta",
-                    "runId": callback_run_id,
-                    "threadId": callback_thread_id,
-                    "delta": delta,
-                    "metadata": metadata,
-                }));
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    state.ops.events.record_drop();
+                    backfill_chat_ws_committed(
+                        transcript_store.clone(),
+                        &out_tx,
+                        &thread_id,
+                        &run_id,
+                        &mut sent_payloads,
+                        &mut last_sent_seq,
+                    )
+                    .await;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    backfill_chat_ws_committed(
+                        transcript_store.clone(),
+                        &out_tx,
+                        &thread_id,
+                        &run_id,
+                        &mut sent_payloads,
+                        &mut last_sent_seq,
+                    )
+                    .await;
+                    break;
+                }
             }
         }
-        StreamEvent::ToolUse { message } => {
-            let metadata = message.metadata.clone();
-            if let Some(agent_id) = metadata
-                .get("agent_id")
+    });
+}
+
+fn is_committed_ws_record_for_run(value: &Value, thread_id: &str, run_id: &str) -> bool {
+    if value.get("type").and_then(Value::as_str) != Some("committed_message")
+        || value.get("thread_id").and_then(Value::as_str) != Some(thread_id)
+    {
+        return false;
+    }
+    value.get("run_id").and_then(Value::as_str) == Some(run_id)
+        || (value.get("run_id").is_none()
+            && value
+                .pointer("/message/control/kind")
                 .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
-                let display_name = metadata
-                    .get("agent_display_name")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or(agent_id);
-                *current_speaker_for_tool.lock().unwrap() = Some(AssistantSpeaker {
-                    agent_id: agent_id.to_owned(),
-                    agent_display_name: display_name.to_owned(),
-                });
-            }
-            let _ = out_tx.send(json!({
-                "type": "tool_use",
-                "runId": callback_run_id,
-                "threadId": callback_thread_id,
-                "message": message
-            }));
-        }
-        StreamEvent::ToolResult { message } => {
-            let metadata = message.metadata.clone();
-            if let Some(agent_id) = metadata
-                .get("agent_id")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
-                let display_name = metadata
-                    .get("agent_display_name")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or(agent_id);
-                *current_speaker_for_tool.lock().unwrap() = Some(AssistantSpeaker {
-                    agent_id: agent_id.to_owned(),
-                    agent_display_name: display_name.to_owned(),
-                });
-            }
-            let mirrored_text = message_tool_mirror_text(&message);
-            let _ = out_tx.send(json!({
-                "type": "tool_result",
-                "runId": callback_run_id,
-                "threadId": callback_thread_id,
-                "message": message
-            }));
-            if let Some(text) = mirrored_text {
-                bound_delivery_callback.suppress();
-                let _ = out_tx.send(json!({
-                    "type": "assistant_delta",
-                    "runId": callback_run_id,
-                    "threadId": callback_thread_id,
-                    "delta": text
-                }));
-            }
-        }
-        StreamEvent::Boundary {
-            kind,
-            pending_input_id,
-        } => match kind {
-            StreamBoundaryKind::AssistantSegment => {
-                bound_delivery_callback.push_separator("api ws bound delivery");
-                let _ = out_tx.send(json!({
-                    "type": "assistant_boundary",
-                    "runId": callback_run_id,
-                    "threadId": callback_thread_id
-                }));
-            }
-            StreamBoundaryKind::UserAck => {
-                bound_delivery_callback.finish(
-                    bound_delivery_state.clone(),
-                    bound_delivery_thread_id.clone(),
-                    bound_delivery_run_id.clone(),
-                    "api ws bound delivery",
-                );
-                let _ = out_tx.send(json!({
-                    "type": "user_ack",
-                    "runId": callback_run_id,
-                    "threadId": callback_thread_id,
-                    "pendingInputId": pending_input_id
-                }));
-            }
-        },
-        StreamEvent::Done => {
-            *current_speaker_for_done.lock().unwrap() = None;
-            bound_delivery_callback.finish(
-                callback_state.clone(),
-                callback_thread_id.clone(),
-                callback_run_id.clone(),
-                "api ws bound delivery",
-            );
-            let _ = out_tx.send(json!({
-                "type": "done",
-                "runId": callback_run_id,
-                "threadId": callback_thread_id
-            }));
-        }
-        StreamEvent::ThreadTitleUpdated { title } => {
-            let _ = out_tx.send(json!({
-                "type": "thread_title_updated",
-                "runId": callback_run_id,
-                "threadId": callback_thread_id,
-                "title": title
-            }));
-        }
+                .is_some())
+}
+
+fn is_terminal_bus_record_for_run(value: &Value, run_id: &str) -> bool {
+    matches!(
+        value.get("type").and_then(Value::as_str),
+        Some("run_complete" | "run_error")
+    ) && value.get("run_id").and_then(Value::as_str) == Some(run_id)
+}
+
+fn committed_ws_payload(record: ThreadTranscriptRecord) -> Value {
+    json!({
+        "type": "committed_message",
+        "thread_id": record.thread_id,
+        "run_id": record.run_id,
+        "seq": record.seq,
+        "message": record.message,
     })
+}
+
+fn forward_chat_ws_committed_record(
+    out_tx: &mpsc::UnboundedSender<Value>,
+    record: ThreadTranscriptRecord,
+    sent_payloads: &mut HashMap<u64, String>,
+    last_sent_seq: &mut u64,
+) -> bool {
+    let payload = committed_ws_payload(record);
+    forward_chat_ws_committed_value(out_tx, &payload, sent_payloads, last_sent_seq)
+}
+
+fn forward_chat_ws_committed_value(
+    out_tx: &mpsc::UnboundedSender<Value>,
+    value: &Value,
+    sent_payloads: &mut HashMap<u64, String>,
+    last_sent_seq: &mut u64,
+) -> bool {
+    let seq = value.get("seq").and_then(Value::as_u64).unwrap_or(0);
+    if seq == 0 {
+        return true;
+    }
+    let payload = value.to_string();
+    if sent_payloads.get(&seq).is_some_and(|sent| sent == &payload) {
+        return true;
+    }
+    if *last_sent_seq != 0 && seq > *last_sent_seq + 1 {
+        return false;
+    }
+    if seq > *last_sent_seq {
+        *last_sent_seq = seq;
+    }
+    sent_payloads.insert(seq, payload);
+    let _ = out_tx.send(value.clone());
+    true
+}
+
+async fn backfill_chat_ws_committed(
+    transcript_store: Arc<garyx_router::ThreadTranscriptStore>,
+    out_tx: &mpsc::UnboundedSender<Value>,
+    thread_id: &str,
+    run_id: &str,
+    sent_payloads: &mut HashMap<u64, String>,
+    last_sent_seq: &mut u64,
+) {
+    loop {
+        let cursor = *last_sent_seq;
+        let records = transcript_store
+            .records_for_run_after_seq(thread_id, run_id, cursor, THREAD_TRANSCRIPT_REPLAY_CAP)
+            .await
+            .unwrap_or_default();
+        if records.is_empty() {
+            break;
+        }
+        let page_len = records.len();
+        for record in records {
+            let _ = forward_chat_ws_committed_record(out_tx, record, sent_payloads, last_sent_seq);
+        }
+        if page_len < THREAD_TRANSCRIPT_REPLAY_CAP || *last_sent_seq == cursor {
+            break;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

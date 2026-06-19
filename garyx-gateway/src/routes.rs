@@ -20,10 +20,10 @@ use garyx_models::provider::{
 };
 use garyx_models::routing::{DELIVERY_TARGET_TYPE_CHAT_ID, DELIVERY_TARGET_TYPE_OPEN_ID};
 use garyx_router::{
-    ChannelBinding, KnownChannelEndpoint, ThreadEnsureOptions, WorkspaceMode, bindings_from_value,
-    detach_endpoint_from_thread, history_message_count, is_thread_key, thread_kind_from_value,
-    update_thread_record, workspace_dir_from_value,
-    workspace_git_status as router_workspace_git_status,
+    ChannelBinding, KnownChannelEndpoint, THREAD_TRANSCRIPT_REPLAY_CAP, ThreadEnsureOptions,
+    ThreadTranscriptRecord, WorkspaceMode, bindings_from_value, detach_endpoint_from_thread,
+    history_message_count, is_thread_key, thread_kind_from_value, update_thread_record,
+    workspace_dir_from_value, workspace_git_status as router_workspace_git_status,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -1721,12 +1721,6 @@ pub struct ThreadStreamParams {
     pub after_seq: u64,
 }
 
-/// Upper bound on committed rows replayed on connect. The common (caught-up) case
-/// returns a handful via the tail-read; a far-behind cursor that exceeds this gets
-/// the NEWEST `REPLAY_CAP` so the live handoff stays gapless (the most recent rows
-/// are always delivered) and the client pages older history via before_index.
-const THREAD_STREAM_REPLAY_CAP: usize = 10_000;
-
 /// GET /api/threads/:key/stream - resumable per-thread transcript stream (S5).
 ///
 /// Replays committed messages with `seq > after_seq` (or the `Last-Event-ID`
@@ -1760,36 +1754,13 @@ pub async fn thread_stream(
     // the overlap idempotent.
     let rx = state.ops.events.subscribe();
 
-    let replay = state
-        .threads
-        .history
-        .transcript_store()
-        .records_after_seq(&thread_id, after_seq, THREAD_STREAM_REPLAY_CAP)
-        .await
-        .unwrap_or_default();
-
-    let mut replay_max_seq = after_seq;
-    let mut sent_committed_payloads = HashMap::new();
-    let mut replay_events: Vec<Result<Event, io::Error>> = Vec::with_capacity(replay.len());
-    for record in replay {
-        replay_max_seq = replay_max_seq.max(record.seq);
-        let payload = json!({
-            "type": "committed_message",
-            "thread_id": thread_id,
-            "run_id": record.run_id,
-            "seq": record.seq,
-            "message": record.message,
-        });
-        let payload = payload.to_string();
-        sent_committed_payloads.insert(record.seq, payload.clone());
-        replay_events.push(Ok(Event::default()
-            .id(record.seq.to_string())
-            .data(payload)));
-    }
+    let replay = build_thread_stream_replay(&state, &thread_id, after_seq).await;
+    let replay_events = replay.events;
+    let mut sent_committed_payloads = replay.sent_payloads;
 
     let thread_for_live = thread_id.clone();
     let state_for_drops = state.clone();
-    let mut last_sent_seq = replay_max_seq;
+    let mut last_sent_seq = replay.max_seq;
     let live = BroadcastStream::new(rx).filter_map(move |item| match item {
         Ok(raw) => {
             let event = match committed_thread_stream_live_payload(
@@ -1821,6 +1792,102 @@ pub async fn thread_stream(
                 .text("ping"),
         )
         .into_response()
+}
+
+struct ThreadStreamReplay {
+    events: Vec<Result<Event, io::Error>>,
+    max_seq: u64,
+    sent_payloads: HashMap<u64, String>,
+}
+
+async fn build_thread_stream_replay(
+    state: &Arc<AppState>,
+    thread_id: &str,
+    after_seq: u64,
+) -> ThreadStreamReplay {
+    let tail = state
+        .threads
+        .history
+        .transcript_store()
+        .records_after_seq(thread_id, after_seq, THREAD_TRANSCRIPT_REPLAY_CAP)
+        .await
+        .unwrap_or_default();
+
+    let tail_has_gap = tail
+        .first()
+        .is_some_and(|record| record.seq > after_seq.saturating_add(1));
+    if !tail_has_gap {
+        return thread_stream_replay_from_records(thread_id, after_seq, tail);
+    }
+
+    let mut cursor = after_seq;
+    let mut replay = ThreadStreamReplay {
+        events: Vec::new(),
+        max_seq: after_seq,
+        sent_payloads: HashMap::new(),
+    };
+    loop {
+        let page = state
+            .threads
+            .history
+            .transcript_store()
+            .records_after_seq_page(thread_id, cursor, THREAD_TRANSCRIPT_REPLAY_CAP)
+            .await
+            .unwrap_or_default();
+        if page.is_empty() {
+            break;
+        }
+        let page_len = page.len();
+        append_thread_stream_replay_records(&mut replay, thread_id, page);
+        if replay.max_seq == cursor || page_len < THREAD_TRANSCRIPT_REPLAY_CAP {
+            break;
+        }
+        cursor = replay.max_seq;
+    }
+    replay
+}
+
+fn thread_stream_replay_from_records(
+    thread_id: &str,
+    after_seq: u64,
+    records: Vec<ThreadTranscriptRecord>,
+) -> ThreadStreamReplay {
+    let mut replay = ThreadStreamReplay {
+        events: Vec::with_capacity(records.len()),
+        max_seq: after_seq,
+        sent_payloads: HashMap::new(),
+    };
+    append_thread_stream_replay_records(&mut replay, thread_id, records);
+    replay
+}
+
+fn append_thread_stream_replay_records(
+    replay: &mut ThreadStreamReplay,
+    thread_id: &str,
+    records: Vec<ThreadTranscriptRecord>,
+) {
+    for record in records {
+        replay.max_seq = replay.max_seq.max(record.seq);
+        let payload = committed_thread_stream_replay_payload(thread_id, &record);
+        replay.sent_payloads.insert(record.seq, payload.clone());
+        replay.events.push(Ok(Event::default()
+            .id(record.seq.to_string())
+            .data(payload)));
+    }
+}
+
+fn committed_thread_stream_replay_payload(
+    thread_id: &str,
+    record: &ThreadTranscriptRecord,
+) -> String {
+    json!({
+        "type": "committed_message",
+        "thread_id": thread_id,
+        "run_id": record.run_id.as_deref(),
+        "seq": record.seq,
+        "message": &record.message,
+    })
+    .to_string()
 }
 
 fn committed_thread_stream_live_payload(

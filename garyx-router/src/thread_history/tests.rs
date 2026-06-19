@@ -1,6 +1,7 @@
 use super::*;
 use crate::memory_store::InMemoryThreadStore;
 use serde_json::json;
+use tempfile::tempdir;
 
 #[tokio::test]
 async fn transcript_store_appends_and_reads_tail() {
@@ -689,4 +690,204 @@ async fn records_after_seq_returns_delta_ascending_and_handles_overflow() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn file_records_after_seq_tail_scan_does_not_parse_old_head() {
+    let dir = tempdir().unwrap();
+    let store = ThreadTranscriptStore::file(dir.path()).await.unwrap();
+    let thread_id = "thread::file-tail-scan";
+    let path = store.transcript_path(thread_id).unwrap();
+    let mut lines = vec!["not-json-old-head".to_owned()];
+    for seq in 1..=5 {
+        lines.push(
+            serde_json::to_string(&TranscriptLine::Message {
+                seq,
+                thread_id: thread_id.to_owned(),
+                run_id: Some("run-tail".to_owned()),
+                timestamp: format!("2026-06-18T12:00:0{seq}Z"),
+                message: json!({"role": "assistant", "content": format!("m{seq}")}),
+            })
+            .unwrap(),
+        );
+    }
+    std::fs::write(&path, format!("{}\n", lines.join("\n"))).unwrap();
+
+    let tail = store.records_after_seq(thread_id, 3, 10).await.unwrap();
+    assert_eq!(
+        tail.iter().map(|record| record.seq).collect::<Vec<_>>(),
+        vec![4, 5]
+    );
+    assert!(
+        store.records_after_seq(thread_id, 0, 10).await.is_err(),
+        "a full-range tail scan still validates malformed lines it reaches"
+    );
+}
+
+#[tokio::test]
+async fn records_after_seq_page_returns_oldest_records_after_cursor() {
+    let store = ThreadTranscriptStore::memory();
+    for seq in 1..=5 {
+        store
+            .append_committed_messages(
+                "thread::page",
+                Some("run-page"),
+                &[json!({"role": "assistant", "content": format!("m{seq}")})],
+            )
+            .await
+            .unwrap();
+    }
+
+    let page = store
+        .records_after_seq_page("thread::page", 1, 2)
+        .await
+        .unwrap();
+    assert_eq!(
+        page.iter().map(|record| record.seq).collect::<Vec<_>>(),
+        vec![2, 3]
+    );
+
+    let tail = store.records_after_seq("thread::page", 1, 2).await.unwrap();
+    assert_eq!(
+        tail.iter().map(|record| record.seq).collect::<Vec<_>>(),
+        vec![4, 5]
+    );
+}
+
+#[tokio::test]
+async fn records_for_run_after_seq_pages_oldest_matching_run_records() {
+    let store = ThreadTranscriptStore::memory();
+    store
+        .append_committed_messages(
+            "thread::run-page",
+            Some("run-other"),
+            &[json!({"role": "assistant", "content": "other"})],
+        )
+        .await
+        .unwrap();
+    store
+        .append_committed_messages(
+            "thread::run-page",
+            Some("run-target"),
+            &[
+                json!({"role": "assistant", "content": "a"}),
+                json!({"role": "assistant", "content": "b"}),
+                json!({"role": "assistant", "content": "c"}),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let page = store
+        .records_for_run_after_seq("thread::run-page", "run-target", 0, 2)
+        .await
+        .unwrap();
+    assert_eq!(
+        page.iter().map(|record| record.seq).collect::<Vec<_>>(),
+        vec![2, 3]
+    );
+}
+
+#[tokio::test]
+async fn rewrite_from_messages_preserves_seq_and_marks_shrink() {
+    let store = ThreadTranscriptStore::memory();
+    store
+        .rewrite_from_messages(
+            "thread::rewrite-stable",
+            &[
+                json!({"role": "user", "content": "one"}),
+                json!({"role": "assistant", "content": "two"}),
+                json!({"role": "assistant", "content": "remove me"}),
+            ],
+        )
+        .await
+        .unwrap();
+
+    store
+        .rewrite_from_messages(
+            "thread::rewrite-stable",
+            &[
+                json!({"role": "user", "content": "one"}),
+                json!({"role": "assistant", "content": "two"}),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let records = store.records("thread::rewrite-stable").await.unwrap();
+    assert_eq!(
+        records.iter().map(|record| record.seq).collect::<Vec<_>>(),
+        vec![1, 2, 3, 4]
+    );
+    assert_eq!(records[2].message["control"]["kind"], "range_rewrite");
+    assert_eq!(records[2].message["control"]["tombstone"], true);
+    assert!(records[2].run_id.is_none());
+    assert_eq!(records[3].message["control"]["kind"], "range_rewrite");
+    assert_eq!(
+        records[3].message["control"]["reason"],
+        "rewrite_from_messages_shrink"
+    );
+
+    store
+        .rewrite_from_messages(
+            "thread::rewrite-stable",
+            &[
+                json!({"role": "user", "content": "one"}),
+                json!({"role": "assistant", "content": "two"}),
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .records("thread::rewrite-stable")
+            .await
+            .unwrap()
+            .iter()
+            .map(|record| record.seq)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3, 4],
+        "reapplying the same import must not append another marker"
+    );
+}
+
+#[tokio::test]
+async fn rewrite_from_messages_uses_same_seq_overwrite_marker_for_changed_prefix() {
+    let store = ThreadTranscriptStore::memory();
+    store
+        .rewrite_from_messages(
+            "thread::rewrite-overwrite",
+            &[
+                json!({"role": "user", "content": "one"}),
+                json!({"role": "assistant", "content": "two"}),
+            ],
+        )
+        .await
+        .unwrap();
+
+    store
+        .rewrite_from_messages(
+            "thread::rewrite-overwrite",
+            &[
+                json!({"role": "user", "content": "ONE"}),
+                json!({"role": "assistant", "content": "two"}),
+                json!({"role": "assistant", "content": "three"}),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let records = store.records("thread::rewrite-overwrite").await.unwrap();
+    assert_eq!(
+        records.iter().map(|record| record.seq).collect::<Vec<_>>(),
+        vec![1, 2, 3, 4]
+    );
+    assert_eq!(records[0].message["content"], "ONE");
+    assert_eq!(records[2].message["content"], "three");
+    assert_eq!(records[3].message["control"]["kind"], "range_rewrite");
+    assert_eq!(
+        records[3].message["control"]["reason"],
+        "same_seq_overwrite"
+    );
+    assert!(records[3].run_id.is_none());
 }

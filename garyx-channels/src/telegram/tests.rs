@@ -732,6 +732,7 @@ mod dispatch_tests {
 
     async fn make_bridge() -> Arc<MultiProviderBridge> {
         let bridge = Arc::new(MultiProviderBridge::new());
+        crate::test_helpers::attach_test_bridge_runtime(&bridge).await;
         let provider = Arc::new(TestProvider::new());
         bridge.register_provider("test-provider", provider).await;
         bridge.set_default_provider_key("test-provider").await;
@@ -3614,7 +3615,7 @@ mod e2e_tests {
     }
 
     #[tokio::test]
-    async fn test_e2e_streaming_throttled_updates_flush_after_pause() {
+    async fn test_e2e_committed_replay_sends_final_text_after_pause() {
         let (server, capture) = setup_tg_capture_mock(false).await;
         let api_base = unique_api_base(&server);
         let provider = Arc::new(StreamingDelayedFlushProvider::new());
@@ -3640,10 +3641,8 @@ mod e2e_tests {
         .await;
 
         wait_for_counter_at_least(&provider.call_count, 1).await;
-        wait_for_json_capture_len(&capture.edit_messages, 1, std::time::Duration::from_secs(5))
-            .await;
-        let edit_bodies = wait_for_json_capture_quiet_window(
-            &capture.edit_messages,
+        let send_bodies = wait_for_json_capture_quiet_window(
+            &capture.send_messages,
             std::time::Duration::from_millis(200),
             std::time::Duration::from_secs(5),
             1,
@@ -3651,15 +3650,19 @@ mod e2e_tests {
         .await;
 
         assert!(
-            edit_bodies
+            send_bodies
                 .iter()
-                .any(|b| b["text"].as_str().unwrap_or_default() == "provider"),
-            "throttled stream should flush pending text before the final Done event"
+                .any(|body| body["text"].as_str().unwrap_or_default() == "provider"),
+            "committed replay should send the finalized assistant segment"
+        );
+        assert!(
+            capture.edit_bodies().is_empty(),
+            "committed-only replay should not require live throttle edits"
         );
     }
 
     #[tokio::test]
-    async fn test_e2e_streaming_rolls_over_long_segments_without_resending_full_history() {
+    async fn test_e2e_committed_replay_splits_long_segments_without_resending_history() {
         let (server, capture) = setup_tg_capture_mock(true).await;
         let api_base = unique_api_base(&server);
         let provider = Arc::new(StreamingOverflowProvider::new());
@@ -3685,26 +3688,6 @@ mod e2e_tests {
         .await;
 
         wait_for_counter_at_least(&provider.call_count, 1).await;
-        let continuation_chunk = wait_for_json_capture_match(
-            &capture.send_messages,
-            std::time::Duration::from_secs(5),
-            |body| {
-                body["text"].as_str().is_some_and(|text| {
-                    !text.is_empty()
-                        && text.len() < 1000
-                        && !text.starts_with('a')
-                        && text.chars().all(|ch| matches!(ch, 'a' | 'b' | 'c'))
-                })
-            },
-        )
-        .await;
-        let first_segment =
-            wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
-                body["text"].as_str().is_some_and(|text| {
-                    text.len() == 4000 && text.chars().all(|ch| matches!(ch, 'a' | 'b' | 'c'))
-                })
-            })
-            .await;
         let send_bodies = wait_for_json_capture_quiet_window(
             &capture.send_messages,
             std::time::Duration::from_millis(200),
@@ -3712,16 +3695,8 @@ mod e2e_tests {
             2,
         )
         .await;
-        let edit_bodies = wait_for_json_capture_quiet_window(
-            &capture.edit_messages,
-            std::time::Duration::from_millis(200),
-            std::time::Duration::from_secs(5),
-            1,
-        )
-        .await;
         let rendered_lengths: Vec<usize> = send_bodies
             .iter()
-            .chain(edit_bodies.iter())
             .filter_map(|body| body["text"].as_str().map(str::len))
             .collect();
         let relevant_send_bodies: Vec<&Value> = send_bodies
@@ -3736,23 +3711,15 @@ mod e2e_tests {
         assert_eq!(
             relevant_send_bodies.len(),
             2,
-            "stream rollover should only send a continuation chunk"
+            "committed replay should split the finalized segment into bounded Telegram sends"
         );
+        let first_segment = relevant_send_bodies[0];
+        let continuation_chunk = relevant_send_bodies[1];
         assert!(
             first_segment["text"]
                 .as_str()
-                .is_some_and(|text| text.len() == 4000),
-            "rollover path should preserve a 4000-char first segment; rendered lengths={rendered_lengths:?}"
-        );
-        assert!(
-            edit_bodies.iter().any(|body| {
-                body["text"].as_str().is_some_and(|text| {
-                    text.len() == MAX_MESSAGE_LENGTH
-                        && !has_legacy_loading_suffix(text)
-                        && !text.contains("🔧")
-                })
-            }),
-            "rollover should clean runtime state before finalizing the previous Telegram message; edits={edit_bodies:?}"
+                .is_some_and(|text| text.len() == MAX_MESSAGE_LENGTH),
+            "first committed chunk should fill the Telegram max length; rendered lengths={rendered_lengths:?}"
         );
         let continuation_len = continuation_chunk["text"]
             .as_str()
@@ -3760,19 +3727,33 @@ mod e2e_tests {
             .len();
         assert!(
             (1..1000).contains(&continuation_len),
-            "stream rollover should only send a bounded continuation chunk, got len={continuation_len}"
-        );
-        assert!(
-            edit_bodies
-                .iter()
-                .all(|body| body["text"].as_str().unwrap_or_default().len() <= MAX_MESSAGE_LENGTH),
-            "streaming edits must stay within Telegram's max message length"
+            "committed split should only send a bounded continuation chunk, got len={continuation_len}"
         );
         assert!(
             send_bodies
                 .iter()
                 .all(|body| body["text"].as_str().unwrap_or_default().len() <= MAX_MESSAGE_LENGTH),
             "stream continuation sends must stay within Telegram's max message length"
+        );
+        let joined = relevant_send_bodies
+            .iter()
+            .map(|body| body["text"].as_str().unwrap_or_default())
+            .collect::<String>();
+        assert_eq!(
+            joined,
+            format!("{}{}{}", "a".repeat(4000), "b".repeat(200), "c".repeat(200)),
+            "committed chunks must preserve the final assistant text without resending history"
+        );
+        assert!(
+            send_bodies.iter().all(|body| {
+                let text = body["text"].as_str().unwrap_or_default();
+                !has_legacy_loading_suffix(text) && !text.contains("🔧")
+            }),
+            "committed replay sends should be final text chunks without runtime placeholders"
+        );
+        assert!(
+            capture.edit_bodies().is_empty(),
+            "committed-only replay should not rely on live rollover edits"
         );
     }
 

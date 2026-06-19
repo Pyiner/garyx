@@ -26,6 +26,7 @@ type SharedStreamCallback = Arc<dyn Fn(StreamEvent) + Send + Sync>;
 
 struct WsAckBeforeInputResponseProvider {
     callback: Mutex<Option<SharedStreamCallback>>,
+    callback_ready: Notify,
     release_run: Notify,
 }
 
@@ -33,8 +34,16 @@ impl WsAckBeforeInputResponseProvider {
     fn new() -> Self {
         Self {
             callback: Mutex::new(None),
+            callback_ready: Notify::new(),
             release_run: Notify::new(),
         }
+    }
+
+    async fn wait_for_callback(&self) {
+        if self.callback.lock().await.is_some() {
+            return;
+        }
+        self.callback_ready.notified().await;
     }
 
     fn release_run(&self) {
@@ -119,6 +128,7 @@ impl AgentLoopProvider for WsAckBeforeInputResponseProvider {
         callback(StreamEvent::Delta {
             text: "initial".to_owned(),
         });
+        self.callback_ready.notify_waiters();
         self.release_run.notified().await;
         callback(StreamEvent::Done);
 
@@ -222,6 +232,28 @@ async fn recv_json(
     serde_json::from_str(&text).expect("expected json frame")
 }
 
+fn committed_control_kind(payload: &Value) -> Option<&str> {
+    (payload.get("type").and_then(Value::as_str) == Some("committed_message"))
+        .then(|| {
+            payload
+                .pointer("/message/control/kind")
+                .and_then(Value::as_str)
+        })
+        .flatten()
+}
+
+fn committed_assistant_text(payload: &Value) -> Option<&str> {
+    if payload.get("type").and_then(Value::as_str) != Some("committed_message")
+        || payload.pointer("/message/role").and_then(Value::as_str) != Some("assistant")
+    {
+        return None;
+    }
+    payload
+        .pointer("/message/text")
+        .and_then(Value::as_str)
+        .or_else(|| payload.pointer("/message/content").and_then(Value::as_str))
+}
+
 #[tokio::test]
 async fn chat_ws_start_streams_events() {
     let addr = start_test_gateway().await;
@@ -243,18 +275,22 @@ async fn chat_ws_start_streams_events() {
     .unwrap();
 
     let mut seen = Vec::new();
+    let mut assistant_text = Vec::new();
     for _ in 0..5 {
         let payload = recv_json(&mut ws).await;
         let kind = payload["type"].as_str().unwrap_or_default().to_owned();
+        if let Some(text) = committed_assistant_text(&payload) {
+            assistant_text.push(text.to_owned());
+        }
         seen.push(kind.clone());
-        if kind == "done" {
+        if committed_control_kind(&payload) == Some("run_complete") {
             break;
         }
     }
 
     assert!(seen.iter().any(|item| item == "accepted"));
-    assert!(seen.iter().any(|item| item == "assistant_delta"));
-    assert!(seen.iter().any(|item| item == "done"));
+    assert!(seen.iter().any(|item| item == "committed_message"));
+    assert_eq!(assistant_text, vec!["ws-e2e: hello ws"]);
 }
 
 #[tokio::test]
@@ -317,18 +353,9 @@ async fn chat_ws_codex_like_user_ack_can_arrive_before_stream_input_response() {
     .await
     .unwrap();
 
-    let mut saw_initial_delta = false;
-    for _ in 0..5 {
-        let payload = recv_json(&mut ws).await;
-        if payload["type"] == "assistant_delta" && payload["delta"] == "initial" {
-            saw_initial_delta = true;
-            break;
-        }
-    }
-    assert!(
-        saw_initial_delta,
-        "run should be active before queuing input"
-    );
+    tokio::time::timeout(Duration::from_secs(5), provider.wait_for_callback())
+        .await
+        .expect("run should be active before queuing input");
 
     ws.send(Message::Text(
         json!({
@@ -343,34 +370,47 @@ async fn chat_ws_codex_like_user_ack_can_arrive_before_stream_input_response() {
     .await
     .unwrap();
 
-    let first_payload = recv_json(&mut ws).await;
-    let second_payload = recv_json(&mut ws).await;
-    let (ack_payload, stream_input_payload) = if first_payload["type"] == "user_ack" {
-        (first_payload, second_payload)
-    } else {
-        (second_payload, first_payload)
-    };
-    assert_eq!(ack_payload["type"], "user_ack");
+    let mut ack_payload = None;
+    let mut stream_input_payload = None;
+    for _ in 0..10 {
+        let payload = recv_json(&mut ws).await;
+        if committed_control_kind(&payload) == Some("user_ack") {
+            ack_payload = Some(payload);
+        } else if payload["type"] == "stream_input"
+            && payload["clientIntentId"] == "intent-follow-up-1"
+        {
+            stream_input_payload = Some(payload);
+        }
+        if ack_payload.is_some() && stream_input_payload.is_some() {
+            break;
+        }
+    }
+    let ack_payload = ack_payload.expect("expected committed user_ack");
+    let stream_input_payload = stream_input_payload.expect("expected stream_input response");
     assert_eq!(stream_input_payload["type"], "stream_input");
     assert_eq!(stream_input_payload["status"], "queued");
     assert_eq!(stream_input_payload["clientIntentId"], "intent-follow-up-1");
-    assert_eq!(ack_payload["threadId"], thread_id);
+    assert_eq!(ack_payload["thread_id"], thread_id);
     assert_eq!(stream_input_payload["threadId"], thread_id);
     assert_eq!(
-        ack_payload["pendingInputId"], stream_input_payload["pendingInputId"],
+        ack_payload["message"]["control"]["pending_input_id"],
+        stream_input_payload["pendingInputId"],
         "Codex-style ack and stream_input response should describe the same queued input"
     );
 
     provider.release_run();
-    let mut saw_done = false;
+    let mut saw_run_complete = false;
     for _ in 0..5 {
         let payload = recv_json(&mut ws).await;
-        if payload["type"] == "done" {
-            saw_done = true;
+        if committed_control_kind(&payload) == Some("run_complete") {
+            saw_run_complete = true;
             break;
         }
     }
-    assert!(saw_done, "run should finish after releasing the provider");
+    assert!(
+        saw_run_complete,
+        "run should finish after releasing the provider"
+    );
 }
 
 #[tokio::test]
@@ -403,7 +443,7 @@ async fn chat_ws_recover_returns_thread_snapshot() {
         {
             active_thread_id = id.to_owned();
         }
-        if kind == "done" || kind == "error" {
+        if committed_control_kind(&payload) == Some("run_complete") || kind == "error" {
             break;
         }
     }
