@@ -233,9 +233,8 @@ fn test_router(state: Arc<AppState>) -> Router {
 }
 
 #[tokio::test]
-async fn test_chat_start_http_returns_accepted_and_emits_stream_event() {
+async fn test_chat_start_http_returns_accepted() {
     let state = test_state_with_provider().await;
-    let event_rx = state.ops.events.subscribe();
     let router = test_router(state);
 
     let req = Request::builder()
@@ -263,21 +262,6 @@ async fn test_chat_start_http_returns_accepted_and_emits_stream_event() {
     assert_eq!(json["threadId"], "thread::chat-start-http");
     let run_id = json["runId"].as_str().expect("run id");
     assert!(!run_id.is_empty());
-
-    let accepted = tokio::time::timeout(std::time::Duration::from_secs(1), async move {
-        let mut event_rx = event_rx;
-        loop {
-            let event = event_rx.recv().await.expect("event");
-            let payload: Value = serde_json::from_str(&event).expect("json event");
-            if payload["type"] == "accepted" {
-                break payload;
-            }
-        }
-    })
-    .await
-    .expect("accepted event");
-    assert_eq!(accepted["thread_id"], "thread::chat-start-http");
-    assert_eq!(accepted["run_id"], run_id);
 }
 
 #[tokio::test]

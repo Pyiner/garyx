@@ -80,7 +80,6 @@ impl RuntimeAssembler {
         let (event_tx, _) = tokio::sync::broadcast::channel(128);
 
         let mut cron_service_raw = CronService::new(PathBuf::from(&session_data_dir));
-        cron_service_raw.set_event_tx(event_tx.clone());
         let cron_boot_config = self.config.cron.clone();
         match cron_service_raw.load(&cron_boot_config).await {
             Ok(()) => {

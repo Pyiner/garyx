@@ -361,40 +361,22 @@ fn last_assistant_segment_none_without_assistant_text() {
 }
 
 #[test]
-fn persisted_provider_messages_merges_committed_cache_and_overlay_tail() {
-    // F1 shrank the active-run overlay to only the in-flight trailing segment.
-    // A native provider resuming (e.g. after a mid-run crash with a stale
-    // overlay) must still see the committed cache, not just the last partial.
+fn persisted_provider_messages_reads_committed_cache_only() {
+    // Native provider resume state comes from the bounded committed cache; live
+    // run recovery is driven by committed transcript controls elsewhere.
     let session_data = serde_json::json!({
         "messages": [
             {"role": "user", "content": "q1"},
             {"role": "assistant", "content": "a1"}
-        ],
-        "history": {
-            "active_run_snapshot": {
-                "messages": [{"role": "assistant", "content": "in-flight tail"}]
-            }
-        }
+        ]
     });
-    let merged = persisted_provider_messages_from_thread(&session_data);
+    let messages = persisted_provider_messages_from_thread(&session_data);
     assert_eq!(
-        merged.len(),
-        3,
-        "committed cache + overlay tail, not overlay alone"
+        messages.len(),
+        2,
+        "resume should use the committed cache without side-channel tails"
     );
 
-    // Empty overlay falls back to the committed cache unchanged.
-    let idle = serde_json::json!({"messages": [{"role": "user", "content": "q1"}]});
-    assert_eq!(persisted_provider_messages_from_thread(&idle).len(), 1);
-
-    // A legacy whole-run overlay that duplicates committed rows is not doubled.
-    let legacy = serde_json::json!({
-        "messages": [{"role": "user", "content": "q1"}],
-        "history": {"active_run_snapshot": {"messages": [{"role": "user", "content": "q1"}]}}
-    });
-    assert_eq!(
-        persisted_provider_messages_from_thread(&legacy).len(),
-        1,
-        "dedup prevents double-count"
-    );
+    let empty = serde_json::json!({});
+    assert!(persisted_provider_messages_from_thread(&empty).is_empty());
 }

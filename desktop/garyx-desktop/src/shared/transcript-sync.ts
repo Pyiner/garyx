@@ -277,7 +277,6 @@ function mergeForwardPageInfo(
     totalMessages: page?.totalMessages ?? base?.totalMessages ?? 0,
     committedMessages:
       page?.committedMessages ?? base?.committedMessages ?? null,
-    overlayMessages: page?.overlayMessages ?? base?.overlayMessages ?? null,
     returnedMessages: page?.returnedMessages ?? base?.returnedMessages ?? 0,
     returnedUserQueries:
       page?.returnedUserQueries ?? base?.returnedUserQueries ?? null,
@@ -364,7 +363,6 @@ export function transcriptForCommittedCache(
               : afterCursor + 1,
           hasMoreAfter: false,
           nextAfterIndex: null,
-          overlayMessages: 0,
         }
       : transcript.pageInfo,
   };

@@ -4,9 +4,9 @@ use garyx_models::routing::{
     DeliveryContext, infer_delivery_target_id, infer_delivery_target_type,
 };
 use garyx_router::{
-    KnownChannelEndpoint, ThreadStore, active_run_snapshot_messages, active_run_snapshot_run_id,
-    agent_id_from_value, bindings_from_value, history_message_count, is_default_thread_list_hidden,
-    is_thread_key, label_from_value, list_registry_channel_endpoints, thread_kind_from_value,
+    KnownChannelEndpoint, ThreadStore, ThreadTranscriptStore, agent_id_from_value,
+    bindings_from_value, history_message_count, is_default_thread_list_hidden, is_thread_key,
+    label_from_value, list_registry_channel_endpoints, thread_kind_from_value,
     workspace_dir_from_value,
 };
 use serde_json::Value;
@@ -16,6 +16,7 @@ use crate::garyx_db::{
     GaryxDbService, ThreadMessageRouteDraft, ThreadMetaDraft, ThreadMetaProjectionDraft,
     ThreadMetaProjectionSnapshot,
 };
+use crate::transcript_run_projection::active_run_id_from_transcript_store;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct ThreadMetaProjectionBackfillStats {
@@ -27,6 +28,7 @@ pub(crate) struct ThreadMetaProjectionBackfillStats {
 
 pub(crate) async fn backfill_thread_meta_projection_if_incomplete(
     thread_store: &Arc<dyn ThreadStore>,
+    transcript_store: &Arc<ThreadTranscriptStore>,
     garyx_db: &GaryxDbService,
 ) -> ThreadMetaProjectionBackfillStats {
     match garyx_db.thread_meta_projection_needs_backfill() {
@@ -41,11 +43,12 @@ pub(crate) async fn backfill_thread_meta_projection_if_incomplete(
     }
 
     let thread_ids = thread_store.list_keys(Some("thread::")).await;
-    backfill_thread_meta_projection(thread_ids, thread_store, garyx_db).await
+    backfill_thread_meta_projection(thread_ids, thread_store, transcript_store, garyx_db).await
 }
 
 pub(crate) async fn list_channel_endpoints_with_projection_backfill(
     thread_store: &Arc<dyn ThreadStore>,
+    transcript_store: &Arc<ThreadTranscriptStore>,
     garyx_db: &GaryxDbService,
 ) -> Vec<KnownChannelEndpoint> {
     let should_backfill = match garyx_db.thread_meta_projection_needs_backfill() {
@@ -57,7 +60,9 @@ pub(crate) async fn list_channel_endpoints_with_projection_backfill(
     };
     if should_backfill {
         let thread_ids = thread_store.list_keys(Some("thread::")).await;
-        let _ = backfill_thread_meta_projection(thread_ids, thread_store, garyx_db).await;
+        let _ =
+            backfill_thread_meta_projection(thread_ids, thread_store, transcript_store, garyx_db)
+                .await;
     }
     // Thread-bound endpoints come from the write-time projection; the registry
     // only contributes endpoints that have no thread yet. Scanning the full
@@ -97,6 +102,7 @@ fn merge_projected_and_known_channel_endpoints(
 async fn backfill_thread_meta_projection(
     thread_ids: Vec<String>,
     thread_store: &Arc<dyn ThreadStore>,
+    transcript_store: &Arc<ThreadTranscriptStore>,
     garyx_db: &GaryxDbService,
 ) -> ThreadMetaProjectionBackfillStats {
     let mut snapshot = ThreadMetaProjectionSnapshot::default();
@@ -106,7 +112,12 @@ async fn backfill_thread_meta_projection(
         let Some(data) = thread_store.get(&thread_id).await else {
             continue;
         };
-        let Some(draft) = thread_meta_projection_from_thread_data(&thread_id, &data) else {
+        let active_run_id = active_run_id_from_transcript_store(transcript_store, &thread_id).await;
+        let Some(draft) = thread_meta_projection_from_thread_data_with_active_run(
+            &thread_id,
+            &data,
+            active_run_id,
+        ) else {
             continue;
         };
         stats.threads_scanned += 1;
@@ -127,9 +138,10 @@ async fn backfill_thread_meta_projection(
     stats
 }
 
-pub(crate) fn thread_meta_projection_from_thread_data(
+pub(crate) fn thread_meta_projection_from_thread_data_with_active_run(
     thread_id: &str,
     data: &Value,
+    active_run_id: Option<String>,
 ) -> Option<ThreadMetaProjectionDraft> {
     let thread_id = thread_id.trim();
     if !is_thread_key(thread_id) {
@@ -155,7 +167,6 @@ pub(crate) fn thread_meta_projection_from_thread_data(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    let active_run_id = active_run_snapshot_run_id(data);
     let worktree_json = data
         .get("worktree")
         .filter(|value| !value.is_null())
@@ -309,11 +320,8 @@ fn string_field(data: &Value, key: &str) -> Option<String> {
 }
 
 fn last_message_preview_for_role(data: &Value, role: &str) -> Option<String> {
-    let active_messages = active_run_snapshot_messages(data);
-    last_message_preview_in_messages(active_messages.iter(), role).or_else(|| {
-        let messages = data.get("messages").and_then(Value::as_array)?;
-        last_message_preview_in_messages(messages.iter(), role)
-    })
+    let messages = data.get("messages").and_then(Value::as_array)?;
+    last_message_preview_in_messages(messages.iter(), role)
 }
 
 fn last_message_preview_in_messages<'a>(

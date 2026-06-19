@@ -2,7 +2,7 @@ import Foundation
 
 /// Persisted committed-history window for one thread (S2 of the cursor-sync
 /// design). Holds only durable committed rows — each carries a stable `index`
-/// (the gateway transcript position); transient in-flight/overlay rows are never
+/// (the gateway transcript position); transient live rows are never
 /// cached, so the window is always a contiguous, ascending slice of committed
 /// history. The highest cached index is the forward (`after_index`) cursor used
 /// for incremental open; `hasMoreBefore`/`nextBeforeIndex` extend it backward.
@@ -84,7 +84,7 @@ public enum GaryxTranscriptCacheLogic {
 
     /// Merge a freshly-fetched page into the cached window, producing the new
     /// snapshot to persist. Pure — the caller decides whether to actually persist
-    /// (e.g. only when the thread is idle, so no in-flight overlay row is cached).
+    /// (e.g. only when the thread is idle, so no transient live row is cached).
     public static func merged(
         into cache: GaryxCachedTranscript?,
         threadId: String,

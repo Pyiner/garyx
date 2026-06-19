@@ -268,7 +268,6 @@ interface HistoryPayload {
     total_messages_in_thread?: number;
     total_messages_in_session?: number;
     committed_message_count?: number;
-    overlay_message_count?: number;
     returned_messages?: number;
     returned_user_queries?: number;
     returned_start_index?: number;
@@ -3071,7 +3070,6 @@ function mapThreadTranscriptPageInfo(
     asFiniteNumber(stats.total_messages_in_session) ??
     0;
   const committedMessages = asFiniteNumber(stats.committed_message_count);
-  const overlayMessages = asFiniteNumber(stats.overlay_message_count);
   const returnedMessages = asFiniteNumber(stats.returned_messages) ?? 0;
   const returnedUserQueries = asFiniteNumber(stats.returned_user_queries);
   const startIndex = asFiniteNumber(stats.returned_start_index) ?? 0;
@@ -3082,7 +3080,6 @@ function mapThreadTranscriptPageInfo(
   return {
     totalMessages,
     committedMessages: committedMessages ?? null,
-    overlayMessages: overlayMessages ?? null,
     returnedMessages,
     returnedUserQueries: returnedUserQueries ?? null,
     startIndex,

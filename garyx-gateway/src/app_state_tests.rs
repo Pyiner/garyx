@@ -8,7 +8,7 @@ use garyx_models::config::{GaryxConfig, TelegramAccount};
 use garyx_models::provider::{
     AgentRunRequest, ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent,
 };
-use garyx_router::{InMemoryThreadStore, ThreadStore};
+use garyx_router::{InMemoryThreadStore, RunTranscriptRecordDraft, ThreadStore};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Notify;
@@ -18,6 +18,34 @@ fn test_state() -> Arc<AppState> {
     create_app_state(crate::test_support::with_gateway_auth(
         GaryxConfig::default(),
     ))
+}
+
+async fn append_run_start(state: &Arc<AppState>, thread_id: &str, run_id: &str) {
+    state
+        .threads
+        .history
+        .transcript_store()
+        .append_run_records(
+            thread_id,
+            Some(run_id),
+            &[RunTranscriptRecordDraft::with_timestamp(
+                serde_json::json!({
+                    "role": "system",
+                    "kind": "control",
+                    "internal": true,
+                    "internal_kind": "control",
+                    "control": {
+                        "kind": "run_start",
+                        "thread_id": thread_id,
+                        "run_id": run_id,
+                        "at": "2026-06-18T12:00:00Z"
+                    }
+                }),
+                "2026-06-18T12:00:00Z",
+            )],
+        )
+        .await
+        .expect("run_start control should append");
 }
 
 struct HoldingProvider {
@@ -347,125 +375,61 @@ async fn test_app_state_builder_wires_bridge_thread_store_for_recent_projection(
 }
 
 #[tokio::test]
-async fn startup_repair_clears_stale_active_run_snapshot_but_keeps_live_runs() {
-    let started = Arc::new(Notify::new());
-    let release = Arc::new(Notify::new());
-    let bridge = Arc::new(MultiProviderBridge::new());
-    bridge
-        .register_provider(
-            "holding-provider",
-            Arc::new(HoldingProvider {
-                started: started.clone(),
-                release: release.clone(),
-            }),
-        )
-        .await;
-    bridge.set_default_provider_key("holding-provider").await;
-
+async fn startup_warmup_projects_running_from_dangling_committed_run() {
     let state = AppStateBuilder::new(crate::test_support::with_gateway_auth(
         GaryxConfig::default(),
     ))
-    .with_bridge(bridge.clone())
     .build();
-
-    // (a) A thread whose active_run_snapshot references a run that is NOT live —
-    // the shape an abandoned run (gateway restart / a run that never reached its
-    // terminal) leaves behind, surfaced as a phantom "running"/tail "Thinking".
+    append_run_start(&state, "thread::cold-running", "run::cold-running").await;
     state
         .threads
         .thread_store
         .set(
-            "thread::stale",
+            "thread::cold-running",
             serde_json::json!({
-                "thread_id": "thread::stale",
-                "label": "Stale",
+                "thread_id": "thread::cold-running",
+                "label": "Cold Running",
                 "updated_at": "2026-01-01T00:00:01Z",
                 "history": {
-                    "active_run_snapshot": { "run_id": "abandoned-run-1" },
+                    "message_count": 1,
                     "recent_committed_run_ids": ["earlier-run"]
                 }
             }),
         )
         .await;
+    state
+        .ops
+        .garyx_db
+        .remove_recent_thread("thread::cold-running")
+        .expect("remove eager projection before warmup");
 
-    // (b) A thread with a genuinely live run, held open so its snapshot is real.
-    bridge
-        .start_agent_run(
-            AgentRunRequest::new(
-                "thread::live-run",
-                "hold",
-                "run::live",
-                "api",
-                "main",
-                HashMap::new(),
-            ),
-            None,
-        )
-        .await
-        .expect("run should start");
-    tokio::time::timeout(std::time::Duration::from_secs(3), started.notified())
-        .await
-        .expect("provider should stream a partial reply");
+    state.spawn_gateway_sync_cache_warmup();
+
     tokio::time::timeout(std::time::Duration::from_secs(3), async {
         loop {
-            if let Some(blob) = state.threads.thread_store.get("thread::live-run").await
-                && blob
-                    .pointer("/history/active_run_snapshot/run_id")
-                    .and_then(serde_json::Value::as_str)
-                    == Some("run::live")
-            {
+            let records = state
+                .ops
+                .garyx_db
+                .list_recent_threads(10, 0)
+                .expect("list recent threads");
+            if records.iter().any(|record| {
+                record.thread_id == "thread::cold-running"
+                    && record.active_run_id.as_deref() == Some("run::cold-running")
+                    && record.run_state == "running"
+            }) {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
     })
     .await
-    .expect("live run snapshot should persist");
-
-    let repaired = crate::api::repair_stale_active_run_snapshots(&state).await;
-
-    assert_eq!(repaired, 1, "only the stale (non-live) snapshot should repair");
-    let stale = state
-        .threads
-        .thread_store
-        .get("thread::stale")
-        .await
-        .unwrap();
-    assert!(
-        stale.pointer("/history/active_run_snapshot").is_none(),
-        "the stale active_run_snapshot must be cleared"
-    );
-    let live = state
-        .threads
-        .thread_store
-        .get("thread::live-run")
-        .await
-        .unwrap();
-    assert_eq!(
-        live.pointer("/history/active_run_snapshot/run_id")
-            .and_then(serde_json::Value::as_str),
-        Some("run::live"),
-        "a genuinely live run's snapshot must be preserved"
-    );
-
-    release.notify_waiters();
-    tokio::time::timeout(std::time::Duration::from_secs(3), async {
-        while bridge.is_run_active("run::live").await {
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("held run should complete after release");
+    .expect("warmup should project dangling committed run as running");
 }
 
-// Reproduction (state-driven, no UI): a streaming run that is ABORTED (preemption
-// by a follow-up the provider can't take mid-run, or an explicit cancel) drops the
-// run task, so its terminal persistence never runs and `active_run_snapshot` is
-// left behind — the recent projection then derives run_state=running forever (the
-// iOS tail "Thinking" that never clears). This asserts the thread returns to idle
-// after the abort.
+// Reproduction (state-driven, no UI): a streaming run that is aborted must append
+// a terminal committed control row so the transcript reducer returns to idle.
 #[tokio::test]
-async fn aborting_a_streaming_run_clears_its_active_run_snapshot() {
+async fn aborting_a_streaming_run_commits_terminal_control() {
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let bridge = Arc::new(MultiProviderBridge::new());
@@ -500,17 +464,19 @@ async fn aborting_a_streaming_run_clears_its_active_run_snapshot() {
         .await
         .expect("run should start");
 
-    // The held provider streams a partial → the bridge persists active_run_snapshot.
     tokio::time::timeout(std::time::Duration::from_secs(3), started.notified())
         .await
         .expect("provider should stream a partial");
     tokio::time::timeout(std::time::Duration::from_secs(3), async {
         loop {
-            if let Some(blob) = state.threads.thread_store.get("thread::aborted-run").await
-                && blob
-                    .pointer("/history/active_run_snapshot/run_id")
-                    .and_then(serde_json::Value::as_str)
-                    == Some("run::aborted")
+            if let Ok(run_state) = state
+                .threads
+                .history
+                .transcript_store()
+                .run_state("thread::aborted-run")
+                .await
+                && run_state.busy
+                && run_state.active_run_id.as_deref() == Some("run::aborted")
             {
                 break;
             }
@@ -518,10 +484,8 @@ async fn aborting_a_streaming_run_clears_its_active_run_snapshot() {
         }
     })
     .await
-    .expect("active_run_snapshot should persist while the run streams");
+    .expect("run_start control should project the run as busy");
 
-    // Abort the run — its tokio task is dropped, so the terminal persistence that
-    // would clear the snapshot never runs.
     assert!(
         bridge.abort_run("run::aborted").await,
         "abort should cancel the active run"
@@ -534,16 +498,24 @@ async fn aborting_a_streaming_run_clears_its_active_run_snapshot() {
     .await
     .expect("aborted run should leave the active set");
 
-    let blob = state
-        .threads
-        .thread_store
-        .get("thread::aborted-run")
-        .await
-        .unwrap();
-    assert!(
-        blob.pointer("/history/active_run_snapshot").is_none(),
-        "aborting a run must clear its active_run_snapshot (else run_state stays running)"
-    );
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let run_state = state
+                .threads
+                .history
+                .transcript_store()
+                .run_state("thread::aborted-run")
+                .await
+                .expect("run state should reduce");
+            if !run_state.busy {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("abort terminal control should make committed run state idle");
+
     if let Some(record) = state
         .ops
         .garyx_db

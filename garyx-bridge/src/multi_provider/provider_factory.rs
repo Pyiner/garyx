@@ -253,8 +253,12 @@ pub(super) async fn create_provider(
             Ok(Arc::new(provider))
         }
         ProviderType::CodexAppServer => {
-            let config =
-                build_codex_config(agent_cfg, default_workspace, ProviderType::CodexAppServer, "codex");
+            let config = build_codex_config(
+                agent_cfg,
+                default_workspace,
+                ProviderType::CodexAppServer,
+                "codex",
+            );
             let mut provider = CodexAgentProvider::new(config);
             provider.initialize().await?;
             Ok(Arc::new(provider))

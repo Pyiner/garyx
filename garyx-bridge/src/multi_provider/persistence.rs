@@ -630,20 +630,6 @@ fn record_recent_committed_run_id(
     run_ids
 }
 
-fn clear_active_run_snapshot(object: &mut serde_json::Map<String, Value>) {
-    let should_remove_history = object
-        .get_mut("history")
-        .and_then(Value::as_object_mut)
-        .map(|history| {
-            history.remove("active_run_snapshot");
-            history.is_empty()
-        })
-        .unwrap_or(false);
-    if should_remove_history {
-        object.remove("history");
-    }
-}
-
 fn update_history_state(
     object: &mut serde_json::Map<String, Value>,
     history: &Arc<ThreadHistoryRepository>,
@@ -651,7 +637,6 @@ fn update_history_state(
     message_count: usize,
     last_message_at: Option<&str>,
     recent_committed_run_ids: &[String],
-    active_run_snapshot: Option<Value>,
 ) {
     let Some(history_obj) = history_object_mut(object) else {
         return;
@@ -701,14 +686,6 @@ fn update_history_state(
                 .collect(),
         ),
     );
-    match active_run_snapshot {
-        Some(snapshot) => {
-            history_obj.insert("active_run_snapshot".to_owned(), snapshot);
-        }
-        None => {
-            history_obj.remove("active_run_snapshot");
-        }
-    }
 }
 
 fn build_run_messages(run: &PersistedRun<'_>) -> Vec<Value> {
@@ -850,21 +827,6 @@ fn build_run_record_drafts(
     drafts
 }
 
-fn transcript_controls_from_session_data(value: &Value) -> Vec<RunControlRecord> {
-    value
-        .get("history")
-        .and_then(|history| history.get("active_run_snapshot"))
-        .and_then(|snapshot| snapshot.get("transcript_controls"))
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| serde_json::from_value(item.clone()).ok())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 fn run_message_metadata(run: &PersistedRun<'_>) -> HashMap<String, Value> {
     let mut metadata = run.metadata.clone();
     match run
@@ -889,10 +851,8 @@ fn run_message_metadata(run: &PersistedRun<'_>) -> HashMap<String, Value> {
 ///
 /// Appends the newly-finalized rows (`build_run_messages` of everything except
 /// the trailing in-flight assistant segment, beyond `already_appended`) to the
-/// jsonl with a seq, and stores ONLY the in-flight partial in the lightweight
-/// `active_run_snapshot` overlay — so a long run no longer rewrites a growing
-/// whole-record overlay, and a per-message `seq` exists during the run. Returns
-/// the running count of finalized rows now committed (the caller's cursor).
+/// jsonl with a seq. Returns the running count of finalized rows now committed
+/// (the caller's cursor).
 pub(super) async fn save_streaming_partial(
     store: &Arc<dyn ThreadStore>,
     history: &Arc<ThreadHistoryRepository>,
@@ -976,31 +936,6 @@ pub(super) async fn save_streaming_partial(
         }
     }
 
-    // Overlay carries ONLY the in-flight partial (not yet finalized), mapped like
-    // build_run_messages maps a session message but without the synthesized head
-    // user row — that row is already committed above.
-    let message_metadata = run_message_metadata(&run);
-    let partial_messages: Vec<Value> = run.session_messages[finalized_len..]
-        .iter()
-        .map(|entry| {
-            let mut object = entry
-                .to_json_value()
-                .as_object()
-                .cloned()
-                .unwrap_or_default();
-            if object.get("timestamp").and_then(Value::as_str).is_none() {
-                object.insert(
-                    "timestamp".to_owned(),
-                    Value::String(Utc::now().to_rfc3339()),
-                );
-            }
-            for (key, value) in &message_metadata {
-                object.entry(key.clone()).or_insert_with(|| value.clone());
-            }
-            Value::Object(object)
-        })
-        .collect();
-
     let mut session_data = store
         .get(run.thread_id)
         .await
@@ -1013,7 +948,7 @@ pub(super) async fn save_streaming_partial(
             .await
             .unwrap_or(appended),
     };
-    let message_count = committed_total + partial_messages.len();
+    let message_count = committed_total;
     let recent_run_ids = recent_committed_run_ids_from_value(&session_data);
     let merged_pending_inputs = merge_pending_inputs_for_persistence(
         &session_data,
@@ -1021,18 +956,6 @@ pub(super) async fn save_streaming_partial(
         pending_user_inputs,
         should_clear_abandoned_pending_inputs(&run),
     );
-    let overlay = serde_json::json!({
-        "run_id": run_id,
-        "provider_key": (!run.provider_key.trim().is_empty()).then(|| run.provider_key.to_owned()),
-        "provider_type": run.provider_type,
-        "sdk_session_id": run.sdk_session_id,
-        "assistant_response": (!run.assistant_response.trim().is_empty())
-            .then_some(run.assistant_response.to_owned()),
-        "messages": partial_messages,
-        "pending_user_inputs": serde_json::to_value(pending_user_inputs).unwrap_or(Value::Array(Vec::new())),
-        "transcript_controls": serde_json::to_value(transcript_controls).unwrap_or(Value::Array(Vec::new())),
-        "updated_at": Utc::now().to_rfc3339(),
-    });
 
     if let Some(obj) = session_data.as_object_mut() {
         if !obj.contains_key("messages") {
@@ -1066,7 +989,6 @@ pub(super) async fn save_streaming_partial(
             message_count,
             None,
             &recent_run_ids,
-            Some(overlay),
         );
         obj.insert(
             "updated_at".to_owned(),
@@ -1084,13 +1006,14 @@ pub(super) async fn save_thread_messages(
     history: &Arc<ThreadHistoryRepository>,
     run: PersistedRun<'_>,
 ) -> Vec<(u64, Value)> {
-    save_thread_messages_with_terminal_control(store, history, run, None).await
+    save_thread_messages_with_terminal_control(store, history, run, &[], None).await
 }
 
 pub(super) async fn save_thread_messages_with_terminal_control(
     store: &Arc<dyn ThreadStore>,
     history: &Arc<ThreadHistoryRepository>,
     run: PersistedRun<'_>,
+    transcript_controls: &[RunControlRecord],
     terminal_control: Option<TerminalRunControl>,
 ) -> Vec<(u64, Value)> {
     let sdk_session_update = match run.sdk_session_id {
@@ -1102,17 +1025,19 @@ pub(super) async fn save_thread_messages_with_terminal_control(
         history,
         run,
         sdk_session_update,
+        transcript_controls,
         terminal_control,
     )
     .await
 }
 
-/// Save messages produced by a failed run, clearing the active snapshot while
-/// preserving any previously committed provider SDK session id for the thread.
+/// Save messages produced by a failed run while preserving any previously
+/// committed provider SDK session id for the thread.
 pub(super) async fn save_failed_thread_messages_with_terminal_control(
     store: &Arc<dyn ThreadStore>,
     history: &Arc<ThreadHistoryRepository>,
     run: PersistedRun<'_>,
+    transcript_controls: &[RunControlRecord],
     terminal_control: Option<TerminalRunControl>,
 ) -> Vec<(u64, Value)> {
     save_thread_messages_with_session_update(
@@ -1120,6 +1045,7 @@ pub(super) async fn save_failed_thread_messages_with_terminal_control(
         history,
         run,
         SdkSessionUpdate::Preserve,
+        transcript_controls,
         terminal_control,
     )
     .await
@@ -1130,6 +1056,7 @@ async fn save_thread_messages_with_session_update(
     history: &Arc<ThreadHistoryRepository>,
     run: PersistedRun<'_>,
     sdk_session_update: SdkSessionUpdate<'_>,
+    transcript_controls: &[RunControlRecord],
     terminal_control: Option<TerminalRunControl>,
 ) -> Vec<(u64, Value)> {
     let mut session_data = store
@@ -1162,7 +1089,7 @@ async fn save_thread_messages_with_session_update(
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
     let mut committed_pairs = Vec::new();
-    let mut transcript_controls = transcript_controls_from_session_data(&session_data);
+    let mut transcript_controls = transcript_controls.to_vec();
     if let Some(terminal_control) = terminal_control
         && let Some(run_id) = current_run_id.as_deref()
     {
@@ -1280,7 +1207,6 @@ async fn save_thread_messages_with_session_update(
                 Value::String(run.provider_key.to_owned()),
             );
         }
-        clear_active_run_snapshot(obj);
         update_history_state(
             obj,
             history,
@@ -1288,7 +1214,6 @@ async fn save_thread_messages_with_session_update(
             message_count,
             last_message_at.as_deref(),
             &recent_run_ids,
-            None,
         );
         obj.insert(
             "updated_at".to_owned(),

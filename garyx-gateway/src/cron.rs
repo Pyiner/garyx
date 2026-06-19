@@ -21,7 +21,7 @@ use garyx_router::{
     thread_metadata_from_value, workspace_dir_from_value,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::{RwLock, broadcast, mpsc};
+use tokio::sync::{RwLock, mpsc};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
@@ -515,8 +515,6 @@ pub struct CronService {
     /// Send () to stop the scheduler loop.
     stop_tx: Option<mpsc::Sender<()>>,
     scheduler_task: Option<JoinHandle<()>>,
-    /// Broadcast channel for SSE events.
-    event_tx: Option<broadcast::Sender<String>>,
     /// Optional bridge+router runtime for agent-turn/system-event actions.
     dispatch_runtime: Arc<RwLock<Option<CronDispatchRuntime>>>,
     /// Weak handle to the owning [`AppState`]. Populated by
@@ -543,7 +541,6 @@ impl CronService {
             active_agent_runs: Arc::new(RwLock::new(HashMap::new())),
             stop_tx: None,
             scheduler_task: None,
-            event_tx: None,
             dispatch_runtime: Arc::new(RwLock::new(None)),
             app_state_weak: Arc::new(OnceLock::new()),
             garyx_db: Arc::new(OnceLock::new()),
@@ -563,11 +560,6 @@ impl CronService {
 
     pub fn set_garyx_db(&self, garyx_db: Arc<GaryxDbService>) {
         let _ = self.garyx_db.set(garyx_db);
-    }
-
-    /// Attach a broadcast channel for publishing lifecycle events.
-    pub fn set_event_tx(&mut self, tx: broadcast::Sender<String>) {
-        self.event_tx = Some(tx);
     }
 
     /// Attach bridge+router runtime for agent-turn/system-event dispatch.
@@ -681,7 +673,6 @@ impl CronService {
         let runs = self.runs.clone();
         let active_agent_runs = self.active_agent_runs.clone();
         let data_dir = self.data_dir.clone();
-        let event_tx = self.event_tx.clone();
         let dispatch_runtime = self.dispatch_runtime.clone();
         let app_state_weak = self.app_state_weak.clone();
         let garyx_db = self.garyx_db.clone();
@@ -701,7 +692,6 @@ impl CronService {
                             &runs,
                             &active_agent_runs,
                             &data_dir,
-                            event_tx.as_ref(),
                             &dispatch_runtime,
                             &app_state_weak,
                             &garyx_db,
@@ -903,7 +893,6 @@ impl CronService {
                     Self::execute_job(
                         &prepared_job,
                         &self.active_agent_runs,
-                        self.event_tx.as_ref(),
                         &self.dispatch_runtime,
                         &self.app_state_weak,
                         &run_id,
@@ -1214,7 +1203,6 @@ impl CronService {
         runs: &Arc<RwLock<VecDeque<RunRecord>>>,
         active_agent_runs: &Arc<RwLock<HashMap<String, String>>>,
         data_dir: &Path,
-        event_tx: Option<&broadcast::Sender<String>>,
         dispatch_runtime: &Arc<RwLock<Option<CronDispatchRuntime>>>,
         app_state_weak: &Arc<OnceLock<Weak<AppState>>>,
         garyx_db: &Arc<OnceLock<Arc<GaryxDbService>>>,
@@ -1263,7 +1251,6 @@ impl CronService {
                         Self::execute_job(
                             &prepared_job,
                             active_agent_runs,
-                            event_tx,
                             dispatch_runtime,
                             app_state_weak,
                             &run_id,
@@ -1312,7 +1299,6 @@ impl CronService {
     async fn execute_job(
         job: &CronJob,
         active_agent_runs: &Arc<RwLock<HashMap<String, String>>>,
-        event_tx: Option<&broadcast::Sender<String>>,
         dispatch_runtime: &Arc<RwLock<Option<CronDispatchRuntime>>>,
         app_state_weak: &Arc<OnceLock<Weak<AppState>>>,
         run_id: &str,
@@ -1321,18 +1307,6 @@ impl CronService {
         let started_at = Utc::now();
 
         tracing::info!(job_id = %job.id, run_id = %run_id, action = ?job.action, "cron job executing");
-
-        // Publish start event.
-        if let Some(tx) = event_tx {
-            let event = serde_json::json!({
-                "type": "cron_job_started",
-                "job_id": job.id,
-                "run_id": run_id,
-                "action": format!("{:?}", job.action),
-                "timestamp": started_at.to_rfc3339(),
-            });
-            let _ = tx.send(event.to_string());
-        }
 
         let (status, error) = match &job.kind {
             CronJobKind::InternalDispatch { payload } => {
@@ -1400,20 +1374,6 @@ impl CronService {
             duration_ms,
             "cron job completed"
         );
-
-        // Publish completion event.
-        if let Some(tx) = event_tx {
-            let event = serde_json::json!({
-                "type": "cron_job_completed",
-                "job_id": job.id,
-                "run_id": run_id,
-                "status": format!("{:?}", status),
-                "duration_ms": duration_ms,
-                "error": error,
-                "timestamp": finished_at.to_rfc3339(),
-            });
-            let _ = tx.send(event.to_string());
-        }
 
         RunRecord {
             run_id,

@@ -71,9 +71,8 @@ pub use thread_logs::{
     ThreadLogSink, is_canonical_thread_id, resolve_thread_log_thread_id,
 };
 pub use thread_record::{
-    ActiveRunSnapshot, ProviderRuntimeState, THREAD_HISTORY_SOURCE_TRANSCRIPT_V1,
-    ThreadHistoryState, ThreadQueueState, ThreadRecord, ThreadRecordView, ThreadRoutingState,
-    ThreadUsageState,
+    ProviderRuntimeState, THREAD_HISTORY_SOURCE_TRANSCRIPT_V1, ThreadHistoryState,
+    ThreadQueueState, ThreadRecord, ThreadRecordView, ThreadRoutingState, ThreadUsageState,
 };
 pub use threading::{
     GroupActivation, QueueDrop, QueueMode, SendPolicy, ThreadOrigin, ThreadTokenUsage,

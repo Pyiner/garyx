@@ -34,13 +34,13 @@ extension GaryxMobileModel {
     }
 
     /// Merge a fetched page into the cached window. Persists to disk and advances
-    /// the mirror when the page is `committedOnly` — meaning it cannot contain an
-    /// in-flight overlay row — or when the thread is idle. A `committedOnly` page is
-    /// a forward page with `has_more_after` (the gateway withholds the overlay until
-    /// the committed tail is drained) or any `before_index` (older) page. An overlay
-    /// row carries a positional index, so this guard — not an index check — is what
-    /// keeps transient rows out of the durable cache; during an active run the final
-    /// overlay-bearing page is returned for display only and the cursor stays frozen.
+    /// the mirror when the page is `committedOnly` — meaning it cannot contain a
+    /// transient live row — or when the thread is idle. A `committedOnly` page is
+    /// a forward page with `has_more_after` (the committed tail is still being
+    /// drained) or any `before_index` (older) page. A live row can carry a
+    /// positional index, so this guard — not an index check — is what keeps
+    /// transient rows out of the durable cache; during an active run the final
+    /// live page is returned for display only and the cursor stays frozen.
     @discardableResult
     func updateTranscriptCache(
         threadId: String,
@@ -90,8 +90,8 @@ extension GaryxMobileModel {
 
     /// Fetch a thread's history incrementally: forward `after_index` delta pages
     /// when a cache cursor exists, paging until `has_more_after` is false so the
-    /// committed tail is fully drained and the gateway's in-flight overlay is
-    /// reached (otherwise a long active run with >1 page of committed rows would
+    /// committed tail is fully drained and any live rows are reached (otherwise
+    /// a long active run with >1 page of committed rows would
     /// freeze the displayed tail). Falls back to the full recent-turns window when
     /// there is no cache. Returns a full-window transcript (cache ∪ delta).
     func fetchThreadTranscriptIncrementally(threadId: String) async throws -> GaryxThreadTranscript {
@@ -144,7 +144,7 @@ extension GaryxMobileModel {
             case .mergeForward(let committedOnly, let continuePaging):
                 // A committed-only (has_more_after) page withholds the overlay until the
                 // committed tail drains, so it persists + advances the cursor even
-                // mid-run; the final overlay-bearing page persists only when idle.
+                // mid-run; the final live page persists only when idle.
                 window = updateTranscriptCache(
                     threadId: threadId,
                     fetched: page,

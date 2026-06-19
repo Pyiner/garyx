@@ -223,8 +223,10 @@ impl AppState {
         }
 
         let started = Instant::now();
+        let transcript_store = self.threads.history.transcript_store();
         let endpoints = list_channel_endpoints_with_projection_backfill(
             &self.threads.thread_store,
+            &transcript_store,
             &self.ops.garyx_db,
         )
         .await;
@@ -265,8 +267,10 @@ impl AppState {
         let workflow_reconcile_cutoff = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
         tokio::spawn(async move {
             let started = Instant::now();
+            let transcript_store = state.threads.history.transcript_store();
             let recent_threads = backfill_recent_thread_projection_if_incomplete(
                 &state.threads.thread_store,
+                &transcript_store,
                 &state.ops.garyx_db,
             )
             .await;
@@ -275,15 +279,15 @@ impl AppState {
                 &state.ops.garyx_db,
             )
             .await;
-            let repaired_active_run_snapshots =
-                crate::api::repair_stale_active_run_snapshots(&state).await;
             let reconciled_recent_threads = reconcile_active_recent_thread_projection(
                 &state.threads.thread_store,
+                &transcript_store,
                 &state.ops.garyx_db,
             )
             .await;
             let thread_meta_projection = backfill_thread_meta_projection_if_incomplete(
                 &state.threads.thread_store,
+                &transcript_store,
                 &state.ops.garyx_db,
             )
             .await;
@@ -300,7 +304,6 @@ impl AppState {
                 endpoint_count = endpoints,
                 recent_thread_backfill_count = recent_threads,
                 recent_thread_prune_count = pruned_recent_threads,
-                recent_thread_active_repair_count = repaired_active_run_snapshots,
                 recent_thread_active_reconcile_count = reconciled_recent_threads,
                 thread_meta_projection_threads = thread_meta_projection.threads_scanned,
                 thread_meta_projection_endpoints = thread_meta_projection.channel_endpoints,

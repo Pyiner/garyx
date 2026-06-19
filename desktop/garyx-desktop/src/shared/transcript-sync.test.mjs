@@ -433,8 +433,8 @@ test("rewrite controls surface invalidation windows", () => {
   assert.equal(state.lastTranscriptResetSeq, 3);
 });
 
-test("active-run overlay rows do not advance committed cache cursor", () => {
-  const threadId = "thread::fixture-overlay";
+test("active-run live rows do not advance committed cache cursor", () => {
+  const threadId = "thread::fixture-live";
   const transcript = {
     threadId,
     remoteFound: true,
@@ -451,13 +451,12 @@ test("active-run overlay rows do not advance committed cache cursor", () => {
     ],
     pendingInputs: [],
     threadInfo: {
-      activeRun: { runId: "run::overlay" },
+      activeRun: { runId: "run::live" },
       channelBindings: [],
     },
     pageInfo: {
       totalMessages: 3,
       committedMessages: 2,
-      overlayMessages: 1,
       returnedMessages: 3,
       startIndex: 0,
       endIndex: 3,
@@ -482,7 +481,6 @@ test("active-run overlay rows do not advance committed cache cursor", () => {
   );
   const cacheTranscript = transcriptForCommittedCache(transcript);
   assert.equal(cacheTranscript.messages.length, 2);
-  assert.equal(cacheTranscript.pageInfo.overlayMessages, 0);
   assert.equal(cacheTranscript.pageInfo.endIndex, 2);
 });
 
@@ -515,7 +513,6 @@ test("terminal control clears matching activeRun before cache and activity state
     pageInfo: {
       totalMessages: 3,
       committedMessages: 3,
-      overlayMessages: 0,
       returnedMessages: 3,
       startIndex: 0,
       endIndex: 3,
@@ -559,7 +556,6 @@ test("terminal control does not clear a different activeRun", () => {
     pageInfo: {
       totalMessages: 2,
       committedMessages: 2,
-      overlayMessages: 0,
       returnedMessages: 2,
       startIndex: 0,
       endIndex: 2,
@@ -609,7 +605,6 @@ test("terminal control still clears activeRun when followed by non-terminal cont
     pageInfo: {
       totalMessages: 3,
       committedMessages: 3,
-      overlayMessages: 0,
       returnedMessages: 3,
       startIndex: 0,
       endIndex: 3,

@@ -1114,7 +1114,7 @@ extension GaryxMobileModel {
             guard self.selectedThread?.id == threadId else { return }
             // Extend the cached committed window backward so older pages persist
             // and survive a cold start, not just this session's memory. A
-            // `before_index` page can never contain the in-flight overlay, so it is
+            // `before_index` page can never contain a transient live row, so it is
             // committed-only and safe to persist even while the run is active.
             updateTranscriptCache(
                 threadId: threadId,

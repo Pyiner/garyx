@@ -149,9 +149,9 @@ dropped silently:
   injected turn (which starts a fresh turn). The drop classifier is structured
   to accommodate such a signal if one is added later.
 
-Every drop path emits a `tracing::warn`, and the existing `cron_job_completed`
-broadcast event carries the run `status` and reason, so drops are observable and
-never silent.
+Every drop path emits a `tracing::warn`, and the persisted run record carries
+the run `status` and reason, so drops are observable through the debug cron
+inspection routes and never silent.
 
 The `RunRecord.status` enum gains a `failed_dropped` value
 (`JobRunStatus::FailedDropped`) distinct from `failed`. It is additive: older

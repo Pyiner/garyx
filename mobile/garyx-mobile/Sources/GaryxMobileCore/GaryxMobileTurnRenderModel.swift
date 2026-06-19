@@ -268,9 +268,9 @@ enum GaryxMobileThreadActivityModel {
     ///
     /// A run completes on the gateway's thread-store write path before its `.done`
     /// event reaches the client, but a transcript reload triggered by that same event
-    /// can still race a not-yet-repaired `active_run_snapshot` and report the finished
-    /// run as active. Without this guard the client re-marks the thread busy and the
-    /// "Thinking" indicator never clears. The client already observed the run terminate,
+    /// can still race an older runtime projection and report the finished run as active.
+    /// Without this guard the client re-marks the thread busy and the "Thinking"
+    /// indicator never clears. The client already observed the run terminate,
     /// so its own terminal signal wins: an `active_run` whose id matches the run we just
     /// saw finish is ignored.
     static func shouldTreatThreadRuntimeAsActive(

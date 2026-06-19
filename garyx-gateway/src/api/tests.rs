@@ -251,12 +251,7 @@ async fn test_thread_diagnostics_returns_ledger_records() {
                 "provider_type": "claude_code",
                 "sdk_session_id": "sdk-123",
                 "history": {
-                    "active_run_snapshot": {
-                        "run_id": "run-1",
-                        "provider_key": "claude_code:old-hash",
-                        "updated_at": "2026-03-22T10:00:02Z",
-                        "pending_user_inputs": [{"id":"q1"}]
-                    }
+                    "message_count": 0
                 }
             }),
         )
@@ -280,7 +275,6 @@ async fn test_thread_diagnostics_returns_ledger_records() {
     assert_eq!(json["thread_runtime"]["provider_label"], "Claude");
     assert_eq!(json["thread_runtime"]["sdk_session_id"], "sdk-123");
     assert!(json["thread_runtime"]["active_run"].is_null());
-    assert!(json["thread"]["history"]["active_run_snapshot"].is_null());
     assert_eq!(
         json["message_ledger"]["records"][0]["terminal_reason"],
         "self_restart"

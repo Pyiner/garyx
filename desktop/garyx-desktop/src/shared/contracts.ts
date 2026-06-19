@@ -1269,7 +1269,6 @@ export interface ThreadTranscript {
 export interface ThreadTranscriptPageInfo {
   totalMessages: number;
   committedMessages?: number | null;
-  overlayMessages?: number | null;
   returnedMessages: number;
   returnedUserQueries?: number | null;
   startIndex: number;

@@ -671,60 +671,6 @@ impl ThreadStore for FileThreadStore {
         self.release_lock(&path).await;
         result
     }
-
-    async fn clear_active_run_snapshot_if_owned(&self, thread_id: &str, run_id: &str) -> bool {
-        let path = self.resolve_thread_file(thread_id);
-        self.check_stale_lock(&path).await;
-        let Ok(_permit) = self.semaphore.acquire().await else {
-            return false;
-        };
-        if self.acquire_lock(&path).await.is_err() {
-            error!(thread_id, "lock timeout on clear_active_run_snapshot_if_owned");
-            return false;
-        }
-        let cleared = async {
-            if !path.exists() {
-                return false;
-            }
-            let Ok(bytes) = tokio::fs::read(&path).await else {
-                return false;
-            };
-            let Ok(mut data) = serde_json::from_slice::<Value>(&bytes) else {
-                return false;
-            };
-            // Ownership check under the lock: only the run that still owns the
-            // overlay clears it, so a replacement run's fresh snapshot is kept.
-            if crate::thread_history::active_run_snapshot_run_id(&data).as_deref() != Some(run_id) {
-                return false;
-            }
-            if !crate::thread_history::remove_active_run_snapshot(&mut data) {
-                return false;
-            }
-            let Ok(out_bytes) = serde_json::to_vec_pretty(&data) else {
-                return false;
-            };
-            if Self::atomic_write(&path, &out_bytes).await.is_err() {
-                return false;
-            }
-            let mtime = Self::file_mtime(&path)
-                .await
-                .unwrap_or(SystemTime::UNIX_EPOCH);
-            let mut cache = self.cache.lock().await;
-            Self::evict_if_needed(&mut cache, self.cache_max_size);
-            cache.insert(
-                thread_id.to_owned(),
-                CacheEntry {
-                    data: Self::deep_clone(&data),
-                    mtime,
-                    inserted_at: Instant::now(),
-                },
-            );
-            true
-        }
-        .await;
-        self.release_lock(&path).await;
-        cleared
-    }
 }
 
 #[cfg(test)]

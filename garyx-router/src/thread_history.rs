@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use garyx_models::{TranscriptRunState, reduce_transcript_run_state};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::AsyncWriteExt;
@@ -77,39 +78,26 @@ pub struct ThreadHistorySnapshot {
     pub thread_id: String,
     pub thread_data: Value,
     pub committed_messages: Vec<Value>,
-    pub overlay_messages: Vec<Value>,
     pub total_committed_messages: usize,
-    pub total_overlay_messages: usize,
     pub committed_start_index: usize,
-    pub overlay_start_index: usize,
 }
 
 impl ThreadHistorySnapshot {
     pub fn combined_messages(&self) -> Vec<Value> {
-        let mut messages =
-            Vec::with_capacity(self.committed_messages.len() + self.overlay_messages.len());
-        messages.extend(self.committed_messages.clone());
-        messages.extend(self.overlay_messages.clone());
-        messages
+        self.committed_messages.clone()
     }
 
     pub fn total_messages(&self) -> usize {
-        self.total_committed_messages + self.total_overlay_messages
+        self.total_committed_messages
     }
 
     pub fn message_index_at(&self, offset: usize) -> usize {
-        if offset < self.committed_messages.len() {
-            self.committed_start_index + offset
-        } else {
-            self.overlay_start_index + offset.saturating_sub(self.committed_messages.len())
-        }
+        self.committed_start_index + offset
     }
 
     pub fn first_message_index(&self) -> Option<usize> {
         if !self.committed_messages.is_empty() {
             Some(self.committed_start_index)
-        } else if !self.overlay_messages.is_empty() {
-            Some(self.overlay_start_index)
         } else {
             None
         }
@@ -1160,6 +1148,18 @@ impl ThreadTranscriptStore {
         self.read_records(thread_id).await
     }
 
+    pub async fn run_state(
+        &self,
+        thread_id: &str,
+    ) -> Result<TranscriptRunState, ThreadHistoryError> {
+        let records = self.read_records(thread_id).await?;
+        let values = records
+            .iter()
+            .filter_map(|record| serde_json::to_value(record).ok())
+            .collect::<Vec<_>>();
+        Ok(reduce_transcript_run_state(&values))
+    }
+
     /// Committed records with `seq > after_seq`, ascending, up to `limit`. Drives
     /// the resumable per-thread stream's replay (catch-up). Optimized for the
     /// caught-up case: it scans the jsonl from the TAIL backward and stops at the
@@ -1449,7 +1449,6 @@ impl ThreadHistoryRepository {
             .get(thread_id)
             .await
             .ok_or_else(|| ThreadHistoryError::ThreadNotFound(thread_id.to_owned()))?;
-        let overlay_messages = active_run_snapshot_messages(&thread_data);
         let bounded_limit = limit.max(1);
 
         if let Some(before_index) = before_index {
@@ -1461,51 +1460,31 @@ impl ThreadHistoryRepository {
                     bounded_limit,
                 )
                 .await?;
-            let total_overlay_messages = overlay_messages.len();
             return Ok(ThreadHistorySnapshot {
                 thread_id: thread_id.to_owned(),
                 thread_data,
                 committed_messages,
-                overlay_messages: Vec::new(),
                 total_committed_messages,
-                total_overlay_messages,
                 committed_start_index,
-                overlay_start_index: total_committed_messages,
             });
         }
 
-        let total_overlay_messages = overlay_messages.len();
-        let overlay_tail = if overlay_messages.len() > bounded_limit {
-            overlay_messages[overlay_messages.len() - bounded_limit..].to_vec()
-        } else {
-            overlay_messages
-        };
-        let committed_limit = bounded_limit.saturating_sub(overlay_tail.len());
         let (committed_messages, total_committed_messages) = self
-            .load_committed_messages(thread_id, &thread_data, committed_limit)
+            .load_committed_messages(thread_id, &thread_data, bounded_limit)
             .await?;
         let committed_start_index =
             total_committed_messages.saturating_sub(committed_messages.len());
-        let overlay_start_index =
-            total_committed_messages + total_overlay_messages.saturating_sub(overlay_tail.len());
 
         Ok(ThreadHistorySnapshot {
             thread_id: thread_id.to_owned(),
             thread_data,
             committed_messages,
-            overlay_messages: overlay_tail,
             total_committed_messages,
-            total_overlay_messages,
             committed_start_index,
-            overlay_start_index,
         })
     }
 
-    /// Forward delta snapshot: committed messages strictly after `after_index`,
-    /// plus the current in-flight overlay — but only once the committed tail is
-    /// fully drained, so a bounded committed page never leaves a gap before the
-    /// overlay. While more committed messages remain, the overlay is withheld and
-    /// the caller keeps paging forward (`next_after_index`).
+    /// Forward delta snapshot: committed messages strictly after `after_index`.
     pub async fn thread_snapshot_after_index(
         &self,
         thread_id: &str,
@@ -1517,7 +1496,6 @@ impl ThreadHistoryRepository {
             .get(thread_id)
             .await
             .ok_or_else(|| ThreadHistoryError::ThreadNotFound(thread_id.to_owned()))?;
-        let overlay_messages = active_run_snapshot_messages(&thread_data);
         let bounded_limit = limit.max(1);
         let (committed_messages, total_committed_messages, committed_start_index) = self
             .load_committed_messages_after_index(
@@ -1527,23 +1505,12 @@ impl ThreadHistoryRepository {
                 bounded_limit,
             )
             .await?;
-        let reached_committed_end =
-            committed_start_index + committed_messages.len() >= total_committed_messages;
-        let overlay = if reached_committed_end {
-            overlay_messages
-        } else {
-            Vec::new()
-        };
-        let total_overlay_messages = overlay.len();
         Ok(ThreadHistorySnapshot {
             thread_id: thread_id.to_owned(),
             thread_data,
             committed_messages,
-            overlay_messages: overlay,
             total_committed_messages,
-            total_overlay_messages,
             committed_start_index,
-            overlay_start_index: total_committed_messages,
         })
     }
 
@@ -1559,7 +1526,6 @@ impl ThreadHistoryRepository {
             .get(thread_id)
             .await
             .ok_or_else(|| ThreadHistoryError::ThreadNotFound(thread_id.to_owned()))?;
-        let overlay_messages = active_run_snapshot_messages(&thread_data);
         let bounded_fallback_limit = fallback_message_limit.max(1);
         let bounded_user_query_limit = user_query_limit.max(1);
 
@@ -1573,66 +1539,31 @@ impl ThreadHistoryRepository {
                     bounded_fallback_limit,
                 )
                 .await?;
-            let total_overlay_messages = overlay_messages.len();
             return Ok(ThreadHistorySnapshot {
                 thread_id: thread_id.to_owned(),
                 thread_data,
                 committed_messages,
-                overlay_messages: Vec::new(),
                 total_committed_messages,
-                total_overlay_messages,
                 committed_start_index,
-                overlay_start_index: total_committed_messages,
             });
         }
 
-        let total_overlay_messages = overlay_messages.len();
-        let overlay_start_offset =
-            if count_user_query_messages(&overlay_messages) > bounded_user_query_limit {
-                recent_user_query_start_index(
-                    &overlay_messages,
-                    overlay_messages.len(),
-                    bounded_user_query_limit,
-                    bounded_fallback_limit,
-                )
-            } else {
-                0
-            };
-        let overlay_tail = overlay_messages[overlay_start_offset..].to_vec();
-        let overlay_user_queries = count_user_query_messages(&overlay_tail);
-        let committed_user_query_limit =
-            bounded_user_query_limit.saturating_sub(overlay_user_queries);
-        let (committed_messages, total_committed_messages, committed_start_index) =
-            if committed_user_query_limit == 0 {
-                let total_committed_messages = self
-                    .committed_message_count(thread_id, &thread_data)
-                    .await?;
-                (
-                    Vec::new(),
-                    total_committed_messages,
-                    total_committed_messages,
-                )
-            } else {
-                self.load_committed_messages_before_user_queries(
-                    thread_id,
-                    &thread_data,
-                    None,
-                    committed_user_query_limit,
-                    bounded_fallback_limit,
-                )
-                .await?
-            };
-        let overlay_start_index = total_committed_messages + overlay_start_offset;
+        let (committed_messages, total_committed_messages, committed_start_index) = self
+            .load_committed_messages_before_user_queries(
+                thread_id,
+                &thread_data,
+                None,
+                bounded_user_query_limit,
+                bounded_fallback_limit,
+            )
+            .await?;
 
         Ok(ThreadHistorySnapshot {
             thread_id: thread_id.to_owned(),
             thread_data,
             committed_messages,
-            overlay_messages: overlay_tail,
             total_committed_messages,
-            total_overlay_messages,
             committed_start_index,
-            overlay_start_index,
         })
     }
 
@@ -1686,16 +1617,6 @@ impl ThreadHistoryRepository {
             .get(thread_id)
             .await
             .ok_or_else(|| ThreadHistoryError::ThreadNotFound(thread_id.to_owned()))?;
-
-        for message in active_run_snapshot_messages(&thread_data).iter().rev() {
-            if message_role(message) == Some(trimmed_role)
-                && let Some(text) = message_text(message)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-            {
-                return Ok(Some(text.to_owned()));
-            }
-        }
 
         if self.transcript_store.exists(thread_id).await {
             return self
@@ -1790,22 +1711,6 @@ impl ThreadHistoryRepository {
         Ok((Vec::new(), 0, 0))
     }
 
-    async fn committed_message_count(
-        &self,
-        thread_id: &str,
-        thread_data: &Value,
-    ) -> Result<usize, ThreadHistoryError> {
-        let has_transcript = self.transcript_store.exists(thread_id).await;
-        let message_count = history_message_count(thread_data);
-        if !has_transcript && message_count > 0 {
-            return Err(ThreadHistoryError::MissingTranscript(thread_id.to_owned()));
-        }
-        if has_transcript {
-            return self.transcript_store.message_count(thread_id).await;
-        }
-        Ok(0)
-    }
-
     async fn load_committed_messages_before_user_queries(
         &self,
         thread_id: &str,
@@ -1865,67 +1770,6 @@ pub fn is_user_query_message(message: &Value) -> bool {
             .and_then(Value::as_str)
             .map(str::trim)
             != Some("loop_continuation")
-}
-
-fn recent_user_query_start_index(
-    messages: &[Value],
-    before_index: usize,
-    user_query_limit: usize,
-    fallback_message_limit: usize,
-) -> usize {
-    let end = before_index.min(messages.len());
-    let mut start = end;
-    let mut user_queries = 0usize;
-    while start > 0 && user_queries < user_query_limit.max(1) {
-        start -= 1;
-        if is_user_query_message(&messages[start]) {
-            user_queries += 1;
-        }
-    }
-    if user_queries == 0 {
-        end.saturating_sub(fallback_message_limit.max(1))
-    } else {
-        start
-    }
-}
-
-pub fn active_run_snapshot_messages(thread_data: &Value) -> Vec<Value> {
-    thread_data
-        .get("history")
-        .and_then(|value| value.get("active_run_snapshot"))
-        .and_then(|value| value.get("messages"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-}
-
-pub fn active_run_snapshot_run_id(thread_data: &Value) -> Option<String> {
-    thread_data
-        .get("history")
-        .and_then(|value| value.get("active_run_snapshot"))
-        .and_then(|value| value.get("run_id"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-/// Remove the `history.active_run_snapshot` overlay from a thread blob, dropping
-/// an emptied `history` object. Returns true if a snapshot was present. Mirrors
-/// the bridge terminal's clear so a run that exits without reaching its terminal
-/// (e.g. an aborted/preempted run) does not leave the thread projected as running.
-pub fn remove_active_run_snapshot(thread_data: &mut Value) -> bool {
-    let Some(object) = thread_data.as_object_mut() else {
-        return false;
-    };
-    let Some(history) = object.get_mut("history").and_then(Value::as_object_mut) else {
-        return false;
-    };
-    let removed = history.remove("active_run_snapshot").is_some();
-    if history.is_empty() {
-        object.remove("history");
-    }
-    removed
 }
 
 pub fn message_text(message: &Value) -> Option<&str> {

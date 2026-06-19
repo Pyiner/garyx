@@ -173,29 +173,6 @@ pub(crate) async fn build_thread_runtime_summary(
         .or(provider_default_service_tier)
         .or(provider_catalog_default.service_tier);
     let sdk_session_id = trimmed_json_string(thread_value.get("sdk_session_id"));
-    let active_run_snapshot = thread_value
-        .get("history")
-        .and_then(|history| history.get("active_run_snapshot"));
-    let active_run = active_run_snapshot.map(|snapshot| {
-        let provider_type = snapshot
-            .get("provider_type")
-            .and_then(provider_type_from_value)
-            .or_else(|| {
-                snapshot
-                    .get("provider_key")
-                    .and_then(Value::as_str)
-                    .and_then(provider_type_from_key)
-            });
-        json!({
-            "run_id": snapshot.get("run_id").cloned().unwrap_or(Value::Null),
-            "provider_type": provider_type.as_ref().and_then(|value| serde_json::to_value(value).ok()).unwrap_or(Value::Null),
-            "provider_label": provider_type.as_ref().map(provider_label).unwrap_or("-"),
-            "assistant_response": snapshot.get("assistant_response").cloned().unwrap_or(Value::Null),
-            "updated_at": snapshot.get("updated_at").cloned().unwrap_or(Value::Null),
-            "pending_user_input_count": snapshot.get("pending_user_inputs").and_then(Value::as_array).map(|items| items.len()).unwrap_or(0),
-        })
-    });
-
     json!({
         "agent_id": agent_id,
         "provider_type": provider_type.as_ref().and_then(|value| serde_json::to_value(value).ok()).unwrap_or(Value::Null),
@@ -207,6 +184,6 @@ pub(crate) async fn build_thread_runtime_summary(
         "model_reasoning_effort_override": reasoning_effort_override,
         "model_service_tier_override": service_tier_override,
         "sdk_session_id": sdk_session_id,
-        "active_run": active_run.unwrap_or(Value::Null),
+        "active_run": Value::Null,
     })
 }

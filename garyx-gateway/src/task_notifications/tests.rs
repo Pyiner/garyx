@@ -246,7 +246,7 @@ fn final_text_keeps_tool_split_final_answer_together() {
 }
 
 #[tokio::test]
-async fn dispatch_defers_snapshot_notification_while_task_run_is_active() {
+async fn dispatch_uses_committed_thread_final_message() {
     let dispatcher = Arc::new(RecordingDispatcher::default());
     let provider = Arc::new(RecordingProvider::default());
     let bridge = Arc::new(MultiProviderBridge::new());
@@ -266,21 +266,15 @@ async fn dispatch_defers_snapshot_notification_while_task_run_is_active() {
         .threads
         .thread_store
         .set(
-            "thread::task-active",
+            "thread::task-final",
             json!({
-                "thread_id": "thread::task-active",
+                "thread_id": "thread::task-final",
                 "task": task_for_notification(TaskNotificationTarget::Bot {
                     channel: "telegram".to_owned(),
                     account_id: "main".to_owned(),
                 }),
                 "history": {
-                    "message_count": 1,
-                    "active_run_snapshot": {
-                        "run_id": "run-active-task",
-                        "messages": [
-                            {"role": "assistant", "content": "Interim handoff text before the run is done."}
-                        ]
-                    }
+                    "message_count": 2
                 }
             }),
         )
@@ -290,9 +284,12 @@ async fn dispatch_defers_snapshot_notification_while_task_run_is_active() {
         .history
         .transcript_store()
         .append_committed_messages(
-            "thread::task-active",
-            Some("run-active-task"),
-            &[json!({"role": "user", "content": "Please finish the implementation."})],
+            "thread::task-final",
+            Some("run-final-task"),
+            &[
+                json!({"role": "user", "content": "Please finish the implementation."}),
+                json!({"role": "assistant", "content": "Committed final handoff text."}),
+            ],
         )
         .await
         .expect("append transcript");
@@ -300,7 +297,7 @@ async fn dispatch_defers_snapshot_notification_while_task_run_is_active() {
     dispatch_task_ready_notification(
         &state,
         TaskReadyForReviewEvent {
-            thread_id: "thread::task-active".to_owned(),
+            thread_id: "thread::task-final".to_owned(),
             task_id: "#TASK-42".to_owned(),
             run_id: None,
             final_message: None,
@@ -309,34 +306,11 @@ async fn dispatch_defers_snapshot_notification_while_task_run_is_active() {
     .await
     .unwrap();
 
-    assert!(
-        dispatcher.calls().is_empty(),
-        "manual status transition must not snapshot an active run"
-    );
-    assert!(
-        provider.calls().is_empty(),
-        "manual status transition must not notify the target agent while the task run is active"
-    );
-
-    dispatch_task_ready_notification(
-        &state,
-        TaskReadyForReviewEvent {
-            thread_id: "thread::task-active".to_owned(),
-            task_id: "#TASK-42".to_owned(),
-            run_id: Some("run-active-task".to_owned()),
-            final_message: Some(
-                "CONFIRMED: the task is complete.\n\nValidation: focused tests passed.".to_owned(),
-            ),
-        },
-    )
-    .await
-    .unwrap();
-
     let calls = dispatcher.calls();
     assert_eq!(calls.len(), 1);
     let text = calls[0].content.as_text().expect("notification text");
-    assert!(text.contains("CONFIRMED: the task is complete."));
-    assert!(!text.contains("Interim handoff text before the run is done."));
+    assert!(text.contains("Committed final handoff text."));
+    assert!(provider.calls().is_empty());
 }
 
 #[tokio::test]

@@ -39,6 +39,7 @@ pub mod thread_logs;
 mod thread_meta_projection;
 mod thread_runtime;
 mod tool_image;
+mod transcript_run_projection;
 mod wikis;
 pub mod workflows;
 pub mod workspace_files;

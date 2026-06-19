@@ -54,10 +54,10 @@ without a follow-up fetch.
 
 Move the authoritative notification body to the stopped-run path.
 
-- In `dispatch_task_ready_notification`, when `final_message` is absent and the
-  task thread still has `history.active_run_snapshot`, skip delivery instead of
-  formatting from the live snapshot. This handles manual `in_review` transitions
-  that happen inside an active agent run.
+- In `dispatch_task_ready_notification`, when `final_message` is absent, format
+  from the committed transcript tail only. Manual `in_review` transitions during
+  an active run should rely on the stopped-run path for the authoritative final
+  body.
 - In `mark_task_ready_for_review_after_stopped_run`, keep the existing
   `InProgress -> InReview` transition path for successful runs with a non-empty
   final response.
@@ -132,7 +132,7 @@ transcript with the same extraction rule.
 
 ## Impact
 
-- Gateway notifications for a task thread with an active run snapshot are
+- Gateway notifications for a task thread with a committed dangling run are
   deferred until the run stops.
 - Stopped-run notifications can include more than the final tiny segment when
   a tool call split the final answer.

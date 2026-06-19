@@ -15,7 +15,7 @@ use claude_agent_sdk::{
 };
 use garyx_models::config::{AgentProviderConfig, GaryxConfig};
 use garyx_models::provider::{ProviderMessage, ProviderMessageRole, ProviderType};
-use garyx_router::{active_run_snapshot_messages, is_thread_key, workspace_dir_from_value};
+use garyx_router::{is_thread_key, workspace_dir_from_value};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use tokio::time::timeout;
@@ -459,14 +459,12 @@ async fn collect_dream_messages(
 
         let workspace_dir = workspace_dir_from_value(&thread_data);
         let mut thread_messages = Vec::new();
-        let mut max_transcript_seq = 0u64;
         if transcript_store.exists(&thread_id).await {
             let records = transcript_store
                 .records(&thread_id)
                 .await
                 .map_err(|error| format!("failed to load transcript for {thread_id}: {error}"))?;
             for record in records {
-                max_transcript_seq = max_transcript_seq.max(record.seq);
                 if let Some(message) = dream_user_message(
                     &thread_id,
                     workspace_dir.as_deref(),
@@ -478,24 +476,6 @@ async fn collect_dream_messages(
                 ) {
                     thread_messages.push(message);
                 }
-            }
-        }
-
-        let base_sequence = max_transcript_seq;
-        for (idx, message) in active_run_snapshot_messages(&thread_data)
-            .iter()
-            .enumerate()
-        {
-            if let Some(entry) = dream_user_message(
-                &thread_id,
-                workspace_dir.as_deref(),
-                base_sequence + idx as u64 + 1,
-                message,
-                None,
-                from,
-                to,
-            ) {
-                thread_messages.push(entry);
             }
         }
 
@@ -546,14 +526,12 @@ pub(crate) async fn has_recent_dream_user_message(
         }
 
         let workspace_dir = workspace_dir_from_value(&thread_data);
-        let mut max_transcript_seq = 0u64;
         if transcript_store.exists(&thread_id).await {
             let records = transcript_store
                 .records(&thread_id)
                 .await
                 .map_err(|error| format!("failed to load transcript for {thread_id}: {error}"))?;
             for record in records {
-                max_transcript_seq = max_transcript_seq.max(record.seq);
                 if dream_user_message(
                     &thread_id,
                     workspace_dir.as_deref(),
@@ -567,25 +545,6 @@ pub(crate) async fn has_recent_dream_user_message(
                 {
                     return Ok(true);
                 }
-            }
-        }
-
-        for (idx, message) in active_run_snapshot_messages(&thread_data)
-            .iter()
-            .enumerate()
-        {
-            if dream_user_message(
-                &thread_id,
-                workspace_dir.as_deref(),
-                max_transcript_seq + idx as u64 + 1,
-                message,
-                None,
-                from,
-                to,
-            )
-            .is_some()
-            {
-                return Ok(true);
             }
         }
     }

@@ -157,7 +157,7 @@ final class GaryxTranscriptCacheTests: XCTestCase {
             threadId: "t",
             fetched: [
                 msg(0, .user, "u"),
-                GaryxTranscriptMessage(index: nil, role: .assistant, text: "in-flight overlay"),
+                GaryxTranscriptMessage(index: nil, role: .assistant, text: "transient live row"),
                 msg(1, .assistant, "a"),
             ],
             pageInfo: pageInfo(),

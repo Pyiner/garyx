@@ -37,7 +37,6 @@ pub(crate) enum ChatPreparationError {
 pub(crate) struct PreparedChatRequest {
     pub(crate) thread_id: String,
     pub(crate) effective_message: String,
-    pub(crate) thread_title_update: Option<String>,
     pub(crate) channel: String,
     pub(crate) account_id: String,
     pub(crate) from_id: String,
@@ -186,9 +185,10 @@ pub(crate) async fn prepare_chat_request(
         );
     }
 
-    let thread_title_update =
-        persist_thread_label_if_missing(state, &thread_id, &resolved_message).await?;
-    if thread_title_update.is_some() {
+    if persist_thread_label_if_missing(state, &thread_id, &resolved_message)
+        .await?
+        .is_some()
+    {
         thread_cache_maybe_stale = true;
     }
 
@@ -224,7 +224,6 @@ pub(crate) async fn prepare_chat_request(
     Ok(PreparedChatRequest {
         thread_id,
         effective_message: resolved_message,
-        thread_title_update,
         channel,
         account_id: req.account_id,
         from_id: req.from_id,

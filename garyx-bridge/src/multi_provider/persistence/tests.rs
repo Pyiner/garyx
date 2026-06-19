@@ -262,7 +262,7 @@ fn test_streaming_run_snapshot_splits_on_agent_prefix_change_without_boundary() 
 }
 
 #[tokio::test]
-async fn test_save_streaming_partial_commits_user_row_and_keeps_only_inflight_in_overlay() {
+async fn test_save_streaming_partial_commits_user_row_without_inflight_content_track() {
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     let history = make_history(store.clone());
     store
@@ -372,16 +372,11 @@ async fn test_save_streaming_partial_commits_user_row_and_keeps_only_inflight_in
         .expect("messages should be an array");
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0]["content"], "older run");
-    // The overlay carries ONLY the trailing in-flight assistant segment now, not
-    // the whole run (the user row was committed above).
-    let active_messages = stored["history"]["active_run_snapshot"]["messages"]
-        .as_array()
-        .expect("active snapshot messages should be an array");
-    assert_eq!(active_messages.len(), 1);
-    assert_eq!(active_messages[0]["role"], "assistant");
-    assert_eq!(active_messages[0]["content"], "hello");
-    // message_count reflects committed (1) + in-flight partial (1).
-    assert_eq!(stored["history"]["message_count"], 2);
+    assert!(
+        stored["history"].get("message_count").is_some(),
+        "streaming partials still update committed history metadata"
+    );
+    assert_eq!(stored["history"]["message_count"], 1);
 }
 
 #[tokio::test]
@@ -600,13 +595,10 @@ async fn test_streaming_then_terminal_commit_does_not_duplicate_messages() {
     appended = flush(&snapshot, appended).await; // final assistant still in flight
     assert_eq!(appended, 4);
 
-    // During the run, only the in-flight trailing assistant lives in the overlay.
+    // During the run, the transcript already contains every finalized row and
+    // the trailing in-flight assistant is intentionally not mirrored elsewhere.
     let mid = store.get(thread_id).await.expect("session exists");
-    let overlay = mid["history"]["active_run_snapshot"]["messages"]
-        .as_array()
-        .expect("overlay messages");
-    assert_eq!(overlay.len(), 1);
-    assert_eq!(overlay[0]["content"], "Done");
+    assert_eq!(mid["history"]["message_count"], 4);
 
     // Terminal commit: reconcile the tail to the full authoritative set.
     save_thread_messages(
@@ -656,13 +648,8 @@ async fn test_streaming_then_terminal_commit_does_not_duplicate_messages() {
         "same_seq_overwrite"
     );
 
-    // Overlay is cleared once the run terminates.
     let stored = store.get(thread_id).await.expect("session exists");
-    assert!(
-        stored["history"].get("active_run_snapshot").is_none()
-            || stored["history"]["active_run_snapshot"].is_null(),
-        "active_run_snapshot must be cleared at terminal"
-    );
+    assert_eq!(stored["history"]["message_count"], 6);
 }
 
 #[tokio::test]
@@ -729,6 +716,7 @@ async fn test_control_records_stream_and_terminal_commit_to_transcript() {
             session_messages: &[],
             metadata: &metadata,
         },
+        &controls,
         Some(TerminalRunControl {
             duration_ms: Some(42),
             success: Some(true),

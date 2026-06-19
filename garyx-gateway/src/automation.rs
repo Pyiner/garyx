@@ -17,8 +17,7 @@ use garyx_router::{
     CreateTaskInput, FileTaskCounterStore, TaskRuntimeInput, TaskService, WorkspaceMode,
 };
 use garyx_router::{
-    active_run_snapshot_run_id, history_message_count, is_thread_key, thread_kind_from_value,
-    workspace_dir_from_value,
+    history_message_count, is_thread_key, thread_kind_from_value, workspace_dir_from_value,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
@@ -32,6 +31,7 @@ use crate::app_db::{
 use crate::cron::{CronJob, JobRunStatus, RunRecord};
 use crate::garyx_db::AutomationThreadRunRecord;
 use crate::server::AppState;
+use crate::transcript_run_projection::active_run_id_from_transcript_store;
 
 const AUTOMATION_KEY_PREFIX: &str = "automation::";
 pub(crate) const DEFAULT_AUTOMATION_AGENT_ID: &str = "claude";
@@ -1088,7 +1088,11 @@ fn normalize_automation_thread_mode_param(value: Option<&str>) -> Result<&'stati
     }
 }
 
-fn automation_thread_summary(thread_id: &str, data: &Value) -> Value {
+fn automation_thread_summary(
+    thread_id: &str,
+    data: &Value,
+    active_run_id: Option<String>,
+) -> Value {
     let title = data
         .get("label")
         .and_then(Value::as_str)
@@ -1116,7 +1120,7 @@ fn automation_thread_summary(thread_id: &str, data: &Value) -> Value {
         "lastUserMessage": last_thread_message_preview(data, "user"),
         "lastAssistantMessage": last_thread_message_preview(data, "assistant"),
         "recentRunId": recent_run_id,
-        "activeRunId": active_run_snapshot_run_id(data),
+        "activeRunId": active_run_id,
         "createdAt": data.get("created_at").and_then(Value::as_str),
         "updatedAt": data.get("updated_at").and_then(Value::as_str),
         "automationId": data.get("automation_id").and_then(Value::as_str),
@@ -1131,12 +1135,20 @@ async fn automation_thread_entry(
     automation_label: Option<&str>,
     automation_deleted: bool,
 ) -> Value {
-    let thread = state
-        .threads
-        .thread_store
-        .get(&record.thread_id)
-        .await
-        .map(|data| automation_thread_summary(&record.thread_id, &data));
+    let thread = state.threads.thread_store.get(&record.thread_id).await;
+    let thread = match thread {
+        Some(data) => {
+            let transcript_store = state.threads.history.transcript_store();
+            let active_run_id =
+                active_run_id_from_transcript_store(&transcript_store, &record.thread_id).await;
+            Some(automation_thread_summary(
+                &record.thread_id,
+                &data,
+                active_run_id,
+            ))
+        }
+        None => None,
+    };
     json!({
         "automationId": record.automation_id.as_str(),
         "runId": record.run_id.as_str(),

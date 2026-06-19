@@ -1,15 +1,15 @@
 use async_trait::async_trait;
 use garyx_router::{
-    ThreadStore, ThreadStoreError, active_run_snapshot_messages, active_run_snapshot_run_id,
-    history_message_count, is_hidden_thread_value, is_thread_key, thread_kind_from_value,
-    workspace_dir_from_value,
+    ThreadStore, ThreadStoreError, ThreadTranscriptStore, history_message_count,
+    is_hidden_thread_value, is_thread_key, thread_kind_from_value, workspace_dir_from_value,
 };
 use serde_json::Value;
 use std::sync::Arc;
 use tracing::warn;
 
 use crate::garyx_db::{GaryxDbService, RecentThreadDraft};
-use crate::thread_meta_projection::thread_meta_projection_from_thread_data;
+use crate::thread_meta_projection::thread_meta_projection_from_thread_data_with_active_run;
+use crate::transcript_run_projection::active_run_id_from_transcript_store;
 
 pub(crate) const RECENT_THREAD_MISSING_TIMESTAMP: &str = "1970-01-01T00:00:00.000Z";
 const RECENT_THREAD_PROJECTION_NAME: &str = "recent_threads";
@@ -18,18 +18,33 @@ const RECENT_THREAD_PROJECTION_VERSION: i64 = 1;
 pub(crate) struct RecentThreadProjectingStore {
     inner: Arc<dyn ThreadStore>,
     garyx_db: Arc<GaryxDbService>,
+    transcript_store: Arc<ThreadTranscriptStore>,
 }
 
 impl RecentThreadProjectingStore {
-    pub(crate) fn new(inner: Arc<dyn ThreadStore>, garyx_db: Arc<GaryxDbService>) -> Self {
-        Self { inner, garyx_db }
+    pub(crate) fn new(
+        inner: Arc<dyn ThreadStore>,
+        garyx_db: Arc<GaryxDbService>,
+        transcript_store: Arc<ThreadTranscriptStore>,
+    ) -> Self {
+        Self {
+            inner,
+            garyx_db,
+            transcript_store,
+        }
     }
 
-    fn project_thread(&self, thread_id: &str, data: &Value) {
+    async fn project_thread(&self, thread_id: &str, data: &Value) {
         if !is_thread_key(thread_id) {
             return;
         }
-        match thread_meta_projection_from_thread_data(thread_id, data) {
+        let active_run_id =
+            active_run_id_from_transcript_store(&self.transcript_store, thread_id).await;
+        match thread_meta_projection_from_thread_data_with_active_run(
+            thread_id,
+            data,
+            active_run_id.clone(),
+        ) {
             Some(draft) => {
                 if let Err(error) = self.garyx_db.replace_thread_meta_projection(draft) {
                     warn!(thread_id, error = %error, "failed to upsert thread meta projection");
@@ -53,7 +68,9 @@ impl RecentThreadProjectingStore {
             }
             return;
         }
-        let Some(draft) = recent_thread_draft_from_thread_data(thread_id, data) else {
+        let Some(draft) =
+            recent_thread_draft_from_thread_data_with_active_run(thread_id, data, active_run_id)
+        else {
             if let Err(error) = self.garyx_db.remove_recent_thread(thread_id) {
                 warn!(thread_id, error = %error, "failed to remove non-projectable thread from recent thread projection");
             }
@@ -67,6 +84,7 @@ impl RecentThreadProjectingStore {
 
 pub(crate) async fn backfill_recent_thread_projection_if_incomplete(
     thread_store: &Arc<dyn ThreadStore>,
+    transcript_store: &Arc<ThreadTranscriptStore>,
     garyx_db: &GaryxDbService,
 ) -> usize {
     match garyx_db.count_recent_threads() {
@@ -98,7 +116,10 @@ pub(crate) async fn backfill_recent_thread_projection_if_incomplete(
         let Some(data) = thread_store.get(&thread_id).await else {
             continue;
         };
-        if let Some(draft) = recent_thread_draft_from_thread_data(&thread_id, &data) {
+        let active_run_id = active_run_id_from_transcript_store(transcript_store, &thread_id).await;
+        if let Some(draft) =
+            recent_thread_draft_from_thread_data_with_active_run(&thread_id, &data, active_run_id)
+        {
             drafts.push(draft);
         }
     }
@@ -119,6 +140,7 @@ pub(crate) async fn backfill_recent_thread_projection_if_incomplete(
 
 pub(crate) async fn reconcile_active_recent_thread_projection(
     thread_store: &Arc<dyn ThreadStore>,
+    transcript_store: &Arc<ThreadTranscriptStore>,
     garyx_db: &GaryxDbService,
 ) -> usize {
     let records = match garyx_db.list_recent_threads(usize::MAX, 0) {
@@ -153,7 +175,13 @@ pub(crate) async fn reconcile_active_recent_thread_projection(
             continue;
         }
 
-        let Some(draft) = recent_thread_draft_from_thread_data(&record.thread_id, &data) else {
+        let active_run_id =
+            active_run_id_from_transcript_store(transcript_store, &record.thread_id).await;
+        let Some(draft) = recent_thread_draft_from_thread_data_with_active_run(
+            &record.thread_id,
+            &data,
+            active_run_id,
+        ) else {
             continue;
         };
         if draft.active_run_id == record.active_run_id && draft.run_state == record.run_state {
@@ -214,7 +242,7 @@ impl ThreadStore for RecentThreadProjectingStore {
 
     async fn set(&self, thread_id: &str, data: Value) {
         self.inner.set(thread_id, data.clone()).await;
-        self.project_thread(thread_id, &data);
+        self.project_thread(thread_id, &data).await;
     }
 
     async fn delete(&self, thread_id: &str) -> bool {
@@ -245,30 +273,16 @@ impl ThreadStore for RecentThreadProjectingStore {
     async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
         self.inner.update(thread_id, updates).await?;
         if let Some(data) = self.inner.get(thread_id).await {
-            self.project_thread(thread_id, &data);
+            self.project_thread(thread_id, &data).await;
         }
         Ok(())
     }
-
-    async fn clear_active_run_snapshot_if_owned(&self, thread_id: &str, run_id: &str) -> bool {
-        let cleared = self
-            .inner
-            .clear_active_run_snapshot_if_owned(thread_id, run_id)
-            .await;
-        // Re-project from the cleaned blob so recent_threads drops run_state=running
-        // immediately (the home list and any already-open client reflect idle).
-        if cleared
-            && let Some(data) = self.inner.get(thread_id).await
-        {
-            self.project_thread(thread_id, &data);
-        }
-        cleared
-    }
 }
 
-pub(crate) fn recent_thread_draft_from_thread_data(
+fn recent_thread_draft_from_thread_data_with_active_run(
     thread_id: &str,
     data: &Value,
+    active_run_id: Option<String>,
 ) -> Option<RecentThreadDraft> {
     let thread_id = thread_id.trim();
     if !is_thread_key(thread_id) || is_hidden_thread_value(data) || is_recent_thread_excluded(data)
@@ -306,7 +320,6 @@ pub(crate) fn recent_thread_draft_from_thread_data(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    let active_run_id = active_run_snapshot_run_id(data);
     let updated_at = data
         .get("updated_at")
         .and_then(Value::as_str)
@@ -407,11 +420,8 @@ fn last_message_preview(data: &Value) -> Option<String> {
 }
 
 fn last_message_preview_for_role(data: &Value, role: &str) -> Option<String> {
-    let active_messages = active_run_snapshot_messages(data);
-    last_message_preview_in_messages(active_messages.iter(), role).or_else(|| {
-        let messages = data.get("messages").and_then(Value::as_array)?;
-        last_message_preview_in_messages(messages.iter(), role)
-    })
+    let messages = data.get("messages").and_then(Value::as_array)?;
+    last_message_preview_in_messages(messages.iter(), role)
 }
 
 fn last_message_preview_in_messages<'a>(
@@ -506,8 +516,11 @@ mod tests {
         garyx_db
             .upsert_recent_thread(stale_active_draft(thread_id))
             .expect("seed stale recent thread");
+        let transcript_store = Arc::new(ThreadTranscriptStore::memory());
 
-        let count = reconcile_active_recent_thread_projection(&thread_store, &garyx_db).await;
+        let count =
+            reconcile_active_recent_thread_projection(&thread_store, &transcript_store, &garyx_db)
+                .await;
 
         assert_eq!(count, 1);
         let records = garyx_db
@@ -554,9 +567,14 @@ mod tests {
                 2,
             )
             .expect("seed projection state");
+        let transcript_store = Arc::new(ThreadTranscriptStore::memory());
 
-        let backfilled =
-            backfill_recent_thread_projection_if_incomplete(&thread_store, &garyx_db).await;
+        let backfilled = backfill_recent_thread_projection_if_incomplete(
+            &thread_store,
+            &transcript_store,
+            &garyx_db,
+        )
+        .await;
 
         assert_eq!(backfilled, 0);
         let records = garyx_db
@@ -584,7 +602,10 @@ mod tests {
         });
 
         assert!(is_recent_thread_excluded(&data));
-        assert!(recent_thread_draft_from_thread_data("thread::automation", &data).is_none());
+        assert!(
+            recent_thread_draft_from_thread_data_with_active_run("thread::automation", &data, None)
+                .is_none()
+        );
     }
 
     #[test]
@@ -600,7 +621,10 @@ mod tests {
         });
 
         assert!(is_recent_thread_excluded(&data));
-        assert!(recent_thread_draft_from_thread_data("thread::workflow", &data).is_none());
+        assert!(
+            recent_thread_draft_from_thread_data_with_active_run("thread::workflow", &data, None)
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -608,7 +632,8 @@ mod tests {
         let thread_id = "thread::automation-projection";
         let inner: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
         let garyx_db = Arc::new(GaryxDbService::memory().expect("memory db"));
-        let store = RecentThreadProjectingStore::new(inner, garyx_db.clone());
+        let transcript_store = Arc::new(ThreadTranscriptStore::memory());
+        let store = RecentThreadProjectingStore::new(inner, garyx_db.clone(), transcript_store);
 
         store
             .set(

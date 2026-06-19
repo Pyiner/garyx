@@ -336,22 +336,6 @@ async fn start_chat_run(
                 },
             )
             .await;
-            let _ = state.ops.events.sender().send(
-                json!({
-                    "type": "accepted",
-                    "thread_id": thread_id,
-                    "run_id": run_id,
-                })
-                .to_string(),
-            );
-            if let Some(title) = prepared.thread_title_update.as_deref() {
-                crate::chat_shared::emit_thread_title_updated_event(
-                    state,
-                    &thread_id,
-                    Some(&run_id),
-                    title,
-                );
-            }
             Ok(StartChatResponse {
                 status: "accepted".to_owned(),
                 run_id,

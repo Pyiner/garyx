@@ -48,18 +48,9 @@ fn make_history(store: Arc<dyn ThreadStore>) -> Arc<ThreadHistoryRepository> {
     ))
 }
 
-fn active_or_committed_messages(data: &serde_json::Value) -> Vec<serde_json::Value> {
-    data["history"]["active_run_snapshot"]["messages"]
-        .as_array()
-        .cloned()
-        .or_else(|| data["messages"].as_array().cloned())
-        .unwrap_or_default()
-}
-
-/// The client-visible transcript = committed jsonl + the in-flight overlay. Under
-/// F1 the worker streams finalized rows into the committed transcript during the
-/// run, so mid-run state must be read through the repository, not the overlay
-/// alone (which now holds only the trailing in-flight assistant segment).
+/// The client-visible transcript is the committed jsonl. Under F1 the worker
+/// streams finalized rows into the committed transcript during the run, so
+/// mid-run state must be read through the repository.
 async fn combined_thread_messages(
     history: &Arc<ThreadHistoryRepository>,
     thread_id: &str,
@@ -181,8 +172,6 @@ struct ClearSessionProvider {
     cleared_sessions: std::sync::Mutex<Vec<String>>,
     should_clear: AtomicBool,
 }
-
-struct EventfulProvider;
 
 struct CheckpointingProvider {
     delta_sent: Arc<Notify>,
@@ -592,88 +581,6 @@ impl AgentLoopProvider for ClearSessionProvider {
             .unwrap()
             .push(session_key.to_owned());
         self.should_clear.load(Ordering::Relaxed)
-    }
-}
-
-#[async_trait::async_trait]
-impl AgentLoopProvider for EventfulProvider {
-    fn provider_type(&self) -> ProviderType {
-        ProviderType::ClaudeCode
-    }
-
-    fn is_ready(&self) -> bool {
-        true
-    }
-
-    async fn initialize(&mut self) -> Result<(), BridgeError> {
-        Ok(())
-    }
-
-    async fn shutdown(&mut self) -> Result<(), BridgeError> {
-        Ok(())
-    }
-
-    async fn run_streaming(
-        &self,
-        options: &ProviderRunOptions,
-        on_chunk: StreamCallback,
-    ) -> Result<ProviderRunResult, BridgeError> {
-        let tool_use = ProviderMessage::tool_use(
-            json!({
-                "type": "commandExecution",
-                "command": "pwd",
-            }),
-            Some("tool-1".to_owned()),
-            Some("shell".to_owned()),
-        );
-        let tool_result = ProviderMessage::tool_result(
-            json!({
-                "output": "/tmp",
-            }),
-            Some("tool-1".to_owned()),
-            Some("shell".to_owned()),
-            Some(false),
-        );
-
-        on_chunk(StreamEvent::Delta {
-            text: "alpha".to_owned(),
-        });
-        on_chunk(StreamEvent::ToolUse { message: tool_use });
-        on_chunk(StreamEvent::ToolResult {
-            message: tool_result,
-        });
-        on_chunk(StreamEvent::Boundary {
-            kind: StreamBoundaryKind::AssistantSegment,
-            pending_input_id: None,
-        });
-        on_chunk(StreamEvent::Delta {
-            text: "beta".to_owned(),
-        });
-        on_chunk(StreamEvent::Boundary {
-            kind: StreamBoundaryKind::UserAck,
-            pending_input_id: None,
-        });
-        on_chunk(StreamEvent::Done);
-
-        Ok(ProviderRunResult {
-            run_id: "eventful-run".to_owned(),
-            thread_id: options.thread_id.clone(),
-            response: "alphabeta".to_owned(),
-            session_messages: Vec::new(),
-            sdk_session_id: None,
-            actual_model: None,
-            thread_title: None,
-            success: true,
-            error: None,
-            input_tokens: 10,
-            output_tokens: 5,
-            cost: 0.001,
-            duration_ms: 42,
-        })
-    }
-
-    async fn get_or_create_session(&self, session_key: &str) -> Result<String, BridgeError> {
-        Ok(format!("sdk-{session_key}"))
     }
 }
 
@@ -2279,17 +2186,12 @@ async fn test_abort_run_persists_interrupted_terminal_control() {
             .eq(1..=records.len() as u64)
     );
 
-    tokio::time::timeout(std::time::Duration::from_secs(3), async {
-        loop {
-            let data = store.get("sess::abort").await.expect("thread data");
-            if data.pointer("/history/active_run_snapshot").is_none() {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("abort worker should clear active snapshot");
+    let run_state = history
+        .transcript_store()
+        .run_state("sess::abort")
+        .await
+        .expect("run state should reduce from committed controls");
+    assert!(!run_state.busy);
 }
 
 #[tokio::test]
@@ -2487,7 +2389,7 @@ async fn done_callback_observes_done_control_record_committed() {
 }
 
 #[tokio::test]
-async fn test_thread_persistence_checkpoints_streaming_output_before_run_completion() {
+async fn test_thread_persistence_checkpoints_streaming_metadata_before_run_completion() {
     let bridge = MultiProviderBridge::new();
     let provider = Arc::new(CheckpointingProvider::new());
     let delta_sent = provider.delta_sent();
@@ -2524,32 +2426,28 @@ async fn test_thread_persistence_checkpoints_streaming_output_before_run_complet
                 continue;
             };
             let messages = combined_thread_messages(&history, "sess::tg::checkpoint").await;
-            if messages.iter().any(|message| {
-                message["role"] == "assistant" && message["content"] == "partial reply"
-            }) {
+            if messages
+                .iter()
+                .any(|message| message["role"] == "user" && message["content"] == "keep this")
+            {
                 break data;
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
     })
     .await
-    .expect("thread store should receive a partial checkpoint before completion");
+    .expect("thread store should receive a committed checkpoint before completion");
 
     let checkpoint_messages = combined_thread_messages(&history, "sess::tg::checkpoint").await;
-    assert_eq!(checkpoint_messages.len(), 2);
+    assert_eq!(checkpoint_messages.len(), 1);
     assert_eq!(checkpoint_messages[0]["role"], "user");
     assert_eq!(checkpoint_messages[0]["content"], "keep this");
-    assert_eq!(checkpoint_messages[1]["role"], "assistant");
-    assert_eq!(checkpoint_messages[1]["content"], "partial reply");
     assert_eq!(checkpointed["sdk_session_id"], "sdk-sess::tg::checkpoint");
     assert_eq!(
         checkpointed["provider_sdk_session_ids"]["p1"],
         "sdk-sess::tg::checkpoint"
     );
-    assert_eq!(
-        checkpointed["history"]["active_run_snapshot"]["sdk_session_id"],
-        "sdk-sess::tg::checkpoint"
-    );
+    assert_eq!(checkpointed["history"]["message_count"], 2);
 
     provider.release_run();
     tokio::time::timeout(std::time::Duration::from_secs(3), async {
@@ -2577,7 +2475,7 @@ async fn test_thread_persistence_checkpoints_streaming_output_before_run_complet
 }
 
 #[tokio::test]
-async fn test_failed_run_clears_active_snapshot_and_preserves_partial_messages() {
+async fn test_failed_run_commits_terminal_control_and_preserves_partial_messages() {
     let bridge = MultiProviderBridge::new();
     let provider = Arc::new(FailingCheckpointProvider::new());
     let delta_sent = provider.delta_sent();
@@ -2653,10 +2551,6 @@ async fn test_failed_run_clears_active_snapshot_and_preserves_partial_messages()
         .get("sess::tg::failed-checkpoint")
         .await
         .expect("failed thread data should exist");
-    assert!(
-        final_data["history"]["active_run_snapshot"].is_null(),
-        "active snapshot should be cleared after failure"
-    );
     assert_eq!(final_data["sdk_session_id"], "sdk-existing");
     assert_eq!(final_data["provider_sdk_session_ids"]["p1"], "sdk-existing");
     assert_eq!(final_data["task"]["status"], "in_progress");
@@ -2823,10 +2717,6 @@ async fn test_unsuccessful_task_run_with_partial_response_does_not_move_to_revie
         .await
         .expect("thread data should exist");
     assert_eq!(final_data["task"]["status"], "in_progress");
-    assert!(
-        final_data["history"]["active_run_snapshot"].is_null(),
-        "failed result should still clear the active snapshot"
-    );
     let final_messages = final_data["messages"]
         .as_array()
         .expect("messages should be persisted");
@@ -3052,21 +2942,21 @@ async fn test_thread_persistence_promotes_queued_input_after_user_ack() {
             let has_follow_up_assistant = messages.iter().any(|message| {
                 message["role"] == "assistant" && message["content"] == "follow-up reply: follow-up"
             });
-            if pending_inputs.is_empty() && has_follow_up_user && has_follow_up_assistant {
+            if pending_inputs.is_empty() && has_follow_up_user && !has_follow_up_assistant {
                 break data;
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
     })
     .await
-    .expect("user_ack should promote the queued follow-up into the persisted transcript");
+    .expect("user_ack should promote the queued follow-up user row into the persisted transcript");
 
     let acked_messages = combined_thread_messages(&history, "sess::tg::queued-input").await;
     let roles: Vec<&str> = acked_messages
         .iter()
         .filter_map(|message| message["role"].as_str())
         .collect();
-    assert_eq!(roles, vec!["user", "assistant", "user", "assistant"]);
+    assert_eq!(roles, vec!["user", "assistant", "user"]);
 
     provider.release_run();
     tokio::time::timeout(std::time::Duration::from_secs(3), async {
@@ -3093,6 +2983,12 @@ async fn test_thread_persistence_promotes_queued_input_after_user_ack() {
         final_data["provider_sdk_session_ids"]["p1"],
         "sdk-sess::tg::queued-input"
     );
+    let final_messages = combined_thread_messages(&history, "sess::tg::queued-input").await;
+    let final_roles: Vec<&str> = final_messages
+        .iter()
+        .filter_map(|message| message["role"].as_str())
+        .collect();
+    assert_eq!(final_roles, vec!["user", "assistant", "user", "assistant"]);
 }
 
 #[tokio::test]
@@ -3106,7 +3002,8 @@ async fn test_start_agent_run_preserves_metadata_attachments_for_active_stream_f
 
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     bridge.set_thread_store(store.clone()).await;
-    bridge.set_thread_history(make_history(store.clone()));
+    let history = make_history(store.clone());
+    bridge.set_thread_history(history.clone());
 
     bridge
         .start_agent_run(
@@ -3165,14 +3062,12 @@ async fn test_start_agent_run_preserves_metadata_attachments_for_active_stream_f
     provider.release_ack();
     tokio::time::timeout(std::time::Duration::from_secs(3), async {
         loop {
-            let Some(data) = store.get("sess::tg::queued-attachment").await else {
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-                continue;
-            };
-            let messages = active_or_committed_messages(&data);
+            let messages = combined_thread_messages(&history, "sess::tg::queued-attachment").await;
             if messages.iter().any(|message| {
-                message["role"] == "assistant"
-                    && message["content"] == "follow-up reply: <media:file>"
+                message["role"] == "user"
+                    && message["content"]
+                        .as_array()
+                        .is_some_and(|blocks| !blocks.is_empty())
             }) {
                 break;
             }
@@ -3180,7 +3075,7 @@ async fn test_start_agent_run_preserves_metadata_attachments_for_active_stream_f
         }
     })
     .await
-    .expect("provider should ack and stream the queued attachment follow-up");
+    .expect("provider should ack and commit the queued attachment follow-up user row");
 
     provider.release_run();
     tokio::time::timeout(std::time::Duration::from_secs(3), async {
@@ -3290,14 +3185,14 @@ async fn test_streaming_input_preserves_raw_task_follow_up_for_provider() {
             let has_provider_reply = messages.iter().any(|message| {
                 message["role"] == "assistant" && message["content"] == "follow-up reply: 继续"
             });
-            if has_raw_user && has_provider_reply {
+            if has_raw_user && !has_provider_reply {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
     })
     .await
-    .expect("provider-facing queued input should preserve raw task follow-up after ack");
+    .expect("provider-facing queued input should commit raw task follow-up after ack");
 
     let messages = combined_thread_messages(&history, "sess::tg::queued-task").await;
     assert!(
@@ -4019,117 +3914,6 @@ async fn test_start_run_attaches_bridge_run_id_metadata() {
         snapshots[0].get("client_run_id"),
         Some(&serde_json::Value::String("external-run".to_owned()))
     );
-}
-
-#[tokio::test]
-async fn test_event_broadcast_after_run() {
-    // P1-D: run lifecycle and live transcript events should appear on broadcast channel after run.
-    let bridge = MultiProviderBridge::new();
-    let p = Arc::new(MockProvider::new(ProviderType::ClaudeCode));
-    bridge.register_provider("p1", p).await;
-    bridge.set_default_provider_key("p1").await;
-
-    let (tx, mut rx) = tokio::sync::broadcast::channel::<String>(128);
-    bridge.set_event_tx(tx).await;
-
-    bridge
-        .start_agent_run(
-            run_request(
-                "sess::tg::events",
-                "hello",
-                "run-events",
-                "telegram",
-                "main",
-            ),
-            None,
-        )
-        .await
-        .unwrap();
-
-    // Collect events.
-    let mut events = Vec::new();
-    for _ in 0..10 {
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        while let Ok(event) = rx.try_recv() {
-            events.push(event);
-        }
-        if events.len() >= 2 {
-            break;
-        }
-    }
-
-    let parsed: Vec<serde_json::Value> = events
-        .iter()
-        .map(|value| serde_json::from_str(value).unwrap())
-        .collect();
-    let event_types: Vec<&str> = parsed
-        .iter()
-        .filter_map(|value| value.get("type").and_then(serde_json::Value::as_str))
-        .collect();
-
-    assert!(event_types.contains(&"user_message"));
-    assert!(event_types.contains(&"assistant_delta"));
-    assert!(event_types.contains(&"done"));
-    assert!(event_types.contains(&"run_start"));
-    assert!(event_types.contains(&"run_complete"));
-}
-
-#[tokio::test]
-async fn test_event_broadcast_includes_tool_and_boundary_events_without_external_callback() {
-    let bridge = MultiProviderBridge::new();
-    let provider = Arc::new(EventfulProvider);
-    bridge.register_provider("p1", provider).await;
-    bridge.set_default_provider_key("p1").await;
-
-    let (tx, mut rx) = tokio::sync::broadcast::channel::<String>(128);
-    bridge.set_event_tx(tx).await;
-
-    bridge
-        .start_agent_run(
-            run_request(
-                "thread::events-rich",
-                "hello rich stream",
-                "run-events-rich",
-                "telegram",
-                "main",
-            ),
-            None,
-        )
-        .await
-        .unwrap();
-
-    let mut events = Vec::new();
-    for _ in 0..20 {
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-        while let Ok(event) = rx.try_recv() {
-            events.push(event);
-        }
-        if events
-            .iter()
-            .any(|event| event.contains("\"type\":\"run_complete\""))
-        {
-            break;
-        }
-    }
-
-    let parsed: Vec<serde_json::Value> = events
-        .iter()
-        .map(|value| serde_json::from_str(value).unwrap())
-        .collect();
-    let event_types: Vec<&str> = parsed
-        .iter()
-        .filter_map(|value| value.get("type").and_then(serde_json::Value::as_str))
-        .collect();
-
-    assert!(event_types.contains(&"user_message"));
-    assert!(event_types.contains(&"assistant_delta"));
-    assert!(event_types.contains(&"tool_use"));
-    assert!(event_types.contains(&"tool_result"));
-    assert!(event_types.contains(&"assistant_boundary"));
-    assert!(event_types.contains(&"user_ack"));
-    assert!(event_types.contains(&"done"));
-    assert!(event_types.contains(&"run_start"));
-    assert!(event_types.contains(&"run_complete"));
 }
 
 #[tokio::test]

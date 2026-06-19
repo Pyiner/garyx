@@ -309,6 +309,7 @@ impl AppStateBuilder {
         let thread_store: Arc<dyn ThreadStore> = Arc::new(RecentThreadProjectingStore::new(
             self.thread_store.clone(),
             self.garyx_db.clone(),
+            self.thread_history.transcript_store(),
         ));
         let thread_history = ThreadHistoryRepository::new(
             thread_store.clone(),

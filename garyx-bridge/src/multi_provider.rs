@@ -73,16 +73,16 @@ impl MultiProviderBridge {
         self.inner.thread_history.read().await.clone()
     }
 
-    /// Set the event broadcast channel for emitting run lifecycle events.
+    /// Set the gateway event channel for committed transcript fan-out.
     pub async fn set_event_tx(&self, tx: broadcast::Sender<String>) {
         *self.inner.event_tx.write().await = Some(tx);
     }
 
     /// Subscribe to the gateway event bus this bridge emits onto.
     ///
-    /// The bus carries `committed_message{seq}` records (content + control) plus
-    /// run lifecycle events (`run_complete`/`run_error`). Channel consumers use
-    /// this to read the durable committed stream instead of draining the live
+    /// The bridge emits replayable `committed_message{seq}` records and the
+    /// task notification event. Channel consumers use committed messages to read
+    /// the durable transcript stream instead of draining the live
     /// `external_callback`. Returns `None` before the event bus is wired.
     ///
     /// Subscribe BEFORE dispatching the run so no committed record is missed in

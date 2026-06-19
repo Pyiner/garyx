@@ -20,15 +20,15 @@ use garyx_models::provider::{
 };
 use garyx_models::routing::{DELIVERY_TARGET_TYPE_CHAT_ID, DELIVERY_TARGET_TYPE_OPEN_ID};
 use garyx_router::{
-    ChannelBinding, KnownChannelEndpoint, ThreadEnsureOptions, WorkspaceMode,
-    active_run_snapshot_run_id, bindings_from_value, detach_endpoint_from_thread,
-    history_message_count, is_thread_key, thread_kind_from_value, update_thread_record,
-    workspace_dir_from_value, workspace_git_status as router_workspace_git_status,
+    ChannelBinding, KnownChannelEndpoint, ThreadEnsureOptions, WorkspaceMode, bindings_from_value,
+    detach_endpoint_from_thread, history_message_count, is_thread_key, thread_kind_from_value,
+    update_thread_record, workspace_dir_from_value,
+    workspace_git_status as router_workspace_git_status,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
-use std::convert::Infallible;
+use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_stream::StreamExt;
@@ -723,15 +723,6 @@ fn provider_type_from_thread_value(thread_data: &Value) -> Option<ProviderType> 
         .and_then(|value| serde_json::from_value::<ProviderType>(value).ok())
 }
 
-fn provider_type_from_active_run_snapshot(thread_data: &Value) -> Option<ProviderType> {
-    thread_data
-        .get("history")
-        .and_then(|history| history.get("active_run_snapshot"))
-        .and_then(|snapshot| snapshot.get("provider_type"))
-        .cloned()
-        .and_then(|value| serde_json::from_value::<ProviderType>(value).ok())
-}
-
 fn non_empty_json_string(value: Option<&Value>) -> Option<String> {
     value
         .and_then(Value::as_str)
@@ -741,22 +732,6 @@ fn non_empty_json_string(value: Option<&Value>) -> Option<String> {
 }
 
 fn fork_source_sdk_session_id(thread_data: &Value, provider_type: &ProviderType) -> Option<String> {
-    let active_snapshot = thread_data
-        .get("history")
-        .and_then(|history| history.get("active_run_snapshot"));
-    if active_snapshot
-        .and_then(|snapshot| snapshot.get("provider_type"))
-        .cloned()
-        .and_then(|value| serde_json::from_value::<ProviderType>(value).ok())
-        .as_ref()
-        .is_some_and(|active_provider_type| active_provider_type == provider_type)
-        && let Some(session_id) = non_empty_json_string(
-            active_snapshot.and_then(|snapshot| snapshot.get("sdk_session_id")),
-        )
-    {
-        return Some(session_id);
-    }
-
     if provider_type_from_thread_value(thread_data)
         .as_ref()
         .is_some_and(|persisted_provider_type| persisted_provider_type == provider_type)
@@ -868,7 +843,6 @@ async fn seed_imported_thread_history(
         "recent_committed_run_ids".to_owned(),
         Value::Array(Vec::new()),
     );
-    history_object.remove("active_run_snapshot");
 
     object.insert(
         "updated_at".to_owned(),
@@ -1348,9 +1322,7 @@ pub(crate) fn thread_summary(thread_id: &str, data: &Value) -> Value {
         .and_then(|entries| entries.last())
         .cloned()
         .unwrap_or(Value::Null);
-    let active_run_id = active_run_snapshot_run_id(data)
-        .map(Value::String)
-        .unwrap_or(Value::Null);
+    let active_run_id = Value::Null;
 
     json!({
         "thread_id": thread_id,
@@ -1550,8 +1522,10 @@ pub async fn list_threads(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListThreadsParams>,
 ) -> impl IntoResponse {
+    let transcript_store = state.threads.history.transcript_store();
     let _ = backfill_thread_meta_projection_if_incomplete(
         &state.threads.thread_store,
+        &transcript_store,
         &state.ops.garyx_db,
     )
     .await;
@@ -1602,8 +1576,10 @@ pub async fn list_recent_threads(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListRecentThreadsParams>,
 ) -> impl IntoResponse {
+    let transcript_store = state.threads.history.transcript_store();
     let _ = backfill_recent_thread_projection_if_incomplete(
         &state.threads.thread_store,
+        &transcript_store,
         &state.ops.garyx_db,
     )
     .await;
@@ -1794,7 +1770,7 @@ pub async fn thread_stream(
 
     let mut replay_max_seq = after_seq;
     let mut sent_committed_payloads = HashMap::new();
-    let mut replay_events: Vec<Result<Event, Infallible>> = Vec::with_capacity(replay.len());
+    let mut replay_events: Vec<Result<Event, io::Error>> = Vec::with_capacity(replay.len());
     for record in replay {
         replay_max_seq = replay_max_seq.max(record.seq);
         let payload = json!({
@@ -1816,19 +1792,24 @@ pub async fn thread_stream(
     let mut last_sent_seq = replay_max_seq;
     let live = BroadcastStream::new(rx).filter_map(move |item| match item {
         Ok(raw) => {
-            let (seq, payload) = committed_thread_stream_live_payload(
+            let event = match committed_thread_stream_live_payload(
                 &raw,
                 &thread_for_live,
                 &mut sent_committed_payloads,
                 &mut last_sent_seq,
-            )?;
-            Some(Ok(Event::default().id(seq.to_string()).data(payload)))
+            ) {
+                Ok(Some((seq, payload))) => Ok(Event::default().id(seq.to_string()).data(payload)),
+                Ok(None) => return None,
+                Err(error) => Err(error),
+            };
+            Some(event)
         }
         Err(_) => {
-            // Lagged: a slow consumer dropped events; the client recovers by
-            // reconnecting with after_seq=cursor (file replay fills the gap).
+            // Lagged: a slow consumer dropped events. Terminate this SSE
+            // response so the client reconnects from the last delivered seq and
+            // the file-backed replay fills the gap.
             state_for_drops.ops.events.record_drop();
-            None
+            Some(Err(thread_stream_reconnect_error("broadcast lagged")))
         }
     });
 
@@ -1847,19 +1828,32 @@ fn committed_thread_stream_live_payload(
     thread_id: &str,
     sent_payloads: &mut HashMap<u64, String>,
     last_sent_seq: &mut u64,
-) -> Option<(u64, String)> {
-    let value: Value = serde_json::from_str(raw).ok()?;
+) -> Result<Option<(u64, String)>, io::Error> {
+    let value: Value = match serde_json::from_str(raw) {
+        Ok(value) => value,
+        Err(_) => return Ok(None),
+    };
     if value.get("thread_id").and_then(Value::as_str) != Some(thread_id) {
-        return None;
+        return Ok(None);
     }
     if value.get("type").and_then(Value::as_str) != Some("committed_message") {
-        return None;
+        return Ok(None);
     }
     let seq = value.get("seq").and_then(Value::as_u64).unwrap_or(0);
-    if !should_forward_committed_payload(sent_payloads, last_sent_seq, seq, raw) {
-        return None;
+    match should_forward_committed_payload(sent_payloads, last_sent_seq, seq, raw) {
+        CommittedPayloadAction::Forward => Ok(Some((seq, raw.to_owned()))),
+        CommittedPayloadAction::Skip => Ok(None),
+        CommittedPayloadAction::Reconnect => Err(thread_stream_reconnect_error(
+            "non-contiguous committed seq",
+        )),
     }
-    Some((seq, raw.to_owned()))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CommittedPayloadAction {
+    Forward,
+    Skip,
+    Reconnect,
 }
 
 fn should_forward_committed_payload(
@@ -1867,16 +1861,26 @@ fn should_forward_committed_payload(
     last_sent_seq: &mut u64,
     seq: u64,
     raw: &str,
-) -> bool {
+) -> CommittedPayloadAction {
     if seq == 0 {
-        return false;
+        return CommittedPayloadAction::Skip;
     }
     if sent_payloads.get(&seq).is_some_and(|sent| sent == raw) {
-        return false;
+        return CommittedPayloadAction::Skip;
+    }
+    if seq > last_sent_seq.saturating_add(1) {
+        return CommittedPayloadAction::Reconnect;
+    }
+    if seq < *last_sent_seq {
+        return CommittedPayloadAction::Skip;
     }
     sent_payloads.insert(seq, raw.to_owned());
     *last_sent_seq = (*last_sent_seq).max(seq);
-    true
+    CommittedPayloadAction::Forward
+}
+
+fn thread_stream_reconnect_error(reason: &'static str) -> io::Error {
+    io::Error::new(io::ErrorKind::Interrupted, reason)
 }
 
 /// POST /api/threads - create a canonical thread
@@ -1967,9 +1971,7 @@ pub async fn create_thread(
                     Json(json!({"error": "fork source thread not found"})),
                 );
             };
-            let Some(provider_type) = provider_type_from_active_run_snapshot(&source_thread_data)
-                .or_else(|| provider_type_from_thread_value(&source_thread_data))
-            else {
+            let Some(provider_type) = provider_type_from_thread_value(&source_thread_data) else {
                 return (
                     StatusCode::BAD_REQUEST,
                     Json(json!({"error": "fork source thread has no provider type"})),
@@ -2187,12 +2189,6 @@ pub async fn update_thread(
         );
     };
 
-    let requested_title = body
-        .label
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
     match update_thread_record(
         &state.threads.thread_store,
         &thread_id,
@@ -2222,11 +2218,6 @@ pub async fn update_thread(
                 .set_thread_workspace_binding(&thread_id, workspace_dir_from_value(&data))
                 .await;
             state.invalidate_gateway_sync_caches().await;
-            if let Some(title) = requested_title.as_deref() {
-                crate::chat_shared::emit_thread_title_updated_event(
-                    &state, &thread_id, None, title,
-                );
-            }
             (StatusCode::OK, Json(thread_summary(&thread_id, &data)))
         }
         Err(error) if error.contains("thread not found") => {

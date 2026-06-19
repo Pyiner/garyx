@@ -24,12 +24,12 @@ async fn transcript_store_appends_and_reads_tail() {
 }
 
 #[tokio::test]
-async fn repository_overlays_active_run_snapshot() {
+async fn repository_reads_only_committed_transcript() {
     let thread_store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     let transcript_store = Arc::new(ThreadTranscriptStore::memory());
     transcript_store
         .append_committed_messages(
-            "thread::overlay",
+            "thread::committed-only",
             Some("run-past"),
             &[json!({"role": "user", "content": "past"})],
         )
@@ -37,53 +37,82 @@ async fn repository_overlays_active_run_snapshot() {
         .unwrap();
     thread_store
         .set(
-            "thread::overlay",
+            "thread::committed-only",
             json!({
                 "history": {
-                    "message_count": 1,
-                    "active_run_snapshot": {
-                        "run_id": "run-live",
-                        "messages": [{"role": "assistant", "content": "live"}]
-                    }
+                    "message_count": 1
                 }
             }),
         )
         .await;
     let repo = ThreadHistoryRepository::new(thread_store, transcript_store);
 
-    let snapshot = repo.thread_snapshot("thread::overlay", 10).await.unwrap();
+    let snapshot = repo
+        .thread_snapshot("thread::committed-only", 10)
+        .await
+        .unwrap();
     let combined = snapshot.combined_messages();
-    assert_eq!(combined.len(), 2);
+    assert_eq!(combined.len(), 1);
     assert_eq!(combined[0]["content"], "past");
-    assert_eq!(combined[1]["content"], "live");
 }
 
 #[tokio::test]
-async fn transcript_backend_allows_empty_thread_with_live_overlay() {
+async fn transcript_run_state_reports_dangling_run_as_busy() {
     let thread_store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let transcript_store = Arc::new(ThreadTranscriptStore::memory());
+    transcript_store
+        .append_run_records(
+            "thread::live-only",
+            Some("run-live"),
+            &[
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({
+                        "role": "system",
+                        "kind": "control",
+                        "internal": true,
+                        "internal_kind": "control",
+                        "control": {
+                            "kind": "run_start",
+                            "thread_id": "thread::live-only",
+                            "run_id": "run-live",
+                            "at": "2026-06-18T12:00:00Z"
+                        }
+                    }),
+                    "2026-06-18T12:00:00Z",
+                ),
+                RunTranscriptRecordDraft::from_message(json!({
+                    "role": "user",
+                    "content": "live"
+                })),
+            ],
+        )
+        .await
+        .unwrap();
     thread_store
         .set(
             "thread::live-only",
             json!({
-                "messages": [],
                 "history": {
-                    "message_count": 0,
-                    "active_run_snapshot": {
-                        "run_id": "run-live",
-                        "messages": [{"role": "assistant", "content": "live"}]
-                    }
+                    "message_count": 2
                 }
             }),
         )
         .await;
-    let repo =
-        ThreadHistoryRepository::new(thread_store, Arc::new(ThreadTranscriptStore::memory()));
+    let repo = ThreadHistoryRepository::new(thread_store, transcript_store.clone());
 
     let snapshot = repo.thread_snapshot("thread::live-only", 10).await.unwrap();
-    assert_eq!(snapshot.total_committed_messages, 0);
+    assert_eq!(snapshot.total_committed_messages, 2);
     let combined = snapshot.combined_messages();
-    assert_eq!(combined.len(), 1);
-    assert_eq!(combined[0]["content"], "live");
+    assert_eq!(combined.len(), 2);
+    assert_eq!(combined[0]["control"]["kind"], "run_start");
+    assert_eq!(combined[1]["content"], "live");
+
+    let state = transcript_store
+        .run_state("thread::live-only")
+        .await
+        .unwrap();
+    assert!(state.busy);
+    assert_eq!(state.active_run_id.as_deref(), Some("run-live"));
 }
 
 #[tokio::test]
@@ -152,7 +181,7 @@ async fn page_after_index_returns_messages_after_cursor() {
 }
 
 #[tokio::test]
-async fn thread_snapshot_after_index_includes_overlay_when_committed_drained() {
+async fn thread_snapshot_after_index_returns_committed_tail_only() {
     let thread_store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     let transcript_store = Arc::new(ThreadTranscriptStore::memory());
     transcript_store
@@ -171,30 +200,25 @@ async fn thread_snapshot_after_index_includes_overlay_when_committed_drained() {
             "thread::fa2",
             json!({
                 "history": {
-                    "message_count": 2,
-                    "active_run_snapshot": {
-                        "run_id": "run-live",
-                        "messages": [{"role": "assistant", "content": "x"}]
-                    }
+                    "message_count": 2
                 }
             }),
         )
         .await;
     let repo = ThreadHistoryRepository::new(thread_store, transcript_store);
 
-    // after index 0 → committed tail [b] reaches end → overlay [x] included
+    // after index 0 -> committed tail [b] only.
     let snapshot = repo
         .thread_snapshot_after_index("thread::fa2", 0, 10)
         .await
         .unwrap();
     let combined = snapshot.combined_messages();
-    assert_eq!(combined.len(), 2);
+    assert_eq!(combined.len(), 1);
     assert_eq!(combined[0]["content"], "b");
-    assert_eq!(combined[1]["content"], "x");
 }
 
 #[tokio::test]
-async fn thread_snapshot_after_index_withholds_overlay_when_more_committed() {
+async fn thread_snapshot_after_index_respects_limit_without_overlay() {
     let thread_store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     let transcript_store = Arc::new(ThreadTranscriptStore::memory());
     transcript_store
@@ -215,18 +239,14 @@ async fn thread_snapshot_after_index_withholds_overlay_when_more_committed() {
             "thread::fa3",
             json!({
                 "history": {
-                    "message_count": 4,
-                    "active_run_snapshot": {
-                        "run_id": "run-live",
-                        "messages": [{"role": "assistant", "content": "x"}]
-                    }
+                    "message_count": 4
                 }
             }),
         )
         .await;
     let repo = ThreadHistoryRepository::new(thread_store, transcript_store);
 
-    // after 0, limit 1 → committed tail [b] does NOT reach end → overlay withheld (no gap)
+    // after 0, limit 1 -> committed tail [b] only.
     let snapshot = repo
         .thread_snapshot_after_index("thread::fa3", 0, 1)
         .await

@@ -16,7 +16,7 @@ use garyx_models::provider::{
     ProviderType, SDK_SESSION_FORK_METADATA_KEY, StreamEvent,
 };
 use garyx_models::thread_logs::{ThreadLogEvent, ThreadLogSink};
-use garyx_router::MessageRouter;
+use garyx_router::{MessageRouter, RunTranscriptRecordDraft};
 use std::path::Path;
 use std::process::Command;
 use tempfile::{TempDir, tempdir};
@@ -36,6 +36,34 @@ fn test_config() -> GaryxConfig {
 
 fn authed_request() -> axum::http::request::Builder {
     crate::test_support::authed_request()
+}
+
+async fn append_dangling_run_start(state: &Arc<AppState>, thread_id: &str, run_id: &str) {
+    state
+        .threads
+        .history
+        .transcript_store()
+        .append_run_records(
+            thread_id,
+            Some(run_id),
+            &[RunTranscriptRecordDraft::with_timestamp(
+                json!({
+                    "role": "system",
+                    "kind": "control",
+                    "internal": true,
+                    "internal_kind": "control",
+                    "control": {
+                        "kind": "run_start",
+                        "thread_id": thread_id,
+                        "run_id": run_id,
+                        "at": "2026-06-18T12:00:00Z"
+                    }
+                }),
+                "2026-06-18T12:00:00Z",
+            )],
+        )
+        .await
+        .expect("dangling run_start should append");
 }
 
 #[test]
@@ -59,12 +87,36 @@ fn committed_stream_dedupe_allows_same_seq_overwrite() {
         "message": {"role": "assistant", "content": "old"}
     })
     .to_string();
-    assert!(!should_forward_committed_payload(
-        &mut sent_payloads,
-        &mut last_sent_seq,
-        3,
-        &duplicate
-    ));
+    assert_eq!(
+        should_forward_committed_payload(&mut sent_payloads, &mut last_sent_seq, 3, &duplicate),
+        CommittedPayloadAction::Skip
+    );
+    assert_eq!(last_sent_seq, 3);
+
+    let gap = json!({
+        "type": "committed_message",
+        "thread_id": "thread::stream-dedupe",
+        "seq": 5,
+        "message": {"role": "assistant", "content": "gap"}
+    })
+    .to_string();
+    assert_eq!(
+        should_forward_committed_payload(&mut sent_payloads, &mut last_sent_seq, 5, &gap),
+        CommittedPayloadAction::Reconnect
+    );
+    assert_eq!(last_sent_seq, 3);
+
+    let stale = json!({
+        "type": "committed_message",
+        "thread_id": "thread::stream-dedupe",
+        "seq": 2,
+        "message": {"role": "assistant", "content": "stale"}
+    })
+    .to_string();
+    assert_eq!(
+        should_forward_committed_payload(&mut sent_payloads, &mut last_sent_seq, 2, &stale),
+        CommittedPayloadAction::Skip
+    );
     assert_eq!(last_sent_seq, 3);
 
     let overwrite = json!({
@@ -80,12 +132,10 @@ fn committed_stream_dedupe_allows_same_seq_overwrite() {
         }
     })
     .to_string();
-    assert!(should_forward_committed_payload(
-        &mut sent_payloads,
-        &mut last_sent_seq,
-        3,
-        &overwrite
-    ));
+    assert_eq!(
+        should_forward_committed_payload(&mut sent_payloads, &mut last_sent_seq, 3, &overwrite),
+        CommittedPayloadAction::Forward
+    );
     assert_eq!(last_sent_seq, 3);
 
     let suffix = json!({
@@ -101,13 +151,34 @@ fn committed_stream_dedupe_allows_same_seq_overwrite() {
         }
     })
     .to_string();
-    assert!(should_forward_committed_payload(
+    assert_eq!(
+        should_forward_committed_payload(&mut sent_payloads, &mut last_sent_seq, 4, &suffix),
+        CommittedPayloadAction::Forward
+    );
+    assert_eq!(last_sent_seq, 4);
+}
+
+#[test]
+fn committed_stream_gap_forces_reconnect() {
+    let mut sent_payloads = HashMap::new();
+    let mut last_sent_seq = 1;
+    let gap = json!({
+        "type": "committed_message",
+        "thread_id": "thread::stream-gap",
+        "seq": 3,
+        "message": {"role": "assistant", "content": "gap"}
+    })
+    .to_string();
+
+    let error = committed_thread_stream_live_payload(
+        &gap,
+        "thread::stream-gap",
         &mut sent_payloads,
         &mut last_sent_seq,
-        4,
-        &suffix
-    ));
-    assert_eq!(last_sent_seq, 4);
+    )
+    .expect_err("non-contiguous live seq should terminate stream");
+    assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+    assert_eq!(last_sent_seq, 1);
 }
 
 #[test]
@@ -115,20 +186,21 @@ fn thread_stream_live_payload_only_forwards_committed_messages() {
     let mut sent_payloads = HashMap::new();
     let mut last_sent_seq = 0;
 
-    let legacy = json!({
-        "type": "run_error",
+    let noise = json!({
+        "type": "ignored_noise",
         "thread_id": "thread::stream-filter",
         "run_id": "run::stream-filter",
-        "error": "timeout"
+        "reason": "not a committed transcript payload"
     })
     .to_string();
     assert_eq!(
         committed_thread_stream_live_payload(
-            &legacy,
+            &noise,
             "thread::stream-filter",
             &mut sent_payloads,
             &mut last_sent_seq,
-        ),
+        )
+        .expect("noise should not force reconnect"),
         None
     );
     assert_eq!(last_sent_seq, 0);
@@ -146,7 +218,8 @@ fn thread_stream_live_payload_only_forwards_committed_messages() {
             "thread::stream-filter",
             &mut sent_payloads,
             &mut last_sent_seq,
-        ),
+        )
+        .expect("other thread should not force reconnect"),
         None
     );
     assert_eq!(last_sent_seq, 0);
@@ -164,7 +237,8 @@ fn thread_stream_live_payload_only_forwards_committed_messages() {
             "thread::stream-filter",
             &mut sent_payloads,
             &mut last_sent_seq,
-        ),
+        )
+        .expect("committed payload should forward"),
         Some((1, committed.clone()))
     );
     assert_eq!(last_sent_seq, 1);
@@ -568,46 +642,10 @@ async fn thread_summary_does_not_fetch_transcript_when_snapshot_cache_is_empty()
 }
 
 #[tokio::test]
-async fn thread_summary_emits_active_run_id() {
-    let (_state, _logger, _dir) = test_state().await;
-    let thread_id = "thread::active-run-summary";
-    let summary = thread_summary(
-        thread_id,
-        &json!({
-            "history": {
-                "active_run_snapshot": {
-                    "run_id": "run-active"
-                }
-            }
-        }),
-    );
-
-    assert_eq!(summary["active_run_id"], "run-active");
-}
-
-#[tokio::test]
-async fn thread_summary_omits_active_run_id_when_snapshot_is_missing() {
+async fn thread_summary_omits_active_run_id_from_runtime_summary() {
     let (_state, _logger, _dir) = test_state().await;
     let thread_id = "thread::inactive-run-summary";
     let summary = thread_summary(thread_id, &json!({ "history": {} }));
-
-    assert_eq!(summary["active_run_id"], json!(null));
-}
-
-#[tokio::test]
-async fn thread_summary_omits_blank_active_run_id() {
-    let (_state, _logger, _dir) = test_state().await;
-    let thread_id = "thread::blank-active-run-summary";
-    let summary = thread_summary(
-        thread_id,
-        &json!({
-            "history": {
-                "active_run_snapshot": {
-                    "run_id": "   "
-                }
-            }
-        }),
-    );
 
     assert_eq!(summary["active_run_id"], json!(null));
 }
@@ -1133,6 +1171,7 @@ async fn recent_threads_route_syncs_router_summary_to_garyx_db() {
             }),
         )
         .await;
+    append_dangling_run_start(&state, "thread::recent-running", "run::active").await;
     state
         .threads
         .thread_store
@@ -1153,14 +1192,32 @@ async fn recent_threads_route_syncs_router_summary_to_garyx_db() {
                     }
                 ],
                 "history": {
-                    "message_count": 4,
-                    "active_run_snapshot": {
-                        "run_id": "run::active"
-                    }
+                    "message_count": 4
                 }
             }),
         )
         .await;
+    let running_state = state
+        .threads
+        .history
+        .transcript_store()
+        .run_state("thread::recent-running")
+        .await
+        .expect("run state should reduce");
+    assert!(running_state.busy);
+    assert_eq!(running_state.active_run_id.as_deref(), Some("run::active"));
+    let eager_projection = state
+        .ops
+        .garyx_db
+        .list_recent_threads(10, 0)
+        .expect("list eager projection")
+        .into_iter()
+        .find(|record| record.thread_id == "thread::recent-running")
+        .expect("running row should project eagerly");
+    assert_eq!(
+        eager_projection.active_run_id.as_deref(),
+        Some("run::active")
+    );
     state
         .threads
         .thread_store
@@ -1558,6 +1615,7 @@ async fn delete_thread_cleans_stale_projected_workflow_thread() {
 async fn threads_route_reads_full_thread_meta_projection_not_recent_subset() {
     let state = AppStateBuilder::new(test_config()).build();
     let thread_id = "thread::workspace-projection-only";
+    append_dangling_run_start(&state, thread_id, "run::active-projection").await;
     state
         .threads
         .thread_store
@@ -1571,17 +1629,11 @@ async fn threads_route_reads_full_thread_meta_projection_not_recent_subset() {
                 "updated_at": "2026-05-23T09:00:00.000Z",
                 "message_count": 2,
                 "history": {
-                    "recent_committed_run_ids": ["run::workspace-projection"],
-                    "active_run_snapshot": {
-                        "run_id": "run::active-projection",
-                        "messages": [
-                            {"role": "assistant", "content": "active answer"}
-                        ]
-                    }
+                    "recent_committed_run_ids": ["run::workspace-projection"]
                 },
                 "messages": [
                     {"role": "user", "content": "hello projection"},
-                    {"role": "assistant", "content": "done projection"}
+                    {"role": "assistant", "content": "active answer"}
                 ],
                 "worktree": {
                     "path": "/Users/test/project/.garyx/worktree"
@@ -1594,6 +1646,11 @@ async fn threads_route_reads_full_thread_meta_projection_not_recent_subset() {
         .garyx_db
         .remove_recent_thread(thread_id)
         .expect("remove from recent projection");
+    state
+        .ops
+        .garyx_db
+        .remove_thread_meta_projection(thread_id)
+        .expect("remove from thread meta projection");
     let router = build_router(state);
 
     let request = authed_request()

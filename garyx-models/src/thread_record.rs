@@ -65,16 +65,6 @@ fn default_thread_history_source() -> String {
     THREAD_HISTORY_SOURCE_TRANSCRIPT_V1.to_owned()
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct ActiveRunSnapshot {
-    pub run_id: Option<String>,
-    pub provider_key: Option<String>,
-    pub assistant_response: Option<String>,
-    pub messages: Vec<HashMap<String, Value>>,
-    pub pending_user_inputs: Vec<HashMap<String, Value>>,
-    pub updated_at: Option<DateTime<Utc>>,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ThreadHistoryState {
@@ -85,7 +75,6 @@ pub struct ThreadHistoryState {
     pub snapshot_truncated: bool,
     pub last_message_at: Option<DateTime<Utc>>,
     pub recent_committed_run_ids: Vec<String>,
-    pub active_run_snapshot: Option<ActiveRunSnapshot>,
 }
 
 impl Default for ThreadHistoryState {
@@ -98,7 +87,6 @@ impl Default for ThreadHistoryState {
             snapshot_truncated: false,
             last_message_at: None,
             recent_committed_run_ids: Vec::new(),
-            active_run_snapshot: None,
         }
     }
 }

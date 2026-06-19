@@ -6435,7 +6435,7 @@ export function AppShell() {
     transcript: TranscriptMessage[],
     existing: UiTranscriptMessage[],
     options?: {
-      activeRunSnapshot?: boolean;
+      activeRunLiveRows?: boolean;
       preserveRemoteBeforeIndex?: number | null;
       /**
        * Whether the fetched transcript reports an active run. Streamed local
@@ -6459,7 +6459,7 @@ export function AppShell() {
       visibleTranscript,
       existing,
       {
-        ignoreTimestampForStableMessages: options?.activeRunSnapshot,
+        ignoreTimestampForStableMessages: options?.activeRunLiveRows,
       },
     );
     const materializedRemoteIds = new Set(
@@ -6684,7 +6684,7 @@ export function AppShell() {
           visibleMessages,
           existing,
           {
-            activeRunSnapshot: Boolean(resolvedTranscript.threadInfo?.activeRun),
+            activeRunLiveRows: Boolean(resolvedTranscript.threadInfo?.activeRun),
             preserveRemoteBeforeIndex:
               resolvedTranscript.pageInfo?.startIndex ?? null,
             threadRunActive: Boolean(resolvedTranscript.threadInfo?.activeRun),
@@ -8052,7 +8052,6 @@ export function AppShell() {
           event.seq,
           base.pageInfo?.committedMessages ?? 0,
         ),
-        overlayMessages: base.pageInfo?.overlayMessages ?? null,
         hasMoreAfter: false,
         nextAfterIndex: null,
       },

@@ -347,7 +347,7 @@ final class GaryxMobileTurnRendererTests: XCTestCase {
     }
 
     func testThreadRuntimeIgnoresActiveRunThatClientAlreadySawTerminate() {
-        // A transcript reload right after `.done` can race a stale active_run_snapshot.
+        // A transcript reload right after `.done` can race an older runtime projection.
         // The run the client just saw finish must not re-mark the thread as busy.
         XCTAssertFalse(
             GaryxMobileThreadActivityModel.shouldTreatThreadRuntimeAsActive(

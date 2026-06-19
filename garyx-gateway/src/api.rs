@@ -225,95 +225,6 @@ async fn reload_team_registry(state: &Arc<AppState>) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-fn clear_active_run_snapshot(thread_value: &mut Value) -> bool {
-    let Some(object) = thread_value.as_object_mut() else {
-        return false;
-    };
-    let should_remove_history = object
-        .get_mut("history")
-        .and_then(Value::as_object_mut)
-        .map(|history| {
-            let removed = history.remove("active_run_snapshot").is_some();
-            (removed, history.is_empty())
-        })
-        .unwrap_or((false, false));
-    if should_remove_history.1 {
-        object.remove("history");
-    }
-    should_remove_history.0
-}
-
-pub(crate) async fn repair_inactive_active_run_snapshot(
-    state: &Arc<AppState>,
-    thread_id: &str,
-    thread_value: &mut Value,
-) -> bool {
-    let run_id = thread_value
-        .get("history")
-        .and_then(|history| history.get("active_run_snapshot"))
-        .and_then(|snapshot| snapshot.get("run_id"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let Some(run_id) = run_id else {
-        return clear_active_run_snapshot(thread_value);
-    };
-    let run_id = run_id.to_owned();
-    if state.integration.bridge.is_run_active(&run_id).await {
-        return false;
-    }
-    // Atomic, run_id-owned clear in the store: if a run started since thread_value
-    // was read, it now owns the snapshot and is preserved (no get→set clobber).
-    let cleared = state
-        .threads
-        .thread_store
-        .clear_active_run_snapshot_if_owned(thread_id, &run_id)
-        .await;
-    if cleared {
-        clear_active_run_snapshot(thread_value);
-    }
-    cleared
-}
-
-/// Startup data migration: clear stale `active_run_snapshot` overlays whose run
-/// is no longer live — a run abandoned by a gateway restart, or (before the
-/// "deliver, do not run" task-notification fix) a synthetic notification run that
-/// recorded a snapshot but never reached the bridge terminal that clears it.
-/// Steady-state correctness still comes from the bridge terminal and the
-/// read-path `repair_inactive_active_run_snapshot`; this only repairs rows that
-/// are ALREADY stale at startup, so a thread does not keep showing a phantom
-/// `running` (the iOS tail "Thinking") until it is reopened. Runs before the
-/// active-run projection reconcile so the reconcile re-derives idle drafts from
-/// the cleaned blobs. Returns the number of threads repaired.
-pub(crate) async fn repair_stale_active_run_snapshots(state: &Arc<AppState>) -> usize {
-    let records = match state.ops.garyx_db.list_recent_threads(usize::MAX, 0) {
-        Ok(records) => records,
-        Err(error) => {
-            tracing::warn!(error = %error, "failed to list recent threads before active-run snapshot repair");
-            return 0;
-        }
-    };
-    let mut repaired = 0;
-    for record in records {
-        let projection_is_active = record
-            .active_run_id
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty())
-            || record.run_state == "running";
-        if !projection_is_active {
-            continue;
-        }
-        let Some(mut thread_value) = state.threads.thread_store.get(&record.thread_id).await else {
-            continue;
-        };
-        if repair_inactive_active_run_snapshot(state, &record.thread_id, &mut thread_value).await {
-            repaired += 1;
-        }
-    }
-    repaired
-}
-
 // ---------------------------------------------------------------------------
 // GET /api/threads/history
 // ---------------------------------------------------------------------------
@@ -513,10 +424,7 @@ pub async fn thread_diagnostics(
     }
 
     let limit = params.limit.clamp(1, MAX_THREAD_HISTORY_LIMIT);
-    let mut thread_value = state.threads.thread_store.get(thread_id).await;
-    if let Some(thread_value_ref) = thread_value.as_mut() {
-        let _ = repair_inactive_active_run_snapshot(&state, thread_id, thread_value_ref).await;
-    }
+    let thread_value = state.threads.thread_store.get(thread_id).await;
     let bindings = thread_value
         .as_ref()
         .map(bindings_from_value)
@@ -912,15 +820,10 @@ async fn build_bot_status_payload(state: &Arc<AppState>, bot_id: &str) -> Value 
     };
 
     let current_thread_id = endpoint.thread_id.clone();
-    let mut current_thread = match current_thread_id.as_deref() {
+    let current_thread = match current_thread_id.as_deref() {
         Some(thread_id) => state.threads.thread_store.get(thread_id).await,
         None => None,
     };
-    if let (Some(thread_id), Some(thread_value_ref)) =
-        (current_thread_id.as_deref(), current_thread.as_mut())
-    {
-        let _ = repair_inactive_active_run_snapshot(state, thread_id, thread_value_ref).await;
-    }
     let current_thread_status = if current_thread_id.is_some() {
         "bound"
     } else {
@@ -973,9 +876,6 @@ pub(crate) async fn thread_history_for_key(
     let bounded_limit = limit.clamp(1, MAX_THREAD_HISTORY_LIMIT);
     let bounded_user_query_limit =
         user_query_limit.map(|value| value.clamp(1, MAX_THREAD_HISTORY_USER_QUERY_LIMIT));
-    if let Some(mut thread_value) = state.threads.thread_store.get(key).await {
-        let _ = repair_inactive_active_run_snapshot(state, key, &mut thread_value).await;
-    }
     // When the client sends both an `after_index` cursor and a `user_query_limit`,
     // bound the catch-up to the newest N user turns: fetch that window once, then if
     // the cursor is older than it, return the window and flag `reset` so the client
@@ -1302,7 +1202,6 @@ pub(crate) async fn thread_history_for_key(
             "total_messages_in_thread": total_messages,
             "total_messages_in_session": total_messages,
             "committed_message_count": snapshot.total_committed_messages,
-            "overlay_message_count": snapshot.total_overlay_messages,
             "returned_messages": returned_messages,
             "returned_user_queries": returned_user_queries,
             "returned_start_index": page_start_index,

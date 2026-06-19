@@ -38,9 +38,8 @@ pub mod storage {
     pub use crate::thread_history::{
         DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, RECENT_COMMITTED_RUN_IDS_LIMIT, ThreadHistoryError,
         ThreadHistoryRepository, ThreadHistorySnapshot, ThreadTranscriptRecord,
-        ThreadTranscriptStore, active_run_snapshot_messages, active_run_snapshot_run_id,
-        count_user_query_messages, extract_run_id, history_message_count, is_user_query_message,
-        message_text,
+        ThreadTranscriptStore, count_user_query_messages, extract_run_id, history_message_count,
+        is_user_query_message, message_text,
     };
 }
 
@@ -82,8 +81,8 @@ pub use thread_history::{
     DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, RECENT_COMMITTED_RUN_IDS_LIMIT,
     RunTranscriptRecordDraft, ThreadHistoryError, ThreadHistoryRepository, ThreadHistorySnapshot,
     ThreadTranscriptRecord, ThreadTranscriptStore, TranscriptAppendRecordsResult,
-    active_run_snapshot_messages, active_run_snapshot_run_id, count_user_query_messages,
-    extract_run_id, history_message_count, is_user_query_message, message_text,
+    count_user_query_messages, extract_run_id, history_message_count, is_user_query_message,
+    message_text,
 };
 pub use threads::{
     ChannelBinding, KnownChannelEndpoint, ThreadEnsureOptions, ThreadIndexStats,

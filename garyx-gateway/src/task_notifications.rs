@@ -134,21 +134,6 @@ pub(crate) async fn dispatch_task_ready_notification(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    if event_final_message.is_none() && thread_has_active_run_snapshot(&record) {
-        record_api_thread_log(
-            state,
-            ThreadLogEvent::info(
-                &event.thread_id,
-                "task",
-                "task ready notification deferred until active run stops",
-            )
-            .with_run_id(event.run_id.clone().unwrap_or_default())
-            .with_field("task_id", json!(event.task_id)),
-        )
-        .await;
-        return Ok(());
-    }
-
     let final_message = match event_final_message {
         Some(value) => value.to_owned(),
         None => final_message_from_task_thread(state, &event.thread_id)
@@ -177,13 +162,6 @@ fn latest_event_is_ready_for_review(task: &ThreadTask) -> bool {
             ..
         })
     )
-}
-
-fn thread_has_active_run_snapshot(record: &Value) -> bool {
-    record
-        .get("history")
-        .and_then(|history| history.get("active_run_snapshot"))
-        .is_some_and(|snapshot| !snapshot.is_null())
 }
 
 pub(crate) fn format_task_ready_notification(
