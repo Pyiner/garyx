@@ -22,6 +22,7 @@ import type {
   DesktopWorkspace,
   DesktopWorkspaceMode,
   PendingThreadInput,
+  RenderState,
   SlashCommand,
   TranscriptMessage,
 } from "@shared/contracts";
@@ -42,14 +43,13 @@ import {
 import { parseTaskNotificationText } from "../../task-notification";
 import { deriveThreadTeamView } from "../../thread-model";
 import {
-  buildRenderTranscriptBlocks,
+  buildThreadViewBlocks,
+  buildThreadViewRows,
+  type MessagesBySeq,
   type RenderTranscriptBlock,
-} from "../../transcript-render";
-import {
-  buildTurnRows,
   type TurnRow,
   type UserTurnActivityRow,
-} from "../../turn-render";
+} from "../../render-view-model";
 import { TurnSummary } from "../../turn-summary";
 import { ToolTraceGroup } from "../../tool-trace";
 import { AgentAvatar } from "./AgentAvatar";
@@ -246,9 +246,9 @@ type ThreadPageProps = {
   composerWorkflowOptions?: ComposerWorkflowOption[];
   composerWorkflowOptionsLoading?: boolean;
   activePendingAutomationRun: PendingAutomationRun | null;
-  activeToolTraceLoadingKey: string | null;
+  activeToolGroupId: string | null;
   activeQueue: MessageIntent[];
-  activeRenderableBlocks: ReturnType<typeof buildRenderTranscriptBlocks>;
+  renderState: RenderState | null;
   activeThreadLogsHasUnread: boolean;
   activeThreadLogsPath: string;
   activeThreadSummary: DesktopThreadSummary | null;
@@ -306,9 +306,8 @@ type ThreadPageProps = {
   selectedThreadId: string | null;
   showAutomationRunInitialPlaceholder: boolean;
   showDreams: boolean;
-  showAutomationRunTailLoading: boolean;
   showHistoryLoadingPlaceholder: boolean;
-  showPendingAckLoading: boolean;
+  showTailThinking: boolean;
   threadLayoutRef: RefObject<HTMLDivElement | null>;
   threadLayoutStyle?: CSSProperties;
   threadLogsActiveTab: ThreadLogTab;
@@ -387,9 +386,9 @@ export function ThreadPage({
   activeMessages,
   activePendingAckIntents,
   activePendingAutomationRun,
-  activeToolTraceLoadingKey,
+  activeToolGroupId,
   activeQueue,
-  activeRenderableBlocks,
+  renderState,
   activeThreadLogsHasUnread,
   activeThreadLogsPath,
   activeThreadSummary,
@@ -490,9 +489,8 @@ export function ThreadPage({
   selectedThreadId,
   showAutomationRunInitialPlaceholder,
   showDreams,
-  showAutomationRunTailLoading,
   showHistoryLoadingPlaceholder,
-  showPendingAckLoading,
+  showTailThinking,
   threadLayoutRef,
   threadLayoutStyle,
   threadLogsActiveTab,
@@ -529,23 +527,38 @@ export function ThreadPage({
       teamAgentDisplayNamesById,
     ],
   );
+  // Resolve render_state seq refs against committed bodies by the raw record
+  // seq stamped at the wire boundary (TranscriptMessage.seq). The message id is
+  // unreliable here — optimistic reconciliation rewrites it to a stable id.
+  const messagesBySeq = useMemo<MessagesBySeq>(() => {
+    const map = new Map<number, TranscriptMessage>();
+    for (const message of activeMessages) {
+      if (typeof message.seq === "number") {
+        map.set(message.seq, message);
+      }
+    }
+    return map;
+  }, [activeMessages]);
+  // Solo threads render server-folded turns; team threads render the flattened
+  // block list so per-agent speaker headers can be interleaved.
   const turnRows = useMemo(
     () =>
-      teamView.isTeam
-        ? []
-        : buildTurnRows(activeRenderableBlocks, {
-            deferTrailingFinalAssistant: isActiveSendingThread,
-          }),
-    [activeRenderableBlocks, isActiveSendingThread, teamView.isTeam],
+      teamView.isTeam ? [] : buildThreadViewRows(renderState, messagesBySeq),
+    [renderState, messagesBySeq, teamView.isTeam],
+  );
+  const teamBlocks = useMemo(
+    () =>
+      teamView.isTeam ? buildThreadViewBlocks(renderState, messagesBySeq) : [],
+    [renderState, messagesBySeq, teamView.isTeam],
   );
   const teamBlockSpeakers = useMemo(
     () =>
       teamView.isTeam
-        ? activeRenderableBlocks.map((block) =>
+        ? teamBlocks.map((block) =>
             speakerForTranscriptBlock(block, teamSpeakerOptions),
           )
         : [],
-    [activeRenderableBlocks, teamSpeakerOptions, teamView.isTeam],
+    [teamBlocks, teamSpeakerOptions, teamView.isTeam],
   );
   const composerSelectedAgentId = selectedThreadId
     ? teamView.isTeam
@@ -720,7 +733,7 @@ export function ThreadPage({
                     key={`${block.key}:body`}
                   >
                     <ToolTraceGroup
-                      active={block.key === activeToolTraceLoadingKey}
+                      active={block.key === activeToolGroupId}
                       defaultExpanded={block.defaultExpanded}
                       entries={block.entries}
                       onThreadNavigate={onOpenThreadById}
@@ -772,28 +785,16 @@ export function ThreadPage({
                   key={`${block.key}:body`}
                   className={`message-bubble ${entry.message.role} ${entry.message.pending ? "pending" : ""} ${entry.message.error ? "error" : ""} ${loopContinuation ? "loop-continuation" : ""}`}
                 >
-                  {entry.message.role === "assistant" &&
-                  entry.message.pending ? (
-                    <div
-                      aria-label={t("Garyx is working")}
-                      className="message-loading"
-                    >
-                      <p className="message-loading-label message-loading-label--thinking">
-                        {displayTranscriptMessageText(entry.message)}
-                      </p>
-                    </div>
-                  ) : (
-                    <RichMessageContent
-                      altPrefix={entry.message.role}
-                      content={
-                        loopContinuation
-                          ? LOOP_CONTINUATION_SUMMARY
-                          : entry.message.content
-                      }
-                      onLocalFileLinkClick={onLocalWorkspaceFileLinkClick}
-                      text={displayText}
-                    />
-                  )}
+                  <RichMessageContent
+                    altPrefix={entry.message.role}
+                    content={
+                      loopContinuation
+                        ? LOOP_CONTINUATION_SUMMARY
+                        : entry.message.content
+                    }
+                    onLocalFileLinkClick={onLocalWorkspaceFileLinkClick}
+                    text={displayText}
+                  />
                 </article>
               );
             };
@@ -803,7 +804,7 @@ export function ThreadPage({
             // through `buildTurnRows` so each multi-step assistant turn ends
             // up behind a Codex-style "Worked for X" collapsible.
             if (teamView.isTeam) {
-              return activeRenderableBlocks.map((block, index) => {
+              return teamBlocks.map((block, index) => {
                 const speaker = teamBlockSpeakers[index] || null;
                 const previousSpeaker = index > 0
                   ? teamBlockSpeakers[index - 1] || null
@@ -865,33 +866,35 @@ export function ThreadPage({
               });
             }
 
-            return turnRows.map((row, idx) => {
-              const renderActivityRow = (
-                activityRow: UserTurnActivityRow,
-                forceRunning: boolean,
-              ): ReactNode => {
-                if (activityRow.kind === "flat") {
-                  return (
-                    <Fragment key={activityRow.key}>
-                      {renderBlockBody(activityRow.block)}
-                    </Fragment>
-                  );
-                }
-                const turn: TurnRow = activityRow;
+            // Running/elapsed state comes from render_state (`step.running`,
+            // which already defers the final answer while the run is busy), so
+            // the view only maps — no client-side run-active bridging.
+            const renderActivityRow = (
+              activityRow: UserTurnActivityRow,
+            ): ReactNode => {
+              if (activityRow.kind === "flat") {
                 return (
-                  <Fragment key={turn.key}>
-                    <TurnSummary turn={turn} forceRunning={forceRunning}>
-                      {turn.steps.map((step) => (
-                        <Fragment key={step.key}>
-                          {renderBlockBody(step)}
-                        </Fragment>
-                      ))}
-                    </TurnSummary>
-                    {turn.finalBlock ? renderBlockBody(turn.finalBlock) : null}
+                  <Fragment key={activityRow.key}>
+                    {renderBlockBody(activityRow.block)}
                   </Fragment>
                 );
-              };
+              }
+              const turn: TurnRow = activityRow;
+              return (
+                <Fragment key={turn.key}>
+                  <TurnSummary turn={turn}>
+                    {turn.steps.map((step) => (
+                      <Fragment key={step.key}>
+                        {renderBlockBody(step)}
+                      </Fragment>
+                    ))}
+                  </TurnSummary>
+                  {turn.finalBlock ? renderBlockBody(turn.finalBlock) : null}
+                </Fragment>
+              );
+            };
 
+            return turnRows.map((row) => {
               if (row.kind === "flat") {
                 return (
                   <Fragment key={row.key}>
@@ -901,31 +904,16 @@ export function ThreadPage({
               }
               if (row.kind === "turn") {
                 return (
-                  <Fragment key={row.key}>
-                    {renderActivityRow(row, false)}
-                  </Fragment>
+                  <Fragment key={row.key}>{renderActivityRow(row)}</Fragment>
                 );
               }
-              // Bridge the gap where the assistant message is no longer
-              // pending=true but the thread run is still active (e.g.
-              // tool call in flight): force only the bottom-most activity
-              // in the bottom-most user turn to read as running.
-              const isLastUserTurn = idx === turnRows.length - 1;
-              const lastActivityIndex = row.activityRows.length - 1;
               return (
                 <Fragment key={row.key}>
                   {renderBlockBody(row.userBlock, {
                     markUserTurnStart: true,
                   })}
-                  {row.activityRows.map((activityRow, activityIndex) =>
-                    renderActivityRow(
-                      activityRow,
-                      isLastUserTurn &&
-                        activityIndex === lastActivityIndex &&
-                        isActiveSendingThread &&
-                        activityRow.kind === "turn" &&
-                        activityRow.finalBlock === null,
-                    ),
+                  {row.activityRows.map((activityRow) =>
+                    renderActivityRow(activityRow),
                   )}
                 </Fragment>
               );
@@ -954,20 +942,7 @@ export function ThreadPage({
             }),
           )}
 
-          {showPendingAckLoading ? (
-            <article className="message-bubble assistant pending">
-              <div
-                aria-label={t("Garyx is working")}
-                className="message-loading"
-              >
-                <p className="message-loading-label message-loading-label--thinking">
-                  {t(RUN_LOADING_LABEL)}
-                </p>
-              </div>
-            </article>
-          ) : null}
-
-          {showAutomationRunTailLoading ? (
+          {showTailThinking ? (
             <article className="message-bubble assistant pending">
               <div
                 aria-label={t("Garyx is working")}

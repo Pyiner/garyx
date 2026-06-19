@@ -328,25 +328,245 @@ async function createMockGateway(workspaceDir) {
     return message;
   }
 
-  function threadStreamPayload(sessionId, record, runId = '') {
-    const seq = Number(record.index) + 1;
+  function recordSeq(record) {
+    return Number(record.index) + 1;
+  }
+
+  function isControlRecord(record) {
+    return record.kind === 'control' || record.internal_kind === 'control';
+  }
+
+  function controlKind(record) {
+    return (
+      record.message?.control?.kind ||
+      (record.content && typeof record.content === 'object'
+        ? record.content.control?.kind
+        : null) ||
+      null
+    );
+  }
+
+  function recordRole(record) {
+    return record.message?.role || record.role;
+  }
+
+  function recordTimestamp(record) {
+    return record.timestamp || record.message?.timestamp || null;
+  }
+
+  function recordToolUseId(record) {
+    const message = record.message || {};
+    if (message.toolUseId) return message.toolUseId;
+    let content = record.content ?? message.content;
+    if (typeof content === 'string') {
+      try {
+        content = JSON.parse(content);
+      } catch {
+        content = null;
+      }
+    }
+    if (content && typeof content === 'object') {
+      return content.tool_use_id || content.toolUseId || content.id || null;
+    }
+    return null;
+  }
+
+  // Test double for the server `transcript_render_state` reducer: builds a
+  // render snapshot from the mock's own structured appends (it knows exactly
+  // what it pushed), faithful to the behaviors the smoke asserts — user turns,
+  // tool grouping with active state, thinking tail, final-answer surfacing.
+  function computeRenderState(sessionId, basedOnSeq) {
+    const records = (state.histories[sessionId] || []).filter(
+      (record) => recordSeq(record) <= basedOnSeq,
+    );
+    let busy = false;
+    for (const record of records) {
+      if (!isControlRecord(record)) continue;
+      const kind = controlKind(record);
+      if (kind === 'run_start') busy = true;
+      else if (kind === 'run_complete') busy = false;
+    }
+
+    const ref = (record) => ({
+      id: `seq:${recordSeq(record)}`,
+      seq: recordSeq(record),
+      role: recordRole(record),
+    });
+    const blocks = [];
+    let group = null;
+    const flushGroup = () => {
+      if (group) {
+        blocks.push(group);
+        group = null;
+      }
+    };
+    for (const record of records) {
+      if (isControlRecord(record)) continue;
+      const role = recordRole(record);
+      if (role === 'tool_use' || role === 'tool_result') {
+        if (!group) {
+          group = { type: 'tool_group', entries: [], firstSeq: recordSeq(record) };
+        }
+        const toolUseId = recordToolUseId(record);
+        if (role === 'tool_use') {
+          group.entries.push({ toolUseId, use: ref(record), result: null });
+        } else {
+          let entry = toolUseId
+            ? group.entries.find((e) => e.toolUseId === toolUseId && !e.result)
+            : null;
+          if (!entry) entry = group.entries.find((e) => e.use && !e.result);
+          if (entry) entry.result = ref(record);
+          else group.entries.push({ toolUseId, use: null, result: ref(record) });
+        }
+        continue;
+      }
+      flushGroup();
+      blocks.push({ type: 'message', role, ref: ref(record), ts: recordTimestamp(record) });
+    }
+    flushGroup();
+
+    const tailIndex = blocks.length - 1;
+    let activeToolGroupId = null;
+    const toolGroupOf = (block) => {
+      const unpaired = block.entries.some((e) => e.use && !e.result);
+      const active =
+        busy && blocks.indexOf(block) === tailIndex && unpaired;
+      const id = `tool_group:${block.entries[0]?.toolUseId || `seq:${block.firstSeq}`}`;
+      if (active) activeToolGroupId = id;
+      return {
+        kind: 'tool_group',
+        id,
+        status: active ? 'active' : 'completed',
+        started_at: null,
+        finished_at: null,
+        entries: block.entries.map((entry) => ({
+          id: `tool_entry:${entry.toolUseId || `seq:${(entry.use || entry.result).seq}`}`,
+          tool_use_id: entry.toolUseId || null,
+          status:
+            active && entry.use && !entry.result ? 'running' : 'completed',
+          tool_use: entry.use,
+          tool_result: entry.result,
+        })),
+      };
+    };
+
+    // Group blocks into user turns and shape activity.
+    const rows = [];
+    let user = null;
+    let activityBlocks = [];
+    const flushTurn = (trailing) => {
+      if (!user && !activityBlocks.length) return;
+      const activity = [];
+      if (activityBlocks.length === 1 && activityBlocks[0].type === 'message' && activityBlocks[0].role === 'assistant') {
+        activity.push({
+          kind: 'assistant_reply',
+          id: `assistant_reply:${activityBlocks[0].ref.id}`,
+          message: activityBlocks[0].ref,
+          streaming: false,
+        });
+      } else if (activityBlocks.length) {
+        const steps = activityBlocks.map((block) =>
+          block.type === 'tool_group'
+            ? toolGroupOf(block)
+            : {
+                kind: 'assistant_message',
+                id: `assistant_step:${block.ref.id}`,
+                message: block.ref,
+                streaming: false,
+              },
+        );
+        let finalMessage = null;
+        const last = steps[steps.length - 1];
+        if (!(busy && trailing) && last?.kind === 'assistant_message') {
+          finalMessage = last.message;
+          steps.pop();
+        }
+        const running = busy && trailing;
+        activity.push({
+          kind: 'step',
+          id: `step:${steps[0]?.id || finalMessage?.id || 'empty'}`,
+          steps,
+          final_message: finalMessage,
+          running,
+          started_at: null,
+          finished_at: null,
+        });
+      }
+      rows.push({
+        kind: 'user_turn',
+        id: user ? `user_turn:${user.ref.id}` : `user_turn:orphan`,
+        user: user ? user.ref : null,
+        activity,
+        started_at: null,
+        finished_at: null,
+      });
+      user = null;
+      activityBlocks = [];
+    };
+    blocks.forEach((block) => {
+      if (block.type === 'message' && block.role === 'user') {
+        flushTurn(false);
+        user = block;
+      } else {
+        activityBlocks.push(block);
+      }
+    });
+    flushTurn(true);
+
+    const tail = blocks[tailIndex];
+    let tailActivity = 'none';
+    if (busy) {
+      if (activeToolGroupId) tailActivity = 'tool_active';
+      else tailActivity = 'thinking';
+    }
+
     return {
-      seq,
-      data: JSON.stringify({
-        type: 'committed_message',
-        thread_id: sessionId,
-        run_id: runId,
-        seq,
-        timestamp: record.timestamp,
-        message: historyRecordMessage(record),
-      }),
+      based_on_seq: basedOnSeq,
+      rows,
+      tailActivity,
+      activeToolGroupId,
+      progress_locus:
+        tailActivity === 'tool_active'
+          ? 'tool_group'
+          : tailActivity === 'none'
+            ? 'none'
+            : 'tail',
+      visibleMessageIds: blocks.flatMap((block) =>
+        block.type === 'message'
+          ? [block.ref.id]
+          : block.entries.flatMap((entry) =>
+              [entry.use?.id, entry.result?.id].filter(Boolean),
+            ),
+      ),
+      filtered_placeholders: [],
     };
   }
 
-  function writeThreadStreamRecord(res, sessionId, record, runId = '') {
-    const payload = threadStreamPayload(sessionId, record, runId);
-    res.write(`id: ${payload.seq}\n`);
-    writeStreamPayload(res, payload.data);
+  function threadRenderFramePayload(sessionId, events, basedOnSeq) {
+    return JSON.stringify({
+      type: 'thread_render_frame',
+      thread_id: sessionId,
+      events,
+      render_state: computeRenderState(sessionId, basedOnSeq),
+    });
+  }
+
+  function committedEventFor(sessionId, record, runId = '') {
+    const seq = recordSeq(record);
+    return {
+      type: 'committed_message',
+      thread_id: sessionId,
+      run_id: runId,
+      seq,
+      timestamp: record.timestamp,
+      message: historyRecordMessage(record),
+    };
+  }
+
+  function writeThreadRenderFrame(res, sessionId, events, basedOnSeq) {
+    if (!events.length) return;
+    res.write(`id: ${basedOnSeq}\n`);
+    writeStreamPayload(res, threadRenderFramePayload(sessionId, events, basedOnSeq));
   }
 
   function broadcastCommittedRecord(sessionId, record, runId = '') {
@@ -354,9 +574,11 @@ async function createMockGateway(workspaceDir) {
     if (!clients) {
       return;
     }
+    const seq = recordSeq(record);
+    const events = [committedEventFor(sessionId, record, runId)];
     for (const client of [...clients]) {
       try {
-        writeThreadStreamRecord(client, sessionId, record, runId);
+        writeThreadRenderFrame(client, sessionId, events, seq);
       } catch {
         clients.delete(client);
       }
@@ -614,11 +836,16 @@ async function createMockGateway(workspaceDir) {
         'cache-control': 'no-cache',
         connection: 'keep-alive',
       });
+      const replayEvents = [];
+      let replayMaxSeq = afterSeq;
       for (const record of state.histories[sessionId] || []) {
-        if (Number(record.index) + 1 > afterSeq) {
-          writeThreadStreamRecord(res, sessionId, record);
+        const seq = recordSeq(record);
+        if (seq > afterSeq) {
+          replayEvents.push(committedEventFor(sessionId, record));
+          replayMaxSeq = Math.max(replayMaxSeq, seq);
         }
       }
+      writeThreadRenderFrame(res, sessionId, replayEvents, replayMaxSeq);
       const clients = threadStreamClientsFor(sessionId);
       clients.add(res);
       req.on('close', () => {

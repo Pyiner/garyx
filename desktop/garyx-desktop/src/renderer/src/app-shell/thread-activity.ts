@@ -80,6 +80,12 @@ export type ThreadActivityModel = {
   showRunLoading: boolean;
 };
 
+// Cross-platform conversation-state contract (spec/conversation-state +
+// iOS conformance twin). Block 4 leaves this derivation intact: it drives the
+// non-render business gates (composer lock, steer, optimistic pre-ack) and is
+// shared with iOS. The rendered thinking/tool indicators no longer read
+// `showRunLoading` — they come from the server `render_state` (tailActivity /
+// activeToolGroupId), so the AppShell loading-boolean bypasses are gone.
 export function deriveThreadActivityModel(input: {
   messages: UiTranscriptMessage[];
   threadInfo: Pick<ThreadRuntimeInfo, "activeRun"> | null | undefined;

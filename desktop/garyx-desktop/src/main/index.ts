@@ -79,6 +79,7 @@ import type {
   ScanDreamsInput,
   SelectAutomationInput,
   SelectWorkspaceInput,
+  RenderState,
   SendMessageInput,
   StartThreadStreamInput,
   StopThreadStreamInput,
@@ -1367,8 +1368,12 @@ function registerIpcHandlers(): void {
   );
   ipcMain.handle(
     "garyx:save-thread-transcript-cache",
-    async (_event, transcript: ThreadTranscript) => {
-      await saveThreadTranscriptCache(transcript);
+    async (
+      _event,
+      transcript: ThreadTranscript,
+      renderState?: RenderState | null,
+    ) => {
+      await saveThreadTranscriptCache(transcript, renderState ?? null);
     },
   );
   ipcMain.handle(

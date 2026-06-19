@@ -1128,6 +1128,12 @@ export type TranscriptRole =
 
 export interface TranscriptMessage {
   id: string;
+  // Raw transcript record seq (1-based). Stamped at the wire boundary — live
+  // committed from the SSE envelope, history from `index + 1`. render_state row
+  // refs carry this seq, so the renderer resolves bodies by seq rather than by
+  // the message id, which is rewritten to a stable id across optimistic
+  // reconciliation and so cannot be trusted to encode the seq.
+  seq?: number;
   role: TranscriptRole;
   text: string;
   content?: unknown;
@@ -1188,14 +1194,125 @@ export interface UploadChatAttachmentsResult {
   files: UploadedChatAttachment[];
 }
 
+// Wire mirror of `garyx-models` `RenderSnapshot` (transcript_render_state.rs).
+// Platform-neutral semantic structure only: message bodies are referenced by
+// `seq` and resolved against the local committed cache on the desktop side.
+export type RenderTailActivity =
+  | "none"
+  | "thinking"
+  | "assistant_streaming"
+  | "tool_active";
+
+export type RenderProgressLocus = "none" | "tail" | "tool_group";
+
+export interface RenderMessageRef {
+  id: string;
+  seq: number;
+  role: string;
+}
+
+export type RenderToolEntryStatus = "running" | "completed" | "failed";
+
+export interface RenderToolEntry {
+  id: string;
+  tool_use_id: string | null;
+  status: RenderToolEntryStatus;
+  tool_use: RenderMessageRef | null;
+  tool_result: RenderMessageRef | null;
+}
+
+export type RenderToolGroupStatus = "active" | "completed";
+
+export interface RenderToolGroup {
+  kind: "tool_group";
+  id: string;
+  status: RenderToolGroupStatus;
+  entries: RenderToolEntry[];
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface RenderAssistantStep {
+  kind: "assistant_message";
+  id: string;
+  message: RenderMessageRef;
+  streaming: boolean;
+}
+
+export type RenderStepItem = RenderAssistantStep | RenderToolGroup;
+
+export interface RenderStepRow {
+  kind: "step";
+  id: string;
+  steps: RenderStepItem[];
+  final_message: RenderMessageRef | null;
+  running: boolean;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface RenderAssistantReplyRow {
+  kind: "assistant_reply";
+  id: string;
+  message: RenderMessageRef;
+  streaming: boolean;
+}
+
+export type RenderActivityRow = RenderAssistantReplyRow | RenderStepRow;
+
+export interface RenderUserTurnRow {
+  kind: "user_turn";
+  id: string;
+  user: RenderMessageRef | null;
+  activity: RenderActivityRow[];
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export type RenderRow = RenderUserTurnRow;
+
+export type RenderPlaceholderFilterReason = "empty_streaming_assistant";
+
+export interface RenderFilteredPlaceholder {
+  message: RenderMessageRef;
+  reason: RenderPlaceholderFilterReason;
+}
+
+export interface RenderState {
+  based_on_seq: number;
+  rows: RenderRow[];
+  tailActivity: RenderTailActivity;
+  activeToolGroupId: string | null;
+  progress_locus: RenderProgressLocus;
+  visibleMessageIds: string[];
+  filtered_placeholders: RenderFilteredPlaceholder[];
+}
+
+export interface CommittedMessageEvent {
+  type: "committed_message";
+  runId: string;
+  threadId: string;
+  sessionId?: string;
+  seq: number;
+  message: TranscriptMessage;
+}
+
+// Offline cache bundle: committed transcript plus the last render snapshot, so a
+// cold/offline thread open can render folded history before the first live frame.
+export interface CachedThreadTranscript {
+  transcript: ThreadTranscript;
+  renderState: RenderState | null;
+}
+
 export type DesktopChatStreamEvent =
+  | CommittedMessageEvent
   | {
-      type: "committed_message";
-      runId: string;
+      // One atomic per-thread render frame: the contiguous committed `events`
+      // plus the full `renderState` snapshot derived at `based_on_seq`.
+      type: "thread_render_frame";
       threadId: string;
-      sessionId?: string;
-      seq: number;
-      message: TranscriptMessage;
+      events: CommittedMessageEvent[];
+      renderState: RenderState;
     }
   | {
       type: "error";
@@ -1984,8 +2101,13 @@ export interface GaryxDesktopApi {
   getThreadHistory: (
     input: string | GetThreadHistoryInput,
   ) => Promise<ThreadTranscript>;
-  loadThreadTranscriptCache: (threadId: string) => Promise<ThreadTranscript | null>;
-  saveThreadTranscriptCache: (transcript: ThreadTranscript) => Promise<void>;
+  loadThreadTranscriptCache: (
+    threadId: string,
+  ) => Promise<CachedThreadTranscript | null>;
+  saveThreadTranscriptCache: (
+    transcript: ThreadTranscript,
+    renderState?: RenderState | null,
+  ) => Promise<void>;
   clearThreadTranscriptCache: (threadId: string) => Promise<void>;
   startThreadStream: (input: StartThreadStreamInput) => Promise<void>;
   stopThreadStream: (input?: StopThreadStreamInput) => Promise<void>;

@@ -1394,6 +1394,163 @@
       ],
       "run_state": null,
       "source": null
+    },
+    {
+      "expected": {
+        "activeToolGroupId": null,
+        "based_on_seq": 6,
+        "filtered_placeholders": [],
+        "progress_locus": "none",
+        "rows": [
+          {
+            "activity": [
+              {
+                "final_message": {
+                  "id": "seq:5",
+                  "role": "assistant",
+                  "seq": 5
+                },
+                "finished_at": "2026-06-19T13:00:04Z",
+                "id": "step:assistant_step:seq:3",
+                "kind": "step",
+                "running": false,
+                "started_at": "2026-06-19T13:00:01Z",
+                "steps": [
+                  {
+                    "id": "assistant_step:seq:3",
+                    "kind": "assistant_message",
+                    "message": {
+                      "id": "seq:3",
+                      "role": "assistant",
+                      "seq": 3
+                    },
+                    "streaming": false
+                  },
+                  {
+                    "id": "assistant_step:seq:4",
+                    "kind": "assistant_message",
+                    "message": {
+                      "id": "seq:4",
+                      "role": "assistant",
+                      "seq": 4
+                    },
+                    "streaming": false
+                  }
+                ]
+              }
+            ],
+            "finished_at": "2026-06-19T13:00:04Z",
+            "id": "user_turn:seq:2",
+            "kind": "user_turn",
+            "started_at": "2026-06-19T13:00:01Z",
+            "user": {
+              "id": "seq:2",
+              "role": "user",
+              "seq": 2
+            }
+          }
+        ],
+        "tailActivity": "none",
+        "visibleMessageIds": [
+          "seq:2",
+          "seq:3",
+          "seq:4",
+          "seq:5"
+        ]
+      },
+      "name": "team interleave flatten",
+      "records": [
+        {
+          "message": {
+            "control": {
+              "kind": "run_start",
+              "run_id": "run::fixture-team",
+              "thread_id": "thread::fixture-team"
+            },
+            "internal": true,
+            "internal_kind": "control",
+            "kind": "control",
+            "role": "system"
+          },
+          "run_id": "run::fixture-team",
+          "seq": 1,
+          "thread_id": "thread::fixture-team",
+          "timestamp": "2026-06-19T13:00:00Z"
+        },
+        {
+          "message": {
+            "role": "user",
+            "text": "Coordinate the team.",
+            "timestamp": "2026-06-19T13:00:01Z"
+          },
+          "run_id": "run::fixture-team",
+          "seq": 2,
+          "thread_id": "thread::fixture-team",
+          "timestamp": "2026-06-19T13:00:01Z"
+        },
+        {
+          "message": {
+            "metadata": {
+              "agent_id": "alpha"
+            },
+            "role": "assistant",
+            "text": "Delegating to beta.",
+            "timestamp": "2026-06-19T13:00:02Z"
+          },
+          "run_id": "run::fixture-team",
+          "seq": 3,
+          "thread_id": "thread::fixture-team",
+          "timestamp": "2026-06-19T13:00:02Z"
+        },
+        {
+          "message": {
+            "metadata": {
+              "agent_id": "beta"
+            },
+            "role": "assistant",
+            "text": "On it.",
+            "timestamp": "2026-06-19T13:00:03Z"
+          },
+          "run_id": "run::fixture-team",
+          "seq": 4,
+          "thread_id": "thread::fixture-team",
+          "timestamp": "2026-06-19T13:00:03Z"
+        },
+        {
+          "message": {
+            "metadata": {
+              "agent_id": "alpha"
+            },
+            "role": "assistant",
+            "text": "Summary done.",
+            "timestamp": "2026-06-19T13:00:04Z"
+          },
+          "run_id": "run::fixture-team",
+          "seq": 5,
+          "thread_id": "thread::fixture-team",
+          "timestamp": "2026-06-19T13:00:04Z"
+        },
+        {
+          "message": {
+            "control": {
+              "kind": "run_complete",
+              "run_id": "run::fixture-team",
+              "status": "completed",
+              "thread_id": "thread::fixture-team"
+            },
+            "internal": true,
+            "internal_kind": "control",
+            "kind": "control",
+            "role": "system"
+          },
+          "run_id": "run::fixture-team",
+          "seq": 6,
+          "thread_id": "thread::fixture-team",
+          "timestamp": "2026-06-19T13:00:05Z"
+        }
+      ],
+      "run_state": null,
+      "source": null
     }
   ],
   "schema_version": 1

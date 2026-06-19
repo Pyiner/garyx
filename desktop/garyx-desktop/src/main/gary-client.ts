@@ -45,7 +45,9 @@ import type {
   ListTaskWorkflowRunsInput,
   ListProviderRecentSessionsInput,
   DeleteSlashCommandInput,
+  CommittedMessageEvent,
   DesktopChatStreamEvent,
+  RenderState,
   DesktopChannelEndpoint,
   DesktopMcpServer,
   DesktopSettings,
@@ -1125,6 +1127,7 @@ function mapCommittedMessageEvent(
     kind === "control" || asString(rawMessage.internal_kind) === "control";
   const baseMessage: TranscriptMessage = {
     id: `${threadId}:${seq - 1}`,
+    seq,
     role,
     text: isControlRecord ? "" : textFromCommittedMessage(rawMessage),
     content: isControlRecord ? rawMessage : rawMessage.content,
@@ -1175,6 +1178,68 @@ function mapCommittedMessageEvent(
   };
 }
 
+// The wire `render_state` already matches the locked `RenderSnapshot` serde
+// shape (snake_case + the documented renames), so this only validates the
+// top-level envelope; the render-view-model mapping tolerates any structural
+// surprises by skipping unresolvable refs.
+function parseRenderState(value: unknown): RenderState | null {
+  const record = parseRecord(value);
+  if (Object.keys(record).length === 0) {
+    return null;
+  }
+  if (typeof asFiniteNumber(record.based_on_seq) !== "number") {
+    return null;
+  }
+  if (!Array.isArray(record.rows)) {
+    return null;
+  }
+  return record as unknown as RenderState;
+}
+
+// Unwrap a `thread_render_frame` into one atomic desktop event: the contiguous
+// committed events plus the full render snapshot. Gap detection runs per inner
+// event (never on `based_on_seq` alone) so batched catch-up frames stay
+// gapless instead of triggering an endless reconnect.
+function mapThreadRenderFrameEvent(
+  payload: Record<string, unknown>,
+  connectionLastSeq: number,
+): { event: DesktopChatStreamEvent; lastSeq: number } | null {
+  const threadId =
+    asString(payload.threadId) || asString(payload.thread_id) || "";
+  if (!threadId) {
+    return null;
+  }
+  const renderState = parseRenderState(payload.render_state ?? payload.renderState);
+  if (!renderState) {
+    return null;
+  }
+  const rawEvents = Array.isArray(payload.events) ? payload.events : [];
+  let lastSeq = connectionLastSeq;
+  const events: CommittedMessageEvent[] = [];
+  for (const raw of rawEvents) {
+    const mapped = mapCommittedMessageEvent(parseRecord(raw));
+    if (!mapped || mapped.type !== "committed_message") {
+      continue;
+    }
+    const decision = decideStreamSeq({
+      incomingSeq: mapped.seq,
+      connectionLastSeq: lastSeq,
+    });
+    if (decision.type === "gap_reconnect") {
+      throw new ThreadStreamGapError(decision.resumeAfterSeq);
+    }
+    if (decision.type === "stale") {
+      continue;
+    }
+    events.push(mapped);
+    lastSeq = Math.max(lastSeq, mapped.seq);
+  }
+  return {
+    event: { type: "thread_render_frame", threadId, events, renderState },
+    lastSeq,
+  };
+}
+
 export async function streamThreadEvents(
   settings: DesktopSettings,
   threadId: string,
@@ -1210,42 +1275,27 @@ export async function streamThreadEvents(
   const decoder = new TextDecoder();
   let buffer = "";
   let dataLines: string[] = [];
-  let eventId: number | null = null;
   let connectionLastSeq = afterSeq;
 
   const flushEvent = () => {
     if (dataLines.length === 0) {
-      eventId = null;
       return;
     }
     const payloadText = dataLines.join("\n");
     dataLines = [];
     const payload = tryParseJson<Record<string, unknown>>(payloadText);
     if (!payload) {
-      eventId = null;
       return;
     }
-    if (asString(payload.type) !== "committed_message") {
-      eventId = null;
+    if (asString(payload.type) !== "thread_render_frame") {
       return;
     }
-    const event = mapCommittedMessageEvent(payload, eventId);
-    eventId = null;
-    if (!event || event.type !== "committed_message") {
+    const frame = mapThreadRenderFrameEvent(payload, connectionLastSeq);
+    if (!frame) {
       return;
     }
-    const decision = decideStreamSeq({
-      incomingSeq: event.seq,
-      connectionLastSeq,
-    });
-    if (decision.type === "gap_reconnect") {
-      throw new ThreadStreamGapError(decision.resumeAfterSeq);
-    }
-    if (decision.type === "stale") {
-      return;
-    }
-    onEvent(event);
-    connectionLastSeq = Math.max(connectionLastSeq, event.seq);
+    onEvent(frame.event);
+    connectionLastSeq = frame.lastSeq;
     options?.onCommittedSeq?.(connectionLastSeq);
   };
   const processLine = (line: string) => {
@@ -1257,8 +1307,8 @@ export async function streamThreadEvents(
       return;
     }
     if (line.startsWith("id:")) {
-      const value = line.slice(3).trim();
-      eventId = /^\d+$/.test(value) ? Number(value) : null;
+      // SSE id mirrors the frame's based_on_seq; the cursor is driven by the
+      // committed events themselves, so the id line is informational only.
       return;
     }
     if (!line.startsWith("data:")) {
@@ -1685,6 +1735,9 @@ function mapHistoryMessage(
 
   const message: TranscriptMessage = {
     id: `${sessionId}:${value.index ?? Math.random().toString(16).slice(2)}`,
+    // History exposes a 0-based global `index`; the raw record seq is index + 1
+    // (seq is 1-based and gapless across all records, control included).
+    seq: typeof value.index === "number" ? value.index + 1 : undefined,
     role,
     text,
     content,

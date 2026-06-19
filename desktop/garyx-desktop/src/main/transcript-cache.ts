@@ -3,14 +3,26 @@ import { join } from "node:path";
 
 import { app } from "electron";
 
-import type { ThreadTranscript } from "@shared/contracts";
+import type {
+  CachedThreadTranscript,
+  RenderState,
+  ThreadTranscript,
+} from "@shared/contracts";
 
+export type { CachedThreadTranscript };
+
+// Not bumped when `renderState` was added: it's an optional field, so existing
+// v1 caches still load (with `renderState` undefined → graceful degradation to
+// an empty render until the first live frame).
 const CACHE_VERSION = 1;
 
 interface CachedThreadTranscriptFile {
   version: number;
   savedAt: string;
   transcript: ThreadTranscript;
+  // Optional offline render snapshot so a cold/offline thread open can render
+  // its folded history without a gateway round-trip.
+  renderState?: RenderState | null;
 }
 
 const cacheMutationQueues = new Map<string, Promise<void>>();
@@ -77,7 +89,7 @@ function validTranscript(value: unknown): value is ThreadTranscript {
 
 export async function loadThreadTranscriptCache(
   threadId: string,
-): Promise<ThreadTranscript | null> {
+): Promise<CachedThreadTranscript | null> {
   const normalizedThreadId = threadId.trim();
   if (!normalizedThreadId) {
     return null;
@@ -93,7 +105,10 @@ export async function loadThreadTranscriptCache(
     ) {
       return null;
     }
-    return parsed.transcript;
+    return {
+      transcript: parsed.transcript,
+      renderState: parsed.renderState ?? null,
+    };
   } catch {
     return null;
   }
@@ -101,6 +116,7 @@ export async function loadThreadTranscriptCache(
 
 export async function saveThreadTranscriptCache(
   transcript: ThreadTranscript,
+  renderState?: RenderState | null,
 ): Promise<void> {
   const threadId = transcript.threadId.trim();
   if (!threadId) {
@@ -114,6 +130,7 @@ export async function saveThreadTranscriptCache(
       version: CACHE_VERSION,
       savedAt: new Date().toISOString(),
       transcript,
+      renderState: renderState ?? null,
     };
     await writeFile(temp, JSON.stringify(payload), "utf8");
     await rename(temp, target);

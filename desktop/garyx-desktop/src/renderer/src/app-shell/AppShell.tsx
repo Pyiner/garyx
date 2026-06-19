@@ -50,6 +50,7 @@ import {
   type MessageFileAttachment,
   type MessageImageAttachment,
   type PendingThreadInput,
+  type RenderState,
   type SlashCommand,
   type ThreadRuntimeInfo,
   type ThreadTranscript,
@@ -63,13 +64,16 @@ import { desktopStateWithoutThread } from "@shared/desktop-state";
 import {
   applyTranscriptRunStateRecord,
   decideTranscriptFetchPageAction,
+  extractToolUseId,
   isControlTranscriptMessage,
   isThreadStreamGapError,
+  isToolRole,
   mergeForwardTranscriptPage,
   reduceTranscriptRunState,
   shouldRefetchAuthoritativeAfterForwardPageLimit,
   shouldRestartSelectedThreadStreamAfterRefetch,
   streamResumeCursor,
+  toolMessagesEquivalent,
   transcriptCommittedAfterCursor,
   transcriptControlKind,
   transcriptForCommittedCache,
@@ -121,13 +125,6 @@ import {
   countTranscriptImages,
   extractTranscriptText,
 } from "../message-rich-content";
-import {
-  buildRenderableTranscript,
-  buildRenderTranscriptBlocks,
-  extractToolUseId,
-  isToolRole,
-  toolMessagesEquivalent,
-} from "../transcript-render";
 import {
   deriveThreadActivityModel,
   threadActivitySignature,
@@ -1174,7 +1171,12 @@ function materializeRemoteTranscript(
         ignoreTimestamp: options?.ignoreTimestampForStableMessages,
       })
     ) {
-      return matchedEntry;
+      // Keep the stable id for React, but carry the committed seq so render_state
+      // refs can resolve this body (the reused entry may be an optimistic one
+      // that never had a seq).
+      return matchedEntry.seq === message.seq
+        ? matchedEntry
+        : { ...matchedEntry, seq: message.seq ?? matchedEntry.seq };
     }
 
     return {
@@ -1613,6 +1615,12 @@ export function AppShell() {
   );
   const [workflowThreadStarting, setWorkflowThreadStarting] = useState(false);
   const [messagesByThread, setMessagesByThread] = useState<MessageMap>({});
+  // Server-derived render snapshot per thread (block 4). The presentation layer
+  // maps `renderState.rows` straight to React; bodies are resolved from
+  // `messagesByThread`. Replaced atomically per render frame.
+  const [renderStateByThread, setRenderStateByThread] = useState<
+    Record<string, RenderState>
+  >({});
   const [threadInfoByThread, setThreadInfoByThread] = useState<
     Record<string, ThreadRuntimeInfo | null>
   >({});
@@ -1810,6 +1818,7 @@ export function AppShell() {
   const pendingClientLogEventsRef = useRef<DesktopChatStreamEvent[]>([]);
   const clientLogFlushFrameRef = useRef<number | null>(null);
   const messagesByThreadRef = useRef<MessageMap>({});
+  const renderStateByThreadRef = useRef<Record<string, RenderState>>({});
   const transcriptSnapshotByThreadRef = useRef<Record<string, ThreadTranscript>>(
     {},
   );
@@ -2848,20 +2857,9 @@ export function AppShell() {
       }),
     [activeMessages],
   );
-  const activeRenderableMessages = useMemo(
-    () => buildRenderableTranscript(activeMessages),
-    [activeMessages],
-  );
-  const activeRenderableBlocks = useMemo(
-    () => buildRenderTranscriptBlocks(activeRenderableMessages),
-    [activeRenderableMessages],
-  );
-  const lastActiveRenderableBlock =
-    activeRenderableBlocks[activeRenderableBlocks.length - 1] || null;
-  const activeTailToolTraceBlockKey =
-    lastActiveRenderableBlock?.kind === "tool_group"
-      ? lastActiveRenderableBlock.key
-      : null;
+  const activeRenderState = activeThreadMessageKey
+    ? renderStateByThread[activeThreadMessageKey] || null
+    : null;
   const activeQueue = selectQueueIntentIds(messageState, activeThreadMessageKey)
     .map((intentId) => messageState.intentsById[intentId])
     .filter((intent): intent is MessageIntent => Boolean(intent));
@@ -2932,8 +2930,15 @@ export function AppShell() {
     pendingHistoryIntent: activePendingHistoryIntent,
   });
   const showPendingAckLoading = threadActivity.showPendingAckLoading;
-  const activeRunLoading = threadActivity.showRunLoading;
   const canSteerQueuedPrompt = threadActivity.canSteerQueuedPrompt;
+  // Rendered tail indicators come from the server snapshot (charter §6): the
+  // thinking bubble is `tailActivity==="thinking"` (or the optimistic pre-ack
+  // window); the tool shimmer keys off `activeToolGroupId`. assistant_streaming
+  // / tool_active are carried by the rows themselves, not a separate bubble.
+  const activeToolGroupId = activeRenderState?.activeToolGroupId ?? null;
+  const showTailThinking = Boolean(
+    activeRenderState?.tailActivity === "thinking" || showPendingAckLoading,
+  );
   const isActiveStreamingThread = Boolean(
     activeLiveStream &&
     ["connecting", "streaming", "reconciling"].includes(
@@ -3395,15 +3400,6 @@ export function AppShell() {
     !activeMessages.length &&
     !activeHasAssistantOrToolMessage,
   );
-  const showAutomationRunTailLoading = Boolean(
-    (activePendingAutomationRun &&
-      activeMessages.length > 0 &&
-      !activeHasAssistantOrToolMessage) ||
-      (activeRunLoading && !activeTailToolTraceBlockKey),
-  );
-  const activeToolTraceLoadingKey = threadActivity.runActive
-    ? activeTailToolTraceBlockKey
-    : null;
   const showHistoryLoadingPlaceholder = Boolean(
     historyLoading &&
     !activeMessages.length &&
@@ -3451,20 +3447,9 @@ export function AppShell() {
     sideChatThreadId && sideChatThreadWorktree ? "worktree" : null;
   const sideChatComposerWorkspaceBranch =
     sideChatThreadWorktree?.branch?.trim() || null;
-  const sideChatRenderableMessages = useMemo(
-    () => buildRenderableTranscript(sideChatMessages),
-    [sideChatMessages],
-  );
-  const sideChatRenderableBlocks = useMemo(
-    () => buildRenderTranscriptBlocks(sideChatRenderableMessages),
-    [sideChatRenderableMessages],
-  );
-  const sideChatLastRenderableBlock =
-    sideChatRenderableBlocks[sideChatRenderableBlocks.length - 1] || null;
-  const sideChatTailToolTraceBlockKey =
-    sideChatLastRenderableBlock?.kind === "tool_group"
-      ? sideChatLastRenderableBlock.key
-      : null;
+  const sideChatRenderState = sideChatThreadId
+    ? renderStateByThread[sideChatThreadId] || null
+    : null;
   const sideChatQueue = sideChatThreadId
     ? selectQueueIntentIds(messageState, sideChatThreadId)
         .map((intentId) => messageState.intentsById[intentId])
@@ -3531,7 +3516,6 @@ export function AppShell() {
   });
   const sideChatShowPendingAckLoading =
     sideChatThreadActivity.showPendingAckLoading;
-  const sideChatRunLoading = sideChatThreadActivity.showRunLoading;
   const sideChatCanSteerQueuedPrompt =
     sideChatThreadActivity.canSteerQueuedPrompt;
   const sideChatIsSendingThread = Boolean(
@@ -3571,12 +3555,12 @@ export function AppShell() {
     sideChatIsSendingThread || sideChatQueue.length > 0
       ? "Queue another follow-up for Garyx..."
       : "Ask in side chat";
-  const sideChatShowTailLoading = Boolean(
-    sideChatRunLoading && !sideChatTailToolTraceBlockKey,
+  const sideChatActiveToolGroupId =
+    sideChatRenderState?.activeToolGroupId ?? null;
+  const sideChatShowTailThinking = Boolean(
+    sideChatRenderState?.tailActivity === "thinking" ||
+      sideChatShowPendingAckLoading,
   );
-  const sideChatToolTraceLoadingKey = sideChatThreadActivity.runActive
-    ? sideChatTailToolTraceBlockKey
-    : null;
   const conversationContextText = isAutomationView
     ? `${desktopState?.automations.length || 0} scheduled runs`
     : isSkillsView
@@ -5621,6 +5605,29 @@ export function AppShell() {
     return next;
   }
 
+  function updateRenderStateByThread(
+    updater: (
+      current: Record<string, RenderState>,
+    ) => Record<string, RenderState>,
+  ): void {
+    const next = updater(renderStateByThreadRef.current);
+    renderStateByThreadRef.current = next;
+    setRenderStateByThread(next);
+  }
+
+  function applyThreadRenderState(threadId: string, renderState: RenderState) {
+    const existing = renderStateByThreadRef.current[threadId];
+    // Monotonic guard: drop late frames from a reconnect race so the rendered
+    // snapshot never moves backward.
+    if (existing && renderState.based_on_seq < existing.based_on_seq) {
+      return;
+    }
+    updateRenderStateByThread((current) => ({
+      ...current,
+      [threadId]: renderState,
+    }));
+  }
+
   function flushPendingClientLogEvents() {
     clientLogFlushFrameRef.current = null;
     const events = pendingClientLogEventsRef.current;
@@ -6098,7 +6105,12 @@ export function AppShell() {
     if (persist) {
       const cacheTranscript = transcriptForCommittedCache(transcript);
       if (cacheTranscript.messages.length > 0 || !transcript.threadInfo?.activeRun) {
-        void window.garyxDesktop.saveThreadTranscriptCache(cacheTranscript);
+        // Persist the last render snapshot alongside committed messages so the
+        // next cold/offline open can render folded history before a live frame.
+        void window.garyxDesktop.saveThreadTranscriptCache(
+          cacheTranscript,
+          renderStateByThreadRef.current[threadId] ?? null,
+        );
       }
     }
   }
@@ -6205,8 +6217,13 @@ export function AppShell() {
 
   function handleChatStreamEvent(event: DesktopChatStreamEvent) {
     const threadId = event.threadId;
-    if (event.type === "committed_message") {
-      applyCommittedThreadMessage(event);
+    if (event.type === "thread_render_frame") {
+      // One atomic frame: apply the contiguous committed events through the
+      // existing transport/ack path, then replace the render snapshot.
+      for (const committed of event.events) {
+        applyCommittedThreadMessage(committed);
+      }
+      applyThreadRenderState(threadId, event.renderState);
       return;
     }
     if (event.type !== "error") {
@@ -7931,8 +7948,13 @@ export function AppShell() {
         return;
       }
       if (cached) {
-        latestTranscript = cached;
-        applyRemoteTranscript(threadId, cached, { persist: false });
+        latestTranscript = cached.transcript;
+        applyRemoteTranscript(threadId, cached.transcript, { persist: false });
+        // Restore the offline render snapshot so folded history renders before
+        // the live stream's first frame arrives.
+        if (cached.renderState) {
+          applyThreadRenderState(threadId, cached.renderState);
+        }
       }
 
       latestTranscript = await fetchSelectedThreadIncrementalTranscript(
@@ -9438,9 +9460,9 @@ export function AppShell() {
       activeMessages={sideChatMessages}
       activePendingAckIntents={sideChatVisiblePendingAckIntents}
       activePendingAutomationRun={null}
-      activeToolTraceLoadingKey={sideChatToolTraceLoadingKey}
+      activeToolGroupId={sideChatActiveToolGroupId}
       activeQueue={sideChatQueue}
-      activeRenderableBlocks={sideChatRenderableBlocks}
+      renderState={sideChatRenderState}
       activeThreadLogsHasUnread={false}
       activeThreadLogsPath=""
       activeThreadSummary={sideChatThreadSummary}
@@ -9589,12 +9611,11 @@ export function AppShell() {
       selectedThreadId={sideChatThreadId}
       showAutomationRunInitialPlaceholder={false}
       showDreams={false}
-      showAutomationRunTailLoading={sideChatShowTailLoading}
       // Side chats fork the provider session without importing visible
       // history, so there is never parent history to wait for — the panel
       // opens as an empty thread instead of a loading placeholder.
       showHistoryLoadingPlaceholder={false}
-      showPendingAckLoading={sideChatShowPendingAckLoading}
+      showTailThinking={sideChatShowTailThinking}
       threadLayoutRef={sideChatThreadLayoutRef}
       threadLogsActiveTab="client"
       threadLogsError={null}
@@ -10455,9 +10476,9 @@ export function AppShell() {
                 activeMessages={activeMessages}
                 activePendingAckIntents={visiblePendingAckIntents}
                 activePendingAutomationRun={activePendingAutomationRun}
-                activeToolTraceLoadingKey={activeToolTraceLoadingKey}
+                activeToolGroupId={activeToolGroupId}
                 activeQueue={activeQueue}
-                activeRenderableBlocks={activeRenderableBlocks}
+                renderState={activeRenderState}
                 activeThreadLogsHasUnread={activeThreadLogsHasUnread}
                 activeThreadLogsPath={activeThreadLogsPath}
                 activeThreadSummary={activeThread || null}
@@ -10680,9 +10701,8 @@ export function AppShell() {
                   showAutomationRunInitialPlaceholder
                 }
                 showDreams={showDreamsFeature}
-                showAutomationRunTailLoading={showAutomationRunTailLoading}
                 showHistoryLoadingPlaceholder={showHistoryLoadingPlaceholder}
-                showPendingAckLoading={showPendingAckLoading}
+                showTailThinking={showTailThinking}
                 threadLayoutRef={threadLayoutRef}
                 threadLayoutStyle={
                   threadLogsOpen

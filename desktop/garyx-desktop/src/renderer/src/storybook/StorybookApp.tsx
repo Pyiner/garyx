@@ -3,10 +3,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ThreadPage } from '../app-shell/components/ThreadPage';
 import { deriveThreadActivityModel } from '../app-shell/thread-activity';
 import { isRuntimeBusy } from '../message-machine';
-import {
-  buildRenderableTranscript,
-  buildRenderTranscriptBlocks,
-} from '../transcript-render';
 import { buildStories, type Story, type StoryStep } from './scenarios';
 
 const PLAY_INTERVAL_MS = 1600;
@@ -25,13 +21,6 @@ function ThreadStage({ step }: { step: StoryStep }) {
   const threadLogsRef = useRef<HTMLDivElement | null>(null);
   const ignoreComposerSubmitUntilRef = useRef(0);
   const isComposingRef = useRef(false);
-
-  const renderableBlocks = useMemo(
-    () => buildRenderTranscriptBlocks(buildRenderableTranscript(state.messages)),
-    [state.messages],
-  );
-  const lastBlock = renderableBlocks[renderableBlocks.length - 1] || null;
-  const tailToolTraceBlockKey = lastBlock?.kind === 'tool_group' ? lastBlock.key : null;
 
   const activity = deriveThreadActivityModel({
     messages: state.messages,
@@ -56,9 +45,12 @@ function ThreadStage({ step }: { step: StoryStep }) {
       activeMessages={state.messages}
       activePendingAckIntents={state.pendingAckIntents}
       activePendingAutomationRun={null}
-      activeToolTraceLoadingKey={activity.runActive ? tailToolTraceBlockKey : null}
+      activeToolGroupId={null}
       activeQueue={state.queue}
-      activeRenderableBlocks={renderableBlocks}
+      // Committed message rows are server-driven (render_state) post-SSR; the
+      // storybook has no gateway, so it visualizes the conversation-state
+      // machine, optimistic bubbles, and activity chrome rather than history.
+      renderState={null}
       activeThreadLogsHasUnread={false}
       activeThreadLogsPath=""
       activeThreadSummary={null}
@@ -141,9 +133,8 @@ function ThreadStage({ step }: { step: StoryStep }) {
       selectedThreadId="storybook-thread"
       showAutomationRunInitialPlaceholder={false}
       showDreams={false}
-      showAutomationRunTailLoading={activity.showRunLoading && !tailToolTraceBlockKey}
       showHistoryLoadingPlaceholder={state.showHistoryLoadingPlaceholder}
-      showPendingAckLoading={activity.showPendingAckLoading}
+      showTailThinking={activity.showRunLoading || activity.showPendingAckLoading}
       threadLayoutRef={threadLayoutRef}
       threadLogsActiveTab="client"
       threadLogsError={null}

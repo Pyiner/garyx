@@ -3,7 +3,7 @@ import { memo, type ReactNode, useEffect, useState } from 'react';
 import { IconChevronDown } from '@tabler/icons-react';
 
 import { useI18n } from './i18n';
-import type { TurnRow } from './turn-render';
+import type { TurnRow } from './render-view-model';
 
 const ICON_SIZE = 15;
 const ICON_STROKE = 1.7;
@@ -56,20 +56,11 @@ function computeElapsed(
 function TurnSummaryComponent({
   turn,
   children,
-  forceRunning = false,
 }: {
   turn: TurnRow;
   children?: ReactNode;
-  /**
-   * When true, treat the turn as still in flight even if no block in it
-   * is `pending=true`. ThreadPage uses this for the bottom-most turn
-   * while the gateway/agent run is still active — covers the gap
-   * between an assistant message finishing streaming and a tool call
-   * settling.
-   */
-  forceRunning?: boolean;
 }) {
-  const isRunning = turn.isRunning || forceRunning;
+  const isRunning = turn.isRunning;
   const { t } = useI18n();
   const [expanded, setExpanded] = useState(isRunning);
   const [userControlled, setUserControlled] = useState(false);
@@ -147,7 +138,5 @@ function TurnSummaryComponent({
 
 export const TurnSummary = memo(
   TurnSummaryComponent,
-  (previous, next) =>
-    previous.turn === next.turn &&
-    previous.forceRunning === next.forceRunning,
+  (previous, next) => previous.turn === next.turn,
 );

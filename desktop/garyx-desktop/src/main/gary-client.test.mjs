@@ -81,6 +81,52 @@ test("fetchThreadHistory preserves kind parity fields for committed reducers", a
   }
 });
 
+function committedEvent(threadId, seq, text) {
+  return {
+    type: "committed_message",
+    thread_id: threadId,
+    run_id: `run-${threadId}`,
+    seq,
+    message: {
+      role: "assistant",
+      content: text,
+      text,
+      timestamp: "2026-06-18T12:00:00Z",
+    },
+  };
+}
+
+function renderFramePayload(threadId, events, basedOnSeq) {
+  return JSON.stringify({
+    type: "thread_render_frame",
+    thread_id: threadId,
+    events,
+    render_state: {
+      based_on_seq: basedOnSeq,
+      rows: [],
+      tailActivity: "none",
+      activeToolGroupId: null,
+      progress_locus: "none",
+      visibleMessageIds: [],
+      filtered_placeholders: [],
+    },
+  });
+}
+
+function sseResponse(...frames) {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        for (const frame of frames) {
+          controller.enqueue(new TextEncoder().encode(frame));
+        }
+        controller.close();
+      },
+    }),
+    { status: 200, statusText: "OK" },
+  );
+}
+
 test("streamThreadEvents connects to per-thread stream with resume cursor", async () => {
   const urls = [];
   const lastEventIds = [];
@@ -88,31 +134,17 @@ test("streamThreadEvents connects to per-thread stream with resume cursor", asyn
   globalThis.fetch = async (url, init = {}) => {
     urls.push(String(url));
     lastEventIds.push(init.headers.get("Last-Event-ID"));
-    const payload = JSON.stringify({
-      type: "committed_message",
-      thread_id: "thread::per-thread",
-      run_id: "run-per-thread",
-      seq: 5,
-      message: {
-        role: "assistant",
-        content: "hello",
-        text: "hello",
-        timestamp: "2026-06-18T12:00:00Z",
-      },
-    });
-    return new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode(`id: 5\ndata: ${payload}\n\n`));
-          controller.close();
-        },
-      }),
-      { status: 200, statusText: "OK" },
+    const payload = renderFramePayload(
+      "thread::per-thread",
+      [committedEvent("thread::per-thread", 5, "hello")],
+      5,
     );
+    return sseResponse(`id: 5\ndata: ${payload}\n\n`);
   };
 
   try {
     const events = [];
+    const committedSeqs = [];
     await streamThreadEvents(
       {
         gatewayUrl: "http://127.0.0.1:31337",
@@ -121,7 +153,7 @@ test("streamThreadEvents connects to per-thread stream with resume cursor", asyn
       "thread::per-thread",
       (event) => events.push(event),
       undefined,
-      { afterSeq: 4 },
+      { afterSeq: 4, onCommittedSeq: (seq) => committedSeqs.push(seq) },
     );
 
     assert.equal(
@@ -130,9 +162,58 @@ test("streamThreadEvents connects to per-thread stream with resume cursor", asyn
     );
     assert.equal(lastEventIds[0], "4");
     assert.equal(events.length, 1);
-    assert.equal(events[0].type, "committed_message");
-    assert.equal(events[0].seq, 5);
-    assert.equal(events[0].message.id, "thread::per-thread:4");
+    assert.equal(events[0].type, "thread_render_frame");
+    assert.equal(events[0].events.length, 1);
+    assert.equal(events[0].events[0].seq, 5);
+    assert.equal(events[0].events[0].message.id, "thread::per-thread:4");
+    assert.equal(events[0].renderState.based_on_seq, 5);
+    assert.deepEqual(committedSeqs, [5]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("streamThreadEvents accepts a batched catch-up frame without reconnecting", async () => {
+  // Regression for the SSR frame protocol: a reconnect/catch-up frame carries
+  // events[M+1..N] in one frame with based_on_seq=N. Gap detection runs per
+  // inner event (M+1, M+2, …), so it must NOT treat based_on_seq=N as a gap.
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    const payload = renderFramePayload(
+      "thread::per-thread-batch",
+      [
+        committedEvent("thread::per-thread-batch", 5, "five"),
+        committedEvent("thread::per-thread-batch", 6, "six"),
+        committedEvent("thread::per-thread-batch", 7, "seven"),
+      ],
+      7,
+    );
+    return sseResponse(`id: 7\ndata: ${payload}\n\n`);
+  };
+
+  try {
+    const events = [];
+    const committedSeqs = [];
+    await streamThreadEvents(
+      {
+        gatewayUrl: "http://127.0.0.1:31337",
+        gatewayAuthToken: "",
+      },
+      "thread::per-thread-batch",
+      (event) => events.push(event),
+      undefined,
+      { afterSeq: 4, onCommittedSeq: (seq) => committedSeqs.push(seq) },
+    );
+
+    assert.equal(events.length, 1);
+    assert.equal(events[0].type, "thread_render_frame");
+    assert.equal(events[0].events.length, 3);
+    assert.deepEqual(
+      events[0].events.map((event) => event.seq),
+      [5, 6, 7],
+    );
+    assert.equal(events[0].renderState.based_on_seq, 7);
+    assert.deepEqual(committedSeqs, [7]);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -141,27 +222,12 @@ test("streamThreadEvents connects to per-thread stream with resume cursor", asyn
 test("streamThreadEvents rejects first replay gap relative to requested cursor", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => {
-    const payload = JSON.stringify({
-      type: "committed_message",
-      thread_id: "thread::per-thread-gap",
-      run_id: "run-per-thread-gap",
-      seq: 7,
-      message: {
-        role: "assistant",
-        content: "gap",
-        text: "gap",
-        timestamp: "2026-06-18T12:00:00Z",
-      },
-    });
-    return new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode(`id: 7\ndata: ${payload}\n\n`));
-          controller.close();
-        },
-      }),
-      { status: 200, statusText: "OK" },
+    const payload = renderFramePayload(
+      "thread::per-thread-gap",
+      [committedEvent("thread::per-thread-gap", 7, "gap")],
+      7,
     );
+    return sseResponse(`id: 7\ndata: ${payload}\n\n`);
   };
 
   try {
@@ -190,7 +256,7 @@ test("streamThreadEvents rejects first replay gap relative to requested cursor",
   }
 });
 
-test("streamThreadEvents ignores non-committed per-thread frames", async () => {
+test("streamThreadEvents ignores non-render per-thread frames", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => {
     const legacyPayload = JSON.stringify({
@@ -199,30 +265,12 @@ test("streamThreadEvents ignores non-committed per-thread frames", async () => {
       run_id: "run-per-thread-failed",
       error: "timeout",
     });
-    const committedPayload = JSON.stringify({
-      type: "committed_message",
-      thread_id: "thread::per-thread-failed",
-      run_id: "run-per-thread-failed",
-      seq: 1,
-      message: {
-        role: "assistant",
-        content: "committed",
-        text: "committed",
-      },
-    });
-    return new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.enqueue(
-            new TextEncoder().encode(
-              `data: ${legacyPayload}\n\ndata: ${committedPayload}\n\n`,
-            ),
-          );
-          controller.close();
-        },
-      }),
-      { status: 200, statusText: "OK" },
+    const renderPayload = renderFramePayload(
+      "thread::per-thread-failed",
+      [committedEvent("thread::per-thread-failed", 1, "committed")],
+      1,
     );
+    return sseResponse(`data: ${legacyPayload}\n\ndata: ${renderPayload}\n\n`);
   };
 
   try {
@@ -237,10 +285,10 @@ test("streamThreadEvents ignores non-committed per-thread frames", async () => {
     );
 
     assert.equal(events.length, 1);
-    assert.equal(events[0].type, "committed_message");
+    assert.equal(events[0].type, "thread_render_frame");
     assert.equal(events[0].threadId, "thread::per-thread-failed");
-    assert.equal(events[0].seq, 1);
-    assert.equal(events[0].message.text, "committed");
+    assert.equal(events[0].events[0].seq, 1);
+    assert.equal(events[0].events[0].message.text, "committed");
   } finally {
     globalThis.fetch = originalFetch;
   }

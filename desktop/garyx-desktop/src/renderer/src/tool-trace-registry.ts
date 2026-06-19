@@ -817,16 +817,6 @@ function parseToolTraceMessage(message: ToolTraceMessage): ParsedToolTrace {
   };
 }
 
-function isCodexProvider(value: string | undefined): boolean {
-  const normalized = value?.trim().toLowerCase();
-  return normalized === 'codex' || normalized === 'codex_app_server';
-}
-
-export function shouldRenderToolTraceMessage(message: ToolTraceMessage): boolean {
-  const parsed = parseToolTraceMessage(message);
-  return !(isCodexProvider(parsed.provider) && parsed.toolKey === 'reasoning');
-}
-
 function exactToolAdapter(toolKeys: string[], presenter: (trace: ParsedToolTrace) => ToolTraceSide): ToolTraceAdapter {
   return {
     id: toolKeys.join(','),
@@ -1334,35 +1324,4 @@ export function resolveMergedToolTrace(
     icon: useSide?.icon || resultSide?.icon || '·',
     isError: Boolean(parsedUse?.isError || parsedResult?.isError),
   };
-}
-
-export function canMergeToolTraceMessages(
-  toolUseMessage: ToolTraceMessage,
-  toolResultMessage: ToolTraceMessage,
-): boolean {
-  if (toolUseMessage.role !== 'tool_use' || toolResultMessage.role !== 'tool_result') {
-    return false;
-  }
-
-  const parsedUse = parseToolTraceMessage(toolUseMessage);
-  const parsedResult = parseToolTraceMessage(toolResultMessage);
-
-  if (parsedUse.toolUseId && parsedResult.toolUseId) {
-    return parsedUse.toolUseId === parsedResult.toolUseId;
-  }
-
-  if (parsedUse.provider !== parsedResult.provider) {
-    return false;
-  }
-
-  if (parsedUse.toolKey === parsedResult.toolKey) {
-    return true;
-  }
-
-  return (
-    parsedUse.toolKey === 'Tool' ||
-    parsedUse.toolKey === 'Tool result' ||
-    parsedResult.toolKey === 'Tool' ||
-    parsedResult.toolKey === 'Tool result'
-  );
 }

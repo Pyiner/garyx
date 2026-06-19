@@ -17,19 +17,11 @@ import {
 } from '@tabler/icons-react';
 
 import {
-  canMergeToolTraceMessages,
   resolveMergedToolTrace,
-  shouldRenderToolTraceMessage,
   type MergedToolTrace,
   type ToolTraceMessage,
 } from './tool-trace-registry';
 import { useI18n, type AppLocale, type Translate } from './i18n';
-
-export {
-  canMergeToolTraceMessages,
-  shouldRenderToolTraceMessage,
-  type ToolTraceMessage,
-} from './tool-trace-registry';
 
 type ToolTraceEntry = {
   key: string;
