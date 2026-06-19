@@ -251,7 +251,9 @@ interface HistoryPayload {
     kind?: string;
     timestamp?: string | null;
     text?: string | null;
-    content?: string | null;
+    content?: unknown;
+    input?: unknown;
+    result?: unknown;
     message?: Record<string, unknown> | null;
   }>;
   pending_user_inputs?: Array<{
@@ -1424,7 +1426,7 @@ function kindFromCommittedMessage(
   if (internalKind === "control") {
     return "control";
   }
-  if (role === "tool_use" || role === "tool_result") {
+  if (role === "tool" || role === "tool_use" || role === "tool_result") {
     return "tool_trace";
   }
   if (role === "assistant") {
@@ -1439,6 +1441,7 @@ function kindFromCommittedMessage(
 function roleFromCommittedMessage(role: unknown): TranscriptMessage["role"] {
   return role === "assistant" ||
     role === "user" ||
+    role === "tool" ||
     role === "tool_use" ||
     role === "tool_result"
     ? role
@@ -1471,6 +1474,8 @@ function mapCommittedMessageEvent(
     role,
     text: isControlRecord ? "" : textFromCommittedMessage(rawMessage),
     content: isControlRecord ? rawMessage : rawMessage.content,
+    input: rawMessage.input,
+    result: rawMessage.result,
     timestamp:
       asString(rawMessage.timestamp) || asString(payload.timestamp) || null,
     toolUseId:
@@ -1990,15 +1995,18 @@ function mapHistoryMessage(
     Boolean((value as { internal?: boolean }).internal) &&
     (value as { internal_kind?: unknown }).internal_kind ===
       "loop_continuation";
+  const sourceRole = asString(value.role) || asString(normalized.role);
   const role = isLoopContinuation
     ? "system"
-    : value.role === "assistant"
+    : sourceRole === "assistant"
       ? "assistant"
-      : value.role === "user"
+      : sourceRole === "user"
         ? "user"
-        : value.role === "tool_use"
+        : sourceRole === "tool"
+          ? "tool"
+        : sourceRole === "tool_use"
           ? "tool_use"
-        : value.role === "tool_result"
+        : sourceRole === "tool_result"
           ? "tool_result"
           : "system";
   const content = isControlRecord
@@ -2007,6 +2015,12 @@ function mapHistoryMessage(
       ? normalized.content
       : value.content;
   const metadataValue = normalized.metadata;
+  const input = Object.prototype.hasOwnProperty.call(normalized, "input")
+    ? normalized.input
+    : value.input;
+  const result = Object.prototype.hasOwnProperty.call(normalized, "result")
+    ? normalized.result
+    : value.result;
   const metadataRecord =
     metadataValue && typeof metadataValue === "object"
       ? (metadataValue as Record<string, unknown>)
@@ -2023,7 +2037,10 @@ function mapHistoryMessage(
       (typeof value.content === "string" ? value.content.trim() : "") ||
       fallbackText;
   const hasStructuredContent =
-    isControlRecord || (content !== null && content !== undefined);
+    isControlRecord ||
+    content !== null && content !== undefined ||
+    input !== null && input !== undefined ||
+    result !== null && result !== undefined;
 
   if (!text && !hasStructuredContent) {
     return null;
@@ -2049,6 +2066,8 @@ function mapHistoryMessage(
     role,
     text,
     content,
+    input,
+    result,
     toolUseId:
       asString(normalized.tool_use_id) ||
       asString(normalized.toolUseId) ||

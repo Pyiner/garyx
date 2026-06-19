@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   ThreadStreamGapError,
+  fetchThreadHistory,
   mapThreadStreamPassthroughPayload,
   streamGatewayEvents,
   streamThreadEvents,
@@ -189,6 +190,106 @@ test("maps committed_message payloads into desktop transcript stream events", ()
   assert.equal(event.message.kind, "control");
   assert.equal(event.message.text, "");
   assert.equal(event.message.content.control.kind, "run_start");
+
+  const [toolEvent] = mapThreadStreamPassthroughPayload(
+    JSON.stringify({
+      type: "committed_message",
+      thread_id: "thread::committed",
+      run_id: "run-committed",
+      seq: 8,
+      message: {
+        role: "tool",
+        input: {
+          tool_calls: [{ id: "call-stream" }],
+        },
+        result: {
+          tool_use_id: "call-stream",
+        },
+      },
+    }),
+  );
+  assert.equal(toolEvent.type, "committed_message");
+  assert.equal(toolEvent.message.role, "tool");
+  assert.deepEqual(toolEvent.message.input, {
+    tool_calls: [{ id: "call-stream" }],
+  });
+  assert.deepEqual(toolEvent.message.result, {
+    tool_use_id: "call-stream",
+  });
+});
+
+test("fetchThreadHistory preserves kind parity fields for committed reducers", async () => {
+  const originalFetch = globalThis.fetch;
+  const urls = [];
+  globalThis.fetch = async (url) => {
+    urls.push(String(url));
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        messages: [
+          {
+            index: 0,
+            role: "tool",
+            kind: "tool_trace",
+            timestamp: "2026-06-18T12:00:00Z",
+            message: {
+              role: "tool",
+              input: {
+                tool_calls: [{ id: "call-history-tool" }],
+              },
+              result: {
+                tool_use_id: "call-history-tool",
+              },
+            },
+          },
+          {
+            index: 1,
+            role: "assistant",
+            kind: "assistant_reply",
+            timestamp: "2026-06-18T12:00:01Z",
+            message: {
+              role: "assistant",
+              input: {
+                tool_calls: [{ id: "call-history-input" }],
+              },
+            },
+          },
+        ],
+        pending_user_inputs: [],
+      }),
+      { status: 200, statusText: "OK" },
+    );
+  };
+
+  try {
+    const transcript = await fetchThreadHistory(
+      {
+        gatewayUrl: "http://127.0.0.1:31337",
+        gatewayAuthToken: "",
+      },
+      {
+        threadId: "thread::history-parity",
+        afterIndex: 0,
+      },
+    );
+
+    assert.equal(urls.length, 1);
+    assert.match(urls[0], /\/api\/threads\/history\?/);
+    assert.equal(transcript.messages.length, 2);
+    assert.equal(transcript.messages[0].role, "tool");
+    assert.deepEqual(transcript.messages[0].input, {
+      tool_calls: [{ id: "call-history-tool" }],
+    });
+    assert.deepEqual(transcript.messages[0].result, {
+      tool_use_id: "call-history-tool",
+    });
+    assert.equal(transcript.messages[1].role, "assistant");
+    assert.deepEqual(transcript.messages[1].input, {
+      tool_calls: [{ id: "call-history-input" }],
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("streamThreadEvents connects to per-thread stream with resume cursor", async () => {
