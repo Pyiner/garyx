@@ -913,7 +913,7 @@ pub async fn build_bound_response_callback(
         let image_scan_thread_id = thread_id.to_owned();
         let image_scan_run_id = run_id.to_owned();
 
-        return Some(Arc::new(move |event| {
+        let streaming_consumer: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(move |event| {
             match &event {
                 StreamEvent::Delta { text } => {
                     image_scan.push_image_scan_delta(text, "streaming markdown image delivery");
@@ -951,7 +951,16 @@ pub async fn build_bound_response_callback(
                 | StreamEvent::ThreadTitleUpdated { .. } => {}
             }
             callback(event);
-        }));
+        });
+        // Read this run's stream from the durable committed transcript instead
+        // of the live external_callback (block 5). The streaming sender is
+        // unchanged; only the source changes.
+        return garyx_channels::committed_replay::committed_or_live_callback(
+            &state.integration.bridge,
+            run_id,
+            streaming_consumer,
+        )
+        .await;
     }
 
     let bound_delivery = BoundThreadDeliveryBuffer::default();
@@ -962,38 +971,48 @@ pub async fn build_bound_response_callback(
     let delayed_flush_scheduled = Arc::new(AtomicBool::new(false));
     let callback_flush_scheduled = delayed_flush_scheduled.clone();
 
-    Some(Arc::new(move |event| match event {
-        StreamEvent::SessionBound { .. } => {}
-        StreamEvent::Delta { text } => {
-            if callback_delivery.push_delta(&text, "bound delivery") {
-                schedule_loop_bound_delivery_flush(
-                    callback_delivery.clone(),
-                    callback_flush_scheduled.clone(),
+    let bound_consumer: Arc<dyn Fn(StreamEvent) + Send + Sync> =
+        Arc::new(move |event| match event {
+            StreamEvent::SessionBound { .. } => {}
+            StreamEvent::Delta { text } => {
+                if callback_delivery.push_delta(&text, "bound delivery") {
+                    schedule_loop_bound_delivery_flush(
+                        callback_delivery.clone(),
+                        callback_flush_scheduled.clone(),
+                        callback_state.clone(),
+                        callback_thread_id.clone(),
+                        callback_run_id.clone(),
+                    );
+                }
+            }
+            StreamEvent::ToolResult { message } => {
+                callback_delivery.dispatch_content_after_flush(
                     callback_state.clone(),
                     callback_thread_id.clone(),
                     callback_run_id.clone(),
+                    ChannelOutboundContent::ToolResult {
+                        message: message.clone(),
+                    },
+                    "bound delivery",
                 );
+                if message_tool_mirror_text(&message).is_some() {
+                    callback_delivery.suppress();
+                }
             }
-        }
-        StreamEvent::ToolResult { message } => {
-            callback_delivery.dispatch_content_after_flush(
-                callback_state.clone(),
-                callback_thread_id.clone(),
-                callback_run_id.clone(),
-                ChannelOutboundContent::ToolResult {
-                    message: message.clone(),
-                },
-                "bound delivery",
-            );
-            if message_tool_mirror_text(&message).is_some() {
-                callback_delivery.suppress();
-            }
-        }
-        StreamEvent::Boundary { kind, .. } => match kind {
-            StreamBoundaryKind::AssistantSegment => {
-                callback_delivery.push_separator("bound delivery");
-            }
-            StreamBoundaryKind::UserAck => {
+            StreamEvent::Boundary { kind, .. } => match kind {
+                StreamBoundaryKind::AssistantSegment => {
+                    callback_delivery.push_separator("bound delivery");
+                }
+                StreamBoundaryKind::UserAck => {
+                    callback_delivery.finish(
+                        callback_state.clone(),
+                        callback_thread_id.clone(),
+                        callback_run_id.clone(),
+                        "bound delivery",
+                    );
+                }
+            },
+            StreamEvent::Done => {
                 callback_delivery.finish(
                     callback_state.clone(),
                     callback_thread_id.clone(),
@@ -1001,30 +1020,30 @@ pub async fn build_bound_response_callback(
                     "bound delivery",
                 );
             }
-        },
-        StreamEvent::Done => {
-            callback_delivery.finish(
-                callback_state.clone(),
-                callback_thread_id.clone(),
-                callback_run_id.clone(),
-                "bound delivery",
-            );
-        }
-        StreamEvent::ThreadTitleUpdated { .. } => {}
-        StreamEvent::ToolUse { message } => {
-            // Flush any accumulated assistant text before a tool call so that
-            // channels without native streaming (e.g. WeChat) deliver messages
-            // incrementally between tool invocations instead of batching
-            // everything until the run completes.
-            callback_delivery.dispatch_content_after_flush(
-                callback_state.clone(),
-                callback_thread_id.clone(),
-                callback_run_id.clone(),
-                ChannelOutboundContent::ToolUse { message },
-                "bound delivery",
-            );
-        }
-    }))
+            StreamEvent::ThreadTitleUpdated { .. } => {}
+            StreamEvent::ToolUse { message } => {
+                // Flush any accumulated assistant text before a tool call so that
+                // channels without native streaming (e.g. WeChat) deliver messages
+                // incrementally between tool invocations instead of batching
+                // everything until the run completes.
+                callback_delivery.dispatch_content_after_flush(
+                    callback_state.clone(),
+                    callback_thread_id.clone(),
+                    callback_run_id.clone(),
+                    ChannelOutboundContent::ToolUse { message },
+                    "bound delivery",
+                );
+            }
+        });
+    // Read this run's stream from the durable committed transcript instead of
+    // the live external_callback (block 5). The bound delivery buffer is
+    // unchanged; only the source changes.
+    garyx_channels::committed_replay::committed_or_live_callback(
+        &state.integration.bridge,
+        run_id,
+        bound_consumer,
+    )
+    .await
 }
 
 #[cfg(test)]
