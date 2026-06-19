@@ -188,6 +188,14 @@ enum BusSignal {
 /// one) and once more at terminal, so the final whole message stays complete and
 /// ordered ("不丢、顺序对"). A same-seq overwrite (terminal tail rewrite) still
 /// flows; an exact duplicate is dropped.
+///
+/// The first record is normally trusted as the run's start (the adapter
+/// subscribes before dispatch, so with no drop the first row it sees is the
+/// run's first emit). But if a drop happens *before* the frontier is
+/// established, the first visible row may not be the start, so the frontier is
+/// instead rebuilt from cursor 0 against the durable transcript once the
+/// thread id is known — never trusting an arbitrary first-visible seq after an
+/// initial lag.
 struct CommittedReplayState {
     run_id: String,
     thread_id: Option<String>,
@@ -196,6 +204,9 @@ struct CommittedReplayState {
     /// Payload last delivered at `frontier`, to tell a same-seq overwrite (flow)
     /// from an exact duplicate (drop).
     frontier_payload: Option<String>,
+    /// A broadcast drop happened before the frontier was established, so the
+    /// first visible row cannot be trusted as the run's start.
+    lagged_before_frontier: bool,
     done_emitted: bool,
 }
 
@@ -206,6 +217,7 @@ impl CommittedReplayState {
             thread_id: None,
             frontier: None,
             frontier_payload: None,
+            lagged_before_frontier: false,
             done_emitted: false,
         }
     }
@@ -228,7 +240,12 @@ impl CommittedReplayState {
                 };
                 let seq = object.get("seq").and_then(Value::as_u64).unwrap_or(0);
                 match self.frontier {
-                    // First record, or the next contiguous one: deliver in order.
+                    // After an initial lag the first visible row may not be the
+                    // run's start, so rebuild the frontier from the durable
+                    // transcript (cursor 0) instead of trusting this seq.
+                    None if self.lagged_before_frontier => BusSignal::GapFill,
+                    // First record with no prior drop: trust it as the run's
+                    // start. Or the next contiguous one. Deliver in order.
                     None => BusSignal::Deliver(self.deliver_record(seq, message)),
                     Some(frontier) if seq == frontier + 1 => {
                         BusSignal::Deliver(self.deliver_record(seq, message))
@@ -303,6 +320,15 @@ impl CommittedReplayState {
         self.frontier.unwrap_or(0)
     }
 
+    /// Record that the broadcast dropped events. While the frontier is not yet
+    /// established this poisons the first-visible-row shortcut, so the start is
+    /// rebuilt from the durable transcript instead.
+    fn note_lag(&mut self) {
+        if self.frontier.is_none() {
+            self.lagged_before_frontier = true;
+        }
+    }
+
     fn capture_thread_id(&mut self, object: &Map<String, Value>) {
         if self.thread_id.is_some() {
             return;
@@ -364,10 +390,15 @@ pub fn spawn_committed_channel_replay(
                     }
                     BusSignal::Ignore => {}
                 },
-                // A drop always raises `Lagged` before the receiver resumes; pull
-                // the durable transcript to fill any of this run's missed rows in
-                // order, then keep draining live.
+                // A drop always raises `Lagged` before the receiver resumes. Note
+                // it (so an initial lag does not let an arbitrary first-visible
+                // row become the frontier) and pull the durable transcript to fill
+                // any of this run's missed rows in order, then keep draining live.
+                // The transcript read is a no-op until the thread id is known; the
+                // lag note ensures the first committed message then rebuilds from
+                // cursor 0 instead.
                 Err(broadcast::error::RecvError::Lagged(_)) => {
+                    state.note_lag();
                     backfill(&mut state, reader.as_ref(), consumer.as_ref()).await;
                 }
                 // The bus closed (shutdown); reconcile what we can and stop.
@@ -1016,6 +1047,122 @@ mod tests {
                 StreamEvent::Done,
             ],
             "the dropped tail done is recovered from the transcript, not double-emitted"
+        );
+    }
+
+    #[test]
+    fn first_visible_row_after_initial_lag_is_not_trusted_as_start() {
+        // Reviewer regression R2 (#TASK-853): a drop before the frontier is
+        // established (before thread_id is even known) must not let the first
+        // visible row become the contiguous start, or earlier rows are lost.
+        let mut state = CommittedReplayState::new(FIXTURE_RUN.to_owned());
+        state.note_lag();
+        assert!(state.lagged_before_frontier);
+
+        // seq 3 is the first row the receiver sees after the lag — not the run's
+        // start. It must defer to a durable rebuild, not seed the frontier.
+        assert_eq!(
+            state.on_bus_message(&committed_line(3, assistant("third "))),
+            BusSignal::GapFill,
+            "an arbitrary first-visible row after an initial lag is not trusted"
+        );
+        assert_eq!(state.frontier, None, "the frontier is not seeded from it");
+        assert_eq!(state.read_cursor(), 0, "the rebuild reads from cursor 0");
+
+        // The transcript rebuild then delivers the whole run in order.
+        let tail = vec![
+            transcript_record(1, FIXTURE_RUN, assistant("first ")),
+            transcript_record(2, FIXTURE_RUN, assistant("second ")),
+            transcript_record(3, FIXTURE_RUN, assistant("third ")),
+        ];
+        assert_eq!(
+            state.reconcile_from_records(&tail),
+            vec![
+                StreamEvent::Delta {
+                    text: "first ".to_owned()
+                },
+                StreamEvent::Delta {
+                    text: "second ".to_owned()
+                },
+                StreamEvent::Delta {
+                    text: "third ".to_owned()
+                },
+            ],
+            "the dropped initial rows are recovered in order from cursor 0"
+        );
+    }
+
+    #[test]
+    fn lag_after_frontier_is_established_does_not_force_a_full_rebuild() {
+        // A drop *after* the start is a normal mid-run gap: the frontier already
+        // anchors the in-order position, so only the tail past it is refilled.
+        let mut state = CommittedReplayState::new(FIXTURE_RUN.to_owned());
+        let _ = state.on_bus_message(&committed_line(1, assistant("first ")));
+        assert_eq!(state.frontier, Some(1));
+        state.note_lag();
+        assert!(
+            !state.lagged_before_frontier,
+            "a lag once the frontier exists is an ordinary gap, not an unsafe start"
+        );
+        assert_eq!(
+            state.read_cursor(),
+            1,
+            "the refill reads past the frontier, not from 0"
+        );
+    }
+
+    #[tokio::test]
+    async fn spawn_recovers_initial_lag_before_thread_id_via_full_rebuild() {
+        use std::sync::Mutex as StdMutex;
+
+        // A small buffer so publishing before the task drains forces a real
+        // initial Lagged with the thread id still unknown.
+        let (tx, rx) = broadcast::channel(2);
+        let collected: Arc<StdMutex<Vec<StreamEvent>>> = Arc::new(StdMutex::new(Vec::new()));
+        let consumer: Arc<dyn Fn(StreamEvent) + Send + Sync> = {
+            let collected = collected.clone();
+            Arc::new(move |event| collected.lock().unwrap().push(event))
+        };
+        let reader = Arc::new(MockTailReader {
+            records: vec![
+                transcript_record(1, FIXTURE_RUN, assistant("first ")),
+                transcript_record(2, FIXTURE_RUN, assistant("second ")),
+                transcript_record(3, FIXTURE_RUN, assistant("third ")),
+            ],
+        });
+
+        let handle = spawn_committed_channel_replay(rx, reader, FIXTURE_RUN.to_owned(), consumer);
+
+        // Publish before the task polls: the cap-2 broadcast drops seq 1 and 2,
+        // so the receiver's first poll is Lagged (thread id unknown), then it
+        // sees only seq 3 and the run_complete.
+        tx.send(committed_line(1, assistant("first "))).unwrap();
+        tx.send(committed_line(2, assistant("second "))).unwrap();
+        tx.send(committed_line(3, assistant("third "))).unwrap();
+        tx.send(run_lifecycle_line("run_complete")).unwrap();
+
+        handle.await.unwrap();
+
+        let events = collected.lock().unwrap().clone();
+        let deltas: Vec<String> = events
+            .iter()
+            .filter_map(|event| match event {
+                StreamEvent::Delta { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            deltas,
+            vec!["first ", "second ", "third "],
+            "the initial-lag drop is rebuilt from cursor 0 in order: {events:?}"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, StreamEvent::Done))
+                .count(),
+            1,
+            "exactly one Done"
         );
     }
 
