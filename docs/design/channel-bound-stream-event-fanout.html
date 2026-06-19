@@ -351,11 +351,11 @@
 
     <section>
       <h2>3. Endpoint Identity 和去重</h2>
-      <div class="warning note">这是 Claude review 指出的 High 风险：origin duplicate prevention 不能只比较 <code>chat_id</code> 或 <code>delivery_target_id</code>。同 chat 不同 topic/thread 必须保持不同 endpoint identity。</div>
+      <div class="warning note">这里的边界收窄为：gateway/router 只认 channel 给出的 opaque <code>Endpoint Identity</code>。它不关心这个 key 怎么生成、里面有什么字段，也不解析任何 channel 内部字段。</div>
       <div class="diagram">
         <div class="diagram-title">
-          <h3>正确和错误的去重方式</h3>
-          <span>binding 去重和 origin 排除必须使用同一把 canonical identity</span>
+          <h3>只按 Endpoint Identity 做 equality</h3>
+          <span>生成和语义归属在 channel，gateway 只比较 key 是否相等</span>
         </div>
         <svg viewBox="0 0 1080 360" role="img" aria-label="Endpoint identity 去重流程图">
           <defs>
@@ -364,35 +364,35 @@
             </marker>
           </defs>
           <rect class="box box-blue" x="52" y="72" width="210" height="78"></rect>
-          <text class="label" x="157" y="104" text-anchor="middle">绑定 A</text>
-          <text class="small" x="157" y="124" text-anchor="middle">chat 100 / topic 10</text>
+          <text class="label" x="157" y="104" text-anchor="middle">Channel target A</text>
+          <text class="small" x="157" y="124" text-anchor="middle">channel 理解 native 目的地</text>
 
           <rect class="box box-blue" x="52" y="198" width="210" height="78"></rect>
-          <text class="label" x="157" y="230" text-anchor="middle">绑定 B</text>
-          <text class="small" x="157" y="250" text-anchor="middle">chat 100 / topic 20</text>
+          <text class="label" x="157" y="230" text-anchor="middle">Channel target B</text>
+          <text class="small" x="157" y="250" text-anchor="middle">channel 理解 native 目的地</text>
 
-          <rect class="box box-red" x="360" y="62" width="260" height="100"></rect>
-          <text class="label" x="490" y="94" text-anchor="middle">错误：粗身份</text>
-          <text class="small" x="490" y="116" text-anchor="middle">channel + account + chat_id</text>
-          <text class="small" x="490" y="136" text-anchor="middle">A 和 B 被误认为相同</text>
+          <rect class="box box-green" x="360" y="62" width="260" height="100"></rect>
+          <text class="label" x="490" y="94" text-anchor="middle">Endpoint Identity A</text>
+          <text class="small" x="490" y="116" text-anchor="middle">opaque unique key</text>
+          <text class="small" x="490" y="136" text-anchor="middle">由 channel 生成</text>
 
           <rect class="box box-green" x="360" y="190" width="260" height="112"></rect>
-          <text class="label" x="490" y="222" text-anchor="middle">正确：精确身份</text>
-          <text class="small" x="490" y="244" text-anchor="middle">channel + account + native scope</text>
-          <text class="small" x="490" y="264" text-anchor="middle">包含 topic/thread/conversation</text>
-          <text class="small" x="490" y="284" text-anchor="middle">A 和 B 保持不同</text>
+          <text class="label" x="490" y="222" text-anchor="middle">Endpoint Identity B</text>
+          <text class="small" x="490" y="244" text-anchor="middle">opaque unique key</text>
+          <text class="small" x="490" y="264" text-anchor="middle">由 channel 生成</text>
+          <text class="small" x="490" y="284" text-anchor="middle">gateway 不解析内容</text>
 
           <rect class="box box-violet" x="740" y="128" width="250" height="96"></rect>
-          <text class="label" x="865" y="160" text-anchor="middle">统一使用 canonical key</text>
+          <text class="label" x="865" y="160" text-anchor="middle">Gateway equality</text>
           <text class="small" x="865" y="182" text-anchor="middle">binding de-duplication</text>
-          <text class="small" x="865" y="202" text-anchor="middle">origin callback exclusion</text>
+          <text class="small" x="865" y="202" text-anchor="middle">origin exclusion / outcome</text>
 
           <path class="arrow" marker-end="url(#arrow3)" d="M262 111 L360 111"></path>
           <path class="arrow" marker-end="url(#arrow3)" d="M262 237 L360 246"></path>
-          <path class="arrow dashed" marker-end="url(#arrow3)" d="M620 112 C676 112 682 150 740 160"></path>
+          <path class="arrow" marker-end="url(#arrow3)" d="M620 112 C676 112 682 150 740 160"></path>
           <path class="arrow" marker-end="url(#arrow3)" d="M620 246 C680 246 682 202 740 188"></path>
-          <text class="small" x="682" y="98" text-anchor="middle">禁止</text>
-          <text class="small" x="682" y="260" text-anchor="middle">采用</text>
+          <text class="small" x="682" y="98" text-anchor="middle">只传 key</text>
+          <text class="small" x="682" y="260" text-anchor="middle">只传 key</text>
         </svg>
       </div>
     </section>
@@ -415,7 +415,7 @@
           </tr>
           <tr>
             <td><code>UserAck</code></td>
-            <td>只投 origin endpoint，或带 origin identity 让非 origin 忽略</td>
+            <td>只投 origin endpoint，或带 origin <code>Endpoint Identity</code> 让非 origin 忽略</td>
             <td>ack 是端点相关事件，不是所有绑定端点都应切分输出</td>
           </tr>
           <tr>
@@ -425,7 +425,7 @@
           </tr>
           <tr>
             <td>delivery outcome</td>
-            <td>返回 target identity、run id、seq、message id、状态</td>
+            <td>返回 <code>Endpoint Identity</code>、run id、seq、message id、状态</td>
             <td>保留 router outbound id persistence 和诊断能力</td>
           </tr>
         </tbody>
@@ -483,7 +483,8 @@
         <div class="panel">
           <h3>迁移顺序</h3>
           <ol>
-            <li>补 exact endpoint identity 测试。</li>
+            <li>补 opaque <code>Endpoint Identity</code> equality 测试。</li>
+            <li>channel 侧补 identity 生成契约测试。</li>
             <li>新增 dispatcher-level <code>dispatch_stream_event</code>。</li>
             <li>内置 channel 先接入 native dispatch。</li>
             <li>补 delivery outcome 和 router outbound id 回流。</li>
@@ -496,7 +497,7 @@
           <h3>验收重点</h3>
           <ul>
             <li>run 来源无关，所有绑定端点都能收到 committed event。</li>
-            <li>同 chat 不同 topic/thread 不被合并或误排除。</li>
+            <li>gateway/router 只按 <code>Endpoint Identity</code> equality 去重。</li>
             <li>结构化 tool event 不在 gateway 降级。</li>
             <li>restart reattach 后不重复投递。</li>
             <li>unsupported structured event 可观测。</li>
