@@ -371,6 +371,7 @@ pub async fn create_task(
                                 agent_id: "workflow".to_owned(),
                             },
                             Some(format!("workflow entrypoint dispatch failed: {error}")),
+                            None,
                         )
                         .await;
                         return workflow_error_as_task_response(error);

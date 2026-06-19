@@ -104,6 +104,7 @@ pub(super) async fn mark_workflow_task_in_review(
             agent_id: "workflow".to_owned(),
         },
         Some(note),
+        None,
     )
     .await
     .map(|_| ())

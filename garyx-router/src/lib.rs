@@ -74,9 +74,9 @@ pub use task_counter::{
     FileTaskCounterStore, InMemoryTaskCounterStore, TaskCounterError, TaskCounterStore,
 };
 pub use tasks::{
-    CreateTaskInput, TaskHistoryPage, TaskId, TaskListFilter, TaskRuntimeInput, TaskService,
-    TaskServiceError, TaskSummary, UpdateTaskStatusInput,
-    mark_thread_task_in_review_if_in_progress,
+    CreateTaskInput, EnterReview, TaskHistoryPage, TaskId, TaskListFilter, TaskRuntimeInput,
+    TaskService, TaskServiceError, TaskSummary, UpdateTaskStatusInput,
+    mark_thread_task_in_progress_on_wake, mark_thread_task_in_review_if_in_progress,
 };
 pub use thread_history::{
     DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, RECENT_COMMITTED_RUN_IDS_LIMIT,

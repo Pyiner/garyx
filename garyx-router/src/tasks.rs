@@ -113,6 +113,12 @@ pub struct UpdateTaskStatusInput {
     pub actor: Option<Principal>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnterReview {
+    pub task: ThreadTask,
+    pub handoff: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TaskListFilter {
     pub status: Option<TaskStatus>,
@@ -776,7 +782,8 @@ pub async fn mark_thread_task_in_review_if_in_progress(
     thread_id: &str,
     actor: Principal,
     note: Option<String>,
-) -> Result<Option<ThreadTask>, TaskServiceError> {
+    handoff: Option<String>,
+) -> Result<Option<EnterReview>, TaskServiceError> {
     validate_principal(&actor)?;
     let lock = task_thread_lock(thread_id);
     let _guard = lock.lock().await;
@@ -812,6 +819,41 @@ pub async fn mark_thread_task_in_review_if_in_progress(
             from,
             to: TaskStatus::InReview,
             note: normalized_limited(note, 500)?,
+        },
+        None,
+    );
+    set_task_on_record(&mut record, &task)?;
+    thread_store.set(thread_id, record).await;
+    task_index_upsert(thread_store_id(thread_store), thread_id, &task);
+    Ok(Some(EnterReview { task, handoff }))
+}
+
+pub async fn mark_thread_task_in_progress_on_wake(
+    thread_store: &Arc<dyn ThreadStore>,
+    thread_id: &str,
+    actor: Principal,
+) -> Result<Option<ThreadTask>, TaskServiceError> {
+    validate_principal(&actor)?;
+    let lock = task_thread_lock(thread_id);
+    let _guard = lock.lock().await;
+    let Some(mut record) = thread_store.get(thread_id).await else {
+        return Ok(None);
+    };
+    let Some(mut task) = task_from_record(&record)? else {
+        return Ok(None);
+    };
+    if !matches!(task.status, TaskStatus::InReview | TaskStatus::Done) {
+        return Ok(None);
+    }
+    let from = task.status;
+    task.status = TaskStatus::InProgress;
+    push_event(
+        &mut task,
+        actor,
+        TaskEventKind::StatusChanged {
+            from,
+            to: TaskStatus::InProgress,
+            note: None,
         },
         None,
     );
@@ -1277,6 +1319,7 @@ fn is_allowed_transition(from: TaskStatus, to: TaskStatus) -> bool {
             | (TaskStatus::InProgress, TaskStatus::InReview)
             | (TaskStatus::InReview, TaskStatus::InProgress)
             | (TaskStatus::InReview, TaskStatus::Done)
+            | (TaskStatus::Done, TaskStatus::InProgress)
             | (TaskStatus::Done, TaskStatus::Todo)
     )
 }
@@ -1728,11 +1771,14 @@ mod tests {
                 agent_id: "garyx".to_owned(),
             },
             Some("agent run completed".to_owned()),
+            Some("handoff text".to_owned()),
         )
         .await
         .unwrap()
         .expect("in-progress task should move to review");
 
+        assert_eq!(updated.handoff.as_deref(), Some("handoff text"));
+        let updated = updated.task;
         assert_eq!(updated.status, TaskStatus::InReview);
         let (_, _, persisted) = service.get_task(&canonical_task_id(&task)).await.unwrap();
         assert_eq!(persisted.status, TaskStatus::InReview);
@@ -1799,6 +1845,7 @@ mod tests {
                 agent_id: "garyx".to_owned(),
             },
             Some("agent run completed".to_owned()),
+            Some("parent handoff".to_owned()),
         )
         .await
         .unwrap();
@@ -1830,10 +1877,13 @@ mod tests {
                 agent_id: "garyx".to_owned(),
             },
             Some("agent run completed".to_owned()),
+            Some("parent handoff".to_owned()),
         )
         .await
         .unwrap()
         .expect("parent task should move to review once no subtasks run");
+        assert_eq!(released.handoff.as_deref(), Some("parent handoff"));
+        let released = released.task;
         assert_eq!(released.status, TaskStatus::InReview);
     }
 
@@ -1876,6 +1926,7 @@ mod tests {
                 agent_id: "garyx".to_owned(),
             },
             Some("agent run completed".to_owned()),
+            Some("handoff text".to_owned()),
         )
         .await
         .unwrap();
@@ -1883,6 +1934,184 @@ mod tests {
         assert!(updated.is_none());
         let (_, _, persisted) = service.get_task(&canonical_task_id(&task)).await.unwrap();
         assert_eq!(persisted.status, TaskStatus::InReview);
+    }
+
+    #[tokio::test]
+    async fn run_wake_revives_in_review_task_to_in_progress() {
+        let service = service();
+        let (thread_id, task) = service
+            .create_task(CreateTaskInput {
+                title: Some("Wake reviewed task".to_owned()),
+                body: None,
+                assignee: Some(Principal::Agent {
+                    agent_id: "codex".to_owned(),
+                }),
+                notification_target: None,
+                source: None,
+                executor: None,
+                start: true,
+                actor: None,
+                agent_id: None,
+                workspace_dir: None,
+                runtime: None,
+            })
+            .await
+            .unwrap();
+        service
+            .update_status(UpdateTaskStatusInput {
+                task_id: canonical_task_id(&task),
+                to: TaskStatus::InReview,
+                note: None,
+                force: false,
+                actor: None,
+            })
+            .await
+            .unwrap();
+
+        let updated = mark_thread_task_in_progress_on_wake(
+            &service.thread_store,
+            &thread_id,
+            Principal::Agent {
+                agent_id: "garyx".to_owned(),
+            },
+        )
+        .await
+        .unwrap()
+        .expect("in-review task should revive");
+
+        assert_eq!(updated.status, TaskStatus::InProgress);
+        assert!(matches!(
+            updated.events.last().map(|event| &event.kind),
+            Some(TaskEventKind::StatusChanged {
+                from: TaskStatus::InReview,
+                to: TaskStatus::InProgress,
+                note: None,
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn run_wake_revives_done_task_to_in_progress() {
+        let service = service();
+        let (thread_id, task) = service
+            .create_task(CreateTaskInput {
+                title: Some("Wake done task".to_owned()),
+                body: None,
+                assignee: Some(Principal::Agent {
+                    agent_id: "codex".to_owned(),
+                }),
+                notification_target: None,
+                source: None,
+                executor: None,
+                start: true,
+                actor: None,
+                agent_id: None,
+                workspace_dir: None,
+                runtime: None,
+            })
+            .await
+            .unwrap();
+        let task_id = canonical_task_id(&task);
+        service
+            .update_status(UpdateTaskStatusInput {
+                task_id: task_id.clone(),
+                to: TaskStatus::InReview,
+                note: None,
+                force: false,
+                actor: None,
+            })
+            .await
+            .unwrap();
+        service
+            .update_status(UpdateTaskStatusInput {
+                task_id: task_id.clone(),
+                to: TaskStatus::Done,
+                note: None,
+                force: false,
+                actor: None,
+            })
+            .await
+            .unwrap();
+
+        let updated = mark_thread_task_in_progress_on_wake(
+            &service.thread_store,
+            &thread_id,
+            Principal::Agent {
+                agent_id: "garyx".to_owned(),
+            },
+        )
+        .await
+        .unwrap()
+        .expect("done task should revive");
+
+        assert_eq!(updated.status, TaskStatus::InProgress);
+        assert!(matches!(
+            updated.events.last().map(|event| &event.kind),
+            Some(TaskEventKind::StatusChanged {
+                from: TaskStatus::Done,
+                to: TaskStatus::InProgress,
+                note: None,
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn status_machine_allows_done_to_in_progress() {
+        let service = service();
+        let (_thread_id, task) = service
+            .create_task(CreateTaskInput {
+                title: Some("Resume done task".to_owned()),
+                body: None,
+                assignee: Some(Principal::Agent {
+                    agent_id: "codex".to_owned(),
+                }),
+                notification_target: None,
+                source: None,
+                executor: None,
+                start: true,
+                actor: None,
+                agent_id: None,
+                workspace_dir: None,
+                runtime: None,
+            })
+            .await
+            .unwrap();
+        let task_id = canonical_task_id(&task);
+        service
+            .update_status(UpdateTaskStatusInput {
+                task_id: task_id.clone(),
+                to: TaskStatus::InReview,
+                note: None,
+                force: false,
+                actor: None,
+            })
+            .await
+            .unwrap();
+        service
+            .update_status(UpdateTaskStatusInput {
+                task_id: task_id.clone(),
+                to: TaskStatus::Done,
+                note: None,
+                force: false,
+                actor: None,
+            })
+            .await
+            .unwrap();
+
+        let updated = service
+            .update_status(UpdateTaskStatusInput {
+                task_id,
+                to: TaskStatus::InProgress,
+                note: None,
+                force: false,
+                actor: Some(Principal::Agent {
+                    agent_id: "garyx".to_owned(),
+                }),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(updated.status, TaskStatus::InProgress);
     }
 
     #[tokio::test]

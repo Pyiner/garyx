@@ -1120,6 +1120,10 @@ async fn mark_task_ready_for_review_after_stopped_run(
     };
 
     if allow_transition && has_gate_response {
+        let handoff = notification_text
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
         match mark_thread_task_in_review_if_in_progress(
             &store,
             thread_id,
@@ -1127,17 +1131,18 @@ async fn mark_task_ready_for_review_after_stopped_run(
                 agent_id: "garyx".to_owned(),
             },
             Some("agent run stopped".to_owned()),
+            handoff,
         )
         .await
         {
-            Ok(Some(task)) => {
-                let task_id = garyx_router::tasks::canonical_task_id(&task);
+            Ok(Some(transition)) => {
+                let task_id = garyx_router::tasks::canonical_task_id(&transition.task);
                 emit_task_ready_for_review_event(
                     inner,
                     thread_id,
                     run_id,
                     &task_id,
-                    notification_text,
+                    transition.handoff.as_deref(),
                 )
                 .await;
                 record_thread_log(
