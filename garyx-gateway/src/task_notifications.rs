@@ -4,8 +4,7 @@ use std::sync::Arc;
 use garyx_channels::{OutboundMessage, SendMessageResult};
 use garyx_models::thread_logs::ThreadLogEvent;
 use garyx_models::{
-    ChannelOutboundContent, MessageLifecycleStatus, MessageTerminalReason, TaskEventKind,
-    TaskNotificationTarget, TaskStatus, ThreadTask, is_tool_related_message,
+    ChannelOutboundContent, MessageLifecycleStatus, MessageTerminalReason, TaskNotificationTarget,
 };
 use garyx_router::tasks::task_from_record;
 use serde_json::{Value, json};
@@ -37,12 +36,12 @@ pub(crate) fn spawn_listener(state: Arc<AppState>) {
                     };
                     let state = state.clone();
                     tokio::spawn(async move {
-                        if let Err(error) = dispatch_task_ready_notification(&state, event).await {
+                        if let Err(error) = deliver_task_review_handoff(&state, event).await {
                             warn!(
                                 thread_id = %error.thread_id,
                                 task_id = %error.task_id,
                                 error = %error.message,
-                                "failed to dispatch task ready notification"
+                                "failed to deliver task review handoff"
                             );
                         }
                     });
@@ -59,7 +58,7 @@ pub(crate) struct TaskReadyForReviewEvent {
     pub(crate) thread_id: String,
     pub(crate) task_id: String,
     pub(crate) run_id: Option<String>,
-    pub(crate) final_message: Option<String>,
+    pub(crate) handoff: Option<String>,
 }
 
 #[derive(Debug)]
@@ -86,28 +85,29 @@ fn parse_task_ready_for_review_event(payload: &Value) -> Option<TaskReadyForRevi
     let thread_id = trimmed_string(payload.get("thread_id")?)?;
     let task_id = trimmed_string(payload.get("task_id")?)?;
     let run_id = payload.get("run_id").and_then(trimmed_string);
-    let final_message = payload.get("final_message").and_then(trimmed_string);
+    let handoff = payload.get("handoff").and_then(trimmed_string);
     Some(TaskReadyForReviewEvent {
         thread_id,
         task_id,
         run_id,
-        final_message,
+        handoff,
     })
 }
 
-pub(crate) async fn dispatch_task_ready_notification(
+pub(crate) async fn deliver_task_review_handoff(
     state: &Arc<AppState>,
     event: TaskReadyForReviewEvent,
 ) -> Result<(), TaskNotificationError> {
+    let Some(handoff) = event.handoff.as_deref().map(str::trim).filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
     let Some(record) = state.threads.thread_store.get(&event.thread_id).await else {
         return Err(TaskNotificationError::new(&event, "task thread not found"));
     };
     let task = task_from_record(&record)
         .map_err(|error| TaskNotificationError::new(&event, error.to_string()))?
         .ok_or_else(|| TaskNotificationError::new(&event, "thread has no task"))?;
-    if task.status != TaskStatus::InReview || !latest_event_is_ready_for_review(&task) {
-        return Ok(());
-    }
     let Some(target) = task.notification_target.clone() else {
         return Err(TaskNotificationError::new(
             &event,
@@ -129,18 +129,7 @@ pub(crate) async fn dispatch_task_ready_notification(
         return Ok(());
     }
 
-    let event_final_message = event
-        .final_message
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let final_message = match event_final_message {
-        Some(value) => value.to_owned(),
-        None => final_message_from_task_thread(state, &event.thread_id)
-            .await
-            .unwrap_or_default(),
-    };
-    let notification = format_task_ready_notification(&event.task_id, &task.title, &final_message);
+    let notification = format_task_ready_notification(&event.task_id, &task.title, handoff);
     match target {
         TaskNotificationTarget::None => Ok(()),
         TaskNotificationTarget::Thread { thread_id } => {
@@ -151,17 +140,6 @@ pub(crate) async fn dispatch_task_ready_notification(
             account_id,
         } => deliver_notification_to_bot(state, &event, &channel, &account_id, &notification).await,
     }
-}
-
-fn latest_event_is_ready_for_review(task: &ThreadTask) -> bool {
-    matches!(
-        task.events.last().map(|event| &event.kind),
-        Some(TaskEventKind::StatusChanged {
-            from: TaskStatus::InProgress,
-            to: TaskStatus::InReview,
-            ..
-        })
-    )
 }
 
 pub(crate) fn format_task_ready_notification(
@@ -191,65 +169,6 @@ If approved, mark it done:\n\
 garyx task update {body_task_id} --status done --note \"approved by reviewer\"\n\
 </{TASK_NOTIFICATION_TAG}>"
     )
-}
-
-async fn final_message_from_task_thread(state: &Arc<AppState>, thread_id: &str) -> Option<String> {
-    let snapshot = state
-        .threads
-        .history
-        .thread_snapshot(thread_id, 500)
-        .await
-        .ok()?;
-    final_text_after_last_user(&snapshot.combined_messages())
-}
-
-fn final_text_after_last_user(messages: &[Value]) -> Option<String> {
-    let mut after_user = false;
-    let mut current_group: Vec<String> = Vec::new();
-    let mut last_group: Vec<String> = Vec::new();
-
-    for message in messages {
-        let role = message.get("role").and_then(Value::as_str);
-        let tool_related = message
-            .as_object()
-            .is_some_and(|object| is_tool_related_message(role.unwrap_or_default(), object));
-        match role {
-            Some("user") if !tool_related => {
-                after_user = true;
-                current_group.clear();
-                last_group.clear();
-            }
-            Some("assistant") if after_user && !tool_related => {
-                let text = message_text(message);
-                if let Some(text) = text {
-                    current_group.push(text);
-                    last_group = current_group.clone();
-                }
-            }
-            _ if after_user && tool_related => {}
-            _ if after_user => {
-                current_group.clear();
-            }
-            _ => {}
-        }
-    }
-
-    (!last_group.is_empty()).then(|| last_group.join("\n\n"))
-}
-
-fn message_text(message: &Value) -> Option<String> {
-    match message.get("content") {
-        Some(Value::String(value)) => trimmed_owned(value),
-        Some(Value::Array(parts)) => {
-            let text = parts
-                .iter()
-                .filter_map(|part| part.get("text").and_then(Value::as_str))
-                .collect::<Vec<_>>()
-                .join("\n");
-            trimmed_owned(&text)
-        }
-        _ => None,
-    }
 }
 
 async fn deliver_notification_to_thread(

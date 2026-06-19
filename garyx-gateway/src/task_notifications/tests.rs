@@ -7,7 +7,7 @@ use garyx_bridge::provider_trait::{AgentLoopProvider, BridgeError, StreamCallbac
 use garyx_channels::{ChannelDispatcher, ChannelInfo};
 use garyx_models::config::{GaryxConfig, OwnerTargetConfig, TelegramAccount};
 use garyx_models::provider::{ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent};
-use garyx_models::{Principal, TaskEvent, TaskEventKind};
+use garyx_models::{Principal, TaskEvent, TaskEventKind, TaskStatus, ThreadTask};
 
 type ProviderCall = (String, String, HashMap<String, Value>);
 
@@ -196,57 +196,8 @@ fn format_wraps_notification_with_single_outer_xml_tag() {
     assert!(text.ends_with("</garyx_task_notification>"));
 }
 
-#[test]
-fn final_text_uses_last_assistant_group_after_last_user() {
-    let messages = vec![
-        json!({"role": "user", "content": "first"}),
-        json!({"role": "assistant", "content": "old answer"}),
-        json!({"role": "user", "content": "second"}),
-        json!({"role": "assistant", "content": "part one"}),
-        json!({"role": "assistant", "content": "part two"}),
-    ];
-
-    assert_eq!(
-        final_text_after_last_user(&messages).as_deref(),
-        Some("part one\n\npart two")
-    );
-}
-
-#[test]
-fn final_text_keeps_tool_split_final_answer_together() {
-    let messages = vec![
-        json!({"role": "user", "content": "Finish the task and report the final result."}),
-        json!({"role": "assistant", "content": "CONFIRMED: the task is complete.\n\nValidation: focused tests passed."}),
-        json!({
-            "role": "assistant",
-            "content": [{
-                "type": "tool_use",
-                "id": "toolu_synthetic_review",
-                "name": "Bash",
-                "input": {"cmd": "garyx task create --title review"}
-            }]
-        }),
-        json!({
-            "role": "user",
-            "content": [{
-                "type": "tool_result",
-                "tool_use_id": "toolu_synthetic_review",
-                "content": "queued"
-            }]
-        }),
-        json!({"role": "assistant", "content": "The code review is queued; stopping for review."}),
-    ];
-
-    assert_eq!(
-        final_text_after_last_user(&messages).as_deref(),
-        Some(
-            "CONFIRMED: the task is complete.\n\nValidation: focused tests passed.\n\nThe code review is queued; stopping for review."
-        )
-    );
-}
-
 #[tokio::test]
-async fn dispatch_uses_committed_thread_final_message() {
+async fn deliver_without_handoff_does_not_fallback_to_committed_thread_final_message() {
     let dispatcher = Arc::new(RecordingDispatcher::default());
     let provider = Arc::new(RecordingProvider::default());
     let bridge = Arc::new(MultiProviderBridge::new());
@@ -294,22 +245,19 @@ async fn dispatch_uses_committed_thread_final_message() {
         .await
         .expect("append transcript");
 
-    dispatch_task_ready_notification(
+    deliver_task_review_handoff(
         &state,
         TaskReadyForReviewEvent {
             thread_id: "thread::task-final".to_owned(),
             task_id: "#TASK-42".to_owned(),
             run_id: None,
-            final_message: None,
+            handoff: None,
         },
     )
     .await
     .unwrap();
 
-    let calls = dispatcher.calls();
-    assert_eq!(calls.len(), 1);
-    let text = calls[0].content.as_text().expect("notification text");
-    assert!(text.contains("Committed final handoff text."));
+    assert!(dispatcher.calls().is_empty());
     assert!(provider.calls().is_empty());
 }
 
@@ -345,25 +293,25 @@ async fn dispatch_does_not_replay_ready_notification_without_handoff() {
         )
         .await;
 
-    dispatch_task_ready_notification(
+    deliver_task_review_handoff(
         &state,
         TaskReadyForReviewEvent {
             thread_id: "thread::task-replay".to_owned(),
             task_id: "#TASK-42".to_owned(),
             run_id: Some("run-handoff".to_owned()),
-            final_message: Some("First handoff.".to_owned()),
+            handoff: Some("First handoff.".to_owned()),
         },
     )
     .await
     .unwrap();
 
-    dispatch_task_ready_notification(
+    deliver_task_review_handoff(
         &state,
         TaskReadyForReviewEvent {
             thread_id: "thread::task-replay".to_owned(),
             task_id: "#TASK-42".to_owned(),
             run_id: None,
-            final_message: None,
+            handoff: None,
         },
     )
     .await
@@ -419,13 +367,13 @@ async fn dispatches_ready_notification_to_bot_target() {
         )
         .await;
 
-    dispatch_task_ready_notification(
+    deliver_task_review_handoff(
         &state,
         TaskReadyForReviewEvent {
             thread_id: "thread::task".to_owned(),
             task_id: "#TASK-42".to_owned(),
             run_id: Some("run-42".to_owned()),
-            final_message: Some("The implementation is complete.".to_owned()),
+            handoff: Some("The implementation is complete.".to_owned()),
         },
     )
     .await
@@ -502,40 +450,37 @@ async fn dispatches_ready_notification_to_bot_target() {
 }
 
 #[test]
-fn parse_event_treats_null_final_message_as_absent() {
-    // Stage 1 contract: when the bridge has no last segment it emits a JSON null
-    // final_message; the gateway must read that as absent so dispatch falls back
-    // to `final_text_after_last_user`.
+fn parse_event_treats_null_handoff_as_absent() {
     let payload = json!({
         "type": "task_ready_for_review",
         "thread_id": "thread::x",
         "task_id": "#TASK-1",
         "run_id": "run-1",
-        "final_message": Value::Null,
+        "handoff": Value::Null,
     });
     let event = parse_task_ready_for_review_event(&payload).expect("event parses");
-    assert_eq!(event.final_message, None);
+    assert_eq!(event.handoff, None);
 }
 
 #[test]
-fn parse_event_treats_missing_final_message_as_absent() {
+fn parse_event_treats_missing_handoff_as_absent() {
     let payload = json!({
         "type": "task_ready_for_review",
         "thread_id": "thread::x",
         "task_id": "#TASK-1",
     });
     let event = parse_task_ready_for_review_event(&payload).expect("event parses");
-    assert_eq!(event.final_message, None);
+    assert_eq!(event.handoff, None);
 }
 
 #[test]
-fn parse_event_keeps_non_empty_final_message() {
+fn parse_event_keeps_non_empty_handoff() {
     let payload = json!({
         "type": "task_ready_for_review",
         "thread_id": "thread::x",
         "task_id": "#TASK-1",
-        "final_message": "Done.",
+        "handoff": "Done.",
     });
     let event = parse_task_ready_for_review_event(&payload).expect("event parses");
-    assert_eq!(event.final_message.as_deref(), Some("Done."));
+    assert_eq!(event.handoff.as_deref(), Some("Done."));
 }

@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
 use garyx_models::Principal;
-use garyx_router::mark_thread_task_in_review_if_in_progress;
+use garyx_router::{mark_thread_task_in_review_if_in_progress, tasks::canonical_task_id};
 
 use crate::garyx_db::WorkflowRunRecord;
 use crate::server::AppState;
+use crate::task_notifications::{TaskReadyForReviewEvent, deliver_task_review_handoff};
 
 use super::{WorkflowError, WorkflowStore};
 
@@ -20,6 +21,7 @@ pub async fn cancel_workflow_run(
                 state,
                 &run,
                 format!("workflow cancelled: {workflow_run_id}"),
+                None,
             )
             .await?;
             Ok(true)
@@ -61,6 +63,7 @@ pub async fn reconcile_interrupted_workflows(
                         "workflow failed after gateway restart: {}",
                         reference.workflow_id
                     ),
+                    None,
                 )
                 .await
                 {
@@ -85,9 +88,10 @@ pub(super) async fn mark_workflow_run_task_in_review(
     state: &Arc<AppState>,
     run: &WorkflowRunRecord,
     note: String,
+    handoff: Option<String>,
 ) -> Result<(), WorkflowError> {
     if let Some(task_thread_id) = run.task_thread_id.as_deref() {
-        mark_workflow_task_in_review(state, task_thread_id, note).await?;
+        mark_workflow_task_in_review(state, task_thread_id, note, handoff).await?;
     }
     Ok(())
 }
@@ -96,17 +100,31 @@ pub(super) async fn mark_workflow_task_in_review(
     state: &Arc<AppState>,
     task_thread_id: &str,
     note: String,
+    handoff: Option<String>,
 ) -> Result<(), WorkflowError> {
-    mark_thread_task_in_review_if_in_progress(
+    let transition = mark_thread_task_in_review_if_in_progress(
         &state.threads.thread_store,
         task_thread_id,
         Principal::Agent {
             agent_id: "workflow".to_owned(),
         },
         Some(note),
-        None,
+        handoff,
     )
     .await
-    .map(|_| ())
-    .map_err(|error| WorkflowError::BadRequest(error.to_string()))
+    .map_err(|error| WorkflowError::BadRequest(error.to_string()))?;
+    if let Some(transition) = transition {
+        deliver_task_review_handoff(
+            state,
+            TaskReadyForReviewEvent {
+                thread_id: task_thread_id.to_owned(),
+                task_id: canonical_task_id(&transition.task),
+                run_id: None,
+                handoff: transition.handoff,
+            },
+        )
+        .await
+        .map_err(|error| WorkflowError::BadRequest(format!("{error:?}")))?;
+    }
+    Ok(())
 }

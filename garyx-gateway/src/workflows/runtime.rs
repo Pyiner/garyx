@@ -591,7 +591,7 @@ impl WorkflowRuntime {
             thread_id: None,
             event_type: event_type.to_owned(),
             payload_json: json!({
-                "outputText": output_text,
+                "outputText": output_text.clone(),
                 "error": request.error,
                 "source": "sdk",
             })
@@ -602,6 +602,7 @@ impl WorkflowRuntime {
                 &self.state,
                 task_thread_id,
                 format!("workflow {status}: {workflow_run_id}"),
+                output_text.clone(),
             )
             .await?;
         }

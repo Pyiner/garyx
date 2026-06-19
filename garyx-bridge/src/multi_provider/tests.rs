@@ -2766,7 +2766,7 @@ async fn test_work_run_wake_revives_in_review_task_before_completion() {
     assert_eq!(ready_event["thread_id"], thread_id);
     assert_eq!(ready_event["task_id"], "#TASK-12");
     assert_eq!(ready_event["run_id"], "run-wake-reviewed");
-    assert_eq!(ready_event["final_message"], "partial reply");
+    assert_eq!(ready_event["handoff"], "partial reply");
 }
 
 #[tokio::test]
@@ -2893,7 +2893,7 @@ async fn test_work_run_wake_revives_done_task_before_completion() {
     assert_eq!(ready_event["thread_id"], thread_id);
     assert_eq!(ready_event["task_id"], "#TASK-13");
     assert_eq!(ready_event["run_id"], "run-wake-done");
-    assert_eq!(ready_event["final_message"], "partial reply");
+    assert_eq!(ready_event["handoff"], "partial reply");
 }
 
 #[tokio::test]

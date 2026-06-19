@@ -10,8 +10,8 @@ use axum::{
 use chrono::Utc;
 use garyx_models::local_paths::default_session_data_dir;
 use garyx_models::{
-    AgentReference, Principal, TaskEventKind, TaskExecutor, TaskNotificationTarget, TaskSource,
-    TaskStatus, ThreadTask,
+    AgentReference, Principal, TaskExecutor, TaskNotificationTarget, TaskSource, TaskStatus,
+    ThreadTask,
 };
 use garyx_router::{
     CreateTaskInput, FileTaskCounterStore, TaskListFilter, TaskRuntimeInput,
@@ -673,31 +673,7 @@ pub async fn update_task_status(
         })
         .await
     {
-        Ok(task) => {
-            if task_ready_for_review_transition(&task)
-                && let Ok((thread_id, _, _)) = service.get_task(&task_id).await
-            {
-                let task_id_for_notification = garyx_router::tasks::canonical_task_id(&task);
-                let state_for_notification = state.clone();
-                tokio::spawn(async move {
-                    let event = crate::task_notifications::TaskReadyForReviewEvent {
-                        thread_id,
-                        task_id: task_id_for_notification,
-                        run_id: None,
-                        final_message: None,
-                    };
-                    if let Err(error) = crate::task_notifications::dispatch_task_ready_notification(
-                        &state_for_notification,
-                        event,
-                    )
-                    .await
-                    {
-                        tracing::warn!(error = ?error, "manual task ready notification failed");
-                    }
-                });
-            }
-            (StatusCode::OK, Json(json!({ "task": task })))
-        }
+        Ok(task) => (StatusCode::OK, Json(json!({ "task": task }))),
         Err(error) => task_error_response(error),
     }
 }
@@ -889,17 +865,6 @@ fn required_notification_target(
                 "notification_target is required; choose a bot, thread, or none".to_owned(),
             )
         })
-}
-
-fn task_ready_for_review_transition(task: &ThreadTask) -> bool {
-    matches!(
-        task.events.last().map(|event| &event.kind),
-        Some(TaskEventKind::StatusChanged {
-            from: TaskStatus::InProgress,
-            to: TaskStatus::InReview,
-            ..
-        })
-    )
 }
 
 fn task_runtime_input(

@@ -5,7 +5,7 @@ use garyx_bridge::MultiProviderBridge;
 use garyx_bridge::provider_trait::{AgentLoopProvider, StreamCallback};
 use garyx_models::config::GaryxConfig;
 use garyx_models::provider::{ProviderRunOptions, ProviderRunResult, ProviderType};
-use garyx_models::{Principal, TaskExecutor, TaskStatus};
+use garyx_models::{Principal, TaskExecutor, TaskNotificationTarget, TaskStatus};
 use garyx_router::tasks::{canonical_task_id, task_from_record};
 use garyx_router::{CreateTaskInput, FileTaskCounterStore, TaskService};
 use std::sync::Arc;
@@ -116,6 +116,11 @@ async fn workflow_test_state_with_recording_provider_error(
     ))
     .with_bridge(bridge.clone())
     .build();
+    bridge
+        .set_thread_store(state.threads.thread_store.clone())
+        .await;
+    bridge.set_thread_history(state.threads.history.clone());
+    bridge.set_event_tx(state.ops.events.sender()).await;
     let run_count = Arc::new(AtomicUsize::new(0));
     bridge
         .register_provider(
@@ -1355,6 +1360,67 @@ async fn start_linked_workflow_task_for_test(state: &Arc<AppState>) -> (String, 
     (task_thread_id, task_id, workflow_id)
 }
 
+async fn start_linked_workflow_task_with_notification_target_for_test(
+    state: &Arc<AppState>,
+    notification_target: TaskNotificationTarget,
+) -> (String, String, String) {
+    let data_dir = tempdir().expect("data dir");
+    let task_service = TaskService::new(
+        state.threads.thread_store.clone(),
+        Arc::new(FileTaskCounterStore::new(data_dir.path())),
+    );
+    let (task_thread_id, task) = task_service
+        .create_task(CreateTaskInput {
+            title: Some("Run workflow with handoff".to_owned()),
+            body: None,
+            assignee: None,
+            notification_target: Some(notification_target),
+            source: None,
+            executor: Some(TaskExecutor::Workflow {
+                workflow_id: "unit".to_owned(),
+                workflow_version: Some(1),
+            }),
+            start: true,
+            actor: Some(Principal::Agent {
+                agent_id: "workflow".to_owned(),
+            }),
+            agent_id: None,
+            workspace_dir: None,
+            runtime: None,
+        })
+        .await
+        .expect("task");
+    let task_id = canonical_task_id(&task);
+    let payload = WorkflowRuntime::new(state.clone())
+        .start_sdk(WorkflowSdkStartRequest {
+            workflow_run_id: None,
+            workflow_id: None,
+            task_id: Some(task_id.clone()),
+            task_thread_id: Some(task_thread_id.clone()),
+            workflow_definition_id: Some("unit".to_owned()),
+            workflow_definition_version: Some(1),
+            workflow_definition_snapshot: Some(json!({
+                "workflowId": "unit",
+                "version": 1
+            })),
+            input: Some(json!("unit test input")),
+            parent_thread_id: Some(task_thread_id.clone()),
+            parent_run_id: None,
+            name: Some("Unit workflow".to_owned()),
+            description: None,
+            phases: Vec::new(),
+            workspace_dir: None,
+            created_by: Some("test".to_owned()),
+        })
+        .await
+        .expect("start workflow");
+    let workflow_id = payload["workflow"]["workflowId"]
+        .as_str()
+        .expect("workflow id")
+        .to_owned();
+    (task_thread_id, task_id, workflow_id)
+}
+
 #[tokio::test]
 async fn sdk_finish_moves_linked_workflow_task_to_review() {
     let state = workflow_test_state().await;
@@ -1383,6 +1449,69 @@ async fn sdk_finish_moves_linked_workflow_task_to_review() {
         .expect("task record");
     assert_eq!(canonical_task_id(&task), task_id);
     assert_eq!(task.status, TaskStatus::InReview);
+}
+
+#[tokio::test]
+async fn sdk_finish_delivers_output_text_as_task_handoff() {
+    let state = workflow_test_state().await;
+    let target_thread_id = "thread::workflow-review-target";
+    state
+        .threads
+        .thread_store
+        .set(
+            target_thread_id,
+            json!({
+                "thread_id": target_thread_id,
+                "channel": "api",
+                "account_id": "main",
+                "from_id": "loop",
+            }),
+        )
+        .await;
+    let (_task_thread_id, _task_id, workflow_id) =
+        start_linked_workflow_task_with_notification_target_for_test(
+            &state,
+            TaskNotificationTarget::Thread {
+                thread_id: target_thread_id.to_owned(),
+            },
+        )
+        .await;
+
+    WorkflowRuntime::new(state.clone())
+        .finish_sdk(
+            &workflow_id,
+            WorkflowSdkFinishRequest {
+                status: Some("succeeded".to_owned()),
+                result: Some(json!({"ok": true})),
+                output_text: Some("Workflow output handoff.".to_owned()),
+                error: None,
+            },
+        )
+        .await
+        .expect("finish workflow");
+
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let snapshot = state
+                .threads
+                .history
+                .thread_snapshot(target_thread_id, 20)
+                .await
+                .expect("target snapshot");
+            if snapshot.combined_messages().iter().any(|message| {
+                message.get("role").and_then(Value::as_str) == Some("user")
+                    && message
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .is_some_and(|content| content.contains("Workflow output handoff."))
+            }) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("workflow outputText handoff should be delivered to target thread");
 }
 
 #[tokio::test]

@@ -391,7 +391,7 @@ pub(super) async fn mark_workflow_task_entrypoint_failed(
     task_thread_id: &str,
     note: String,
 ) {
-    let _ = mark_workflow_task_in_review(state, task_thread_id, note).await;
+    let _ = mark_workflow_task_in_review(state, task_thread_id, note, None).await;
 }
 
 pub(super) async fn mark_workflow_thread_entrypoint_failed(

@@ -1014,7 +1014,7 @@ async fn emit_task_ready_for_review_event(
             "thread_id": thread_id,
             "run_id": run_id,
             "task_id": task_id,
-            "final_message": notification_text
+            "handoff": notification_text
                 .map(str::trim)
                 .filter(|value| !value.is_empty()),
         });
