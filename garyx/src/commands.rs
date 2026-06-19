@@ -5921,11 +5921,16 @@ async fn patch_task_status(
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let gateway = gateway_endpoint(config_path)?;
+    let to = normalize_task_status(status)?;
+    if let Some(message) = blocked_status_update(&gateway, task_id, &to, force).await? {
+        eprintln!("{message}");
+        std::process::exit(1);
+    }
     let payload = patch_gateway_json_as_cli_actor(
         &gateway,
         &format!("/api/tasks/{}/status", encode_task_id(task_id)?),
         &json!({
-            "to": normalize_task_status(status)?,
+            "to": to,
             "note": note,
             "force": force,
         }),
@@ -5936,6 +5941,66 @@ async fn patch_task_status(
     }
     print_task_summary(&payload);
     Ok(())
+}
+
+/// Decides whether a manual `garyx task update` should be refused at the CLI,
+/// returning the guidance to print when it is. The CLI refuses two transitions
+/// by default (see [`blocked_task_status_transition`]); `--force` is an explicit
+/// override that skips the guard and lets the gateway apply the change.
+///
+/// The task's current status is only fetched when it could matter, so a forced
+/// update, completing a task (`done`), or reopening it (`todo`) returns
+/// `Ok(None)` without an extra request.
+async fn blocked_status_update(
+    gateway: &GatewayEndpoint,
+    task_id: &str,
+    to: &str,
+    force: bool,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    if force || (to != "in_progress" && to != "in_review") {
+        return Ok(None);
+    }
+    let current =
+        fetch_gateway_json(gateway, &format!("/api/tasks/{}", encode_task_id(task_id)?)).await?;
+    Ok(current_task_status(&current)
+        .and_then(|from| blocked_task_status_transition(from, to, task_id)))
+}
+
+/// Reads a task's current status from a `GET /api/tasks/{id}` payload. The
+/// status lives under `task.status`, with a top-level `status` fallback for
+/// responses that flatten the task (matching [`print_task_summary`]).
+fn current_task_status(value: &Value) -> Option<&str> {
+    value
+        .get("task")
+        .and_then(|task| task.get("status"))
+        .and_then(Value::as_str)
+        .or_else(|| value.get("status").and_then(Value::as_str))
+}
+
+/// CLI-side guard for manual `garyx task update` status changes. Two
+/// transitions are refused by default (the caller lets `--force` override):
+///
+/// - `in_review -> in_progress`: review only moves forward to `done`. To keep
+///   working on a task under review, send it a message instead of reopening it.
+/// - `in_progress -> in_review`: the system moves a task to review on its own
+///   when the run ends, so it is not set manually.
+///
+/// Returns the user-facing guidance to print when the transition is blocked, or
+/// `None` when it should be forwarded to the gateway. `from`/`to` are the
+/// normalized status strings produced by [`normalize_task_status`].
+fn blocked_task_status_transition(from: &str, to: &str, task_id: &str) -> Option<String> {
+    match (from, to) {
+        ("in_review", "in_progress") => Some(format!(
+            "Refusing to move task {task_id} from In Review to In Progress.\n\
+             In Review can only move to Done. To keep working on this task, send it a message:\n  \
+             garyx thread send task '{task_id}' \"<your message>\""
+        )),
+        ("in_progress", "in_review") => Some(format!(
+            "Refusing to move task {task_id} from In Progress to In Review.\n\
+             A task moves to In Review automatically when its run ends; it cannot be set manually."
+        )),
+        _ => None,
+    }
 }
 
 fn principal_payload(principal: &str) -> Result<Value, Box<dyn std::error::Error>> {

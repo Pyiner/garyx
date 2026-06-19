@@ -2742,3 +2742,196 @@ fn gui_session_available_true_with_x11_display() {
 fn gui_session_available_true_with_wayland_only() {
     assert!(gui_session_available(None, Some(OsStr::new("wayland-0"))));
 }
+
+#[test]
+fn blocked_transition_in_review_to_in_progress_points_to_send_message() {
+    let message = blocked_task_status_transition("in_review", "in_progress", "#TASK-12")
+        .expect("in_review -> in_progress must be blocked");
+    assert!(message.contains("In Review"));
+    assert!(message.contains("In Progress"));
+    // The guidance must hand the user a copy-pasteable send-message command;
+    // the task id is single-quoted so the shell does not treat the leading `#`
+    // in canonical `#TASK-*` ids as a comment.
+    assert!(message.contains("garyx thread send task '#TASK-12'"));
+}
+
+#[test]
+fn blocked_transition_in_progress_to_in_review_explains_it_is_automatic() {
+    let message = blocked_task_status_transition("in_progress", "in_review", "#TASK-12")
+        .expect("in_progress -> in_review must be blocked");
+    assert!(message.contains("automatically"));
+    assert!(message.contains("cannot be set manually"));
+}
+
+#[test]
+fn allowed_transitions_are_not_blocked() {
+    // The one allowed move out of review, plus the ordinary start/stop/reopen
+    // transitions, must all pass through to the gateway untouched.
+    for (from, to) in [
+        ("in_review", "done"),
+        ("todo", "in_progress"),
+        ("in_progress", "todo"),
+        ("done", "todo"),
+    ] {
+        assert!(
+            blocked_task_status_transition(from, to, "#TASK-1").is_none(),
+            "{from} -> {to} should be allowed"
+        );
+    }
+}
+
+#[test]
+fn current_task_status_reads_nested_then_top_level() {
+    assert_eq!(
+        current_task_status(&json!({ "task": { "status": "in_review" } })),
+        Some("in_review")
+    );
+    assert_eq!(
+        current_task_status(&json!({ "status": "in_progress" })),
+        Some("in_progress")
+    );
+    assert_eq!(
+        current_task_status(&json!({ "thread_id": "thread::x" })),
+        None
+    );
+}
+
+/// Mock gateway serving `GET /api/tasks/{id}` with a fixed status and recording
+/// every lookup, so tests can assert both the decision and whether the status
+/// lookup was issued at all.
+async fn spawn_task_get_server(
+    status: &'static str,
+    requests: StdArc<Mutex<Vec<RecordedRequest>>>,
+) -> (String, JoinHandle<()>) {
+    let app = Router::new().route(
+        "/api/tasks/{task_id}",
+        get(move |AxumPath(task_id): AxumPath<String>| {
+            let requests = requests.clone();
+            async move {
+                requests.lock().expect("request lock").push(RecordedRequest {
+                    method: "GET".to_owned(),
+                    path: format!("/api/tasks/{task_id}"),
+                    body: Value::Null,
+                });
+                Json(json!({ "task": { "status": status } }))
+            }
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let addr = listener.local_addr().expect("listener addr");
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve test router");
+    });
+    (format!("http://{addr}"), handle)
+}
+
+#[tokio::test]
+async fn blocked_status_update_refuses_review_to_progress_after_one_lookup() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_task_get_server("in_review", requests.clone()).await;
+    let gateway = GatewayEndpoint {
+        base_url,
+        auth_token: None,
+    };
+
+    let blocked = blocked_status_update(&gateway, "#TASK-7", "in_progress", false)
+        .await
+        .expect("status lookup should succeed");
+
+    handle.abort();
+    let message = blocked.expect("in_review -> in_progress must be blocked");
+    assert!(message.contains("garyx thread send task '#TASK-7'"));
+    assert_eq!(
+        requests.lock().expect("request lock").len(),
+        1,
+        "should look up current status exactly once"
+    );
+}
+
+#[tokio::test]
+async fn blocked_status_update_refuses_progress_to_review() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_task_get_server("in_progress", requests.clone()).await;
+    let gateway = GatewayEndpoint {
+        base_url,
+        auth_token: None,
+    };
+
+    let blocked = blocked_status_update(&gateway, "#TASK-7", "in_review", false)
+        .await
+        .expect("status lookup should succeed");
+
+    handle.abort();
+    assert!(
+        blocked
+            .expect("in_progress -> in_review must be blocked")
+            .contains("automatically")
+    );
+}
+
+#[tokio::test]
+async fn blocked_status_update_allows_todo_to_progress() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_task_get_server("todo", requests.clone()).await;
+    let gateway = GatewayEndpoint {
+        base_url,
+        auth_token: None,
+    };
+
+    let blocked = blocked_status_update(&gateway, "#TASK-7", "in_progress", false)
+        .await
+        .expect("status lookup should succeed");
+
+    handle.abort();
+    assert!(blocked.is_none(), "starting a todo task must be allowed");
+    assert_eq!(requests.lock().expect("request lock").len(), 1);
+}
+
+#[tokio::test]
+async fn blocked_status_update_skips_lookup_when_completing() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_task_get_server("in_review", requests.clone()).await;
+    let gateway = GatewayEndpoint {
+        base_url,
+        auth_token: None,
+    };
+
+    // Completing a reviewed task is the allowed move and must not be gated, so
+    // it should never issue the current-status lookup.
+    let blocked = blocked_status_update(&gateway, "#TASK-7", "done", false)
+        .await
+        .expect("done update should not error");
+
+    handle.abort();
+    assert!(blocked.is_none());
+    assert!(
+        requests.lock().expect("request lock").is_empty(),
+        "completing a task should not look up current status"
+    );
+}
+
+#[tokio::test]
+async fn blocked_status_update_force_overrides_guard_without_lookup() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_task_get_server("in_review", requests.clone()).await;
+    let gateway = GatewayEndpoint {
+        base_url,
+        auth_token: None,
+    };
+
+    // --force is an explicit override: even the otherwise-blocked
+    // in_review -> in_progress move is allowed through, and the guard does not
+    // even look up the current status.
+    let blocked = blocked_status_update(&gateway, "#TASK-7", "in_progress", true)
+        .await
+        .expect("forced update should not error");
+
+    handle.abort();
+    assert!(blocked.is_none(), "--force must override the guard");
+    assert!(
+        requests.lock().expect("request lock").is_empty(),
+        "a forced update should not look up current status"
+    );
+}
