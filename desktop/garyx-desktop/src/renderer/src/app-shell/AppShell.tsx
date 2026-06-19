@@ -61,6 +61,7 @@ import {
 } from "@shared/contracts";
 import { desktopStateWithoutThread } from "@shared/desktop-state";
 import {
+  applyTranscriptRunStateRecord,
   decideTranscriptFetchPageAction,
   isControlTranscriptMessage,
   isThreadStreamGapError,
@@ -112,7 +113,7 @@ import { ConversationHeaderActions } from "../ConversationHeaderActions";
 import { ConversationHeaderTitle } from "../ConversationHeaderTitle";
 import { NewThreadEmptyState } from "../NewThreadEmptyState";
 import { ToastViewport, type ToastItem, type ToastTone } from "../toast";
-import { ToolTraceGroup, shouldRenderToolTraceMessage } from "../tool-trace";
+import { ToolTraceGroup } from "../tool-trace";
 import {
   RichMessageContent,
   buildOptimisticTranscriptContent,
@@ -268,8 +269,7 @@ const THREAD_HISTORY_PAGE_SIZE = 100;
 const THREAD_HISTORY_USER_QUERY_LIMIT = 10;
 const THREAD_HISTORY_FORWARD_PAGE_LIMIT = 50;
 const USER_TURN_PREFETCH_THRESHOLD = 3;
-const HIDDEN_TOOL_USE_STATUS_TEXT = "Garyx is thinking through the next step…";
-const HIDDEN_TOOL_RESULT_STATUS_TEXT = "Garyx finished a reasoning step…";
+const SELECTED_THREAD_STREAM_CONSUMER_ID = "selected-thread";
 
 type ThreadEntrySelectionSource =
   | "pinned"
@@ -1036,14 +1036,6 @@ type SeededTurn = {
   legacyPendingAssistantId: string | null;
 };
 
-type PendingAssistantDelta = {
-  threadId: string;
-  intentId?: string;
-  runId: string;
-  text: string;
-  metadata?: Record<string, unknown> | null;
-};
-
 function queuedInputIdFromMessage(
   message: Pick<TranscriptMessage, "metadata">,
 ): string {
@@ -1059,27 +1051,6 @@ function queuedInputIdFromMessage(
   return typeof camelCase === "string" && camelCase.trim() ? camelCase : "";
 }
 
-function buildStreamingToolBubble(
-  event: Extract<DesktopChatStreamEvent, { type: "tool_use" | "tool_result" }>,
-  intentId?: string,
-): UiTranscriptMessage {
-  return {
-    id: `${event.type}:${event.message.toolUseId || crypto.randomUUID()}:${crypto.randomUUID()}`,
-    role: event.type,
-    text: "",
-    content: event.message.content,
-    toolUseId: event.message.toolUseId ?? null,
-    toolName: event.message.toolName ?? null,
-    isError: event.message.isError,
-    metadata: event.message.metadata ?? null,
-    timestamp: event.message.timestamp || new Date().toISOString(),
-    intentId,
-    remoteRunId: event.runId,
-    kind: "tool_trace",
-    localState: "remote_partial",
-  };
-}
-
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -1087,121 +1058,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
-function speakerIdentityKey(
-  metadata: Record<string, unknown> | null | undefined,
-): string {
-  const record = asRecord(metadata);
-  if (!record) {
-    return "";
-  }
-  const agentId =
-    typeof record.agent_id === "string" ? record.agent_id.trim() : "";
-  const displayName =
-    typeof record.agent_display_name === "string"
-      ? record.agent_display_name.trim()
-      : "";
-  return `${agentId}::${displayName}`;
-}
-
-function isMessageToolName(value: unknown): boolean {
-  if (typeof value !== "string") {
-    return false;
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return false;
-  }
-  const tail = trimmed.split(":").pop() || trimmed;
-  return tail.toLowerCase() === "message";
-}
-
-function valueMarksMessageTool(value: unknown): boolean {
-  if (Array.isArray(value)) {
-    return value.some((entry) => valueMarksMessageTool(entry));
-  }
-  const record = asRecord(value);
-  if (!record) {
-    return false;
-  }
-  if (
-    isMessageToolName(record.tool) ||
-    isMessageToolName(record.tool_name) ||
-    isMessageToolName(record.toolName) ||
-    isMessageToolName(record.name)
-  ) {
-    return true;
-  }
-  return Object.values(record).some((entry) => valueMarksMessageTool(entry));
-}
-
-function extractMessageToolImageBlocks(
-  value: unknown,
-  blocks: Array<Record<string, unknown>>,
-) {
-  if (Array.isArray(value)) {
-    for (const entry of value) {
-      extractMessageToolImageBlocks(entry, blocks);
-    }
-    return;
-  }
-  const record = asRecord(value);
-  if (!record) {
-    return;
-  }
-  const type =
-    typeof record.type === "string" ? record.type.trim().toLowerCase() : "";
-  if (type === "image") {
-    const source = asRecord(record.source);
-    const hasData =
-      typeof source?.data === "string" && source.data.trim().length > 0;
-    const hasUrl =
-      typeof record.url === "string" && record.url.trim().length > 0;
-    if (hasData || hasUrl) {
-      if (hasUrl) {
-        blocks.push({
-          type: "image",
-          url: record.url,
-        });
-      } else if (source) {
-        blocks.push({
-          type: "image",
-          source: {
-            type: source.type || "base64",
-            media_type:
-              (typeof source.media_type === "string" &&
-                source.media_type.trim()) ||
-              (typeof source.mediaType === "string" &&
-                source.mediaType.trim()) ||
-              "image/png",
-            data: source.data,
-          },
-        });
-      }
-    }
-  }
-  for (const entry of Object.values(record)) {
-    extractMessageToolImageBlocks(entry, blocks);
-  }
-}
-
 const GENERATED_IMAGE_TOOL_USE_METADATA_KEY = "generated_image_tool_use_id";
-
-function extractStreamingMessageToolImageContent(
-  event: Extract<DesktopChatStreamEvent, { type: "tool_result" }>,
-): unknown[] | null {
-  if (
-    !isMessageToolName(event.message.toolName) &&
-    !valueMarksMessageTool(event.message.content)
-  ) {
-    return null;
-  }
-  const blocks: Array<Record<string, unknown>> = [];
-  extractMessageToolImageBlocks(event.message.content, blocks);
-  if (!blocks.length) {
-    return null;
-  }
-  return blocks;
-}
 
 function transcriptMessagesSemanticallyMatch(
   local: UiTranscriptMessage,
@@ -1952,12 +1809,11 @@ export function AppShell() {
   const clientLogSequenceRef = useRef(1);
   const pendingClientLogEventsRef = useRef<DesktopChatStreamEvent[]>([]);
   const clientLogFlushFrameRef = useRef<number | null>(null);
-  const pendingAssistantDeltaByThreadRef = useRef<
-    Record<string, PendingAssistantDelta>
-  >({});
-  const assistantDeltaFlushFrameRef = useRef<number | null>(null);
   const messagesByThreadRef = useRef<MessageMap>({});
   const transcriptSnapshotByThreadRef = useRef<Record<string, ThreadTranscript>>(
+    {},
+  );
+  const transcriptRunStateByThreadRef = useRef<Record<string, TranscriptRunState>>(
     {},
   );
   const historyPaginationByThreadRef = useRef<
@@ -4471,10 +4327,6 @@ export function AppShell() {
         window.cancelAnimationFrame(clientLogFlushFrameRef.current);
         clientLogFlushFrameRef.current = null;
       }
-      if (assistantDeltaFlushFrameRef.current !== null) {
-        window.cancelAnimationFrame(assistantDeltaFlushFrameRef.current);
-        assistantDeltaFlushFrameRef.current = null;
-      }
     };
   }, []);
 
@@ -5155,21 +5007,27 @@ export function AppShell() {
 
     return () => {
       cancelled = true;
-      void window.garyxDesktop.stopThreadStream({ threadId: selectedThreadId });
+      void window.garyxDesktop.stopThreadStream({
+        threadId: selectedThreadId,
+        consumerId: SELECTED_THREAD_STREAM_CONSUMER_ID,
+      });
     };
   }, [Boolean(desktopState), selectedThreadId]);
 
   // Load the side thread transcript once per side thread (after state
   // hydration). Depending on `desktopState` identity here is unsafe: applying
   // a transcript can rewrite `desktopState.sessions`, which would re-fire
-  // this effect in a fetch loop. Steady-state sync comes from the 1.5s
-  // signature-checked poll below.
+  // this effect in a fetch loop. Steady-state sync comes from the per-thread
+  // committed stream started after the initial committed cursor is known.
   const desktopStateHydrated = Boolean(desktopState);
   useEffect(() => {
     if (!sideChatThreadId || !desktopStateHydrated) {
       return;
     }
 
+    let cancelled = false;
+    let latestTranscript: ThreadTranscript | null = null;
+    const consumerId = sideChatStreamConsumerId(sideChatThreadId);
     void loadThreadHistory({
       api: getDesktopApi(),
       threadId: sideChatThreadId,
@@ -5178,71 +5036,38 @@ export function AppShell() {
           scrollMessagesToLatest(sideChatMessagesRef.current);
         }
       },
-      onTranscript: applyRemoteTranscript,
+      onTranscript: (threadId, transcript) => {
+        if (cancelled) {
+          return;
+        }
+        latestTranscript = transcript;
+        applyRemoteTranscript(threadId, transcript);
+      },
       onAutomationResponseDetected: (threadId) => {
         setPendingAutomationRun(threadId, null);
       },
       hasAutomationResponse: transcriptHasAutomationResponse,
       setHistoryLoading: setSideChatHistoryLoading,
       setError,
+    }).then(() => {
+      if (cancelled || !latestTranscript) {
+        return;
+      }
+      void startCommittedThreadStream(
+        sideChatThreadId,
+        latestTranscript,
+        consumerId,
+      );
     });
-  }, [desktopStateHydrated, sideChatThreadId]);
-
-  useEffect(() => {
-    if (!sideChatThreadId) {
-      return;
-    }
-
-    let cancelled = false;
-    let polling = false;
-
-    const pollSideChatHistory = async () => {
-      if (cancelled || document.hidden || polling) {
-        return;
-      }
-
-      const liveStream = liveStreamStateRef.current[sideChatThreadId] || null;
-      if (
-        liveStream &&
-        ["connecting", "streaming", "reconciling"].includes(
-          liveStream.streamStatus,
-        )
-      ) {
-        return;
-      }
-
-      polling = true;
-      try {
-        const transcript =
-          await window.garyxDesktop.getThreadHistory(sideChatThreadId);
-        const nextSignature = threadActivitySignature(
-          visibleTranscriptMessages(transcript.messages),
-          transcript.pendingInputs,
-          transcript.threadInfo,
-        );
-        if (
-          nextSignature ===
-          remoteTranscriptSignatureByThreadRef.current[sideChatThreadId]
-        ) {
-          return;
-        }
-        applyRemoteTranscript(sideChatThreadId, transcript);
-      } catch {
-        // Best-effort reconcile loop for passive side-thread updates.
-      } finally {
-        polling = false;
-      }
-    };
-
-    const timer = window.setInterval(() => {
-      void pollSideChatHistory();
-    }, 1500);
 
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      void window.garyxDesktop.stopThreadStream({
+        threadId: sideChatThreadId,
+        consumerId,
+      });
     };
-  }, [sideChatThreadId]);
+  }, [desktopStateHydrated, sideChatThreadId]);
 
   useEffect(() => {
     if (!sideChatThreadId) {
@@ -5682,11 +5507,14 @@ export function AppShell() {
     });
   }
 
-  function syncTranscriptRunState(
+  function publishTranscriptRunState(
     threadId: string,
-    transcript: ThreadTranscript,
+    state: TranscriptRunState,
   ): TranscriptRunState {
-    const state = reduceTranscriptRunState(transcript.messages);
+    transcriptRunStateByThreadRef.current = {
+      ...transcriptRunStateByThreadRef.current,
+      [threadId]: state,
+    };
     if (state.title) {
       applyThreadTitleUpdate(threadId, state.title);
     }
@@ -5734,6 +5562,30 @@ export function AppShell() {
       }
     }
     return state;
+  }
+
+  function syncTranscriptRunState(
+    threadId: string,
+    transcript: ThreadTranscript,
+  ): TranscriptRunState {
+    return publishTranscriptRunState(
+      threadId,
+      reduceTranscriptRunState(transcript.messages),
+    );
+  }
+
+  function applyCommittedTranscriptRunState(
+    event: Extract<DesktopChatStreamEvent, { type: "committed_message" }>,
+  ): TranscriptRunState {
+    const current =
+      transcriptRunStateByThreadRef.current[event.threadId] ||
+      reduceTranscriptRunState(
+        transcriptSnapshotByThreadRef.current[event.threadId]?.messages || [],
+      );
+    return publishTranscriptRunState(
+      event.threadId,
+      applyTranscriptRunStateRecord(current, event.message, { seq: event.seq }),
+    );
   }
 
   function updateLiveStreamState(
@@ -5826,91 +5678,6 @@ export function AppShell() {
     clientLogFlushFrameRef.current = window.requestAnimationFrame(
       flushPendingClientLogEvents,
     );
-  }
-
-  function flushPendingAssistantDelta(
-    threadId?: string,
-  ): LiveStreamState | null {
-    const pendingByThread = pendingAssistantDeltaByThreadRef.current;
-    const pendingDeltas = threadId
-      ? pendingByThread[threadId]
-        ? [pendingByThread[threadId]]
-        : []
-      : Object.values(pendingByThread);
-    if (!pendingDeltas.length) {
-      return threadId ? getLiveStreamState(threadId) : null;
-    }
-
-    let latestState: LiveStreamState | null = null;
-    for (const pending of pendingDeltas) {
-      delete pendingByThread[pending.threadId];
-      const assistantEntryId = applyStreamingAssistantDelta(
-        pending.threadId,
-        pending.intentId,
-        pending.runId,
-        pending.text,
-        pending.metadata,
-      );
-      latestState = updateLiveStreamState(pending.threadId, (current) => ({
-        threadId: pending.threadId,
-        runId: pending.runId,
-        activeIntentId: current?.activeIntentId || pending.intentId,
-        assistantEntryId,
-        pendingAckIntentIds: current?.pendingAckIntentIds || [],
-        streamStatus: "streaming",
-      }));
-      setThreadRuntimeState(pending.threadId, "running_remote", {
-        activeIntentId: pending.intentId,
-        remoteRunId: pending.runId,
-      });
-    }
-    return threadId ? getLiveStreamState(threadId) : latestState;
-  }
-
-  function schedulePendingAssistantDeltaFlush() {
-    if (assistantDeltaFlushFrameRef.current !== null) {
-      return;
-    }
-    assistantDeltaFlushFrameRef.current = window.requestAnimationFrame(() => {
-      assistantDeltaFlushFrameRef.current = null;
-      flushPendingAssistantDelta();
-    });
-  }
-
-  function enqueueStreamingAssistantDelta(
-    threadId: string,
-    intentId: string | undefined,
-    runId: string,
-    delta: string,
-    metadata?: Record<string, unknown> | null,
-  ) {
-    const pending = pendingAssistantDeltaByThreadRef.current[threadId];
-    const nextSpeakerKey = speakerIdentityKey(metadata);
-    const pendingSpeakerKey = speakerIdentityKey(pending?.metadata);
-    if (
-      pending &&
-      (pending.runId !== runId ||
-        pending.intentId !== intentId ||
-        pendingSpeakerKey !== nextSpeakerKey)
-    ) {
-      flushPendingAssistantDelta(threadId);
-    }
-
-    const current = pendingAssistantDeltaByThreadRef.current[threadId];
-    pendingAssistantDeltaByThreadRef.current[threadId] = current
-      ? {
-          ...current,
-          text: `${current.text}${delta}`,
-          metadata: metadata ?? current.metadata,
-        }
-      : {
-          threadId,
-          intentId,
-          runId,
-          text: delta,
-          metadata: metadata ?? null,
-        };
-    schedulePendingAssistantDeltaFlush();
   }
 
   function requestMessagesBottomSnap(
@@ -6006,45 +5773,6 @@ export function AppShell() {
         messagesStickScrollTimeoutsRef.current.push(timeout);
       }
     }
-  }
-
-  function updatePendingAssistantActivity(
-    threadId: string,
-    intentId: string | undefined,
-    assistantEntryId: string | null | undefined,
-    text: string,
-  ) {
-    updateMessagesByThread((current) => {
-      const existing = current[threadId] || [];
-      let changed = false;
-      const nextMessages = existing.map((entry) => {
-        const matchesAssistantEntry =
-          assistantEntryId && entry.id === assistantEntryId;
-        const matchesIntent =
-          intentId && entry.role === "assistant" && entry.intentId === intentId;
-        if (
-          entry.role !== "assistant" ||
-          !entry.pending ||
-          (!matchesAssistantEntry && !matchesIntent) ||
-          entry.text === text
-        ) {
-          return entry;
-        }
-        changed = true;
-        return {
-          ...entry,
-          text,
-        };
-      });
-
-      if (!changed) {
-        return current;
-      }
-      return {
-        ...current,
-        [threadId]: nextMessages,
-      };
-    });
   }
 
   function applyThreadTitleUpdate(threadId: string, title: string) {
@@ -6354,180 +6082,19 @@ export function AppShell() {
     }, delayMs);
   }
 
-  function applyStreamingAssistantDelta(
-    threadId: string,
-    intentId: string | undefined,
-    runId: string,
-    delta: string,
-    metadata?: Record<string, unknown> | null,
-  ): string {
-    let nextAssistantEntryId =
-      getLiveStreamState(threadId)?.assistantEntryId || null;
-    const nextSpeakerKey = speakerIdentityKey(metadata);
-
-    updateMessagesByThread((current) => {
-      const existing = current[threadId] || [];
-      if (nextAssistantEntryId) {
-        let matchedExistingEntry = false;
-        let speakerChanged = false;
-        const next = {
-          ...current,
-          [threadId]: existing.map((entry) => {
-            if (entry.id !== nextAssistantEntryId) {
-              return entry;
-            }
-            if (
-              nextSpeakerKey &&
-              nextSpeakerKey !== speakerIdentityKey(entry.metadata)
-            ) {
-              speakerChanged = true;
-              return entry;
-            }
-            matchedExistingEntry = true;
-            return {
-              ...entry,
-              text: entry.pending ? delta : `${entry.text}${delta}`,
-              metadata: metadata ?? entry.metadata ?? null,
-              pending: false,
-              error: false,
-              localState: "remote_partial" as const,
-              remoteRunId: runId,
-            };
-          }),
-        };
-        if (matchedExistingEntry && !speakerChanged) {
-          return next;
-        }
-        nextAssistantEntryId = null;
-      }
-
-      const pendingIndex = existing.findIndex((entry) => {
-        return (
-          entry.role === "assistant" &&
-          entry.pending &&
-          entry.intentId === intentId
-        );
-      });
-      if (pendingIndex >= 0) {
-        const next = [...existing];
-        nextAssistantEntryId = next[pendingIndex]?.id || null;
-        next[pendingIndex] = {
-          ...next[pendingIndex],
-          text: delta,
-          metadata: metadata ?? next[pendingIndex]?.metadata ?? null,
-          pending: false,
-          error: false,
-          remoteRunId: runId,
-          localState: "remote_partial" as const,
-        };
-        return {
-          ...current,
-          [threadId]: next,
-        };
-      }
-
-      nextAssistantEntryId = `assistant:${intentId || threadId}:${crypto.randomUUID()}`;
-      return {
-        ...current,
-        [threadId]: [
-          ...existing,
-          {
-            id: nextAssistantEntryId,
-            role: "assistant",
-            text: delta,
-            metadata: metadata ?? null,
-            timestamp: new Date().toISOString(),
-            intentId,
-            remoteRunId: runId,
-            localState: "remote_partial" as const,
-          },
-        ],
-      };
-    });
-
-    return (
-      nextAssistantEntryId ||
-      `assistant:${intentId || threadId}:${crypto.randomUUID()}`
-    );
-  }
-
-  function applyStreamingAssistantBoundary(threadId: string): string | null {
-    let nextAssistantEntryId =
-      getLiveStreamState(threadId)?.assistantEntryId || null;
-
-    updateMessagesByThread((current) => {
-      const existing = current[threadId] || [];
-      if (!nextAssistantEntryId) {
-        return current;
-      }
-      return {
-        ...current,
-        [threadId]: existing.map((entry) => {
-          if (entry.id !== nextAssistantEntryId) {
-            return entry;
-          }
-          const currentText = entry.text || "";
-          if (!currentText.trim()) {
-            return entry;
-          }
-          const nextText = currentText.endsWith("\n\n")
-            ? currentText
-            : currentText.endsWith("\n")
-              ? `${currentText}\n`
-              : `${currentText}\n\n`;
-          return nextText === currentText
-            ? entry
-            : {
-                ...entry,
-                text: nextText,
-              };
-        }),
-      };
-    });
-
-    return nextAssistantEntryId;
-  }
-
-  function appendStreamingToolEvent(
-    event: Extract<
-      DesktopChatStreamEvent,
-      { type: "tool_use" | "tool_result" }
-    >,
-    context?: {
-      intentId?: string;
-      assistantEntryId?: string | null;
-    },
-  ) {
-    const threadId = event.threadId;
-    updateMessagesByThread((current) => {
-      const existing = current[threadId] || [];
-      return {
-        ...current,
-        [threadId]: [
-          ...existing.filter((entry) => {
-            return !(
-              entry.role === "assistant" &&
-              entry.pending &&
-              (entry.intentId === context?.intentId ||
-                entry.id === context?.assistantEntryId)
-            );
-          }),
-          buildStreamingToolBubble(event, context?.intentId),
-        ],
-      };
-    });
-  }
-
   function rememberTranscriptSnapshot(
     threadId: string,
     transcript: ThreadTranscript,
     persist = true,
+    syncRunState = true,
   ) {
     transcriptSnapshotByThreadRef.current = {
       ...transcriptSnapshotByThreadRef.current,
       [threadId]: transcript,
     };
-    syncTranscriptRunState(threadId, transcript);
+    if (syncRunState) {
+      syncTranscriptRunState(threadId, transcript);
+    }
     if (persist) {
       const cacheTranscript = transcriptForCommittedCache(transcript);
       if (cacheTranscript.messages.length > 0 || !transcript.threadInfo?.activeRun) {
@@ -6539,9 +6106,15 @@ export function AppShell() {
   function applyCanonicalTranscript(
     threadId: string,
     transcript: ThreadTranscript,
+    options?: { syncRunState?: boolean },
   ) {
     const resolvedTranscript = transcriptWithResolvedActiveRun(transcript);
-    rememberTranscriptSnapshot(threadId, resolvedTranscript);
+    rememberTranscriptSnapshot(
+      threadId,
+      resolvedTranscript,
+      true,
+      options?.syncRunState ?? true,
+    );
     setThreadInfoByThread((current) => ({
       ...current,
       [threadId]: resolvedTranscript.threadInfo ?? null,
@@ -6633,372 +6206,122 @@ export function AppShell() {
   function handleChatStreamEvent(event: DesktopChatStreamEvent) {
     const threadId = event.threadId;
     if (event.type === "committed_message") {
-      flushPendingAssistantDelta(threadId);
       applyCommittedThreadMessage(event);
       return;
     }
-    let currentStream = getLiveStreamState(threadId);
-    if (event.type !== "assistant_delta") {
-      currentStream = flushPendingAssistantDelta(threadId);
+    if (event.type !== "error") {
+      return;
     }
+    const currentStream = getLiveStreamState(threadId);
     const activeIntentId = currentStream?.activeIntentId;
 
-    switch (event.type) {
-      case "accepted": {
-        updateLiveStreamState(threadId, (current) => ({
-          threadId: threadId,
-          runId: event.runId,
-          activeIntentId: current?.activeIntentId,
-          assistantEntryId: current?.assistantEntryId ?? null,
-          pendingAckIntentIds: current?.pendingAckIntentIds || [],
-          streamStatus: "streaming",
-        }));
-        if (activeIntentId) {
-          const intent = intentForId(activeIntentId);
-          if (
-            intent &&
-            ![
-              "remote_accepted",
-              "awaiting_provider_ack",
-              "awaiting_history",
-              "completed",
-            ].includes(intent.state)
-          ) {
-            dispatchMessageState({
-              type: "intent/remote-accepted",
-              intentId: activeIntentId,
-              runId: event.runId,
-              threadId: threadId,
-              removeFromQueue: false,
-            });
-          }
-        }
-        setThreadRuntimeState(threadId, "running_remote", {
-          activeIntentId,
-          remoteRunId: event.runId,
+    if (isThreadStreamGapError(event)) {
+      if (activeIntentId) {
+        dispatchMessageState({
+          type: "intent/awaiting-history",
+          intentId: activeIntentId,
         });
-        break;
       }
-      case "assistant_delta": {
-        enqueueStreamingAssistantDelta(
-          threadId,
-          activeIntentId,
-          event.runId,
-          event.delta,
-          event.metadata,
-        );
-        break;
-      }
-      case "assistant_boundary": {
-        const assistantEntryId = applyStreamingAssistantBoundary(threadId);
-        updateLiveStreamState(threadId, (current) => ({
-          threadId: threadId,
-          runId: event.runId,
-          activeIntentId: current?.activeIntentId,
-          assistantEntryId,
-          pendingAckIntentIds: current?.pendingAckIntentIds || [],
-          streamStatus: "streaming",
-        }));
-        setThreadRuntimeState(threadId, "running_remote", {
-          activeIntentId: activeIntentId || undefined,
-          remoteRunId: event.runId,
-        });
-        break;
-      }
-      case "tool_use":
-      case "tool_result":
-        if (event.type === "tool_result") {
-          const generatedImageContent = extractImageGenerationImageContent(
-            event.message,
-          );
-          if (generatedImageContent) {
-            appendStreamingToolEvent(
-              { ...event, threadId: threadId },
-              {
-                intentId: activeIntentId,
-                assistantEntryId: currentStream?.assistantEntryId ?? null,
-              },
-            );
-            updateMessagesByThread((current) => {
-              const existing = current[threadId] || [];
-              return {
-                ...current,
-                [threadId]: [
-                  ...existing.filter((entry) => {
-                    return !(
-                      entry.role === "assistant" &&
-                      entry.pending &&
-                      (entry.intentId === activeIntentId ||
-                        entry.id === (currentStream?.assistantEntryId ?? null))
-                    );
-                  }),
-                  {
-                    id: `assistant-generated-image:${event.message.toolUseId || activeIntentId || threadId}:${crypto.randomUUID()}`,
-                    role: "assistant",
-                    text: "",
-                    content: generatedImageContent,
-                    metadata: {
-                      source: "codex_app_server",
-                      item_type: "imageGeneration",
-                      [GENERATED_IMAGE_TOOL_USE_METADATA_KEY]:
-                        event.message.toolUseId || "",
-                    },
-                    timestamp: event.message.timestamp || new Date().toISOString(),
-                    intentId: activeIntentId,
-                    remoteRunId: event.runId,
-                    localState: "remote_partial",
-                    pending: false,
-                    error: false,
-                  },
-                ],
-              };
-            });
-            updateLiveStreamState(threadId, (current) => ({
-              threadId: threadId,
+      updateLiveStreamState(threadId, (current) =>
+        current
+          ? {
+              ...current,
               runId: event.runId,
-              activeIntentId: current?.activeIntentId,
               assistantEntryId: null,
-              pendingAckIntentIds: current?.pendingAckIntentIds || [],
-              streamStatus: "streaming",
-            }));
-            setThreadRuntimeState(threadId, "running_remote", {
-              activeIntentId: activeIntentId || undefined,
-              remoteRunId: event.runId,
-            });
-            break;
-          }
-          const mediaContent = extractStreamingMessageToolImageContent(event);
-          if (mediaContent) {
-            updateMessagesByThread((current) => {
-              const existing = current[threadId] || [];
-              return {
-                ...current,
-                [threadId]: [
-                  ...existing.filter((entry) => {
-                    return !(
-                      entry.role === "assistant" &&
-                      entry.pending &&
-                      (entry.intentId === activeIntentId ||
-                        entry.id === (currentStream?.assistantEntryId ?? null))
-                    );
-                  }),
-                  {
-                    id: `assistant-media:${activeIntentId || threadId}:${crypto.randomUUID()}`,
-                    role: "assistant",
-                    text: "",
-                    content: mediaContent,
-                    timestamp: new Date().toISOString(),
-                    intentId: activeIntentId,
-                    remoteRunId: event.runId,
-                    localState: "remote_partial",
-                    pending: false,
-                    error: false,
-                  },
-                ],
-              };
-            });
-            updateLiveStreamState(threadId, (current) => ({
-              threadId: threadId,
-              runId: event.runId,
-              activeIntentId: current?.activeIntentId,
-              assistantEntryId: null,
-              pendingAckIntentIds: current?.pendingAckIntentIds || [],
-              streamStatus: "streaming",
-            }));
-            setThreadRuntimeState(threadId, "running_remote", {
-              activeIntentId: activeIntentId || undefined,
-              remoteRunId: event.runId,
-            });
-            break;
-          }
-        }
-        if (!shouldRenderToolTraceMessage({ ...event.message, text: "" })) {
-          updatePendingAssistantActivity(
-            threadId,
-            activeIntentId,
-            currentStream?.assistantEntryId ?? null,
-            event.type === "tool_use"
-              ? HIDDEN_TOOL_USE_STATUS_TEXT
-              : HIDDEN_TOOL_RESULT_STATUS_TEXT,
-          );
-          updateLiveStreamState(threadId, (current) => ({
-            threadId: threadId,
-            runId: event.runId,
-            activeIntentId: current?.activeIntentId,
-            assistantEntryId: current?.assistantEntryId ?? null,
-            pendingAckIntentIds: current?.pendingAckIntentIds || [],
-            streamStatus: "streaming",
-          }));
-          setThreadRuntimeState(threadId, "running_remote", {
-            activeIntentId: activeIntentId || undefined,
-            remoteRunId: event.runId,
-          });
-          break;
-        }
-        appendStreamingToolEvent(
-          { ...event, threadId: threadId },
-          {
-            intentId: activeIntentId,
-            assistantEntryId: currentStream?.assistantEntryId ?? null,
-          },
-        );
-        updateLiveStreamState(threadId, (current) => ({
-          threadId: threadId,
-          runId: event.runId,
-          activeIntentId: current?.activeIntentId,
-          assistantEntryId: null,
-          pendingAckIntentIds: current?.pendingAckIntentIds || [],
-          streamStatus: "streaming",
-        }));
-        setThreadRuntimeState(threadId, "running_remote", {
-          activeIntentId: activeIntentId || undefined,
-          remoteRunId: event.runId,
-        });
-        break;
-      case "user_ack": {
-        applyUserAck(threadId, event.runId, event.pendingInputId);
-        break;
-      }
-      case "thread_title_updated":
-        applyThreadTitleUpdate(threadId, event.title);
-        break;
-      case "done":
-        if (activeIntentId) {
-          dispatchMessageState({
-            type: "intent/awaiting-history",
-            intentId: activeIntentId,
-            responseText: intentForId(activeIntentId)?.responseText,
-          });
-        }
-        updateLiveStreamState(threadId, (current) =>
-          current
-            ? {
-                ...current,
-                runId: event.runId,
-                assistantEntryId: null,
-                streamStatus: "reconciling",
-              }
-            : null,
-        );
-        setThreadRuntimeState(threadId, "reconciling_history", {
-          activeIntentId: activeIntentId || undefined,
-          remoteRunId: event.runId,
-        });
-        scheduleHistoryRefresh(threadId, 8, 250, true);
-        break;
-      case "error":
-        if (isThreadStreamGapError(event)) {
-          if (activeIntentId) {
-            dispatchMessageState({
-              type: "intent/awaiting-history",
-              intentId: activeIntentId,
-            });
-          }
-          updateLiveStreamState(threadId, (current) =>
-            current
-              ? {
-                  ...current,
-                  runId: event.runId,
-                  assistantEntryId: null,
-                  streamStatus: "reconciling",
-                }
-              : null,
-          );
-          setThreadRuntimeState(threadId, "reconciling_history", {
-            activeIntentId: activeIntentId || undefined,
-            remoteRunId: event.runId,
-          });
-          void refetchAuthoritativeTranscriptAfterRewrite(threadId);
-          break;
-        }
-        const recoveryResult = activeIntentId
-          ? reconcileAssistantEntriesForGatewayRecovery(
-              messagesByThreadRef.current[threadId] || [],
-              activeIntentId,
-              [currentStream?.assistantEntryId],
-            )
-          : { entries: [] as UiTranscriptMessage[], matched: false };
-        const isTerminalRunError = event.terminal === true;
-        if (
-          !isTerminalRunError &&
-          (isTransientGatewayErrorMessage(event.error) ||
-            recoveryResult.matched)
-        ) {
-          const recoveryStatusLabel = "Waiting to sync with gateway…";
-          recordGatewayStatusObservation(
-            {
-              ok: false,
-              bridgeReady: false,
-              gatewayUrl: connection?.gatewayUrl || settingsDraft.gatewayUrl,
-              error: event.error,
-            },
-            recoveryStatusLabel,
-          );
-          let assistantEntryId: string | null | undefined = null;
-          updateLiveStreamState(threadId, (current) => {
-            assistantEntryId = current?.assistantEntryId ?? null;
-            return current
-              ? {
-                  ...current,
-                  runId: event.runId,
-                  assistantEntryId: null,
-                  streamStatus: "disconnected",
-                }
-              : null;
-          });
-          if (activeIntentId) {
-            dispatchMessageState({
-              type: "intent/awaiting-history",
-              intentId: activeIntentId,
-            });
-          }
-          setThreadRuntimeState(threadId, "reconciling_history", {
-            activeIntentId: activeIntentId || undefined,
-            remoteRunId: event.runId,
-          });
-          if (activeIntentId) {
-            updateMessagesByThread((current) => {
-              const nextEntries = reconcileAssistantEntriesForGatewayRecovery(
-                current[threadId] || [],
-                activeIntentId,
-                [assistantEntryId],
-              ).entries;
-              return {
-                ...current,
-                [threadId]: nextEntries,
-              };
-            });
-          }
-          scheduleHistoryRefresh(threadId, 5, 1200, true);
-          break;
-        }
-        updateLiveStreamState(threadId, (current) =>
-          current
-            ? {
-                ...current,
-                runId: event.runId,
-                assistantEntryId: null,
-                streamStatus: "failed",
-              }
-            : null,
-        );
-        if (activeIntentId) {
-          dispatchMessageState({
-            type: "intent/failed",
-            intentId: activeIntentId,
-            error: event.error,
-          });
-        }
-        setThreadRuntimeState(threadId, "failed", {
-          activeIntentId: activeIntentId || undefined,
-          remoteRunId: event.runId,
-          error: event.error,
-        });
-        setError(event.error);
-        break;
-      default:
-        break;
+              streamStatus: "reconciling",
+            }
+          : null,
+      );
+      setThreadRuntimeState(threadId, "reconciling_history", {
+        activeIntentId: activeIntentId || undefined,
+        remoteRunId: event.runId,
+      });
+      void refetchAuthoritativeTranscriptAfterRewrite(threadId);
+      return;
     }
+    const recoveryResult = activeIntentId
+      ? reconcileAssistantEntriesForGatewayRecovery(
+          messagesByThreadRef.current[threadId] || [],
+          activeIntentId,
+          [currentStream?.assistantEntryId],
+        )
+      : { entries: [] as UiTranscriptMessage[], matched: false };
+    const isTerminalRunError = event.terminal === true;
+    if (
+      !isTerminalRunError &&
+      (isTransientGatewayErrorMessage(event.error) || recoveryResult.matched)
+    ) {
+      const recoveryStatusLabel = "Waiting to sync with gateway…";
+      recordGatewayStatusObservation(
+        {
+          ok: false,
+          bridgeReady: false,
+          gatewayUrl: connection?.gatewayUrl || settingsDraft.gatewayUrl,
+          error: event.error,
+        },
+        recoveryStatusLabel,
+      );
+      let assistantEntryId: string | null | undefined = null;
+      updateLiveStreamState(threadId, (current) => {
+        assistantEntryId = current?.assistantEntryId ?? null;
+        return current
+          ? {
+              ...current,
+              runId: event.runId,
+              assistantEntryId: null,
+              streamStatus: "disconnected",
+            }
+          : null;
+      });
+      if (activeIntentId) {
+        dispatchMessageState({
+          type: "intent/awaiting-history",
+          intentId: activeIntentId,
+        });
+      }
+      setThreadRuntimeState(threadId, "reconciling_history", {
+        activeIntentId: activeIntentId || undefined,
+        remoteRunId: event.runId,
+      });
+      if (activeIntentId) {
+        updateMessagesByThread((current) => {
+          const nextEntries = reconcileAssistantEntriesForGatewayRecovery(
+            current[threadId] || [],
+            activeIntentId,
+            [assistantEntryId],
+          ).entries;
+          return {
+            ...current,
+            [threadId]: nextEntries,
+          };
+        });
+      }
+      scheduleHistoryRefresh(threadId, 5, 1200, true);
+      return;
+    }
+    updateLiveStreamState(threadId, (current) =>
+      current
+        ? {
+            ...current,
+            runId: event.runId,
+            assistantEntryId: null,
+            streamStatus: "failed",
+          }
+        : null,
+    );
+    if (activeIntentId) {
+      dispatchMessageState({
+        type: "intent/failed",
+        intentId: activeIntentId,
+        error: event.error,
+      });
+    }
+    setThreadRuntimeState(threadId, "failed", {
+      activeIntentId: activeIntentId || undefined,
+      remoteRunId: event.runId,
+      error: event.error,
+    });
+    setError(event.error);
   }
 
   function markIntentsFromHistory(
@@ -7306,6 +6629,7 @@ export function AppShell() {
     transcript: ThreadTranscript,
     options?: {
       persist?: boolean;
+      syncRunState?: boolean;
     },
   ) {
     const resolvedTranscript = transcriptWithResolvedActiveRun(transcript);
@@ -7313,6 +6637,7 @@ export function AppShell() {
       threadId,
       resolvedTranscript,
       options?.persist !== false,
+      options?.syncRunState ?? true,
     );
     cacheOpenableTranscriptThread(threadId, resolvedTranscript);
     updateThreadHistoryPagination(threadId, (current) => {
@@ -8497,6 +7822,25 @@ export function AppShell() {
     });
   }
 
+  function sideChatStreamConsumerId(threadId: string): string {
+    return `side-chat:${threadId}`;
+  }
+
+  async function startCommittedThreadStream(
+    threadId: string,
+    transcript: ThreadTranscript,
+    consumerId: string,
+  ): Promise<void> {
+    await window.garyxDesktop.startThreadStream({
+      threadId,
+      consumerId,
+      afterSeq: streamResumeCursor({
+        afterCursor: transcriptCommittedAfterCursor(transcript),
+        fallbackMaxIndex: null,
+      }),
+    });
+  }
+
   async function fetchSelectedThreadIncrementalTranscript(
     threadId: string,
     cached: ThreadTranscript | null,
@@ -8625,14 +7969,11 @@ export function AppShell() {
         if (!streamReady || !latestTranscript) {
           return;
         }
-        const afterCursor = transcriptCommittedAfterCursor(latestTranscript);
-        await window.garyxDesktop.startThreadStream({
+        await startCommittedThreadStream(
           threadId,
-          afterSeq: streamResumeCursor({
-            afterCursor,
-            fallbackMaxIndex: null,
-          }),
-        });
+          latestTranscript,
+          SELECTED_THREAD_STREAM_CONSUMER_ID,
+        );
       }
     }
   }
@@ -8646,23 +7987,27 @@ export function AppShell() {
         requestSelectedThreadMessagesBottomSnap(threadId, true);
       }
       applyRemoteTranscript(threadId, transcript);
-      if (
-        !shouldRestartSelectedThreadStreamAfterRefetch({
+      const shouldRestartSelectedStream =
+        shouldRestartSelectedThreadStreamAfterRefetch({
           threadId,
           selectedThreadId: selectedThreadIdRef.current,
           startSelectionGeneration,
           currentSelectionGeneration: selectedThreadGenerationRef.current,
-        })
-      ) {
-        return;
+        });
+      if (shouldRestartSelectedStream) {
+        await startCommittedThreadStream(
+          threadId,
+          transcript,
+          SELECTED_THREAD_STREAM_CONSUMER_ID,
+        );
       }
-      await window.garyxDesktop.startThreadStream({
-        threadId,
-        afterSeq: streamResumeCursor({
-          afterCursor: transcriptCommittedAfterCursor(transcript),
-          fallbackMaxIndex: null,
-        }),
-      });
+      if (sideChatThreadIdRef.current === threadId) {
+        await startCommittedThreadStream(
+          threadId,
+          transcript,
+          sideChatStreamConsumerId(threadId),
+        );
+      }
     } catch {
       scheduleHistoryRefresh(threadId, 3, 500, true);
     }
@@ -8676,6 +8021,7 @@ export function AppShell() {
       void refetchAuthoritativeTranscriptAfterRewrite(threadId);
       return;
     }
+    applyCommittedTranscriptRunState(event);
     const base =
       transcriptSnapshotByThreadRef.current[threadId] || {
         threadId,
@@ -8715,7 +8061,7 @@ export function AppShell() {
     if (selectedThreadIdRef.current === threadId) {
       requestSelectedThreadMessagesBottomSnap(threadId, true);
     }
-    applyRemoteTranscript(threadId, merged);
+    applyRemoteTranscript(threadId, merged, { syncRunState: false });
     const controlKind = transcriptControlKind(event.message);
     if (controlKind === "user_ack") {
       const control =
@@ -8903,7 +8249,7 @@ export function AppShell() {
             ? {
                 ...current,
                 runId: result.runId,
-                streamStatus: "streaming",
+                streamStatus: current.streamStatus,
               }
             : {
                 threadId: resultThreadId,
@@ -8911,7 +8257,7 @@ export function AppShell() {
                 activeIntentId: intent.intentId,
                 assistantEntryId,
                 pendingAckIntentIds: [],
-                streamStatus: "streaming",
+                streamStatus: "connecting",
               },
         );
         const latestIntent = intentForId(intent.intentId);
@@ -8932,10 +8278,6 @@ export function AppShell() {
             removeFromQueue: false,
           });
         }
-        setThreadRuntimeState(resultThreadId, "running_remote", {
-          activeIntentId: intent.intentId,
-          remoteRunId: result.runId,
-        });
         setDesktopState((current) => {
           if (!current) {
             return current;
@@ -9393,7 +8735,7 @@ export function AppShell() {
         pendingAckIntentIds: pendingAckIntentIds.includes(latestIntent.intentId)
           ? pendingAckIntentIds
           : [...pendingAckIntentIds, latestIntent.intentId],
-        streamStatus: current?.streamStatus || "streaming",
+        streamStatus: current?.streamStatus || "connecting",
       };
     });
 
@@ -9436,15 +8778,8 @@ export function AppShell() {
             : shouldTrackProviderAck
               ? [...(current?.pendingAckIntentIds || []), latestIntent.intentId]
               : current?.pendingAckIntentIds || [],
-          streamStatus: current?.streamStatus || "streaming",
+          streamStatus: current?.streamStatus || "connecting",
         }));
-        setThreadRuntimeState(resultThreadId, "running_remote", {
-          activeIntentId:
-            getLiveStreamState(resultThreadId)?.activeIntentId ||
-            selectThreadRuntime(messageStateRef.current, resultThreadId)
-              ?.activeIntentId,
-          remoteRunId: activeRunId,
-        });
         return;
       }
 

@@ -14,7 +14,6 @@ import type {
   DesktopApiProviderType,
   DesktopAutomationSummary,
   ChannelPluginCatalogEntry,
-  ChatStreamToolMessage,
   ConnectionStatus,
   DesktopCustomAgent,
   DesktopDreamScan,
@@ -1045,336 +1044,6 @@ function tryParseJson<T>(body: string): T | null {
   }
 }
 
-function mapThreadTitleUpdatedEvent(
-  payload: Record<string, unknown>,
-): DesktopChatStreamEvent | null {
-  if (asString(payload.type) !== "thread_title_updated") {
-    return null;
-  }
-  const title = (asString(payload.title) || "").trim();
-  const threadId =
-    asString(payload.threadId) || asString(payload.thread_id) || "";
-  if (!title || !threadId) {
-    return null;
-  }
-  const runId = asString(payload.runId) || asString(payload.run_id) || "";
-  return {
-    type: "thread_title_updated",
-    runId,
-    threadId,
-    sessionId: threadId,
-    title,
-  };
-}
-
-function gatewayStreamEventIds(payload: Record<string, unknown>): {
-  runId: string;
-  threadId: string;
-} | null {
-  const threadId =
-    asString(payload.threadId) ||
-    asString(payload.thread_id) ||
-    asString(payload.sessionKey) ||
-    "";
-  if (!threadId) {
-    return null;
-  }
-  return {
-    runId: asString(payload.runId) || asString(payload.run_id) || "",
-    threadId,
-  };
-}
-
-interface GatewayStreamEventMapOptions {
-  includeContentEvents: boolean;
-  includeCommittedMessages: boolean;
-}
-
-const THREAD_STREAM_EVENT_MAP_OPTIONS: GatewayStreamEventMapOptions = {
-  includeContentEvents: true,
-  includeCommittedMessages: true,
-};
-
-const GLOBAL_STREAM_EVENT_MAP_OPTIONS: GatewayStreamEventMapOptions = {
-  includeContentEvents: false,
-  includeCommittedMessages: false,
-};
-
-function mapGatewayStreamEventPayload(
-  payload: Record<string, unknown>,
-  options: GatewayStreamEventMapOptions,
-): DesktopChatStreamEvent | null {
-  const type = asString(payload.type);
-  if (!type) {
-    return null;
-  }
-  if (type === "thread_title_updated") {
-    return mapThreadTitleUpdatedEvent(payload);
-  }
-  const ids = gatewayStreamEventIds(payload);
-  if (!ids) {
-    return null;
-  }
-  const base = {
-    runId: ids.runId,
-    threadId: ids.threadId,
-    sessionId: ids.threadId,
-  };
-
-  switch (type) {
-    case "committed_message":
-      if (!options.includeCommittedMessages) {
-        return null;
-      }
-      return mapCommittedMessageEvent(payload);
-    case "accepted":
-    case "run_start":
-      return {
-        type: "accepted",
-        ...base,
-      };
-    case "assistant_delta": {
-      if (!options.includeContentEvents) {
-        return null;
-      }
-      const delta = asString(payload.delta) || "";
-      if (!delta) {
-        return null;
-      }
-      const metadata = parseRecord(payload.metadata);
-      return {
-        type: "assistant_delta",
-        ...base,
-        delta,
-        metadata: Object.keys(metadata).length ? metadata : null,
-      };
-    }
-    case "assistant_boundary":
-      return {
-        type: "assistant_boundary",
-        ...base,
-      };
-    case "tool_use":
-    case "tool_result":
-      if (!options.includeContentEvents) {
-        return null;
-      }
-      if (payload.message === undefined) {
-        return null;
-      }
-      return {
-        type,
-        ...base,
-        message: mapStreamToolMessage(payload.message),
-      };
-    case "user_ack":
-      return {
-        type: "user_ack",
-        ...base,
-        pendingInputId:
-          asString(payload.pendingInputId) ||
-          asString(payload.pending_input_id) ||
-          undefined,
-      };
-    case "done":
-      return {
-        type: "done",
-        ...base,
-      };
-    case "error":
-      return {
-        type: "error",
-        ...base,
-        error: asString(payload.error) || "Gateway stream error",
-      };
-    case "run_error":
-      return {
-        type: "error",
-        ...base,
-        error: asString(payload.error) || "Gateway stream error",
-        terminal: true,
-      };
-    default:
-      return null;
-  }
-}
-
-function mapGatewayEventPayloadInternal(
-  raw: string,
-  shouldForwardHistoryEntry?: (entry: string) => boolean,
-  options: GatewayStreamEventMapOptions = THREAD_STREAM_EVENT_MAP_OPTIONS,
-): DesktopChatStreamEvent[] {
-  const payload = tryParseJson<Record<string, unknown>>(raw);
-  if (!payload) {
-    return [];
-  }
-  if (asString(payload.type) === "history") {
-    const events = Array.isArray(payload.events) ? payload.events : [];
-    return events.flatMap((entry) => {
-      if (typeof entry === "string") {
-        if (shouldForwardHistoryEntry && !shouldForwardHistoryEntry(entry)) {
-          return [];
-        }
-        return mapGatewayEventPayloadInternal(
-          entry,
-          shouldForwardHistoryEntry,
-          options,
-        );
-      }
-      const historyEntry = JSON.stringify(entry);
-      if (
-        shouldForwardHistoryEntry &&
-        !shouldForwardHistoryEntry(historyEntry)
-      ) {
-        return [];
-      }
-      const mapped = mapGatewayStreamEventPayload(parseRecord(entry), options);
-      return mapped ? [mapped] : [];
-    });
-  }
-  const event = mapGatewayStreamEventPayload(payload, options);
-  return event ? [event] : [];
-}
-
-export function mapThreadStreamPassthroughPayload(
-  raw: string,
-): DesktopChatStreamEvent[] {
-  return mapGatewayEventPayloadInternal(raw);
-}
-
-function isGatewayHistoryPayload(raw: string): boolean {
-  const payload = tryParseJson<Record<string, unknown>>(raw);
-  return asString(payload?.type) === "history";
-}
-
-const MAX_SEEN_GATEWAY_STREAM_PAYLOADS = 512;
-const seenGatewayStreamPayloads = new Set<string>();
-const seenGatewayStreamPayloadOrder: string[] = [];
-
-function rememberGatewayStreamPayload(raw: string): void {
-  const payload = raw.trim();
-  if (!payload || seenGatewayStreamPayloads.has(payload)) {
-    return;
-  }
-  seenGatewayStreamPayloads.add(payload);
-  seenGatewayStreamPayloadOrder.push(payload);
-  while (seenGatewayStreamPayloadOrder.length > MAX_SEEN_GATEWAY_STREAM_PAYLOADS) {
-    const oldest = seenGatewayStreamPayloadOrder.shift();
-    if (oldest) {
-      seenGatewayStreamPayloads.delete(oldest);
-    }
-  }
-}
-
-function shouldForwardGatewayHistoryEntry(raw: string): boolean {
-  const payload = raw.trim();
-  if (!payload || seenGatewayStreamPayloads.has(payload)) {
-    return false;
-  }
-  rememberGatewayStreamPayload(payload);
-  return true;
-}
-
-interface StreamGatewayEventsOptions {
-  historyLimit?: number;
-  onConnected?: () => void;
-}
-
-export async function streamGatewayEvents(
-  settings: DesktopSettings,
-  onEvent: (event: DesktopChatStreamEvent) => void,
-  signal?: AbortSignal,
-  options?: StreamGatewayEventsOptions,
-): Promise<void> {
-  const headers = applyGatewayAuthHeader(
-    new Headers({ Accept: "text/event-stream" }),
-    settings.gatewayAuthToken,
-  );
-  const historyLimit = Math.max(
-    0,
-    Math.min(Math.trunc(options?.historyLimit ?? 0), 200),
-  );
-  const response = await fetch(
-    buildUrl(settings, `/api/stream?history_limit=${historyLimit}`),
-    {
-      headers,
-      signal,
-    },
-  );
-  if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
-  }
-  if (!response.body) {
-    throw new Error("Gateway event stream returned no body");
-  }
-  options?.onConnected?.();
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let dataLines: string[] = [];
-  const flushEvent = () => {
-    if (dataLines.length === 0) {
-      return;
-    }
-    const payload = dataLines.join("\n");
-    dataLines = [];
-    const events = mapGatewayEventPayloadInternal(
-      payload,
-      shouldForwardGatewayHistoryEntry,
-      GLOBAL_STREAM_EVENT_MAP_OPTIONS,
-    );
-    if (events.length > 0 && !isGatewayHistoryPayload(payload)) {
-      rememberGatewayStreamPayload(payload);
-    }
-    for (const event of events) {
-      onEvent(event);
-    }
-  };
-  const processLine = (line: string) => {
-    if (line === "") {
-      flushEvent();
-      return;
-    }
-    if (line.startsWith(":")) {
-      return;
-    }
-    if (!line.startsWith("data:")) {
-      return;
-    }
-    let value = line.slice(5);
-    if (value.startsWith(" ")) {
-      value = value.slice(1);
-    }
-    dataLines.push(value);
-  };
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      buffer += decoder.decode(value, { stream: true });
-      let newlineIndex = buffer.indexOf("\n");
-      while (newlineIndex >= 0) {
-        const rawLine = buffer.slice(0, newlineIndex).replace(/\r$/, "");
-        buffer = buffer.slice(newlineIndex + 1);
-        processLine(rawLine);
-        newlineIndex = buffer.indexOf("\n");
-      }
-    }
-    buffer += decoder.decode();
-    if (buffer.length > 0) {
-      processLine(buffer.replace(/\r$/, ""));
-      buffer = "";
-    }
-    flushEvent();
-  } finally {
-    reader.releaseLock();
-  }
-}
-
 export class ThreadStreamGapError extends Error {
   resumeAfterSeq: number;
 
@@ -1383,20 +1052,6 @@ export class ThreadStreamGapError extends Error {
     this.name = "ThreadStreamGapError";
     this.resumeAfterSeq = resumeAfterSeq;
   }
-}
-
-function shouldForwardThreadPassthroughEvent(event: DesktopChatStreamEvent): boolean {
-  if (event.type === "error" && event.terminal === true) {
-    return true;
-  }
-  return ![
-    "accepted",
-    "assistant_boundary",
-    "done",
-    "error",
-    "thread_title_updated",
-    "user_ack",
-  ].includes(event.type);
 }
 
 interface StreamThreadEventsOptions {
@@ -1571,33 +1226,28 @@ export async function streamThreadEvents(
       eventId = null;
       return;
     }
-    if (asString(payload.type) === "committed_message") {
-      const event = mapCommittedMessageEvent(payload, eventId);
+    if (asString(payload.type) !== "committed_message") {
       eventId = null;
-      if (!event || event.type !== "committed_message") {
-        return;
-      }
-      const decision = decideStreamSeq({
-        incomingSeq: event.seq,
-        connectionLastSeq,
-      });
-      if (decision.type === "gap_reconnect") {
-        throw new ThreadStreamGapError(decision.resumeAfterSeq);
-      }
-      if (decision.type === "stale") {
-        return;
-      }
-      onEvent(event);
-      connectionLastSeq = Math.max(connectionLastSeq, event.seq);
-      options?.onCommittedSeq?.(connectionLastSeq);
       return;
     }
+    const event = mapCommittedMessageEvent(payload, eventId);
     eventId = null;
-    for (const event of mapThreadStreamPassthroughPayload(payloadText)) {
-      if (shouldForwardThreadPassthroughEvent(event)) {
-        onEvent(event);
-      }
+    if (!event || event.type !== "committed_message") {
+      return;
     }
+    const decision = decideStreamSeq({
+      incomingSeq: event.seq,
+      connectionLastSeq,
+    });
+    if (decision.type === "gap_reconnect") {
+      throw new ThreadStreamGapError(decision.resumeAfterSeq);
+    }
+    if (decision.type === "stale") {
+      return;
+    }
+    onEvent(event);
+    connectionLastSeq = Math.max(connectionLastSeq, event.seq);
+    options?.onCommittedSeq?.(connectionLastSeq);
   };
   const processLine = (line: string) => {
     if (line === "") {
@@ -1953,33 +1603,6 @@ function buildProviderMetadata(
   };
 
   return Object.keys(metadata).length > 0 ? metadata : undefined;
-}
-
-function mapStreamToolMessage(value: unknown): ChatStreamToolMessage {
-  const record = parseRecord(value);
-  const role = record.role === "tool_result" ? "tool_result" : "tool_use";
-  const metadataValue = record.metadata;
-  const metadataRecord =
-    metadataValue && typeof metadataValue === "object"
-      ? (metadataValue as Record<string, unknown>)
-      : null;
-  const contentRecord = parseRecord(record.content);
-  return {
-    role,
-    content: record.content,
-    timestamp: typeof record.timestamp === "string" ? record.timestamp : null,
-    toolUseId:
-      asString(record.tool_use_id) || asString(record.toolUseId) || null,
-    toolName:
-      asString(record.tool_name) ||
-      asString(record.toolName) ||
-      asString(metadataRecord?.item_type) ||
-      asString(metadataRecord?.itemType) ||
-      asString(contentRecord.type) ||
-      null,
-    isError: asBoolean(record.is_error) ?? asBoolean(record.isError),
-    metadata: metadataRecord,
-  };
 }
 
 function mapHistoryMessage(

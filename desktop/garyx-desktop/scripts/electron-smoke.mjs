@@ -5,7 +5,6 @@ import { readFileSync } from 'node:fs';
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { WebSocketServer } from 'ws';
 
 import { _electron as electron } from 'playwright';
 import { buildDesktopElectronLaunchEnv } from './electron-launch-env.mjs';
@@ -238,8 +237,6 @@ function buildToolScenario(interactionIndex, workspaceDir) {
 
 async function createMockGateway(workspaceDir) {
   const state = {
-    offlineUntil: 0,
-    nextStreamDisconnect: null,
     threadCreateRequests: [],
     workspaces: [
       {
@@ -265,9 +262,7 @@ async function createMockGateway(workspaceDir) {
       [THREAD_ID]: [],
     },
     activeRuns: {},
-    streamClients: new Set(),
     threadStreamClients: new Map(),
-    streamHistory: [],
     commands: [
       {
         name: SLASH_COMMAND_NAME,
@@ -301,28 +296,8 @@ async function createMockGateway(workspaceDir) {
     res.end(JSON.stringify(payload));
   }
 
-  function rememberStreamEvent(payload) {
-    const raw = JSON.stringify(payload);
-    state.streamHistory.push(raw);
-    while (state.streamHistory.length > 256) {
-      state.streamHistory.shift();
-    }
-    return raw;
-  }
-
   function writeStreamPayload(res, raw) {
     res.write(`data: ${raw}\n\n`);
-  }
-
-  function broadcastGatewayStreamEvent(payload) {
-    const raw = rememberStreamEvent(payload);
-    for (const client of [...state.streamClients]) {
-      try {
-        writeStreamPayload(client, raw);
-      } catch {
-        state.streamClients.delete(client);
-      }
-    }
   }
 
   function threadStreamClientsFor(sessionId) {
@@ -388,23 +363,33 @@ async function createMockGateway(workspaceDir) {
     }
   }
 
-  function broadcastThreadPassthroughEvent(sessionId, payload) {
-    const clients = state.threadStreamClients.get(sessionId);
-    if (!clients) {
-      return;
+  function appendHistoryRecord(sessionId, partialRecord, runId = '') {
+    const session = ensureSession(sessionId);
+    if (!session) {
+      return null;
     }
-    const raw = JSON.stringify(payload);
-    for (const client of [...clients]) {
-      try {
-        writeStreamPayload(client, raw);
-      } catch {
-        clients.delete(client);
-      }
+    const history = state.histories[sessionId] || [];
+    const record = {
+      index: history.length,
+      timestamp: new Date().toISOString(),
+      ...partialRecord,
+    };
+    history.push(record);
+    state.histories[sessionId] = history;
+    session.updated_at = record.timestamp;
+    session.message_count = history.length;
+    if (record.role === 'user' && typeof record.content === 'string') {
+      session.last_user_message = record.content;
     }
+    if (record.role === 'assistant' && typeof record.content === 'string') {
+      session.last_assistant_message = record.content;
+    }
+    broadcastCommittedRecord(sessionId, record, runId);
+    return record;
   }
 
   function appendControlRecord(sessionId, runId, control) {
-    const history = state.histories[sessionId] || [];
+    const timestamp = new Date().toISOString();
     const message = {
       role: 'system',
       kind: 'control',
@@ -414,94 +399,60 @@ async function createMockGateway(workspaceDir) {
         ...control,
         run_id: runId,
         thread_id: sessionId,
-        at: new Date().toISOString(),
+        at: timestamp,
       },
     };
-    const record = {
-      index: history.length,
+    return appendHistoryRecord(sessionId, {
       role: 'system',
       kind: 'control',
       internal: true,
       internal_kind: 'control',
-      timestamp: message.control.at,
+      timestamp,
       content: message,
       message,
-    };
-    history.push(record);
-    state.histories[sessionId] = history;
-    const session = ensureSession(sessionId);
-    if (session) {
-      session.updated_at = record.timestamp;
-      session.message_count = history.length;
-    }
-    broadcastCommittedRecord(sessionId, record, runId);
-    return record;
-  }
-
-  function closeStreamClients() {
-    for (const client of [...state.streamClients]) {
-      state.streamClients.delete(client);
-      try {
-        client.destroy();
-      } catch {
-        // no-op
-      }
-    }
+    }, runId);
   }
 
   function ensureSession(sessionId) {
     return state.sessions.find((session) => session.thread_id === sessionId) || null;
   }
 
-  function appendStreamHistory(sessionId, userText) {
+  function buildRunPayload(sessionId, userText) {
     const session = ensureSession(sessionId);
     if (!session) {
       return null;
     }
     const assistantText = tokenFromPrompt(userText);
     const history = state.histories[sessionId] || [];
-    const userIndex = history.length;
-    const interactionIndex = Math.floor(userIndex / 4);
+    const interactionIndex = history.filter((record) => record.role === 'user').length;
     const scenario = buildToolScenario(interactionIndex, workspaceDir);
-    history.push({
-      index: userIndex,
-      role: 'user',
-      kind: 'user_input',
-      timestamp: new Date().toISOString(),
-      content: userText,
-    });
-    history.push({
-      index: userIndex + 1,
-      role: 'tool_use',
-      kind: 'tool_trace',
-      timestamp: new Date().toISOString(),
-      content: JSON.stringify(scenario.historyToolUseContent),
-    });
-    history.push({
-      index: userIndex + 2,
-      role: 'tool_result',
-      kind: 'tool_trace',
-      timestamp: new Date().toISOString(),
-      content: JSON.stringify(scenario.historyToolResultContent),
-    });
-    history.push({
-      index: userIndex + 3,
-      role: 'assistant',
-      kind: 'assistant_reply',
-      timestamp: new Date().toISOString(),
-      content: assistantText,
-    });
-    state.histories[sessionId] = history;
-    session.updated_at = new Date().toISOString();
-    session.message_count = history.length;
-    session.last_user_message = userText;
-    session.last_assistant_message = assistantText;
     return {
       runId: `run::${Date.now()}`,
       assistantText,
       scenario,
       sessionId,
-      records: history.slice(userIndex),
+      records: [
+        {
+          role: 'user',
+          kind: 'user_input',
+          content: userText,
+        },
+        {
+          role: 'tool_use',
+          kind: 'tool_trace',
+          content: JSON.stringify(scenario.historyToolUseContent),
+        },
+        {
+          role: 'tool_result',
+          kind: 'tool_trace',
+          content: JSON.stringify(scenario.historyToolResultContent),
+        },
+        {
+          role: 'assistant',
+          kind: 'assistant_reply',
+          content: assistantText,
+        },
+      ],
     };
   }
 
@@ -590,57 +541,6 @@ async function createMockGateway(workspaceDir) {
     return history[assistantIndex];
   }
 
-  async function streamRunToSocket(socket, payload) {
-    socket.send(
-      JSON.stringify({
-        type: 'accepted',
-        runId: payload.runId,
-        threadId: payload.sessionId,
-      }),
-    );
-    await sleep(120);
-    socket.send(
-      JSON.stringify({
-        type: 'tool_use',
-        runId: payload.runId,
-        threadId: payload.sessionId,
-        message: payload.scenario.streamToolUseMessage,
-      }),
-    );
-    await sleep(120);
-    socket.send(
-      JSON.stringify({
-        type: 'tool_result',
-        runId: payload.runId,
-        threadId: payload.sessionId,
-        message: payload.scenario.streamToolResultMessage,
-      }),
-    );
-    await sleep(800);
-    socket.send(
-      JSON.stringify({
-        type: 'assistant_delta',
-        runId: payload.runId,
-        threadId: payload.sessionId,
-        delta: payload.assistantText,
-      }),
-    );
-    if (state.nextStreamDisconnect) {
-      state.offlineUntil = Date.now() + state.nextStreamDisconnect.offlineMs;
-      state.nextStreamDisconnect = null;
-      socket.close();
-      return;
-    }
-    await sleep(60);
-    socket.send(
-      JSON.stringify({
-        type: 'done',
-        runId: payload.runId,
-        threadId: payload.sessionId,
-      }),
-    );
-  }
-
   async function streamRunToGateway(payload) {
     const [userRecord, toolUseRecord, toolResultRecord, assistantRecord] = payload.records || [];
     state.activeRuns[payload.sessionId] = {
@@ -651,74 +551,23 @@ async function createMockGateway(workspaceDir) {
       updated_at: new Date().toISOString(),
       pending_user_input_count: 0,
     };
-    broadcastGatewayStreamEvent({
-      type: 'accepted',
-      run_id: payload.runId,
-      thread_id: payload.sessionId,
-    });
     if (userRecord) {
-      broadcastCommittedRecord(payload.sessionId, userRecord, payload.runId);
+      appendHistoryRecord(payload.sessionId, userRecord, payload.runId);
     }
+    appendControlRecord(payload.sessionId, payload.runId, { kind: 'run_start' });
     await sleep(120);
-    broadcastGatewayStreamEvent({
-      type: 'tool_use',
-      run_id: payload.runId,
-      thread_id: payload.sessionId,
-      message: payload.scenario.streamToolUseMessage,
-    });
-    broadcastThreadPassthroughEvent(payload.sessionId, {
-      type: 'tool_use',
-      run_id: payload.runId,
-      thread_id: payload.sessionId,
-      message: payload.scenario.streamToolUseMessage,
-    });
-    await sleep(120);
-    broadcastGatewayStreamEvent({
-      type: 'tool_result',
-      run_id: payload.runId,
-      thread_id: payload.sessionId,
-      message: payload.scenario.streamToolResultMessage,
-    });
-    broadcastThreadPassthroughEvent(payload.sessionId, {
-      type: 'tool_result',
-      run_id: payload.runId,
-      thread_id: payload.sessionId,
-      message: payload.scenario.streamToolResultMessage,
-    });
     if (toolUseRecord) {
-      broadcastCommittedRecord(payload.sessionId, toolUseRecord, payload.runId);
+      appendHistoryRecord(payload.sessionId, toolUseRecord, payload.runId);
     }
+    await sleep(120);
     if (toolResultRecord) {
-      broadcastCommittedRecord(payload.sessionId, toolResultRecord, payload.runId);
+      appendHistoryRecord(payload.sessionId, toolResultRecord, payload.runId);
     }
     await sleep(800);
-    broadcastGatewayStreamEvent({
-      type: 'assistant_delta',
-      run_id: payload.runId,
-      thread_id: payload.sessionId,
-      delta: payload.assistantText,
-    });
-    broadcastThreadPassthroughEvent(payload.sessionId, {
-      type: 'assistant_delta',
-      run_id: payload.runId,
-      thread_id: payload.sessionId,
-      delta: payload.assistantText,
-    });
     if (assistantRecord) {
-      broadcastCommittedRecord(payload.sessionId, assistantRecord, payload.runId);
-    }
-    if (state.nextStreamDisconnect) {
-      state.offlineUntil = Date.now() + state.nextStreamDisconnect.offlineMs;
-      state.nextStreamDisconnect = null;
-      closeStreamClients();
-      return;
+      appendHistoryRecord(payload.sessionId, assistantRecord, payload.runId);
     }
     await sleep(60);
-    broadcastGatewayStreamEvent({
-      type: 'done',
-      run_id: payload.runId,
-      thread_id: payload.sessionId,
-    });
     appendControlRecord(payload.sessionId, payload.runId, {
       kind: 'run_complete',
       status: 'completed',
@@ -726,65 +575,9 @@ async function createMockGateway(workspaceDir) {
     delete state.activeRuns[payload.sessionId];
   }
 
-  const wsServer = new WebSocketServer({ noServer: true });
-  wsServer.on('connection', (socket) => {
-    socket.on('message', async (raw) => {
-      let payload;
-      try {
-        payload = JSON.parse(String(raw));
-      } catch {
-        socket.send(JSON.stringify({ type: 'error', error: 'invalid websocket json payload' }));
-        return;
-      }
-      const op = payload.op;
-      if (op === 'start') {
-        const sessionId = payload.threadId || payload.sessionKey || THREAD_ID;
-        const session = ensureSession(sessionId);
-        if (!session) {
-          socket.send(JSON.stringify({ type: 'error', error: 'thread not found', threadId: sessionId }));
-          return;
-        }
-        const streamPayload = appendStreamHistory(sessionId, String(payload.message || ''));
-        if (!streamPayload) {
-          socket.send(JSON.stringify({ type: 'error', error: 'thread not found', threadId: sessionId }));
-          return;
-        }
-        await streamRunToSocket(socket, streamPayload);
-        return;
-      }
-      if (op === 'input') {
-        socket.send(
-          JSON.stringify({
-            type: 'stream_input',
-            status: 'no_active_session',
-            threadId: payload.threadId || THREAD_ID,
-          }),
-        );
-        return;
-      }
-      if (op === 'interrupt') {
-        socket.send(
-          JSON.stringify({
-            type: 'interrupt',
-            status: 'ok',
-            threadId: payload.threadId || THREAD_ID,
-            abortedRuns: [],
-          }),
-        );
-      }
-    });
-  });
-
   const server = createServer(async (req, res) => {
     const url = new URL(req.url || '/', 'http://127.0.0.1');
     const { pathname } = url;
-    const offline = Date.now() < state.offlineUntil;
-
-    if (offline) {
-      return writeJson(res, 503, {
-        error: 'gateway temporarily offline',
-      });
-    }
 
     const remainingFailures = STARTUP_FAILURE_BUDGET.get(pathname) || 0;
     if (req.method === 'GET' && remainingFailures > 0) {
@@ -805,40 +598,6 @@ async function createMockGateway(workspaceDir) {
         uptime_seconds: 5,
         version: '0.1.0',
       });
-    }
-    if (req.method === 'GET' && pathname === '/api/stream') {
-      const historyLimit = Math.max(
-        0,
-        Math.min(Number(url.searchParams.get('history_limit') || 50) || 0, 200),
-      );
-      const historyEvents = state.streamHistory.slice(-historyLimit);
-      res.writeHead(200, {
-        'content-type': 'text/event-stream',
-        'cache-control': 'no-cache',
-        connection: 'keep-alive',
-      });
-      writeStreamPayload(
-        res,
-        JSON.stringify({
-          type: 'snapshot',
-          status: 'running',
-          uptime_seconds: 5,
-          version: '0.1.0',
-        }),
-      );
-      writeStreamPayload(
-        res,
-        JSON.stringify({
-          type: 'history',
-          count: historyEvents.length,
-          events: historyEvents,
-        }),
-      );
-      state.streamClients.add(res);
-      req.on('close', () => {
-        state.streamClients.delete(res);
-      });
-      return;
     }
     const threadStreamMatch = pathname.match(/^\/api\/threads\/([^/]+)\/stream$/);
     if (req.method === 'GET' && threadStreamMatch) {
@@ -1011,107 +770,6 @@ async function createMockGateway(workspaceDir) {
         response: assistantText,
       });
     }
-    if (req.method === 'POST' && pathname === '/api/chat/stream') {
-      const body = await readJson(req);
-      const sessionId = body.threadId || body.sessionKey || THREAD_ID;
-      const session = ensureSession(sessionId);
-      if (!session) {
-        return writeJson(res, 404, { error: 'thread not found' });
-      }
-
-      const userText = String(body.message || '');
-      const assistantText = tokenFromPrompt(userText);
-      const history = state.histories[sessionId] || [];
-      const userIndex = history.length;
-      const interactionIndex = Math.floor(userIndex / 4);
-      const scenario = buildToolScenario(interactionIndex, workspaceDir);
-      history.push({
-        index: userIndex,
-        role: 'user',
-        kind: 'user_input',
-        timestamp: new Date().toISOString(),
-        content: userText,
-      });
-      history.push({
-        index: userIndex + 1,
-        role: 'tool_use',
-        kind: 'tool_trace',
-        timestamp: new Date().toISOString(),
-        content: JSON.stringify(scenario.historyToolUseContent),
-      });
-      history.push({
-        index: userIndex + 2,
-        role: 'tool_result',
-        kind: 'tool_trace',
-        timestamp: new Date().toISOString(),
-        content: JSON.stringify(scenario.historyToolResultContent),
-      });
-      history.push({
-        index: userIndex + 3,
-        role: 'assistant',
-        kind: 'assistant_reply',
-        timestamp: new Date().toISOString(),
-        content: assistantText,
-      });
-      state.histories[sessionId] = history;
-      session.updated_at = new Date().toISOString();
-      session.message_count = history.length;
-      session.last_user_message = userText;
-      session.last_assistant_message = assistantText;
-
-      const runId = `run::${Date.now()}`;
-      const sendEvent = (eventName, payload) => {
-        res.write(`event: ${eventName}\n`);
-        res.write(`data: ${JSON.stringify(payload)}\n\n`);
-      };
-
-      res.writeHead(200, {
-        'content-type': 'text/event-stream',
-        'cache-control': 'no-cache',
-        connection: 'keep-alive',
-      });
-
-      sendEvent('accepted', {
-        runId,
-        threadId: sessionId,
-        sessionKey: sessionId,
-      });
-      await sleep(120);
-      sendEvent('tool_use', {
-        runId,
-        threadId: sessionId,
-        sessionKey: sessionId,
-        message: scenario.streamToolUseMessage,
-      });
-      await sleep(120);
-      sendEvent('tool_result', {
-        runId,
-        threadId: sessionId,
-        sessionKey: sessionId,
-        message: scenario.streamToolResultMessage,
-      });
-      await sleep(800);
-      sendEvent('assistant_delta', {
-        runId,
-        threadId: sessionId,
-        sessionKey: sessionId,
-        delta: assistantText,
-      });
-      if (state.nextStreamDisconnect) {
-        state.offlineUntil = Date.now() + state.nextStreamDisconnect.offlineMs;
-        state.nextStreamDisconnect = null;
-        res.destroy();
-        return;
-      }
-      await sleep(60);
-      sendEvent('done', {
-        runId,
-        threadId: sessionId,
-        sessionKey: sessionId,
-      });
-      res.end();
-      return;
-    }
     if (req.method === 'POST' && pathname === '/api/chat/start') {
       const body = await readJson(req);
       const sessionId = body.threadId || body.sessionKey || THREAD_ID;
@@ -1119,7 +777,7 @@ async function createMockGateway(workspaceDir) {
       if (!session) {
         return writeJson(res, 404, { error: 'thread not found' });
       }
-      const streamPayload = appendStreamHistory(sessionId, String(body.message || ''));
+      const streamPayload = buildRunPayload(sessionId, String(body.message || ''));
       if (!streamPayload) {
         return writeJson(res, 404, { error: 'thread not found' });
       }
@@ -1157,21 +815,6 @@ async function createMockGateway(workspaceDir) {
     server.listen(0, '127.0.0.1', resolve);
   });
 
-  server.on('upgrade', (req, socket, head) => {
-    const url = new URL(req.url || '/', 'http://127.0.0.1');
-    if (url.pathname !== '/api/chat/ws') {
-      socket.destroy();
-      return;
-    }
-    if (Date.now() < state.offlineUntil) {
-      socket.destroy();
-      return;
-    }
-    wsServer.handleUpgrade(req, socket, head, (ws) => {
-      wsServer.emit('connection', ws, req);
-    });
-  });
-
   const address = server.address();
   const port = typeof address === 'object' && address ? address.port : 0;
   return {
@@ -1182,20 +825,14 @@ async function createMockGateway(workspaceDir) {
     clearExternalRun: ({ sessionId = THREAD_ID } = {}) => clearExternalRun(sessionId),
     finishExternalRun: ({ sessionId = THREAD_ID, assistantText }) =>
       finishExternalRun(sessionId, assistantText),
-    scheduleTransientDisconnect: ({ offlineMs = 3500 } = {}) => {
-      state.nextStreamDisconnect = { offlineMs };
-    },
     close: () =>
       new Promise((resolve, reject) => {
-        closeStreamClients();
-        wsServer.close(() => {
-          server.close((error) => {
-            if (error) {
-              reject(error);
-            } else {
-              resolve();
-            }
-          });
+        server.close((error) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve();
+          }
         });
       }),
   };
@@ -1385,17 +1022,37 @@ async function main() {
         0,
         'ASCII run loading placeholder should not render as transcript text',
       );
-      await window.locator('.tool-trace-group.is-active .tool-trace-group-header').first().waitFor({ timeout: 20000 });
-      assert.equal(
-        await window.locator('.tool-trace-group.is-active').count(),
-        1,
-        'only the latest tool trace group should express the active run state',
+      const warmupProgressState = await Promise.race([
+        window
+          .locator('.tool-trace-group.is-active .tool-trace-group-header')
+          .first()
+          .waitFor({ timeout: 20000 })
+          .then(() => 'tool-active')
+          .catch(() => null),
+        window
+          .locator('.message-bubble.assistant p')
+          .filter({ hasText: WARMUP_TOKEN })
+          .first()
+          .waitFor({ timeout: 20000 })
+          .then(() => 'assistant-committed')
+          .catch(() => null),
+      ]);
+      assert.ok(
+        warmupProgressState,
+        'warmup should reach either active committed tool progress or committed assistant text',
       );
-      assert.equal(
-        await window.getByText(RUN_LOADING_TEXT_ZH).count(),
-        0,
-        'Thinking should disappear once tool progress is visible',
-      );
+      if (warmupProgressState === 'tool-active') {
+        assert.equal(
+          await window.locator('.tool-trace-group.is-active').count(),
+          1,
+          'only the latest tool trace group should express the active run state',
+        );
+        assert.equal(
+          await window.getByText(RUN_LOADING_TEXT_ZH).count(),
+          0,
+          'Thinking should disappear once tool progress is visible',
+        );
+      }
       stage = 'verify-new-thread-workspace-path';
       const createRequests = gateway.createdThreadRequests();
       const expectedWorkspacePath = path.join(isolatedHome, 'workspace');

@@ -94,14 +94,6 @@ function truncateClientLogText(value: string, maxChars = 160): string {
   return `${value.slice(0, Math.max(0, maxChars - 1))}…`;
 }
 
-function shortenClientLogId(value: string | null | undefined): string {
-  const text = String(value || '').trim();
-  if (!text) {
-    return '';
-  }
-  return text.length <= 18 ? text : `${text.slice(0, 8)}…${text.slice(-6)}`;
-}
-
 function stringifyClientLogPayload(value: unknown, maxChars = 4_000): string {
   const text = typeof value === 'string'
     ? value
@@ -118,50 +110,12 @@ function stringifyClientLogPayload(value: unknown, maxChars = 4_000): string {
   return `${text.slice(0, maxChars)}\n…[truncated ${text.length - maxChars} chars]`;
 }
 
-function assistantDeltaSummary(count: number, totalChars: number): string {
-  return count === 1
-    ? `1 chunk · ${totalChars} chars`
-    : `${count} chunks · ${totalChars} chars`;
-}
-
-function assistantDeltaDetail(input: {
-  count: number;
-  runId?: string;
-  totalChars: number;
-}): string {
-  return stringifyClientLogPayload({
-    type: 'assistant_delta',
-    runId: input.runId,
-    chunks: input.count,
-    chars: input.totalChars,
-    coalesced: input.count > 1,
-  });
-}
-
 function summarizeClientStreamEvent(event: DesktopChatStreamEvent): string {
   switch (event.type) {
-    case 'assistant_delta':
-      return assistantDeltaSummary(1, event.delta.length);
-    case 'tool_use':
-    case 'tool_result': {
-      const summaryParts = [
-        event.message.toolName || 'tool',
-        event.message.toolUseId ? `#${shortenClientLogId(event.message.toolUseId)}` : '',
-        event.message.isError ? 'error' : '',
-      ].filter(Boolean);
-      return summaryParts.join(' · ');
-    }
     case 'error':
       return truncateClientLogText(compactClientLogText(event.error), 220);
-    case 'thread_title_updated':
-      return truncateClientLogText(compactClientLogText(event.title), 120);
     case 'committed_message':
       return `seq=${event.seq} · ${event.message.kind || event.message.role}`;
-    case 'accepted':
-    case 'assistant_boundary':
-    case 'done':
-    case 'user_ack':
-      return `run=${shortenClientLogId(event.runId)}`;
     default:
       return '';
   }
@@ -169,19 +123,6 @@ function summarizeClientStreamEvent(event: DesktopChatStreamEvent): string {
 
 function buildClientStreamLogDetail(event: DesktopChatStreamEvent): string {
   switch (event.type) {
-    case 'assistant_delta':
-      return assistantDeltaDetail({
-        count: 1,
-        runId: event.runId,
-        totalChars: event.delta.length,
-      });
-    case 'tool_use':
-    case 'tool_result':
-      return stringifyClientLogPayload({
-        type: event.type,
-        runId: event.runId,
-        message: event.message,
-      });
     case 'error':
       return stringifyClientLogPayload({
         type: event.type,
@@ -203,8 +144,6 @@ export function buildClientStreamLogEntry(
     timestamp: formatThreadLogClock(now),
     eventType: event.type,
     runId: 'runId' in event ? event.runId : undefined,
-    count: event.type === 'assistant_delta' ? 1 : undefined,
-    totalChars: event.type === 'assistant_delta' ? event.delta.length : undefined,
     summary: summarizeClientStreamEvent(event),
     detail: buildClientStreamLogDetail(event),
     level: event.type === 'error' ? 'error' : 'default',
@@ -216,35 +155,7 @@ export function appendClientStreamLogEntry(
   nextEntry: ClientLogEntry,
   maxEntries = MAX_CLIENT_STREAM_LOG_ENTRIES,
 ): ClientLogEntry[] {
-  const previous = existing[existing.length - 1];
-  let nextEntries: ClientLogEntry[];
-  if (
-    previous &&
-    previous.eventType === 'assistant_delta' &&
-    nextEntry.eventType === 'assistant_delta' &&
-    previous.runId === nextEntry.runId
-  ) {
-    const count = (previous.count || 1) + (nextEntry.count || 1);
-    const totalChars =
-      (previous.totalChars || 0) + (nextEntry.totalChars || 0);
-    nextEntries = [
-      ...existing.slice(0, -1),
-      {
-        ...previous,
-        timestamp: nextEntry.timestamp,
-        count,
-        totalChars,
-        summary: assistantDeltaSummary(count, totalChars),
-        detail: assistantDeltaDetail({
-          count,
-          runId: previous.runId,
-          totalChars,
-        }),
-      },
-    ];
-  } else {
-    nextEntries = [...existing, nextEntry];
-  }
+  const nextEntries = [...existing, nextEntry];
   return maxEntries > 0 && nextEntries.length > maxEntries
     ? nextEntries.slice(nextEntries.length - maxEntries)
     : nextEntries;

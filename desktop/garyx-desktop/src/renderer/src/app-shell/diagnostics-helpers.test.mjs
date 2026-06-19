@@ -7,70 +7,45 @@ import {
   defaultSideToolsPanelWidth,
 } from './diagnostics-helpers.ts';
 
-function assistantDeltaEvent(runId, delta) {
+function committedEvent(seq, kind = 'assistant_reply') {
   return {
-    type: 'assistant_delta',
+    type: 'committed_message',
     threadId: 'thread-1',
-    runId,
-    delta,
+    runId: 'run-1',
+    seq,
+    message: {
+      id: `thread-1:${seq - 1}`,
+      role: kind === 'control' ? 'system' : 'assistant',
+      text: kind === 'control' ? '' : 'hello',
+      kind,
+    },
   };
 }
 
-test('coalesces consecutive assistant delta client logs for the same run', () => {
+test('builds committed-message client log entries', () => {
   const first = buildClientStreamLogEntry(
-    assistantDeltaEvent('run-1', 'hello'),
+    committedEvent(1),
     'client-log-line-1',
   );
-  const second = buildClientStreamLogEntry(
-    assistantDeltaEvent('run-1', ' world'),
-    'client-log-line-2',
-  );
 
-  const entries = appendClientStreamLogEntry(
-    appendClientStreamLogEntry([], first),
-    second,
-  );
-
-  assert.equal(entries.length, 1);
-  assert.equal(entries[0].key, 'client-log-line-1');
-  assert.equal(entries[0].count, 2);
-  assert.equal(entries[0].totalChars, 11);
-  assert.equal(entries[0].summary, '2 chunks · 11 chars');
+  assert.equal(first.eventType, 'committed_message');
+  assert.equal(first.runId, 'run-1');
+  assert.equal(first.summary, 'seq=1 · assistant_reply');
 });
 
-test('keeps assistant delta client logs separate across runs', () => {
-  const first = buildClientStreamLogEntry(
-    assistantDeltaEvent('run-1', 'hello'),
-    'client-log-line-1',
-  );
-  const second = buildClientStreamLogEntry(
-    assistantDeltaEvent('run-2', 'world'),
-    'client-log-line-2',
-  );
-
-  const entries = appendClientStreamLogEntry(
-    appendClientStreamLogEntry([], first),
-    second,
-  );
-
-  assert.equal(entries.length, 2);
-  assert.equal(entries[0].runId, 'run-1');
-  assert.equal(entries[1].runId, 'run-2');
-});
-
-test('trims client logs after append or coalesce', () => {
+test('trims committed client logs after append', () => {
   const entries = [
     buildClientStreamLogEntry(
-      { type: 'accepted', threadId: 'thread-1', runId: 'run-1' },
+      committedEvent(1),
       'client-log-line-1',
     ),
     buildClientStreamLogEntry(
-      { type: 'accepted', threadId: 'thread-1', runId: 'run-2' },
+      committedEvent(2, 'control'),
       'client-log-line-2',
     ),
   ];
   const next = buildClientStreamLogEntry(
-    assistantDeltaEvent('run-3', 'x'),
+    committedEvent(3),
     'client-log-line-3',
   );
 

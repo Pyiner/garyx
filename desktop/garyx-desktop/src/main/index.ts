@@ -106,7 +106,6 @@ import type {
   CopyTextToClipboardInput,
   UnassignTaskInput,
 } from "@shared/contracts";
-import { shouldForwardGlobalStreamEvent } from "@shared/transcript-sync";
 
 import {
   createCustomAgent,
@@ -160,7 +159,6 @@ import {
   saveGatewaySettings,
   saveSkillFile,
   sendStreamingInput,
-  streamGatewayEvents,
   streamThreadEvents,
   ThreadStreamGapError,
   scanDreams,
@@ -263,27 +261,43 @@ let tray: Tray | null = null;
 let isQuitting = false;
 const deepLinkSubscribers = new Set<Electron.WebContents>();
 const pendingDeepLinks: DesktopDeepLinkEvent[] = [];
-let gatewayEventStreamAbortController: AbortController | null = null;
-let selectedThreadStreamAbortController: AbortController | null = null;
-let selectedThreadStreamThreadId: string | null = null;
 
-function stopGatewayEventForwarder(): void {
-  gatewayEventStreamAbortController?.abort();
-  gatewayEventStreamAbortController = null;
+interface ThreadStreamForwarder {
+  controller: AbortController;
+  owners: Set<string>;
+  lastSeq: number;
 }
 
-function stopSelectedThreadEventForwarder(threadId?: string | null): void {
-  const normalizedThreadId = threadId?.trim() || null;
-  if (
-    normalizedThreadId &&
-    selectedThreadStreamThreadId &&
-    selectedThreadStreamThreadId !== normalizedThreadId
-  ) {
+const threadStreamForwarders = new Map<string, ThreadStreamForwarder>();
+
+function threadStreamConsumerId(input?: {
+  consumerId?: string | null;
+} | null): string {
+  return input?.consumerId?.trim() || "default";
+}
+
+function stopThreadEventForwarder(input?: StopThreadStreamInput | null): void {
+  const normalizedThreadId = input?.threadId?.trim() || null;
+  const consumerId = input?.consumerId?.trim() || null;
+  if (!normalizedThreadId) {
+    for (const forwarder of threadStreamForwarders.values()) {
+      forwarder.controller.abort();
+    }
+    threadStreamForwarders.clear();
     return;
   }
-  selectedThreadStreamAbortController?.abort();
-  selectedThreadStreamAbortController = null;
-  selectedThreadStreamThreadId = null;
+  const forwarder = threadStreamForwarders.get(normalizedThreadId);
+  if (!forwarder) {
+    return;
+  }
+  if (consumerId) {
+    forwarder.owners.delete(consumerId);
+    if (forwarder.owners.size > 0) {
+      return;
+    }
+  }
+  forwarder.controller.abort();
+  threadStreamForwarders.delete(normalizedThreadId);
 }
 
 function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
@@ -304,69 +318,38 @@ function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-function shouldForwardGlobalChatStreamEvent(payload: {
-  threadId?: string;
-}): boolean {
-  return shouldForwardGlobalStreamEvent({
-    selectedThreadId: selectedThreadStreamThreadId,
-    eventThreadId: payload.threadId,
-  });
-}
-
-function startGatewayEventForwarder(window: BrowserWindow): void {
-  stopGatewayEventForwarder();
-  const controller = new AbortController();
-  gatewayEventStreamAbortController = controller;
-  void (async () => {
-    let retryDelayMs = 1000;
-    let hasConnectedOnce = false;
-    while (!controller.signal.aborted && !window.isDestroyed()) {
-      try {
-        const settings = await resolveSettings();
-        await streamGatewayEvents(
-          settings,
-          (payload) => {
-            if (!shouldForwardGlobalChatStreamEvent(payload)) {
-              return;
-            }
-            if (!window.isDestroyed()) {
-              window.webContents.send("garyx:chat-stream", payload);
-            }
-          },
-          controller.signal,
-          {
-            historyLimit: hasConnectedOnce ? 50 : 0,
-            onConnected: () => {
-              hasConnectedOnce = true;
-            },
-          },
-        );
-        retryDelayMs = 1000;
-      } catch {
-        if (controller.signal.aborted || window.isDestroyed()) {
-          break;
-        }
-      }
-      await sleepWithAbort(retryDelayMs, controller.signal);
-      retryDelayMs = Math.min(retryDelayMs * 2, 10_000);
-    }
-  })();
-}
-
-function startSelectedThreadEventForwarder(input: StartThreadStreamInput): void {
+function startThreadEventForwarder(
+  input: StartThreadStreamInput,
+  ownerIds?: Iterable<string>,
+): void {
   const threadId = input.threadId.trim();
   if (!threadId || !mainWindow || mainWindow.isDestroyed()) {
     return;
   }
-  stopSelectedThreadEventForwarder();
-  selectedThreadStreamThreadId = threadId;
+  const owners = new Set(ownerIds ?? [threadStreamConsumerId(input)]);
+  const existing = threadStreamForwarders.get(threadId);
+  if (existing) {
+    for (const owner of existing.owners) {
+      owners.add(owner);
+    }
+    existing.controller.abort();
+  }
   const controller = new AbortController();
-  selectedThreadStreamAbortController = controller;
+  const afterSeq = Math.max(
+    Math.max(0, Math.trunc(input.afterSeq ?? 0)),
+    existing?.lastSeq ?? 0,
+  );
+  const forwarder: ThreadStreamForwarder = {
+    controller,
+    owners,
+    lastSeq: afterSeq,
+  };
+  threadStreamForwarders.set(threadId, forwarder);
   const window = mainWindow;
   void (async () => {
     try {
       let retryDelayMs = 500;
-      let resumeAfterSeq = Math.max(0, Math.trunc(input.afterSeq ?? 0));
+      let resumeAfterSeq = forwarder.lastSeq;
       while (!controller.signal.aborted && !window.isDestroyed()) {
         try {
           const settings = await resolveSettings();
@@ -383,6 +366,7 @@ function startSelectedThreadEventForwarder(input: StartThreadStreamInput): void 
               afterSeq: resumeAfterSeq,
               onCommittedSeq: (seq) => {
                 resumeAfterSeq = seq;
+                forwarder.lastSeq = seq;
               },
             },
           );
@@ -406,12 +390,31 @@ function startSelectedThreadEventForwarder(input: StartThreadStreamInput): void 
         retryDelayMs = Math.min(Math.max(retryDelayMs * 2, 500), 10_000);
       }
     } finally {
-      if (selectedThreadStreamAbortController === controller) {
-        selectedThreadStreamAbortController = null;
-        selectedThreadStreamThreadId = null;
+      if (threadStreamForwarders.get(threadId)?.controller === controller) {
+        threadStreamForwarders.delete(threadId);
       }
     }
   })();
+}
+
+function restartThreadEventForwarders(): void {
+  const active = Array.from(threadStreamForwarders.entries()).map(
+    ([threadId, forwarder]) => ({
+      threadId,
+      afterSeq: forwarder.lastSeq,
+      owners: new Set(forwarder.owners),
+    }),
+  );
+  for (const forwarder of threadStreamForwarders.values()) {
+    forwarder.controller.abort();
+  }
+  threadStreamForwarders.clear();
+  for (const item of active) {
+    startThreadEventForwarder(
+      { threadId: item.threadId, afterSeq: item.afterSeq },
+      item.owners,
+    );
+  }
 }
 const recentDeepLinkTimestamps = new Map<string, number>();
 const startupDeepLinkUrls = extractProtocolUrls(process.argv);
@@ -602,7 +605,6 @@ function createMainWindow(): BrowserWindow {
 
   bindBrowserWindow(window);
   subscribeUpdateStatus(window);
-  startGatewayEventForwarder(window);
   window.on("close", (event) => {
     if (!isQuitting) {
       event.preventDefault();
@@ -612,7 +614,7 @@ function createMainWindow(): BrowserWindow {
   window.on("closed", () => {
     writeBootstrapTrace("createMainWindow:closed");
     unbindBrowserWindow(window);
-    stopGatewayEventForwarder();
+    stopThreadEventForwarder();
   });
 
   return window;
@@ -664,7 +666,7 @@ function registerIpcHandlers(): void {
     async (_event, settings: DesktopSettings) => {
       const state = await saveDesktopSettings(settings);
       if (mainWindow && !mainWindow.isDestroyed()) {
-        startGatewayEventForwarder(mainWindow);
+        restartThreadEventForwarders();
       }
       return state;
     },
@@ -673,7 +675,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle("garyx:remember-gateway-profile", async () => {
     const state = await rememberDesktopGatewayProfile();
     if (mainWindow && !mainWindow.isDestroyed()) {
-      startGatewayEventForwarder(mainWindow);
+      restartThreadEventForwarders();
     }
     return state;
   });
@@ -711,7 +713,7 @@ function registerIpcHandlers(): void {
           : undefined,
       });
       if (mainWindow && !mainWindow.isDestroyed()) {
-        startGatewayEventForwarder(mainWindow);
+        restartThreadEventForwarders();
       }
       return state;
     },
@@ -1378,13 +1380,13 @@ function registerIpcHandlers(): void {
   ipcMain.handle(
     "garyx:start-thread-stream",
     async (_event, input: StartThreadStreamInput) => {
-      startSelectedThreadEventForwarder(input);
+      startThreadEventForwarder(input);
     },
   );
   ipcMain.handle(
     "garyx:stop-thread-stream",
     async (_event, input?: StopThreadStreamInput) => {
-      stopSelectedThreadEventForwarder(input?.threadId);
+      stopThreadEventForwarder(input);
     },
   );
   ipcMain.handle(

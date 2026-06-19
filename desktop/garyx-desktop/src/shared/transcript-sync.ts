@@ -50,15 +50,6 @@ const TERMINAL_CONTROL_KINDS = new Set([
   "interrupt_confirmed",
 ]);
 
-export function shouldForwardGlobalStreamEvent(input: {
-  selectedThreadId?: string | null;
-  eventThreadId?: string | null;
-}): boolean {
-  const selectedThreadId = normalizedString(input.selectedThreadId);
-  const eventThreadId = normalizedString(input.eventThreadId);
-  return !selectedThreadId || !eventThreadId || selectedThreadId !== eventThreadId;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -510,7 +501,7 @@ function numericControlValue(value: unknown): number | null {
   return null;
 }
 
-function runStateInitial(): TranscriptRunState {
+export function initialTranscriptRunState(): TranscriptRunState {
   return {
     busy: false,
     activeRunId: null,
@@ -527,29 +518,47 @@ function runStateInitial(): TranscriptRunState {
 export function reduceTranscriptRunState(
   messages: TranscriptMessage[],
 ): TranscriptRunState {
-  const state = runStateInitial();
+  let state = initialTranscriptRunState();
   for (const message of messages) {
-    const seq = transcriptMessageIndex(message);
-    const kind = deriveTranscriptKind(message);
-    if (kind === "control") {
-      applyControlMessage(state, seq === null ? null : seq + 1, message);
-      continue;
-    }
-    if (kind === "tool_trace") {
-      if (state.busy) {
-        state.activity = "using_tool";
-      }
-      continue;
-    }
-    if (
-      (kind === "assistant_reply" || kind === "user_input") &&
-      state.busy &&
-      state.activity !== "reconciling"
-    ) {
-      state.activity = "thinking";
-    }
+    state = applyTranscriptRunStateRecord(state, message);
   }
   return state;
+}
+
+export function applyTranscriptRunStateRecord(
+  state: TranscriptRunState,
+  message: TranscriptMessage,
+  options?: { seq?: number | null },
+): TranscriptRunState {
+  const next: TranscriptRunState = {
+    ...state,
+    rewriteRanges: [...state.rewriteRanges],
+  };
+  const index = transcriptMessageIndex(message);
+  const seq = options && "seq" in options
+    ? options.seq ?? null
+    : index === null
+      ? null
+      : index + 1;
+  const kind = deriveTranscriptKind(message);
+  if (kind === "control") {
+    applyControlMessage(next, seq, message);
+    return next;
+  }
+  if (kind === "tool_trace") {
+    if (next.busy) {
+      next.activity = "using_tool";
+    }
+    return next;
+  }
+  if (
+    (kind === "assistant_reply" || kind === "user_input") &&
+    next.busy &&
+    next.activity !== "reconciling"
+  ) {
+    next.activity = "thinking";
+  }
+  return next;
 }
 
 function applyControlMessage(

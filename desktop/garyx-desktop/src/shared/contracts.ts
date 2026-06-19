@@ -1187,72 +1187,7 @@ export interface UploadChatAttachmentsResult {
   files: UploadedChatAttachment[];
 }
 
-export interface ChatStreamToolMessage {
-  role: "tool_use" | "tool_result";
-  content: unknown;
-  timestamp?: string | null;
-  toolUseId?: string | null;
-  toolName?: string | null;
-  isError?: boolean;
-  metadata?: Record<string, unknown> | null;
-}
-
 export type DesktopChatStreamEvent =
-  // `sessionId` remains as a compatibility mirror for older stream payloads.
-  | {
-      type: "accepted";
-      runId: string;
-      threadId: string;
-      sessionId?: string;
-    }
-  | {
-      type: "assistant_delta";
-      runId: string;
-      threadId: string;
-      sessionId?: string;
-      delta: string;
-      metadata?: Record<string, unknown> | null;
-    }
-  | {
-      type: "assistant_boundary";
-      runId: string;
-      threadId: string;
-      sessionId?: string;
-    }
-  | {
-      type: "tool_use";
-      runId: string;
-      threadId: string;
-      sessionId?: string;
-      message: ChatStreamToolMessage;
-    }
-  | {
-      type: "tool_result";
-      runId: string;
-      threadId: string;
-      sessionId?: string;
-      message: ChatStreamToolMessage;
-    }
-  | {
-      type: "user_ack";
-      runId: string;
-      threadId: string;
-      sessionId?: string;
-      pendingInputId?: string;
-    }
-  | {
-      type: "thread_title_updated";
-      runId: string;
-      threadId: string;
-      sessionId?: string;
-      title: string;
-    }
-  | {
-      type: "done";
-      runId: string;
-      threadId: string;
-      sessionId?: string;
-    }
   | {
       type: "committed_message";
       runId: string;
@@ -1359,10 +1294,12 @@ export interface GetThreadHistoryInput {
 export interface StartThreadStreamInput {
   threadId: string;
   afterSeq?: number | null;
+  consumerId?: string | null;
 }
 
 export interface StopThreadStreamInput {
   threadId?: string | null;
+  consumerId?: string | null;
 }
 
 export interface PendingThreadInput {

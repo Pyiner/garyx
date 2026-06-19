@@ -110,6 +110,66 @@ fn committed_stream_dedupe_allows_same_seq_overwrite() {
     assert_eq!(last_sent_seq, 4);
 }
 
+#[test]
+fn thread_stream_live_payload_only_forwards_committed_messages() {
+    let mut sent_payloads = HashMap::new();
+    let mut last_sent_seq = 0;
+
+    let legacy = json!({
+        "type": "run_error",
+        "thread_id": "thread::stream-filter",
+        "run_id": "run::stream-filter",
+        "error": "timeout"
+    })
+    .to_string();
+    assert_eq!(
+        committed_thread_stream_live_payload(
+            &legacy,
+            "thread::stream-filter",
+            &mut sent_payloads,
+            &mut last_sent_seq,
+        ),
+        None
+    );
+    assert_eq!(last_sent_seq, 0);
+
+    let other_thread = json!({
+        "type": "committed_message",
+        "thread_id": "thread::other",
+        "seq": 1,
+        "message": {"role": "assistant", "content": "other"}
+    })
+    .to_string();
+    assert_eq!(
+        committed_thread_stream_live_payload(
+            &other_thread,
+            "thread::stream-filter",
+            &mut sent_payloads,
+            &mut last_sent_seq,
+        ),
+        None
+    );
+    assert_eq!(last_sent_seq, 0);
+
+    let committed = json!({
+        "type": "committed_message",
+        "thread_id": "thread::stream-filter",
+        "seq": 1,
+        "message": {"role": "assistant", "content": "ok"}
+    })
+    .to_string();
+    assert_eq!(
+        committed_thread_stream_live_payload(
+            &committed,
+            "thread::stream-filter",
+            &mut sent_payloads,
+            &mut last_sent_seq,
+        ),
+        Some((1, committed.clone()))
+    );
+    assert_eq!(last_sent_seq, 1);
+}
+
 fn run_git(repo: &Path, args: &[&str]) {
     let output = Command::new("git")
         .arg("-C")

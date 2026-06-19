@@ -1816,23 +1816,13 @@ pub async fn thread_stream(
     let mut last_sent_seq = replay_max_seq;
     let live = BroadcastStream::new(rx).filter_map(move |item| match item {
         Ok(raw) => {
-            let value: Value = serde_json::from_str(&raw).ok()?;
-            if value.get("thread_id").and_then(Value::as_str) != Some(thread_for_live.as_str()) {
-                return None;
-            }
-            if value.get("type").and_then(Value::as_str) == Some("committed_message") {
-                let seq = value.get("seq").and_then(Value::as_u64).unwrap_or(0);
-                if !should_forward_committed_payload(
-                    &mut sent_committed_payloads,
-                    &mut last_sent_seq,
-                    seq,
-                    &raw,
-                ) {
-                    return None;
-                }
-                return Some(Ok(Event::default().id(seq.to_string()).data(raw)));
-            }
-            Some(Ok(Event::default().data(raw)))
+            let (seq, payload) = committed_thread_stream_live_payload(
+                &raw,
+                &thread_for_live,
+                &mut sent_committed_payloads,
+                &mut last_sent_seq,
+            )?;
+            Some(Ok(Event::default().id(seq.to_string()).data(payload)))
         }
         Err(_) => {
             // Lagged: a slow consumer dropped events; the client recovers by
@@ -1850,6 +1840,26 @@ pub async fn thread_stream(
                 .text("ping"),
         )
         .into_response()
+}
+
+fn committed_thread_stream_live_payload(
+    raw: &str,
+    thread_id: &str,
+    sent_payloads: &mut HashMap<u64, String>,
+    last_sent_seq: &mut u64,
+) -> Option<(u64, String)> {
+    let value: Value = serde_json::from_str(raw).ok()?;
+    if value.get("thread_id").and_then(Value::as_str) != Some(thread_id) {
+        return None;
+    }
+    if value.get("type").and_then(Value::as_str) != Some("committed_message") {
+        return None;
+    }
+    let seq = value.get("seq").and_then(Value::as_u64).unwrap_or(0);
+    if !should_forward_committed_payload(sent_payloads, last_sent_seq, seq, raw) {
+        return None;
+    }
+    Some((seq, raw.to_owned()))
 }
 
 fn should_forward_committed_payload(

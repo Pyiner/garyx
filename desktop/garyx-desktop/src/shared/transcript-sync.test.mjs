@@ -9,10 +9,10 @@ import {
   decideTranscriptFetchPageAction,
   deriveTranscriptKind,
   isThreadStreamGapError,
+  applyTranscriptRunStateRecord,
   mergeForwardTranscriptPage,
   reduceTranscriptRunState,
   shouldRefetchAuthoritativeAfterForwardPageLimit,
-  shouldForwardGlobalStreamEvent,
   shouldRestartSelectedThreadStreamAfterRefetch,
   streamResumeCursor,
   transcriptAfterCursor,
@@ -170,37 +170,6 @@ test("stream seq planner applies first replay row, skips stale rows, and reconne
   );
 });
 
-test("selected-thread live events are suppressed while per-thread stream owns them", () => {
-  assert.equal(
-    shouldForwardGlobalStreamEvent({
-      selectedThreadId: "thread::selected",
-      eventThreadId: "thread::selected",
-    }),
-    false,
-  );
-  assert.equal(
-    shouldForwardGlobalStreamEvent({
-      selectedThreadId: "thread::selected",
-      eventThreadId: "thread::other",
-    }),
-    true,
-  );
-  assert.equal(
-    shouldForwardGlobalStreamEvent({
-      selectedThreadId: null,
-      eventThreadId: "thread::selected",
-    }),
-    true,
-  );
-  assert.equal(
-    shouldForwardGlobalStreamEvent({
-      selectedThreadId: "thread::selected",
-      eventThreadId: null,
-    }),
-    true,
-  );
-});
-
 test("after_index planner resets, refetches shrink, and pages forward", () => {
   assert.deepEqual(
     decideTranscriptFetchPageAction({
@@ -237,6 +206,16 @@ test("lifecycle fixture replay reaches idle terminal state from control records"
   assert.equal(state.activity, "idle");
   assert.equal(state.terminalStatus, "completed");
   assert.equal(state.activeRunId, null);
+});
+
+test("incremental run-state apply matches full reducer on lifecycle fixture", () => {
+  const messages = transcriptFromLifecycleFixture();
+  const incremental = messages.reduce(
+    (state, message, index) =>
+      applyTranscriptRunStateRecord(state, message, { seq: index + 1 }),
+    reduceTranscriptRunState([]),
+  );
+  assert.deepEqual(incremental, reduceTranscriptRunState(messages));
 });
 
 test("user_ack fixture replays ack position and reconciling activity", () => {
