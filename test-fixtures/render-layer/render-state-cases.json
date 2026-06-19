@@ -1,0 +1,1400 @@
+{
+  "cases": [
+    {
+      "expected": {
+        "activeToolGroupId": null,
+        "based_on_seq": 2,
+        "filtered_placeholders": [],
+        "progress_locus": "tail",
+        "rows": [
+          {
+            "activity": [],
+            "finished_at": null,
+            "id": "user_turn:seq:2",
+            "kind": "user_turn",
+            "started_at": "2026-06-19T12:20:01Z",
+            "user": {
+              "id": "seq:2",
+              "role": "user",
+              "seq": 2
+            }
+          }
+        ],
+        "tailActivity": "thinking",
+        "visibleMessageIds": [
+          "seq:2"
+        ]
+      },
+      "expected_run_state": {
+        "activity": "thinking",
+        "busy": true
+      },
+      "name": "pure user waits",
+      "records": [
+        {
+          "message": {
+            "control": {
+              "kind": "run_start",
+              "run_id": "run::fixture-pure-user-waits",
+              "thread_id": "thread::fixture-pure-user-waits"
+            },
+            "internal": true,
+            "internal_kind": "control",
+            "kind": "control",
+            "role": "system"
+          },
+          "run_id": "run::fixture-pure-user-waits",
+          "seq": 1,
+          "thread_id": "thread::fixture-pure-user-waits",
+          "timestamp": "2026-06-19T12:20:00Z"
+        },
+        {
+          "message": {
+            "role": "user",
+            "text": "Run the check.",
+            "timestamp": "2026-06-19T12:20:01Z"
+          },
+          "run_id": "run::fixture-pure-user-waits",
+          "seq": 2,
+          "thread_id": "thread::fixture-pure-user-waits",
+          "timestamp": "2026-06-19T12:20:01Z"
+        }
+      ],
+      "run_state": null,
+      "source": null
+    },
+    {
+      "expected": {
+        "activeToolGroupId": null,
+        "based_on_seq": 3,
+        "filtered_placeholders": [],
+        "progress_locus": "tail",
+        "rows": [
+          {
+            "activity": [
+              {
+                "id": "assistant_reply:seq:3",
+                "kind": "assistant_reply",
+                "message": {
+                  "id": "seq:3",
+                  "role": "assistant",
+                  "seq": 3
+                },
+                "streaming": true
+              }
+            ],
+            "finished_at": null,
+            "id": "user_turn:seq:2",
+            "kind": "user_turn",
+            "started_at": "2026-06-19T12:21:01Z",
+            "user": {
+              "id": "seq:2",
+              "role": "user",
+              "seq": 2
+            }
+          }
+        ],
+        "tailActivity": "assistant_streaming",
+        "visibleMessageIds": [
+          "seq:2",
+          "seq:3"
+        ]
+      },
+      "expected_run_state": {
+        "activity": "thinking",
+        "busy": true
+      },
+      "name": "assistant streaming text",
+      "records": [
+        {
+          "message": {
+            "control": {
+              "kind": "run_start",
+              "run_id": "run::fixture-assistant-streaming",
+              "thread_id": "thread::fixture-assistant-streaming"
+            },
+            "internal": true,
+            "internal_kind": "control",
+            "kind": "control",
+            "role": "system"
+          },
+          "run_id": "run::fixture-assistant-streaming",
+          "seq": 1,
+          "thread_id": "thread::fixture-assistant-streaming",
+          "timestamp": "2026-06-19T12:21:00Z"
+        },
+        {
+          "message": {
+            "role": "user",
+            "text": "Explain the result.",
+            "timestamp": "2026-06-19T12:21:01Z"
+          },
+          "run_id": "run::fixture-assistant-streaming",
+          "seq": 2,
+          "thread_id": "thread::fixture-assistant-streaming",
+          "timestamp": "2026-06-19T12:21:01Z"
+        },
+        {
+          "message": {
+            "pending": true,
+            "role": "assistant",
+            "text": "Working through it",
+            "timestamp": "2026-06-19T12:21:02Z"
+          },
+          "run_id": "run::fixture-assistant-streaming",
+          "seq": 3,
+          "thread_id": "thread::fixture-assistant-streaming",
+          "timestamp": "2026-06-19T12:21:02Z"
+        }
+      ],
+      "run_state": null,
+      "source": null
+    },
+    {
+      "expected": {
+        "activeToolGroupId": null,
+        "based_on_seq": 3,
+        "filtered_placeholders": [
+          {
+            "message": {
+              "id": "seq:3",
+              "role": "assistant",
+              "seq": 3
+            },
+            "reason": "empty_streaming_assistant"
+          }
+        ],
+        "progress_locus": "tail",
+        "rows": [
+          {
+            "activity": [],
+            "finished_at": null,
+            "id": "user_turn:seq:2",
+            "kind": "user_turn",
+            "started_at": "2026-06-19T12:22:01Z",
+            "user": {
+              "id": "seq:2",
+              "role": "user",
+              "seq": 2
+            }
+          }
+        ],
+        "tailActivity": "thinking",
+        "visibleMessageIds": [
+          "seq:2"
+        ]
+      },
+      "expected_run_state": {
+        "activity": "thinking",
+        "busy": true
+      },
+      "name": "empty assistant placeholder",
+      "records": [
+        {
+          "message": {
+            "control": {
+              "kind": "run_start",
+              "run_id": "run::fixture-empty-placeholder",
+              "thread_id": "thread::fixture-empty-placeholder"
+            },
+            "internal": true,
+            "internal_kind": "control",
+            "kind": "control",
+            "role": "system"
+          },
+          "run_id": "run::fixture-empty-placeholder",
+          "seq": 1,
+          "thread_id": "thread::fixture-empty-placeholder",
+          "timestamp": "2026-06-19T12:22:00Z"
+        },
+        {
+          "message": {
+            "role": "user",
+            "text": "Run the check.",
+            "timestamp": "2026-06-19T12:22:01Z"
+          },
+          "run_id": "run::fixture-empty-placeholder",
+          "seq": 2,
+          "thread_id": "thread::fixture-empty-placeholder",
+          "timestamp": "2026-06-19T12:22:01Z"
+        },
+        {
+          "message": {
+            "attachments": [],
+            "pending": true,
+            "role": "assistant",
+            "text": "",
+            "timestamp": "2026-06-19T12:22:02Z"
+          },
+          "run_id": "run::fixture-empty-placeholder",
+          "seq": 3,
+          "thread_id": "thread::fixture-empty-placeholder",
+          "timestamp": "2026-06-19T12:22:02Z"
+        }
+      ],
+      "run_state": null,
+      "source": null
+    },
+    {
+      "expected": {
+        "activeToolGroupId": null,
+        "based_on_seq": 3,
+        "filtered_placeholders": [],
+        "progress_locus": "tail",
+        "rows": [
+          {
+            "activity": [
+              {
+                "id": "assistant_reply:seq:3",
+                "kind": "assistant_reply",
+                "message": {
+                  "id": "seq:3",
+                  "role": "assistant",
+                  "seq": 3
+                },
+                "streaming": true
+              }
+            ],
+            "finished_at": null,
+            "id": "user_turn:seq:2",
+            "kind": "user_turn",
+            "started_at": "2026-06-19T12:23:01Z",
+            "user": {
+              "id": "seq:2",
+              "role": "user",
+              "seq": 2
+            }
+          }
+        ],
+        "tailActivity": "assistant_streaming",
+        "visibleMessageIds": [
+          "seq:2",
+          "seq:3"
+        ]
+      },
+      "expected_run_state": {
+        "activity": "thinking",
+        "busy": true
+      },
+      "name": "empty text assistant with attachment",
+      "records": [
+        {
+          "message": {
+            "control": {
+              "kind": "run_start",
+              "run_id": "run::fixture-placeholder-attachment",
+              "thread_id": "thread::fixture-placeholder-attachment"
+            },
+            "internal": true,
+            "internal_kind": "control",
+            "kind": "control",
+            "role": "system"
+          },
+          "run_id": "run::fixture-placeholder-attachment",
+          "seq": 1,
+          "thread_id": "thread::fixture-placeholder-attachment",
+          "timestamp": "2026-06-19T12:23:00Z"
+        },
+        {
+          "message": {
+            "role": "user",
+            "text": "Show the image.",
+            "timestamp": "2026-06-19T12:23:01Z"
+          },
+          "run_id": "run::fixture-placeholder-attachment",
+          "seq": 2,
+          "thread_id": "thread::fixture-placeholder-attachment",
+          "timestamp": "2026-06-19T12:23:01Z"
+        },
+        {
+          "message": {
+            "attachments": [
+              {
+                "id": "attachment_fixture_image",
+                "kind": "image",
+                "media_type": "image/png",
+                "name": "fixture.png"
+              }
+            ],
+            "pending": true,
+            "role": "assistant",
+            "text": "",
+            "timestamp": "2026-06-19T12:23:02Z"
+          },
+          "run_id": "run::fixture-placeholder-attachment",
+          "seq": 3,
+          "thread_id": "thread::fixture-placeholder-attachment",
+          "timestamp": "2026-06-19T12:23:02Z"
+        }
+      ],
+      "run_state": null,
+      "source": null
+    },
+    {
+      "expected": {
+        "activeToolGroupId": "tool_group:call_fixture_check",
+        "based_on_seq": 4,
+        "filtered_placeholders": [],
+        "progress_locus": "tool_group",
+        "rows": [
+          {
+            "activity": [
+              {
+                "final_message": null,
+                "finished_at": null,
+                "id": "step:assistant_step:seq:3",
+                "kind": "step",
+                "running": true,
+                "started_at": "2026-06-18T12:30:00Z",
+                "steps": [
+                  {
+                    "id": "assistant_step:seq:3",
+                    "kind": "assistant_message",
+                    "message": {
+                      "id": "seq:3",
+                      "role": "assistant",
+                      "seq": 3
+                    },
+                    "streaming": false
+                  },
+                  {
+                    "entries": [
+                      {
+                        "id": "tool_entry:call_fixture_check",
+                        "status": "running",
+                        "tool_result": null,
+                        "tool_use": {
+                          "id": "seq:4",
+                          "role": "tool_use",
+                          "seq": 4
+                        },
+                        "tool_use_id": "call_fixture_check"
+                      }
+                    ],
+                    "finished_at": "2026-06-18T12:30:02Z",
+                    "id": "tool_group:call_fixture_check",
+                    "kind": "tool_group",
+                    "started_at": "2026-06-18T12:30:02Z",
+                    "status": "active"
+                  }
+                ]
+              }
+            ],
+            "finished_at": null,
+            "id": "user_turn:seq:2",
+            "kind": "user_turn",
+            "started_at": "2026-06-18T12:30:00Z",
+            "user": {
+              "id": "seq:2",
+              "role": "user",
+              "seq": 2
+            }
+          }
+        ],
+        "tailActivity": "tool_active",
+        "visibleMessageIds": [
+          "seq:2",
+          "seq:3",
+          "seq:4"
+        ]
+      },
+      "expected_run_state": {
+        "activity": "using_tool",
+        "busy": true
+      },
+      "name": "tool active",
+      "records": [],
+      "run_state": null,
+      "source": {
+        "fixture": "stream-sync/transcript-with-control.jsonl",
+        "max_seq": 4,
+        "min_seq": null
+      }
+    },
+    {
+      "expected": {
+        "activeToolGroupId": null,
+        "based_on_seq": 6,
+        "filtered_placeholders": [],
+        "progress_locus": "tail",
+        "rows": [
+          {
+            "activity": [
+              {
+                "final_message": null,
+                "finished_at": null,
+                "id": "step:assistant_step:seq:3",
+                "kind": "step",
+                "running": true,
+                "started_at": "2026-06-18T12:30:00Z",
+                "steps": [
+                  {
+                    "id": "assistant_step:seq:3",
+                    "kind": "assistant_message",
+                    "message": {
+                      "id": "seq:3",
+                      "role": "assistant",
+                      "seq": 3
+                    },
+                    "streaming": false
+                  },
+                  {
+                    "entries": [
+                      {
+                        "id": "tool_entry:call_fixture_check",
+                        "status": "completed",
+                        "tool_result": {
+                          "id": "seq:5",
+                          "role": "tool_result",
+                          "seq": 5
+                        },
+                        "tool_use": {
+                          "id": "seq:4",
+                          "role": "tool_use",
+                          "seq": 4
+                        },
+                        "tool_use_id": "call_fixture_check"
+                      }
+                    ],
+                    "finished_at": "2026-06-18T12:30:03Z",
+                    "id": "tool_group:call_fixture_check",
+                    "kind": "tool_group",
+                    "started_at": "2026-06-18T12:30:02Z",
+                    "status": "completed"
+                  }
+                ]
+              }
+            ],
+            "finished_at": null,
+            "id": "user_turn:seq:2",
+            "kind": "user_turn",
+            "started_at": "2026-06-18T12:30:00Z",
+            "user": {
+              "id": "seq:2",
+              "role": "user",
+              "seq": 2
+            }
+          }
+        ],
+        "tailActivity": "thinking",
+        "visibleMessageIds": [
+          "seq:2",
+          "seq:3",
+          "seq:4",
+          "seq:5"
+        ]
+      },
+      "expected_run_state": {
+        "activity": "thinking",
+        "busy": true
+      },
+      "name": "tool lull after completed tool",
+      "records": [],
+      "run_state": null,
+      "source": {
+        "fixture": "stream-sync/transcript-with-control.jsonl",
+        "max_seq": 6,
+        "min_seq": null
+      }
+    },
+    {
+      "expected": {
+        "activeToolGroupId": null,
+        "based_on_seq": 8,
+        "filtered_placeholders": [],
+        "progress_locus": "tail",
+        "rows": [
+          {
+            "activity": [
+              {
+                "final_message": null,
+                "finished_at": null,
+                "id": "step:assistant_step:seq:3",
+                "kind": "step",
+                "running": true,
+                "started_at": "2026-06-18T12:30:00Z",
+                "steps": [
+                  {
+                    "id": "assistant_step:seq:3",
+                    "kind": "assistant_message",
+                    "message": {
+                      "id": "seq:3",
+                      "role": "assistant",
+                      "seq": 3
+                    },
+                    "streaming": false
+                  },
+                  {
+                    "entries": [
+                      {
+                        "id": "tool_entry:call_fixture_check",
+                        "status": "completed",
+                        "tool_result": {
+                          "id": "seq:5",
+                          "role": "tool_result",
+                          "seq": 5
+                        },
+                        "tool_use": {
+                          "id": "seq:4",
+                          "role": "tool_use",
+                          "seq": 4
+                        },
+                        "tool_use_id": "call_fixture_check"
+                      }
+                    ],
+                    "finished_at": "2026-06-18T12:30:03Z",
+                    "id": "tool_group:call_fixture_check",
+                    "kind": "tool_group",
+                    "started_at": "2026-06-18T12:30:02Z",
+                    "status": "completed"
+                  },
+                  {
+                    "id": "assistant_step:seq:7",
+                    "kind": "assistant_message",
+                    "message": {
+                      "id": "seq:7",
+                      "role": "assistant",
+                      "seq": 7
+                    },
+                    "streaming": false
+                  }
+                ]
+              }
+            ],
+            "finished_at": null,
+            "id": "user_turn:seq:2",
+            "kind": "user_turn",
+            "started_at": "2026-06-18T12:30:00Z",
+            "user": {
+              "id": "seq:2",
+              "role": "user",
+              "seq": 2
+            }
+          }
+        ],
+        "tailActivity": "thinking",
+        "visibleMessageIds": [
+          "seq:2",
+          "seq:3",
+          "seq:4",
+          "seq:5",
+          "seq:7"
+        ]
+      },
+      "expected_run_state": {
+        "activity": "reconciling",
+        "busy": true
+      },
+      "name": "reconciling after done",
+      "records": [],
+      "run_state": null,
+      "source": {
+        "fixture": "stream-sync/transcript-with-control.jsonl",
+        "max_seq": 8,
+        "min_seq": null
+      }
+    },
+    {
+      "expected": {
+        "activeToolGroupId": null,
+        "based_on_seq": 4,
+        "filtered_placeholders": [],
+        "progress_locus": "tail",
+        "rows": [
+          {
+            "activity": [
+              {
+                "final_message": null,
+                "finished_at": null,
+                "id": "step:assistant_step:seq:2",
+                "kind": "step",
+                "running": true,
+                "started_at": "2026-06-19T12:00:01Z",
+                "steps": [
+                  {
+                    "id": "assistant_step:seq:2",
+                    "kind": "assistant_message",
+                    "message": {
+                      "id": "seq:2",
+                      "role": "assistant",
+                      "seq": 2
+                    },
+                    "streaming": false
+                  },
+                  {
+                    "entries": [
+                      {
+                        "id": "tool_entry:call_fixture_list",
+                        "status": "completed",
+                        "tool_result": {
+                          "id": "seq:4",
+                          "role": "tool_result",
+                          "seq": 4
+                        },
+                        "tool_use": {
+                          "id": "seq:3",
+                          "role": "tool_use",
+                          "seq": 3
+                        },
+                        "tool_use_id": "call_fixture_list"
+                      }
+                    ],
+                    "finished_at": null,
+                    "id": "tool_group:call_fixture_list",
+                    "kind": "tool_group",
+                    "started_at": null,
+                    "status": "completed"
+                  }
+                ]
+              }
+            ],
+            "finished_at": null,
+            "id": "user_turn:orphan:step:assistant_step:seq:2",
+            "kind": "user_turn",
+            "started_at": "2026-06-19T12:00:01Z",
+            "user": null
+          }
+        ],
+        "tailActivity": "thinking",
+        "visibleMessageIds": [
+          "seq:2",
+          "seq:3",
+          "seq:4"
+        ]
+      },
+      "expected_run_state": {
+        "activity": "thinking",
+        "busy": true
+      },
+      "name": "multi tool first lull",
+      "records": [],
+      "run_state": null,
+      "source": {
+        "fixture": "stream-sync/multi-tool-lull.jsonl",
+        "max_seq": 4,
+        "min_seq": null
+      }
+    },
+    {
+      "expected": {
+        "activeToolGroupId": "tool_group:call_fixture_list",
+        "based_on_seq": 5,
+        "filtered_placeholders": [],
+        "progress_locus": "tool_group",
+        "rows": [
+          {
+            "activity": [
+              {
+                "final_message": null,
+                "finished_at": null,
+                "id": "step:assistant_step:seq:2",
+                "kind": "step",
+                "running": true,
+                "started_at": "2026-06-19T12:00:01Z",
+                "steps": [
+                  {
+                    "id": "assistant_step:seq:2",
+                    "kind": "assistant_message",
+                    "message": {
+                      "id": "seq:2",
+                      "role": "assistant",
+                      "seq": 2
+                    },
+                    "streaming": false
+                  },
+                  {
+                    "entries": [
+                      {
+                        "id": "tool_entry:call_fixture_list",
+                        "status": "completed",
+                        "tool_result": {
+                          "id": "seq:4",
+                          "role": "tool_result",
+                          "seq": 4
+                        },
+                        "tool_use": {
+                          "id": "seq:3",
+                          "role": "tool_use",
+                          "seq": 3
+                        },
+                        "tool_use_id": "call_fixture_list"
+                      },
+                      {
+                        "id": "tool_entry:call_fixture_write",
+                        "status": "running",
+                        "tool_result": null,
+                        "tool_use": {
+                          "id": "seq:5",
+                          "role": "tool_use",
+                          "seq": 5
+                        },
+                        "tool_use_id": "call_fixture_write"
+                      }
+                    ],
+                    "finished_at": null,
+                    "id": "tool_group:call_fixture_list",
+                    "kind": "tool_group",
+                    "started_at": null,
+                    "status": "active"
+                  }
+                ]
+              }
+            ],
+            "finished_at": null,
+            "id": "user_turn:orphan:step:assistant_step:seq:2",
+            "kind": "user_turn",
+            "started_at": "2026-06-19T12:00:01Z",
+            "user": null
+          }
+        ],
+        "tailActivity": "tool_active",
+        "visibleMessageIds": [
+          "seq:2",
+          "seq:3",
+          "seq:4",
+          "seq:5"
+        ]
+      },
+      "expected_run_state": {
+        "activity": "using_tool",
+        "busy": true
+      },
+      "name": "multi tool second running",
+      "records": [],
+      "run_state": null,
+      "source": {
+        "fixture": "stream-sync/multi-tool-lull.jsonl",
+        "max_seq": 5,
+        "min_seq": null
+      }
+    },
+    {
+      "expected": {
+        "activeToolGroupId": null,
+        "based_on_seq": 6,
+        "filtered_placeholders": [],
+        "progress_locus": "tail",
+        "rows": [
+          {
+            "activity": [
+              {
+                "final_message": null,
+                "finished_at": null,
+                "id": "step:assistant_step:seq:2",
+                "kind": "step",
+                "running": true,
+                "started_at": "2026-06-19T12:00:01Z",
+                "steps": [
+                  {
+                    "id": "assistant_step:seq:2",
+                    "kind": "assistant_message",
+                    "message": {
+                      "id": "seq:2",
+                      "role": "assistant",
+                      "seq": 2
+                    },
+                    "streaming": false
+                  },
+                  {
+                    "entries": [
+                      {
+                        "id": "tool_entry:call_fixture_list",
+                        "status": "completed",
+                        "tool_result": {
+                          "id": "seq:4",
+                          "role": "tool_result",
+                          "seq": 4
+                        },
+                        "tool_use": {
+                          "id": "seq:3",
+                          "role": "tool_use",
+                          "seq": 3
+                        },
+                        "tool_use_id": "call_fixture_list"
+                      },
+                      {
+                        "id": "tool_entry:call_fixture_write",
+                        "status": "completed",
+                        "tool_result": {
+                          "id": "seq:6",
+                          "role": "tool_result",
+                          "seq": 6
+                        },
+                        "tool_use": {
+                          "id": "seq:5",
+                          "role": "tool_use",
+                          "seq": 5
+                        },
+                        "tool_use_id": "call_fixture_write"
+                      }
+                    ],
+                    "finished_at": null,
+                    "id": "tool_group:call_fixture_list",
+                    "kind": "tool_group",
+                    "started_at": null,
+                    "status": "completed"
+                  }
+                ]
+              }
+            ],
+            "finished_at": null,
+            "id": "user_turn:orphan:step:assistant_step:seq:2",
+            "kind": "user_turn",
+            "started_at": "2026-06-19T12:00:01Z",
+            "user": null
+          }
+        ],
+        "tailActivity": "thinking",
+        "visibleMessageIds": [
+          "seq:2",
+          "seq:3",
+          "seq:4",
+          "seq:5",
+          "seq:6"
+        ]
+      },
+      "expected_run_state": {
+        "activity": "thinking",
+        "busy": true
+      },
+      "name": "multi tool final lull",
+      "records": [],
+      "run_state": null,
+      "source": {
+        "fixture": "stream-sync/multi-tool-lull.jsonl",
+        "max_seq": 6,
+        "min_seq": null
+      }
+    },
+    {
+      "expected": {
+        "activeToolGroupId": "tool_group:call_fixture_a",
+        "based_on_seq": 4,
+        "filtered_placeholders": [],
+        "progress_locus": "tool_group",
+        "rows": [
+          {
+            "activity": [
+              {
+                "final_message": null,
+                "finished_at": null,
+                "id": "step:assistant_step:seq:2",
+                "kind": "step",
+                "running": true,
+                "started_at": "2026-06-19T12:10:01Z",
+                "steps": [
+                  {
+                    "id": "assistant_step:seq:2",
+                    "kind": "assistant_message",
+                    "message": {
+                      "id": "seq:2",
+                      "role": "assistant",
+                      "seq": 2
+                    },
+                    "streaming": false
+                  },
+                  {
+                    "entries": [
+                      {
+                        "id": "tool_entry:call_fixture_a",
+                        "status": "running",
+                        "tool_result": null,
+                        "tool_use": {
+                          "id": "seq:3",
+                          "role": "tool_use",
+                          "seq": 3
+                        },
+                        "tool_use_id": "call_fixture_a"
+                      },
+                      {
+                        "id": "tool_entry:call_fixture_b",
+                        "status": "running",
+                        "tool_result": null,
+                        "tool_use": {
+                          "id": "seq:4",
+                          "role": "tool_use",
+                          "seq": 4
+                        },
+                        "tool_use_id": "call_fixture_b"
+                      }
+                    ],
+                    "finished_at": null,
+                    "id": "tool_group:call_fixture_a",
+                    "kind": "tool_group",
+                    "started_at": null,
+                    "status": "active"
+                  }
+                ]
+              }
+            ],
+            "finished_at": null,
+            "id": "user_turn:orphan:step:assistant_step:seq:2",
+            "kind": "user_turn",
+            "started_at": "2026-06-19T12:10:01Z",
+            "user": null
+          }
+        ],
+        "tailActivity": "tool_active",
+        "visibleMessageIds": [
+          "seq:2",
+          "seq:3",
+          "seq:4"
+        ]
+      },
+      "expected_run_state": {
+        "activity": "using_tool",
+        "busy": true
+      },
+      "name": "parallel tools both running",
+      "records": [],
+      "run_state": null,
+      "source": {
+        "fixture": "stream-sync/parallel-tool-lull.jsonl",
+        "max_seq": 4,
+        "min_seq": null
+      }
+    },
+    {
+      "expected": {
+        "activeToolGroupId": "tool_group:call_fixture_a",
+        "based_on_seq": 5,
+        "filtered_placeholders": [],
+        "progress_locus": "tool_group",
+        "rows": [
+          {
+            "activity": [
+              {
+                "final_message": null,
+                "finished_at": null,
+                "id": "step:assistant_step:seq:2",
+                "kind": "step",
+                "running": true,
+                "started_at": "2026-06-19T12:10:01Z",
+                "steps": [
+                  {
+                    "id": "assistant_step:seq:2",
+                    "kind": "assistant_message",
+                    "message": {
+                      "id": "seq:2",
+                      "role": "assistant",
+                      "seq": 2
+                    },
+                    "streaming": false
+                  },
+                  {
+                    "entries": [
+                      {
+                        "id": "tool_entry:call_fixture_a",
+                        "status": "completed",
+                        "tool_result": {
+                          "id": "seq:5",
+                          "role": "tool_result",
+                          "seq": 5
+                        },
+                        "tool_use": {
+                          "id": "seq:3",
+                          "role": "tool_use",
+                          "seq": 3
+                        },
+                        "tool_use_id": "call_fixture_a"
+                      },
+                      {
+                        "id": "tool_entry:call_fixture_b",
+                        "status": "running",
+                        "tool_result": null,
+                        "tool_use": {
+                          "id": "seq:4",
+                          "role": "tool_use",
+                          "seq": 4
+                        },
+                        "tool_use_id": "call_fixture_b"
+                      }
+                    ],
+                    "finished_at": null,
+                    "id": "tool_group:call_fixture_a",
+                    "kind": "tool_group",
+                    "started_at": null,
+                    "status": "active"
+                  }
+                ]
+              }
+            ],
+            "finished_at": null,
+            "id": "user_turn:orphan:step:assistant_step:seq:2",
+            "kind": "user_turn",
+            "started_at": "2026-06-19T12:10:01Z",
+            "user": null
+          }
+        ],
+        "tailActivity": "tool_active",
+        "visibleMessageIds": [
+          "seq:2",
+          "seq:3",
+          "seq:4",
+          "seq:5"
+        ]
+      },
+      "expected_run_state": {
+        "activity": "using_tool",
+        "busy": true
+      },
+      "name": "parallel one still running",
+      "records": [],
+      "run_state": null,
+      "source": {
+        "fixture": "stream-sync/parallel-tool-lull.jsonl",
+        "max_seq": 5,
+        "min_seq": null
+      }
+    },
+    {
+      "expected": {
+        "activeToolGroupId": null,
+        "based_on_seq": 6,
+        "filtered_placeholders": [],
+        "progress_locus": "tail",
+        "rows": [
+          {
+            "activity": [
+              {
+                "final_message": null,
+                "finished_at": null,
+                "id": "step:assistant_step:seq:2",
+                "kind": "step",
+                "running": true,
+                "started_at": "2026-06-19T12:10:01Z",
+                "steps": [
+                  {
+                    "id": "assistant_step:seq:2",
+                    "kind": "assistant_message",
+                    "message": {
+                      "id": "seq:2",
+                      "role": "assistant",
+                      "seq": 2
+                    },
+                    "streaming": false
+                  },
+                  {
+                    "entries": [
+                      {
+                        "id": "tool_entry:call_fixture_a",
+                        "status": "completed",
+                        "tool_result": {
+                          "id": "seq:5",
+                          "role": "tool_result",
+                          "seq": 5
+                        },
+                        "tool_use": {
+                          "id": "seq:3",
+                          "role": "tool_use",
+                          "seq": 3
+                        },
+                        "tool_use_id": "call_fixture_a"
+                      },
+                      {
+                        "id": "tool_entry:call_fixture_b",
+                        "status": "completed",
+                        "tool_result": {
+                          "id": "seq:6",
+                          "role": "tool_result",
+                          "seq": 6
+                        },
+                        "tool_use": {
+                          "id": "seq:4",
+                          "role": "tool_use",
+                          "seq": 4
+                        },
+                        "tool_use_id": "call_fixture_b"
+                      }
+                    ],
+                    "finished_at": null,
+                    "id": "tool_group:call_fixture_a",
+                    "kind": "tool_group",
+                    "started_at": null,
+                    "status": "completed"
+                  }
+                ]
+              }
+            ],
+            "finished_at": null,
+            "id": "user_turn:orphan:step:assistant_step:seq:2",
+            "kind": "user_turn",
+            "started_at": "2026-06-19T12:10:01Z",
+            "user": null
+          }
+        ],
+        "tailActivity": "thinking",
+        "visibleMessageIds": [
+          "seq:2",
+          "seq:3",
+          "seq:4",
+          "seq:5",
+          "seq:6"
+        ]
+      },
+      "expected_run_state": {
+        "activity": "thinking",
+        "busy": true
+      },
+      "name": "parallel all finished gap",
+      "records": [],
+      "run_state": null,
+      "source": {
+        "fixture": "stream-sync/parallel-tool-lull.jsonl",
+        "max_seq": 6,
+        "min_seq": null
+      }
+    },
+    {
+      "expected": {
+        "activeToolGroupId": null,
+        "based_on_seq": 4,
+        "filtered_placeholders": [],
+        "progress_locus": "tail",
+        "rows": [
+          {
+            "activity": [
+              {
+                "final_message": null,
+                "finished_at": null,
+                "id": "step:tool_group:call_fixture_list",
+                "kind": "step",
+                "running": true,
+                "started_at": null,
+                "steps": [
+                  {
+                    "entries": [
+                      {
+                        "id": "tool_entry:call_fixture_list",
+                        "status": "completed",
+                        "tool_result": {
+                          "id": "seq:4",
+                          "role": "tool_result",
+                          "seq": 4
+                        },
+                        "tool_use": {
+                          "id": "seq:3",
+                          "role": "tool_use",
+                          "seq": 3
+                        },
+                        "tool_use_id": "call_fixture_list"
+                      }
+                    ],
+                    "finished_at": null,
+                    "id": "tool_group:call_fixture_list",
+                    "kind": "tool_group",
+                    "started_at": null,
+                    "status": "completed"
+                  }
+                ]
+              }
+            ],
+            "finished_at": null,
+            "id": "user_turn:orphan:step:tool_group:call_fixture_list",
+            "kind": "user_turn",
+            "started_at": null,
+            "user": null
+          }
+        ],
+        "tailActivity": "thinking",
+        "visibleMessageIds": [
+          "seq:3",
+          "seq:4"
+        ]
+      },
+      "expected_run_state": null,
+      "name": "orphan tool slice",
+      "records": [],
+      "run_state": {
+        "activity": "thinking",
+        "busy": true
+      },
+      "source": {
+        "fixture": "stream-sync/multi-tool-lull.jsonl",
+        "max_seq": 4,
+        "min_seq": 3
+      }
+    },
+    {
+      "expected": {
+        "activeToolGroupId": null,
+        "based_on_seq": 6,
+        "filtered_placeholders": [],
+        "progress_locus": "none",
+        "rows": [
+          {
+            "activity": [
+              {
+                "final_message": {
+                  "id": "seq:5",
+                  "role": "assistant",
+                  "seq": 5
+                },
+                "finished_at": "2026-06-19T12:24:04Z",
+                "id": "step:tool_group:call_fixture_final",
+                "kind": "step",
+                "running": false,
+                "started_at": "2026-06-19T12:24:01Z",
+                "steps": [
+                  {
+                    "entries": [
+                      {
+                        "id": "tool_entry:call_fixture_final",
+                        "status": "completed",
+                        "tool_result": {
+                          "id": "seq:4",
+                          "role": "tool_result",
+                          "seq": 4
+                        },
+                        "tool_use": {
+                          "id": "seq:3",
+                          "role": "tool_use",
+                          "seq": 3
+                        },
+                        "tool_use_id": "call_fixture_final"
+                      }
+                    ],
+                    "finished_at": "2026-06-19T12:24:03Z",
+                    "id": "tool_group:call_fixture_final",
+                    "kind": "tool_group",
+                    "started_at": "2026-06-19T12:24:02Z",
+                    "status": "completed"
+                  }
+                ]
+              }
+            ],
+            "finished_at": "2026-06-19T12:24:04Z",
+            "id": "user_turn:seq:2",
+            "kind": "user_turn",
+            "started_at": "2026-06-19T12:24:01Z",
+            "user": {
+              "id": "seq:2",
+              "role": "user",
+              "seq": 2
+            }
+          }
+        ],
+        "tailActivity": "none",
+        "visibleMessageIds": [
+          "seq:2",
+          "seq:3",
+          "seq:4",
+          "seq:5"
+        ]
+      },
+      "expected_run_state": {
+        "activity": "idle",
+        "busy": false
+      },
+      "name": "final answer completed",
+      "records": [
+        {
+          "message": {
+            "control": {
+              "kind": "run_start",
+              "run_id": "run::fixture-final-answer",
+              "thread_id": "thread::fixture-final-answer"
+            },
+            "internal": true,
+            "internal_kind": "control",
+            "kind": "control",
+            "role": "system"
+          },
+          "run_id": "run::fixture-final-answer",
+          "seq": 1,
+          "thread_id": "thread::fixture-final-answer",
+          "timestamp": "2026-06-19T12:24:00Z"
+        },
+        {
+          "message": {
+            "role": "user",
+            "text": "Run and summarize.",
+            "timestamp": "2026-06-19T12:24:01Z"
+          },
+          "run_id": "run::fixture-final-answer",
+          "seq": 2,
+          "thread_id": "thread::fixture-final-answer",
+          "timestamp": "2026-06-19T12:24:01Z"
+        },
+        {
+          "message": {
+            "content": {
+              "command": "/bin/zsh -lc 'printf done'",
+              "cwd": "/Users/test/repo",
+              "id": "call_fixture_final",
+              "processId": "1000000004",
+              "status": "inProgress",
+              "type": "commandExecution"
+            },
+            "kind": "tool_trace",
+            "role": "tool_use",
+            "timestamp": "2026-06-19T12:24:02Z",
+            "tool_name": "Bash",
+            "tool_use_id": "call_fixture_final"
+          },
+          "run_id": "run::fixture-final-answer",
+          "seq": 3,
+          "thread_id": "thread::fixture-final-answer",
+          "timestamp": "2026-06-19T12:24:02Z"
+        },
+        {
+          "message": {
+            "content": {
+              "aggregatedOutput": "done",
+              "command": "/bin/zsh -lc 'printf done'",
+              "cwd": "/Users/test/repo",
+              "durationMs": 3,
+              "exitCode": 0,
+              "id": "call_fixture_final",
+              "processId": "1000000004",
+              "status": "completed",
+              "type": "commandExecution"
+            },
+            "is_error": false,
+            "kind": "tool_trace",
+            "role": "tool_result",
+            "timestamp": "2026-06-19T12:24:03Z",
+            "tool_name": "Bash",
+            "tool_use_id": "call_fixture_final"
+          },
+          "run_id": "run::fixture-final-answer",
+          "seq": 4,
+          "thread_id": "thread::fixture-final-answer",
+          "timestamp": "2026-06-19T12:24:03Z"
+        },
+        {
+          "message": {
+            "role": "assistant",
+            "text": "Done.",
+            "timestamp": "2026-06-19T12:24:04Z"
+          },
+          "run_id": "run::fixture-final-answer",
+          "seq": 5,
+          "thread_id": "thread::fixture-final-answer",
+          "timestamp": "2026-06-19T12:24:04Z"
+        },
+        {
+          "message": {
+            "control": {
+              "kind": "run_complete",
+              "run_id": "run::fixture-final-answer",
+              "status": "completed",
+              "thread_id": "thread::fixture-final-answer"
+            },
+            "internal": true,
+            "internal_kind": "control",
+            "kind": "control",
+            "role": "system"
+          },
+          "run_id": "run::fixture-final-answer",
+          "seq": 6,
+          "thread_id": "thread::fixture-final-answer",
+          "timestamp": "2026-06-19T12:24:05Z"
+        }
+      ],
+      "run_state": null,
+      "source": null
+    }
+  ],
+  "schema_version": 1
+}

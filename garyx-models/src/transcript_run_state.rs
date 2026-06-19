@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::transcript_kind::{is_tool_related_message, resolve_message_kind_for_object};
+use crate::transcript_kind::{
+    is_tool_related_message, is_tool_result_trace, resolve_message_kind_for_object, tool_call_id,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -181,29 +183,6 @@ fn apply_tool_trace_record(
     state.activity = activity_for_pending_tools(state);
 }
 
-fn is_tool_result_trace(role: &str, message: &serde_json::Map<String, Value>) -> bool {
-    matches!(role, "tool" | "tool_result")
-        || message
-            .get("tool_use_result")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        || message.get("result").is_some_and(|value| !value.is_null())
-        || tool_trace_type_is_result(message.get("content"))
-}
-
-fn tool_trace_type_is_result(value: Option<&Value>) -> bool {
-    let Some(object) = value.and_then(Value::as_object) else {
-        return false;
-    };
-    ["type", "kind"].iter().any(|field| {
-        object
-            .get(*field)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .is_some_and(|value| value.eq_ignore_ascii_case("tool_result"))
-    })
-}
-
 fn mark_tool_use(state: &mut TranscriptRunState, tool_call_id: Option<String>) {
     if let Some(tool_call_id) = tool_call_id {
         *state.pending_tool_call_ids.entry(tool_call_id).or_insert(0) += 1;
@@ -233,23 +212,6 @@ fn decrement_pending_tool_id(state: &mut TranscriptRunState, tool_call_id: &str)
         state.pending_tool_call_ids.remove(tool_call_id);
     }
     true
-}
-
-fn tool_call_id(message: &serde_json::Map<String, Value>) -> Option<String> {
-    control_string(message.get("tool_use_id"))
-        .or_else(|| control_string(message.get("toolUseId")))
-        .or_else(|| nested_tool_call_id(message.get("content")))
-        .or_else(|| nested_tool_call_id(message.get("input")))
-        .or_else(|| nested_tool_call_id(message.get("result")))
-}
-
-fn nested_tool_call_id(value: Option<&Value>) -> Option<String> {
-    let object = value.and_then(Value::as_object)?;
-    control_string(object.get("tool_use_id"))
-        .or_else(|| control_string(object.get("toolUseId")))
-        .or_else(|| control_string(object.get("tool_call_id")))
-        .or_else(|| control_string(object.get("toolCallId")))
-        .or_else(|| control_string(object.get("id")))
 }
 
 fn activity_for_pending_tools(state: &TranscriptRunState) -> TranscriptRunActivity {

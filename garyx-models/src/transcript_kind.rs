@@ -135,6 +135,59 @@ pub fn resolve_message_kind_for_object(
     }
 }
 
+/// Returns true when a tool-related transcript message is the result side of a
+/// tool call. `message` is the transcript record's nested `message` object, and
+/// `role` is that object's normalized role.
+pub fn is_tool_result_trace(role: &str, message: &Map<String, Value>) -> bool {
+    matches!(role, "tool" | "tool_result")
+        || message
+            .get("tool_use_result")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        || message.get("result").is_some_and(|value| !value.is_null())
+        || tool_trace_type_is_result(message.get("content"))
+}
+
+/// Extracts the semantic tool-call id from a transcript message object. The
+/// input is the nested `message` object, not the outer transcript record.
+pub fn tool_call_id(message: &Map<String, Value>) -> Option<String> {
+    field_string(message.get("tool_use_id"))
+        .or_else(|| field_string(message.get("toolUseId")))
+        .or_else(|| nested_tool_call_id(message.get("content")))
+        .or_else(|| nested_tool_call_id(message.get("input")))
+        .or_else(|| nested_tool_call_id(message.get("result")))
+}
+
+fn tool_trace_type_is_result(value: Option<&Value>) -> bool {
+    let Some(object) = value.and_then(Value::as_object) else {
+        return false;
+    };
+    ["type", "kind"].iter().any(|field| {
+        object
+            .get(*field)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .is_some_and(|value| value.eq_ignore_ascii_case("tool_result"))
+    })
+}
+
+fn nested_tool_call_id(value: Option<&Value>) -> Option<String> {
+    let object = value.and_then(Value::as_object)?;
+    field_string(object.get("tool_use_id"))
+        .or_else(|| field_string(object.get("toolUseId")))
+        .or_else(|| field_string(object.get("tool_call_id")))
+        .or_else(|| field_string(object.get("toolCallId")))
+        .or_else(|| field_string(object.get("id")))
+}
+
+fn field_string(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -255,6 +308,43 @@ mod tests {
         assert_eq!(resolve_message_kind("system", false), "system");
         assert_eq!(resolve_message_kind("other", true), "tool_trace");
         assert_eq!(resolve_message_kind("other", false), "internal");
+    }
+
+    #[test]
+    fn tool_result_detection_matches_client_edge_cases() {
+        let null_result_message = obj(json!({
+            "role": "tool_use",
+            "kind": "tool_trace",
+            "result": null,
+            "content": {
+                "type": "commandExecution",
+                "id": "call_fixture_null_result",
+            },
+        }));
+        assert!(!is_tool_result_trace("tool_use", &null_result_message));
+
+        let kind_result_message = obj(json!({
+            "role": "tool_use",
+            "kind": "tool_trace",
+            "content": {
+                "type": "commandExecution",
+                "kind": "tool_result",
+                "id": "call_fixture_kind_result",
+            },
+        }));
+        assert!(is_tool_result_trace("tool_use", &kind_result_message));
+    }
+
+    #[test]
+    fn tool_call_id_uses_envelope_before_nested_payload() {
+        let message = obj(json!({
+            "role": "tool_use",
+            "tool_use_id": "call_envelope",
+            "content": {
+                "tool_use_id": "call_nested"
+            },
+        }));
+        assert_eq!(tool_call_id(&message).as_deref(), Some("call_envelope"));
     }
 
     #[test]

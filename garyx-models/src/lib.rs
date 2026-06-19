@@ -19,6 +19,7 @@ pub mod thread_logs;
 pub mod thread_record;
 pub mod threading;
 pub mod transcript_kind;
+pub mod transcript_render_state;
 pub mod transcript_run_state;
 pub mod wiki;
 
@@ -80,6 +81,13 @@ pub use threading::{
 pub use transcript_kind::{
     is_control_message, is_tool_related_message, resolve_message_kind,
     resolve_message_kind_for_object,
+};
+pub use transcript_render_state::{
+    RenderActivityRow, RenderAssistantReplyRow, RenderAssistantStep, RenderFilteredPlaceholder,
+    RenderMessageRef, RenderPlaceholderFilterReason, RenderProgressLocus, RenderRow,
+    RenderSnapshot, RenderStepItem, RenderStepRow, RenderTailActivity, RenderToolEntry,
+    RenderToolEntryStatus, RenderToolGroup, RenderToolGroupStatus, RenderUserTurnRow,
+    reduce_transcript_render_state, reduce_transcript_render_state_with_run_state,
 };
 pub use transcript_run_state::{
     TranscriptRunActivity, TranscriptRunState, apply_transcript_record, reduce_transcript_run_state,
