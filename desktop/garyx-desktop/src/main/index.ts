@@ -118,7 +118,6 @@ import {
   createSlashCommand,
   bindRemoteChannelEndpoint,
   checkConnection,
-  closeActiveChatStreams,
   deleteCustomAgent,
   deleteTeam,
   deleteMcpServer,
@@ -306,11 +305,9 @@ function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 function shouldForwardGlobalChatStreamEvent(payload: {
-  type: string;
   threadId?: string;
 }): boolean {
   return shouldForwardGlobalStreamEvent({
-    eventType: payload.type,
     selectedThreadId: selectedThreadStreamThreadId,
     eventThreadId: payload.threadId,
   });
@@ -595,18 +592,6 @@ function createMainWindow(): BrowserWindow {
     }
     return { action: "deny" };
   });
-  window.webContents.on(
-    "did-start-navigation",
-    (_event, _url, isInPlace, isMainFrame) => {
-      if (isMainFrame && !isInPlace) {
-        closeActiveChatStreams();
-      }
-    },
-  );
-  window.webContents.on("destroyed", () => {
-    closeActiveChatStreams();
-  });
-
   const devServerUrl = process.env.ELECTRON_RENDERER_URL;
   if (devServerUrl) {
     void window.loadURL(devServerUrl);
@@ -1421,12 +1406,7 @@ function registerIpcHandlers(): void {
     "garyx:open-chat-stream",
     async (_event, input: SendMessageInput) => {
       const settings = await resolveSettings();
-      const result = await openChatStream(settings, input, (payload) => {
-        if (!mainWindow || mainWindow.isDestroyed()) {
-          return;
-        }
-        mainWindow.webContents.send("garyx:chat-stream", payload);
-      });
+      const result = await openChatStream(settings, input);
       const state = await getDesktopState();
       const thread = state.threads.find(
         (entry) => entry.id === result.threadId,

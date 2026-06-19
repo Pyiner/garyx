@@ -51,13 +51,9 @@ const TERMINAL_CONTROL_KINDS = new Set([
 ]);
 
 export function shouldForwardGlobalStreamEvent(input: {
-  eventType?: string | null;
   selectedThreadId?: string | null;
   eventThreadId?: string | null;
 }): boolean {
-  if (normalizedString(input.eventType) === "committed_message") {
-    return false;
-  }
   const selectedThreadId = normalizedString(input.selectedThreadId);
   const eventThreadId = normalizedString(input.eventThreadId);
   return !selectedThreadId || !eventThreadId || selectedThreadId !== eventThreadId;

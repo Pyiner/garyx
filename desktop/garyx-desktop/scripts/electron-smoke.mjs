@@ -266,6 +266,7 @@ async function createMockGateway(workspaceDir) {
     },
     activeRuns: {},
     streamClients: new Set(),
+    threadStreamClients: new Map(),
     streamHistory: [],
     commands: [
       {
@@ -322,6 +323,119 @@ async function createMockGateway(workspaceDir) {
         state.streamClients.delete(client);
       }
     }
+  }
+
+  function threadStreamClientsFor(sessionId) {
+    let clients = state.threadStreamClients.get(sessionId);
+    if (!clients) {
+      clients = new Set();
+      state.threadStreamClients.set(sessionId, clients);
+    }
+    return clients;
+  }
+
+  function historyRecordMessage(record) {
+    if (record.message && typeof record.message === 'object') {
+      return record.message;
+    }
+    const message = {
+      role: record.role,
+      content: record.content,
+      timestamp: record.timestamp,
+      kind: record.kind,
+    };
+    if (typeof record.content === 'string') {
+      message.text = record.content;
+    }
+    if (record.metadata) {
+      message.metadata = record.metadata;
+    }
+    return message;
+  }
+
+  function threadStreamPayload(sessionId, record, runId = '') {
+    const seq = Number(record.index) + 1;
+    return {
+      seq,
+      data: JSON.stringify({
+        type: 'committed_message',
+        thread_id: sessionId,
+        run_id: runId,
+        seq,
+        timestamp: record.timestamp,
+        message: historyRecordMessage(record),
+      }),
+    };
+  }
+
+  function writeThreadStreamRecord(res, sessionId, record, runId = '') {
+    const payload = threadStreamPayload(sessionId, record, runId);
+    res.write(`id: ${payload.seq}\n`);
+    writeStreamPayload(res, payload.data);
+  }
+
+  function broadcastCommittedRecord(sessionId, record, runId = '') {
+    const clients = state.threadStreamClients.get(sessionId);
+    if (!clients) {
+      return;
+    }
+    for (const client of [...clients]) {
+      try {
+        writeThreadStreamRecord(client, sessionId, record, runId);
+      } catch {
+        clients.delete(client);
+      }
+    }
+  }
+
+  function broadcastThreadPassthroughEvent(sessionId, payload) {
+    const clients = state.threadStreamClients.get(sessionId);
+    if (!clients) {
+      return;
+    }
+    const raw = JSON.stringify(payload);
+    for (const client of [...clients]) {
+      try {
+        writeStreamPayload(client, raw);
+      } catch {
+        clients.delete(client);
+      }
+    }
+  }
+
+  function appendControlRecord(sessionId, runId, control) {
+    const history = state.histories[sessionId] || [];
+    const message = {
+      role: 'system',
+      kind: 'control',
+      internal: true,
+      internal_kind: 'control',
+      control: {
+        ...control,
+        run_id: runId,
+        thread_id: sessionId,
+        at: new Date().toISOString(),
+      },
+    };
+    const record = {
+      index: history.length,
+      role: 'system',
+      kind: 'control',
+      internal: true,
+      internal_kind: 'control',
+      timestamp: message.control.at,
+      content: message,
+      message,
+    };
+    history.push(record);
+    state.histories[sessionId] = history;
+    const session = ensureSession(sessionId);
+    if (session) {
+      session.updated_at = record.timestamp;
+      session.message_count = history.length;
+    }
+    broadcastCommittedRecord(sessionId, record, runId);
+    return record;
   }
 
   function closeStreamClients() {
@@ -387,6 +501,7 @@ async function createMockGateway(workspaceDir) {
       assistantText,
       scenario,
       sessionId,
+      records: history.slice(userIndex),
     };
   }
 
@@ -429,10 +544,19 @@ async function createMockGateway(workspaceDir) {
       updated_at: new Date().toISOString(),
       pending_user_input_count: 0,
     };
+    broadcastCommittedRecord(sessionId, userMessage, runId);
+    appendControlRecord(sessionId, runId, { kind: 'run_start' });
     return runId;
   }
 
   function clearExternalRun(sessionId) {
+    const runId = state.activeRuns[sessionId]?.run_id;
+    if (runId) {
+      appendControlRecord(sessionId, runId, {
+        kind: 'run_complete',
+        status: 'cancelled',
+      });
+    }
     delete state.activeRuns[sessionId];
   }
 
@@ -454,7 +578,15 @@ async function createMockGateway(workspaceDir) {
     session.updated_at = new Date().toISOString();
     session.message_count = history.length;
     session.last_assistant_message = assistantText;
-    clearExternalRun(sessionId);
+    broadcastCommittedRecord(sessionId, history[assistantIndex], state.activeRuns[sessionId]?.run_id || '');
+    const runId = state.activeRuns[sessionId]?.run_id;
+    if (runId) {
+      appendControlRecord(sessionId, runId, {
+        kind: 'run_complete',
+        status: 'completed',
+      });
+    }
+    delete state.activeRuns[sessionId];
     return history[assistantIndex];
   }
 
@@ -510,6 +642,7 @@ async function createMockGateway(workspaceDir) {
   }
 
   async function streamRunToGateway(payload) {
+    const [userRecord, toolUseRecord, toolResultRecord, assistantRecord] = payload.records || [];
     state.activeRuns[payload.sessionId] = {
       run_id: payload.runId,
       provider_type: 'codex',
@@ -523,8 +656,17 @@ async function createMockGateway(workspaceDir) {
       run_id: payload.runId,
       thread_id: payload.sessionId,
     });
+    if (userRecord) {
+      broadcastCommittedRecord(payload.sessionId, userRecord, payload.runId);
+    }
     await sleep(120);
     broadcastGatewayStreamEvent({
+      type: 'tool_use',
+      run_id: payload.runId,
+      thread_id: payload.sessionId,
+      message: payload.scenario.streamToolUseMessage,
+    });
+    broadcastThreadPassthroughEvent(payload.sessionId, {
       type: 'tool_use',
       run_id: payload.runId,
       thread_id: payload.sessionId,
@@ -537,6 +679,18 @@ async function createMockGateway(workspaceDir) {
       thread_id: payload.sessionId,
       message: payload.scenario.streamToolResultMessage,
     });
+    broadcastThreadPassthroughEvent(payload.sessionId, {
+      type: 'tool_result',
+      run_id: payload.runId,
+      thread_id: payload.sessionId,
+      message: payload.scenario.streamToolResultMessage,
+    });
+    if (toolUseRecord) {
+      broadcastCommittedRecord(payload.sessionId, toolUseRecord, payload.runId);
+    }
+    if (toolResultRecord) {
+      broadcastCommittedRecord(payload.sessionId, toolResultRecord, payload.runId);
+    }
     await sleep(800);
     broadcastGatewayStreamEvent({
       type: 'assistant_delta',
@@ -544,6 +698,15 @@ async function createMockGateway(workspaceDir) {
       thread_id: payload.sessionId,
       delta: payload.assistantText,
     });
+    broadcastThreadPassthroughEvent(payload.sessionId, {
+      type: 'assistant_delta',
+      run_id: payload.runId,
+      thread_id: payload.sessionId,
+      delta: payload.assistantText,
+    });
+    if (assistantRecord) {
+      broadcastCommittedRecord(payload.sessionId, assistantRecord, payload.runId);
+    }
     if (state.nextStreamDisconnect) {
       state.offlineUntil = Date.now() + state.nextStreamDisconnect.offlineMs;
       state.nextStreamDisconnect = null;
@@ -555,6 +718,10 @@ async function createMockGateway(workspaceDir) {
       type: 'done',
       run_id: payload.runId,
       thread_id: payload.sessionId,
+    });
+    appendControlRecord(payload.sessionId, payload.runId, {
+      kind: 'run_complete',
+      status: 'completed',
     });
     delete state.activeRuns[payload.sessionId];
   }
@@ -670,6 +837,33 @@ async function createMockGateway(workspaceDir) {
       state.streamClients.add(res);
       req.on('close', () => {
         state.streamClients.delete(res);
+      });
+      return;
+    }
+    const threadStreamMatch = pathname.match(/^\/api\/threads\/([^/]+)\/stream$/);
+    if (req.method === 'GET' && threadStreamMatch) {
+      const sessionId = decodeURIComponent(threadStreamMatch[1]);
+      if (!ensureSession(sessionId)) {
+        return writeJson(res, 404, { error: 'thread not found' });
+      }
+      const afterSeq = Math.max(
+        0,
+        Number(url.searchParams.get('after_seq') || req.headers['last-event-id'] || 0) || 0,
+      );
+      res.writeHead(200, {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+        connection: 'keep-alive',
+      });
+      for (const record of state.histories[sessionId] || []) {
+        if (Number(record.index) + 1 > afterSeq) {
+          writeThreadStreamRecord(res, sessionId, record);
+        }
+      }
+      const clients = threadStreamClientsFor(sessionId);
+      clients.add(res);
+      req.on('close', () => {
+        clients.delete(res);
       });
       return;
     }
@@ -1334,7 +1528,7 @@ async function main() {
           .locator('.settings-page-header .settings-tab-title')
           .filter({ hasText: oneOfExact(labels) })
           .waitFor({ timeout: 10000 });
-        if (tab === 'Gateway') {
+        if (tab === 'General') {
           await window.getByText(oneOfExact(SMOKE_TEXT.language)).first().waitFor({
             timeout: 10000,
           });

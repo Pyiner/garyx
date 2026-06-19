@@ -209,11 +209,6 @@ function serializeMessageAttachments(
   };
 }
 
-export function closeActiveChatStreams(): void {
-  // Chat runs use HTTP commands plus the process-wide gateway event stream.
-  // Kept as a compatibility hook for renderer reload paths.
-}
-
 function formatLocalChatTimestamp(date = new Date()): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -1088,8 +1083,24 @@ function gatewayStreamEventIds(payload: Record<string, unknown>): {
   };
 }
 
+interface GatewayStreamEventMapOptions {
+  includeContentEvents: boolean;
+  includeCommittedMessages: boolean;
+}
+
+const THREAD_STREAM_EVENT_MAP_OPTIONS: GatewayStreamEventMapOptions = {
+  includeContentEvents: true,
+  includeCommittedMessages: true,
+};
+
+const GLOBAL_STREAM_EVENT_MAP_OPTIONS: GatewayStreamEventMapOptions = {
+  includeContentEvents: false,
+  includeCommittedMessages: false,
+};
+
 function mapGatewayStreamEventPayload(
   payload: Record<string, unknown>,
+  options: GatewayStreamEventMapOptions,
 ): DesktopChatStreamEvent | null {
   const type = asString(payload.type);
   if (!type) {
@@ -1110,6 +1121,9 @@ function mapGatewayStreamEventPayload(
 
   switch (type) {
     case "committed_message":
+      if (!options.includeCommittedMessages) {
+        return null;
+      }
       return mapCommittedMessageEvent(payload);
     case "accepted":
       return {
@@ -1117,6 +1131,9 @@ function mapGatewayStreamEventPayload(
         ...base,
       };
     case "assistant_delta": {
+      if (!options.includeContentEvents) {
+        return null;
+      }
       const delta = asString(payload.delta) || "";
       if (!delta) {
         return null;
@@ -1136,6 +1153,9 @@ function mapGatewayStreamEventPayload(
       };
     case "tool_use":
     case "tool_result":
+      if (!options.includeContentEvents) {
+        return null;
+      }
       if (payload.message === undefined) {
         return null;
       }
@@ -1172,6 +1192,7 @@ function mapGatewayStreamEventPayload(
 function mapGatewayEventPayloadInternal(
   raw: string,
   shouldForwardHistoryEntry?: (entry: string) => boolean,
+  options: GatewayStreamEventMapOptions = THREAD_STREAM_EVENT_MAP_OPTIONS,
 ): DesktopChatStreamEvent[] {
   const payload = tryParseJson<Record<string, unknown>>(raw);
   if (!payload) {
@@ -1184,7 +1205,11 @@ function mapGatewayEventPayloadInternal(
         if (shouldForwardHistoryEntry && !shouldForwardHistoryEntry(entry)) {
           return [];
         }
-        return mapGatewayEventPayloadInternal(entry, shouldForwardHistoryEntry);
+        return mapGatewayEventPayloadInternal(
+          entry,
+          shouldForwardHistoryEntry,
+          options,
+        );
       }
       const historyEntry = JSON.stringify(entry);
       if (
@@ -1193,15 +1218,17 @@ function mapGatewayEventPayloadInternal(
       ) {
         return [];
       }
-      const mapped = mapGatewayStreamEventPayload(parseRecord(entry));
+      const mapped = mapGatewayStreamEventPayload(parseRecord(entry), options);
       return mapped ? [mapped] : [];
     });
   }
-  const event = mapGatewayStreamEventPayload(payload);
+  const event = mapGatewayStreamEventPayload(payload, options);
   return event ? [event] : [];
 }
 
-export function mapGatewayEventPayload(raw: string): DesktopChatStreamEvent[] {
+export function mapThreadStreamPassthroughPayload(
+  raw: string,
+): DesktopChatStreamEvent[] {
   return mapGatewayEventPayloadInternal(raw);
 }
 
@@ -1285,6 +1312,7 @@ export async function streamGatewayEvents(
     const events = mapGatewayEventPayloadInternal(
       payload,
       shouldForwardGatewayHistoryEntry,
+      GLOBAL_STREAM_EVENT_MAP_OPTIONS,
     );
     if (events.length > 0 && !isGatewayHistoryPayload(payload)) {
       rememberGatewayStreamPayload(payload);
@@ -1549,7 +1577,7 @@ export async function streamThreadEvents(
       return;
     }
     eventId = null;
-    for (const event of mapGatewayEventPayload(payloadText)) {
+    for (const event of mapThreadStreamPassthroughPayload(payloadText)) {
       if (shouldForwardThreadPassthroughEvent(event)) {
         onEvent(event);
       }
@@ -5466,7 +5494,6 @@ export async function detachRemoteChannelEndpoint(
 export async function openChatStream(
   settings: DesktopSettings,
   input: SendMessageInput,
-  _onEvent: (event: DesktopChatStreamEvent) => void,
   workspacePath?: string | null,
 ): Promise<{
   runId: string;

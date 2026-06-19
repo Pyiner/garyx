@@ -186,22 +186,6 @@ test("selected-thread global stream events are suppressed while per-thread strea
   );
   assert.equal(
     shouldForwardGlobalStreamEvent({
-      eventType: "committed_message",
-      selectedThreadId: "thread::selected",
-      eventThreadId: "thread::other",
-    }),
-    false,
-  );
-  assert.equal(
-    shouldForwardGlobalStreamEvent({
-      eventType: "committed_message",
-      selectedThreadId: null,
-      eventThreadId: "thread::other",
-    }),
-    false,
-  );
-  assert.equal(
-    shouldForwardGlobalStreamEvent({
       selectedThreadId: null,
       eventThreadId: "thread::selected",
     }),

@@ -3,13 +3,13 @@ import assert from "node:assert/strict";
 
 import {
   ThreadStreamGapError,
-  mapGatewayEventPayload,
+  mapThreadStreamPassthroughPayload,
   streamGatewayEvents,
   streamThreadEvents,
 } from "./gary-client.ts";
 
-test("maps gateway SSE tool events into desktop chat stream events", () => {
-  const [toolUse] = mapGatewayEventPayload(
+test("maps per-thread passthrough tool events into desktop chat stream events", () => {
+  const [toolUse] = mapThreadStreamPassthroughPayload(
     JSON.stringify({
       type: "tool_use",
       thread_id: "thread::stream-1",
@@ -45,7 +45,7 @@ test("maps gateway SSE tool events into desktop chat stream events", () => {
     source: "claude_sdk",
   });
 
-  const [toolResult] = mapGatewayEventPayload(
+  const [toolResult] = mapThreadStreamPassthroughPayload(
     JSON.stringify({
       type: "tool_result",
       thread_id: "thread::stream-1",
@@ -66,8 +66,8 @@ test("maps gateway SSE tool events into desktop chat stream events", () => {
   assert.equal(toolResult.message.isError, false);
 });
 
-test("maps gateway SSE history payloads into live renderer events", () => {
-  const events = mapGatewayEventPayload(
+test("maps per-thread passthrough history payloads into live renderer events", () => {
+  const events = mapThreadStreamPassthroughPayload(
     JSON.stringify({
       type: "history",
       events: [
@@ -103,8 +103,8 @@ test("maps gateway SSE history payloads into live renderer events", () => {
   assert.equal(events[1].pendingInputId, "pending-1");
 });
 
-test("maps camelCase websocket-shaped gateway stream payloads", () => {
-  const events = mapGatewayEventPayload(
+test("maps camelCase websocket-shaped per-thread passthrough payloads", () => {
+  const events = mapThreadStreamPassthroughPayload(
     JSON.stringify({
       type: "tool_use",
       threadId: "thread::stream-3",
@@ -129,7 +129,7 @@ test("maps camelCase websocket-shaped gateway stream payloads", () => {
 });
 
 test("maps committed_message payloads into desktop transcript stream events", () => {
-  const [event] = mapGatewayEventPayload(
+  const [event] = mapThreadStreamPassthroughPayload(
     JSON.stringify({
       type: "committed_message",
       thread_id: "thread::committed",
@@ -267,32 +267,21 @@ test("streamThreadEvents rejects first replay gap relative to requested cursor",
   }
 });
 
-test("streamGatewayEvents replays unseen history without duplicating seen live events", async () => {
-  const liveToolUse = JSON.stringify({
-    type: "tool_use",
+test("streamGatewayEvents replays unseen control history without duplicating seen live events", async () => {
+  const liveUserAck = JSON.stringify({
+    type: "user_ack",
     thread_id: "thread::stream-replay",
     run_id: "run-replay",
-    message: {
-      role: "tool_use",
-      content: { type: "shell" },
-      tool_use_id: "toolu-replay",
-      tool_name: "shell",
-    },
+    pending_input_id: "pending-replay",
   });
-  const unseenToolResult = JSON.stringify({
-    type: "tool_result",
+  const unseenDone = JSON.stringify({
+    type: "done",
     thread_id: "thread::stream-replay",
     run_id: "run-replay",
-    message: {
-      role: "tool_result",
-      content: "ok",
-      tool_use_id: "toolu-replay",
-      is_error: false,
-    },
   });
   const historyEnvelope = JSON.stringify({
     type: "history",
-    events: [liveToolUse, unseenToolResult],
+    events: [liveUserAck, unseenDone],
   });
   const urls = [];
   const originalFetch = globalThis.fetch;
@@ -301,7 +290,7 @@ test("streamGatewayEvents replays unseen history without duplicating seen live e
     urls.push(String(url));
     const payload =
       callCount === 0
-        ? `data: ${liveToolUse}\n\n`
+        ? `data: ${liveUserAck}\n\n`
         : `event: history\ndata: ${historyEnvelope}\n\n`;
     callCount += 1;
     return new Response(
@@ -339,12 +328,83 @@ test("streamGatewayEvents replays unseen history without duplicating seen live e
     assert.equal(urls[1], "http://127.0.0.1:31337/api/stream?history_limit=50");
     assert.deepEqual(
       firstEvents.map((event) => event.type),
-      ["tool_use"],
+      ["user_ack"],
     );
     assert.deepEqual(
       replayedEvents.map((event) => event.type),
-      ["tool_result"],
+      ["done"],
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("streamGatewayEvents ignores global content frames", async () => {
+  const ignoredAssistantDelta = JSON.stringify({
+    type: "assistant_delta",
+    thread_id: "thread::global-content",
+    run_id: "run-global-content",
+    delta: "old global content path",
+  });
+  const ignoredToolUse = JSON.stringify({
+    type: "tool_use",
+    thread_id: "thread::global-content",
+    run_id: "run-global-content",
+    message: {
+      role: "tool_use",
+      content: { type: "shell" },
+      tool_use_id: "toolu-global-content",
+      tool_name: "shell",
+    },
+  });
+  const ignoredCommitted = JSON.stringify({
+    type: "committed_message",
+    thread_id: "thread::global-content",
+    run_id: "run-global-content",
+    seq: 3,
+    message: {
+      role: "assistant",
+      content: "committed globally",
+      text: "committed globally",
+    },
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            new TextEncoder().encode(
+              [
+                `data: ${ignoredAssistantDelta}`,
+                "",
+                `data: ${ignoredToolUse}`,
+                "",
+                `data: ${ignoredCommitted}`,
+                "",
+                "",
+              ].join("\n"),
+            ),
+          );
+          controller.close();
+        },
+      }),
+      { status: 200, statusText: "OK" },
+    );
+
+  try {
+    const events = [];
+    await streamGatewayEvents(
+      {
+        gatewayUrl: "http://127.0.0.1:31337",
+        gatewayAuthToken: "",
+      },
+      (event) => events.push(event),
+      undefined,
+      { historyLimit: 0 },
+    );
+
+    assert.deepEqual(events, []);
   } finally {
     globalThis.fetch = originalFetch;
   }
