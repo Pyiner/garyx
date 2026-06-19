@@ -108,6 +108,10 @@ import type {
   StartWorkflowThreadInput,
   StartWorkflowThreadResult,
 } from "@shared/contracts";
+import {
+  decideStreamSeq,
+  isControlTranscriptMessage,
+} from "../shared/transcript-sync.ts";
 
 const DEFAULT_THREAD_HISTORY_PAGE_SIZE = 100;
 const DEFAULT_THREAD_HISTORY_USER_QUERY_LIMIT = 10;
@@ -267,12 +271,17 @@ interface HistoryPayload {
   message_stats?: {
     total_messages_in_thread?: number;
     total_messages_in_session?: number;
+    committed_message_count?: number;
+    overlay_message_count?: number;
     returned_messages?: number;
     returned_user_queries?: number;
     returned_start_index?: number;
     returned_end_index?: number;
     has_more_before?: boolean;
     next_before_index?: number | null;
+    has_more_after?: boolean;
+    next_after_index?: number | null;
+    reset?: boolean;
     user_query_limit?: number | null;
   };
   team?: ThreadTeamBlockPayload | null;
@@ -1100,6 +1109,8 @@ function mapGatewayStreamEventPayload(
   };
 
   switch (type) {
+    case "committed_message":
+      return mapCommittedMessageEvent(payload);
     case "accepted":
       return {
         type: "accepted",
@@ -1288,6 +1299,273 @@ export async function streamGatewayEvents(
       return;
     }
     if (line.startsWith(":")) {
+      return;
+    }
+    if (!line.startsWith("data:")) {
+      return;
+    }
+    let value = line.slice(5);
+    if (value.startsWith(" ")) {
+      value = value.slice(1);
+    }
+    dataLines.push(value);
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      let newlineIndex = buffer.indexOf("\n");
+      while (newlineIndex >= 0) {
+        const rawLine = buffer.slice(0, newlineIndex).replace(/\r$/, "");
+        buffer = buffer.slice(newlineIndex + 1);
+        processLine(rawLine);
+        newlineIndex = buffer.indexOf("\n");
+      }
+    }
+    buffer += decoder.decode();
+    if (buffer.length > 0) {
+      processLine(buffer.replace(/\r$/, ""));
+      buffer = "";
+    }
+    flushEvent();
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+export class ThreadStreamGapError extends Error {
+  resumeAfterSeq: number;
+
+  constructor(resumeAfterSeq: number) {
+    super(`Thread stream seq gap after ${resumeAfterSeq}`);
+    this.name = "ThreadStreamGapError";
+    this.resumeAfterSeq = resumeAfterSeq;
+  }
+}
+
+function shouldForwardThreadPassthroughEvent(event: DesktopChatStreamEvent): boolean {
+  return ![
+    "accepted",
+    "assistant_boundary",
+    "done",
+    "error",
+    "thread_title_updated",
+    "user_ack",
+  ].includes(event.type);
+}
+
+interface StreamThreadEventsOptions {
+  afterSeq?: number;
+  onConnected?: () => void;
+  onCommittedSeq?: (seq: number) => void;
+}
+
+function textFromCommittedMessage(message: Record<string, unknown>): string {
+  const explicitText = asString(message.text);
+  if (explicitText) {
+    return explicitText;
+  }
+  const content = message.content;
+  return typeof content === "string" ? content.trim() : "";
+}
+
+function kindFromCommittedMessage(
+  role: TranscriptMessage["role"],
+  message: Record<string, unknown>,
+): string | undefined {
+  const explicitKind = asString(message.kind);
+  if (explicitKind) {
+    return explicitKind;
+  }
+  const internalKind = asString(message.internal_kind);
+  if (internalKind === "control") {
+    return "control";
+  }
+  if (role === "tool_use" || role === "tool_result") {
+    return "tool_trace";
+  }
+  if (role === "assistant") {
+    return "assistant_reply";
+  }
+  if (role === "user") {
+    return "user_input";
+  }
+  return undefined;
+}
+
+function roleFromCommittedMessage(role: unknown): TranscriptMessage["role"] {
+  return role === "assistant" ||
+    role === "user" ||
+    role === "tool_use" ||
+    role === "tool_result"
+    ? role
+    : "system";
+}
+
+function mapCommittedMessageEvent(
+  payload: Record<string, unknown>,
+  eventId?: number | null,
+): DesktopChatStreamEvent | null {
+  const seq = asFiniteNumber(payload.seq) ?? eventId ?? undefined;
+  if (typeof seq !== "number" || seq < 1) {
+    return null;
+  }
+  const threadId =
+    asString(payload.threadId) || asString(payload.thread_id) || "";
+  const runId = asString(payload.runId) || asString(payload.run_id) || "";
+  const rawMessage = parseRecord(payload.message);
+  if (!threadId || Object.keys(rawMessage).length === 0) {
+    return null;
+  }
+  const role = roleFromCommittedMessage(rawMessage.role);
+  const metadata = parseRecord(rawMessage.metadata);
+  const contentRecord = parseRecord(rawMessage.content);
+  const kind = kindFromCommittedMessage(role, rawMessage);
+  const isControlRecord =
+    kind === "control" || asString(rawMessage.internal_kind) === "control";
+  const baseMessage: TranscriptMessage = {
+    id: `${threadId}:${seq - 1}`,
+    role,
+    text: isControlRecord ? "" : textFromCommittedMessage(rawMessage),
+    content: isControlRecord ? rawMessage : rawMessage.content,
+    timestamp:
+      asString(rawMessage.timestamp) || asString(payload.timestamp) || null,
+    toolUseId:
+      asString(rawMessage.tool_use_id) ||
+      asString(rawMessage.toolUseId) ||
+      null,
+    toolName:
+      asString(rawMessage.tool_name) ||
+      asString(rawMessage.toolName) ||
+      asString(metadata.item_type) ||
+      asString(metadata.itemType) ||
+      asString(contentRecord.type) ||
+      null,
+    isError: asBoolean(rawMessage.is_error) ?? asBoolean(rawMessage.isError),
+    metadata: Object.keys(metadata).length ? metadata : null,
+    kind,
+    internal: isControlRecord || Boolean(rawMessage.internal),
+    internalKind:
+      asString(rawMessage.internal_kind) ||
+      asString(rawMessage.internalKind) ||
+      (isControlRecord ? "control" : null),
+    loopOrigin:
+      asString(rawMessage.loop_origin) || asString(rawMessage.loopOrigin) || null,
+  };
+  const message = isControlTranscriptMessage(baseMessage)
+    ? {
+        ...baseMessage,
+        role: "system" as const,
+        text: "",
+        content: rawMessage,
+        kind: "control",
+        internal: true,
+        internalKind: "control",
+      }
+    : baseMessage;
+  return {
+    type: "committed_message",
+    runId,
+    threadId,
+    sessionId: threadId,
+    seq,
+    message,
+  };
+}
+
+export async function streamThreadEvents(
+  settings: DesktopSettings,
+  threadId: string,
+  onEvent: (event: DesktopChatStreamEvent) => void,
+  signal?: AbortSignal,
+  options?: StreamThreadEventsOptions,
+): Promise<void> {
+  const afterSeq = Math.max(0, Math.trunc(options?.afterSeq ?? 0));
+  const headers = applyGatewayAuthHeader(
+    new Headers({ Accept: "text/event-stream" }),
+    settings.gatewayAuthToken,
+  );
+  headers.set("Last-Event-ID", String(afterSeq));
+  const response = await fetch(
+    buildUrl(
+      settings,
+      `/api/threads/${encodeURIComponent(threadId)}/stream?after_seq=${afterSeq}`,
+    ),
+    {
+      headers,
+      signal,
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}`);
+  }
+  if (!response.body) {
+    throw new Error("Thread event stream returned no body");
+  }
+  options?.onConnected?.();
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let dataLines: string[] = [];
+  let eventId: number | null = null;
+  let connectionLastSeq = afterSeq;
+
+  const flushEvent = () => {
+    if (dataLines.length === 0) {
+      eventId = null;
+      return;
+    }
+    const payloadText = dataLines.join("\n");
+    dataLines = [];
+    const payload = tryParseJson<Record<string, unknown>>(payloadText);
+    if (!payload) {
+      eventId = null;
+      return;
+    }
+    if (asString(payload.type) === "committed_message") {
+      const event = mapCommittedMessageEvent(payload, eventId);
+      eventId = null;
+      if (!event || event.type !== "committed_message") {
+        return;
+      }
+      const decision = decideStreamSeq({
+        incomingSeq: event.seq,
+        connectionLastSeq,
+      });
+      if (decision.type === "gap_reconnect") {
+        throw new ThreadStreamGapError(decision.resumeAfterSeq);
+      }
+      if (decision.type === "stale") {
+        return;
+      }
+      onEvent(event);
+      connectionLastSeq = Math.max(connectionLastSeq, event.seq);
+      options?.onCommittedSeq?.(connectionLastSeq);
+      return;
+    }
+    eventId = null;
+    for (const event of mapGatewayEventPayload(payloadText)) {
+      if (shouldForwardThreadPassthroughEvent(event)) {
+        onEvent(event);
+      }
+    }
+  };
+  const processLine = (line: string) => {
+    if (line === "") {
+      flushEvent();
+      return;
+    }
+    if (line.startsWith(":")) {
+      return;
+    }
+    if (line.startsWith("id:")) {
+      const value = line.slice(3).trim();
+      eventId = /^\d+$/.test(value) ? Number(value) : null;
       return;
     }
     if (!line.startsWith("data:")) {
@@ -1665,6 +1943,10 @@ function mapHistoryMessage(
   value: NonNullable<HistoryPayload["messages"]>[number],
 ) {
   const normalized = parseRecord(value.message);
+  const isControlRecord =
+    value.kind === "control" ||
+    asString(normalized.kind) === "control" ||
+    asString(normalized.internal_kind) === "control";
   const isLoopContinuation =
     Boolean((value as { internal?: boolean }).internal) &&
     (value as { internal_kind?: unknown }).internal_kind ===
@@ -1677,10 +1959,14 @@ function mapHistoryMessage(
         ? "user"
         : value.role === "tool_use"
           ? "tool_use"
-          : value.role === "tool_result"
-            ? "tool_result"
-            : "system";
-  const content = "content" in normalized ? normalized.content : value.content;
+        : value.role === "tool_result"
+          ? "tool_result"
+          : "system";
+  const content = isControlRecord
+    ? normalized
+    : "content" in normalized
+      ? normalized.content
+      : value.content;
   const metadataValue = normalized.metadata;
   const metadataRecord =
     metadataValue && typeof metadataValue === "object"
@@ -1691,12 +1977,14 @@ function mapHistoryMessage(
     isLoopContinuation && value.role === "user"
       ? "System triggered an automatic continuation."
       : "";
-  const text =
-    asString(normalized.text) ||
-    (typeof value.text === "string" ? value.text.trim() : "") ||
-    (typeof value.content === "string" ? value.content.trim() : "") ||
-    fallbackText;
-  const hasStructuredContent = content !== null && content !== undefined;
+  const text = isControlRecord
+    ? ""
+    : asString(normalized.text) ||
+      (typeof value.text === "string" ? value.text.trim() : "") ||
+      (typeof value.content === "string" ? value.content.trim() : "") ||
+      fallbackText;
+  const hasStructuredContent =
+    isControlRecord || (content !== null && content !== undefined);
 
   if (!text && !hasStructuredContent) {
     return null;
@@ -1709,7 +1997,11 @@ function mapHistoryMessage(
     "system",
     "internal",
   ]);
-  if (!visibleKinds.has(value.kind || "") && role === "system") {
+  if (
+    !isControlRecord &&
+    !visibleKinds.has(value.kind || "") &&
+    role === "system"
+  ) {
     return null;
   }
 
@@ -3027,12 +3319,14 @@ function normalizeThreadHistoryInput(
 ): {
   threadId: string;
   beforeIndex?: number;
+  afterIndex?: number;
   limit: number;
   userQueryLimit: number;
 } {
   const raw: {
     threadId: string;
     beforeIndex?: number | null;
+    afterIndex?: number | null;
     limit?: number | null;
     userQueryLimit?: number | null;
   } =
@@ -3041,6 +3335,7 @@ function normalizeThreadHistoryInput(
       : {
           threadId: input.threadId,
           beforeIndex: input.beforeIndex,
+          afterIndex: input.afterIndex,
           limit: input.limit,
           userQueryLimit: input.userQueryLimit,
         };
@@ -3057,6 +3352,12 @@ function normalizeThreadHistoryInput(
     raw.beforeIndex >= 0
       ? Math.floor(raw.beforeIndex)
       : undefined;
+  const afterIndex =
+    typeof raw.afterIndex === "number" &&
+    Number.isFinite(raw.afterIndex) &&
+    raw.afterIndex >= 0
+      ? Math.floor(raw.afterIndex)
+      : undefined;
   const userQueryLimit =
     typeof raw.userQueryLimit === "number" && Number.isFinite(raw.userQueryLimit)
       ? Math.max(
@@ -3070,6 +3371,7 @@ function normalizeThreadHistoryInput(
   return {
     threadId: raw.threadId,
     beforeIndex,
+    afterIndex,
     limit,
     userQueryLimit,
   };
@@ -3087,20 +3389,28 @@ function mapThreadTranscriptPageInfo(
     asFiniteNumber(stats.total_messages_in_thread) ??
     asFiniteNumber(stats.total_messages_in_session) ??
     0;
+  const committedMessages = asFiniteNumber(stats.committed_message_count);
+  const overlayMessages = asFiniteNumber(stats.overlay_message_count);
   const returnedMessages = asFiniteNumber(stats.returned_messages) ?? 0;
   const returnedUserQueries = asFiniteNumber(stats.returned_user_queries);
   const startIndex = asFiniteNumber(stats.returned_start_index) ?? 0;
   const endIndex = asFiniteNumber(stats.returned_end_index) ?? startIndex;
   const nextBeforeIndex = asFiniteNumber(stats.next_before_index);
+  const nextAfterIndex = asFiniteNumber(stats.next_after_index);
   const userQueryLimit = asFiniteNumber(stats.user_query_limit);
   return {
     totalMessages,
+    committedMessages: committedMessages ?? null,
+    overlayMessages: overlayMessages ?? null,
     returnedMessages,
     returnedUserQueries: returnedUserQueries ?? null,
     startIndex,
     endIndex,
     hasMoreBefore: Boolean(stats.has_more_before),
     nextBeforeIndex: nextBeforeIndex ?? null,
+    hasMoreAfter: Boolean(stats.has_more_after),
+    nextAfterIndex: nextAfterIndex ?? null,
+    reset: Boolean(stats.reset),
     limit,
     userQueryLimit: userQueryLimit ?? null,
   };
@@ -3110,7 +3420,7 @@ export async function fetchThreadHistory(
   settings: DesktopSettings,
   input: string | GetThreadHistoryInput,
 ): Promise<ThreadTranscript> {
-  const { threadId, beforeIndex, limit, userQueryLimit } =
+  const { threadId, beforeIndex, afterIndex, limit, userQueryLimit } =
     normalizeThreadHistoryInput(input);
   const query = new URLSearchParams({
     thread_id: threadId,
@@ -3118,7 +3428,9 @@ export async function fetchThreadHistory(
     user_query_limit: String(userQueryLimit),
     include_tool_messages: "true",
   });
-  if (beforeIndex !== undefined) {
+  if (afterIndex !== undefined) {
+    query.set("after_index", String(afterIndex));
+  } else if (beforeIndex !== undefined) {
     query.set("before_index", String(beforeIndex));
   }
   const [payload, detail] = await Promise.all([
@@ -3129,7 +3441,7 @@ export async function fetchThreadHistory(
         signal: AbortSignal.timeout(8000),
       },
     ),
-    beforeIndex === undefined
+    beforeIndex === undefined && afterIndex === undefined
       ? requestJson<ThreadMetadataPayload>(
           settings,
           `/api/threads/${encodeURIComponent(threadId)}`,

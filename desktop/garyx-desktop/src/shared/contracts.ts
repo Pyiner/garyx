@@ -1250,6 +1250,14 @@ export type DesktopChatStreamEvent =
       sessionId?: string;
     }
   | {
+      type: "committed_message";
+      runId: string;
+      threadId: string;
+      sessionId?: string;
+      seq: number;
+      message: TranscriptMessage;
+    }
+  | {
       type: "error";
       runId: string;
       threadId: string;
@@ -1320,12 +1328,17 @@ export interface ThreadTranscript {
 
 export interface ThreadTranscriptPageInfo {
   totalMessages: number;
+  committedMessages?: number | null;
+  overlayMessages?: number | null;
   returnedMessages: number;
   returnedUserQueries?: number | null;
   startIndex: number;
   endIndex: number;
   hasMoreBefore: boolean;
   nextBeforeIndex?: number | null;
+  hasMoreAfter?: boolean;
+  nextAfterIndex?: number | null;
+  reset?: boolean;
   limit: number;
   userQueryLimit?: number | null;
 }
@@ -1333,8 +1346,18 @@ export interface ThreadTranscriptPageInfo {
 export interface GetThreadHistoryInput {
   threadId: string;
   beforeIndex?: number | null;
+  afterIndex?: number | null;
   limit?: number | null;
   userQueryLimit?: number | null;
+}
+
+export interface StartThreadStreamInput {
+  threadId: string;
+  afterSeq?: number | null;
+}
+
+export interface StopThreadStreamInput {
+  threadId?: string | null;
 }
 
 export interface PendingThreadInput {
@@ -2019,6 +2042,11 @@ export interface GaryxDesktopApi {
   getThreadHistory: (
     input: string | GetThreadHistoryInput,
   ) => Promise<ThreadTranscript>;
+  loadThreadTranscriptCache: (threadId: string) => Promise<ThreadTranscript | null>;
+  saveThreadTranscriptCache: (transcript: ThreadTranscript) => Promise<void>;
+  clearThreadTranscriptCache: (threadId: string) => Promise<void>;
+  startThreadStream: (input: StartThreadStreamInput) => Promise<void>;
+  stopThreadStream: (input?: StopThreadStreamInput) => Promise<void>;
   getThreadLogs: (threadId: string, cursor?: number) => Promise<ThreadLogChunk>;
   openChatStream: (input: SendMessageInput) => Promise<OpenChatStreamResult>;
   sendStreamingInput: (

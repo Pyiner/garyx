@@ -2,8 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  ThreadStreamGapError,
   mapGatewayEventPayload,
   streamGatewayEvents,
+  streamThreadEvents,
 } from "./gary-client.ts";
 
 test("maps gateway SSE tool events into desktop chat stream events", () => {
@@ -124,6 +126,145 @@ test("maps camelCase websocket-shaped gateway stream payloads", () => {
   assert.equal(events[0].runId, "run-3");
   assert.equal(events[0].message.toolUseId, "toolu-3");
   assert.equal(events[0].message.toolName, "search");
+});
+
+test("maps committed_message payloads into desktop transcript stream events", () => {
+  const [event] = mapGatewayEventPayload(
+    JSON.stringify({
+      type: "committed_message",
+      thread_id: "thread::committed",
+      run_id: "run-committed",
+      seq: 7,
+      message: {
+        role: "system",
+        kind: "control",
+        internal: true,
+        internal_kind: "control",
+        control: {
+          kind: "run_start",
+          run_id: "run-committed",
+        },
+      },
+    }),
+  );
+
+  assert.equal(event.type, "committed_message");
+  assert.equal(event.threadId, "thread::committed");
+  assert.equal(event.runId, "run-committed");
+  assert.equal(event.seq, 7);
+  assert.equal(event.message.id, "thread::committed:6");
+  assert.equal(event.message.kind, "control");
+  assert.equal(event.message.text, "");
+  assert.equal(event.message.content.control.kind, "run_start");
+});
+
+test("streamThreadEvents connects to per-thread stream with resume cursor", async () => {
+  const urls = [];
+  const lastEventIds = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    urls.push(String(url));
+    lastEventIds.push(init.headers.get("Last-Event-ID"));
+    const payload = JSON.stringify({
+      type: "committed_message",
+      thread_id: "thread::per-thread",
+      run_id: "run-per-thread",
+      seq: 5,
+      message: {
+        role: "assistant",
+        content: "hello",
+        text: "hello",
+        timestamp: "2026-06-18T12:00:00Z",
+      },
+    });
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(`id: 5\ndata: ${payload}\n\n`));
+          controller.close();
+        },
+      }),
+      { status: 200, statusText: "OK" },
+    );
+  };
+
+  try {
+    const events = [];
+    await streamThreadEvents(
+      {
+        gatewayUrl: "http://127.0.0.1:31337",
+        gatewayAuthToken: "",
+      },
+      "thread::per-thread",
+      (event) => events.push(event),
+      undefined,
+      { afterSeq: 4 },
+    );
+
+    assert.equal(
+      urls[0],
+      "http://127.0.0.1:31337/api/threads/thread%3A%3Aper-thread/stream?after_seq=4",
+    );
+    assert.equal(lastEventIds[0], "4");
+    assert.equal(events.length, 1);
+    assert.equal(events[0].type, "committed_message");
+    assert.equal(events[0].seq, 5);
+    assert.equal(events[0].message.id, "thread::per-thread:4");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("streamThreadEvents rejects first replay gap relative to requested cursor", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    const payload = JSON.stringify({
+      type: "committed_message",
+      thread_id: "thread::per-thread-gap",
+      run_id: "run-per-thread-gap",
+      seq: 7,
+      message: {
+        role: "assistant",
+        content: "gap",
+        text: "gap",
+        timestamp: "2026-06-18T12:00:00Z",
+      },
+    });
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(`id: 7\ndata: ${payload}\n\n`));
+          controller.close();
+        },
+      }),
+      { status: 200, statusText: "OK" },
+    );
+  };
+
+  try {
+    const events = [];
+    await assert.rejects(
+      () =>
+        streamThreadEvents(
+          {
+            gatewayUrl: "http://127.0.0.1:31337",
+            gatewayAuthToken: "",
+          },
+          "thread::per-thread-gap",
+          (event) => events.push(event),
+          undefined,
+          { afterSeq: 4 },
+        ),
+      (error) => {
+        assert.equal(error instanceof ThreadStreamGapError, true);
+        assert.equal(error.resumeAfterSeq, 4);
+        return true;
+      },
+    );
+    assert.equal(events.length, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("streamGatewayEvents replays unseen history without duplicating seen live events", async () => {

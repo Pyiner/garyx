@@ -1301,6 +1301,8 @@ pub(crate) async fn thread_history_for_key(
         "message_stats": {
             "total_messages_in_thread": total_messages,
             "total_messages_in_session": total_messages,
+            "committed_message_count": snapshot.total_committed_messages,
+            "overlay_message_count": snapshot.total_overlay_messages,
             "returned_messages": returned_messages,
             "returned_user_queries": returned_user_queries,
             "returned_start_index": page_start_index,

@@ -18,6 +18,9 @@ operating principles here; detailed rules live in the referenced files under
   committer metadata. Do not override local Git identity.
 - When you create review tasks for your own work, notify `current-thread` so
   review results return to the task thread instead of a personal bot channel.
+- Self-review is not enough for adversarial review gates. Assign review tasks to
+  a different model family than the implementer, for example `--assignee claude`
+  for Codex-authored changes.
 
 ## Public Repository Hygiene
 

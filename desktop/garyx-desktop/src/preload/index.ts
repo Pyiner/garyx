@@ -291,6 +291,16 @@ const api: GaryxDesktopApi = {
     ipcRenderer.invoke("garyx:set-thread-pinned", input),
   getThreadHistory: (input) =>
     ipcRenderer.invoke("garyx:get-thread-history", input),
+  loadThreadTranscriptCache: (threadId) =>
+    ipcRenderer.invoke("garyx:load-thread-transcript-cache", threadId),
+  saveThreadTranscriptCache: (transcript) =>
+    ipcRenderer.invoke("garyx:save-thread-transcript-cache", transcript),
+  clearThreadTranscriptCache: (threadId) =>
+    ipcRenderer.invoke("garyx:clear-thread-transcript-cache", threadId),
+  startThreadStream: (input) =>
+    ipcRenderer.invoke("garyx:start-thread-stream", input),
+  stopThreadStream: (input) =>
+    ipcRenderer.invoke("garyx:stop-thread-stream", input),
   getThreadLogs: (threadId, cursor) =>
     ipcRenderer.invoke("garyx:get-thread-logs", { threadId, cursor }),
   openChatStream: (input) => ipcRenderer.invoke("garyx:open-chat-stream", input),

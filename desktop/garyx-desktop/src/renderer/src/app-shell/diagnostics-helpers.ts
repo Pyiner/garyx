@@ -155,6 +155,8 @@ function summarizeClientStreamEvent(event: DesktopChatStreamEvent): string {
       return truncateClientLogText(compactClientLogText(event.error), 220);
     case 'thread_title_updated':
       return truncateClientLogText(compactClientLogText(event.title), 120);
+    case 'committed_message':
+      return `seq=${event.seq} · ${event.message.kind || event.message.role}`;
     case 'accepted':
     case 'assistant_boundary':
     case 'done':

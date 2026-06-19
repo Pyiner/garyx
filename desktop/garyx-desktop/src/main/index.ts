@@ -80,6 +80,9 @@ import type {
   SelectAutomationInput,
   SelectWorkspaceInput,
   SendMessageInput,
+  StartThreadStreamInput,
+  StopThreadStreamInput,
+  ThreadTranscript,
   DeleteSlashCommandInput,
   StopTaskInput,
   StartWorkflowThreadInput,
@@ -103,6 +106,7 @@ import type {
   CopyTextToClipboardInput,
   UnassignTaskInput,
 } from "@shared/contracts";
+import { shouldForwardGlobalStreamEvent } from "@shared/transcript-sync";
 
 import {
   createCustomAgent,
@@ -158,6 +162,8 @@ import {
   saveSkillFile,
   sendStreamingInput,
   streamGatewayEvents,
+  streamThreadEvents,
+  ThreadStreamGapError,
   scanDreams,
   stopTask,
   toggleMcpServer,
@@ -175,6 +181,11 @@ import {
   updateTaskTitle,
   updateRemoteThread,
 } from "./gary-client";
+import {
+  clearThreadTranscriptCache,
+  loadThreadTranscriptCache,
+  saveThreadTranscriptCache,
+} from "./transcript-cache";
 import {
   addChannelAccount,
   pollFeishuChannelAuth,
@@ -254,10 +265,26 @@ let isQuitting = false;
 const deepLinkSubscribers = new Set<Electron.WebContents>();
 const pendingDeepLinks: DesktopDeepLinkEvent[] = [];
 let gatewayEventStreamAbortController: AbortController | null = null;
+let selectedThreadStreamAbortController: AbortController | null = null;
+let selectedThreadStreamThreadId: string | null = null;
 
 function stopGatewayEventForwarder(): void {
   gatewayEventStreamAbortController?.abort();
   gatewayEventStreamAbortController = null;
+}
+
+function stopSelectedThreadEventForwarder(threadId?: string | null): void {
+  const normalizedThreadId = threadId?.trim() || null;
+  if (
+    normalizedThreadId &&
+    selectedThreadStreamThreadId &&
+    selectedThreadStreamThreadId !== normalizedThreadId
+  ) {
+    return;
+  }
+  selectedThreadStreamAbortController?.abort();
+  selectedThreadStreamAbortController = null;
+  selectedThreadStreamThreadId = null;
 }
 
 function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
@@ -278,6 +305,17 @@ function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+function shouldForwardGlobalChatStreamEvent(payload: {
+  type: string;
+  threadId?: string;
+}): boolean {
+  return shouldForwardGlobalStreamEvent({
+    eventType: payload.type,
+    selectedThreadId: selectedThreadStreamThreadId,
+    eventThreadId: payload.threadId,
+  });
+}
+
 function startGatewayEventForwarder(window: BrowserWindow): void {
   stopGatewayEventForwarder();
   const controller = new AbortController();
@@ -291,6 +329,9 @@ function startGatewayEventForwarder(window: BrowserWindow): void {
         await streamGatewayEvents(
           settings,
           (payload) => {
+            if (!shouldForwardGlobalChatStreamEvent(payload)) {
+              return;
+            }
             if (!window.isDestroyed()) {
               window.webContents.send("garyx:chat-stream", payload);
             }
@@ -311,6 +352,67 @@ function startGatewayEventForwarder(window: BrowserWindow): void {
       }
       await sleepWithAbort(retryDelayMs, controller.signal);
       retryDelayMs = Math.min(retryDelayMs * 2, 10_000);
+    }
+  })();
+}
+
+function startSelectedThreadEventForwarder(input: StartThreadStreamInput): void {
+  const threadId = input.threadId.trim();
+  if (!threadId || !mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+  stopSelectedThreadEventForwarder();
+  selectedThreadStreamThreadId = threadId;
+  const controller = new AbortController();
+  selectedThreadStreamAbortController = controller;
+  const window = mainWindow;
+  void (async () => {
+    try {
+      let retryDelayMs = 500;
+      let resumeAfterSeq = Math.max(0, Math.trunc(input.afterSeq ?? 0));
+      while (!controller.signal.aborted && !window.isDestroyed()) {
+        try {
+          const settings = await resolveSettings();
+          await streamThreadEvents(
+            settings,
+            threadId,
+            (payload) => {
+              if (!window.isDestroyed()) {
+                window.webContents.send("garyx:chat-stream", payload);
+              }
+            },
+            controller.signal,
+            {
+              afterSeq: resumeAfterSeq,
+              onCommittedSeq: (seq) => {
+                resumeAfterSeq = seq;
+              },
+            },
+          );
+          retryDelayMs = 500;
+        } catch (error) {
+          if (controller.signal.aborted || window.isDestroyed()) {
+            break;
+          }
+          if (error instanceof ThreadStreamGapError) {
+            window.webContents.send("garyx:chat-stream", {
+              type: "error",
+              runId: "thread-stream-gap",
+              threadId,
+              sessionId: threadId,
+              error: `Thread stream seq gap after ${error.resumeAfterSeq}; authoritative refetch required`,
+            });
+            break;
+          }
+        }
+        await sleepWithAbort(retryDelayMs, controller.signal);
+        retryDelayMs = Math.min(Math.max(retryDelayMs * 2, 500), 10_000);
+      }
+    } finally {
+      if (selectedThreadStreamAbortController === controller) {
+        selectedThreadStreamAbortController = null;
+        selectedThreadStreamThreadId = null;
+      }
     }
   })();
 }
@@ -1268,6 +1370,36 @@ function registerIpcHandlers(): void {
     async (_event, input: string | GetThreadHistoryInput) => {
       const settings = await resolveSettings();
       return fetchThreadHistory(settings, input);
+    },
+  );
+  ipcMain.handle(
+    "garyx:load-thread-transcript-cache",
+    async (_event, threadId: string) => {
+      return loadThreadTranscriptCache(threadId || "");
+    },
+  );
+  ipcMain.handle(
+    "garyx:save-thread-transcript-cache",
+    async (_event, transcript: ThreadTranscript) => {
+      await saveThreadTranscriptCache(transcript);
+    },
+  );
+  ipcMain.handle(
+    "garyx:clear-thread-transcript-cache",
+    async (_event, threadId: string) => {
+      await clearThreadTranscriptCache(threadId || "");
+    },
+  );
+  ipcMain.handle(
+    "garyx:start-thread-stream",
+    async (_event, input: StartThreadStreamInput) => {
+      startSelectedThreadEventForwarder(input);
+    },
+  );
+  ipcMain.handle(
+    "garyx:stop-thread-stream",
+    async (_event, input?: StopThreadStreamInput) => {
+      stopSelectedThreadEventForwarder(input?.threadId);
     },
   );
   ipcMain.handle(

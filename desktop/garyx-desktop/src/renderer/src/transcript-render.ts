@@ -1,4 +1,5 @@
 import type { TranscriptMessage } from '@shared/contracts';
+import { isControlTranscriptMessage } from '../../shared/transcript-sync.ts';
 
 import {
   canMergeToolTraceMessages,
@@ -125,6 +126,9 @@ export function buildRenderableTranscript(messages: TranscriptMessage[]): Render
   const pendingToolUses = new Map<string, number>();
 
   for (const message of messages) {
+    if (isControlTranscriptMessage(message)) {
+      continue;
+    }
     if (!isToolRole(message.role)) {
       pendingToolUses.clear();
       rendered.push({

@@ -60,6 +60,22 @@ import {
   type UpsertSlashCommandInput,
 } from "@shared/contracts";
 import { desktopStateWithoutThread } from "@shared/desktop-state";
+import {
+  decideTranscriptFetchPageAction,
+  isControlTranscriptMessage,
+  isThreadStreamGapError,
+  mergeForwardTranscriptPage,
+  reduceTranscriptRunState,
+  shouldRefetchAuthoritativeAfterForwardPageLimit,
+  shouldRestartSelectedThreadStreamAfterRefetch,
+  streamResumeCursor,
+  transcriptCommittedAfterCursor,
+  transcriptControlKind,
+  transcriptForCommittedCache,
+  transcriptRewriteAction,
+  transcriptWithResolvedActiveRun,
+  type TranscriptRunState,
+} from "@shared/transcript-sync";
 
 import {
   buildIntent,
@@ -250,6 +266,7 @@ const MESSAGES_TOP_PAGINATION_PREFETCH_MIN_PX = 640;
 const MESSAGES_TOP_PAGINATION_PREFETCH_VIEWPORTS = 1.5;
 const THREAD_HISTORY_PAGE_SIZE = 100;
 const THREAD_HISTORY_USER_QUERY_LIMIT = 10;
+const THREAD_HISTORY_FORWARD_PAGE_LIMIT = 50;
 const USER_TURN_PREFETCH_THRESHOLD = 3;
 const HIDDEN_TOOL_USE_STATUS_TEXT = "Garyx is thinking through the next step…";
 const HIDDEN_TOOL_RESULT_STATUS_TEXT = "Garyx finished a reasoning step…";
@@ -548,9 +565,15 @@ function earliestRemoteHistoryIndex(messages: UiTranscriptMessage[]): number | n
 function transcriptHasAutomationResponse(
   messages: TranscriptMessage[],
 ): boolean {
-  return messages.some(
+  return visibleTranscriptMessages(messages).some(
     (message) => message.role === "assistant" || isToolRole(message.role),
   );
+}
+
+function visibleTranscriptMessages(
+  messages: TranscriptMessage[],
+): TranscriptMessage[] {
+  return messages.filter((message) => !isControlTranscriptMessage(message));
 }
 
 function formatThreadTimestamp(value?: string | null): string {
@@ -1378,6 +1401,9 @@ function materializeRemoteTranscript(
 
   const materializedRemote: UiTranscriptMessage[] = [];
   for (const message of transcript) {
+    if (isControlTranscriptMessage(message)) {
+      continue;
+    }
     if (isRunLoadingPlaceholderMessage(message)) {
       continue;
     }
@@ -1907,6 +1933,7 @@ export function AppShell() {
   const sideChatThreadLayoutRef = useRef<HTMLDivElement | null>(null);
   const conversationRef = useRef<HTMLElement | null>(null);
   const selectedThreadIdRef = useRef<string | null>(null);
+  const selectedThreadGenerationRef = useRef(0);
   const newThreadDraftActiveRef = useRef(false);
   const pendingWorkspacePathRef = useRef<string | null>(null);
   const pendingWorkspaceModeRef = useRef<DesktopWorkspaceMode>("local");
@@ -1930,6 +1957,9 @@ export function AppShell() {
   >({});
   const assistantDeltaFlushFrameRef = useRef<number | null>(null);
   const messagesByThreadRef = useRef<MessageMap>({});
+  const transcriptSnapshotByThreadRef = useRef<Record<string, ThreadTranscript>>(
+    {},
+  );
   const historyPaginationByThreadRef = useRef<
     Record<string, ThreadHistoryPaginationState>
   >({});
@@ -4500,6 +4530,7 @@ export function AppShell() {
 
   useEffect(() => {
     selectedThreadIdRef.current = selectedThreadId;
+    selectedThreadGenerationRef.current += 1;
   }, [selectedThreadId]);
 
   useEffect(() => {
@@ -5106,93 +5137,27 @@ export function AppShell() {
   }, [canEditThreadTitle, editingThreadTitle]);
 
   useEffect(() => {
+    if (!editingThreadTitle) {
+      setTitleDraft(activeThread?.title || DEFAULT_SESSION_TITLE);
+    }
+  }, [editingThreadTitle, activeThread?.title]);
+
+  useEffect(() => {
     if (!selectedThreadId || !desktopState) {
       return;
     }
 
-    if (!editingThreadTitle) {
-      setTitleDraft(activeThread?.title || DEFAULT_SESSION_TITLE);
-    }
-
-    void loadThreadHistory({
-      api: getDesktopApi(),
-      threadId: selectedThreadId,
-      onBeforeLoad: (threadId) => {
-        const hasRenderedThread =
-          lastRenderedMessageThreadRef.current === threadId;
-        const hasCachedMessages =
-          (messagesByThreadRef.current[threadId] || []).length > 0;
-        requestSelectedThreadMessagesBottomSnap(
-          threadId,
-          !hasRenderedThread || !hasCachedMessages,
-        );
-      },
-      onTranscript: applyRemoteTranscript,
-      onAutomationResponseDetected: (threadId) => {
-        setPendingAutomationRun(threadId, null);
-      },
-      hasAutomationResponse: transcriptHasAutomationResponse,
-      setHistoryLoading,
-      setError,
-    });
-  }, [desktopState, editingThreadTitle, selectedThreadId, activeThread?.title]);
-
-  useEffect(() => {
-    if (contentView !== "thread" || !selectedThreadId) {
-      return;
-    }
-
     let cancelled = false;
-    let polling = false;
-
-    const pollSelectedThreadHistory = async () => {
-      if (cancelled || document.hidden || polling) {
-        return;
-      }
-
-      const liveStream = liveStreamStateRef.current[selectedThreadId] || null;
-      if (
-        liveStream &&
-        ["connecting", "streaming", "reconciling"].includes(
-          liveStream.streamStatus,
-        )
-      ) {
-        return;
-      }
-
-      polling = true;
-      try {
-        const transcript =
-          await window.garyxDesktop.getThreadHistory(selectedThreadId);
-        const nextSignature = threadActivitySignature(
-          transcript.messages,
-          transcript.pendingInputs,
-          transcript.threadInfo,
-        );
-        if (
-          nextSignature ===
-          remoteTranscriptSignatureByThreadRef.current[selectedThreadId]
-        ) {
-          return;
-        }
-        requestSelectedThreadMessagesBottomSnap(selectedThreadId, true);
-        applyRemoteTranscript(selectedThreadId, transcript);
-      } catch {
-        // Best-effort reconcile loop for passive inbound messages.
-      } finally {
-        polling = false;
-      }
-    };
-
-    const timer = window.setInterval(() => {
-      void pollSelectedThreadHistory();
-    }, 1500);
+    void loadSelectedThreadTranscriptFromSingleSource(
+      selectedThreadId,
+      () => cancelled,
+    );
 
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      void window.garyxDesktop.stopThreadStream({ threadId: selectedThreadId });
     };
-  }, [contentView, selectedThreadId]);
+  }, [Boolean(desktopState), selectedThreadId]);
 
   // Load the side thread transcript once per side thread (after state
   // hydration). Depending on `desktopState` identity here is unsafe: applying
@@ -5251,7 +5216,7 @@ export function AppShell() {
         const transcript =
           await window.garyxDesktop.getThreadHistory(sideChatThreadId);
         const nextSignature = threadActivitySignature(
-          transcript.messages,
+          visibleTranscriptMessages(transcript.messages),
           transcript.pendingInputs,
           transcript.threadInfo,
         );
@@ -5715,6 +5680,60 @@ export function AppShell() {
       remoteRunId: options?.remoteRunId,
       error: options?.error,
     });
+  }
+
+  function syncTranscriptRunState(
+    threadId: string,
+    transcript: ThreadTranscript,
+  ): TranscriptRunState {
+    const state = reduceTranscriptRunState(transcript.messages);
+    if (state.title) {
+      applyThreadTitleUpdate(threadId, state.title);
+    }
+    const remoteRunId = state.activeRunId || undefined;
+    if (state.busy) {
+      const runtimeState: ThreadRuntimeState =
+        state.activity === "reconciling"
+          ? "reconciling_history"
+          : "running_remote";
+      updateLiveStreamState(threadId, (current) => ({
+        threadId,
+        runId: remoteRunId || current?.runId,
+        activeIntentId: current?.activeIntentId,
+        assistantEntryId: current?.assistantEntryId ?? null,
+        pendingAckIntentIds: current?.pendingAckIntentIds || [],
+        streamStatus:
+          state.activity === "reconciling" ? "reconciling" : "streaming",
+      }));
+      setThreadRuntimeState(threadId, runtimeState, {
+        activeIntentId: getLiveStreamState(threadId)?.activeIntentId,
+        remoteRunId,
+      });
+      return state;
+    }
+    if (state.terminalStatus) {
+      updateLiveStreamState(threadId, (current) =>
+        current
+          ? {
+              ...current,
+              runId: current.runId || remoteRunId,
+              assistantEntryId: null,
+              streamStatus:
+                state.terminalStatus === "interrupted"
+                  ? "interrupted"
+                  : "reconciling",
+            }
+          : null,
+      );
+      if (!hasPendingHistoryIntents(threadId)) {
+        dispatchMessageState({
+          type: "thread/clear",
+          threadId,
+        });
+        clearLiveStreamState(threadId);
+      }
+    }
+    return state;
   }
 
   function updateLiveStreamState(
@@ -6499,36 +6518,57 @@ export function AppShell() {
     });
   }
 
+  function rememberTranscriptSnapshot(
+    threadId: string,
+    transcript: ThreadTranscript,
+    persist = true,
+  ) {
+    transcriptSnapshotByThreadRef.current = {
+      ...transcriptSnapshotByThreadRef.current,
+      [threadId]: transcript,
+    };
+    syncTranscriptRunState(threadId, transcript);
+    if (persist) {
+      const cacheTranscript = transcriptForCommittedCache(transcript);
+      if (cacheTranscript.messages.length > 0 || !transcript.threadInfo?.activeRun) {
+        void window.garyxDesktop.saveThreadTranscriptCache(cacheTranscript);
+      }
+    }
+  }
+
   function applyCanonicalTranscript(
     threadId: string,
     transcript: ThreadTranscript,
   ) {
+    const resolvedTranscript = transcriptWithResolvedActiveRun(transcript);
+    rememberTranscriptSnapshot(threadId, resolvedTranscript);
     setThreadInfoByThread((current) => ({
       ...current,
-      [threadId]: transcript.threadInfo ?? null,
+      [threadId]: resolvedTranscript.threadInfo ?? null,
     }));
+    const visibleMessages = visibleTranscriptMessages(resolvedTranscript.messages);
     remoteTranscriptSignatureByThreadRef.current = {
       ...remoteTranscriptSignatureByThreadRef.current,
       [threadId]: threadActivitySignature(
-        transcript.messages,
-        transcript.pendingInputs,
-        transcript.threadInfo,
+        visibleMessages,
+        resolvedTranscript.pendingInputs,
+        resolvedTranscript.threadInfo,
       ),
     };
-    setRemotePendingInputs(threadId, transcript.pendingInputs);
+    setRemotePendingInputs(threadId, resolvedTranscript.pendingInputs);
     startTransition(() => {
       updateMessagesByThread((current) => {
         const existing = current[threadId] || [];
         return {
           ...current,
           [threadId]: materializeRemoteTranscript(
-            transcript.messages,
+            visibleMessages,
             existing,
           ),
         };
       });
     });
-    markIntentsFromHistory(threadId, transcript.messages);
+    markIntentsFromHistory(threadId, visibleMessages);
   }
 
   function materializeAckedUserMessage(threadId: string, intentId: string) {
@@ -6592,6 +6632,11 @@ export function AppShell() {
 
   function handleChatStreamEvent(event: DesktopChatStreamEvent) {
     const threadId = event.threadId;
+    if (event.type === "committed_message") {
+      flushPendingAssistantDelta(threadId);
+      applyCommittedThreadMessage(event);
+      return;
+    }
     let currentStream = getLiveStreamState(threadId);
     if (event.type !== "assistant_delta") {
       currentStream = flushPendingAssistantDelta(threadId);
@@ -6811,61 +6856,7 @@ export function AppShell() {
         });
         break;
       case "user_ack": {
-        let nextIntentId: string | undefined;
-        const acknowledgedPendingInputId = event.pendingInputId?.trim() || "";
-        updateLiveStreamState(threadId, (current) => {
-          const pendingAckIntentIds = [...(current?.pendingAckIntentIds || [])];
-          const matchedIndex = findPendingAckIntentIndex(
-            pendingAckIntentIds,
-            acknowledgedPendingInputId,
-            messageStateRef.current.intentsById,
-          );
-          if (matchedIndex >= 0) {
-            nextIntentId = pendingAckIntentIds[matchedIndex];
-            pendingAckIntentIds.splice(matchedIndex, 1);
-          } else {
-            nextIntentId = undefined;
-          }
-          const nextPendingAckIntentIds = nextIntentId
-            ? pendingAckIntentIds.filter((intentId) => intentId !== nextIntentId)
-            : pendingAckIntentIds;
-          return current
-            ? {
-                ...current,
-                runId: event.runId,
-                activeIntentId: nextIntentId || current.activeIntentId,
-                assistantEntryId: null,
-                pendingAckIntentIds: nextPendingAckIntentIds,
-                streamStatus: "streaming",
-              }
-            : null;
-        });
-        if (nextIntentId) {
-          materializeAckedUserMessage(threadId, nextIntentId);
-          const acknowledgedIntent = intentForId(nextIntentId);
-          dispatchMessageState({
-            type: "intent/awaiting-history",
-            intentId: nextIntentId,
-            responseText: acknowledgedIntent?.responseText,
-          });
-          // Queued follow-ups can surface in the thread snapshot before the transcript catches up.
-          scheduleHistoryRefresh(threadId, 8, 250, false);
-          requestSelectedThreadMessagesBottomSnap(threadId, true);
-          setThreadRuntimeState(threadId, "running_remote", {
-            activeIntentId: nextIntentId,
-            remoteRunId: event.runId,
-          });
-        } else {
-          const pendingInput = consumeRemotePendingInput(
-            threadId,
-            acknowledgedPendingInputId,
-          );
-          if (pendingInput) {
-            materializeAckedRemotePendingInput(threadId, pendingInput);
-            requestSelectedThreadMessagesBottomSnap(threadId, true);
-          }
-          scheduleHistoryRefresh(threadId, 4, 250, false);
-        }
+        applyUserAck(threadId, event.runId, event.pendingInputId);
         break;
       }
       case "thread_title_updated":
@@ -6896,6 +6887,30 @@ export function AppShell() {
         scheduleHistoryRefresh(threadId, 8, 250, true);
         break;
       case "error":
+        if (isThreadStreamGapError(event)) {
+          if (activeIntentId) {
+            dispatchMessageState({
+              type: "intent/awaiting-history",
+              intentId: activeIntentId,
+            });
+          }
+          updateLiveStreamState(threadId, (current) =>
+            current
+              ? {
+                  ...current,
+                  runId: event.runId,
+                  assistantEntryId: null,
+                  streamStatus: "reconciling",
+                }
+              : null,
+          );
+          setThreadRuntimeState(threadId, "reconciling_history", {
+            activeIntentId: activeIntentId || undefined,
+            remoteRunId: event.runId,
+          });
+          void refetchAuthoritativeTranscriptAfterRewrite(threadId);
+          break;
+        }
         const recoveryResult = activeIntentId
           ? reconcileAssistantEntriesForGatewayRecovery(
               messagesByThreadRef.current[threadId] || [],
@@ -6988,6 +7003,7 @@ export function AppShell() {
     threadId: string,
     transcript: TranscriptMessage[],
   ) {
+    const visibleTranscript = visibleTranscriptMessages(transcript);
     const intents = Object.values(messageStateRef.current.intentsById).filter(
       (intent) => {
         return (
@@ -7004,7 +7020,7 @@ export function AppShell() {
     );
 
     for (const intent of intents) {
-      const match = resolveIntentHistoryMatch(intent, transcript);
+      const match = resolveIntentHistoryMatch(intent, visibleTranscript);
       if (!match.userVisible) {
         continue;
       }
@@ -7109,12 +7125,13 @@ export function AppShell() {
       threadRunActive?: boolean;
     },
   ): UiTranscriptMessage[] {
-    if (transcript.length === 0) {
+    const visibleTranscript = visibleTranscriptMessages(transcript);
+    if (visibleTranscript.length === 0) {
       return existing.length > 0 ? existing : [];
     }
 
     const materializedRemote = materializeRemoteTranscript(
-      transcript,
+      visibleTranscript,
       existing,
       {
         ignoreTimestampForStableMessages: options?.activeRunSnapshot,
@@ -7161,7 +7178,7 @@ export function AppShell() {
         );
       }
 
-      const match = resolveIntentHistoryMatch(intent, transcript);
+      const match = resolveIntentHistoryMatch(intent, visibleTranscript);
       if (entry.role === "user") {
         return !match.userVisible;
       }
@@ -7285,10 +7302,19 @@ export function AppShell() {
   function applyRemoteTranscript(
     threadId: string,
     transcript: ThreadTranscript,
+    options?: {
+      persist?: boolean;
+    },
   ) {
-    cacheOpenableTranscriptThread(threadId, transcript);
+    const resolvedTranscript = transcriptWithResolvedActiveRun(transcript);
+    rememberTranscriptSnapshot(
+      threadId,
+      resolvedTranscript,
+      options?.persist !== false,
+    );
+    cacheOpenableTranscriptThread(threadId, resolvedTranscript);
     updateThreadHistoryPagination(threadId, (current) => {
-      const incoming = paginationStateFromTranscript(transcript);
+      const incoming = paginationStateFromTranscript(resolvedTranscript);
       if (!current) {
         return incoming;
       }
@@ -7312,27 +7338,29 @@ export function AppShell() {
     });
     setThreadInfoByThread((current) => ({
       ...current,
-      [threadId]: transcript.threadInfo ?? null,
+      [threadId]: resolvedTranscript.threadInfo ?? null,
     }));
+    const visibleMessages = visibleTranscriptMessages(resolvedTranscript.messages);
     remoteTranscriptSignatureByThreadRef.current = {
       ...remoteTranscriptSignatureByThreadRef.current,
       [threadId]: threadActivitySignature(
-        transcript.messages,
-        transcript.pendingInputs,
-        transcript.threadInfo,
+        visibleMessages,
+        resolvedTranscript.pendingInputs,
+        resolvedTranscript.threadInfo,
       ),
     };
-    setRemotePendingInputs(threadId, transcript.pendingInputs);
+    setRemotePendingInputs(threadId, resolvedTranscript.pendingInputs);
     startTransition(() => {
       updateMessagesByThread((current) => {
         const existing = current[threadId] || [];
         const merged = mergeRemoteTranscriptWithLocal(
-          transcript.messages,
+          visibleMessages,
           existing,
           {
-            activeRunSnapshot: Boolean(transcript.threadInfo?.activeRun),
-            preserveRemoteBeforeIndex: transcript.pageInfo?.startIndex ?? null,
-            threadRunActive: Boolean(transcript.threadInfo?.activeRun),
+            activeRunSnapshot: Boolean(resolvedTranscript.threadInfo?.activeRun),
+            preserveRemoteBeforeIndex:
+              resolvedTranscript.pageInfo?.startIndex ?? null,
+            threadRunActive: Boolean(resolvedTranscript.threadInfo?.activeRun),
           },
         );
         if (
@@ -7355,12 +7383,12 @@ export function AppShell() {
     // stuck on the plain agent label. Only write when the block is present
     // and different from what's already cached — idempotent updates must
     // not churn React identity and re-trigger dependent effects.
-    if (transcript.team !== undefined) {
+    if (resolvedTranscript.team !== undefined) {
       setDesktopState((current) => {
         if (!current) {
           return current;
         }
-        const nextTeam = transcript.team ?? null;
+        const nextTeam = resolvedTranscript.team ?? null;
         let changed = false;
         const mapThreadTeam = (
           thread: (typeof current.threads)[number],
@@ -7383,7 +7411,7 @@ export function AppShell() {
         return { ...current, threads: nextThreads, sessions: nextSessions };
       });
     }
-    markIntentsFromHistory(threadId, transcript.messages);
+    markIntentsFromHistory(threadId, visibleMessages);
   }
 
   function applyOlderRemoteTranscriptPage(
@@ -7393,7 +7421,8 @@ export function AppShell() {
     updateThreadHistoryPagination(threadId, () =>
       paginationStateFromTranscript(transcript),
     );
-    if (transcript.messages.length === 0) {
+    const visibleMessages = visibleTranscriptMessages(transcript.messages);
+    if (visibleMessages.length === 0) {
       return;
     }
 
@@ -7401,7 +7430,7 @@ export function AppShell() {
       const existing = current[threadId] || [];
       const existingIds = new Set(existing.map((entry) => entry.id));
       const olderEntries = materializeRemoteTranscript(
-        transcript.messages,
+        visibleMessages,
         [],
       ).filter((entry) => !existingIds.has(entry.id));
       if (olderEntries.length === 0) {
@@ -8464,6 +8493,305 @@ export function AppShell() {
         ].includes(intent.state)
       );
     });
+  }
+
+  async function fetchSelectedThreadIncrementalTranscript(
+    threadId: string,
+    cached: ThreadTranscript | null,
+    isCancelled: () => boolean,
+  ): Promise<ThreadTranscript> {
+    let current = cached;
+    let cursor = transcriptCommittedAfterCursor(current);
+    if (!current || cursor === null) {
+      return window.garyxDesktop.getThreadHistory(threadId);
+    }
+
+    let pagesFetched = 0;
+    let latestHasMoreAfter = false;
+    for (
+      let pageCount = 0;
+      pageCount < THREAD_HISTORY_FORWARD_PAGE_LIMIT;
+      pageCount += 1
+    ) {
+      const page = await window.garyxDesktop.getThreadHistory({
+        threadId,
+        afterIndex: cursor,
+        limit: THREAD_HISTORY_PAGE_SIZE,
+        userQueryLimit: THREAD_HISTORY_USER_QUERY_LIMIT,
+      });
+      if (isCancelled()) {
+        return current;
+      }
+      pagesFetched = pageCount + 1;
+      const action = decideTranscriptFetchPageAction({
+        cursor,
+        reset: page.pageInfo?.reset,
+        hasMoreAfter: page.pageInfo?.hasMoreAfter,
+        totalMessagesInThread: page.pageInfo?.totalMessages,
+      });
+      if (action.type === "reset" || action.type === "shrink_refetch") {
+        await window.garyxDesktop.clearThreadTranscriptCache(threadId);
+        return window.garyxDesktop.getThreadHistory(threadId);
+      }
+
+      current = mergeForwardTranscriptPage(current, page);
+      latestHasMoreAfter = action.continuePaging;
+      if (!action.continuePaging) {
+        return current;
+      }
+      const nextCursor =
+        page.pageInfo?.nextAfterIndex ?? transcriptCommittedAfterCursor(current);
+      if (nextCursor === null || nextCursor <= cursor) {
+        return current;
+      }
+      cursor = nextCursor;
+    }
+    if (isCancelled()) {
+      return current;
+    }
+    if (
+      shouldRefetchAuthoritativeAfterForwardPageLimit({
+        pagesFetched,
+        maxPages: THREAD_HISTORY_FORWARD_PAGE_LIMIT,
+        hasMoreAfter: latestHasMoreAfter,
+      })
+    ) {
+      await window.garyxDesktop.clearThreadTranscriptCache(threadId);
+      return window.garyxDesktop.getThreadHistory(threadId);
+    }
+    return current;
+  }
+
+  async function loadSelectedThreadTranscriptFromSingleSource(
+    threadId: string,
+    isCancelled: () => boolean,
+  ) {
+    const hasRenderedThread = lastRenderedMessageThreadRef.current === threadId;
+    const hasCachedMessages =
+      (messagesByThreadRef.current[threadId] || []).length > 0;
+    requestSelectedThreadMessagesBottomSnap(
+      threadId,
+      !hasRenderedThread || !hasCachedMessages,
+    );
+
+    setHistoryLoading(true);
+    setError(null);
+    let latestTranscript =
+      transcriptSnapshotByThreadRef.current[threadId] || null;
+    let streamReady = false;
+    try {
+      const cached = await window.garyxDesktop.loadThreadTranscriptCache(threadId);
+      if (isCancelled()) {
+        return;
+      }
+      if (cached) {
+        latestTranscript = cached;
+        applyRemoteTranscript(threadId, cached, { persist: false });
+      }
+
+      latestTranscript = await fetchSelectedThreadIncrementalTranscript(
+        threadId,
+        latestTranscript,
+        isCancelled,
+      );
+      if (isCancelled()) {
+        return;
+      }
+      requestSelectedThreadMessagesBottomSnap(threadId, true);
+      applyRemoteTranscript(threadId, latestTranscript);
+      if (transcriptHasAutomationResponse(latestTranscript.messages)) {
+        setPendingAutomationRun(threadId, null);
+      }
+      streamReady = true;
+    } catch (historyError) {
+      if (!latestTranscript) {
+        setError(
+          historyError instanceof Error
+            ? historyError.message
+            : "Failed to load thread history",
+        );
+      } else {
+        setError(
+          historyError instanceof Error
+            ? `Failed to sync latest thread history: ${historyError.message}`
+            : "Failed to sync latest thread history",
+        );
+      }
+    } finally {
+      if (!isCancelled()) {
+        setHistoryLoading(false);
+        if (!streamReady || !latestTranscript) {
+          return;
+        }
+        const afterCursor = transcriptCommittedAfterCursor(latestTranscript);
+        await window.garyxDesktop.startThreadStream({
+          threadId,
+          afterSeq: streamResumeCursor({
+            afterCursor,
+            fallbackMaxIndex: null,
+          }),
+        });
+      }
+    }
+  }
+
+  async function refetchAuthoritativeTranscriptAfterRewrite(threadId: string) {
+    const startSelectionGeneration = selectedThreadGenerationRef.current;
+    try {
+      await window.garyxDesktop.clearThreadTranscriptCache(threadId);
+      const transcript = await window.garyxDesktop.getThreadHistory(threadId);
+      if (selectedThreadIdRef.current === threadId) {
+        requestSelectedThreadMessagesBottomSnap(threadId, true);
+      }
+      applyRemoteTranscript(threadId, transcript);
+      if (
+        !shouldRestartSelectedThreadStreamAfterRefetch({
+          threadId,
+          selectedThreadId: selectedThreadIdRef.current,
+          startSelectionGeneration,
+          currentSelectionGeneration: selectedThreadGenerationRef.current,
+        })
+      ) {
+        return;
+      }
+      await window.garyxDesktop.startThreadStream({
+        threadId,
+        afterSeq: streamResumeCursor({
+          afterCursor: transcriptCommittedAfterCursor(transcript),
+          fallbackMaxIndex: null,
+        }),
+      });
+    } catch {
+      scheduleHistoryRefresh(threadId, 3, 500, true);
+    }
+  }
+
+  function applyCommittedThreadMessage(
+    event: Extract<DesktopChatStreamEvent, { type: "committed_message" }>,
+  ) {
+    const threadId = event.threadId;
+    if (transcriptRewriteAction(event.message) === "refetch_authoritative") {
+      void refetchAuthoritativeTranscriptAfterRewrite(threadId);
+      return;
+    }
+    const base =
+      transcriptSnapshotByThreadRef.current[threadId] || {
+        threadId,
+        remoteFound: true,
+        messages: [],
+        pendingInputs: [],
+        pageInfo: null,
+      };
+    const merged = mergeForwardTranscriptPage(base, {
+      threadId,
+      remoteFound: true,
+      messages: [event.message],
+      pendingInputs: base.pendingInputs,
+      thread: base.thread ?? null,
+      threadInfo: base.threadInfo ?? null,
+      pageInfo: {
+        ...(base.pageInfo ?? {
+          totalMessages: event.seq,
+          returnedMessages: 0,
+          startIndex: 0,
+          endIndex: event.seq,
+          hasMoreBefore: false,
+          nextBeforeIndex: null,
+          limit: THREAD_HISTORY_PAGE_SIZE,
+          userQueryLimit: THREAD_HISTORY_USER_QUERY_LIMIT,
+        }),
+        committedMessages: Math.max(
+          event.seq,
+          base.pageInfo?.committedMessages ?? 0,
+        ),
+        overlayMessages: base.pageInfo?.overlayMessages ?? null,
+        hasMoreAfter: false,
+        nextAfterIndex: null,
+      },
+      team: base.team ?? null,
+    });
+    if (selectedThreadIdRef.current === threadId) {
+      requestSelectedThreadMessagesBottomSnap(threadId, true);
+    }
+    applyRemoteTranscript(threadId, merged);
+    const controlKind = transcriptControlKind(event.message);
+    if (controlKind === "user_ack") {
+      const control =
+        event.message.content &&
+        typeof event.message.content === "object" &&
+        !Array.isArray(event.message.content)
+          ? (event.message.content as { control?: Record<string, unknown> })
+              .control
+          : null;
+      applyUserAck(
+        threadId,
+        event.runId,
+        typeof control?.pending_input_id === "string"
+          ? control.pending_input_id
+          : typeof control?.pendingInputId === "string"
+            ? control.pendingInputId
+            : undefined,
+      );
+    }
+  }
+
+  function applyUserAck(
+    threadId: string,
+    runId: string,
+    pendingInputId?: string,
+  ) {
+    let nextIntentId: string | undefined;
+    const acknowledgedPendingInputId = pendingInputId?.trim() || "";
+    updateLiveStreamState(threadId, (current) => {
+      const pendingAckIntentIds = [...(current?.pendingAckIntentIds || [])];
+      const matchedIndex = findPendingAckIntentIndex(
+        pendingAckIntentIds,
+        acknowledgedPendingInputId,
+        messageStateRef.current.intentsById,
+      );
+      if (matchedIndex >= 0) {
+        nextIntentId = pendingAckIntentIds[matchedIndex];
+        pendingAckIntentIds.splice(matchedIndex, 1);
+      } else {
+        nextIntentId = undefined;
+      }
+      const nextPendingAckIntentIds = nextIntentId
+        ? pendingAckIntentIds.filter((intentId) => intentId !== nextIntentId)
+        : pendingAckIntentIds;
+      return current
+        ? {
+            ...current,
+            runId,
+            activeIntentId: nextIntentId || current.activeIntentId,
+            assistantEntryId: null,
+            pendingAckIntentIds: nextPendingAckIntentIds,
+            streamStatus: "streaming",
+          }
+        : null;
+    });
+    if (nextIntentId) {
+      materializeAckedUserMessage(threadId, nextIntentId);
+      const acknowledgedIntent = intentForId(nextIntentId);
+      dispatchMessageState({
+        type: "intent/awaiting-history",
+        intentId: nextIntentId,
+        responseText: acknowledgedIntent?.responseText,
+      });
+      requestSelectedThreadMessagesBottomSnap(threadId, true);
+      setThreadRuntimeState(threadId, "running_remote", {
+        activeIntentId: nextIntentId,
+        remoteRunId: runId,
+      });
+    } else {
+      const pendingInput = consumeRemotePendingInput(
+        threadId,
+        acknowledgedPendingInputId,
+      );
+      if (pendingInput) {
+        materializeAckedRemotePendingInput(threadId, pendingInput);
+        requestSelectedThreadMessagesBottomSnap(threadId, true);
+      }
+    }
   }
 
   function scheduleHistoryRefresh(
