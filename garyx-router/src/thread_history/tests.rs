@@ -1,5 +1,6 @@
 use super::*;
 use crate::memory_store::InMemoryThreadStore;
+use garyx_models::RenderRow;
 use serde_json::json;
 use tempfile::tempdir;
 
@@ -641,6 +642,85 @@ async fn reconcile_run_records_tail_preserves_control_records_and_appends_termin
     assert_eq!(
         records[4].message["control"]["reason"],
         "same_seq_overwrite"
+    );
+}
+
+#[tokio::test]
+async fn reconcile_run_records_tail_preserves_user_origin_id() {
+    let store = ThreadTranscriptStore::memory();
+    store
+        .append_run_records(
+            "thread::origin-reconcile",
+            Some("run-1"),
+            &[
+                control_draft("run_start", "2026-06-18T12:00:00Z"),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({
+                        "role": "user",
+                        "content": "hello",
+                        "metadata": {
+                            "origin_id": "00000000-0000-0000-0000-000000000001"
+                        }
+                    }),
+                    "2026-06-18T12:00:01Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "answer"}),
+                    "2026-06-18T12:00:02Z",
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let result = store
+        .reconcile_run_records_tail(
+            "thread::origin-reconcile",
+            "run-1",
+            &[
+                control_draft("run_start", "2026-06-18T12:00:00Z"),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({
+                        "role": "user",
+                        "content": "hello",
+                        "timestamp": "2026-06-18T12:00:11Z",
+                        "metadata": {
+                            "origin_id": "00000000-0000-0000-0000-000000000001"
+                        }
+                    }),
+                    "2026-06-18T12:00:11Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "answer"}),
+                    "2026-06-18T12:00:02Z",
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result
+            .appended_records
+            .iter()
+            .map(|record| record.seq)
+            .collect::<Vec<_>>(),
+        vec![2, 4]
+    );
+
+    let records = store.records("thread::origin-reconcile").await.unwrap();
+    assert_eq!(
+        records[1].message["metadata"]["origin_id"],
+        "00000000-0000-0000-0000-000000000001"
+    );
+    let render = store
+        .render_snapshot_at_seq("thread::origin-reconcile", 2)
+        .await
+        .unwrap();
+    let RenderRow::UserTurn(row) = &render.rows[0];
+    assert_eq!(
+        row.id,
+        "user_turn:origin:00000000-0000-0000-0000-000000000001"
     );
 }
 
