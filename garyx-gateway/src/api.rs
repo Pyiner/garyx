@@ -304,11 +304,11 @@ pub struct CustomAgentUpsertPayload {
     pub display_name: String,
     pub provider_type: garyx_models::ProviderType,
     #[serde(default)]
-    pub model: String,
+    pub model: Option<String>,
     #[serde(default, alias = "modelReasoningEffort")]
-    pub model_reasoning_effort: String,
+    pub model_reasoning_effort: Option<String>,
     #[serde(default, alias = "modelServiceTier")]
-    pub model_service_tier: String,
+    pub model_service_tier: Option<String>,
     #[serde(default, alias = "env", alias = "providerEnv")]
     pub provider_env: Option<HashMap<String, String>>,
     #[serde(default, alias = "authSource")]

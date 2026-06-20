@@ -1440,7 +1440,7 @@ async fn cmd_agent_create_posts_model_payload() {
 }
 
 #[tokio::test]
-async fn cmd_agent_update_puts_empty_model_when_omitted() {
+async fn cmd_agent_update_omits_model_fields_when_omitted() {
     let requests = StdArc::new(Mutex::new(Vec::new()));
     let (base_url, handle) = spawn_agent_http_test_server(requests.clone(), StatusCode::OK).await;
     let dir = tempdir().expect("tempdir");
@@ -1452,6 +1452,43 @@ async fn cmd_agent_update_puts_empty_model_when_omitted() {
         "Spec Review".to_owned(),
         "codex_app_server".to_owned(),
         None,
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,
+        "Review specs carefully.".to_owned(),
+        false,
+    )
+    .await
+    .expect("agent update should succeed");
+
+    handle.abort();
+
+    let records = requests.lock().expect("request lock");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].method, "PUT");
+    assert_eq!(records[0].path, "/api/custom-agents/spec-review");
+    assert!(records[0].body.get("model").is_none());
+    assert!(records[0].body.get("model_reasoning_effort").is_none());
+    assert!(records[0].body.get("model_service_tier").is_none());
+}
+
+#[tokio::test]
+async fn cmd_agent_update_sends_empty_model_when_clear_model_is_set() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_agent_http_test_server(requests.clone(), StatusCode::OK).await;
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_test_gateway_config(&dir, &base_url);
+
+    cmd_agent_update(
+        config_path.to_str().expect("config path"),
+        "spec-review".to_owned(),
+        "Spec Review".to_owned(),
+        "codex_app_server".to_owned(),
+        None,
+        true,
         None,
         None,
         None,
@@ -1470,8 +1507,8 @@ async fn cmd_agent_update_puts_empty_model_when_omitted() {
     assert_eq!(records[0].method, "PUT");
     assert_eq!(records[0].path, "/api/custom-agents/spec-review");
     assert_eq!(records[0].body["model"], "");
-    assert_eq!(records[0].body["model_reasoning_effort"], "");
-    assert_eq!(records[0].body["model_service_tier"], "");
+    assert!(records[0].body.get("model_reasoning_effort").is_none());
+    assert!(records[0].body.get("model_service_tier").is_none());
 }
 
 #[tokio::test]
@@ -1488,6 +1525,7 @@ async fn cmd_agent_upsert_falls_back_to_post_after_put_failure() {
         "Spec Review".to_owned(),
         "gemini_cli".to_owned(),
         Some("gemini-3.1-pro-preview".to_owned()),
+        false,
         None,
         None,
         None,
