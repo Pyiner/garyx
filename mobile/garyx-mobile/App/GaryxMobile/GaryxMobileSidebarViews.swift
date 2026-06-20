@@ -114,7 +114,8 @@ struct GaryxHomeThreadListView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @Environment(\.garyxSidebarDragActive) private var sidebarDragActive
     @Environment(\.garyxOpenSidebar) private var openDrawer
-    private let silentRefreshIntervalNanos: UInt64 = 3_000_000_000
+    @State private var isThreadListInteracting = false
+    private let silentRefreshIntervalNanos: UInt64 = 10_000_000_000
 
     var body: some View {
         threadListWithBottomBar
@@ -147,6 +148,9 @@ struct GaryxHomeThreadListView: View {
         }
         .scrollDisabled(sidebarDragActive)
         .scrollDismissesKeyboard(.interactively)
+        .garyxHomeThreadListScrollInteraction { isInteracting in
+            isThreadListInteracting = isInteracting
+        }
         .refreshable {
             await refreshAll()
         }
@@ -157,22 +161,19 @@ struct GaryxHomeThreadListView: View {
     // whole section into one eager lazy item and materialize every row at once.
     @ViewBuilder
     private var sidebarThreadSections: some View {
-        let pinned = model.pinnedThreads
-        if !pinned.isEmpty {
+        let sections = model.homeThreadSections
+        if !sections.pinned.isEmpty {
             GaryxSidebarSectionHeader(title: "Pinned", systemImage: "pin.fill")
                 .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
                 .padding(.bottom, 4)
 
-            ForEach(Array(pinned.enumerated()), id: \.element.id) { index, thread in
-                if index > 0 {
+            ForEach(sections.pinned) { row in
+                if row.showsDivider {
                     GaryxSidebarRowDivider()
                 }
-                GaryxSidebarThreadButton(
+                GaryxHomeThreadButton(
                     model: model,
-                    thread: thread,
-                    isSelected: model.selectedThread?.id == thread.id,
-                    isPinned: true,
-                    trailingTimestamp: garyxFormattedTaskTimestamp(thread.updatedAt ?? thread.createdAt)
+                    row: row
                 )
             }
 
@@ -181,28 +182,24 @@ struct GaryxHomeThreadListView: View {
                 .accessibilityHidden(true)
         }
 
-        let recent = model.recentThreads.filter { !model.isThreadPinned($0.id) }
         GaryxSidebarSectionHeader(title: "Recent", systemImage: "clock.fill")
             .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
             .padding(.bottom, 4)
 
-        if recent.isEmpty {
+        if sections.recent.isEmpty {
             if model.isLoadingThreads {
                 GaryxSidebarLoadingRow(title: "Loading recent threads")
             } else {
                 GaryxSidebarEmptyRow(title: "No recent threads")
             }
         } else {
-            ForEach(Array(recent.enumerated()), id: \.element.id) { index, thread in
-                if index > 0 {
+            ForEach(sections.recent) { row in
+                if row.showsDivider {
                     GaryxSidebarRowDivider()
                 }
-                GaryxSidebarThreadButton(
+                GaryxHomeThreadButton(
                     model: model,
-                    thread: thread,
-                    isSelected: model.selectedThread?.id == thread.id,
-                    isPinned: false,
-                    trailingTimestamp: garyxFormattedTaskTimestamp(thread.updatedAt ?? thread.createdAt)
+                    row: row
                 )
             }
         }
@@ -225,16 +222,20 @@ struct GaryxHomeThreadListView: View {
         // response handling does not contend with the opening transition.
         try? await Task.sleep(nanoseconds: 300_000_000)
         guard !Task.isCancelled, shouldRefreshSidebarThreads else { return }
-        await refreshSidebarThreads(silent: true)
+        if !isThreadListInteracting {
+            await refreshSidebarThreads(silent: true)
+        }
         while !Task.isCancelled {
             try? await Task.sleep(nanoseconds: silentRefreshIntervalNanos)
             guard !Task.isCancelled, shouldRefreshSidebarThreads else { return }
+            guard !isThreadListInteracting else { continue }
             await refreshSidebarThreads(silent: true)
         }
     }
 
     private func refreshSidebarThreads(silent: Bool = false) async {
         guard shouldRefreshSidebarThreads else { return }
+        guard !isThreadListInteracting else { return }
         guard !model.isLoadingThreads, !model.isLoadingMoreThreads else { return }
         await model.refreshThreads(silent: silent)
     }
@@ -245,6 +246,238 @@ struct GaryxHomeThreadListView: View {
 
     private func startNewChat() {
         model.openNewThreadDraft()
+    }
+}
+
+private struct GaryxHomeThreadSections {
+    var pinned: [GaryxHomeThreadRow] = []
+    var recent: [GaryxHomeThreadRow] = []
+}
+
+private struct GaryxHomeThreadRow: Identifiable {
+    let id: String
+    let thread: GaryxThreadSummary
+    let presentation: GaryxSidebarThreadRowPresentation
+    let avatar: GaryxSidebarThreadRowAvatar
+    let canArchive: Bool
+    let showsDivider: Bool
+}
+
+private struct GaryxHomeThreadButton: View {
+    let model: GaryxMobileModel
+    let row: GaryxHomeThreadRow
+    @State private var showsArchiveConfirmation = false
+
+    var body: some View {
+        GaryxSwipeActionRow(id: "thread:\(row.id)", actions: threadSwipeActions) {
+            GaryxSidebarThreadRowView(
+                model: row.presentation,
+                avatar: row.avatar,
+                onSelect: {
+                    model.openThreadImmediately(row.thread, source: .replace)
+                },
+                onUnpin: {
+                    model.unpinThread(row.id)
+                }
+            )
+        }
+        .onLongPressGesture {
+            guard row.canArchive else { return }
+            showsArchiveConfirmation = true
+        }
+        .confirmationDialog("Archive thread", isPresented: $showsArchiveConfirmation, titleVisibility: .visible) {
+            Button("Archive", role: .destructive) {
+                Task { await model.archiveThread(row.thread) }
+            }
+        }
+    }
+
+    private var threadSwipeActions: [GaryxRowAction] {
+        [
+            GaryxRowAction(
+                title: row.presentation.isPinned ? "Unpin thread" : "Pin thread",
+                systemImage: row.presentation.isPinned ? "pin.slash" : "pin",
+                tone: .neutral
+            ) {
+                model.togglePinnedThread(row.id)
+            },
+            GaryxRowAction(
+                title: "Archive thread",
+                systemImage: "archivebox",
+                tone: .destructive
+            ) {
+                Task { await model.archiveThread(row.thread) }
+            },
+        ]
+    }
+}
+
+private extension GaryxMobileModel {
+    var homeThreadSections: GaryxHomeThreadSections {
+        var threadsById: [String: GaryxThreadSummary] = [:]
+        for thread in threads where threadsById[thread.id] == nil {
+            threadsById[thread.id] = thread
+        }
+        let pinnedIds = Self.normalizedPinnedThreadIds(pinnedThreadIds)
+        let pinnedIdSet = Set(pinnedIds)
+        let selectedThreadId = selectedThread?.id
+        var teamsById: [String: GaryxTeamSummary] = [:]
+        for team in teams where teamsById[team.id] == nil {
+            teamsById[team.id] = team
+        }
+        var agentsById: [String: GaryxAgentSummary] = [:]
+        for agent in agents where agentsById[agent.id] == nil {
+            agentsById[agent.id] = agent
+        }
+        let automationThreadIds = Set(automations.compactMap { automation -> String? in
+            let threadId = (automation.targetThreadId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return threadId.isEmpty ? nil : threadId
+        })
+
+        let pinnedRows = pinnedIds
+            .compactMap { threadsById[$0] }
+            .enumerated()
+            .map { index, thread in
+                homeThreadRow(
+                    thread: thread,
+                    isSelected: selectedThreadId == thread.id,
+                    isPinned: true,
+                    showsDivider: index > 0,
+                    teamsById: teamsById,
+                    agentsById: agentsById,
+                    automationThreadIds: automationThreadIds
+                )
+            }
+
+        let recentRows = recentThreadIds
+            .filter { !pinnedIdSet.contains($0) }
+            .compactMap { threadsById[$0] }
+            .enumerated()
+            .map { index, thread in
+                homeThreadRow(
+                    thread: thread,
+                    isSelected: selectedThreadId == thread.id,
+                    isPinned: false,
+                    showsDivider: index > 0,
+                    teamsById: teamsById,
+                    agentsById: agentsById,
+                    automationThreadIds: automationThreadIds
+                )
+            }
+
+        return GaryxHomeThreadSections(pinned: pinnedRows, recent: recentRows)
+    }
+
+    func homeThreadRow(
+        thread: GaryxThreadSummary,
+        isSelected: Bool,
+        isPinned: Bool,
+        showsDivider: Bool,
+        teamsById: [String: GaryxTeamSummary],
+        agentsById: [String: GaryxAgentSummary],
+        automationThreadIds: Set<String>
+    ) -> GaryxHomeThreadRow {
+        let identity = homeThreadIdentity(for: thread, teamsById: teamsById, agentsById: agentsById)
+        let canArchive = !isThreadBusy(thread.id) && !automationThreadIds.contains(thread.id)
+        return GaryxHomeThreadRow(
+            id: thread.id,
+            thread: thread,
+            presentation: GaryxSidebarThreadRowPresentation(
+                thread: thread,
+                isSelected: isSelected,
+                isPinned: isPinned,
+                trailingTimestamp: garyxFormattedTaskTimestamp(thread.updatedAt ?? thread.createdAt)
+            ),
+            avatar: GaryxSidebarThreadRowAvatar(
+                agentId: identity.id ?? "",
+                avatarDataUrl: identity.avatarDataUrl ?? "",
+                kind: identity.isTeam ? .team : .agent,
+                label: identity.name ?? thread.title,
+                providerType: identity.providerType ?? "",
+                builtIn: identity.builtIn
+            ),
+            canArchive: canArchive,
+            showsDivider: showsDivider
+        )
+    }
+
+    func homeThreadIdentity(
+        for thread: GaryxThreadSummary,
+        teamsById: [String: GaryxTeamSummary],
+        agentsById: [String: GaryxAgentSummary]
+    ) -> WidgetAgentIdentity {
+        let teamId = thread.teamId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !teamId.isEmpty {
+            if let team = teamsById[teamId] {
+                return WidgetAgentIdentity(
+                    id: team.id,
+                    name: team.displayName,
+                    avatarDataUrl: team.avatarDataUrl.isEmpty ? nil : team.avatarDataUrl,
+                    providerType: nil,
+                    isTeam: true,
+                    builtIn: false
+                )
+            }
+            return WidgetAgentIdentity(
+                id: teamId,
+                name: thread.teamName,
+                avatarDataUrl: nil,
+                providerType: nil,
+                isTeam: true,
+                builtIn: false
+            )
+        }
+
+        let agentId = thread.agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !agentId.isEmpty {
+            if let agent = agentsById[agentId] {
+                return WidgetAgentIdentity(
+                    id: agent.id,
+                    name: agent.displayName,
+                    avatarDataUrl: agent.avatarDataUrl.isEmpty ? nil : agent.avatarDataUrl,
+                    providerType: agent.providerType,
+                    isTeam: false,
+                    builtIn: agent.builtIn
+                )
+            }
+            return WidgetAgentIdentity(
+                id: agentId,
+                name: nil,
+                avatarDataUrl: nil,
+                providerType: thread.providerType,
+                isTeam: false,
+                builtIn: false
+            )
+        }
+
+        return WidgetAgentIdentity(
+            id: nil,
+            name: nil,
+            avatarDataUrl: nil,
+            providerType: thread.providerType,
+            isTeam: false,
+            builtIn: false
+        )
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func garyxHomeThreadListScrollInteraction(_ onChange: @escaping (Bool) -> Void) -> some View {
+        if #available(iOS 18.0, *) {
+            onScrollPhaseChange { _, newPhase in
+                switch newPhase {
+                case .tracking, .interacting, .decelerating:
+                    onChange(true)
+                case .idle, .animating:
+                    onChange(false)
+                @unknown default:
+                    onChange(false)
+                }
+            }
+        } else {
+            self
+        }
     }
 }
 
@@ -743,7 +976,8 @@ private struct GaryxAutomationThreadsDetailSection: View {
                             thread: thread,
                             isSelected: model.selectedThread?.id == thread.id,
                             isPinned: model.isThreadPinned(thread.id),
-                            trailingTimestamp: garyxFormattedTaskTimestamp(entry.finishedAt ?? entry.startedAt)
+                            trailingTimestamp: garyxFormattedTaskTimestamp(entry.finishedAt ?? entry.startedAt),
+                            openSource: .current
                         )
                     } else {
                         GaryxAutomationThreadUnavailableRow(entry: entry)
@@ -906,7 +1140,7 @@ private struct GaryxBotThreadDetailSection: View {
                             canArchive: canArchive(entry),
                             onSelect: {
                                 guard entry.openable else { return }
-                                Task { await model.openThread(thread) }
+                                model.openThreadImmediately(thread, source: .current)
                             },
                             onArchive: {
                                 Task { await model.archiveBotConversationEndpoint(entry.endpoint) }
@@ -1054,7 +1288,8 @@ private struct GaryxWorkspaceThreadDetailSection: View {
                         thread: thread,
                         isSelected: model.selectedThread?.id == thread.id,
                         isPinned: model.isThreadPinned(thread.id),
-                        trailingTimestamp: garyxFormattedTaskTimestamp(thread.updatedAt ?? thread.createdAt)
+                        trailingTimestamp: garyxFormattedTaskTimestamp(thread.updatedAt ?? thread.createdAt),
+                        openSource: .current
                     )
                 }
             }
@@ -1109,12 +1344,13 @@ private struct GaryxSidebarThreadButton: View {
     var trailingTimestamp: String?
     var isFullBleed = false
     var canArchive: Bool?
+    var openSource: GaryxMobilePanelOpenSource = .replace
     var onSelect: (() -> Void)?
     var onArchive: (() -> Void)?
     @State private var showsArchiveConfirmation = false
 
     var body: some View {
-        GaryxSwipeActionRow(actions: threadSwipeActions) {
+        GaryxSwipeActionRow(id: "thread:\(thread.id)", actions: threadSwipeActions) {
             GaryxSidebarThreadRowView(
                 model: GaryxSidebarThreadRowPresentation(
                     thread: thread,
@@ -1128,7 +1364,7 @@ private struct GaryxSidebarThreadButton: View {
                     if let onSelect {
                         onSelect()
                     } else {
-                        Task { await model.openThread(thread) }
+                        model.openThreadImmediately(thread, source: openSource)
                     }
                 },
                 onUnpin: {

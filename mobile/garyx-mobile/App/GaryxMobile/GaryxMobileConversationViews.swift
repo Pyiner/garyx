@@ -117,6 +117,29 @@ private final class GaryxConversationScrollStateBox {
     var state = GaryxConversationScrollState()
 }
 
+private struct GaryxMessageBubbleActions {
+    var model: GaryxMobileModel?
+    var localFilePreview: @MainActor (_ target: String, _ reportsError: Bool) async -> GaryxWorkspaceFilePreview?
+    var retryFailedUserMessage: @MainActor (_ messageId: String) async -> Bool
+
+    static let empty = GaryxMessageBubbleActions(
+        model: nil,
+        localFilePreview: { _, _ in nil },
+        retryFailedUserMessage: { _ in false }
+    )
+}
+
+private struct GaryxMessageBubbleActionsKey: EnvironmentKey {
+    static let defaultValue = GaryxMessageBubbleActions.empty
+}
+
+private extension EnvironmentValues {
+    var garyxMessageBubbleActions: GaryxMessageBubbleActions {
+        get { self[GaryxMessageBubbleActionsKey.self] }
+        set { self[GaryxMessageBubbleActionsKey.self] = newValue }
+    }
+}
+
 struct GaryxConversationView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @Environment(\.garyxSidebarDragActive) private var sidebarDragActive
@@ -246,6 +269,19 @@ struct GaryxConversationView: View {
         .garyxAdaptiveTopBar {
             GaryxConversationHeader()
         }
+        .environment(\.garyxMessageBubbleActions, messageBubbleActions)
+    }
+
+    private var messageBubbleActions: GaryxMessageBubbleActions {
+        GaryxMessageBubbleActions(
+            model: model,
+            localFilePreview: { target, reportsError in
+                await model.localFilePreview(target, reportsError: reportsError)
+            },
+            retryFailedUserMessage: { messageId in
+                await model.retryFailedUserMessage(messageId)
+            }
+        )
     }
 
     private func messageScroll(proxy: ScrollViewProxy) -> some View {
@@ -309,12 +345,10 @@ struct GaryxConversationView: View {
             .padding(.top, 18)
             .padding(.bottom, 24)
             .garyxVerticalScrollContentWidth(alignment: .topLeading)
-            // A short entrance animation keyed to cheap insertion signals
-            // (message count, indicator visibility), so new bubbles and tool
-            // rows ease in instead of popping. Streaming text growth and
-            // scroll measurements never re-key it.
-            .animation(.easeOut(duration: 0.2), value: model.messages.count)
-            .animation(.easeOut(duration: 0.2), value: model.showsTailThinkingIndicator)
+            // Do not attach a count-driven animation to the transcript
+            // container. A send changes the message count, composer height,
+            // spacer, and bottom anchor in the same layout pass; animating the
+            // whole stack makes the scroll view visibly wobble.
 
             Color.clear
                 .frame(height: conversationBottomChromeClearance)
@@ -459,10 +493,7 @@ struct GaryxConversationView: View {
         let identity = conversationScrollIdentity
         // Long transcripts re-layout while scrolling, so a single scrollTo
         // can land short; the later attempts converge on the true bottom.
-        let delays: [DispatchTimeInterval] = [
-            .milliseconds(0), .milliseconds(16), .milliseconds(40), .milliseconds(140),
-            .milliseconds(320), .milliseconds(650), .milliseconds(1_000),
-        ]
+        let delays = tailScrollRetryDelays(for: request.reason)
 
         for (index, delay) in delays.enumerated() {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
@@ -481,6 +512,23 @@ struct GaryxConversationView: View {
                     }
                 }
             }
+        }
+    }
+
+    private func tailScrollRetryDelays(
+        for reason: GaryxConversationScrollState.TailScrollReason
+    ) -> [DispatchTimeInterval] {
+        switch reason {
+        case .tailUpdate:
+            // Ordinary tail growth during send/streaming should stay pinned,
+            // but long retry chains make the transcript visibly wobble while
+            // the composer and bottom spacer are also settling.
+            return [.milliseconds(0), .milliseconds(40), .milliseconds(140)]
+        case .openingThread, .manual, .repair:
+            return [
+                .milliseconds(0), .milliseconds(16), .milliseconds(40), .milliseconds(140),
+                .milliseconds(320), .milliseconds(650), .milliseconds(1_000),
+            ]
         }
     }
 
@@ -1573,6 +1621,15 @@ private func garyxConfiguredBot(
 }
 
 private extension View {
+    @ViewBuilder
+    func garyxOptionalEnvironmentObject<Object: ObservableObject>(_ object: Object?) -> some View {
+        if let object {
+            environmentObject(object)
+        } else {
+            self
+        }
+    }
+
     /// Opens the transcript anchored to its bottom from the very first
     /// layout pass and keeps the tail pinned through content growth while
     /// positioned there — no post-load programmatic scroll-down. The
@@ -1767,7 +1824,7 @@ private struct GaryxSelectedThreadEmptyConversationView: View {
 struct GaryxMessageBubble: View {
     let message: GaryxMobileMessage
     @Environment(\.colorScheme) private var colorScheme
-    @EnvironmentObject private var model: GaryxMobileModel
+    @Environment(\.garyxMessageBubbleActions) private var actions
     @State private var retrying = false
     @State private var filePreviewSheet: GaryxMessageFilePreviewSheet?
 
@@ -1784,7 +1841,7 @@ struct GaryxMessageBubble: View {
             GaryxFullscreenWorkspaceFilePreview(preview: sheet.preview) {
                 filePreviewSheet = nil
             }
-            .environmentObject(model)
+            .garyxOptionalEnvironmentObject(actions.model)
         }
     }
 
@@ -1954,14 +2011,14 @@ struct GaryxMessageBubble: View {
 
     private func openMessageFileLink(_ target: String) {
         Task {
-            guard let preview = await model.localFilePreview(target) else { return }
+            guard let preview = await actions.localFilePreview(target, true) else { return }
             filePreviewSheet = GaryxMessageFilePreviewSheet(preview: preview)
         }
     }
 
     @MainActor
     private func messageImageFilePreview(_ target: String) async -> GaryxWorkspaceFilePreview? {
-        await model.localFilePreview(target, reportsError: false)
+        await actions.localFilePreview(target, false)
     }
 
     @ViewBuilder
@@ -1973,7 +2030,7 @@ struct GaryxMessageBubble: View {
                 guard !retrying else { return }
                 retrying = true
                 Task {
-                    _ = await model.retryFailedUserMessage(message.id)
+                    _ = await actions.retryFailedUserMessage(message.id)
                     retrying = false
                 }
             } label: {

@@ -89,12 +89,39 @@ enum GaryxMobileAvatarImageNormalizer {
 extension GaryxMobileModel {
 
     func openThread(_ thread: GaryxThreadSummary) async {
-        await openResolvedThread(thread, invalidatesPendingThreadOpen: true)
+        await openResolvedThread(thread, invalidatesPendingThreadOpen: true, source: .replace)
     }
 
-    func openThread(id: String) async {
+    func openThread(
+        id: String,
+        source: GaryxMobilePanelOpenSource = .replace
+    ) async {
         let requestId = beginDirectThreadOpen()
-        await openThread(id: id, requestId: requestId)
+        await openThread(id: id, requestId: requestId, source: source)
+    }
+
+    func openThreadImmediately(
+        _ thread: GaryxThreadSummary,
+        source: GaryxMobilePanelOpenSource = .replace
+    ) {
+        threads = Self.mergedThreadSummaries(threads + [thread])
+        showSelectedThread(thread, invalidatesPendingThreadOpen: true, source: source)
+        Task { [weak self] in
+            await self?.loadSelectedThreadHistory()
+        }
+    }
+
+    func openThreadImmediately(
+        id: String,
+        source: GaryxMobilePanelOpenSource = .replace
+    ) {
+        let threadId = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !threadId.isEmpty else { return }
+        let requestId = beginDirectThreadOpen()
+        showPendingThreadLink(threadId, requestId: requestId, source: source)
+        Task { [weak self] in
+            await self?.openThread(id: threadId, requestId: requestId, source: source)
+        }
     }
 
     func queuePendingThreadLink(_ id: String) {
@@ -102,7 +129,7 @@ extension GaryxMobileModel {
               let threadId = threadOpenState.pendingThreadId else {
             return
         }
-        showPendingThreadLink(threadId, requestId: requestId)
+        showPendingThreadLink(threadId, requestId: requestId, source: .replace)
     }
 
     func openPendingThreadLinkIfNeeded() async {
@@ -111,38 +138,43 @@ extension GaryxMobileModel {
         }
         guard case .ready = connectionState else { return }
         let requestId = threadOpenState.requestId
-        await openThread(id: threadId, requestId: requestId)
+        await openThread(id: threadId, requestId: requestId, source: .replace)
         if isCurrentPendingThreadOpen(requestId), threadHistoryLoadedIds.contains(threadId) {
             completePendingThreadLink(threadId, requestId: requestId)
         }
     }
 
-    private func openThread(id: String, requestId: UUID) async {
+    private func openThread(
+        id: String,
+        requestId: UUID,
+        source: GaryxMobilePanelOpenSource
+    ) async {
         let threadId = id.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !threadId.isEmpty else { return }
 
         if let thread = threads.first(where: { $0.id == threadId }) {
             guard isCurrentPendingThreadOpen(requestId) else { return }
-            await openResolvedThread(thread, invalidatesPendingThreadOpen: false)
+            await openResolvedThread(thread, invalidatesPendingThreadOpen: false, source: source)
             return
         }
 
         await selectThread(
             Self.placeholderThreadSummary(id: threadId),
-            invalidatesPendingThreadOpen: false
+            invalidatesPendingThreadOpen: false,
+            source: source
         )
         guard isCurrentPendingThreadOpen(requestId) else { return }
 
         await refreshThreads()
         guard isCurrentPendingThreadOpen(requestId) else { return }
         if let thread = threads.first(where: { $0.id == threadId }) {
-            await openResolvedThread(thread, invalidatesPendingThreadOpen: false)
+            await openResolvedThread(thread, invalidatesPendingThreadOpen: false, source: source)
             return
         }
         do {
             let thread = try await client().getThread(threadId: threadId)
             guard isCurrentPendingThreadOpen(requestId) else { return }
-            await openResolvedThread(thread, invalidatesPendingThreadOpen: false)
+            await openResolvedThread(thread, invalidatesPendingThreadOpen: false, source: source)
         } catch {
             guard isCurrentPendingThreadOpen(requestId) else { return }
             lastError = displayMessage(for: error)
@@ -151,33 +183,27 @@ extension GaryxMobileModel {
 
     private func openResolvedThread(
         _ thread: GaryxThreadSummary,
-        invalidatesPendingThreadOpen: Bool
+        invalidatesPendingThreadOpen: Bool,
+        source: GaryxMobilePanelOpenSource
     ) async {
         threads = Self.mergedThreadSummaries(threads + [thread])
-        await selectThread(thread, invalidatesPendingThreadOpen: invalidatesPendingThreadOpen)
+        await selectThread(
+            thread,
+            invalidatesPendingThreadOpen: invalidatesPendingThreadOpen,
+            source: source
+        )
     }
 
-    private func showPendingThreadLink(_ threadId: String, requestId: UUID) {
+    private func showPendingThreadLink(
+        _ threadId: String,
+        requestId: UUID,
+        source: GaryxMobilePanelOpenSource
+    ) {
         guard threadOpenState.markShown(threadId: threadId, requestId: requestId) else { return }
         let thread = threads.first(where: { $0.id == threadId })
             ?? (selectedThread?.id == threadId ? selectedThread : nil)
             ?? Self.placeholderThreadSummary(id: threadId)
-        let previousThreadId = selectedThread?.id
-        if previousThreadId != threadId {
-            advanceSelectedThreadDraftGeneration()
-            switchComposerDraft(to: threadId)
-            selectedThreadRecoveryTask?.cancel()
-            selectedThreadRecoveryTask = nil
-            selectedThreadRecoveryThreadId = nil
-            cancelSelectedThreadReconcileLoop()
-            resetSelectedThreadHistoryPagination()
-            messages = cachedMessages(for: threadId)
-        }
-        selectedThread = thread
-        clearPendingBotDraft()
-        draftThreadTitle = thread.title
-        setActivePanel(.chat, invalidatesPendingThreadOpen: false)
-        setSidebarVisible(false)
+        showSelectedThread(thread, invalidatesPendingThreadOpen: false, source: source)
         lastError = nil
     }
 

@@ -439,6 +439,10 @@ public struct GaryxMobileNavigationState: Equatable, Sendable {
         workspaceBotsDrilldown = drilldown
     }
 
+    public mutating func openConversation(source: GaryxMobilePanelOpenSource) {
+        openRoute(GaryxMobilePanelRoute(panel: .chat, settingsTab: .manage), source: source)
+    }
+
     public mutating func openPanel(
         _ panel: GaryxMobilePanel,
         dreamsAutoScanEnabled: Bool,

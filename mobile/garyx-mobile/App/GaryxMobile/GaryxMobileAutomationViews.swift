@@ -873,6 +873,7 @@ struct GaryxAutomationThreadPickerSheet: View {
     let onSelect: (GaryxThreadSummary) -> Void
     @State private var searchText = ""
     @State private var isRefreshing = false
+    @State private var openSwipeActionRowId: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -944,6 +945,7 @@ struct GaryxAutomationThreadPickerSheet: View {
         .presentationDetents([.fraction(0.93), .large])
         .presentationDragIndicator(.hidden)
         .presentationCornerRadius(38)
+        .environment(\.garyxOpenSwipeActionRowId, $openSwipeActionRowId)
         .task {
             await refreshThreadOptions()
         }
@@ -1011,7 +1013,7 @@ struct GaryxAutomationThreadPickerRow: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            GaryxSwipeActionRow(actions: threadSwipeActions) {
+            GaryxSwipeActionRow(id: "thread:\(thread.id)", actions: threadSwipeActions) {
                 GaryxSidebarThreadRowView(
                     model: GaryxSidebarThreadRowPresentation(
                         thread: thread,

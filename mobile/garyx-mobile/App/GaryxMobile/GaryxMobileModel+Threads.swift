@@ -600,8 +600,29 @@ extension GaryxMobileModel {
 
     func selectThread(
         _ thread: GaryxThreadSummary,
-        invalidatesPendingThreadOpen: Bool = true
+        invalidatesPendingThreadOpen: Bool = true,
+        source: GaryxMobilePanelOpenSource = .replace
     ) async {
+        showSelectedThread(
+            thread,
+            invalidatesPendingThreadOpen: invalidatesPendingThreadOpen,
+            source: source
+        )
+        // Bound the open to the newest ~threadHistoryUserQueryLimit user turns: always
+        // refresh from the gateway, which returns the forward delta when the cached
+        // cursor is within that window, or the newest window + `reset` when the cursor
+        // is older (the client overwrites its cache). With no cache it seeds the newest
+        // window. The stream then resumes near the tail (live only); older history
+        // pages in on scroll-up. The stream supersedes the reconcile poll and falls
+        // back to it (and the after_index HTTP path) on failure.
+        await loadSelectedThreadHistory()
+    }
+
+    func showSelectedThread(
+        _ thread: GaryxThreadSummary,
+        invalidatesPendingThreadOpen: Bool = true,
+        source: GaryxMobilePanelOpenSource = .replace
+    ) {
         if invalidatesPendingThreadOpen {
             invalidatePendingThreadOpen()
         }
@@ -624,8 +645,7 @@ extension GaryxMobileModel {
         clearPendingNewThreadAgentTarget()
         clearPendingBotDraft()
         draftThreadTitle = thread.title
-        setActivePanel(.chat, invalidatesPendingThreadOpen: invalidatesPendingThreadOpen)
-        setSidebarVisible(false)
+        openConversation(source: source, invalidatesPendingThreadOpen: false)
         if previousThreadId != thread.id {
             let inMemory = cachedMessages(for: thread.id)
             if inMemory.isEmpty {
@@ -641,14 +661,6 @@ extension GaryxMobileModel {
                 messages = inMemory
             }
         }
-        // Bound the open to the newest ~threadHistoryUserQueryLimit user turns: always
-        // refresh from the gateway, which returns the forward delta when the cached
-        // cursor is within that window, or the newest window + `reset` when the cursor
-        // is older (the client overwrites its cache). With no cache it seeds the newest
-        // window. The stream then resumes near the tail (live only); older history
-        // pages in on scroll-up. The stream supersedes the reconcile poll and falls
-        // back to it (and the after_index HTTP path) on failure.
-        await loadSelectedThreadHistory()
     }
 
     func openNewThreadDraft(agentTargetOverride: String? = nil) {

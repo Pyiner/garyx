@@ -182,7 +182,7 @@ public struct GaryxConversationScrollState: Equatable {
             return TailScrollRequest(reason: .openingThread, animated: false)
         }
         guard isFollowingTail else { return nil }
-        return TailScrollRequest(reason: .tailUpdate, animated: true)
+        return TailScrollRequest(reason: .tailUpdate, animated: false)
     }
 
     /// The tail thinking indicator appeared (run started with no visible

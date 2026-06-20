@@ -257,17 +257,32 @@ struct GaryxRowActionMenu<Content: View>: View {
     }
 }
 
+private struct GaryxOpenSwipeActionRowIdKey: EnvironmentKey {
+    static let defaultValue: Binding<String?> = .constant(nil)
+}
+
+extension EnvironmentValues {
+    var garyxOpenSwipeActionRowId: Binding<String?> {
+        get { self[GaryxOpenSwipeActionRowIdKey.self] }
+        set { self[GaryxOpenSwipeActionRowIdKey.self] = newValue }
+    }
+}
+
 struct GaryxSwipeActionRow<Content: View>: View {
+    var id: String?
     let actions: [GaryxRowAction]
     let content: Content
+    @Environment(\.garyxOpenSwipeActionRowId) private var openSwipeActionRowId
     @GestureState private var dragTranslation: CGFloat = 0
-    @State private var settledOffset: CGFloat = 0
+    @State private var localIsOpen = false
+    @State private var didPlayFullRevealFeedback = false
 
     private let actionButtonDiameter: CGFloat = 38
     private let actionButtonSpacing: CGFloat = 10
     private let actionTrailingPadding: CGFloat = 10
 
-    init(actions: [GaryxRowAction], @ViewBuilder content: () -> Content) {
+    init(id: String? = nil, actions: [GaryxRowAction], @ViewBuilder content: () -> Content) {
+        self.id = id
         self.actions = actions
         self.content = content()
     }
@@ -282,10 +297,16 @@ struct GaryxSwipeActionRow<Content: View>: View {
                 content
                     .background(GaryxTheme.surface)
                     .offset(x: currentOffset)
+                    .animation(GaryxMobileMotion.rowSwipe, value: isOpen)
             }
             .contentShape(Rectangle())
             .clipped()
             .simultaneousGesture(rowDragGesture)
+            .onChange(of: isOpen) { _, open in
+                if !open {
+                    didPlayFullRevealFeedback = false
+                }
+            }
             .accessibilityHint("Swipe left for thread actions.")
             .modifier(GaryxRowMenuAccessibilityActions(actions: actions, onAction: perform))
         }
@@ -300,6 +321,7 @@ struct GaryxSwipeActionRow<Content: View>: View {
                     Image(systemName: action.systemImage)
                         .font(GaryxFont.system(size: 15, weight: .semibold))
                         .foregroundStyle(Color.white)
+                        .rotationEffect(.degrees(action.iconRotationDegrees))
                         .frame(width: actionButtonDiameter, height: actionButtonDiameter)
                         .background(action.tone.background, in: Circle())
                         .contentShape(Circle())
@@ -317,19 +339,41 @@ struct GaryxSwipeActionRow<Content: View>: View {
             .updating($dragTranslation) { value, state, _ in
                 state = horizontalSwipeTranslation(value.translation)
             }
+            .onChanged { value in
+                let translation = horizontalSwipeTranslation(value.translation)
+                closeOtherOpenRowIfNeeded(translation: translation)
+                updateFullRevealFeedback(for: clampedOffset(baseOffset + translation))
+            }
             .onEnded { value in
                 let translation = horizontalSwipeTranslation(value.translation)
-                guard translation != 0 || settledOffset != 0 else { return }
+                guard translation != 0 || isOpen else { return }
                 let predicted = horizontalSwipeTranslation(value.predictedEndTranslation)
-                let projectedOffset = clampedOffset(settledOffset + (predicted == 0 ? translation : predicted))
+                let projectedOffset = clampedOffset(baseOffset + (predicted == 0 ? translation : predicted))
+                let nextIsOpen = projectedOffset < -maxRevealWidth * 0.35
                 withAnimation(GaryxMobileMotion.rowSwipe) {
-                    settledOffset = projectedOffset < -maxRevealWidth * 0.35 ? -maxRevealWidth : 0
+                    setOpen(nextIsOpen)
+                }
+                if nextIsOpen {
+                    playFullRevealFeedbackIfNeeded()
+                } else {
+                    didPlayFullRevealFeedback = false
                 }
             }
     }
 
     private var currentOffset: CGFloat {
-        clampedOffset(settledOffset + dragTranslation)
+        clampedOffset(baseOffset + dragTranslation)
+    }
+
+    private var baseOffset: CGFloat {
+        isOpen ? -maxRevealWidth : 0
+    }
+
+    private var isOpen: Bool {
+        if let id {
+            return openSwipeActionRowId.wrappedValue == id
+        }
+        return localIsOpen
     }
 
     private var maxRevealWidth: CGFloat {
@@ -344,7 +388,7 @@ struct GaryxSwipeActionRow<Content: View>: View {
         let horizontalMagnitude = abs(horizontal)
         let verticalMagnitude = abs(vertical)
         guard horizontalMagnitude > verticalMagnitude * 1.15 else { return 0 }
-        if settledOffset == 0 {
+        if !isOpen {
             return min(0, horizontal)
         }
         return horizontal
@@ -356,9 +400,47 @@ struct GaryxSwipeActionRow<Content: View>: View {
 
     private func perform(_ action: GaryxRowAction) {
         withAnimation(GaryxMobileMotion.rowSwipe) {
-            settledOffset = 0
+            setOpen(false)
         }
         action.action()
+    }
+
+    private func setOpen(_ open: Bool) {
+        if let id {
+            if open {
+                openSwipeActionRowId.wrappedValue = id
+            } else if openSwipeActionRowId.wrappedValue == id {
+                openSwipeActionRowId.wrappedValue = nil
+            }
+        } else {
+            localIsOpen = open
+        }
+    }
+
+    private func closeOtherOpenRowIfNeeded(translation: CGFloat) {
+        guard let id,
+              translation < -4,
+              let openId = openSwipeActionRowId.wrappedValue,
+              openId != id else {
+            return
+        }
+        withAnimation(GaryxMobileMotion.rowSwipe) {
+            openSwipeActionRowId.wrappedValue = nil
+        }
+    }
+
+    private func updateFullRevealFeedback(for offset: CGFloat) {
+        if offset <= -maxRevealWidth + 0.5 {
+            playFullRevealFeedbackIfNeeded()
+        } else if offset > -maxRevealWidth + 8 {
+            didPlayFullRevealFeedback = false
+        }
+    }
+
+    private func playFullRevealFeedbackIfNeeded() {
+        guard !didPlayFullRevealFeedback else { return }
+        didPlayFullRevealFeedback = true
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
     }
 }
 
@@ -376,6 +458,10 @@ struct GaryxItemActionMenuButtonStyle: ButtonStyle {
 private extension GaryxRowAction {
     var menuRole: ButtonRole? {
         tone == .destructive ? .destructive : nil
+    }
+
+    var iconRotationDegrees: Double {
+        systemImage.hasPrefix("pin") ? -28 : 0
     }
 }
 
