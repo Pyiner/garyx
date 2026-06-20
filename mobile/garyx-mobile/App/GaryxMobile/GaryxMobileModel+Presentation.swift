@@ -63,15 +63,16 @@ extension GaryxMobileModel {
     }
 
     var isSelectedThreadAwaitingInitialHistory: Bool {
-        guard let threadId = selectedThread?.id.trimmingCharacters(in: .whitespacesAndNewlines),
-              !threadId.isEmpty else {
-            return false
-        }
-        if renderSnapshotsByThread[threadId] != nil
-            || cachedTranscriptSnapshots[threadId]?.renderSnapshot != nil {
-            return false
-        }
-        return !threadHistoryLoadedIds.contains(threadId)
+        let threadId = selectedThread?.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        return GaryxSelectedThreadHistoryPresentation.isAwaitingInitialHistory(
+            threadId: threadId,
+            historyLoaded: threadId.map { threadHistoryLoadedIds.contains($0) } ?? false,
+            liveRenderSnapshot: threadId.flatMap { renderSnapshotsByThread[$0] },
+            cachedTranscript: threadId.flatMap { cachedTranscriptSnapshots[$0] },
+            hasRemoteFinalMessages: threadId.map { threadId in
+                cachedMessages(for: threadId).contains { $0.localState == .remoteFinal }
+            } ?? false
+        )
     }
 
     /// True while the selected thread is fetching its initial transcript, either
