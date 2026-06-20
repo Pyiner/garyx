@@ -488,6 +488,31 @@ public enum GaryxRenderPlaceholderFilterReason: String, Codable, Equatable, Send
     case emptyStreamingAssistant = "empty_streaming_assistant"
 }
 
+public enum GaryxSelectedThreadHistoryPresentation {
+    public static func isAwaitingInitialHistory(
+        threadId: String?,
+        historyLoaded: Bool,
+        liveRenderSnapshot: GaryxRenderSnapshot?,
+        cachedTranscript: GaryxCachedTranscript?,
+        hasRemoteFinalMessages: Bool = false
+    ) -> Bool {
+        guard let threadId = threadId?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !threadId.isEmpty else {
+            return false
+        }
+        if liveRenderSnapshot != nil || cachedTranscript?.renderSnapshot != nil {
+            return false
+        }
+        guard historyLoaded else {
+            return true
+        }
+        // Use the committed ledger boundary, not `likelyUserVisible`: tool-only
+        // rows can be renderable even when their individual messages are not
+        // likely user-visible, while internal control rows never form turns.
+        return hasRemoteFinalMessages || (cachedTranscript?.messages.contains { !$0.internalMessage } == true)
+    }
+}
+
 enum GaryxMobileRenderStateMapper {
     static func rows(
         snapshot: GaryxRenderSnapshot?,
