@@ -485,6 +485,83 @@ fn test_build_tool_session_message_mcp() {
 }
 
 #[test]
+fn test_build_tool_session_message_skips_reasoning_items() {
+    let item = json!({
+        "type": "reasoning",
+        "id": "reason_1",
+        "summary": ["checking state"],
+        "content": [],
+    });
+
+    assert!(build_tool_session_message(&item, false).is_none());
+    assert!(build_tool_session_message(&item, true).is_none());
+}
+
+#[test]
+fn test_build_tool_session_message_keeps_codex_tool_activity_records() {
+    let command = json!({
+        "type": "commandExecution",
+        "id": "cmd_1",
+        "status": "running",
+        "command": "ls -la",
+    });
+    let command_use = build_tool_session_message(&command, false).unwrap();
+    assert_eq!(command_use.role_str(), "tool_use");
+    assert_eq!(command_use.tool_name.as_deref(), Some("commandExecution"));
+    assert_eq!(command_use.tool_use_id.as_deref(), Some("cmd_1"));
+    assert_eq!(
+        command_use
+            .metadata
+            .get("item_type")
+            .and_then(Value::as_str),
+        Some("commandExecution")
+    );
+
+    let file_change = json!({
+        "type": "fileChange",
+        "id": "file_1",
+        "status": "completed",
+        "path": "src/lib.rs",
+    });
+    let file_result = build_tool_session_message(&file_change, true).unwrap();
+    assert_eq!(file_result.role_str(), "tool_result");
+    assert_eq!(file_result.tool_name.as_deref(), Some("fileChange"));
+    assert_eq!(file_result.tool_use_id.as_deref(), Some("file_1"));
+    assert_eq!(
+        file_result
+            .metadata
+            .get("item_type")
+            .and_then(Value::as_str),
+        Some("fileChange")
+    );
+}
+
+#[test]
+fn test_reasoning_items_do_not_emit_tool_stream_events() {
+    let emitted = std::sync::Arc::new(std::sync::Mutex::new(Vec::<StreamEvent>::new()));
+    let emitted_cb = emitted.clone();
+    let callback: StreamCallback = Box::new(move |event| {
+        emitted_cb
+            .lock()
+            .expect("events mutex poisoned")
+            .push(event);
+    });
+    let item = json!({
+        "type": "reasoning",
+        "id": "reason_1",
+        "summary": ["checking state"],
+    });
+
+    for is_completed in [false, true] {
+        if let Some(message) = build_tool_session_message(&item, is_completed) {
+            emit_tool_stream_event(&message, callback.as_ref());
+        }
+    }
+
+    assert!(emitted.lock().expect("events mutex poisoned").is_empty());
+}
+
+#[test]
 fn test_build_tool_session_message_codex_schema_tool_types() {
     let cases = [
         (
@@ -502,15 +579,6 @@ fn test_build_tool_session_message_codex_schema_tool_types() {
                 "text": "1. inspect\n2. patch",
             }),
             "plan",
-        ),
-        (
-            json!({
-                "type": "reasoning",
-                "id": "reason_1",
-                "summary": ["checking state"],
-                "content": [],
-            }),
-            "reasoning",
         ),
         (
             json!({
@@ -674,7 +742,7 @@ fn test_is_tool_activity_item_matches_supported_types() {
         "type": "plan",
         "id": "plan-1"
     })));
-    assert!(is_tool_activity_item(&json!({
+    assert!(!is_tool_activity_item(&json!({
         "type": "reasoning",
         "id": "reasoning-1"
     })));

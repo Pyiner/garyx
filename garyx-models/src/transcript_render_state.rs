@@ -203,9 +203,6 @@ pub fn reduce_transcript_render_state_with_run_state<'a>(
                 }));
             }
             "tool_trace" => {
-                if !should_render_tool_trace(&role, message) {
-                    continue;
-                }
                 visible_message_ids.push(reference.id.clone());
                 current_tool_group.push_tool_message(ToolMessage {
                     reference,
@@ -688,14 +685,6 @@ fn apply_tool_group_statuses(blocks: &mut [RenderBlock], run_state: &TranscriptR
             };
         }
     }
-}
-
-fn should_render_tool_trace(_role: &str, message: &Map<String, Value>) -> bool {
-    let reasoning = message
-        .get("kind")
-        .and_then(Value::as_str)
-        .is_some_and(|kind| kind.eq_ignore_ascii_case("reasoning"));
-    !reasoning
 }
 
 fn record_seq(record: &Value) -> Option<u64> {

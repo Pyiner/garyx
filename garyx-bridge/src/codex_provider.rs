@@ -614,10 +614,11 @@ fn codex_thread_item_type(item: &Value) -> Option<&str> {
 }
 
 fn is_codex_structured_activity_item_type(item_type: &str) -> bool {
+    // "reasoning" is intentionally excluded: Codex internal chain-of-thought
+    // must not be persisted as Garyx activity (#TASK-963).
     [
         "hookPrompt",
         "plan",
-        "reasoning",
         "commandExecution",
         "fileChange",
         "mcpToolCall",
