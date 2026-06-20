@@ -139,14 +139,14 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         XCTAssertEqual(request, .init(reason: .openingThread, animated: false))
     }
 
-    func testTailGrowthFollowsWhileFollowing() {
+    func testTailGrowthFollowsWhileFollowingWithoutAnimatedScroll() {
         var state = GaryxConversationScrollState()
         let request = state.contentChanged(
             isInitialLoad: false,
             isHistoryPrepend: false,
             hasTailContent: true
         )
-        XCTAssertEqual(request, .init(reason: .tailUpdate, animated: true))
+        XCTAssertEqual(request, .init(reason: .tailUpdate, animated: false))
         XCTAssertFalse(state.showsScrollToBottomButton)
     }
 

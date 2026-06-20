@@ -345,12 +345,10 @@ struct GaryxConversationView: View {
             .padding(.top, 18)
             .padding(.bottom, 24)
             .garyxVerticalScrollContentWidth(alignment: .topLeading)
-            // A short entrance animation keyed to cheap insertion signals
-            // (message count, indicator visibility), so new bubbles and tool
-            // rows ease in instead of popping. Streaming text growth and
-            // scroll measurements never re-key it.
-            .animation(.easeOut(duration: 0.2), value: model.messages.count)
-            .animation(.easeOut(duration: 0.2), value: model.showsTailThinkingIndicator)
+            // Do not attach a count-driven animation to the transcript
+            // container. A send changes the message count, composer height,
+            // spacer, and bottom anchor in the same layout pass; animating the
+            // whole stack makes the scroll view visibly wobble.
 
             Color.clear
                 .frame(height: conversationBottomChromeClearance)
@@ -495,10 +493,7 @@ struct GaryxConversationView: View {
         let identity = conversationScrollIdentity
         // Long transcripts re-layout while scrolling, so a single scrollTo
         // can land short; the later attempts converge on the true bottom.
-        let delays: [DispatchTimeInterval] = [
-            .milliseconds(0), .milliseconds(16), .milliseconds(40), .milliseconds(140),
-            .milliseconds(320), .milliseconds(650), .milliseconds(1_000),
-        ]
+        let delays = tailScrollRetryDelays(for: request.reason)
 
         for (index, delay) in delays.enumerated() {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
@@ -517,6 +512,23 @@ struct GaryxConversationView: View {
                     }
                 }
             }
+        }
+    }
+
+    private func tailScrollRetryDelays(
+        for reason: GaryxConversationScrollState.TailScrollReason
+    ) -> [DispatchTimeInterval] {
+        switch reason {
+        case .tailUpdate:
+            // Ordinary tail growth during send/streaming should stay pinned,
+            // but long retry chains make the transcript visibly wobble while
+            // the composer and bottom spacer are also settling.
+            return [.milliseconds(0), .milliseconds(40), .milliseconds(140)]
+        case .openingThread, .manual, .repair:
+            return [
+                .milliseconds(0), .milliseconds(16), .milliseconds(40), .milliseconds(140),
+                .milliseconds(320), .milliseconds(650), .milliseconds(1_000),
+            ]
         }
     }
 
