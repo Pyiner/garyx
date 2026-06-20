@@ -256,12 +256,11 @@ pub(crate) enum GatewayAction {
         long_about = "Restart the managed gateway service and refresh its unit/plist first.\n\nAgent safety: if you are running inside an agent thread, do not use a bare restart. Queue a wake so the new gateway can resume this same thread after the service comes back:\n  garyx gateway restart --wake thread <thread_id> --wake-message \"continue\"\n\nUse --no-wake only when you intentionally want the gateway to restart without resuming any agent thread."
     )]
     Restart {
-        /// Wake a target after restart: `thread <thread_id>`, `task <task_id>`, or `bot <channel:account_id>`
+        /// Wake a target after restart: `all`, `thread <thread_id>`, `task <task_id>`, or `bot <channel:account_id>`
         #[arg(
             long,
             value_names = ["KIND", "TARGET"],
-            num_args = 2,
-            requires = "wake_message",
+            num_args = 1..=2,
             conflicts_with = "no_wake"
         )]
         wake: Vec<String>,

@@ -56,15 +56,23 @@ use commands::{
     cmd_workflow_get, cmd_workflow_list, run_gateway,
 };
 
+#[derive(Debug)]
 struct ThreadSendDestination {
     target: ThreadSendTarget,
     message_parts: Vec<String>,
 }
 
+#[derive(Debug)]
 enum ThreadSendTarget {
     Thread(String),
     Task(String),
     Bot(String),
+}
+
+#[derive(Debug)]
+enum GatewayRestartWakeDecision {
+    Single(ThreadSendDestination),
+    All { message: String },
 }
 
 fn resolve_thread_send_destination(
@@ -141,12 +149,19 @@ fn resolve_thread_send_destination(
 fn resolve_gateway_restart_wake_destination(
     wake: Vec<String>,
     wake_message: Option<String>,
-) -> Result<Option<ThreadSendDestination>, Box<dyn std::error::Error>> {
+) -> Result<Option<GatewayRestartWakeDecision>, Box<dyn std::error::Error>> {
     if wake.is_empty() {
         return Ok(None);
     }
+    if wake.len() == 1 {
+        if wake[0].trim() != "all" {
+            return Err("single-token wake target must be `all`".into());
+        }
+        let message = trim_optional(wake_message).unwrap_or_else(|| "continue".to_owned());
+        return Ok(Some(GatewayRestartWakeDecision::All { message }));
+    }
     if wake.len() != 2 {
-        return Err("wake target must be `thread|task|bot <target>`".into());
+        return Err("wake target must be `all` or `thread|task|bot <target>`".into());
     }
     let message = trim_optional(wake_message).ok_or_else(|| {
         "wake message is required: use `--wake-message \"...\"` with `--wake`".to_owned()
@@ -157,6 +172,7 @@ fn resolve_gateway_restart_wake_destination(
         vec![message],
         None,
     )
+    .map(GatewayRestartWakeDecision::Single)
     .map(Some)
 }
 
@@ -264,27 +280,63 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     std::process::exit(2);
                 }
                 if let Some(destination) = wake_destination.as_ref() {
-                    let (kind, target) = match &destination.target {
-                        ThreadSendTarget::Thread(thread_id) => ("thread", thread_id.as_str()),
-                        ThreadSendTarget::Task(task_id) => ("task", task_id.as_str()),
-                        ThreadSendTarget::Bot(bot) => ("bot", bot.as_str()),
-                    };
-                    let message = destination.message_parts.join(" ");
-                    let path = garyx_gateway::restart_wake::queue_pending_restart_wake(
-                        kind, target, &message,
-                    )?;
-                    if wake_json {
-                        println!(
-                            "{}",
-                            serde_json::to_string(&json!({
-                                "type": "restart_wake_queued",
-                                "kind": kind,
-                                "target": target,
-                                "path": path.display().to_string(),
-                            }))?
-                        );
-                    } else {
-                        println!("Queued restart wake: {}", path.display());
+                    match destination {
+                        GatewayRestartWakeDecision::Single(destination) => {
+                            let (kind, target) = match &destination.target {
+                                ThreadSendTarget::Thread(thread_id) => {
+                                    ("thread", thread_id.as_str())
+                                }
+                                ThreadSendTarget::Task(task_id) => ("task", task_id.as_str()),
+                                ThreadSendTarget::Bot(bot) => ("bot", bot.as_str()),
+                            };
+                            let message = destination.message_parts.join(" ");
+                            let path = garyx_gateway::restart_wake::queue_pending_restart_wake(
+                                kind, target, &message,
+                            )?;
+                            if wake_json {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string(&json!({
+                                        "type": "restart_wake_queued",
+                                        "kind": kind,
+                                        "target": target,
+                                        "path": path.display().to_string(),
+                                    }))?
+                                );
+                            } else {
+                                println!("Queued restart wake: {}", path.display());
+                            }
+                        }
+                        GatewayRestartWakeDecision::All { message } => {
+                            let report =
+                                garyx_gateway::restart_wake::queue_pending_restart_wake_all(
+                                    message,
+                                )?;
+                            if wake_json {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string(&json!({
+                                        "type": "restart_wake_queued",
+                                        "kind": "all",
+                                        "target_count": report.targets.len(),
+                                        "truncated_count": report.truncated_count,
+                                        "path": report.path.display().to_string(),
+                                    }))?
+                                );
+                            } else {
+                                println!(
+                                    "Queued restart wake-all: {} target(s) at {}",
+                                    report.targets.len(),
+                                    report.path.display()
+                                );
+                                if report.truncated_count > 0 {
+                                    println!(
+                                        "  warning: {} additional running thread(s) omitted by wake-all cap",
+                                        report.truncated_count
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
                 cmd_gateway_restart(config_path).await?;

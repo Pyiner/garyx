@@ -37,4 +37,11 @@ bash scripts/codesign-macos-cli.sh <path-to-garyx>
 garyx gateway restart --wake thread <thread_id> --wake-message "continue"
 ```
 
+- When a restart should recover every thread that was already running before the
+  restart, queue wake-all:
+
+```bash
+garyx gateway restart --wake all
+```
+
 - Use `--no-wake` only when no continuation is intended.
