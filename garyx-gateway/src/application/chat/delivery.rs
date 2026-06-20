@@ -81,8 +81,9 @@ pub async fn build_bound_response_callback(
         };
         // Read this run's stream from the durable committed transcript. The
         // streaming sender is unchanged; only the source changes.
-        return garyx_channels::committed_replay::committed_callback(
+        return garyx_channels::committed_replay::committed_callback_for_thread(
             &state.integration.bridge,
+            thread_id,
             run_id,
             consumer,
         )
@@ -101,8 +102,9 @@ pub async fn build_bound_response_callback(
 
     // Read this run's stream from the durable committed transcript. The bound
     // delivery buffer is unchanged; only the source changes.
-    garyx_channels::committed_replay::committed_callback(
+    garyx_channels::committed_replay::committed_callback_for_thread(
         &state.integration.bridge,
+        thread_id,
         run_id,
         bound_consumer,
     )

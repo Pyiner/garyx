@@ -273,9 +273,17 @@ struct CommittedReplayState {
 
 impl CommittedReplayState {
     fn new(run_id: String) -> Self {
+        Self::with_initial_thread_id(run_id, None)
+    }
+
+    fn with_thread_id(run_id: String, thread_id: String) -> Self {
+        Self::with_initial_thread_id(run_id, Some(thread_id))
+    }
+
+    fn with_initial_thread_id(run_id: String, thread_id: Option<String>) -> Self {
         Self {
             run_id,
-            thread_id: None,
+            thread_id,
             frontier: None,
             frontier_payload: None,
             lagged_before_frontier: false,
@@ -477,9 +485,44 @@ pub fn spawn_committed_channel_replay(
     run_id: String,
     consumer: Arc<dyn Fn(StreamEvent) + Send + Sync>,
 ) -> JoinHandle<()> {
+    spawn_committed_channel_replay_with_state(
+        rx,
+        reader,
+        CommittedReplayState::new(run_id),
+        consumer,
+    )
+}
+
+/// Drive a channel consumer from the durable committed stream when the
+/// canonical thread id is known before dispatch.
+///
+/// This keeps the legacy inbound-channel subscription API unchanged while
+/// letting bound delivery recover an initial broadcast lag immediately, before a
+/// matching committed bus line arrives.
+pub fn spawn_committed_channel_replay_for_thread(
+    rx: broadcast::Receiver<String>,
+    reader: Arc<dyn CommittedTailReader>,
+    run_id: String,
+    thread_id: String,
+    consumer: Arc<dyn Fn(StreamEvent) + Send + Sync>,
+) -> JoinHandle<()> {
+    spawn_committed_channel_replay_with_state(
+        rx,
+        reader,
+        CommittedReplayState::with_thread_id(run_id, thread_id),
+        consumer,
+    )
+}
+
+fn spawn_committed_channel_replay_with_state(
+    rx: broadcast::Receiver<String>,
+    reader: Arc<dyn CommittedTailReader>,
+    initial_state: CommittedReplayState,
+    consumer: Arc<dyn Fn(StreamEvent) + Send + Sync>,
+) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut rx = rx;
-        let mut state = CommittedReplayState::new(run_id);
+        let mut state = initial_state;
         loop {
             match rx.recv().await {
                 Ok(raw) => match state.on_bus_message(&raw) {
@@ -589,6 +632,31 @@ pub async fn committed_callback(
         return Err(CommittedReplayError::MissingEventBus);
     };
     let task = spawn_committed_channel_replay(rx, bridge.clone(), run_id.to_owned(), consumer);
+    Ok(CommittedReplaySubscription::new(None, task))
+}
+
+/// Wire a channel `consumer` to the committed stream when the canonical thread
+/// id is already known before the run starts.
+///
+/// Gateway bound delivery uses this path. Inbound channel dispatch should keep
+/// using [`committed_callback`], because those call sites subscribe before
+/// routing resolves the canonical thread.
+pub async fn committed_callback_for_thread(
+    bridge: &Arc<MultiProviderBridge>,
+    thread_id: &str,
+    run_id: &str,
+    consumer: Arc<dyn Fn(StreamEvent) + Send + Sync>,
+) -> Result<CommittedReplaySubscription, CommittedReplayError> {
+    let Some(rx) = bridge.subscribe_events().await else {
+        return Err(CommittedReplayError::MissingEventBus);
+    };
+    let task = spawn_committed_channel_replay_for_thread(
+        rx,
+        bridge.clone(),
+        run_id.to_owned(),
+        thread_id.to_owned(),
+        consumer,
+    );
     Ok(CommittedReplaySubscription::new(None, task))
 }
 
@@ -875,6 +943,27 @@ mod tests {
             "run_id": FIXTURE_RUN,
             "seq": seq,
             "message": message,
+        })
+        .to_string()
+    }
+
+    fn committed_line_for_run(seq: u64, run_id: &str, message: Value) -> String {
+        json!({
+            "type": "committed_message",
+            "thread_id": FIXTURE_THREAD,
+            "run_id": run_id,
+            "seq": seq,
+            "message": message,
+        })
+        .to_string()
+    }
+
+    fn thread_scoped_control_line(seq: u64, thread_id: &str, kind: &str) -> String {
+        json!({
+            "type": "committed_message",
+            "thread_id": thread_id,
+            "seq": seq,
+            "message": RunControlMessage::new(kind).build(),
         })
         .to_string()
     }
@@ -1386,6 +1475,108 @@ mod tests {
                 .count(),
             1,
             "exactly one Done"
+        );
+    }
+
+    #[tokio::test]
+    async fn spawn_backfills_initial_lag_before_matching_row_reaches_terminal() {
+        use std::sync::Mutex as StdMutex;
+        use std::time::Duration;
+
+        let (tx, rx) = broadcast::channel(1);
+        let collected: Arc<StdMutex<Vec<StreamEvent>>> = Arc::new(StdMutex::new(Vec::new()));
+        let consumer: Arc<dyn Fn(StreamEvent) + Send + Sync> = {
+            let collected = collected.clone();
+            Arc::new(move |event| collected.lock().unwrap().push(event))
+        };
+        let reader = Arc::new(MockTailReader {
+            records: vec![
+                transcript_record(1, FIXTURE_RUN, assistant("first ")),
+                transcript_record(2, FIXTURE_RUN, assistant("second ")),
+            ],
+        });
+
+        let handle = spawn_committed_channel_replay_for_thread(
+            rx,
+            reader,
+            FIXTURE_RUN.to_owned(),
+            FIXTURE_THREAD.to_owned(),
+            consumer,
+        );
+
+        // The target run's rows were already committed, but the receiver lags
+        // before it has observed any matching row. The retained bus line belongs
+        // to another run, so waiting for the next matching row would defer the
+        // durable catch-up until terminal.
+        tx.send(committed_line(1, assistant("first "))).unwrap();
+        tx.send(committed_line(2, assistant("second "))).unwrap();
+        tx.send(committed_line_for_run(
+            3,
+            "run::other",
+            assistant("other run"),
+        ))
+        .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+
+        let deltas: Vec<String> = collected
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|event| match event {
+                StreamEvent::Delta { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            deltas,
+            vec!["first ", "second "],
+            "initial lag must backfill the target run before terminal"
+        );
+
+        tx.send(run_lifecycle_line(4, "run_complete")).unwrap();
+        handle.await.unwrap();
+
+        let events = collected.lock().unwrap().clone();
+        let final_deltas: Vec<String> = events
+            .iter()
+            .filter_map(|event| match event {
+                StreamEvent::Delta { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            final_deltas,
+            vec!["first ", "second "],
+            "terminal backfill must not duplicate already recovered deltas"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, StreamEvent::Done))
+                .count(),
+            1,
+            "terminal still emits exactly one Done"
+        );
+    }
+
+    #[test]
+    fn seeded_thread_id_filters_thread_scoped_controls_by_thread() {
+        let mut state =
+            CommittedReplayState::with_thread_id(FIXTURE_RUN.to_owned(), FIXTURE_THREAD.to_owned());
+
+        assert_eq!(
+            state.on_bus_message(&thread_scoped_control_line(1, FIXTURE_THREAD, "user_ack")),
+            BusSignal::Deliver(vec![StreamEvent::Boundary {
+                kind: StreamBoundaryKind::UserAck,
+                pending_input_id: None,
+            }]),
+            "same-thread runless controls still flow for bound delivery"
+        );
+        assert_eq!(
+            state.on_bus_message(&thread_scoped_control_line(2, "thread::other", "user_ack")),
+            BusSignal::Ignore,
+            "seeded bound replay rejects runless controls from other threads"
         );
     }
 
