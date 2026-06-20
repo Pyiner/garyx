@@ -1649,6 +1649,7 @@ fn parse_agent_update_without_model() {
                     display_name,
                     provider,
                     model,
+                    clear_model,
                     model_reasoning_effort,
                     model_service_tier,
                     provider_auth_source,
@@ -1662,6 +1663,7 @@ fn parse_agent_update_without_model() {
             assert_eq!(display_name, "Spec Review");
             assert_eq!(provider, "codex_app_server");
             assert_eq!(model, None);
+            assert!(!clear_model);
             assert_eq!(model_reasoning_effort, None);
             assert_eq!(model_service_tier, None);
             assert_eq!(provider_auth_source, None);
@@ -1672,6 +1674,60 @@ fn parse_agent_update_without_model() {
         }
         _ => panic!("expected Agent::Update"),
     }
+}
+
+#[test]
+fn parse_agent_update_clear_model() {
+    let cli = Cli::parse_from([
+        "garyx",
+        "agent",
+        "update",
+        "--agent-id",
+        "spec-review",
+        "--display-name",
+        "Spec Review",
+        "--provider",
+        "codex_app_server",
+        "--clear-model",
+        "--system-prompt",
+        "Review specs carefully.",
+    ]);
+    match cli.command {
+        Some(Commands::Agent {
+            action: AgentAction::Update {
+                model, clear_model, ..
+            },
+        }) => {
+            assert_eq!(model, None);
+            assert!(clear_model);
+        }
+        _ => panic!("expected Agent::Update"),
+    }
+}
+
+#[test]
+fn parse_agent_update_rejects_model_with_clear_model() {
+    let error = match Cli::try_parse_from([
+        "garyx",
+        "agent",
+        "update",
+        "--agent-id",
+        "spec-review",
+        "--display-name",
+        "Spec Review",
+        "--provider",
+        "codex_app_server",
+        "--model",
+        "gpt-5",
+        "--clear-model",
+        "--system-prompt",
+        "Review specs carefully.",
+    ]) {
+        Ok(_) => panic!("model and clear-model should conflict"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
 }
 
 #[test]
@@ -1704,6 +1760,7 @@ fn parse_agent_upsert() {
                     display_name,
                     provider,
                     model,
+                    clear_model,
                     model_reasoning_effort,
                     model_service_tier,
                     provider_auth_source,
@@ -1717,6 +1774,7 @@ fn parse_agent_upsert() {
             assert_eq!(display_name, "Spec Review");
             assert_eq!(provider, "codex_app_server");
             assert_eq!(model.as_deref(), Some("gpt-5"));
+            assert!(!clear_model);
             assert_eq!(model_reasoning_effort.as_deref(), Some("xhigh"));
             assert_eq!(model_service_tier, None);
             assert_eq!(provider_auth_source, None);

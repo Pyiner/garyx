@@ -1,5 +1,30 @@
 use super::*;
 
+fn model_contract_request(
+    agent_id: &str,
+    model: Option<&str>,
+    model_reasoning_effort: Option<&str>,
+    model_service_tier: Option<&str>,
+) -> UpsertCustomAgentRequest {
+    UpsertCustomAgentRequest {
+        agent_id: agent_id.to_owned(),
+        display_name: "Reviewer".to_owned(),
+        provider_type: ProviderType::CodexAppServer,
+        model: model.map(str::to_owned),
+        model_reasoning_effort: model_reasoning_effort.map(str::to_owned),
+        model_service_tier: model_service_tier.map(str::to_owned),
+        provider_env: None,
+        auth_source: None,
+        base_url: None,
+        codex_home: None,
+        max_tool_iterations: None,
+        request_timeout_seconds: None,
+        default_workspace_dir: None,
+        avatar_data_url: None,
+        system_prompt: "Review carefully.".to_owned(),
+    }
+}
+
 #[tokio::test]
 async fn lists_only_provider_builtin_agents() {
     let store = CustomAgentStore::new();
@@ -27,9 +52,9 @@ async fn rejects_builtin_agent_modification() {
             agent_id: "claude".to_owned(),
             display_name: "Claude Override".to_owned(),
             provider_type: ProviderType::ClaudeCode,
-            model: "claude-opus-4-1".to_owned(),
-            model_reasoning_effort: String::new(),
-            model_service_tier: String::new(),
+            model: Some("claude-opus-4-1".to_owned()),
+            model_reasoning_effort: Some(String::new()),
+            model_service_tier: Some(String::new()),
             provider_env: None,
             auth_source: None,
             base_url: None,
@@ -46,6 +71,98 @@ async fn rejects_builtin_agent_modification() {
 }
 
 #[tokio::test]
+async fn upsert_without_model_fields_preserves_existing_model_settings() {
+    let store = CustomAgentStore::new();
+    store
+        .upsert_agent(model_contract_request(
+            "reviewer",
+            Some("gpt-5"),
+            Some("high"),
+            Some("priority"),
+        ))
+        .await
+        .expect("create agent");
+
+    let updated = store
+        .upsert_agent(model_contract_request("reviewer", None, None, None))
+        .await
+        .expect("update agent");
+
+    assert_eq!(updated.model, "gpt-5");
+    assert_eq!(updated.model_reasoning_effort, "high");
+    assert_eq!(updated.model_service_tier, "priority");
+}
+
+#[tokio::test]
+async fn upsert_with_empty_model_fields_clears_existing_model_settings() {
+    let store = CustomAgentStore::new();
+    store
+        .upsert_agent(model_contract_request(
+            "reviewer",
+            Some("gpt-5"),
+            Some("high"),
+            Some("priority"),
+        ))
+        .await
+        .expect("create agent");
+
+    let updated = store
+        .upsert_agent(model_contract_request(
+            "reviewer",
+            Some(""),
+            Some(""),
+            Some(""),
+        ))
+        .await
+        .expect("update agent");
+
+    assert_eq!(updated.model, "");
+    assert_eq!(updated.model_reasoning_effort, "");
+    assert_eq!(updated.model_service_tier, "");
+}
+
+#[tokio::test]
+async fn upsert_with_model_fields_replaces_existing_model_settings() {
+    let store = CustomAgentStore::new();
+    store
+        .upsert_agent(model_contract_request(
+            "reviewer",
+            Some("gpt-5"),
+            Some("high"),
+            Some("priority"),
+        ))
+        .await
+        .expect("create agent");
+
+    let updated = store
+        .upsert_agent(model_contract_request(
+            "reviewer",
+            Some(" claude-opus-4-8 "),
+            Some(" max "),
+            Some(" flex "),
+        ))
+        .await
+        .expect("update agent");
+
+    assert_eq!(updated.model, "claude-opus-4-8");
+    assert_eq!(updated.model_reasoning_effort, "max");
+    assert_eq!(updated.model_service_tier, "flex");
+}
+
+#[tokio::test]
+async fn upsert_create_without_model_fields_stores_provider_default_settings() {
+    let store = CustomAgentStore::new();
+    let created = store
+        .upsert_agent(model_contract_request("reviewer", None, None, None))
+        .await
+        .expect("create agent");
+
+    assert_eq!(created.model, "");
+    assert_eq!(created.model_reasoning_effort, "");
+    assert_eq!(created.model_service_tier, "");
+}
+
+#[tokio::test]
 async fn upsert_preserves_and_clears_default_workspace_dir() {
     let store = CustomAgentStore::new();
     let created = store
@@ -53,9 +170,9 @@ async fn upsert_preserves_and_clears_default_workspace_dir() {
             agent_id: "reviewer".to_owned(),
             display_name: "Reviewer".to_owned(),
             provider_type: ProviderType::CodexAppServer,
-            model: "gpt-5".to_owned(),
-            model_reasoning_effort: "high".to_owned(),
-            model_service_tier: "priority".to_owned(),
+            model: Some("gpt-5".to_owned()),
+            model_reasoning_effort: Some("high".to_owned()),
+            model_service_tier: Some("priority".to_owned()),
             provider_env: None,
             auth_source: None,
             base_url: None,
@@ -80,9 +197,9 @@ async fn upsert_preserves_and_clears_default_workspace_dir() {
             agent_id: "reviewer".to_owned(),
             display_name: "Reviewer".to_owned(),
             provider_type: ProviderType::CodexAppServer,
-            model: "gpt-5".to_owned(),
-            model_reasoning_effort: String::new(),
-            model_service_tier: String::new(),
+            model: Some("gpt-5".to_owned()),
+            model_reasoning_effort: Some(String::new()),
+            model_service_tier: Some(String::new()),
             provider_env: None,
             auth_source: None,
             base_url: None,
@@ -105,9 +222,9 @@ async fn upsert_preserves_and_clears_default_workspace_dir() {
             agent_id: "reviewer".to_owned(),
             display_name: "Reviewer".to_owned(),
             provider_type: ProviderType::CodexAppServer,
-            model: "gpt-5".to_owned(),
-            model_reasoning_effort: String::new(),
-            model_service_tier: String::new(),
+            model: Some("gpt-5".to_owned()),
+            model_reasoning_effort: Some(String::new()),
+            model_service_tier: Some(String::new()),
             provider_env: None,
             auth_source: None,
             base_url: None,
@@ -131,9 +248,9 @@ async fn upsert_preserves_and_clears_avatar_data_url() {
             agent_id: "designer".to_owned(),
             display_name: "Designer".to_owned(),
             provider_type: ProviderType::CodexAppServer,
-            model: "gpt-5".to_owned(),
-            model_reasoning_effort: String::new(),
-            model_service_tier: String::new(),
+            model: Some("gpt-5".to_owned()),
+            model_reasoning_effort: Some(String::new()),
+            model_service_tier: Some(String::new()),
             provider_env: None,
             auth_source: None,
             base_url: None,
@@ -156,9 +273,9 @@ async fn upsert_preserves_and_clears_avatar_data_url() {
             agent_id: "designer".to_owned(),
             display_name: "Designer".to_owned(),
             provider_type: ProviderType::CodexAppServer,
-            model: "gpt-5".to_owned(),
-            model_reasoning_effort: String::new(),
-            model_service_tier: String::new(),
+            model: Some("gpt-5".to_owned()),
+            model_reasoning_effort: Some(String::new()),
+            model_service_tier: Some(String::new()),
             provider_env: None,
             auth_source: None,
             base_url: None,
@@ -181,9 +298,9 @@ async fn upsert_preserves_and_clears_avatar_data_url() {
             agent_id: "designer".to_owned(),
             display_name: "Designer".to_owned(),
             provider_type: ProviderType::CodexAppServer,
-            model: "gpt-5".to_owned(),
-            model_reasoning_effort: String::new(),
-            model_service_tier: String::new(),
+            model: Some("gpt-5".to_owned()),
+            model_reasoning_effort: Some(String::new()),
+            model_service_tier: Some(String::new()),
             provider_env: None,
             auth_source: None,
             base_url: None,
@@ -207,9 +324,9 @@ async fn upsert_persists_and_preserves_provider_auth_config() {
             agent_id: "budget-gpt".to_owned(),
             display_name: "Budget GPT".to_owned(),
             provider_type: ProviderType::Gpt,
-            model: "gpt-5.5".to_owned(),
-            model_reasoning_effort: "medium".to_owned(),
-            model_service_tier: String::new(),
+            model: Some("gpt-5.5".to_owned()),
+            model_reasoning_effort: Some("medium".to_owned()),
+            model_service_tier: Some(String::new()),
             provider_env: Some(HashMap::from([(
                 " OPENAI_API_KEY ".to_owned(),
                 " test-api-key ".to_owned(),
@@ -243,9 +360,9 @@ async fn upsert_persists_and_preserves_provider_auth_config() {
             agent_id: "budget-gpt".to_owned(),
             display_name: "Budget GPT".to_owned(),
             provider_type: ProviderType::Gpt,
-            model: "gpt-5.5".to_owned(),
-            model_reasoning_effort: String::new(),
-            model_service_tier: String::new(),
+            model: Some("gpt-5.5".to_owned()),
+            model_reasoning_effort: Some(String::new()),
+            model_service_tier: Some(String::new()),
             provider_env: None,
             auth_source: None,
             base_url: None,

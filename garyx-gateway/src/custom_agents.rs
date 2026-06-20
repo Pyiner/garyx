@@ -16,11 +16,11 @@ pub struct UpsertCustomAgentRequest {
     pub display_name: String,
     pub provider_type: ProviderType,
     #[serde(default)]
-    pub model: String,
+    pub model: Option<String>,
     #[serde(default, alias = "modelReasoningEffort")]
-    pub model_reasoning_effort: String,
+    pub model_reasoning_effort: Option<String>,
     #[serde(default, alias = "modelServiceTier")]
-    pub model_service_tier: String,
+    pub model_service_tier: Option<String>,
     #[serde(default, alias = "env", alias = "providerEnv")]
     pub provider_env: Option<HashMap<String, String>>,
     #[serde(default, alias = "authSource")]
@@ -134,9 +134,13 @@ impl CustomAgentStore {
     ) -> Result<CustomAgentProfile, String> {
         let agent_id = request.agent_id.trim();
         let display_name = request.display_name.trim();
-        let model = request.model.trim();
-        let model_reasoning_effort = request.model_reasoning_effort.trim();
-        let model_service_tier = request.model_service_tier.trim();
+        let requested_model = request.model.map(|value| value.trim().to_owned());
+        let requested_model_reasoning_effort = request
+            .model_reasoning_effort
+            .map(|value| value.trim().to_owned());
+        let requested_model_service_tier = request
+            .model_service_tier
+            .map(|value| value.trim().to_owned());
         let provider_env = request.provider_env.map(|values| {
             values
                 .into_iter()
@@ -195,6 +199,15 @@ impl CustomAgentStore {
                 .and_then(|existing| existing.avatar_data_url.clone()),
         };
         let existing = inner.get(agent_id);
+        let model = requested_model
+            .or_else(|| existing.map(|profile| profile.model.clone()))
+            .unwrap_or_default();
+        let model_reasoning_effort = requested_model_reasoning_effort
+            .or_else(|| existing.map(|profile| profile.model_reasoning_effort.clone()))
+            .unwrap_or_default();
+        let model_service_tier = requested_model_service_tier
+            .or_else(|| existing.map(|profile| profile.model_service_tier.clone()))
+            .unwrap_or_default();
         let provider_env = provider_env
             .or_else(|| existing.map(|profile| profile.provider_env.clone()))
             .unwrap_or_default();
@@ -219,9 +232,9 @@ impl CustomAgentStore {
             agent_id: agent_id.to_owned(),
             display_name: display_name.to_owned(),
             provider_type: request.provider_type,
-            model: model.to_owned(),
-            model_reasoning_effort: model_reasoning_effort.to_owned(),
-            model_service_tier: model_service_tier.to_owned(),
+            model,
+            model_reasoning_effort,
+            model_service_tier,
             provider_env,
             auth_source,
             base_url,

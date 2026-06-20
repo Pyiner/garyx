@@ -1113,9 +1113,12 @@ pub(crate) enum AgentAction {
         /// Provider type: claude_code, codex_app_server, traex, gemini_cli, gpt, anthropic, or google
         #[arg(long, default_value = "claude_code")]
         provider: String,
-        /// Optional model override. Omit to use the provider default.
-        #[arg(long)]
+        /// Optional model override. Omit to preserve the existing value.
+        #[arg(long, conflicts_with = "clear_model")]
         model: Option<String>,
+        /// Clear the model override and use the provider default.
+        #[arg(long)]
+        clear_model: bool,
         /// Optional reasoning effort override: low, medium, high, or xhigh. Pass an empty string to clear it.
         #[arg(long)]
         model_reasoning_effort: Option<String>,
@@ -1150,9 +1153,12 @@ pub(crate) enum AgentAction {
         /// Provider type: claude_code, codex_app_server, traex, gemini_cli, gpt, anthropic, or google
         #[arg(long, default_value = "claude_code")]
         provider: String,
-        /// Optional model override. Omit to use the provider default.
-        #[arg(long)]
+        /// Optional model override. Omit to preserve an existing value, or use the provider default on create.
+        #[arg(long, conflicts_with = "clear_model")]
         model: Option<String>,
+        /// Clear the model override and use the provider default.
+        #[arg(long)]
+        clear_model: bool,
         /// Optional reasoning effort override: low, medium, high, or xhigh. Pass an empty string to clear it.
         #[arg(long)]
         model_reasoning_effort: Option<String>,

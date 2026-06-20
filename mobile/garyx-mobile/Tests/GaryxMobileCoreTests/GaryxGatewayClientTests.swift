@@ -105,6 +105,24 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(attachments.first?["path"] as? String, "/workspace/project/note.md")
     }
 
+    func testCustomAgentRequestEncodesEmptyModelAsPresentValue() throws {
+        let request = GaryxCustomAgentRequest(
+            agentId: "agent-test",
+            displayName: "Agent Test",
+            providerType: "codex_app_server",
+            model: "",
+            modelReasoningEffort: "",
+            modelServiceTier: "",
+            systemPrompt: "Use synthetic instructions."
+        )
+
+        let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any]
+
+        XCTAssertEqual(object?["model"] as? String, "")
+        XCTAssertEqual(object?["model_reasoning_effort"] as? String, "")
+        XCTAssertEqual(object?["model_service_tier"] as? String, "")
+    }
+
     func testStartChatRequestEncodesGatewayShape() throws {
         let request = GaryxStartChatRequest(
             threadId: "thread::test",

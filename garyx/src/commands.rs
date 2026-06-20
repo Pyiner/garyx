@@ -3503,6 +3503,7 @@ fn build_agent_mutation_body(
     display_name: String,
     provider: String,
     model: Option<String>,
+    clear_model: bool,
     model_reasoning_effort: Option<String>,
     model_service_tier: Option<String>,
     provider_auth_source: Option<String>,
@@ -3518,11 +3519,19 @@ fn build_agent_mutation_body(
         "agent_id": agent_id,
         "display_name": display_name.trim(),
         "provider_type": provider.trim(),
-        "model": model.as_deref().map(str::trim).unwrap_or(""),
-        "model_reasoning_effort": model_reasoning_effort.as_deref().map(str::trim).unwrap_or(""),
-        "model_service_tier": model_service_tier.as_deref().map(str::trim).unwrap_or(""),
         "system_prompt": system_prompt,
     });
+    if clear_model {
+        body["model"] = Value::String(String::new());
+    } else if let Some(model) = model.as_deref().map(str::trim) {
+        body["model"] = Value::String(model.to_owned());
+    }
+    if let Some(effort) = model_reasoning_effort.as_deref().map(str::trim) {
+        body["model_reasoning_effort"] = Value::String(effort.to_owned());
+    }
+    if let Some(tier) = model_service_tier.as_deref().map(str::trim) {
+        body["model_service_tier"] = Value::String(tier.to_owned());
+    }
     let provider_type = ProviderType::from_slug(provider.trim());
     let auth_source = provider_auth_source
         .as_deref()
@@ -3578,6 +3587,7 @@ pub(crate) async fn cmd_agent_create(
         display_name,
         provider,
         model,
+        false,
         model_reasoning_effort,
         model_service_tier,
         provider_auth_source,
@@ -3599,6 +3609,7 @@ pub(crate) async fn cmd_agent_update(
     display_name: String,
     provider: String,
     model: Option<String>,
+    clear_model: bool,
     model_reasoning_effort: Option<String>,
     model_service_tier: Option<String>,
     provider_auth_source: Option<String>,
@@ -3613,6 +3624,7 @@ pub(crate) async fn cmd_agent_update(
         display_name,
         provider,
         model,
+        clear_model,
         model_reasoning_effort,
         model_service_tier,
         provider_auth_source,
@@ -3638,6 +3650,7 @@ pub(crate) async fn cmd_agent_upsert(
     display_name: String,
     provider: String,
     model: Option<String>,
+    clear_model: bool,
     model_reasoning_effort: Option<String>,
     model_service_tier: Option<String>,
     provider_auth_source: Option<String>,
@@ -3652,6 +3665,7 @@ pub(crate) async fn cmd_agent_upsert(
         display_name,
         provider,
         model,
+        clear_model,
         model_reasoning_effort,
         model_service_tier,
         provider_auth_source,
