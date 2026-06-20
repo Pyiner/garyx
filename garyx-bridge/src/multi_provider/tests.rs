@@ -178,6 +178,8 @@ struct CheckpointingProvider {
     release_run: Arc<Notify>,
 }
 
+struct SegmentedResponseProvider;
+
 struct FailingCheckpointProvider {
     delta_sent: Arc<Notify>,
 }
@@ -248,6 +250,65 @@ impl CheckpointingProvider {
 
     fn release_run(&self) {
         self.release_run.notify_waiters();
+    }
+}
+
+#[async_trait::async_trait]
+impl AgentLoopProvider for SegmentedResponseProvider {
+    fn provider_type(&self) -> ProviderType {
+        ProviderType::CodexAppServer
+    }
+
+    fn is_ready(&self) -> bool {
+        true
+    }
+
+    async fn initialize(&mut self) -> Result<(), BridgeError> {
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> Result<(), BridgeError> {
+        Ok(())
+    }
+
+    async fn run_streaming(
+        &self,
+        options: &ProviderRunOptions,
+        on_chunk: StreamCallback,
+    ) -> Result<ProviderRunResult, BridgeError> {
+        on_chunk(StreamEvent::Delta {
+            text: "polling review status".to_owned(),
+        });
+        on_chunk(StreamEvent::Boundary {
+            kind: StreamBoundaryKind::AssistantSegment,
+            pending_input_id: None,
+        });
+        on_chunk(StreamEvent::Delta {
+            text: "final implementation summary".to_owned(),
+        });
+        on_chunk(StreamEvent::Done);
+        Ok(ProviderRunResult {
+            run_id: "segmented-run".to_owned(),
+            thread_id: options.thread_id.clone(),
+            response: "polling review status\n\nfinal implementation summary".to_owned(),
+            session_messages: vec![
+                ProviderMessage::assistant_text("polling review status"),
+                ProviderMessage::assistant_text("final implementation summary"),
+            ],
+            sdk_session_id: None,
+            actual_model: None,
+            thread_title: None,
+            success: true,
+            error: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            cost: 0.0,
+            duration_ms: 1,
+        })
+    }
+
+    async fn get_or_create_session(&self, session_key: &str) -> Result<String, BridgeError> {
+        Ok(session_key.to_owned())
     }
 }
 
@@ -2654,6 +2715,94 @@ async fn test_unsuccessful_task_run_with_partial_response_does_not_move_to_revie
                 && message["content"] == "I'll continue by editing files."),
         "partial response should be preserved for diagnosis"
     );
+}
+
+#[tokio::test]
+async fn test_segmented_successful_task_run_hands_off_only_final_answer_segment() {
+    let bridge = MultiProviderBridge::new();
+    bridge
+        .register_provider("p1", Arc::new(SegmentedResponseProvider))
+        .await;
+    bridge.set_default_provider_key("p1").await;
+
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let now = Utc::now();
+    let task = ThreadTask {
+        schema_version: 1,
+        number: 11,
+        title: "Review segmented handoff".to_owned(),
+        status: TaskStatus::InProgress,
+        creator: Principal::Human {
+            user_id: "1000000011".to_owned(),
+        },
+        assignee: Some(Principal::Agent {
+            agent_id: "codex".to_owned(),
+        }),
+        notification_target: None,
+        executor: None,
+        source: None,
+        body: None,
+        created_at: now,
+        updated_at: now,
+        updated_by: Principal::Agent {
+            agent_id: "codex".to_owned(),
+        },
+        events: Vec::new(),
+    };
+    let thread_id = "sess::tg::segmented-task";
+    store
+        .set(
+            thread_id,
+            json!({
+                "task": task
+            }),
+        )
+        .await;
+    bridge.set_thread_store(store.clone()).await;
+    bridge.set_thread_history(make_history(store.clone()));
+    let (tx, mut rx) = tokio::sync::broadcast::channel::<String>(128);
+    bridge.set_event_tx(tx).await;
+
+    bridge
+        .start_agent_run(
+            run_request(
+                thread_id,
+                "finish segmented task",
+                "run-segmented-task",
+                "telegram",
+                "main",
+            ),
+            None,
+        )
+        .await
+        .unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while bridge.is_run_active("run-segmented-task").await {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("segmented task run should finish");
+
+    let ready_event = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let raw = rx.recv().await.expect("event channel should stay open");
+            let event: serde_json::Value = serde_json::from_str(&raw).expect("event parses");
+            if event.get("type").and_then(serde_json::Value::as_str)
+                == Some("task_ready_for_review")
+            {
+                break event;
+            }
+        }
+    })
+    .await
+    .expect("segmented task should emit a task-ready event");
+
+    assert_eq!(ready_event["thread_id"], thread_id);
+    assert_eq!(ready_event["task_id"], "#TASK-11");
+    assert_eq!(ready_event["run_id"], "run-segmented-task");
+    assert_eq!(ready_event["handoff"], "final implementation summary");
 }
 
 #[tokio::test]

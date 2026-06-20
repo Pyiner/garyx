@@ -17,6 +17,7 @@ use crate::server::AppState;
 
 const TASK_NOTIFICATION_EVENT: &str = "task_ready_for_review";
 const TASK_NOTIFICATION_TAG: &str = "garyx_task_notification";
+const TASK_NOTIFICATION_HANDOFF_CHAR_LIMIT: usize = 4000;
 
 pub(crate) fn spawn_listener(state: Arc<AppState>) {
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
@@ -133,7 +134,8 @@ pub(crate) async fn deliver_task_review_handoff(
         return Ok(());
     }
 
-    let notification = format_task_ready_notification(&event.task_id, &task.title, handoff);
+    let handoff = cap_task_notification_handoff(handoff);
+    let notification = format_task_ready_notification(&event.task_id, &task.title, &handoff);
     match target {
         TaskNotificationTarget::None => Ok(()),
         TaskNotificationTarget::Thread { thread_id } => {
@@ -173,6 +175,19 @@ If approved, mark it done:\n\
 garyx task update {body_task_id} --status done --note \"approved by reviewer\"\n\
 </{TASK_NOTIFICATION_TAG}>"
     )
+}
+
+fn cap_task_notification_handoff(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.chars().count() <= TASK_NOTIFICATION_HANDOFF_CHAR_LIMIT {
+        return trimmed.to_owned();
+    }
+    let mut clipped = trimmed
+        .chars()
+        .take(TASK_NOTIFICATION_HANDOFF_CHAR_LIMIT)
+        .collect::<String>();
+    clipped.push_str("\n\n[truncated]");
+    clipped
 }
 
 async fn deliver_notification_to_thread(

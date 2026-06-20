@@ -155,6 +155,19 @@ pub fn reduce_transcript_render_state<'a>(
     reduce_transcript_render_state_with_run_state(records.iter().copied(), &run_state)
 }
 
+pub fn final_assistant_text_from_render_records<'a>(
+    records: impl IntoIterator<Item = &'a Value>,
+) -> Option<String> {
+    let records = records.into_iter().collect::<Vec<_>>();
+    let snapshot = reduce_transcript_render_state(records.iter().copied());
+    let final_message = latest_final_assistant_ref(&snapshot)?;
+    let message = records
+        .iter()
+        .find(|record| record_seq(record) == Some(final_message.seq))
+        .and_then(|record| record_message(record))?;
+    assistant_visible_text(message)
+}
+
 pub fn reduce_transcript_render_state_with_run_state<'a>(
     records: impl IntoIterator<Item = &'a Value>,
     run_state: &TranscriptRunState,
@@ -854,6 +867,88 @@ fn step_item_timestamp(item: &RenderStepItem) -> Option<String> {
     }
 }
 
+fn latest_final_assistant_ref(snapshot: &RenderSnapshot) -> Option<&RenderMessageRef> {
+    for row in snapshot.rows.iter().rev() {
+        let RenderRow::UserTurn(turn) = row;
+        for activity in turn.activity.iter().rev() {
+            match activity {
+                RenderActivityRow::AssistantReply(reply)
+                    if !reply.streaming && reply.message.role == "assistant" =>
+                {
+                    return Some(&reply.message);
+                }
+                RenderActivityRow::Step(step) => {
+                    if let Some(message) = step
+                        .final_message
+                        .as_ref()
+                        .filter(|message| message.role == "assistant")
+                    {
+                        return Some(message);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+fn assistant_visible_text(message: &Map<String, Value>) -> Option<String> {
+    if normalized_role(message) != "assistant" {
+        return None;
+    }
+    if let Some(text) = message
+        .get("text")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Some(text.to_owned());
+    }
+    visible_text_from_value(message.get("content"))
+}
+
+fn visible_text_from_value(value: Option<&Value>) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(value) = value {
+        collect_visible_text(value, &mut parts, 0);
+    }
+    let text = parts.join("\n").trim().to_owned();
+    (!text.is_empty()).then_some(text)
+}
+
+fn collect_visible_text(value: &Value, parts: &mut Vec<String>, depth: usize) {
+    if depth > 32 {
+        return;
+    }
+    match value {
+        Value::String(text) => push_visible_text_part(parts, text),
+        Value::Array(items) => {
+            for item in items {
+                collect_visible_text(item, parts, depth + 1);
+            }
+        }
+        Value::Object(object) => {
+            if let Some(text) = object.get("text").and_then(Value::as_str) {
+                push_visible_text_part(parts, text);
+            }
+            for key in ["content", "parts", "items"] {
+                if let Some(value) = object.get(key) {
+                    collect_visible_text(value, parts, depth + 1);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn push_visible_text_part(parts: &mut Vec<String>, text: &str) {
+    let trimmed = text.trim();
+    if !trimmed.is_empty() {
+        parts.push(trimmed.to_owned());
+    }
+}
+
 fn message_timestamp_from_ref(
     blocks: &[RenderBlock],
     reference: &RenderMessageRef,
@@ -870,6 +965,7 @@ fn message_timestamp_from_ref(
 mod tests {
     use super::*;
     use serde::Deserialize;
+    use serde_json::json;
     use std::fs;
     use std::path::PathBuf;
 
@@ -936,6 +1032,97 @@ mod tests {
         }
     }
 
+    #[test]
+    fn final_assistant_text_from_render_records_uses_final_segment() {
+        let records = vec![
+            control_record(1, "run_start"),
+            message_record(2, json!({"role": "user", "content": "finish the task"})),
+            message_record(
+                3,
+                json!({
+                    "role": "assistant",
+                    "content": "polling review status",
+                    "text": "polling review status"
+                }),
+            ),
+            control_record(4, "assistant_boundary"),
+            message_record(
+                5,
+                json!({
+                    "role": "assistant",
+                    "content": "final implementation summary",
+                    "text": "final implementation summary"
+                }),
+            ),
+            control_record(6, "run_complete"),
+        ];
+
+        assert_eq!(
+            final_assistant_text_from_render_records(&records).as_deref(),
+            Some("final implementation summary")
+        );
+    }
+
+    #[test]
+    fn final_assistant_text_from_render_records_keeps_single_reply() {
+        let records = vec![
+            control_record(1, "run_start"),
+            message_record(2, json!({"role": "user", "content": "finish the task"})),
+            message_record(
+                3,
+                json!({
+                    "role": "assistant",
+                    "content": "single final summary",
+                    "text": "single final summary"
+                }),
+            ),
+            control_record(4, "run_complete"),
+        ];
+
+        assert_eq!(
+            final_assistant_text_from_render_records(&records).as_deref(),
+            Some("single final summary")
+        );
+    }
+
+    #[test]
+    fn final_assistant_text_from_render_records_returns_none_without_assistant() {
+        let records = vec![
+            control_record(1, "run_start"),
+            message_record(2, json!({"role": "user", "content": "finish the task"})),
+            control_record(3, "run_complete"),
+        ];
+
+        assert_eq!(final_assistant_text_from_render_records(&records), None);
+    }
+
+    #[test]
+    fn final_assistant_text_from_render_records_requires_terminal_control_for_steps() {
+        let records = vec![
+            control_record(1, "run_start"),
+            message_record(2, json!({"role": "user", "content": "finish the task"})),
+            message_record(
+                3,
+                json!({
+                    "role": "assistant",
+                    "content": "polling review status",
+                    "text": "polling review status"
+                }),
+            ),
+            control_record(4, "assistant_boundary"),
+            message_record(
+                5,
+                json!({
+                    "role": "assistant",
+                    "content": "final implementation summary",
+                    "text": "final implementation summary"
+                }),
+            ),
+        ];
+
+        assert_eq!(final_assistant_text_from_render_records(&records), None);
+    }
+
     fn load_render_fixture() -> RenderFixture {
         let path = fixture_root().join("render-layer/render-state-cases.json");
         let raw = fs::read_to_string(&path)
@@ -970,5 +1157,33 @@ mod tests {
             .parent()
             .expect("repo root")
             .join("test-fixtures")
+    }
+
+    fn message_record(seq: u64, message: Value) -> Value {
+        json!({
+            "seq": seq,
+            "thread_id": "thread::render-final",
+            "run_id": "run::render-final",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "message": message,
+        })
+    }
+
+    fn control_record(seq: u64, kind: &str) -> Value {
+        message_record(
+            seq,
+            json!({
+                "role": "system",
+                "kind": "control",
+                "internal": true,
+                "internal_kind": "control",
+                "control": {
+                    "kind": kind,
+                    "thread_id": "thread::render-final",
+                    "run_id": "run::render-final",
+                    "at": "2026-01-01T00:00:00Z",
+                }
+            }),
+        )
     }
 }
