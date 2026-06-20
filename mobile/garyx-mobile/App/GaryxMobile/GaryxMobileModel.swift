@@ -245,6 +245,7 @@ final class GaryxMobileModel: ObservableObject {
     var activeAssistantMessageIdsByThread: [String: String] = [:]
     var pendingDirectFollowUpsByThread: [String: [(userId: String, assistantId: String)]] = [:]
     var pendingQueuedInputsByIntentId: [String: GaryxPendingQueuedInput] = [:]
+    var pendingThreadArchives = GaryxPendingThreadArchiveState()
     var gatewayRuntimeGeneration = UUID()
     var selectedThreadRecoveryTask: Task<Void, Never>?
     var selectedThreadRecoveryThreadId: String?

@@ -103,6 +103,7 @@ extension GaryxMobileModel {
         threads = []
         pinnedThreadIds = []
         recentThreadIds = []
+        pendingThreadArchives = GaryxPendingThreadArchiveState()
         GaryxMobileWidgetStore.clear()
         WidgetCenter.shared.reloadTimelines(ofKind: GaryxRecentThreadsWidgetConstants.kind)
         GaryxUsageWidgetStore.clear()

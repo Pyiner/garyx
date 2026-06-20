@@ -248,6 +248,7 @@ extension GaryxMobileModel {
     func archiveThreadRecord(threadId: String, additionalEndpointKey: String? = nil) async {
         let normalizedThreadId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedThreadId.isEmpty else { return }
+        guard !pendingThreadArchives.contains(threadId: normalizedThreadId) else { return }
 
         var endpointKeys = Set(
             channelEndpoints
@@ -261,6 +262,12 @@ extension GaryxMobileModel {
         }
 
         let runtimeGeneration = gatewayRuntimeGeneration
+        let previousPinnedThreadIds = pinnedThreadIds
+        let previousRecentThreadIds = recentThreadIds
+        let previousThreads = threads
+        let previousLastOpenedThreadId = persistedLastOpenedThreadId
+        pendingThreadArchives.startArchive(threadId: normalizedThreadId)
+        removeArchivedThreadLocally(normalizedThreadId)
         if selectedThread?.id == normalizedThreadId {
             openNewThreadDraft()
         }
@@ -270,6 +277,7 @@ extension GaryxMobileModel {
             }
             _ = try await client().deleteThread(threadId: normalizedThreadId)
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            pendingThreadArchives.resolveArchive(threadId: normalizedThreadId)
             removeArchivedThreadLocally(normalizedThreadId)
             channelEndpoints.removeAll { endpoint in
                 let endpointThreadId = endpoint.threadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -292,6 +300,12 @@ extension GaryxMobileModel {
             await refreshThreads()
         } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            pendingThreadArchives.resolveArchive(threadId: normalizedThreadId)
+            pinnedThreadIds = previousPinnedThreadIds
+            recentThreadIds = previousRecentThreadIds
+            threads = previousThreads
+            restorePersistedLastOpenedThreadId(previousLastOpenedThreadId)
+            persistRecentThreadsWidgetSnapshot()
             lastError = displayMessage(for: error)
         }
     }

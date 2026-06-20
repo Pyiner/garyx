@@ -84,6 +84,16 @@ extension GaryxMobileModel {
         defaults.removeObject(forKey: key)
     }
 
+    func restorePersistedLastOpenedThreadId(_ threadId: String?) {
+        let key = scopedSettingsKey(GaryxMobileSettingsKeys.lastOpenedThreadId)
+        let normalizedId = threadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if normalizedId.isEmpty {
+            defaults.removeObject(forKey: key)
+        } else {
+            defaults.set(normalizedId, forKey: key)
+        }
+    }
+
     /// True when the app last went to background while showing a
     /// conversation; launches restore the thread only in that case.
     func persistLastSessionLocation() {
@@ -174,18 +184,19 @@ extension GaryxMobileModel {
             async let threadPinsPage = gatewayClient.listThreadPins()
             let (page, pinsPage) = try await (threadsPage, threadPinsPage)
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            applyPinnedThreadIds(pinsPage.threadIds)
+            let visiblePinnedThreadIds = pendingThreadArchives.visibleThreadIds(pinsPage.threadIds)
+            applyPinnedThreadIds(visiblePinnedThreadIds)
             applyRecentThreadsPage(page, preservesLoadedPages: silent)
-            var nextThreads = page.threads
+            var nextThreads = pendingThreadArchives.visibleThreads(page.threads)
             let selectionIdForThisRefresh = selectedThread?.id
-            let requiredThreadIds = normalizedThreadIds(pinsPage.threadIds + [selectionIdForThisRefresh])
+            let requiredThreadIds = normalizedThreadIds(visiblePinnedThreadIds + [selectionIdForThisRefresh])
             nextThreads += await fetchMissingThreadSummaries(
                 using: gatewayClient,
                 requiredThreadIds: requiredThreadIds,
                 existingThreadIds: Set(nextThreads.map(\.id))
             )
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            let existingThreads = silent ? threads : []
+            let existingThreads = silent ? pendingThreadArchives.visibleThreads(threads) : []
             let previousRuntimeByThreadId = Dictionary(
                 uniqueKeysWithValues: previousThreadSummaries.compactMap { thread -> (String, GaryxThreadRuntimeSummary)? in
                     guard let runtime = thread.threadRuntime else { return nil }
@@ -234,14 +245,16 @@ extension GaryxMobileModel {
     }
 
     func applyRecentThreadsPage(_ page: GaryxRecentThreadsPage, preservesLoadedPages: Bool) {
-        let pageIds = page.threads.map(\.id)
+        let pageIds = pendingThreadArchives.visibleThreads(page.threads).map(\.id)
         let returnedEnd = page.offset + page.count
         let hasLoadedBeyondHead = preservesLoadedPages
             && (nextThreadListOffset > returnedEnd || recentThreadIds.count > pageIds.count)
 
         if hasLoadedBeyondHead {
             let pageIdSet = Set(pageIds)
-            let existingTail = recentThreadIds.filter { !pageIdSet.contains($0) }
+            let existingTail = pendingThreadArchives.visibleThreadIds(
+                recentThreadIds.filter { !pageIdSet.contains($0) }
+            )
             let merged = pageIds + existingTail
             if recentThreadIds != merged {
                 recentThreadIds = merged
@@ -395,11 +408,12 @@ extension GaryxMobileModel {
             let page = try await client().listRecentThreads(limit: Self.threadListPageLimit, offset: offset)
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             updateThreadListPagination(from: page)
+            let pageThreads = pendingThreadArchives.visibleThreads(page.threads)
             var seenRecentIds = Set(recentThreadIds)
-            recentThreadIds += page.threads.compactMap { thread in
+            recentThreadIds += pageThreads.compactMap { thread in
                 seenRecentIds.insert(thread.id).inserted ? thread.id : nil
             }
-            threads = Self.mergedThreadSummaries(threads + page.threads.map(summaryWithCommittedRunState))
+            threads = Self.mergedThreadSummaries(threads + pageThreads.map(summaryWithCommittedRunState))
             persistRecentThreadsWidgetSnapshot()
         } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
@@ -440,7 +454,11 @@ extension GaryxMobileModel {
                 offset = nextOffset
             }
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            threads = Self.mergedThreadSummaries(threads + allThreads.map(summaryWithCommittedRunState))
+            let visibleThreads = pendingThreadArchives.visibleThreads(threads)
+            let visibleAllThreads = pendingThreadArchives.visibleThreads(allThreads)
+            threads = Self.mergedThreadSummaries(
+                visibleThreads + visibleAllThreads.map(summaryWithCommittedRunState)
+            )
             await mergeMissingSidebarRequiredThreads(
                 using: gatewayClient,
                 extraThreadIds: [selectedThread?.id],

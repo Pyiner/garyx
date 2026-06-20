@@ -1804,7 +1804,7 @@ async fn delete_thread_removes_garyx_db_recent_thread() {
         .uri(format!("/api/threads/{thread_id}"))
         .body(Body::empty())
         .unwrap();
-    let response = router.oneshot(request).await.unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert!(
         state
@@ -1814,6 +1814,18 @@ async fn delete_thread_removes_garyx_db_recent_thread() {
             .expect("list recent threads")
             .is_empty()
     );
+
+    let request = authed_request()
+        .uri("/api/recent-threads?limit=10")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert!(payload["threads"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]
