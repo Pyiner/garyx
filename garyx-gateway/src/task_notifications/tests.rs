@@ -196,6 +196,19 @@ fn format_wraps_notification_with_single_outer_xml_tag() {
     assert!(text.ends_with("</garyx_task_notification>"));
 }
 
+#[test]
+fn cap_task_notification_handoff_limits_long_bodies() {
+    let long_body = "a".repeat(TASK_NOTIFICATION_HANDOFF_CHAR_LIMIT + 100);
+    let capped = cap_task_notification_handoff(&long_body);
+
+    assert!(capped.ends_with("\n\n[truncated]"));
+    assert!(
+        capped.chars().count()
+            <= TASK_NOTIFICATION_HANDOFF_CHAR_LIMIT + "\n\n[truncated]".chars().count()
+    );
+    assert!(!capped.contains(&"a".repeat(TASK_NOTIFICATION_HANDOFF_CHAR_LIMIT + 1)));
+}
+
 #[tokio::test]
 async fn deliver_without_handoff_does_not_fallback_to_committed_thread_final_message() {
     let dispatcher = Arc::new(RecordingDispatcher::default());
