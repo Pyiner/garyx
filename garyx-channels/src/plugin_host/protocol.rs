@@ -15,6 +15,7 @@
 
 use std::collections::BTreeMap;
 
+use garyx_models::provider::{StreamBoundaryKind, StreamEvent};
 use garyx_models::{ChannelOutboundContent, ProviderMessage};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -148,6 +149,8 @@ pub struct CapabilitiesResponse {
     pub inbound: bool,
     #[serde(default)]
     pub streaming: bool,
+    #[serde(default)]
+    pub dispatch_stream_event: bool,
     #[serde(default)]
     pub images: bool,
     #[serde(default)]
@@ -302,6 +305,15 @@ pub enum StreamEventFrame {
         kind: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         text: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pending_input_id: Option<String>,
+    },
+    Done,
+    SessionBound {
+        sdk_session_id: String,
+    },
+    ThreadTitleUpdated {
+        title: String,
     },
     /// Other host-emitted metadata.
     Meta {
@@ -310,6 +322,34 @@ pub enum StreamEventFrame {
         #[serde(default)]
         detail: Option<Value>,
     },
+}
+
+fn stream_boundary_kind_to_wire(kind: StreamBoundaryKind) -> String {
+    match kind {
+        StreamBoundaryKind::AssistantSegment => "assistant_segment".to_owned(),
+        StreamBoundaryKind::UserAck => "user_ack".to_owned(),
+    }
+}
+
+impl From<StreamEvent> for StreamEventFrame {
+    fn from(event: StreamEvent) -> Self {
+        match event {
+            StreamEvent::Delta { text } => Self::Delta { text },
+            StreamEvent::ToolUse { message } => Self::ToolUse { message },
+            StreamEvent::ToolResult { message } => Self::ToolResult { message },
+            StreamEvent::Boundary {
+                kind,
+                pending_input_id,
+            } => Self::Boundary {
+                kind: stream_boundary_kind_to_wire(kind),
+                text: None,
+                pending_input_id,
+            },
+            StreamEvent::Done => Self::Done,
+            StreamEvent::SessionBound { sdk_session_id } => Self::SessionBound { sdk_session_id },
+            StreamEvent::ThreadTitleUpdated { title } => Self::ThreadTitleUpdated { title },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -381,6 +421,28 @@ pub struct DispatchOutbound {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DispatchOutboundResult {
+    pub message_ids: Vec<String>,
+}
+
+// -- dispatch_stream_event (host → plugin) ---------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DispatchStreamEvent {
+    pub account_id: String,
+    pub chat_id: String,
+    pub delivery_target_type: String,
+    pub delivery_target_id: String,
+    pub endpoint_identity: String,
+    pub thread_id: String,
+    pub run_id: String,
+    pub event: StreamEventFrame,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DispatchStreamEventResult {
+    #[serde(default)]
     pub message_ids: Vec<String>,
 }
 

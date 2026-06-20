@@ -338,12 +338,14 @@ impl AppState {
         // working across config reloads. Cron holds a cast-to-trait
         // view of the same swap, so its visible dispatcher follows this
         // store with no further plumbing.
-        let preserved_plugin_senders = self
-            .integration
-            .channel_swap
-            .load()
-            .plugin_senders_snapshot();
-        let mut rebuilt = ChannelDispatcherImpl::from_config(&config.channels);
+        let dispatcher_snapshot = self.integration.channel_swap.load();
+        let preserved_plugin_senders = dispatcher_snapshot.plugin_senders_snapshot();
+        let mut rebuilt = match dispatcher_snapshot.channel_running_handle("weixin") {
+            Some(running) => {
+                ChannelDispatcherImpl::from_config_with_weixin_running(&config.channels, running)
+            }
+            None => ChannelDispatcherImpl::from_config(&config.channels),
+        };
         for sender in preserved_plugin_senders {
             let plugin_id = sender.plugin_id().to_owned();
             if let Err(error) = rebuilt.register_plugin(sender) {

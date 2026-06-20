@@ -13,8 +13,17 @@ async fn dispatch_im_message_event(
     _public_url: &str,
     bot_open_id: &str,
 ) {
-    let runtime =
-        FeishuRuntimeContext::new(account_id, router, bridge, client, account, bot_open_id);
+    let dispatcher: Arc<dyn crate::dispatcher::ChannelDispatcher> =
+        Arc::new(crate::dispatcher::ChannelDispatcherImpl::new());
+    let runtime = FeishuRuntimeContext::new(
+        account_id,
+        router,
+        bridge,
+        &dispatcher,
+        client,
+        account,
+        bot_open_id,
+    );
     super::ws::handle_im_message_event(event, runtime).await;
 }
 

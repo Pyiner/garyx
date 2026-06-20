@@ -16,6 +16,45 @@ struct RecordingProvider {
     calls: StdMutex<Vec<ProviderCall>>,
 }
 
+#[test]
+fn single_bound_endpoint_identity_uses_persisted_binding_key() {
+    let thread = json!({
+        "channel_bindings": [{
+            "channel": "telegram",
+            "account_id": "bot1",
+            "binding_key": "user42",
+            "chat_id": "user42"
+        }]
+    });
+
+    assert_eq!(
+        single_bound_endpoint_identity(&thread).as_deref(),
+        Some("telegram::bot1::user42")
+    );
+}
+
+#[test]
+fn single_bound_endpoint_identity_does_not_guess_with_multiple_bindings() {
+    let thread = json!({
+        "channel_bindings": [
+            {
+                "channel": "telegram",
+                "account_id": "bot1",
+                "binding_key": "user42",
+                "chat_id": "user42"
+            },
+            {
+                "channel": "feishu",
+                "account_id": "bot2",
+                "binding_key": "ou_test",
+                "chat_id": "oc_test"
+            }
+        ]
+    });
+
+    assert!(single_bound_endpoint_identity(&thread).is_none());
+}
+
 #[async_trait]
 impl AgentLoopProvider for RecordingProvider {
     fn provider_type(&self) -> ProviderType {

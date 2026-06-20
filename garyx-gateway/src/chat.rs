@@ -12,6 +12,7 @@ use crate::application::chat::contracts::{
 };
 use crate::chat_application::{ChatPreparationError, prepare_chat_request};
 use crate::chat_control::{execute_chat_interrupt, execute_chat_stream_input};
+use crate::chat_delivery::build_bound_response_callback;
 use axum::Json;
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -272,6 +273,19 @@ async fn handle_chat_ws_start(
 type ChatStreamCallbackBuilder =
     Box<dyn Fn(&str, &str) -> Option<Arc<dyn Fn(StreamEvent) + Send + Sync>> + Send + Sync>;
 
+fn compose_stream_callbacks(
+    callbacks: Vec<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
+) -> Option<Arc<dyn Fn(StreamEvent) + Send + Sync>> {
+    if callbacks.is_empty() {
+        return None;
+    }
+    Some(Arc::new(move |event: StreamEvent| {
+        for callback in &callbacks {
+            callback(event.clone());
+        }
+    }))
+}
+
 async fn start_chat_run(
     state: &Arc<AppState>,
     request: ChatRequest,
@@ -306,7 +320,25 @@ async fn start_chat_run(
         &run_id,
     );
 
-    let callback = callback_builder.and_then(|builder| builder(&run_id, &thread_id));
+    let mut callbacks = Vec::new();
+    if let Some(callback) = callback_builder.and_then(|builder| builder(&run_id, &thread_id)) {
+        callbacks.push(callback);
+    }
+    match build_bound_response_callback(state, &thread_id, &run_id, None).await {
+        Ok(Some(callback)) => callbacks.push(callback),
+        Ok(None) => {}
+        Err(error) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "runId": run_id,
+                    "threadId": thread_id,
+                    "error": format!("failed to attach bound channel response stream: {error}")
+                })),
+            ));
+        }
+    }
+    let callback = compose_stream_callbacks(callbacks);
     state.sync_external_user_skills_before_run("api_chat_start", &thread_id);
     let start_result = state
         .integration

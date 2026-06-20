@@ -46,9 +46,9 @@ final class GaryxMobileModel: ObservableObject {
     static let threadHistoryMaxForwardPages = 50
     static let selectedThreadReconcileIntervalNanos: UInt64 = 1_500_000_000
     /// Coalescing window for streamed committed rows: a large catch-up replays many
-    /// committed messages back-to-back, so render + disk-persist are folded into one
-    /// flush per interval instead of running per row (which flickers the list).
-    static let streamedCommittedFlushDelayNanos: UInt64 = 80_000_000
+    /// committed messages back-to-back, so visible run-state, render, and
+    /// disk-persist fold into one update per interval instead of flickering the list.
+    static let streamedCommittedFlushDelayNanos = GaryxStreamUpdateCadence.committedMessageBatchWindowNanos
     static let selectedThreadHistoryRetryLimit = 8
 
     struct MessageListSignature: Equatable {

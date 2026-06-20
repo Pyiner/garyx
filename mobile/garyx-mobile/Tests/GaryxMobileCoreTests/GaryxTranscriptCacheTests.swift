@@ -105,6 +105,29 @@ final class GaryxTranscriptCacheTests: XCTestCase {
         XCTAssertEqual(merged.nextBeforeIndex, 2)
     }
 
+    func testReplaceLatestDropsExistingWindowOnReset() {
+        let cache = GaryxCachedTranscript(
+            threadId: "t",
+            savedAt: Date(timeIntervalSince1970: 0),
+            messages: [msg(0, .user, "old-u"), msg(1, .assistant, "old-a")],
+            hasMoreBefore: false,
+            nextBeforeIndex: nil
+        )
+        let merged = GaryxTranscriptCacheLogic.merged(
+            into: cache,
+            threadId: "t",
+            fetched: [msg(8, .user, "new-u"), msg(9, .assistant, "new-a")],
+            pageInfo: pageInfo(hasMoreBefore: true, nextBeforeIndex: 7),
+            direction: .replaceLatest,
+            savedAt: Date(timeIntervalSince1970: 1)
+        )
+        XCTAssertEqual(merged.messages.map(\.index), [8, 9])
+        XCTAssertEqual(merged.messages.map(\.text), ["new-u", "new-a"])
+        XCTAssertEqual(merged.afterCursor, 9)
+        XCTAssertTrue(merged.hasMoreBefore)
+        XCTAssertEqual(merged.nextBeforeIndex, 7)
+    }
+
     func testForwardAppendsNewerAndKeepsCacheOlderBoundary() {
         let cache = GaryxCachedTranscript(
             threadId: "t",

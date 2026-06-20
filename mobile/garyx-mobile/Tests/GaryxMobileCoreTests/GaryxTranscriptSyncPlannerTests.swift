@@ -66,6 +66,13 @@ final class GaryxTranscriptSyncPlannerTests: XCTestCase {
         )
     }
 
+    func testCommittedStreamBatchWindowIsThreeSeconds() {
+        XCTAssertEqual(
+            GaryxStreamUpdateCadence.committedMessageBatchWindowNanos,
+            3_000_000_000
+        )
+    }
+
     // MARK: - Stream seq decision
 
     func testStreamSeqFirstRowApplies() {

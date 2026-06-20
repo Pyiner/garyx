@@ -38,6 +38,13 @@ public enum GaryxTranscriptFetchPlanner {
     }
 }
 
+public enum GaryxStreamUpdateCadence {
+    /// The mobile transcript stream batches committed SSE rows for three seconds.
+    /// Bursty catch-up traffic should publish one consolidated UI state per window,
+    /// not rebuild the SwiftUI message list for each event.
+    public static let committedMessageBatchWindowNanos: UInt64 = 3_000_000_000
+}
+
 /// What to do with one streamed `committed_message` seq on the per-thread stream.
 public enum GaryxStreamSeqDecision: Equatable, Sendable {
     /// A mid-stream seq hole (a dropped broadcast event): reconnect from the last

@@ -45,7 +45,7 @@ use garyx_models::provider::{
     ATTACHMENTS_METADATA_KEY, ImagePayload, PromptAttachment, PromptAttachmentKind,
     StreamBoundaryKind, StreamEvent, attachments_from_metadata, attachments_to_metadata_value,
 };
-use garyx_router::{InboundRequest, MessageRouter};
+use garyx_router::{InboundRequest, MessageRouter, endpoint_key};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, mpsc};
@@ -406,15 +406,29 @@ impl HostInboundHandler {
             file_paths: parsed.file_paths,
         };
 
+        let origin_endpoint_identity = endpoint_key(
+            &self.plugin_id,
+            &parsed.account_id,
+            &parsed.thread_binding_key,
+        );
+        let deferred_fanout = garyx_channels::bound_fanout::DeferredBoundStreamFanout::new(
+            self.router.clone(),
+            self.swap.clone(),
+            run_id.clone(),
+            origin_endpoint_identity,
+        );
+        let fanout_consumer = deferred_fanout.consumer(response_callback);
+
         // Read this run's stream from the durable committed transcript. The
-        // frame-emitting worker is unchanged; it still produces
-        // inbound/stream_frame + inbound/stream_end with local stream_id/seq, so
-        // the plugin protocol is unaffected. The worker's stream lifecycle
-        // (live_streams) still ends when its mpsc closes.
+        // origin frame-emitting worker is unchanged; it still produces
+        // inbound/stream_frame + inbound/stream_end with local stream_id/seq.
+        // Bound non-origin endpoints attach after `route_and_dispatch` returns
+        // the canonical thread id, with early events buffered by the deferred
+        // fanout.
         let dispatch_callback = garyx_channels::committed_replay::committed_callback(
             &self.bridge,
             &run_id,
-            response_callback,
+            fanout_consumer,
         )
         .await
         .map_err(|error| (PluginErrorCode::InternalError.as_i32(), error.to_string()))?;
@@ -423,10 +437,20 @@ impl HostInboundHandler {
         // agent run. The committed replay adapter streams events back in; we pin
         // the thread id so the Done-handler can tag its outbound back through the
         // dispatcher with the right chat.
+        let thread_store = {
+            let router = self.router.lock().await;
+            router.thread_store()
+        };
+        let dispatch_delegate = garyx_channels::bound_fanout::DeferredFanoutAgentDispatcher::new(
+            self.bridge.as_ref(),
+            deferred_fanout.clone(),
+            thread_store,
+        );
+
         let result = {
             let mut router = self.router.lock().await;
             router
-                .route_and_dispatch(inbound_request, self.bridge.as_ref(), dispatch_callback)
+                .route_and_dispatch(inbound_request, &dispatch_delegate, dispatch_callback)
                 .await
         };
 
@@ -444,6 +468,7 @@ impl HostInboundHandler {
         if let Ok(mut holder) = thread_holder.lock() {
             *holder = Some(result.thread_id.clone());
         }
+        deferred_fanout.attach_thread(&result.thread_id).await;
 
         // If route_and_dispatch produced a synchronous `local_reply`,
         // send it directly through the plugin's outbound path.

@@ -23,10 +23,12 @@ use garyx_models::provider::{
     ATTACHMENTS_METADATA_KEY, PromptAttachment, PromptAttachmentKind, ProviderMessage,
     StreamBoundaryKind, StreamEvent, attachments_to_metadata_value,
 };
-use garyx_router::{InboundRequest, MessageRouter, NATIVE_COMMAND_TEXT_METADATA_KEY};
+use garyx_router::{InboundRequest, MessageRouter, NATIVE_COMMAND_TEXT_METADATA_KEY, endpoint_key};
 
 use crate::channel_trait::{Channel, ChannelError};
-use crate::dispatcher::{DISCORD_MAX_MESSAGE_LENGTH, DiscordSender, split_discord_message};
+use crate::dispatcher::{
+    ChannelDispatcher, DISCORD_MAX_MESSAGE_LENGTH, DiscordSender, split_discord_message,
+};
 use crate::generated_images::{extract_image_generation_result, write_generated_image_temp};
 use crate::plugin_tools::{
     PluginStreamSendDecision, PluginStreamSendPolicy, PluginStreamSendState,
@@ -121,6 +123,7 @@ struct DiscordInboundRuntime {
     account: DiscordAccount,
     router: Arc<Mutex<MessageRouter>>,
     bridge: Arc<MultiProviderBridge>,
+    dispatcher: Arc<dyn ChannelDispatcher>,
 }
 
 fn discord_user_mentioned(event: &DiscordMessageCreateEvent, bot_id: &str) -> bool {
@@ -1408,6 +1411,7 @@ pub struct DiscordChannel {
     tasks: Vec<JoinHandle<()>>,
     router: Arc<Mutex<MessageRouter>>,
     bridge: Arc<MultiProviderBridge>,
+    dispatcher: Arc<dyn ChannelDispatcher>,
 }
 
 impl DiscordChannel {
@@ -1415,6 +1419,7 @@ impl DiscordChannel {
         config: DiscordConfig,
         router: Arc<Mutex<MessageRouter>>,
         bridge: Arc<MultiProviderBridge>,
+        dispatcher: Arc<dyn ChannelDispatcher>,
     ) -> Self {
         let http = Client::builder()
             .timeout(Duration::from_secs(30))
@@ -1433,6 +1438,7 @@ impl DiscordChannel {
             tasks: Vec::new(),
             router,
             bridge,
+            dispatcher,
         }
     }
 
@@ -1479,6 +1485,7 @@ impl DiscordChannel {
             account: account.clone(),
             router: self.router.clone(),
             bridge: self.bridge.clone(),
+            dispatcher: self.dispatcher.clone(),
         }
     }
 
@@ -1682,14 +1689,24 @@ impl DiscordChannel {
                 reply_to_message_id: Some(reply_to.clone()),
             });
 
+        let origin_endpoint_identity =
+            endpoint_key("discord", &runtime.account_id, &thread_binding_key);
+        let deferred_fanout = crate::bound_fanout::DeferredBoundStreamFanout::new(
+            runtime.router.clone(),
+            runtime.dispatcher.clone(),
+            request.run_id.clone(),
+            origin_endpoint_identity,
+        );
+        let fanout_consumer = deferred_fanout.consumer(response_callback);
+
         // Read this run's stream from the durable committed transcript:
         // subscribe before dispatch and let the replay adapter drive the
-        // Discord sender. `None` is then passed to dispatch so the bridge does
-        // not double-drive the same callback.
+        // Discord sender. Bound non-origin endpoints attach after
+        // route_and_dispatch resolves the canonical thread id.
         let dispatch_callback = match crate::committed_replay::committed_callback(
             &runtime.bridge,
             &request.run_id,
-            response_callback,
+            fanout_consumer,
         )
         .await
         {
@@ -1700,14 +1717,25 @@ impl DiscordChannel {
             }
         };
 
+        let thread_store = {
+            let router = runtime.router.lock().await;
+            router.thread_store()
+        };
+        let dispatch_delegate = crate::bound_fanout::DeferredFanoutAgentDispatcher::new(
+            runtime.bridge.as_ref(),
+            deferred_fanout.clone(),
+            thread_store,
+        );
+
         let dispatch_result = {
             let mut router = runtime.router.lock().await;
             router
-                .route_and_dispatch(request, runtime.bridge.as_ref(), dispatch_callback)
+                .route_and_dispatch(request, &dispatch_delegate, dispatch_callback)
                 .await
         };
         match dispatch_result {
             Ok(result) => {
+                deferred_fanout.attach_thread(&result.thread_id).await;
                 let _ = thread_id_tx.send(result.thread_id.clone());
                 if let Some(local_reply) = result.local_reply {
                     match sender
@@ -2066,6 +2094,7 @@ mod tests {
                 crate::test_helpers::ConfigurableTestProvider::echo(),
             ))
             .await,
+            dispatcher: Arc::new(crate::dispatcher::ChannelDispatcherImpl::new()),
         };
 
         enrich_inbound_request_with_discord_attachments(&runtime, &event, &mut request).await;

@@ -19,5 +19,5 @@ pub use types::{
     AgentMessageDelta, Capabilities, ClientInfo, CommandApprovalRequest, FileChangeApprovalRequest,
     InitializeParams, InputItem, ItemEventParams, JsonRpcNotification, ThreadForkParams,
     ThreadResumeParams, ThreadStartParams, TurnCompletedParams, TurnInfo, TurnInterruptParams,
-    TurnStartParams, TurnSteerParams, UsageInfo,
+    TurnStartOptions, TurnStartParams, TurnSteerParams, UsageInfo,
 };

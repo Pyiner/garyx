@@ -32,10 +32,12 @@ fn stream_event_tagged_serialization() {
     let boundary = StreamEventFrame::Boundary {
         kind: "user_ack".into(),
         text: None,
+        pending_input_id: Some("input-1".into()),
     };
     let ser = serde_json::to_value(&boundary).unwrap();
     assert_eq!(ser["type"], "boundary");
     assert_eq!(ser["kind"], "user_ack");
+    assert_eq!(ser["pending_input_id"], "input-1");
 
     let tool_use = StreamEventFrame::ToolUse {
         message: ProviderMessage::tool_use(
@@ -47,6 +49,47 @@ fn stream_event_tagged_serialization() {
     let ser = serde_json::to_value(&tool_use).unwrap();
     assert_eq!(ser["type"], "tool_use");
     assert_eq!(ser["message"]["tool_name"], "Bash");
+}
+
+#[test]
+fn stream_event_boundary_preserves_pending_input_id() {
+    let frame = StreamEventFrame::from(garyx_models::provider::StreamEvent::Boundary {
+        kind: garyx_models::provider::StreamBoundaryKind::UserAck,
+        pending_input_id: Some("pending-1".to_owned()),
+    });
+
+    match frame {
+        StreamEventFrame::Boundary {
+            kind,
+            pending_input_id,
+            ..
+        } => {
+            assert_eq!(kind, "user_ack");
+            assert_eq!(pending_input_id.as_deref(), Some("pending-1"));
+        }
+        other => panic!("expected boundary frame, got {other:?}"),
+    }
+}
+
+#[test]
+fn dispatch_stream_event_payload_uses_shared_stream_frame() {
+    let payload = DispatchStreamEvent {
+        account_id: "acct".into(),
+        chat_id: "chat".into(),
+        delivery_target_type: "chat_id".into(),
+        delivery_target_id: "chat".into(),
+        endpoint_identity: "plugin::acct::chat".into(),
+        thread_id: "thread::1".into(),
+        run_id: "run-1".into(),
+        event: StreamEventFrame::Delta { text: "hi".into() },
+        delivery_thread_id: None,
+    };
+
+    let ser = serde_json::to_value(&payload).unwrap();
+
+    assert_eq!(ser["endpoint_identity"], "plugin::acct::chat");
+    assert_eq!(ser["event"]["type"], "delta");
+    assert_eq!(ser["event"]["text"], "hi");
 }
 
 #[test]

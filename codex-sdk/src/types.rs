@@ -170,6 +170,24 @@ pub enum InputItem {
 pub struct TurnStartParams {
     pub thread_id: String,
     pub input: Vec<InputItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
+}
+
+/// Optional sticky execution settings for `turn/start`.
+///
+/// The current app-server schema applies these to the current turn and
+/// subsequent turns. Omit fields to let the thread or local Codex defaults
+/// decide.
+#[derive(Debug, Clone, Default)]
+pub struct TurnStartOptions {
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub service_tier: Option<String>,
 }
 
 /// Parameters for `turn/steer`.

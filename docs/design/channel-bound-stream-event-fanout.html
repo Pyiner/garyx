@@ -1,0 +1,575 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>绑定 Channel 的 StreamEvent 扇出设计</title>
+  <style>
+    :root {
+      --bg: #f7f8fa;
+      --paper: #ffffff;
+      --ink: #1e2430;
+      --muted: #667085;
+      --line: #d8dee8;
+      --blue: #2563eb;
+      --cyan: #0891b2;
+      --green: #14804a;
+      --amber: #b7791f;
+      --red: #c2410c;
+      --violet: #6d28d9;
+      --radius: 8px;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 40px 24px 72px;
+    }
+
+    header {
+      padding: 28px 0 22px;
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 28px;
+    }
+
+    h1, h2, h3 { line-height: 1.2; margin: 0; }
+
+    h1 {
+      font-size: 34px;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      font-size: 22px;
+      margin: 34px 0 14px;
+    }
+
+    h3 {
+      font-size: 17px;
+      margin: 22px 0 8px;
+    }
+
+    p { margin: 8px 0; }
+
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      background: #eef2f7;
+      border: 1px solid #dde5ef;
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-size: 0.92em;
+    }
+
+    ul, ol { margin: 8px 0 0 22px; padding: 0; }
+
+    li { margin: 5px 0; }
+
+    .kicker {
+      color: var(--blue);
+      font-weight: 700;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-size: 12px;
+    }
+
+    .subtitle {
+      max-width: 820px;
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 17px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+      margin: 18px 0 6px;
+    }
+
+    .panel {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 18px;
+      box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+    }
+
+    .panel strong { display: block; margin-bottom: 6px; }
+
+    .note {
+      border-left: 4px solid var(--blue);
+      background: #eef6ff;
+      padding: 12px 14px;
+      border-radius: 0 var(--radius) var(--radius) 0;
+      margin: 14px 0;
+    }
+
+    .warning {
+      border-left-color: var(--red);
+      background: #fff4ed;
+    }
+
+    .diagram {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 18px;
+      margin: 16px 0 26px;
+      overflow-x: auto;
+    }
+
+    .diagram-title {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .diagram-title span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    svg {
+      display: block;
+      max-width: 100%;
+      height: auto;
+      min-width: 900px;
+    }
+
+    .box { fill: #fff; stroke: #c9d3e3; stroke-width: 1.3; rx: 8; }
+    .box-blue { fill: #eef6ff; stroke: #8bb8ff; }
+    .box-cyan { fill: #ecfeff; stroke: #67d1e5; }
+    .box-green { fill: #ecfdf3; stroke: #70c99d; }
+    .box-amber { fill: #fff8e6; stroke: #e0b24b; }
+    .box-violet { fill: #f4f0ff; stroke: #b79af2; }
+    .box-red { fill: #fff1f0; stroke: #ef8a78; }
+    .label { fill: var(--ink); font: 600 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    .small { fill: var(--muted); font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    .arrow { stroke: #758195; stroke-width: 1.8; fill: none; }
+    .dashed { stroke-dasharray: 6 5; }
+    .badge { fill: #101828; opacity: 0.06; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+      margin: 14px 0 22px;
+    }
+
+    th, td {
+      padding: 11px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #f0f3f8;
+      font-weight: 700;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    .two {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin: 16px 0;
+    }
+
+    .tag {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #eef2f7;
+      color: #344054;
+      font-size: 12px;
+      font-weight: 700;
+      margin-right: 6px;
+    }
+
+    footer {
+      margin-top: 42px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+    }
+
+    @media (max-width: 860px) {
+      main { padding: 26px 16px 48px; }
+      h1 { font-size: 28px; }
+      .grid, .two { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="kicker">Garyx Implemented Design</div>
+      <h1>绑定 Channel 的 StreamEvent 扇出设计</h1>
+      <p class="subtitle">当前实现把线程运行产生的 committed <code>StreamEvent</code>，按线程绑定关系统一扇出到所有 channel 端点；内置 channel 和新外部 plugin 使用同一个 <code>StreamDispatchEnvelope</code> outbound 契约，gateway/router 不承担 Markdown、图片、工具调用或平台特殊规则的渲染职责。</p>
+    </header>
+
+    <section class="grid">
+      <div class="panel">
+        <strong>核心边界</strong>
+        Gateway/router 只做事件和端点选择；channel 自己消费 <code>StreamEvent</code> 并渲染。
+      </div>
+      <div class="panel">
+        <strong>主路径</strong>
+        内置 channel 和新外部 plugin 都消费 <code>StreamDispatchEnvelope</code>。
+      </div>
+      <div class="panel">
+        <strong>兼容路径</strong>
+        旧 subprocess plugin 才由 adapter 降级到 <code>dispatch_outbound(ChannelOutboundContent)</code>。
+      </div>
+    </section>
+
+    <section>
+      <h2>1. 目标架构</h2>
+      <div class="note">API/gateway 入口在已有稳定 <code>thread_id</code> 后直接 snapshot；channel/plugin inbound 入口先用 <code>DeferredBoundStreamFanout</code> 缓冲事件，等 router 解析出 canonical <code>thread_id</code> 后，通过 <code>DeferredFanoutAgentDispatcher</code> 在 provider dispatch 前 snapshot、排除 origin、flush 缓冲。<code>route_and_dispatch</code> 返回后的 attach 只是幂等兜底。内部入口只是 run 来源，不是另一套 outbound 协议。</div>
+      <div class="diagram">
+        <div class="diagram-title">
+          <h3>统一 StreamEvent 扇出</h3>
+          <span>run 来源无关，channel 渲染内聚在 garyx-channels</span>
+        </div>
+        <svg viewBox="0 0 1080 410" role="img" aria-label="统一 StreamEvent 扇出流程图">
+          <defs>
+            <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L0,6 L9,3 z" fill="#758195"></path>
+            </marker>
+          </defs>
+          <rect class="box box-blue" x="30" y="34" width="170" height="54"></rect>
+          <text class="label" x="115" y="58" text-anchor="middle">API chat</text>
+          <text class="small" x="115" y="76" text-anchor="middle">用户直接入口</text>
+
+          <rect class="box box-blue" x="30" y="112" width="170" height="54"></rect>
+          <text class="label" x="115" y="136" text-anchor="middle">Channel inbound</text>
+          <text class="small" x="115" y="154" text-anchor="middle">Feishu / Telegram 等</text>
+
+          <rect class="box box-blue" x="30" y="190" width="170" height="54"></rect>
+          <text class="label" x="115" y="214" text-anchor="middle">Internal / plugin</text>
+          <text class="small" x="115" y="232" text-anchor="middle">内部入口 / 外部插件入口</text>
+
+          <rect class="box box-blue" x="30" y="268" width="170" height="54"></rect>
+          <text class="label" x="115" y="292" text-anchor="middle">Other run source</text>
+          <text class="small" x="115" y="310" text-anchor="middle">复用同一挂载链路</text>
+
+          <rect class="box box-cyan" x="270" y="134" width="180" height="96"></rect>
+          <text class="label" x="360" y="168" text-anchor="middle">Provider run</text>
+          <text class="small" x="360" y="190" text-anchor="middle">产生 committed</text>
+          <text class="small" x="360" y="208" text-anchor="middle">StreamEvent</text>
+
+          <rect class="box box-green" x="520" y="124" width="190" height="116"></rect>
+          <text class="label" x="615" y="158" text-anchor="middle">Bound / Deferred Fanout</text>
+          <text class="small" x="615" y="180" text-anchor="middle">按 thread_id 查绑定</text>
+          <text class="small" x="615" y="198" text-anchor="middle">snapshot target set</text>
+          <text class="small" x="615" y="216" text-anchor="middle">按事件顺序扇出</text>
+
+          <rect class="box box-violet" x="790" y="42" width="220" height="68"></rect>
+          <text class="label" x="900" y="70" text-anchor="middle">内置 channel</text>
+          <text class="small" x="900" y="90" text-anchor="middle">native StreamDispatchEnvelope</text>
+
+          <rect class="box box-violet" x="790" y="144" width="220" height="68"></rect>
+          <text class="label" x="900" y="172" text-anchor="middle">新 subprocess plugin</text>
+          <text class="small" x="900" y="192" text-anchor="middle">host -> plugin StreamEvent RPC</text>
+
+          <rect class="box box-amber" x="790" y="246" width="220" height="82"></rect>
+          <text class="label" x="900" y="276" text-anchor="middle">旧 subprocess plugin</text>
+          <text class="small" x="900" y="296" text-anchor="middle">adapter 降级</text>
+          <text class="small" x="900" y="314" text-anchor="middle">dispatch_outbound</text>
+
+          <path class="arrow" marker-end="url(#arrow)" d="M200 61 C238 61 232 150 270 172"></path>
+          <path class="arrow" marker-end="url(#arrow)" d="M200 139 C235 139 238 160 270 176"></path>
+          <path class="arrow" marker-end="url(#arrow)" d="M200 217 C235 217 238 196 270 188"></path>
+          <path class="arrow" marker-end="url(#arrow)" d="M200 295 C242 295 232 215 270 194"></path>
+          <path class="arrow" marker-end="url(#arrow)" d="M450 182 L520 182"></path>
+          <path class="arrow" marker-end="url(#arrow)" d="M710 168 C760 126 742 78 790 76"></path>
+          <path class="arrow" marker-end="url(#arrow)" d="M710 182 L790 178"></path>
+          <path class="arrow" marker-end="url(#arrow)" d="M710 202 C760 235 742 285 790 287"></path>
+        </svg>
+      </div>
+    </section>
+
+    <section>
+      <h2>2. Run 生命周期和绑定变更</h2>
+      <p>run 开始时 snapshot target set。运行中修改 bot/channel 绑定不会影响当前 run；streaming input 追加到同一个 run 时也不会重新选目标。新绑定从下一次 run 开始生效。</p>
+      <div class="diagram">
+        <div class="diagram-title">
+          <h3>Snapshot 语义</h3>
+          <span>稳定性优先，避免一个 run 中途改变投递集合</span>
+        </div>
+        <svg viewBox="0 0 1080 330" role="img" aria-label="Run snapshot 生命周期流程图">
+          <defs>
+            <marker id="arrow2" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L0,6 L9,3 z" fill="#758195"></path>
+            </marker>
+          </defs>
+          <rect class="box box-blue" x="40" y="78" width="160" height="70"></rect>
+          <text class="label" x="120" y="108" text-anchor="middle">Run start</text>
+          <text class="small" x="120" y="128" text-anchor="middle">thread_id / run_id 稳定</text>
+
+          <rect class="box box-green" x="260" y="78" width="180" height="70"></rect>
+          <text class="label" x="350" y="108" text-anchor="middle">Snapshot bindings</text>
+          <text class="small" x="350" y="128" text-anchor="middle">得到 target set v1</text>
+
+          <rect class="box box-cyan" x="500" y="78" width="180" height="70"></rect>
+          <text class="label" x="590" y="108" text-anchor="middle">Stream events</text>
+          <text class="small" x="590" y="128" text-anchor="middle">保持单目标顺序</text>
+
+          <rect class="box box-violet" x="740" y="78" width="160" height="70"></rect>
+          <text class="label" x="820" y="108" text-anchor="middle">Done</text>
+          <text class="small" x="820" y="128" text-anchor="middle">flush / outcome</text>
+
+          <rect class="box box-red" x="300" y="210" width="330" height="66"></rect>
+          <text class="label" x="465" y="238" text-anchor="middle">运行中修改绑定</text>
+          <text class="small" x="465" y="258" text-anchor="middle">不影响当前 run，下一次 run 生效</text>
+
+          <path class="arrow" marker-end="url(#arrow2)" d="M200 113 L260 113"></path>
+          <path class="arrow" marker-end="url(#arrow2)" d="M440 113 L500 113"></path>
+          <path class="arrow" marker-end="url(#arrow2)" d="M680 113 L740 113"></path>
+          <path class="arrow dashed" marker-end="url(#arrow2)" d="M465 210 C465 175 350 170 350 148"></path>
+          <text class="small" x="588" y="190" text-anchor="middle">不重新 snapshot</text>
+        </svg>
+      </div>
+    </section>
+
+    <section>
+      <h2>3. Endpoint Identity 和去重</h2>
+      <div class="warning note">这里的边界收窄为：gateway/router 只认 channel 给出的 opaque <code>Endpoint Identity</code>。它不关心这个 key 怎么生成、里面有什么字段，也不解析任何 channel 内部字段。</div>
+      <div class="diagram">
+        <div class="diagram-title">
+          <h3>只按 Endpoint Identity 做 equality</h3>
+          <span>生成和语义归属在 channel，gateway 只比较 key 是否相等</span>
+        </div>
+        <svg viewBox="0 0 1080 360" role="img" aria-label="Endpoint identity 去重流程图">
+          <defs>
+            <marker id="arrow3" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L0,6 L9,3 z" fill="#758195"></path>
+            </marker>
+          </defs>
+          <rect class="box box-blue" x="52" y="72" width="210" height="78"></rect>
+          <text class="label" x="157" y="104" text-anchor="middle">Channel target A</text>
+          <text class="small" x="157" y="124" text-anchor="middle">channel 理解 native 目的地</text>
+
+          <rect class="box box-blue" x="52" y="198" width="210" height="78"></rect>
+          <text class="label" x="157" y="230" text-anchor="middle">Channel target B</text>
+          <text class="small" x="157" y="250" text-anchor="middle">channel 理解 native 目的地</text>
+
+          <rect class="box box-green" x="360" y="62" width="260" height="100"></rect>
+          <text class="label" x="490" y="94" text-anchor="middle">Endpoint Identity A</text>
+          <text class="small" x="490" y="116" text-anchor="middle">opaque unique key</text>
+          <text class="small" x="490" y="136" text-anchor="middle">由 channel 生成</text>
+
+          <rect class="box box-green" x="360" y="190" width="260" height="112"></rect>
+          <text class="label" x="490" y="222" text-anchor="middle">Endpoint Identity B</text>
+          <text class="small" x="490" y="244" text-anchor="middle">opaque unique key</text>
+          <text class="small" x="490" y="264" text-anchor="middle">由 channel 生成</text>
+          <text class="small" x="490" y="284" text-anchor="middle">gateway 不解析内容</text>
+
+          <rect class="box box-violet" x="740" y="128" width="250" height="96"></rect>
+          <text class="label" x="865" y="160" text-anchor="middle">Gateway equality</text>
+          <text class="small" x="865" y="182" text-anchor="middle">binding de-duplication</text>
+          <text class="small" x="865" y="202" text-anchor="middle">origin exclusion / outcome</text>
+
+          <path class="arrow" marker-end="url(#arrow3)" d="M262 111 L360 111"></path>
+          <path class="arrow" marker-end="url(#arrow3)" d="M262 237 L360 246"></path>
+          <path class="arrow" marker-end="url(#arrow3)" d="M620 112 C676 112 682 150 740 160"></path>
+          <path class="arrow" marker-end="url(#arrow3)" d="M620 246 C680 246 682 202 740 188"></path>
+          <text class="small" x="682" y="98" text-anchor="middle">只传 key</text>
+          <text class="small" x="682" y="260" text-anchor="middle">只传 key</text>
+        </svg>
+      </div>
+    </section>
+
+    <section>
+      <h2>4. Dispatcher Contract 和数据</h2>
+      <p>主路径 callback 接收 <code>StreamDispatchEnvelope</code>。新 subprocess plugin 的 JSON-RPC <code>DispatchStreamEvent</code> 由这个 envelope 直接转换出来，避免内部和外部插件协议字段漂移。当前主路径不伪造 per-target sequence；如果后续需要 replay recovery，sequence 必须来自 committed per-run replay。</p>
+      <table>
+        <thead>
+          <tr>
+            <th>字段</th>
+            <th>含义</th>
+            <th>归属边界</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>endpoint_identity</code></td>
+            <td>端点唯一 key，用于去重、origin 排除、outbound id 关联</td>
+            <td>channel 生成；gateway/router 只做 equality</td>
+          </tr>
+          <tr>
+            <td><code>thread_id</code> / <code>run_id</code></td>
+            <td>canonical thread 和当前 run</td>
+            <td>fanout snapshot 和 committed replay 使用</td>
+          </tr>
+          <tr>
+            <td><code>account_id</code> / <code>chat_id</code></td>
+            <td>channel 账号和主要投递目标</td>
+            <td>channel renderer 使用，gateway 不解析</td>
+          </tr>
+          <tr>
+            <td><code>delivery_target_type</code> / <code>delivery_target_id</code></td>
+            <td>typed target，例如 chat_id/open_id 等</td>
+            <td>channel 自己解释</td>
+          </tr>
+          <tr>
+            <td><code>delivery_thread_id</code></td>
+            <td>平台 thread/topic/scope</td>
+            <td>channel 自己解释；router 只保存关联</td>
+          </tr>
+          <tr>
+            <td><code>event</code></td>
+            <td>原始 <code>StreamEvent</code>，包含 Delta、Boundary、ToolUse、ToolResult、Done 等</td>
+            <td>保持结构化直到 channel renderer</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="note">当前内置 native callback：Telegram、Feishu、Discord、Weixin。Feishu 的非 origin 目标没有原始 Feishu message id，因此无法把 COT thread 挂回用户那条消息，但仍然收到完整 <code>StreamEvent</code>，由 Feishu renderer 自己退化为普通卡片/图片。</div>
+    </section>
+
+    <section>
+      <h2>5. Plugin 协议和 Legacy Adapter</h2>
+      <p>新外部 plugin 和内置 channel 对齐同一套 outbound 事件语义：目标消费 <code>StreamDispatchEnvelope</code>。差异只在传输形态，内置 channel 是 Rust callback，新 subprocess plugin 是 host -> plugin 的 <code>dispatch_stream_event</code> RPC。唯一允许不同的是旧 subprocess plugin adapter，它只是兼容旧协议的临时路径。</p>
+      <p>host 只通过注册或初始化 capability 识别新旧协议：声明 <code>capabilities.dispatch_stream_event = true</code> 的 plugin 走 native RPC；没有声明的旧 plugin 才走 adapter。</p>
+      <div class="diagram">
+        <div class="diagram-title">
+          <h3>插件协议选择</h3>
+          <span>新插件对齐 StreamEvent，旧插件走临时兼容 adapter</span>
+        </div>
+        <svg viewBox="0 0 1080 350" role="img" aria-label="Legacy plugin adapter 流程图">
+          <defs>
+            <marker id="arrow4" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L0,6 L9,3 z" fill="#758195"></path>
+            </marker>
+          </defs>
+          <rect class="box box-blue" x="52" y="90" width="180" height="72"></rect>
+          <text class="label" x="142" y="120" text-anchor="middle">StreamDispatchEnvelope</text>
+          <text class="small" x="142" y="140" text-anchor="middle">结构化事件输入</text>
+
+          <rect class="box box-cyan" x="304" y="80" width="210" height="92"></rect>
+          <text class="label" x="409" y="112" text-anchor="middle">Capability detection</text>
+          <text class="small" x="409" y="134" text-anchor="middle">dispatch_stream_event = true</text>
+          <text class="small" x="409" y="152" text-anchor="middle">只看能力位，不看来源</text>
+
+          <rect class="box box-green" x="610" y="42" width="220" height="70"></rect>
+          <text class="label" x="720" y="72" text-anchor="middle">新 plugin</text>
+          <text class="small" x="720" y="92" text-anchor="middle">dispatch_stream_event RPC</text>
+
+          <rect class="box box-amber" x="610" y="182" width="220" height="92"></rect>
+          <text class="label" x="720" y="214" text-anchor="middle">Legacy adapter</text>
+          <text class="small" x="720" y="236" text-anchor="middle">ChannelOutboundContent</text>
+          <text class="small" x="720" y="254" text-anchor="middle">ToolUse/ToolResult 透传</text>
+
+          <rect class="box box-violet" x="892" y="192" width="150" height="72"></rect>
+          <text class="label" x="967" y="222" text-anchor="middle">旧 plugin</text>
+          <text class="small" x="967" y="242" text-anchor="middle">dispatch_outbound</text>
+
+          <path class="arrow" marker-end="url(#arrow4)" d="M232 126 L304 126"></path>
+          <path class="arrow" marker-end="url(#arrow4)" d="M514 108 C560 80 565 76 610 76"></path>
+          <path class="arrow" marker-end="url(#arrow4)" d="M514 148 C560 196 565 224 610 228"></path>
+          <path class="arrow" marker-end="url(#arrow4)" d="M830 228 L892 228"></path>
+          <text class="small" x="562" y="78" text-anchor="middle">yes</text>
+          <text class="small" x="560" y="205" text-anchor="middle">no</text>
+        </svg>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>目标类型</th>
+            <th>协议选择</th>
+            <th>工具调用语义</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>内置 channel</td>
+            <td>dispatcher callback 接收 <code>StreamDispatchEnvelope</code></td>
+            <td>保持结构化，交给 channel renderer</td>
+          </tr>
+          <tr>
+            <td>新 subprocess plugin</td>
+            <td><code>dispatch_stream_event(StreamDispatchEnvelope)</code></td>
+            <td>与内置 channel 同语义</td>
+          </tr>
+          <tr>
+            <td>旧 subprocess plugin</td>
+            <td>adapter 输出 <code>dispatch_outbound(ChannelOutboundContent)</code></td>
+            <td><code>ToolUse</code> / <code>ToolResult</code> 走旧协议已有结构化类型</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>6. 当前代码落点和验收</h2>
+      <div class="two">
+        <div class="panel">
+          <h3>代码落点</h3>
+          <ol>
+            <li><code>garyx-channels/src/dispatcher.rs</code>：统一 envelope、native callback、legacy adapter fallback。</li>
+            <li><code>garyx-channels/src/bound_fanout.rs</code>：deferred fanout、provider-dispatch 前挂载 wrapper、origin endpoint 排除、缓冲 flush。</li>
+            <li><code>garyx-channels/src/plugin_host/*</code>：外部 plugin capability 和 <code>dispatch_stream_event</code> RPC。</li>
+            <li><code>garyx-gateway/src/application/chat/delivery.rs</code>：gateway/API 入口 bound delivery。</li>
+            <li><code>garyx/src/channel_plugin_host.rs</code> 和内置 channel handlers：入口 unknown thread 时使用 deferred fanout。</li>
+          </ol>
+        </div>
+        <div class="panel">
+          <h3>验收重点</h3>
+          <ul>
+            <li>run 来源无关，所有绑定端点都能收到 committed event。</li>
+            <li>gateway/router 只按 <code>Endpoint Identity</code> equality 去重。</li>
+            <li>结构化 tool event 不在 gateway 降级。</li>
+            <li>新 plugin 和内置 channel 对齐 <code>StreamDispatchEnvelope</code> 语义。</li>
+            <li>旧 plugin adapter 保留 <code>ToolUse</code> / <code>ToolResult</code> 结构化透传。</li>
+            <li>内置 Feishu、Discord、Weixin、Telegram 都有 native stream-event callback。</li>
+            <li>outbound message id 继续回写 router。</li>
+            <li>deferred fanout 在 provider dispatch 前 snapshot，运行中绑定变更不进入当前 run。</li>
+            <li>当前不伪造 event seq；restart recovery / per-event diagnostics 后续补 typed outcome。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>7. 已落地和剩余债务</h2>
+      <div class="two">
+        <div class="panel">
+          <h3>已落地</h3>
+          <ul>
+            <li>内置 channel 和新外部 plugin 都消费同一套 stream-event envelope。</li>
+            <li>新旧 plugin 用 <code>dispatch_stream_event</code> capability 识别。</li>
+            <li>旧 plugin 走 <code>dispatch_outbound(ChannelOutboundContent)</code> adapter。</li>
+            <li>运行中修改绑定不影响当前 run，下一次 run 生效。</li>
+          </ul>
+        </div>
+        <div class="panel">
+          <h3>剩余债务</h3>
+          <p><span class="tag">TODO</span>旧 subprocess plugin adapter 只为兼容旧协议保留；所有插件升级到 <code>dispatch_stream_event</code> 后删除。</p>
+          <p><span class="tag">Diagnostics</span>当前可观测性以 outbound message id persistence 和日志为主；独立 per-event delivery outcome 可后续补。</p>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <p>状态：主路径已实现。本文是 `docs/design/channel-bound-stream-event-fanout.md` 的 HTML 审阅版。</p>
+    </footer>
+  </main>
+</body>
+</html>

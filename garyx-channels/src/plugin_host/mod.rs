@@ -46,10 +46,11 @@ pub use preflight::{PROTOCOL_VERSION, PreflightFailure, PreflightSummary, prefli
 pub use protocol::{
     AccountDescriptor, AttachmentRef, AuthFlowDisplayItem, AuthFlowPollResponse,
     AuthFlowStartRequest, AuthFlowStartResponse, CapabilitiesResponse, DispatchOutbound,
-    DispatchOutboundResult, HostContext, InboundEnd, InboundEndStatus, InboundRequestPayload,
-    InitializeParams, InitializeResult, PluginErrorCode, RecordOutbound, ReloadAccountsParams,
-    ResolveAccountUiParams, ResolveAccountUiResult, StreamEventFrame, StreamFrameParams,
-    UiConversationNode, UiEndpointDescriptor,
+    DispatchOutboundResult, DispatchStreamEvent, DispatchStreamEventResult, HostContext,
+    InboundEnd, InboundEndStatus, InboundRequestPayload, InitializeParams, InitializeResult,
+    PluginErrorCode, RecordOutbound, ReloadAccountsParams, ResolveAccountUiParams,
+    ResolveAccountUiResult, StreamEventFrame, StreamFrameParams, UiConversationNode,
+    UiEndpointDescriptor,
 };
 pub use sender::{DISPATCH_TIMEOUT, PluginSenderHandle};
 pub use stream::{StreamId, StreamIdGenerator, StreamRegistry, TombstoneReason};

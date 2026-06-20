@@ -233,7 +233,10 @@ fn test_resolve_runtime_codex_env_skips_desktop_codex_env_for_traex() {
     )]);
 
     let env = resolve_runtime_codex_env(&config, &metadata);
-    assert_eq!(env.get("TRAE_FROM_CONFIG").map(String::as_str), Some("keep"));
+    assert_eq!(
+        env.get("TRAE_FROM_CONFIG").map(String::as_str),
+        Some("keep")
+    );
     assert!(
         !env.contains_key("OPENAI_API_KEY"),
         "traex must not inherit desktop_codex_env"
@@ -1020,6 +1023,62 @@ fn test_build_thread_start_params_prefers_metadata_model_override() {
     let metadata = HashMap::from([("model".to_owned(), json!("o3"))]);
     let params = build_thread_start_params(&config, None, "thread::test", "run-1", &metadata);
     assert_eq!(params.model.as_deref(), Some("o3"));
+}
+
+#[test]
+fn test_build_turn_start_options_omits_unconfigured_defaults() {
+    let config = CodexAppServerConfig {
+        model: String::new(),
+        default_model: String::new(),
+        model_reasoning_effort: String::new(),
+        model_service_tier: String::new(),
+        ..Default::default()
+    };
+
+    let options = build_turn_start_options(&config, &HashMap::new());
+
+    assert!(options.model.is_none());
+    assert!(options.effort.is_none());
+    assert!(options.service_tier.is_none());
+}
+
+#[test]
+fn test_build_turn_start_options_prefers_metadata_over_provider_config() {
+    let config = CodexAppServerConfig {
+        model: "gpt-5.5".to_owned(),
+        default_model: "gpt-5.4".to_owned(),
+        model_reasoning_effort: "xhigh".to_owned(),
+        model_service_tier: "priority".to_owned(),
+        ..Default::default()
+    };
+    let metadata = HashMap::from([
+        ("model".to_owned(), json!("gpt-5.4")),
+        ("model_reasoning_effort".to_owned(), json!("medium")),
+        ("model_service_tier".to_owned(), json!("standard")),
+    ]);
+
+    let options = build_turn_start_options(&config, &metadata);
+
+    assert_eq!(options.model.as_deref(), Some("gpt-5.4"));
+    assert_eq!(options.effort.as_deref(), Some("medium"));
+    assert_eq!(options.service_tier.as_deref(), Some("standard"));
+}
+
+#[test]
+fn test_build_turn_start_options_uses_provider_config() {
+    let config = CodexAppServerConfig {
+        model: String::new(),
+        default_model: "gpt-5.5".to_owned(),
+        model_reasoning_effort: "xhigh".to_owned(),
+        model_service_tier: "priority".to_owned(),
+        ..Default::default()
+    };
+
+    let options = build_turn_start_options(&config, &HashMap::new());
+
+    assert_eq!(options.model.as_deref(), Some("gpt-5.5"));
+    assert_eq!(options.effort.as_deref(), Some("xhigh"));
+    assert_eq!(options.service_tier.as_deref(), Some("priority"));
 }
 
 #[test]

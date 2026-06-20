@@ -238,12 +238,12 @@ impl AppStateBuilder {
     }
 
     /// Install the production [`SwappableDispatcher`]. Callers that
-    /// need both a trait-object view (for the `channel_dispatcher`
-    /// cell) and the concrete handle (for
-    /// `ChannelPluginManager::attach_dispatcher`) should provide this
-    /// alongside [`Self::with_channel_dispatcher`] so the two slots
-    /// agree on the initial dispatcher identity.
+    /// need a custom trait-object-only test double can still call
+    /// [`Self::with_channel_dispatcher`] after this method; production
+    /// paths should keep the trait-object view and concrete swap in
+    /// sync.
     pub fn with_channel_swap(mut self, channel_swap: Arc<SwappableDispatcher>) -> Self {
+        self.channel_dispatcher = channel_swap.clone();
         self.channel_swap = channel_swap;
         self
     }
@@ -414,10 +414,11 @@ impl AppStateBuilder {
                 .try_lock()
                 .expect("channel plugin manager lock must be uncontended during build");
             manager.attach_dispatcher(self.channel_swap.clone());
-            let discoverer = BuiltInPluginDiscoverer::new(
+            let discoverer = BuiltInPluginDiscoverer::with_dispatcher(
                 self.config.channels.clone(),
                 router.clone(),
                 self.bridge.clone(),
+                self.channel_swap.clone(),
                 String::new(),
             );
             let discovered = discoverer.discover().unwrap_or_else(|error| {

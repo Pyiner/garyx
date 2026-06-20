@@ -262,6 +262,11 @@ fn capability_mismatch(
         ("outbound", manifest.outbound, runtime.outbound),
         ("inbound", manifest.inbound, runtime.inbound),
         ("streaming", manifest.streaming, runtime.streaming),
+        (
+            "dispatch_stream_event",
+            manifest.dispatch_stream_event,
+            runtime.dispatch_stream_event,
+        ),
         ("images", manifest.images, runtime.images),
         ("files", manifest.files, runtime.files),
     ] {

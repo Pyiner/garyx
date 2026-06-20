@@ -142,6 +142,7 @@ pub fn builtin_capabilities(
         outbound,
         inbound,
         streaming,
+        dispatch_stream_event: true,
         images: false,
         files: false,
         hot_reload_accounts: false,

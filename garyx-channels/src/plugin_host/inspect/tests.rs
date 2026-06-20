@@ -10,6 +10,7 @@ fn sample_report() -> InspectReport {
             outbound: true,
             inbound: true,
             streaming: false,
+            dispatch_stream_event: false,
             images: false,
             files: false,
             survives_respawn: false,

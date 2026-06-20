@@ -31,6 +31,7 @@ use garyx_models::config::{FeishuAccount, FeishuConfig, TopicSessionMode};
 use garyx_router::MessageRouter;
 
 use crate::channel_trait::{Channel, ChannelError};
+use crate::dispatcher::ChannelDispatcher;
 
 mod auth_flow_executor;
 mod client;
@@ -43,7 +44,7 @@ mod policy;
 mod types;
 mod ws;
 
-use client::FeishuClient;
+pub(crate) use client::FeishuClient;
 use types::{FeishuResponseStreamState, MentionTarget};
 
 pub use auth_flow_executor::FeishuAuthExecutor;
@@ -63,6 +64,7 @@ pub use types::{
     FeishuEventEnvelope, FeishuEventHeader, ImMention, ImMentionId, ImMessage,
     ImMessageReceiveEvent, ImSender, ImSenderId,
 };
+pub(crate) use ws::{FeishuStreamingCallbackConfig, build_feishu_response_callback};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -359,6 +361,7 @@ pub struct FeishuChannel {
     ws_tasks: Vec<JoinHandle<()>>,
     router: Arc<Mutex<MessageRouter>>,
     bridge: Arc<MultiProviderBridge>,
+    dispatcher: Arc<dyn ChannelDispatcher>,
     public_url: String,
 }
 
@@ -368,6 +371,7 @@ impl FeishuChannel {
         config: FeishuConfig,
         router: Arc<Mutex<MessageRouter>>,
         bridge: Arc<MultiProviderBridge>,
+        dispatcher: Arc<dyn ChannelDispatcher>,
         public_url: String,
     ) -> Self {
         let mut clients = HashMap::new();
@@ -384,6 +388,7 @@ impl FeishuChannel {
             ws_tasks: Vec::new(),
             router,
             bridge,
+            dispatcher,
             public_url,
         }
     }
@@ -407,6 +412,7 @@ impl FeishuChannel {
             let client = client.clone();
             let router = self.router.clone();
             let bridge = self.bridge.clone();
+            let dispatcher = self.dispatcher.clone();
             let Some(account_cfg) = self.config.accounts.get(account_id).cloned() else {
                 warn!(
                     account_id = %account_id,
@@ -424,6 +430,7 @@ impl FeishuChannel {
                     running,
                     router,
                     bridge,
+                    dispatcher,
                     &public_url,
                 )
                 .await;
@@ -535,10 +542,11 @@ async fn ws_listen_loop(
     running: Arc<AtomicBool>,
     router: Arc<Mutex<MessageRouter>>,
     bridge: Arc<MultiProviderBridge>,
+    dispatcher: Arc<dyn ChannelDispatcher>,
     public_url: &str,
 ) {
     ws::ws_listen_loop(
-        account_id, client, account, running, router, bridge, public_url,
+        account_id, client, account, running, router, bridge, dispatcher, public_url,
     )
     .await;
 }

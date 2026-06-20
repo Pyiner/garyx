@@ -222,14 +222,12 @@ extension GaryxMobileModel {
     }
 
     /// Merge one durable committed row into the S2 cache (in-memory, cheap — keeps the
-    /// cursor current per row) and coalesce the view render + disk persist into one
-    /// flush per interval. A large catch-up replays many committed rows back-to-back;
-    /// rendering/persisting each one would rebuild the whole list and rewrite the whole
-    /// window per row, flickering the page. The flush shows the accumulated window a
-    /// few times instead of N.
+    /// cursor current per row) and coalesce run-state, view render, and disk persist
+    /// into one flush per interval. A large catch-up replays many committed rows
+    /// back-to-back; publishing each row would rebuild the whole list and flicker the
+    /// page. The flush shows the accumulated window as one consolidated state.
     func applyStreamedCommittedMessage(_ message: GaryxTranscriptMessage, threadId: String) {
         guard selectedThread?.id == threadId else { return }
-        applyCommittedTranscriptMessage(message, threadId: threadId)
         let base = transcriptSnapshot(for: threadId)
         let window = GaryxTranscriptCacheLogic.merged(
             into: base,
@@ -265,9 +263,9 @@ extension GaryxMobileModel {
 
     /// Leading-throttle (mirrors scheduleAssistantDeltaFlush): the first row schedules
     /// a flush; rows arriving within the interval are absorbed (the flush reads the
-    /// latest window), so a catch-up burst folds into one render + persist. The final
-    /// row always lands in a flush because the last scheduled flush reads the latest
-    /// in-memory window.
+    /// latest window), so a catch-up burst folds into one run-state update, render,
+    /// and persist. The final row always lands in a flush because the last scheduled
+    /// flush reads the latest in-memory window.
     private func scheduleSelectedThreadStreamFlush(for threadId: String) {
         guard selectedThreadStreamFlushTask == nil else { return }
         selectedThreadStreamFlushTask = Task { [weak self] in
@@ -287,6 +285,7 @@ extension GaryxMobileModel {
         selectedThreadStreamFlushTask = nil
         guard selectedThread?.id == threadId,
               let window = cachedTranscriptSnapshots[threadId] else { return }
+        rebuildThreadRunState(threadId: threadId, messages: window.messages)
         let threadRunActive = isThreadBusy(threadId)
         if !threadRunActive {
             transcriptCacheStore.save(window)

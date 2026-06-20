@@ -1003,6 +1003,7 @@ private struct GaryxAutomationIndexedThread: Identifiable {
 }
 
 struct GaryxAutomationThreadPickerRow: View {
+    @EnvironmentObject private var model: GaryxMobileModel
     let thread: GaryxThreadSummary
     let isSelected: Bool
     let showsSeparator: Bool
@@ -1010,25 +1011,53 @@ struct GaryxAutomationThreadPickerRow: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            GaryxSidebarThreadRowView(
-                model: GaryxSidebarThreadRowPresentation(
-                    thread: thread,
-                    isSelected: isSelected,
-                    isPinned: false,
-                    trailingTimestamp: garyxFormattedTaskTimestamp(thread.updatedAt ?? thread.createdAt),
-                    showsRunningState: false
-                ),
-                isFullBleed: true,
-                density: .compact,
-                selectionDisplay: .checkmark,
-                onSelect: onSelect
-            )
+            GaryxSwipeActionRow(actions: threadSwipeActions) {
+                GaryxSidebarThreadRowView(
+                    model: GaryxSidebarThreadRowPresentation(
+                        thread: thread,
+                        isSelected: isSelected,
+                        isPinned: isPinned,
+                        trailingTimestamp: garyxFormattedTaskTimestamp(thread.updatedAt ?? thread.createdAt),
+                        showsRunningState: false
+                    ),
+                    isFullBleed: true,
+                    density: .compact,
+                    selectionDisplay: .checkmark,
+                    onSelect: onSelect,
+                    onUnpin: {
+                        model.unpinThread(thread.id)
+                    }
+                )
+            }
 
             if showsSeparator {
                 Divider()
                     .padding(.leading, 16)
             }
         }
+    }
+
+    private var isPinned: Bool {
+        model.isThreadPinned(thread.id)
+    }
+
+    private var threadSwipeActions: [GaryxRowAction] {
+        [
+            GaryxRowAction(
+                title: isPinned ? "Unpin thread" : "Pin thread",
+                systemImage: isPinned ? "pin.slash" : "pin",
+                tone: .neutral
+            ) {
+                model.togglePinnedThread(thread.id)
+            },
+            GaryxRowAction(
+                title: "Archive thread",
+                systemImage: "archivebox",
+                tone: .destructive
+            ) {
+                Task { await model.archiveThread(thread) }
+            },
+        ]
     }
 }
 

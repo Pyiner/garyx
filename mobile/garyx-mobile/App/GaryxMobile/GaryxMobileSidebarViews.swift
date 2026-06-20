@@ -1114,26 +1114,28 @@ private struct GaryxSidebarThreadButton: View {
     @State private var showsArchiveConfirmation = false
 
     var body: some View {
-        GaryxSidebarThreadRowView(
-            model: GaryxSidebarThreadRowPresentation(
-                thread: thread,
-                isSelected: isSelected,
-                isPinned: isPinned,
-                trailingTimestamp: trailingTimestamp
-            ),
-            avatar: rowAvatar,
-            isFullBleed: isFullBleed,
-            onSelect: {
-                if let onSelect {
-                    onSelect()
-                } else {
-                    Task { await model.openThread(thread) }
+        GaryxSwipeActionRow(actions: threadSwipeActions) {
+            GaryxSidebarThreadRowView(
+                model: GaryxSidebarThreadRowPresentation(
+                    thread: thread,
+                    isSelected: isSelected,
+                    isPinned: isPinned,
+                    trailingTimestamp: trailingTimestamp
+                ),
+                avatar: rowAvatar,
+                isFullBleed: isFullBleed,
+                onSelect: {
+                    if let onSelect {
+                        onSelect()
+                    } else {
+                        Task { await model.openThread(thread) }
+                    }
+                },
+                onUnpin: {
+                    model.unpinThread(thread.id)
                 }
-            },
-            onUnpin: {
-                model.unpinThread(thread.id)
-            }
-        )
+            )
+        }
         .onLongPressGesture {
             guard archiveAvailable else { return }
             showsArchiveConfirmation = true
@@ -1144,6 +1146,25 @@ private struct GaryxSidebarThreadButton: View {
             }
         }
         .padding(.leading, indent)
+    }
+
+    private var threadSwipeActions: [GaryxRowAction] {
+        [
+            GaryxRowAction(
+                title: isPinned ? "Unpin thread" : "Pin thread",
+                systemImage: isPinned ? "pin.slash" : "pin",
+                tone: .neutral
+            ) {
+                model.togglePinnedThread(thread.id)
+            },
+            GaryxRowAction(
+                title: "Archive thread",
+                systemImage: "archivebox",
+                tone: .destructive
+            ) {
+                archive()
+            },
+        ]
     }
 
     private var archiveAvailable: Bool {

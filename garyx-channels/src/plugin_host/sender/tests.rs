@@ -1,7 +1,9 @@
 use super::*;
+use crate::plugin_host::StreamEventFrame;
 use crate::plugin_host::transport::{InboundHandler, Transport, TransportConfig};
 use async_trait::async_trait;
 use garyx_models::ChannelOutboundContent;
+use garyx_models::provider::StreamEvent;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -12,6 +14,19 @@ fn caps(outbound: bool) -> CapabilitiesResponse {
         outbound,
         inbound: false,
         streaming: false,
+        dispatch_stream_event: false,
+        images: false,
+        files: false,
+        survives_respawn: false,
+    }
+}
+
+fn caps_with_stream_event(outbound: bool, dispatch_stream_event: bool) -> CapabilitiesResponse {
+    CapabilitiesResponse {
+        outbound,
+        inbound: false,
+        streaming: false,
+        dispatch_stream_event,
         images: false,
         files: false,
         survives_respawn: false,
@@ -30,7 +45,23 @@ fn sample_request() -> DispatchOutbound {
     }
 }
 
+fn sample_stream_event_request() -> DispatchStreamEvent {
+    DispatchStreamEvent {
+        account_id: "acct".into(),
+        chat_id: "chat-1".into(),
+        delivery_target_type: "chat_id".into(),
+        delivery_target_id: "chat-1".into(),
+        endpoint_identity: "plugin::acct::chat-1".into(),
+        thread_id: "thread::1".into(),
+        run_id: "run-1".into(),
+        event: StreamEventFrame::from(StreamEvent::Delta { text: "hi".into() }),
+        delivery_thread_id: None,
+    }
+}
+
 type DispatchResponder = dyn Fn(DispatchOutbound) -> Result<Value, (i32, String)> + Send + Sync;
+type StreamEventResponder =
+    dyn Fn(DispatchStreamEvent) -> Result<Value, (i32, String)> + Send + Sync;
 
 /// A plugin-side handler driven by a closure. Every `dispatch_outbound`
 /// call runs `responder`; everything else responds with
@@ -39,6 +70,29 @@ type DispatchResponder = dyn Fn(DispatchOutbound) -> Result<Value, (i32, String)
 struct ClosurePlugin {
     dispatch_count: Arc<std::sync::atomic::AtomicUsize>,
     responder: Arc<DispatchResponder>,
+}
+
+struct StreamEventPlugin {
+    dispatch_count: Arc<std::sync::atomic::AtomicUsize>,
+    responder: Arc<StreamEventResponder>,
+}
+
+#[async_trait]
+impl InboundHandler for StreamEventPlugin {
+    async fn on_request(&self, method: String, params: Value) -> Result<Value, (i32, String)> {
+        match method.as_str() {
+            "dispatch_stream_event" => {
+                self.dispatch_count
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let req: DispatchStreamEvent = serde_json::from_value(params)
+                    .map_err(|err| (-32602, format!("bad params: {err}")))?;
+                (self.responder)(req)
+            }
+            other => Err((-32601, format!("no {other}"))),
+        }
+    }
+
+    async fn on_notification(&self, _method: String, _params: Value) {}
 }
 
 #[async_trait]
@@ -123,6 +177,60 @@ fn wire_fake_plugin(
     (host_client, counter, plugin_keep_alive)
 }
 
+fn wire_fake_stream_event_plugin(
+    responder: impl Fn(DispatchStreamEvent) -> Result<Value, (i32, String)> + Send + Sync + 'static,
+) -> (
+    PluginRpcClient,
+    Arc<std::sync::atomic::AtomicUsize>,
+    PluginRpcClient,
+) {
+    let (host_rw, plugin_rw) = duplex(64 * 1024);
+    let (host_r, host_w) = tokio::io::split(host_rw);
+    let (plugin_r, plugin_w) = tokio::io::split(plugin_rw);
+
+    struct HostDrop;
+    #[async_trait]
+    impl InboundHandler for HostDrop {
+        async fn on_request(
+            &self,
+            _method: String,
+            _params: Value,
+        ) -> Result<Value, (i32, String)> {
+            Err((-32601, "host does not accept inbound in this test".into()))
+        }
+        async fn on_notification(&self, _method: String, _params: Value) {}
+    }
+
+    let (host_client, _host_handles) = Transport::spawn(
+        host_r,
+        host_w,
+        TransportConfig {
+            plugin_id: "test".into(),
+            default_rpc_timeout: Duration::from_secs(60),
+            ..Default::default()
+        },
+        Arc::new(HostDrop),
+    );
+
+    let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let plugin_handler = StreamEventPlugin {
+        dispatch_count: counter.clone(),
+        responder: Arc::new(responder),
+    };
+
+    let (plugin_keep_alive, _plugin_handles) = Transport::spawn(
+        plugin_r,
+        plugin_w,
+        TransportConfig {
+            plugin_id: "test-peer".into(),
+            ..Default::default()
+        },
+        Arc::new(plugin_handler),
+    );
+
+    (host_client, counter, plugin_keep_alive)
+}
+
 // -- Capability gate --------------------------------------------------
 
 #[tokio::test]
@@ -150,6 +258,27 @@ async fn outbound_capability_gate_short_circuits_before_rpc() {
     );
 }
 
+#[tokio::test]
+async fn stream_event_capability_gate_short_circuits_before_rpc() {
+    let (rpc, counter, _keep) =
+        wire_fake_stream_event_plugin(|_req| Ok(json!({"message_ids": ["ok"]})));
+    let handle = PluginSenderHandle::new("gated".into(), rpc, caps_with_stream_event(true, false));
+
+    let err = handle
+        .dispatch_stream_event(sample_stream_event_request())
+        .await
+        .expect_err("should short-circuit");
+
+    match err {
+        ChannelError::Config(msg) => assert!(
+            msg.contains("dispatch_stream_event"),
+            "error should mention dispatch_stream_event capability: {msg}"
+        ),
+        other => panic!("expected Config, got {other:?}"),
+    }
+    assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
 // -- Happy path -------------------------------------------------------
 
 #[tokio::test]
@@ -161,6 +290,26 @@ async fn success_returns_message_ids_verbatim() {
     let handle = PluginSenderHandle::new("ok".into(), rpc, caps(true));
     let result = handle.dispatch(sample_request()).await.expect("ok");
     assert_eq!(result.message_ids, vec!["plugin-msg-1", "plugin-msg-2"]);
+    assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn dispatch_stream_event_sends_shared_envelope() {
+    let (rpc, counter, _keep) = wire_fake_stream_event_plugin(|req| {
+        assert_eq!(req.endpoint_identity, "plugin::acct::chat-1");
+        assert_eq!(req.thread_id, "thread::1");
+        assert_eq!(req.run_id, "run-1");
+        assert!(matches!(req.event, StreamEventFrame::Delta { ref text } if text == "hi"));
+        Ok(json!({ "message_ids": ["plugin-stream-1"] }))
+    });
+    let handle = PluginSenderHandle::new("ok".into(), rpc, caps_with_stream_event(true, true));
+
+    let result = handle
+        .dispatch_stream_event(sample_stream_event_request())
+        .await
+        .expect("ok");
+
+    assert_eq!(result.message_ids, vec!["plugin-stream-1"]);
     assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
