@@ -806,6 +806,19 @@ fn test_chat_request_accepts_thread_id_alias() {
 }
 
 #[test]
+fn test_chat_request_accepts_client_intent_id_alias() {
+    let req: ChatRequest = serde_json::from_value(json!({
+        "message": "hi",
+        "clientIntentId": "00000000-0000-0000-0000-000000000001"
+    }))
+    .unwrap();
+    assert_eq!(
+        req.client_intent_id.as_deref(),
+        Some("00000000-0000-0000-0000-000000000001")
+    );
+}
+
+#[test]
 fn test_interrupt_request_accepts_thread_id_alias() {
     let req: InterruptRequest = serde_json::from_value(json!({
         "thread_id": "thread::custom"

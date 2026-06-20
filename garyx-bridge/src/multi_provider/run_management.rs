@@ -72,6 +72,15 @@ fn requested_agent_id_from_metadata(metadata: &HashMap<String, Value>) -> Option
         .map(ToOwned::to_owned)
 }
 
+fn metadata_string(metadata: &HashMap<String, Value>, key: &str) -> Option<String> {
+    metadata
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 fn summarize_text(value: &str, limit: usize) -> String {
     let sanitized = value.split_whitespace().collect::<Vec<_>>().join(" ");
     let trimmed = sanitized.trim();
@@ -1416,6 +1425,7 @@ impl MultiProviderBridge {
                 images.clone(),
                 None,
                 queued_attachments,
+                metadata_string(&metadata, "client_intent_id"),
             )
             .await
             .is_some()
@@ -2584,6 +2594,7 @@ impl MultiProviderBridge {
         images: Option<Vec<ImagePayload>>,
         files: Option<Vec<FilePayload>>,
         attachments: Option<Vec<PromptAttachment>>,
+        client_intent_id: Option<String>,
     ) -> Option<QueuedStreamingInput> {
         let provider_key = self
             .inner
@@ -2629,6 +2640,11 @@ impl MultiProviderBridge {
                 text: message.to_owned(),
                 content: build_pending_input_content(message, &image_payloads, &staged_attachments),
                 queued_at: chrono::Utc::now().to_rfc3339(),
+                origin_id: client_intent_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned),
                 status: PendingUserInputStatus::Queued,
             };
             if let Some(tx) = persistence_tx.as_ref() {

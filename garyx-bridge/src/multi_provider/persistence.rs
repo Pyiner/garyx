@@ -18,6 +18,15 @@ use tracing::warn;
 const MAX_SESSION_MESSAGES: usize = 100;
 const PROVIDER_SDK_SESSION_IDS_KEY: &str = "provider_sdk_session_ids";
 
+fn metadata_string(metadata: &HashMap<String, Value>, key: &str) -> Option<String> {
+    metadata
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 fn attach_run_fields(
     object: &mut serde_json::Map<String, Value>,
     metadata: &HashMap<String, Value>,
@@ -215,6 +224,11 @@ fn build_user_object(
     if let Some(extra_metadata) = extra_metadata {
         merged_metadata.extend(extra_metadata);
     }
+    if let Some(origin_id) = metadata_string(metadata, "client_intent_id") {
+        merged_metadata
+            .entry("origin_id".to_owned())
+            .or_insert(Value::String(origin_id));
+    }
     let mut user_object = ProviderMessage {
         role: ProviderMessageRole::User,
         content,
@@ -252,6 +266,8 @@ pub(super) struct PendingUserInput {
     pub text: String,
     pub content: Value,
     pub queued_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_id: Option<String>,
     pub status: PendingUserInputStatus,
 }
 
@@ -420,6 +436,9 @@ impl StreamingRunSnapshot {
             "queued_at".to_owned(),
             Value::String(pending_input.queued_at.clone()),
         );
+        if let Some(origin_id) = pending_input.origin_id.as_deref() {
+            metadata.insert("origin_id".to_owned(), Value::String(origin_id.to_owned()));
+        }
         self.session_messages.push(ProviderMessage {
             role: ProviderMessageRole::User,
             content: pending_input.content.clone(),

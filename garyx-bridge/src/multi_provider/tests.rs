@@ -3209,7 +3209,14 @@ async fn test_thread_persistence_promotes_queued_input_after_user_ack() {
         .expect("provider should emit the initial streamed delta");
 
     let queued = bridge
-        .add_streaming_input("sess::tg::queued-input", "follow-up", None, None, None)
+        .add_streaming_input(
+            "sess::tg::queued-input",
+            "follow-up",
+            None,
+            None,
+            None,
+            Some("00000000-0000-0000-0000-000000000001".to_owned()),
+        )
         .await;
     assert!(
         queued.is_some(),
@@ -3249,6 +3256,10 @@ async fn test_thread_persistence_promotes_queued_input_after_user_ack() {
         pending_checkpoint["pending_user_inputs"][0]["text"],
         "follow-up"
     );
+    assert_eq!(
+        pending_checkpoint["pending_user_inputs"][0]["origin_id"],
+        "00000000-0000-0000-0000-000000000001"
+    );
 
     provider.release_ack();
 
@@ -3284,6 +3295,18 @@ async fn test_thread_persistence_promotes_queued_input_after_user_ack() {
         .filter_map(|message| message["role"].as_str())
         .collect();
     assert_eq!(roles, vec!["user", "assistant", "user"]);
+    let follow_up_user = acked_messages
+        .iter()
+        .find(|message| message["role"] == "user" && message["content"] == "follow-up")
+        .expect("follow-up user should be committed");
+    assert_eq!(
+        follow_up_user["metadata"]["origin_id"],
+        "00000000-0000-0000-0000-000000000001"
+    );
+    assert_eq!(
+        follow_up_user["metadata"]["queued_input_id"],
+        pending_checkpoint["pending_user_inputs"][0]["id"]
+    );
 
     provider.release_run();
     tokio::time::timeout(std::time::Duration::from_secs(3), async {
@@ -3483,7 +3506,7 @@ async fn test_streaming_input_preserves_raw_task_follow_up_for_provider() {
         .expect("provider should emit the initial streamed delta");
 
     let queued = bridge
-        .add_streaming_input("sess::tg::queued-task", "继续", None, None, None)
+        .add_streaming_input("sess::tg::queued-task", "继续", None, None, None, None)
         .await;
     assert!(
         queued.is_some(),
@@ -3578,6 +3601,7 @@ async fn test_add_streaming_input_retries_until_provider_ready() {
             .add_streaming_input(
                 "sess::tg::delayed-queued-input",
                 "follow-up",
+                None,
                 None,
                 None,
                 None,

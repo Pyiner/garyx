@@ -118,6 +118,17 @@ pub(crate) async fn prepare_chat_request(
     for (key, value) in metadata {
         req.metadata.insert(key, value);
     }
+    if let Some(client_intent_id) = req
+        .client_intent_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        req.metadata.insert(
+            "client_intent_id".to_owned(),
+            Value::String(client_intent_id.to_owned()),
+        );
+    }
     let thread_data = state.threads.thread_store.get(&thread_id).await;
     if let Some(thread_data) = thread_data.as_ref() {
         merge_thread_provider_overrides(thread_data, &mut req.metadata);

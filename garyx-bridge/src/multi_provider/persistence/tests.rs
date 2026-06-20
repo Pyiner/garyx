@@ -74,6 +74,46 @@ async fn test_save_thread_messages_preserves_provider_message_order() {
 }
 
 #[tokio::test]
+async fn test_save_thread_messages_copies_client_intent_to_user_origin_id() {
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let history = make_history(store.clone());
+    let metadata = HashMap::from([(
+        "client_intent_id".to_owned(),
+        json!("00000000-0000-0000-0000-000000000001"),
+    )]);
+
+    save_thread_messages(
+        &store,
+        &history,
+        PersistedRun {
+            thread_id: "thread::origin",
+            user_message: "hello",
+            user_timestamp: Some("2026-03-01T00:00:00Z"),
+            user_images: &[],
+            assistant_response: "answer",
+            sdk_session_id: None,
+            provider_key: "provider::origin",
+            provider_type: ProviderType::ClaudeCode,
+            session_messages: &[],
+            metadata: &metadata,
+        },
+    )
+    .await;
+
+    let stored = store
+        .get("thread::origin")
+        .await
+        .expect("stored session should exist");
+    let messages = stored["messages"]
+        .as_array()
+        .expect("messages should be an array");
+    assert_eq!(
+        messages[0]["metadata"]["origin_id"],
+        "00000000-0000-0000-0000-000000000001"
+    );
+}
+
+#[tokio::test]
 async fn test_save_thread_messages_persists_user_images_as_blocks() {
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     let history = make_history(store.clone());
