@@ -27,6 +27,44 @@ pub enum CommittedReplayError {
     MissingEventBus,
 }
 
+pub struct CommittedReplaySubscription {
+    callback: Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
+    task: Option<JoinHandle<()>>,
+}
+
+impl CommittedReplaySubscription {
+    fn new(callback: Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>, task: JoinHandle<()>) -> Self {
+        Self {
+            callback,
+            task: Some(task),
+        }
+    }
+
+    pub fn callback(&self) -> Option<Arc<dyn Fn(StreamEvent) + Send + Sync>> {
+        self.callback.clone()
+    }
+
+    pub fn detach(mut self) {
+        self.task.take();
+    }
+
+    pub fn abort(mut self) -> Option<JoinHandle<()>> {
+        let task = self.task.take();
+        if let Some(task) = task.as_ref() {
+            task.abort();
+        }
+        task
+    }
+}
+
+impl Drop for CommittedReplaySubscription {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
+}
+
 /// Map a single committed transcript record `message` payload to the
 /// [`StreamEvent`]s a channel consumer would have observed live.
 ///
@@ -261,6 +299,9 @@ impl CommittedReplayState {
                 let Some(message) = object.get("message") else {
                     return BusSignal::Ignore;
                 };
+                if is_terminal_control_message(message) {
+                    return BusSignal::Terminal;
+                }
                 let seq = object.get("seq").and_then(Value::as_u64).unwrap_or(0);
                 match self.frontier {
                     // After an initial lag the first visible row may not be the
@@ -289,13 +330,6 @@ impl CommittedReplayState {
                     // transcript rather than forwarding out of order.
                     Some(_) => BusSignal::GapFill,
                 }
-            }
-            Some("run_complete") | Some("run_error") => {
-                if object.get("run_id").and_then(Value::as_str) != Some(self.run_id.as_str()) {
-                    return BusSignal::Ignore;
-                }
-                self.capture_thread_id(object);
-                BusSignal::Terminal
             }
             _ => BusSignal::Ignore,
         }
@@ -415,6 +449,17 @@ fn is_thread_scoped_control_message(message: &Value) -> bool {
         .and_then(|control| control.get("kind"))
         .and_then(Value::as_str)
         .is_some()
+}
+
+fn control_kind(message: &Value) -> Option<&str> {
+    message
+        .get("control")
+        .and_then(|control| control.get("kind"))
+        .and_then(Value::as_str)
+}
+
+fn is_terminal_control_message(message: &Value) -> bool {
+    matches!(control_kind(message), Some("run_complete" | "run_error"))
 }
 
 /// Drive a channel consumer from the durable per-thread committed stream.
@@ -539,12 +584,12 @@ pub async fn committed_callback(
     bridge: &Arc<MultiProviderBridge>,
     run_id: &str,
     consumer: Arc<dyn Fn(StreamEvent) + Send + Sync>,
-) -> Result<Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>, CommittedReplayError> {
+) -> Result<CommittedReplaySubscription, CommittedReplayError> {
     let Some(rx) = bridge.subscribe_events().await else {
         return Err(CommittedReplayError::MissingEventBus);
     };
-    spawn_committed_channel_replay(rx, bridge.clone(), run_id.to_owned(), consumer);
-    Ok(None)
+    let task = spawn_committed_channel_replay(rx, bridge.clone(), run_id.to_owned(), consumer);
+    Ok(CommittedReplaySubscription::new(None, task))
 }
 
 #[cfg(test)]
@@ -809,16 +854,6 @@ mod tests {
             .collect()
     }
 
-    fn run_lifecycle_line(kind: &str) -> String {
-        json!({
-            "type": kind,
-            "thread_id": FIXTURE_THREAD,
-            "run_id": FIXTURE_RUN,
-            "duration_ms": 1234,
-        })
-        .to_string()
-    }
-
     fn transcript_record(seq: u64, run_id: &str, message: Value) -> ThreadTranscriptRecord {
         ThreadTranscriptRecord {
             seq,
@@ -842,6 +877,16 @@ mod tests {
             "message": message,
         })
         .to_string()
+    }
+
+    fn run_lifecycle_line(seq: u64, kind: &str) -> String {
+        committed_line(
+            seq,
+            RunControlMessage::new(kind)
+                .with("status", json!("completed"))
+                .with("duration_ms", json!(1234))
+                .build(),
+        )
     }
 
     fn assistant(text: &str) -> Value {
@@ -910,7 +955,7 @@ mod tests {
     fn contiguous_live_replay_matches_direct_mapping_and_detects_terminal() {
         let raw = include_str!("../../test-fixtures/stream-sync/transcript-with-control.jsonl");
         let mut lines = committed_bus_lines(raw);
-        lines.push(run_lifecycle_line("run_complete"));
+        lines.push(run_lifecycle_line(9, "run_complete"));
 
         let (events, terminal, gap, state) = drive_live(FIXTURE_RUN, &lines);
 
@@ -1102,7 +1147,7 @@ mod tests {
         // hole), then the run completes.
         tx.send(committed_line(1, assistant("first "))).unwrap();
         tx.send(committed_line(3, assistant("third "))).unwrap();
-        tx.send(run_lifecycle_line("run_complete")).unwrap();
+        tx.send(run_lifecycle_line(4, "run_complete")).unwrap();
 
         handle.await.unwrap();
 
@@ -1153,7 +1198,7 @@ mod tests {
         // Live sees the reply but the broadcast drops the done control; the
         // run_complete lifecycle event triggers the terminal backfill.
         tx.send(committed_line(1, assistant("only reply"))).unwrap();
-        tx.send(run_lifecycle_line("run_complete")).unwrap();
+        tx.send(run_lifecycle_line(3, "run_complete")).unwrap();
 
         handle.await.unwrap();
 
@@ -1168,6 +1213,64 @@ mod tests {
             ],
             "the dropped tail done is recovered from the transcript, not double-emitted"
         );
+    }
+
+    #[tokio::test]
+    async fn spawn_synthesizes_done_for_interrupted_run_without_done_control() {
+        use std::sync::Mutex as StdMutex;
+
+        let (tx, rx) = broadcast::channel(64);
+        let collected: Arc<StdMutex<Vec<StreamEvent>>> = Arc::new(StdMutex::new(Vec::new()));
+        let consumer: Arc<dyn Fn(StreamEvent) + Send + Sync> = {
+            let collected = collected.clone();
+            Arc::new(move |event| collected.lock().unwrap().push(event))
+        };
+        let reader = Arc::new(MockTailReader {
+            records: vec![transcript_record(
+                1,
+                FIXTURE_RUN,
+                assistant("partial reply"),
+            )],
+        });
+
+        let handle = spawn_committed_channel_replay(rx, reader, FIXTURE_RUN.to_owned(), consumer);
+
+        tx.send(committed_line(1, assistant("partial reply")))
+            .unwrap();
+        tx.send(run_lifecycle_line(2, "run_complete")).unwrap();
+
+        handle.await.unwrap();
+
+        let events = collected.lock().unwrap().clone();
+        assert_eq!(
+            events,
+            vec![
+                StreamEvent::Delta {
+                    text: "partial reply".to_owned()
+                },
+                StreamEvent::Done,
+            ],
+            "interrupted/error runs without done still flush buffered channel text"
+        );
+    }
+
+    #[tokio::test]
+    async fn replay_subscription_abort_stops_task_before_terminal_arrives() {
+        let (_tx, rx) = broadcast::channel(64);
+        let reader = Arc::new(MockTailReader {
+            records: Vec::new(),
+        });
+        let consumer: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(|_event| {});
+        let task = spawn_committed_channel_replay(rx, reader, FIXTURE_RUN.to_owned(), consumer);
+        let subscription = CommittedReplaySubscription::new(None, task);
+
+        let task = subscription.abort().expect("subscription owns replay task");
+        let error = tokio::time::timeout(std::time::Duration::from_secs(1), task)
+            .await
+            .expect("aborted replay task should finish promptly")
+            .expect_err("aborted task should be cancelled");
+
+        assert!(error.is_cancelled());
     }
 
     #[test]
@@ -1259,7 +1362,7 @@ mod tests {
         tx.send(committed_line(1, assistant("first "))).unwrap();
         tx.send(committed_line(2, assistant("second "))).unwrap();
         tx.send(committed_line(3, assistant("third "))).unwrap();
-        tx.send(run_lifecycle_line("run_complete")).unwrap();
+        tx.send(run_lifecycle_line(4, "run_complete")).unwrap();
 
         handle.await.unwrap();
 
@@ -1297,8 +1400,8 @@ mod tests {
         fn new(kind: &str) -> Self {
             let mut control = Map::new();
             control.insert("kind".to_owned(), json!(kind));
-            control.insert("thread_id".to_owned(), json!("thread::fixture-control"));
-            control.insert("run_id".to_owned(), json!("run::fixture-control"));
+            control.insert("thread_id".to_owned(), json!(FIXTURE_THREAD));
+            control.insert("run_id".to_owned(), json!(FIXTURE_RUN));
             control.insert("at".to_owned(), json!("2026-06-18T12:00:00Z"));
             Self { control }
         }

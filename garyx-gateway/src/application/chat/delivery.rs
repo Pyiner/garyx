@@ -11,15 +11,49 @@ use garyx_models::provider::StreamEvent;
 
 use crate::server::AppState;
 
+pub struct BoundResponseStream {
+    callback: Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
+    replay: Option<garyx_channels::committed_replay::CommittedReplaySubscription>,
+}
+
+impl BoundResponseStream {
+    fn none() -> Self {
+        Self {
+            callback: None,
+            replay: None,
+        }
+    }
+
+    fn from_replay(replay: garyx_channels::committed_replay::CommittedReplaySubscription) -> Self {
+        Self {
+            callback: replay.callback(),
+            replay: Some(replay),
+        }
+    }
+
+    pub fn callback(&self) -> Option<Arc<dyn Fn(StreamEvent) + Send + Sync>> {
+        self.callback.clone()
+    }
+
+    pub fn detach(mut self) {
+        if let Some(replay) = self.replay.take() {
+            replay.detach();
+        }
+    }
+
+    pub fn abort(mut self) {
+        if let Some(replay) = self.replay.take() {
+            replay.abort();
+        }
+    }
+}
+
 pub async fn build_bound_response_callback(
     state: &Arc<AppState>,
     thread_id: &str,
     run_id: &str,
     streaming_target: Option<StreamingDispatchTarget>,
-) -> Result<
-    Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
-    garyx_channels::committed_replay::CommittedReplayError,
-> {
+) -> Result<BoundResponseStream, garyx_channels::committed_replay::CommittedReplayError> {
     let targets = snapshot_bound_thread_delivery_targets(state, thread_id).await;
     if let Some(target) = streaming_target.as_ref() {
         let callback = build_stream_dispatch_callback(
@@ -43,7 +77,7 @@ pub async fn build_bound_response_callback(
                 as Arc<dyn Fn(StreamEvent) + Send + Sync>,
             (Some(callback), None) => callback,
             (None, Some(bound_consumer)) => bound_consumer,
-            (None, None) => return Ok(None),
+            (None, None) => return Ok(BoundResponseStream::none()),
         };
         // Read this run's stream from the durable committed transcript. The
         // streaming sender is unchanged; only the source changes.
@@ -52,7 +86,8 @@ pub async fn build_bound_response_callback(
             run_id,
             consumer,
         )
-        .await;
+        .await
+        .map(BoundResponseStream::from_replay);
     }
 
     let Some(bound_consumer) = build_bound_delivery_consumer(
@@ -61,7 +96,7 @@ pub async fn build_bound_response_callback(
         run_id.to_owned(),
         targets,
     ) else {
-        return Ok(None);
+        return Ok(BoundResponseStream::none());
     };
 
     // Read this run's stream from the durable committed transcript. The bound
@@ -72,6 +107,7 @@ pub async fn build_bound_response_callback(
         bound_consumer,
     )
     .await
+    .map(BoundResponseStream::from_replay)
 }
 
 fn delivery_target_to_streaming_target(

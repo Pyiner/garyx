@@ -164,7 +164,7 @@ pub(crate) async fn dispatch_internal_message_to_thread(
     // The thread's bound agent runtime configuration (model, effort, system
     // prompt) is backfilled by the bridge at run resolution; no per-entry
     // expansion is needed here.
-    let response_callback = build_bound_response_callback(
+    let response_stream = build_bound_response_callback(
         state,
         target_thread_id,
         run_id,
@@ -180,6 +180,7 @@ pub(crate) async fn dispatch_internal_message_to_thread(
     )
     .await
     .map_err(|error| format!("failed to attach committed response stream: {error}"))?;
+    let response_callback = response_stream.callback();
 
     crate::runtime_diagnostics::record_message_ledger_event(
         state,
@@ -219,12 +220,21 @@ pub(crate) async fn dispatch_internal_message_to_thread(
                 state.integration.bridge.as_ref(),
                 response_callback,
             )
-            .await?
+            .await
+    };
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            response_stream.abort();
+            return Err(error);
+        }
     };
 
     if result.local_reply.is_some() {
+        response_stream.abort();
         return Err("internal thread dispatch unexpectedly handled locally".to_owned());
     }
+    response_stream.detach();
 
     Ok(())
 }

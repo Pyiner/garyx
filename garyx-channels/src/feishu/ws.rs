@@ -1402,14 +1402,14 @@ pub(super) async fn handle_im_message_event(
     // before dispatch and let the replay adapter drive the Feishu sender.
     // Bound non-origin endpoints attach after route_and_dispatch resolves the
     // canonical thread id.
-    let dispatch_callback = match crate::committed_replay::committed_callback(
+    let replay_subscription = match crate::committed_replay::committed_callback(
         runtime.bridge,
         &request.run_id,
         fanout_consumer,
     )
     .await
     {
-        Ok(callback) => callback,
+        Ok(subscription) => subscription,
         Err(error) => {
             tracing::error!(run_id = %request.run_id, error = %error, "committed replay bus missing for Feishu dispatch");
             return;
@@ -1425,6 +1425,7 @@ pub(super) async fn handle_im_message_event(
         deferred_fanout.clone(),
         thread_store,
     );
+    let dispatch_callback = replay_subscription.callback();
 
     let dispatch_result = {
         let mut router_guard = runtime.router.lock().await;
@@ -1463,7 +1464,13 @@ pub(super) async fn handle_im_message_event(
         Ok(result) => {
             deferred_fanout.attach_thread(&result.thread_id).await;
             let _ = thread_id_tx.send(result.thread_id.clone());
-            if let Some(local_reply) = result.local_reply {
+            let local_reply = result.local_reply;
+            if local_reply.is_some() {
+                replay_subscription.abort();
+            } else {
+                replay_subscription.detach();
+            }
+            if let Some(local_reply) = local_reply {
                 match send_native_command_reply(runtime.client, &message.message_id, &local_reply)
                     .await
                 {

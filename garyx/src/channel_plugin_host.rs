@@ -425,13 +425,14 @@ impl HostInboundHandler {
         // Bound non-origin endpoints attach after `route_and_dispatch` returns
         // the canonical thread id, with early events buffered by the deferred
         // fanout.
-        let dispatch_callback = garyx_channels::committed_replay::committed_callback(
+        let replay_subscription = garyx_channels::committed_replay::committed_callback(
             &self.bridge,
             &run_id,
             fanout_consumer,
         )
         .await
         .map_err(|error| (PluginErrorCode::InternalError.as_i32(), error.to_string()))?;
+        let dispatch_callback = replay_subscription.callback();
 
         // `route_and_dispatch` resolves the thread and kicks off the
         // agent run. The committed replay adapter streams events back in; we pin
@@ -463,12 +464,23 @@ impl HostInboundHandler {
         // task drains its mpsc on its own schedule and removes the
         // id on exit, which is the true end-of-stream.
 
-        let result = result.map_err(|err| (PluginErrorCode::InternalError.as_i32(), err))?;
+        let result = match result {
+            Ok(result) => result,
+            Err(err) => {
+                replay_subscription.abort();
+                return Err((PluginErrorCode::InternalError.as_i32(), err));
+            }
+        };
 
         if let Ok(mut holder) = thread_holder.lock() {
             *holder = Some(result.thread_id.clone());
         }
         deferred_fanout.attach_thread(&result.thread_id).await;
+        if result.local_reply.is_some() {
+            replay_subscription.abort();
+        } else {
+            replay_subscription.detach();
+        }
 
         // If route_and_dispatch produced a synchronous `local_reply`,
         // send it directly through the plugin's outbound path.

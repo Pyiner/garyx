@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -22,7 +23,11 @@ use tower::ServiceExt;
 use crate::application::chat::contracts::{ChatRequest, InterruptRequest, StreamInputRequest};
 use crate::server::{AppState, AppStateBuilder};
 
-use super::{chat_health, chat_interrupt, chat_start, chat_stream_input};
+use super::{
+    ChatWsForwardOutcome, chat_health, chat_interrupt, chat_start, chat_stream_input,
+    forward_chat_ws_committed_value, is_terminal_bus_record_for_run,
+    spawn_chat_ws_committed_stream,
+};
 
 struct ReadyProvider;
 struct SlowProvider {
@@ -819,4 +824,123 @@ fn test_stream_input_request_accepts_thread_id_alias() {
     .unwrap();
     assert_eq!(req.thread_id.as_deref(), Some("thread::custom"));
     assert_eq!(req.client_intent_id.as_deref(), Some("intent-1"));
+}
+
+fn committed_ws_control(thread_id: &str, run_id: &str, seq: u64, kind: &str) -> Value {
+    json!({
+        "type": "committed_message",
+        "thread_id": thread_id,
+        "run_id": run_id,
+        "seq": seq,
+        "message": {
+            "role": "system",
+            "kind": "control",
+            "internal": true,
+            "internal_kind": "control",
+            "control": {
+                "kind": kind,
+                "thread_id": thread_id,
+                "run_id": run_id,
+                "at": "2026-06-20T00:00:00Z",
+                "status": "interrupted"
+            }
+        }
+    })
+}
+
+#[test]
+fn chat_ws_terminal_detection_reads_committed_control_kind() {
+    let terminal = committed_ws_control(
+        "thread::chat-ws-terminal-detect",
+        "run::chat-ws-terminal-detect",
+        1,
+        "run_complete",
+    );
+    assert!(is_terminal_bus_record_for_run(
+        &terminal,
+        "run::chat-ws-terminal-detect"
+    ));
+
+    let top_level = json!({
+        "type": "run_complete",
+        "thread_id": "thread::chat-ws-terminal-detect",
+        "run_id": "run::chat-ws-terminal-detect"
+    });
+    assert!(
+        !is_terminal_bus_record_for_run(&top_level, "run::chat-ws-terminal-detect"),
+        "top-level lifecycle shapes are not produced on the committed bus"
+    );
+
+    let done = committed_ws_control(
+        "thread::chat-ws-terminal-detect",
+        "run::chat-ws-terminal-detect",
+        2,
+        "done",
+    );
+    assert!(!is_terminal_bus_record_for_run(
+        &done,
+        "run::chat-ws-terminal-detect"
+    ));
+}
+
+#[test]
+fn chat_ws_forward_outcome_distinguishes_gap_from_closed_client() {
+    let (open_tx, _open_rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut sent_payloads = HashMap::new();
+    let mut last_sent_seq = 1;
+    let gap = committed_ws_control("thread::chat-ws-forward", "run::chat-ws-forward", 3, "done");
+    assert_eq!(
+        forward_chat_ws_committed_value(&open_tx, &gap, &mut sent_payloads, &mut last_sent_seq),
+        ChatWsForwardOutcome::Gap
+    );
+    assert_eq!(last_sent_seq, 1, "gap does not advance the cursor");
+
+    let (closed_tx, closed_rx) = tokio::sync::mpsc::unbounded_channel();
+    drop(closed_rx);
+    let mut sent_payloads = HashMap::new();
+    let mut last_sent_seq = 0;
+    let terminal = committed_ws_control(
+        "thread::chat-ws-forward",
+        "run::chat-ws-forward",
+        1,
+        "run_complete",
+    );
+    assert_eq!(
+        forward_chat_ws_committed_value(
+            &closed_tx,
+            &terminal,
+            &mut sent_payloads,
+            &mut last_sent_seq
+        ),
+        ChatWsForwardOutcome::Closed
+    );
+}
+
+#[tokio::test]
+async fn chat_ws_committed_stream_forwards_terminal_record_then_exits() {
+    let state = test_state_with_provider().await;
+    let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel();
+    let thread_id = "thread::chat-ws-terminal-forward".to_owned();
+    let run_id = "run::chat-ws-terminal-forward".to_owned();
+    let handle =
+        spawn_chat_ws_committed_stream(state.clone(), out_tx, thread_id.clone(), run_id.clone());
+    let terminal = committed_ws_control(&thread_id, &run_id, 1, "run_complete");
+
+    state
+        .ops
+        .events
+        .sender()
+        .send(terminal.to_string())
+        .expect("event bus has an active committed stream subscriber");
+
+    let forwarded = tokio::time::timeout(std::time::Duration::from_secs(1), out_rx.recv())
+        .await
+        .expect("terminal committed record should be forwarded")
+        .expect("stream output should remain open until terminal is sent");
+    assert_eq!(forwarded, terminal);
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), handle)
+        .await
+        .expect("terminal committed record should stop the WS stream task")
+        .expect("WS stream task should not panic");
 }

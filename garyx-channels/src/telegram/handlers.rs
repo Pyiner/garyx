@@ -817,14 +817,14 @@ impl TelegramChannel {
         // subscribe before dispatch and let the replay adapter drive the
         // Telegram sender. Bound non-origin endpoints attach after
         // route_and_dispatch resolves the canonical thread id.
-        let dispatch_callback = match crate::committed_replay::committed_callback(
+        let replay_subscription = match crate::committed_replay::committed_callback(
             &context.bridge,
             &request.run_id,
             fanout_consumer,
         )
         .await
         {
-            Ok(callback) => callback,
+            Ok(subscription) => subscription,
             Err(error) => {
                 tracing::error!(run_id = %request.run_id, error = %error, "committed replay bus missing for Telegram dispatch");
                 return;
@@ -840,6 +840,7 @@ impl TelegramChannel {
             deferred_fanout.clone(),
             thread_store,
         );
+        let dispatch_callback = replay_subscription.callback();
 
         let dispatch_result = {
             let mut router_guard = context.router.lock().await;
@@ -876,7 +877,13 @@ impl TelegramChannel {
         match dispatch_result {
             Ok(result) => {
                 deferred_fanout.attach_thread(&result.thread_id).await;
-                if let Some(local_reply) = result.local_reply {
+                let local_reply = result.local_reply;
+                if local_reply.is_some() {
+                    replay_subscription.abort();
+                } else {
+                    replay_subscription.detach();
+                }
+                if let Some(local_reply) = local_reply {
                     if let Err(e) = send_response(
                         TelegramSendTarget::new(
                             &context.http,

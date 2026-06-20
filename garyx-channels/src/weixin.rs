@@ -4252,14 +4252,14 @@ impl WeixinChannel {
         // subscribe before dispatch and let the replay adapter drive the Weixin
         // sender. Bound non-origin endpoints attach after route_and_dispatch
         // resolves the canonical thread id.
-        let dispatch_callback = match crate::committed_replay::committed_callback(
+        let replay_subscription = match crate::committed_replay::committed_callback(
             &runtime.bridge,
             &request.run_id,
             fanout_consumer,
         )
         .await
         {
-            Ok(callback) => callback,
+            Ok(subscription) => subscription,
             Err(error) => {
                 tracing::error!(run_id = %request.run_id, error = %error, "committed replay bus missing for Weixin dispatch");
                 return;
@@ -4275,6 +4275,7 @@ impl WeixinChannel {
             deferred_fanout.clone(),
             thread_store,
         );
+        let dispatch_callback = replay_subscription.callback();
 
         let result = {
             let mut router_guard = runtime.router.lock().await;
@@ -4289,7 +4290,13 @@ impl WeixinChannel {
                 if let Ok(mut holder) = thread_id_holder.lock() {
                     *holder = result.thread_id.clone();
                 }
-                if let Some(local_reply) = result.local_reply {
+                let local_reply = result.local_reply;
+                if local_reply.is_some() {
+                    replay_subscription.abort();
+                } else {
+                    replay_subscription.detach();
+                }
+                if let Some(local_reply) = local_reply {
                     let token = if message.context_token.trim().is_empty() {
                         get_context_token_for_thread(
                             &runtime.account_id,

@@ -25,6 +25,7 @@ use garyx_router::{THREAD_TRANSCRIPT_REPLAY_CAP, ThreadTranscriptRecord};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use crate::agent_team_provider::AGENT_TEAM_PROVIDER_KEY;
@@ -227,13 +228,16 @@ async fn handle_chat_ws_start(
         let callback_state = run_state.clone();
         let callback_out_tx = run_out_tx.clone();
         let callback_builder = move |run_id: &str, thread_id: &str| {
-            spawn_chat_ws_committed_stream(
+            let task = spawn_chat_ws_committed_stream(
                 callback_state.clone(),
                 callback_out_tx.clone(),
                 thread_id.to_owned(),
                 run_id.to_owned(),
             );
-            None
+            ChatStreamCallbackAttachment {
+                callback: None,
+                task: Some(task),
+            }
         };
         match start_chat_run(&run_state, request, Some(Box::new(callback_builder))).await {
             Ok(response) => {
@@ -270,8 +274,13 @@ async fn handle_chat_ws_start(
     });
 }
 
+struct ChatStreamCallbackAttachment {
+    callback: Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
+    task: Option<JoinHandle<()>>,
+}
+
 type ChatStreamCallbackBuilder =
-    Box<dyn Fn(&str, &str) -> Option<Arc<dyn Fn(StreamEvent) + Send + Sync>> + Send + Sync>;
+    Box<dyn Fn(&str, &str) -> ChatStreamCallbackAttachment + Send + Sync>;
 
 fn compose_stream_callbacks(
     callbacks: Vec<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
@@ -321,13 +330,27 @@ async fn start_chat_run(
     );
 
     let mut callbacks = Vec::new();
-    if let Some(callback) = callback_builder.and_then(|builder| builder(&run_id, &thread_id)) {
-        callbacks.push(callback);
+    let mut stream_tasks = Vec::<JoinHandle<()>>::new();
+    if let Some(builder) = callback_builder {
+        let mut attachment = builder(&run_id, &thread_id);
+        if let Some(callback) = attachment.callback.take() {
+            callbacks.push(callback);
+        }
+        if let Some(task) = attachment.task.take() {
+            stream_tasks.push(task);
+        }
     }
-    match build_bound_response_callback(state, &thread_id, &run_id, None).await {
-        Ok(Some(callback)) => callbacks.push(callback),
-        Ok(None) => {}
+    let bound_stream = match build_bound_response_callback(state, &thread_id, &run_id, None).await {
+        Ok(stream) => {
+            if let Some(callback) = stream.callback() {
+                callbacks.push(callback);
+            }
+            stream
+        }
         Err(error) => {
+            for task in stream_tasks {
+                task.abort();
+            }
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
@@ -337,7 +360,7 @@ async fn start_chat_run(
                 })),
             ));
         }
-    }
+    };
     let callback = compose_stream_callbacks(callbacks);
     state.sync_external_user_skills_before_run("api_chat_start", &thread_id);
     let start_result = state
@@ -361,6 +384,7 @@ async fn start_chat_run(
 
     match start_result {
         Ok(()) => {
+            bound_stream.detach();
             crate::runtime_diagnostics::record_message_ledger_event(
                 state,
                 MessageLifecycleStatus::RunStarted,
@@ -384,14 +408,20 @@ async fn start_chat_run(
                 thread_id,
             })
         }
-        Err(error) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "runId": run_id,
-                "threadId": thread_id,
-                "error": error.to_string()
-            })),
-        )),
+        Err(error) => {
+            bound_stream.abort();
+            for task in stream_tasks {
+                task.abort();
+            }
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "runId": run_id,
+                    "threadId": thread_id,
+                    "error": error.to_string()
+                })),
+            ))
+        }
     }
 }
 
@@ -540,7 +570,7 @@ fn spawn_chat_ws_committed_stream(
     out_tx: mpsc::UnboundedSender<Value>,
     thread_id: String,
     run_id: String,
-) {
+) -> JoinHandle<()> {
     let mut rx = state.ops.events.subscribe();
     let transcript_store = state.threads.history.transcript_store();
     tokio::spawn(async move {
@@ -553,15 +583,36 @@ fn spawn_chat_ws_committed_stream(
                         continue;
                     };
                     if is_committed_ws_record_for_run(&value, &thread_id, &run_id) {
-                        if forward_chat_ws_committed_value(
+                        let terminal = is_terminal_bus_record_for_run(&value, &run_id);
+                        match forward_chat_ws_committed_value(
                             &out_tx,
                             &value,
                             &mut sent_payloads,
                             &mut last_sent_seq,
                         ) {
-                            continue;
+                            ChatWsForwardOutcome::SentOrSkipped => {
+                                if terminal
+                                    && !backfill_chat_ws_committed(
+                                        transcript_store.clone(),
+                                        &out_tx,
+                                        &thread_id,
+                                        &run_id,
+                                        &mut sent_payloads,
+                                        &mut last_sent_seq,
+                                    )
+                                    .await
+                                {
+                                    break;
+                                }
+                                if terminal {
+                                    break;
+                                }
+                                continue;
+                            }
+                            ChatWsForwardOutcome::Closed => break,
+                            ChatWsForwardOutcome::Gap => {}
                         }
-                        backfill_chat_ws_committed(
+                        if !backfill_chat_ws_committed(
                             transcript_store.clone(),
                             &out_tx,
                             &thread_id,
@@ -569,29 +620,39 @@ fn spawn_chat_ws_committed_stream(
                             &mut sent_payloads,
                             &mut last_sent_seq,
                         )
-                        .await;
-                        let _ = forward_chat_ws_committed_value(
+                        .await
+                        {
+                            break;
+                        }
+                        match forward_chat_ws_committed_value(
                             &out_tx,
                             &value,
                             &mut sent_payloads,
                             &mut last_sent_seq,
-                        );
-                    } else if is_terminal_bus_record_for_run(&value, &run_id) {
-                        backfill_chat_ws_committed(
-                            transcript_store.clone(),
-                            &out_tx,
-                            &thread_id,
-                            &run_id,
-                            &mut sent_payloads,
-                            &mut last_sent_seq,
-                        )
-                        .await;
-                        break;
+                        ) {
+                            ChatWsForwardOutcome::Closed => break,
+                            ChatWsForwardOutcome::SentOrSkipped | ChatWsForwardOutcome::Gap => {}
+                        }
+                        if terminal {
+                            if !backfill_chat_ws_committed(
+                                transcript_store.clone(),
+                                &out_tx,
+                                &thread_id,
+                                &run_id,
+                                &mut sent_payloads,
+                                &mut last_sent_seq,
+                            )
+                            .await
+                            {
+                                break;
+                            }
+                            break;
+                        }
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                     state.ops.events.record_drop();
-                    backfill_chat_ws_committed(
+                    if !backfill_chat_ws_committed(
                         transcript_store.clone(),
                         &out_tx,
                         &thread_id,
@@ -599,10 +660,13 @@ fn spawn_chat_ws_committed_stream(
                         &mut sent_payloads,
                         &mut last_sent_seq,
                     )
-                    .await;
+                    .await
+                    {
+                        break;
+                    }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    backfill_chat_ws_committed(
+                    let _ = backfill_chat_ws_committed(
                         transcript_store.clone(),
                         &out_tx,
                         &thread_id,
@@ -615,7 +679,7 @@ fn spawn_chat_ws_committed_stream(
                 }
             }
         }
-    });
+    })
 }
 
 fn is_committed_ws_record_for_run(value: &Value, thread_id: &str, run_id: &str) -> bool {
@@ -633,10 +697,14 @@ fn is_committed_ws_record_for_run(value: &Value, thread_id: &str, run_id: &str) 
 }
 
 fn is_terminal_bus_record_for_run(value: &Value, run_id: &str) -> bool {
-    matches!(
-        value.get("type").and_then(Value::as_str),
-        Some("run_complete" | "run_error")
-    ) && value.get("run_id").and_then(Value::as_str) == Some(run_id)
+    value.get("type").and_then(Value::as_str) == Some("committed_message")
+        && value.get("run_id").and_then(Value::as_str) == Some(run_id)
+        && matches!(
+            value
+                .pointer("/message/control/kind")
+                .and_then(Value::as_str),
+            Some("run_complete" | "run_error")
+        )
 }
 
 fn committed_ws_payload(record: ThreadTranscriptRecord) -> Value {
@@ -654,9 +722,16 @@ fn forward_chat_ws_committed_record(
     record: ThreadTranscriptRecord,
     sent_payloads: &mut HashMap<u64, String>,
     last_sent_seq: &mut u64,
-) -> bool {
+) -> ChatWsForwardOutcome {
     let payload = committed_ws_payload(record);
     forward_chat_ws_committed_value(out_tx, &payload, sent_payloads, last_sent_seq)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChatWsForwardOutcome {
+    SentOrSkipped,
+    Gap,
+    Closed,
 }
 
 fn forward_chat_ws_committed_value(
@@ -664,24 +739,26 @@ fn forward_chat_ws_committed_value(
     value: &Value,
     sent_payloads: &mut HashMap<u64, String>,
     last_sent_seq: &mut u64,
-) -> bool {
+) -> ChatWsForwardOutcome {
     let seq = value.get("seq").and_then(Value::as_u64).unwrap_or(0);
     if seq == 0 {
-        return true;
+        return ChatWsForwardOutcome::SentOrSkipped;
     }
     let payload = value.to_string();
     if sent_payloads.get(&seq).is_some_and(|sent| sent == &payload) {
-        return true;
+        return ChatWsForwardOutcome::SentOrSkipped;
     }
     if *last_sent_seq != 0 && seq > *last_sent_seq + 1 {
-        return false;
+        return ChatWsForwardOutcome::Gap;
     }
     if seq > *last_sent_seq {
         *last_sent_seq = seq;
     }
     sent_payloads.insert(seq, payload);
-    let _ = out_tx.send(value.clone());
-    true
+    if out_tx.send(value.clone()).is_err() {
+        return ChatWsForwardOutcome::Closed;
+    }
+    ChatWsForwardOutcome::SentOrSkipped
 }
 
 async fn backfill_chat_ws_committed(
@@ -691,7 +768,7 @@ async fn backfill_chat_ws_committed(
     run_id: &str,
     sent_payloads: &mut HashMap<u64, String>,
     last_sent_seq: &mut u64,
-) {
+) -> bool {
     loop {
         let cursor = *last_sent_seq;
         let records = transcript_store
@@ -703,12 +780,18 @@ async fn backfill_chat_ws_committed(
         }
         let page_len = records.len();
         for record in records {
-            let _ = forward_chat_ws_committed_record(out_tx, record, sent_payloads, last_sent_seq);
+            if matches!(
+                forward_chat_ws_committed_record(out_tx, record, sent_payloads, last_sent_seq),
+                ChatWsForwardOutcome::Closed
+            ) {
+                return false;
+            }
         }
         if page_len < THREAD_TRANSCRIPT_REPLAY_CAP || *last_sent_seq == cursor {
             break;
         }
     }
+    true
 }
 
 // ---------------------------------------------------------------------------
