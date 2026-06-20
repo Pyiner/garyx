@@ -1201,12 +1201,11 @@ extension GaryxMobileModel {
                 runtime.activeRun = nil
                 updated.threadRuntime = runtime
             }
-            updated.activeRunId = nil
-            let runState = updated.runState?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            if runState == "running" {
-                let recentRunId = updated.recentRunId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                updated.runState = recentRunId.isEmpty ? "idle" : "completed"
-            }
+            updated.runState = GaryxThreadSummaryRunStateResolver.resolvedRunState(
+                apiRunState: updated.runState,
+                recentRunId: updated.recentRunId,
+                committedState: nil
+            )
             return updated
         }
         return summary(thread, applying: state)
@@ -1219,15 +1218,11 @@ extension GaryxMobileModel {
             updated.threadRuntime = runtime
         }
         updated.activeRunId = state.busy ? state.activeRunId : nil
-        if state.busy {
-            updated.runState = "running"
-        } else if let terminal = state.terminalStatus?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !terminal.isEmpty {
-            updated.runState = terminal
-        } else {
-            let recentRunId = updated.recentRunId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            updated.runState = recentRunId.isEmpty ? "idle" : "completed"
-        }
+        updated.runState = GaryxThreadSummaryRunStateResolver.resolvedRunState(
+            apiRunState: updated.runState,
+            recentRunId: updated.recentRunId,
+            committedState: state
+        )
         if let title = state.title?.trimmingCharacters(in: .whitespacesAndNewlines),
            !title.isEmpty {
             updated.title = title

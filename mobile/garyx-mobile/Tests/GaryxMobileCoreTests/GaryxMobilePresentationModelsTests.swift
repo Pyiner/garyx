@@ -2,6 +2,87 @@ import XCTest
 @testable import GaryxMobileCore
 
 final class GaryxMobilePresentationModelsTests: XCTestCase {
+    func testRunStateResolverPreservesAPIRunningWhenCommittedStateIsMissing() {
+        XCTAssertEqual(
+            GaryxThreadSummaryRunStateResolver.resolvedRunState(
+                apiRunState: "running",
+                recentRunId: nil,
+                committedState: nil
+            ),
+            "running"
+        )
+        XCTAssertEqual(
+            GaryxThreadSummaryRunStateResolver.resolvedRunState(
+                apiRunState: " running ",
+                recentRunId: "run-1",
+                committedState: nil
+            ),
+            " running "
+        )
+    }
+
+    func testRunStateResolverUsesCommittedTerminalStateWhenPresent() {
+        let state = GaryxTranscriptRunState(
+            busy: false,
+            activeRunId: nil,
+            terminalStatus: "completed"
+        )
+
+        XCTAssertEqual(
+            GaryxThreadSummaryRunStateResolver.resolvedRunState(
+                apiRunState: "running",
+                recentRunId: "run-1",
+                committedState: state
+            ),
+            "completed"
+        )
+    }
+
+    func testRunStateResolverFallsBackFromCommittedIdleByRecentRun() {
+        XCTAssertEqual(
+            GaryxThreadSummaryRunStateResolver.resolvedRunState(
+                apiRunState: "running",
+                recentRunId: "run-1",
+                committedState: GaryxTranscriptRunState()
+            ),
+            "completed"
+        )
+        XCTAssertEqual(
+            GaryxThreadSummaryRunStateResolver.resolvedRunState(
+                apiRunState: "running",
+                recentRunId: nil,
+                committedState: GaryxTranscriptRunState()
+            ),
+            "idle"
+        )
+    }
+
+    func testRunStateResolverDoesNotInventRunningFromNonRunningAPIState() {
+        XCTAssertEqual(
+            GaryxThreadSummaryRunStateResolver.resolvedRunState(
+                apiRunState: "completed",
+                recentRunId: "run-1",
+                committedState: nil
+            ),
+            "completed"
+        )
+        XCTAssertEqual(
+            GaryxThreadSummaryRunStateResolver.resolvedRunState(
+                apiRunState: "idle",
+                recentRunId: nil,
+                committedState: nil
+            ),
+            "idle"
+        )
+        XCTAssertNil(
+            GaryxThreadSummaryRunStateResolver.resolvedRunState(
+                apiRunState: nil,
+                recentRunId: nil,
+                committedState: nil
+            )
+        )
+    }
+
     func testSidebarThreadPresentationUsesWorkspaceSubtitleAndRunningState() {
         let thread = makeThread(
             title: "",

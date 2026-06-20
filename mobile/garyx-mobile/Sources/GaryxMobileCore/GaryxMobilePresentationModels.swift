@@ -1,5 +1,36 @@
 import Foundation
 
+enum GaryxThreadSummaryRunStateResolver {
+    static func resolvedRunState(
+        apiRunState: String?,
+        recentRunId: String?,
+        committedState: GaryxTranscriptRunState?
+    ) -> String? {
+        guard let committedState else {
+            return apiRunState
+        }
+
+        if committedState.busy {
+            return "running"
+        }
+
+        if let terminal = trimmed(committedState.terminalStatus) {
+            return terminal
+        }
+
+        return hasValue(recentRunId) ? "completed" : "idle"
+    }
+
+    private static func trimmed(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func hasValue(_ value: String?) -> Bool {
+        !(value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+    }
+}
+
 struct GaryxSidebarThreadRowPresentation: Equatable {
     let title: String
     let subtitle: String?
