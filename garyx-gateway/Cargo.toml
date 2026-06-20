@@ -50,6 +50,7 @@ urlencoding = "2"
 
 [dev-dependencies]
 tempfile.workspace = true
+filetime.workspace = true
 wiremock = "0.6"
 tokio-tungstenite = { workspace = true }
 futures-util = "0.3"

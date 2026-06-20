@@ -37,6 +37,10 @@ wake message through the same target resolution used by `garyx thread send`.
 The wake target is the only routing input; workspace is resolved from the target
 thread/task/bot binding inside the gateway.
 
+`garyx gateway restart --wake all` captures the threads that are running in
+`recent_threads` before restart and sends each one `continue` after the new
+gateway starts. Use `--wake-message "..."` to override the message.
+
 Bare `garyx gateway restart` is blocked because it can interrupt an active
 streaming thread without waking it again. Use `--wake` for normal restarts, or
 `garyx gateway restart --no-wake` when you intentionally want only a restart.

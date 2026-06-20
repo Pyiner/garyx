@@ -250,6 +250,68 @@ fn parse_gateway_restart_wake_thread() {
 }
 
 #[test]
+fn parse_gateway_restart_wake_all() {
+    let cli = Cli::parse_from(["garyx", "gateway", "restart", "--wake", "all"]);
+    match cli.command {
+        Some(Commands::Gateway {
+            action:
+                GatewayAction::Restart {
+                    wake,
+                    wake_message,
+                    no_wake,
+                    wake_json,
+                },
+        }) => {
+            assert_eq!(wake, vec!["all".to_owned()]);
+            assert_eq!(wake_message, None);
+            assert!(!no_wake);
+            assert!(!wake_json);
+        }
+        _ => panic!("expected Gateway restart"),
+    }
+}
+
+#[test]
+fn resolve_gateway_restart_wake_all_defaults_message() {
+    let decision = super::resolve_gateway_restart_wake_destination(vec!["all".to_owned()], None)
+        .unwrap()
+        .expect("wake decision");
+    match decision {
+        super::GatewayRestartWakeDecision::All { message } => {
+            assert_eq!(message, "continue");
+        }
+        _ => panic!("expected wake all"),
+    }
+}
+
+#[test]
+fn resolve_gateway_restart_wake_all_accepts_custom_message() {
+    let decision = super::resolve_gateway_restart_wake_destination(
+        vec!["all".to_owned()],
+        Some("resume all".to_owned()),
+    )
+    .unwrap()
+    .expect("wake decision");
+    match decision {
+        super::GatewayRestartWakeDecision::All { message } => {
+            assert_eq!(message, "resume all");
+        }
+        _ => panic!("expected wake all"),
+    }
+}
+
+#[test]
+fn resolve_gateway_restart_wake_single_target_still_requires_message() {
+    let error = super::resolve_gateway_restart_wake_destination(
+        vec!["thread".to_owned(), "thread::abc".to_owned()],
+        None,
+    )
+    .expect_err("single target wake should require message")
+    .to_string();
+    assert!(error.contains("wake message is required"));
+}
+
+#[test]
 fn gateway_restart_requires_explicit_wake_decision() {
     assert!(super::validate_gateway_restart_wake_decision(true, false).is_ok());
     assert!(super::validate_gateway_restart_wake_decision(false, true).is_ok());
