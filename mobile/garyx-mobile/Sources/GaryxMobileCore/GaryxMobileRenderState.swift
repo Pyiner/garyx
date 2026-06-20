@@ -520,30 +520,9 @@ enum GaryxMobileRenderStateMapper {
         transcriptMessages: [GaryxTranscriptMessage]
     ) -> [GaryxMobileTurnRow] {
         let lookup = MessageLookup(messages: messages, transcriptMessages: transcriptMessages)
-        var rows = snapshot?.rows.compactMap { row in
+        return snapshot?.rows.compactMap { row in
             row.mobileRow(lookup: lookup)
         } ?? []
-        rows += pendingUserRows(messages: messages, referencedBy: snapshot)
-        return rows
-    }
-
-    private static func pendingUserRows(
-        messages: [GaryxMobileMessage],
-        referencedBy snapshot: GaryxRenderSnapshot?
-    ) -> [GaryxMobileTurnRow] {
-        messages.compactMap { message in
-            guard message.role == .user,
-                  message.localState != nil,
-                  message.localState != .remoteFinal,
-                  !message.isReferenced(by: snapshot) else {
-                return nil
-            }
-            return GaryxMobileTurnRow(
-                id: "pending-user-turn:\(message.id)",
-                userBlock: .message(message),
-                activityRows: []
-            )
-        }
     }
 }
 
@@ -556,9 +535,6 @@ private struct MessageLookup {
     init(messages: [GaryxMobileMessage], transcriptMessages: [GaryxTranscriptMessage]) {
         for message in messages {
             mobileById[message.id] = message
-            if let remoteId = message.remoteId {
-                mobileById[remoteId] = message
-            }
             if let historyIndex = message.historyIndex {
                 mobileByHistoryIndex[historyIndex] = message
             }
@@ -696,27 +672,6 @@ private extension GaryxRenderToolEntry {
         case .failed:
             return .failed
         }
-    }
-}
-
-private extension GaryxMobileMessage {
-    func isReferenced(by snapshot: GaryxRenderSnapshot?) -> Bool {
-        guard let snapshot else { return false }
-        return snapshot.messageRefs.contains { ref in
-            if let historyIndex, historyIndex == ref.seq - 1 {
-                return true
-            }
-            if id == ref.id || remoteId == ref.id {
-                return true
-            }
-            return false
-        }
-    }
-}
-
-private extension GaryxRenderSnapshot {
-    var messageRefs: [GaryxRenderMessageRef] {
-        rows.flatMap(\.messageRefs)
     }
 }
 

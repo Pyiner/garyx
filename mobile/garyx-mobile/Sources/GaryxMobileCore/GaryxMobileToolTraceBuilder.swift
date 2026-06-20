@@ -19,6 +19,7 @@ extension GaryxMobileTranscriptMapper {
                 attachments: attachments,
                 timestamp: item.timestamp,
                 isStreaming: false,
+                clientIntentId: item.originId,
                 localState: .remoteFinal,
                 historyIndex: item.index
             )

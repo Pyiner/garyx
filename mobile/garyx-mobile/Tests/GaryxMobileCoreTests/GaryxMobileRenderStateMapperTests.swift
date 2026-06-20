@@ -234,10 +234,9 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
         XCTAssertEqual(entry.status, .running)
     }
 
-    func testPendingUserRowsAppendUntilRemoteMaterializes() throws {
+    func testMapperUsesOnlyServerRowsAndDoesNotAppendPendingUsers() throws {
         var materialized = mobileMessage(index: 0, role: .user, text: "Sent", id: "local-user-1")
         materialized.localState = .remoteFinal
-        materialized.remoteId = "history:0"
         let pending = GaryxMobileMessage(
             id: "local-user-2",
             role: .user,
@@ -264,9 +263,8 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
             transcriptMessages: []
         )
 
-        XCTAssertEqual(rows.map(\.id), ["turn:seq1", "pending-user-turn:local-user-2"])
+        XCTAssertEqual(rows.map(\.id), ["turn:seq1"])
         XCTAssertEqual(rows.first?.userBlock?.message.id, "local-user-1")
-        XCTAssertEqual(rows.last?.userBlock?.message.text, "Still pending")
     }
 
     func testMissingServerRefsAreSkippedInsteadOfSynthesizedFromMessages() {
@@ -290,7 +288,7 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
         XCTAssertTrue(rows.isEmpty)
     }
 
-    func testNilSnapshotOnlyRendersOptimisticPendingUserRows() {
+    func testNilSnapshotDoesNotSynthesizeOptimisticPendingRows() {
         let committed = mobileMessage(index: 0, role: .assistant, text: "Cached")
         let pending = GaryxMobileMessage(
             id: "local-user-pending",
@@ -307,8 +305,24 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
             transcriptMessages: []
         )
 
-        XCTAssertEqual(rows.map(\.id), ["pending-user-turn:local-user-pending"])
-        XCTAssertEqual(rows.only?.userBlock?.message.text, "Pending")
+        XCTAssertTrue(rows.isEmpty)
+    }
+
+    func testCommittedUserMessageUsesOriginIdFromMetadata() {
+        let originId = "00000000-0000-0000-0000-000000000001"
+        let message = GaryxTranscriptMessage(
+            index: 1,
+            role: .user,
+            text: "Hello",
+            metadata: json(#"{"origin_id":"\#(originId)"}"#)
+        )
+
+        let mobileMessages = GaryxMobileTranscriptMapper.mobileMessages(from: [message])
+
+        XCTAssertEqual(message.id, "origin:\(originId)")
+        XCTAssertEqual(message.originId, originId)
+        XCTAssertEqual(mobileMessages.only?.id, "origin:\(originId)")
+        XCTAssertEqual(mobileMessages.only?.clientIntentId, originId)
     }
 
     func testToolPayloadEnvelopeStillParsesButDoesNotDecideVisibility() throws {

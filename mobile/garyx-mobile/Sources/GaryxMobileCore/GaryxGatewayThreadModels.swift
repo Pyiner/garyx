@@ -541,6 +541,10 @@ public struct GaryxTranscriptMessage: Codable, Identifiable, Equatable, Sendable
         return nil
     }
 
+    public var originId: String? {
+        Self.originId(role: role, metadata: metadata)
+    }
+
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         index = try container.decodeIfPresent(Int.self, forKey: .index)
@@ -570,7 +574,7 @@ public struct GaryxTranscriptMessage: Codable, Identifiable, Equatable, Sendable
             ?? true
         toolUseId = try container.garyxDecodeFirstString(.toolUseId, .toolUseIdCamel)
         metadata = try container.decodeIfPresent(GaryxJSONValue.self, forKey: .metadata)
-        id = index.map { "history:\($0)" } ?? UUID().uuidString
+        id = Self.messageId(index: index, role: role, metadata: metadata)
     }
 
     /// Symmetric encoder so committed transcript rows can be cached on device and
@@ -644,7 +648,22 @@ public struct GaryxTranscriptMessage: Codable, Identifiable, Equatable, Sendable
         self.likelyUserVisible = likelyUserVisible
         self.toolUseId = toolUseId
         self.metadata = metadata
-        self.id = index.map { "history:\($0)" } ?? UUID().uuidString
+        self.id = Self.messageId(index: index, role: role, metadata: metadata)
+    }
+
+    private static func messageId(index: Int?, role: GaryxTranscriptRole, metadata: GaryxJSONValue?) -> String {
+        if let originId = originId(role: role, metadata: metadata) {
+            return "origin:\(originId)"
+        }
+        return index.map { "history:\($0)" } ?? UUID().uuidString
+    }
+
+    private static func originId(role: GaryxTranscriptRole, metadata: GaryxJSONValue?) -> String? {
+        guard role == .user,
+              case let .object(meta)? = metadata else {
+            return nil
+        }
+        return meta.garyxGatewayStringValue(forKeys: ["origin_id"])
     }
 }
 

@@ -12,7 +12,7 @@ extension GaryxMobileModel {
         let followUp = pendingFollowUps.removeFirst()
         pendingDirectFollowUpsByThread[threadId] = pendingFollowUps.isEmpty ? nil : pendingFollowUps
         mutateMessages(for: threadId) { messages in
-            guard let index = messages.firstIndex(where: { $0.id == followUp.userId || $0.remoteId == followUp.userId }) else {
+            guard let index = messages.firstIndex(where: { $0.id == followUp.userId }) else {
                 return
             }
             let message = messages.remove(at: index)
@@ -33,67 +33,6 @@ extension GaryxMobileModel {
 
     func hasPendingDirectFollowUpUser(threadId: String, userId: String) -> Bool {
         pendingDirectFollowUpsByThread[threadId]?.contains { $0.userId == userId } ?? false
-    }
-
-    func appendRemoteUserMessage(runId: String, threadId: String, text: String, imageCount: Int) {
-        let messageId = runId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? "remote-user-\(threadId)-\(UUID().uuidString)"
-            : "remote-user-\(runId)"
-        let visibleText = Self.remoteUserMessageText(text: text, imageCount: imageCount)
-        let existingMessages = cachedMessages(for: threadId)
-        let materializedLocalUserIndex = existingMessages.firstIndex { message in
-            message.role == .user
-                && message.localState != .remoteFinal
-                && Self.normalizedMergeText(message.text) == Self.normalizedMergeText(visibleText)
-        }
-        let materializedLocalUserIsPendingDirectFollowUp = materializedLocalUserIndex.map { index in
-            hasPendingDirectFollowUpUser(threadId: threadId, userId: existingMessages[index].id)
-        } ?? false
-        let alreadyRendered = existingMessages.contains { $0.id == messageId || $0.remoteId == messageId }
-        if !alreadyRendered {
-            if let materializedLocalUserIndex {
-                let activeAssistantId = activeAssistantMessageIdsByThread[threadId]
-                let activeAssistantIndex = activeAssistantId.flatMap { id in
-                    existingMessages.firstIndex { $0.id == id || $0.remoteId == id }
-                }
-                if let activeAssistantIndex,
-                   activeAssistantIndex < materializedLocalUserIndex,
-                   !materializedLocalUserIsPendingDirectFollowUp {
-                    finishActiveAssistantSegmentBeforeUserTurn(for: threadId)
-                }
-            } else {
-                finishActiveAssistantSegmentBeforeUserTurn(for: threadId)
-            }
-        }
-        mutateMessages(for: threadId) { messages in
-            if messages.contains(where: { $0.id == messageId || $0.remoteId == messageId }) {
-                return
-            }
-            if let localIndex = messages.firstIndex(where: { message in
-                message.role == .user
-                    && message.localState != .remoteFinal
-                    && Self.normalizedMergeText(message.text) == Self.normalizedMergeText(visibleText)
-            }) {
-                // Materialize in place, keeping the local row id so the list
-                // row identity stays stable (no re-created rows on echo).
-                messages[localIndex].text = visibleText
-                messages[localIndex].statusText = nil
-                messages[localIndex].isStreaming = false
-                messages[localIndex].localState = .remoteFinal
-                messages[localIndex].remoteId = messageId
-                return
-            }
-            messages.append(
-                GaryxMobileMessage(
-                    id: messageId,
-                    role: .user,
-                    text: visibleText,
-                    timestamp: nil,
-                    isStreaming: false,
-                    localState: .remoteFinal
-                )
-            )
-        }
     }
 
     func markStreamingAssistantComplete(for threadId: String, removeEmpty: Bool = false) {
@@ -252,35 +191,10 @@ extension GaryxMobileModel {
         )
     }
 
-
-
-
-
-
-
-
-    static func normalizedMergeText(_ text: String) -> String {
-        GaryxTranscriptMerge.normalizedMergeText(text)
-    }
-
     static func attachmentSummary(from attachments: [GaryxMobileMessageAttachment]) -> String? {
         GaryxStructuredContentRenderer.attachmentSummary(
             from: attachments.map(\.contentDescriptor)
         )
-    }
-
-    static func remoteUserMessageText(text: String, imageCount: Int) -> String {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty {
-            return trimmed
-        }
-        if imageCount == 1 {
-            return "[1 image]"
-        }
-        if imageCount > 1 {
-            return "[\(imageCount) images]"
-        }
-        return "User message"
     }
 
     static func visibleUserText(text: String, attachments: [GaryxMobileComposerAttachment]) -> String {
@@ -369,10 +283,7 @@ extension GaryxMobileModel {
     }
 
     func mobileMessages(from transcript: GaryxThreadTranscript, threadId: String, live: Bool = false) -> [GaryxMobileMessage] {
-        GaryxMobileTranscriptMapper.appendPendingUserInputs(
-            to: mobileMessages(from: transcript.messages, live: live),
-            from: transcript
-        )
+        mobileMessages(from: transcript.messages, live: live)
     }
 
     func mobileMessages(from transcript: [GaryxTranscriptMessage], live: Bool = false) -> [GaryxMobileMessage] {

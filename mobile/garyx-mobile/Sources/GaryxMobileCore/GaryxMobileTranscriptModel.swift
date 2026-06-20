@@ -25,13 +25,9 @@ struct GaryxMobileMessage: Identifiable, Equatable {
     /// instead of id-prefix conventions. Failure is carried by `statusText`
     /// as an overlay on the provenance. `nil` only for synthetic fixtures.
     var localState: GaryxTranscriptEntryState? = nil
-    /// Canonical transcript index for history rows; replaces parsing
-    /// `history:N` ids. Survives identity reuse when a remote row
-    /// materializes an optimistic local message.
+    /// Canonical transcript index for committed rows; replaces parsing
+    /// `history:N` ids and remains stable when user ids are `origin:*`.
     var historyIndex: Int? = nil
-    /// The remote id this row materialized, when identity reuse kept the
-    /// local id for row stability. Used to dedupe repeated remote events.
-    var remoteId: String? = nil
 }
 
 struct GaryxMobileMessageAttachment: Identifiable, Equatable {
@@ -60,75 +56,7 @@ struct GaryxMobileMessageAttachment: Identifiable, Equatable {
     }
 }
 
-enum GaryxMobileTranscriptMapper {
-    static func appendPendingUserInputs(
-        to messages: [GaryxMobileMessage],
-        from transcript: GaryxThreadTranscript
-    ) -> [GaryxMobileMessage] {
-        var rendered = messages
-        var existingPendingIds = Set(
-            rendered
-                .compactMap { $0.pendingInputId?.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-        )
-        for input in transcript.pendingUserInputs {
-            let pendingId = input.id.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard input.active,
-                  !pendingId.isEmpty,
-                  (input.status ?? "awaiting_ack").lowercased() != "abandoned",
-                  !existingPendingIds.contains(pendingId) else {
-                continue
-            }
-            existingPendingIds.insert(pendingId)
-            let attachments = messageAttachments(fromStructuredContent: input.content)
-            rendered.append(
-                GaryxMobileMessage(
-                    id: "pending-user:\(pendingId)",
-                    role: .user,
-                    text: pendingUserInputText(input, attachments: attachments),
-                    attachments: attachments,
-                    timestamp: input.timestamp,
-                    isStreaming: false,
-                    pendingInputId: pendingId,
-                    localState: .remotePartial
-                )
-            )
-        }
-        return rendered
-    }
-
-    private static func pendingUserInputText(
-        _ input: GaryxPendingUserInput,
-        attachments: [GaryxMobileMessageAttachment]
-    ) -> String {
-        let trimmed = input.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty {
-            return input.text
-        }
-        if !attachments.isEmpty {
-            return input.content.flatMap { GaryxStructuredContentRenderer.text(from: $0) } ?? ""
-        }
-        if let contentSummary = input.content.flatMap({ GaryxStructuredContentRenderer.summaryText(from: $0) }),
-           !contentSummary.isEmpty {
-            return contentSummary
-        }
-        return "User message"
-    }
-
-    private static func messageAttachments(fromStructuredContent content: GaryxJSONValue?) -> [GaryxMobileMessageAttachment] {
-        GaryxStructuredContentRenderer.attachments(from: content).map { attachment in
-            GaryxMobileMessageAttachment(
-                id: attachment.id,
-                kind: attachment.kind,
-                name: attachment.name,
-                mediaType: attachment.mediaType,
-                path: attachment.path,
-                dataUrl: attachment.dataUrl,
-                remoteUrl: attachment.remoteUrl
-            )
-        }
-    }
-}
+enum GaryxMobileTranscriptMapper {}
 
 enum GaryxMobileToolTraceStatus: String, Equatable {
     case running
