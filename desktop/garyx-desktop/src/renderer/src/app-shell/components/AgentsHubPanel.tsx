@@ -556,9 +556,16 @@ export function AgentsHubPanel({
     setActiveTab(initialTab);
   }, [initialTab]);
 
-  async function loadData() {
-    setLoading(true);
-    setLoadError(null);
+  async function loadData(options: { silent?: boolean } = {}) {
+    // A silent refresh (e.g. when the window regains focus) must not flash the
+    // loading state, blank the lists, or toast on a transient failure. It only
+    // swaps in fresh data for the fetches that actually succeed and otherwise
+    // leaves the currently displayed data untouched.
+    const silent = options.silent ?? false;
+    if (!silent) {
+      setLoading(true);
+      setLoadError(null);
+    }
     try {
       const [agentsResult, teamsResult, workflowsResult] = await Promise.allSettled([
         window.garyxDesktop.listCustomAgents(),
@@ -566,12 +573,21 @@ export function AgentsHubPanel({
         window.garyxDesktop.listWorkflowDefinitions(),
       ]);
 
-      const nextAgents = agentsResult.status === 'fulfilled' ? sortedAgents(agentsResult.value) : [];
-      const nextTeams = teamsResult.status === 'fulfilled' ? sortedTeams(teamsResult.value) : [];
-      const nextWorkflows = workflowsResult.status === 'fulfilled' ? sortedWorkflows(workflowsResult.value) : [];
-      setAgents(nextAgents);
-      setTeams(nextTeams);
-      setWorkflows(nextWorkflows);
+      if (agentsResult.status === 'fulfilled') {
+        setAgents(sortedAgents(agentsResult.value));
+      } else if (!silent) {
+        setAgents([]);
+      }
+      if (teamsResult.status === 'fulfilled') {
+        setTeams(sortedTeams(teamsResult.value));
+      } else if (!silent) {
+        setTeams([]);
+      }
+      if (workflowsResult.status === 'fulfilled') {
+        setWorkflows(sortedWorkflows(workflowsResult.value));
+      } else if (!silent) {
+        setWorkflows([]);
+      }
 
       const failures = [
         agentsResult.status === 'rejected' ? 'agents' : null,
@@ -579,13 +595,15 @@ export function AgentsHubPanel({
         workflowsResult.status === 'rejected' ? 'workflows' : null,
       ].filter(Boolean);
 
-      if (failures.length) {
+      if (failures.length && !silent) {
         const message = `Failed to fully load ${failures.join(' and ')}.`;
         setLoadError(message);
         onToast?.(message, 'error');
       }
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   }
 
@@ -616,6 +634,30 @@ export function AgentsHubPanel({
 
   useEffect(() => {
     void loadData();
+  }, []);
+
+  // Re-fetch when the user returns to the app, so changes made on another
+  // surface (e.g. editing an agent's model on mobile) show up without a manual
+  // reload. `focus` covers switching apps while the window stays visible;
+  // `visibilitychange` covers minimize/occlusion. The refresh is silent so it
+  // never flickers the panel.
+  useEffect(() => {
+    let refreshing = false;
+    const refreshOnReturn = () => {
+      if (document.hidden || refreshing) {
+        return;
+      }
+      refreshing = true;
+      void loadData({ silent: true }).finally(() => {
+        refreshing = false;
+      });
+    };
+    window.addEventListener('focus', refreshOnReturn);
+    document.addEventListener('visibilitychange', refreshOnReturn);
+    return () => {
+      window.removeEventListener('focus', refreshOnReturn);
+      document.removeEventListener('visibilitychange', refreshOnReturn);
+    };
   }, []);
 
   useEffect(() => {
