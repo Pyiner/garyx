@@ -743,7 +743,8 @@ private struct GaryxAutomationThreadsDetailSection: View {
                             thread: thread,
                             isSelected: model.selectedThread?.id == thread.id,
                             isPinned: model.isThreadPinned(thread.id),
-                            trailingTimestamp: garyxFormattedTaskTimestamp(entry.finishedAt ?? entry.startedAt)
+                            trailingTimestamp: garyxFormattedTaskTimestamp(entry.finishedAt ?? entry.startedAt),
+                            openSource: .current
                         )
                     } else {
                         GaryxAutomationThreadUnavailableRow(entry: entry)
@@ -906,7 +907,7 @@ private struct GaryxBotThreadDetailSection: View {
                             canArchive: canArchive(entry),
                             onSelect: {
                                 guard entry.openable else { return }
-                                Task { await model.openThread(thread) }
+                                model.openThreadImmediately(thread, source: .current)
                             },
                             onArchive: {
                                 Task { await model.archiveBotConversationEndpoint(entry.endpoint) }
@@ -1054,7 +1055,8 @@ private struct GaryxWorkspaceThreadDetailSection: View {
                         thread: thread,
                         isSelected: model.selectedThread?.id == thread.id,
                         isPinned: model.isThreadPinned(thread.id),
-                        trailingTimestamp: garyxFormattedTaskTimestamp(thread.updatedAt ?? thread.createdAt)
+                        trailingTimestamp: garyxFormattedTaskTimestamp(thread.updatedAt ?? thread.createdAt),
+                        openSource: .current
                     )
                 }
             }
@@ -1109,12 +1111,13 @@ private struct GaryxSidebarThreadButton: View {
     var trailingTimestamp: String?
     var isFullBleed = false
     var canArchive: Bool?
+    var openSource: GaryxMobilePanelOpenSource = .replace
     var onSelect: (() -> Void)?
     var onArchive: (() -> Void)?
     @State private var showsArchiveConfirmation = false
 
     var body: some View {
-        GaryxSwipeActionRow(actions: threadSwipeActions) {
+        GaryxSwipeActionRow(id: "thread:\(thread.id)", actions: threadSwipeActions) {
             GaryxSidebarThreadRowView(
                 model: GaryxSidebarThreadRowPresentation(
                     thread: thread,
@@ -1128,7 +1131,7 @@ private struct GaryxSidebarThreadButton: View {
                     if let onSelect {
                         onSelect()
                     } else {
-                        Task { await model.openThread(thread) }
+                        model.openThreadImmediately(thread, source: openSource)
                     }
                 },
                 onUnpin: {

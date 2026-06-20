@@ -386,6 +386,7 @@ struct GaryxShellView: View {
 
     @State private var sidebarDragOffset: CGFloat = 0
     @State private var sidebarDragAxis: GaryxSidebarDragAxis?
+    @State private var openSwipeActionRowId: String?
     /// Auto-resetting liveness for the drawer drag. `DragGesture.onEnded` is
     /// skipped when the system cancels a gesture, which used to leave
     /// `sidebarDragAxis` stuck on `.horizontal` and the conversation scroll
@@ -407,6 +408,7 @@ struct GaryxShellView: View {
                 safeAreaInsets: proxy.safeAreaInsets
             )
             .environment(\.garyxSidebarDragActive, sidebarDragAxis == .horizontal)
+            .environment(\.garyxOpenSwipeActionRowId, $openSwipeActionRowId)
             .onChange(of: sidebarDragLive) { _, live in
                 guard !live, sidebarDragAxis != nil else { return }
                 sidebarDragAxis = nil

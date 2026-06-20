@@ -208,6 +208,21 @@ final class GaryxMobileNavigationStateTests: XCTestCase {
         XCTAssertEqual(state.rootNavigationPath, [.conversation])
     }
 
+    func testConversationOpenedFromCurrentPanelReturnsToThatPanel() {
+        var state = GaryxMobileNavigationState()
+        state.openPanel(.tasks, dreamsAutoScanEnabled: true, source: .current)
+
+        state.openConversation(source: .current)
+
+        XCTAssertEqual(state.activePanel, .chat)
+        XCTAssertEqual(state.rootNavigationPath, [.conversation])
+        XCTAssertEqual(state.mainPanelBackStack, [GaryxMobilePanelRoute(panel: .tasks, settingsTab: .manage)])
+        XCTAssertEqual(state.leadingEdgeAction, .mainPanelBack)
+        XCTAssertTrue(state.goBackInMainPanel())
+        XCTAssertEqual(state.activePanel, .tasks)
+        XCTAssertEqual(state.rootNavigationPath, [.panel(.tasks)])
+    }
+
     func testSidebarNavigationClearsPreviousRouteStack() {
         var state = GaryxMobileNavigationState()
         state.openPanel(.tasks, dreamsAutoScanEnabled: true, source: .current)

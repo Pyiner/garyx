@@ -117,6 +117,29 @@ private final class GaryxConversationScrollStateBox {
     var state = GaryxConversationScrollState()
 }
 
+private struct GaryxMessageBubbleActions {
+    var model: GaryxMobileModel?
+    var localFilePreview: @MainActor (_ target: String, _ reportsError: Bool) async -> GaryxWorkspaceFilePreview?
+    var retryFailedUserMessage: @MainActor (_ messageId: String) async -> Bool
+
+    static let empty = GaryxMessageBubbleActions(
+        model: nil,
+        localFilePreview: { _, _ in nil },
+        retryFailedUserMessage: { _ in false }
+    )
+}
+
+private struct GaryxMessageBubbleActionsKey: EnvironmentKey {
+    static let defaultValue = GaryxMessageBubbleActions.empty
+}
+
+private extension EnvironmentValues {
+    var garyxMessageBubbleActions: GaryxMessageBubbleActions {
+        get { self[GaryxMessageBubbleActionsKey.self] }
+        set { self[GaryxMessageBubbleActionsKey.self] = newValue }
+    }
+}
+
 struct GaryxConversationView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @Environment(\.garyxSidebarDragActive) private var sidebarDragActive
@@ -246,6 +269,19 @@ struct GaryxConversationView: View {
         .garyxAdaptiveTopBar {
             GaryxConversationHeader()
         }
+        .environment(\.garyxMessageBubbleActions, messageBubbleActions)
+    }
+
+    private var messageBubbleActions: GaryxMessageBubbleActions {
+        GaryxMessageBubbleActions(
+            model: model,
+            localFilePreview: { target, reportsError in
+                await model.localFilePreview(target, reportsError: reportsError)
+            },
+            retryFailedUserMessage: { messageId in
+                await model.retryFailedUserMessage(messageId)
+            }
+        )
     }
 
     private func messageScroll(proxy: ScrollViewProxy) -> some View {
@@ -1573,6 +1609,15 @@ private func garyxConfiguredBot(
 }
 
 private extension View {
+    @ViewBuilder
+    func garyxOptionalEnvironmentObject<Object: ObservableObject>(_ object: Object?) -> some View {
+        if let object {
+            environmentObject(object)
+        } else {
+            self
+        }
+    }
+
     /// Opens the transcript anchored to its bottom from the very first
     /// layout pass and keeps the tail pinned through content growth while
     /// positioned there — no post-load programmatic scroll-down. The
@@ -1767,7 +1812,7 @@ private struct GaryxSelectedThreadEmptyConversationView: View {
 struct GaryxMessageBubble: View {
     let message: GaryxMobileMessage
     @Environment(\.colorScheme) private var colorScheme
-    @EnvironmentObject private var model: GaryxMobileModel
+    @Environment(\.garyxMessageBubbleActions) private var actions
     @State private var retrying = false
     @State private var filePreviewSheet: GaryxMessageFilePreviewSheet?
 
@@ -1784,7 +1829,7 @@ struct GaryxMessageBubble: View {
             GaryxFullscreenWorkspaceFilePreview(preview: sheet.preview) {
                 filePreviewSheet = nil
             }
-            .environmentObject(model)
+            .garyxOptionalEnvironmentObject(actions.model)
         }
     }
 
@@ -1954,14 +1999,14 @@ struct GaryxMessageBubble: View {
 
     private func openMessageFileLink(_ target: String) {
         Task {
-            guard let preview = await model.localFilePreview(target) else { return }
+            guard let preview = await actions.localFilePreview(target, true) else { return }
             filePreviewSheet = GaryxMessageFilePreviewSheet(preview: preview)
         }
     }
 
     @MainActor
     private func messageImageFilePreview(_ target: String) async -> GaryxWorkspaceFilePreview? {
-        await model.localFilePreview(target, reportsError: false)
+        await actions.localFilePreview(target, false)
     }
 
     @ViewBuilder
@@ -1973,7 +2018,7 @@ struct GaryxMessageBubble: View {
                 guard !retrying else { return }
                 retrying = true
                 Task {
-                    _ = await model.retryFailedUserMessage(message.id)
+                    _ = await actions.retryFailedUserMessage(message.id)
                     retrying = false
                 }
             } label: {

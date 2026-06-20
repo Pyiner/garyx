@@ -50,7 +50,7 @@ extension GaryxMobileModel {
     /// swipe / back button); pushes always originate from the model.
     func applyRootNavigationPath(_ newPath: [GaryxMobileRootRoute]) {
         guard newPath.isEmpty, navigationState.presentsContent else { return }
-        popToHome()
+        performMainPanelLeadingEdgeAction()
     }
 
     func popToHome() {
@@ -98,6 +98,19 @@ extension GaryxMobileModel {
         if panel == .tasks {
             clearTaskSourceThreadFilter()
         }
+    }
+
+    func openConversation(
+        source: GaryxMobilePanelOpenSource = .replace,
+        invalidatesPendingThreadOpen: Bool = true
+    ) {
+        if invalidatesPendingThreadOpen {
+            invalidatePendingThreadOpen()
+        }
+        var nextState = navigationState
+        nextState.openConversation(source: source)
+        navigationState = nextState
+        setSidebarVisible(false)
     }
 
     func openPanel(_ panel: GaryxMobilePanel, source: GaryxMobilePanelOpenSource = .current) {
@@ -185,7 +198,7 @@ extension GaryxMobileModel {
         case .chat:
             openNewThreadDraft()
         case let .thread(threadId):
-            await openThread(id: threadId)
+            await openThread(id: threadId, source: source)
         case let .settings(tab):
             openSettings(tab: tab, source: source)
         case let .panel(panel):

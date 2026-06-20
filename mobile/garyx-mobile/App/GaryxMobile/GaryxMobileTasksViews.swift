@@ -109,7 +109,7 @@ struct GaryxTasksView: View {
                     isPinned: model.isThreadPinned(row.thread.id),
                     trailingTimestamp: row.trailingTimestamp
                 ) {
-                    Task { await model.openThread(id: row.thread.id) }
+                    model.openThreadImmediately(row.thread, source: .current)
                 }
             }
         }
@@ -285,7 +285,7 @@ private struct GaryxTaskThreadButton: View {
     let onSelect: () -> Void
 
     var body: some View {
-        GaryxSwipeActionRow(actions: threadSwipeActions) {
+        GaryxSwipeActionRow(id: "thread:\(thread.id)", actions: threadSwipeActions) {
             GaryxSidebarThreadRowView(
                 model: GaryxSidebarThreadRowPresentation(
                     thread: thread,
@@ -595,7 +595,7 @@ struct GaryxTaskListRow: View {
         if !task.threadId.isEmpty {
             actions.append(
                 GaryxRowAction(title: "Open", systemImage: "message", tone: .accent) {
-                    Task { await model.openThread(id: task.threadId) }
+                    model.openThreadImmediately(id: task.threadId, source: .current)
                 }
             )
         }
