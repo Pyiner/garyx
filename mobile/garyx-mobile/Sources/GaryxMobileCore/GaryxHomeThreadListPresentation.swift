@@ -457,8 +457,11 @@ final class GaryxHomeThreadListStore: ObservableObject {
     @Published private(set) var snapshot: GaryxHomeThreadListSnapshot
     private var previousInput: GaryxHomeThreadListInput?
     private let sectionsCache = GaryxHomeThreadSectionsCache()
+    private var hasDeferredInteractionRefresh = false
     private(set) var acceptedInputCount = 0
     private(set) var publishCount = 0
+    private(set) var deferredInteractionRefreshCount = 0
+    private(set) var deferredInteractionFlushCount = 0
 
     init(snapshot: GaryxHomeThreadListSnapshot = .empty) {
         self.snapshot = snapshot
@@ -466,6 +469,32 @@ final class GaryxHomeThreadListStore: ObservableObject {
 
     var sectionDerivationCount: Int {
         sectionsCache.derivationCount
+    }
+
+    @discardableResult
+    func applyUnlessInteracting(
+        isThreadListInteracting: Bool,
+        _ makeInput: () -> GaryxHomeThreadListInput
+    ) -> Bool {
+        guard !isThreadListInteracting else {
+            hasDeferredInteractionRefresh = true
+            deferredInteractionRefreshCount += 1
+            return false
+        }
+        hasDeferredInteractionRefresh = false
+        return apply(makeInput())
+    }
+
+    @discardableResult
+    func flushDeferredInteractionRefresh(
+        _ makeInput: () -> GaryxHomeThreadListInput
+    ) -> Bool {
+        guard hasDeferredInteractionRefresh else {
+            return false
+        }
+        hasDeferredInteractionRefresh = false
+        deferredInteractionFlushCount += 1
+        return apply(makeInput())
     }
 
     @discardableResult

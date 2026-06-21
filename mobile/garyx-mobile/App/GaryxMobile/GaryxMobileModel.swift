@@ -287,6 +287,7 @@ final class GaryxMobileModel: ObservableObject {
     var workspaceRefreshRequestId: UUID?
     var nextThreadListOffset = 0
     var lastPersistedWidgetThreads: [GaryxMobileWidgetThread]?
+    var hasDeferredRecentThreadsWidgetSnapshotPersistence = false
     let homeThreadListStore = GaryxHomeThreadListStore()
     var isThreadListInteracting = false
     var hasAttemptedLastOpenedThreadRestore = false

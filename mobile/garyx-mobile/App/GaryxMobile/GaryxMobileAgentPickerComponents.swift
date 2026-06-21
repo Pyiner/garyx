@@ -7,13 +7,15 @@ struct GaryxChannelLogoView: View {
     let label: String
     let iconDataUrl: String?
     var diameter: CGFloat = 30
+    @State private var asyncDecodedImage: UIImage?
+    @State private var asyncDecodedImageKey: String?
 
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: diameter * 0.28, style: .continuous)
                 .fill(Color(.secondarySystemFill))
 
-            if let image = decodedImage {
+            if let image = visibleDecodedImage {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFit()
@@ -37,10 +39,44 @@ struct GaryxChannelLogoView: View {
                 .stroke(Color.primary.opacity(0.06), lineWidth: 1)
         }
         .accessibilityHidden(true)
+        .task(id: dataURLDecodeKey) {
+            await updateDecodedImage()
+        }
     }
 
-    private var decodedImage: UIImage? {
-        GaryxDataURLImageCache.image(from: iconDataUrl)
+    private var visibleDecodedImage: UIImage? {
+        if asyncDecodedImageKey == dataURLDecodeKey, let asyncDecodedImage {
+            return asyncDecodedImage
+        }
+        return GaryxDataURLImageCache.cachedImage(from: iconDataUrl, maxPixelSize: decodeMaxPixelSize)
+    }
+
+    private var dataURLDecodeKey: String {
+        guard let raw = iconDataUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else {
+            return ""
+        }
+        return "\(raw.count):\(raw.hashValue):\(Int(decodeMaxPixelSize.rounded(.up)))"
+    }
+
+    private var decodeMaxPixelSize: CGFloat {
+        max(48, diameter * 3)
+    }
+
+    @MainActor
+    private func updateDecodedImage() async {
+        let key = dataURLDecodeKey
+        guard asyncDecodedImageKey != key else { return }
+        asyncDecodedImage = nil
+        asyncDecodedImageKey = key
+        guard !key.isEmpty else { return }
+        if let cached = GaryxDataURLImageCache.cachedImage(from: iconDataUrl, maxPixelSize: decodeMaxPixelSize) {
+            asyncDecodedImage = cached
+            return
+        }
+        let image = await GaryxDataURLImageCache.imageAsync(from: iconDataUrl, maxPixelSize: decodeMaxPixelSize)
+        guard !Task.isCancelled, asyncDecodedImageKey == key else { return }
+        asyncDecodedImage = image
     }
 
     private var builtInFallbackImage: UIImage? {
@@ -112,12 +148,14 @@ struct GaryxAgentAvatarView: View {
     let providerType: String
     var builtIn: Bool = false
     var diameter: CGFloat = 34
+    @State private var asyncDecodedImage: UIImage?
+    @State private var asyncDecodedImageKey: String?
 
     var body: some View {
         ZStack {
             Circle()
                 .fill(fallbackBackground)
-            if let image = decodedImage {
+            if let image = visibleDecodedImage {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
@@ -147,10 +185,42 @@ struct GaryxAgentAvatarView: View {
                 .stroke(Color.primary.opacity(0.06), lineWidth: 1)
         }
         .accessibilityHidden(true)
+        .task(id: dataURLDecodeKey) {
+            await updateDecodedImage()
+        }
     }
 
-    private var decodedImage: UIImage? {
-        GaryxDataURLImageCache.image(from: avatarDataUrl)
+    private var visibleDecodedImage: UIImage? {
+        if asyncDecodedImageKey == dataURLDecodeKey, let asyncDecodedImage {
+            return asyncDecodedImage
+        }
+        return GaryxDataURLImageCache.cachedImage(from: avatarDataUrl, maxPixelSize: decodeMaxPixelSize)
+    }
+
+    private var dataURLDecodeKey: String {
+        let raw = avatarDataUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty, remoteAvatarURL == nil else { return "" }
+        return "\(raw.count):\(raw.hashValue):\(Int(decodeMaxPixelSize.rounded(.up)))"
+    }
+
+    private var decodeMaxPixelSize: CGFloat {
+        max(96, diameter * 3)
+    }
+
+    @MainActor
+    private func updateDecodedImage() async {
+        let key = dataURLDecodeKey
+        guard asyncDecodedImageKey != key else { return }
+        asyncDecodedImage = nil
+        asyncDecodedImageKey = key
+        guard !key.isEmpty else { return }
+        if let cached = GaryxDataURLImageCache.cachedImage(from: avatarDataUrl, maxPixelSize: decodeMaxPixelSize) {
+            asyncDecodedImage = cached
+            return
+        }
+        let image = await GaryxDataURLImageCache.imageAsync(from: avatarDataUrl, maxPixelSize: decodeMaxPixelSize)
+        guard !Task.isCancelled, asyncDecodedImageKey == key else { return }
+        asyncDecodedImage = image
     }
 
     private var remoteAvatarURL: URL? {

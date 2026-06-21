@@ -33,20 +33,63 @@ enum GaryxDataURLImageCache {
         return cache
     }()
 
+    static func cachedImage(from rawValue: String?, maxPixelSize: CGFloat) -> UIImage? {
+        guard let raw = normalizedRawValue(rawValue) else { return nil }
+        return cache.object(forKey: cacheKey(for: raw, maxPixelSize: maxPixelSize))
+    }
+
     static func image(from rawValue: String?) -> UIImage? {
-        let raw = (rawValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !raw.isEmpty else { return nil }
-        let cacheKey = NSString(string: raw)
+        guard let raw = normalizedRawValue(rawValue) else { return nil }
+        let cacheKey = cacheKey(for: raw, maxPixelSize: nil)
         if let cached = cache.object(forKey: cacheKey) {
             return cached
         }
-        let encoded = raw.split(separator: ",", maxSplits: 1).last.map(String.init) ?? raw
-        guard let data = Data(base64Encoded: encoded),
-              let image = UIImage(data: data) else {
+        guard let image = decodedImage(from: raw, maxPixelSize: nil) else {
             return nil
         }
-        cache.setObject(image, forKey: cacheKey, cost: data.count)
+        cache.setObject(image, forKey: cacheKey, cost: raw.utf8.count)
         return image
+    }
+
+    static func imageAsync(from rawValue: String?, maxPixelSize: CGFloat) async -> UIImage? {
+        guard let raw = normalizedRawValue(rawValue) else { return nil }
+        let cacheKey = cacheKey(for: raw, maxPixelSize: maxPixelSize)
+        if let cached = cache.object(forKey: cacheKey) {
+            return cached
+        }
+        return await Task.detached(priority: .utility) {
+            if let cached = cache.object(forKey: cacheKey) {
+                return cached
+            }
+            guard let image = decodedImage(from: raw, maxPixelSize: maxPixelSize) else {
+                return nil
+            }
+            cache.setObject(image, forKey: cacheKey, cost: raw.utf8.count)
+            return image
+        }.value
+    }
+
+    private static func normalizedRawValue(_ rawValue: String?) -> String? {
+        let raw = (rawValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return raw.isEmpty ? nil : raw
+    }
+
+    private static func cacheKey(for raw: String, maxPixelSize: CGFloat?) -> NSString {
+        if let maxPixelSize {
+            return NSString(string: "\(Int(maxPixelSize.rounded(.up)))|\(raw)")
+        }
+        return NSString(string: "full|\(raw)")
+    }
+
+    private static func decodedImage(from raw: String, maxPixelSize: CGFloat?) -> UIImage? {
+        let encoded = raw.split(separator: ",", maxSplits: 1).last.map(String.init) ?? raw
+        guard let data = Data(base64Encoded: encoded) else {
+            return nil
+        }
+        if let maxPixelSize {
+            return GaryxImageDecoder.image(from: data, maxPixelSize: maxPixelSize)
+        }
+        return UIImage(data: data)
     }
 }
 

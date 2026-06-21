@@ -269,6 +269,10 @@ extension GaryxMobileModel {
     }
 
     func persistRecentThreadsWidgetSnapshot() {
+        guard !isThreadListInteracting else {
+            hasDeferredRecentThreadsWidgetSnapshotPersistence = true
+            return
+        }
         var summariesById: [String: GaryxThreadSummary] = [:]
         for thread in threads where summariesById[thread.id] == nil {
             summariesById[thread.id] = thread
@@ -301,6 +305,12 @@ extension GaryxMobileModel {
         lastPersistedWidgetThreads = widgetThreads
         GaryxMobileWidgetStore.saveRecentThreads(widgetThreads)
         WidgetCenter.shared.reloadTimelines(ofKind: GaryxRecentThreadsWidgetConstants.kind)
+    }
+
+    func flushDeferredRecentThreadsWidgetSnapshotPersistence() {
+        guard hasDeferredRecentThreadsWidgetSnapshotPersistence else { return }
+        hasDeferredRecentThreadsWidgetSnapshotPersistence = false
+        persistRecentThreadsWidgetSnapshot()
     }
 
     func widgetAgentIdentity(for thread: GaryxThreadSummary) -> WidgetAgentIdentity {
