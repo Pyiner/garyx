@@ -10,17 +10,26 @@ extension GaryxMobileModel {
         teams nextTeams: [GaryxTeamSummary]?
     ) -> Bool {
         var didUpdateTargets = false
+        let receivedTargets = nextAgents != nil || nextTeams != nil
         if let nextAgents {
-            agents = nextAgents
-            didUpdateTargets = true
+            didUpdateTargets = GaryxEquatableAssignment.assignIfChanged(
+                current: agents,
+                next: nextAgents
+            ) { agents = $0 } || didUpdateTargets
         }
         if let nextTeams {
-            teams = nextTeams
-            didUpdateTargets = true
+            didUpdateTargets = GaryxEquatableAssignment.assignIfChanged(
+                current: teams,
+                next: nextTeams
+            ) { teams = $0 } || didUpdateTargets
+        }
+        if receivedTargets, agentTargetsLoadPhase != .loaded {
+            agentTargetsLoadPhase = .loaded
+        }
+        if receivedTargets {
+            ensureSelectedAgentTarget()
         }
         if didUpdateTargets {
-            agentTargetsLoadPhase = .loaded
-            ensureSelectedAgentTarget()
             if !threads.isEmpty {
                 persistRecentThreadsWidgetSnapshot()
             }

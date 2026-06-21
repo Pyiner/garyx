@@ -42,11 +42,14 @@ extension GaryxMobileModel {
             return
         }
         catalogSnapshotRestored = true
-        agents = snapshot.agents.map(\.model)
-        teams = snapshot.teams.map(\.model)
+        let cachedAgents = snapshot.agents.map(\.model)
+        GaryxEquatableAssignment.assignIfChanged(current: agents, next: cachedAgents) { agents = $0 }
+        let cachedTeams = snapshot.teams.map(\.model)
+        GaryxEquatableAssignment.assignIfChanged(current: teams, next: cachedTeams) { teams = $0 }
         skills = snapshot.skills.map(\.model)
         tasks = snapshot.tasks.map(\.model)
-        automations = snapshot.automations.map(\.model)
+        let cachedAutomations = snapshot.automations.map(\.model)
+        GaryxEquatableAssignment.assignIfChanged(current: automations, next: cachedAutomations) { automations = $0 }
         slashCommands = snapshot.slashCommands.map(\.model)
         mcpServers = snapshot.mcpServers.map(\.model)
         channelEndpoints = snapshot.channelEndpoints.map(\.model)

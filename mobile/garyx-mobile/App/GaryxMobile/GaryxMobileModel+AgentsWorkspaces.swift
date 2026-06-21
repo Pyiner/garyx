@@ -104,10 +104,11 @@ extension GaryxMobileModel {
         _ thread: GaryxThreadSummary,
         source: GaryxMobilePanelOpenSource = .replace
     ) {
-        threads = Self.mergedThreadSummaries(threads + [thread])
-        switch GaryxWorkflowRunDestination.destination(for: thread) {
+        let resolvedThread = summaryWithCommittedRunState(thread)
+        threads = Self.mergedThreadSummaries(threads + [resolvedThread])
+        switch GaryxWorkflowRunDestination.destination(for: resolvedThread) {
         case .chat:
-            showSelectedThread(thread, invalidatesPendingThreadOpen: true, source: source)
+            showSelectedThread(resolvedThread, invalidatesPendingThreadOpen: true, source: source)
             Task { [weak self] in
                 await self?.loadSelectedThreadHistory()
             }
@@ -115,7 +116,7 @@ extension GaryxMobileModel {
             Task { [weak self] in
                 await self?.openWorkflowRun(
                     workflowRunId: workflowRunId,
-                    thread: thread,
+                    thread: resolvedThread,
                     invalidatesPendingThreadOpen: true,
                     source: source
                 )
@@ -213,9 +214,10 @@ extension GaryxMobileModel {
         invalidatesPendingThreadOpen: Bool,
         source: GaryxMobilePanelOpenSource
     ) async {
-        threads = Self.mergedThreadSummaries(threads + [thread])
+        let resolvedThread = summaryWithCommittedRunState(thread)
+        threads = Self.mergedThreadSummaries(threads + [resolvedThread])
         _ = await openThreadDestination(
-            thread,
+            resolvedThread,
             requestId: nil,
             invalidatesPendingThreadOpen: invalidatesPendingThreadOpen,
             source: source

@@ -31,7 +31,7 @@ enum GaryxThreadSummaryRunStateResolver {
     }
 }
 
-struct GaryxSidebarThreadRowPresentation: Equatable {
+struct GaryxSidebarThreadRowPresentation: Equatable, Sendable {
     let title: String
     let subtitle: String?
     let trailingTimestamp: String?
@@ -52,6 +52,44 @@ struct GaryxSidebarThreadRowPresentation: Equatable {
         self.isSelected = isSelected
         self.isPinned = isPinned
         self.isRunning = showsRunningState && Self.isRunning(thread)
+    }
+
+    init(
+        title: String,
+        subtitle: String?,
+        trailingTimestamp: String?,
+        isSelected: Bool,
+        isPinned: Bool,
+        isRunning: Bool
+    ) {
+        self.title = title
+        self.subtitle = subtitle
+        self.trailingTimestamp = trailingTimestamp
+        self.isSelected = isSelected
+        self.isPinned = isPinned
+        self.isRunning = isRunning
+    }
+
+    func withTrailingTimestamp(_ trailingTimestamp: String?) -> GaryxSidebarThreadRowPresentation {
+        GaryxSidebarThreadRowPresentation(
+            title: title,
+            subtitle: subtitle,
+            trailingTimestamp: trailingTimestamp,
+            isSelected: isSelected,
+            isPinned: isPinned,
+            isRunning: isRunning
+        )
+    }
+
+    func withRunningState(_ isRunning: Bool) -> GaryxSidebarThreadRowPresentation {
+        GaryxSidebarThreadRowPresentation(
+            title: title,
+            subtitle: subtitle,
+            trailingTimestamp: trailingTimestamp,
+            isSelected: isSelected,
+            isPinned: isPinned,
+            isRunning: isRunning
+        )
     }
 
     private static func subtitle(for thread: GaryxThreadSummary) -> String? {
