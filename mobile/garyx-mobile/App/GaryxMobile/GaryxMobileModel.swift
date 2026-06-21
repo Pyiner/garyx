@@ -131,7 +131,10 @@ final class GaryxMobileModel: ObservableObject {
         )
     }
     @Published var navigationState = GaryxMobileNavigationState() {
-        didSet { refreshHomeThreadListSnapshot() }
+        didSet {
+            endThreadListInteractionIfHomeBecameHidden(previousNavigationState: oldValue)
+            refreshHomeThreadListSnapshot()
+        }
     }
     @Published var pendingMobileRoute: GaryxMobileRoute?
     @Published var storedLastError: String?

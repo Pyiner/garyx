@@ -144,6 +144,9 @@ struct GaryxHomeThreadListView: View, Equatable {
                     onNewChat: { startNewChat() }
                 )
             }
+            .onDisappear {
+                setThreadListInteracting(false)
+            }
             .task(id: homeListStore.snapshot.isHomeVisible) {
                 await runSilentSidebarRefreshLoop()
             }
@@ -166,8 +169,7 @@ struct GaryxHomeThreadListView: View, Equatable {
         .scrollDisabled(sidebarDragActive)
         .scrollDismissesKeyboard(.interactively)
         .garyxHomeThreadListScrollInteraction { isInteracting in
-            isThreadListInteracting = isInteracting
-            model.setThreadListInteracting(isInteracting)
+            setThreadListInteracting(isInteracting)
         }
         .refreshable {
             await refreshAll()
@@ -269,6 +271,11 @@ struct GaryxHomeThreadListView: View, Equatable {
 
     private func startNewChat() {
         model.openNewThreadDraft()
+    }
+
+    private func setThreadListInteracting(_ isInteracting: Bool) {
+        isThreadListInteracting = isInteracting
+        model.setThreadListInteracting(isInteracting)
     }
 }
 
