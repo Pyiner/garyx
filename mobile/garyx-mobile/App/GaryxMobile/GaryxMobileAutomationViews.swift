@@ -1015,7 +1015,7 @@ struct GaryxAutomationThreadPickerRow: View {
         VStack(spacing: 0) {
             GaryxSwipeActionRow(id: "thread:\(thread.id)", actions: threadSwipeActions) {
                 GaryxSidebarThreadRowView(
-                    model: GaryxSidebarThreadRowPresentation(
+                    presentation: GaryxSidebarThreadRowPresentation(
                         thread: thread,
                         isSelected: isSelected,
                         isPinned: isPinned,

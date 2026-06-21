@@ -1,22 +1,200 @@
+import Combine
 import Foundation
+import os
 import SwiftUI
+import UIKit
 
 enum GaryxSidebarDragAxis {
     case horizontal
     case vertical
 }
 
+#if DEBUG
+@MainActor
+final class GaryxHomeScrollPerformanceProbe: NSObject {
+    static let shared = GaryxHomeScrollPerformanceProbe()
+
+    private let log = OSLog(subsystem: "com.garyx.mobile", category: "HomeScroll")
+    private let logger = Logger(subsystem: "com.garyx.mobile", category: "HomeScroll")
+    private var displayLink: CADisplayLink?
+    private var objectWillChangeCancellable: AnyCancellable?
+    private var windowStartTimestamp: CFTimeInterval?
+    private var elapsedFrameTime: CFTimeInterval = 0
+    private var hitchTime: CFTimeInterval = 0
+    private var frameBudget: CFTimeInterval = 1.0 / 60.0
+    private(set) var rootBodyCount = 0
+    private(set) var homeBodyCount = 0
+    private(set) var rowBodyCount = 0
+    private(set) var modelPublishCount = 0
+    private(set) var homeListStoreApplyCount = 0
+
+    func attachModelObjectWillChange(_ publisher: ObservableObjectPublisher) {
+        guard objectWillChangeCancellable == nil else { return }
+        objectWillChangeCancellable = publisher.sink { [weak self] _ in
+            Task { @MainActor in
+                self?.markModelObjectWillChange()
+            }
+        }
+    }
+
+    func beginWindow(label: StaticString = "home_scroll_probe") {
+        resetCounters()
+        os_signpost(.begin, log: log, name: "GaryxHomeScrollProbe", "%{public}s", "\(label)")
+        displayLink?.invalidate()
+        let link = CADisplayLink(target: self, selector: #selector(stepDisplayLink(_:)))
+        if #available(iOS 15.0, *) {
+            link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 120, preferred: 60)
+        } else {
+            link.preferredFramesPerSecond = 60
+        }
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+    }
+
+    @discardableResult
+    func endWindow() -> GaryxHomeScrollPerformanceReport {
+        displayLink?.invalidate()
+        displayLink = nil
+        let report = GaryxHomeScrollPerformanceReport(
+            rootBodyCount: rootBodyCount,
+            homeBodyCount: homeBodyCount,
+            rowBodyCount: rowBodyCount,
+            modelPublishCount: modelPublishCount,
+            homeListStoreApplyCount: homeListStoreApplyCount,
+            hitchTimeRatio: elapsedFrameTime > 0 ? hitchTime / elapsedFrameTime : 0
+        )
+        os_signpost(
+            .end,
+            log: log,
+            name: "GaryxHomeScrollProbe",
+            "root=%{public}d home=%{public}d row=%{public}d model=%{public}d store_apply=%{public}d hitch_ratio=%{public}.4f",
+            report.rootBodyCount,
+            report.homeBodyCount,
+            report.rowBodyCount,
+            report.modelPublishCount,
+            report.homeListStoreApplyCount,
+            report.hitchTimeRatio
+        )
+        logger.info(
+            "GARYX_HOME_SCROLL_PROBE root_body=\(report.rootBodyCount, privacy: .public) home_body=\(report.homeBodyCount, privacy: .public) row_body=\(report.rowBodyCount, privacy: .public) model_publish=\(report.modelPublishCount, privacy: .public) home_store_apply=\(report.homeListStoreApplyCount, privacy: .public) hitch_time_ratio=\(report.hitchTimeRatio, privacy: .public)"
+        )
+        let line = "GARYX_HOME_SCROLL_PROBE root_body=\(report.rootBodyCount) home_body=\(report.homeBodyCount) row_body=\(report.rowBodyCount) model_publish=\(report.modelPublishCount) home_store_apply=\(report.homeListStoreApplyCount) hitch_time_ratio=\(report.hitchTimeRatio)"
+        print(line)
+        writeReport(line)
+        return report
+    }
+
+    func markRootBody() {
+        rootBodyCount += 1
+        os_signpost(.event, log: log, name: "GaryxRootNavigationView.body")
+    }
+
+    func markHomeBody() {
+        homeBodyCount += 1
+        os_signpost(.event, log: log, name: "GaryxHomeThreadListView.body")
+    }
+
+    func markRowBody() {
+        rowBodyCount += 1
+        os_signpost(.event, log: log, name: "GaryxHomeThreadButton.body")
+    }
+
+    func markModelObjectWillChange() {
+        modelPublishCount += 1
+        os_signpost(.event, log: log, name: "GaryxMobileModel.objectWillChange")
+    }
+
+    func markHomeListStoreApply() {
+        homeListStoreApplyCount += 1
+        os_signpost(.event, log: log, name: "GaryxHomeThreadListStore.apply")
+    }
+
+    @objc private func stepDisplayLink(_ link: CADisplayLink) {
+        if windowStartTimestamp == nil {
+            windowStartTimestamp = link.timestamp
+        }
+        let interval = max(0, link.targetTimestamp - link.timestamp)
+        if interval > 0 {
+            frameBudget = min(max(interval, 1.0 / 120.0), 1.0 / 30.0)
+        }
+        elapsedFrameTime += interval
+        let hitchThreshold = frameBudget * 1.5
+        if interval > hitchThreshold {
+            hitchTime += interval - frameBudget
+        }
+    }
+
+    private func resetCounters() {
+        windowStartTimestamp = nil
+        elapsedFrameTime = 0
+        hitchTime = 0
+        rootBodyCount = 0
+        homeBodyCount = 0
+        rowBodyCount = 0
+        modelPublishCount = 0
+        homeListStoreApplyCount = 0
+    }
+
+    private func writeReport(_ line: String) {
+        guard let cacheURL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
+        let reportURL = cacheURL.appendingPathComponent("garyx-home-scroll-probe.txt", isDirectory: false)
+        try? line.appending("\n").write(to: reportURL, atomically: true, encoding: .utf8)
+    }
+}
+
+struct GaryxHomeScrollPerformanceReport: Equatable {
+    var rootBodyCount: Int
+    var homeBodyCount: Int
+    var rowBodyCount: Int
+    var modelPublishCount: Int
+    var homeListStoreApplyCount: Int
+    var hitchTimeRatio: Double
+}
+#endif
+
 /// Root content column: the home thread list with conversation and panel
 /// pages pushed above it. Pushes originate from model navigation state; the
 /// path binding only ever receives pops (system back swipe or back buttons).
-struct GaryxRootNavigationView: View {
-    @EnvironmentObject private var model: GaryxMobileModel
+struct GaryxRootNavigationView: View, Equatable {
+    @ObservedObject var navigationStore: GaryxRootNavigationPathStore
+    @ObservedObject var routeNotFoundStore: GaryxRouteNotFoundStore
+    @ObservedObject var homeListStore: GaryxHomeThreadListStore
+    let isSidebarDragActive: Bool
+    let onOpenDrawer: () -> Void
+    let applyRootNavigationPath: ([GaryxMobileRootRoute]) -> Void
+    let onRefreshAll: () async -> Void
+    let onRefreshSidebarThreads: (Bool) async -> Void
+    let canRefreshSidebarThreads: () -> Bool
+    let onStartNewChat: () -> Void
+    let onOpenThread: (GaryxThreadSummary) -> Void
+    let onTogglePinnedThread: (String) -> Void
+    let onUnpinThread: (String) -> Void
+    let onArchiveThread: (GaryxThreadSummary) async -> Void
+
+    static func == (lhs: GaryxRootNavigationView, rhs: GaryxRootNavigationView) -> Bool {
+        lhs.navigationStore === rhs.navigationStore
+            && lhs.routeNotFoundStore === rhs.routeNotFoundStore
+            && lhs.homeListStore === rhs.homeListStore
+            && lhs.isSidebarDragActive == rhs.isSidebarDragActive
+    }
 
     var body: some View {
+        #if DEBUG
+        let _ = GaryxHomeScrollPerformanceProbe.shared.markRootBody()
+        #endif
         NavigationStack(path: rootPathBinding) {
             GaryxHomeThreadListView(
-                model: model,
-                homeListStore: model.homeThreadListStore
+                homeListStore: homeListStore,
+                isSidebarDragActive: isSidebarDragActive,
+                onOpenDrawer: onOpenDrawer,
+                onRefreshAll: onRefreshAll,
+                onRefreshSidebarThreads: onRefreshSidebarThreads,
+                canRefreshSidebarThreads: canRefreshSidebarThreads,
+                onStartNewChat: onStartNewChat,
+                onOpenThread: onOpenThread,
+                onTogglePinnedThread: onTogglePinnedThread,
+                onUnpinThread: onUnpinThread,
+                onArchiveThread: onArchiveThread
             )
                 .equatable()
                 .toolbar(.hidden, for: .navigationBar)
@@ -26,7 +204,7 @@ struct GaryxRootNavigationView: View {
                 }
         }
         .garyxPageBackground()
-        .fullScreenCover(item: $model.selectedRouteNotFound) { state in
+        .fullScreenCover(item: $routeNotFoundStore.selection) { state in
             GaryxFormSheet(title: state.title) {
                 GaryxRouteNotFoundCard(state: state)
             }
@@ -35,8 +213,8 @@ struct GaryxRootNavigationView: View {
 
     private var rootPathBinding: Binding<[GaryxMobileRootRoute]> {
         Binding(
-            get: { model.rootNavigationPath },
-            set: { model.applyRootNavigationPath($0) }
+            get: { navigationStore.path },
+            set: { applyRootNavigationPath($0) }
         )
     }
 }
@@ -123,29 +301,36 @@ private enum GaryxSidebarMetrics {
 }
 
 struct GaryxHomeThreadListView: View, Equatable {
-    let model: GaryxMobileModel
     @ObservedObject var homeListStore: GaryxHomeThreadListStore
-    @Environment(\.garyxSidebarDragActive) private var sidebarDragActive
-    @Environment(\.garyxOpenSidebar) private var openDrawer
-    @State private var isThreadListInteracting = false
+    let isSidebarDragActive: Bool
+    let onOpenDrawer: () -> Void
+    let onRefreshAll: () async -> Void
+    let onRefreshSidebarThreads: (Bool) async -> Void
+    let canRefreshSidebarThreads: () -> Bool
+    let onStartNewChat: () -> Void
+    let onOpenThread: (GaryxThreadSummary) -> Void
+    let onTogglePinnedThread: (String) -> Void
+    let onUnpinThread: (String) -> Void
+    let onArchiveThread: (GaryxThreadSummary) async -> Void
     private let silentRefreshIntervalNanos: UInt64 = 10_000_000_000
 
     static func == (lhs: GaryxHomeThreadListView, rhs: GaryxHomeThreadListView) -> Bool {
-        lhs.model === rhs.model && lhs.homeListStore === rhs.homeListStore
+        lhs.homeListStore === rhs.homeListStore
+            && lhs.isSidebarDragActive == rhs.isSidebarDragActive
     }
 
     var body: some View {
+        #if DEBUG
+        let _ = GaryxHomeScrollPerformanceProbe.shared.markHomeBody()
+        #endif
         threadListWithBottomBar
             .frame(maxHeight: .infinity)
             .garyxPageBackground()
             .garyxAdaptiveTopBar {
                 GaryxHomeHeaderView(
-                    onOpenDrawer: { openDrawer() },
-                    onNewChat: { startNewChat() }
+                    onOpenDrawer: onOpenDrawer,
+                    onNewChat: { onStartNewChat() }
                 )
-            }
-            .onDisappear {
-                setThreadListInteracting(false)
             }
             .task(id: homeListStore.snapshot.isHomeVisible) {
                 await runSilentSidebarRefreshLoop()
@@ -166,11 +351,8 @@ struct GaryxHomeThreadListView: View, Equatable {
                     .accessibilityHidden(true)
             }
         }
-        .scrollDisabled(sidebarDragActive)
+        .scrollDisabled(isSidebarDragActive)
         .scrollDismissesKeyboard(.interactively)
-        .garyxHomeThreadListScrollInteraction { isInteracting in
-            setThreadListInteracting(isInteracting)
-        }
         .refreshable {
             await refreshAll()
         }
@@ -193,9 +375,11 @@ struct GaryxHomeThreadListView: View, Equatable {
                     GaryxSidebarRowDivider()
                 }
                 GaryxHomeThreadButton(
-                    model: model,
                     row: row,
-                    isRunningBadgePaused: isThreadListInteracting
+                    onOpenThread: onOpenThread,
+                    onTogglePinnedThread: onTogglePinnedThread,
+                    onUnpinThread: onUnpinThread,
+                    onArchiveThread: onArchiveThread
                 )
                 .equatable()
             }
@@ -221,9 +405,11 @@ struct GaryxHomeThreadListView: View, Equatable {
                     GaryxSidebarRowDivider()
                 }
                 GaryxHomeThreadButton(
-                    model: model,
                     row: row,
-                    isRunningBadgePaused: isThreadListInteracting
+                    onOpenThread: onOpenThread,
+                    onTogglePinnedThread: onTogglePinnedThread,
+                    onUnpinThread: onUnpinThread,
+                    onArchiveThread: onArchiveThread
                 )
                 .equatable()
             }
@@ -237,8 +423,7 @@ struct GaryxHomeThreadListView: View, Equatable {
     }
 
     private func refreshAll() async {
-        await model.refreshThreads(silent: true)
-        await model.refreshRemoteState()
+        await onRefreshAll()
     }
 
     private func runSilentSidebarRefreshLoop() async {
@@ -247,61 +432,53 @@ struct GaryxHomeThreadListView: View, Equatable {
         // response handling does not contend with the opening transition.
         try? await Task.sleep(nanoseconds: 300_000_000)
         guard !Task.isCancelled, shouldRefreshSidebarThreads else { return }
-        if !isThreadListInteracting {
-            await refreshSidebarThreads(silent: true)
-        }
+        await refreshSidebarThreads(silent: true)
         while !Task.isCancelled {
             try? await Task.sleep(nanoseconds: silentRefreshIntervalNanos)
             guard !Task.isCancelled, shouldRefreshSidebarThreads else { return }
-            guard !isThreadListInteracting else { continue }
             await refreshSidebarThreads(silent: true)
         }
     }
 
     private func refreshSidebarThreads(silent: Bool = false) async {
         guard shouldRefreshSidebarThreads else { return }
-        guard !isThreadListInteracting else { return }
-        guard !model.isLoadingThreads, !model.isLoadingMoreThreads else { return }
-        await model.refreshThreads(silent: silent)
+        guard canRefreshSidebarThreads() else { return }
+        await onRefreshSidebarThreads(silent)
     }
 
     private var shouldRefreshSidebarThreads: Bool {
         homeListStore.snapshot.isHomeVisible
     }
 
-    private func startNewChat() {
-        model.openNewThreadDraft()
-    }
-
-    private func setThreadListInteracting(_ isInteracting: Bool) {
-        isThreadListInteracting = isInteracting
-        model.setThreadListInteracting(isInteracting)
-    }
 }
 
 private struct GaryxHomeThreadButton: View, Equatable {
-    let model: GaryxMobileModel
     let row: GaryxHomeThreadRow
-    let isRunningBadgePaused: Bool
+    let onOpenThread: (GaryxThreadSummary) -> Void
+    let onTogglePinnedThread: (String) -> Void
+    let onUnpinThread: (String) -> Void
+    let onArchiveThread: (GaryxThreadSummary) async -> Void
     @State private var showsArchiveConfirmation = false
 
     static func == (lhs: GaryxHomeThreadButton, rhs: GaryxHomeThreadButton) -> Bool {
-        lhs.row == rhs.row && lhs.isRunningBadgePaused == rhs.isRunningBadgePaused
+        lhs.row == rhs.row
     }
 
     var body: some View {
+        #if DEBUG
+        let _ = GaryxHomeScrollPerformanceProbe.shared.markRowBody()
+        #endif
         let presentation = row.presentation
             .withTrailingTimestamp(garyxFormattedTaskTimestamp(row.timestampValue))
         GaryxSwipeActionRow(id: "thread:\(row.id)", actions: threadSwipeActions) {
             GaryxSidebarThreadRowView(
-                model: presentation,
+                presentation: presentation,
                 avatar: row.avatar,
-                isRunningBadgePaused: isRunningBadgePaused,
                 onSelect: {
-                    model.openThreadImmediately(row.thread, source: .replace)
+                    onOpenThread(row.thread)
                 },
                 onUnpin: {
-                    model.unpinThread(row.id)
+                    onUnpinThread(row.id)
                 }
             )
         }
@@ -311,7 +488,7 @@ private struct GaryxHomeThreadButton: View, Equatable {
         }
         .confirmationDialog("Archive thread", isPresented: $showsArchiveConfirmation, titleVisibility: .visible) {
             Button("Archive", role: .destructive) {
-                Task { await model.archiveThread(row.thread) }
+                Task { await onArchiveThread(row.thread) }
             }
         }
     }
@@ -323,36 +500,16 @@ private struct GaryxHomeThreadButton: View, Equatable {
                 systemImage: row.presentation.isPinned ? "pin.slash" : "pin",
                 tone: .neutral
             ) {
-                model.togglePinnedThread(row.id)
+                onTogglePinnedThread(row.id)
             },
             GaryxRowAction(
                 title: "Archive thread",
                 systemImage: "archivebox",
                 tone: .destructive
             ) {
-                Task { await model.archiveThread(row.thread) }
+                Task { await onArchiveThread(row.thread) }
             },
         ]
-    }
-}
-
-private extension View {
-    @ViewBuilder
-    func garyxHomeThreadListScrollInteraction(_ onChange: @escaping (Bool) -> Void) -> some View {
-        if #available(iOS 18.0, *) {
-            onScrollPhaseChange { _, newPhase in
-                switch newPhase {
-                case .tracking, .interacting, .decelerating:
-                    onChange(true)
-                case .idle, .animating:
-                    onChange(false)
-                @unknown default:
-                    onChange(false)
-                }
-            }
-        } else {
-            self
-        }
     }
 }
 
@@ -1227,7 +1384,7 @@ private struct GaryxSidebarThreadButton: View {
     var body: some View {
         GaryxSwipeActionRow(id: "thread:\(thread.id)", actions: threadSwipeActions) {
             GaryxSidebarThreadRowView(
-                model: GaryxSidebarThreadRowPresentation(
+                presentation: GaryxSidebarThreadRowPresentation(
                     thread: thread,
                     isSelected: isSelected,
                     isPinned: isPinned,
@@ -1371,9 +1528,8 @@ enum GaryxSidebarThreadSelectionDisplay: Equatable {
 }
 
 struct GaryxSidebarThreadRowView: View {
-    let model: GaryxSidebarThreadRowPresentation
+    let presentation: GaryxSidebarThreadRowPresentation
     var avatar: GaryxSidebarThreadRowAvatar?
-    var isRunningBadgePaused = false
     var isFullBleed = false
     var density: GaryxSidebarThreadRowDensity = .regular
     var selectionDisplay: GaryxSidebarThreadSelectionDisplay = .sidebar
@@ -1397,8 +1553,8 @@ struct GaryxSidebarThreadRowView: View {
                     diameter: 38
                 )
                 .overlay(alignment: .bottomTrailing) {
-                    if model.isRunning {
-                        GaryxAvatarTypingBadge(isPaused: isRunningBadgePaused)
+                    if presentation.isRunning {
+                        GaryxAvatarTypingBadge()
                             .offset(x: 3, y: 3)
                     }
                 }
@@ -1406,14 +1562,14 @@ struct GaryxSidebarThreadRowView: View {
 
             VStack(alignment: .leading, spacing: density.textSpacing) {
                 HStack(alignment: .center, spacing: 5) {
-                    Text(model.title)
+                    Text(presentation.title)
                         .font(density.titleFont)
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .foregroundStyle(.primary)
                         .layoutPriority(1)
 
-                    if model.isPinned {
+                    if presentation.isPinned {
                         Button {
                             onUnpin?()
                         } label: {
@@ -1435,7 +1591,7 @@ struct GaryxSidebarThreadRowView: View {
                         .fixedSize(horizontal: true, vertical: false)
                 }
 
-                if let subtitle = model.subtitle, !subtitle.isEmpty {
+                if let subtitle = presentation.subtitle, !subtitle.isEmpty {
                     Text(subtitle)
                         .font(density.subtitleFont)
                         .foregroundStyle(.secondary)
@@ -1555,10 +1711,10 @@ private struct GaryxSidebarRunningIndicator: View {
 private extension GaryxSidebarThreadRowView {
     var rowAccessibilityLabel: String {
         [
-            model.title,
-            model.subtitle,
-            model.isPinned ? "Pinned" : nil,
-            model.isRunning ? "Running" : nil,
+            presentation.title,
+            presentation.subtitle,
+            presentation.isPinned ? "Pinned" : nil,
+            presentation.isRunning ? "Running" : nil,
         ]
         .compactMap { value in
             let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -1569,11 +1725,11 @@ private extension GaryxSidebarThreadRowView {
 
     var trailingMeta: some View {
         HStack(spacing: 6) {
-            if model.isRunning, avatar == nil {
+            if presentation.isRunning, avatar == nil {
                 GaryxSidebarRunningIndicator()
-            } else if model.isSelected, selectionDisplay == .checkmark {
+            } else if presentation.isSelected, selectionDisplay == .checkmark {
                 GaryxSelectionCheckmark(size: 13)
-            } else if let trailingTimestamp = model.trailingTimestamp, !trailingTimestamp.isEmpty {
+            } else if let trailingTimestamp = presentation.trailingTimestamp, !trailingTimestamp.isEmpty {
                 // The selected row already reads through its background fill;
                 // no extra trailing marker.
                 Text(trailingTimestamp)

@@ -185,17 +185,13 @@ final class GaryxHomeThreadListPerformanceDiagnosticsTests: XCTestCase {
         XCTAssertEqual(loop.refreshesPerMinute, 40.0, accuracy: 0.001)
     }
 
-    func testOptimizedBackgroundReconcileWouldSkipRefreshesWhileThreadListInteracting() {
+    func testBackgroundReconcileCadenceIsNotGatedByHomeScrollInteraction() {
         let gateway = DiagnosticCountingThreadRefreshGateway()
         let loop = DiagnosticBackgroundReconcileLoop(intervalSeconds: 1.5)
 
-        loop.run(
-            forSeconds: 6.0,
-            gateway: gateway,
-            isThreadListInteracting: { _ in true }
-        )
+        loop.run(forSeconds: 6.0, gateway: gateway)
 
-        XCTAssertEqual(gateway.refreshThreadsCallCount, 0)
+        XCTAssertEqual(gateway.refreshThreadsCallCount, 4)
     }
 
     func testTypingBadgeCostAtHomeScale() {
@@ -688,14 +684,11 @@ private struct DiagnosticBackgroundReconcileLoop {
 
     func run(
         forSeconds duration: TimeInterval,
-        gateway: DiagnosticCountingThreadRefreshGateway,
-        isThreadListInteracting: (TimeInterval) -> Bool = { _ in false }
+        gateway: DiagnosticCountingThreadRefreshGateway
     ) {
         var elapsed = intervalSeconds
         while elapsed <= duration + 0.000_001 {
-            if !isThreadListInteracting(elapsed) {
-                gateway.refreshThreads()
-            }
+            gateway.refreshThreads()
             elapsed += intervalSeconds
         }
     }

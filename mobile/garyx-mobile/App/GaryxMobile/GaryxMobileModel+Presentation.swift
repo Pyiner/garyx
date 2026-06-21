@@ -5,26 +5,10 @@ import WidgetKit
 
 extension GaryxMobileModel {
     func refreshHomeThreadListSnapshot() {
-        homeThreadListStore.applyUnlessInteracting(
-            isThreadListInteracting: isThreadListInteracting
-        ) {
-            homeThreadListInput
-        }
-    }
-
-    func setThreadListInteracting(_ isInteracting: Bool) {
-        guard isThreadListInteracting != isInteracting else { return }
-        isThreadListInteracting = isInteracting
-        guard !isInteracting else { return }
-        homeThreadListStore.flushDeferredInteractionRefresh {
-            homeThreadListInput
-        }
-        flushDeferredRecentThreadsWidgetSnapshotPersistence()
-    }
-
-    func endThreadListInteractionIfHomeBecameHidden(previousNavigationState: GaryxMobileNavigationState) {
-        guard !previousNavigationState.presentsContent, navigationState.presentsContent else { return }
-        setThreadListInteracting(false)
+        #if DEBUG
+        GaryxHomeScrollPerformanceProbe.shared.markHomeListStoreApply()
+        #endif
+        homeThreadListStore.apply(homeThreadListInput)
     }
 
     var homeThreadListInput: GaryxHomeThreadListInput {
@@ -211,6 +195,65 @@ extension GaryxMobileModel {
         }
         return true
     }
+
+    #if DEBUG
+    func startHomeScrollPressureProbeIfRequested() {
+        let environment = ProcessInfo.processInfo.environment
+        let arguments = CommandLine.arguments
+        guard environment["GARYX_MOBILE_HOME_SCROLL_PROBE"] == "1"
+            || arguments.contains("--garyx-home-scroll-probe")
+        else { return }
+        debugSnapshotActive = true
+        loadHomeScrollPressureFixture()
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard let self else { return }
+            let probe = GaryxHomeScrollPerformanceProbe.shared
+            probe.beginWindow(label: "home_scroll_60hz_render_snapshot")
+            let threadId = "thread-0"
+            for tick in 0..<60 {
+                guard !Task.isCancelled else { break }
+                renderSnapshotsByThread[threadId] = GaryxRenderSnapshot(
+                    basedOnSeq: tick,
+                    rows: [],
+                    tailActivity: .thinking,
+                    visibleMessageIds: ["message-\(tick)"]
+                )
+                try? await Task.sleep(nanoseconds: 16_666_667)
+            }
+            _ = probe.endWindow()
+        }
+    }
+
+    private func loadHomeScrollPressureFixture() {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        let now = Date()
+        threads = (0..<50).map { index in
+            GaryxThreadSummary(
+                id: "thread-\(index)",
+                title: "Synthetic thread \(index)",
+                createdAt: formatter.string(from: now.addingTimeInterval(Double(-index) * 3_600)),
+                updatedAt: formatter.string(from: now.addingTimeInterval(Double(-index) * 180)),
+                lastMessagePreview: "Synthetic preview \(index)",
+                workspacePath: "/Users/test/workspaces/project-\(index % 6)",
+                messageCount: 10 + index,
+                agentId: "agent-\(index % 4)",
+                teamId: nil,
+                teamName: nil,
+                providerType: "codex",
+                recentRunId: "run-\(index)",
+                activeRunId: index == 0 ? "run-\(index)" : nil,
+                runState: index == 0 ? "running" : "idle",
+                worktreePath: nil
+            )
+        }
+        pinnedThreadIds = (0..<6).map { "thread-\($0)" }
+        recentThreadIds = (0..<50).map { "thread-\($0)" }
+        connectionState = .ready(version: "debug-home-scroll-probe")
+        refreshHomeThreadListSnapshot()
+    }
+    #endif
 
     func sidebarThreadSummary(for threadId: String) -> GaryxThreadSummary? {
         let normalizedId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 public enum GaryxMobileConnectionState: Equatable, Sendable {
@@ -335,6 +336,29 @@ public enum GaryxMobileLeadingEdgeAction: Equatable, Sendable {
 public enum GaryxMobileRootRoute: Hashable, Sendable {
     case conversation
     case panel(GaryxMobilePanel)
+}
+
+@MainActor
+final class GaryxRootNavigationPathStore: ObservableObject {
+    @Published private(set) var path: [GaryxMobileRootRoute]
+    private(set) var publishCount = 0
+
+    init(path: [GaryxMobileRootRoute] = []) {
+        self.path = path
+    }
+
+    @discardableResult
+    func apply(navigationState: GaryxMobileNavigationState) -> Bool {
+        apply(path: navigationState.rootNavigationPath)
+    }
+
+    @discardableResult
+    func apply(path nextPath: [GaryxMobileRootRoute]) -> Bool {
+        guard path != nextPath else { return false }
+        path = nextPath
+        publishCount += 1
+        return true
+    }
 }
 
 public enum GaryxMobilePanelOpenSource: Equatable, Sendable {
