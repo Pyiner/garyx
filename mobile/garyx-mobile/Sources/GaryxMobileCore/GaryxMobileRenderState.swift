@@ -520,9 +520,31 @@ enum GaryxMobileRenderStateMapper {
         transcriptMessages: [GaryxTranscriptMessage]
     ) -> [GaryxMobileTurnRow] {
         let lookup = MessageLookup(messages: messages, transcriptMessages: transcriptMessages)
-        return snapshot?.rows.compactMap { row in
+        var rows = snapshot?.rows.compactMap { row in
             row.mobileRow(lookup: lookup)
         } ?? []
+        let representedMessageIds = Set((snapshot?.rows ?? []).flatMap(\.messageRefs).map(\.id))
+        rows += localUserRows(messages: messages, representedBy: representedMessageIds)
+        return rows
+    }
+
+    private static func localUserRows(
+        messages: [GaryxMobileMessage],
+        representedBy representedMessageIds: Set<String>
+    ) -> [GaryxMobileTurnRow] {
+        messages.compactMap { message in
+            guard message.role == .user,
+                  message.localState != nil,
+                  message.localState != .remoteFinal,
+                  !representedMessageIds.contains(message.id) else {
+                return nil
+            }
+            return GaryxMobileTurnRow(
+                id: "user_turn:\(message.id)",
+                userBlock: .message(message),
+                activityRows: []
+            )
+        }
     }
 }
 
