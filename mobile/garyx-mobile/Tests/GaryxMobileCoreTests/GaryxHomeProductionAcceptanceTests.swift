@@ -60,6 +60,57 @@ final class GaryxHomeProductionAcceptanceTests: XCTestCase {
         XCTAssertEqual(renamedSections.pinned.first?.presentation.title, "Renamed conversation")
     }
 
+    func testHomeListStoreIgnoresRunMetadataChurnThatDoesNotChangeVisibleSnapshot() {
+        var base = GaryxHomeListFixture.makeInputs(threadCount: 50, runningCount: 1)
+        let store = GaryxHomeThreadListStore()
+        XCTAssertTrue(store.apply(GaryxHomeThreadListInput(base)))
+        let baselineSnapshot = store.snapshot
+        XCTAssertEqual(store.sectionDerivationCount, 1)
+
+        var publishes = 0
+        let cancellable = store.objectWillChange.sink { publishes += 1 }
+        defer { cancellable.cancel() }
+
+        for index in 0..<300 {
+            base.threads[0].activeRunId = "run-\(index)"
+            base.threads[0].runState = index.isMultiple(of: 2) ? "running" : "running "
+            XCTAssertFalse(
+                store.apply(GaryxHomeThreadListInput(base)),
+                "Run metadata churn with the same running row must not publish to the home list."
+            )
+        }
+
+        XCTAssertEqual(store.snapshot, baselineSnapshot)
+        XCTAssertEqual(publishes, 0)
+        XCTAssertEqual(store.acceptedInputCount, 1)
+        XCTAssertEqual(store.sectionDerivationCount, 1)
+    }
+
+    func testHomeListStorePublishesRowRunningChangeWithoutRederivingSections() throws {
+        let base = GaryxHomeListFixture.makeInputs(threadCount: 50, runningCount: 0)
+        let store = GaryxHomeThreadListStore()
+        XCTAssertTrue(store.apply(GaryxHomeThreadListInput(base)))
+        XCTAssertEqual(store.sectionDerivationCount, 1)
+
+        var publishes = 0
+        let cancellable = store.objectWillChange.sink { publishes += 1 }
+        defer { cancellable.cancel() }
+
+        var running = base
+        running.busyThreadIds = ["thread-10"]
+        XCTAssertTrue(store.apply(GaryxHomeThreadListInput(running)))
+
+        let row = try XCTUnwrap(store.snapshot.sections.recent.first { $0.id == "thread-10" })
+        XCTAssertTrue(row.presentation.isRunning)
+        XCTAssertEqual(publishes, 1)
+        XCTAssertEqual(store.acceptedInputCount, 2)
+        XCTAssertEqual(
+            store.sectionDerivationCount,
+            1,
+            "Running-only changes must reuse the section derivation and publish only the folded row snapshot."
+        )
+    }
+
     func testCatalogAssignmentGateDoesNotPublishIdenticalCollections() {
         let base = GaryxHomeListFixture.makeInputs(threadCount: 10)
         let model = GaryxHomeCatalogPublicationProbe(
@@ -114,6 +165,21 @@ private extension GaryxHomeThreadSectionsInput {
             pinnedThreadIds: input.pinnedThreadIds,
             recentThreadIds: input.recentThreadIds,
             selectedThreadId: input.selectedThreadId
+        )
+    }
+}
+
+private extension GaryxHomeThreadListInput {
+    init(
+        _ input: HomeThreadSectionsReference.Inputs,
+        isLoadingThreads: Bool = false,
+        isHomeVisible: Bool = true
+    ) {
+        self.init(
+            sectionsInput: GaryxHomeThreadSectionsInput(input),
+            runningThreadIds: input.busyThreadIds,
+            isLoadingThreads: isLoadingThreads,
+            isHomeVisible: isHomeVisible
         )
     }
 }

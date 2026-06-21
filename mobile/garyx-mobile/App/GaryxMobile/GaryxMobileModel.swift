@@ -71,10 +71,13 @@ final class GaryxMobileModel: ObservableObject {
     @Published var gatewayProfiles: [GaryxGatewayProfile]
     @Published var gatewaySettingsStatus: String?
     @Published var connectionState: GaryxMobileConnectionState = .disconnected
-    @Published var threads: [GaryxThreadSummary] = []
+    @Published var threads: [GaryxThreadSummary] = [] {
+        didSet { refreshHomeThreadListSnapshot() }
+    }
     @Published var selectedThread: GaryxThreadSummary? {
         didSet {
             applySelectedThreadStreamPolicy(previousThreadId: oldValue?.id, selectedThreadId: selectedThread?.id)
+            refreshHomeThreadListSnapshot()
         }
     }
     @Published var messages: [GaryxMobileMessage] = [] {
@@ -94,7 +97,9 @@ final class GaryxMobileModel: ObservableObject {
     var composerDraftStore = GaryxComposerDraftStore()
     @Published var composerContextVersion = 0
     @Published var composerAttachments: [GaryxMobileComposerAttachment] = []
-    @Published var isLoadingThreads = false
+    @Published var isLoadingThreads = false {
+        didSet { refreshHomeThreadListSnapshot() }
+    }
     @Published var isLoadingMoreThreads = false
     @Published var hasMoreThreadSummaries = false
     @Published var isLoadingSelectedThreadHistory = false
@@ -104,9 +109,13 @@ final class GaryxMobileModel: ObservableObject {
     /// scattered `isSending` / `activeRunThreadId` /
     /// `pendingChatStartThreadIds` / `terminatedActiveRunIdsByThread` flags;
     /// see docs/agents/conversation-state.md.
-    @Published var runTracker = GaryxConversationRunTracker()
+    @Published var runTracker = GaryxConversationRunTracker() {
+        didSet { refreshHomeThreadListSnapshot() }
+    }
     /// Server run-state rebuilt from committed transcript control records.
-    @Published var runStateByThread: [String: GaryxTranscriptRunState] = [:]
+    @Published var runStateByThread: [String: GaryxTranscriptRunState] = [:] {
+        didSet { refreshHomeThreadListSnapshot() }
+    }
     /// Server-rendered transcript snapshots keyed by thread. These snapshots own
     /// visible transcript rows; committed messages remain only the data pool they
     /// reference.
@@ -121,7 +130,9 @@ final class GaryxMobileModel: ObservableObject {
             })
         )
     }
-    @Published var navigationState = GaryxMobileNavigationState()
+    @Published var navigationState = GaryxMobileNavigationState() {
+        didSet { refreshHomeThreadListSnapshot() }
+    }
     @Published var pendingMobileRoute: GaryxMobileRoute?
     @Published var storedLastError: String?
     var lastError: String? {
@@ -134,21 +145,31 @@ final class GaryxMobileModel: ObservableObject {
     }
     @Published var showsSettings = false
     @Published var sidebarVisible = false
-    @Published var pinnedThreadIds: [String] = []
-    @Published var recentThreadIds: [String] = []
+    @Published var pinnedThreadIds: [String] = [] {
+        didSet { refreshHomeThreadListSnapshot() }
+    }
+    @Published var recentThreadIds: [String] = [] {
+        didSet { refreshHomeThreadListSnapshot() }
+    }
     @Published var dreams: [GaryxDreamTopic] = []
     @Published var latestDreamScan: GaryxDreamScan?
     @Published var isScanningDreams = false
     @Published var dreamsAutoScanEnabled = false
     @Published var isSavingDreamsSettings = false
-    @Published var agents: [GaryxAgentSummary] = []
-    @Published var teams: [GaryxTeamSummary] = []
+    @Published var agents: [GaryxAgentSummary] = [] {
+        didSet { refreshHomeThreadListSnapshot() }
+    }
+    @Published var teams: [GaryxTeamSummary] = [] {
+        didSet { refreshHomeThreadListSnapshot() }
+    }
     @Published var skills: [GaryxSkillSummary] = []
     @Published var tasks: [GaryxTaskSummary] = []
     @Published var tasksPanelState = GaryxMobileTasksPanelState()
     @Published var workflowRunPanelState = GaryxWorkflowRunPanelState()
     @Published var selectedWorkflowRunThread: GaryxThreadSummary?
-    @Published var automations: [GaryxAutomationSummary] = []
+    @Published var automations: [GaryxAutomationSummary] = [] {
+        didSet { refreshHomeThreadListSnapshot() }
+    }
     @Published var remoteStateLoadPhase: GaryxMobileLoadPhase = .idle
     @Published var agentTargetsLoadPhase: GaryxMobileLoadPhase = .idle
     @Published var selectedAgentTargetId: String
@@ -266,7 +287,7 @@ final class GaryxMobileModel: ObservableObject {
     var workspaceRefreshRequestId: UUID?
     var nextThreadListOffset = 0
     var lastPersistedWidgetThreads: [GaryxMobileWidgetThread]?
-    var homeThreadSectionsCache = GaryxHomeThreadSectionsCache()
+    let homeThreadListStore = GaryxHomeThreadListStore()
     var isThreadListInteracting = false
     var hasAttemptedLastOpenedThreadRestore = false
     var selectedThreadNextHistoryBeforeIndex: Int?
@@ -319,5 +340,6 @@ final class GaryxMobileModel: ObservableObject {
             )
         }
         #endif
+        refreshHomeThreadListSnapshot()
     }
 }
