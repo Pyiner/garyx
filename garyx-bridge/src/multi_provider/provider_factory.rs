@@ -4,9 +4,11 @@ use std::sync::Arc;
 
 use garyx_models::config::AgentProviderConfig;
 use garyx_models::provider::{
-    ClaudeCodeConfig, CodexAppServerConfig, GaryxNativeConfig, GeminiCliConfig, ProviderType,
+    AntigravityCliConfig, ClaudeCodeConfig, CodexAppServerConfig, GaryxNativeConfig,
+    GeminiCliConfig, ProviderType, default_antigravity_model,
 };
 
+use crate::antigravity_provider::AntigravityCliProvider;
 use crate::claude_provider::ClaudeCliProvider;
 use crate::codex_provider::CodexAgentProvider;
 use crate::garyx_native_provider::GaryxNativeProvider;
@@ -149,6 +151,37 @@ fn build_gemini_config(
     }
 }
 
+/// Build an Antigravity CLI config from an agent runtime config.
+fn build_antigravity_config(
+    agent_cfg: &AgentProviderConfig,
+    default_workspace: &Option<String>,
+) -> AntigravityCliConfig {
+    let default_model = if agent_cfg.default_model.trim().is_empty() {
+        default_antigravity_model()
+    } else {
+        agent_cfg.default_model.clone()
+    };
+    let model = if agent_cfg.model.trim().is_empty() {
+        default_model.clone()
+    } else {
+        agent_cfg.model.clone()
+    };
+    AntigravityCliConfig {
+        workspace_dir: agent_cfg
+            .workspace_dir
+            .clone()
+            .or_else(|| default_workspace.clone()),
+        default_model,
+        antigravity_bin: agent_cfg.antigravity_bin.clone(),
+        antigravity_brain_root: agent_cfg.antigravity_brain_root.clone(),
+        model,
+        max_turns: agent_cfg.max_turns,
+        timeout_seconds: agent_cfg.timeout_seconds,
+        env: agent_cfg.env.clone(),
+        ..Default::default()
+    }
+}
+
 /// Build the native-loop GPT backend config from an agent runtime config.
 fn build_garyx_native_config(
     agent_cfg: &AgentProviderConfig,
@@ -275,6 +308,12 @@ pub(super) async fn create_provider(
         ProviderType::GeminiCli => {
             let config = build_gemini_config(agent_cfg, default_workspace);
             let mut provider = GeminiCliProvider::new(config);
+            provider.initialize().await?;
+            Ok(Arc::new(provider))
+        }
+        ProviderType::AntigravityCli => {
+            let config = build_antigravity_config(agent_cfg, default_workspace);
+            let mut provider = AntigravityCliProvider::new(config);
             provider.initialize().await?;
             Ok(Arc::new(provider))
         }

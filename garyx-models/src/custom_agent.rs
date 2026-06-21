@@ -210,11 +210,37 @@ pub fn builtin_provider_agent_profiles() -> Vec<CustomAgentProfile> {
             created_at: now.clone(),
             updated_at: now.clone(),
         },
+        CustomAgentProfile {
+            agent_id: "antigravity".to_owned(),
+            display_name: "Antigravity".to_owned(),
+            provider_type: ProviderType::AntigravityCli,
+            model: crate::provider::default_antigravity_model(),
+            model_reasoning_effort: String::new(),
+            model_service_tier: String::new(),
+            provider_env: HashMap::new(),
+            auth_source: String::new(),
+            base_url: String::new(),
+            codex_home: String::new(),
+            max_tool_iterations: default_garyx_native_max_tool_iterations(),
+            request_timeout_seconds: default_native_request_timeout_u32(),
+            default_workspace_dir: None,
+            // Antigravity is a Google CLI surface; reuse the Gemini avatar
+            // until a dedicated Antigravity asset is added.
+            avatar_data_url: Some(builtin_avatar_data_url(BUILTIN_GEMINI_AVATAR_PNG)),
+            system_prompt: String::new(),
+            built_in: true,
+            standalone: true,
+            created_at: now.clone(),
+            updated_at: now.clone(),
+        },
     ]
 }
 
 pub fn is_builtin_provider_agent_id(agent_id: &str) -> bool {
-    matches!(agent_id.trim(), "claude" | "codex" | "traex" | "gemini")
+    matches!(
+        agent_id.trim(),
+        "claude" | "codex" | "traex" | "gemini" | "antigravity"
+    )
 }
 
 #[cfg(test)]

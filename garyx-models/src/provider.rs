@@ -19,9 +19,18 @@ pub enum ProviderType {
     /// TRAE CLI (`traex`) app-server backend. Forked from Codex and speaks the
     /// identical app-server JSON-RPC protocol, so it reuses the entire Codex
     /// provider pipeline with the `traex` binary.
-    #[serde(rename = "traex", alias = "trae", alias = "trae_cli", alias = "traecli")]
+    #[serde(
+        rename = "traex",
+        alias = "trae",
+        alias = "trae_cli",
+        alias = "traecli"
+    )]
     Traex,
     GeminiCli,
+    /// Google Antigravity CLI (`agy`) provider, driven through the user's local
+    /// OAuth-backed CLI session and transcript files.
+    #[serde(rename = "antigravity", alias = "agy", alias = "antigravity_cli")]
+    AntigravityCli,
     /// OpenAI GPT model backend served through Garyx's in-process agent loop.
     #[serde(alias = "garyx_native", alias = "garyx", alias = "native")]
     Gpt,
@@ -49,6 +58,7 @@ impl ProviderType {
             Self::CodexAppServer => "codex_app_server",
             Self::Traex => "traex",
             Self::GeminiCli => "gemini_cli",
+            Self::AntigravityCli => "antigravity",
             Self::Gpt => "gpt",
             Self::ClaudeLlm => "anthropic",
             Self::GeminiLlm => "google",
@@ -62,6 +72,7 @@ impl ProviderType {
             "codex" | "codex_app_server" => Some(Self::CodexAppServer),
             "traex" | "trae" | "trae_cli" | "traecli" => Some(Self::Traex),
             "gemini" | "gemini_cli" => Some(Self::GeminiCli),
+            "antigravity" | "agy" | "antigravity_cli" => Some(Self::AntigravityCli),
             "gpt" | "openai" | "openai_gpt" | "garyx" | "garyx_native" | "native" => {
                 Some(Self::Gpt)
             }
@@ -624,6 +635,55 @@ impl Default for GeminiCliConfig {
             mcp_base_url: crate::config::default_mcp_base_url(),
             gemini_bin: String::new(),
             approval_mode: default_gemini_approval_mode(),
+            model: String::new(),
+            env: HashMap::new(),
+        }
+    }
+}
+
+/// Configuration for Google Antigravity CLI provider.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct AntigravityCliConfig {
+    #[serde(default = "default_antigravity_provider_type")]
+    pub provider_type: ProviderType,
+
+    #[serde(default = "default_antigravity_model")]
+    pub default_model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_turns: Option<i64>,
+    #[serde(default)]
+    pub timeout_seconds: f64,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_dir: Option<String>,
+    #[serde(default)]
+    pub antigravity_bin: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub antigravity_brain_root: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub env: HashMap<String, String>,
+}
+
+fn default_antigravity_provider_type() -> ProviderType {
+    ProviderType::AntigravityCli
+}
+
+pub fn default_antigravity_model() -> String {
+    "Claude Opus 4.6 (Thinking)".to_owned()
+}
+
+impl Default for AntigravityCliConfig {
+    fn default() -> Self {
+        Self {
+            provider_type: ProviderType::AntigravityCli,
+            default_model: default_antigravity_model(),
+            max_turns: None,
+            timeout_seconds: 0.0,
+            workspace_dir: None,
+            antigravity_bin: String::new(),
+            antigravity_brain_root: String::new(),
             model: String::new(),
             env: HashMap::new(),
         }

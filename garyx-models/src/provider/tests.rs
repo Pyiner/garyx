@@ -16,6 +16,14 @@ fn test_provider_type_serde() {
     let back: ProviderType = serde_json::from_str(&json).unwrap();
     assert_eq!(back, ProviderType::GeminiCli);
 
+    let pt = ProviderType::AntigravityCli;
+    let json = serde_json::to_string(&pt).unwrap();
+    assert_eq!(json, "\"antigravity\"");
+    let back: ProviderType = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, ProviderType::AntigravityCli);
+    let alias: ProviderType = serde_json::from_str("\"agy\"").unwrap();
+    assert_eq!(alias, ProviderType::AntigravityCli);
+
     let pt = ProviderType::Gpt;
     let json = serde_json::to_string(&pt).unwrap();
     assert_eq!(json, "\"gpt\"");
@@ -52,7 +60,9 @@ fn test_provider_type_slug_round_trip() {
     for provider_type in [
         ProviderType::ClaudeCode,
         ProviderType::CodexAppServer,
+        ProviderType::Traex,
         ProviderType::GeminiCli,
+        ProviderType::AntigravityCli,
         ProviderType::Gpt,
         ProviderType::ClaudeLlm,
         ProviderType::GeminiLlm,
@@ -93,6 +103,10 @@ fn test_provider_type_slug_round_trip() {
     assert_eq!(
         ProviderType::from_slug("google_gemini"),
         Some(ProviderType::GeminiLlm)
+    );
+    assert_eq!(
+        ProviderType::from_slug("agy"),
+        Some(ProviderType::AntigravityCli)
     );
 }
 

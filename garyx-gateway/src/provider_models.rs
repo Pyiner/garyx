@@ -98,6 +98,20 @@ pub(crate) async fn list_provider_models(
     provider_type: ProviderType,
 ) -> ProviderModelsResponse {
     match provider_type {
+        ProviderType::AntigravityCli => {
+            let default_model = configured_default_model(
+                config,
+                ProviderType::AntigravityCli,
+                &["antigravity", "agy", "antigravity_cli"],
+            )
+            .unwrap_or_else(garyx_models::provider::default_antigravity_model);
+            native_model_catalog_response(
+                provider_type,
+                "antigravity_builtin",
+                antigravity_models(),
+                &default_model,
+            )
+        }
         ProviderType::GeminiCli => {
             let configured_default = configured_default_model(
                 config,
@@ -324,6 +338,11 @@ pub(crate) fn builtin_provider_catalog_default(
                 service_tier: recommended_model_option(&response.service_tiers),
             }
         }
+        ProviderType::AntigravityCli => ProviderCatalogDefault {
+            model: Some(garyx_models::provider::default_antigravity_model()),
+            reasoning_effort: None,
+            service_tier: None,
+        },
         ProviderType::ClaudeCode
         | ProviderType::CodexAppServer
         | ProviderType::Traex
@@ -805,6 +824,103 @@ fn native_gemini_models() -> Vec<ProviderModelOption> {
     ]
 }
 
+fn antigravity_models() -> Vec<ProviderModelOption> {
+    vec![
+        ProviderModelOption {
+            id: "Claude Opus 4.6 (Thinking)".to_owned(),
+            label: "Claude Opus 4.6 (Thinking)".to_owned(),
+            description: Some(
+                "Default Antigravity model; uses the Claude backend through the local agy CLI."
+                    .to_owned(),
+            ),
+            recommended: true,
+            default_reasoning_effort: None,
+            supported_reasoning_efforts: Vec::new(),
+            service_tiers: Vec::new(),
+        },
+        ProviderModelOption {
+            id: "Claude Sonnet 4.6 (Thinking)".to_owned(),
+            label: "Claude Sonnet 4.6 (Thinking)".to_owned(),
+            description: Some("Claude option exposed by the local agy CLI.".to_owned()),
+            recommended: false,
+            default_reasoning_effort: None,
+            supported_reasoning_efforts: Vec::new(),
+            service_tiers: Vec::new(),
+        },
+        ProviderModelOption {
+            id: "Gemini 3.5 Flash (Low)".to_owned(),
+            label: "Gemini 3.5 Flash (Low)".to_owned(),
+            description: Some(
+                "Antigravity Gemini option; may be subject to Google AI Platform location limits."
+                    .to_owned(),
+            ),
+            recommended: false,
+            default_reasoning_effort: None,
+            supported_reasoning_efforts: Vec::new(),
+            service_tiers: Vec::new(),
+        },
+        ProviderModelOption {
+            id: "Gemini 3.5 Flash (Medium)".to_owned(),
+            label: "Gemini 3.5 Flash (Medium)".to_owned(),
+            description: Some(
+                "Antigravity Gemini option; may be subject to Google AI Platform location limits."
+                    .to_owned(),
+            ),
+            recommended: false,
+            default_reasoning_effort: None,
+            supported_reasoning_efforts: Vec::new(),
+            service_tiers: Vec::new(),
+        },
+        ProviderModelOption {
+            id: "Gemini 3.5 Flash (High)".to_owned(),
+            label: "Gemini 3.5 Flash (High)".to_owned(),
+            description: Some(
+                "Antigravity Gemini option; may be subject to Google AI Platform location limits."
+                    .to_owned(),
+            ),
+            recommended: false,
+            default_reasoning_effort: None,
+            supported_reasoning_efforts: Vec::new(),
+            service_tiers: Vec::new(),
+        },
+        ProviderModelOption {
+            id: "Gemini 3.1 Pro (Low)".to_owned(),
+            label: "Gemini 3.1 Pro (Low)".to_owned(),
+            description: Some(
+                "Antigravity Gemini option; may be subject to Google AI Platform location limits."
+                    .to_owned(),
+            ),
+            recommended: false,
+            default_reasoning_effort: None,
+            supported_reasoning_efforts: Vec::new(),
+            service_tiers: Vec::new(),
+        },
+        ProviderModelOption {
+            id: "Gemini 3.1 Pro (High)".to_owned(),
+            label: "Gemini 3.1 Pro (High)".to_owned(),
+            description: Some(
+                "Antigravity Gemini option; may be subject to Google AI Platform location limits."
+                    .to_owned(),
+            ),
+            recommended: false,
+            default_reasoning_effort: None,
+            supported_reasoning_efforts: Vec::new(),
+            service_tiers: Vec::new(),
+        },
+        ProviderModelOption {
+            id: "GPT-OSS 120B (Medium)".to_owned(),
+            label: "GPT-OSS 120B (Medium)".to_owned(),
+            description: Some(
+                "Antigravity open model option exposed by the local agy CLI.".to_owned(),
+            ),
+            recommended: false,
+            default_reasoning_effort: None,
+            supported_reasoning_efforts: Vec::new(),
+            service_tiers: Vec::new(),
+        },
+    ]
+}
+
 async fn resolve_codex_models_client_version() -> String {
     if let Ok(value) = std::env::var("CODEX_CLIENT_VERSION")
         && let Some(version) = parse_codex_cli_version(&value)
@@ -1058,7 +1174,11 @@ fn parse_app_server_models(result: &Value, source: &'static str) -> GptModelDisc
     let mut first_service_tiers: Vec<ProviderModelOption> = Vec::new();
 
     for entry in entries {
-        if entry.get("hidden").and_then(Value::as_bool).unwrap_or(false) {
+        if entry
+            .get("hidden")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
             continue;
         }
         let Some(id) = entry
@@ -1605,6 +1725,26 @@ mod tests {
         );
 
         assert_eq!(default_model, None);
+    }
+
+    #[tokio::test]
+    async fn antigravity_model_catalog_defaults_to_claude_opus() {
+        let response =
+            list_provider_models(&GaryxConfig::default(), ProviderType::AntigravityCli).await;
+
+        assert_eq!(response.provider_type, ProviderType::AntigravityCli);
+        assert!(response.supports_model_selection);
+        assert_eq!(response.source, "antigravity_builtin");
+        assert_eq!(
+            response.default_model.as_deref(),
+            Some("Claude Opus 4.6 (Thinking)")
+        );
+        assert!(
+            response
+                .models
+                .iter()
+                .any(|model| model.id == "Claude Sonnet 4.6 (Thinking)")
+        );
     }
 
     #[tokio::test]

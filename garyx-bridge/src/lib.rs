@@ -1,3 +1,4 @@
+pub mod antigravity_provider;
 pub mod claude_provider;
 pub mod codex_provider;
 mod gary_prompt;

@@ -75,6 +75,7 @@ fn provider_icon_descriptor(provider_type: &ProviderType) -> Option<Value> {
         ProviderType::CodexAppServer => ("codex", "Codex"),
         ProviderType::Traex => ("traex", "Traex"),
         ProviderType::GeminiCli | ProviderType::GeminiLlm => ("gemini", "Gemini"),
+        ProviderType::AntigravityCli => ("gemini", "Antigravity"),
         ProviderType::Gpt | ProviderType::AgentTeam => return None,
     };
     Some(json!({
