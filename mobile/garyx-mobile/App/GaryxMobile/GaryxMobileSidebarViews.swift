@@ -329,12 +329,6 @@ private struct GaryxHomeThreadButton: View, Equatable {
     }
 }
 
-private extension GaryxMobileModel {
-    func setThreadListInteracting(_ isInteracting: Bool) {
-        isThreadListInteracting = isInteracting
-    }
-}
-
 private extension View {
     @ViewBuilder
     func garyxHomeThreadListScrollInteraction(_ onChange: @escaping (Bool) -> Void) -> some View {

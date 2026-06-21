@@ -111,6 +111,86 @@ final class GaryxHomeProductionAcceptanceTests: XCTestCase {
         )
     }
 
+    func testHomeListStoreDefersAllInputWorkWhileThreadListIsInteractingAndFlushesLatest() throws {
+        let base = GaryxHomeListFixture.makeInputs(threadCount: 50, runningCount: 0)
+        let store = GaryxHomeThreadListStore()
+        var inputBuildCount = 0
+
+        func makeInput(_ input: HomeThreadSectionsReference.Inputs) -> GaryxHomeThreadListInput {
+            inputBuildCount += 1
+            return GaryxHomeThreadListInput(input)
+        }
+
+        XCTAssertTrue(
+            store.applyUnlessInteracting(isThreadListInteracting: false) {
+                makeInput(base)
+            }
+        )
+        let baselineSnapshot = store.snapshot
+        XCTAssertEqual(inputBuildCount, 1)
+        XCTAssertEqual(store.acceptedInputCount, 1)
+        XCTAssertEqual(store.publishCount, 1)
+        XCTAssertEqual(store.sectionDerivationCount, 1)
+
+        var publishes = 0
+        let cancellable = store.objectWillChange.sink { publishes += 1 }
+        defer { cancellable.cancel() }
+
+        for index in 0..<40 {
+            var changed = base
+            changed.threads[index % changed.threads.count].title = "Interacting title \(index)"
+            changed.busyThreadIds = ["thread-\(index % changed.threads.count)"]
+            changed.selectedThreadId = "thread-\((index + 1) % changed.threads.count)"
+            XCTAssertFalse(
+                store.applyUnlessInteracting(isThreadListInteracting: true) {
+                    makeInput(changed)
+                }
+            )
+        }
+
+        XCTAssertEqual(
+            inputBuildCount,
+            1,
+            "No home-list input or section work should run while the list is interacting."
+        )
+        XCTAssertEqual(publishes, 0)
+        XCTAssertEqual(store.publishCount, 1)
+        XCTAssertEqual(store.acceptedInputCount, 1)
+        XCTAssertEqual(store.sectionDerivationCount, 1)
+        XCTAssertEqual(store.deferredInteractionRefreshCount, 40)
+        XCTAssertEqual(store.snapshot, baselineSnapshot)
+
+        var latest = base
+        latest.threads[0].title = "Latest title after scroll"
+        latest.busyThreadIds = ["thread-0"]
+        latest.selectedThreadId = "thread-0"
+        XCTAssertTrue(
+            store.flushDeferredInteractionRefresh {
+                makeInput(latest)
+            }
+        )
+
+        XCTAssertEqual(inputBuildCount, 2)
+        XCTAssertEqual(publishes, 1)
+        XCTAssertEqual(store.publishCount, 2)
+        XCTAssertEqual(store.acceptedInputCount, 2)
+        XCTAssertEqual(store.deferredInteractionFlushCount, 1)
+
+        let flushedRow = try XCTUnwrap(store.snapshot.sections.allRows.first { $0.id == "thread-0" })
+        XCTAssertEqual(flushedRow.presentation.title, "Latest title after scroll")
+        XCTAssertTrue(flushedRow.presentation.isRunning)
+        XCTAssertTrue(flushedRow.presentation.isSelected)
+
+        XCTAssertFalse(
+            store.flushDeferredInteractionRefresh {
+                makeInput(latest)
+            }
+        )
+        XCTAssertEqual(inputBuildCount, 2)
+        XCTAssertEqual(publishes, 1)
+        XCTAssertEqual(store.deferredInteractionFlushCount, 1)
+    }
+
     func testCatalogAssignmentGateDoesNotPublishIdenticalCollections() {
         let base = GaryxHomeListFixture.makeInputs(threadCount: 10)
         let model = GaryxHomeCatalogPublicationProbe(

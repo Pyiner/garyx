@@ -5,7 +5,21 @@ import WidgetKit
 
 extension GaryxMobileModel {
     func refreshHomeThreadListSnapshot() {
-        homeThreadListStore.apply(homeThreadListInput)
+        homeThreadListStore.applyUnlessInteracting(
+            isThreadListInteracting: isThreadListInteracting
+        ) {
+            homeThreadListInput
+        }
+    }
+
+    func setThreadListInteracting(_ isInteracting: Bool) {
+        guard isThreadListInteracting != isInteracting else { return }
+        isThreadListInteracting = isInteracting
+        guard !isInteracting else { return }
+        homeThreadListStore.flushDeferredInteractionRefresh {
+            homeThreadListInput
+        }
+        flushDeferredRecentThreadsWidgetSnapshotPersistence()
     }
 
     var homeThreadListInput: GaryxHomeThreadListInput {
