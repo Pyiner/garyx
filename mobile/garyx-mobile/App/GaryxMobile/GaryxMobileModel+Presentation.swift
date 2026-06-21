@@ -4,6 +4,45 @@ import UniformTypeIdentifiers
 import WidgetKit
 
 extension GaryxMobileModel {
+    func refreshHomeThreadListSnapshot() {
+        homeThreadListStore.apply(homeThreadListInput)
+    }
+
+    var homeThreadListInput: GaryxHomeThreadListInput {
+        GaryxHomeThreadListInput(
+            sectionsInput: GaryxHomeThreadSectionsInput(
+                threads: threads,
+                agents: agents,
+                teams: teams,
+                automations: automations,
+                pinnedThreadIds: pinnedThreadIds,
+                recentThreadIds: recentThreadIds,
+                selectedThreadId: selectedThread?.id
+            ),
+            runningThreadIds: homeThreadRunningThreadIds,
+            isLoadingThreads: isLoadingThreads,
+            isHomeVisible: isHomeVisible
+        )
+    }
+
+    var homeThreadRunningThreadIds: Set<String> {
+        var running = Set<String>()
+        for thread in threads {
+            let threadId = thread.id.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !threadId.isEmpty else { continue }
+            if runTracker.isThreadBusy(threadId) {
+                running.insert(threadId)
+            } else if let state = runStateByThread[threadId] {
+                if state.busy {
+                    running.insert(threadId)
+                }
+            } else if isThreadSummaryRunning(thread) {
+                running.insert(threadId)
+            }
+        }
+        return running
+    }
+
     var hasGatewaySettings: Bool {
         !gatewayURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }

@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 enum GaryxThreadSummaryRunStateResolver {
@@ -168,6 +169,56 @@ struct GaryxHomeThreadSections: Equatable, Sendable {
     var allRows: [GaryxHomeThreadRow] {
         pinned + recent
     }
+}
+
+struct GaryxHomeThreadListInput: Equatable, Sendable {
+    var sectionsInput: GaryxHomeThreadSectionsInput
+    var runningThreadIds: Set<String>
+    var isLoadingThreads: Bool
+    var isHomeVisible: Bool
+
+    init(
+        sectionsInput: GaryxHomeThreadSectionsInput,
+        runningThreadIds: Set<String>,
+        isLoadingThreads: Bool,
+        isHomeVisible: Bool
+    ) {
+        self.sectionsInput = sectionsInput
+        self.runningThreadIds = Set(
+            runningThreadIds.compactMap { threadId -> String? in
+                let normalized = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
+                return normalized.isEmpty ? nil : normalized
+            }
+        )
+        self.isLoadingThreads = isLoadingThreads
+        self.isHomeVisible = isHomeVisible
+    }
+
+    static func == (lhs: GaryxHomeThreadListInput, rhs: GaryxHomeThreadListInput) -> Bool {
+        IdentityKey(lhs) == IdentityKey(rhs)
+    }
+
+    private struct IdentityKey: Equatable {
+        var sections: GaryxHomeThreadSectionsIdentityKey
+        var runningThreadIds: Set<String>
+        var isLoadingThreads: Bool
+        var isHomeVisible: Bool
+
+        init(_ input: GaryxHomeThreadListInput) {
+            sections = GaryxHomeThreadSectionsIdentityKey(input.sectionsInput)
+            runningThreadIds = input.runningThreadIds
+            isLoadingThreads = input.isLoadingThreads
+            isHomeVisible = input.isHomeVisible
+        }
+    }
+}
+
+struct GaryxHomeThreadListSnapshot: Equatable, Sendable {
+    var sections = GaryxHomeThreadSections()
+    var isLoadingThreads = false
+    var isHomeVisible = false
+
+    static let empty = GaryxHomeThreadListSnapshot()
 }
 
 struct GaryxHomeThreadRow: Identifiable, Equatable, Sendable {
@@ -355,12 +406,12 @@ enum GaryxHomeThreadSectionsBuilder {
 }
 
 final class GaryxHomeThreadSectionsCache {
-    private var previousKey: IdentityKey?
+    private var previousKey: GaryxHomeThreadSectionsIdentityKey?
     private var previousSections = GaryxHomeThreadSections()
     private(set) var derivationCount = 0
 
     func sections(for input: GaryxHomeThreadSectionsInput) -> GaryxHomeThreadSections {
-        let key = IdentityKey(input)
+        let key = GaryxHomeThreadSectionsIdentityKey(input)
         if previousKey == key {
             return previousSections
         }
@@ -369,36 +420,104 @@ final class GaryxHomeThreadSectionsCache {
         derivationCount += 1
         return previousSections
     }
+}
 
-    private struct IdentityKey: Equatable {
-        var threads: [GaryxThreadSummary]
-        var agents: [GaryxAgentSummary]
-        var teams: [GaryxTeamSummary]
-        var automationThreadIds: Set<String>
-        var pinnedThreadIds: [String]
-        var recentThreadIds: [String]
-        var selectedThreadId: String?
+struct GaryxHomeThreadSectionsIdentityKey: Equatable {
+    var threads: [GaryxThreadSummary]
+    var agents: [GaryxAgentSummary]
+    var teams: [GaryxTeamSummary]
+    var automationThreadIds: Set<String>
+    var pinnedThreadIds: [String]
+    var recentThreadIds: [String]
+    var selectedThreadId: String?
 
-        init(_ input: GaryxHomeThreadSectionsInput) {
-            threads = input.threads.map(Self.displayThread)
-            agents = input.agents
-            teams = input.teams
-            automationThreadIds = GaryxHomeThreadSectionsBuilder.automationThreadIds(input.automations)
-            pinnedThreadIds = GaryxHomeThreadSectionsBuilder.normalizedPinnedThreadIds(input.pinnedThreadIds)
-            recentThreadIds = input.recentThreadIds
-            selectedThreadId = input.selectedThreadId?.trimmingCharacters(in: .whitespacesAndNewlines)
+    init(_ input: GaryxHomeThreadSectionsInput) {
+        threads = input.threads.map(Self.displayThread)
+        agents = input.agents
+        teams = input.teams
+        automationThreadIds = GaryxHomeThreadSectionsBuilder.automationThreadIds(input.automations)
+        pinnedThreadIds = GaryxHomeThreadSectionsBuilder.normalizedPinnedThreadIds(input.pinnedThreadIds)
+        recentThreadIds = input.recentThreadIds
+        selectedThreadId = input.selectedThreadId?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func displayThread(_ thread: GaryxThreadSummary) -> GaryxThreadSummary {
+        var copy = thread
+        copy.activeRunId = nil
+        copy.runState = nil
+        if var runtime = copy.threadRuntime {
+            runtime.activeRun = nil
+            copy.threadRuntime = runtime
         }
+        return copy
+    }
+}
 
-        private static func displayThread(_ thread: GaryxThreadSummary) -> GaryxThreadSummary {
-            var copy = thread
-            copy.activeRunId = nil
-            copy.runState = nil
-            if var runtime = copy.threadRuntime {
-                runtime.activeRun = nil
-                copy.threadRuntime = runtime
-            }
-            return copy
+final class GaryxHomeThreadListStore: ObservableObject {
+    @Published private(set) var snapshot: GaryxHomeThreadListSnapshot
+    private var previousInput: GaryxHomeThreadListInput?
+    private let sectionsCache = GaryxHomeThreadSectionsCache()
+    private(set) var acceptedInputCount = 0
+    private(set) var publishCount = 0
+
+    init(snapshot: GaryxHomeThreadListSnapshot = .empty) {
+        self.snapshot = snapshot
+    }
+
+    var sectionDerivationCount: Int {
+        sectionsCache.derivationCount
+    }
+
+    @discardableResult
+    func apply(_ input: GaryxHomeThreadListInput) -> Bool {
+        if previousInput == input {
+            return false
         }
+        previousInput = input
+        acceptedInputCount += 1
+
+        let baseSections = sectionsCache.sections(for: input.sectionsInput)
+        let next = GaryxHomeThreadListSnapshot(
+            sections: Self.sections(baseSections, runningThreadIds: input.runningThreadIds),
+            isLoadingThreads: input.isLoadingThreads,
+            isHomeVisible: input.isHomeVisible
+        )
+        guard snapshot != next else {
+            return false
+        }
+        snapshot = next
+        publishCount += 1
+        return true
+    }
+
+    private static func sections(
+        _ sections: GaryxHomeThreadSections,
+        runningThreadIds: Set<String>
+    ) -> GaryxHomeThreadSections {
+        GaryxHomeThreadSections(
+            pinned: sections.pinned.map { row($0, runningThreadIds: runningThreadIds) },
+            recent: sections.recent.map { row($0, runningThreadIds: runningThreadIds) }
+        )
+    }
+
+    private static func row(
+        _ row: GaryxHomeThreadRow,
+        runningThreadIds: Set<String>
+    ) -> GaryxHomeThreadRow {
+        let normalizedId = row.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isRunning = !normalizedId.isEmpty && runningThreadIds.contains(normalizedId)
+        guard row.presentation.isRunning != isRunning else {
+            return row
+        }
+        return GaryxHomeThreadRow(
+            id: row.id,
+            thread: row.thread,
+            presentation: row.presentation.withRunningState(isRunning),
+            avatar: row.avatar,
+            timestampValue: row.timestampValue,
+            canArchive: row.canArchive,
+            showsDivider: row.showsDivider
+        )
     }
 }
 

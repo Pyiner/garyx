@@ -8,6 +8,22 @@ settings:
     MARKETING_VERSION: 0.1.0
     CURRENT_PROJECT_VERSION: 1
     DEVELOPMENT_TEAM: ""
+schemes:
+  GaryxMobile:
+    build:
+      targets:
+        GaryxMobile: all
+    run:
+      config: Debug
+  GaryxMobileScrollPerformance:
+    build:
+      targets:
+        GaryxMobile: all
+        GaryxMobileUITests: [test]
+    test:
+      config: Debug
+      targets:
+        - GaryxMobileUITests
 targets:
   GaryxMobile:
     type: application
@@ -69,3 +85,22 @@ targets:
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: Apple Distribution
           PROVISIONING_PROFILE_SPECIFIER: "$(IOS_WIDGET_PROVISIONING_PROFILE_SPECIFIER)"
+  GaryxMobileUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: UITests/GaryxMobileUITests
+    dependencies:
+      - target: GaryxMobile
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.garyx.mobile.UITests
+        PRODUCT_NAME: GaryxMobileUITests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: 5.9
+        TEST_TARGET_NAME: GaryxMobile
+        CODE_SIGN_STYLE: Automatic
+      configs:
+        Debug:
+          CODE_SIGN_IDENTITY: iPhone Developer

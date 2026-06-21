@@ -14,7 +14,11 @@ struct GaryxRootNavigationView: View {
 
     var body: some View {
         NavigationStack(path: rootPathBinding) {
-            GaryxHomeThreadListView()
+            GaryxHomeThreadListView(
+                model: model,
+                homeListStore: model.homeThreadListStore
+            )
+                .equatable()
                 .toolbar(.hidden, for: .navigationBar)
                 .navigationDestination(for: GaryxMobileRootRoute.self) { route in
                     GaryxRootRouteContentView(route: route)
@@ -118,12 +122,17 @@ private enum GaryxSidebarMetrics {
     static let bottomBarClearance: CGFloat = 28
 }
 
-struct GaryxHomeThreadListView: View {
-    @EnvironmentObject private var model: GaryxMobileModel
+struct GaryxHomeThreadListView: View, Equatable {
+    let model: GaryxMobileModel
+    @ObservedObject var homeListStore: GaryxHomeThreadListStore
     @Environment(\.garyxSidebarDragActive) private var sidebarDragActive
     @Environment(\.garyxOpenSidebar) private var openDrawer
     @State private var isThreadListInteracting = false
     private let silentRefreshIntervalNanos: UInt64 = 10_000_000_000
+
+    static func == (lhs: GaryxHomeThreadListView, rhs: GaryxHomeThreadListView) -> Bool {
+        lhs.model === rhs.model && lhs.homeListStore === rhs.homeListStore
+    }
 
     var body: some View {
         threadListWithBottomBar
@@ -135,7 +144,7 @@ struct GaryxHomeThreadListView: View {
                     onNewChat: { startNewChat() }
                 )
             }
-            .task(id: model.isHomeVisible) {
+            .task(id: homeListStore.snapshot.isHomeVisible) {
                 await runSilentSidebarRefreshLoop()
             }
     }
@@ -170,9 +179,9 @@ struct GaryxHomeThreadListView: View {
     // whole section into one eager lazy item and materialize every row at once.
     @ViewBuilder
     private var sidebarThreadSections: some View {
-        let sections = model.homeThreadSections
+        let snapshot = homeListStore.snapshot
+        let sections = snapshot.sections
         if !sections.pinned.isEmpty {
-            let pinnedRunningStates = model.homeThreadRunningStates(for: sections.pinned)
             GaryxSidebarSectionHeader(title: "Pinned", systemImage: "pin.fill")
                 .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
                 .padding(.bottom, 4)
@@ -184,7 +193,7 @@ struct GaryxHomeThreadListView: View {
                 GaryxHomeThreadButton(
                     model: model,
                     row: row,
-                    isRunning: pinnedRunningStates[row.id] ?? false
+                    isRunningBadgePaused: isThreadListInteracting
                 )
                 .equatable()
             }
@@ -199,13 +208,12 @@ struct GaryxHomeThreadListView: View {
             .padding(.bottom, 4)
 
         if sections.recent.isEmpty {
-            if model.isLoadingThreads {
+            if snapshot.isLoadingThreads {
                 GaryxSidebarLoadingRow(title: "Loading recent threads")
             } else {
                 GaryxSidebarEmptyRow(title: "No recent threads")
             }
         } else {
-            let recentRunningStates = model.homeThreadRunningStates(for: sections.recent)
             ForEach(sections.recent) { row in
                 if row.showsDivider {
                     GaryxSidebarRowDivider()
@@ -213,7 +221,7 @@ struct GaryxHomeThreadListView: View {
                 GaryxHomeThreadButton(
                     model: model,
                     row: row,
-                    isRunning: recentRunningStates[row.id] ?? false
+                    isRunningBadgePaused: isThreadListInteracting
                 )
                 .equatable()
             }
@@ -256,7 +264,7 @@ struct GaryxHomeThreadListView: View {
     }
 
     private var shouldRefreshSidebarThreads: Bool {
-        model.isHomeVisible
+        homeListStore.snapshot.isHomeVisible
     }
 
     private func startNewChat() {
@@ -267,21 +275,21 @@ struct GaryxHomeThreadListView: View {
 private struct GaryxHomeThreadButton: View, Equatable {
     let model: GaryxMobileModel
     let row: GaryxHomeThreadRow
-    let isRunning: Bool
+    let isRunningBadgePaused: Bool
     @State private var showsArchiveConfirmation = false
 
     static func == (lhs: GaryxHomeThreadButton, rhs: GaryxHomeThreadButton) -> Bool {
-        lhs.row == rhs.row && lhs.isRunning == rhs.isRunning
+        lhs.row == rhs.row && lhs.isRunningBadgePaused == rhs.isRunningBadgePaused
     }
 
     var body: some View {
         let presentation = row.presentation
             .withTrailingTimestamp(garyxFormattedTaskTimestamp(row.timestampValue))
-            .withRunningState(isRunning)
         GaryxSwipeActionRow(id: "thread:\(row.id)", actions: threadSwipeActions) {
             GaryxSidebarThreadRowView(
                 model: presentation,
                 avatar: row.avatar,
+                isRunningBadgePaused: isRunningBadgePaused,
                 onSelect: {
                     model.openThreadImmediately(row.thread, source: .replace)
                 },
@@ -291,7 +299,7 @@ private struct GaryxHomeThreadButton: View, Equatable {
             )
         }
         .onLongPressGesture {
-            guard row.canArchive, !isRunning else { return }
+            guard row.canArchive, !row.presentation.isRunning else { return }
             showsArchiveConfirmation = true
         }
         .confirmationDialog("Archive thread", isPresented: $showsArchiveConfirmation, titleVisibility: .visible) {
@@ -322,41 +330,6 @@ private struct GaryxHomeThreadButton: View, Equatable {
 }
 
 private extension GaryxMobileModel {
-    var homeThreadSections: GaryxHomeThreadSections {
-        homeThreadSectionsCache.sections(
-            for: GaryxHomeThreadSectionsInput(
-                threads: threads,
-                agents: agents,
-                teams: teams,
-                automations: automations,
-                pinnedThreadIds: pinnedThreadIds,
-                recentThreadIds: recentThreadIds,
-                selectedThreadId: selectedThread?.id
-            )
-        )
-    }
-
-    func homeThreadRunningStates(for rows: [GaryxHomeThreadRow]) -> [String: Bool] {
-        guard !rows.isEmpty else { return [:] }
-        var threadsById: [String: GaryxThreadSummary] = [:]
-        for thread in threads where threadsById[thread.id] == nil {
-            threadsById[thread.id] = thread
-        }
-        return rows.reduce(into: [String: Bool](minimumCapacity: rows.count)) { result, row in
-            let normalizedId = row.id.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !normalizedId.isEmpty else { return }
-            if isThreadBusy(normalizedId) {
-                result[row.id] = true
-            } else if let state = runStateByThread[normalizedId] {
-                result[row.id] = state.busy
-            } else if let thread = threadsById[normalizedId] {
-                result[row.id] = isThreadSummaryRunning(thread)
-            } else {
-                result[row.id] = false
-            }
-        }
-    }
-
     func setThreadListInteracting(_ isInteracting: Bool) {
         isThreadListInteracting = isInteracting
     }
@@ -1399,6 +1372,7 @@ enum GaryxSidebarThreadSelectionDisplay: Equatable {
 struct GaryxSidebarThreadRowView: View {
     let model: GaryxSidebarThreadRowPresentation
     var avatar: GaryxSidebarThreadRowAvatar?
+    var isRunningBadgePaused = false
     var isFullBleed = false
     var density: GaryxSidebarThreadRowDensity = .regular
     var selectionDisplay: GaryxSidebarThreadSelectionDisplay = .sidebar
@@ -1423,7 +1397,7 @@ struct GaryxSidebarThreadRowView: View {
                 )
                 .overlay(alignment: .bottomTrailing) {
                     if model.isRunning {
-                        GaryxAvatarTypingBadge()
+                        GaryxAvatarTypingBadge(isPaused: isRunningBadgePaused)
                             .offset(x: 3, y: 3)
                     }
                 }
@@ -1493,27 +1467,39 @@ struct GaryxSidebarThreadRowView: View {
 /// tinted bubble with an iMessage-style three-dot typing wave, ringed by the
 /// page background so it sits cleanly on any avatar.
 struct GaryxAvatarTypingBadge: View {
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
-            let cycle = 1.05
-            let progress = context.date.timeIntervalSinceReferenceDate
-                .truncatingRemainder(dividingBy: cycle) / cycle
+    var isPaused = false
 
-            HStack(spacing: 2.2) {
-                ForEach(0..<3, id: \.self) { index in
-                    Circle()
-                        .fill(Color(.systemGray).opacity(dotOpacity(progress: progress, index: index)))
-                        .frame(width: 3.2, height: 3.2)
+    var body: some View {
+        Group {
+            if isPaused {
+                badge(progress: 0)
+            } else {
+                TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+                    let cycle = 1.05
+                    let progress = context.date.timeIntervalSinceReferenceDate
+                        .truncatingRemainder(dividingBy: cycle) / cycle
+
+                    badge(progress: progress)
                 }
-            }
-            .frame(width: 22, height: 15)
-            .background(Color(.systemGray5), in: Capsule())
-            .overlay {
-                Capsule()
-                    .stroke(GaryxTheme.background, lineWidth: 2)
             }
         }
         .accessibilityLabel("Running")
+    }
+
+    private func badge(progress: Double) -> some View {
+        HStack(spacing: 2.2) {
+            ForEach(0..<3, id: \.self) { index in
+                Circle()
+                    .fill(Color(.systemGray).opacity(dotOpacity(progress: progress, index: index)))
+                    .frame(width: 3.2, height: 3.2)
+            }
+        }
+        .frame(width: 22, height: 15)
+        .background(Color(.systemGray5), in: Capsule())
+        .overlay {
+            Capsule()
+                .stroke(GaryxTheme.background, lineWidth: 2)
+        }
     }
 
     private func dotOpacity(progress: Double, index: Int) -> Double {
