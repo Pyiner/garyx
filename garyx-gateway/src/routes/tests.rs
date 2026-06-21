@@ -22,6 +22,7 @@ use std::process::Command;
 use tempfile::{TempDir, tempdir};
 use tower::ServiceExt;
 
+use crate::cron::CronService;
 use crate::garyx_db::{
     DreamSpanDraft, DreamTopicDraft, RecentThreadDraft, ThreadMetaDraft, ThreadMetaProjectionDraft,
     WorkspaceDraft,
@@ -3385,6 +3386,388 @@ async fn delete_thread_rejects_enabled_channel_binding() {
         "cannot delete thread with active channel bindings"
     );
     assert!(state.threads.thread_store.get(thread_id).await.is_some());
+}
+
+#[test]
+fn archive_thread_body_accepts_snake_case_endpoint_keys_alias() {
+    let body: ArchiveThreadBody = serde_json::from_value(json!({
+        "endpoint_keys": ["api::main::loop"]
+    }))
+    .unwrap();
+
+    assert_eq!(body.endpoint_keys, vec!["api::main::loop"]);
+}
+
+#[tokio::test]
+async fn archive_thread_detaches_live_channel_binding_and_prevents_recent_revival() {
+    let mut config = test_config();
+    config
+        .channels
+        .plugin_channel_mut("telegram")
+        .accounts
+        .insert(
+            "main".to_owned(),
+            garyx_models::config::telegram_account_to_plugin_entry(&TelegramAccount {
+                token: "${TOKEN}".to_owned(),
+                enabled: true,
+                name: Some("Test Telegram".to_owned()),
+                agent_id: "claude".to_owned(),
+                workspace_dir: Some("/Users/test/project".to_owned()),
+                owner_target: None,
+                groups: std::collections::HashMap::new(),
+            }),
+        );
+
+    let state = AppStateBuilder::new(config).build();
+    let thread_id = "thread::archive-bound-telegram";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "New Thread",
+                "workspace_dir": "/Users/test/project",
+                "created_at": "2026-06-21T08:00:00.000Z",
+                "updated_at": "2026-06-21T08:01:00.000Z",
+                "messages": [
+                    {"role": "user", "content": "reconnect proof"}
+                ],
+                "channel_bindings": [{
+                    "channel": "telegram",
+                    "account_id": "main",
+                    "binding_key": "1000000001",
+                    "chat_id": "1000000001",
+                    "delivery_target_type": DELIVERY_TARGET_TYPE_CHAT_ID,
+                    "delivery_target_id": "1000000001",
+                    "display_label": "Test User",
+                    "last_inbound_at": "2026-06-21T08:01:00.000Z"
+                }]
+            }),
+        )
+        .await;
+    state
+        .ops
+        .garyx_db
+        .pin_thread(thread_id)
+        .expect("pin archived candidate");
+    assert_eq!(
+        state
+            .ops
+            .garyx_db
+            .list_recent_threads(10, 0)
+            .expect("seed recent projection")
+            .len(),
+        1
+    );
+    assert_eq!(
+        state
+            .ops
+            .garyx_db
+            .list_thread_meta()
+            .expect("seed thread meta projection")
+            .len(),
+        1
+    );
+
+    let router = build_router(state.clone());
+    let request = authed_request()
+        .method("POST")
+        .uri(format!("/api/threads/{thread_id}/archive"))
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "endpointKeys": ["api::main::loop"]
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["detached_endpoint_keys"],
+        json!(["api::main::loop", "telegram::main::1000000001"])
+    );
+
+    assert!(state.threads.thread_store.get(thread_id).await.is_none());
+    assert!(
+        state
+            .ops
+            .garyx_db
+            .list_recent_threads(10, 0)
+            .expect("recent projection after archive")
+            .is_empty()
+    );
+    assert!(
+        state
+            .ops
+            .garyx_db
+            .list_thread_meta()
+            .expect("thread meta after archive")
+            .is_empty()
+    );
+    assert!(
+        state
+            .ops
+            .garyx_db
+            .list_pinned_threads()
+            .expect("pins after archive")
+            .is_empty()
+    );
+
+    let reconnected_thread_id = {
+        let mut router = state.threads.router.lock().await;
+        router
+            .resolve_or_create_inbound_thread("telegram", "main", "1000000001", &HashMap::new())
+            .await
+    };
+    assert_ne!(reconnected_thread_id, thread_id);
+    assert!(state.threads.thread_store.get(thread_id).await.is_none());
+    assert!(
+        state
+            .ops
+            .garyx_db
+            .list_recent_threads(10, 0)
+            .expect("recent projection after reconnect")
+            .iter()
+            .all(|record| record.thread_id != thread_id)
+    );
+}
+
+#[tokio::test]
+async fn archive_thread_rejects_active_run_without_deleting() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::archive-active-run";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "Active Archive",
+                "created_at": "2026-06-21T08:00:00.000Z",
+                "updated_at": "2026-06-21T08:01:00.000Z",
+                "messages": []
+            }),
+        )
+        .await;
+    append_dangling_run_start(&state, thread_id, "run::archive-active").await;
+
+    let router = build_router(state.clone());
+    let request = authed_request()
+        .method("POST")
+        .uri(format!("/api/threads/{thread_id}/archive"))
+        .header("content-type", "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(state.threads.thread_store.get(thread_id).await.is_some());
+    assert!(
+        !state
+            .ops
+            .garyx_db
+            .is_thread_archived(thread_id)
+            .expect("archive tombstone check")
+    );
+}
+
+#[tokio::test]
+async fn archive_thread_rejects_automation_thread_id_without_deleting() {
+    let temp = tempdir().unwrap();
+    let cron = Arc::new(CronService::new(temp.path().to_path_buf()));
+    let thread_id = "thread::archive-automation-target";
+    cron.add(CronJobConfig {
+        id: "automation::archive-target".to_owned(),
+        kind: CronJobKind::AutomationPrompt,
+        label: Some("Archive Target".to_owned()),
+        schedule: CronSchedule::Interval {
+            interval_secs: 3600,
+        },
+        ui_schedule: None,
+        action: CronAction::AgentTurn,
+        target: None,
+        message: Some("Summarize the thread.".to_owned()),
+        workspace_dir: None,
+        agent_id: Some("claude".to_owned()),
+        thread_id: Some(thread_id.to_owned()),
+        delete_after_run: false,
+        enabled: true,
+        system: false,
+    })
+    .await
+    .expect("add automation target");
+    let state = AppStateBuilder::new(test_config())
+        .with_cron_service(cron)
+        .build();
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "Automation Target",
+                "created_at": "2026-06-21T08:00:00.000Z",
+                "updated_at": "2026-06-21T08:01:00.000Z",
+                "messages": []
+            }),
+        )
+        .await;
+
+    let router = build_router(state.clone());
+    let request = authed_request()
+        .method("POST")
+        .uri(format!("/api/threads/{thread_id}/archive"))
+        .header("content-type", "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(state.threads.thread_store.get(thread_id).await.is_some());
+    assert!(
+        !state
+            .ops
+            .garyx_db
+            .is_thread_archived(thread_id)
+            .expect("archive tombstone check")
+    );
+}
+
+#[tokio::test]
+async fn archive_thread_rejects_automation_target_reference_without_deleting() {
+    let temp = tempdir().unwrap();
+    let cron = Arc::new(CronService::new(temp.path().to_path_buf()));
+    let thread_id = "thread::archive-automation-target-ref";
+    cron.add(CronJobConfig {
+        id: "automation::archive-target-ref".to_owned(),
+        kind: CronJobKind::AutomationPrompt,
+        label: Some("Archive Target Ref".to_owned()),
+        schedule: CronSchedule::Interval {
+            interval_secs: 3600,
+        },
+        ui_schedule: None,
+        action: CronAction::AgentTurn,
+        target: Some(format!("thread:{thread_id}")),
+        message: Some("Summarize the thread.".to_owned()),
+        workspace_dir: None,
+        agent_id: Some("claude".to_owned()),
+        thread_id: None,
+        delete_after_run: false,
+        enabled: true,
+        system: false,
+    })
+    .await
+    .expect("add automation target reference");
+    let state = AppStateBuilder::new(test_config())
+        .with_cron_service(cron)
+        .build();
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "Automation Target Ref",
+                "created_at": "2026-06-21T08:00:00.000Z",
+                "updated_at": "2026-06-21T08:01:00.000Z",
+                "messages": []
+            }),
+        )
+        .await;
+
+    let router = build_router(state.clone());
+    let request = authed_request()
+        .method("POST")
+        .uri(format!("/api/threads/{thread_id}/archive"))
+        .header("content-type", "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(state.threads.thread_store.get(thread_id).await.is_some());
+    assert!(
+        !state
+            .ops
+            .garyx_db
+            .is_thread_archived(thread_id)
+            .expect("archive tombstone check")
+    );
+}
+
+#[tokio::test]
+async fn archived_thread_tombstone_blocks_projection_rewrite() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::archived-projection-rewrite";
+    state
+        .ops
+        .garyx_db
+        .mark_thread_archived(thread_id)
+        .expect("mark thread archived");
+
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "Should Not Return",
+                "created_at": "2026-06-21T08:00:00.000Z",
+                "updated_at": "2026-06-21T08:01:00.000Z",
+                "messages": [{"role": "user", "content": "hello ws"}]
+            }),
+        )
+        .await;
+
+    assert!(state.threads.thread_store.get(thread_id).await.is_none());
+    assert!(
+        state
+            .ops
+            .garyx_db
+            .list_recent_threads(10, 0)
+            .expect("recent projection")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn chat_start_rejects_archived_thread_id() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::archived-chat-start";
+    state
+        .ops
+        .garyx_db
+        .mark_thread_archived(thread_id)
+        .expect("mark thread archived");
+
+    let router = build_router(state);
+    let request = authed_request()
+        .method("POST")
+        .uri("/api/chat/start")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "threadId": thread_id,
+                "message": "reconnect proof",
+                "waitForResponse": false
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::GONE);
 }
 
 #[tokio::test]

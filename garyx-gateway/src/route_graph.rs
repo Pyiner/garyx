@@ -89,6 +89,10 @@ fn thread_routes() -> Router<Arc<AppState>> {
                 .delete(routes::delete_thread),
         )
         .route(
+            "/api/threads/{key}/archive",
+            axum::routing::post(routes::archive_thread),
+        )
+        .route(
             "/api/threads/{key}/logs",
             axum::routing::get(routes::get_thread_logs),
         )

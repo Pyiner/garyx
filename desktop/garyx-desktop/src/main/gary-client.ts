@@ -3562,6 +3562,22 @@ export async function deleteRemoteThread(
   );
 }
 
+export async function archiveRemoteThread(
+  settings: DesktopSettings,
+  threadId: string,
+  endpointKeys: string[] = [],
+): Promise<void> {
+  await requestJson<unknown>(
+    settings,
+    `/api/threads/${encodeURIComponent(threadId)}/archive`,
+    {
+      method: "POST",
+      signal: AbortSignal.timeout(8000),
+      body: JSON.stringify({ endpointKeys }),
+    },
+  );
+}
+
 export const fetchSessions = fetchThreads;
 export const createRemoteSession = createRemoteThread;
 export const updateRemoteSession = updateRemoteThread;

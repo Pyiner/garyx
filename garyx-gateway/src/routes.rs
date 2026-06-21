@@ -29,7 +29,7 @@ use garyx_router::{
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
@@ -1008,6 +1008,13 @@ pub struct DetachChannelEndpointBody {
     pub endpoint_key: String,
 }
 
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveThreadBody {
+    #[serde(default, alias = "endpoint_keys")]
+    pub endpoint_keys: Vec<String>,
+}
+
 #[derive(Deserialize)]
 pub struct CreateSkillBody {
     pub id: String,
@@ -1071,6 +1078,36 @@ fn remove_deleted_thread_projection_records(state: &Arc<AppState>, thread_id: &s
         removed |= value;
     }
     removed
+}
+
+async fn hard_delete_thread_record(
+    state: &Arc<AppState>,
+    thread_id: &str,
+    thread_data: &Value,
+    abort_active_runs: bool,
+) -> Result<(), (StatusCode, Json<Value>)> {
+    let provider_key = thread_data
+        .get("provider_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+
+    if abort_active_runs {
+        let _ = state.integration.bridge.abort_thread_runs(thread_id).await;
+    }
+    if !state.threads.thread_store.delete(thread_id).await {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"deleted": false, "error": format!("thread not found: {thread_id}") })),
+        ));
+    }
+
+    clear_deleted_thread_runtime_state(state, thread_id, provider_key.as_deref()).await;
+    remove_deleted_thread_projection_records(state, thread_id);
+    rebuild_thread_indexes(state).await;
+    state.invalidate_gateway_sync_caches().await;
+    Ok(())
 }
 
 async fn clear_deleted_thread_runtime_state(
@@ -2430,6 +2467,222 @@ pub async fn update_thread(
     }
 }
 
+fn active_run_conflict_response(
+    thread_id: &str,
+    active_run_id: Option<String>,
+) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::CONFLICT,
+        Json(json!({
+            "archived": false,
+            "thread_id": thread_id,
+            "active_run_id": active_run_id,
+            "error": "cannot archive thread with active run",
+        })),
+    )
+}
+
+async fn active_run_for_archive_conflict(
+    state: &Arc<AppState>,
+    thread_id: &str,
+) -> Option<Option<String>> {
+    match state
+        .threads
+        .history
+        .transcript_store()
+        .run_state(thread_id)
+        .await
+    {
+        Ok(run_state) => {
+            let active_run_id = run_state
+                .active_run_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned);
+            if run_state.busy || active_run_id.is_some() {
+                Some(active_run_id)
+            } else {
+                None
+            }
+        }
+        Err(error) => {
+            tracing::warn!(thread_id, error = %error, "failed to read thread run_state before archive");
+            None
+        }
+    }
+}
+
+fn cron_target_thread_id(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if is_thread_key(trimmed) {
+        return Some(trimmed.to_owned());
+    }
+    let stripped = trimmed.strip_prefix("thread:")?;
+    is_thread_key(stripped).then(|| stripped.to_owned())
+}
+
+fn cron_job_references_thread(job: &crate::cron::CronJob, thread_id: &str) -> bool {
+    job.thread_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some_and(|value| value == thread_id)
+        || job
+            .target
+            .as_deref()
+            .and_then(cron_target_thread_id)
+            .is_some_and(|target| target == thread_id)
+}
+
+async fn automation_job_for_archive_conflict(
+    state: &Arc<AppState>,
+    thread_id: &str,
+) -> Option<String> {
+    let Some(service) = state.ops.cron_service.as_ref() else {
+        return None;
+    };
+    service
+        .list_all()
+        .await
+        .into_iter()
+        .find(|job| cron_job_references_thread(job, thread_id))
+        .map(|job| job.id)
+}
+
+fn automation_conflict_response(
+    thread_id: &str,
+    automation_id: String,
+) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::CONFLICT,
+        Json(json!({
+            "archived": false,
+            "thread_id": thread_id,
+            "automation_id": automation_id,
+            "error": "cannot archive thread targeted by automation",
+        })),
+    )
+}
+
+async fn endpoint_keys_for_archive(
+    state: &Arc<AppState>,
+    thread_id: &str,
+    thread_data: &Value,
+    client_endpoint_keys: Vec<String>,
+) -> Vec<String> {
+    let mut endpoint_keys = BTreeSet::new();
+    for binding in bindings_from_value(thread_data) {
+        endpoint_keys.insert(binding.endpoint_key());
+    }
+    for endpoint in state.cached_channel_endpoints().await {
+        if endpoint.thread_id.as_deref() == Some(thread_id) {
+            endpoint_keys.insert(endpoint.endpoint_key);
+        }
+    }
+    for endpoint_key in client_endpoint_keys {
+        let normalized = normalize_endpoint_lookup_key(&endpoint_key);
+        if !normalized.is_empty() {
+            endpoint_keys.insert(normalized);
+        }
+    }
+    endpoint_keys.into_iter().collect()
+}
+
+fn archive_internal_error(error: impl std::fmt::Display) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({
+            "archived": false,
+            "error": error.to_string(),
+        })),
+    )
+}
+
+/// POST /api/threads/:key/archive - product archive semantics: hard delete and tombstone.
+pub async fn archive_thread(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    Json(body): Json<ArchiveThreadBody>,
+) -> impl IntoResponse {
+    let trimmed = key.trim();
+    if trimmed.is_empty() || !is_thread_key(trimmed) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"archived": false, "error": "thread not found"})),
+        );
+    }
+    let Some(thread_data) = state.threads.thread_store.get(trimmed).await else {
+        if let Err(error) = state.ops.garyx_db.mark_thread_archived(trimmed) {
+            return archive_internal_error(error);
+        }
+        let stale_projection = remove_deleted_thread_projection_records(&state, trimmed);
+        clear_deleted_thread_runtime_state(&state, trimmed, None).await;
+        rebuild_thread_indexes(&state).await;
+        state.invalidate_gateway_sync_caches().await;
+        return (
+            StatusCode::OK,
+            Json(json!({
+                "archived": true,
+                "deleted": true,
+                "thread_id": trimmed,
+                "stale_projection": stale_projection,
+            })),
+        );
+    };
+
+    if let Some(active_run_id) = active_run_for_archive_conflict(&state, trimmed).await {
+        return active_run_conflict_response(trimmed, active_run_id);
+    }
+    if let Some(automation_id) = automation_job_for_archive_conflict(&state, trimmed).await {
+        return automation_conflict_response(trimmed, automation_id);
+    }
+
+    let endpoint_keys =
+        endpoint_keys_for_archive(&state, trimmed, &thread_data, body.endpoint_keys).await;
+    let mut detached_endpoint_keys = Vec::new();
+    for endpoint_key in endpoint_keys {
+        match detach_channel_endpoint_key(&state, &endpoint_key).await {
+            Ok(result) => detached_endpoint_keys.push(result.endpoint_key),
+            Err(error) => {
+                return (
+                    error.status,
+                    Json(json!({
+                        "archived": false,
+                        "thread_id": trimmed,
+                        "error": error.message,
+                    })),
+                );
+            }
+        }
+    }
+
+    if let Err(error) = state.ops.garyx_db.mark_thread_archived(trimmed) {
+        return archive_internal_error(error);
+    }
+    let delete_data = state
+        .threads
+        .thread_store
+        .get(trimmed)
+        .await
+        .unwrap_or(thread_data);
+    if let Err(response) = hard_delete_thread_record(&state, trimmed, &delete_data, false).await {
+        return response;
+    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "archived": true,
+            "deleted": true,
+            "thread_id": trimmed,
+            "detached_endpoint_keys": detached_endpoint_keys,
+        })),
+    )
+}
+
 /// DELETE /api/threads/:key - delete thread
 pub async fn delete_thread(
     State(state): State<Arc<AppState>>,
@@ -2491,25 +2744,9 @@ pub async fn delete_thread(
         }
     }
 
-    let provider_key = thread_data
-        .get("provider_key")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-
-    let _ = state.integration.bridge.abort_thread_runs(&thread_id).await;
-    if !state.threads.thread_store.delete(&thread_id).await {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({"deleted": false, "error": format!("thread not found: {thread_id}") })),
-        );
+    if let Err(response) = hard_delete_thread_record(&state, &thread_id, &thread_data, true).await {
+        return response;
     }
-
-    clear_deleted_thread_runtime_state(&state, &thread_id, provider_key.as_deref()).await;
-    remove_deleted_thread_projection_records(&state, &thread_id);
-    rebuild_thread_indexes(&state).await;
-    state.invalidate_gateway_sync_caches().await;
     (
         StatusCode::OK,
         Json(json!({"deleted": true, "thread_id": thread_id})),

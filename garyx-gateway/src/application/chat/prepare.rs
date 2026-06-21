@@ -460,6 +460,23 @@ async fn resolve_chat_target(
                 })),
             ));
         }
+        match state.ops.garyx_db.is_thread_archived(trimmed) {
+            Ok(true) => {
+                return Err(ChatPreparationError::InvalidRequest(
+                    StatusCode::GONE,
+                    Json(json!({
+                        "runId": "",
+                        "threadId": trimmed,
+                        "response": Value::Null,
+                        "error": "thread is archived",
+                    })),
+                ));
+            }
+            Ok(false) => {}
+            Err(error) => {
+                tracing::warn!(thread_id = trimmed, error = %error, "failed to check archived thread before chat start");
+            }
+        }
         return Ok(ResolvedChatTarget {
             thread_id: trimmed.to_owned(),
             channel: "api".to_owned(),

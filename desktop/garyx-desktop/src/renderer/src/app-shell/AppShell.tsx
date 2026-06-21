@@ -7531,17 +7531,11 @@ export function AppShell() {
 
     try {
       const api = getDesktopApi();
-      for (const endpointKey of endpointKeys) {
-        try {
-          await api.detachChannelEndpoint({ endpointKey });
-        } catch {
-          // Deleting the thread is the source of truth for the archive. A stale
-          // endpoint should not make the row reappear after confirmation.
-        }
-      }
-
-      const deletedState = await api.deleteThread({ threadId: targetThreadId });
-      setDesktopState(desktopStateWithoutThread(deletedState, targetThreadId));
+      const archivedState = await api.archiveThread({
+        threadId: targetThreadId,
+        endpointKeys: Array.from(endpointKeys).sort(),
+      });
+      setDesktopState(desktopStateWithoutThread(archivedState, targetThreadId));
     } catch (archiveError) {
       if (isArchiveAlreadyApplied(archiveError)) {
         return;

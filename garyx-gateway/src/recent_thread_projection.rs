@@ -80,6 +80,36 @@ impl RecentThreadProjectingStore {
             warn!(thread_id, error = %error, "failed to upsert recent thread projection");
         }
     }
+
+    fn clear_archived_thread_projections(&self, thread_id: &str) {
+        if let Err(error) = self.garyx_db.unpin_thread(thread_id) {
+            warn!(thread_id, error = %error, "failed to unpin archived thread");
+        }
+        if let Err(error) = self.garyx_db.remove_recent_thread(thread_id) {
+            warn!(thread_id, error = %error, "failed to remove archived thread from recent projection");
+        }
+        if let Err(error) = self.garyx_db.remove_thread_meta_projection(thread_id) {
+            warn!(thread_id, error = %error, "failed to remove archived thread meta projection");
+        }
+    }
+
+    async fn reject_archived_thread_write(&self, thread_id: &str) -> bool {
+        if !is_thread_key(thread_id) {
+            return false;
+        }
+        match self.garyx_db.is_thread_archived(thread_id) {
+            Ok(true) => {
+                self.inner.delete(thread_id).await;
+                self.clear_archived_thread_projections(thread_id);
+                true
+            }
+            Ok(false) => false,
+            Err(error) => {
+                warn!(thread_id, error = %error, "failed to check archived thread tombstone before projection");
+                false
+            }
+        }
+    }
 }
 
 pub(crate) async fn backfill_recent_thread_projection_if_incomplete(
@@ -241,6 +271,9 @@ impl ThreadStore for RecentThreadProjectingStore {
     }
 
     async fn set(&self, thread_id: &str, data: Value) {
+        if self.reject_archived_thread_write(thread_id).await {
+            return;
+        }
         self.inner.set(thread_id, data.clone()).await;
         self.project_thread(thread_id, &data).await;
     }
@@ -271,6 +304,9 @@ impl ThreadStore for RecentThreadProjectingStore {
     }
 
     async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
+        if self.reject_archived_thread_write(thread_id).await {
+            return Err(ThreadStoreError::NotFound(thread_id.to_owned()));
+        }
         self.inner.update(thread_id, updates).await?;
         if let Some(data) = self.inner.get(thread_id).await {
             self.project_thread(thread_id, &data).await;

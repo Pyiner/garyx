@@ -1613,6 +1613,11 @@ export interface DeleteThreadInput {
   sessionId?: string;
 }
 
+export interface ArchiveThreadInput {
+  threadId: string;
+  endpointKeys?: string[];
+}
+
 export interface SetThreadPinnedInput {
   threadId: string;
   pinned: boolean;
@@ -2172,6 +2177,7 @@ export interface GaryxDesktopApi {
   updateThreadRuntimeSettings: (
     input: UpdateThreadRuntimeSettingsInput,
   ) => Promise<ThreadTranscript>;
+  archiveThread: (input: ArchiveThreadInput) => Promise<DesktopState>;
   deleteThread: (input: DeleteThreadInput) => Promise<DesktopState>;
   setThreadPinned: (input: SetThreadPinnedInput) => Promise<DesktopState>;
   getThreadHistory: (

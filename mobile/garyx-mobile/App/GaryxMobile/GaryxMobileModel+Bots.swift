@@ -250,16 +250,11 @@ extension GaryxMobileModel {
         guard !normalizedThreadId.isEmpty else { return }
         guard !pendingThreadArchives.contains(threadId: normalizedThreadId) else { return }
 
-        var endpointKeys = Set(
-            channelEndpoints
-                .filter { $0.threadId?.trimmingCharacters(in: .whitespacesAndNewlines) == normalizedThreadId }
-                .map(\.endpointKey)
-                .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let endpointKeys = GaryxThreadArchiveRequestBuilder.endpointKeys(
+            threadId: normalizedThreadId,
+            endpoints: channelEndpoints,
+            additionalEndpointKey: additionalEndpointKey
         )
-        let currentEndpointKey = additionalEndpointKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !currentEndpointKey.isEmpty {
-            endpointKeys.insert(currentEndpointKey)
-        }
 
         let runtimeGeneration = gatewayRuntimeGeneration
         let previousPinnedThreadIds = pinnedThreadIds
@@ -272,10 +267,10 @@ extension GaryxMobileModel {
             openNewThreadDraft()
         }
         do {
-            for endpointKey in endpointKeys {
-                _ = try await client().detachChannelEndpoint(endpointKey: endpointKey)
-            }
-            _ = try await client().deleteThread(threadId: normalizedThreadId)
+            _ = try await client().archiveThread(
+                threadId: normalizedThreadId,
+                endpointKeys: endpointKeys
+            )
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             pendingThreadArchives.resolveArchive(threadId: normalizedThreadId)
             removeArchivedThreadLocally(normalizedThreadId)

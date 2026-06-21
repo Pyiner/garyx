@@ -505,6 +505,32 @@ impl GaryxDbService {
         Ok(removed > 0)
     }
 
+    pub fn mark_thread_archived(&self, thread_id: &str) -> GaryxDbResult<String> {
+        let thread_id = normalize_thread_id(thread_id)?;
+        let archived_at = now_string();
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT INTO archived_threads (thread_id, archived_at)
+             VALUES (?1, ?2)
+             ON CONFLICT(thread_id) DO UPDATE SET archived_at = excluded.archived_at",
+            params![thread_id, archived_at],
+        )?;
+        Ok(archived_at)
+    }
+
+    pub fn is_thread_archived(&self, thread_id: &str) -> GaryxDbResult<bool> {
+        let thread_id = normalize_thread_id(thread_id)?;
+        let conn = self.conn()?;
+        let archived: Option<String> = conn
+            .query_row(
+                "SELECT archived_at FROM archived_threads WHERE thread_id = ?1",
+                params![thread_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(archived.is_some())
+    }
+
     pub fn list_workspaces(&self) -> GaryxDbResult<Vec<WorkspaceRecord>> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -2790,6 +2816,11 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
         CREATE TABLE IF NOT EXISTS thread_pins (
             thread_id TEXT PRIMARY KEY,
             pinned_at TEXT NOT NULL
+        ) STRICT;
+
+        CREATE TABLE IF NOT EXISTS archived_threads (
+            thread_id TEXT PRIMARY KEY,
+            archived_at TEXT NOT NULL
         ) STRICT;
 
         CREATE TABLE IF NOT EXISTS recent_threads (

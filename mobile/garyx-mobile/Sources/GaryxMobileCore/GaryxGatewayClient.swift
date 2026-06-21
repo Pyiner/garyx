@@ -322,6 +322,17 @@ public final class GaryxGatewayClient {
         try await delete("/api/threads/\(threadId.urlPathEncoded)")
     }
 
+    public func archiveThread(
+        threadId: String,
+        endpointKeys: [String] = []
+    ) async throws -> GaryxArchiveThreadResult {
+        try await post(
+            "/api/threads/\(threadId.urlPathEncoded)/archive",
+            body: GaryxArchiveThreadRequest(endpointKeys: endpointKeys),
+            idempotent: true
+        )
+    }
+
     public func startChat(_ request: GaryxStartChatRequest) async throws -> GaryxStartChatResult {
         // Chat start is non-idempotent: only connection-establishment errors auto-retry.
         try await post("/api/chat/start", body: request)

@@ -27,6 +27,7 @@ import {
 } from '@shared/contracts';
 import { desktopStateWithoutThread } from '@shared/desktop-state';
 import {
+  archiveRemoteThread,
   createRemoteAutomation,
   createRemoteThread,
   addRemoteWorkspace,
@@ -1540,6 +1541,19 @@ export async function deleteDesktopThread(threadId: string): Promise<DesktopStat
   const current = await getDesktopState();
   await deleteRemoteThread(current.settings, threadId);
   return withSortedEntities(desktopStateWithoutThread(await getDesktopState(), threadId));
+}
+
+export async function archiveDesktopThread(input: {
+  threadId: string;
+  endpointKeys?: string[];
+}): Promise<DesktopState> {
+  const current = await getDesktopState();
+  await archiveRemoteThread(
+    current.settings,
+    input.threadId,
+    input.endpointKeys || [],
+  );
+  return withSortedEntities(desktopStateWithoutThread(await getDesktopState(), input.threadId));
 }
 
 export async function recordOutgoingThreadPrompt(threadId: string, prompt: string): Promise<{

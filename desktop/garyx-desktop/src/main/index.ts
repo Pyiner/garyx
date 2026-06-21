@@ -36,6 +36,7 @@ import {
 } from "./updater";
 
 import type {
+  ArchiveThreadInput,
   CreateCustomAgentInput,
   CreateTeamInput,
   CreateSkillEntryInput,
@@ -194,6 +195,7 @@ import {
 import { generateCustomAgentAvatar } from "./agent-avatar";
 import {
   addDesktopWorkspace,
+  archiveDesktopThread,
   createDesktopAutomation,
   createDesktopThread,
   deleteDesktopAutomation,
@@ -1333,6 +1335,16 @@ function registerIpcHandlers(): void {
       }
       await updateRemoteThread(settings, threadId, patch);
       return fetchThreadHistory(settings, { threadId });
+    },
+  );
+
+  ipcMain.handle(
+    "garyx:archive-thread",
+    async (_event, input: ArchiveThreadInput) => {
+      return archiveDesktopThread({
+        threadId: input.threadId,
+        endpointKeys: input.endpointKeys || [],
+      });
     },
   );
 

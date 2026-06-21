@@ -69,6 +69,47 @@ public struct GaryxDeleteResult: Decodable, Equatable, Sendable {
 }
 
 
+public struct GaryxArchiveThreadRequest: Encodable, Equatable, Sendable {
+    public var endpointKeys: [String]
+
+    public init(endpointKeys: [String] = []) {
+        self.endpointKeys = endpointKeys
+    }
+}
+
+
+public struct GaryxArchiveThreadResult: Decodable, Equatable, Sendable {
+    public var archived: Bool?
+    public var deleted: Bool?
+    public var threadId: String?
+    public var staleProjection: Bool?
+    public var detachedEndpointKeys: [String]?
+
+    enum CodingKeys: String, CodingKey {
+        case archived
+        case deleted
+        case threadId = "thread_id"
+        case threadIdCamel = "threadId"
+        case staleProjection = "stale_projection"
+        case staleProjectionCamel = "staleProjection"
+        case detachedEndpointKeys = "detached_endpoint_keys"
+        case detachedEndpointKeysCamel = "detachedEndpointKeys"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        archived = try container.decodeIfPresent(Bool.self, forKey: .archived)
+        deleted = try container.decodeIfPresent(Bool.self, forKey: .deleted)
+        threadId = try container.garyxDecodeFirstString(.threadId, .threadIdCamel)
+        staleProjection = try container.garyxDecodeFirstBool(.staleProjection, .staleProjectionCamel)
+        detachedEndpointKeys = try container.garyxDecodeFirstStringArray(
+            .detachedEndpointKeys,
+            .detachedEndpointKeysCamel
+        )
+    }
+}
+
+
 public struct GaryxEmptyResponse: Decodable, Equatable, Sendable {
     public init() {}
     public init(from decoder: Decoder) throws {
