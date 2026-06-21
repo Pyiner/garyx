@@ -593,7 +593,10 @@ extension GaryxMobileModel {
                 applyGatewayRuntimeSettings(settings)
             }
             if case let .success(value) = nextAutomations {
-                automations = value
+                GaryxEquatableAssignment.assignIfChanged(
+                    current: automations,
+                    next: value
+                ) { automations = $0 }
             }
             if case let .success(value) = nextSlashCommands {
                 slashCommands = value

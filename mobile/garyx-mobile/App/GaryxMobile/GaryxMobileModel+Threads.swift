@@ -582,6 +582,13 @@ extension GaryxMobileModel {
             cancelBackgroundCommittedRunReconcileLoop()
             return
         }
+        let initialCandidateThreadIds = backgroundCommittedRunCandidateThreadIds()
+        guard GaryxBackgroundThreadReconcilePolicy.shouldRefreshThreads(
+            isThreadListInteracting: isThreadListInteracting,
+            candidateThreadIds: initialCandidateThreadIds
+        ) else {
+            return
+        }
         await refreshThreads(silent: true)
         guard runtimeGeneration == gatewayRuntimeGeneration else { return }
         for threadId in backgroundCommittedRunCandidateThreadIds() {
@@ -603,7 +610,10 @@ extension GaryxMobileModel {
             state.busy ? threadId : nil
         })
         ids.formUnion(threads.compactMap { thread in
-            isThreadSummaryRunning(thread) ? thread.id : nil
+            if let committedState = runStateByThread[thread.id] {
+                return committedState.busy ? thread.id : nil
+            }
+            return isThreadSummaryRunning(thread) ? thread.id : nil
         })
         return ids
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -1258,12 +1268,12 @@ extension GaryxMobileModel {
         let normalizedThreadId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedThreadId.isEmpty else { return }
 
-        threads = threads.map { thread in
-            thread.id == normalizedThreadId ? summary(thread, applying: state) : thread
-        }
         if selectedThread?.id == normalizedThreadId,
            let selectedThread {
-            self.selectedThread = summary(selectedThread, applying: state)
+            let nextSelectedThread = summary(selectedThread, applying: state)
+            if self.selectedThread != nextSelectedThread {
+                self.selectedThread = nextSelectedThread
+            }
         }
     }
 
@@ -1287,12 +1297,20 @@ extension GaryxMobileModel {
             return updated
         }
 
-        threads = threads.map { thread in
-            thread.id == normalizedThreadId ? mergedRuntimeSummary(thread) : thread
+        if let index = threads.firstIndex(where: { $0.id == normalizedThreadId }) {
+            let nextThread = mergedRuntimeSummary(threads[index])
+            if threads[index] != nextThread {
+                var nextThreads = threads
+                nextThreads[index] = nextThread
+                threads = nextThreads
+            }
         }
         if selectedThread?.id == normalizedThreadId,
            let selectedThread {
-            self.selectedThread = mergedRuntimeSummary(selectedThread)
+            let nextSelectedThread = mergedRuntimeSummary(selectedThread)
+            if self.selectedThread != nextSelectedThread {
+                self.selectedThread = nextSelectedThread
+            }
         }
     }
 

@@ -266,6 +266,8 @@ final class GaryxMobileModel: ObservableObject {
     var workspaceRefreshRequestId: UUID?
     var nextThreadListOffset = 0
     var lastPersistedWidgetThreads: [GaryxMobileWidgetThread]?
+    var homeThreadSectionsCache = GaryxHomeThreadSectionsCache()
+    var isThreadListInteracting = false
     var hasAttemptedLastOpenedThreadRestore = false
     var selectedThreadNextHistoryBeforeIndex: Int?
     var sceneRefreshTask: Task<Void, Never>?
