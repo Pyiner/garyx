@@ -127,7 +127,7 @@ extension GaryxMobileModel {
         let visibleUserText = Self.visibleUserText(text: text, attachments: attachments)
         let clientIntentId = "mobile-\(UUID().uuidString)"
         let userMessage = GaryxMobileMessage(
-            id: "local-user-\(UUID().uuidString)",
+            id: Self.userOriginMessageId(clientIntentId),
             role: .user,
             text: visibleUserText,
             attachments: Self.messageAttachments(from: attachments),
@@ -254,7 +254,7 @@ extension GaryxMobileModel {
         let clientIntentId = "mobile-\(UUID().uuidString)"
         let visibleUserText = Self.visibleUserText(text: text, attachments: attachments)
         let userMessage = GaryxMobileMessage(
-            id: "local-user-\(UUID().uuidString)",
+            id: Self.userOriginMessageId(clientIntentId),
             role: .user,
             text: visibleUserText,
             attachments: Self.messageAttachments(from: attachments),
@@ -595,6 +595,10 @@ extension GaryxMobileModel {
         let workspace = pendingBotWorkspace?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let agentId = pendingBotAgentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return (botId: botId, workspace: workspace, agentId: agentId)
+    }
+
+    static func userOriginMessageId(_ clientIntentId: String) -> String {
+        "origin:\(clientIntentId)"
     }
 
     func clearPendingBotDraftIfCurrent(

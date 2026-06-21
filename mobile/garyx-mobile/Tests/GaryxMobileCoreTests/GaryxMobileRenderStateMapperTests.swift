@@ -234,25 +234,31 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
         XCTAssertEqual(entry.status, .running)
     }
 
-    func testPendingUserRowsAppendUntilRemoteMaterializes() throws {
-        var materialized = mobileMessage(index: 0, role: .user, text: "Sent", id: "local-user-1")
-        materialized.localState = .remoteFinal
-        materialized.remoteId = "history:0"
+    func testOptimisticUserRowsAppendUntilOriginMaterializes() throws {
+        let materializedOrigin = "00000000-0000-0000-0000-000000000001"
+        let pendingOrigin = "00000000-0000-0000-0000-000000000002"
+        var materialized = mobileMessage(
+            index: 0,
+            role: .user,
+            text: "Sent",
+            id: "origin:\(materializedOrigin)"
+        )
+        materialized.localState = .optimistic
         let pending = GaryxMobileMessage(
-            id: "local-user-2",
+            id: "origin:\(pendingOrigin)",
             role: .user,
             text: "Still pending",
             timestamp: nil,
             isStreaming: false,
-            clientIntentId: "intent-2",
+            clientIntentId: pendingOrigin,
             localState: .optimistic
         )
         let snapshot = GaryxRenderSnapshot(
             basedOnSeq: 1,
             rows: [
                 .userTurn(GaryxRenderUserTurnRow(
-                    id: "turn:seq1",
-                    user: ref(seq: 1, role: "user"),
+                    id: "user_turn:origin:\(materializedOrigin)",
+                    user: ref(seq: 1, role: "user", id: "origin:\(materializedOrigin)"),
                     activity: []
                 )),
             ]
@@ -264,8 +270,14 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
             transcriptMessages: []
         )
 
-        XCTAssertEqual(rows.map(\.id), ["turn:seq1", "pending-user-turn:local-user-2"])
-        XCTAssertEqual(rows.first?.userBlock?.message.id, "local-user-1")
+        XCTAssertEqual(
+            rows.map(\.id),
+            [
+                "user_turn:origin:\(materializedOrigin)",
+                "user_turn:origin:\(pendingOrigin)",
+            ]
+        )
+        XCTAssertEqual(rows.first?.userBlock?.message.id, "origin:\(materializedOrigin)")
         XCTAssertEqual(rows.last?.userBlock?.message.text, "Still pending")
     }
 
@@ -290,14 +302,16 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
         XCTAssertTrue(rows.isEmpty)
     }
 
-    func testNilSnapshotOnlyRendersOptimisticPendingUserRows() {
+    func testNilSnapshotRendersOptimisticUserRows() {
         let committed = mobileMessage(index: 0, role: .assistant, text: "Cached")
+        let pendingOrigin = "00000000-0000-0000-0000-000000000003"
         let pending = GaryxMobileMessage(
-            id: "local-user-pending",
+            id: "origin:\(pendingOrigin)",
             role: .user,
             text: "Pending",
             timestamp: nil,
             isStreaming: false,
+            clientIntentId: pendingOrigin,
             localState: .optimistic
         )
 
@@ -307,8 +321,48 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
             transcriptMessages: []
         )
 
-        XCTAssertEqual(rows.map(\.id), ["pending-user-turn:local-user-pending"])
+        XCTAssertEqual(rows.map(\.id), ["user_turn:origin:\(pendingOrigin)"])
         XCTAssertEqual(rows.only?.userBlock?.message.text, "Pending")
+    }
+
+    func testFailedLocalUserRowRendersRetryEntryWithoutSnapshot() {
+        let failedOrigin = "00000000-0000-0000-0000-000000000004"
+        var failed = GaryxMobileMessage(
+            id: "origin:\(failedOrigin)",
+            role: .user,
+            text: "Retry me",
+            timestamp: nil,
+            isStreaming: false,
+            clientIntentId: failedOrigin,
+            localState: .optimistic
+        )
+        failed.statusText = "Gateway unavailable"
+
+        let rows = GaryxMobileRenderStateMapper.rows(
+            snapshot: nil,
+            messages: [failed],
+            transcriptMessages: []
+        )
+
+        XCTAssertEqual(rows.map(\.id), ["user_turn:origin:\(failedOrigin)"])
+        XCTAssertEqual(rows.only?.userBlock?.message.statusText, "Gateway unavailable")
+    }
+
+    func testCommittedUserMessageUsesOriginIdFromMetadata() {
+        let originId = "00000000-0000-0000-0000-000000000001"
+        let message = GaryxTranscriptMessage(
+            index: 1,
+            role: .user,
+            text: "Hello",
+            metadata: json(#"{"origin_id":"\#(originId)"}"#)
+        )
+
+        let mobileMessages = GaryxMobileTranscriptMapper.mobileMessages(from: [message])
+
+        XCTAssertEqual(message.id, "origin:\(originId)")
+        XCTAssertEqual(message.originId, originId)
+        XCTAssertEqual(mobileMessages.only?.id, "origin:\(originId)")
+        XCTAssertEqual(mobileMessages.only?.clientIntentId, originId)
     }
 
     func testToolPayloadEnvelopeStillParsesButDoesNotDecideVisibility() throws {
@@ -343,8 +397,8 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
         )
     }
 
-    private func ref(seq: Int, role: String) -> GaryxRenderMessageRef {
-        GaryxRenderMessageRef(id: "seq:\(seq)", seq: seq, role: role)
+    private func ref(seq: Int, role: String, id: String? = nil) -> GaryxRenderMessageRef {
+        GaryxRenderMessageRef(id: id ?? "seq:\(seq)", seq: seq, role: role)
     }
 
     private func toolUse(index: Int, toolUseId: String, command: String) -> GaryxTranscriptMessage {

@@ -191,7 +191,7 @@ pub fn reduce_transcript_render_state_with_run_state<'a>(
             continue;
         };
         let role = normalized_role(message);
-        let reference = message_ref(seq, &role);
+        let reference = message_ref(seq, &role, message);
         if is_control_message(message) {
             continue;
         }
@@ -717,12 +717,30 @@ fn normalized_role(message: &Map<String, Value>) -> String {
         .to_ascii_lowercase()
 }
 
-fn message_ref(seq: u64, role: &str) -> RenderMessageRef {
+fn message_ref(seq: u64, role: &str, message: &Map<String, Value>) -> RenderMessageRef {
+    let id = if role == "user" {
+        origin_id_of(message)
+            .map(|origin_id| format!("origin:{origin_id}"))
+            .unwrap_or_else(|| format!("seq:{seq}"))
+    } else {
+        format!("seq:{seq}")
+    };
     RenderMessageRef {
-        id: format!("seq:{seq}"),
+        id,
         seq,
         role: role.to_owned(),
     }
+}
+
+fn origin_id_of(message: &Map<String, Value>) -> Option<String> {
+    message
+        .get("metadata")
+        .and_then(Value::as_object)
+        .and_then(|metadata| metadata.get("origin_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn message_timestamp(record: &Value, message: &Map<String, Value>) -> Option<String> {
@@ -1022,6 +1040,176 @@ mod tests {
     }
 
     #[test]
+    fn first_message_origin_id_drives_user_row_identity() {
+        let records = vec![
+            control_record(1, "run_start"),
+            message_record(
+                2,
+                json!({
+                    "role": "user",
+                    "text": "Start.",
+                    "timestamp": "2026-01-01T00:00:01Z",
+                    "metadata": {
+                        "origin_id": "00000000-0000-0000-0000-000000000001"
+                    }
+                }),
+            ),
+        ];
+
+        let snapshot = reduce_transcript_render_state(&records);
+        let row = expect_user_turn(&snapshot.rows[0]);
+        let user = row.user.as_ref().expect("user ref");
+        assert_eq!(
+            row.id,
+            "user_turn:origin:00000000-0000-0000-0000-000000000001"
+        );
+        assert_eq!(user.id, "origin:00000000-0000-0000-0000-000000000001");
+        assert_eq!(user.seq, 2);
+        assert_eq!(snapshot.visible_message_ids, vec![user.id.clone()]);
+    }
+
+    #[test]
+    fn queued_mid_stream_attribution_stays_physical_seq_order() {
+        let records = vec![
+            control_record(1, "run_start"),
+            user_record(2, "Root", "00000000-0000-0000-0000-000000000001"),
+            assistant_record(3, "Before queued 1"),
+            assistant_record(4, "Before queued 2"),
+            user_record(5, "Queued", "00000000-0000-0000-0000-000000000002"),
+            user_ack_record(6, "queued-input-1"),
+            assistant_record(7, "After queued"),
+        ];
+
+        let snapshot = reduce_transcript_render_state(&records);
+        assert_eq!(snapshot.rows.len(), 2);
+
+        let first = expect_user_turn(&snapshot.rows[0]);
+        assert_eq!(
+            first.id,
+            "user_turn:origin:00000000-0000-0000-0000-000000000001"
+        );
+        let first_step = expect_step(&first.activity[0]);
+        assert_eq!(first_step.steps.len(), 1);
+        match &first_step.steps[0] {
+            RenderStepItem::AssistantMessage(message) => assert_eq!(message.message.seq, 3),
+            other => panic!("expected assistant step, got {other:?}"),
+        }
+        assert_eq!(
+            first_step
+                .final_message
+                .as_ref()
+                .expect("final before ack")
+                .seq,
+            4
+        );
+
+        let second = expect_user_turn(&snapshot.rows[1]);
+        assert_eq!(
+            second.id,
+            "user_turn:origin:00000000-0000-0000-0000-000000000002"
+        );
+        let reply = expect_assistant_reply(&second.activity[0]);
+        assert_eq!(reply.message.seq, 7);
+        assert!(!snapshot.visible_message_ids.contains(&"seq:6".to_owned()));
+    }
+
+    #[test]
+    fn two_queued_user_rows_keep_origin_order() {
+        let records = vec![
+            control_record(1, "run_start"),
+            user_record(2, "Root", "00000000-0000-0000-0000-000000000001"),
+            assistant_record(3, "Before queued"),
+            user_record(4, "Queued 1", "00000000-0000-0000-0000-000000000002"),
+            user_ack_record(5, "queued-input-1"),
+            assistant_record(6, "After queued 1"),
+            user_record(7, "Queued 2", "00000000-0000-0000-0000-000000000003"),
+            user_ack_record(8, "queued-input-2"),
+            assistant_record(9, "After queued 2"),
+        ];
+
+        let snapshot = reduce_transcript_render_state(&records);
+        let row_ids = snapshot
+            .rows
+            .iter()
+            .map(|row| expect_user_turn(row).id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            row_ids,
+            vec![
+                "user_turn:origin:00000000-0000-0000-0000-000000000001",
+                "user_turn:origin:00000000-0000-0000-0000-000000000002",
+                "user_turn:origin:00000000-0000-0000-0000-000000000003",
+            ]
+        );
+    }
+
+    #[test]
+    fn missing_origin_id_keeps_seq_fallback() {
+        let records = vec![
+            control_record(1, "run_start"),
+            message_record(
+                2,
+                json!({
+                    "role": "user",
+                    "text": "No origin.",
+                    "timestamp": "2026-01-01T00:00:01Z"
+                }),
+            ),
+        ];
+
+        let snapshot = reduce_transcript_render_state(&records);
+        let row = expect_user_turn(&snapshot.rows[0]);
+        let user = row.user.as_ref().expect("user ref");
+        assert_eq!(row.id, "user_turn:seq:2");
+        assert_eq!(user.id, "seq:2");
+        assert_eq!(user.seq, 2);
+    }
+
+    #[test]
+    fn cold_replay_equals_live_for_origin_user_rows() {
+        let records = vec![
+            control_record(1, "run_start"),
+            user_record(2, "Root", "00000000-0000-0000-0000-000000000001"),
+            assistant_record(3, "Before queued"),
+            user_record(4, "Queued", "00000000-0000-0000-0000-000000000002"),
+            user_ack_record(5, "queued-input-1"),
+            assistant_record(6, "After queued"),
+            control_record(7, "run_complete"),
+        ];
+        let cold = reduce_transcript_render_state(&records);
+        let live = (1..=records.len())
+            .map(|len| reduce_transcript_render_state(&records[..len]))
+            .last()
+            .expect("live final snapshot");
+
+        assert_eq!(live, cold);
+    }
+
+    #[test]
+    fn user_ack_run_state_is_unchanged_by_origin_id() {
+        let records = vec![
+            control_record(1, "run_start"),
+            user_record(2, "Root", "00000000-0000-0000-0000-000000000001"),
+            user_ack_record(3, "queued-input-1"),
+        ];
+
+        let run_state = reduce_transcript_run_state(&records);
+        let snapshot = reduce_transcript_render_state_with_run_state(&records, &run_state);
+
+        assert_eq!(run_state.last_user_ack_seq, Some(3));
+        assert_eq!(
+            run_state.last_user_ack_pending_input_id.as_deref(),
+            Some("queued-input-1")
+        );
+        assert_eq!(snapshot.rows.len(), 1);
+        assert_eq!(
+            expect_user_turn(&snapshot.rows[0]).id,
+            "user_turn:origin:00000000-0000-0000-0000-000000000001"
+        );
+        assert!(!snapshot.visible_message_ids.contains(&"seq:3".to_owned()));
+    }
+
+    #[test]
     fn final_assistant_text_from_render_records_uses_final_segment() {
         let records = vec![
             control_record(1, "run_start"),
@@ -1174,5 +1362,69 @@ mod tests {
                 }
             }),
         )
+    }
+
+    fn user_record(seq: u64, text: &str, origin_id: &str) -> Value {
+        message_record(
+            seq,
+            json!({
+                "role": "user",
+                "text": text,
+                "timestamp": "2026-01-01T00:00:01Z",
+                "metadata": {
+                    "origin_id": origin_id
+                }
+            }),
+        )
+    }
+
+    fn assistant_record(seq: u64, text: &str) -> Value {
+        message_record(
+            seq,
+            json!({
+                "role": "assistant",
+                "text": text,
+                "timestamp": "2026-01-01T00:00:02Z"
+            }),
+        )
+    }
+
+    fn user_ack_record(seq: u64, pending_input_id: &str) -> Value {
+        message_record(
+            seq,
+            json!({
+                "role": "system",
+                "kind": "control",
+                "internal": true,
+                "internal_kind": "control",
+                "control": {
+                    "kind": "user_ack",
+                    "thread_id": "thread::render-final",
+                    "run_id": "run::render-final",
+                    "pending_input_id": pending_input_id,
+                    "at": "2026-01-01T00:00:00Z"
+                }
+            }),
+        )
+    }
+
+    fn expect_user_turn(row: &RenderRow) -> &RenderUserTurnRow {
+        match row {
+            RenderRow::UserTurn(row) => row,
+        }
+    }
+
+    fn expect_assistant_reply(activity: &RenderActivityRow) -> &RenderAssistantReplyRow {
+        match activity {
+            RenderActivityRow::AssistantReply(row) => row,
+            other => panic!("expected assistant reply, got {other:?}"),
+        }
+    }
+
+    fn expect_step(activity: &RenderActivityRow) -> &RenderStepRow {
+        match activity {
+            RenderActivityRow::Step(row) => row,
+            other => panic!("expected step, got {other:?}"),
+        }
     }
 }

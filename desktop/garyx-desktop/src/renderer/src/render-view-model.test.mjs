@@ -206,6 +206,39 @@ test('render_state ref seq resolves the body keyed by that same seq', () => {
   assert.equal(buildThreadViewRows(renderState, wrongKeyed).length, 0);
 });
 
+test('origin user ids remain stable while the body resolves by seq', () => {
+  const originId = 'origin:00000000-0000-0000-0000-000000000001';
+  const renderState = {
+    based_on_seq: 2,
+    rows: [
+      {
+        kind: 'user_turn',
+        id: `user_turn:${originId}`,
+        user: { id: originId, seq: 2, role: 'user' },
+        activity: [],
+        started_at: null,
+        finished_at: null,
+      },
+    ],
+    tailActivity: 'none',
+    activeToolGroupId: null,
+    progress_locus: 'none',
+    visibleMessageIds: [originId],
+    filtered_placeholders: [],
+  };
+  const messages = new Map([
+    [2, { id: originId, seq: 2, role: 'user', text: 'hello' }],
+  ]);
+
+  const rows = buildThreadViewRows(renderState, messages);
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].kind, 'user_turn');
+  assert.equal(rows[0].key, `user-turn:${originId}`);
+  assert.equal(rows[0].userBlock.key, originId);
+  assert.equal(rows[0].userBlock.entry.message.text, 'hello');
+});
+
 test('unloaded committed window: rows whose bodies are absent are skipped', () => {
   const fixtureCase = renderFixture.cases.find(
     (c) => c.name === 'final answer completed',

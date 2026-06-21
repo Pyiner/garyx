@@ -1805,6 +1805,807 @@
       ],
       "run_state": null,
       "source": null
+    },
+    {
+      "expected": {
+        "activeToolGroupId": null,
+        "based_on_seq": 2,
+        "filtered_placeholders": [],
+        "progress_locus": "tail",
+        "rows": [
+          {
+            "activity": [],
+            "finished_at": null,
+            "id": "user_turn:origin:00000000-0000-0000-0000-000000000001",
+            "kind": "user_turn",
+            "started_at": "2026-06-19T14:00:01Z",
+            "user": {
+              "id": "origin:00000000-0000-0000-0000-000000000001",
+              "role": "user",
+              "seq": 2
+            }
+          }
+        ],
+        "tailActivity": "thinking",
+        "visibleMessageIds": [
+          "origin:00000000-0000-0000-0000-000000000001"
+        ]
+      },
+      "expected_run_state": {
+        "activity": "thinking",
+        "busy": true
+      },
+      "name": "first-message-origin-id",
+      "records": [
+        {
+          "message": {
+            "control": {
+              "kind": "run_start",
+              "run_id": "run::fixture-origin-first",
+              "thread_id": "thread::fixture-origin-first"
+            },
+            "internal": true,
+            "internal_kind": "control",
+            "kind": "control",
+            "role": "system"
+          },
+          "run_id": "run::fixture-origin-first",
+          "seq": 1,
+          "thread_id": "thread::fixture-origin-first",
+          "timestamp": "2026-06-19T14:00:00Z"
+        },
+        {
+          "message": {
+            "metadata": {
+              "origin_id": "00000000-0000-0000-0000-000000000001"
+            },
+            "role": "user",
+            "text": "Start with origin.",
+            "timestamp": "2026-06-19T14:00:01Z"
+          },
+          "run_id": "run::fixture-origin-first",
+          "seq": 2,
+          "thread_id": "thread::fixture-origin-first",
+          "timestamp": "2026-06-19T14:00:01Z"
+        }
+      ],
+      "run_state": null,
+      "source": null
+    },
+    {
+      "expected": {
+        "activeToolGroupId": null,
+        "based_on_seq": 7,
+        "filtered_placeholders": [],
+        "progress_locus": "tail",
+        "rows": [
+          {
+            "activity": [
+              {
+                "final_message": {
+                  "id": "seq:4",
+                  "role": "assistant",
+                  "seq": 4
+                },
+                "finished_at": "2026-06-19T14:01:03Z",
+                "id": "step:assistant_step:seq:3",
+                "kind": "step",
+                "running": false,
+                "started_at": "2026-06-19T14:01:01Z",
+                "steps": [
+                  {
+                    "id": "assistant_step:seq:3",
+                    "kind": "assistant_message",
+                    "message": {
+                      "id": "seq:3",
+                      "role": "assistant",
+                      "seq": 3
+                    },
+                    "streaming": false
+                  }
+                ]
+              }
+            ],
+            "finished_at": "2026-06-19T14:01:03Z",
+            "id": "user_turn:origin:00000000-0000-0000-0000-000000000001",
+            "kind": "user_turn",
+            "started_at": "2026-06-19T14:01:01Z",
+            "user": {
+              "id": "origin:00000000-0000-0000-0000-000000000001",
+              "role": "user",
+              "seq": 2
+            }
+          },
+          {
+            "activity": [
+              {
+                "id": "assistant_reply:seq:7",
+                "kind": "assistant_reply",
+                "message": {
+                  "id": "seq:7",
+                  "role": "assistant",
+                  "seq": 7
+                },
+                "streaming": false
+              }
+            ],
+            "finished_at": null,
+            "id": "user_turn:origin:00000000-0000-0000-0000-000000000002",
+            "kind": "user_turn",
+            "started_at": "2026-06-19T14:01:04Z",
+            "user": {
+              "id": "origin:00000000-0000-0000-0000-000000000002",
+              "role": "user",
+              "seq": 5
+            }
+          }
+        ],
+        "tailActivity": "thinking",
+        "visibleMessageIds": [
+          "origin:00000000-0000-0000-0000-000000000001",
+          "seq:3",
+          "seq:4",
+          "origin:00000000-0000-0000-0000-000000000002",
+          "seq:7"
+        ]
+      },
+      "expected_run_state": {
+        "activity": "thinking",
+        "busy": true
+      },
+      "name": "queued-mid-stream-attribution",
+      "records": [
+        {
+          "message": {
+            "control": {
+              "kind": "run_start",
+              "run_id": "run::fixture-origin-queued",
+              "thread_id": "thread::fixture-origin-queued"
+            },
+            "internal": true,
+            "internal_kind": "control",
+            "kind": "control",
+            "role": "system"
+          },
+          "run_id": "run::fixture-origin-queued",
+          "seq": 1,
+          "thread_id": "thread::fixture-origin-queued",
+          "timestamp": "2026-06-19T14:01:00Z"
+        },
+        {
+          "message": {
+            "metadata": {
+              "origin_id": "00000000-0000-0000-0000-000000000001"
+            },
+            "role": "user",
+            "text": "Root.",
+            "timestamp": "2026-06-19T14:01:01Z"
+          },
+          "run_id": "run::fixture-origin-queued",
+          "seq": 2,
+          "thread_id": "thread::fixture-origin-queued",
+          "timestamp": "2026-06-19T14:01:01Z"
+        },
+        {
+          "message": {
+            "role": "assistant",
+            "text": "Before queued 1.",
+            "timestamp": "2026-06-19T14:01:02Z"
+          },
+          "run_id": "run::fixture-origin-queued",
+          "seq": 3,
+          "thread_id": "thread::fixture-origin-queued",
+          "timestamp": "2026-06-19T14:01:02Z"
+        },
+        {
+          "message": {
+            "role": "assistant",
+            "text": "Before queued 2.",
+            "timestamp": "2026-06-19T14:01:03Z"
+          },
+          "run_id": "run::fixture-origin-queued",
+          "seq": 4,
+          "thread_id": "thread::fixture-origin-queued",
+          "timestamp": "2026-06-19T14:01:03Z"
+        },
+        {
+          "message": {
+            "metadata": {
+              "origin_id": "00000000-0000-0000-0000-000000000002",
+              "queued_input_id": "queued-input-1"
+            },
+            "role": "user",
+            "text": "Queued.",
+            "timestamp": "2026-06-19T14:01:04Z"
+          },
+          "run_id": "run::fixture-origin-queued",
+          "seq": 5,
+          "thread_id": "thread::fixture-origin-queued",
+          "timestamp": "2026-06-19T14:01:04Z"
+        },
+        {
+          "message": {
+            "control": {
+              "kind": "user_ack",
+              "pending_input_id": "queued-input-1",
+              "run_id": "run::fixture-origin-queued",
+              "thread_id": "thread::fixture-origin-queued"
+            },
+            "internal": true,
+            "internal_kind": "control",
+            "kind": "control",
+            "role": "system"
+          },
+          "run_id": "run::fixture-origin-queued",
+          "seq": 6,
+          "thread_id": "thread::fixture-origin-queued",
+          "timestamp": "2026-06-19T14:01:05Z"
+        },
+        {
+          "message": {
+            "role": "assistant",
+            "text": "After queued.",
+            "timestamp": "2026-06-19T14:01:06Z"
+          },
+          "run_id": "run::fixture-origin-queued",
+          "seq": 7,
+          "thread_id": "thread::fixture-origin-queued",
+          "timestamp": "2026-06-19T14:01:06Z"
+        }
+      ],
+      "run_state": null,
+      "source": null
+    },
+    {
+      "expected": {
+        "activeToolGroupId": null,
+        "based_on_seq": 9,
+        "filtered_placeholders": [],
+        "progress_locus": "tail",
+        "rows": [
+          {
+            "activity": [
+              {
+                "id": "assistant_reply:seq:3",
+                "kind": "assistant_reply",
+                "message": {
+                  "id": "seq:3",
+                  "role": "assistant",
+                  "seq": 3
+                },
+                "streaming": false
+              }
+            ],
+            "finished_at": null,
+            "id": "user_turn:origin:00000000-0000-0000-0000-000000000001",
+            "kind": "user_turn",
+            "started_at": "2026-06-19T14:02:01Z",
+            "user": {
+              "id": "origin:00000000-0000-0000-0000-000000000001",
+              "role": "user",
+              "seq": 2
+            }
+          },
+          {
+            "activity": [
+              {
+                "id": "assistant_reply:seq:6",
+                "kind": "assistant_reply",
+                "message": {
+                  "id": "seq:6",
+                  "role": "assistant",
+                  "seq": 6
+                },
+                "streaming": false
+              }
+            ],
+            "finished_at": null,
+            "id": "user_turn:origin:00000000-0000-0000-0000-000000000002",
+            "kind": "user_turn",
+            "started_at": "2026-06-19T14:02:03Z",
+            "user": {
+              "id": "origin:00000000-0000-0000-0000-000000000002",
+              "role": "user",
+              "seq": 4
+            }
+          },
+          {
+            "activity": [
+              {
+                "id": "assistant_reply:seq:9",
+                "kind": "assistant_reply",
+                "message": {
+                  "id": "seq:9",
+                  "role": "assistant",
+                  "seq": 9
+                },
+                "streaming": false
+              }
+            ],
+            "finished_at": null,
+            "id": "user_turn:origin:00000000-0000-0000-0000-000000000003",
+            "kind": "user_turn",
+            "started_at": "2026-06-19T14:02:06Z",
+            "user": {
+              "id": "origin:00000000-0000-0000-0000-000000000003",
+              "role": "user",
+              "seq": 7
+            }
+          }
+        ],
+        "tailActivity": "thinking",
+        "visibleMessageIds": [
+          "origin:00000000-0000-0000-0000-000000000001",
+          "seq:3",
+          "origin:00000000-0000-0000-0000-000000000002",
+          "seq:6",
+          "origin:00000000-0000-0000-0000-000000000003",
+          "seq:9"
+        ]
+      },
+      "expected_run_state": {
+        "activity": "thinking",
+        "busy": true
+      },
+      "name": "two-queued-ordering",
+      "records": [
+        {
+          "message": {
+            "control": {
+              "kind": "run_start",
+              "run_id": "run::fixture-origin-two-queued",
+              "thread_id": "thread::fixture-origin-two-queued"
+            },
+            "internal": true,
+            "internal_kind": "control",
+            "kind": "control",
+            "role": "system"
+          },
+          "run_id": "run::fixture-origin-two-queued",
+          "seq": 1,
+          "thread_id": "thread::fixture-origin-two-queued",
+          "timestamp": "2026-06-19T14:02:00Z"
+        },
+        {
+          "message": {
+            "metadata": {
+              "origin_id": "00000000-0000-0000-0000-000000000001"
+            },
+            "role": "user",
+            "text": "Root.",
+            "timestamp": "2026-06-19T14:02:01Z"
+          },
+          "run_id": "run::fixture-origin-two-queued",
+          "seq": 2,
+          "thread_id": "thread::fixture-origin-two-queued",
+          "timestamp": "2026-06-19T14:02:01Z"
+        },
+        {
+          "message": {
+            "role": "assistant",
+            "text": "Before queued.",
+            "timestamp": "2026-06-19T14:02:02Z"
+          },
+          "run_id": "run::fixture-origin-two-queued",
+          "seq": 3,
+          "thread_id": "thread::fixture-origin-two-queued",
+          "timestamp": "2026-06-19T14:02:02Z"
+        },
+        {
+          "message": {
+            "metadata": {
+              "origin_id": "00000000-0000-0000-0000-000000000002",
+              "queued_input_id": "queued-input-1"
+            },
+            "role": "user",
+            "text": "Queued 1.",
+            "timestamp": "2026-06-19T14:02:03Z"
+          },
+          "run_id": "run::fixture-origin-two-queued",
+          "seq": 4,
+          "thread_id": "thread::fixture-origin-two-queued",
+          "timestamp": "2026-06-19T14:02:03Z"
+        },
+        {
+          "message": {
+            "control": {
+              "kind": "user_ack",
+              "pending_input_id": "queued-input-1",
+              "run_id": "run::fixture-origin-two-queued",
+              "thread_id": "thread::fixture-origin-two-queued"
+            },
+            "internal": true,
+            "internal_kind": "control",
+            "kind": "control",
+            "role": "system"
+          },
+          "run_id": "run::fixture-origin-two-queued",
+          "seq": 5,
+          "thread_id": "thread::fixture-origin-two-queued",
+          "timestamp": "2026-06-19T14:02:04Z"
+        },
+        {
+          "message": {
+            "role": "assistant",
+            "text": "After queued 1.",
+            "timestamp": "2026-06-19T14:02:05Z"
+          },
+          "run_id": "run::fixture-origin-two-queued",
+          "seq": 6,
+          "thread_id": "thread::fixture-origin-two-queued",
+          "timestamp": "2026-06-19T14:02:05Z"
+        },
+        {
+          "message": {
+            "metadata": {
+              "origin_id": "00000000-0000-0000-0000-000000000003",
+              "queued_input_id": "queued-input-2"
+            },
+            "role": "user",
+            "text": "Queued 2.",
+            "timestamp": "2026-06-19T14:02:06Z"
+          },
+          "run_id": "run::fixture-origin-two-queued",
+          "seq": 7,
+          "thread_id": "thread::fixture-origin-two-queued",
+          "timestamp": "2026-06-19T14:02:06Z"
+        },
+        {
+          "message": {
+            "control": {
+              "kind": "user_ack",
+              "pending_input_id": "queued-input-2",
+              "run_id": "run::fixture-origin-two-queued",
+              "thread_id": "thread::fixture-origin-two-queued"
+            },
+            "internal": true,
+            "internal_kind": "control",
+            "kind": "control",
+            "role": "system"
+          },
+          "run_id": "run::fixture-origin-two-queued",
+          "seq": 8,
+          "thread_id": "thread::fixture-origin-two-queued",
+          "timestamp": "2026-06-19T14:02:07Z"
+        },
+        {
+          "message": {
+            "role": "assistant",
+            "text": "After queued 2.",
+            "timestamp": "2026-06-19T14:02:08Z"
+          },
+          "run_id": "run::fixture-origin-two-queued",
+          "seq": 9,
+          "thread_id": "thread::fixture-origin-two-queued",
+          "timestamp": "2026-06-19T14:02:08Z"
+        }
+      ],
+      "run_state": null,
+      "source": null
+    },
+    {
+      "expected": {
+        "activeToolGroupId": null,
+        "based_on_seq": 2,
+        "filtered_placeholders": [],
+        "progress_locus": "tail",
+        "rows": [
+          {
+            "activity": [],
+            "finished_at": null,
+            "id": "user_turn:seq:2",
+            "kind": "user_turn",
+            "started_at": "2026-06-19T14:03:01Z",
+            "user": {
+              "id": "seq:2",
+              "role": "user",
+              "seq": 2
+            }
+          }
+        ],
+        "tailActivity": "thinking",
+        "visibleMessageIds": [
+          "seq:2"
+        ]
+      },
+      "expected_run_state": {
+        "activity": "thinking",
+        "busy": true
+      },
+      "name": "missing-origin-id-fallback",
+      "records": [
+        {
+          "message": {
+            "control": {
+              "kind": "run_start",
+              "run_id": "run::fixture-origin-missing",
+              "thread_id": "thread::fixture-origin-missing"
+            },
+            "internal": true,
+            "internal_kind": "control",
+            "kind": "control",
+            "role": "system"
+          },
+          "run_id": "run::fixture-origin-missing",
+          "seq": 1,
+          "thread_id": "thread::fixture-origin-missing",
+          "timestamp": "2026-06-19T14:03:00Z"
+        },
+        {
+          "message": {
+            "role": "user",
+            "text": "No origin.",
+            "timestamp": "2026-06-19T14:03:01Z"
+          },
+          "run_id": "run::fixture-origin-missing",
+          "seq": 2,
+          "thread_id": "thread::fixture-origin-missing",
+          "timestamp": "2026-06-19T14:03:01Z"
+        }
+      ],
+      "run_state": null,
+      "source": null
+    },
+    {
+      "expected": {
+        "activeToolGroupId": null,
+        "based_on_seq": 3,
+        "filtered_placeholders": [],
+        "progress_locus": "tail",
+        "rows": [
+          {
+            "activity": [
+              {
+                "id": "assistant_reply:seq:3",
+                "kind": "assistant_reply",
+                "message": {
+                  "id": "seq:3",
+                  "role": "assistant",
+                  "seq": 3
+                },
+                "streaming": false
+              }
+            ],
+            "finished_at": null,
+            "id": "user_turn:origin:00000000-0000-0000-0000-000000000001",
+            "kind": "user_turn",
+            "started_at": "2026-06-19T14:04:01Z",
+            "user": {
+              "id": "origin:00000000-0000-0000-0000-000000000001",
+              "role": "user",
+              "seq": 2
+            }
+          }
+        ],
+        "tailActivity": "thinking",
+        "visibleMessageIds": [
+          "origin:00000000-0000-0000-0000-000000000001",
+          "seq:3"
+        ]
+      },
+      "expected_run_state": {
+        "activity": "thinking",
+        "busy": true
+      },
+      "name": "reconcile-preserves-origin",
+      "records": [
+        {
+          "message": {
+            "control": {
+              "kind": "run_start",
+              "run_id": "run::fixture-origin-reconcile",
+              "thread_id": "thread::fixture-origin-reconcile"
+            },
+            "internal": true,
+            "internal_kind": "control",
+            "kind": "control",
+            "role": "system"
+          },
+          "run_id": "run::fixture-origin-reconcile",
+          "seq": 1,
+          "thread_id": "thread::fixture-origin-reconcile",
+          "timestamp": "2026-06-19T14:04:00Z"
+        },
+        {
+          "message": {
+            "metadata": {
+              "origin_id": "00000000-0000-0000-0000-000000000001"
+            },
+            "role": "user",
+            "text": "Preserved origin.",
+            "timestamp": "2026-06-19T14:04:01Z"
+          },
+          "run_id": "run::fixture-origin-reconcile",
+          "seq": 2,
+          "thread_id": "thread::fixture-origin-reconcile",
+          "timestamp": "2026-06-19T14:04:01Z"
+        },
+        {
+          "message": {
+            "role": "assistant",
+            "text": "Same seq rewrite keeps metadata.",
+            "timestamp": "2026-06-19T14:04:02Z"
+          },
+          "run_id": "run::fixture-origin-reconcile",
+          "seq": 3,
+          "thread_id": "thread::fixture-origin-reconcile",
+          "timestamp": "2026-06-19T14:04:02Z"
+        }
+      ],
+      "run_state": null,
+      "source": null
+    },
+    {
+      "expected": {
+        "activeToolGroupId": null,
+        "based_on_seq": 7,
+        "filtered_placeholders": [],
+        "progress_locus": "none",
+        "rows": [
+          {
+            "activity": [
+              {
+                "id": "assistant_reply:seq:3",
+                "kind": "assistant_reply",
+                "message": {
+                  "id": "seq:3",
+                  "role": "assistant",
+                  "seq": 3
+                },
+                "streaming": false
+              }
+            ],
+            "finished_at": null,
+            "id": "user_turn:origin:00000000-0000-0000-0000-000000000001",
+            "kind": "user_turn",
+            "started_at": "2026-06-19T14:05:01Z",
+            "user": {
+              "id": "origin:00000000-0000-0000-0000-000000000001",
+              "role": "user",
+              "seq": 2
+            }
+          },
+          {
+            "activity": [
+              {
+                "id": "assistant_reply:seq:6",
+                "kind": "assistant_reply",
+                "message": {
+                  "id": "seq:6",
+                  "role": "assistant",
+                  "seq": 6
+                },
+                "streaming": false
+              }
+            ],
+            "finished_at": null,
+            "id": "user_turn:origin:00000000-0000-0000-0000-000000000002",
+            "kind": "user_turn",
+            "started_at": "2026-06-19T14:05:03Z",
+            "user": {
+              "id": "origin:00000000-0000-0000-0000-000000000002",
+              "role": "user",
+              "seq": 4
+            }
+          }
+        ],
+        "tailActivity": "none",
+        "visibleMessageIds": [
+          "origin:00000000-0000-0000-0000-000000000001",
+          "seq:3",
+          "origin:00000000-0000-0000-0000-000000000002",
+          "seq:6"
+        ]
+      },
+      "name": "cold-replay-equals-live",
+      "records": [
+        {
+          "message": {
+            "control": {
+              "kind": "run_start",
+              "run_id": "run::fixture-origin-cold",
+              "thread_id": "thread::fixture-origin-cold"
+            },
+            "internal": true,
+            "internal_kind": "control",
+            "kind": "control",
+            "role": "system"
+          },
+          "run_id": "run::fixture-origin-cold",
+          "seq": 1,
+          "thread_id": "thread::fixture-origin-cold",
+          "timestamp": "2026-06-19T14:05:00Z"
+        },
+        {
+          "message": {
+            "metadata": {
+              "origin_id": "00000000-0000-0000-0000-000000000001"
+            },
+            "role": "user",
+            "text": "Root.",
+            "timestamp": "2026-06-19T14:05:01Z"
+          },
+          "run_id": "run::fixture-origin-cold",
+          "seq": 2,
+          "thread_id": "thread::fixture-origin-cold",
+          "timestamp": "2026-06-19T14:05:01Z"
+        },
+        {
+          "message": {
+            "role": "assistant",
+            "text": "Before queued.",
+            "timestamp": "2026-06-19T14:05:02Z"
+          },
+          "run_id": "run::fixture-origin-cold",
+          "seq": 3,
+          "thread_id": "thread::fixture-origin-cold",
+          "timestamp": "2026-06-19T14:05:02Z"
+        },
+        {
+          "message": {
+            "metadata": {
+              "origin_id": "00000000-0000-0000-0000-000000000002",
+              "queued_input_id": "queued-input-1"
+            },
+            "role": "user",
+            "text": "Queued.",
+            "timestamp": "2026-06-19T14:05:03Z"
+          },
+          "run_id": "run::fixture-origin-cold",
+          "seq": 4,
+          "thread_id": "thread::fixture-origin-cold",
+          "timestamp": "2026-06-19T14:05:03Z"
+        },
+        {
+          "message": {
+            "control": {
+              "kind": "user_ack",
+              "pending_input_id": "queued-input-1",
+              "run_id": "run::fixture-origin-cold",
+              "thread_id": "thread::fixture-origin-cold"
+            },
+            "internal": true,
+            "internal_kind": "control",
+            "kind": "control",
+            "role": "system"
+          },
+          "run_id": "run::fixture-origin-cold",
+          "seq": 5,
+          "thread_id": "thread::fixture-origin-cold",
+          "timestamp": "2026-06-19T14:05:04Z"
+        },
+        {
+          "message": {
+            "role": "assistant",
+            "text": "After queued.",
+            "timestamp": "2026-06-19T14:05:05Z"
+          },
+          "run_id": "run::fixture-origin-cold",
+          "seq": 6,
+          "thread_id": "thread::fixture-origin-cold",
+          "timestamp": "2026-06-19T14:05:05Z"
+        },
+        {
+          "message": {
+            "control": {
+              "kind": "run_complete",
+              "run_id": "run::fixture-origin-cold",
+              "status": "completed",
+              "thread_id": "thread::fixture-origin-cold"
+            },
+            "internal": true,
+            "internal_kind": "control",
+            "kind": "control",
+            "role": "system"
+          },
+          "run_id": "run::fixture-origin-cold",
+          "seq": 7,
+          "thread_id": "thread::fixture-origin-cold",
+          "timestamp": "2026-06-19T14:05:06Z"
+        }
+      ],
+      "run_state": null,
+      "source": null
     }
   ],
   "schema_version": 1

@@ -2,31 +2,39 @@ import XCTest
 @testable import GaryxMobileCore
 
 final class GaryxTranscriptMergeTests: XCTestCase {
-    func testRemoteMaterializationReusesLocalRowIdentity() {
-        let local = [optimisticUser("local-user-1", text: "hello", clientIntentId: "mobile-1")]
-        let remote = [historyUser(0, text: "hello", clientIntentId: "mobile-1")]
+    func testRemoteMaterializationUsesSharedOriginIdentity() {
+        let origin = "00000000-0000-0000-0000-000000000001"
+        let local = [optimisticUser("origin:\(origin)", text: "hello", clientIntentId: origin)]
+        let remote = [historyUser(0, text: "hello", clientIntentId: origin)]
 
         let merged = GaryxTranscriptMerge.mergedMessages(remote, withLocal: local)
 
         XCTAssertEqual(merged.count, 1)
-        XCTAssertEqual(merged[0].id, "local-user-1", "row identity must stay stable")
-        XCTAssertEqual(merged[0].remoteId, "history:0")
+        XCTAssertEqual(merged[0].id, "origin:\(origin)", "row identity must stay stable")
         XCTAssertEqual(merged[0].localState, .remoteFinal)
-        XCTAssertEqual(merged[0].historyIndex, 0, "pagination math follows the materialized row")
+        XCTAssertEqual(merged[0].historyIndex, 0, "pagination math follows the committed row")
     }
 
-    func testTextMatchMaterializationConsumesOnlyOneOptimisticRow() {
+    func testSameTextWithoutOriginDoesNotDedupOptimisticRows() {
         let local = [
-            optimisticUser("local-user-1", text: "same text"),
-            optimisticUser("local-user-2", text: "same text"),
+            optimisticUser("origin:00000000-0000-0000-0000-000000000001", text: "same text"),
+            optimisticUser("origin:00000000-0000-0000-0000-000000000002", text: "same text"),
         ]
         let remote = [historyUser(0, text: "same text")]
 
         let merged = GaryxTranscriptMerge.mergedMessages(remote, withLocal: local)
 
-        XCTAssertEqual(merged.map(\.id), ["local-user-1", "local-user-2"])
+        XCTAssertEqual(
+            merged.map(\.id),
+            [
+                "history:0",
+                "origin:00000000-0000-0000-0000-000000000001",
+                "origin:00000000-0000-0000-0000-000000000002",
+            ]
+        )
         XCTAssertEqual(merged[0].localState, .remoteFinal)
-        XCTAssertEqual(merged[1].localState, .optimistic, "the second send is still in flight")
+        XCTAssertEqual(merged[1].localState, .optimistic)
+        XCTAssertEqual(merged[2].localState, .optimistic)
     }
 
     func testPreserveRemoteBeforeIndexKeepsOlderLoadedPages() {
@@ -49,64 +57,39 @@ final class GaryxTranscriptMergeTests: XCTestCase {
     }
 
     func testFailedOptimisticSendSurvivesMerge() {
-        var failed = optimisticUser("local-user-9", text: "did not make it")
+        var failed = optimisticUser("origin:00000000-0000-0000-0000-000000000009", text: "did not make it")
         failed.statusText = "gateway exploded"
         let remote = [historyUser(0, text: "older message")]
 
         let merged = GaryxTranscriptMerge.mergedMessages(remote, withLocal: [failed])
 
         XCTAssertEqual(merged.count, 2)
-        XCTAssertEqual(merged[1].id, "local-user-9")
+        XCTAssertEqual(merged[1].id, "origin:00000000-0000-0000-0000-000000000009")
         XCTAssertEqual(merged[1].statusText, "gateway exploded")
     }
 
-    func testPendingInputRowConsumesRemoteOccurrence() {
-        let pendingRow = GaryxMobileMessage(
-            id: "pending-user:p1",
-            role: .user,
-            text: "do it",
-            timestamp: nil,
-            isStreaming: false,
-            pendingInputId: "p1",
-            localState: .remotePartial
-        )
-        let optimistic = optimisticUser("local-user-2", text: "do it")
-        let remote = [historyUser(0, text: "do it")]
-
-        let merged = GaryxTranscriptMerge.mergedMessages(remote, withLocal: [pendingRow, optimistic])
-
-        XCTAssertEqual(merged.count, 2)
-        XCTAssertEqual(
-            merged[0].id,
-            "history:0",
-            "the remote occurrence belongs to the pending row, not the optimistic send"
-        )
-        XCTAssertEqual(merged[1].id, "local-user-2", "optimistic send is preserved")
-        XCTAssertEqual(merged[1].localState, .optimistic)
-    }
-
     func testOptimisticSendEchoesImmediatelyAndDedupesWhenCommitted() {
+        let origin = "00000000-0000-0000-0000-000000000010"
         let optimistic = optimisticUser(
-            "local-user-echo",
+            "origin:\(origin)",
             text: "continue",
-            clientIntentId: "mobile-echo"
+            clientIntentId: origin
         )
 
         XCTAssertEqual(
             GaryxTranscriptMerge.mergedMessages([], withLocal: [optimistic]).map(\.id),
-            ["local-user-echo"]
+            ["origin:\(origin)"]
         )
 
-        let committed = [historyUser(42, text: "continue", clientIntentId: "mobile-echo")]
+        let committed = [historyUser(42, text: "continue", clientIntentId: origin)]
         let merged = GaryxTranscriptMerge.mergedMessages(committed, withLocal: [optimistic])
 
-        XCTAssertEqual(merged.map(\.id), ["local-user-echo"])
-        XCTAssertEqual(merged[0].remoteId, "history:42")
+        XCTAssertEqual(merged.map(\.id), ["origin:\(origin)"])
         XCTAssertEqual(merged[0].localState, .remoteFinal)
     }
 
     func testEmptyRemoteKeepsLocalUntouched() {
-        let local = [optimisticUser("local-user-1", text: "hello")]
+        let local = [optimisticUser("origin:00000000-0000-0000-0000-000000000001", text: "hello")]
         XCTAssertEqual(GaryxTranscriptMerge.mergedMessages([], withLocal: local), local)
     }
 
@@ -148,7 +131,7 @@ final class GaryxTranscriptMergeTests: XCTestCase {
 
     private func historyUser(_ index: Int, text: String, clientIntentId: String? = nil) -> GaryxMobileMessage {
         GaryxMobileMessage(
-            id: "history:\(index)",
+            id: clientIntentId.map { "origin:\($0)" } ?? "history:\(index)",
             role: .user,
             text: text,
             timestamp: nil,

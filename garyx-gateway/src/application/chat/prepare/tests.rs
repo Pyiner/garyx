@@ -227,6 +227,7 @@ async fn prepare_chat_request_resolves_provider_and_system_prompt_from_thread_ag
             attachments: Vec::new(),
             images: Vec::new(),
             files: Vec::new(),
+            client_intent_id: Some("00000000-0000-0000-0000-000000000001".to_owned()),
             from_id: "api-user".to_owned(),
             account_id: "main".to_owned(),
             bot: None,
@@ -255,6 +256,13 @@ async fn prepare_chat_request_resolves_provider_and_system_prompt_from_thread_ag
     assert_eq!(
         prepared.metadata.get("model").and_then(Value::as_str),
         Some("gpt-5-codex")
+    );
+    assert_eq!(
+        prepared
+            .metadata
+            .get("client_intent_id")
+            .and_then(Value::as_str),
+        Some("00000000-0000-0000-0000-000000000001")
     );
     assert_eq!(
         prepared

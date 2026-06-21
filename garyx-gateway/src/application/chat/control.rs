@@ -50,6 +50,7 @@ pub(crate) async fn execute_chat_stream_input(
             Some(images),
             Some(files),
             Some(attachments),
+            client_intent_id.clone(),
         )
         .await;
 

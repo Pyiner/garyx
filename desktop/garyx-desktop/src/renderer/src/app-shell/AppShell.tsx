@@ -532,10 +532,13 @@ function messageTailSignature(messages: UiTranscriptMessage[]): string {
 }
 
 function transcriptEntryHistoryIndex(
-  message: Pick<UiTranscriptMessage, "id" | "localState">,
+  message: Pick<UiTranscriptMessage, "id" | "localState" | "seq">,
 ): number | null {
   if (message.localState !== "remote_final") {
     return null;
+  }
+  if (typeof message.seq === "number" && Number.isFinite(message.seq)) {
+    return Math.max(0, message.seq - 1);
   }
   const suffix = message.id.split(":").pop();
   if (!suffix || !/^\d+$/.test(suffix)) {
@@ -687,51 +690,6 @@ function uiTranscriptMessageComparableText(
   return normalizeMessageText(message.text);
 }
 
-function pendingThreadInputImageCount(input: PendingThreadInput): number {
-  return countTranscriptImages(input.content);
-}
-
-function pendingThreadInputFileCount(input: PendingThreadInput): number {
-  return countTranscriptFiles(input.content);
-}
-
-function pendingThreadInputComparableText(input: PendingThreadInput): string {
-  const structuredText = normalizeMessageText(
-    extractTranscriptText(input.content),
-  );
-  if (structuredText) {
-    return structuredText;
-  }
-  if (
-    pendingThreadInputImageCount(input) > 0 ||
-    pendingThreadInputFileCount(input) > 0
-  ) {
-    return "";
-  }
-  return normalizeMessageText(input.text);
-}
-
-function pendingThreadInputMatchesMessage(
-  input: PendingThreadInput,
-  message: TranscriptMessage,
-): boolean {
-  if (message.role !== "user") {
-    return false;
-  }
-
-  const queuedInputId = queuedInputIdFromMessage(message);
-  if (queuedInputId) {
-    return queuedInputId === input.id;
-  }
-
-  return (
-    pendingThreadInputComparableText(input) ===
-      transcriptMessageComparableText(message) &&
-    pendingThreadInputImageCount(input) === transcriptMessageImageCount(message) &&
-    pendingThreadInputFileCount(input) === transcriptMessageFileCount(message)
-  );
-}
-
 function isRecoverableAssistantEntry(
   entry: UiTranscriptMessage,
   intentId: string,
@@ -794,13 +752,7 @@ function transcriptMessageMatchesIntent(
   message: TranscriptMessage,
   intent: MessageIntent,
 ): boolean {
-  return (
-    message.role === "user" &&
-    transcriptMessageComparableText(message) ===
-      normalizeMessageText(intent.text) &&
-    transcriptMessageImageCount(message) === intent.images.length &&
-    transcriptMessageFileCount(message) === intent.files.length
-  );
+  return messageOriginId(message) === intent.intentId;
 }
 
 function fileToBase64(file: File): Promise<string> {
@@ -1006,7 +958,7 @@ function browserAnnotationScreenshotImages(
 
 function seededUserBubble(intent: MessageIntent): UiTranscriptMessage {
   return {
-    id: `user:${intent.intentId}`,
+    id: userMessageIdForOrigin(intent.intentId),
     role: "user",
     text: intent.text,
     content: buildOptimisticTranscriptContent(
@@ -1020,32 +972,10 @@ function seededUserBubble(intent: MessageIntent): UiTranscriptMessage {
   };
 }
 
-function seededAckedUserBubble(intent: MessageIntent): UiTranscriptMessage {
-  return {
-    ...seededUserBubble(intent),
-    localState: "remote_partial",
-  };
-}
-
 type SeededTurn = {
   assistantEntryId: string | null;
   legacyPendingAssistantId: string | null;
 };
-
-function queuedInputIdFromMessage(
-  message: Pick<TranscriptMessage, "metadata">,
-): string {
-  const metadata = message.metadata;
-  if (!metadata || typeof metadata !== "object") {
-    return "";
-  }
-  const snakeCase = metadata.queued_input_id;
-  if (typeof snakeCase === "string" && snakeCase.trim()) {
-    return snakeCase;
-  }
-  const camelCase = metadata.queuedInputId;
-  return typeof camelCase === "string" && camelCase.trim() ? camelCase : "";
-}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -1054,58 +984,42 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
-const GENERATED_IMAGE_TOOL_USE_METADATA_KEY = "generated_image_tool_use_id";
-
-function transcriptMessagesSemanticallyMatch(
-  local: UiTranscriptMessage,
-  remote: TranscriptMessage,
-): boolean {
-  if (local.role !== remote.role) {
-    return false;
-  }
-
-  const localQueuedInputId = queuedInputIdFromMessage(local);
-  const remoteQueuedInputId = queuedInputIdFromMessage(remote);
-  if (localQueuedInputId && remoteQueuedInputId) {
-    return localQueuedInputId === remoteQueuedInputId;
-  }
-
-  if (isToolRole(local.role) && isToolRole(remote.role)) {
-    return toolMessagesEquivalent(local, remote);
-  }
-
-  if (local.role === "user") {
-    return (
-      transcriptMessageComparableText(local) ===
-        transcriptMessageComparableText(remote) &&
-      transcriptMessageImageCount(local) === transcriptMessageImageCount(remote) &&
-      transcriptMessageFileCount(local) === transcriptMessageFileCount(remote)
-    );
-  }
-
-  if (local.role === "assistant") {
-    const localText = transcriptMessageComparableText(local);
-    const remoteText = transcriptMessageComparableText(remote);
-    if (!localText || !remoteText) {
-      return localText === remoteText;
-    }
-    return (
-      localText === remoteText ||
-      remoteText.startsWith(localText) ||
-      localText.startsWith(remoteText)
-    );
-  }
-
-  if (local.role === "system") {
-    return (
-      local.internalKind === remote.internalKind &&
-      transcriptMessageComparableText(local) ===
-        transcriptMessageComparableText(remote)
-    );
-  }
-
-  return false;
+function metadataString(
+  metadata: Record<string, unknown> | null | undefined,
+  key: string,
+): string {
+  const value = metadata?.[key];
+  return typeof value === "string" ? value.trim() : "";
 }
+
+function userMessageIdForOrigin(originId: string): string {
+  return `origin:${originId}`;
+}
+
+function messageOriginId(
+  message: Pick<TranscriptMessage, "id" | "metadata" | "role">,
+): string {
+  if (message.role !== "user") {
+    return "";
+  }
+  if (message.id.startsWith("origin:")) {
+    return message.id.slice("origin:".length).trim();
+  }
+  return metadataString(message.metadata, "origin_id");
+}
+
+function normalizeTranscriptMessageId(
+  message: TranscriptMessage,
+): TranscriptMessage {
+  const originId = messageOriginId(message);
+  if (!originId) {
+    return message;
+  }
+  const id = userMessageIdForOrigin(originId);
+  return message.id === id ? message : { ...message, id };
+}
+
+const GENERATED_IMAGE_TOOL_USE_METADATA_KEY = "generated_image_tool_use_id";
 
 function jsonValuesEqual(left: unknown, right: unknown): boolean {
   return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
@@ -1144,20 +1058,10 @@ function materializeRemoteTranscript(
 
   const materializeMessage = (
     message: TranscriptMessage,
-    matchSemantic: boolean,
   ): UiTranscriptMessage => {
     let matchedIndex = existing.findIndex((entry, index) => {
       return !usedExistingIndexes.has(index) && entry.id === message.id;
     });
-
-    if (matchedIndex < 0 && matchSemantic) {
-      matchedIndex = existing.findIndex((entry, index) => {
-        return (
-          !usedExistingIndexes.has(index) &&
-          transcriptMessagesSemanticallyMatch(entry, message)
-        );
-      });
-    }
 
     const matchedEntry = matchedIndex >= 0 ? existing[matchedIndex] : null;
     if (matchedIndex >= 0) {
@@ -1265,7 +1169,8 @@ function materializeRemoteTranscript(
     if (isRunLoadingPlaceholderMessage(message)) {
       continue;
     }
-    materializedRemote.push(materializeMessage(message, true));
+    const normalizedMessage = normalizeTranscriptMessageId(message);
+    materializedRemote.push(materializeMessage(normalizedMessage));
     if (message.role === "tool_result") {
       const imageContent = extractImageGenerationImageContent(message);
       if (imageContent) {
@@ -1829,7 +1734,6 @@ export function AppShell() {
   >({});
   const messageStateRef = useRef(initialMessageMachineState);
   const liveStreamStateRef = useRef<Record<string, LiveStreamState>>({});
-  const pendingRemoteInputsRef = useRef<PendingThreadInputMap>({});
   const deferredQueueDrainByThreadRef = useRef<Record<string, boolean>>({});
   const queueDrainInFlightByThreadRef = useRef<Record<string, boolean>>({});
   const pendingAutomationRunsRef = useRef<Record<string, PendingAutomationRun>>(
@@ -2892,14 +2796,7 @@ export function AppShell() {
     visiblePendingAckIntents.length > 0
       ? []
       : activeRemotePendingInputs.filter((input) => {
-          if (input.status !== "awaiting_ack") {
-            return false;
-          }
-          // Follow gateway pending-input state, but suppress duplicate UI when the
-          // same queued input has already landed in the visible transcript.
-          return !activeMessages.some((message) =>
-            pendingThreadInputMatchesMessage(input, message),
-          );
+          return input.status === "awaiting_ack";
         });
   const visibleRemoteAwaitingAckInputs = visibleRemotePendingInputs;
   const activePendingHistoryIntent = activeThreadMessageKey
@@ -3476,12 +3373,7 @@ export function AppShell() {
     sideChatPendingAckIntents.length > 0
       ? []
       : sideChatRemotePendingInputs.filter((input) => {
-          if (input.status !== "awaiting_ack") {
-            return false;
-          }
-          return !sideChatMessages.some((message) =>
-            pendingThreadInputMatchesMessage(input, message),
-          );
+          return input.status === "awaiting_ack";
         });
   const sideChatPendingHistoryIntent = sideChatThreadId
     ? Object.values(messageState.intentsById).some((intent) => {
@@ -5984,43 +5876,8 @@ export function AppShell() {
       } else {
         delete next[threadId];
       }
-      pendingRemoteInputsRef.current = next;
       return next;
     });
-  }
-
-  function consumeRemotePendingInput(
-    threadId: string,
-    pendingInputId?: string,
-  ): PendingThreadInput | null {
-    let consumed: PendingThreadInput | null = null;
-    setPendingRemoteInputsByThread((current) => {
-      const existing = current[threadId] || [];
-      const normalizedPendingInputId = pendingInputId?.trim() || "";
-      const consumeIndex = normalizedPendingInputId
-        ? existing.findIndex((input) => {
-            return (
-              input.status === "awaiting_ack" &&
-              input.id === normalizedPendingInputId
-            );
-          })
-        : existing.findIndex((input) => input.status === "awaiting_ack");
-      if (consumeIndex < 0) {
-        pendingRemoteInputsRef.current = current;
-        return current;
-      }
-      consumed = existing[consumeIndex] || null;
-      const nextInputs = existing.filter((_, index) => index !== consumeIndex);
-      const next = { ...current };
-      if (nextInputs.length > 0) {
-        next[threadId] = nextInputs;
-      } else {
-        delete next[threadId];
-      }
-      pendingRemoteInputsRef.current = next;
-      return next;
-    });
-    return consumed;
   }
 
   function setPendingAutomationRun(
@@ -6138,65 +5995,6 @@ export function AppShell() {
       });
     });
     markIntentsFromHistory(threadId, visibleMessages);
-  }
-
-  function materializeAckedUserMessage(threadId: string, intentId: string) {
-    const intent = intentForId(intentId);
-    if (!intent) {
-      return;
-    }
-    const ackedUserBubble = seededAckedUserBubble(intent);
-    updateMessagesByThread((current) => {
-      const existing = current[threadId] || [];
-      if (
-        existing.some(
-          (entry) => entry.role === "user" && entry.intentId === intentId,
-        )
-      ) {
-        return current;
-      }
-      return {
-        ...current,
-        [threadId]: [...existing, ackedUserBubble],
-      };
-    });
-  }
-
-  function materializeAckedRemotePendingInput(
-    threadId: string,
-    pendingInput: PendingThreadInput,
-  ) {
-    const ackedUserBubble: UiTranscriptMessage = {
-      id: `pending-user:${pendingInput.id}`,
-      role: "user",
-      text: pendingInput.text,
-      content: pendingInput.content,
-      timestamp: pendingInput.timestamp || new Date().toISOString(),
-      metadata: {
-        queued_input_id: pendingInput.id,
-      },
-      remoteRunId: pendingInput.runId || undefined,
-      localState: "remote_partial",
-      pending: false,
-      error: false,
-    };
-    updateMessagesByThread((current) => {
-      const existing = current[threadId] || [];
-      if (
-        existing.some((entry) => {
-          return (
-            queuedInputIdFromMessage(entry) === pendingInput.id ||
-            transcriptMessagesSemanticallyMatch(entry, ackedUserBubble)
-          );
-        })
-      ) {
-        return current;
-      }
-      return {
-        ...current,
-        [threadId]: [...existing, ackedUserBubble],
-      };
-    });
   }
 
   function handleChatStreamEvent(event: DesktopChatStreamEvent) {
@@ -6486,12 +6284,6 @@ export function AppShell() {
         return false;
       }
       if (!entry.intentId) {
-        const queuedInputId = queuedInputIdFromMessage(entry);
-        if (entry.role === "user" && queuedInputId) {
-          return !materializedRemote.some((candidate) => {
-            return queuedInputIdFromMessage(candidate) === queuedInputId;
-          });
-        }
         return (
           entry.localState === "error" || entry.localState === "interrupted"
         );
@@ -6504,10 +6296,13 @@ export function AppShell() {
         );
       }
 
-      const match = resolveIntentHistoryMatch(intent, visibleTranscript);
       if (entry.role === "user") {
-        return !match.userVisible;
+        return !(
+          materializedRemoteIds.has(entry.id) ||
+          materializedRemoteIds.has(userMessageIdForOrigin(intent.intentId))
+        );
       }
+      const match = resolveIntentHistoryMatch(intent, visibleTranscript);
       if (entry.role === "assistant") {
         return !match.assistantVisible;
       }
@@ -8115,7 +7910,6 @@ export function AppShell() {
         : null;
     });
     if (nextIntentId) {
-      materializeAckedUserMessage(threadId, nextIntentId);
       const acknowledgedIntent = intentForId(nextIntentId);
       dispatchMessageState({
         type: "intent/awaiting-history",
@@ -8127,15 +7921,6 @@ export function AppShell() {
         activeIntentId: nextIntentId,
         remoteRunId: runId,
       });
-    } else {
-      const pendingInput = consumeRemotePendingInput(
-        threadId,
-        acknowledgedPendingInputId,
-      );
-      if (pendingInput) {
-        materializeAckedRemotePendingInput(threadId, pendingInput);
-        requestSelectedThreadMessagesBottomSnap(threadId, true);
-      }
     }
   }
 

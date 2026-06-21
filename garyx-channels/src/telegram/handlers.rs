@@ -698,6 +698,7 @@ impl TelegramChannel {
                     None,
                     None,
                     Some(image_attachments.clone()),
+                    None,
                 )
                 .await;
             if queued.is_some() {
