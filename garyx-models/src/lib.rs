@@ -54,12 +54,12 @@ pub use message_lifecycle::{
 };
 pub use messages::MessageMetadata;
 pub use provider::{
-    ATTACHMENTS_METADATA_KEY, FilePayload, GeminiCliConfig, ImagePayload, PromptAttachment,
-    PromptAttachmentKind, ProviderMessage, ProviderMessageRole, ProviderRunOptions,
-    ProviderRunResult, ProviderType, StreamBoundaryKind, StreamEvent, attachments_from_metadata,
-    attachments_to_metadata_value, build_prompt_message_with_attachments,
-    build_user_content_from_parts, file_attachments_from_paths, stage_file_payloads_for_prompt,
-    stage_image_payloads_for_prompt,
+    ATTACHMENTS_METADATA_KEY, AntigravityCliConfig, FilePayload, GeminiCliConfig, ImagePayload,
+    PromptAttachment, PromptAttachmentKind, ProviderMessage, ProviderMessageRole,
+    ProviderRunOptions, ProviderRunResult, ProviderType, StreamBoundaryKind, StreamEvent,
+    attachments_from_metadata, attachments_to_metadata_value,
+    build_prompt_message_with_attachments, build_user_content_from_parts,
+    file_attachments_from_paths, stage_file_payloads_for_prompt, stage_image_payloads_for_prompt,
 };
 pub use routing::DeliveryContext;
 pub use session::{ChatType, SessionEntry, SessionOrigin, SessionTokenUsage};

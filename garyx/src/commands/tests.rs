@@ -929,6 +929,10 @@ fn provider_model_config_key_maps_configurable_provider_types() {
         "gemini"
     );
     assert_eq!(
+        provider_model_config_key(&ProviderType::AntigravityCli).unwrap(),
+        "antigravity"
+    );
+    assert_eq!(
         provider_model_config_key(&ProviderType::Gpt).unwrap(),
         "gpt"
     );

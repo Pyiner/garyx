@@ -226,6 +226,12 @@ pub struct AgentProviderConfig {
     #[serde(default = "default_gemini_approval_mode")]
     pub approval_mode: String,
 
+    // Antigravity CLI specific
+    #[serde(default)]
+    pub antigravity_bin: String,
+    #[serde(default)]
+    pub antigravity_brain_root: String,
+
     // Native GPT model backend specific
     #[serde(default = "default_garyx_native_auth_source")]
     pub auth_source: String,
@@ -281,6 +287,8 @@ impl Default for AgentProviderConfig {
             experimental_api: false,
             gemini_bin: String::new(),
             approval_mode: default_gemini_approval_mode(),
+            antigravity_bin: String::new(),
+            antigravity_brain_root: String::new(),
             auth_source: default_garyx_native_auth_source(),
             base_url: String::new(),
             codex_home: String::new(),
