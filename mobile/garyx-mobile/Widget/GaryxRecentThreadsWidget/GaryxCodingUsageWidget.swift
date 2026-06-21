@@ -234,16 +234,7 @@ struct GaryxCodingUsageWidgetView: View {
     }
 
     private var models: [GaryxUsageGaugeModel] {
-        let usage = entry.snapshot.usage
-        let ordered = [
-            GaryxCodingUsageWidgetConstants.claudeCodeProviderId,
-            GaryxCodingUsageWidgetConstants.codexProviderId,
-        ]
-        let known = ordered.compactMap { id in
-            usage.provider(id: id).map { GaryxUsageGaugeModel.make(from: $0, now: entry.date) }
-        }
-        if !known.isEmpty { return known }
-        return usage.providers.map { GaryxUsageGaugeModel.make(from: $0, now: entry.date) }
+        GaryxUsageGaugeModel.widgetModels(from: entry.snapshot.usage, now: entry.date)
     }
 
     private var ageText: String? {

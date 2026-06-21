@@ -1,6 +1,7 @@
 import Foundation
 
 public enum GaryxProviderIdentityKind: String, Equatable {
+    case antigravity
     case codex
     case traex
     case openAI
@@ -66,6 +67,9 @@ public struct GaryxProviderPresentation: Equatable {
 
     private static func kind(for value: String) -> GaryxProviderIdentityKind {
         let source = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if source.contains("antigravity") || source == "agy" || source.contains("antigravity_cli") {
+            return .antigravity
+        }
         if source.contains("codex") {
             return .codex
         }
@@ -88,6 +92,8 @@ public struct GaryxProviderPresentation: Equatable {
 
     private static func symbolName(for kind: GaryxProviderIdentityKind) -> String? {
         switch kind {
+        case .antigravity:
+            "bolt.fill"
         case .codex:
             "chevron.left.forwardslash.chevron.right"
         case .traex:
@@ -107,6 +113,8 @@ public struct GaryxProviderPresentation: Equatable {
     private static func displayName(for providerType: String, kind: GaryxProviderIdentityKind) -> String {
         let normalized = providerType.trimmingCharacters(in: .whitespacesAndNewlines)
         switch normalized {
+        case "antigravity", "agy", "antigravity_cli":
+            return "Antigravity"
         case "codex_app_server":
             return "Codex"
         case "traex":
@@ -133,6 +141,8 @@ public struct GaryxProviderPresentation: Equatable {
                 return words.joined(separator: " ")
             }
             switch kind {
+            case .antigravity:
+                return "Antigravity"
             case .codex:
                 return "Codex"
             case .traex:

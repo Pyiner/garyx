@@ -60,7 +60,7 @@ import { WorkspacePathPicker } from '../../components/WorkspacePathPicker';
 import { useI18n } from '../../i18n';
 import { ProviderAgentIcon, hasProviderAgentIcon } from './ProviderAgentIcon';
 
-type ProviderType = 'claude_code' | 'codex_app_server' | 'traex' | 'gemini_cli' | 'gpt' | 'anthropic' | 'google' | 'claude_llm' | 'gemini_llm';
+type ProviderType = 'claude_code' | 'codex_app_server' | 'antigravity' | 'traex' | 'gemini_cli' | 'gpt' | 'anthropic' | 'google' | 'claude_llm' | 'gemini_llm';
 type HubTab = 'agents' | 'teams' | 'workflows';
 type AgentDialogMode = 'create' | 'edit' | 'view' | null;
 type TeamDialogMode = 'create' | 'edit' | 'view' | null;
@@ -205,6 +205,9 @@ function deriveId(name: string): string {
 function providerLabel(value: ProviderType): string {
   if (value === 'codex_app_server') {
     return 'Codex';
+  }
+  if (value === 'antigravity') {
+    return 'Antigravity';
   }
   if (value === 'traex') {
     return 'Traex';
@@ -1681,6 +1684,7 @@ export function AgentsHubPanel({
                       <SelectGroup>
                         <SelectItem value="claude_code">Claude</SelectItem>
                         <SelectItem value="codex_app_server">Codex</SelectItem>
+                        <SelectItem value="antigravity">Antigravity</SelectItem>
                         <SelectItem value="traex">Trae</SelectItem>
                         <SelectItem value="gemini_cli">Gemini</SelectItem>
                         <SelectItem value="gpt">GPT</SelectItem>

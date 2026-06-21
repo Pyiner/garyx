@@ -208,6 +208,7 @@ final class GaryxMobileModel: ObservableObject {
     @Published var gatewaySettingsDocument: [String: GaryxJSONValue] = [:]
     @Published var isSavingBotSettings = false
     @Published var providerModelsByType: [String: GaryxProviderModels] = [:]
+    @Published var codingUsage: GaryxCodingUsage?
     @Published var selectedSkillEditor: GaryxSkillEditorState?
     @Published var selectedSkillDocument: GaryxSkillFileDocument?
     @Published var selectedTaskDetail: GaryxTaskSummary?

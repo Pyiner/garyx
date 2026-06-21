@@ -51,6 +51,76 @@ public struct GaryxUsageWindow: Codable, Equatable, Sendable {
     }
 }
 
+/// One per-model quota bucket as reported by coding providers that expose
+/// model-scoped allowance, currently Antigravity.
+public struct GaryxModelUsage: Codable, Equatable, Identifiable, Sendable {
+    public var id: String
+    public var name: String
+    public var remainingFraction: Double
+    public var remainingPercent: Double
+    public var usedPercent: Double
+    public var resetsAt: String?
+    public var resetAfterSeconds: Int?
+    public var description: String?
+
+    public init(
+        id: String,
+        name: String,
+        remainingFraction: Double,
+        remainingPercent: Double,
+        usedPercent: Double,
+        resetsAt: String? = nil,
+        resetAfterSeconds: Int? = nil,
+        description: String? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.remainingFraction = remainingFraction
+        self.remainingPercent = remainingPercent
+        self.usedPercent = usedPercent
+        self.resetsAt = resetsAt
+        self.resetAfterSeconds = resetAfterSeconds
+        self.description = description
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case remainingFraction = "remaining_fraction"
+        case remainingPercent = "remaining_percent"
+        case usedPercent = "used_percent"
+        case resetsAt = "resets_at"
+        case resetAfterSeconds = "reset_after_seconds"
+        case description
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        remainingFraction = try container.decodeIfPresent(Double.self, forKey: .remainingFraction) ?? 0
+        remainingPercent = try container.decodeIfPresent(Double.self, forKey: .remainingPercent)
+            ?? (remainingFraction * 100)
+        usedPercent = try container.decodeIfPresent(Double.self, forKey: .usedPercent)
+            ?? max(0, 100 - remainingPercent)
+        resetsAt = try container.decodeIfPresent(String.self, forKey: .resetsAt)
+        resetAfterSeconds = try container.decodeIfPresent(Int.self, forKey: .resetAfterSeconds)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(remainingFraction, forKey: .remainingFraction)
+        try container.encode(remainingPercent, forKey: .remainingPercent)
+        try container.encode(usedPercent, forKey: .usedPercent)
+        try container.encodeIfPresent(resetsAt, forKey: .resetsAt)
+        try container.encodeIfPresent(resetAfterSeconds, forKey: .resetAfterSeconds)
+        try container.encodeIfPresent(description, forKey: .description)
+    }
+}
+
 /// Usage for a single coding assistant on the gateway machine.
 public struct GaryxProviderUsage: Codable, Equatable, Identifiable, Sendable {
     public var id: String
@@ -60,6 +130,7 @@ public struct GaryxProviderUsage: Codable, Equatable, Identifiable, Sendable {
     public var plan: String?
     public var weekly: GaryxUsageWindow?
     public var session: GaryxUsageWindow?
+    public var models: [GaryxModelUsage]
     public var error: String?
 
     public init(
@@ -70,6 +141,7 @@ public struct GaryxProviderUsage: Codable, Equatable, Identifiable, Sendable {
         plan: String? = nil,
         weekly: GaryxUsageWindow? = nil,
         session: GaryxUsageWindow? = nil,
+        models: [GaryxModelUsage] = [],
         error: String? = nil
     ) {
         self.id = id
@@ -79,6 +151,7 @@ public struct GaryxProviderUsage: Codable, Equatable, Identifiable, Sendable {
         self.plan = plan
         self.weekly = weekly
         self.session = session
+        self.models = models
         self.error = error
     }
 
@@ -90,6 +163,7 @@ public struct GaryxProviderUsage: Codable, Equatable, Identifiable, Sendable {
         case plan
         case weekly
         case session
+        case models
         case error
     }
 
@@ -102,6 +176,7 @@ public struct GaryxProviderUsage: Codable, Equatable, Identifiable, Sendable {
         plan = try container.decodeIfPresent(String.self, forKey: .plan)
         weekly = try container.decodeIfPresent(GaryxUsageWindow.self, forKey: .weekly)
         session = try container.decodeIfPresent(GaryxUsageWindow.self, forKey: .session)
+        models = try container.decodeIfPresent([GaryxModelUsage].self, forKey: .models) ?? []
         error = try container.decodeIfPresent(String.self, forKey: .error)
     }
 
@@ -114,6 +189,9 @@ public struct GaryxProviderUsage: Codable, Equatable, Identifiable, Sendable {
         try container.encodeIfPresent(plan, forKey: .plan)
         try container.encodeIfPresent(weekly, forKey: .weekly)
         try container.encodeIfPresent(session, forKey: .session)
+        if !models.isEmpty {
+            try container.encode(models, forKey: .models)
+        }
         try container.encodeIfPresent(error, forKey: .error)
     }
 }
@@ -318,6 +396,15 @@ public struct GaryxUsageGaugeModel: Equatable, Sendable {
         )
     }
 
+    public static func widgetModels(
+        from usage: GaryxCodingUsage,
+        now: Date = Date()
+    ) -> [GaryxUsageGaugeModel] {
+        GaryxCodingUsageWidgetConstants.widgetProviderIds.compactMap { id in
+            usage.provider(id: id).map { GaryxUsageGaugeModel.make(from: $0, now: now) }
+        }
+    }
+
     static func level(forRemaining remaining: Double) -> GaryxUsageLevel {
         switch remaining {
         case let value where value >= 50:
@@ -369,6 +456,130 @@ public struct GaryxUsageGaugeModel: Equatable, Sendable {
     }
 }
 
+public struct GaryxProviderModelUsageDisplayModel: Equatable, Identifiable, Sendable {
+    public var id: String
+    public var title: String
+    public var remainingText: String
+    public var detailText: String
+    public var level: GaryxUsageLevel
+
+    public init(
+        id: String,
+        title: String,
+        remainingText: String,
+        detailText: String,
+        level: GaryxUsageLevel
+    ) {
+        self.id = id
+        self.title = title
+        self.remainingText = remainingText
+        self.detailText = detailText
+        self.level = level
+    }
+}
+
+public struct GaryxProviderUsageDisplayModel: Equatable, Sendable {
+    public var providerId: String
+    public var summaryText: String
+    public var detailText: String
+    public var available: Bool
+    public var models: [GaryxProviderModelUsageDisplayModel]
+
+    public init(
+        providerId: String,
+        summaryText: String,
+        detailText: String,
+        available: Bool,
+        models: [GaryxProviderModelUsageDisplayModel]
+    ) {
+        self.providerId = providerId
+        self.summaryText = summaryText
+        self.detailText = detailText
+        self.available = available
+        self.models = models
+    }
+
+    public static func make(
+        from provider: GaryxProviderUsage?,
+        now: Date = Date()
+    ) -> GaryxProviderUsageDisplayModel? {
+        guard let provider else { return nil }
+        if !provider.available {
+            return GaryxProviderUsageDisplayModel(
+                providerId: provider.id,
+                summaryText: "Unavailable",
+                detailText: provider.error?.isEmpty == false ? "Check local credentials" : "No usage data",
+                available: false,
+                models: []
+            )
+        }
+
+        let modelRows = provider.models.map { model in
+            let remaining = model.remainingPercent.clamped(to: 0...100)
+            return GaryxProviderModelUsageDisplayModel(
+                id: model.id,
+                title: model.name,
+                remainingText: "\(Int(remaining.rounded()))% left",
+                detailText: modelDetailText(for: model, stale: provider.stale, now: now),
+                level: GaryxUsageGaugeModel.level(forRemaining: remaining)
+            )
+        }
+
+        if let weekly = provider.weekly {
+            let remaining = weekly.remainingPercent.clamped(to: 0...100)
+            return GaryxProviderUsageDisplayModel(
+                providerId: provider.id,
+                summaryText: "\(Int(remaining.rounded()))% left",
+                detailText: GaryxUsageGaugeModel.resetDetailText(for: weekly, stale: provider.stale, now: now),
+                available: true,
+                models: modelRows
+            )
+        }
+
+        if !modelRows.isEmpty {
+            let modelCountText = modelRows.count == 1
+                ? "1 model quota"
+                : "\(modelRows.count) model quotas"
+            return GaryxProviderUsageDisplayModel(
+                providerId: provider.id,
+                summaryText: modelCountText,
+                detailText: provider.stale ? "stale data" : "Per-model quota",
+                available: true,
+                models: modelRows
+            )
+        }
+
+        return GaryxProviderUsageDisplayModel(
+            providerId: provider.id,
+            summaryText: "No data",
+            detailText: provider.error?.isEmpty == false ? "Check local credentials" : "Usage not reported",
+            available: false,
+            models: []
+        )
+    }
+
+    private static func modelDetailText(
+        for model: GaryxModelUsage,
+        stale: Bool,
+        now: Date
+    ) -> String {
+        if stale {
+            return "stale data"
+        }
+        let description = model.description?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !description.isEmpty {
+            return description
+        }
+        let window = GaryxUsageWindow(
+            usedPercent: model.usedPercent,
+            remainingPercent: model.remainingPercent,
+            resetsAt: model.resetsAt,
+            resetAfterSeconds: model.resetAfterSeconds
+        )
+        return GaryxUsageGaugeModel.resetDetailText(for: window, stale: false, now: now)
+    }
+}
+
 public enum GaryxUsageDateParsing {
     private static let withFractional: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
@@ -394,6 +605,7 @@ public enum GaryxCodingUsageWidgetConstants {
     /// Provider ids exposed by the gateway, in display order.
     public static let claudeCodeProviderId = "claude_code"
     public static let codexProviderId = "codex"
+    public static let widgetProviderIds = [claudeCodeProviderId, codexProviderId]
 }
 
 extension Comparable {

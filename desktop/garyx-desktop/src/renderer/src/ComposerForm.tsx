@@ -155,6 +155,9 @@ function providerOptionLabel(providerType: DesktopApiProviderType): string {
   if (providerType === 'codex_app_server') {
     return 'Codex';
   }
+  if (providerType === 'antigravity') {
+    return 'Antigravity';
+  }
   if (providerType === 'traex') {
     return 'Traex';
   }

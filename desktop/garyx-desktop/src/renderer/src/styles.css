@@ -16187,7 +16187,7 @@ button.codex-list-row {
 
 .provider-config-table table {
   width: 100%;
-  min-width: 840px;
+  min-width: 1060px;
   border-collapse: collapse;
 }
 
@@ -16251,6 +16251,10 @@ button.codex-list-row {
   white-space: nowrap;
 }
 
+.provider-config-col-usage {
+  width: 280px;
+}
+
 .provider-config-col-status {
   width: 132px;
 }
@@ -16258,6 +16262,51 @@ button.codex-list-row {
 .provider-config-col-actions {
   width: 112px;
   text-align: right;
+}
+
+.provider-usage-summary,
+.provider-usage-models {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.provider-usage-model-row {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(84px, 1fr) auto minmax(72px, 0.8fr);
+  align-items: baseline;
+  gap: 8px;
+}
+
+.provider-usage-model-name,
+.provider-usage-detail,
+.provider-usage-muted {
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(26, 28, 31, 0.55);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-usage-value {
+  color: var(--color-token-text-primary);
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.provider-usage-value.healthy {
+  color: #1c8f52;
+}
+
+.provider-usage-value.warning {
+  color: #a35d00;
+}
+
+.provider-usage-value.critical {
+  color: #b3261e;
 }
 
 .provider-config-col-kind code {

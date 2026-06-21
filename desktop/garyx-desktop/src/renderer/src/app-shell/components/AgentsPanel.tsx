@@ -20,7 +20,7 @@ import {
 import { Textarea } from '../../components/ui/textarea';
 import { useI18n } from '../../i18n';
 
-type ProviderType = 'claude_code' | 'codex_app_server' | 'traex' | 'gemini_cli' | 'gpt' | 'anthropic' | 'google' | 'claude_llm' | 'gemini_llm';
+type ProviderType = 'claude_code' | 'codex_app_server' | 'antigravity' | 'traex' | 'gemini_cli' | 'gpt' | 'anthropic' | 'google' | 'claude_llm' | 'gemini_llm';
 type EditorMode = 'inspect' | 'create' | 'edit';
 
 type AgentsPanelProps = {
@@ -82,6 +82,9 @@ function deriveAgentId(name: string): string {
 function providerLabel(value: ProviderType): string {
   if (value === 'codex_app_server') {
     return 'Codex';
+  }
+  if (value === 'antigravity') {
+    return 'Antigravity';
   }
   if (value === 'traex') {
     return 'Traex';
@@ -505,6 +508,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                     <SelectGroup>
                       <SelectItem value="claude_code">Claude</SelectItem>
                       <SelectItem value="codex_app_server">Codex</SelectItem>
+                      <SelectItem value="antigravity">Antigravity</SelectItem>
                       <SelectItem value="traex">Trae</SelectItem>
                       <SelectItem value="gemini_cli">Gemini</SelectItem>
                       <SelectItem value="gpt">GPT</SelectItem>

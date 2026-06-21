@@ -200,6 +200,7 @@ const api: GaryxDesktopApi = {
   listCustomAgents: () => ipcRenderer.invoke("garyx:list-custom-agents"),
   listProviderModels: (providerType) =>
     ipcRenderer.invoke("garyx:list-provider-models", providerType),
+  getCodingUsage: () => ipcRenderer.invoke("garyx:get-coding-usage"),
   createCustomAgent: (input) =>
     ipcRenderer.invoke("garyx:create-custom-agent", input),
   updateCustomAgent: (input) =>

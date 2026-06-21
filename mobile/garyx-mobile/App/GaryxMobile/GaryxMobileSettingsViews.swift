@@ -485,7 +485,11 @@ struct GaryxSettingsProviderContent: View {
                             GaryxProviderModelsRow(
                                 provider: provider,
                                 catalog: model.providerModelsByType[provider.providerType],
-                                settings: model.gatewaySettingsDocument
+                                settings: model.gatewaySettingsDocument,
+                                usage: GaryxModelProviderDefaults.usage(
+                                    in: model.codingUsage,
+                                    provider: provider
+                                )
                             )
                         }
                         .buttonStyle(.plain)
@@ -498,6 +502,7 @@ struct GaryxSettingsProviderContent: View {
             }
         }
         .task {
+            await model.refreshCodingUsageWidget()
             for provider in GaryxModelProviderDefaults.providers
             where model.providerModelsByType[provider.providerType] == nil {
                 await model.loadProviderModels(providerType: provider.providerType)
@@ -513,31 +518,39 @@ struct GaryxProviderModelsRow: View {
     let provider: GaryxModelProviderDefault
     let catalog: GaryxProviderModels?
     let settings: [String: GaryxJSONValue]
+    let usage: GaryxProviderUsage?
 
     var body: some View {
-        HStack(spacing: 9) {
-            Image(systemName: iconName)
-                .font(GaryxFont.system(size: 14, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 20, height: 20)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(providerPresentation.displayName)
-                    .font(GaryxFont.subheadline(weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Text(detail)
-                    .font(GaryxFont.caption())
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 9) {
+                Image(systemName: iconName)
+                    .font(GaryxFont.system(size: 14, weight: .semibold))
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .frame(width: 20, height: 20)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(providerPresentation.displayName)
+                        .font(GaryxFont.subheadline(weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text(detail)
+                        .font(GaryxFont.caption())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+
+                GaryxStatusPill(text: statusText, tone: statusTone)
+                Image(systemName: "chevron.right")
+                    .font(GaryxFont.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tertiary)
             }
 
-            Spacer(minLength: 8)
-
-            GaryxStatusPill(text: statusText, tone: statusTone)
-            Image(systemName: "chevron.right")
-                .font(GaryxFont.system(size: 11, weight: .semibold))
-                .foregroundStyle(.tertiary)
+            if let usageDisplay {
+                providerUsageBlock(usageDisplay)
+                    .padding(.leading, 29)
+            }
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 7)
@@ -550,6 +563,10 @@ struct GaryxProviderModelsRow: View {
 
     private var providerPresentation: GaryxProviderPresentation {
         GaryxProviderPresentation.make(providerType: provider.providerType)
+    }
+
+    private var usageDisplay: GaryxProviderUsageDisplayModel? {
+        GaryxProviderUsageDisplayModel.make(from: usage)
     }
 
     private var hasError: Bool {
@@ -598,6 +615,48 @@ struct GaryxProviderModelsRow: View {
             return catalog == nil ? "Loading metadata" : "Provider metadata"
         }
         return parts.joined(separator: " · ")
+    }
+
+    @ViewBuilder
+    private func providerUsageBlock(_ usageDisplay: GaryxProviderUsageDisplayModel) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text("Usage")
+                    .font(GaryxFont.caption(weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Text(usageDisplay.summaryText)
+                    .font(GaryxFont.caption(weight: .semibold))
+                    .foregroundStyle(usageDisplay.available ? .primary : .secondary)
+                Text(usageDisplay.detailText)
+                    .font(GaryxFont.caption())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+            if !usageDisplay.models.isEmpty {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(usageDisplay.models) { model in
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(model.title)
+                                .font(GaryxFont.caption())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.72)
+                            Spacer(minLength: 6)
+                            Text(model.remainingText)
+                                .font(GaryxFont.caption(weight: .semibold))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                            Text(model.detailText)
+                                .font(GaryxFont.caption())
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.7)
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

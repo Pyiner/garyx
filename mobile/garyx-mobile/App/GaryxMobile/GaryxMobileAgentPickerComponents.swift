@@ -281,6 +281,8 @@ struct GaryxAgentAvatarView: View {
 
     private var providerBackground: Color {
         switch providerPresentation.kind {
+        case .antigravity:
+            Color(red: 0.15, green: 0.36, blue: 0.30)
         case .codex, .traex:
             Color(red: 0.08, green: 0.10, blue: 0.12)
         case .openAI:
@@ -296,6 +298,8 @@ struct GaryxAgentAvatarView: View {
 
     private var providerIconSize: CGFloat {
         switch providerPresentation.kind {
+        case .antigravity:
+            diameter * 0.36
         case .codex, .traex:
             diameter * 0.32
         case .openAI:

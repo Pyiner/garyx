@@ -4,19 +4,42 @@ public struct GaryxModelProviderDefault: Identifiable, Equatable, Sendable {
     public var id: String { providerType }
     public var providerType: String
     public var configKey: String
+    public var usageProviderId: String?
     public var fallbackDefaultModel: String
 
-    public init(providerType: String, configKey: String, fallbackDefaultModel: String) {
+    public init(
+        providerType: String,
+        configKey: String,
+        usageProviderId: String? = nil,
+        fallbackDefaultModel: String
+    ) {
         self.providerType = providerType
         self.configKey = configKey
+        self.usageProviderId = usageProviderId
         self.fallbackDefaultModel = fallbackDefaultModel
     }
 }
 
 public enum GaryxModelProviderDefaults {
     public static let providers: [GaryxModelProviderDefault] = [
-        GaryxModelProviderDefault(providerType: "claude_code", configKey: "claude", fallbackDefaultModel: ""),
-        GaryxModelProviderDefault(providerType: "codex_app_server", configKey: "codex", fallbackDefaultModel: ""),
+        GaryxModelProviderDefault(
+            providerType: "claude_code",
+            configKey: "claude",
+            usageProviderId: "claude_code",
+            fallbackDefaultModel: ""
+        ),
+        GaryxModelProviderDefault(
+            providerType: "codex_app_server",
+            configKey: "codex",
+            usageProviderId: "codex",
+            fallbackDefaultModel: ""
+        ),
+        GaryxModelProviderDefault(
+            providerType: "antigravity",
+            configKey: "antigravity",
+            usageProviderId: "antigravity",
+            fallbackDefaultModel: "Claude Opus 4.6 (Thinking)"
+        ),
         GaryxModelProviderDefault(providerType: "traex", configKey: "traex", fallbackDefaultModel: ""),
         GaryxModelProviderDefault(providerType: "gemini_cli", configKey: "gemini", fallbackDefaultModel: "gemini-3-flash-preview"),
         GaryxModelProviderDefault(providerType: "gpt", configKey: "gpt", fallbackDefaultModel: "gpt-5.5"),
@@ -27,6 +50,14 @@ public enum GaryxModelProviderDefaults {
     public static func provider(for providerType: String) -> GaryxModelProviderDefault? {
         let normalized = providerType.trimmingCharacters(in: .whitespacesAndNewlines)
         return providers.first { $0.providerType == normalized }
+    }
+
+    public static func usage(
+        in codingUsage: GaryxCodingUsage?,
+        provider: GaryxModelProviderDefault
+    ) -> GaryxProviderUsage? {
+        guard let usageProviderId = provider.usageProviderId else { return nil }
+        return codingUsage?.provider(id: usageProviderId)
     }
 
     public static func providerConfig(

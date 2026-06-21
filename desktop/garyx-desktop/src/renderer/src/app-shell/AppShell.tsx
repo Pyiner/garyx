@@ -1380,6 +1380,9 @@ function presentProviderReadyError(
   if (providerType === "codex_app_server") {
     return "Codex is not ready on this Mac. Check that the codex CLI is installed, logged in, and available on the Garyx gateway PATH.";
   }
+  if (providerType === "antigravity") {
+    return "Antigravity is not ready on this Mac. Check that the agy CLI is installed, logged in, and available on the Garyx gateway PATH.";
+  }
   if (providerType === "traex") {
     return "Traex is not ready on this Mac. Check that the traex CLI is installed, logged in, and available on the Garyx gateway PATH.";
   }
@@ -1411,6 +1414,7 @@ function inferProviderTypeForThread(
   if (
     runtimeProvider === "claude_code" ||
     runtimeProvider === "codex_app_server" ||
+    runtimeProvider === "antigravity" ||
     runtimeProvider === "traex" ||
     runtimeProvider === "gemini_cli" ||
     runtimeProvider === "gpt" ||
@@ -1435,6 +1439,9 @@ function inferProviderTypeForThread(
   }
   if (agentId === "codex") {
     return "codex_app_server";
+  }
+  if (agentId === "antigravity") {
+    return "antigravity";
   }
   if (agentId === "traex") {
     return "traex";

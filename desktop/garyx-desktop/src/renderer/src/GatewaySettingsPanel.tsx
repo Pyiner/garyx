@@ -7,10 +7,12 @@ import {
   type ChannelPluginCatalogEntry,
   type ConnectionStatus,
   type DesktopApiProviderType,
+  type DesktopCodingUsage,
   type DesktopCustomAgent,
   type DesktopFollowUpBehavior,
   type DesktopProviderModelOption,
   type DesktopProviderModels,
+  type DesktopProviderUsage,
   type DesktopWorkspace,
   type DesktopTeam,
   type DesktopGatewayProfile,
@@ -82,6 +84,7 @@ import { EditBotDialog, type EditBotDialogContext, type EditBotPatch } from './a
 import { RendererPerformancePanel } from './app-shell/components/RendererPerformancePanel';
 import { languagePreferenceLabel, type Translate, useI18n } from './i18n';
 import type { RendererPerformanceSnapshot } from './perf-metrics';
+import { usageProviderIdForModelProviderKey } from './provider-usage';
 import { SETTINGS_TABS, type SettingsTabId } from './settings-tabs';
 
 const UNKNOWN_DESKTOP_APP_VERSION = '0.0.0';
@@ -207,6 +210,7 @@ type McpServerDraft = {
 type FixedModelProviderKey =
   | 'claude_code'
   | 'codex_app_server'
+  | 'antigravity'
   | 'traex'
   | 'gemini_cli'
   | 'gpt'
@@ -221,6 +225,7 @@ type FixedModelProviderRow = {
   providerType: DesktopApiProviderType;
   group: 'default' | 'native';
   defaultModel: string;
+  usageProviderId?: string;
 };
 
 type ModelProviderConfigDraft = {
@@ -254,6 +259,7 @@ const MODEL_PROVIDER_ROWS: FixedModelProviderRow[] = [
     providerType: 'claude_code',
     group: 'default',
     defaultModel: '(provider default)',
+    usageProviderId: usageProviderIdForModelProviderKey('claude_code'),
   },
   {
     key: 'codex_app_server',
@@ -262,6 +268,16 @@ const MODEL_PROVIDER_ROWS: FixedModelProviderRow[] = [
     providerType: 'codex_app_server',
     group: 'default',
     defaultModel: '(provider default)',
+    usageProviderId: usageProviderIdForModelProviderKey('codex_app_server'),
+  },
+  {
+    key: 'antigravity',
+    agentId: 'antigravity',
+    label: 'Antigravity',
+    providerType: 'antigravity',
+    group: 'default',
+    defaultModel: 'Claude Opus 4.6 (Thinking)',
+    usageProviderId: usageProviderIdForModelProviderKey('antigravity'),
   },
   {
     key: 'traex',
@@ -441,6 +457,9 @@ function providerTypeLabel(provider: any): string {
   if (value === 'codex_app_server') {
     return 'codex';
   }
+  if (value === 'antigravity') {
+    return 'antigravity';
+  }
   if (value === 'traex') {
     return 'traex';
   }
@@ -481,6 +500,8 @@ function preferredStandaloneAgentId(
   let normalizedProviderType: DesktopCustomAgent['providerType'] = 'claude_code';
   if (providerType === 'codex_app_server') {
     normalizedProviderType = 'codex_app_server';
+  } else if (providerType === 'antigravity' || providerType === 'agy' || providerType === 'antigravity_cli') {
+    normalizedProviderType = 'antigravity';
   } else if (providerType === 'traex') {
     normalizedProviderType = 'traex';
   } else if (providerType === 'gemini_cli') {
@@ -496,6 +517,8 @@ function preferredStandaloneAgentId(
   let builtInId = 'claude';
   if (normalizedProviderType === 'codex_app_server') {
     builtInId = 'codex';
+  } else if (normalizedProviderType === 'antigravity') {
+    builtInId = 'antigravity';
   } else if (normalizedProviderType === 'traex') {
     builtInId = 'traex';
   } else if (normalizedProviderType === 'gemini_cli') {
@@ -690,6 +713,63 @@ function countNonEmptyLines(value: string): number {
 
 function fixedModelProviderRow(key: FixedModelProviderKey): FixedModelProviderRow {
   return MODEL_PROVIDER_ROWS.find((row) => row.key === key) || MODEL_PROVIDER_ROWS[0];
+}
+
+function usageLevelClass(remainingPercent: number): string {
+  if (remainingPercent >= 50) {
+    return 'healthy';
+  }
+  if (remainingPercent >= 20) {
+    return 'warning';
+  }
+  return 'critical';
+}
+
+function formatUsagePercent(value: number): string {
+  const safe = Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0;
+  return `${Math.round(safe)}%`;
+}
+
+function formatUsageDuration(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  const days = Math.floor(total / 86_400);
+  if (days >= 1) {
+    return `${days}d`;
+  }
+  const hours = Math.floor(total / 3_600);
+  if (hours >= 1) {
+    return `${hours}h`;
+  }
+  const minutes = Math.floor(total / 60);
+  if (minutes >= 1) {
+    return `${minutes}m`;
+  }
+  return '<1m';
+}
+
+function resetSecondsFromIso(value?: string | null): number | null {
+  if (!value) {
+    return null;
+  }
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) {
+    return null;
+  }
+  return Math.max(0, Math.floor((timestamp - Date.now()) / 1000));
+}
+
+function usageResetText(
+  resetsAt?: string | null,
+  resetAfterSeconds?: number | null,
+  fallback = 'weekly left',
+): string {
+  const seconds = Number.isFinite(resetAfterSeconds || NaN)
+    ? resetAfterSeconds || 0
+    : resetSecondsFromIso(resetsAt);
+  if (seconds && seconds > 0) {
+    return `resets in ${formatUsageDuration(seconds)}`;
+  }
+  return fallback;
 }
 
 const REASONING_EFFORT_RANK: Record<string, number> = {
@@ -1514,6 +1594,9 @@ export function GatewaySettingsPanel({
   const [providerModelsLoading, setProviderModelsLoading] = useState<
     Partial<Record<DesktopApiProviderType, boolean>>
   >({});
+  const [codingUsage, setCodingUsage] = useState<DesktopCodingUsage | null>(null);
+  const [codingUsageLoading, setCodingUsageLoading] = useState(false);
+  const [codingUsageError, setCodingUsageError] = useState<string | null>(null);
   const [updateStatus, setUpdateStatus] = useState<DesktopUpdateStatus>(IDLE_UPDATE_STATUS);
   const [updateFeedback, setUpdateFeedback] = useState<UpdateFeedback | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
@@ -1579,6 +1662,13 @@ export function GatewaySettingsPanel({
     activeProviderModels,
     providerConfigDraft.model,
   );
+  const codingUsageByProviderId = useMemo(() => {
+    const map: Record<string, DesktopProviderUsage> = {};
+    for (const provider of codingUsage?.providers || []) {
+      map[provider.id] = provider;
+    }
+    return map;
+  }, [codingUsage]);
   const channelsSourceMessage = gatewaySettingsSource === 'local_file'
     ? t('Editing the gateway runtime config file on the gateway host.')
     : t('Editing live gateway settings over the API.');
@@ -1693,6 +1783,28 @@ export function GatewaySettingsPanel({
       cancelled = true;
     };
   }, [providerConfigRow?.providerType, providerModelsByType, providerModelsLoading]);
+
+  useEffect(() => {
+    if (normalizedActiveTab !== 'provider') {
+      return;
+    }
+    let cancelled = false;
+    setCodingUsageLoading(true);
+    setCodingUsageError(null);
+    void window.garyxDesktop.getCodingUsage().then((usage) => {
+      if (cancelled) return;
+      setCodingUsage(usage);
+    }).catch((error) => {
+      if (cancelled) return;
+      setCodingUsageError(error instanceof Error ? error.message : t('Failed to load usage.'));
+    }).finally(() => {
+      if (cancelled) return;
+      setCodingUsageLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [normalizedActiveTab, t]);
 
   useEffect(() => {
     if (!providerConfigRow || !activeProviderModels) {
@@ -1843,6 +1955,72 @@ export function GatewaySettingsPanel({
           : t('Env / API key'),
       model: configuredDefaultModel || agent?.model || row.defaultModel,
     };
+  }
+
+  function renderProviderUsageCell(row: FixedModelProviderRow): ReactNode {
+    if (!row.usageProviderId) {
+      return <span className="provider-usage-muted">{t('Not tracked')}</span>;
+    }
+    const usage = codingUsageByProviderId[row.usageProviderId];
+    if (!usage) {
+      if (codingUsageLoading) {
+        return <span className="provider-usage-muted">{t('Loading')}</span>;
+      }
+      return (
+        <span className="provider-usage-muted" title={codingUsageError || undefined}>
+          {codingUsageError ? t('Unavailable') : t('No data')}
+        </span>
+      );
+    }
+    if (!usage.available) {
+      return (
+        <span className="provider-usage-muted" title={usage.error || undefined}>
+          {t('Unavailable')}
+        </span>
+      );
+    }
+    if (usage.models.length > 0) {
+      return (
+        <div className="provider-usage-models">
+          {usage.models.map((model) => {
+            const level = usageLevelClass(model.remainingPercent);
+            return (
+              <div className="provider-usage-model-row" key={model.id}>
+                <span className="provider-usage-model-name" title={model.name}>
+                  {model.name}
+                </span>
+                <span className={`provider-usage-value ${level}`}>
+                  {formatUsagePercent(model.remainingPercent)}
+                </span>
+                <span className="provider-usage-detail" title={model.description || undefined}>
+                  {model.description || usageResetText(
+                    model.resetsAt,
+                    model.resetAfterSeconds,
+                    t('model quota'),
+                  )}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+    if (usage.weekly) {
+      const level = usageLevelClass(usage.weekly.remainingPercent);
+      return (
+        <div className="provider-usage-summary">
+          <span className={`provider-usage-value ${level}`}>
+            {formatUsagePercent(usage.weekly.remainingPercent)}
+          </span>
+          <span className="provider-usage-detail">
+            {usage.stale
+              ? t('stale data')
+              : usageResetText(usage.weekly.resetsAt, usage.weekly.resetAfterSeconds)}
+          </span>
+        </div>
+      );
+    }
+    return <span className="provider-usage-muted">{t('No data')}</span>;
   }
 
   function openProviderConfigDialog(key: FixedModelProviderKey) {
@@ -2231,6 +2409,7 @@ export function GatewaySettingsPanel({
               <TableHead className="provider-config-col-kind">{t('Type')}</TableHead>
               <TableHead className="provider-config-col-auth">{t('Auth')}</TableHead>
               <TableHead className="provider-config-col-model">{t('Model')}</TableHead>
+              <TableHead className="provider-config-col-usage">{t('Usage')}</TableHead>
               <TableHead className="provider-config-col-status">{t('Status')}</TableHead>
               <TableHead className="provider-config-col-actions">{t('Actions')}</TableHead>
             </TableRow>
@@ -2260,6 +2439,9 @@ export function GatewaySettingsPanel({
                   <TableCell className="provider-config-col-auth">{details.auth}</TableCell>
                   <TableCell className="provider-config-col-model" title={modelLabel}>
                     {modelLabel}
+                  </TableCell>
+                  <TableCell className="provider-config-col-usage">
+                    {renderProviderUsageCell(row)}
                   </TableCell>
                   <TableCell className="provider-config-col-status">
                     <Badge

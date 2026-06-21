@@ -15,16 +15,19 @@ import type {
   DesktopAutomationSummary,
   ChannelPluginCatalogEntry,
   ConnectionStatus,
+  DesktopCodingUsage,
   DesktopCustomAgent,
   DesktopDreamScan,
   DesktopDreamSpan,
   DesktopDreamTopic,
   DesktopDreamsPage,
   DesktopProviderModels,
+  DesktopProviderUsage,
   DesktopProviderIconDescriptor,
   DesktopProviderIconKey,
   DesktopProviderRecentSession,
   DesktopProviderModelOption,
+  DesktopModelUsage,
   DesktopBotConsoleSummary,
   DesktopBotConversationNode,
   DesktopTeam,
@@ -54,6 +57,7 @@ import type {
   DesktopChannelEndpoint,
   DesktopMcpServer,
   DesktopSettings,
+  DesktopUsageWindow,
   DesktopThreadSummary,
   DesktopThreadProviderType,
   DesktopSkillEditorState,
@@ -859,6 +863,51 @@ interface ProviderModelsPayload {
   error?: unknown;
 }
 
+interface UsageWindowPayload {
+  used_percent?: unknown;
+  usedPercent?: unknown;
+  remaining_percent?: unknown;
+  remainingPercent?: unknown;
+  resets_at?: unknown;
+  resetsAt?: unknown;
+  reset_after_seconds?: unknown;
+  resetAfterSeconds?: unknown;
+}
+
+interface ModelUsagePayload {
+  id?: unknown;
+  name?: unknown;
+  remaining_fraction?: unknown;
+  remainingFraction?: unknown;
+  remaining_percent?: unknown;
+  remainingPercent?: unknown;
+  used_percent?: unknown;
+  usedPercent?: unknown;
+  resets_at?: unknown;
+  resetsAt?: unknown;
+  reset_after_seconds?: unknown;
+  resetAfterSeconds?: unknown;
+  description?: unknown;
+}
+
+interface ProviderUsagePayload {
+  id?: unknown;
+  name?: unknown;
+  available?: unknown;
+  stale?: unknown;
+  plan?: unknown;
+  weekly?: unknown;
+  session?: unknown;
+  models?: unknown;
+  error?: unknown;
+}
+
+interface CodingUsagePayload {
+  providers?: unknown;
+  refreshed_at?: unknown;
+  refreshedAt?: unknown;
+}
+
 interface TeamPayload {
   team_id?: string;
   teamId?: string;
@@ -889,6 +938,9 @@ function baseUrl(settings: DesktopSettings): string {
 function normalizeDesktopProviderType(value: unknown): DesktopApiProviderType {
   if (value === "codex_app_server") {
     return "codex_app_server";
+  }
+  if (value === "antigravity" || value === "agy" || value === "antigravity_cli") {
+    return "antigravity";
   }
   if (value === "traex" || value === "trae" || value === "trae_cli" || value === "traecli") {
     return "traex";
@@ -942,6 +994,7 @@ function parseThreadProviderType(
     value === "claude_code" ||
     value === "claude_tty" ||
     value === "codex_app_server" ||
+    value === "antigravity" ||
     value === "traex" ||
     value === "gemini_cli" ||
     value === "gpt" ||
@@ -977,6 +1030,8 @@ function providerLabelForThread(
       return "Claude";
     case "codex_app_server":
       return "Codex";
+    case "antigravity":
+      return "Antigravity";
     case "traex":
       return "Traex";
     case "gemini_cli":
@@ -2770,6 +2825,87 @@ function mapProviderModels(value: ProviderModelsPayload): DesktopProviderModels 
   };
 }
 
+function mapUsageWindow(value: unknown): DesktopUsageWindow | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const payload = value as UsageWindowPayload;
+  const usedPercent = asFiniteNumber(payload.used_percent ?? payload.usedPercent) ?? 0;
+  const remainingPercent = asFiniteNumber(payload.remaining_percent ?? payload.remainingPercent)
+    ?? Math.max(0, 100 - usedPercent);
+  return {
+    usedPercent,
+    remainingPercent,
+    resetsAt: asString(payload.resets_at ?? payload.resetsAt) ?? null,
+    resetAfterSeconds: asFiniteNumber(payload.reset_after_seconds ?? payload.resetAfterSeconds) ?? null,
+  };
+}
+
+function mapModelUsage(value: unknown): DesktopModelUsage | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const payload = value as ModelUsagePayload;
+  const id = asString(payload.id);
+  const name = asString(payload.name) || id;
+  if (!id || !name) {
+    return null;
+  }
+  const remainingFraction = asFiniteNumber(payload.remaining_fraction ?? payload.remainingFraction) ?? 0;
+  const remainingPercent = asFiniteNumber(payload.remaining_percent ?? payload.remainingPercent)
+    ?? remainingFraction * 100;
+  const usedPercent = asFiniteNumber(payload.used_percent ?? payload.usedPercent)
+    ?? Math.max(0, 100 - remainingPercent);
+  return {
+    id,
+    name,
+    remainingFraction,
+    remainingPercent,
+    usedPercent,
+    resetsAt: asString(payload.resets_at ?? payload.resetsAt) ?? null,
+    resetAfterSeconds: asFiniteNumber(payload.reset_after_seconds ?? payload.resetAfterSeconds) ?? null,
+    description: asString(payload.description) ?? null,
+  };
+}
+
+function mapProviderUsage(value: unknown): DesktopProviderUsage | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const payload = value as ProviderUsagePayload;
+  const id = asString(payload.id);
+  const name = asString(payload.name) || id;
+  if (!id || !name) {
+    return null;
+  }
+  const models = Array.isArray(payload.models)
+    ? payload.models.map(mapModelUsage).filter((model): model is DesktopModelUsage => Boolean(model))
+    : [];
+  return {
+    id,
+    name,
+    available: payload.available === true,
+    stale: payload.stale === true,
+    plan: asString(payload.plan) ?? null,
+    weekly: mapUsageWindow(payload.weekly),
+    session: mapUsageWindow(payload.session),
+    models,
+    error: asString(payload.error) ?? null,
+  };
+}
+
+function mapCodingUsage(value: CodingUsagePayload): DesktopCodingUsage {
+  const providers = Array.isArray(value.providers)
+    ? value.providers
+        .map(mapProviderUsage)
+        .filter((provider): provider is DesktopProviderUsage => Boolean(provider))
+    : [];
+  return {
+    providers,
+    refreshedAt: asString(value.refreshed_at ?? value.refreshedAt) ?? null,
+  };
+}
+
 export async function checkConnection(
   settings: DesktopSettings,
 ): Promise<ConnectionStatus> {
@@ -4010,6 +4146,20 @@ export async function listProviderModels(
   );
 
   return mapProviderModels(payload);
+}
+
+export async function getCodingUsage(
+  settings: DesktopSettings,
+): Promise<DesktopCodingUsage> {
+  const payload = await requestJson<CodingUsagePayload>(
+    settings,
+    "/api/usage/coding",
+    {
+      signal: AbortSignal.timeout(15000),
+    },
+  );
+
+  return mapCodingUsage(payload);
 }
 
 export async function listTeams(

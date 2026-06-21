@@ -8,6 +8,8 @@ final class GaryxMobileIdentityPresentationTests: XCTestCase {
             GaryxProviderPresentation.make(providerType: "codex_app_server").symbolName,
             "chevron.left.forwardslash.chevron.right"
         )
+        XCTAssertEqual(GaryxProviderPresentation.make(providerType: "antigravity").displayName, "Antigravity")
+        XCTAssertEqual(GaryxProviderPresentation.make(providerType: "antigravity").symbolName, "bolt.fill")
         XCTAssertEqual(GaryxProviderPresentation.make(providerType: "claude_code").symbolName, "sparkles")
         XCTAssertEqual(GaryxProviderPresentation.make(providerType: "gemini_cli").displayName, "Gemini CLI")
         XCTAssertEqual(GaryxProviderPresentation.make(providerType: "gpt").displayName, "OpenAI")

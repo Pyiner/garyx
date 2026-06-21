@@ -27,6 +27,7 @@ export interface DesktopGatewayProfile {
 export type DesktopApiProviderType =
   | "claude_code"
   | "codex_app_server"
+  | "antigravity"
   | "traex"
   | "gemini_cli"
   | "gpt"
@@ -64,6 +65,41 @@ export interface DesktopProviderModels {
   defaultModel?: string | null;
   source: string;
   error?: string | null;
+}
+
+export interface DesktopUsageWindow {
+  usedPercent: number;
+  remainingPercent: number;
+  resetsAt?: string | null;
+  resetAfterSeconds?: number | null;
+}
+
+export interface DesktopModelUsage {
+  id: string;
+  name: string;
+  remainingFraction: number;
+  remainingPercent: number;
+  usedPercent: number;
+  resetsAt?: string | null;
+  resetAfterSeconds?: number | null;
+  description?: string | null;
+}
+
+export interface DesktopProviderUsage {
+  id: string;
+  name: string;
+  available: boolean;
+  stale: boolean;
+  plan?: string | null;
+  weekly?: DesktopUsageWindow | null;
+  session?: DesktopUsageWindow | null;
+  models: DesktopModelUsage[];
+  error?: string | null;
+}
+
+export interface DesktopCodingUsage {
+  providers: DesktopProviderUsage[];
+  refreshedAt?: string | null;
 }
 
 export type DesktopThreadProviderType =
@@ -2074,6 +2110,7 @@ export interface GaryxDesktopApi {
   listProviderModels: (
     providerType: DesktopApiProviderType,
   ) => Promise<DesktopProviderModels>;
+  getCodingUsage: () => Promise<DesktopCodingUsage>;
   createCustomAgent: (
     input: CreateCustomAgentInput,
   ) => Promise<DesktopCustomAgent>;

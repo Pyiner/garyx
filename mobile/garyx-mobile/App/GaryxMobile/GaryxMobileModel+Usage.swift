@@ -10,6 +10,7 @@ extension GaryxMobileModel {
     func refreshCodingUsageWidget() async {
         guard let gateway = try? client() else { return }
         guard let usage = try? await gateway.codingUsage() else { return }
+        codingUsage = usage
         GaryxUsageWidgetStore.saveSnapshot(
             GaryxUsageWidgetSnapshot(usage: usage, fetchedAt: Date())
         )

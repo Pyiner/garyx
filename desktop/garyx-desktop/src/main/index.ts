@@ -135,6 +135,7 @@ import {
   fetchGatewaySettings,
   fetchThreadHistory,
   fetchThreadLogs,
+  getCodingUsage,
   getDream,
   getTask,
   getWorkflowDefinitionSource,
@@ -998,6 +999,11 @@ function registerIpcHandlers(): void {
       return listProviderModels(settings, providerType);
     },
   );
+
+  ipcMain.handle("garyx:get-coding-usage", async () => {
+    const settings = await resolveSettings();
+    return getCodingUsage(settings);
+  });
 
   ipcMain.handle(
     "garyx:create-custom-agent",

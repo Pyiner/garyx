@@ -32,13 +32,30 @@ final class GaryxMobileUsageWidgetTests: XCTestCase {
               "name": "Gemini",
               "available": false,
               "error": "no credentials"
+            },
+            {
+              "id": "antigravity",
+              "name": "Antigravity",
+              "available": true,
+              "models": [
+                {
+                  "id": "claude-opus-4-6-thinking",
+                  "name": "Claude Opus 4.6 (Thinking)",
+                  "remaining_fraction": 0.985,
+                  "remaining_percent": 98.5,
+                  "used_percent": 1.5,
+                  "resets_at": "2030-01-01T08:00:00Z",
+                  "reset_after_seconds": 3600,
+                  "description": "Quota resets in 1 hour."
+                }
+              ]
             }
           ],
           "refreshed_at": "2030-01-01T00:00:00+00:00"
         }
         """
         let usage = try JSONDecoder().decode(GaryxCodingUsage.self, from: Data(json.utf8))
-        XCTAssertEqual(usage.providers.count, 3)
+        XCTAssertEqual(usage.providers.count, 4)
         XCTAssertEqual(usage.refreshedAt, "2030-01-01T00:00:00+00:00")
 
         let claude = try XCTUnwrap(usage.provider(id: "claude_code"))
@@ -59,6 +76,14 @@ final class GaryxMobileUsageWidgetTests: XCTestCase {
         let gemini = try XCTUnwrap(usage.provider(id: "gemini"))
         XCTAssertFalse(gemini.available)
         XCTAssertNil(gemini.weekly)
+
+        let antigravity = try XCTUnwrap(usage.provider(id: "antigravity"))
+        XCTAssertTrue(antigravity.available)
+        XCTAssertNil(antigravity.weekly)
+        XCTAssertEqual(antigravity.models.count, 1)
+        XCTAssertEqual(antigravity.models[0].name, "Claude Opus 4.6 (Thinking)")
+        XCTAssertEqual(antigravity.models[0].remainingPercent, 98.5)
+        XCTAssertEqual(antigravity.models[0].description, "Quota resets in 1 hour.")
     }
 
     func testDecodesWindowRemainingFallbackFromUsed() throws {
@@ -165,6 +190,88 @@ final class GaryxMobileUsageWidgetTests: XCTestCase {
         let model = GaryxUsageGaugeModel.make(from: provider, now: referenceNow)
         XCTAssertEqual(model.fillFraction, 1.0, accuracy: 0.0001)
         XCTAssertEqual(model.remainingText, "100%")
+    }
+
+    func testWidgetModelsOnlyShowsClaudeCodeAndCodexInOrder() {
+        let usage = GaryxCodingUsage(providers: [
+            GaryxProviderUsage(
+                id: "antigravity",
+                name: "Antigravity",
+                available: true,
+                models: [
+                    GaryxModelUsage(
+                        id: "claude-opus-4-6-thinking",
+                        name: "Claude Opus 4.6 (Thinking)",
+                        remainingFraction: 0.98,
+                        remainingPercent: 98,
+                        usedPercent: 2
+                    )
+                ]
+            ),
+            GaryxProviderUsage(
+                id: "codex",
+                name: "Codex",
+                available: true,
+                weekly: GaryxUsageWindow(usedPercent: 20, remainingPercent: 80)
+            ),
+            GaryxProviderUsage(
+                id: "claude_code",
+                name: "Claude Code",
+                available: true,
+                weekly: GaryxUsageWindow(usedPercent: 10, remainingPercent: 90)
+            ),
+        ])
+
+        let models = GaryxUsageGaugeModel.widgetModels(from: usage, now: referenceNow)
+        XCTAssertEqual(models.map(\.providerId), ["claude_code", "codex"])
+        XCTAssertEqual(models.map(\.remainingText), ["90%", "80%"])
+    }
+
+    func testWidgetModelsDoesNotFallbackToAntigravityOnlyUsage() {
+        let usage = GaryxCodingUsage(providers: [
+            GaryxProviderUsage(
+                id: "antigravity",
+                name: "Antigravity",
+                available: true,
+                models: [
+                    GaryxModelUsage(
+                        id: "claude-opus-4-6-thinking",
+                        name: "Claude Opus 4.6 (Thinking)",
+                        remainingFraction: 0.98,
+                        remainingPercent: 98,
+                        usedPercent: 2
+                    )
+                ]
+            ),
+        ])
+
+        XCTAssertTrue(GaryxUsageGaugeModel.widgetModels(from: usage, now: referenceNow).isEmpty)
+    }
+
+    func testProviderUsageDisplayModelsAntigravityBuckets() throws {
+        let provider = GaryxProviderUsage(
+            id: "antigravity",
+            name: "Antigravity",
+            available: true,
+            models: [
+                GaryxModelUsage(
+                    id: "claude-opus-4-6-thinking",
+                    name: "Claude Opus 4.6 (Thinking)",
+                    remainingFraction: 0.985,
+                    remainingPercent: 98.5,
+                    usedPercent: 1.5,
+                    description: "Quota resets in 1 hour."
+                )
+            ]
+        )
+
+        let display = try XCTUnwrap(GaryxProviderUsageDisplayModel.make(from: provider, now: referenceNow))
+        XCTAssertEqual(display.summaryText, "1 model quota")
+        XCTAssertEqual(display.detailText, "Per-model quota")
+        XCTAssertEqual(display.models.count, 1)
+        XCTAssertEqual(display.models[0].title, "Claude Opus 4.6 (Thinking)")
+        XCTAssertEqual(display.models[0].remainingText, "99% left")
+        XCTAssertEqual(display.models[0].detailText, "Quota resets in 1 hour.")
     }
 
     // MARK: - Store + snapshot
