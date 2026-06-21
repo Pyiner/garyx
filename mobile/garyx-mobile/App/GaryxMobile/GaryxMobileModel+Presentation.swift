@@ -22,6 +22,11 @@ extension GaryxMobileModel {
         flushDeferredRecentThreadsWidgetSnapshotPersistence()
     }
 
+    func endThreadListInteractionIfHomeBecameHidden(previousNavigationState: GaryxMobileNavigationState) {
+        guard !previousNavigationState.presentsContent, navigationState.presentsContent else { return }
+        setThreadListInteracting(false)
+    }
+
     var homeThreadListInput: GaryxHomeThreadListInput {
         GaryxHomeThreadListInput(
             sectionsInput: GaryxHomeThreadSectionsInput(

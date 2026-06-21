@@ -191,6 +191,87 @@ final class GaryxHomeProductionAcceptanceTests: XCTestCase {
         XCTAssertEqual(store.deferredInteractionFlushCount, 1)
     }
 
+    func testHomeListStoreInterruptedInteractionFlushesAndAllowsLaterUpdates() throws {
+        let base = GaryxHomeListFixture.makeInputs(threadCount: 50, runningCount: 0)
+        let store = GaryxHomeThreadListStore()
+        var inputBuildCount = 0
+
+        func makeInput(
+            _ input: HomeThreadSectionsReference.Inputs,
+            isHomeVisible: Bool = true
+        ) -> GaryxHomeThreadListInput {
+            inputBuildCount += 1
+            return GaryxHomeThreadListInput(input, isHomeVisible: isHomeVisible)
+        }
+
+        XCTAssertTrue(
+            store.applyUnlessInteracting(isThreadListInteracting: false) {
+                makeInput(base)
+            }
+        )
+        XCTAssertEqual(inputBuildCount, 1)
+
+        var publishes = 0
+        let cancellable = store.objectWillChange.sink { publishes += 1 }
+        defer { cancellable.cancel() }
+
+        var deferred = base
+        deferred.threads[1].title = "Deferred before interruption"
+        deferred.busyThreadIds = ["thread-1"]
+        deferred.selectedThreadId = "thread-1"
+        XCTAssertFalse(
+            store.applyUnlessInteracting(isThreadListInteracting: true) {
+                makeInput(deferred)
+            }
+        )
+
+        XCTAssertEqual(inputBuildCount, 1)
+        XCTAssertEqual(publishes, 0)
+        XCTAssertEqual(store.deferredInteractionRefreshCount, 1)
+
+        XCTAssertTrue(
+            store.flushDeferredInteractionRefresh {
+                makeInput(deferred, isHomeVisible: false)
+            }
+        )
+
+        XCTAssertEqual(inputBuildCount, 2)
+        XCTAssertEqual(publishes, 1)
+        XCTAssertEqual(store.deferredInteractionFlushCount, 1)
+        XCTAssertFalse(store.snapshot.isHomeVisible)
+        let interruptedRow = try XCTUnwrap(store.snapshot.sections.allRows.first { $0.id == "thread-1" })
+        XCTAssertEqual(interruptedRow.presentation.title, "Deferred before interruption")
+        XCTAssertTrue(interruptedRow.presentation.isRunning)
+        XCTAssertTrue(interruptedRow.presentation.isSelected)
+
+        var afterInterruption = deferred
+        afterInterruption.threads[2].title = "Update after interruption"
+        afterInterruption.busyThreadIds = ["thread-2"]
+        afterInterruption.selectedThreadId = "thread-2"
+        XCTAssertTrue(
+            store.applyUnlessInteracting(isThreadListInteracting: false) {
+                makeInput(afterInterruption, isHomeVisible: false)
+            }
+        )
+
+        XCTAssertEqual(inputBuildCount, 3)
+        XCTAssertEqual(publishes, 2)
+        XCTAssertEqual(store.deferredInteractionFlushCount, 1)
+        let laterRow = try XCTUnwrap(store.snapshot.sections.allRows.first { $0.id == "thread-2" })
+        XCTAssertEqual(laterRow.presentation.title, "Update after interruption")
+        XCTAssertTrue(laterRow.presentation.isRunning)
+        XCTAssertTrue(laterRow.presentation.isSelected)
+
+        XCTAssertFalse(
+            store.flushDeferredInteractionRefresh {
+                XCTFail("Interrupted flush should clear the deferred interaction flag.")
+                return makeInput(afterInterruption, isHomeVisible: false)
+            }
+        )
+        XCTAssertEqual(inputBuildCount, 3)
+        XCTAssertEqual(publishes, 2)
+    }
+
     func testCatalogAssignmentGateDoesNotPublishIdenticalCollections() {
         let base = GaryxHomeListFixture.makeInputs(threadCount: 10)
         let model = GaryxHomeCatalogPublicationProbe(
