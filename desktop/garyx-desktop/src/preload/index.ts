@@ -176,6 +176,7 @@ const api: GaryxDesktopApi = {
   listDreams: (input) => ipcRenderer.invoke("garyx:list-dreams", input),
   scanDreams: (input) => ipcRenderer.invoke("garyx:scan-dreams", input),
   getDream: (dreamId) => ipcRenderer.invoke("garyx:get-dream", dreamId),
+  getTask: (input) => ipcRenderer.invoke("garyx:get-task", input),
   createTask: (input) => ipcRenderer.invoke("garyx:create-task", input),
   listWorkflowDefinitions: () =>
     ipcRenderer.invoke("garyx:list-workflow-definitions"),
@@ -183,8 +184,6 @@ const api: GaryxDesktopApi = {
     ipcRenderer.invoke("garyx:list-provider-recent-sessions", input),
   getWorkflowDefinitionSource: (input) =>
     ipcRenderer.invoke("garyx:get-workflow-definition-source", input),
-  listTaskWorkflowRuns: (input) =>
-    ipcRenderer.invoke("garyx:list-task-workflow-runs", input),
   getWorkflowRun: (input) =>
     ipcRenderer.invoke("garyx:get-workflow-run", input),
   startWorkflowThread: (input) =>

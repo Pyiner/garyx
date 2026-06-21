@@ -287,39 +287,6 @@ pub async fn list_thread_workflows(
     }
 }
 
-pub async fn list_task_workflow_runs(
-    State(state): State<Arc<AppState>>,
-    Path(task_id): Path<String>,
-    Query(query): Query<WorkflowListQuery>,
-) -> impl IntoResponse {
-    let limit = query.limit.min(200);
-    let store = WorkflowStore::new(state.ops.garyx_db.clone());
-    match store.list_runs_for_task(&task_id, limit.saturating_add(1), query.offset) {
-        Ok(mut records) => {
-            let has_more = records.len() > limit;
-            records.truncate(limit);
-            let mut workflow_runs = Vec::with_capacity(records.len());
-            for record in records {
-                match workflow_run_drilldown_json(&store, &record) {
-                    Ok(value) => workflow_runs.push(value),
-                    Err(error) => return workflow_error_response(error),
-                }
-            }
-            (
-                StatusCode::OK,
-                Json(json!({
-                    "taskId": task_id,
-                    "workflowRuns": workflow_runs,
-                    "count": workflow_runs.len(),
-                    "hasMore": has_more,
-                })),
-            )
-                .into_response()
-        }
-        Err(error) => workflow_error_response(error),
-    }
-}
-
 pub async fn workflow_events(
     State(state): State<Arc<AppState>>,
     Path(workflow_run_id): Path<String>,

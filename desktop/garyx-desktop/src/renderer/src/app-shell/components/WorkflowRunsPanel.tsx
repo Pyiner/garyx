@@ -39,7 +39,6 @@ function readStoredViewMode(): WorkflowViewMode {
 
 type WorkflowRunsPanelProps = {
   task?: DesktopTaskSummary | null;
-  taskId?: string | null;
   workflowRunId?: string | null;
   onOpenTasks?: () => void;
   onOpenThread: (threadId: string) => void;
@@ -1621,14 +1620,13 @@ function RunCard({
 
 export function WorkflowRunsPanel({
   task,
-  taskId,
   workflowRunId,
   onOpenTasks,
   onOpenThread,
   onToast,
   t,
 }: WorkflowRunsPanelProps) {
-  const [runs, setRuns] = useState<DesktopWorkflowRunDrilldown[]>([]);
+  const [run, setRun] = useState<DesktopWorkflowRunDrilldown | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<WorkflowViewMode>(readStoredViewMode);
@@ -1640,15 +1638,14 @@ export function WorkflowRunsPanel({
       // Ignore storage failures (private mode, quota, etc.).
     }
   }, [viewMode]);
-  const hasNonTerminal = runs.some((run) => !isTerminal(run.workflow.status));
+  const hasNonTerminal = run ? !isTerminal(run.workflow.status) : false;
   const shouldPoll =
     hasNonTerminal ||
-    (runs.length === 0 &&
-      (task?.status === 'in_progress' || Boolean(workflowRunId)));
+    (!run && (task?.status === 'in_progress' || Boolean(workflowRunId)));
   const mountedRef = useRef(true);
-  const primaryWorkflow = runs[0]?.workflow || null;
+  const primaryWorkflow = run?.workflow || null;
   const awaitingWorkflowRunRecord =
-    Boolean(workflowRunId) && !error && runs.length === 0;
+    Boolean(workflowRunId) && !error && !run;
 
   const load = useCallback(
     async (options?: { silent?: boolean }) => {
@@ -1657,30 +1654,22 @@ export function WorkflowRunsPanel({
       }
       try {
         const workflowRunKey = workflowRunId?.trim() || '';
-        const taskKey = taskId?.trim() || '';
-        const nextRuns = workflowRunKey
-          ? [
-              await getDesktopApi().getWorkflowRun({
-                workflowRunId: workflowRunKey,
-              }),
-            ]
-          : taskKey
-            ? (await getDesktopApi().listTaskWorkflowRuns({
-                taskId: taskKey,
-                limit: 50,
-              })).workflowRuns
-            : [];
+        const nextRun = workflowRunKey
+          ? await getDesktopApi().getWorkflowRun({
+              workflowRunId: workflowRunKey,
+            })
+          : null;
         if (!mountedRef.current) {
           return;
         }
-        setRuns(nextRuns);
+        setRun(nextRun);
         setError(null);
       } catch (loadError) {
         if (!mountedRef.current) {
           return;
         }
         if (workflowRunId?.trim() && isWorkflowRunNotFoundError(loadError)) {
-          setRuns([]);
+          setRun(null);
           setError(null);
           return;
         }
@@ -1698,7 +1687,7 @@ export function WorkflowRunsPanel({
         }
       }
     },
-    [taskId, workflowRunId, onToast],
+    [workflowRunId, onToast],
   );
 
   useEffect(() => {
@@ -1741,7 +1730,7 @@ export function WorkflowRunsPanel({
             <span className="workflow-runs-header-spacer" />
           )}
           <div className="workflow-runs-header-actions">
-            {runs.length ? (
+            {run ? (
               <ToggleGroup
                 aria-label={t('Workflow view')}
                 onValueChange={(value) => {
@@ -1802,21 +1791,16 @@ export function WorkflowRunsPanel({
             </div>
           ) : awaitingWorkflowRunRecord ? (
             <div className="workflow-runs-state">{t('Loading workflow runs…')}</div>
-          ) : runs.length ? (
-            <div className="workflow-runs-list">
-              {runs.map((run) => (
-                <RunCard
-                  key={run.workflow.workflowRunId}
-                  onOpenThread={onOpenThread}
-                  run={run}
-                  t={t}
-                  viewMode={viewMode}
-                />
-              ))}
-            </div>
+          ) : run ? (
+            <RunCard
+              onOpenThread={onOpenThread}
+              run={run}
+              t={t}
+              viewMode={viewMode}
+            />
           ) : (
             <div className="workflow-runs-state">
-              {taskId ? t('No workflow runs for this task.') : t('No workflow data for this thread.')}
+              {t('No workflow data for this thread.')}
             </div>
           )}
         </div>

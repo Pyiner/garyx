@@ -161,10 +161,6 @@ fn thread_routes() -> Router<Arc<AppState>> {
             axum::routing::get(tasks::task_history),
         )
         .route(
-            "/api/tasks/{task_id}/workflow-runs",
-            axum::routing::get(workflows::list_task_workflow_runs),
-        )
-        .route(
             "/api/tasks/{task_id}/stop",
             axum::routing::post(tasks::stop_task),
         )

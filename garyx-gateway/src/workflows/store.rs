@@ -60,17 +60,6 @@ impl WorkflowStore {
             .list_workflow_runs(parent_thread_id, limit, offset)?)
     }
 
-    pub fn list_runs_for_task(
-        &self,
-        task_id: &str,
-        limit: usize,
-        offset: usize,
-    ) -> Result<Vec<WorkflowRunRecord>, WorkflowError> {
-        Ok(self
-            .db
-            .list_workflow_runs_for_task(task_id, limit, offset)?)
-    }
-
     pub fn children(
         &self,
         workflow_run_id: &str,

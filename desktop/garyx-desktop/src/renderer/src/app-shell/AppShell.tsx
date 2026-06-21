@@ -1482,6 +1482,9 @@ export function AppShell() {
   >(() =>
     initialRouteValue.kind === "workflow-task" ? initialRouteValue.taskId : null,
   );
+  const [selectedWorkflowRunId, setSelectedWorkflowRunId] = useState<
+    string | null
+  >(null);
   const [threadEntrySelectionSource, setThreadEntrySelectionSource] =
     useState<ThreadEntrySelectionSource | null>(null);
   const [newThreadDraftActive, setNewThreadDraftActive] = useState(
@@ -3982,6 +3985,7 @@ export function AppShell() {
     setError(null);
     setSelectedWorkflowTask(task);
     setSelectedWorkflowTaskId(taskId);
+    setSelectedWorkflowRunId(task.threadId || null);
     setContentView("workflow");
   }
 
@@ -4021,6 +4025,7 @@ export function AppShell() {
           setError(null);
           setSelectedWorkflowTask(null);
           setSelectedWorkflowTaskId(route.taskId);
+          setSelectedWorkflowRunId(null);
           setContentView("workflow");
           return;
         case "view":
@@ -4047,6 +4052,55 @@ export function AppShell() {
       setContentView,
     ],
   );
+
+  useEffect(() => {
+    if (
+      loading ||
+      contentView !== "workflow" ||
+      !selectedWorkflowTaskId ||
+      selectedWorkflowRunId
+    ) {
+      return;
+    }
+    let cancelled = false;
+    const taskId = selectedWorkflowTaskId;
+    void (async () => {
+      try {
+        const task = await getDesktopApi().getTask({ taskId });
+        if (cancelled) {
+          return;
+        }
+        setSelectedWorkflowTask(task);
+        setSelectedWorkflowTaskId(task.taskId || taskId);
+        if (task.executor?.type !== "workflow") {
+          setError(`Task is not workflow-backed: ${task.taskId || taskId}`);
+          return;
+        }
+        if (!task.threadId) {
+          setError(`Workflow task has no thread: ${task.taskId || taskId}`);
+          return;
+        }
+        setSelectedWorkflowRunId(task.threadId);
+        setError(null);
+      } catch (routeError) {
+        if (!cancelled) {
+          setError(
+            routeError instanceof Error
+              ? routeError.message
+              : `Failed to load workflow task: ${taskId}`,
+          );
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    contentView,
+    loading,
+    selectedWorkflowRunId,
+    selectedWorkflowTaskId,
+  ]);
 
   useEffect(() => {
     const handleRouteChange = () => {
@@ -10184,22 +10238,43 @@ export function AppShell() {
                 workspaceMutation={workspaceMutation}
               />
             ) : isWorkflowView && selectedWorkflowTaskId ? (
-              <WorkflowRunsPanel
-                onOpenTasks={() => {
-                  trackUiAction("workflow.back_to_tasks", () => {
-                    setContentView("tasks");
-                  });
-                }}
-                onOpenThread={(threadId) => {
-                  trackUiAction("workflow.open_thread", async () => {
-                    await openExistingThread(threadId);
-                  });
-                }}
-                onToast={pushToast}
-                t={t}
-                task={selectedWorkflowTask}
-                taskId={selectedWorkflowTaskId}
-              />
+              selectedWorkflowRunId ? (
+                <WorkflowRunsPanel
+                  onOpenTasks={() => {
+                    trackUiAction("workflow.back_to_tasks", () => {
+                      setContentView("tasks");
+                    });
+                  }}
+                  onOpenThread={(threadId) => {
+                    trackUiAction("workflow.open_thread", async () => {
+                      await openExistingThread(threadId);
+                    });
+                  }}
+                  onToast={pushToast}
+                  t={t}
+                  task={selectedWorkflowTask}
+                  workflowRunId={selectedWorkflowRunId}
+                />
+              ) : (
+                <div className="workflow-runs-page">
+                  <section
+                    aria-label={t("Workflow runs")}
+                    className="workflow-runs-panel"
+                  >
+                    <div className="workflow-runs-body">
+                      <div
+                        className={
+                          error
+                            ? "workflow-runs-state workflow-runs-state-error"
+                            : "workflow-runs-state"
+                        }
+                      >
+                        {error || t("Loading workflow runs…")}
+                      </div>
+                    </div>
+                  </section>
+                </div>
+              )
             ) : isDreamsView ? (
               <DreamsPanel
                 onOpenThread={(threadId) => {

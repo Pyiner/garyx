@@ -277,8 +277,8 @@ API groups:
 - `POST /api/workflows/sdk` creates or reuses a workflow execution thread
 - `POST /api/tasks` with `executor.type = "workflow"` creates a Task-wrapped
   workflow execution thread
-- `GET /api/tasks/{id}/workflow-runs` returns the wrapped workflow thread
-- `GET /api/workflows/{threadId}`
+- `GET /api/tasks/{id}` returns the task's backing `thread_id`
+- `GET /api/workflows/{threadId}` returns the wrapped workflow thread
 - `GET /api/workflows/{threadId}/events`
 
 CLI:

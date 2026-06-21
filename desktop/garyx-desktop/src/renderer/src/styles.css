@@ -20884,13 +20884,6 @@ button.new-thread-dreams-scan:hover {
   color: #b03a2e;
 }
 
-.workflow-runs-list {
-  display: grid;
-  min-height: 0;
-  height: 100%;
-  gap: 0;
-}
-
 .workflow-run-card {
   display: flex;
   flex-direction: column;

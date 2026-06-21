@@ -934,7 +934,7 @@ garyx workflow events run-abc</code></pre>
               <tr><td><code>POST /api/workflows/sdk/:runId/finish</code></td><td>SDK 完成 WorkflowRun。</td><td><code>status</code>、<code>result</code>、<code>error</code>。</td></tr>
               <tr><td><code>GET /api/workflows/:runId</code></td><td>查看 run 详情。</td><td><code>workflow</code>、<code>children</code>、<code>events</code>。</td></tr>
               <tr><td><code>GET /api/workflows/:runId/events</code></td><td>分页读取事件流。</td><td><code>after</code> cursor、<code>limit</code>。</td></tr>
-              <tr><td><code>GET /api/tasks/:taskId/workflow-runs</code></td><td>Task detail drilldown。</td><td>按 Task 查询所有关联 WorkflowRun。</td></tr>
+              <tr><td><code>GET /api/tasks/:taskId</code></td><td>Task detail routing。</td><td>返回 Task backing <code>thread_id</code>；workflow task 的 <code>thread_id</code> 即唯一 WorkflowRun id。</td></tr>
             </tbody>
           </table>
 

@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   ThreadStreamGapError,
   fetchThreadHistory,
+  getTask,
   streamThreadEvents,
 } from "./gary-client.ts";
 
@@ -75,6 +76,51 @@ test("fetchThreadHistory preserves kind parity fields for committed reducers", a
     assert.equal(transcript.messages[1].role, "assistant");
     assert.deepEqual(transcript.messages[1].input, {
       tool_calls: [{ id: "call-history-input" }],
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("getTask fetches task detail and preserves backing workflow thread id", async () => {
+  const originalFetch = globalThis.fetch;
+  const urls = [];
+  globalThis.fetch = async (url) => {
+    urls.push(String(url));
+    return new Response(
+      JSON.stringify({
+        task_id: "#TASK-42",
+        number: 42,
+        title: "Synthetic workflow task",
+        status: "in_progress",
+        thread_id: "thread::workflow-task-42",
+        executor: {
+          type: "workflow",
+          workflow_id: "development-loop",
+          workflow_version: 1,
+        },
+      }),
+      { status: 200, statusText: "OK" },
+    );
+  };
+
+  try {
+    const task = await getTask(
+      {
+        gatewayUrl: "http://127.0.0.1:31337",
+        gatewayAuthToken: "",
+      },
+      { taskId: "#TASK-42" },
+    );
+
+    assert.equal(urls.length, 1);
+    assert.equal(urls[0], "http://127.0.0.1:31337/api/tasks/%23TASK-42");
+    assert.equal(task.taskId, "#TASK-42");
+    assert.equal(task.threadId, "thread::workflow-task-42");
+    assert.deepEqual(task.executor, {
+      type: "workflow",
+      workflowId: "development-loop",
+      workflowVersion: 1,
     });
   } finally {
     globalThis.fetch = originalFetch;

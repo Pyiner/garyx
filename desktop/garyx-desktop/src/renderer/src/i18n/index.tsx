@@ -376,7 +376,6 @@ const zhCN: Record<string, string> = {
   'Failed to load workflows.': '加载工作流失败。',
   'Start workflow': '启动工作流',
   'Workflow task started.': '工作流任务已启动。',
-  'No workflow runs for this task.': '该任务暂无工作流运行。',
   'No workflow data for this thread.': '该线程暂无工作流数据。',
   'Loading workflow runs…': '正在加载工作流运行…',
   'Child agents': '子智能体',

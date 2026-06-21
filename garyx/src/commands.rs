@@ -5431,28 +5431,25 @@ pub(crate) async fn cmd_task_get(
         Some(fetch) => fetch.await,
         None => None,
     };
-    let workflow_runs_payload = payload
-        .get("task_id")
+    let workflow_run_payload = payload
+        .get("thread_id")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(|task_id| async move {
+        .map(|thread_id| async move {
             fetch_gateway_json(
                 &gateway,
-                &format!(
-                    "/api/tasks/{}/workflow-runs?limit=10",
-                    encode_task_id(task_id).ok()?
-                ),
+                &format!("/api/workflows/{}", urlencoding::encode(thread_id)),
             )
             .await
             .ok()
         });
-    let workflow_runs_payload = match workflow_runs_payload {
+    let workflow_run_payload = match workflow_run_payload {
         Some(fetch) => fetch.await,
         None => None,
     };
     let mut output = format_task_progress(&payload, history_payload.as_ref());
-    append_task_workflow_runs(&mut output, workflow_runs_payload.as_ref());
+    append_task_workflow_run(&mut output, workflow_run_payload.as_ref());
     print!("{output}");
     Ok(())
 }
@@ -6296,84 +6293,78 @@ fn format_task_progress(task_payload: &Value, history_payload: Option<&Value>) -
     output
 }
 
-fn append_task_workflow_runs(output: &mut String, workflow_runs_payload: Option<&Value>) {
-    let Some(workflow_runs) = workflow_runs_payload
-        .and_then(|payload| payload.get("workflowRuns"))
-        .and_then(Value::as_array)
-        .filter(|runs| !runs.is_empty())
-    else {
+fn append_task_workflow_run(output: &mut String, workflow_run_payload: Option<&Value>) {
+    let Some(run) = workflow_run_payload else {
         return;
     };
     output.push('\n');
-    output.push_str("Workflow Runs:\n");
-    for run in workflow_runs {
-        let workflow = run.get("workflow").unwrap_or(run);
-        let workflow_id = workflow
-            .get("workflowRunId")
-            .or_else(|| workflow.get("workflowId"))
+    output.push_str("Workflow Run:\n");
+    let workflow = run.get("workflow").unwrap_or(run);
+    let workflow_id = workflow
+        .get("workflowRunId")
+        .or_else(|| workflow.get("workflowId"))
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let status = workflow
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let definition_id = workflow
+        .get("workflowDefinitionId")
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let definition_version = workflow
+        .get("workflowDefinitionVersion")
+        .and_then(Value::as_u64)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_owned());
+    let total_children = workflow
+        .get("totalChildren")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let completed_children = workflow
+        .get("completedChildren")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let failed_children = workflow
+        .get("failedChildren")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let _ = writeln!(
+        output,
+        "- {workflow_id} [{status}] definition {definition_id}@{definition_version} children {completed_children}/{total_children} failed {failed_children}"
+    );
+    if let Some(output_text) = workflow
+        .get("outputText")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let _ = writeln!(output, "  Output: {output_text}");
+    }
+    if let Some(error) = workflow
+        .get("error")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let _ = writeln!(output, "  Error: {error}");
+    }
+    let Some(children) = run.get("children").and_then(Value::as_array) else {
+        return;
+    };
+    for child in children {
+        let label = child.get("label").and_then(Value::as_str).unwrap_or("-");
+        let child_status = child.get("status").and_then(Value::as_str).unwrap_or("-");
+        let thread_id = child.get("threadId").and_then(Value::as_str).unwrap_or("-");
+        let phase_title = child
+            .get("phaseTitle")
             .and_then(Value::as_str)
             .unwrap_or("-");
-        let status = workflow
-            .get("status")
-            .and_then(Value::as_str)
-            .unwrap_or("-");
-        let definition_id = workflow
-            .get("workflowDefinitionId")
-            .and_then(Value::as_str)
-            .unwrap_or("-");
-        let definition_version = workflow
-            .get("workflowDefinitionVersion")
-            .and_then(Value::as_u64)
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "-".to_owned());
-        let total_children = workflow
-            .get("totalChildren")
-            .and_then(Value::as_i64)
-            .unwrap_or(0);
-        let completed_children = workflow
-            .get("completedChildren")
-            .and_then(Value::as_i64)
-            .unwrap_or(0);
-        let failed_children = workflow
-            .get("failedChildren")
-            .and_then(Value::as_i64)
-            .unwrap_or(0);
         let _ = writeln!(
             output,
-            "- {workflow_id} [{status}] definition {definition_id}@{definition_version} children {completed_children}/{total_children} failed {failed_children}"
+            "  - {label} [{child_status}] phase {phase_title} thread {thread_id}"
         );
-        if let Some(output_text) = workflow
-            .get("outputText")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            let _ = writeln!(output, "  Output: {output_text}");
-        }
-        if let Some(error) = workflow
-            .get("error")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            let _ = writeln!(output, "  Error: {error}");
-        }
-        let Some(children) = run.get("children").and_then(Value::as_array) else {
-            continue;
-        };
-        for child in children {
-            let label = child.get("label").and_then(Value::as_str).unwrap_or("-");
-            let child_status = child.get("status").and_then(Value::as_str).unwrap_or("-");
-            let thread_id = child.get("threadId").and_then(Value::as_str).unwrap_or("-");
-            let phase_title = child
-                .get("phaseTitle")
-                .and_then(Value::as_str)
-                .unwrap_or("-");
-            let _ = writeln!(
-                output,
-                "  - {label} [{child_status}] phase {phase_title} thread {thread_id}"
-            );
-        }
     }
 }
 

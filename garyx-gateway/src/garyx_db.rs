@@ -1468,37 +1468,6 @@ impl GaryxDbService {
         Ok(records)
     }
 
-    pub fn list_workflow_runs_for_task(
-        &self,
-        task_id: &str,
-        limit: usize,
-        offset: usize,
-    ) -> GaryxDbResult<Vec<WorkflowRunRecord>> {
-        let task_id = normalize_required("task_id", task_id)?;
-        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
-        let offset = i64::try_from(offset).unwrap_or(i64::MAX);
-        let conn = self.conn()?;
-        let mut stmt = conn.prepare(
-            "SELECT workflow_id, task_id, task_thread_id, workflow_definition_id,
-                    workflow_definition_version, workflow_definition_snapshot_json, input_json,
-                    parent_thread_id, parent_run_id, name, description, status,
-                    current_phase_index, script_text, meta_json, result_json, output_text, error,
-                    workspace_dir, created_by, total_children, completed_children, failed_children,
-                    total_input_tokens, total_output_tokens, total_tool_calls, total_cost_usd,
-                    created_at, started_at, finished_at, updated_at
-             FROM workflow_runs
-             WHERE task_id = ?1
-             ORDER BY created_at DESC, workflow_id ASC
-             LIMIT ?2 OFFSET ?3",
-        )?;
-        let rows = stmt.query_map(params![task_id, limit, offset], workflow_run_from_row)?;
-        let mut records = Vec::new();
-        for row in rows {
-            records.push(row?);
-        }
-        Ok(records)
-    }
-
     pub fn update_workflow_run_status(
         &self,
         workflow_id: &str,
@@ -3077,9 +3046,6 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
         CREATE INDEX IF NOT EXISTS idx_thread_meta_visible_updated
             ON thread_meta(default_list_hidden, updated_at DESC, projected_at DESC);
 
-        CREATE INDEX IF NOT EXISTS idx_workflow_runs_task
-            ON workflow_runs(task_id, created_at DESC);
-
         CREATE INDEX IF NOT EXISTS idx_workflow_runs_definition
             ON workflow_runs(workflow_definition_id, created_at DESC);
         "#,
@@ -3807,10 +3773,11 @@ mod tests {
         }
 
         let db = GaryxDbService::open(&path).expect("open migrated db");
-        let rows = db
-            .list_workflow_runs_for_task("#TASK-legacy", 10, 0)
-            .expect("query task index");
-        assert!(rows.is_empty());
+        assert!(
+            db.get_workflow_run("thread::missing")
+                .expect("query migrated workflow table")
+                .is_none()
+        );
     }
 
     #[test]
@@ -4094,38 +4061,6 @@ mod tests {
         assert_eq!(refreshed.total_output_tokens, 6);
         assert_eq!(refreshed.total_tool_calls, 3);
         assert_eq!(refreshed.total_cost_usd, 0.02);
-        db.create_workflow_run(WorkflowRunDraft {
-            task_id: Some("#TASK-other".to_owned()),
-            task_thread_id: Some("thread::other-task".to_owned()),
-            workflow_definition_id: Some("definition".to_owned()),
-            workflow_definition_version: Some(2),
-            workflow_definition_snapshot_json: None,
-            input_json: None,
-            workflow_id: Some("other-task".to_owned()),
-            parent_thread_id: "thread::other-parent".to_owned(),
-            parent_run_id: None,
-            name: "Other Task Workflow".to_owned(),
-            description: None,
-            status: "running".to_owned(),
-            current_phase_index: None,
-            script_text: "sdk".to_owned(),
-            meta_json: "{}".to_owned(),
-            result_json: None,
-            output_text: None,
-            error: None,
-            workspace_dir: Some("/Users/test/project".to_owned()),
-            created_by: Some("test".to_owned()),
-            started_at: Some("2026-05-29T01:00:03.000Z".to_owned()),
-            finished_at: None,
-        })
-        .expect("create other task workflow");
-        let task_runs = db
-            .list_workflow_runs_for_task("#TASK-123", 10, 0)
-            .expect("list runs by task");
-        assert_eq!(task_runs.len(), 1);
-        assert_eq!(task_runs[0].workflow_id, workflow.workflow_id);
-        assert_eq!(task_runs[0].task_id.as_deref(), Some("#TASK-123"));
-
         db.append_workflow_event(WorkflowEventDraft {
             event_id: Some("workflow-event::one".to_owned()),
             workflow_id: workflow.workflow_id.clone(),

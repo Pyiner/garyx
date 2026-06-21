@@ -286,6 +286,10 @@ export interface ListTasksInput {
   offset?: number;
 }
 
+export interface GetTaskInput {
+  taskId: string;
+}
+
 export type DesktopTaskNotificationTarget =
   | { kind: "none" }
   | { kind: "bot"; channel: string; accountId: string };
@@ -443,18 +447,6 @@ export interface DesktopWorkflowRunDrilldown {
   workflow: DesktopWorkflowRun;
   children: DesktopWorkflowChild[];
   events: DesktopWorkflowEvent[];
-}
-
-export interface DesktopWorkflowRunsPage {
-  taskId: string;
-  workflowRuns: DesktopWorkflowRunDrilldown[];
-  count: number;
-  hasMore: boolean;
-}
-
-export interface ListTaskWorkflowRunsInput {
-  taskId: string;
-  limit?: number;
 }
 
 export interface GetWorkflowRunInput {
@@ -1953,14 +1945,12 @@ export interface GaryxDesktopApi {
   ) => Promise<{ state: DesktopState; automation: DesktopAutomationSummary }>;
   deleteAutomation: (input: DeleteAutomationInput) => Promise<DesktopState>;
   listTasks: (input?: ListTasksInput) => Promise<DesktopTasksPage>;
+  getTask: (input: GetTaskInput) => Promise<DesktopTaskSummary>;
   createTask: (input: CreateTaskInput) => Promise<DesktopTaskSummary>;
   listWorkflowDefinitions: () => Promise<DesktopWorkflowDefinition[]>;
   getWorkflowDefinitionSource: (
     input: GetWorkflowDefinitionSourceInput,
   ) => Promise<DesktopWorkflowSourceDocument>;
-  listTaskWorkflowRuns: (
-    input: ListTaskWorkflowRunsInput,
-  ) => Promise<DesktopWorkflowRunsPage>;
   getWorkflowRun: (
     input: GetWorkflowRunInput,
   ) => Promise<DesktopWorkflowRunDrilldown>;

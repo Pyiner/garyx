@@ -2589,39 +2589,34 @@ fn format_task_progress_groups_each_user_turn_with_last_assistant_text_group() {
 }
 
 #[test]
-fn append_task_workflow_runs_renders_run_and_child_summary() {
+fn append_task_workflow_run_renders_run_and_child_summary() {
     let mut output = String::from("Task: #TASK-42\n");
-    let workflow_runs = json!({
-        "taskId": "#TASK-42",
-        "workflowRuns": [
+    let workflow_run = json!({
+        "workflow": {
+            "workflowRunId": "run-abc",
+            "workflowId": "run-abc",
+            "status": "succeeded",
+            "workflowDefinitionId": "deep-research",
+            "workflowDefinitionVersion": 2,
+            "totalChildren": 2,
+            "completedChildren": 2,
+            "failedChildren": 0,
+            "outputText": "Done"
+        },
+        "children": [
             {
-                "workflow": {
-                    "workflowRunId": "run-abc",
-                    "workflowId": "run-abc",
-                    "status": "succeeded",
-                    "workflowDefinitionId": "deep-research",
-                    "workflowDefinitionVersion": 2,
-                    "totalChildren": 2,
-                    "completedChildren": 2,
-                    "failedChildren": 0,
-                    "outputText": "Done"
-                },
-                "children": [
-                    {
-                        "label": "Search",
-                        "status": "succeeded",
-                        "phaseTitle": "Search",
-                        "threadId": "thread::child"
-                    }
-                ],
-                "events": []
+                "label": "Search",
+                "status": "succeeded",
+                "phaseTitle": "Search",
+                "threadId": "thread::child"
             }
-        ]
+        ],
+        "events": []
     });
 
-    append_task_workflow_runs(&mut output, Some(&workflow_runs));
+    append_task_workflow_run(&mut output, Some(&workflow_run));
 
-    assert!(output.contains("Workflow Runs:"));
+    assert!(output.contains("Workflow Run:"));
     assert!(
         output.contains("- run-abc [succeeded] definition deep-research@2 children 2/2 failed 0")
     );

@@ -85,13 +85,11 @@ pub fn spawn_workflow_task_entrypoint(
         match command.spawn() {
             Ok(mut child) => match child.wait().await {
                 Ok(status) if status.success() => {
-                    match WorkflowStore::new(state.ops.garyx_db.clone()).list_runs_for_task(
-                        &task_id_for_spawn,
-                        1,
-                        0,
-                    ) {
-                        Ok(records) if !records.is_empty() => {}
-                        Ok(_) => {
+                    match WorkflowStore::new(state.ops.garyx_db.clone())
+                        .get_run(&task_thread_for_spawn)
+                    {
+                        Ok(_) => {}
+                        Err(WorkflowError::NotFound(_)) => {
                             mark_workflow_task_entrypoint_failed(
                                 &state,
                                 &task_thread_for_spawn,

@@ -39,10 +39,9 @@ import type {
   DesktopWorkflowChild,
   DesktopWorkflowEvent,
   DesktopWorkflowRunDrilldown,
-  DesktopWorkflowRunsPage,
+  GetTaskInput,
   GetWorkflowDefinitionSourceInput,
   GetWorkflowRunInput,
-  ListTaskWorkflowRunsInput,
   ListProviderRecentSessionsInput,
   DeleteSlashCommandInput,
   CommittedMessageEvent,
@@ -541,16 +540,6 @@ interface WorkflowSourcePayload {
   mediaType?: string;
   media_type?: string;
   language?: string;
-}
-
-interface TaskWorkflowRunsPayload {
-  taskId?: string;
-  task_id?: string;
-  workflowRuns?: unknown[];
-  workflow_runs?: unknown[];
-  count?: number;
-  hasMore?: boolean;
-  has_more?: boolean;
 }
 
 interface WorkflowThreadStartPayload {
@@ -4737,37 +4726,6 @@ export async function getWorkflowDefinitionSource(
   return mapWorkflowSource(payload);
 }
 
-export async function listTaskWorkflowRuns(
-  settings: DesktopSettings,
-  input: ListTaskWorkflowRunsInput,
-): Promise<DesktopWorkflowRunsPage> {
-  const taskId = input.taskId?.trim() || "";
-  if (!taskId) {
-    throw new Error("taskId is required");
-  }
-  const query = new URLSearchParams();
-  query.set("limit", String(Math.max(1, Math.min(200, input.limit || 50))));
-  const payload = await requestJson<TaskWorkflowRunsPayload>(
-    settings,
-    `/api/tasks/${encodeURIComponent(taskId)}/workflow-runs?${query.toString()}`,
-    {
-      signal: AbortSignal.timeout(8000),
-    },
-  );
-  const runsRaw = Array.isArray(payload.workflowRuns)
-    ? payload.workflowRuns
-    : Array.isArray(payload.workflow_runs)
-      ? payload.workflow_runs
-      : [];
-  const workflowRuns = runsRaw.map(mapWorkflowRunDrilldown);
-  return {
-    taskId: asString(payload.taskId) || asString(payload.task_id) || taskId,
-    workflowRuns,
-    count: asFiniteNumber(payload.count) ?? workflowRuns.length,
-    hasMore: payload.hasMore ?? payload.has_more ?? false,
-  };
-}
-
 export async function getWorkflowRun(
   settings: DesktopSettings,
   input: GetWorkflowRunInput,
@@ -4868,6 +4826,24 @@ export async function listTasks(
     total: asFiniteNumber(payload.total) ?? tasks.length,
     hasMore: payload.has_more ?? payload.hasMore ?? false,
   };
+}
+
+export async function getTask(
+  settings: DesktopSettings,
+  input: GetTaskInput,
+): Promise<DesktopTaskSummary> {
+  const taskId = input.taskId?.trim() || "";
+  if (!taskId) {
+    throw new Error("taskId is required");
+  }
+  const payload = await requestJson<TaskSummaryPayload>(
+    settings,
+    `/api/tasks/${encodeURIComponent(taskId)}`,
+    {
+      signal: AbortSignal.timeout(8000),
+    },
+  );
+  return mapTaskSummary(payload);
 }
 
 export async function createTask(
