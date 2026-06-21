@@ -7,6 +7,7 @@ use chrono::{SecondsFormat, Utc};
 use garyx_router::KnownChannelEndpoint;
 use rusqlite::{Connection, OptionalExtension, Transaction, params, params_from_iter};
 use serde::Serialize;
+use serde_json::Value;
 use uuid::Uuid;
 
 const CURRENT_THREAD_META_PROJECTION_VERSION: i64 = 3;
@@ -324,6 +325,14 @@ pub struct WorkflowEventDraft {
     pub thread_id: Option<String>,
     pub event_type: String,
     pub payload_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkflowRunDrilldownSnapshot {
+    pub workflow: WorkflowRunRecord,
+    pub children: Vec<WorkflowChildRunRecord>,
+    pub events: Vec<WorkflowEventRecord>,
+    pub latest_event_seq: u64,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -1415,6 +1424,38 @@ impl GaryxDbService {
         workflow_run_by_id(&conn, &workflow_run_id)
     }
 
+    pub fn get_workflow_run_drilldown_snapshot(
+        &self,
+        workflow_run_id: &str,
+        after_event_seq: u64,
+        events_limit: usize,
+    ) -> GaryxDbResult<Option<WorkflowRunDrilldownSnapshot>> {
+        let workflow_run_id = normalize_required("workflowRunId", workflow_run_id)?;
+        let after_event_seq = i64::try_from(after_event_seq).unwrap_or(i64::MAX);
+        let events_limit = i64::try_from(events_limit).unwrap_or(i64::MAX);
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let Some(workflow) = workflow_run_by_id(&tx, &workflow_run_id)? else {
+            tx.commit()?;
+            return Ok(None);
+        };
+        let children = workflow_child_runs_for_workflow(&tx, &workflow_run_id)?;
+        let events = workflow_events_after_for_workflow(
+            &tx,
+            &workflow_run_id,
+            after_event_seq,
+            events_limit,
+        )?;
+        let latest_event_seq = latest_workflow_event_seq(&tx, &workflow_run_id)?;
+        tx.commit()?;
+        Ok(Some(WorkflowRunDrilldownSnapshot {
+            workflow,
+            children,
+            events,
+            latest_event_seq,
+        }))
+    }
+
     pub fn list_workflow_runs(
         &self,
         parent_thread_id: Option<&str>,
@@ -1795,21 +1836,7 @@ impl GaryxDbService {
     ) -> GaryxDbResult<Vec<WorkflowChildRunRecord>> {
         let workflow_id = normalize_required("workflow_id", workflow_id)?;
         let conn = self.conn()?;
-        let mut stmt = conn.prepare(
-            "SELECT workflow_id, workflow_child_run_id, thread_id, phase_index, phase_title,
-                    label, agent_id, status, prompt, result_mode, schema_json, result_text,
-                    result_json, result_preview, error, input_tokens, output_tokens, tool_calls,
-                    cost_usd, queued_at, started_at, finished_at, updated_at
-             FROM workflow_child_runs
-             WHERE workflow_id = ?1
-             ORDER BY phase_index ASC, queued_at ASC, workflow_child_run_id ASC",
-        )?;
-        let rows = stmt.query_map(params![workflow_id], workflow_child_run_from_row)?;
-        let mut records = Vec::new();
-        for row in rows {
-            records.push(row?);
-        }
-        Ok(records)
+        workflow_child_runs_for_workflow(&conn, &workflow_id)
     }
 
     pub fn append_workflow_event(
@@ -1843,6 +1870,17 @@ impl GaryxDbService {
                 created_at,
             ],
         )?;
+        if event_type == "workflow.phase_started"
+            && let Some(phase_index) = workflow_phase_index_from_payload(&payload_json)
+        {
+            conn.execute(
+                "UPDATE workflow_runs
+                 SET current_phase_index = ?2,
+                     updated_at = ?3
+                 WHERE workflow_id = ?1",
+                params![workflow_id, phase_index, created_at],
+            )?;
+        }
         workflow_event_by_id(&conn, &event_id)?
             .ok_or_else(|| GaryxDbError::BadRequest("workflow event was not saved".to_owned()))
     }
@@ -1857,23 +1895,7 @@ impl GaryxDbService {
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         let after_event_seq = i64::try_from(after_event_seq).unwrap_or(i64::MAX);
         let conn = self.conn()?;
-        let mut stmt = conn.prepare(
-            "SELECT event_seq, event_id, workflow_id, workflow_child_run_id, thread_id,
-                    event_type, payload_json, created_at
-             FROM workflow_events
-             WHERE workflow_id = ?1 AND event_seq > ?2
-             ORDER BY event_seq ASC
-             LIMIT ?3",
-        )?;
-        let rows = stmt.query_map(
-            params![workflow_id, after_event_seq, limit],
-            workflow_event_from_row,
-        )?;
-        let mut records = Vec::new();
-        for row in rows {
-            records.push(row?);
-        }
-        Ok(records)
+        workflow_events_after_for_workflow(&conn, &workflow_id, after_event_seq, limit)
     }
 
     pub fn list_interrupted_workflow_task_references(
@@ -3630,6 +3652,27 @@ fn workflow_child_run_by_id(
         .optional()?)
 }
 
+fn workflow_child_runs_for_workflow(
+    conn: &Connection,
+    workflow_id: &str,
+) -> GaryxDbResult<Vec<WorkflowChildRunRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT workflow_id, workflow_child_run_id, thread_id, phase_index, phase_title,
+                label, agent_id, status, prompt, result_mode, schema_json, result_text,
+                result_json, result_preview, error, input_tokens, output_tokens, tool_calls,
+                cost_usd, queued_at, started_at, finished_at, updated_at
+         FROM workflow_child_runs
+         WHERE workflow_id = ?1
+         ORDER BY phase_index ASC, queued_at ASC, workflow_child_run_id ASC",
+    )?;
+    let rows = stmt.query_map(params![workflow_id], workflow_child_run_from_row)?;
+    let mut records = Vec::new();
+    for row in rows {
+        records.push(row?);
+    }
+    Ok(records)
+}
+
 fn workflow_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkflowEventRecord> {
     Ok(WorkflowEventRecord {
         event_seq: row.get(0)?,
@@ -3641,6 +3684,51 @@ fn workflow_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Workflow
         payload_json: row.get(6)?,
         created_at: row.get(7)?,
     })
+}
+
+fn workflow_events_after_for_workflow(
+    conn: &Connection,
+    workflow_id: &str,
+    after_event_seq: i64,
+    limit: i64,
+) -> GaryxDbResult<Vec<WorkflowEventRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT event_seq, event_id, workflow_id, workflow_child_run_id, thread_id,
+                event_type, payload_json, created_at
+         FROM workflow_events
+         WHERE workflow_id = ?1 AND event_seq > ?2
+         ORDER BY event_seq ASC
+         LIMIT ?3",
+    )?;
+    let rows = stmt.query_map(
+        params![workflow_id, after_event_seq, limit],
+        workflow_event_from_row,
+    )?;
+    let mut records = Vec::new();
+    for row in rows {
+        records.push(row?);
+    }
+    Ok(records)
+}
+
+fn latest_workflow_event_seq(conn: &Connection, workflow_id: &str) -> GaryxDbResult<u64> {
+    let seq: i64 = conn.query_row(
+        "SELECT COALESCE(MAX(event_seq), 0)
+         FROM workflow_events
+         WHERE workflow_id = ?1",
+        params![workflow_id],
+        |row| row.get(0),
+    )?;
+    Ok(u64::try_from(seq).unwrap_or(0))
+}
+
+fn workflow_phase_index_from_payload(payload_json: &str) -> Option<i64> {
+    let value = serde_json::from_str::<Value>(payload_json).ok()?;
+    let index = value
+        .get("phaseIndex")
+        .or_else(|| value.get("phase_index"))?
+        .as_i64()?;
+    (index >= 0).then_some(index)
 }
 
 fn workflow_event_by_id(
@@ -4123,11 +4211,22 @@ mod tests {
                 workflow_child_run_id: None,
                 thread_id: None,
                 event_type: "workflow.phase_started".to_owned(),
-                payload_json: "{}".to_owned(),
+                payload_json: r#"{"phaseIndex":2,"title":"Review"}"#.to_owned(),
             })
             .expect("second event");
 
         assert!(second.event_seq > first.event_seq);
+        let workflow = db
+            .get_workflow_run("cursor")
+            .expect("get workflow")
+            .expect("workflow exists");
+        assert_eq!(workflow.current_phase_index, Some(2));
+        let snapshot = db
+            .get_workflow_run_drilldown_snapshot("cursor", 0, 10)
+            .expect("snapshot")
+            .expect("workflow snapshot");
+        assert_eq!(snapshot.latest_event_seq, second.event_seq);
+        assert_eq!(snapshot.events.len(), 2);
         let after_first = db
             .list_workflow_events_after("cursor", first.event_seq, 10)
             .expect("events after first");

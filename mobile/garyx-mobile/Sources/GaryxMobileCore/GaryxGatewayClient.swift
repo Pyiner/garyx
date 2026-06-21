@@ -473,6 +473,14 @@ public final class GaryxGatewayClient {
         try await post("/api/tasks", body: request)
     }
 
+    public func getTask(taskId: String) async throws -> GaryxTaskSummary {
+        try await get("/api/tasks/\(taskId.urlPathEncoded)")
+    }
+
+    public func getWorkflowRun(workflowRunId: String) async throws -> GaryxWorkflowRunDrilldown {
+        try await get("/api/workflows/\(workflowRunId.urlPathEncoded)")
+    }
+
     public func updateTaskStatus(
         taskId: String,
         request: GaryxTaskUpdateStatusRequest

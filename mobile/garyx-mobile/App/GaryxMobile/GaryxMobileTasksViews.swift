@@ -153,7 +153,9 @@ struct GaryxTasksView: View {
             recentRunId: nil,
             activeRunId: nil,
             runState: task.status == .inProgress ? "running" : nil,
-            worktreePath: nil
+            worktreePath: nil,
+            threadType: task.executor?.isWorkflow == true ? "workflow_run" : "chat",
+            workflowRunId: task.executor?.isWorkflow == true ? threadId : nil
         )
     }
 
@@ -595,7 +597,7 @@ struct GaryxTaskListRow: View {
         if !task.threadId.isEmpty {
             actions.append(
                 GaryxRowAction(title: "Open", systemImage: "message", tone: .accent) {
-                    model.openThreadImmediately(id: task.threadId, source: .current)
+                    Task { await model.openTaskThread(task, source: .current) }
                 }
             )
         }

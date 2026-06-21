@@ -644,6 +644,9 @@ extension GaryxMobileModel {
         if invalidatesPendingThreadOpen {
             invalidatePendingThreadOpen()
         }
+        if isWorkflowRunSurfaceActive {
+            clearWorkflowRunSurface()
+        }
         let previousThreadId = selectedThread?.id
         if previousThreadId != thread.id {
             advanceSelectedThreadDraftGeneration()
@@ -659,7 +662,9 @@ extension GaryxMobileModel {
             resetSelectedThreadHistoryPagination()
         }
         selectedThread = thread
-        persistLastOpenedThreadId(thread.id)
+        if !thread.excludeFromRecent {
+            persistLastOpenedThreadId(thread.id)
+        }
         clearPendingNewThreadAgentTarget()
         clearPendingBotDraft()
         draftThreadTitle = thread.title
@@ -693,6 +698,7 @@ extension GaryxMobileModel {
         selectedThreadHistoryRetryCount = 0
         cancelSelectedThreadReconcileLoop()
         stopSelectedThreadStream()
+        clearWorkflowRunSurface()
         selectedThreadHistoryRequestId = nil
         isLoadingSelectedThreadHistory = false
         resetSelectedThreadHistoryPagination()

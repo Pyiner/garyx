@@ -38,6 +38,10 @@ import type {
   DesktopWorkflowRun,
   DesktopWorkflowChild,
   DesktopWorkflowEvent,
+  DesktopWorkflowPresentation,
+  DesktopWorkflowPresentationCounts,
+  DesktopWorkflowPresentationPhase,
+  DesktopWorkflowPresentationPhaseStatus,
   DesktopWorkflowRunDrilldown,
   GetTaskInput,
   GetWorkflowDefinitionSourceInput,
@@ -4647,6 +4651,153 @@ function mapWorkflowEvent(value: unknown): DesktopWorkflowEvent | null {
   };
 }
 
+function mapWorkflowPresentationCounts(
+  value: unknown,
+): DesktopWorkflowPresentationCounts {
+  const record = parseRecord(value);
+  return {
+    total: asFiniteNumber(record.total) ?? 0,
+    completed: asFiniteNumber(record.completed) ?? 0,
+    failedChildren: asFiniteNumber(record.failedChildren) ?? 0,
+    runningChildren: asFiniteNumber(record.runningChildren) ?? 0,
+    queuedChildren: asFiniteNumber(record.queuedChildren) ?? 0,
+    skippedChildren: asFiniteNumber(record.skippedChildren) ?? 0,
+    totalPhases: asFiniteNumber(record.totalPhases) ?? 0,
+    completedPhases: asFiniteNumber(record.completedPhases) ?? 0,
+    totalInputTokens: asFiniteNumber(record.totalInputTokens) ?? 0,
+    totalOutputTokens: asFiniteNumber(record.totalOutputTokens) ?? 0,
+    totalToolCalls: asFiniteNumber(record.totalToolCalls) ?? 0,
+    costUsd: asFiniteNumber(record.costUsd) ?? 0,
+  };
+}
+
+function mapWorkflowPresentationPhase(
+  value: unknown,
+): DesktopWorkflowPresentationPhase | null {
+  const record = parseRecord(value);
+  const phaseId = asString(record.phaseId) || '';
+  const title = asString(record.title) || '';
+  if (!phaseId || !title) {
+    return null;
+  }
+  const counts = parseRecord(record.counts);
+  const children = Array.isArray(record.children)
+    ? record.children
+        .map(mapWorkflowChild)
+        .filter((entry): entry is DesktopWorkflowChild => Boolean(entry))
+    : [];
+  return {
+    phaseId,
+    index: asFiniteNumber(record.index) ?? null,
+    title,
+    detail: asString(record.detail) || null,
+    status: asString(record.status) || 'queued',
+    active: asBoolean(record.active) ?? false,
+    counts: {
+      completed: asFiniteNumber(counts.completed) ?? 0,
+      total: asFiniteNumber(counts.total) ?? children.length,
+      failedChildren: asFiniteNumber(counts.failedChildren) ?? 0,
+    },
+    children,
+  };
+}
+
+function mapWorkflowPresentationPhaseStatus(
+  value: unknown,
+): DesktopWorkflowPresentationPhaseStatus | null {
+  const record = parseRecord(value);
+  const phaseId = asString(record.phaseId) || '';
+  const title = asString(record.title) || '';
+  if (!phaseId || !title) {
+    return null;
+  }
+  return {
+    phaseId,
+    index: asFiniteNumber(record.index) ?? null,
+    title,
+    status: asString(record.status) || 'queued',
+    active: asBoolean(record.active) ?? false,
+    completedChildren: asFiniteNumber(record.completedChildren) ?? 0,
+    totalChildren: asFiniteNumber(record.totalChildren) ?? 0,
+    failedChildren: asFiniteNumber(record.failedChildren) ?? 0,
+  };
+}
+
+function mapWorkflowPresentation(
+  value: unknown,
+): DesktopWorkflowPresentation | null {
+  const record = parseRecord(value);
+  const workflowRunId = asString(record.workflowRunId) || '';
+  if (!workflowRunId) {
+    return null;
+  }
+  const activePhase = asRecordOrNull(record.activePhase);
+  const outcome = parseRecord(record.outcome);
+  const eventsSeed = parseRecord(record.eventsSeed);
+  const phases = Array.isArray(record.phases)
+    ? record.phases
+        .map(mapWorkflowPresentationPhase)
+        .filter((entry): entry is DesktopWorkflowPresentationPhase =>
+          Boolean(entry),
+        )
+    : [];
+  const phaseStatus = Array.isArray(record.phaseStatus)
+    ? record.phaseStatus
+        .map(mapWorkflowPresentationPhaseStatus)
+        .filter((entry): entry is DesktopWorkflowPresentationPhaseStatus =>
+          Boolean(entry),
+        )
+    : [];
+  const childCards = Array.isArray(record.childCards)
+    ? record.childCards
+        .map(mapWorkflowChild)
+        .filter((entry): entry is DesktopWorkflowChild => Boolean(entry))
+    : [];
+  return {
+    version: asFiniteNumber(record.version) ?? 1,
+    workflowRunId,
+    threadId: asString(record.threadId) || workflowRunId,
+    workflowDefinitionId: asString(record.workflowDefinitionId) || null,
+    taskId: asString(record.taskId) || null,
+    taskThreadId: asString(record.taskThreadId) || null,
+    title: asString(record.title) || 'Workflow run',
+    description: asString(record.description) || null,
+    status: asString(record.status) || 'running',
+    counts: mapWorkflowPresentationCounts(record.counts),
+    activePhase: activePhase
+      ? {
+          phaseId: asString(activePhase.phaseId) || '',
+          index: asFiniteNumber(activePhase.index) ?? null,
+          title: asString(activePhase.title) || '',
+          detail: asString(activePhase.detail) || null,
+        }
+      : null,
+    phaseStatus,
+    phases,
+    childCards,
+    outcome: {
+      kind: asString(outcome.kind) || 'running',
+      status: asString(outcome.status) || 'running',
+      hasOutputText: asBoolean(outcome.hasOutputText) ?? false,
+      hasResult: asBoolean(outcome.hasResult) ?? false,
+      error: asString(outcome.error) || null,
+    },
+    outputText: asString(record.outputText) || null,
+    result: record.result ?? null,
+    error: asString(record.error) || null,
+    terminalComplete: asBoolean(record.terminalComplete) ?? false,
+    stale: asBoolean(record.stale) ?? false,
+    staleReason: asString(record.staleReason) || null,
+    snapshotVersion: asFiniteNumber(record.snapshotVersion) ?? 0,
+    latestEventSeq: asFiniteNumber(record.latestEventSeq) ?? 0,
+    eventsSeed: {
+      count: asFiniteNumber(eventsSeed.count) ?? 0,
+      latestSeedEventSeq: asFiniteNumber(eventsSeed.latestSeedEventSeq) ?? 0,
+      truncated: asBoolean(eventsSeed.truncated) ?? false,
+    },
+  };
+}
+
 function mapWorkflowRunDrilldown(value: unknown): DesktopWorkflowRunDrilldown {
   const record = parseRecord(value);
   const children = Array.isArray(record.children)
@@ -4663,6 +4814,7 @@ function mapWorkflowRunDrilldown(value: unknown): DesktopWorkflowRunDrilldown {
     workflow: mapWorkflowRun(record.workflow),
     children,
     events,
+    presentation: mapWorkflowPresentation(record.presentation),
   };
 }
 

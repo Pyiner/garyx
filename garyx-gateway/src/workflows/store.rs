@@ -6,7 +6,7 @@ use serde_json::json;
 
 use crate::garyx_db::{
     GaryxDbService, WorkflowChildRunRecord, WorkflowEventDraft, WorkflowEventRecord,
-    WorkflowRunDraft, WorkflowRunRecord,
+    WorkflowRunDraft, WorkflowRunDrilldownSnapshot, WorkflowRunRecord,
 };
 
 use super::WorkflowError;
@@ -47,6 +47,19 @@ impl WorkflowStore {
         self.db.get_workflow_run(workflow_run_id)?.ok_or_else(|| {
             WorkflowError::NotFound(format!("workflow run not found: {workflow_run_id}"))
         })
+    }
+
+    pub fn drilldown_snapshot(
+        &self,
+        workflow_run_id: &str,
+        after_event_seq: u64,
+        events_limit: usize,
+    ) -> Result<WorkflowRunDrilldownSnapshot, WorkflowError> {
+        self.db
+            .get_workflow_run_drilldown_snapshot(workflow_run_id, after_event_seq, events_limit)?
+            .ok_or_else(|| {
+                WorkflowError::NotFound(format!("workflow run not found: {workflow_run_id}"))
+            })
     }
 
     pub fn list_runs(

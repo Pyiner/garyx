@@ -702,13 +702,6 @@ type WorkflowPhase = {
   completed: number;
 };
 
-type WorkflowPhasePlan = {
-  key: string;
-  index: number;
-  title: string;
-  detail?: string;
-};
-
 function childDisplayName(child: DesktopWorkflowChild): string {
   return child.label || child.agentId || child.workflowChildRunId;
 }
@@ -717,142 +710,18 @@ function childAgentDisplayName(child: DesktopWorkflowChild): string {
   return child.agentId || child.label || 'Agent';
 }
 
-function childSortTime(child: DesktopWorkflowChild): number {
-  const raw = child.startedAt || child.queuedAt || child.updatedAt || '';
-  const value = new Date(raw).getTime();
-  return Number.isFinite(value) ? value : 0;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function asString(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
-}
-
-function asNumber(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
-function workflowPhasePlan(
-  workflow: DesktopWorkflowRunDrilldown['workflow'],
-): WorkflowPhasePlan[] {
-  const phases = Array.isArray(workflow.meta?.phases)
-    ? workflow.meta.phases
-    : [];
-  return phases
-    .map((entry, fallbackIndex) => {
-      const record = asRecord(entry);
-      if (!record) {
-        return null;
-      }
-      const title = asString(record.title);
-      if (!title) {
-        return null;
-      }
-      const index = asNumber(record.index) ?? fallbackIndex;
-      const detail = asString(record.detail) ?? undefined;
-      return {
-        key: `${index}:${title}`,
-        index,
-        title,
-        ...(detail ? { detail } : {}),
-      } satisfies WorkflowPhasePlan;
-    })
-    .filter((entry): entry is WorkflowPhasePlan => Boolean(entry))
-    .sort((left, right) => left.index - right.index);
-}
-
-function phaseSortTime(phase: WorkflowPhase): number {
-  const first = phase.children[0];
-  return first ? childSortTime(first) : 0;
-}
-
-function buildWorkflowPhases(
-  workflow: DesktopWorkflowRunDrilldown['workflow'],
-  children: DesktopWorkflowChild[],
-  t: Translate,
+function buildWorkflowPhasesFromPresentation(
+  run: DesktopWorkflowRunDrilldown,
 ): WorkflowPhase[] {
-  const grouped = new Map<string, WorkflowPhase>();
-  const phaseByIndex = new Map<number, WorkflowPhase>();
-  const phaseByTitle = new Map<string, WorkflowPhase>();
-
-  for (const planned of workflowPhasePlan(workflow)) {
-    const phase: WorkflowPhase = {
-      key: planned.key,
-      index: planned.index,
-      title: planned.title,
-      detail: planned.detail,
-      children: [],
-      status: 'queued',
-      completed: 0,
-    };
-    grouped.set(phase.key, phase);
-    phaseByIndex.set(planned.index, phase);
-    phaseByTitle.set(planned.title, phase);
-  }
-
-  for (const child of children) {
-    const index = child.phaseIndex ?? null;
-    const title =
-      child.phaseTitle ||
-      (index === null
-        ? t('Run')
-        : t('Phase {number}', { number: index + 1 }));
-    const key = `${index ?? 'none'}:${title}`;
-    const existing =
-      (index === null ? undefined : phaseByIndex.get(index)) ||
-      phaseByTitle.get(title) ||
-      grouped.get(key);
-    const phase =
-      existing ||
-      ({
-        key,
-        index,
-        title,
-        children: [],
-        status: 'queued',
-        completed: 0,
-      } satisfies WorkflowPhase);
-    phase.children.push(child);
-    grouped.set(key, phase);
-    if (index !== null) {
-      phaseByIndex.set(index, phase);
-    }
-    phaseByTitle.set(title, phase);
-  }
-
-  const phases = [...grouped.values()].sort((left, right) => {
-    const leftIndex = left.index ?? Number.MAX_SAFE_INTEGER;
-    const rightIndex = right.index ?? Number.MAX_SAFE_INTEGER;
-    if (leftIndex !== rightIndex) {
-      return leftIndex - rightIndex;
-    }
-    return (
-      phaseSortTime(left) - phaseSortTime(right)
-    );
-  });
-
-  for (const phase of phases) {
-    phase.children.sort((left, right) => childSortTime(left) - childSortTime(right));
-    phase.completed = phase.children.filter((child) => isTerminal(child.status)).length;
-    if (phase.children.some((child) => child.status === 'running')) {
-      phase.status = 'running';
-    } else if (phase.children.some((child) => child.status === 'failed')) {
-      phase.status = 'failed';
-    } else if (phase.children.some((child) => child.status === 'cancelled')) {
-      phase.status = 'cancelled';
-    } else if (phase.children.length && phase.completed === phase.children.length) {
-      phase.status = 'succeeded';
-    } else {
-      phase.status = 'queued';
-    }
-  }
-
-  return phases;
+  return (run.presentation?.phases ?? []).map((phase) => ({
+    key: phase.phaseId,
+    index: phase.index ?? null,
+    title: phase.title,
+    detail: phase.detail ?? undefined,
+    children: phase.children,
+    status: phase.status,
+    completed: phase.counts.completed,
+  }));
 }
 
 function preferredPhaseKey(
@@ -1445,10 +1314,10 @@ function RunCard({
   onOpenThread: (threadId: string) => void;
   t: Translate;
 }) {
-  const { workflow, children } = run;
+  const { workflow } = run;
   const phases = useMemo(
-    () => buildWorkflowPhases(workflow, children, t),
-    [workflow, children, t],
+    () => buildWorkflowPhasesFromPresentation(run),
+    [run],
   );
   const [selectedPhaseKey, setSelectedPhaseKey] = useState(() =>
     preferredPhaseKey(phases, workflow),
@@ -1464,7 +1333,7 @@ function RunCard({
       (child) => child.workflowChildRunId === selectedChildId,
     ) ||
     selectedChildForPhase(activePhase);
-  const runOutcome = workflow.outputText || '';
+  const runOutcome = run.presentation?.outputText || workflow.outputText || '';
 
   useEffect(() => {
     const preferred = preferredPhaseKey(phases, workflow);
@@ -1638,7 +1507,7 @@ export function WorkflowRunsPanel({
       // Ignore storage failures (private mode, quota, etc.).
     }
   }, [viewMode]);
-  const hasNonTerminal = run ? !isTerminal(run.workflow.status) : false;
+  const hasNonTerminal = run ? !run.presentation?.terminalComplete : false;
   const shouldPoll =
     hasNonTerminal ||
     (!run && (task?.status === 'in_progress' || Boolean(workflowRunId)));

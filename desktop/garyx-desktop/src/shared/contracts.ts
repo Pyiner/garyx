@@ -443,10 +443,96 @@ export interface DesktopWorkflowEvent {
   createdAt?: string | null;
 }
 
+export interface DesktopWorkflowPresentationCounts {
+  total: number;
+  completed: number;
+  failedChildren: number;
+  runningChildren: number;
+  queuedChildren: number;
+  skippedChildren: number;
+  totalPhases: number;
+  completedPhases: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalToolCalls: number;
+  costUsd: number;
+}
+
+export interface DesktopWorkflowPresentationPhase {
+  phaseId: string;
+  index?: number | null;
+  title: string;
+  detail?: string | null;
+  status: DesktopWorkflowRunStatus;
+  active: boolean;
+  counts: {
+    completed: number;
+    total: number;
+    failedChildren: number;
+  };
+  children: DesktopWorkflowChild[];
+}
+
+export interface DesktopWorkflowPresentationPhaseStatus {
+  phaseId: string;
+  index?: number | null;
+  title: string;
+  status: DesktopWorkflowRunStatus;
+  active: boolean;
+  completedChildren: number;
+  totalChildren: number;
+  failedChildren: number;
+}
+
+export interface DesktopWorkflowPresentationOutcome {
+  kind: string;
+  status: DesktopWorkflowRunStatus;
+  hasOutputText: boolean;
+  hasResult: boolean;
+  error?: string | null;
+}
+
+export interface DesktopWorkflowPresentation {
+  version: number;
+  workflowRunId: string;
+  threadId: string;
+  workflowDefinitionId?: string | null;
+  taskId?: string | null;
+  taskThreadId?: string | null;
+  title: string;
+  description?: string | null;
+  status: DesktopWorkflowRunStatus;
+  counts: DesktopWorkflowPresentationCounts;
+  activePhase?: {
+    phaseId: string;
+    index?: number | null;
+    title: string;
+    detail?: string | null;
+  } | null;
+  phaseStatus: DesktopWorkflowPresentationPhaseStatus[];
+  phases: DesktopWorkflowPresentationPhase[];
+  childCards: DesktopWorkflowChild[];
+  outcome: DesktopWorkflowPresentationOutcome;
+  outputText?: string | null;
+  result?: unknown | null;
+  error?: string | null;
+  terminalComplete: boolean;
+  stale: boolean;
+  staleReason?: string | null;
+  snapshotVersion: number;
+  latestEventSeq: number;
+  eventsSeed: {
+    count: number;
+    latestSeedEventSeq: number;
+    truncated: boolean;
+  };
+}
+
 export interface DesktopWorkflowRunDrilldown {
   workflow: DesktopWorkflowRun;
   children: DesktopWorkflowChild[];
   events: DesktopWorkflowEvent[];
+  presentation?: DesktopWorkflowPresentation | null;
 }
 
 export interface GetWorkflowRunInput {

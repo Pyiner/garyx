@@ -146,6 +146,8 @@ final class GaryxMobileModel: ObservableObject {
     @Published var skills: [GaryxSkillSummary] = []
     @Published var tasks: [GaryxTaskSummary] = []
     @Published var tasksPanelState = GaryxMobileTasksPanelState()
+    @Published var workflowRunPanelState = GaryxWorkflowRunPanelState()
+    @Published var selectedWorkflowRunThread: GaryxThreadSummary?
     @Published var automations: [GaryxAutomationSummary] = []
     @Published var remoteStateLoadPhase: GaryxMobileLoadPhase = .idle
     @Published var agentTargetsLoadPhase: GaryxMobileLoadPhase = .idle
@@ -276,6 +278,8 @@ final class GaryxMobileModel: ObservableObject {
     var selectedThreadDraftGeneration = UUID()
     var threadOpenState = GaryxMobileThreadOpenState()
     var threadRuntimeMutationIds: [String: UUID] = [:]
+    var workflowRunPollTask: Task<Void, Never>?
+    var workflowRunPollGeneration: UUID?
     #if DEBUG
     var debugSnapshotActive = false
     #endif

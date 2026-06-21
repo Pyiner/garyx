@@ -1,9 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import {
   ThreadStreamGapError,
   fetchThreadHistory,
+  getWorkflowRun,
   getTask,
   streamThreadEvents,
 } from "./gary-client.ts";
@@ -122,6 +124,63 @@ test("getTask fetches task detail and preserves backing workflow thread id", asy
       workflowId: "development-loop",
       workflowVersion: 1,
     });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("getWorkflowRun maps shared server presentation fixture", async () => {
+  const originalFetch = globalThis.fetch;
+  const urls = [];
+  const fixture = JSON.parse(
+    readFileSync(
+      new URL(
+        "../../../../test-fixtures/workflow-presentation/mobile-desktop-parity.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  globalThis.fetch = async (url) => {
+    urls.push(String(url));
+    return new Response(JSON.stringify(fixture), {
+      status: 200,
+      statusText: "OK",
+    });
+  };
+
+  try {
+    const run = await getWorkflowRun(
+      {
+        gatewayUrl: "http://127.0.0.1:31337",
+        gatewayAuthToken: "",
+      },
+      { workflowRunId: "thread::workflow-1001" },
+    );
+
+    assert.equal(
+      urls[0],
+      "http://127.0.0.1:31337/api/workflows/thread%3A%3Aworkflow-1001",
+    );
+    assert.equal(run.presentation?.workflowRunId, "thread::workflow-1001");
+    assert.equal(run.presentation?.terminalComplete, false);
+    assert.equal(run.presentation?.stale, false);
+    assert.deepEqual(
+      run.presentation?.phases.map((phase) => phase.phaseId),
+      ["plan", "review", "finalize"],
+    );
+    assert.deepEqual(
+      run.presentation?.phases[1].children.map(
+        (child) => child.workflowChildRunId,
+      ),
+      ["child::risk", "child::lint"],
+    );
+    assert.deepEqual(
+      run.presentation?.childCards.map((child) => child.workflowChildRunId),
+      ["child::risk", "child::lint", "child::summary"],
+    );
+    assert.equal(run.presentation?.snapshotVersion, 1782028950000);
+    assert.equal(run.presentation?.latestEventSeq, 2);
   } finally {
     globalThis.fetch = originalFetch;
   }

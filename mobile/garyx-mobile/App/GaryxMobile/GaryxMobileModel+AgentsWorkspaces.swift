@@ -105,9 +105,23 @@ extension GaryxMobileModel {
         source: GaryxMobilePanelOpenSource = .replace
     ) {
         threads = Self.mergedThreadSummaries(threads + [thread])
-        showSelectedThread(thread, invalidatesPendingThreadOpen: true, source: source)
-        Task { [weak self] in
-            await self?.loadSelectedThreadHistory()
+        switch GaryxWorkflowRunDestination.destination(for: thread) {
+        case .chat:
+            showSelectedThread(thread, invalidatesPendingThreadOpen: true, source: source)
+            Task { [weak self] in
+                await self?.loadSelectedThreadHistory()
+            }
+        case .workflowRun(let workflowRunId):
+            Task { [weak self] in
+                await self?.openWorkflowRun(
+                    workflowRunId: workflowRunId,
+                    thread: thread,
+                    invalidatesPendingThreadOpen: true,
+                    source: source
+                )
+            }
+        case .unresolved:
+            openThreadImmediately(id: thread.id, source: source)
         }
     }
 
@@ -118,7 +132,7 @@ extension GaryxMobileModel {
         let threadId = id.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !threadId.isEmpty else { return }
         let requestId = beginDirectThreadOpen()
-        showPendingThreadLink(threadId, requestId: requestId, source: source)
+        showResolvingWorkflowThread(threadId: threadId, requestId: requestId, source: source)
         Task { [weak self] in
             await self?.openThread(id: threadId, requestId: requestId, source: source)
         }
@@ -129,7 +143,7 @@ extension GaryxMobileModel {
               let threadId = threadOpenState.pendingThreadId else {
             return
         }
-        showPendingThreadLink(threadId, requestId: requestId, source: .replace)
+        showResolvingWorkflowThread(threadId: threadId, requestId: requestId, source: .replace)
     }
 
     func openPendingThreadLinkIfNeeded() async {
@@ -152,29 +166,42 @@ extension GaryxMobileModel {
         let threadId = id.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !threadId.isEmpty else { return }
 
-        if let thread = threads.first(where: { $0.id == threadId }) {
-            guard isCurrentPendingThreadOpen(requestId) else { return }
-            await openResolvedThread(thread, invalidatesPendingThreadOpen: false, source: source)
+        if let thread = threads.first(where: { $0.id == threadId }),
+           await openThreadDestination(
+                thread,
+                requestId: requestId,
+                invalidatesPendingThreadOpen: false,
+                source: source
+           ) {
             return
         }
 
-        await selectThread(
-            Self.placeholderThreadSummary(id: threadId),
-            invalidatesPendingThreadOpen: false,
-            source: source
-        )
+        showResolvingWorkflowThread(threadId: threadId, requestId: requestId, source: source)
         guard isCurrentPendingThreadOpen(requestId) else { return }
 
         await refreshThreads()
         guard isCurrentPendingThreadOpen(requestId) else { return }
-        if let thread = threads.first(where: { $0.id == threadId }) {
-            await openResolvedThread(thread, invalidatesPendingThreadOpen: false, source: source)
+        if let thread = threads.first(where: { $0.id == threadId }),
+           await openThreadDestination(
+                thread,
+                requestId: requestId,
+                invalidatesPendingThreadOpen: false,
+                source: source
+           ) {
             return
         }
         do {
             let thread = try await client().getThread(threadId: threadId)
             guard isCurrentPendingThreadOpen(requestId) else { return }
-            await openResolvedThread(thread, invalidatesPendingThreadOpen: false, source: source)
+            if await openThreadDestination(
+                thread,
+                requestId: requestId,
+                invalidatesPendingThreadOpen: false,
+                source: source
+            ) {
+                return
+            }
+            lastError = "Garyx could not resolve thread type for \(threadId)."
         } catch {
             guard isCurrentPendingThreadOpen(requestId) else { return }
             lastError = displayMessage(for: error)
@@ -187,11 +214,43 @@ extension GaryxMobileModel {
         source: GaryxMobilePanelOpenSource
     ) async {
         threads = Self.mergedThreadSummaries(threads + [thread])
-        await selectThread(
+        _ = await openThreadDestination(
             thread,
+            requestId: nil,
             invalidatesPendingThreadOpen: invalidatesPendingThreadOpen,
             source: source
         )
+    }
+
+    private func openThreadDestination(
+        _ thread: GaryxThreadSummary,
+        requestId: UUID?,
+        invalidatesPendingThreadOpen: Bool,
+        source: GaryxMobilePanelOpenSource
+    ) async -> Bool {
+        if let requestId {
+            guard isCurrentPendingThreadOpen(requestId) else { return false }
+        }
+        switch GaryxWorkflowRunDestination.destination(for: thread) {
+        case .chat:
+            clearWorkflowRunSurface()
+            await selectThread(
+                thread,
+                invalidatesPendingThreadOpen: invalidatesPendingThreadOpen,
+                source: source
+            )
+            return true
+        case .workflowRun(let workflowRunId):
+            await openWorkflowRun(
+                workflowRunId: workflowRunId,
+                thread: thread,
+                invalidatesPendingThreadOpen: invalidatesPendingThreadOpen,
+                source: source
+            )
+            return true
+        case .unresolved:
+            return false
+        }
     }
 
     private func showPendingThreadLink(
@@ -203,6 +262,7 @@ extension GaryxMobileModel {
         let thread = threads.first(where: { $0.id == threadId })
             ?? (selectedThread?.id == threadId ? selectedThread : nil)
             ?? Self.placeholderThreadSummary(id: threadId)
+        clearWorkflowRunSurface()
         showSelectedThread(thread, invalidatesPendingThreadOpen: false, source: source)
         lastError = nil
     }

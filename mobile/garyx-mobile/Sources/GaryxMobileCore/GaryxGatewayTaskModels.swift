@@ -39,6 +39,7 @@ public struct GaryxTaskSummary: Decodable, Identifiable, Equatable, Sendable {
     public var assignee: GaryxTaskPrincipal?
     public var assigneeLabel: String
     public var source: GaryxTaskSource?
+    public var executor: GaryxTaskExecutor?
     public var updatedBy: GaryxTaskPrincipal?
     public var runtimeAgentId: String
     public var replyCount: Int
@@ -54,6 +55,7 @@ public struct GaryxTaskSummary: Decodable, Identifiable, Equatable, Sendable {
         assignee: GaryxTaskPrincipal? = nil,
         assigneeLabel: String = "",
         source: GaryxTaskSource? = nil,
+        executor: GaryxTaskExecutor? = nil,
         updatedBy: GaryxTaskPrincipal? = nil,
         runtimeAgentId: String = "",
         replyCount: Int = 0,
@@ -68,6 +70,7 @@ public struct GaryxTaskSummary: Decodable, Identifiable, Equatable, Sendable {
         self.assignee = assignee
         self.assigneeLabel = assigneeLabel.isEmpty ? assignee?.label ?? "" : assigneeLabel
         self.source = source
+        self.executor = executor
         self.updatedBy = updatedBy
         self.runtimeAgentId = runtimeAgentId
         self.replyCount = replyCount
@@ -86,6 +89,7 @@ public struct GaryxTaskSummary: Decodable, Identifiable, Equatable, Sendable {
         case creator
         case assignee
         case source
+        case executor
         case updatedBy = "updated_by"
         case updatedByCamel = "updatedBy"
         case runtimeAgentId = "runtime_agent_id"
@@ -109,6 +113,9 @@ public struct GaryxTaskSummary: Decodable, Identifiable, Equatable, Sendable {
             if let runtimeAgentId = try container.garyxDecodeFirstString(.runtimeAgentId, .runtimeAgentIdCamel) {
                 summary.runtimeAgentId = runtimeAgentId
             }
+            if let executor = try container.decodeIfPresent(GaryxTaskExecutor.self, forKey: .executor) {
+                summary.executor = executor
+            }
             self = summary
             return
         }
@@ -122,6 +129,7 @@ public struct GaryxTaskSummary: Decodable, Identifiable, Equatable, Sendable {
         assignee = try container.decodeIfPresent(GaryxTaskPrincipal.self, forKey: .assignee)
         assigneeLabel = assignee?.label ?? ""
         source = try container.decodeIfPresent(GaryxTaskSource.self, forKey: .source)
+        executor = try container.decodeIfPresent(GaryxTaskExecutor.self, forKey: .executor)
         updatedBy = try container.decodeIfPresent(GaryxTaskPrincipal.self, forKey: .updatedBy)
             ?? container.decodeIfPresent(GaryxTaskPrincipal.self, forKey: .updatedByCamel)
         runtimeAgentId = try container.garyxDecodeFirstString(.runtimeAgentId, .runtimeAgentIdCamel) ?? ""
@@ -129,6 +137,55 @@ public struct GaryxTaskSummary: Decodable, Identifiable, Equatable, Sendable {
             ?? container.decodeIfPresent(Int.self, forKey: .replyCountCamel)
             ?? 0
         updatedAt = try container.garyxDecodeFirstString(.updatedAt, .updatedAtCamel)
+    }
+}
+
+
+public struct GaryxTaskExecutor: Decodable, Equatable, Sendable {
+    public var type: String
+    public var agentId: String?
+    public var teamId: String?
+    public var workflowId: String?
+    public var workflowVersion: Int?
+
+    public init(
+        type: String,
+        agentId: String? = nil,
+        teamId: String? = nil,
+        workflowId: String? = nil,
+        workflowVersion: Int? = nil
+    ) {
+        self.type = type
+        self.agentId = agentId
+        self.teamId = teamId
+        self.workflowId = workflowId
+        self.workflowVersion = workflowVersion
+    }
+
+    public var isWorkflow: Bool {
+        type.caseInsensitiveCompare("workflow") == .orderedSame
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case agentId = "agent_id"
+        case agentIdCamel = "agentId"
+        case teamId = "team_id"
+        case teamIdCamel = "teamId"
+        case workflowId = "workflow_id"
+        case workflowIdCamel = "workflowId"
+        case workflowVersion = "workflow_version"
+        case workflowVersionCamel = "workflowVersion"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        type = try container.garyxDecodeFirstString(.type) ?? ""
+        agentId = try container.garyxDecodeFirstString(.agentId, .agentIdCamel)
+        teamId = try container.garyxDecodeFirstString(.teamId, .teamIdCamel)
+        workflowId = try container.garyxDecodeFirstString(.workflowId, .workflowIdCamel)
+        workflowVersion = try container.decodeIfPresent(Int.self, forKey: .workflowVersion)
+            ?? container.decodeIfPresent(Int.self, forKey: .workflowVersionCamel)
     }
 }
 

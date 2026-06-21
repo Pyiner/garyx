@@ -57,6 +57,7 @@ extension GaryxMobileModel {
         guard navigationState.presentsContent else { return }
         invalidatePendingThreadOpen()
         cancelSelectedThreadReconcileLoop()
+        cancelWorkflowRunPolling()
         var nextState = navigationState
         nextState.popToHome()
         navigationState = nextState

@@ -1,4 +1,5 @@
 use super::*;
+use crate::garyx_db::WorkflowChildRunDraft;
 use async_trait::async_trait;
 use axum::body::{Body, to_bytes};
 use garyx_bridge::MultiProviderBridge;
@@ -1051,6 +1052,174 @@ async fn workflow_routes_create_list_and_page_events_for_sdk_run() {
 }
 
 #[tokio::test]
+async fn workflow_get_returns_server_presentation_projection() {
+    let state = workflow_test_state().await;
+    let (thread_id, task_id) = create_workflow_task_for_test(&state).await;
+    let db = state.ops.garyx_db.clone();
+    let router = crate::route_graph::build_router(state);
+    let response = router
+        .clone()
+        .oneshot(
+            crate::test_support::authed_request()
+                .method("POST")
+                .uri("/api/workflows/sdk")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "parentThreadId": thread_id,
+                        "taskId": task_id,
+                        "taskThreadId": thread_id,
+                        "name": "Presentation Workflow",
+                        "phases": [
+                            { "id": "plan", "title": "Plan", "index": 0 },
+                            { "id": "review", "title": "Review", "detail": "Architecture gate", "index": 1 },
+                            { "id": "finalize", "title": "Finalize", "index": 2 }
+                        ],
+                    })
+                    .to_string(),
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let payload: Value = serde_json::from_slice(&body).expect("json");
+    let workflow_id = payload["workflow"]["workflowId"]
+        .as_str()
+        .expect("workflow id")
+        .to_owned();
+    assert_eq!(payload["presentation"]["counts"]["totalPhases"], 3);
+    assert_eq!(payload["presentation"]["terminalComplete"], false);
+
+    db.upsert_workflow_child_run(WorkflowChildRunDraft {
+        workflow_id: workflow_id.clone(),
+        workflow_child_run_id: Some("child::lint".to_owned()),
+        thread_id: "thread::child-lint".to_owned(),
+        phase_index: 1,
+        phase_title: "Review".to_owned(),
+        label: "Lint check".to_owned(),
+        agent_id: Some("codex-test".to_owned()),
+        status: "running".to_owned(),
+        prompt: "Run lint.".to_owned(),
+        result_mode: "structured".to_owned(),
+        schema_json: None,
+        result_text: None,
+        result_json: None,
+        result_preview: None,
+        error: None,
+        input_tokens: 700,
+        output_tokens: 200,
+        tool_calls: 3,
+        cost_usd: 0.22,
+        started_at: Some("2026-06-21T08:01:02Z".to_owned()),
+        finished_at: None,
+    })
+    .expect("insert running child");
+    db.upsert_workflow_child_run(WorkflowChildRunDraft {
+        workflow_id: workflow_id.clone(),
+        workflow_child_run_id: Some("child::risk".to_owned()),
+        thread_id: "thread::child-risk".to_owned(),
+        phase_index: 1,
+        phase_title: "Review".to_owned(),
+        label: "Risk review".to_owned(),
+        agent_id: Some("claude-test".to_owned()),
+        status: "failed".to_owned(),
+        prompt: "Review high-risk paths.".to_owned(),
+        result_mode: "text".to_owned(),
+        schema_json: None,
+        result_text: None,
+        result_json: None,
+        result_preview: None,
+        error: Some("Missing fixture coverage.".to_owned()),
+        input_tokens: 200,
+        output_tokens: 40,
+        tool_calls: 1,
+        cost_usd: 0.09,
+        started_at: Some("2026-06-21T08:01:12Z".to_owned()),
+        finished_at: Some("2026-06-21T08:01:50Z".to_owned()),
+    })
+    .expect("insert failed child");
+
+    let response = router
+        .clone()
+        .oneshot(
+            crate::test_support::authed_request()
+                .method("POST")
+                .uri(format!("/api/workflows/{workflow_id}/events"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "eventType": "workflow.phase_started",
+                        "payload": {
+                            "title": "Review",
+                            "detail": "Architecture gate",
+                            "phaseIndex": 1
+                        },
+                    })
+                    .to_string(),
+                ))
+                .expect("event request"),
+        )
+        .await
+        .expect("event response");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = router
+        .oneshot(
+            crate::test_support::authed_request()
+                .method("GET")
+                .uri(format!("/api/workflows/{workflow_id}"))
+                .body(Body::empty())
+                .expect("get request"),
+        )
+        .await
+        .expect("get response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("get body");
+    let payload: Value = serde_json::from_slice(&body).expect("workflow json");
+    let presentation = &payload["presentation"];
+    assert_eq!(payload["workflow"]["currentPhaseIndex"], 1);
+    assert_eq!(presentation["workflowRunId"], workflow_id);
+    assert_eq!(presentation["activePhase"]["phaseId"], "review");
+    assert_eq!(presentation["activePhase"]["index"], 1);
+    assert_eq!(presentation["phases"][1]["status"], "running");
+    assert_eq!(presentation["phases"][1]["active"], true);
+    assert_eq!(
+        presentation["phases"][1]["children"]
+            .as_array()
+            .expect("review children")
+            .iter()
+            .map(|child| child["workflowChildRunId"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>(),
+        vec!["child::risk", "child::lint"]
+    );
+    assert_eq!(
+        presentation["childCards"]
+            .as_array()
+            .expect("child cards")
+            .iter()
+            .map(|child| child["workflowChildRunId"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>(),
+        vec!["child::risk", "child::lint"]
+    );
+    assert_eq!(presentation["phaseStatus"][1]["status"], "running");
+    assert_eq!(presentation["counts"]["completedPhases"], 0);
+    assert_eq!(presentation["stale"], false);
+    assert_eq!(presentation["latestEventSeq"], 2);
+    assert!(
+        presentation["snapshotVersion"]
+            .as_u64()
+            .expect("snapshot version")
+            >= 2
+    );
+}
+
+#[tokio::test]
 async fn workflow_definition_routes_get_and_list_file_packages() {
     let temp = tempdir().expect("workflow root");
     let mut config = crate::test_support::with_gateway_auth(GaryxConfig::default());
@@ -1564,6 +1733,9 @@ async fn sdk_agent_executes_hidden_child_and_structured_schema() {
     .expect("workflow payload");
     assert_eq!(final_payload["workflow"]["totalChildren"], 1);
     assert_eq!(final_payload["workflow"]["completedChildren"], 1);
+    assert_eq!(final_payload["presentation"]["counts"]["total"], 1);
+    assert_eq!(final_payload["presentation"]["counts"]["completed"], 1);
+    assert_eq!(final_payload["presentation"]["terminalComplete"], false);
     let children = final_payload["children"].as_array().expect("children");
     assert_eq!(children.len(), 1);
     assert_eq!(children[0]["resultMode"], "structured");
@@ -1858,6 +2030,13 @@ async fn sdk_workflow_routes_start_log_run_agent_and_finish() {
     let final_payload: Value = serde_json::from_slice(&body).expect("finish json");
     assert_eq!(final_payload["workflow"]["status"], "succeeded");
     assert_eq!(final_payload["workflow"]["totalChildren"], 1);
+    assert_eq!(final_payload["presentation"]["terminalComplete"], true);
+    assert_eq!(final_payload["presentation"]["stale"], false);
+    assert_eq!(final_payload["presentation"]["counts"]["completed"], 1);
+    assert_eq!(
+        final_payload["presentation"]["outcome"]["kind"],
+        "finalText"
+    );
     assert_eq!(
         final_payload["workflow"]["result"]["finding"],
         agent_payload["result"]
