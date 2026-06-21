@@ -387,11 +387,21 @@ async function createMockGateway(workspaceDir) {
       else if (kind === 'run_complete') busy = false;
     }
 
-    const ref = (record) => ({
-      id: `seq:${recordSeq(record)}`,
-      seq: recordSeq(record),
-      role: recordRole(record),
-    });
+    const ref = (record) => {
+      // Mirror the garyx-models reducer: a committed user row whose record
+      // carries metadata.origin_id renders with a stable `origin:{id}` row id;
+      // everything else falls back to `seq:{N}`.
+      const originId =
+        recordRole(record) === 'user' &&
+        typeof record?.metadata?.origin_id === 'string'
+          ? record.metadata.origin_id.trim()
+          : '';
+      return {
+        id: originId ? `origin:${originId}` : `seq:${recordSeq(record)}`,
+        seq: recordSeq(record),
+        role: recordRole(record),
+      };
+    };
     const blocks = [];
     let group = null;
     const flushGroup = () => {
@@ -639,7 +649,7 @@ async function createMockGateway(workspaceDir) {
     return state.sessions.find((session) => session.thread_id === sessionId) || null;
   }
 
-  function buildRunPayload(sessionId, userText) {
+  function buildRunPayload(sessionId, userText, clientIntentId) {
     const session = ensureSession(sessionId);
     if (!session) {
       return null;
@@ -658,6 +668,10 @@ async function createMockGateway(workspaceDir) {
           role: 'user',
           kind: 'user_input',
           content: userText,
+          // The real bridge persists the client intent id as the committed
+          // user record's origin id; mirror that so origin-row convergence and
+          // pending-ack clearing exercise the new contract.
+          ...(clientIntentId ? { metadata: { origin_id: clientIntentId } } : {}),
         },
         {
           role: 'tool_use',
@@ -1004,7 +1018,11 @@ async function createMockGateway(workspaceDir) {
       if (!session) {
         return writeJson(res, 404, { error: 'thread not found' });
       }
-      const streamPayload = buildRunPayload(sessionId, String(body.message || ''));
+      const streamPayload = buildRunPayload(
+        sessionId,
+        String(body.message || ''),
+        body?.metadata?.client_intent_id,
+      );
       if (!streamPayload) {
         return writeJson(res, 404, { error: 'thread not found' });
       }
@@ -1280,6 +1298,39 @@ async function main() {
           'Thinking should disappear once tool progress is visible',
         );
       }
+      // user-row DOM key stability (charter §6): once committed with an
+      // origin:{id} render-state id, the user row must stay a single stable DOM
+      // node through run completion and the post-run reconcile — no remount, no
+      // duplicate. Mark the committed row, run to completion, prove the SAME
+      // node survives (a seq-keyed regression would drift and remount it).
+      stage = 'warmup-verify-row-identity';
+      const warmupCommittedRow = window
+        .locator('.message-bubble.user')
+        .filter({ hasText: WARMUP_TOKEN })
+        .first();
+      await warmupCommittedRow.waitFor({ timeout: 10000 });
+      await warmupCommittedRow.evaluate((el) => {
+        el.setAttribute('data-smoke-warmup-node', '1');
+      });
+      await window
+        .getByRole('button', { name: oneOfExact(SMOKE_TEXT.send) })
+        .waitFor({ timeout: 20000 });
+      await window.waitForTimeout(400);
+      const warmupRowStable = await window.evaluate((token) => {
+        const marked = document.querySelectorAll('[data-smoke-warmup-node="1"]');
+        const userRows = Array.from(
+          document.querySelectorAll('.message-bubble.user'),
+        ).filter((el) => (el.textContent || '').includes(token));
+        return (
+          marked.length === 1 &&
+          userRows.length === 1 &&
+          marked[0] === userRows[0]
+        );
+      }, WARMUP_TOKEN);
+      assert.ok(
+        warmupRowStable,
+        'committed user row must stay one stable DOM node through run completion (stable origin:{id} key, no remount/duplicate)',
+      );
       stage = 'verify-new-thread-workspace-path';
       const createRequests = gateway.createdThreadRequests();
       const expectedWorkspacePath = path.join(isolatedHome, 'workspace');
@@ -1330,8 +1381,20 @@ async function main() {
         .filter({ hasText: TOKENS[0] })
         .first()
         .waitFor({ timeout: 10000 });
+      // Wait until the first run is active so the follow-up is enqueued against
+      // it (queued_local, shown optimistically before it is drained/committed)
+      // rather than starting immediately as its own run.
+      await window.getByText(RUN_LOADING_TEXT_ZH).first().waitFor({ timeout: 10000 });
       await composer.fill(`Return exactly the token ${TOKENS[1]} and nothing else.`);
       await composer.press('Enter');
+      // The queued follow-up must be visible immediately as an optimistic origin
+      // row — before the active run acks/commits it (44547a81 regression: queued
+      // rows must not be hidden until ack).
+      await window
+        .locator('.message-bubble.user')
+        .filter({ hasText: TOKENS[1] })
+        .first()
+        .waitFor({ timeout: 10000 });
       await window.getByText(oneOfExact(SMOKE_TEXT.followUpsReady)).waitFor({ timeout: 3000 }).catch(() => {});
       await window
         .locator('.message-bubble.assistant p')
@@ -1343,6 +1406,36 @@ async function main() {
         .filter({ hasText: TOKENS[1] })
         .first()
         .waitFor({ timeout: 20000 });
+
+      // The queued follow-up user row must also hold a single stable DOM node
+      // through run completion — its origin:{id} key never drifts to seq.
+      stage = 'queued-row-identity';
+      const queuedUserRow = window
+        .locator('.message-bubble.user')
+        .filter({ hasText: TOKENS[1] })
+        .first();
+      await queuedUserRow.evaluate((el) => {
+        el.setAttribute('data-smoke-queued-node', '1');
+      });
+      await window
+        .getByRole('button', { name: oneOfExact(SMOKE_TEXT.send) })
+        .waitFor({ timeout: 20000 });
+      await window.waitForTimeout(400);
+      const queuedRowStable = await window.evaluate((token) => {
+        const marked = document.querySelectorAll('[data-smoke-queued-node="1"]');
+        const userRows = Array.from(
+          document.querySelectorAll('.message-bubble.user'),
+        ).filter((el) => (el.textContent || '').includes(token));
+        return (
+          marked.length === 1 &&
+          userRows.length === 1 &&
+          marked[0] === userRows[0]
+        );
+      }, TOKENS[1]);
+      assert.ok(
+        queuedRowStable,
+        'queued follow-up user row must stay one stable DOM node through the run (stable origin:{id} key)',
+      );
 
       stage = 'verify-tool-traces';
       const assistantTexts = await window
