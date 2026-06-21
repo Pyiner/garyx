@@ -625,10 +625,39 @@ private extension GaryxRenderStepItem {
     func mobileBlock(lookup: MessageLookup) -> GaryxMobileTranscriptBlock? {
         switch self {
         case .assistantMessage(let step):
-            return lookup.mobileMessage(for: step.message).map(GaryxMobileTranscriptBlock.message)
+            // The server `render_state` owns the step structure: this assistant
+            // sits between two tool groups. If its body has not yet reached the
+            // local message store, fall back to a placeholder instead of dropping
+            // the step — dropping it would collapse the surrounding tool groups
+            // into adjacent rows (TASK-1021). Mirrors the tool-group fallback,
+            // which never vanishes when its refs are unresolved.
+            let message = lookup.mobileMessage(for: step.message)
+                ?? .assistantStepPlaceholder(for: step.message)
+            return .message(message)
         case .toolGroup(let group):
             return group.mobileBlock(lookup: lookup)
         }
+    }
+}
+
+private extension GaryxMobileMessage {
+    /// Body-less placeholder for an assistant step whose committed body has not
+    /// yet reached the local `messages` store (the synchronously-updated render
+    /// snapshot can reference a seq before the throttled message flush ingests
+    /// its body). `id`/`historyIndex` mirror the committed body's
+    /// (`history:<seq-1>`) so the row upgrades in place — not re-inserts — once
+    /// the body arrives. Rendered as a loading state, never an empty bubble.
+    static func assistantStepPlaceholder(for ref: GaryxRenderMessageRef) -> GaryxMobileMessage {
+        let historyIndex = max(ref.seq - 1, 0)
+        return GaryxMobileMessage(
+            id: "history:\(historyIndex)",
+            role: .assistant,
+            text: "",
+            timestamp: nil,
+            isStreaming: true,
+            localState: .remotePartial,
+            historyIndex: historyIndex
+        )
     }
 }
 
