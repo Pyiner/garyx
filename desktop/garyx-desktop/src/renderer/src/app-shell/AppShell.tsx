@@ -98,10 +98,10 @@ import {
 } from "../message-machine";
 import type { SettingsTabId } from "../settings-tabs";
 import { GatewayProfileHistoryButton } from "../GatewayProfileHistoryButton";
+import { GatewayHeadersEditor } from "../GatewayHeadersEditor";
 import { GatewayIdentityBar } from "../GatewaySwitcher";
 import { SettingsErrorBoundary } from "../SettingsErrorBoundary";
 import { Input } from "../components/ui/input";
-import { Textarea } from "../components/ui/textarea";
 import { WorkspacePathPickerDialog } from "../components/WorkspacePathPicker";
 import { AddBotDialog } from "./components/AddBotDialog";
 import { DreamsPanel } from "./components/DreamsPanel";
@@ -9981,24 +9981,19 @@ export function AppShell() {
                 />
               </label>
 
-              <label className="gateway-setup-field">
+              <div className="gateway-setup-field">
                 <span>{t('Headers')}</span>
-                <Textarea
-                  autoCapitalize="off"
-                  autoComplete="off"
-                  className="gateway-setup-textarea"
-                  placeholder="X-Garyx-Gateway: value"
-                  spellCheck={false}
+                <GatewayHeadersEditor
                   value={settingsDraft.gatewayHeaders}
-                  onChange={(event) => {
+                  onChange={(value) => {
                     setLocalSettingsStatus(null);
                     setSettingsDraft((current) => ({
                       ...current,
-                      gatewayHeaders: event.target.value,
+                      gatewayHeaders: value,
                     }));
                   }}
                 />
-              </label>
+              </div>
             </div>
 
             <p

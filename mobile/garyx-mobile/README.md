@@ -5,14 +5,14 @@ gateway directly, with no account binding or separate mobile backend in this
 app.
 
 On a real phone, connect to the Mac's LAN address and paste the gateway token.
-If a reverse proxy or tunnel requires extra HTTP headers, add one header per
-line in the gateway headers field:
+If a reverse proxy or tunnel requires extra HTTP headers, add one row per
+header in the gateway headers editor:
 
 ```text
 Gateway URL: http://192.168.1.20:31337
 Gateway Token: output from `garyx gateway token`
-Gateway Headers:
-X-Garyx-Proxy: proxy-token
+Gateway Header Name: X-Garyx-Proxy
+Gateway Header Value: proxy-token
 ```
 
 `127.0.0.1` is only useful in the iOS simulator because it points back to the

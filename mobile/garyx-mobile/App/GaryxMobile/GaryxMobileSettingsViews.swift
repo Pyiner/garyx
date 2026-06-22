@@ -421,15 +421,7 @@ struct GaryxSavedGatewayProfileRow: View {
                             autocorrectionDisabled: true
                         )
                         Divider().padding(.leading, 16)
-                        GaryxFormTextAreaRow(
-                            title: "Headers",
-                            text: $headers,
-                            placeholder: "X-Garyx-Gateway: value",
-                            minHeight: 96,
-                            lineLimits: 2...8,
-                            autocapitalization: .never,
-                            autocorrectionDisabled: true
-                        )
+                        GaryxGatewayHeadersEditor(text: $headers)
                     }
                 }
             }

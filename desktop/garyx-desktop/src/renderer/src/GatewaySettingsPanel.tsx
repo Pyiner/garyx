@@ -76,6 +76,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { buildAgentTargetOptions, type AgentTargetOption } from './app-shell/agent-options';
 import { AddBotDialog } from './app-shell/components/AddBotDialog';
 import { AgentOptionAvatar } from './app-shell/components/AgentOptionAvatar';
+import { GatewayHeadersEditor } from './GatewayHeadersEditor';
 import { WorkspacePathPicker } from './components/WorkspacePathPicker';
 import { MoreDotsIcon } from './app-shell/icons';
 import { ChannelPluginCatalogPanel } from './channel-plugins/ChannelPluginCatalogPanel';
@@ -1344,18 +1345,13 @@ function GatewayProfileDialog({
               onChange={(event) => setGatewayAuthToken(event.target.value)}
             />
           </label>
-          <label className="gateway-setup-field">
+          <div className="gateway-setup-field">
             <span>{t('Headers')}</span>
-            <Textarea
-              autoCapitalize="off"
-              autoComplete="off"
-              className="gateway-profile-headers-editor"
-              placeholder="X-Garyx-Gateway: value"
-              spellCheck={false}
+            <GatewayHeadersEditor
               value={gatewayHeaders}
-              onChange={(event) => setGatewayHeaders(event.target.value)}
+              onChange={setGatewayHeaders}
             />
-          </label>
+          </div>
         </div>
         <DialogFooter>
           <Button

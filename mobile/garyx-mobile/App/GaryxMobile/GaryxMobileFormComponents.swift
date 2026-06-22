@@ -391,6 +391,145 @@ struct GaryxFormTextAreaRow: View {
     }
 }
 
+private struct GaryxGatewayHeaderDraftRow: Identifiable {
+    let id: UUID
+    var name: String
+    var value: String
+
+    init(id: UUID = UUID(), name: String = "", value: String = "") {
+        self.id = id
+        self.name = name
+        self.value = value
+    }
+
+    init(entry: GaryxGatewayHeaderEntry) {
+        self.id = UUID()
+        self.name = entry.name
+        self.value = entry.value
+    }
+
+    var entry: GaryxGatewayHeaderEntry {
+        GaryxGatewayHeaderEntry(name: name, value: value)
+    }
+}
+
+struct GaryxGatewayHeadersEditor: View {
+    @Binding var text: String
+    @State private var rows: [GaryxGatewayHeaderDraftRow] = []
+    @State private var lastText = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
+                GaryxFormFieldTitle(title: "Headers")
+                Spacer(minLength: 0)
+                Button(action: addRow) {
+                    Label("Add Header", systemImage: "plus")
+                        .font(GaryxFont.caption(weight: .semibold))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+
+            VStack(spacing: 12) {
+                ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Header \(index + 1)")
+                                .font(GaryxFont.caption(weight: .semibold))
+                                .foregroundStyle(.secondary)
+                            Spacer(minLength: 0)
+                            Button(role: .destructive) {
+                                removeRow(row.id)
+                            } label: {
+                                Image(systemName: "trash")
+                                    .font(GaryxFont.system(size: 13, weight: .semibold))
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(rows.count == 1 && row.name.isEmpty && row.value.isEmpty)
+                            .accessibilityLabel("Remove header")
+                        }
+
+                        TextField(
+                            "Header name",
+                            text: Binding(
+                                get: { value(for: row.id).name },
+                                set: { updateRow(row.id, name: $0) }
+                            )
+                        )
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled(true)
+                        .textFieldStyle(.roundedBorder)
+
+                        TextField(
+                            "Header value",
+                            text: Binding(
+                                get: { value(for: row.id).value },
+                                set: { updateRow(row.id, value: $0) }
+                            )
+                        )
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled(true)
+                        .textFieldStyle(.roundedBorder)
+                    }
+
+                    if index < rows.count - 1 {
+                        Divider()
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .onAppear {
+            resetRows(from: text)
+        }
+        .onChange(of: text) { _, newValue in
+            if newValue != lastText {
+                resetRows(from: newValue)
+            }
+        }
+    }
+
+    private func value(for id: UUID) -> GaryxGatewayHeaderDraftRow {
+        rows.first(where: { $0.id == id }) ?? GaryxGatewayHeaderDraftRow(id: id)
+    }
+
+    private func updateRow(_ id: UUID, name: String? = nil, value: String? = nil) {
+        var nextRows = rows
+        guard let index = nextRows.firstIndex(where: { $0.id == id }) else { return }
+        if let name {
+            nextRows[index].name = name
+        }
+        if let value {
+            nextRows[index].value = value
+        }
+        setRowsAndEmit(nextRows)
+    }
+
+    private func addRow() {
+        rows.append(GaryxGatewayHeaderDraftRow())
+    }
+
+    private func removeRow(_ id: UUID) {
+        let nextRows = rows.filter { $0.id != id }
+        setRowsAndEmit(nextRows.isEmpty ? [GaryxGatewayHeaderDraftRow()] : nextRows)
+    }
+
+    private func resetRows(from value: String) {
+        lastText = value
+        let parsedRows = GaryxGatewayHeaders.parseEntries(value).map(GaryxGatewayHeaderDraftRow.init(entry:))
+        rows = parsedRows.isEmpty ? [GaryxGatewayHeaderDraftRow()] : parsedRows
+    }
+
+    private func setRowsAndEmit(_ nextRows: [GaryxGatewayHeaderDraftRow]) {
+        rows = nextRows
+        let nextText = GaryxGatewayHeaders.format(nextRows.map(\.entry))
+        lastText = nextText
+        text = nextText
+    }
+}
+
 struct GaryxFormMenuValueLabel: View {
     let value: String
 

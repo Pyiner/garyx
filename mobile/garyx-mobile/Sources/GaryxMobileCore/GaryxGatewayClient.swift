@@ -16,6 +16,16 @@ public struct GaryxGatewayConfiguration: Equatable, Sendable {
     }
 }
 
+public struct GaryxGatewayHeaderEntry: Equatable, Sendable {
+    public var name: String
+    public var value: String
+
+    public init(name: String, value: String) {
+        self.name = name
+        self.value = value
+    }
+}
+
 public enum GaryxGatewayHeaders {
     private static let headerNameAllowedScalars = CharacterSet.alphanumerics.union(
         CharacterSet(charactersIn: "!#$%&'*+-.^_`|~")
@@ -33,6 +43,14 @@ public enum GaryxGatewayHeaders {
 
     public static func parse(_ value: String) -> [String: String] {
         var headers: [String: String] = [:]
+        for entry in parseEntries(value) where isValidHeaderName(entry.name) {
+            headers[entry.name] = entry.value
+        }
+        return headers
+    }
+
+    public static func parseEntries(_ value: String) -> [GaryxGatewayHeaderEntry] {
+        var entries: [GaryxGatewayHeaderEntry] = []
         for line in normalizedBlock(value).split(whereSeparator: \.isNewline) {
             let text = String(line)
             guard !text.hasPrefix("#"),
@@ -42,10 +60,23 @@ public enum GaryxGatewayHeaders {
             }
             let name = String(text[..<separator]).trimmingCharacters(in: .whitespacesAndNewlines)
             let value = String(text[text.index(after: separator)...]).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard isValidHeaderName(name) else { continue }
-            headers[name] = value
+            guard !name.isEmpty else { continue }
+            entries.append(GaryxGatewayHeaderEntry(name: name, value: value))
         }
-        return headers
+        return entries
+    }
+
+    public static func format(_ entries: [GaryxGatewayHeaderEntry]) -> String {
+        entries
+            .map {
+                GaryxGatewayHeaderEntry(
+                    name: $0.name.trimmingCharacters(in: .whitespacesAndNewlines),
+                    value: $0.value.trimmingCharacters(in: .whitespacesAndNewlines)
+                )
+            }
+            .filter { !$0.name.isEmpty }
+            .map { "\($0.name): \($0.value)" }
+            .joined(separator: "\n")
     }
 
     public static func normalized(_ headers: [String: String]) -> [String: String] {

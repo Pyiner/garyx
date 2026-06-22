@@ -867,8 +867,8 @@ gateway connection shape:
 
 - `gatewayUrl`: the URL the phone can reach.
 - `gatewayAuthToken`: the token created by `garyx gateway token`.
-- `gatewayHeaders`: optional custom HTTP headers, one per line, for reverse
-  proxies or tunnels.
+- `gatewayHeaders`: optional custom HTTP headers for reverse proxies or
+  tunnels; the apps edit these as one name/value row per header.
 
 For a physical phone, the gateway must be reachable from the LAN. A managed
 macOS gateway service is installed to listen on `0.0.0.0`; if you run the
