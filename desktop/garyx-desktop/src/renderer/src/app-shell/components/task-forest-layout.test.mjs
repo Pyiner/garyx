@@ -101,6 +101,36 @@ test("summarizes hidden descendants at the depth cap", () => {
   assert.equal(capped.descendantStatusCounts.done, 1);
 });
 
+test("handles rootless cycles without recursing forever", () => {
+  const layout = buildTaskForestLayout(
+    [
+      task({ number: 1, parentTaskNumber: 2 }),
+      task({ number: 2, parentTaskNumber: 1 }),
+    ],
+    { maxDepth: 4 },
+  );
+
+  assert.deepEqual(
+    layout.nodes.map((node) => node.task.number).sort((left, right) => left - right),
+    [1, 2],
+  );
+});
+
+test("lays out a large deep chain within a bounded time", () => {
+  const tasks = Array.from({ length: 1200 }, (_, index) =>
+    task({
+      number: index + 1,
+      parentTaskNumber: index === 0 ? null : index,
+    }),
+  );
+  const start = Date.now();
+  const layout = buildTaskForestLayout(tasks, { maxDepth: tasks.length });
+  const elapsedMs = Date.now() - start;
+
+  assert.equal(layout.nodes.length, tasks.length);
+  assert.ok(elapsedMs < 750, `layout took ${elapsedMs}ms`);
+});
+
 test("selects visible nodes with viewport overscan", () => {
   const layout = buildTaskForestLayout(
     [

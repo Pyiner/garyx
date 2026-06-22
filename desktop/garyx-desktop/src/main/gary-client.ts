@@ -5201,6 +5201,9 @@ export async function listTaskForest(
   if (input.includeDone !== false) {
     query.set("include_done", "true");
   }
+  if (input.scope) {
+    query.set("scope", input.scope);
+  }
 
   const suffix = query.toString();
   const payload = await requestJson<TaskForestPayload>(

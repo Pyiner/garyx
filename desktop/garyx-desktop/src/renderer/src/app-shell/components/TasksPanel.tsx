@@ -269,7 +269,7 @@ export function TasksPanel({
 }: TasksPanelProps) {
   const { t } = useI18n();
   const { entries: pluginCatalog } = useChannelPluginCatalog();
-  const [viewMode, setViewMode] = useState<TaskViewMode>('board');
+  const [viewMode, setViewMode] = useState<TaskViewMode>('forest');
   const [tasks, setTasks] = useState<DesktopTaskSummary[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);

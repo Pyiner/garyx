@@ -243,6 +243,7 @@ export function TaskForestConsole({
   );
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
       if (smoothCameraTimeoutRef.current !== null) {
@@ -350,6 +351,7 @@ export function TaskForestConsole({
         try {
           const page = await getDesktopApi().listTaskForest({
             includeDone: true,
+            scope: "active",
             sourceBot,
           });
           if (!mountedRef.current || skipResultForRequestRef.current === requestSequence) {
@@ -904,7 +906,7 @@ export function TaskForestConsole({
         ) : error ? (
           <div className="task-forest-state error">{error}</div>
         ) : !tasks.length ? (
-          <div className="task-forest-state">{t("No tasks yet.")}</div>
+          <div className="task-forest-state">{t("No active tasks right now.")}</div>
         ) : null}
         <div
           className={`task-forest-world ${birdseye ? "birdseye" : ""} ${smoothCamera ? "smooth-camera" : ""}`}
