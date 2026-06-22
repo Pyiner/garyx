@@ -74,7 +74,10 @@ final class GaryxMobileModel: ObservableObject {
     }
 
     @Published var gatewayURL: String {
-        didSet { refreshNavigationDrawerSnapshot() }
+        didSet {
+            refreshNavigationDrawerSnapshot()
+            refreshHomeObservationConnectionSnapshot()
+        }
     }
     @Published var gatewayAuthToken: String
     @Published var gatewayProfiles: [GaryxGatewayProfile] {
@@ -82,7 +85,10 @@ final class GaryxMobileModel: ObservableObject {
     }
     @Published var gatewaySettingsStatus: String?
     @Published var connectionState: GaryxMobileConnectionState = .disconnected {
-        didSet { refreshNavigationDrawerSnapshot() }
+        didSet {
+            refreshNavigationDrawerSnapshot()
+            refreshHomeObservationConnectionSnapshot()
+        }
     }
     @Published var threads: [GaryxThreadSummary] = [] {
         didSet {
@@ -118,8 +124,12 @@ final class GaryxMobileModel: ObservableObject {
     @Published var isLoadingThreads = false {
         didSet { refreshHomeThreadListSnapshot() }
     }
-    @Published var isLoadingMoreThreads = false
-    @Published var hasMoreThreadSummaries = false
+    @Published var isLoadingMoreThreads = false {
+        didSet { refreshHomeObservationPaginationSnapshot() }
+    }
+    @Published var hasMoreThreadSummaries = false {
+        didSet { refreshHomeObservationPaginationSnapshot() }
+    }
     @Published var isLoadingSelectedThreadHistory = false
     @Published var isLoadingOlderThreadHistory = false
     @Published var selectedThreadHasMoreHistoryBefore = false
@@ -163,10 +173,14 @@ final class GaryxMobileModel: ObservableObject {
             storedLastError
         }
         set {
-            storedLastError = Self.presentableErrorMessage(newValue)
+            let message = Self.presentableErrorMessage(newValue)
+            storedLastError = message
+            homeObservationStore.setLastError(message)
         }
     }
-    @Published var showsSettings = false
+    @Published var showsSettings = false {
+        didSet { homeObservationStore.setShowsSettings(showsSettings) }
+    }
     @Published var sidebarVisible = false {
         didSet { refreshShellChromeSnapshot() }
     }
@@ -223,7 +237,9 @@ final class GaryxMobileModel: ObservableObject {
     @Published var workspacePreview: GaryxWorkspaceFilePreview?
     @Published var workspaceGitStatuses: [String: GaryxWorkspaceGitStatus] = [:]
     @Published var debugShowsWorkspaceModeSheet = false
-    @Published var debugShowsGatewaySwitcher = false
+    @Published var debugShowsGatewaySwitcher = false {
+        didSet { homeObservationStore.setDebugShowsGatewaySwitcher(debugShowsGatewaySwitcher) }
+    }
     @Published var isUploadingWorkspaceFiles = false
     @Published var workspaceUploadStatus: String?
     @Published var slashCommands: [GaryxSlashCommand] = []
@@ -333,6 +349,7 @@ final class GaryxMobileModel: ObservableObject {
     var nextThreadListOffset = 0
     let rootNavigationPathStore = GaryxRootNavigationPathStore()
     let routeNotFoundStore = GaryxRouteNotFoundStore()
+    let homeObservationStore = GaryxHomeObservationStore()
     let homeThreadListStore = GaryxHomeThreadListStore()
     let homeProjectionGateway = HomeProjectionGateway()
     let shellChromeStore = GaryxShellChromeStore()
@@ -394,6 +411,7 @@ final class GaryxMobileModel: ObservableObject {
         }
         #endif
         rootNavigationPathStore.apply(navigationState: navigationState)
+        refreshHomeObservationSnapshot()
         refreshShellChromeSnapshot()
         refreshNavigationDrawerSnapshot()
         refreshHomeThreadListSnapshot()

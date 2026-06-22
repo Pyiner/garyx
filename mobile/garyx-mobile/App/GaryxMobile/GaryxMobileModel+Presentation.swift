@@ -17,6 +17,34 @@ extension GaryxMobileModel {
         navigationDrawerStore.apply(navigationDrawerSnapshot)
     }
 
+    func refreshHomeObservationSnapshot() {
+        refreshHomeObservationConnectionSnapshot()
+        refreshHomeObservationPaginationSnapshot()
+        homeObservationStore.setShowsSettings(showsSettings)
+        homeObservationStore.setDebugShowsGatewaySwitcher(debugShowsGatewaySwitcher)
+        homeObservationStore.setLastError(lastError)
+    }
+
+    func refreshHomeObservationConnectionSnapshot() {
+        homeObservationStore.applyConnection(
+            isGatewayConfigured: hasGatewaySettings,
+            connectionState: connectionState
+        )
+    }
+
+    func refreshHomeObservationPaginationSnapshot() {
+        homeObservationStore.applyPagination(
+            isLoadingMoreThreads: isLoadingMoreThreads,
+            hasMoreThreadSummaries: hasMoreThreadSummaries
+        )
+    }
+
+    func clearLastErrorIfCurrent(_ message: String) {
+        if lastError == message {
+            lastError = nil
+        }
+    }
+
     func predecodeAgentAvatarImages() {
         GaryxDataURLImageCache.predecodeAgentAvatars(
             from: agents.map { Optional($0.avatarDataUrl) } + teams.map { Optional($0.avatarDataUrl) }

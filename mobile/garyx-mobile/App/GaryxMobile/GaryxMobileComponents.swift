@@ -6,6 +6,10 @@ private struct GaryxOpenSidebarActionKey: EnvironmentKey {
     static let defaultValue: () -> Void = {}
 }
 
+private struct GaryxLoadMoreThreadsActionKey: EnvironmentKey {
+    static let defaultValue: () async -> Void = {}
+}
+
 private struct GaryxSidebarDragActiveKey: EnvironmentKey {
     static let defaultValue: Bool = false
 }
@@ -14,6 +18,11 @@ extension EnvironmentValues {
     var garyxOpenSidebar: () -> Void {
         get { self[GaryxOpenSidebarActionKey.self] }
         set { self[GaryxOpenSidebarActionKey.self] = newValue }
+    }
+
+    var garyxLoadMoreThreads: () async -> Void {
+        get { self[GaryxLoadMoreThreadsActionKey.self] }
+        set { self[GaryxLoadMoreThreadsActionKey.self] = newValue }
     }
 
     // True while a horizontal sidebar open/close drag is in progress. Surfaces

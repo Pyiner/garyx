@@ -165,6 +165,7 @@ struct GaryxRootNavigationView: View, Equatable {
     let onRefreshAll: () async -> Void
     let onRefreshSidebarThreads: (Bool) async -> Void
     let canRefreshSidebarThreads: () -> Bool
+    let onLoadMoreThreads: () async -> Void
     let onStartNewChat: () -> Void
     let onOpenThread: (GaryxThreadSummary) -> Void
     let onTogglePinnedThread: (String) -> Void
@@ -190,6 +191,7 @@ struct GaryxRootNavigationView: View, Equatable {
                 onRefreshAll: onRefreshAll,
                 onRefreshSidebarThreads: onRefreshSidebarThreads,
                 canRefreshSidebarThreads: canRefreshSidebarThreads,
+                onLoadMoreThreads: onLoadMoreThreads,
                 onStartNewChat: onStartNewChat,
                 onOpenThread: onOpenThread,
                 onTogglePinnedThread: onTogglePinnedThread,
@@ -307,6 +309,7 @@ struct GaryxHomeThreadListView: View, Equatable {
     let onRefreshAll: () async -> Void
     let onRefreshSidebarThreads: (Bool) async -> Void
     let canRefreshSidebarThreads: () -> Bool
+    let onLoadMoreThreads: () async -> Void
     let onStartNewChat: () -> Void
     let onOpenThread: (GaryxThreadSummary) -> Void
     let onTogglePinnedThread: (String) -> Void
@@ -420,6 +423,7 @@ struct GaryxHomeThreadListView: View, Equatable {
             .accessibilityHidden(true)
 
         GaryxSidebarThreadAutoLoadFooter()
+            .environment(\.garyxLoadMoreThreads, onLoadMoreThreads)
     }
 
     private func refreshAll() async {
@@ -843,11 +847,12 @@ private struct GaryxSidebarEmptyRow: View {
 }
 
 private struct GaryxSidebarThreadAutoLoadFooter: View {
-    @EnvironmentObject private var model: GaryxMobileModel
+    @Environment(GaryxHomeObservationStore.self) private var homeObservationStore
+    @Environment(\.garyxLoadMoreThreads) private var loadMoreThreads
 
     var body: some View {
         Group {
-            if model.isLoadingMoreThreads {
+            if homeObservationStore.isLoadingMoreThreads {
                 HStack(spacing: 8) {
                     ProgressView()
                         .scaleEffect(0.68)
@@ -857,11 +862,11 @@ private struct GaryxSidebarThreadAutoLoadFooter: View {
                 .foregroundStyle(.tertiary)
                 .frame(maxWidth: .infinity)
                 .frame(minHeight: 44)
-            } else if model.hasMoreThreadSummaries {
+            } else if homeObservationStore.hasMoreThreadSummaries {
                 Color.clear
                     .frame(height: 1)
                     .onAppear {
-                        Task { await model.loadMoreThreads() }
+                        Task { await loadMoreThreads() }
                     }
             }
         }
