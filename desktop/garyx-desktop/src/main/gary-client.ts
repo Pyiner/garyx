@@ -555,6 +555,10 @@ interface TaskForestPayload {
   total?: number;
   projection_current?: boolean;
   projectionCurrent?: boolean;
+  root_thread_ids?: unknown[];
+  rootThreadIds?: unknown[];
+  skipped_pinned_thread_ids?: unknown[];
+  skippedPinnedThreadIds?: unknown[];
 }
 
 interface WorkflowDefinitionsPayload {
@@ -1690,6 +1694,23 @@ function asFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value)
     ? value
     : undefined;
+}
+
+function asStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const item of value) {
+    const id = asString(item);
+    if (!id || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids;
 }
 
 function buildProviderMetadata(
@@ -5224,6 +5245,10 @@ export async function listTaskForest(
     total: asFiniteNumber(payload.total) ?? tasks.length,
     projectionCurrent:
       payload.projection_current ?? payload.projectionCurrent ?? true,
+    rootThreadIds: asStringList(payload.root_thread_ids ?? payload.rootThreadIds),
+    skippedPinnedThreadIds: asStringList(
+      payload.skipped_pinned_thread_ids ?? payload.skippedPinnedThreadIds,
+    ),
   };
 }
 

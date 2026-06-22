@@ -1702,6 +1702,7 @@ export function AppShell() {
   const [workspaceMutation, setWorkspaceMutation] = useState<
     "add" | "assign" | "relink" | "remove" | null
   >(null);
+  const [pinnedThreadsVersion, setPinnedThreadsVersion] = useState(0);
   const [addWorkspaceDialog, setAddWorkspaceDialog] = useState<{
     source: "new-thread" | "task";
     initialPath?: string;
@@ -3201,6 +3202,7 @@ export function AppShell() {
         pinned,
       });
       setDesktopState(nextState);
+      setPinnedThreadsVersion((version) => version + 1);
     } catch (error) {
       setError(
         error instanceof Error
@@ -10590,6 +10592,8 @@ export function AppShell() {
                   });
                 }}
                 onToast={pushToast}
+                pinnedThreadIds={pinnedThreadIds}
+                pinnedThreadsVersion={pinnedThreadsVersion}
                 selectedThreadId={selectedThreadId}
                 selectedThreadPanel={renderPrimaryThreadPage({
                   embedded: true,

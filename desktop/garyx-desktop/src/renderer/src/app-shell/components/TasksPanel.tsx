@@ -90,6 +90,8 @@ type TaskExecutorMode = 'agent' | 'team' | 'workflow';
 type TasksPanelProps = {
   agents: DesktopCustomAgent[];
   botGroups: DesktopBotConsoleSummary[];
+  pinnedThreadIds: string[];
+  pinnedThreadsVersion: number;
   workspaces: DesktopWorkspace[];
   workspaceMutation: string | null;
   onAddWorkspace: (path: string) => Promise<DesktopWorkspace | null>;
@@ -257,6 +259,8 @@ function isWorkflowTask(task: DesktopTaskSummary): boolean {
 export function TasksPanel({
   agents,
   botGroups,
+  pinnedThreadIds,
+  pinnedThreadsVersion,
   workspaces,
   workspaceMutation,
   onAddWorkspace,
@@ -1310,6 +1314,8 @@ export function TasksPanel({
           botGroups={botGroups}
           onOpenThreadInPanel={onOpenThreadInPanel}
           onToast={onToast}
+          pinnedThreadIds={pinnedThreadIds}
+          pinnedThreadsVersion={pinnedThreadsVersion}
           selectedThreadId={selectedThreadId}
           selectedThreadPanel={selectedThreadPanel}
           sourceBot={botFilter || null}

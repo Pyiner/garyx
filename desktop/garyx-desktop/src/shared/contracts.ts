@@ -265,9 +265,11 @@ export interface DesktopTaskForestPage {
   tasks: DesktopTaskForestNode[];
   total: number;
   projectionCurrent: boolean;
+  rootThreadIds: string[];
+  skippedPinnedThreadIds: string[];
 }
 
-export type DesktopTaskForestScope = 'active' | 'all';
+export type DesktopTaskForestScope = 'all';
 
 export interface DesktopDreamSpan {
   spanId: string;

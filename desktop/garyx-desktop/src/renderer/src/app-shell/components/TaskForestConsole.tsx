@@ -45,6 +45,8 @@ import {
 type TaskForestConsoleProps = {
   agents: DesktopCustomAgent[];
   botGroups: DesktopBotConsoleSummary[];
+  pinnedThreadIds: string[];
+  pinnedThreadsVersion: number;
   selectedThreadId: string | null;
   selectedThreadPanel: ReactNode;
   sourceBot: string | null;
@@ -191,6 +193,8 @@ function defaultDraft(
 export function TaskForestConsole({
   agents,
   botGroups,
+  pinnedThreadIds,
+  pinnedThreadsVersion,
   selectedThreadId,
   selectedThreadPanel,
   sourceBot,
@@ -218,6 +222,8 @@ export function TaskForestConsole({
   } | null>(null);
   const [tasks, setTasks] = useState<DesktopTaskForestNode[]>([]);
   const [total, setTotal] = useState(0);
+  const [rootThreadIds, setRootThreadIds] = useState<string[]>([]);
+  const [skippedPinnedThreadIds, setSkippedPinnedThreadIds] = useState<string[]>([]);
   const [projectionCurrent, setProjectionCurrent] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -292,6 +298,10 @@ export function TaskForestConsole({
   }, []);
 
   const layout = useMemo(() => buildTaskForestLayout(tasks), [tasks]);
+  const pinnedThreadSignature = useMemo(
+    () => pinnedThreadIds.map((threadId) => threadId.trim()).filter(Boolean).join("\n"),
+    [pinnedThreadIds],
+  );
   const forestFitSignature = useMemo(() => {
     if (!tasks.length) {
       return null;
@@ -300,8 +310,8 @@ export function TaskForestConsole({
       .map((task) => task.number)
       .sort((left, right) => left - right)
       .join(",");
-    return `${sourceBot || "all"}:${taskNumbers}`;
-  }, [sourceBot, tasks]);
+    return `${sourceBot || "all"}:${pinnedThreadSignature}:${taskNumbers}`;
+  }, [pinnedThreadSignature, sourceBot, tasks]);
   const nodesByNumber = useMemo(
     () => new Map(layout.nodes.map((node) => [node.task.number, node])),
     [layout.nodes],
@@ -339,6 +349,22 @@ export function TaskForestConsole({
 
   const startForestRequest = useCallback(
     (silent: boolean) => {
+      if (!pinnedThreadIds.length) {
+        if (mountedRef.current) {
+          setTasks([]);
+          setTotal(0);
+          setRootThreadIds([]);
+          setSkippedPinnedThreadIds([]);
+          setProjectionCurrent(true);
+          setSelectedNumber(null);
+          setCursorNumber(null);
+          setError(null);
+          setLoading(false);
+        }
+        requestRef.current = null;
+        currentRequestSequenceRef.current = null;
+        return Promise.resolve();
+      }
       const requestSequence = ++requestSequenceRef.current;
       currentRequestSequenceRef.current = requestSequence;
       const request = (async () => {
@@ -351,7 +377,6 @@ export function TaskForestConsole({
         try {
           const page = await getDesktopApi().listTaskForest({
             includeDone: true,
-            scope: "active",
             sourceBot,
           });
           if (!mountedRef.current || skipResultForRequestRef.current === requestSequence) {
@@ -359,6 +384,8 @@ export function TaskForestConsole({
           }
           setTasks(page.tasks);
           setTotal(page.total);
+          setRootThreadIds(page.rootThreadIds);
+          setSkippedPinnedThreadIds(page.skippedPinnedThreadIds);
           setProjectionCurrent(page.projectionCurrent);
           setSelectedNumber((current) =>
             current && page.tasks.some((task) => task.number === current)
@@ -395,13 +422,19 @@ export function TaskForestConsole({
       requestRef.current = request;
       return request;
     },
-    [sourceBot],
+    [pinnedThreadIds.length, sourceBot],
   );
 
   const loadForest = useCallback(
     (options?: { silent?: boolean; force?: boolean }) => {
       const silent = Boolean(options?.silent);
       const currentRequest = requestRef.current;
+      if (!pinnedThreadIds.length) {
+        if (currentRequestSequenceRef.current !== null) {
+          skipResultForRequestRef.current = currentRequestSequenceRef.current;
+        }
+        return startForestRequest(silent);
+      }
       if (currentRequest) {
         if (!options?.force) {
           return currentRequest;
@@ -419,12 +452,12 @@ export function TaskForestConsole({
       }
       return startForestRequest(silent);
     },
-    [startForestRequest],
+    [pinnedThreadIds.length, startForestRequest],
   );
 
   useEffect(() => {
     void loadForest({ force: true });
-  }, [loadForest]);
+  }, [loadForest, pinnedThreadSignature, pinnedThreadsVersion]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -825,7 +858,7 @@ export function TaskForestConsole({
               </button>
             ))
           ) : (
-            <span>{projectionCurrent ? t("All roots") : t("Projection refreshing")}</span>
+            <span>{projectionCurrent ? t("Pinned roots") : t("Projection refreshing")}</span>
           )}
         </nav>
         <div className="task-forest-actions">
@@ -906,7 +939,11 @@ export function TaskForestConsole({
         ) : error ? (
           <div className="task-forest-state error">{error}</div>
         ) : !tasks.length ? (
-          <div className="task-forest-state">{t("No active tasks right now.")}</div>
+          <div className="task-forest-state">
+            {pinnedThreadIds.length
+              ? t("Pinned threads with tasks will appear here.")
+              : t("Pin threads to add them to the operation room.")}
+          </div>
         ) : null}
         <div
           className={`task-forest-world ${birdseye ? "birdseye" : ""} ${smoothCamera ? "smooth-camera" : ""}`}
@@ -980,7 +1017,11 @@ export function TaskForestConsole({
         </div>
         <div className="task-forest-legend">
           <span>{t("{count} tasks", { count: total || tasks.length })}</span>
+          <span>{t("{count} roots", { count: rootThreadIds.length })}</span>
           <span>{activeNodeCount ? t("{count} running", { count: activeNodeCount }) : t("Idle")}</span>
+          {skippedPinnedThreadIds.length ? (
+            <span>{t("{count} chats skipped", { count: skippedPinnedThreadIds.length })}</span>
+          ) : null}
         </div>
         <div
           aria-hidden

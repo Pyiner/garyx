@@ -108,16 +108,24 @@ pub struct TaskForestNode {
     pub last_active_at: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskForestPage {
+    pub tasks: Vec<TaskForestNode>,
+    pub total: usize,
+    pub root_thread_ids: Vec<String>,
+    pub skipped_pinned_thread_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskForestScope {
+    Pinned,
     All,
-    Active,
 }
 
 impl Default for TaskForestScope {
     fn default() -> Self {
-        Self::All
+        Self::Pinned
     }
 }
 
@@ -1095,10 +1103,18 @@ impl GaryxDbService {
         &self,
         filter: &TaskListFilter,
         scope: TaskForestScope,
-    ) -> GaryxDbResult<(Vec<TaskForestNode>, usize)> {
+    ) -> GaryxDbResult<TaskForestPage> {
         match scope {
-            TaskForestScope::All => self.list_all_task_forest(filter),
-            TaskForestScope::Active => self.list_active_task_forest(filter),
+            TaskForestScope::Pinned => self.list_pinned_task_forest(filter),
+            TaskForestScope::All => {
+                let (tasks, total) = self.list_all_task_forest(filter)?;
+                Ok(TaskForestPage {
+                    tasks,
+                    total,
+                    root_thread_ids: Vec::new(),
+                    skipped_pinned_thread_ids: Vec::new(),
+                })
+            }
         }
     }
 
@@ -1182,40 +1198,49 @@ impl GaryxDbService {
         Ok((tasks, usize::try_from(total).unwrap_or(usize::MAX)))
     }
 
-    fn list_active_task_forest(
-        &self,
-        filter: &TaskListFilter,
-    ) -> GaryxDbResult<(Vec<TaskForestNode>, usize)> {
+    fn list_pinned_task_forest(&self, filter: &TaskListFilter) -> GaryxDbResult<TaskForestPage> {
         let (where_sql, bind_values) = task_projection_filter_sql(filter)?;
+        let skipped_sql = "SELECT pinned.thread_id
+             FROM thread_pins pinned
+             LEFT JOIN task_projection task
+               ON task.thread_id = pinned.thread_id
+              AND task.projection_version = ?1
+             WHERE task.thread_id IS NULL
+             ORDER BY pinned.pinned_at DESC, pinned.thread_id ASC";
         let list_sql = format!(
-            "WITH RECURSIVE filtered AS (
+            "WITH RECURSIVE pinned AS (
+                SELECT thread_id,
+                       ROW_NUMBER() OVER (ORDER BY pinned_at DESC, thread_id ASC) AS root_rank
+                FROM thread_pins
+             ),
+             raw_pinned AS (
+                SELECT pinned.root_rank, pinned.thread_id
+                FROM pinned
+                JOIN task_projection task
+                  ON task.thread_id = pinned.thread_id
+                 AND task.projection_version = ?
+             ),
+             filtered AS (
                 SELECT task.thread_id, task.number, task.status, task.title,
                        task.creator_json, task.assignee_json, task.source_json,
                        task.executor_json, task.updated_at, task.updated_by_json,
                        COALESCE(meta.agent_id, '') AS runtime_agent_id,
                        COALESCE(meta.message_count, 0) AS reply_count,
                        task.parent_task_number,
+                       task.source_task_thread_id,
                        task.source_task_id,
-                       COALESCE(
-                           task.source_task_thread_id,
-                           (
-                               SELECT parent.thread_id
-                               FROM task_projection parent
-                               WHERE parent.projection_version = ?
-                                 AND (
-                                   parent.number = task.parent_task_number
-                                   OR task.source_task_id = ('#TASK-' || parent.number) COLLATE NOCASE
-                                 )
-                               ORDER BY parent.updated_at DESC, parent.thread_id ASC
-                               LIMIT 1
-                           )
-                       ) AS parent_thread_id,
                        recent.active_run_id,
                        recent.run_state,
                        recent.last_active_at,
                        ROW_NUMBER() OVER (
                            PARTITION BY task.number
-                           ORDER BY task.updated_at DESC, task.thread_id ASC
+                           ORDER BY
+                             CASE
+                               WHEN task.thread_id IN (SELECT thread_id FROM raw_pinned) THEN 0
+                               ELSE 1
+                             END,
+                             task.updated_at DESC,
+                             task.thread_id ASC
                        ) AS rn
                 FROM task_projection task
                 LEFT JOIN thread_meta meta ON meta.thread_id = task.thread_id
@@ -1225,49 +1250,100 @@ impl GaryxDbService {
              deduped AS (
                 SELECT * FROM filtered WHERE rn = 1
              ),
-             active_chain(number, path) AS (
-                SELECT number, ',' || number || ','
-                FROM deduped
-                WHERE lower(trim(COALESCE(run_state, ''))) IN ('running', 'streaming', 'pending')
-                   OR (
-                     COALESCE(active_run_id, '') <> ''
-                     AND lower(trim(COALESCE(run_state, ''))) NOT IN (
-                       'idle', 'completed', 'failed', 'error', 'aborted'
-                     )
-                   )
-                UNION
-                SELECT parent.number, active_chain.path || parent.number || ','
-                FROM active_chain
-                JOIN deduped child ON child.number = active_chain.number
-                JOIN deduped parent
-                  ON parent.number = child.parent_task_number
-                  OR child.source_task_id = ('#TASK-' || parent.number) COLLATE NOCASE
-                WHERE instr(active_chain.path, ',' || parent.number || ',') = 0
+             seeds AS (
+                SELECT raw_pinned.root_rank, deduped.thread_id, deduped.number
+                FROM raw_pinned
+                JOIN deduped ON deduped.thread_id = raw_pinned.thread_id
+             ),
+             task_tree(root_rank, depth, thread_id, number, path) AS (
+                SELECT root_rank, 0, thread_id, number, ',' || thread_id || ','
+                FROM seeds
+                UNION ALL
+                SELECT task_tree.root_rank,
+                       task_tree.depth + 1,
+                       child.thread_id,
+                       child.number,
+                       task_tree.path || child.thread_id || ','
+                FROM task_tree
+                JOIN deduped child
+                  ON child.source_task_thread_id = task_tree.thread_id
+                  OR child.parent_task_number = task_tree.number
+                  OR child.source_task_id = ('#TASK-' || task_tree.number) COLLATE NOCASE
+                WHERE task_tree.depth < 64
+                  AND instr(task_tree.path, ',' || child.thread_id || ',') = 0
+             ),
+             reached AS (
+                SELECT root_rank, depth, thread_id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY thread_id
+                           ORDER BY root_rank ASC, depth ASC, thread_id ASC
+                       ) AS reach_rn
+                FROM task_tree
              )
-             SELECT thread_id, number, status, title, creator_json, assignee_json,
-                    source_json, executor_json, updated_at, updated_by_json,
-                    runtime_agent_id, reply_count, parent_task_number,
-                    parent_thread_id, active_run_id, COALESCE(run_state, 'idle') AS run_state,
-                    last_active_at
-             FROM deduped
-             WHERE number IN (SELECT number FROM active_chain)
-             ORDER BY updated_at DESC, thread_id ASC"
+             SELECT deduped.thread_id, deduped.number, deduped.status, deduped.title,
+                    deduped.creator_json, deduped.assignee_json,
+                    deduped.source_json, deduped.executor_json,
+                    deduped.updated_at, deduped.updated_by_json,
+                    deduped.runtime_agent_id, deduped.reply_count,
+                    deduped.parent_task_number,
+                    COALESCE(
+                        deduped.source_task_thread_id,
+                        (
+                            SELECT parent.thread_id
+                            FROM deduped parent
+                            WHERE parent.number = deduped.parent_task_number
+                               OR deduped.source_task_id = ('#TASK-' || parent.number) COLLATE NOCASE
+                            ORDER BY parent.updated_at DESC, parent.thread_id ASC
+                            LIMIT 1
+                        )
+                    ) AS parent_thread_id,
+                    deduped.active_run_id,
+                    COALESCE(deduped.run_state, 'idle') AS run_state,
+                    deduped.last_active_at,
+                    reached.root_rank,
+                    reached.depth
+                FROM deduped
+                JOIN reached ON reached.thread_id = deduped.thread_id
+             WHERE reached.reach_rn = 1
+             ORDER BY reached.root_rank ASC, reached.depth ASC, deduped.number ASC, deduped.thread_id ASC"
         );
 
         let conn = self.conn()?;
+        let mut skipped_stmt = conn.prepare(skipped_sql)?;
+        let skipped_rows = skipped_stmt
+            .query_map(params![CURRENT_TASK_PROJECTION_VERSION], |row| {
+                row.get::<_, String>(0)
+            })?;
+        let mut skipped_pinned_thread_ids = Vec::new();
+        for row in skipped_rows {
+            skipped_pinned_thread_ids.push(row?);
+        }
+
         let mut list_bind_values = vec![SqlValue::Integer(CURRENT_TASK_PROJECTION_VERSION)];
         list_bind_values.extend(bind_values);
         let mut stmt = conn.prepare(&list_sql)?;
-        let rows = stmt.query_map(
-            params_from_iter(list_bind_values.iter()),
-            task_forest_from_row,
-        )?;
+        let rows = stmt.query_map(params_from_iter(list_bind_values.iter()), |row| {
+            let node = task_forest_from_row(row)?;
+            let root_rank = row.get::<_, i64>(17)?;
+            let depth = row.get::<_, i64>(18)?;
+            Ok((node, root_rank, depth))
+        })?;
         let mut tasks = Vec::new();
+        let mut root_thread_ids = Vec::new();
         for row in rows {
-            tasks.push(row?);
+            let (node, _root_rank, depth) = row?;
+            if depth == 0 {
+                root_thread_ids.push(node.task.thread_id.clone());
+            }
+            tasks.push(node);
         }
         let total = tasks.len();
-        Ok((tasks, total))
+        Ok(TaskForestPage {
+            tasks,
+            total,
+            root_thread_ids,
+            skipped_pinned_thread_ids,
+        })
     }
 
     pub fn task_subtree_summaries(&self, root_thread_id: &str) -> GaryxDbResult<Vec<TaskSummary>> {
@@ -5083,7 +5159,7 @@ mod tests {
         })
         .expect("insert recent thread");
 
-        let (nodes, total) = db
+        let page = db
             .list_task_forest(
                 &TaskListFilter {
                     include_done: true,
@@ -5093,8 +5169,11 @@ mod tests {
             )
             .expect("list forest");
 
-        assert_eq!(total, 3);
-        let child = nodes
+        assert_eq!(page.total, 3);
+        assert!(page.root_thread_ids.is_empty());
+        assert!(page.skipped_pinned_thread_ids.is_empty());
+        let child = page
+            .tasks
             .iter()
             .find(|node| node.task.thread_id == "thread::child")
             .expect("child node");
@@ -5106,7 +5185,8 @@ mod tests {
             child.last_active_at.as_deref(),
             Some("2026-01-01T00:00:04.000Z")
         );
-        let legacy_child = nodes
+        let legacy_child = page
+            .tasks
             .iter()
             .find(|node| node.task.thread_id == "thread::legacy-child")
             .expect("legacy child node");
@@ -5115,7 +5195,8 @@ mod tests {
             legacy_child.parent_thread_id.as_deref(),
             Some("thread::parent")
         );
-        let parent = nodes
+        let parent = page
+            .tasks
             .iter()
             .find(|node| node.task.thread_id == "thread::parent")
             .expect("parent node");
@@ -5124,217 +5205,173 @@ mod tests {
     }
 
     #[test]
-    fn active_task_forest_keeps_active_seed_and_filtered_ancestors() {
+    fn pinned_task_forest_returns_pinned_roots_and_descendants() {
         let db = GaryxDbService::memory().expect("db opens");
         db.replace_task_projection(task_projection_draft(
-            "thread::parent",
-            1,
-            TaskStatus::Done,
+            "thread::root-a",
+            10,
+            TaskStatus::InProgress,
             "2026-01-01T00:00:01.000Z",
-            Some(TaskSource {
-                thread_id: None,
-                task_id: None,
-                task_thread_id: None,
-                bot_id: Some("api:main".to_owned()),
-                channel: None,
-                account_id: None,
-            }),
+            None,
             1,
         ))
-        .expect("insert parent");
+        .expect("insert root a");
+        db.replace_task_projection(task_projection_draft(
+            "thread::child-a",
+            11,
+            TaskStatus::Todo,
+            "2026-01-01T00:00:02.000Z",
+            Some(thread_source("thread::root-a", "#TASK-10")),
+            1,
+        ))
+        .expect("insert child a");
+        db.replace_task_projection(task_projection_draft(
+            "thread::grandchild-a",
+            12,
+            TaskStatus::Todo,
+            "2026-01-01T00:00:03.000Z",
+            Some(thread_source("thread::child-a", "#TASK-11")),
+            1,
+        ))
+        .expect("insert grandchild a");
+        db.replace_task_projection(task_projection_draft(
+            "thread::root-b",
+            20,
+            TaskStatus::InProgress,
+            "2026-01-01T00:00:04.000Z",
+            None,
+            1,
+        ))
+        .expect("insert root b");
+        db.replace_task_projection(task_projection_draft(
+            "thread::child-b",
+            21,
+            TaskStatus::Todo,
+            "2026-01-01T00:00:05.000Z",
+            Some(thread_source("thread::root-b", "#TASK-20")),
+            1,
+        ))
+        .expect("insert child b");
+        db.replace_task_projection(task_projection_draft(
+            "thread::unrelated",
+            99,
+            TaskStatus::Todo,
+            "2026-01-01T00:00:06.000Z",
+            None,
+            1,
+        ))
+        .expect("insert unrelated");
+        db.conn()
+            .expect("db connection")
+            .execute_batch(
+                "INSERT INTO thread_pins (thread_id, pinned_at)
+                 VALUES
+                   ('thread::root-a', '2026-01-01T00:00:01.000Z'),
+                   ('thread::chat', '2026-01-01T00:00:02.000Z'),
+                   ('thread::root-b', '2026-01-01T00:00:03.000Z')",
+            )
+            .expect("insert pins");
+
+        let page = db
+            .list_task_forest(
+                &TaskListFilter {
+                    include_done: true,
+                    ..Default::default()
+                },
+                TaskForestScope::Pinned,
+            )
+            .expect("list pinned forest");
+
+        assert_eq!(
+            page.tasks
+                .iter()
+                .map(|node| node.task.thread_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "thread::root-b",
+                "thread::child-b",
+                "thread::root-a",
+                "thread::child-a",
+                "thread::grandchild-a"
+            ]
+        );
+        assert_eq!(page.total, 5);
+        assert_eq!(
+            page.root_thread_ids,
+            vec!["thread::root-b".to_owned(), "thread::root-a".to_owned()]
+        );
+        assert_eq!(page.skipped_pinned_thread_ids, vec!["thread::chat"]);
+        let child_a = page
+            .tasks
+            .iter()
+            .find(|node| node.task.thread_id == "thread::child-a")
+            .expect("child a");
+        assert_eq!(child_a.parent_thread_id.as_deref(), Some("thread::root-a"));
+    }
+
+    #[test]
+    fn pinned_task_forest_prefers_pinned_seed_over_newer_duplicate_number() {
+        let db = GaryxDbService::memory().expect("db opens");
+        db.replace_task_projection(task_projection_draft(
+            "thread::pinned-root",
+            1,
+            TaskStatus::InProgress,
+            "2026-01-01T00:00:01.000Z",
+            None,
+            1,
+        ))
+        .expect("insert pinned duplicate");
+        db.replace_task_projection(task_projection_draft(
+            "thread::newer-duplicate",
+            1,
+            TaskStatus::InReview,
+            "2026-01-01T00:00:02.000Z",
+            None,
+            2,
+        ))
+        .expect("insert newer duplicate");
         db.replace_task_projection(task_projection_draft(
             "thread::child",
             2,
             TaskStatus::Todo,
-            "2026-01-01T00:00:02.000Z",
-            Some(TaskSource {
-                thread_id: Some("thread::parent".to_owned()),
-                task_id: Some("#TASK-1".to_owned()),
-                task_thread_id: Some("thread::parent".to_owned()),
-                bot_id: Some("api:main".to_owned()),
-                channel: None,
-                account_id: None,
-            }),
+            "2026-01-01T00:00:03.000Z",
+            Some(thread_source("thread::pinned-root", "#TASK-1")),
             1,
         ))
         .expect("insert child");
-        db.replace_task_projection(task_projection_draft(
-            "thread::idle-stale",
-            3,
-            TaskStatus::Todo,
-            "2026-01-01T00:00:03.000Z",
-            Some(TaskSource {
-                thread_id: None,
-                task_id: None,
-                task_thread_id: None,
-                bot_id: Some("api:main".to_owned()),
-                channel: None,
-                account_id: None,
-            }),
-            1,
-        ))
-        .expect("insert stale idle task");
-        db.upsert_recent_thread(RecentThreadDraft {
-            thread_id: "thread::child".to_owned(),
-            title: "Child".to_owned(),
-            workspace_dir: None,
-            thread_type: "chat".to_owned(),
-            provider_type: Some("claude_code".to_owned()),
-            agent_id: Some("claude".to_owned()),
-            message_count: 4,
-            last_message_preview: "Working".to_owned(),
-            recent_run_id: Some("run::recent".to_owned()),
-            active_run_id: Some("run::active".to_owned()),
-            run_state: "streaming".to_owned(),
-            updated_at: Some("2026-01-01T00:00:04.000Z".to_owned()),
-            last_active_at: "2026-01-01T00:00:05.000Z".to_owned(),
-        })
-        .expect("insert child recent thread");
-        db.upsert_recent_thread(RecentThreadDraft {
-            thread_id: "thread::idle-stale".to_owned(),
-            title: "Idle Stale".to_owned(),
-            workspace_dir: None,
-            thread_type: "chat".to_owned(),
-            provider_type: Some("claude_code".to_owned()),
-            agent_id: Some("claude".to_owned()),
-            message_count: 1,
-            last_message_preview: "Idle".to_owned(),
-            recent_run_id: Some("run::stale-recent".to_owned()),
-            active_run_id: Some("run::stale-active".to_owned()),
-            run_state: "idle".to_owned(),
-            updated_at: Some("2026-01-01T00:00:06.000Z".to_owned()),
-            last_active_at: "2026-01-01T00:00:07.000Z".to_owned(),
-        })
-        .expect("insert stale recent thread");
+        db.pin_thread("thread::pinned-root").expect("pin root");
 
-        let (nodes, total) = db
+        let page = db
             .list_task_forest(
                 &TaskListFilter {
                     include_done: true,
-                    source_bot_id: Some("api:main".to_owned()),
                     ..Default::default()
                 },
-                TaskForestScope::Active,
+                TaskForestScope::Pinned,
             )
-            .expect("list active forest");
+            .expect("list pinned forest");
 
-        assert_eq!(total, 2);
         assert_eq!(
-            nodes
+            page.tasks
                 .iter()
-                .map(|node| node.task.number)
-                .collect::<BTreeSet<_>>(),
-            BTreeSet::from([1, 2])
+                .map(|node| node.task.thread_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["thread::pinned-root", "thread::child"]
+        );
+        assert_eq!(page.root_thread_ids, vec!["thread::pinned-root"]);
+        assert!(
+            !page
+                .tasks
+                .iter()
+                .any(|node| node.task.thread_id == "thread::newer-duplicate")
         );
     }
 
     #[test]
-    fn active_task_forest_falls_back_to_active_run_id_for_unknown_run_state() {
-        let db = GaryxDbService::memory().expect("db opens");
-        for (thread_id, number) in [
-            ("thread::unknown-active", 1),
-            ("thread::unknown-inactive", 2),
-            ("thread::empty-active", 3),
-        ] {
-            db.replace_task_projection(task_projection_draft(
-                thread_id,
-                number,
-                TaskStatus::Todo,
-                "2026-01-01T00:00:01.000Z",
-                Some(TaskSource {
-                    thread_id: None,
-                    task_id: None,
-                    task_thread_id: None,
-                    bot_id: Some("api:main".to_owned()),
-                    channel: None,
-                    account_id: None,
-                }),
-                1,
-            ))
-            .expect("insert task");
-        }
-        db.upsert_recent_thread(RecentThreadDraft {
-            thread_id: "thread::unknown-active".to_owned(),
-            title: "Unknown Active".to_owned(),
-            workspace_dir: None,
-            thread_type: "chat".to_owned(),
-            provider_type: Some("claude_code".to_owned()),
-            agent_id: Some("claude".to_owned()),
-            message_count: 2,
-            last_message_preview: "Running".to_owned(),
-            recent_run_id: Some("run::recent".to_owned()),
-            active_run_id: Some("run::active".to_owned()),
-            run_state: "unreported".to_owned(),
-            updated_at: Some("2026-01-01T00:00:02.000Z".to_owned()),
-            last_active_at: "2026-01-01T00:00:03.000Z".to_owned(),
-        })
-        .expect("insert unknown active thread");
-        db.upsert_recent_thread(RecentThreadDraft {
-            thread_id: "thread::unknown-inactive".to_owned(),
-            title: "Unknown Inactive".to_owned(),
-            workspace_dir: None,
-            thread_type: "chat".to_owned(),
-            provider_type: Some("claude_code".to_owned()),
-            agent_id: Some("claude".to_owned()),
-            message_count: 1,
-            last_message_preview: "Idle".to_owned(),
-            recent_run_id: Some("run::recent".to_owned()),
-            active_run_id: None,
-            run_state: "unreported".to_owned(),
-            updated_at: Some("2026-01-01T00:00:04.000Z".to_owned()),
-            last_active_at: "2026-01-01T00:00:05.000Z".to_owned(),
-        })
-        .expect("insert unknown inactive thread");
-        db.upsert_recent_thread(RecentThreadDraft {
-            thread_id: "thread::empty-active".to_owned(),
-            title: "Empty Active".to_owned(),
-            workspace_dir: None,
-            thread_type: "chat".to_owned(),
-            provider_type: Some("claude_code".to_owned()),
-            agent_id: Some("claude".to_owned()),
-            message_count: 3,
-            last_message_preview: "Running".to_owned(),
-            recent_run_id: Some("run::recent".to_owned()),
-            active_run_id: Some("run::empty-active".to_owned()),
-            run_state: "unreported".to_owned(),
-            updated_at: Some("2026-01-01T00:00:06.000Z".to_owned()),
-            last_active_at: "2026-01-01T00:00:07.000Z".to_owned(),
-        })
-        .expect("insert empty active thread");
-        db.conn()
-            .expect("db connection")
-            .execute(
-                "UPDATE recent_threads SET run_state = '' WHERE thread_id = ?1",
-                params!["thread::empty-active"],
-            )
-            .expect("make run_state empty");
-
-        let (nodes, total) = db
-            .list_task_forest(
-                &TaskListFilter {
-                    include_done: true,
-                    source_bot_id: Some("api:main".to_owned()),
-                    ..Default::default()
-                },
-                TaskForestScope::Active,
-            )
-            .expect("list active forest");
-
-        assert_eq!(total, 2);
-        assert_eq!(
-            nodes
-                .iter()
-                .map(|node| node.task.number)
-                .collect::<BTreeSet<_>>(),
-            BTreeSet::from([1, 3])
-        );
-    }
-
-    #[test]
-    fn active_task_forest_truncates_ancestors_at_filter_boundary() {
+    fn pinned_task_forest_skips_only_pins_without_any_projection() {
         let db = GaryxDbService::memory().expect("db opens");
         db.replace_task_projection(task_projection_draft(
-            "thread::other-bot-parent",
+            "thread::other-bot-root",
             1,
             TaskStatus::InProgress,
             "2026-01-01T00:00:01.000Z",
@@ -5348,16 +5385,16 @@ mod tests {
             }),
             1,
         ))
-        .expect("insert parent");
+        .expect("insert other bot root");
         db.replace_task_projection(task_projection_draft(
             "thread::main-child",
             2,
             TaskStatus::InProgress,
             "2026-01-01T00:00:02.000Z",
             Some(TaskSource {
-                thread_id: Some("thread::other-bot-parent".to_owned()),
+                thread_id: Some("thread::other-bot-root".to_owned()),
                 task_id: Some("#TASK-1".to_owned()),
-                task_thread_id: Some("thread::other-bot-parent".to_owned()),
+                task_thread_id: Some("thread::other-bot-root".to_owned()),
                 bot_id: Some("api:main".to_owned()),
                 channel: None,
                 account_id: None,
@@ -5365,37 +5402,24 @@ mod tests {
             1,
         ))
         .expect("insert child");
-        db.upsert_recent_thread(RecentThreadDraft {
-            thread_id: "thread::main-child".to_owned(),
-            title: "Main Child".to_owned(),
-            workspace_dir: None,
-            thread_type: "chat".to_owned(),
-            provider_type: Some("claude_code".to_owned()),
-            agent_id: Some("claude".to_owned()),
-            message_count: 2,
-            last_message_preview: "Running".to_owned(),
-            recent_run_id: Some("run::recent".to_owned()),
-            active_run_id: None,
-            run_state: "running".to_owned(),
-            updated_at: Some("2026-01-01T00:00:03.000Z".to_owned()),
-            last_active_at: "2026-01-01T00:00:04.000Z".to_owned(),
-        })
-        .expect("insert recent thread");
+        db.pin_thread("thread::other-bot-root")
+            .expect("pin filtered root");
+        db.pin_thread("thread::chat").expect("pin chat");
 
-        let (nodes, total) = db
+        let page = db
             .list_task_forest(
                 &TaskListFilter {
                     include_done: true,
                     source_bot_id: Some("api:main".to_owned()),
                     ..Default::default()
                 },
-                TaskForestScope::Active,
+                TaskForestScope::Pinned,
             )
-            .expect("list filtered active forest");
+            .expect("list filtered pinned forest");
 
-        assert_eq!(total, 1);
-        assert_eq!(nodes[0].task.number, 2);
-        assert_eq!(nodes[0].parent_task_number, Some(1));
+        assert!(page.tasks.is_empty());
+        assert!(page.root_thread_ids.is_empty());
+        assert_eq!(page.skipped_pinned_thread_ids, vec!["thread::chat"]);
     }
 
     #[test]
