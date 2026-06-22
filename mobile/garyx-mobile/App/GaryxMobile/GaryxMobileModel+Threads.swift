@@ -560,6 +560,7 @@ extension GaryxMobileModel {
 
     func startBackgroundCommittedRunReconcileLoop() {
         guard hasGatewaySettings,
+              isHomeVisible,
               case .ready = connectionState else {
             cancelBackgroundCommittedRunReconcileLoop()
             return
@@ -591,6 +592,9 @@ extension GaryxMobileModel {
         let decision = backgroundCommittedRunReconcilePlanner.nextDecision(
             candidateThreadIds: backgroundCommittedRunCandidateThreadIds()
         )
+        if decision.refreshesThreads {
+            await refreshThreads(silent: true)
+        }
         guard decision.hydratesCandidateThreads else { return }
 
         var observedCompletion = false
@@ -606,8 +610,16 @@ extension GaryxMobileModel {
             observedCompletion = observedCompletion || !remainedBusy
         }
         guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-        if decision.refreshesThreads || observedCompletion {
+        if observedCompletion {
             await refreshThreads(silent: true)
+        }
+    }
+
+    func syncBackgroundCommittedRunReconcileLoopForHomeVisibility() {
+        if isHomeVisible {
+            startBackgroundCommittedRunReconcileLoop()
+        } else {
+            cancelBackgroundCommittedRunReconcileLoop()
         }
     }
 

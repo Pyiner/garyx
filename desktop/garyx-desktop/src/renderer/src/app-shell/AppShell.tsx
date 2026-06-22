@@ -1240,7 +1240,31 @@ const TRANSIENT_STATUS_MS = 3200;
 const ERROR_TOAST_MS = 4400;
 const GATEWAY_HEALTHY_POLL_MS = 12000;
 const SILENT_DESKTOP_STATE_REFRESH_MS = 60000;
+const RUN_STATE_LIST_REFRESH_DEBOUNCE_MS = 350;
+const GATEWAY_READY_STATE_REFRESH_THROTTLE_MS = 12000;
 const GATEWAY_RETRY_BACKOFF_MS = [2500, 4000, 6500, 10000, 15000];
+
+function threadRunStateIsRunning(thread: DesktopThreadSummary): boolean {
+  return (thread.runState || "").trim().toLowerCase() === "running";
+}
+
+function chatStreamEventHasRunLifecycle(event: DesktopChatStreamEvent): boolean {
+  const events =
+    event.type === "thread_render_frame"
+      ? event.events
+      : event.type === "committed_message"
+        ? [event]
+        : [];
+  return events.some((committed) => {
+    const controlKind = transcriptControlKind(committed.message);
+    return (
+      controlKind === "run_start" ||
+      controlKind === "run_complete" ||
+      controlKind === "run_interrupted" ||
+      controlKind === "interrupt_confirmed"
+    );
+  });
+}
 
 function savedContentView(): ContentView {
   const saved = sessionStorage.getItem("gary-content-view");
@@ -1768,6 +1792,8 @@ export function AppShell() {
   const gatewaySetupSavedConnectionRef = useRef<ConnectionStatus | null>(null);
   const botBindingRequestSequenceRef = useRef(0);
   const previousConnectionOkRef = useRef<boolean | null>(null);
+  const desktopStateRefreshTimeoutRef = useRef<number | null>(null);
+  const lastGatewayReadyStateRefreshAtRef = useRef(0);
   const lastRemoteStateWarningKeyRef = useRef<string | null>(null);
   const threadLogsPanelWidthRef = useRef(
     DEFAULT_DESKTOP_SETTINGS.threadLogsPanelWidth,
@@ -3108,11 +3134,10 @@ export function AppShell() {
         isActive:
           visibleThreadEntrySelectionSource === "recent" &&
           visibleSelectedThreadId === thread.id,
-        isBusy: isRuntimeBusy(selectThreadRuntime(messageState, thread.id)?.state),
+        isBusy: threadRunStateIsRunning(thread),
       })),
     [
       desktopState?.threads,
-      messageState,
       visibleSelectedThreadId,
       visibleThreadEntrySelectionSource,
     ],
@@ -3128,10 +3153,9 @@ export function AppShell() {
           isActive:
             visibleThreadEntrySelectionSource === "pinned" &&
             visibleSelectedThreadId === thread.id,
-          isBusy: isRuntimeBusy(selectThreadRuntime(messageState, thread.id)?.state),
+          isBusy: threadRunStateIsRunning(thread),
         })),
     [
-      messageState,
       pinnedThreadIds,
       threadAvatarCatalog,
       threadSummaryById,
@@ -3650,6 +3674,30 @@ export function AppShell() {
       setDesktopWorkflows(nextWorkflows);
     });
     return nextState;
+  }
+
+  function scheduleDesktopStateRefresh(delayMs = RUN_STATE_LIST_REFRESH_DEBOUNCE_MS) {
+    if (desktopStateRefreshTimeoutRef.current !== null) {
+      window.clearTimeout(desktopStateRefreshTimeoutRef.current);
+    }
+    desktopStateRefreshTimeoutRef.current = window.setTimeout(() => {
+      desktopStateRefreshTimeoutRef.current = null;
+      void refreshDesktopState().catch((refreshError) => {
+        console.debug("Desktop state refresh failed.", refreshError);
+      });
+    }, delayMs);
+  }
+
+  function scheduleGatewayReadyStateRefresh() {
+    const now = Date.now();
+    if (
+      now - lastGatewayReadyStateRefreshAtRef.current <
+      GATEWAY_READY_STATE_REFRESH_THROTTLE_MS
+    ) {
+      return;
+    }
+    lastGatewayReadyStateRefreshAtRef.current = now;
+    scheduleDesktopStateRefresh(0);
   }
 
   async function refreshAgentTargets() {
@@ -4341,6 +4389,9 @@ export function AppShell() {
   useEffect(() => {
     const listener = (event: DesktopChatStreamEvent) => {
       enqueueClientLogEvent(event);
+      if (chatStreamEventHasRunLifecycle(event)) {
+        scheduleDesktopStateRefresh();
+      }
       streamEventHandlerRef.current(event);
     };
     window.garyxDesktop.subscribeChatStream(listener);
@@ -4356,6 +4407,15 @@ export function AppShell() {
     window.garyxDesktop.subscribeDeepLinks(listener);
     return () => {
       window.garyxDesktop.unsubscribeDeepLinks(listener);
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (desktopStateRefreshTimeoutRef.current !== null) {
+        window.clearTimeout(desktopStateRefreshTimeoutRef.current);
+        desktopStateRefreshTimeoutRef.current = null;
+      }
     };
   }, []);
 
@@ -4787,6 +4847,7 @@ export function AppShell() {
         }
         if (nextOk) {
           gatewayRetryStepRef.current = 0;
+          scheduleGatewayReadyStateRefresh();
         } else {
           gatewayRetryStepRef.current = Math.min(
             gatewayRetryStepRef.current + 1,

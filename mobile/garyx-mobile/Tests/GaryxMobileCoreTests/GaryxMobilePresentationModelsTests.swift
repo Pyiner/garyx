@@ -2,7 +2,7 @@ import XCTest
 @testable import GaryxMobileCore
 
 final class GaryxMobilePresentationModelsTests: XCTestCase {
-    func testRunStateResolverPreservesAPIRunningWhenCommittedStateIsMissing() {
+    func testRunStateResolverPreservesAPIRunStateWithoutCommittedOverride() {
         XCTAssertEqual(
             GaryxThreadSummaryRunStateResolver.resolvedRunState(
                 apiRunState: "running",
@@ -19,45 +19,25 @@ final class GaryxMobilePresentationModelsTests: XCTestCase {
             ),
             " running "
         )
-    }
-
-    func testRunStateResolverUsesCommittedTerminalStateWhenPresent() {
-        let state = GaryxTranscriptRunState(
-            busy: false,
-            activeRunId: nil,
-            terminalStatus: "completed"
-        )
-
         XCTAssertEqual(
             GaryxThreadSummaryRunStateResolver.resolvedRunState(
-                apiRunState: "running",
+                apiRunState: "idle",
                 recentRunId: "run-1",
-                committedState: state
-            ),
-            "completed"
-        )
-    }
-
-    func testRunStateResolverFallsBackFromCommittedIdleByRecentRun() {
-        XCTAssertEqual(
-            GaryxThreadSummaryRunStateResolver.resolvedRunState(
-                apiRunState: "running",
-                recentRunId: "run-1",
-                committedState: GaryxTranscriptRunState()
-            ),
-            "completed"
-        )
-        XCTAssertEqual(
-            GaryxThreadSummaryRunStateResolver.resolvedRunState(
-                apiRunState: "running",
-                recentRunId: nil,
-                committedState: GaryxTranscriptRunState()
+                committedState: GaryxTranscriptRunState(
+                    busy: true,
+                    activeRunId: "run-local"
+                )
             ),
             "idle"
         )
-    }
-
-    func testRunStateResolverDoesNotInventRunningFromNonRunningAPIState() {
+        XCTAssertEqual(
+            GaryxThreadSummaryRunStateResolver.resolvedRunState(
+                apiRunState: "running",
+                recentRunId: "run-1",
+                committedState: GaryxTranscriptRunState()
+            ),
+            "running"
+        )
         XCTAssertEqual(
             GaryxThreadSummaryRunStateResolver.resolvedRunState(
                 apiRunState: "completed",

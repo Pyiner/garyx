@@ -253,6 +253,32 @@ final class GaryxHomeProductionAcceptanceTests: XCTestCase {
         XCTAssertLessThanOrEqual(refreshes, 4)
     }
 
+    func testBackgroundCommittedRunReconcilePlannerRefreshesWithoutCandidates() {
+        let planner = GaryxBackgroundCommittedRunReconcilePlanner(minimumRefreshInterval: 15)
+
+        let first = planner.nextDecision(
+            candidateThreadIds: [],
+            now: Date(timeIntervalSince1970: 0)
+        )
+        XCTAssertTrue(first.refreshesThreads)
+        XCTAssertFalse(first.hydratesCandidateThreads)
+        XCTAssertTrue(first.candidateThreadIds.isEmpty)
+
+        let suppressed = planner.nextDecision(
+            candidateThreadIds: [],
+            now: Date(timeIntervalSince1970: 1.5)
+        )
+        XCTAssertFalse(suppressed.refreshesThreads)
+        XCTAssertFalse(suppressed.hydratesCandidateThreads)
+
+        let elapsed = planner.nextDecision(
+            candidateThreadIds: [],
+            now: Date(timeIntervalSince1970: 16)
+        )
+        XCTAssertTrue(elapsed.refreshesThreads)
+        XCTAssertFalse(elapsed.hydratesCandidateThreads)
+    }
+
     @MainActor
     func testShellAndDrawerStoresPublishOnlyForTheirOwnSnapshots() {
         let shellStore = GaryxShellChromeStore()

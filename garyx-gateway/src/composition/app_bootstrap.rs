@@ -217,6 +217,7 @@ impl AppStateBuilder {
 
     /// Override the active-run probe (tests). Production wiring derives the
     /// probe from the bridge in `build`.
+    #[cfg(test)]
     pub(crate) fn with_active_run_probe(mut self, probe: Arc<dyn ActiveRunProbe>) -> Self {
         self.active_run_probe = Some(probe);
         self

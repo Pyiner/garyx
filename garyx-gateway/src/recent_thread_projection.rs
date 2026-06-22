@@ -812,6 +812,7 @@ mod tests {
             &thread_store,
             &transcript_store,
             &garyx_db,
+            &FakeActiveRunProbe { active: false },
         )
         .await;
 

@@ -189,9 +189,8 @@ private struct GaryxRecentThreadWidgetRow: View {
     let metrics: GaryxRecentThreadsWidgetMetrics
 
     private var isRunning: Bool {
-        let activeRun = thread.activeRunId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let runState = thread.runState?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        return !activeRun.isEmpty || runState == "running"
+        return runState == "running"
     }
 
     var body: some View {
