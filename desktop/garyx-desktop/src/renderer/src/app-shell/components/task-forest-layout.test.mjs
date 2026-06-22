@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   buildTaskForestLayout,
   taskForestParentNumberForTest,
+  visibleTaskForestNodeNumbers,
 } from "./task-forest-layout.ts";
 
 function task(overrides) {
@@ -98,4 +99,40 @@ test("summarizes hidden descendants at the depth cap", () => {
   assert.ok(capped);
   assert.equal(capped.hiddenDescendantCount, 1);
   assert.equal(capped.descendantStatusCounts.done, 1);
+});
+
+test("selects visible nodes with viewport overscan", () => {
+  const layout = buildTaskForestLayout(
+    [
+      task({ number: 1 }),
+      task({ number: 2 }),
+      task({ number: 3 }),
+    ],
+    { rootGap: 260 },
+  );
+  const [first, second, third] = layout.nodes.slice().sort((left, right) => left.y - right.y);
+
+  assert.ok(first);
+  assert.ok(second);
+  assert.ok(third);
+  const visible = visibleTaskForestNodeNumbers(layout.nodes, {
+    minX: first.x - 10,
+    minY: first.y - 10,
+    maxX: first.x + first.width + 10,
+    maxY: first.y + first.height + 10,
+  });
+  assert.deepEqual([...visible], [first.task.number]);
+
+  const overscanned = visibleTaskForestNodeNumbers(
+    layout.nodes,
+    {
+      minX: first.x - 10,
+      minY: first.y - 10,
+      maxX: first.x + first.width + 10,
+      maxY: first.y + first.height + 10,
+    },
+    second.y - first.y,
+  );
+  assert.ok(overscanned.has(second.task.number));
+  assert.equal(overscanned.has(third.task.number), false);
 });

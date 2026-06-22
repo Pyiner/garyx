@@ -1714,6 +1714,7 @@ export function AppShell() {
   const conversationRef = useRef<HTMLElement | null>(null);
   const selectedThreadIdRef = useRef<string | null>(null);
   const selectedThreadGenerationRef = useRef(0);
+  const selectThreadRequestSequenceRef = useRef(0);
   const newThreadDraftActiveRef = useRef(false);
   const pendingWorkspacePathRef = useRef<string | null>(null);
   const pendingWorkspaceModeRef = useRef<DesktopWorkspaceMode>("local");
@@ -3976,15 +3977,22 @@ export function AppShell() {
     threadId: string,
     entrySource: ThreadEntrySelectionSource | null = null,
   ): Promise<boolean> {
+    const requestSequence = ++selectThreadRequestSequenceRef.current;
     setError(null);
     setNewThreadDraftActive(false);
 
     try {
       if (!(await ensureThreadOpenable(threadId))) {
+        if (requestSequence !== selectThreadRequestSequenceRef.current) {
+          return true;
+        }
         setError(`Thread not found: ${threadId}`);
         return false;
       }
     } catch (error) {
+      if (requestSequence !== selectThreadRequestSequenceRef.current) {
+        return true;
+      }
       setError(
         error instanceof Error
           ? error.message
@@ -3993,6 +4001,9 @@ export function AppShell() {
       return false;
     }
 
+    if (requestSequence !== selectThreadRequestSequenceRef.current) {
+      return true;
+    }
     setSelectedThreadId(threadId);
     setThreadEntrySelectionSource(entrySource);
     return true;

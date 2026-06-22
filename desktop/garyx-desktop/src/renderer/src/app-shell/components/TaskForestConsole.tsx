@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type MouseEvent,
   type ReactNode,
   type WheelEvent,
 } from "react";
@@ -36,7 +37,10 @@ import type {
 import { getDesktopApi } from "../../platform/desktop-api";
 import { useI18n } from "../../i18n";
 import type { ToastTone } from "../../toast";
-import { buildTaskForestLayout } from "./task-forest-layout";
+import {
+  buildTaskForestLayout,
+  visibleTaskForestNodeNumbers,
+} from "./task-forest-layout";
 
 type TaskForestConsoleProps = {
   agents: DesktopCustomAgent[];
@@ -83,6 +87,11 @@ const STATUS_ORDER: DesktopTaskStatus[] = [
 ];
 
 const REFRESH_INTERVAL_MS = 5000;
+const CULLING_NODE_THRESHOLD = 120;
+const CULLING_OVERSCAN_PX = 360;
+const MINIMAP_PLOT_WIDTH = 150;
+const MINIMAP_PLOT_HEIGHT = 82;
+const SMOOTH_CAMERA_MS = 220;
 
 function displayTaskId(task: DesktopTaskForestNode): string {
   return task.taskId || `#TASK-${task.number}`;
@@ -112,7 +121,19 @@ function initials(value: string): string {
 }
 
 function isActiveRun(task: DesktopTaskForestNode): boolean {
-  return task.runState === "running" || Boolean(task.activeRunId);
+  const runState = task.runState.trim().toLowerCase();
+  if (runState === "running" || runState === "streaming" || runState === "pending") {
+    return true;
+  }
+  if (runState === "idle" || runState === "completed" || isFailedRun(task)) {
+    return false;
+  }
+  return Boolean(task.activeRunId);
+}
+
+function isFailedRun(task: DesktopTaskForestNode): boolean {
+  const runState = task.runState.trim().toLowerCase();
+  return runState === "failed" || runState === "error" || runState === "aborted";
 }
 
 function taskNumberFromId(taskId?: string | null): number | null {
@@ -181,7 +202,14 @@ export function TaskForestConsole({
   const { t } = useI18n();
   const stageRef = useRef<HTMLDivElement | null>(null);
   const requestRef = useRef<Promise<void> | null>(null);
+  const requestSequenceRef = useRef(0);
+  const currentRequestSequenceRef = useRef<number | null>(null);
+  const trailingRequestRef = useRef<Promise<void> | null>(null);
+  const skipResultForRequestRef = useRef<number | null>(null);
   const fittedSignatureRef = useRef<string | null>(null);
+  const mountedRef = useRef(true);
+  const openTaskRequestRef = useRef(0);
+  const smoothCameraTimeoutRef = useRef<number | null>(null);
   const dragRef = useRef<{
     pointerId: number;
     startX: number;
@@ -197,6 +225,8 @@ export function TaskForestConsole({
   const [selectedNumber, setSelectedNumber] = useState<number | null>(null);
   const [cursorNumber, setCursorNumber] = useState<number | null>(null);
   const [camera, setCamera] = useState<Camera>({ x: 48, y: 42, z: 1 });
+  const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
+  const [smoothCamera, setSmoothCamera] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState("");
   const [draft, setDraft] = useState<NewTaskDraft | null>(null);
@@ -211,6 +241,54 @@ export function TaskForestConsole({
       ),
     [workspaces],
   );
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      if (smoothCameraTimeoutRef.current !== null) {
+        window.clearTimeout(smoothCameraTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) {
+      return undefined;
+    }
+    const updateSize = () => {
+      const rect = stage.getBoundingClientRect();
+      setStageSize({
+        width: Math.max(0, rect.width),
+        height: Math.max(0, rect.height),
+      });
+    };
+    updateSize();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateSize);
+      return () => window.removeEventListener("resize", updateSize);
+    }
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(stage);
+    return () => observer.disconnect();
+  }, []);
+
+  const moveCamera = useCallback((nextCamera: Camera, smooth = false) => {
+    if (smoothCameraTimeoutRef.current !== null) {
+      window.clearTimeout(smoothCameraTimeoutRef.current);
+      smoothCameraTimeoutRef.current = null;
+    }
+    setSmoothCamera(smooth);
+    setCamera(nextCamera);
+    if (smooth) {
+      smoothCameraTimeoutRef.current = window.setTimeout(() => {
+        if (mountedRef.current) {
+          setSmoothCamera(false);
+        }
+        smoothCameraTimeoutRef.current = null;
+      }, SMOOTH_CAMERA_MS);
+    }
+  }, []);
 
   const layout = useMemo(() => buildTaskForestLayout(tasks), [tasks]);
   const forestFitSignature = useMemo(() => {
@@ -258,21 +336,25 @@ export function TaskForestConsole({
     return counts;
   }, [tasks]);
 
-  const loadForest = useCallback(
-    async (options?: { silent?: boolean }) => {
-      if (requestRef.current) {
-        return requestRef.current;
-      }
+  const startForestRequest = useCallback(
+    (silent: boolean) => {
+      const requestSequence = ++requestSequenceRef.current;
+      currentRequestSequenceRef.current = requestSequence;
       const request = (async () => {
-        if (!options?.silent) {
+        if (!silent && mountedRef.current) {
           setLoading(true);
         }
-        setError(null);
+        if (mountedRef.current) {
+          setError(null);
+        }
         try {
           const page = await getDesktopApi().listTaskForest({
             includeDone: true,
             sourceBot,
           });
+          if (!mountedRef.current || skipResultForRequestRef.current === requestSequence) {
+            return;
+          }
           setTasks(page.tasks);
           setTotal(page.total);
           setProjectionCurrent(page.projectionCurrent);
@@ -287,14 +369,23 @@ export function TaskForestConsole({
               : page.tasks[0]?.number ?? null,
           );
         } catch (loadError) {
+          if (!mountedRef.current || skipResultForRequestRef.current === requestSequence) {
+            return;
+          }
           setError(
             loadError instanceof Error
               ? loadError.message
               : String(loadError || "Failed to load task forest"),
           );
         } finally {
-          requestRef.current = null;
-          if (!options?.silent) {
+          if (skipResultForRequestRef.current === requestSequence) {
+            skipResultForRequestRef.current = null;
+          }
+          if (currentRequestSequenceRef.current === requestSequence) {
+            currentRequestSequenceRef.current = null;
+            requestRef.current = null;
+          }
+          if (!silent && mountedRef.current) {
             setLoading(false);
           }
         }
@@ -305,8 +396,32 @@ export function TaskForestConsole({
     [sourceBot],
   );
 
+  const loadForest = useCallback(
+    (options?: { silent?: boolean; force?: boolean }) => {
+      const silent = Boolean(options?.silent);
+      const currentRequest = requestRef.current;
+      if (currentRequest) {
+        if (!options?.force) {
+          return currentRequest;
+        }
+        skipResultForRequestRef.current = currentRequestSequenceRef.current;
+        if (!trailingRequestRef.current) {
+          trailingRequestRef.current = currentRequest
+            .catch(() => undefined)
+            .then(() => startForestRequest(silent))
+            .finally(() => {
+              trailingRequestRef.current = null;
+            });
+        }
+        return trailingRequestRef.current;
+      }
+      return startForestRequest(silent);
+    },
+    [startForestRequest],
+  );
+
   useEffect(() => {
-    void loadForest();
+    void loadForest({ force: true });
   }, [loadForest]);
 
   useEffect(() => {
@@ -331,13 +446,19 @@ export function TaskForestConsole({
     const rect = stage.getBoundingClientRect();
     const width = Math.max(1, layout.bbox.maxX - layout.bbox.minX);
     const height = Math.max(1, layout.bbox.maxY - layout.bbox.minY);
-    const z = Math.min(1.15, Math.max(0.34, Math.min((rect.width - 96) / width, (rect.height - 96) / height)));
-    setCamera({
-      z,
-      x: (rect.width - width * z) / 2 - layout.bbox.minX * z,
-      y: (rect.height - height * z) / 2 - layout.bbox.minY * z,
-    });
-  }, [layout]);
+    const z = Math.min(
+      1.15,
+      Math.max(0.34, Math.min((rect.width - 96) / width, (rect.height - 96) / height)),
+    );
+    moveCamera(
+      {
+        z,
+        x: (rect.width - width * z) / 2 - layout.bbox.minX * z,
+        y: (rect.height - height * z) / 2 - layout.bbox.minY * z,
+      },
+      true,
+    );
+  }, [layout, moveCamera]);
 
   const focusTask = useCallback(
     (task: DesktopTaskForestNode) => {
@@ -348,13 +469,16 @@ export function TaskForestConsole({
       }
       const rect = stage.getBoundingClientRect();
       const z = Math.max(0.82, Math.min(1.15, camera.z));
-      setCamera({
-        z,
-        x: rect.width / 2 - (node.x + node.width / 2) * z,
-        y: rect.height / 2 - (node.y + node.height / 2) * z,
-      });
+      moveCamera(
+        {
+          z,
+          x: rect.width / 2 - (node.x + node.width / 2) * z,
+          y: rect.height / 2 - (node.y + node.height / 2) * z,
+        },
+        true,
+      );
     },
-    [camera.z, nodesByNumber],
+    [camera.z, moveCamera, nodesByNumber],
   );
 
   useEffect(() => {
@@ -370,10 +494,15 @@ export function TaskForestConsole({
 
   const openTask = useCallback(
     async (task: DesktopTaskForestNode) => {
+      const requestSequence = ++openTaskRequestRef.current;
       setSelectedNumber(task.number);
       setCursorNumber(task.number);
       const opened = await onOpenThreadInPanel(task.threadId);
+      if (requestSequence !== openTaskRequestRef.current) {
+        return;
+      }
       if (!opened) {
+        setSelectedNumber((current) => (current === task.number ? null : current));
         onToast(t("Thread not found."), "error");
       }
     },
@@ -455,11 +584,11 @@ export function TaskForestConsole({
   function zoomAt(event: WheelEvent<HTMLDivElement>) {
     if (!event.ctrlKey && !event.metaKey) {
       event.preventDefault();
-      setCamera((current) => ({
-        ...current,
-        x: current.x - event.deltaX,
-        y: current.y - event.deltaY,
-      }));
+      moveCamera({
+        ...camera,
+        x: camera.x - event.deltaX,
+        y: camera.y - event.deltaY,
+      });
       return;
     }
     event.preventDefault();
@@ -467,7 +596,7 @@ export function TaskForestConsole({
     const nextZ = Math.max(0.32, Math.min(1.5, camera.z * (event.deltaY > 0 ? 0.9 : 1.1)));
     const worldX = (event.clientX - rect.left - camera.x) / camera.z;
     const worldY = (event.clientY - rect.top - camera.y) / camera.z;
-    setCamera({
+    moveCamera({
       z: nextZ,
       x: event.clientX - rect.left - worldX * nextZ,
       y: event.clientY - rect.top - worldY * nextZ,
@@ -500,7 +629,7 @@ export function TaskForestConsole({
               })(),
       });
       setDraft(null);
-      await loadForest({ silent: true });
+      await loadForest({ silent: true, force: true });
       onToast(t("Task created."), "success");
     } catch (createError) {
       onToast(
@@ -522,7 +651,7 @@ export function TaskForestConsole({
         taskId: displayTaskId(selectedTask),
         status,
       });
-      await loadForest({ silent: true });
+      await loadForest({ silent: true, force: true });
       onToast(t("Task updated."), "success");
     } catch (statusError) {
       onToast(
@@ -554,6 +683,102 @@ export function TaskForestConsole({
   const worldWidth = Math.max(1, layout.bbox.maxX + 80);
   const worldHeight = Math.max(1, layout.bbox.maxY + 80);
   const selectedRootTask = selectedPath[0] ?? selectedTask;
+  const birdseye = camera.z < 0.58;
+  const worldViewport = useMemo(() => {
+    if (!stageSize.width || !stageSize.height || camera.z <= 0) {
+      return null;
+    }
+    return {
+      minX: -camera.x / camera.z,
+      minY: -camera.y / camera.z,
+      maxX: (stageSize.width - camera.x) / camera.z,
+      maxY: (stageSize.height - camera.y) / camera.z,
+    };
+  }, [camera, stageSize.height, stageSize.width]);
+  const visibleNodeNumbers = useMemo(() => {
+    if (!worldViewport || layout.nodes.length <= CULLING_NODE_THRESHOLD) {
+      return null;
+    }
+    return visibleTaskForestNodeNumbers(
+      layout.nodes,
+      worldViewport,
+      CULLING_OVERSCAN_PX / camera.z,
+    );
+  }, [camera.z, layout.nodes, worldViewport]);
+  const visibleNodes = useMemo(
+    () =>
+      visibleNodeNumbers
+        ? layout.nodes.filter((node) => visibleNodeNumbers.has(node.task.number))
+        : layout.nodes,
+    [layout.nodes, visibleNodeNumbers],
+  );
+  const visibleEdges = useMemo(
+    () =>
+      visibleNodeNumbers
+        ? layout.edges.filter(
+            (edge) => visibleNodeNumbers.has(edge.from) || visibleNodeNumbers.has(edge.to),
+          )
+        : layout.edges,
+    [layout.edges, visibleNodeNumbers],
+  );
+  const minimapViewport = useMemo(() => {
+    if (!worldViewport) {
+      return null;
+    }
+    const bboxWidth = Math.max(1, layout.bbox.maxX - layout.bbox.minX);
+    const bboxHeight = Math.max(1, layout.bbox.maxY - layout.bbox.minY);
+    const rawLeft = ((worldViewport.minX - layout.bbox.minX) / bboxWidth) * MINIMAP_PLOT_WIDTH;
+    const rawTop = ((worldViewport.minY - layout.bbox.minY) / bboxHeight) * MINIMAP_PLOT_HEIGHT;
+    const rawRight = ((worldViewport.maxX - layout.bbox.minX) / bboxWidth) * MINIMAP_PLOT_WIDTH;
+    const rawBottom =
+      ((worldViewport.maxY - layout.bbox.minY) / bboxHeight) * MINIMAP_PLOT_HEIGHT;
+    const left = Math.max(0, Math.min(MINIMAP_PLOT_WIDTH, rawLeft));
+    const top = Math.max(0, Math.min(MINIMAP_PLOT_HEIGHT, rawTop));
+    const right = Math.max(0, Math.min(MINIMAP_PLOT_WIDTH, rawRight));
+    const bottom = Math.max(0, Math.min(MINIMAP_PLOT_HEIGHT, rawBottom));
+    if (right <= 0 || bottom <= 0 || left >= MINIMAP_PLOT_WIDTH || top >= MINIMAP_PLOT_HEIGHT) {
+      return null;
+    }
+    return {
+      left,
+      top,
+      width: Math.max(4, right - left),
+      height: Math.max(4, bottom - top),
+    };
+  }, [layout.bbox, worldViewport]);
+
+  const centerMinimapAt = useCallback(
+    (event: MouseEvent<HTMLDivElement>) => {
+      if (!stageSize.width || !stageSize.height) {
+        return;
+      }
+      const rect = event.currentTarget.getBoundingClientRect();
+      const plotX = Math.max(
+        0,
+        Math.min(MINIMAP_PLOT_WIDTH, ((event.clientX - rect.left) / rect.width) * MINIMAP_PLOT_WIDTH),
+      );
+      const plotY = Math.max(
+        0,
+        Math.min(
+          MINIMAP_PLOT_HEIGHT,
+          ((event.clientY - rect.top) / rect.height) * MINIMAP_PLOT_HEIGHT,
+        ),
+      );
+      const bboxWidth = Math.max(1, layout.bbox.maxX - layout.bbox.minX);
+      const bboxHeight = Math.max(1, layout.bbox.maxY - layout.bbox.minY);
+      const worldX = layout.bbox.minX + (plotX / MINIMAP_PLOT_WIDTH) * bboxWidth;
+      const worldY = layout.bbox.minY + (plotY / MINIMAP_PLOT_HEIGHT) * bboxHeight;
+      moveCamera(
+        {
+          z: camera.z,
+          x: stageSize.width / 2 - worldX * camera.z,
+          y: stageSize.height / 2 - worldY * camera.z,
+        },
+        true,
+      );
+    },
+    [camera.z, layout.bbox, moveCamera, stageSize.height, stageSize.width],
+  );
 
   return (
     <div
@@ -609,7 +834,7 @@ export function TaskForestConsole({
           <button
             className="task-forest-icon-button"
             disabled={loading}
-            onClick={() => void loadForest()}
+            onClick={() => void loadForest({ force: true })}
             title={t("Refresh")}
             type="button"
           >
@@ -659,7 +884,7 @@ export function TaskForestConsole({
           if (!drag || drag.pointerId !== event.pointerId) {
             return;
           }
-          setCamera({
+          moveCamera({
             ...drag.camera,
             x: drag.camera.x + event.clientX - drag.startX,
             y: drag.camera.y + event.clientY - drag.startY,
@@ -682,7 +907,7 @@ export function TaskForestConsole({
           <div className="task-forest-state">{t("No tasks yet.")}</div>
         ) : null}
         <div
-          className="task-forest-world"
+          className={`task-forest-world ${birdseye ? "birdseye" : ""} ${smoothCamera ? "smooth-camera" : ""}`}
           role="tree"
           style={{
             width: worldWidth,
@@ -697,7 +922,7 @@ export function TaskForestConsole({
             viewBox={`0 0 ${worldWidth} ${worldHeight}`}
             width={worldWidth}
           >
-            {layout.edges.map((edge) => (
+            {visibleEdges.map((edge) => (
               <path
                 className={`task-forest-edge ${edge.active ? "active" : ""}`}
                 d={edge.path}
@@ -705,15 +930,16 @@ export function TaskForestConsole({
               />
             ))}
           </svg>
-          {layout.nodes.map((node) => {
+          {visibleNodes.map((node) => {
             const task = node.task;
             const meta = STATUS_META[task.status];
             const dimmed = Boolean(statusFilter && task.status !== statusFilter);
             const active = isActiveRun(task);
+            const failed = isFailedRun(task);
             return (
               <button
                 aria-current={selectedNumber === task.number ? "true" : undefined}
-                className={`task-forest-node tone-${meta.tone} ${selectedNumber === task.number ? "selected" : ""} ${cursorNumber === task.number ? "cursor" : ""} ${active ? "active-run" : ""} ${dimmed ? "dimmed" : ""}`}
+                className={`task-forest-node tone-${meta.tone} ${selectedNumber === task.number ? "selected" : ""} ${cursorNumber === task.number ? "cursor" : ""} ${active ? "active-run" : ""} ${failed ? "failed-run" : ""} ${dimmed ? "dimmed" : ""}`}
                 key={task.threadId}
                 onClick={() => void openTask(task)}
                 role="treeitem"
@@ -754,7 +980,11 @@ export function TaskForestConsole({
           <span>{t("{count} tasks", { count: total || tasks.length })}</span>
           <span>{activeNodeCount ? t("{count} running", { count: activeNodeCount }) : t("Idle")}</span>
         </div>
-        <div className="task-forest-minimap" aria-hidden>
+        <div
+          aria-hidden
+          className="task-forest-minimap"
+          onClick={centerMinimapAt}
+        >
           {layout.nodes.map((node) => {
             const left =
               ((node.x - layout.bbox.minX) /
@@ -766,12 +996,23 @@ export function TaskForestConsole({
               82;
             return (
               <span
-                className={`tone-${STATUS_META[node.task.status].tone} ${isActiveRun(node.task) ? "active" : ""} ${statusFilter && node.task.status !== statusFilter ? "dimmed" : ""}`}
+                className={`tone-${STATUS_META[node.task.status].tone} ${isActiveRun(node.task) ? "active" : ""} ${isFailedRun(node.task) ? "failed-run" : ""} ${statusFilter && node.task.status !== statusFilter ? "dimmed" : ""}`}
                 key={node.task.threadId}
                 style={{ left, top }}
               />
             );
           })}
+          {minimapViewport ? (
+            <div
+              className="task-forest-minimap-viewport"
+              style={{
+                left: minimapViewport.left,
+                top: minimapViewport.top,
+                width: minimapViewport.width,
+                height: minimapViewport.height,
+              }}
+            />
+          ) : null}
         </div>
       </section>
 

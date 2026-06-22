@@ -22417,6 +22417,10 @@ button.new-thread-dreams-scan:hover {
   will-change: transform;
 }
 
+.task-forest-world.smooth-camera {
+  transition: transform 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
 .task-forest-edges {
   overflow: visible;
   pointer-events: none;
@@ -22498,6 +22502,29 @@ button.new-thread-dreams-scan:hover {
 .task-forest-node.active-run {
   background:
     linear-gradient(180deg, var(--color-token-bg-success), var(--color-token-bg-primary) 70%);
+}
+
+.task-forest-node.failed-run,
+.task-forest-minimap .failed-run {
+  --task-forest-tone: var(--color-token-error-foreground);
+  --task-forest-tone-bg: var(--color-token-bg-error);
+}
+
+.task-forest-node.failed-run {
+  border-color: color-mix(in srgb, var(--color-token-error-foreground) 42%, var(--color-token-border));
+  background:
+    linear-gradient(180deg, var(--color-token-bg-error), var(--color-token-bg-primary) 72%);
+}
+
+.task-forest-world.birdseye .task-forest-node {
+  gap: 4px;
+  padding-top: 9px;
+  padding-bottom: 9px;
+}
+
+.task-forest-world.birdseye .task-forest-node-title,
+.task-forest-world.birdseye .task-forest-node-meta {
+  opacity: 0;
 }
 
 .task-forest-node-row,
@@ -22613,6 +22640,7 @@ button.new-thread-dreams-scan:hover {
   width: 170px;
   height: 108px;
   border-radius: 8px;
+  cursor: crosshair;
 }
 
 .task-forest-minimap span {
@@ -22629,6 +22657,15 @@ button.new-thread-dreams-scan:hover {
 
 .task-forest-minimap span.dimmed {
   opacity: 0.22;
+}
+
+.task-forest-minimap-viewport {
+  position: absolute;
+  border: 1px solid var(--color-token-focus-border);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-token-row-selected) 36%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-token-bg-primary) 70%, transparent);
+  pointer-events: none;
 }
 
 .task-forest-state {
@@ -22866,6 +22903,7 @@ button.new-thread-dreams-scan:hover {
     animation: none;
   }
 
+  .task-forest-world.smooth-camera,
   .task-forest-node,
   .task-forest-chip,
   .task-forest-button,

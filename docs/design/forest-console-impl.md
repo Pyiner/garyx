@@ -156,8 +156,9 @@ type TaskForestConsoleProps = {
 ```
 
 The component owns forest-only state: camera transform, selected/cursor node,
-status filter, command palette, minimap viewport, collapse flags, and new-task
-modal state. It does not own transcript/composer state.
+status filter, command palette, minimap viewport, and new-task modal state. It
+does not own transcript/composer state. Explicit subtree collapse remains a
+follow-up; the v1 tree uses the three-level cap plus descendant rollups.
 
 ### AppShell integration
 
@@ -247,9 +248,11 @@ Performance:
 - Layout runs in `useMemo` over the forest page.
 - Render only nodes intersecting the viewport plus overscan when task count is
   large; otherwise render all nodes for crisp hover and keyboard behavior.
-- At zoom below `0.58`, switch cards to birdseye LOD, hide secondary text, and
-  re-anchor edges to the compact card size.
-- Minimap draws to a canvas from layout positions, not DOM measurement.
+- At zoom below `0.58`, switch cards to birdseye LOD and hide secondary text
+  while keeping stable layout geometry so panning/zooming does not relayout the
+  forest.
+- Minimap draws status dots and the viewport rectangle from layout positions,
+  not DOM measurement.
 
 ## Visual Mapping
 
@@ -315,8 +318,9 @@ Command palette:
 
 Task actions:
 
-- Root task creation opens the shared task form with no `source`.
-- Child task creation opens the same form with the selected task as source:
+- Root task creation opens the forest-scoped compact task form with no `source`.
+- Child task creation opens the same compact form with the selected task as
+  source:
 
 ```ts
 source: {

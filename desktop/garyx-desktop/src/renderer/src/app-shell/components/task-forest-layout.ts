@@ -29,6 +29,13 @@ export type TaskForestLayout = {
   };
 };
 
+export type TaskForestViewport = {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+};
+
 type BuildTaskForestLayoutOptions = {
   maxDepth?: number;
   nodeWidth?: number;
@@ -82,7 +89,14 @@ function compareTasks(left: DesktopTaskForestNode, right: DesktopTaskForestNode)
 }
 
 function isRunning(task: DesktopTaskForestNode): boolean {
-  return task.runState === "running" || Boolean(task.activeRunId);
+  const runState = task.runState.trim().toLowerCase();
+  if (runState === "running" || runState === "streaming" || runState === "pending") {
+    return true;
+  }
+  if (runState === "idle" || runState === "completed" || runState === "failed" || runState === "error" || runState === "aborted") {
+    return false;
+  }
+  return Boolean(task.activeRunId);
 }
 
 function roundedOrthogonalPath(
@@ -282,4 +296,24 @@ export function buildTaskForestLayout(
 
 export function taskForestParentNumberForTest(task: DesktopTaskForestNode): number | null {
   return parentNumberFor(task);
+}
+
+export function visibleTaskForestNodeNumbers(
+  nodes: TaskForestLayoutNode[],
+  viewport: TaskForestViewport,
+  overscan = 0,
+): Set<number> {
+  const minX = viewport.minX - overscan;
+  const minY = viewport.minY - overscan;
+  const maxX = viewport.maxX + overscan;
+  const maxY = viewport.maxY + overscan;
+  const visible = new Set<number>();
+  for (const node of nodes) {
+    const nodeMaxX = node.x + node.width;
+    const nodeMaxY = node.y + node.height;
+    if (nodeMaxX >= minX && node.x <= maxX && nodeMaxY >= minY && node.y <= maxY) {
+      visible.add(node.task.number);
+    }
+  }
+  return visible;
 }
