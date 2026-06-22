@@ -275,8 +275,42 @@ actor HomeProjectionActor {
             latestDifference = result.difference ?? latestDifference
         }
         previousCapture = capture
-        snapshotEmitCount += 1
+        return finishBoundary(
+            transactionId: transactionId,
+            latestDifference: latestDifference,
+            liveLegacySnapshot: liveLegacySnapshot
+        )
+    }
 
+    func applyCommittedRunStateDelta(
+        threadId: String,
+        isRunning: Bool,
+        transactionId: UInt64
+    ) -> HomeProjectionBoundaryResult {
+        boundaryEpoch += 1
+        let result = HomeProjectionReducer.reduce(
+            state,
+            .runStateDelta(
+                source: .committedRunState,
+                threadId: threadId,
+                status: HomeProjectionRunStateStatus(isRunning: isRunning),
+                basedOnSeq: boundaryEpoch
+            )
+        )
+        state = result.state
+        return finishBoundary(
+            transactionId: transactionId,
+            latestDifference: result.difference,
+            liveLegacySnapshot: nil
+        )
+    }
+
+    private func finishBoundary(
+        transactionId: UInt64,
+        latestDifference: CollectionDifference<String>?,
+        liveLegacySnapshot: GaryxHomeThreadListSnapshot?
+    ) -> HomeProjectionBoundaryResult {
+        snapshotEmitCount += 1
         let actorCheckpoint = HomeProjectionCheckpoint(snapshot: state.snapshot)
         _ = checkpointStore.apply(state.legacyCheckpointInput())
         let legacyCheckpoint = HomeProjectionCheckpoint(snapshot: checkpointStore.snapshot)
@@ -312,10 +346,14 @@ actor HomeProjectionActor {
 
 @MainActor
 final class HomeProjectionGateway {
+    private enum BoundaryPayload: Sendable {
+        case capture(HomeProjectionCapture, GaryxHomeThreadListSnapshot?)
+        case committedRunStateDelta(threadId: String, isRunning: Bool)
+    }
+
     private struct Boundary: Sendable {
         var transactionId: UInt64
-        var capture: HomeProjectionCapture
-        var liveLegacySnapshot: GaryxHomeThreadListSnapshot?
+        var payload: BoundaryPayload
     }
 
     private let actor: HomeProjectionActor
@@ -372,15 +410,21 @@ final class HomeProjectionGateway {
         if transactionDepth > 0, let transactionId = activeTransactionId {
             pendingTransactionBoundary = Boundary(
                 transactionId: transactionId,
-                capture: capture,
-                liveLegacySnapshot: liveLegacySnapshot
+                payload: .capture(capture, liveLegacySnapshot)
             )
             return
         }
         enqueue(Boundary(
             transactionId: allocateTransactionId(),
-            capture: capture,
-            liveLegacySnapshot: liveLegacySnapshot
+            payload: .capture(capture, liveLegacySnapshot)
+        ))
+    }
+
+    func captureCommittedRunStateDelta(threadId: String, isRunning: Bool) {
+        guard isEnabled else { return }
+        enqueue(Boundary(
+            transactionId: allocateTransactionId(),
+            payload: .committedRunStateDelta(threadId: threadId, isRunning: isRunning)
         ))
     }
 
@@ -405,11 +449,21 @@ final class HomeProjectionGateway {
         guard inFlightTask == nil, let boundary = queuedBoundary else { return }
         queuedBoundary = nil
         inFlightTask = Task { [actor] in
-            let result = await actor.applyBoundary(
-                capture: boundary.capture,
-                transactionId: boundary.transactionId,
-                liveLegacySnapshot: boundary.liveLegacySnapshot
-            )
+            let result: HomeProjectionBoundaryResult
+            switch boundary.payload {
+            case let .capture(capture, liveLegacySnapshot):
+                result = await actor.applyBoundary(
+                    capture: capture,
+                    transactionId: boundary.transactionId,
+                    liveLegacySnapshot: liveLegacySnapshot
+                )
+            case let .committedRunStateDelta(threadId, isRunning):
+                result = await actor.applyCommittedRunStateDelta(
+                    threadId: threadId,
+                    isRunning: isRunning,
+                    transactionId: boundary.transactionId
+                )
+            }
             await MainActor.run { [weak self] in
                 self?.finishDrain(result)
             }

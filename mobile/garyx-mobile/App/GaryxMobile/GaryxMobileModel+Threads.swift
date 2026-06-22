@@ -680,10 +680,12 @@ extension GaryxMobileModel {
         invalidatesPendingThreadOpen: Bool = true,
         source: GaryxMobilePanelOpenSource = .replace
     ) async {
+        let reopeningSelectedThreadFromHome = isHomeVisible && selectedThread?.id == thread.id
         showSelectedThread(
             thread,
             invalidatesPendingThreadOpen: invalidatesPendingThreadOpen,
-            source: source
+            source: source,
+            startsSelectedThreadStream: !reopeningSelectedThreadFromHome
         )
         // Bound the open to the newest ~threadHistoryUserQueryLimit user turns: always
         // refresh from the gateway, which returns the forward delta when the cached
@@ -693,12 +695,16 @@ extension GaryxMobileModel {
         // pages in on scroll-up. The stream supersedes the reconcile poll and falls
         // back to it (and the after_index HTTP path) on failure.
         await loadSelectedThreadHistory()
+        if reopeningSelectedThreadFromHome {
+            ensureSelectedThreadStreamForVisibleConversation()
+        }
     }
 
     func showSelectedThread(
         _ thread: GaryxThreadSummary,
         invalidatesPendingThreadOpen: Bool = true,
-        source: GaryxMobilePanelOpenSource = .replace
+        source: GaryxMobilePanelOpenSource = .replace,
+        startsSelectedThreadStream: Bool = true
     ) {
         if invalidatesPendingThreadOpen {
             invalidatePendingThreadOpen()
@@ -720,14 +726,25 @@ extension GaryxMobileModel {
             cancelSelectedThreadReconcileLoop()
             resetSelectedThreadHistoryPagination()
         }
+        let shouldSuppressStreamPolicy = !startsSelectedThreadStream
+        if shouldSuppressStreamPolicy {
+            suppressesSelectedThreadStreamPolicy = true
+        }
         selectedThread = thread
+        if shouldSuppressStreamPolicy {
+            suppressesSelectedThreadStreamPolicy = false
+        }
         if !thread.excludeFromRecent {
             persistLastOpenedThreadId(thread.id)
         }
         clearPendingNewThreadAgentTarget()
         clearPendingBotDraft()
         draftThreadTitle = thread.title
-        openConversation(source: source, invalidatesPendingThreadOpen: false)
+        openConversation(
+            source: source,
+            invalidatesPendingThreadOpen: false,
+            startsSelectedThreadStream: startsSelectedThreadStream
+        )
         if previousThreadId != thread.id {
             let inMemory = cachedMessages(for: thread.id)
             if inMemory.isEmpty {
@@ -1310,6 +1327,7 @@ extension GaryxMobileModel {
             return
         }
         runStateByThread[threadId] = state
+        emitCommittedRunStateProjectionDelta(threadId: threadId, state: state)
         applyThreadRunStateSummary(threadId: threadId, state: state)
 
         if previous.lastUserAckSeq != state.lastUserAckSeq
@@ -1341,6 +1359,10 @@ extension GaryxMobileModel {
             runTracker.completeCommittedRun(threadId: threadId)
         }
         refreshHomeThreadsAfterLocalRunStateChange()
+    }
+
+    func emitCommittedRunStateProjectionDelta(threadId: String, state: GaryxTranscriptRunState) {
+        homeProjectionGateway.captureCommittedRunStateDelta(threadId: threadId, isRunning: state.busy)
     }
 
     func summaryWithCommittedRunState(_ thread: GaryxThreadSummary) -> GaryxThreadSummary {
