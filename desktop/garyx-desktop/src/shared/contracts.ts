@@ -267,6 +267,8 @@ export interface DesktopTaskForestPage {
   projectionCurrent: boolean;
 }
 
+export type DesktopTaskForestScope = 'active' | 'all';
+
 export interface DesktopDreamSpan {
   spanId: string;
   dreamId: string;
@@ -336,7 +338,9 @@ export interface ListTasksInput {
   offset?: number;
 }
 
-export interface ListTaskForestInput extends ListTasksInput {}
+export interface ListTaskForestInput extends ListTasksInput {
+  scope?: DesktopTaskForestScope;
+}
 
 export interface GetTaskInput {
   taskId: string;

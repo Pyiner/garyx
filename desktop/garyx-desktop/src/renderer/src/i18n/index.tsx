@@ -399,6 +399,7 @@ const zhCN: Record<string, string> = {
   'Delete task {taskId}? The task will leave task lists, but the backing thread and transcript stay available.': '删除任务 {taskId}？该任务会从任务列表中移除，但对应线程和转录仍会保留。',
   'Tasks are disabled in the gateway config.': '网关配置中尚未启用任务功能。',
   'No tasks yet.': '还没有任务。',
+  'No active tasks right now.': '当前没有活跃任务。',
   'No tasks from this thread yet.': '当前线程还没有创建任务。',
   'Open a thread to see its tasks.': '打开线程后查看它创建的任务。',
   'No {status} tasks.': '没有{status}任务。',

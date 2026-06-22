@@ -25,7 +25,7 @@ use uuid::Uuid;
 use crate::agent_identity::{
     default_workspace_dir_from_agent_reference, resolve_agent_reference_from_stores,
 };
-use crate::garyx_db::GaryxDbError;
+use crate::garyx_db::{GaryxDbError, TaskForestScope};
 use crate::internal_inbound::{InternalDispatchOptions, dispatch_internal_message_to_thread};
 use crate::server::AppState;
 use crate::task_projection::backfill_task_projection_if_incomplete;
@@ -182,6 +182,8 @@ pub struct TaskListQuery {
     pub source_bot_id: Option<String>,
     #[serde(default)]
     pub include_done: bool,
+    #[serde(default)]
+    pub scope: TaskForestScope,
     #[serde(default)]
     pub limit: Option<usize>,
     #[serde(default)]
@@ -556,6 +558,7 @@ pub async fn list_task_forest(
     if task_service(&state).is_none() {
         return tasks_disabled();
     }
+    let scope = query.scope;
     let filter = match task_list_filter(query) {
         Ok(filter) => filter,
         Err(error) => return task_error_response(error),
@@ -572,7 +575,7 @@ pub async fn list_task_forest(
         Ok(current) => current,
         Err(error) => return task_projection_error_response(error),
     };
-    match state.ops.garyx_db.list_task_forest(&filter) {
+    match state.ops.garyx_db.list_task_forest(&filter, scope) {
         Ok((tasks, total)) => (
             StatusCode::OK,
             Json(json!({
@@ -1792,6 +1795,7 @@ mod tests {
                 source_task_id: None,
                 source_bot_id: None,
                 include_done: true,
+                scope: TaskForestScope::All,
                 limit: None,
                 offset: None,
             }),

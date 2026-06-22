@@ -166,50 +166,83 @@ export function buildTaskForestLayout(
     children.sort(compareTasks);
   }
 
-  const subtreeCounts = new Map<number, Record<DesktopTaskStatus, number>>();
-  const subtreeSizes = new Map<number, number>();
+  const subtreeValues = new Map<
+    number,
+    { size: number; counts: Record<DesktopTaskStatus, number> }
+  >();
+  const visiting = new Set<number>();
 
-  function collect(task: DesktopTaskForestNode, seen = new Set<number>()): {
+  function collect(task: DesktopTaskForestNode): {
     size: number;
     counts: Record<DesktopTaskStatus, number>;
   } {
-    if (seen.has(task.number)) {
+    const memoized = subtreeValues.get(task.number);
+    if (memoized) {
+      return memoized;
+    }
+    if (visiting.has(task.number)) {
       return { size: 0, counts: { ...EMPTY_STATUS_COUNTS } };
     }
-    seen.add(task.number);
+    visiting.add(task.number);
     let size = 1;
     let counts = { ...EMPTY_STATUS_COUNTS };
     for (const child of childrenByParent.get(task.number) ?? []) {
+      if (visiting.has(child.number)) {
+        continue;
+      }
       counts[child.status] += 1;
-      const childValue = collect(child, new Set(seen));
+      const childValue = collect(child);
       size += childValue.size;
       counts = mergeCounts(counts, childValue.counts);
     }
-    subtreeCounts.set(task.number, counts);
-    subtreeSizes.set(task.number, size);
-    return { size, counts };
+    visiting.delete(task.number);
+    const value = { size, counts };
+    subtreeValues.set(task.number, value);
+    return value;
   }
 
   for (const root of roots) {
     collect(root);
+  }
+  for (const task of tasks) {
+    if (!subtreeValues.has(task.number)) {
+      roots.push(task);
+      collect(task);
+    }
   }
 
   roots.sort((left, right) => {
     const runningDelta = Number(isRunning(right)) - Number(isRunning(left));
     return (
       runningDelta ||
-      (subtreeSizes.get(right.number) ?? 1) - (subtreeSizes.get(left.number) ?? 1) ||
+      (subtreeValues.get(right.number)?.size ?? 1) -
+        (subtreeValues.get(left.number)?.size ?? 1) ||
       updatedTime(right) - updatedTime(left) ||
       left.number - right.number
     );
   });
 
   const nodes: TaskForestLayoutNode[] = [];
+  const placed = new Set<number>();
   let nextY = 24;
 
-  function place(task: DesktopTaskForestNode, depth: number, yHint: number): number {
+  function place(
+    task: DesktopTaskForestNode,
+    depth: number,
+    yHint: number,
+    path = new Set<number>(),
+  ): number {
+    if (placed.has(task.number) || path.has(task.number)) {
+      return yHint;
+    }
+    path.add(task.number);
     const visibleChildren =
-      depth + 1 < maxDepth ? childrenByParent.get(task.number) ?? [] : [];
+      depth + 1 < maxDepth
+        ? (childrenByParent.get(task.number) ?? []).filter(
+            (child) => !path.has(child.number),
+          )
+        : [];
+    const subtree = subtreeValues.get(task.number);
     if (visibleChildren.length === 0) {
       nodes.push({
         task,
@@ -219,16 +252,18 @@ export function buildTaskForestLayout(
         height: nodeHeight,
         depth,
         hiddenDescendantCount:
-          depth + 1 >= maxDepth ? Math.max(0, (subtreeSizes.get(task.number) ?? 1) - 1) : 0,
-        descendantStatusCounts: subtreeCounts.get(task.number) ?? { ...EMPTY_STATUS_COUNTS },
+          depth + 1 >= maxDepth ? Math.max(0, (subtree?.size ?? 1) - 1) : 0,
+        descendantStatusCounts: subtree?.counts ?? { ...EMPTY_STATUS_COUNTS },
       });
+      placed.add(task.number);
+      path.delete(task.number);
       return yHint + nodeHeight + rowGap;
     }
 
     let childY = yHint;
     const childStart = childY;
     for (const child of visibleChildren) {
-      childY = place(child, depth + 1, childY);
+      childY = place(child, depth + 1, childY, path);
     }
     const childEnd = childY - rowGap;
     const y = Math.max(yHint, childStart + (childEnd - childStart - nodeHeight) / 2);
@@ -240,8 +275,10 @@ export function buildTaskForestLayout(
       height: nodeHeight,
       depth,
       hiddenDescendantCount: 0,
-      descendantStatusCounts: subtreeCounts.get(task.number) ?? { ...EMPTY_STATUS_COUNTS },
+      descendantStatusCounts: subtree?.counts ?? { ...EMPTY_STATUS_COUNTS },
     });
+    placed.add(task.number);
+    path.delete(task.number);
     return Math.max(childY, y + nodeHeight + rowGap);
   }
 
