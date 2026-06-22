@@ -208,6 +208,14 @@ extension GaryxMobileModel {
         return renderSnapshot(for: threadId)?.tailActivity == .thinking
     }
 
+    /// Quota / rate-limit context for the selected thread's most recent run,
+    /// when it terminated because the provider's usage quota was exhausted. The
+    /// conversation view renders a countdown banner at the transcript tail.
+    var selectedThreadRateLimit: GaryxRenderRateLimit? {
+        guard let threadId = selectedThread?.id else { return nil }
+        return renderSnapshot(for: threadId)?.rateLimit
+    }
+
     func isThreadBusy(_ threadId: String) -> Bool {
         runTracker.isThreadBusy(threadId)
             || runStateByThread[threadId]?.busy == true

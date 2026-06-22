@@ -76,6 +76,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { buildAgentTargetOptions, type AgentTargetOption } from './app-shell/agent-options';
 import { AddBotDialog } from './app-shell/components/AddBotDialog';
 import { AgentOptionAvatar } from './app-shell/components/AgentOptionAvatar';
+import { GatewayHeadersEditor } from './GatewayHeadersEditor';
 import { WorkspacePathPicker } from './components/WorkspacePathPicker';
 import { MoreDotsIcon } from './app-shell/icons';
 import { ChannelPluginCatalogPanel } from './channel-plugins/ChannelPluginCatalogPanel';
@@ -147,12 +148,14 @@ type GatewaySettingsPanelProps = {
     label?: string;
     gatewayUrl: string;
     gatewayAuthToken?: string;
+    gatewayHeaders?: string;
   }) => Promise<void>;
   onUpdateGatewayProfile?: (input: {
     profileId: string;
     label?: string;
     gatewayUrl: string;
     gatewayAuthToken?: string;
+    gatewayHeaders?: string;
   }) => Promise<void>;
   onDeleteGatewayProfile?: (profileId: string) => Promise<void>;
   onMutateGatewayDraft?: DraftMutator;
@@ -1241,12 +1244,14 @@ function GatewayProfileDialog({
     label?: string;
     gatewayUrl: string;
     gatewayAuthToken?: string;
+    gatewayHeaders?: string;
   }) => Promise<void>;
 }) {
   const { t } = useI18n();
   const [label, setLabel] = useState('');
   const [gatewayUrl, setGatewayUrl] = useState('');
   const [gatewayAuthToken, setGatewayAuthToken] = useState('');
+  const [gatewayHeaders, setGatewayHeaders] = useState('');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -1254,6 +1259,7 @@ function GatewayProfileDialog({
       setLabel(profile?.label ?? '');
       setGatewayUrl(profile?.gatewayUrl ?? '');
       setGatewayAuthToken(profile?.gatewayAuthToken ?? '');
+      setGatewayHeaders(profile?.gatewayHeaders ?? '');
     }
   }, [open, profile]);
 
@@ -1270,6 +1276,7 @@ function GatewayProfileDialog({
     setLabel('');
     setGatewayUrl('');
     setGatewayAuthToken('');
+    setGatewayHeaders('');
   }
 
   async function handleSave() {
@@ -1278,7 +1285,7 @@ function GatewayProfileDialog({
     }
     setSaving(true);
     try {
-      await onSubmit({ label, gatewayUrl, gatewayAuthToken });
+      await onSubmit({ label, gatewayUrl, gatewayAuthToken, gatewayHeaders });
       resetFields();
       onOpenChange(false);
     } finally {
@@ -1338,6 +1345,13 @@ function GatewayProfileDialog({
               onChange={(event) => setGatewayAuthToken(event.target.value)}
             />
           </label>
+          <div className="gateway-setup-field">
+            <span>{t('Headers')}</span>
+            <GatewayHeadersEditor
+              value={gatewayHeaders}
+              onChange={setGatewayHeaders}
+            />
+          </div>
         </div>
         <DialogFooter>
           <Button
@@ -2257,6 +2271,13 @@ export function GatewaySettingsPanel({
                 <span className="gateway-profile-row-copy">
                   <span className="gateway-profile-row-name">{profile.label}</span>
                   <span className="gateway-profile-row-url">{profile.gatewayUrl}</span>
+                  {countNonEmptyLines(profile.gatewayHeaders) > 0 ? (
+                    <span className="gateway-profile-row-url">
+                      {t('{count} custom headers', {
+                        count: countNonEmptyLines(profile.gatewayHeaders),
+                      })}
+                    </span>
+                  ) : null}
                 </span>
                 {isCurrent ? (
                   <span className="gateway-profile-current">{t('Current')}</span>

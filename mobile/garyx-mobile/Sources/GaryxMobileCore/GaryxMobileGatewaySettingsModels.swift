@@ -4,8 +4,46 @@ struct GaryxGatewayProfile: Identifiable, Codable, Equatable {
     var id: String
     var label: String
     var gatewayUrl: String
+    var gatewayHeaders: String
     var updatedAt: Date
     var hasToken: Bool
+
+    init(
+        id: String,
+        label: String,
+        gatewayUrl: String,
+        gatewayHeaders: String = "",
+        updatedAt: Date,
+        hasToken: Bool
+    ) {
+        self.id = id
+        self.label = label
+        self.gatewayUrl = gatewayUrl
+        self.gatewayHeaders = GaryxGatewayHeaders.normalizedBlock(gatewayHeaders)
+        self.updatedAt = updatedAt
+        self.hasToken = hasToken
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case label
+        case gatewayUrl
+        case gatewayHeaders
+        case updatedAt
+        case hasToken
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        label = try container.decode(String.self, forKey: .label)
+        gatewayUrl = try container.decode(String.self, forKey: .gatewayUrl)
+        gatewayHeaders = GaryxGatewayHeaders.normalizedBlock(
+            try container.decodeIfPresent(String.self, forKey: .gatewayHeaders) ?? ""
+        )
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        hasToken = try container.decode(Bool.self, forKey: .hasToken)
+    }
 }
 
 enum GaryxGatewaySetupConnectionPhase: Equatable {
@@ -56,6 +94,7 @@ enum GaryxGatewayProfileStorage {
             let key = url.lowercased()
             var normalized = profile
             normalized.gatewayUrl = url
+            normalized.gatewayHeaders = GaryxGatewayHeaders.normalizedBlock(profile.gatewayHeaders)
             normalized.id = stableId(for: url)
             normalized.label = profile.label.trimmingCharacters(in: .whitespacesAndNewlines)
             if normalized.label.isEmpty {

@@ -86,6 +86,45 @@ test("fetchThreadHistory preserves kind parity fields for committed reducers", a
   }
 });
 
+test("fetchThreadHistory sends configured gateway headers", async () => {
+  const originalFetch = globalThis.fetch;
+  let capturedHeaders = null;
+  globalThis.fetch = async (_url, options) => {
+    capturedHeaders = new Headers(options?.headers);
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        messages: [],
+        pending_user_inputs: [],
+      }),
+      { status: 200, statusText: "OK" },
+    );
+  };
+
+  try {
+    await fetchThreadHistory(
+      {
+        gatewayUrl: "http://127.0.0.1:31337",
+        gatewayAuthToken: "test-token",
+        gatewayHeaders: [
+          "X-Garyx-Proxy: proxy-token",
+          "X-Trace-Id=trace-123",
+        ].join("\n"),
+      },
+      {
+        threadId: "thread::header-test",
+        afterIndex: 0,
+      },
+    );
+
+    assert.equal(capturedHeaders.get("Authorization"), "Bearer test-token");
+    assert.equal(capturedHeaders.get("X-Garyx-Proxy"), "proxy-token");
+    assert.equal(capturedHeaders.get("X-Trace-Id"), "trace-123");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("getTask fetches task detail and preserves backing workflow thread id", async () => {
   const originalFetch = globalThis.fetch;
   const urls = [];

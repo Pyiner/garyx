@@ -4,20 +4,25 @@
 gateway directly, with no account binding or separate mobile backend in this
 app.
 
-On a real phone, connect to the Mac's LAN address and paste the gateway token:
+On a real phone, connect to the Mac's LAN address and paste the gateway token.
+If a reverse proxy or tunnel requires extra HTTP headers, add one row per
+header in the gateway headers editor:
 
 ```text
 Gateway URL: http://192.168.1.20:31337
 Gateway Token: output from `garyx gateway token`
+Gateway Header Name: X-Garyx-Proxy
+Gateway Header Value: proxy-token
 ```
 
 `127.0.0.1` is only useful in the iOS simulator because it points back to the
 Mac running the simulator.
 
 The Mac app can also generate a `garyx://mobile/connect?...` QR/link from its
-Desktop Settings view. Scanning or opening that link imports `gatewayUrl` and
-`gatewayAuthToken` into iOS. The token is stored in the iOS Keychain; provider
-API keys remain on the gateway host and are not copied to the phone.
+Desktop Settings view. Scanning or opening that link imports `gatewayUrl`,
+`gatewayAuthToken`, and optional `gatewayHeaders` into iOS. The token is stored
+in the iOS Keychain; provider API keys remain on the gateway host and are not
+copied to the phone.
 
 The package currently covers:
 

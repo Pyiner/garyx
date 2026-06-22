@@ -62,7 +62,8 @@ extension GaryxMobileModel {
         return GaryxGatewayClient(
             configuration: GaryxGatewayConfiguration(
                 baseURL: url,
-                authToken: gatewayAuthToken
+                authToken: gatewayAuthToken,
+                customHeaders: GaryxGatewayHeaders.parse(gatewayHeaders)
             )
         )
     }

@@ -24,6 +24,27 @@ pub struct TranscriptRewriteRange {
     pub end_seq: u64,
 }
 
+/// Provider usage-quota / rate-limit context for a terminated run.
+///
+/// Surfaced when a run ended because the provider's rolling quota was
+/// exhausted (e.g. Codex's 5-hour ChatGPT-plan window). Carries the
+/// authoritative reset time so clients can render a live countdown, and a flag
+/// indicating the gateway has scheduled an automatic resend at reset time.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct TranscriptRateLimit {
+    /// Provider identity, e.g. `codex`.
+    pub provider: Option<String>,
+    /// ISO 8601 timestamp when the exhausted window resets, when known.
+    pub reset_at: Option<String>,
+    /// Which rolling window was exhausted: `primary` (e.g. the 5-hour session)
+    /// or `secondary` (e.g. the weekly allowance).
+    pub window: Option<String>,
+    /// Human-readable detail reported by the provider, when available.
+    pub message: Option<String>,
+    /// Whether the gateway scheduled an automatic resend at reset time.
+    pub will_auto_resend: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct TranscriptRunState {
     pub busy: bool,
@@ -35,6 +56,10 @@ pub struct TranscriptRunState {
     pub title: Option<String>,
     pub rewrite_ranges: Vec<TranscriptRewriteRange>,
     pub last_transcript_reset_seq: Option<u64>,
+    /// Set when the active run terminated due to provider quota exhaustion.
+    /// Cleared whenever a fresh run starts or the run is interrupted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_limit: Option<TranscriptRateLimit>,
     #[serde(skip)]
     pending_tool_call_ids: BTreeMap<String, usize>,
     #[serde(skip)]
@@ -92,6 +117,7 @@ fn apply_control_record(state: &mut TranscriptRunState, seq: Option<u64>, contro
             state.busy = true;
             state.active_run_id = control_string(control.get("run_id"));
             state.terminal_status = None;
+            state.rate_limit = None;
             clear_pending_tools(state);
             state.activity = TranscriptRunActivity::Thinking;
         }
@@ -116,6 +142,7 @@ fn apply_control_record(state: &mut TranscriptRunState, seq: Option<u64>, contro
             state.activity = TranscriptRunActivity::Idle;
             state.terminal_status =
                 control_string(control.get("status")).or_else(|| Some("completed".to_owned()));
+            state.rate_limit = parse_rate_limit(control.get("rate_limit"));
         }
         "run_interrupted" | "interrupt_confirmed" => {
             state.busy = false;
@@ -123,6 +150,7 @@ fn apply_control_record(state: &mut TranscriptRunState, seq: Option<u64>, contro
             clear_pending_tools(state);
             state.activity = TranscriptRunActivity::Idle;
             state.terminal_status = Some("interrupted".to_owned());
+            state.rate_limit = None;
         }
         "thread_title_updated" => {
             state.title = control_string(control.get("title"));
@@ -141,6 +169,22 @@ fn apply_control_record(state: &mut TranscriptRunState, seq: Option<u64>, contro
         }
         _ => {}
     }
+}
+
+fn parse_rate_limit(value: Option<&Value>) -> Option<TranscriptRateLimit> {
+    let object = value.and_then(Value::as_object)?;
+    Some(TranscriptRateLimit {
+        provider: control_string(object.get("provider")),
+        reset_at: control_string(object.get("reset_at"))
+            .or_else(|| control_string(object.get("resetAt"))),
+        window: control_string(object.get("window")),
+        message: control_string(object.get("message")),
+        will_auto_resend: object
+            .get("will_auto_resend")
+            .or_else(|| object.get("willAutoResend"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    })
 }
 
 fn control_string(value: Option<&Value>) -> Option<String> {

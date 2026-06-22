@@ -98,6 +98,7 @@ import {
 } from "../message-machine";
 import type { SettingsTabId } from "../settings-tabs";
 import { GatewayProfileHistoryButton } from "../GatewayProfileHistoryButton";
+import { GatewayHeadersEditor } from "../GatewayHeadersEditor";
 import { GatewayIdentityBar } from "../GatewaySwitcher";
 import { SettingsErrorBoundary } from "../SettingsErrorBoundary";
 import { Input } from "../components/ui/input";
@@ -2076,6 +2077,7 @@ export function AppShell() {
       const status = await window.garyxDesktop.checkConnection({
         gatewayUrl: savedSettings.gatewayUrl,
         gatewayAuthToken: savedSettings.gatewayAuthToken,
+        gatewayHeaders: savedSettings.gatewayHeaders,
       });
       setConnection(status);
       if (isConnectionValidForSettings(status, savedSettings)) {
@@ -2106,6 +2108,7 @@ export function AppShell() {
       ...current,
       gatewayUrl: savedSettings.gatewayUrl,
       gatewayAuthToken: savedSettings.gatewayAuthToken,
+      gatewayHeaders: savedSettings.gatewayHeaders,
     }));
     setConnection(savedConnection);
     setError(null);
@@ -2866,6 +2869,7 @@ export function AppShell() {
   // window); the tool shimmer keys off `activeToolGroupId`. assistant_streaming
   // / tool_active are carried by the rows themselves, not a separate bubble.
   const activeToolGroupId = activeRenderState?.activeToolGroupId ?? null;
+  const activeRateLimit = activeRenderState?.rateLimit ?? null;
   const showTailThinking = Boolean(
     activeRenderState?.tailActivity === "thinking" || showPendingAckLoading,
   );
@@ -9824,6 +9828,7 @@ export function AppShell() {
         showDreams={showDreamsFeature}
         showHistoryLoadingPlaceholder={showHistoryLoadingPlaceholder}
         showTailThinking={showTailThinking}
+        rateLimit={activeRateLimit}
         threadLayoutRef={threadLayoutRef}
         threadLayoutStyle={
           !embedded && threadLogsOpen
@@ -9951,6 +9956,7 @@ export function AppShell() {
                         ...current,
                         gatewayUrl: profile.gatewayUrl,
                         gatewayAuthToken: profile.gatewayAuthToken,
+                        gatewayHeaders: profile.gatewayHeaders,
                       }));
                     }}
                   />
@@ -9976,6 +9982,20 @@ export function AppShell() {
                   }}
                 />
               </label>
+
+              <div className="gateway-setup-field">
+                <span>{t('Headers')}</span>
+                <GatewayHeadersEditor
+                  value={settingsDraft.gatewayHeaders}
+                  onChange={(value) => {
+                    setLocalSettingsStatus(null);
+                    setSettingsDraft((current) => ({
+                      ...current,
+                      gatewayHeaders: value,
+                    }));
+                  }}
+                />
+              </div>
             </div>
 
             <p
@@ -10048,6 +10068,7 @@ export function AppShell() {
                   ...settingsDraft,
                   gatewayUrl: profile.gatewayUrl,
                   gatewayAuthToken: profile.gatewayAuthToken,
+                  gatewayHeaders: profile.gatewayHeaders,
                 },
                 { requireGatewayConnection: true },
               );
@@ -10447,6 +10468,7 @@ export function AppShell() {
                         ...current,
                         gatewayUrl: nextState.settings.gatewayUrl,
                         gatewayAuthToken: nextState.settings.gatewayAuthToken,
+                        gatewayHeaders: nextState.settings.gatewayHeaders,
                       }));
                       const status = await window.garyxDesktop.checkConnection();
                       setConnection(status);

@@ -121,6 +121,7 @@ struct GaryxGatewaySetupView: View {
     @State private var draftGatewayLabel = ""
     @State private var draftGatewayURL = ""
     @State private var draftGatewayAuthToken = ""
+    @State private var draftGatewayHeaders = ""
     @State private var didInitializeDraft = false
     @State private var showsAddGateway = false
 
@@ -201,6 +202,8 @@ struct GaryxGatewaySetupView: View {
                         autocapitalization: .never,
                         autocorrectionDisabled: true
                     )
+                    Divider().padding(.leading, 16)
+                    GaryxGatewayHeadersEditor(text: $draftGatewayHeaders)
                 }
             }
         }
@@ -339,6 +342,7 @@ struct GaryxGatewaySetupView: View {
         draftGatewayLabel = startsEmpty ? "" : (model.currentGatewayProfile?.label ?? "")
         draftGatewayURL = startsEmpty ? "" : model.gatewayURL
         draftGatewayAuthToken = startsEmpty ? "" : model.gatewayAuthToken
+        draftGatewayHeaders = startsEmpty ? "" : model.gatewayHeaders
         didInitializeDraft = true
     }
 
@@ -351,6 +355,7 @@ struct GaryxGatewaySetupView: View {
         guard canSaveGateway, !setupIsBusy else { return }
         model.gatewayURL = draftGatewayURL
         model.gatewayAuthToken = draftGatewayAuthToken
+        model.gatewayHeaders = draftGatewayHeaders
         await model.connectAndRefresh()
         if case .ready = model.connectionState {
             model.rememberCurrentGatewayProfile(label: draftGatewayLabel)

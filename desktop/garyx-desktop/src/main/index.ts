@@ -688,12 +688,23 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(
     "garyx:add-gateway-profile",
-    async (_event, input: { label?: string; gatewayUrl?: string; gatewayAuthToken?: string }) => {
+    async (
+      _event,
+      input: {
+        label?: string;
+        gatewayUrl?: string;
+        gatewayAuthToken?: string;
+        gatewayHeaders?: string;
+      },
+    ) => {
       return addDesktopGatewayProfile({
         label: typeof input?.label === "string" ? input.label : "",
         gatewayUrl: String(input?.gatewayUrl || ""),
         gatewayAuthToken: typeof input?.gatewayAuthToken === "string"
           ? input.gatewayAuthToken
+          : "",
+        gatewayHeaders: typeof input?.gatewayHeaders === "string"
+          ? input.gatewayHeaders
           : "",
       });
     },
@@ -708,6 +719,7 @@ function registerIpcHandlers(): void {
         label?: string;
         gatewayUrl?: string;
         gatewayAuthToken?: string;
+        gatewayHeaders?: string;
       },
     ) => {
       const state = await updateDesktopGatewayProfile({
@@ -716,6 +728,9 @@ function registerIpcHandlers(): void {
         gatewayUrl: String(input?.gatewayUrl || ""),
         gatewayAuthToken: typeof input?.gatewayAuthToken === "string"
           ? input.gatewayAuthToken
+          : undefined,
+        gatewayHeaders: typeof input?.gatewayHeaders === "string"
+          ? input.gatewayHeaders
           : undefined,
       });
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1494,7 +1509,7 @@ function registerIpcHandlers(): void {
     "garyx:check-connection",
     async (
       _event,
-      input?: { gatewayUrl?: string; gatewayAuthToken?: string },
+      input?: { gatewayUrl?: string; gatewayAuthToken?: string; gatewayHeaders?: string },
     ) => {
       const settings = await resolveSettings();
       const nextSettings = input
@@ -1508,6 +1523,10 @@ function registerIpcHandlers(): void {
               typeof input.gatewayAuthToken === "string"
                 ? input.gatewayAuthToken
                 : settings.gatewayAuthToken,
+            gatewayHeaders:
+              typeof input.gatewayHeaders === "string"
+                ? input.gatewayHeaders
+                : settings.gatewayHeaders,
           }
         : settings;
       return checkConnection(nextSettings);
@@ -1518,7 +1537,7 @@ function registerIpcHandlers(): void {
     "garyx:probe-gateway",
     async (
       _event,
-      input: { gatewayUrl: string; gatewayAuthToken: string },
+      input: { gatewayUrl: string; gatewayAuthToken: string; gatewayHeaders?: string },
     ) => {
       return probeGateway(input);
     },

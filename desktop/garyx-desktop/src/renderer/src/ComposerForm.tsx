@@ -68,6 +68,7 @@ import {
 } from './app-shell/agent-options';
 import { AgentOptionAvatar, AgentOptionRow } from './app-shell/components/AgentOptionAvatar';
 import { AgentsIcon } from './app-shell/icons';
+import { resolveComposerModelControlState } from './composer-model-control';
 
 export type { ComposerAgentOption };
 
@@ -419,101 +420,38 @@ function renderComposerModelControl({
     return null;
   }
 
-  const catalogModels = providerModels.models || [];
-  const effectiveModelId =
-    selectedModel?.trim() ||
-    effectiveModel?.trim() ||
-    agentConfiguredModel?.trim() ||
-    "";
-  // Include the running model even when the provider catalog omits it, so the
-  // picker can always mark the active row (mirrors the mobile thread sheet).
-  const models =
-    effectiveModelId && !catalogModels.some((option) => option.id === effectiveModelId)
-      ? [
-          ...catalogModels,
-          {
-            id: effectiveModelId,
-            label: effectiveModelId,
-            recommended: false,
-            supportedReasoningEfforts: providerModels.reasoningEfforts || [],
-            serviceTiers: providerModels.serviceTiers || [],
-          },
-        ]
-      : catalogModels;
-  const selectedModelOption = selectedModel
-    ? models.find((option) => option.id === selectedModel)
-    : undefined;
-  const effectiveModelOption = effectiveModelId
-    ? models.find((option) => option.id === effectiveModelId)
-    : undefined;
-  const defaultModelId =
-    agentConfiguredModel?.trim() || providerModels.defaultModel?.trim() || effectiveModelId;
-  const defaultModelOption = defaultModelId
-    ? models.find((option) => option.id === defaultModelId)
-    : undefined;
-  const defaultModelLabel = defaultModelOption?.label || defaultModelId || t("Model");
-  // Thinking options follow the model that will actually run: explicit
-  // override first, then the resolved agent/provider default.
-  const effortFilterModelOption = selectedModelOption || effectiveModelOption;
-  const catalogReasoningEfforts =
-    effortFilterModelOption?.supportedReasoningEfforts?.length
-      ? effortFilterModelOption.supportedReasoningEfforts
-      : providerModels.reasoningEfforts || [];
-  const effectiveReasoningEffortId =
-    selectedReasoningEffort?.trim() || effectiveReasoningEffort?.trim() || "";
-  // Include the running level even when the catalog omits it, so the picker can
-  // always mark the active row.
-  const reasoningEfforts =
-    effectiveReasoningEffortId &&
-    !catalogReasoningEfforts.some((option) => option.id === effectiveReasoningEffortId)
-      ? [
-          ...catalogReasoningEfforts,
-          { id: effectiveReasoningEffortId, label: effectiveReasoningEffortId, recommended: false },
-        ]
-      : catalogReasoningEfforts;
+  const {
+    models,
+    effectiveModelId,
+    defaultModelId,
+    defaultModelLabel,
+    defaultModelOption,
+    triggerLabel,
+    reasoningEfforts,
+    effectiveReasoningEffortId,
+    defaultReasoningEffortId,
+    defaultEffortLabel,
+    serviceTiers,
+    effectiveServiceTierId,
+    defaultServiceTierLabel,
+  } = resolveComposerModelControlState({
+    providerModels,
+    agentConfiguredModel,
+    effectiveModel,
+    effectiveReasoningEffort,
+    effectiveServiceTier,
+    selectedModel,
+    selectedReasoningEffort,
+    selectedServiceTier,
+    modelFallbackLabel: t("Model"),
+    thinkingLevelFallbackLabel: t("Thinking level"),
+    standardServiceTierLabel: t("Standard"),
+  });
   const supportsReasoning =
     Boolean(providerModels.supportsReasoningEffortSelection) &&
     reasoningEfforts.length > 0;
-  const selectedEffortOption = effectiveReasoningEffortId
-    ? reasoningEfforts.find((option) => option.id === effectiveReasoningEffortId)
-    : undefined;
-  const defaultReasoningEffortId =
-    effortFilterModelOption?.defaultReasoningEffort?.trim() ||
-    reasoningEfforts.find((option) => option.recommended)?.id ||
-    reasoningEfforts[0]?.id ||
-    "";
-  const defaultEffortOption = defaultReasoningEffortId
-    ? reasoningEfforts.find((option) => option.id === defaultReasoningEffortId)
-    : undefined;
-  const defaultEffortLabel =
-    defaultEffortOption?.label || defaultReasoningEffortId || t("Thinking level");
-  // Service tier (speed) follows the same model as thinking level.
-  const catalogServiceTiers =
-    effortFilterModelOption?.serviceTiers?.length
-      ? effortFilterModelOption.serviceTiers
-      : providerModels.serviceTiers || [];
-  const effectiveServiceTierId =
-    selectedServiceTier?.trim() || effectiveServiceTier?.trim() || "";
-  const serviceTiers =
-    effectiveServiceTierId &&
-    !catalogServiceTiers.some((option) => option.id === effectiveServiceTierId)
-      ? [
-          ...catalogServiceTiers,
-          { id: effectiveServiceTierId, label: effectiveServiceTierId, recommended: false },
-        ]
-      : catalogServiceTiers;
   const supportsServiceTier =
     Boolean(providerModels.supportsServiceTierSelection) && serviceTiers.length > 0;
-  // The provider default tier is "standard" (no explicit tier); represented as
-  // clearing the override.
-  const defaultServiceTierLabel = t("Standard");
-  const triggerLabel = effectiveModelOption
-    ? selectedEffortOption
-      ? `${effectiveModelOption.label} · ${selectedEffortOption.label}`
-      : effectiveModelOption.label
-    : selectedEffortOption
-      ? `${t("Model")} · ${selectedEffortOption.label}`
-      : t("Model");
 
   // Selecting a model also clears a service tier the target model does not
   // support, so the thread never runs with an unsupported speed tier (mirrors
@@ -539,7 +477,7 @@ function renderComposerModelControl({
       <DropdownMenuTrigger
         aria-label={t("Change model for this thread")}
         className="composer-provider-trigger"
-        data-muted={!effectiveModelOption && !selectedEffortOption ? "" : undefined}
+        data-muted={!effectiveModelId && !effectiveReasoningEffortId ? "" : undefined}
         type="button"
       >
         <IconCube aria-hidden size={15} stroke={1.75} />

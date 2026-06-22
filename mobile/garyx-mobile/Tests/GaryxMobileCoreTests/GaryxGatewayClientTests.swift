@@ -74,7 +74,8 @@ final class GaryxGatewayClientTests: XCTestCase {
         let url = try XCTUnwrap(
             GaryxMobileConnectLink.make(
                 gatewayUrl: "http://192.168.1.20:31337",
-                gatewayAuthToken: "test gateway token"
+                gatewayAuthToken: "test gateway token",
+                gatewayHeaders: "X-Garyx-Proxy: proxy-token\nX-Trace-Id=trace-123"
             )
         )
 
@@ -82,6 +83,24 @@ final class GaryxGatewayClientTests: XCTestCase {
 
         XCTAssertEqual(payload.gatewayUrl, "http://192.168.1.20:31337")
         XCTAssertEqual(payload.gatewayAuthToken, "test gateway token")
+        XCTAssertEqual(payload.gatewayHeaders, "X-Garyx-Proxy: proxy-token\nX-Trace-Id=trace-123")
+    }
+
+    func testGatewayHeadersParseMultiLineBlock() {
+        XCTAssertEqual(
+            GaryxGatewayHeaders.parse(
+                """
+                X-Garyx-Proxy: proxy-token
+                X-Trace-Id=trace-123
+                # ignored
+                invalid header: skipped
+                """
+            ),
+            [
+                "X-Garyx-Proxy": "proxy-token",
+                "X-Trace-Id": "trace-123",
+            ]
+        )
     }
 
     func testMobileConnectLinkAcceptsTokenAlias() throws {
@@ -1210,6 +1229,8 @@ final class GaryxGatewayClientTests: XCTestCase {
             )
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test token")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-Garyx-Proxy"), "proxy-token")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-Trace-Id"), "trace-123")
             let response = try XCTUnwrap(
                 HTTPURLResponse(
                     url: try XCTUnwrap(request.url),
@@ -1234,7 +1255,11 @@ final class GaryxGatewayClientTests: XCTestCase {
         let client = GaryxGatewayClient(
             configuration: GaryxGatewayConfiguration(
                 baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/garyx")),
-                authToken: "test token"
+                authToken: "test token",
+                customHeaders: [
+                    "X-Garyx-Proxy": "proxy-token",
+                    "X-Trace-Id": "trace-123",
+                ]
             ),
             session: session
         )

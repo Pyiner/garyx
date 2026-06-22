@@ -339,6 +339,10 @@ struct GaryxConversationView: View {
                             .id(tailThinkingAnchorId)
                             .transition(.garyxTranscriptAppear)
                     }
+                    if let rateLimit = model.selectedThreadRateLimit {
+                        GaryxRateLimitBanner(rateLimit: rateLimit)
+                            .transition(.garyxTranscriptAppear)
+                    }
                 }
             }
             .padding(.horizontal, 16)
@@ -2461,6 +2465,54 @@ struct GaryxThinkingLabel: View {
     var body: some View {
         GaryxShimmerText(text: "Thinking", font: GaryxFont.body())
             .frame(minHeight: 22)
+    }
+}
+
+/// Tail banner shown when the selected thread's last run was cut off by the
+/// provider's usage quota. The countdown re-derives every second from the
+/// server-provided reset time via `GaryxRateLimitBannerModel`; when the gateway
+/// scheduled an auto-resend the banner says so and flips to "resending" the
+/// moment the window recovers.
+struct GaryxRateLimitBanner: View {
+    let rateLimit: GaryxRenderRateLimit
+
+    private let accent = Color(red: 0.85, green: 0.60, blue: 0.17)
+    private let fill = Color(red: 0.99, green: 0.96, blue: 0.91)
+    private let stroke = Color(red: 0.94, green: 0.886, blue: 0.77)
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            if let model = GaryxRateLimitBannerModel.make(from: rateLimit, now: context.date) {
+                HStack(alignment: .top, spacing: 10) {
+                    Circle()
+                        .fill(accent)
+                        .frame(width: 8, height: 8)
+                        .padding(.top, 5)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(model.title)
+                            .font(GaryxFont.body())
+                            .fontWeight(.semibold)
+                            .foregroundStyle(Color(.label))
+                        Text(model.detail)
+                            .font(GaryxFont.caption())
+                            .monospacedDigit()
+                            .foregroundStyle(GaryxTheme.secondaryText)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous).fill(fill)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(stroke, lineWidth: 1)
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .combine)
+            }
+        }
     }
 }
 

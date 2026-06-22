@@ -25,6 +25,7 @@ pub mod mcp;
 pub mod mcp_config;
 mod provider_models;
 mod provider_session_locator;
+mod quota_resend;
 mod recent_thread_projection;
 pub mod restart;
 pub mod restart_wake;
