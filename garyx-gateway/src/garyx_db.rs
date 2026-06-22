@@ -97,6 +97,17 @@ pub struct TaskProjectionDraft {
     pub source_events_len: usize,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskForestNode {
+    #[serde(flatten)]
+    pub task: TaskSummary,
+    pub parent_task_number: Option<u64>,
+    pub parent_thread_id: Option<String>,
+    pub active_run_id: Option<String>,
+    pub run_state: String,
+    pub last_active_at: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThreadMessageRouteRecord {
     pub thread_id: String,
@@ -1065,6 +1076,85 @@ impl GaryxDbService {
         let total = usize::try_from(total).unwrap_or(usize::MAX);
         let has_more = offset.saturating_add(tasks.len()) < total;
         Ok((tasks, total, has_more))
+    }
+
+    pub fn list_task_forest(
+        &self,
+        filter: &TaskListFilter,
+    ) -> GaryxDbResult<(Vec<TaskForestNode>, usize)> {
+        let (where_sql, bind_values) = task_projection_filter_sql(filter)?;
+        let count_sql = format!(
+            "WITH filtered AS (
+                SELECT task.thread_id, task.number, task.updated_at,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY task.number
+                           ORDER BY task.updated_at DESC, task.thread_id ASC
+                       ) AS rn
+                FROM task_projection task
+                WHERE {where_sql}
+             )
+             SELECT COUNT(*) FROM filtered WHERE rn = 1"
+        );
+        let list_sql = format!(
+            "WITH filtered AS (
+                SELECT task.thread_id, task.number, task.status, task.title,
+                       task.creator_json, task.assignee_json, task.source_json,
+                       task.executor_json, task.updated_at, task.updated_by_json,
+                       COALESCE(meta.agent_id, '') AS runtime_agent_id,
+                       COALESCE(meta.message_count, 0) AS reply_count,
+                       task.parent_task_number,
+                       COALESCE(
+                           task.source_task_thread_id,
+                           (
+                               SELECT parent.thread_id
+                               FROM task_projection parent
+                               WHERE parent.projection_version = ?
+                                 AND (
+                                   parent.number = task.parent_task_number
+                                   OR task.source_task_id = ('#TASK-' || parent.number) COLLATE NOCASE
+                                 )
+                               ORDER BY parent.updated_at DESC, parent.thread_id ASC
+                               LIMIT 1
+                           )
+                       ) AS parent_thread_id,
+                       recent.active_run_id,
+                       COALESCE(recent.run_state, 'idle') AS run_state,
+                       recent.last_active_at,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY task.number
+                           ORDER BY task.updated_at DESC, task.thread_id ASC
+                       ) AS rn
+                FROM task_projection task
+                LEFT JOIN thread_meta meta ON meta.thread_id = task.thread_id
+                LEFT JOIN recent_threads recent ON recent.thread_id = task.thread_id
+                WHERE {where_sql}
+             )
+             SELECT thread_id, number, status, title, creator_json, assignee_json,
+                    source_json, executor_json, updated_at, updated_by_json,
+                    runtime_agent_id, reply_count, parent_task_number,
+                    parent_thread_id, active_run_id, run_state, last_active_at
+             FROM filtered
+             WHERE rn = 1
+             ORDER BY updated_at DESC, thread_id ASC"
+        );
+
+        let conn = self.conn()?;
+        let total: i64 =
+            conn.query_row(&count_sql, params_from_iter(bind_values.iter()), |row| {
+                row.get(0)
+            })?;
+        let mut list_bind_values = vec![SqlValue::Integer(CURRENT_TASK_PROJECTION_VERSION)];
+        list_bind_values.extend(bind_values);
+        let mut stmt = conn.prepare(&list_sql)?;
+        let rows = stmt.query_map(
+            params_from_iter(list_bind_values.iter()),
+            task_forest_from_row,
+        )?;
+        let mut tasks = Vec::new();
+        for row in rows {
+            tasks.push(row?);
+        }
+        Ok((tasks, usize::try_from(total).unwrap_or(usize::MAX)))
     }
 
     pub fn task_subtree_summaries(&self, root_thread_id: &str) -> GaryxDbResult<Vec<TaskSummary>> {
@@ -3824,6 +3914,22 @@ fn task_summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskSummar
     })
 }
 
+fn task_forest_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskForestNode> {
+    let task = task_summary_from_row(row)?;
+    let parent_task_number = row
+        .get::<_, Option<i64>>(12)?
+        .and_then(|value| u64::try_from(value).ok())
+        .filter(|value| *value > 0);
+    Ok(TaskForestNode {
+        task,
+        parent_task_number,
+        parent_thread_id: row.get(13)?,
+        active_run_id: row.get(14)?,
+        run_state: row.get(15)?,
+        last_active_at: row.get(16)?,
+    })
+}
+
 fn task_status_from_row(index: usize, value: String) -> rusqlite::Result<TaskStatus> {
     match value.as_str() {
         "todo" => Ok(TaskStatus::Todo),
@@ -4808,6 +4914,97 @@ mod tests {
 
         let cycle = db.task_subtree_summaries("thread::cycle").expect("cycle");
         assert_eq!(cycle.len(), 1);
+    }
+
+    #[test]
+    fn task_forest_includes_parent_and_run_state_fields() {
+        let db = GaryxDbService::memory().expect("db opens");
+        db.replace_task_projection(task_projection_draft(
+            "thread::parent",
+            1,
+            TaskStatus::InProgress,
+            "2026-01-01T00:00:01.000Z",
+            None,
+            1,
+        ))
+        .expect("insert parent");
+        db.replace_task_projection(task_projection_draft(
+            "thread::child",
+            2,
+            TaskStatus::Todo,
+            "2026-01-01T00:00:02.000Z",
+            Some(thread_source("thread::parent", "#TASK-1")),
+            1,
+        ))
+        .expect("insert child");
+        db.replace_task_projection(task_projection_draft(
+            "thread::legacy-child",
+            3,
+            TaskStatus::Todo,
+            "2026-01-01T00:00:03.000Z",
+            Some(TaskSource {
+                thread_id: Some("thread::origin".to_owned()),
+                task_id: Some("#TASK-1".to_owned()),
+                task_thread_id: None,
+                bot_id: None,
+                channel: None,
+                account_id: None,
+            }),
+            1,
+        ))
+        .expect("insert legacy child");
+        db.upsert_recent_thread(RecentThreadDraft {
+            thread_id: "thread::child".to_owned(),
+            title: "Child".to_owned(),
+            workspace_dir: None,
+            thread_type: "chat".to_owned(),
+            provider_type: Some("claude_code".to_owned()),
+            agent_id: Some("claude".to_owned()),
+            message_count: 4,
+            last_message_preview: "Working".to_owned(),
+            recent_run_id: Some("run::recent".to_owned()),
+            active_run_id: Some("run::active".to_owned()),
+            run_state: "running".to_owned(),
+            updated_at: Some("2026-01-01T00:00:03.000Z".to_owned()),
+            last_active_at: "2026-01-01T00:00:04.000Z".to_owned(),
+        })
+        .expect("insert recent thread");
+
+        let (nodes, total) = db
+            .list_task_forest(&TaskListFilter {
+                include_done: true,
+                ..Default::default()
+            })
+            .expect("list forest");
+
+        assert_eq!(total, 3);
+        let child = nodes
+            .iter()
+            .find(|node| node.task.thread_id == "thread::child")
+            .expect("child node");
+        assert_eq!(child.parent_task_number, Some(1));
+        assert_eq!(child.parent_thread_id.as_deref(), Some("thread::parent"));
+        assert_eq!(child.active_run_id.as_deref(), Some("run::active"));
+        assert_eq!(child.run_state, "running");
+        assert_eq!(
+            child.last_active_at.as_deref(),
+            Some("2026-01-01T00:00:04.000Z")
+        );
+        let legacy_child = nodes
+            .iter()
+            .find(|node| node.task.thread_id == "thread::legacy-child")
+            .expect("legacy child node");
+        assert_eq!(legacy_child.parent_task_number, Some(1));
+        assert_eq!(
+            legacy_child.parent_thread_id.as_deref(),
+            Some("thread::parent")
+        );
+        let parent = nodes
+            .iter()
+            .find(|node| node.task.thread_id == "thread::parent")
+            .expect("parent node");
+        assert_eq!(parent.parent_task_number, None);
+        assert_eq!(parent.run_state, "idle");
     }
 
     #[test]

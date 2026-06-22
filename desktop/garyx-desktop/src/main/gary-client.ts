@@ -21,6 +21,8 @@ import type {
   DesktopDreamSpan,
   DesktopDreamTopic,
   DesktopDreamsPage,
+  DesktopTaskForestNode,
+  DesktopTaskForestPage,
   DesktopProviderModels,
   DesktopProviderUsage,
   DesktopProviderIconDescriptor,
@@ -50,6 +52,7 @@ import type {
   GetWorkflowDefinitionSourceInput,
   GetWorkflowRunInput,
   ListProviderRecentSessionsInput,
+  ListTaskForestInput,
   DeleteSlashCommandInput,
   CommittedMessageEvent,
   DesktopChatStreamEvent,
@@ -529,6 +532,26 @@ interface TasksPayload {
   total?: number;
   has_more?: boolean;
   hasMore?: boolean;
+}
+
+interface TaskForestNodePayload extends TaskSummaryPayload {
+  parent_task_number?: number | null;
+  parentTaskNumber?: number | null;
+  parent_thread_id?: string | null;
+  parentThreadId?: string | null;
+  active_run_id?: string | null;
+  activeRunId?: string | null;
+  run_state?: string | null;
+  runState?: string | null;
+  last_active_at?: string | null;
+  lastActiveAt?: string | null;
+}
+
+interface TaskForestPayload {
+  tasks?: TaskForestNodePayload[];
+  total?: number;
+  projection_current?: boolean;
+  projectionCurrent?: boolean;
 }
 
 interface WorkflowDefinitionsPayload {
@@ -2348,6 +2371,23 @@ function mapTaskSummary(value: TaskSummaryPayload): DesktopTaskSummary {
       asFiniteNumber(task.reply_count) ??
       asFiniteNumber(task.replyCount) ??
       0,
+  };
+}
+
+function mapTaskForestNode(value: TaskForestNodePayload): DesktopTaskForestNode {
+  return {
+    ...mapTaskSummary(value),
+    parentTaskNumber:
+      asFiniteNumber(value.parent_task_number) ??
+      asFiniteNumber(value.parentTaskNumber) ??
+      null,
+    parentThreadId:
+      asString(value.parent_thread_id) || asString(value.parentThreadId) || null,
+    activeRunId:
+      asString(value.active_run_id) || asString(value.activeRunId) || null,
+    runState: asString(value.run_state) || asString(value.runState) || "idle",
+    lastActiveAt:
+      asString(value.last_active_at) || asString(value.lastActiveAt) || null,
   };
 }
 
@@ -5146,6 +5186,42 @@ export async function listTasks(
   };
 }
 
+export async function listTaskForest(
+  settings: DesktopSettings,
+  input: ListTaskForestInput = {},
+): Promise<DesktopTaskForestPage> {
+  const query = new URLSearchParams();
+  if (input.status) {
+    query.set("status", input.status);
+  }
+  const sourceBot = input.sourceBot?.trim() || "";
+  if (sourceBot) {
+    query.set("source_bot_id", sourceBot);
+  }
+  if (input.includeDone !== false) {
+    query.set("include_done", "true");
+  }
+
+  const suffix = query.toString();
+  const payload = await requestJson<TaskForestPayload>(
+    settings,
+    `/api/tasks/forest${suffix ? `?${suffix}` : ""}`,
+    {
+      signal: AbortSignal.timeout(8000),
+    },
+  );
+
+  const tasks = Array.isArray(payload.tasks)
+    ? payload.tasks.map(mapTaskForestNode)
+    : [];
+  return {
+    tasks,
+    total: asFiniteNumber(payload.total) ?? tasks.length,
+    projectionCurrent:
+      payload.projection_current ?? payload.projectionCurrent ?? true,
+  };
+}
+
 export async function getTask(
   settings: DesktopSettings,
   input: GetTaskInput,
@@ -5195,12 +5271,14 @@ export async function createTask(
           ? assignee.agent_id
           : "";
   const workspaceDir = input.workspaceDir?.trim() || "";
+  const source = taskSourcePayload(input.source);
   const payload = await requestJson<TaskSummaryPayload>(settings, "/api/tasks", {
     method: "POST",
     signal: AbortSignal.timeout(8000),
     body: JSON.stringify({
       title: input.title?.trim() || null,
       body: input.body?.trim() || null,
+      ...(source ? { source } : {}),
       executor: executorPayload,
       assignee: executorPayload ? null : assignee,
       start: input.start === true || executorPayload !== null || assignee !== null,
@@ -5214,6 +5292,40 @@ export async function createTask(
     }),
   });
   return mapTaskSummary(payload);
+}
+
+function taskSourcePayload(
+  source: DesktopTaskSource | null | undefined,
+): Record<string, string> | null {
+  if (!source) {
+    return null;
+  }
+  const payload: Record<string, string> = {};
+  const threadId = source.threadId?.trim();
+  const taskId = source.taskId?.trim();
+  const taskThreadId = source.taskThreadId?.trim();
+  const botId = source.botId?.trim();
+  const channel = source.channel?.trim();
+  const accountId = source.accountId?.trim();
+  if (threadId) {
+    payload.thread_id = threadId;
+  }
+  if (taskId) {
+    payload.task_id = taskId;
+  }
+  if (taskThreadId) {
+    payload.task_thread_id = taskThreadId;
+  }
+  if (botId) {
+    payload.bot_id = botId;
+  }
+  if (channel) {
+    payload.channel = channel;
+  }
+  if (accountId) {
+    payload.account_id = accountId;
+  }
+  return Object.keys(payload).length ? payload : null;
 }
 
 function taskNotificationTargetPayload(

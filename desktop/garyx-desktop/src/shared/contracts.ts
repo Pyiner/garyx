@@ -233,6 +233,14 @@ export interface DesktopTaskSummary {
   replyCount: number;
 }
 
+export interface DesktopTaskForestNode extends DesktopTaskSummary {
+  parentTaskNumber?: number | null;
+  parentThreadId?: string | null;
+  activeRunId?: string | null;
+  runState: string;
+  lastActiveAt?: string | null;
+}
+
 export type DesktopTaskExecutor =
   | { type: 'agent'; agentId: string }
   | { type: 'team'; teamId: string }
@@ -251,6 +259,12 @@ export interface DesktopTasksPage {
   tasks: DesktopTaskSummary[];
   total: number;
   hasMore: boolean;
+}
+
+export interface DesktopTaskForestPage {
+  tasks: DesktopTaskForestNode[];
+  total: number;
+  projectionCurrent: boolean;
 }
 
 export interface DesktopDreamSpan {
@@ -322,6 +336,8 @@ export interface ListTasksInput {
   offset?: number;
 }
 
+export interface ListTaskForestInput extends ListTasksInput {}
+
 export interface GetTaskInput {
   taskId: string;
 }
@@ -333,6 +349,7 @@ export type DesktopTaskNotificationTarget =
 export interface CreateTaskInput {
   title?: string | null;
   body?: string | null;
+  source?: DesktopTaskSource | null;
   executor?: CreateTaskExecutorInput | null;
   /** @deprecated New task creation should use `executor`. */
   assignee?: string | null;
@@ -2072,6 +2089,9 @@ export interface GaryxDesktopApi {
   ) => Promise<{ state: DesktopState; automation: DesktopAutomationSummary }>;
   deleteAutomation: (input: DeleteAutomationInput) => Promise<DesktopState>;
   listTasks: (input?: ListTasksInput) => Promise<DesktopTasksPage>;
+  listTaskForest: (
+    input?: ListTaskForestInput,
+  ) => Promise<DesktopTaskForestPage>;
   getTask: (input: GetTaskInput) => Promise<DesktopTaskSummary>;
   createTask: (input: CreateTaskInput) => Promise<DesktopTaskSummary>;
   listWorkflowDefinitions: () => Promise<DesktopWorkflowDefinition[]>;

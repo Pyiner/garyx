@@ -4,9 +4,11 @@ import { readFileSync } from "node:fs";
 
 import {
   ThreadStreamGapError,
+  createTask,
   fetchThreadHistory,
   getWorkflowRun,
   getTask,
+  listTaskForest,
   streamThreadEvents,
 } from "./gary-client.ts";
 
@@ -124,6 +126,136 @@ test("getTask fetches task detail and preserves backing workflow thread id", asy
       workflowId: "development-loop",
       workflowVersion: 1,
     });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("listTaskForest maps parent and run-state fields", async () => {
+  const originalFetch = globalThis.fetch;
+  const urls = [];
+  globalThis.fetch = async (url) => {
+    urls.push(String(url));
+    return new Response(
+      JSON.stringify({
+        tasks: [
+          {
+            task_id: "#TASK-7",
+            number: 7,
+            title: "Synthetic forest child",
+            status: "in_progress",
+            thread_id: "thread::forest-child",
+            creator: { kind: "agent", agent_id: "claude" },
+            updated_by: { kind: "agent", agent_id: "claude" },
+            updated_at: "2026-06-22T00:00:00Z",
+            runtime_agent_id: "claude",
+            reply_count: 5,
+            parent_task_number: 3,
+            parent_thread_id: "thread::forest-parent",
+            active_run_id: "run::forest-active",
+            run_state: "running",
+            last_active_at: "2026-06-22T00:01:00Z",
+          },
+        ],
+        total: 1,
+        projection_current: true,
+      }),
+      { status: 200, statusText: "OK" },
+    );
+  };
+
+  try {
+    const page = await listTaskForest(
+      {
+        gatewayUrl: "http://127.0.0.1:31337",
+        gatewayAuthToken: "",
+      },
+      {
+        status: "in_progress",
+        sourceBot: "test-bot",
+        includeDone: true,
+      },
+    );
+
+    assert.equal(urls.length, 1);
+    assert.equal(
+      urls[0],
+      "http://127.0.0.1:31337/api/tasks/forest?status=in_progress&source_bot_id=test-bot&include_done=true",
+    );
+    assert.equal(page.total, 1);
+    assert.equal(page.projectionCurrent, true);
+    assert.equal(page.tasks[0].taskId, "#TASK-7");
+    assert.equal(page.tasks[0].parentTaskNumber, 3);
+    assert.equal(page.tasks[0].parentThreadId, "thread::forest-parent");
+    assert.equal(page.tasks[0].activeRunId, "run::forest-active");
+    assert.equal(page.tasks[0].runState, "running");
+    assert.equal(page.tasks[0].lastActiveAt, "2026-06-22T00:01:00Z");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("createTask serializes child task source fields", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestBody = null;
+  globalThis.fetch = async (_url, options) => {
+    requestBody = JSON.parse(options.body);
+    return new Response(
+      JSON.stringify({
+        task_id: "#TASK-8",
+        number: 8,
+        title: "Synthetic child",
+        status: "in_progress",
+        thread_id: "thread::forest-created-child",
+        creator: { kind: "agent", agent_id: "claude" },
+        updated_by: { kind: "agent", agent_id: "claude" },
+        updated_at: "2026-06-22T00:02:00Z",
+        runtime_agent_id: "claude",
+        reply_count: 0,
+      }),
+      { status: 201, statusText: "Created" },
+    );
+  };
+
+  try {
+    const task = await createTask(
+      {
+        gatewayUrl: "http://127.0.0.1:31337",
+        gatewayAuthToken: "",
+      },
+      {
+        title: "Synthetic child",
+        body: null,
+        source: {
+          threadId: "thread::forest-parent",
+          taskId: "#TASK-7",
+          taskThreadId: "thread::forest-parent",
+          botId: "test-bot",
+          channel: "test-channel",
+          accountId: "test-account",
+        },
+        executor: { type: "agent", agentId: "claude" },
+        start: true,
+        workspaceDir: "/Users/test/project",
+        workspaceMode: "local",
+        notificationTarget: { kind: "none" },
+      },
+    );
+
+    assert.equal(task.taskId, "#TASK-8");
+    assert.deepEqual(requestBody.source, {
+      thread_id: "thread::forest-parent",
+      task_id: "#TASK-7",
+      task_thread_id: "thread::forest-parent",
+      bot_id: "test-bot",
+      channel: "test-channel",
+      account_id: "test-account",
+    });
+    assert.deepEqual(requestBody.executor, {
+      type: "agent",
+      agent_id: "claude",
+    });
+    assert.equal(requestBody.runtime.workspace_dir, "/Users/test/project");
   } finally {
     globalThis.fetch = originalFetch;
   }

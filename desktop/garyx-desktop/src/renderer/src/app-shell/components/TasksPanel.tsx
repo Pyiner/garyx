@@ -6,6 +6,7 @@ import {
   useState,
   type DragEvent,
   type FormEvent,
+  type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -81,6 +82,7 @@ import {
 } from '../agent-options';
 import { AgentOptionRow } from './AgentOptionAvatar';
 import { AgentsIcon, MoreDotsIcon } from '../icons';
+import { TaskForestConsole } from './TaskForestConsole';
 import { WorkflowTaskFields } from './WorkflowTaskFields';
 
 type TaskExecutorMode = 'agent' | 'team' | 'workflow';
@@ -92,11 +94,14 @@ type TasksPanelProps = {
   workspaceMutation: string | null;
   onAddWorkspace: (path: string) => Promise<DesktopWorkspace | null>;
   onOpenThread: (threadId: string) => void;
+  onOpenThreadInPanel: (threadId: string) => Promise<boolean> | boolean;
   onOpenWorkflowTask: (task: DesktopTaskSummary) => void;
   onToast: (message: string, tone?: ToastTone) => void;
+  selectedThreadId: string | null;
+  selectedThreadPanel: ReactNode;
 };
 
-type TaskViewMode = 'board' | 'list';
+type TaskViewMode = 'forest' | 'board' | 'list';
 
 const TASK_COLUMNS: Array<{
   status: DesktopTaskStatus;
@@ -256,8 +261,11 @@ export function TasksPanel({
   workspaceMutation,
   onAddWorkspace,
   onOpenThread,
+  onOpenThreadInPanel,
   onOpenWorkflowTask,
   onToast,
+  selectedThreadId,
+  selectedThreadPanel,
 }: TasksPanelProps) {
   const { t } = useI18n();
   const { entries: pluginCatalog } = useChannelPluginCatalog();
@@ -983,6 +991,14 @@ export function TasksPanel({
           </button>
           <div aria-label={t('Task view')} className="tasks-segmented">
             <button
+              className={viewMode === 'forest' ? 'active' : ''}
+              onClick={() => setViewMode('forest')}
+              type="button"
+            >
+              <GitBranch aria-hidden size={14} strokeWidth={1.8} />
+              {t('Forest')}
+            </button>
+            <button
               className={viewMode === 'board' ? 'active' : ''}
               onClick={() => setViewMode('board')}
               type="button"
@@ -1288,7 +1304,19 @@ export function TasksPanel({
         </div>
       ) : null}
 
-      {viewMode === 'board' ? (
+      {viewMode === 'forest' ? (
+        <TaskForestConsole
+          agents={agents}
+          botGroups={botGroups}
+          onOpenThreadInPanel={onOpenThreadInPanel}
+          onToast={onToast}
+          selectedThreadId={selectedThreadId}
+          selectedThreadPanel={selectedThreadPanel}
+          sourceBot={botFilter || null}
+          workspaces={workspaces}
+          workspaceMutation={workspaceMutation}
+        />
+      ) : viewMode === 'board' ? (
         <div className="tasks-board" aria-busy={loading}>
           {TASK_COLUMNS.map((column) => {
             const columnTasks = tasksByStatus[column.status];

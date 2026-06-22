@@ -157,6 +157,10 @@ fn thread_routes() -> Router<Arc<AppState>> {
             axum::routing::post(tasks::create_tasks_batch),
         )
         .route(
+            "/api/tasks/forest",
+            axum::routing::get(tasks::list_task_forest),
+        )
+        .route(
             "/api/tasks/{task_id}",
             axum::routing::get(tasks::get_task).delete(tasks::delete_task),
         )

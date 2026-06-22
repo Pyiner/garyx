@@ -173,6 +173,8 @@ const api: GaryxDesktopApi = {
   deleteAutomation: (input) =>
     ipcRenderer.invoke("garyx:delete-automation", input),
   listTasks: (input) => ipcRenderer.invoke("garyx:list-tasks", input),
+  listTaskForest: (input) =>
+    ipcRenderer.invoke("garyx:list-task-forest", input),
   listDreams: (input) => ipcRenderer.invoke("garyx:list-dreams", input),
   scanDreams: (input) => ipcRenderer.invoke("garyx:scan-dreams", input),
   getDream: (dreamId) => ipcRenderer.invoke("garyx:get-dream", dreamId),
