@@ -341,19 +341,16 @@ struct GaryxHomeThreadListView: View, Equatable {
     }
 
     private var threadListWithBottomBar: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                Color.clear
-                    .frame(height: 4)
-                    .accessibilityHidden(true)
-
-                sidebarThreadSections
-
-                Color.clear
-                    .frame(height: GaryxSidebarMetrics.bottomBarClearance)
-                    .accessibilityHidden(true)
-            }
+        // Native List backs onto UICollectionView, so off-screen rows are truly
+        // recycled and scrolling emits real UIScrollView signals (Instruments
+        // Animation Hitches). Headers/spacers/footer are flat rows (no Section)
+        // to keep the non-sticky parity of the old LazyVStack.
+        List {
+            sidebarThreadRows
         }
+        .listStyle(.plain)
+        .environment(\.defaultMinListRowHeight, 0)
+        .scrollContentBackground(.hidden)
         .scrollDisabled(isSidebarDragActive)
         .scrollDismissesKeyboard(.interactively)
         .refreshable {
@@ -361,9 +358,29 @@ struct GaryxHomeThreadListView: View, Equatable {
         }
     }
 
-    // Section headers and thread rows are emitted directly into the enclosing
-    // LazyVStack. Wrapping a section's ForEach in its own VStack would turn the
-    // whole section into one eager lazy item and materialize every row at once.
+    @ViewBuilder
+    private var sidebarThreadRows: some View {
+        Group {
+            spacerRow(height: 4)
+            sidebarThreadSections
+            spacerRow(height: GaryxSidebarMetrics.bottomBarClearance)
+        }
+        // Rows carry their own padding/background; strip List chrome so the page
+        // background shows through and custom dividers are the only separators.
+        .listRowSeparator(.hidden)
+        .listRowInsets(EdgeInsets())
+        .listRowBackground(Color.clear)
+    }
+
+    private func spacerRow(height: CGFloat) -> some View {
+        Color.clear
+            .frame(height: height)
+            .accessibilityHidden(true)
+    }
+
+    // Section headers and thread rows are emitted as flat List rows. Each thread
+    // is exactly one row (its leading divider is folded into the row), so
+    // row.id == thread.id stays stable for correct cell reuse.
     @ViewBuilder
     private var sidebarThreadSections: some View {
         let snapshot = homeListStore.snapshot
@@ -374,9 +391,6 @@ struct GaryxHomeThreadListView: View, Equatable {
                 .padding(.bottom, 4)
 
             ForEach(sections.pinned) { row in
-                if row.showsDivider {
-                    GaryxSidebarRowDivider()
-                }
                 GaryxHomeThreadButton(
                     row: row,
                     onOpenThread: onOpenThread,
@@ -387,9 +401,7 @@ struct GaryxHomeThreadListView: View, Equatable {
                 .equatable()
             }
 
-            Color.clear
-                .frame(height: 10)
-                .accessibilityHidden(true)
+            spacerRow(height: 10)
         }
 
         GaryxSidebarSectionHeader(title: "Recent", systemImage: "clock.fill")
@@ -404,9 +416,6 @@ struct GaryxHomeThreadListView: View, Equatable {
             }
         } else {
             ForEach(sections.recent) { row in
-                if row.showsDivider {
-                    GaryxSidebarRowDivider()
-                }
                 GaryxHomeThreadButton(
                     row: row,
                     onOpenThread: onOpenThread,
@@ -418,9 +427,7 @@ struct GaryxHomeThreadListView: View, Equatable {
             }
         }
 
-        Color.clear
-            .frame(height: 10)
-            .accessibilityHidden(true)
+        spacerRow(height: 10)
 
         GaryxSidebarThreadAutoLoadFooter()
             .environment(\.garyxLoadMoreThreads, onLoadMoreThreads)
@@ -462,7 +469,6 @@ private struct GaryxHomeThreadButton: View, Equatable {
     let onTogglePinnedThread: (String) -> Void
     let onUnpinThread: (String) -> Void
     let onArchiveThread: (GaryxThreadSummary) async -> Void
-    @State private var showsArchiveConfirmation = false
 
     static func == (lhs: GaryxHomeThreadButton, rhs: GaryxHomeThreadButton) -> Bool {
         lhs.row == rhs.row
@@ -472,12 +478,17 @@ private struct GaryxHomeThreadButton: View, Equatable {
         #if DEBUG
         let _ = GaryxHomeScrollPerformanceProbe.shared.markRowBody()
         #endif
-        let presentation = row.presentation
-            .withTrailingTimestamp(garyxFormattedTaskTimestamp(row.timestampValue))
-        GaryxSwipeActionRow(id: "thread:\(row.id)", actions: threadSwipeActions) {
+        // Divider folded into the row so one thread == one List cell. The
+        // timestamp is rendered live (self-refreshing) from the raw value rather
+        // than baked here, so the body stays equatable for cell reuse.
+        VStack(spacing: 0) {
+            if row.showsDivider {
+                GaryxSidebarRowDivider()
+            }
             GaryxSidebarThreadRowView(
-                presentation: presentation,
+                presentation: row.presentation,
                 avatar: row.avatar,
+                liveTimestampValue: row.timestampValue,
                 onSelect: {
                     onOpenThread(row.thread)
                 },
@@ -486,34 +497,24 @@ private struct GaryxHomeThreadButton: View, Equatable {
                 }
             )
         }
-        .onLongPressGesture {
-            guard row.canArchive, !row.presentation.isRunning else { return }
-            showsArchiveConfirmation = true
-        }
-        .confirmationDialog("Archive thread", isPresented: $showsArchiveConfirmation, titleVisibility: .visible) {
-            Button("Archive", role: .destructive) {
-                Task { await onArchiveThread(row.thread) }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            if row.canArchive {
+                Button(role: .destructive) {
+                    Task { await onArchiveThread(row.thread) }
+                } label: {
+                    Label("Archive thread", systemImage: "archivebox")
+                }
             }
-        }
-    }
-
-    private var threadSwipeActions: [GaryxRowAction] {
-        [
-            GaryxRowAction(
-                title: row.presentation.isPinned ? "Unpin thread" : "Pin thread",
-                systemImage: row.presentation.isPinned ? "pin.slash" : "pin",
-                tone: .neutral
-            ) {
+            Button {
                 onTogglePinnedThread(row.id)
-            },
-            GaryxRowAction(
-                title: "Archive thread",
-                systemImage: "archivebox",
-                tone: .destructive
-            ) {
-                Task { await onArchiveThread(row.thread) }
-            },
-        ]
+            } label: {
+                Label(
+                    row.presentation.isPinned ? "Unpin thread" : "Pin thread",
+                    systemImage: row.presentation.isPinned ? "pin.slash" : "pin"
+                )
+            }
+            .tint(Color(.systemGray))
+        }
     }
 }
 
@@ -1546,12 +1547,31 @@ enum GaryxSidebarThreadSelectionDisplay: Equatable {
     case none
 }
 
+/// Trailing relative timestamp that refreshes once a minute so the label
+/// ("3m"/"2h") never freezes when its row stays equatable across true List cell
+/// reuse. Only this leaf re-renders on the tick — the row body does not.
+struct GaryxRelativeTimestampText: View {
+    let timestampValue: String?
+
+    var body: some View {
+        TimelineView(.everyMinute) { context in
+            Text(garyxFormattedTaskTimestamp(timestampValue, now: context.date))
+                .font(GaryxFont.caption())
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+        }
+    }
+}
+
 struct GaryxSidebarThreadRowView: View {
     let presentation: GaryxSidebarThreadRowPresentation
     var avatar: GaryxSidebarThreadRowAvatar?
     var isFullBleed = false
     var density: GaryxSidebarThreadRowDensity = .regular
     var selectionDisplay: GaryxSidebarThreadSelectionDisplay = .sidebar
+    /// When set (home rows), render a self-refreshing relative timestamp from
+    /// this raw ISO value instead of `presentation.trailingTimestamp`.
+    var liveTimestampValue: String?
     var onSelect: (() -> Void)?
     var onUnpin: (() -> Void)?
     // `.onTapGesture` ignores `.disabled`, so honor the environment manually:
@@ -1648,26 +1668,30 @@ struct GaryxAvatarTypingBadge: View {
     var body: some View {
         Group {
             if isPaused {
-                badge(progress: 0)
+                badge(activeDot: -1)
             } else {
-                TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
-                    let cycle = 1.05
-                    let progress = context.date.timeIntervalSinceReferenceDate
-                        .truncatingRemainder(dividingBy: cycle) / cycle
-
-                    badge(progress: progress)
+                // One looping PhaseAnimator drives the three-dot wave on the render
+                // server: per-frame main-thread cost is zero (Core Animation
+                // interpolates opacity), the phase advances only ~3x/sec, and with
+                // no retained @State the loop restarts cleanly whenever a recycled
+                // List cell reappears. Cost does not scale with visible running rows.
+                PhaseAnimator([0, 1, 2]) { activeDot in
+                    badge(activeDot: activeDot)
+                } animation: { _ in
+                    .easeInOut(duration: 0.34)
                 }
             }
         }
         .accessibilityLabel("Running")
     }
 
-    private func badge(progress: Double) -> some View {
+    private func badge(activeDot: Int) -> some View {
         HStack(spacing: 2.2) {
             ForEach(0..<3, id: \.self) { index in
                 Circle()
-                    .fill(Color(.systemGray).opacity(dotOpacity(progress: progress, index: index)))
+                    .fill(Color(.systemGray))
                     .frame(width: 3.2, height: 3.2)
+                    .opacity(index == activeDot ? 1.0 : 0.4)
             }
         }
         .frame(width: 22, height: 15)
@@ -1676,11 +1700,6 @@ struct GaryxAvatarTypingBadge: View {
             Capsule()
                 .stroke(GaryxTheme.background, lineWidth: 2)
         }
-    }
-
-    private func dotOpacity(progress: Double, index: Int) -> Double {
-        let phase = progress * 2 * .pi - Double(index) * (.pi / 4)
-        return 0.35 + 0.65 * max(0, sin(phase))
     }
 }
 
@@ -1748,6 +1767,10 @@ private extension GaryxSidebarThreadRowView {
                 GaryxSidebarRunningIndicator()
             } else if presentation.isSelected, selectionDisplay == .checkmark {
                 GaryxSelectionCheckmark(size: 13)
+            } else if let liveTimestampValue, !liveTimestampValue.isEmpty {
+                // Home rows: self-refreshing relative timestamp (never freezes
+                // under equatable rows + true List cell reuse).
+                GaryxRelativeTimestampText(timestampValue: liveTimestampValue)
             } else if let trailingTimestamp = presentation.trailingTimestamp, !trailingTimestamp.isEmpty {
                 // The selected row already reads through its background fill;
                 // no extra trailing marker.

@@ -404,60 +404,7 @@ private struct GaryxHostingBackgroundClearer: UIViewRepresentable {
     }
 }
 
-func garyxFormattedTaskTimestamp(_ value: String?) -> String {
-    guard let value, let date = garyxISO8601Date(from: value) else {
-        return ""
-    }
-    let diff = max(0, Date().timeIntervalSince(date))
-    let minutes = Int(diff / 60)
-    let hours = Int(diff / 3_600)
-    let days = Int(diff / 86_400)
-    let months = days / 30
-    if minutes < 1 { return "now" }
-    if minutes < 60 { return "\(minutes)m" }
-    if hours < 24 { return "\(hours)h" }
-    if days < 30 { return "\(days)d" }
-    if months < 12 { return "\(months)mo" }
-    return "\(days / 365)y"
-}
-
-func garyxThreadDate(from value: String) -> Date? {
-    garyxISO8601Date(from: value)
-}
-
-// Formatter construction is expensive and these run per row per render in
-// sidebar/task lists, so keep shared instances (ISO8601DateFormatter is
-// thread-safe) plus a bounded parse cache keyed by the raw timestamp string.
-private let garyxISO8601FractionalFormatter: ISO8601DateFormatter = {
-    let formatter = ISO8601DateFormatter()
-    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    return formatter
-}()
-
-private let garyxISO8601StandardFormatter: ISO8601DateFormatter = {
-    let formatter = ISO8601DateFormatter()
-    formatter.formatOptions = [.withInternetDateTime]
-    return formatter
-}()
-
-private let garyxISO8601DateCache: NSCache<NSString, NSDate> = {
-    let cache = NSCache<NSString, NSDate>()
-    cache.countLimit = 4096
-    return cache
-}()
-
-private func garyxISO8601Date(from value: String) -> Date? {
-    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else { return nil }
-
-    let cacheKey = trimmed as NSString
-    if let cached = garyxISO8601DateCache.object(forKey: cacheKey) {
-        return cached as Date
-    }
-    let parsed = garyxISO8601FractionalFormatter.date(from: trimmed)
-        ?? garyxISO8601StandardFormatter.date(from: trimmed)
-    if let parsed {
-        garyxISO8601DateCache.setObject(parsed as NSDate, forKey: cacheKey)
-    }
-    return parsed
-}
+// Relative-time formatting and ISO8601 parsing moved to GaryxMobileCore
+// (`GaryxRelativeTimestamp.swift`) so `swift test` exercises the production
+// implementation. In the app target those Core sources compile into this same
+// module, so call sites here use them without importing GaryxMobileCore.
