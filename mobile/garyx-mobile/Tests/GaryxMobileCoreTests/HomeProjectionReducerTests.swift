@@ -186,6 +186,19 @@ final class HomeProjectionReducerTests: XCTestCase {
         )
     }
 
+    func testHomeVisibleRunningDotComesFromRecentThreadProjection() throws {
+        let input = GaryxHomeListFixture.makeInputs(threadCount: 12, pinnedCount: 0, runningCount: 1)
+        var state = HomeProjectionState()
+        state = reduce(state, ingest(input, epoch: 1)).state
+        state = reduce(state, .selectedThreadChanged(threadId: "thread-0")).state
+        state = reduce(state, .homeVisibilityChanged(isVisible: true)).state
+
+        XCTAssertTrue(
+            try row(in: state, id: "thread-0").presentation.isRunning,
+            "B2 stops the selected-thread stream on home, so the home dot must remain supplied by recent_threads."
+        )
+    }
+
     func testSameSourceStaleFramesAreIgnored() throws {
         let input = GaryxHomeListFixture.makeInputs(threadCount: 20, pinnedCount: 2, runningCount: 0)
         var state = reduce(HomeProjectionState(), ingest(input, epoch: 1)).state

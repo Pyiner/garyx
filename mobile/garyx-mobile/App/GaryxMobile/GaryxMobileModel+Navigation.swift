@@ -56,6 +56,7 @@ extension GaryxMobileModel {
     func popToHome() {
         guard navigationState.presentsContent else { return }
         invalidatePendingThreadOpen()
+        stopSelectedThreadStreamForHome()
         cancelSelectedThreadReconcileLoop()
         cancelWorkflowRunPolling()
         var nextState = navigationState
@@ -87,6 +88,9 @@ extension GaryxMobileModel {
                 var nextState = navigationState
                 nextState.setActivePanel(panel)
                 navigationState = nextState
+                if panel == .chat {
+                    ensureSelectedThreadStreamForVisibleConversation()
+                }
             }
             return
         }
@@ -103,7 +107,8 @@ extension GaryxMobileModel {
 
     func openConversation(
         source: GaryxMobilePanelOpenSource = .replace,
-        invalidatesPendingThreadOpen: Bool = true
+        invalidatesPendingThreadOpen: Bool = true,
+        startsSelectedThreadStream: Bool = true
     ) {
         if invalidatesPendingThreadOpen {
             invalidatePendingThreadOpen()
@@ -111,6 +116,9 @@ extension GaryxMobileModel {
         var nextState = navigationState
         nextState.openConversation(source: source)
         navigationState = nextState
+        if startsSelectedThreadStream {
+            ensureSelectedThreadStreamForVisibleConversation()
+        }
         setSidebarVisible(false)
     }
 

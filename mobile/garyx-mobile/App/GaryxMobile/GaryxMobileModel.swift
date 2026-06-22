@@ -92,7 +92,9 @@ final class GaryxMobileModel: ObservableObject {
     }
     @Published var selectedThread: GaryxThreadSummary? {
         didSet {
-            applySelectedThreadStreamPolicy(previousThreadId: oldValue?.id, selectedThreadId: selectedThread?.id)
+            if !suppressesSelectedThreadStreamPolicy {
+                applySelectedThreadStreamPolicy(previousThreadId: oldValue?.id, selectedThreadId: selectedThread?.id)
+            }
             refreshHomeThreadListSnapshot()
         }
     }
@@ -288,19 +290,12 @@ final class GaryxMobileModel: ObservableObject {
     var selectedThreadStreamTask: Task<Void, Never>?
     var selectedThreadStreamGeneration: UUID?
     var streamOwnedThreadId: String?
-    /// Resume-cursor override for the next per-thread stream connection. Set when a
-    /// live seq gap is detected (a dropped broadcast event) so the reconnect replays
-    /// from the last contiguous seq and refills the hole, rather than from the cache
-    /// head (which would skip it).
-    var selectedThreadStreamResumeOverride: Int?
-    /// Highest committed seq applied on the CURRENT stream connection (0 = none yet).
-    /// Drives mid-stream seq-gap detection and per-connection progress; reset on each
-    /// (re)connect.
-    var selectedThreadStreamConnectionLastSeq: Int = 0
+    var suppressesSelectedThreadStreamPolicy = false
     /// Coalesces render + persist across a burst of streamed committed rows (a large
     /// catch-up). Each row merges into the in-memory window immediately; this task
     /// flushes the accumulated window to the view/disk once per interval.
     var selectedThreadStreamFlushTask: Task<Void, Never>?
+    var selectedThreadStreamDrainTask: Task<Void, Never>?
     var messagesByThread: [String: [GaryxMobileMessage]] = [:]
     var messageSignaturesByThread: [String: MessageListSignature] = [:]
     /// Persistent committed-transcript cache (S2/S3): instant cold-start display
@@ -339,6 +334,7 @@ final class GaryxMobileModel: ObservableObject {
     let rootNavigationPathStore = GaryxRootNavigationPathStore()
     let routeNotFoundStore = GaryxRouteNotFoundStore()
     let homeThreadListStore = GaryxHomeThreadListStore()
+    let homeProjectionGateway = HomeProjectionGateway()
     let shellChromeStore = GaryxShellChromeStore()
     let navigationDrawerStore = GaryxNavigationDrawerStore()
     let recentThreadsWidgetPersistenceQueue = GaryxRecentThreadsWidgetPersistenceQueue()

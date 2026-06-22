@@ -8,4 +8,31 @@ final class GaryxSelectedThreadStreamPolicyTests: XCTestCase {
             .start("thread-new")
         )
     }
+
+    func testVisibleConversationRestartsStreamAfterHomeStop() {
+        XCTAssertTrue(GaryxVisibleConversationStreamPolicy.shouldStart(
+            isConversationVisible: true,
+            selectedThreadId: "thread-current",
+            streamOwnedThreadId: nil,
+            hasStreamTask: false
+        ))
+    }
+
+    func testVisibleConversationDoesNotRestartAlreadyOwnedStream() {
+        XCTAssertFalse(GaryxVisibleConversationStreamPolicy.shouldStart(
+            isConversationVisible: true,
+            selectedThreadId: "thread-current",
+            streamOwnedThreadId: "thread-current",
+            hasStreamTask: true
+        ))
+    }
+
+    func testHiddenHomeSurfaceDoesNotStartSelectedThreadStream() {
+        XCTAssertFalse(GaryxVisibleConversationStreamPolicy.shouldStart(
+            isConversationVisible: false,
+            selectedThreadId: "thread-current",
+            streamOwnedThreadId: nil,
+            hasStreamTask: false
+        ))
+    }
 }
