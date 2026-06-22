@@ -883,6 +883,7 @@ export interface DesktopThreadSummary {
   teamId?: string | null;
   teamName?: string | null;
   recentRunId?: string | null;
+  runState?: string | null;
   worktree?: ThreadWorktreeInfo | null;
   /**
    * Full team block when this thread is bound to a Team. It is filled by

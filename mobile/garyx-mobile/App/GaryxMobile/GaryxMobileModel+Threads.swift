@@ -263,6 +263,31 @@ extension GaryxMobileModel {
         }
     }
 
+    func refreshHomeThreadsAfterLocalRunStart() {
+        refreshHomeThreadsAfterLocalRunStateChange()
+        scheduleHomeThreadsRunStateRefresh(after: 350_000_000)
+    }
+
+    func refreshHomeThreadsAfterLocalRunStateChange() {
+        scheduleHomeThreadsRunStateRefresh()
+    }
+
+    private func scheduleHomeThreadsRunStateRefresh(after delayNanos: UInt64? = nil) {
+        guard hasGatewaySettings else { return }
+        Task { [weak self] in
+            if let delayNanos {
+                try? await Task.sleep(nanoseconds: delayNanos)
+                guard !Task.isCancelled else { return }
+            }
+            await self?.refreshHomeThreadsRunStateIfConnected()
+        }
+    }
+
+    private func refreshHomeThreadsRunStateIfConnected() async {
+        guard hasGatewaySettings, case .ready = connectionState else { return }
+        await refreshThreads(silent: true)
+    }
+
     func applyRecentThreadsPage(_ page: GaryxRecentThreadsPage, preservesLoadedPages: Bool) {
         let pageIds = pendingThreadArchives.visibleThreads(page.threads).map(\.id)
         let returnedEnd = page.offset + page.count
@@ -560,6 +585,7 @@ extension GaryxMobileModel {
 
     func startBackgroundCommittedRunReconcileLoop() {
         guard hasGatewaySettings,
+              isHomeVisible,
               case .ready = connectionState else {
             cancelBackgroundCommittedRunReconcileLoop()
             return
@@ -591,6 +617,9 @@ extension GaryxMobileModel {
         let decision = backgroundCommittedRunReconcilePlanner.nextDecision(
             candidateThreadIds: backgroundCommittedRunCandidateThreadIds()
         )
+        if decision.refreshesThreads {
+            await refreshThreads(silent: true)
+        }
         guard decision.hydratesCandidateThreads else { return }
 
         var observedCompletion = false
@@ -606,8 +635,16 @@ extension GaryxMobileModel {
             observedCompletion = observedCompletion || !remainedBusy
         }
         guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-        if decision.refreshesThreads || observedCompletion {
+        if observedCompletion {
             await refreshThreads(silent: true)
+        }
+    }
+
+    func syncBackgroundCommittedRunReconcileLoopForHomeVisibility() {
+        if isHomeVisible {
+            startBackgroundCommittedRunReconcileLoop()
+        } else {
+            cancelBackgroundCommittedRunReconcileLoop()
         }
     }
 
@@ -1299,6 +1336,7 @@ extension GaryxMobileModel {
         } else {
             runTracker.completeCommittedRun(threadId: threadId)
         }
+        refreshHomeThreadsAfterLocalRunStateChange()
     }
 
     func summaryWithCommittedRunState(_ thread: GaryxThreadSummary) -> GaryxThreadSummary {

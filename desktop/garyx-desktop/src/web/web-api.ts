@@ -31,6 +31,10 @@ type ThreadSummaryPayload = {
   message_count?: number;
   last_user_message?: string | null;
   last_assistant_message?: string | null;
+  recent_run_id?: string | null;
+  recentRunId?: string | null;
+  run_state?: string | null;
+  runState?: string | null;
 };
 
 type ThreadsPayload = {
@@ -262,6 +266,8 @@ function mapThreadSummary(value: ThreadSummaryPayload): DesktopThreadSummary {
     lastMessagePreview: preview,
     workspacePath: value.workspace_dir || null,
     messageCount: value.message_count,
+    recentRunId: value.recent_run_id || value.recentRunId || null,
+    runState: value.run_state || value.runState || null,
   };
 }
 

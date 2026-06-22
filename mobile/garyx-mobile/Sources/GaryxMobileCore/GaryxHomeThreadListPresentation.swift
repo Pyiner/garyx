@@ -4,31 +4,10 @@ import Foundation
 enum GaryxThreadSummaryRunStateResolver {
     static func resolvedRunState(
         apiRunState: String?,
-        recentRunId: String?,
-        committedState: GaryxTranscriptRunState?
+        recentRunId _: String?,
+        committedState _: GaryxTranscriptRunState?
     ) -> String? {
-        guard let committedState else {
-            return apiRunState
-        }
-
-        if committedState.busy {
-            return "running"
-        }
-
-        if let terminal = trimmed(committedState.terminalStatus) {
-            return terminal
-        }
-
-        return hasValue(recentRunId) ? "completed" : "idle"
-    }
-
-    private static func trimmed(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private static func hasValue(_ value: String?) -> Bool {
-        !(value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        apiRunState
     }
 }
 
@@ -705,22 +684,30 @@ final class GaryxBackgroundCommittedRunReconcilePlanner {
         forceRefresh: Bool = false
     ) -> GaryxBackgroundCommittedRunReconcileDecision {
         let normalizedIds = normalizedThreadIds(candidateThreadIds)
+        let intervalElapsed = lastRefreshAt.map { now.timeIntervalSince($0) >= minimumRefreshInterval } ?? true
+        let shouldRefresh = forceRefresh || intervalElapsed
         guard !normalizedIds.isEmpty else {
             lastCandidateThreadIds = []
-            return .idle
+            if shouldRefresh {
+                lastRefreshAt = now
+            }
+            return GaryxBackgroundCommittedRunReconcileDecision(
+                candidateThreadIds: [],
+                refreshesThreads: shouldRefresh,
+                hydratesCandidateThreads: false
+            )
         }
 
         let candidatesChanged = normalizedIds != lastCandidateThreadIds
-        let intervalElapsed = lastRefreshAt.map { now.timeIntervalSince($0) >= minimumRefreshInterval } ?? true
-        let shouldRefresh = forceRefresh || candidatesChanged || intervalElapsed
-        if shouldRefresh {
+        let refreshesThreads = shouldRefresh || candidatesChanged
+        if refreshesThreads {
             lastRefreshAt = now
         }
         lastCandidateThreadIds = normalizedIds
 
         return GaryxBackgroundCommittedRunReconcileDecision(
             candidateThreadIds: normalizedIds,
-            refreshesThreads: shouldRefresh,
+            refreshesThreads: refreshesThreads,
             hydratesCandidateThreads: true
         )
     }

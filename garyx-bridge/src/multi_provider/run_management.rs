@@ -2809,6 +2809,21 @@ impl MultiProviderBridge {
         (!aborted.is_empty(), aborted)
     }
 
+    /// Abort every active run across all threads. Called on graceful shutdown
+    /// so a clean restart writes close controls and leaves no orphaned
+    /// `running` projection behind; the startup reconcile only needs to back up
+    /// true hard crashes (SIGKILL / power loss).
+    pub async fn abort_all_active_runs(&self) -> Vec<String> {
+        let run_ids = self.get_active_runs().await;
+        let mut aborted = Vec::new();
+        for run_id in &run_ids {
+            if self.abort_run(run_id).await {
+                aborted.push(run_id.clone());
+            }
+        }
+        aborted
+    }
+
     /// Get list of active run IDs.
     pub async fn get_active_runs(&self) -> Vec<String> {
         self.inner

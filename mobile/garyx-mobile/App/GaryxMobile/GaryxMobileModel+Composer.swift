@@ -197,8 +197,10 @@ extension GaryxMobileModel {
                     intentId: clientIntentId,
                     error: "Thread is busy"
                 )
+                refreshHomeThreadsAfterLocalRunStateChange()
                 return
             }
+            refreshHomeThreadsAfterLocalRunStart()
             lastError = nil
             if !hasPendingDirectFollowUpAssistant(threadId: thread.id, assistantId: assistantId) {
                 activeAssistantMessageIdsByThread[thread.id] = assistantId
@@ -241,6 +243,7 @@ extension GaryxMobileModel {
                     intentId: clientIntentId,
                     error: displayMessage(for: error)
                 )
+                refreshHomeThreadsAfterLocalRunStateChange()
             }
             lastError = displayMessage(for: error)
         }
@@ -383,6 +386,7 @@ extension GaryxMobileModel {
                 intentId: queued.clientIntentId,
                 text: queued.text
             )
+            refreshHomeThreadsAfterLocalRunStart()
             activeAssistantMessageIdsByThread[queued.threadId] = assistantId
             let workspacePath = Self.firstNonEmpty(
                 thread.workspacePath,
@@ -410,6 +414,7 @@ extension GaryxMobileModel {
                 intentId: queued.clientIntentId,
                 error: displayMessage(for: error)
             )
+            refreshHomeThreadsAfterLocalRunStateChange()
             lastError = displayMessage(for: error)
         }
     }
@@ -449,6 +454,7 @@ extension GaryxMobileModel {
             intentId: clientIntentId,
             runId: result.runId
         )
+        refreshHomeThreadsAfterLocalRunStateChange()
         if !hasPendingDirectFollowUpAssistant(threadId: acceptedThreadId, assistantId: assistantMessageId) {
             activeAssistantMessageIdsByThread[acceptedThreadId] = assistantMessageId
         }

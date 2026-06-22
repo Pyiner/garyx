@@ -1,5 +1,6 @@
 use super::*;
 use crate::app_bootstrap::{AppStateBuilder, create_app_state};
+use crate::recent_thread_projection::ActiveRunProbe;
 use async_trait::async_trait;
 use axum::body::Body;
 use garyx_bridge::MultiProviderBridge;
@@ -18,6 +19,15 @@ fn test_state() -> Arc<AppState> {
     create_app_state(crate::test_support::with_gateway_auth(
         GaryxConfig::default(),
     ))
+}
+
+struct NeverActiveRunProbe;
+
+#[async_trait]
+impl ActiveRunProbe for NeverActiveRunProbe {
+    async fn is_run_active(&self, _run_id: &str) -> bool {
+        false
+    }
 }
 
 async fn append_run_start(state: &Arc<AppState>, thread_id: &str, run_id: &str) {
@@ -375,10 +385,11 @@ async fn test_app_state_builder_wires_bridge_thread_store_for_recent_projection(
 }
 
 #[tokio::test]
-async fn startup_warmup_projects_running_from_dangling_committed_run() {
+async fn startup_warmup_clears_dangling_orphan_run() {
     let state = AppStateBuilder::new(crate::test_support::with_gateway_auth(
         GaryxConfig::default(),
     ))
+    .with_active_run_probe(Arc::new(NeverActiveRunProbe))
     .build();
     append_run_start(&state, "thread::cold-running", "run::cold-running").await;
     state
@@ -405,25 +416,27 @@ async fn startup_warmup_projects_running_from_dangling_committed_run() {
 
     state.spawn_gateway_sync_cache_warmup();
 
-    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+    let record = tokio::time::timeout(std::time::Duration::from_secs(3), async {
         loop {
             let records = state
                 .ops
                 .garyx_db
                 .list_recent_threads(10, 0)
                 .expect("list recent threads");
-            if records.iter().any(|record| {
-                record.thread_id == "thread::cold-running"
-                    && record.active_run_id.as_deref() == Some("run::cold-running")
-                    && record.run_state == "running"
-            }) {
-                break;
+            if let Some(record) = records
+                .into_iter()
+                .find(|record| record.thread_id == "thread::cold-running")
+            {
+                break record;
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
     })
     .await
-    .expect("warmup should project dangling committed run as running");
+    .expect("warmup should project dangling committed run as an orphan");
+
+    assert_eq!(record.active_run_id, None);
+    assert_eq!(record.run_state, "completed");
 }
 
 // Reproduction (state-driven, no UI): a streaming run that is aborted must append

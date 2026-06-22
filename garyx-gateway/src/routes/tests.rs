@@ -1449,7 +1449,13 @@ async fn delete_thread_removes_garyx_db_pin() {
 
 #[tokio::test]
 async fn recent_threads_route_syncs_router_summary_to_garyx_db() {
-    let state = AppStateBuilder::new(test_config()).build();
+    // The running fixture below seeds a dangling run_start; inject a probe that
+    // confirms it as live so the projection treats it as a real running run.
+    // Crash-orphan handling (dangling run with no live bridge run) is covered in
+    // recent_thread_projection::tests.
+    let state = AppStateBuilder::new(test_config())
+        .with_active_run_probe(Arc::new(crate::recent_thread_projection::AlwaysActiveRunProbe))
+        .build();
     state
         .threads
         .thread_store

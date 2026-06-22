@@ -35,6 +35,7 @@ impl Gateway {
         self.state.spawn_gateway_sync_cache_warmup();
         tracing::info!("Gateway listening on {}", addr);
 
+        let shutdown_state = self.state.clone();
         axum::serve(
             listener,
             self.router
@@ -42,6 +43,25 @@ impl Gateway {
         )
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+
+        // On graceful shutdown, abort in-flight runs so a restart does not leave
+        // orphaned `running` projections behind. Bounded so a stuck abort cannot
+        // hang shutdown; the startup reconcile backs up anything not closed here.
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            shutdown_state.integration.bridge.abort_all_active_runs(),
+        )
+        .await
+        {
+            Ok(aborted) if !aborted.is_empty() => {
+                tracing::info!(
+                    count = aborted.len(),
+                    "aborted in-flight runs on graceful shutdown"
+                );
+            }
+            Ok(_) => {}
+            Err(_) => tracing::warn!("timed out aborting in-flight runs on shutdown"),
+        }
 
         tracing::info!("Gateway shut down gracefully");
         Ok(())

@@ -57,6 +57,7 @@ extension GaryxMobileModel {
         GaryxHomeScrollPerformanceProbe.shared.markHomeListStoreApply()
         #endif
         homeThreadListStore.apply(homeThreadListInput)
+        syncBackgroundCommittedRunReconcileLoopForHomeVisibility()
     }
 
     var homeThreadListInput: GaryxHomeThreadListInput {
@@ -77,21 +78,11 @@ extension GaryxMobileModel {
     }
 
     var homeThreadRunningThreadIds: Set<String> {
-        var running = Set<String>()
-        for thread in threads {
+        Set(threads.compactMap { thread in
             let threadId = thread.id.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !threadId.isEmpty else { continue }
-            if runTracker.isThreadBusy(threadId) {
-                running.insert(threadId)
-            } else if let state = runStateByThread[threadId] {
-                if state.busy {
-                    running.insert(threadId)
-                }
-            } else if isThreadSummaryRunning(thread) {
-                running.insert(threadId)
-            }
-        }
-        return running
+            guard !threadId.isEmpty, isThreadSummaryRunning(thread) else { return nil }
+            return threadId
+        })
     }
 
     var hasGatewaySettings: Bool {

@@ -402,6 +402,9 @@ interface ThreadSummaryPayload {
   teamDisplayName?: string | null;
   team?: ThreadTeamBlockPayload | null;
   recent_run_id?: string | null;
+  recentRunId?: string | null;
+  run_state?: string | null;
+  runState?: string | null;
   sdk_session_id?: string | null;
   worktree?: unknown;
 }
@@ -2098,9 +2101,8 @@ function mapThreadSummary(value: ThreadSummaryPayload): DesktopThreadSummary {
           : null),
     team,
     recentRunId:
-      typeof (value as { recent_run_id?: unknown }).recent_run_id === "string"
-        ? ((value as { recent_run_id?: string }).recent_run_id ?? null)
-        : null,
+      asString(value.recent_run_id) || asString(value.recentRunId) || null,
+    runState: asString(value.run_state) || asString(value.runState) || null,
     worktree: mapThreadWorktreeInfo(value.worktree),
   };
 }

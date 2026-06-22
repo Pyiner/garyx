@@ -40,7 +40,7 @@ use crate::event_stream_hub::EventStreamHub;
 use crate::garyx_db::GaryxDbService;
 use crate::health::HealthChecker;
 use crate::mcp_metrics::McpToolMetrics;
-use crate::recent_thread_projection::RecentThreadProjectingStore;
+use crate::recent_thread_projection::{ActiveRunProbe, BridgeActiveRunProbe, RecentThreadProjectingStore};
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
 use crate::task_projection::register_gateway_task_projection_reader;
@@ -108,6 +108,10 @@ pub struct AppStateBuilder {
     wikis: Arc<WikiStore>,
     app_db: Arc<AppDbService>,
     garyx_db: Arc<GaryxDbService>,
+    /// Optional override for the active-run probe. Production leaves this `None`
+    /// and `build` wires a bridge-backed probe; tests inject a fake to control
+    /// which runs count as live.
+    active_run_probe: Option<Arc<dyn ActiveRunProbe>>,
 }
 
 impl AppStateBuilder {
@@ -183,6 +187,7 @@ impl AppStateBuilder {
                 default_garyx_db_service()
                     .unwrap_or_else(|error| panic!("failed to open garyx database: {error}")),
             ),
+            active_run_probe: None,
         }
     }
 
@@ -207,6 +212,14 @@ impl AppStateBuilder {
 
     pub fn with_bridge(mut self, bridge: Arc<MultiProviderBridge>) -> Self {
         self.bridge = bridge;
+        self
+    }
+
+    /// Override the active-run probe (tests). Production wiring derives the
+    /// probe from the bridge in `build`.
+    #[cfg(test)]
+    pub(crate) fn with_active_run_probe(mut self, probe: Arc<dyn ActiveRunProbe>) -> Self {
+        self.active_run_probe = Some(probe);
         self
     }
 
@@ -307,10 +320,15 @@ impl AppStateBuilder {
             panic!("agent_team registry uniqueness check failed during startup: {error}");
         }
         let start_time = Instant::now();
+        let active_run_probe: Arc<dyn ActiveRunProbe> = self
+            .active_run_probe
+            .clone()
+            .unwrap_or_else(|| Arc::new(BridgeActiveRunProbe::new(Arc::downgrade(&self.bridge))));
         let thread_store: Arc<dyn ThreadStore> = Arc::new(RecentThreadProjectingStore::new(
             self.thread_store.clone(),
             self.garyx_db.clone(),
             self.thread_history.transcript_store(),
+            active_run_probe,
         ));
         register_gateway_task_projection_reader(&thread_store, &self.garyx_db);
         let thread_history = ThreadHistoryRepository::new(

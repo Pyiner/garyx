@@ -1,10 +1,11 @@
 use async_trait::async_trait;
+use garyx_bridge::MultiProviderBridge;
 use garyx_router::{
     ThreadStore, ThreadStoreError, ThreadTranscriptStore, history_message_count,
     is_hidden_thread_value, is_thread_key, thread_kind_from_value, workspace_dir_from_value,
 };
 use serde_json::Value;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use tracing::warn;
 
 use crate::garyx_db::{GaryxDbService, RecentThreadDraft};
@@ -16,10 +17,75 @@ pub(crate) const RECENT_THREAD_MISSING_TIMESTAMP: &str = "1970-01-01T00:00:00.00
 const RECENT_THREAD_PROJECTION_NAME: &str = "recent_threads";
 const RECENT_THREAD_PROJECTION_VERSION: i64 = 1;
 
+/// In-memory confirmation that a run is still actually executing, backed by the
+/// bridge run index. Used to veto a transcript `running` state left dangling by
+/// a crash: the transcript keeps a `run_start` with no paired close, but the
+/// run index is rebuilt empty on restart so the orphan resolves to idle.
+#[async_trait]
+pub(crate) trait ActiveRunProbe: Send + Sync {
+    async fn is_run_active(&self, run_id: &str) -> bool;
+}
+
+/// Bridge-backed active-run probe. Holds a `Weak` because the bridge owns an
+/// `Arc` to the projecting thread store (`set_thread_store_blocking`); an `Arc`
+/// back would form a reference cycle.
+pub(crate) struct BridgeActiveRunProbe {
+    bridge: Weak<MultiProviderBridge>,
+}
+
+impl BridgeActiveRunProbe {
+    pub(crate) fn new(bridge: Weak<MultiProviderBridge>) -> Self {
+        Self { bridge }
+    }
+}
+
+#[async_trait]
+impl ActiveRunProbe for BridgeActiveRunProbe {
+    async fn is_run_active(&self, run_id: &str) -> bool {
+        match self.bridge.upgrade() {
+            Some(bridge) => bridge.is_run_active(run_id).await,
+            None => false,
+        }
+    }
+}
+
+/// Resolve the authoritative active run id for a thread: the transcript's
+/// reduced active run, gated by in-memory confirmation that the run is still
+/// executing. Returns `None` (idle) when the transcript shows no open run or
+/// when the bridge no longer holds the run (crash orphan).
+pub(crate) async fn resolve_active_run_id(
+    transcript_store: &Arc<ThreadTranscriptStore>,
+    probe: &dyn ActiveRunProbe,
+    thread_id: &str,
+) -> Option<String> {
+    let active_run_id = active_run_id_from_transcript_store(transcript_store, thread_id).await?;
+    if probe.is_run_active(&active_run_id).await {
+        Some(active_run_id)
+    } else {
+        None
+    }
+}
+
+/// Test probe that reports every run as active, so route/projection tests can
+/// seed a busy transcript and have it project as `running` without standing up
+/// a real bridge run. Crash-orphan behavior is covered by tests that use a
+/// probe reporting inactive.
+#[cfg(test)]
+pub(crate) struct AlwaysActiveRunProbe;
+
+#[cfg(test)]
+#[async_trait]
+impl ActiveRunProbe for AlwaysActiveRunProbe {
+    async fn is_run_active(&self, _run_id: &str) -> bool {
+        true
+    }
+}
+
 pub(crate) struct RecentThreadProjectingStore {
     inner: Arc<dyn ThreadStore>,
     garyx_db: Arc<GaryxDbService>,
     transcript_store: Arc<ThreadTranscriptStore>,
+    active_run_probe: Arc<dyn ActiveRunProbe>,
 }
 
 impl RecentThreadProjectingStore {
@@ -27,11 +93,13 @@ impl RecentThreadProjectingStore {
         inner: Arc<dyn ThreadStore>,
         garyx_db: Arc<GaryxDbService>,
         transcript_store: Arc<ThreadTranscriptStore>,
+        active_run_probe: Arc<dyn ActiveRunProbe>,
     ) -> Self {
         Self {
             inner,
             garyx_db,
             transcript_store,
+            active_run_probe,
         }
     }
 
@@ -39,8 +107,12 @@ impl RecentThreadProjectingStore {
         if !is_thread_key(thread_id) {
             return;
         }
-        let active_run_id =
-            active_run_id_from_transcript_store(&self.transcript_store, thread_id).await;
+        let active_run_id = resolve_active_run_id(
+            &self.transcript_store,
+            self.active_run_probe.as_ref(),
+            thread_id,
+        )
+        .await;
         match thread_meta_projection_from_thread_data_with_active_run(
             thread_id,
             data,
@@ -132,6 +204,7 @@ pub(crate) async fn backfill_recent_thread_projection_if_incomplete(
     thread_store: &Arc<dyn ThreadStore>,
     transcript_store: &Arc<ThreadTranscriptStore>,
     garyx_db: &GaryxDbService,
+    probe: &dyn ActiveRunProbe,
 ) -> usize {
     match garyx_db.count_recent_threads() {
         Ok(count) if count > 0 => return 0,
@@ -162,7 +235,7 @@ pub(crate) async fn backfill_recent_thread_projection_if_incomplete(
         let Some(data) = thread_store.get(&thread_id).await else {
             continue;
         };
-        let active_run_id = active_run_id_from_transcript_store(transcript_store, &thread_id).await;
+        let active_run_id = resolve_active_run_id(transcript_store, probe, &thread_id).await;
         if let Some(draft) =
             recent_thread_draft_from_thread_data_with_active_run(&thread_id, &data, active_run_id)
         {
@@ -188,6 +261,7 @@ pub(crate) async fn reconcile_active_recent_thread_projection(
     thread_store: &Arc<dyn ThreadStore>,
     transcript_store: &Arc<ThreadTranscriptStore>,
     garyx_db: &GaryxDbService,
+    probe: &dyn ActiveRunProbe,
 ) -> usize {
     let records = match garyx_db.list_recent_threads(usize::MAX, 0) {
         Ok(records) => records,
@@ -222,7 +296,7 @@ pub(crate) async fn reconcile_active_recent_thread_projection(
         }
 
         let active_run_id =
-            active_run_id_from_transcript_store(transcript_store, &record.thread_id).await;
+            resolve_active_run_id(transcript_store, probe, &record.thread_id).await;
         let Some(draft) = recent_thread_draft_from_thread_data_with_active_run(
             &record.thread_id,
             &data,
@@ -529,8 +603,49 @@ fn summarize_text(value: &str, limit: usize) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use garyx_router::InMemoryThreadStore;
+    use garyx_router::{InMemoryThreadStore, RunTranscriptRecordDraft};
     use serde_json::json;
+
+    struct FakeActiveRunProbe {
+        active: bool,
+    }
+
+    #[async_trait]
+    impl ActiveRunProbe for FakeActiveRunProbe {
+        async fn is_run_active(&self, _run_id: &str) -> bool {
+            self.active
+        }
+    }
+
+    /// Seed a `run_start` control with no paired close, so the transcript
+    /// reduces to busy (active_run_id = run_id) — the shape a crash leaves.
+    async fn seed_busy_run(
+        transcript_store: &Arc<ThreadTranscriptStore>,
+        thread_id: &str,
+        run_id: &str,
+    ) {
+        transcript_store
+            .append_run_records(
+                thread_id,
+                Some(run_id),
+                &[RunTranscriptRecordDraft {
+                    timestamp: Some("2026-01-01T00:00:00Z".to_owned()),
+                    message: json!({
+                        "role": "system",
+                        "kind": "control",
+                        "internal": true,
+                        "internal_kind": "control",
+                        "control": {
+                            "kind": "run_start",
+                            "thread_id": thread_id,
+                            "run_id": run_id,
+                        },
+                    }),
+                }],
+            )
+            .await
+            .expect("seed run_start");
+    }
 
     fn stale_active_draft(thread_id: &str) -> RecentThreadDraft {
         RecentThreadDraft {
@@ -576,9 +691,14 @@ mod tests {
             .expect("seed stale recent thread");
         let transcript_store = Arc::new(ThreadTranscriptStore::memory());
 
-        let count =
-            reconcile_active_recent_thread_projection(&thread_store, &transcript_store, &garyx_db)
-                .await;
+        let probe = FakeActiveRunProbe { active: false };
+        let count = reconcile_active_recent_thread_projection(
+            &thread_store,
+            &transcript_store,
+            &garyx_db,
+            &probe,
+        )
+        .await;
 
         assert_eq!(count, 1);
         let records = garyx_db
@@ -587,6 +707,67 @@ mod tests {
         assert_eq!(records[0].thread_id, thread_id);
         assert_eq!(records[0].active_run_id, None);
         assert_eq!(records[0].run_state, "completed");
+    }
+
+    #[tokio::test]
+    async fn project_clears_running_when_run_not_active_in_memory() {
+        // Transcript still shows an open run (crash left no close), but the
+        // bridge no longer holds it → the badge must resolve to idle.
+        let thread_id = "thread::orphan-running";
+        let run_id = "run::orphan";
+        let inner: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        let garyx_db = Arc::new(GaryxDbService::memory().expect("memory db"));
+        let transcript_store = Arc::new(ThreadTranscriptStore::memory());
+        seed_busy_run(&transcript_store, thread_id, run_id).await;
+
+        let probe: Arc<dyn ActiveRunProbe> = Arc::new(FakeActiveRunProbe { active: false });
+        let store =
+            RecentThreadProjectingStore::new(inner, garyx_db.clone(), transcript_store, probe);
+        store
+            .set(
+                thread_id,
+                json!({
+                    "label": "Orphan",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "messages": [{"role": "user", "content": "hi"}]
+                }),
+            )
+            .await;
+
+        let records = garyx_db.list_recent_threads(10, 0).expect("list");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].active_run_id, None);
+        assert_ne!(records[0].run_state, "running");
+    }
+
+    #[tokio::test]
+    async fn project_keeps_running_when_run_active_in_memory() {
+        // Transcript shows an open run and the bridge confirms it is live → running.
+        let thread_id = "thread::live-running";
+        let run_id = "run::live";
+        let inner: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        let garyx_db = Arc::new(GaryxDbService::memory().expect("memory db"));
+        let transcript_store = Arc::new(ThreadTranscriptStore::memory());
+        seed_busy_run(&transcript_store, thread_id, run_id).await;
+
+        let probe: Arc<dyn ActiveRunProbe> = Arc::new(FakeActiveRunProbe { active: true });
+        let store =
+            RecentThreadProjectingStore::new(inner, garyx_db.clone(), transcript_store, probe);
+        store
+            .set(
+                thread_id,
+                json!({
+                    "label": "Live",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "messages": [{"role": "user", "content": "hi"}]
+                }),
+            )
+            .await;
+
+        let records = garyx_db.list_recent_threads(10, 0).expect("list");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].active_run_id.as_deref(), Some(run_id));
+        assert_eq!(records[0].run_state, "running");
     }
 
     #[tokio::test]
@@ -631,6 +812,7 @@ mod tests {
             &thread_store,
             &transcript_store,
             &garyx_db,
+            &FakeActiveRunProbe { active: false },
         )
         .await;
 
@@ -691,7 +873,9 @@ mod tests {
         let inner: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
         let garyx_db = Arc::new(GaryxDbService::memory().expect("memory db"));
         let transcript_store = Arc::new(ThreadTranscriptStore::memory());
-        let store = RecentThreadProjectingStore::new(inner, garyx_db.clone(), transcript_store);
+        let probe: Arc<dyn ActiveRunProbe> = Arc::new(FakeActiveRunProbe { active: false });
+        let store =
+            RecentThreadProjectingStore::new(inner, garyx_db.clone(), transcript_store, probe);
 
         store
             .set(
