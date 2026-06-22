@@ -22316,6 +22316,12 @@ button.new-thread-dreams-scan:hover {
   --task-forest-tone-bg: var(--color-token-bg-secondary);
 }
 
+.task-forest-node.tone-thread,
+.task-forest-minimap .tone-thread {
+  --task-forest-tone: #2f6f9f;
+  --task-forest-tone-bg: #e9f3fa;
+}
+
 .task-forest-breadcrumb {
   flex: 1;
   gap: 4px;
@@ -22502,6 +22508,12 @@ button.new-thread-dreams-scan:hover {
 .task-forest-node.active-run {
   background:
     linear-gradient(180deg, var(--color-token-bg-success), var(--color-token-bg-primary) 70%);
+}
+
+.task-forest-node.kind-thread {
+  border-style: dashed;
+  background:
+    linear-gradient(180deg, #f5fbff, var(--color-token-bg-primary) 74%);
 }
 
 .task-forest-node.failed-run,

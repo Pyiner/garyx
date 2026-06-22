@@ -538,6 +538,11 @@ interface TasksPayload {
 }
 
 interface TaskForestNodePayload extends TaskSummaryPayload {
+  kind?: string | null;
+  node_id?: string | null;
+  nodeId?: string | null;
+  parent_node_id?: string | null;
+  parentNodeId?: string | null;
   parent_task_number?: number | null;
   parentTaskNumber?: number | null;
   parent_thread_id?: string | null;
@@ -548,6 +553,16 @@ interface TaskForestNodePayload extends TaskSummaryPayload {
   runState?: string | null;
   last_active_at?: string | null;
   lastActiveAt?: string | null;
+  thread_type?: string | null;
+  threadType?: string | null;
+  provider_type?: string | null;
+  providerType?: string | null;
+  agent_id?: string | null;
+  agentId?: string | null;
+  message_count?: number | null;
+  messageCount?: number | null;
+  last_message_preview?: string | null;
+  lastMessagePreview?: string | null;
 }
 
 interface TaskForestPayload {
@@ -2356,7 +2371,12 @@ function mapTaskSummary(value: TaskSummaryPayload): DesktopTaskSummary {
     (number > 0 ? `#TASK-${number}` : "") ||
     "Untitled task";
   return {
-    threadId: asString(value.thread_id) || asString(value.threadId) || "",
+    threadId:
+      asString(value.thread_id) ||
+      asString(value.threadId) ||
+      asString(task.thread_id) ||
+      asString(task.threadId) ||
+      "",
     taskId:
       asString(value.task_id) ||
       asString(value.taskId) ||
@@ -2398,8 +2418,49 @@ function mapTaskSummary(value: TaskSummaryPayload): DesktopTaskSummary {
 }
 
 function mapTaskForestNode(value: TaskForestNodePayload): DesktopTaskForestNode {
+  const kind = (asString(value.kind) || "").trim().toLowerCase();
+  if (kind === "thread") {
+    const threadId = asString(value.thread_id) || asString(value.threadId) || "";
+    return {
+      kind: "thread",
+      nodeId:
+        asString(value.node_id) ||
+        asString(value.nodeId) ||
+        `thread-root:${threadId}`,
+      threadId,
+      title: asString(value.title) || threadId || "Pinned thread",
+      threadType:
+        asString(value.thread_type) || asString(value.threadType) || "chat",
+      providerType:
+        asString(value.provider_type) || asString(value.providerType) || null,
+      agentId: asString(value.agent_id) || asString(value.agentId) || null,
+      messageCount:
+        asFiniteNumber(value.message_count) ??
+        asFiniteNumber(value.messageCount) ??
+        0,
+      lastMessagePreview:
+        asString(value.last_message_preview) ||
+        asString(value.lastMessagePreview) ||
+        "",
+      activeRunId:
+        asString(value.active_run_id) || asString(value.activeRunId) || null,
+      runState: asString(value.run_state) || asString(value.runState) || "idle",
+      updatedAt:
+        asString(value.updated_at) || asString(value.updatedAt) || null,
+      lastActiveAt:
+        asString(value.last_active_at) || asString(value.lastActiveAt) || null,
+    };
+  }
+  const task = mapTaskSummary(value);
   return {
-    ...mapTaskSummary(value),
+    ...task,
+    kind: "task",
+    nodeId:
+      asString(value.node_id) ||
+      asString(value.nodeId) ||
+      `task:${task.threadId}`,
+    parentNodeId:
+      asString(value.parent_node_id) || asString(value.parentNodeId) || null,
     parentTaskNumber:
       asFiniteNumber(value.parent_task_number) ??
       asFiniteNumber(value.parentTaskNumber) ??

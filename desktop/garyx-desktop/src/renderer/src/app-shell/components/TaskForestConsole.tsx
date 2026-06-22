@@ -30,6 +30,7 @@ import type {
   DesktopBotConsoleSummary,
   DesktopCustomAgent,
   DesktopTaskForestNode,
+  DesktopTaskForestTaskNode,
   DesktopTaskStatus,
   DesktopWorkspace,
 } from "@shared/contracts";
@@ -95,11 +96,19 @@ const MINIMAP_PLOT_WIDTH = 150;
 const MINIMAP_PLOT_HEIGHT = 82;
 const SMOOTH_CAMERA_MS = 220;
 
-function displayTaskId(task: DesktopTaskForestNode): string {
+function isTaskNode(node: DesktopTaskForestNode | null): node is DesktopTaskForestTaskNode {
+  return Boolean(node && node.kind === "task");
+}
+
+function displayNodeId(node: DesktopTaskForestNode): string {
+  return node.kind === "task" ? displayTaskId(node) : "Pinned";
+}
+
+function displayTaskId(task: DesktopTaskForestTaskNode): string {
   return task.taskId || `#TASK-${task.number}`;
 }
 
-function principalLabel(task: DesktopTaskForestNode): string {
+function principalLabel(task: DesktopTaskForestTaskNode): string {
   if (task.assignee?.kind === "agent") {
     return task.assignee.agentId;
   }
@@ -107,6 +116,13 @@ function principalLabel(task: DesktopTaskForestNode): string {
     return `@${task.assignee.userId}`;
   }
   return task.runtimeAgentId || "unassigned";
+}
+
+function threadRootLabel(thread: DesktopTaskForestNode): string {
+  if (thread.kind === "task") {
+    return principalLabel(thread);
+  }
+  return thread.agentId || thread.providerType || "thread";
 }
 
 function initials(value: string): string {
@@ -148,6 +164,9 @@ function taskNumberFromId(taskId?: string | null): number | null {
 }
 
 function parentNumberForNavigation(task: DesktopTaskForestNode): number | null {
+  if (task.kind !== "task") {
+    return null;
+  }
   if (typeof task.parentTaskNumber === "number" && task.parentTaskNumber > 0) {
     return task.parentTaskNumber;
   }
@@ -164,6 +183,16 @@ function isEditableEventTarget(target: EventTarget | null): boolean {
 }
 
 function taskSourceForChild(parent: DesktopTaskForestNode) {
+  if (parent.kind === "thread") {
+    return {
+      threadId: parent.threadId,
+      taskId: null,
+      taskThreadId: null,
+      botId: null,
+      channel: null,
+      accountId: null,
+    };
+  }
   return {
     threadId: parent.threadId,
     taskId: displayTaskId(parent),
@@ -221,15 +250,14 @@ export function TaskForestConsole({
     camera: Camera;
   } | null>(null);
   const [tasks, setTasks] = useState<DesktopTaskForestNode[]>([]);
-  const [total, setTotal] = useState(0);
   const [rootThreadIds, setRootThreadIds] = useState<string[]>([]);
   const [skippedPinnedThreadIds, setSkippedPinnedThreadIds] = useState<string[]>([]);
   const [projectionCurrent, setProjectionCurrent] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<DesktopTaskStatus | null>(null);
-  const [selectedNumber, setSelectedNumber] = useState<number | null>(null);
-  const [cursorNumber, setCursorNumber] = useState<number | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [cursorNodeId, setCursorNodeId] = useState<string | null>(null);
   const [camera, setCamera] = useState<Camera>({ x: 48, y: 42, z: 1 });
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
   const [smoothCamera, setSmoothCamera] = useState(false);
@@ -306,28 +334,37 @@ export function TaskForestConsole({
     if (!tasks.length) {
       return null;
     }
-    const taskNumbers = tasks
-      .map((task) => task.number)
-      .sort((left, right) => left - right)
+    const nodeIds = tasks
+      .map((task) => task.nodeId)
+      .sort()
       .join(",");
-    return `${sourceBot || "all"}:${pinnedThreadSignature}:${taskNumbers}`;
+    return `${sourceBot || "all"}:${pinnedThreadSignature}:${nodeIds}`;
   }, [pinnedThreadSignature, sourceBot, tasks]);
-  const nodesByNumber = useMemo(
-    () => new Map(layout.nodes.map((node) => [node.task.number, node])),
+  const nodesById = useMemo(
+    () => new Map(layout.nodes.map((node) => [node.task.nodeId, node])),
     [layout.nodes],
   );
-  const selectedTask = selectedNumber ? nodesByNumber.get(selectedNumber)?.task ?? null : null;
+  const selectedTask = selectedNodeId ? nodesById.get(selectedNodeId)?.task ?? null : null;
   const selectedPath = useMemo(() => {
     if (!selectedTask) {
       return [];
     }
-    const byNumber = new Map(tasks.map((task) => [task.number, task]));
+    const byId = new Map(tasks.map((task) => [task.nodeId, task]));
+    const byNumber = new Map(
+      tasks
+        .filter(isTaskNode)
+        .map((task) => [task.number, task] as const),
+    );
     const path: DesktopTaskForestNode[] = [];
     let current: DesktopTaskForestNode | null = selectedTask;
-    const seen = new Set<number>();
-    while (current && !seen.has(current.number)) {
+    const seen = new Set<string>();
+    while (current && !seen.has(current.nodeId)) {
       path.unshift(current);
-      seen.add(current.number);
+      seen.add(current.nodeId);
+      if (current.kind === "task" && current.parentNodeId) {
+        current = byId.get(current.parentNodeId) ?? null;
+        continue;
+      }
       const parentNumber = parentNumberForNavigation(current);
       current = parentNumber ? byNumber.get(parentNumber) ?? null : null;
     }
@@ -342,6 +379,9 @@ export function TaskForestConsole({
       done: 0,
     };
     for (const task of tasks) {
+      if (task.kind !== "task") {
+        continue;
+      }
       counts[task.status] += 1;
     }
     return counts;
@@ -352,12 +392,11 @@ export function TaskForestConsole({
       if (!pinnedThreadIds.length) {
         if (mountedRef.current) {
           setTasks([]);
-          setTotal(0);
           setRootThreadIds([]);
           setSkippedPinnedThreadIds([]);
           setProjectionCurrent(true);
-          setSelectedNumber(null);
-          setCursorNumber(null);
+          setSelectedNodeId(null);
+          setCursorNodeId(null);
           setError(null);
           setLoading(false);
         }
@@ -383,19 +422,18 @@ export function TaskForestConsole({
             return;
           }
           setTasks(page.tasks);
-          setTotal(page.total);
           setRootThreadIds(page.rootThreadIds);
           setSkippedPinnedThreadIds(page.skippedPinnedThreadIds);
           setProjectionCurrent(page.projectionCurrent);
-          setSelectedNumber((current) =>
-            current && page.tasks.some((task) => task.number === current)
+          setSelectedNodeId((current) =>
+            current && page.tasks.some((task) => task.nodeId === current)
               ? current
               : null,
           );
-          setCursorNumber((current) =>
-            current && page.tasks.some((task) => task.number === current)
+          setCursorNodeId((current) =>
+            current && page.tasks.some((task) => task.nodeId === current)
               ? current
-              : page.tasks[0]?.number ?? null,
+              : page.tasks[0]?.nodeId ?? null,
           );
         } catch (loadError) {
           if (!mountedRef.current || skipResultForRequestRef.current === requestSequence) {
@@ -498,7 +536,7 @@ export function TaskForestConsole({
   const focusTask = useCallback(
     (task: DesktopTaskForestNode) => {
       const stage = stageRef.current;
-      const node = nodesByNumber.get(task.number);
+      const node = nodesById.get(task.nodeId);
       if (!stage || !node) {
         return;
       }
@@ -513,7 +551,7 @@ export function TaskForestConsole({
         true,
       );
     },
-    [camera.z, moveCamera, nodesByNumber],
+    [camera.z, moveCamera, nodesById],
   );
 
   useEffect(() => {
@@ -530,14 +568,14 @@ export function TaskForestConsole({
   const openTask = useCallback(
     async (task: DesktopTaskForestNode) => {
       const requestSequence = ++openTaskRequestRef.current;
-      setSelectedNumber(task.number);
-      setCursorNumber(task.number);
+      setSelectedNodeId(task.nodeId);
+      setCursorNodeId(task.nodeId);
       const opened = await onOpenThreadInPanel(task.threadId);
       if (requestSequence !== openTaskRequestRef.current) {
         return;
       }
       if (!opened) {
-        setSelectedNumber((current) => (current === task.number ? null : current));
+        setSelectedNodeId((current) => (current === task.nodeId ? null : current));
         onToast(t("Thread not found."), "error");
       }
     },
@@ -570,31 +608,51 @@ export function TaskForestConsole({
       }
       const currentIndex = Math.max(
         0,
-        ordered.findIndex((node) => node.task.number === cursorNumber),
+        ordered.findIndex((node) => node.task.nodeId === cursorNodeId),
       );
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
         const delta = event.key === "ArrowDown" ? 1 : -1;
         const next = ordered[(currentIndex + delta + ordered.length) % ordered.length];
-        setCursorNumber(next.task.number);
+        setCursorNodeId(next.task.nodeId);
       } else if (event.key === "ArrowRight") {
         event.preventDefault();
-        const child = layout.nodes.find(
-          (node) => parentNumberForNavigation(node.task) === cursorNumber,
-        );
+        const current = cursorNodeId ? nodesById.get(cursorNodeId)?.task ?? null : null;
+        const currentTaskNumber = isTaskNode(current) ? current.number : null;
+        const child = layout.nodes.find((node) => {
+          const candidate = node.task;
+          if (candidate.kind !== "task") {
+            return false;
+          }
+          if (candidate.parentNodeId) {
+            return candidate.parentNodeId === cursorNodeId;
+          }
+          return (
+            currentTaskNumber !== null &&
+            parentNumberForNavigation(candidate) === currentTaskNumber
+          );
+        });
         if (child) {
-          setCursorNumber(child.task.number);
+          setCursorNodeId(child.task.nodeId);
         }
       } else if (event.key === "ArrowLeft") {
         event.preventDefault();
-        const current = cursorNumber ? nodesByNumber.get(cursorNumber)?.task : null;
-        const parentNumber = current ? parentNumberForNavigation(current) : null;
-        const parent = parentNumber ? nodesByNumber.get(parentNumber) : null;
+        const current = cursorNodeId ? nodesById.get(cursorNodeId)?.task : null;
+        const parent =
+          current?.kind === "task" && current.parentNodeId
+            ? nodesById.get(current.parentNodeId)
+            : current?.kind === "task"
+              ? layout.nodes.find(
+                  (node) =>
+                    node.task.kind === "task" &&
+                    node.task.number === parentNumberForNavigation(current),
+                )
+              : null;
         if (parent) {
-          setCursorNumber(parent.task.number);
+          setCursorNodeId(parent.task.nodeId);
         }
       } else if (event.key === "Enter") {
-        const task = cursorNumber ? nodesByNumber.get(cursorNumber)?.task : null;
+        const task = cursorNodeId ? nodesById.get(cursorNodeId)?.task : null;
         if (task) {
           event.preventDefault();
           void openTask(task);
@@ -614,7 +672,7 @@ export function TaskForestConsole({
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [cursorNumber, draft, layout.nodes, nodesByNumber, openTask, paletteOpen]);
+  }, [cursorNodeId, draft, layout.nodes, nodesById, openTask, paletteOpen]);
 
   function zoomAt(event: WheelEvent<HTMLDivElement>) {
     if (!event.ctrlKey && !event.metaKey) {
@@ -677,7 +735,7 @@ export function TaskForestConsole({
   }
 
   async function updateSelectedStatus(status: DesktopTaskStatus) {
-    if (!selectedTask || selectedTask.status === status) {
+    if (!isTaskNode(selectedTask) || selectedTask.status === status) {
       return;
     }
     setMutatingTaskId(displayTaskId(selectedTask));
@@ -707,12 +765,13 @@ export function TaskForestConsole({
         }
         return (
           task.title.toLowerCase().includes(query) ||
-          displayTaskId(task).toLowerCase().includes(query)
+          displayNodeId(task).toLowerCase().includes(query)
         );
       })
       .slice(0, 8);
   }, [paletteQuery, tasks]);
 
+  const taskNodeCount = tasks.filter(isTaskNode).length;
   const activeNodeCount = tasks.filter(isActiveRun).length;
   const readout = `${Math.round(camera.z * 100)}%`;
   const worldWidth = Math.max(1, layout.bbox.maxX + 80);
@@ -730,7 +789,7 @@ export function TaskForestConsole({
       maxY: (stageSize.height - camera.y) / camera.z,
     };
   }, [camera, stageSize.height, stageSize.width]);
-  const visibleNodeNumbers = useMemo(() => {
+  const visibleNodeIds = useMemo(() => {
     if (!worldViewport || layout.nodes.length <= CULLING_NODE_THRESHOLD) {
       return null;
     }
@@ -742,19 +801,19 @@ export function TaskForestConsole({
   }, [camera.z, layout.nodes, worldViewport]);
   const visibleNodes = useMemo(
     () =>
-      visibleNodeNumbers
-        ? layout.nodes.filter((node) => visibleNodeNumbers.has(node.task.number))
+      visibleNodeIds
+        ? layout.nodes.filter((node) => visibleNodeIds.has(node.task.nodeId))
         : layout.nodes,
-    [layout.nodes, visibleNodeNumbers],
+    [layout.nodes, visibleNodeIds],
   );
   const visibleEdges = useMemo(
     () =>
-      visibleNodeNumbers
+      visibleNodeIds
         ? layout.edges.filter(
-            (edge) => visibleNodeNumbers.has(edge.from) || visibleNodeNumbers.has(edge.to),
+            (edge) => visibleNodeIds.has(edge.from) || visibleNodeIds.has(edge.to),
           )
         : layout.edges,
-    [layout.edges, visibleNodeNumbers],
+    [layout.edges, visibleNodeIds],
   );
   const minimapViewport = useMemo(() => {
     if (!worldViewport) {
@@ -849,12 +908,12 @@ export function TaskForestConsole({
           {selectedPath.length ? (
             selectedPath.map((task, index) => (
               <button
-                key={task.threadId}
+                key={task.nodeId}
                 onClick={() => void openTask(task)}
                 type="button"
               >
                 {index > 0 ? <span aria-hidden>/</span> : null}
-                {displayTaskId(task)}
+                {displayNodeId(task)}
               </button>
             ))
           ) : (
@@ -941,8 +1000,8 @@ export function TaskForestConsole({
         ) : !tasks.length ? (
           <div className="task-forest-state">
             {pinnedThreadIds.length
-              ? t("Pinned threads with tasks will appear here.")
-              : t("Pin threads to add them to the operation room.")}
+              ? t("Pinned conversations with tasks will appear here.")
+              : t("Pin conversations to add them to the operation room.")}
           </div>
         ) : null}
         <div
@@ -971,15 +1030,16 @@ export function TaskForestConsole({
           </svg>
           {visibleNodes.map((node) => {
             const task = node.task;
-            const meta = STATUS_META[task.status];
-            const dimmed = Boolean(statusFilter && task.status !== statusFilter);
+            const taskNode = isTaskNode(task);
+            const meta = taskNode ? STATUS_META[task.status] : null;
+            const dimmed = Boolean(taskNode && statusFilter && task.status !== statusFilter);
             const active = isActiveRun(task);
             const failed = isFailedRun(task);
             return (
               <button
-                aria-current={selectedNumber === task.number ? "true" : undefined}
-                className={`task-forest-node tone-${meta.tone} ${selectedNumber === task.number ? "selected" : ""} ${cursorNumber === task.number ? "cursor" : ""} ${active ? "active-run" : ""} ${failed ? "failed-run" : ""} ${dimmed ? "dimmed" : ""}`}
-                key={task.threadId}
+                aria-current={selectedNodeId === task.nodeId ? "true" : undefined}
+                className={`task-forest-node ${taskNode ? `tone-${meta?.tone}` : "kind-thread tone-thread"} ${selectedNodeId === task.nodeId ? "selected" : ""} ${cursorNodeId === task.nodeId ? "cursor" : ""} ${active ? "active-run" : ""} ${failed ? "failed-run" : ""} ${dimmed ? "dimmed" : ""}`}
+                key={task.nodeId}
                 onClick={() => void openTask(task)}
                 role="treeitem"
                 style={{
@@ -992,19 +1052,23 @@ export function TaskForestConsole({
               >
                 <span className="task-forest-node-row">
                   <span className="task-forest-pill">
-                    <meta.Icon aria-hidden size={11} strokeWidth={2} />
-                    {t(meta.label)}
+                    {taskNode && meta ? (
+                      <meta.Icon aria-hidden size={11} strokeWidth={2} />
+                    ) : (
+                      <MessageSquare aria-hidden size={11} strokeWidth={2} />
+                    )}
+                    {taskNode && meta ? t(meta.label) : t("Thread")}
                     {active ? <span className="task-forest-pulse-dot" /> : null}
                   </span>
-                  <span className="task-forest-node-id">{displayTaskId(task)}</span>
+                  <span className="task-forest-node-id">{displayNodeId(task)}</span>
                 </span>
                 <span className="task-forest-node-title">{task.title}</span>
                 <span className="task-forest-node-meta">
                   <span className={`task-forest-avatar ${active ? "active" : ""}`}>
-                    {initials(principalLabel(task))}
+                    {initials(threadRootLabel(task))}
                   </span>
-                  <span>{principalLabel(task)}</span>
-                  <span>{task.replyCount}</span>
+                  <span>{threadRootLabel(task)}</span>
+                  <span>{taskNode ? task.replyCount : task.messageCount}</span>
                   {node.hiddenDescendantCount ? (
                     <span className="task-forest-rollup">
                       +{node.hiddenDescendantCount}
@@ -1016,7 +1080,7 @@ export function TaskForestConsole({
           })}
         </div>
         <div className="task-forest-legend">
-          <span>{t("{count} tasks", { count: total || tasks.length })}</span>
+          <span>{t("{count} tasks", { count: taskNodeCount })}</span>
           <span>{t("{count} roots", { count: rootThreadIds.length })}</span>
           <span>{activeNodeCount ? t("{count} running", { count: activeNodeCount }) : t("Idle")}</span>
           {skippedPinnedThreadIds.length ? (
@@ -1039,8 +1103,10 @@ export function TaskForestConsole({
               82;
             return (
               <span
-                className={`tone-${STATUS_META[node.task.status].tone} ${isActiveRun(node.task) ? "active" : ""} ${isFailedRun(node.task) ? "failed-run" : ""} ${statusFilter && node.task.status !== statusFilter ? "dimmed" : ""}`}
-                key={node.task.threadId}
+                className={`${
+                  isTaskNode(node.task) ? `tone-${STATUS_META[node.task.status].tone}` : "tone-thread"
+                } ${isActiveRun(node.task) ? "active" : ""} ${isFailedRun(node.task) ? "failed-run" : ""} ${statusFilter && isTaskNode(node.task) && node.task.status !== statusFilter ? "dimmed" : ""}`}
+                key={node.task.nodeId}
                 style={{ left, top }}
               />
             );
@@ -1063,26 +1129,28 @@ export function TaskForestConsole({
         <aside className="task-forest-thread-panel">
           <header className="task-forest-panel-header">
             <div className="task-forest-panel-title">
-              <span className="task-forest-panel-id">{displayTaskId(selectedTask)}</span>
+              <span className="task-forest-panel-id">{displayNodeId(selectedTask)}</span>
               <h2>{selectedTask.title}</h2>
-              <span>{principalLabel(selectedTask)}</span>
+              <span>{threadRootLabel(selectedTask)}</span>
             </div>
             <div className="task-forest-panel-actions">
-              <select
-                aria-label={t("Task status")}
-                className="task-forest-status-select"
-                disabled={mutatingTaskId === displayTaskId(selectedTask)}
-                onChange={(event) =>
-                  void updateSelectedStatus(event.target.value as DesktopTaskStatus)
-                }
-                value={selectedTask.status}
-              >
-                {STATUS_ORDER.map((status) => (
-                  <option key={status} value={status}>
-                    {t(STATUS_META[status].label)}
-                  </option>
-                ))}
-              </select>
+              {isTaskNode(selectedTask) ? (
+                <select
+                  aria-label={t("Task status")}
+                  className="task-forest-status-select"
+                  disabled={mutatingTaskId === displayTaskId(selectedTask)}
+                  onChange={(event) =>
+                    void updateSelectedStatus(event.target.value as DesktopTaskStatus)
+                  }
+                  value={selectedTask.status}
+                >
+                  {STATUS_ORDER.map((status) => (
+                    <option key={status} value={status}>
+                      {t(STATUS_META[status].label)}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
               <button
                 className="task-forest-icon-button"
                 onClick={() =>
@@ -1095,7 +1163,7 @@ export function TaskForestConsole({
               </button>
               <button
                 className="task-forest-icon-button"
-                onClick={() => setSelectedNumber(null)}
+                onClick={() => setSelectedNodeId(null)}
                 title={t("Close")}
                 type="button"
               >
@@ -1157,14 +1225,14 @@ export function TaskForestConsole({
                   </button>
                   {paletteMatches.map((task) => (
                     <button
-                      key={task.threadId}
+                      key={task.nodeId}
                       onClick={() => {
                         setPaletteOpen(false);
                         void openTask(task);
                       }}
                       type="button"
                     >
-                      <span>{displayTaskId(task)}</span>
+                      <span>{displayNodeId(task)}</span>
                       {task.title}
                     </button>
                   ))}

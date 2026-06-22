@@ -1617,6 +1617,17 @@ mod tests {
         }
     }
 
+    fn route_chat_source(thread_id: &str) -> TaskSource {
+        TaskSource {
+            thread_id: Some(thread_id.to_owned()),
+            task_id: None,
+            task_thread_id: None,
+            bot_id: None,
+            channel: None,
+            account_id: None,
+        }
+    }
+
     fn route_task_projection_draft(
         thread_id: &str,
         number: u64,
@@ -1836,24 +1847,24 @@ mod tests {
             .ops
             .garyx_db
             .replace_task_projection(route_task_projection_draft(
-                "thread::route-root",
-                1,
-                TaskStatus::InProgress,
-                "2026-01-01T00:00:01.000Z",
-                None,
-            ))
-            .expect("insert root projection");
-        state
-            .ops
-            .garyx_db
-            .replace_task_projection(route_task_projection_draft(
                 "thread::route-child",
                 2,
                 TaskStatus::Todo,
                 "2026-01-01T00:00:02.000Z",
-                Some(route_task_source("thread::route-root", "#TASK-1")),
+                Some(route_chat_source("thread::route-chat-root")),
             ))
             .expect("insert child projection");
+        state
+            .ops
+            .garyx_db
+            .replace_task_projection(route_task_projection_draft(
+                "thread::route-grandchild",
+                4,
+                TaskStatus::InProgress,
+                "2026-01-01T00:00:04.000Z",
+                Some(route_task_source("thread::route-child", "#TASK-2")),
+            ))
+            .expect("insert grandchild projection");
         state
             .ops
             .garyx_db
@@ -1868,7 +1879,26 @@ mod tests {
         state
             .ops
             .garyx_db
-            .pin_thread("thread::route-root")
+            .upsert_recent_thread(RecentThreadDraft {
+                thread_id: "thread::route-chat-root".to_owned(),
+                title: "Route Chat Root".to_owned(),
+                workspace_dir: None,
+                thread_type: "chat".to_owned(),
+                provider_type: Some("codex".to_owned()),
+                agent_id: Some("codex".to_owned()),
+                message_count: 5,
+                last_message_preview: "Make the forest rooted here".to_owned(),
+                recent_run_id: None,
+                active_run_id: None,
+                run_state: "idle".to_owned(),
+                updated_at: Some("2026-01-01T00:00:01.000Z".to_owned()),
+                last_active_at: "2026-01-01T00:00:01.000Z".to_owned(),
+            })
+            .expect("insert root recent thread");
+        state
+            .ops
+            .garyx_db
+            .pin_thread("thread::route-chat-root")
             .expect("pin root");
         state
             .ops
@@ -1899,11 +1929,11 @@ mod tests {
         .await;
 
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(payload["total"], 2);
+        assert_eq!(payload["total"], 3);
         assert_eq!(payload["projection_current"], true);
         assert_eq!(
             payload["root_thread_ids"],
-            serde_json::json!(["thread::route-root"])
+            serde_json::json!(["thread::route-chat-root"])
         );
         assert_eq!(
             payload["skipped_pinned_thread_ids"],
@@ -1915,7 +1945,19 @@ mod tests {
                 .iter()
                 .map(|task| task["thread_id"].as_str().unwrap_or_default())
                 .collect::<Vec<_>>(),
-            vec!["thread::route-root", "thread::route-child"]
+            vec![
+                "thread::route-chat-root",
+                "thread::route-child",
+                "thread::route-grandchild"
+            ]
+        );
+        assert_eq!(tasks[0]["kind"], "thread");
+        assert_eq!(tasks[0]["title"], "Route Chat Root");
+        assert_eq!(tasks[1]["kind"], "task");
+        assert_eq!(tasks[1]["parent_thread_id"], "thread::route-chat-root");
+        assert_eq!(
+            tasks[1]["parent_node_id"],
+            "thread-root:thread::route-chat-root"
         );
     }
 

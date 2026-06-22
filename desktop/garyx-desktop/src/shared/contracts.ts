@@ -233,13 +233,36 @@ export interface DesktopTaskSummary {
   replyCount: number;
 }
 
-export interface DesktopTaskForestNode extends DesktopTaskSummary {
+export interface DesktopTaskForestTaskNode extends DesktopTaskSummary {
+  kind: 'task';
+  nodeId: string;
+  parentNodeId?: string | null;
   parentTaskNumber?: number | null;
   parentThreadId?: string | null;
   activeRunId?: string | null;
   runState: string;
   lastActiveAt?: string | null;
 }
+
+export interface DesktopTaskForestThreadNode {
+  kind: 'thread';
+  nodeId: string;
+  threadId: string;
+  title: string;
+  threadType: string;
+  providerType?: string | null;
+  agentId?: string | null;
+  messageCount: number;
+  lastMessagePreview: string;
+  activeRunId?: string | null;
+  runState: string;
+  updatedAt?: string | null;
+  lastActiveAt?: string | null;
+}
+
+export type DesktopTaskForestNode =
+  | DesktopTaskForestTaskNode
+  | DesktopTaskForestThreadNode;
 
 export type DesktopTaskExecutor =
   | { type: 'agent'; agentId: string }

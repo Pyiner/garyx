@@ -12,8 +12,8 @@ export type TaskForestLayoutNode = {
 };
 
 export type TaskForestLayoutEdge = {
-  from: number;
-  to: number;
+  from: string;
+  to: string;
   path: string;
   active: boolean;
 };
@@ -69,6 +69,9 @@ function parseTaskNumber(taskId?: string | null): number | null {
 }
 
 function parentNumberFor(task: DesktopTaskForestNode): number | null {
+  if (task.kind !== "task") {
+    return null;
+  }
   if (typeof task.parentTaskNumber === "number" && task.parentTaskNumber > 0) {
     return task.parentTaskNumber;
   }
@@ -76,11 +79,20 @@ function parentNumberFor(task: DesktopTaskForestNode): number | null {
 }
 
 function updatedTime(task: DesktopTaskForestNode): number {
-  const timestamp = Date.parse(task.updatedAt);
+  const timestamp = Date.parse(task.updatedAt || "");
   return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
 function compareTasks(left: DesktopTaskForestNode, right: DesktopTaskForestNode): number {
+  if (left.kind !== "task" && right.kind === "task") {
+    return -1;
+  }
+  if (left.kind === "task" && right.kind !== "task") {
+    return 1;
+  }
+  if (left.kind !== "task" || right.kind !== "task") {
+    return updatedTime(right) - updatedTime(left) || left.nodeId.localeCompare(right.nodeId);
+  }
   return (
     STATUS_ORDER[left.status] - STATUS_ORDER[right.status] ||
     updatedTime(right) - updatedTime(left) ||
@@ -97,6 +109,10 @@ function isRunning(task: DesktopTaskForestNode): boolean {
     return false;
   }
   return Boolean(task.activeRunId);
+}
+
+function nodeIdFor(task: DesktopTaskForestNode): string {
+  return task.nodeId || `${task.kind}:${task.threadId}`;
 }
 
 function roundedOrthogonalPath(
@@ -143,61 +159,88 @@ export function buildTaskForestLayout(
   const rowGap = options.rowGap ?? 28;
   const rootGap = options.rootGap ?? 44;
   const maxDepth = Math.max(1, options.maxDepth ?? 3);
+  const inputIndex = new Map<string, number>();
+  tasks.forEach((task, index) => {
+    inputIndex.set(nodeIdFor(task), index);
+  });
+  const byId = new Map<string, DesktopTaskForestNode>();
+  for (const task of tasks) {
+    const nodeId = nodeIdFor(task);
+    if (!byId.has(nodeId)) {
+      byId.set(nodeId, task);
+    }
+  }
   const byNumber = new Map<number, DesktopTaskForestNode>();
   for (const task of tasks) {
-    if (task.number > 0 && !byNumber.has(task.number)) {
+    if (task.kind === "task" && task.number > 0 && !byNumber.has(task.number)) {
       byNumber.set(task.number, task);
     }
   }
 
-  const childrenByParent = new Map<number, DesktopTaskForestNode[]>();
+  function parentNodeIdFor(task: DesktopTaskForestNode): string | null {
+    if (task.kind === "task" && task.parentNodeId) {
+      return task.parentNodeId;
+    }
+    const parentNumber = parentNumberFor(task);
+    if (!parentNumber) {
+      return null;
+    }
+    const parent = byNumber.get(parentNumber);
+    return parent ? nodeIdFor(parent) : null;
+  }
+
+  const childrenByParent = new Map<string, DesktopTaskForestNode[]>();
   const roots: DesktopTaskForestNode[] = [];
   for (const task of tasks) {
-    const parentNumber = parentNumberFor(task);
-    if (!parentNumber || !byNumber.has(parentNumber)) {
+    const parentNodeId = parentNodeIdFor(task);
+    if (!parentNodeId || !byId.has(parentNodeId)) {
       roots.push(task);
       continue;
     }
-    const children = childrenByParent.get(parentNumber) ?? [];
+    const children = childrenByParent.get(parentNodeId) ?? [];
     children.push(task);
-    childrenByParent.set(parentNumber, children);
+    childrenByParent.set(parentNodeId, children);
   }
   for (const children of childrenByParent.values()) {
     children.sort(compareTasks);
   }
 
   const subtreeValues = new Map<
-    number,
+    string,
     { size: number; counts: Record<DesktopTaskStatus, number> }
   >();
-  const visiting = new Set<number>();
+  const visiting = new Set<string>();
 
   function collect(task: DesktopTaskForestNode): {
     size: number;
     counts: Record<DesktopTaskStatus, number>;
   } {
-    const memoized = subtreeValues.get(task.number);
+    const nodeId = nodeIdFor(task);
+    const memoized = subtreeValues.get(nodeId);
     if (memoized) {
       return memoized;
     }
-    if (visiting.has(task.number)) {
+    if (visiting.has(nodeId)) {
       return { size: 0, counts: { ...EMPTY_STATUS_COUNTS } };
     }
-    visiting.add(task.number);
+    visiting.add(nodeId);
     let size = 1;
     let counts = { ...EMPTY_STATUS_COUNTS };
-    for (const child of childrenByParent.get(task.number) ?? []) {
-      if (visiting.has(child.number)) {
+    for (const child of childrenByParent.get(nodeId) ?? []) {
+      const childNodeId = nodeIdFor(child);
+      if (visiting.has(childNodeId)) {
         continue;
       }
-      counts[child.status] += 1;
+      if (child.kind === "task") {
+        counts[child.status] += 1;
+      }
       const childValue = collect(child);
       size += childValue.size;
       counts = mergeCounts(counts, childValue.counts);
     }
-    visiting.delete(task.number);
+    visiting.delete(nodeId);
     const value = { size, counts };
-    subtreeValues.set(task.number, value);
+    subtreeValues.set(nodeId, value);
     return value;
   }
 
@@ -205,44 +248,38 @@ export function buildTaskForestLayout(
     collect(root);
   }
   for (const task of tasks) {
-    if (!subtreeValues.has(task.number)) {
+    if (!subtreeValues.has(nodeIdFor(task))) {
       roots.push(task);
       collect(task);
     }
   }
 
   roots.sort((left, right) => {
-    const runningDelta = Number(isRunning(right)) - Number(isRunning(left));
-    return (
-      runningDelta ||
-      (subtreeValues.get(right.number)?.size ?? 1) -
-        (subtreeValues.get(left.number)?.size ?? 1) ||
-      updatedTime(right) - updatedTime(left) ||
-      left.number - right.number
-    );
+    return (inputIndex.get(nodeIdFor(left)) ?? 0) - (inputIndex.get(nodeIdFor(right)) ?? 0);
   });
 
   const nodes: TaskForestLayoutNode[] = [];
-  const placed = new Set<number>();
+  const placed = new Set<string>();
   let nextY = 24;
 
   function place(
     task: DesktopTaskForestNode,
     depth: number,
     yHint: number,
-    path = new Set<number>(),
+    path = new Set<string>(),
   ): number {
-    if (placed.has(task.number) || path.has(task.number)) {
+    const nodeId = nodeIdFor(task);
+    if (placed.has(nodeId) || path.has(nodeId)) {
       return yHint;
     }
-    path.add(task.number);
+    path.add(nodeId);
     const visibleChildren =
       depth + 1 < maxDepth
-        ? (childrenByParent.get(task.number) ?? []).filter(
-            (child) => !path.has(child.number),
+        ? (childrenByParent.get(nodeId) ?? []).filter(
+            (child) => !path.has(nodeIdFor(child)),
           )
         : [];
-    const subtree = subtreeValues.get(task.number);
+    const subtree = subtreeValues.get(nodeId);
     if (visibleChildren.length === 0) {
       nodes.push({
         task,
@@ -255,8 +292,8 @@ export function buildTaskForestLayout(
           depth + 1 >= maxDepth ? Math.max(0, (subtree?.size ?? 1) - 1) : 0,
         descendantStatusCounts: subtree?.counts ?? { ...EMPTY_STATUS_COUNTS },
       });
-      placed.add(task.number);
-      path.delete(task.number);
+      placed.add(nodeId);
+      path.delete(nodeId);
       return yHint + nodeHeight + rowGap;
     }
 
@@ -277,8 +314,8 @@ export function buildTaskForestLayout(
       hiddenDescendantCount: 0,
       descendantStatusCounts: subtree?.counts ?? { ...EMPTY_STATUS_COUNTS },
     });
-    placed.add(task.number);
-    path.delete(task.number);
+    placed.add(nodeId);
+    path.delete(nodeId);
     return Math.max(childY, y + nodeHeight + rowGap);
   }
 
@@ -291,11 +328,11 @@ export function buildTaskForestLayout(
     nextY += rootGap - rowGap;
   }
 
-  const byPlacedNumber = new Map(nodes.map((node) => [node.task.number, node]));
+  const byPlacedId = new Map(nodes.map((node) => [nodeIdFor(node.task), node]));
   const edges: TaskForestLayoutEdge[] = [];
   for (const node of nodes) {
-    const parentNumber = parentNumberFor(node.task);
-    const parent = parentNumber ? byPlacedNumber.get(parentNumber) : null;
+    const parentNodeId = parentNodeIdFor(node.task);
+    const parent = parentNodeId ? byPlacedId.get(parentNodeId) : null;
     if (!parent) {
       continue;
     }
@@ -304,8 +341,8 @@ export function buildTaskForestLayout(
     const endX = node.x;
     const endY = node.y + node.height / 2;
     edges.push({
-      from: parent.task.number,
-      to: node.task.number,
+      from: nodeIdFor(parent.task),
+      to: nodeIdFor(node.task),
       active: isRunning(parent.task) || isRunning(node.task),
       path: roundedOrthogonalPath(startX, startY, endX, endY),
     });
@@ -320,7 +357,11 @@ export function buildTaskForestLayout(
   }
 
   return {
-    nodes: nodes.sort((left, right) => left.task.number - right.task.number),
+    nodes: nodes.sort(
+      (left, right) =>
+        (inputIndex.get(nodeIdFor(left.task)) ?? 0) -
+        (inputIndex.get(nodeIdFor(right.task)) ?? 0),
+    ),
     edges,
     bbox: {
       minX: Math.min(...nodes.map((node) => node.x)),
@@ -339,17 +380,17 @@ export function visibleTaskForestNodeNumbers(
   nodes: TaskForestLayoutNode[],
   viewport: TaskForestViewport,
   overscan = 0,
-): Set<number> {
+): Set<string> {
   const minX = viewport.minX - overscan;
   const minY = viewport.minY - overscan;
   const maxX = viewport.maxX + overscan;
   const maxY = viewport.maxY + overscan;
-  const visible = new Set<number>();
+  const visible = new Set<string>();
   for (const node of nodes) {
     const nodeMaxX = node.x + node.width;
     const nodeMaxY = node.y + node.height;
     if (nodeMaxX >= minX && node.x <= maxX && nodeMaxY >= minY && node.y <= maxY) {
-      visible.add(node.task.number);
+      visible.add(nodeIdFor(node.task));
     }
   }
   return visible;

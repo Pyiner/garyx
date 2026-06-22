@@ -140,6 +140,24 @@ test("listTaskForest maps parent and run-state fields", async () => {
       JSON.stringify({
         tasks: [
           {
+            kind: "thread",
+            node_id: "thread-root:thread::forest-parent",
+            thread_id: "thread::forest-parent",
+            title: "Pinned conversation",
+            thread_type: "chat",
+            provider_type: "codex",
+            agent_id: "codex",
+            message_count: 9,
+            last_message_preview: "Launch from here",
+            active_run_id: null,
+            run_state: "idle",
+            updated_at: "2026-06-22T00:00:00Z",
+            last_active_at: "2026-06-22T00:00:00Z",
+          },
+          {
+            kind: "task",
+            node_id: "task:thread::forest-child",
+            parent_node_id: "thread-root:thread::forest-parent",
             task_id: "#TASK-7",
             number: 7,
             title: "Synthetic forest child",
@@ -157,7 +175,7 @@ test("listTaskForest maps parent and run-state fields", async () => {
             last_active_at: "2026-06-22T00:01:00Z",
           },
         ],
-        total: 1,
+        total: 2,
         projection_current: true,
         root_thread_ids: ["thread::forest-parent"],
         skipped_pinned_thread_ids: ["thread::plain-chat"],
@@ -184,16 +202,23 @@ test("listTaskForest maps parent and run-state fields", async () => {
       urls[0],
       "http://127.0.0.1:31337/api/tasks/forest?status=in_progress&source_bot_id=test-bot&include_done=true",
     );
-    assert.equal(page.total, 1);
+    assert.equal(page.total, 2);
     assert.equal(page.projectionCurrent, true);
     assert.deepEqual(page.rootThreadIds, ["thread::forest-parent"]);
     assert.deepEqual(page.skippedPinnedThreadIds, ["thread::plain-chat"]);
-    assert.equal(page.tasks[0].taskId, "#TASK-7");
-    assert.equal(page.tasks[0].parentTaskNumber, 3);
-    assert.equal(page.tasks[0].parentThreadId, "thread::forest-parent");
-    assert.equal(page.tasks[0].activeRunId, "run::forest-active");
-    assert.equal(page.tasks[0].runState, "running");
-    assert.equal(page.tasks[0].lastActiveAt, "2026-06-22T00:01:00Z");
+    assert.equal(page.tasks[0].kind, "thread");
+    assert.equal(page.tasks[0].nodeId, "thread-root:thread::forest-parent");
+    assert.equal(page.tasks[0].title, "Pinned conversation");
+    assert.equal(page.tasks[0].messageCount, 9);
+    assert.equal(page.tasks[1].kind, "task");
+    assert.equal(page.tasks[1].nodeId, "task:thread::forest-child");
+    assert.equal(page.tasks[1].parentNodeId, "thread-root:thread::forest-parent");
+    assert.equal(page.tasks[1].taskId, "#TASK-7");
+    assert.equal(page.tasks[1].parentTaskNumber, 3);
+    assert.equal(page.tasks[1].parentThreadId, "thread::forest-parent");
+    assert.equal(page.tasks[1].activeRunId, "run::forest-active");
+    assert.equal(page.tasks[1].runState, "running");
+    assert.equal(page.tasks[1].lastActiveAt, "2026-06-22T00:01:00Z");
   } finally {
     globalThis.fetch = originalFetch;
   }

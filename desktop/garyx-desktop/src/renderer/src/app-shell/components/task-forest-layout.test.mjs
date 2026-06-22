@@ -10,6 +10,8 @@ import {
 function task(overrides) {
   const number = overrides.number;
   return {
+    kind: "task",
+    nodeId: `task:${number}`,
     threadId: `thread::${number}`,
     taskId: `#TASK-${number}`,
     number,
@@ -30,6 +32,26 @@ function task(overrides) {
   };
 }
 
+function thread(overrides) {
+  const threadId = overrides.threadId;
+  return {
+    kind: "thread",
+    nodeId: `thread-root:${threadId}`,
+    threadId,
+    title: overrides.title ?? "Pinned conversation",
+    threadType: "chat",
+    providerType: "codex",
+    agentId: "codex",
+    messageCount: 1,
+    lastMessagePreview: "",
+    runState: "idle",
+    activeRunId: null,
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    lastActiveAt: null,
+    ...overrides,
+  };
+}
+
 test("lays out parent and child in right-growing columns", () => {
   const layout = buildTaskForestLayout([
     task({ number: 1 }),
@@ -43,8 +65,29 @@ test("lays out parent and child in right-growing columns", () => {
   assert.equal(parent.depth, 0);
   assert.equal(child.depth, 1);
   assert.ok(child.x > parent.x);
-  assert.deepEqual(layout.edges.map((edge) => [edge.from, edge.to]), [[1, 2]]);
+  assert.deepEqual(layout.edges.map((edge) => [edge.from, edge.to]), [["task:1", "task:2"]]);
   assert.match(layout.edges[0].path, /^M /);
+});
+
+test("lays out pinned conversation roots above direct task children", () => {
+  const root = thread({ threadId: "thread::chat-root", title: "Pinned root" });
+  const child = task({
+    number: 2,
+    nodeId: "task:thread::child",
+    threadId: "thread::child",
+    parentNodeId: root.nodeId,
+  });
+  const layout = buildTaskForestLayout([root, child]);
+
+  const rootNode = layout.nodes.find((node) => node.task.nodeId === root.nodeId);
+  const childNode = layout.nodes.find((node) => node.task.nodeId === child.nodeId);
+  assert.ok(rootNode);
+  assert.ok(childNode);
+  assert.equal(rootNode.depth, 0);
+  assert.equal(childNode.depth, 1);
+  assert.deepEqual(layout.edges.map((edge) => [edge.from, edge.to]), [
+    [root.nodeId, child.nodeId],
+  ]);
 });
 
 test("uses rounded orthogonal edge paths when nodes are vertically offset", () => {
@@ -81,7 +124,7 @@ test("parses legacy source task id when explicit parent field is absent", () => 
   const layout = buildTaskForestLayout([parent, child]);
 
   assert.equal(taskForestParentNumberForTest(child), 11);
-  assert.deepEqual(layout.edges.map((edge) => [edge.from, edge.to]), [[11, 12]]);
+  assert.deepEqual(layout.edges.map((edge) => [edge.from, edge.to]), [["task:11", "task:12"]]);
 });
 
 test("summarizes hidden descendants at the depth cap", () => {
@@ -151,7 +194,7 @@ test("selects visible nodes with viewport overscan", () => {
     maxX: first.x + first.width + 10,
     maxY: first.y + first.height + 10,
   });
-  assert.deepEqual([...visible], [first.task.number]);
+  assert.deepEqual([...visible], [first.task.nodeId]);
 
   const overscanned = visibleTaskForestNodeNumbers(
     layout.nodes,
@@ -163,6 +206,6 @@ test("selects visible nodes with viewport overscan", () => {
     },
     second.y - first.y,
   );
-  assert.ok(overscanned.has(second.task.number));
-  assert.equal(overscanned.has(third.task.number), false);
+  assert.ok(overscanned.has(second.task.nodeId));
+  assert.equal(overscanned.has(third.task.nodeId), false);
 });
