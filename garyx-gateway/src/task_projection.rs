@@ -251,40 +251,46 @@ pub(crate) async fn reconcile_task_projection(
     thread_store: &Arc<dyn ThreadStore>,
     garyx_db: &GaryxDbService,
 ) -> usize {
-    let thread_ids = thread_store.list_keys(Some("thread::")).await;
-    let mut projected_thread_ids = BTreeSet::new();
+    let existing_thread_ids = match garyx_db.list_task_projection_thread_ids() {
+        Ok(thread_ids) => thread_ids,
+        Err(error) => {
+            warn!(error = %error, "failed to list task projection rows before reconcile");
+            return 0;
+        }
+    };
+
+    let mut candidate_thread_ids = existing_thread_ids.into_iter().collect::<BTreeSet<_>>();
+    match garyx_db.list_recent_threads(usize::MAX, 0) {
+        Ok(records) => {
+            for record in records {
+                let projection_is_active = record
+                    .active_run_id
+                    .as_deref()
+                    .map(str::trim)
+                    .is_some_and(|value| !value.is_empty())
+                    || record.run_state == "running";
+                if projection_is_active {
+                    candidate_thread_ids.insert(record.thread_id);
+                }
+            }
+        }
+        Err(error) => {
+            warn!(error = %error, "failed to list recent thread projection rows before task projection reconcile");
+        }
+    }
+
     let mut reconciled = 0usize;
-    for thread_id in thread_ids {
-        let Some(data) = thread_store.get(&thread_id).await else {
-            continue;
-        };
-        if let Some(draft) = task_projection_draft_from_thread_data(&thread_id, &data) {
-            projected_thread_ids.insert(thread_id.clone());
+    for thread_id in candidate_thread_ids {
+        let draft = thread_store
+            .get(&thread_id)
+            .await
+            .and_then(|data| task_projection_draft_from_thread_data(&thread_id, &data));
+        if let Some(draft) = draft {
             if let Err(error) = garyx_db.replace_task_projection(draft) {
                 warn!(thread_id, error = %error, "failed to reconcile task projection row");
             } else {
                 reconciled += 1;
             }
-        }
-    }
-
-    let existing_thread_ids = match garyx_db.list_task_projection_thread_ids() {
-        Ok(thread_ids) => thread_ids,
-        Err(error) => {
-            warn!(error = %error, "failed to list task projection rows before reconcile prune");
-            return reconciled;
-        }
-    };
-    for thread_id in existing_thread_ids {
-        if projected_thread_ids.contains(&thread_id) {
-            continue;
-        }
-        let still_has_task = thread_store
-            .get(&thread_id)
-            .await
-            .and_then(|data| task_projection_draft_from_thread_data(&thread_id, &data))
-            .is_some();
-        if still_has_task {
             continue;
         }
         match garyx_db.remove_task_projection(&thread_id) {
@@ -320,4 +326,156 @@ fn source_channel_account_id(source: &TaskSource) -> Option<String> {
     let channel = normalized(source.channel.as_deref())?;
     let account_id = normalized(source.account_id.as_deref())?;
     Some(format!("{channel}:{account_id}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use async_trait::async_trait;
+    use chrono::{DateTime, Utc};
+    use garyx_models::{
+        Principal, TASK_SCHEMA_VERSION_V1, TaskEvent, TaskEventKind, TaskStatus, ThreadTask,
+    };
+    use garyx_router::{InMemoryThreadStore, ThreadStore, ThreadStoreError};
+    use serde_json::{Value, json};
+
+    use super::*;
+    use crate::garyx_db::RecentThreadDraft;
+
+    struct CountingThreadStore {
+        inner: Arc<InMemoryThreadStore>,
+        list_keys_calls: AtomicUsize,
+    }
+
+    impl CountingThreadStore {
+        fn new() -> Self {
+            Self {
+                inner: Arc::new(InMemoryThreadStore::new()),
+                list_keys_calls: AtomicUsize::new(0),
+            }
+        }
+
+        async fn insert_task(&self, thread_id: &str, task: ThreadTask) {
+            self.inner
+                .set(
+                    thread_id,
+                    json!({ "task": task, "updated_at": task.updated_at }),
+                )
+                .await;
+        }
+    }
+
+    #[async_trait]
+    impl ThreadStore for CountingThreadStore {
+        async fn get(&self, thread_id: &str) -> Option<Value> {
+            self.inner.get(thread_id).await
+        }
+
+        async fn set(&self, thread_id: &str, data: Value) {
+            self.inner.set(thread_id, data).await;
+        }
+
+        async fn delete(&self, thread_id: &str) -> bool {
+            self.inner.delete(thread_id).await
+        }
+
+        async fn list_keys(&self, prefix: Option<&str>) -> Vec<String> {
+            self.list_keys_calls.fetch_add(1, Ordering::SeqCst);
+            self.inner.list_keys(prefix).await
+        }
+
+        async fn exists(&self, thread_id: &str) -> bool {
+            self.inner.exists(thread_id).await
+        }
+
+        async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
+            self.inner.update(thread_id, updates).await
+        }
+    }
+
+    fn test_task(number: u64, status: TaskStatus, updated_at: &str) -> ThreadTask {
+        let at = DateTime::parse_from_rfc3339(updated_at)
+            .expect("valid timestamp")
+            .with_timezone(&Utc);
+        let actor = Principal::Agent {
+            agent_id: "agent:test".to_owned(),
+        };
+        ThreadTask {
+            schema_version: TASK_SCHEMA_VERSION_V1,
+            number,
+            title: format!("Task {number}"),
+            status,
+            creator: actor.clone(),
+            assignee: None,
+            notification_target: None,
+            source: None,
+            executor: None,
+            body: None,
+            created_at: at,
+            updated_at: at,
+            updated_by: actor.clone(),
+            events: vec![TaskEvent {
+                event_id: format!("event-{number}"),
+                at,
+                actor: actor.clone(),
+                kind: TaskEventKind::Created {
+                    initial_status: status,
+                    assignee: None,
+                },
+            }],
+        }
+    }
+
+    fn active_recent_thread(thread_id: &str) -> RecentThreadDraft {
+        RecentThreadDraft {
+            thread_id: thread_id.to_owned(),
+            title: "Active task".to_owned(),
+            workspace_dir: None,
+            thread_type: "thread".to_owned(),
+            provider_type: Some("claude_code".to_owned()),
+            agent_id: Some("claude".to_owned()),
+            message_count: 0,
+            last_message_preview: String::new(),
+            recent_run_id: Some("run-active".to_owned()),
+            active_run_id: Some("run-active".to_owned()),
+            run_state: "running".to_owned(),
+            updated_at: Some("2026-01-01T00:00:01.000Z".to_owned()),
+            last_active_at: "2026-01-01T00:00:01.000Z".to_owned(),
+        }
+    }
+
+    #[tokio::test]
+    async fn task_projection_reconcile_uses_sql_candidates_without_listing_all_threads() {
+        let store = Arc::new(CountingThreadStore::new());
+        let thread_store: Arc<dyn ThreadStore> = store.clone();
+        let db = GaryxDbService::memory().expect("db opens");
+
+        let active_thread = "thread::active-task";
+        store
+            .insert_task(
+                active_thread,
+                test_task(12, TaskStatus::InProgress, "2026-01-01T00:00:01.000Z"),
+            )
+            .await;
+        db.upsert_recent_thread(active_recent_thread(active_thread))
+            .expect("seed active recent row");
+
+        let stale_task = test_task(13, TaskStatus::Todo, "2026-01-01T00:00:01.000Z");
+        db.replace_task_projection(
+            task_projection_draft_from_task("thread::stale-task", &stale_task)
+                .expect("stale projection draft"),
+        )
+        .expect("seed stale task projection");
+
+        let reconciled = reconcile_task_projection(&thread_store, &db).await;
+
+        assert_eq!(reconciled, 2);
+        assert_eq!(store.list_keys_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            db.thread_id_for_number(12).expect("active lookup"),
+            Some(active_thread.to_owned())
+        );
+        assert_eq!(db.thread_id_for_number(13).expect("stale lookup"), None);
+    }
 }
