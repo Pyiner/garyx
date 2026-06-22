@@ -17,6 +17,18 @@ extension GaryxMobileModel {
         navigationDrawerStore.apply(navigationDrawerSnapshot)
     }
 
+    func predecodeAgentAvatarImages() {
+        GaryxDataURLImageCache.predecodeAgentAvatars(
+            from: agents.map { Optional($0.avatarDataUrl) } + teams.map { Optional($0.avatarDataUrl) }
+        )
+    }
+
+    func predecodeChannelIconImages() {
+        GaryxDataURLImageCache.predecodeChannelIcons(
+            from: channelPlugins.map(\.iconDataUrl) + mobileBotGroups.map(\.iconDataUrl)
+        )
+    }
+
     var navigationDrawerSnapshot: GaryxNavigationDrawerSnapshot {
         GaryxNavigationDrawerSnapshot(
             activePanel: activePanel,
@@ -276,6 +288,26 @@ extension GaryxMobileModel {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         let now = Date()
+        let avatarDataURLs = [
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAFklEQVR42mNUcLj0nwEPYGIgAIaHAgBE3AJBVcnK6gAAAABJRU5ErkJggg==",
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAFklEQVR42mOM8VjwnwEPYGIgAIaHAgBXtgJTMAef0wAAAABJRU5ErkJggg==",
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAFklEQVR42mOUaYn5z4AHMDEQAMNDAQAOCgILqEOeygAAAABJRU5ErkJggg==",
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAFklEQVR42mNUcLj0nwEPYGIgAIaHAgBE3AJBVcnK6gAAAABJRU5ErkJggg==",
+        ]
+        agents = (0..<4).map { index in
+            GaryxAgentSummary(
+                id: "agent-\(index)",
+                displayName: "Synthetic Agent \(index)",
+                providerType: "codex",
+                model: "gpt-5-codex",
+                defaultWorkspaceDir: "/Users/test/workspaces/project-\(index)",
+                avatarDataUrl: avatarDataURLs[index],
+                builtIn: false,
+                standalone: true,
+                createdAt: formatter.string(from: now),
+                updatedAt: formatter.string(from: now)
+            )
+        }
         threads = (0..<50).map { index in
             GaryxThreadSummary(
                 id: "thread-\(index)",

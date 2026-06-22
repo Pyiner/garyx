@@ -26,12 +26,20 @@ extension EnvironmentValues {
 }
 
 enum GaryxDataURLImageCache {
+    static let channelIconMaxPixelSize: CGFloat = 128
+    static let agentAvatarMaxPixelSize: CGFloat = 288
+
     private static let cache: NSCache<NSString, UIImage> = {
         let cache = NSCache<NSString, UIImage>()
         cache.countLimit = 128
         cache.totalCostLimit = 32 * 1024 * 1024
         return cache
     }()
+    private static let predecodeQueue = DispatchQueue(
+        label: "com.garyx.mobile.data-url-image-cache.predecode",
+        qos: .utility
+    )
+    private static let predecodeState = GaryxDataURLImagePredecodeState()
 
     static func cachedImage(from rawValue: String?, maxPixelSize: CGFloat) -> UIImage? {
         guard let raw = normalizedRawValue(rawValue) else { return nil }
@@ -51,21 +59,33 @@ enum GaryxDataURLImageCache {
         return image
     }
 
-    static func imageAsync(from rawValue: String?, maxPixelSize: CGFloat) async -> UIImage? {
-        guard let raw = normalizedRawValue(rawValue) else { return nil }
-        let cacheKey = cacheKey(for: raw, maxPixelSize: maxPixelSize)
-        if let cached = cache.object(forKey: cacheKey) {
-            return cached
+    static func predecodeAgentAvatars(from rawValues: [String?]) {
+        predecode(rawValues, maxPixelSize: agentAvatarMaxPixelSize)
+    }
+
+    static func predecodeAgentAvatar(from rawValue: String?) async {
+        await predecodeOne(rawValue, maxPixelSize: agentAvatarMaxPixelSize)
+    }
+
+    static func predecodeChannelIcons(from rawValues: [String?]) {
+        predecode(rawValues, maxPixelSize: channelIconMaxPixelSize)
+    }
+
+    static func predecode(_ rawValues: [String?], maxPixelSize: CGFloat) {
+        let jobs = rawValues.compactMap { predecodeJob(for: $0, maxPixelSize: maxPixelSize) }
+        guard !jobs.isEmpty else { return }
+
+        predecodeQueue.async {
+            for job in jobs {
+                performPredecode(job, maxPixelSize: maxPixelSize)
+            }
         }
-        return await Task.detached(priority: .utility) {
-            if let cached = cache.object(forKey: cacheKey) {
-                return cached
-            }
-            guard let image = decodedImage(from: raw, maxPixelSize: maxPixelSize) else {
-                return nil
-            }
-            cache.setObject(image, forKey: cacheKey, cost: raw.utf8.count)
-            return image
+    }
+
+    private static func predecodeOne(_ rawValue: String?, maxPixelSize: CGFloat) async {
+        guard let job = predecodeJob(for: rawValue, maxPixelSize: maxPixelSize) else { return }
+        await Task.detached(priority: .utility) {
+            performPredecode(job, maxPixelSize: maxPixelSize)
         }.value
     }
 
@@ -81,6 +101,40 @@ enum GaryxDataURLImageCache {
         return NSString(string: "full|\(raw)")
     }
 
+    private static func predecodeJob(for rawValue: String?, maxPixelSize: CGFloat) -> PredecodeJob? {
+        guard let raw = normalizedRawValue(rawValue),
+              !isRemoteURL(raw) else {
+            return nil
+        }
+        let keyString = cacheKey(for: raw, maxPixelSize: maxPixelSize) as String
+        guard cache.object(forKey: NSString(string: keyString)) == nil else { return nil }
+        guard reserveScheduledKey(keyString) else { return nil }
+        return PredecodeJob(raw: raw, keyString: keyString)
+    }
+
+    private static func performPredecode(_ job: PredecodeJob, maxPixelSize: CGFloat) {
+        let cacheKey = NSString(string: job.keyString)
+        autoreleasepool {
+            if cache.object(forKey: cacheKey) == nil,
+               let image = decodedImage(from: job.raw, maxPixelSize: maxPixelSize) {
+                cache.setObject(image, forKey: cacheKey, cost: cost(for: image, raw: job.raw))
+            }
+        }
+        releaseScheduledKey(job.keyString)
+    }
+
+    private static func reserveScheduledKey(_ key: String) -> Bool {
+        predecodeState.reserve(key)
+    }
+
+    private static func releaseScheduledKey(_ key: String) {
+        predecodeState.release(key)
+    }
+
+    private static func isRemoteURL(_ raw: String) -> Bool {
+        raw.hasPrefix("http://") || raw.hasPrefix("https://")
+    }
+
     private static func decodedImage(from raw: String, maxPixelSize: CGFloat?) -> UIImage? {
         let encoded = raw.split(separator: ",", maxSplits: 1).last.map(String.init) ?? raw
         guard let data = Data(base64Encoded: encoded) else {
@@ -90,6 +144,37 @@ enum GaryxDataURLImageCache {
             return GaryxImageDecoder.image(from: data, maxPixelSize: maxPixelSize)
         }
         return UIImage(data: data)
+    }
+
+    private static func cost(for image: UIImage, raw: String) -> Int {
+        if let cgImage = image.cgImage {
+            return max(raw.utf8.count, cgImage.bytesPerRow * cgImage.height)
+        }
+        return raw.utf8.count
+    }
+
+    private struct PredecodeJob: Sendable {
+        var raw: String
+        var keyString: String
+    }
+}
+
+private final class GaryxDataURLImagePredecodeState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var scheduledKeys = Set<String>()
+
+    func reserve(_ key: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !scheduledKeys.contains(key) else { return false }
+        scheduledKeys.insert(key)
+        return true
+    }
+
+    func release(_ key: String) {
+        lock.lock()
+        scheduledKeys.remove(key)
+        lock.unlock()
     }
 }
 

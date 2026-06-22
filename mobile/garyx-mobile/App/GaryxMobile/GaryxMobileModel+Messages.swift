@@ -55,6 +55,21 @@ extension GaryxMobileModel {
         }
     }
 
+    func setPreparedMessages(_ prepared: GaryxPreparedThreadMessages, for threadId: String) {
+        activeAssistantMessageIdsByThread[threadId] = prepared.activeAssistantMessageId
+        if messageSignaturesByThread[threadId] == prepared.signature,
+           !prepared.signature.sampled,
+           (selectedThread?.id != threadId || selectedMessagesSignature == prepared.signature) {
+            return
+        }
+        messagesByThread[threadId] = prepared.messages
+        messageSignaturesByThread[threadId] = prepared.signature
+        if selectedThread?.id == threadId {
+            pendingSelectedMessagesSignature = prepared.signature
+            messages = prepared.messages
+        }
+    }
+
     func reconcileActiveAssistantMessageId(threadId: String, messages: inout [GaryxMobileMessage]) {
         guard isThreadBusy(threadId) else {
             activeAssistantMessageIdsByThread[threadId] = nil
@@ -162,7 +177,7 @@ extension GaryxMobileModel {
             : "\(GaryxComposerDraftStore.newThreadKey):\(target)"
     }
 
-    static func messageListSignature(for messages: [GaryxMobileMessage]) -> MessageListSignature {
+    nonisolated static func messageListSignature(for messages: [GaryxMobileMessage]) -> MessageListSignature {
         var hasher = Hasher()
         var sampled = false
         for message in messages {
@@ -209,7 +224,7 @@ extension GaryxMobileModel {
     }
 
     @discardableResult
-    static func combineTextSignature(_ value: String?, into hasher: inout Hasher) -> Bool {
+    nonisolated static func combineTextSignature(_ value: String?, into hasher: inout Hasher) -> Bool {
         guard let value else {
             hasher.combine(-1)
             return false
@@ -218,7 +233,7 @@ extension GaryxMobileModel {
     }
 
     @discardableResult
-    static func combineTextSignature(_ value: String, into hasher: inout Hasher) -> Bool {
+    nonisolated static func combineTextSignature(_ value: String, into hasher: inout Hasher) -> Bool {
         hasher.combine(value.count)
         if value.count <= 1_024 {
             hasher.combine(value)
@@ -233,7 +248,7 @@ extension GaryxMobileModel {
         return true
     }
 
-    static func roleSignature(_ role: GaryxMobileMessage.Role) -> String {
+    nonisolated static func roleSignature(_ role: GaryxMobileMessage.Role) -> String {
         switch role {
         case .user:
             "user"
@@ -244,5 +259,138 @@ extension GaryxMobileModel {
         case .tool:
             "tool"
         }
+    }
+}
+
+struct GaryxPreparedThreadMessages: Equatable, Sendable {
+    var messages: [GaryxMobileMessage]
+    var signature: GaryxMobileModel.MessageListSignature
+    var activeAssistantMessageId: String?
+
+    static func make(
+        remoteMessages: [GaryxMobileMessage],
+        localMessages: [GaryxMobileMessage],
+        preserveRemoteBeforeIndex: Int?,
+        isThreadBusy: Bool,
+        activeAssistantMessageId: String?
+    ) -> GaryxPreparedThreadMessages {
+        let merged = GaryxTranscriptMerge.mergedMessages(
+            remoteMessages,
+            withLocal: localMessages,
+            preserveRemoteBeforeIndex: preserveRemoteBeforeIndex
+        )
+        return make(
+            messages: merged,
+            isThreadBusy: isThreadBusy,
+            activeAssistantMessageId: activeAssistantMessageId
+        )
+    }
+
+    static func make(
+        messages: [GaryxMobileMessage],
+        isThreadBusy: Bool,
+        activeAssistantMessageId: String?
+    ) -> GaryxPreparedThreadMessages {
+        let reconciled = reconciledActiveAssistantMessages(
+            messages,
+            isThreadBusy: isThreadBusy,
+            activeAssistantMessageId: activeAssistantMessageId
+        )
+        return GaryxPreparedThreadMessages(
+            messages: reconciled.messages,
+            signature: GaryxMobileModel.messageListSignature(for: reconciled.messages),
+            activeAssistantMessageId: reconciled.activeAssistantMessageId
+        )
+    }
+
+    private static func reconciledActiveAssistantMessages(
+        _ messages: [GaryxMobileMessage],
+        isThreadBusy: Bool,
+        activeAssistantMessageId: String?
+    ) -> (messages: [GaryxMobileMessage], activeAssistantMessageId: String?) {
+        guard isThreadBusy else {
+            return (messages, nil)
+        }
+        var adjustedMessages = messages
+        if let activeAssistantMessageId,
+           let index = adjustedMessages.firstIndex(where: { $0.id == activeAssistantMessageId && $0.role == .assistant }) {
+            adjustedMessages[index].isStreaming = true
+            return (adjustedMessages, activeAssistantMessageId)
+        }
+        if let index = adjustedMessages.indices.last(where: {
+            adjustedMessages[$0].role == .assistant && adjustedMessages[$0].isStreaming
+        }) {
+            adjustedMessages[index].isStreaming = true
+            return (adjustedMessages, adjustedMessages[index].id)
+        }
+        return (adjustedMessages, nil)
+    }
+}
+
+struct GaryxPreparedSelectedThreadTranscriptUpdate: Equatable, Sendable {
+    var activitySignature: String
+    var runState: GaryxTranscriptRunState
+    var messages: GaryxPreparedThreadMessages
+    var threadRunActive: Bool
+
+    static func make(
+        from transcript: GaryxThreadTranscript,
+        localMessages: [GaryxMobileMessage],
+        localRunTrackerBusy: Bool,
+        activeAssistantMessageId: String?
+    ) -> GaryxPreparedSelectedThreadTranscriptUpdate {
+        make(
+            transcriptMessages: transcript.messages,
+            activitySignature: GaryxThreadActivitySignature.make(from: transcript),
+            localMessages: localMessages,
+            preserveRemoteBeforeIndex: transcript.pageInfo?.returnedStartIndex
+                ?? transcript.messages.compactMap(\.index).min(),
+            localRunTrackerBusy: localRunTrackerBusy,
+            activeAssistantMessageId: activeAssistantMessageId
+        )
+    }
+
+    static func make(
+        from window: GaryxCachedTranscript,
+        localMessages: [GaryxMobileMessage],
+        localRunTrackerBusy: Bool,
+        activeAssistantMessageId: String?
+    ) -> GaryxPreparedSelectedThreadTranscriptUpdate {
+        make(
+            transcriptMessages: window.messages,
+            activitySignature: GaryxThreadActivitySignature.make(messages: window.messages, pendingUserInputs: []),
+            localMessages: localMessages,
+            preserveRemoteBeforeIndex: window.firstIndex,
+            localRunTrackerBusy: localRunTrackerBusy,
+            activeAssistantMessageId: activeAssistantMessageId
+        )
+    }
+
+    private static func make(
+        transcriptMessages: [GaryxTranscriptMessage],
+        activitySignature: String,
+        localMessages: [GaryxMobileMessage],
+        preserveRemoteBeforeIndex: Int?,
+        localRunTrackerBusy: Bool,
+        activeAssistantMessageId: String?
+    ) -> GaryxPreparedSelectedThreadTranscriptUpdate {
+        let runState = GaryxTranscriptRunStateReducer.reduce(transcriptMessages)
+        let threadRunActive = localRunTrackerBusy || runState.busy
+        let remoteMessages = GaryxMobileTranscriptMapper.mobileMessages(
+            from: transcriptMessages,
+            live: threadRunActive
+        )
+        return GaryxPreparedSelectedThreadTranscriptUpdate(
+            activitySignature: activitySignature,
+            runState: runState,
+            messages: GaryxPreparedThreadMessages.make(
+                remoteMessages: remoteMessages,
+                localMessages: localMessages,
+                preserveRemoteBeforeIndex: preserveRemoteBeforeIndex,
+                isThreadBusy: threadRunActive,
+                activeAssistantMessageId: activeAssistantMessageId
+            ),
+            threadRunActive: threadRunActive
+        )
     }
 }

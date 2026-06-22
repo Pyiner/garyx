@@ -58,7 +58,7 @@ final class GaryxMobileModel: ObservableObject {
     static let streamedCommittedFlushDelayNanos = GaryxStreamUpdateCadence.committedMessageBatchWindowNanos
     static let selectedThreadHistoryRetryLimit = 8
 
-    struct MessageListSignature: Equatable {
+    struct MessageListSignature: Equatable, Sendable {
         let count: Int
         let fingerprint: Int
         let sampled: Bool
@@ -180,10 +180,16 @@ final class GaryxMobileModel: ObservableObject {
     @Published var dreamsAutoScanEnabled = false
     @Published var isSavingDreamsSettings = false
     @Published var agents: [GaryxAgentSummary] = [] {
-        didSet { refreshHomeThreadListSnapshot() }
+        didSet {
+            predecodeAgentAvatarImages()
+            refreshHomeThreadListSnapshot()
+        }
     }
     @Published var teams: [GaryxTeamSummary] = [] {
-        didSet { refreshHomeThreadListSnapshot() }
+        didSet {
+            predecodeAgentAvatarImages()
+            refreshHomeThreadListSnapshot()
+        }
     }
     @Published var skills: [GaryxSkillSummary] = []
     @Published var tasks: [GaryxTaskSummary] = []
@@ -221,17 +227,29 @@ final class GaryxMobileModel: ObservableObject {
     @Published var slashCommands: [GaryxSlashCommand] = []
     @Published var mcpServers: [GaryxMcpServer] = []
     @Published var channelEndpoints: [GaryxChannelEndpoint] = [] {
-        didSet { refreshNavigationDrawerSnapshot() }
+        didSet {
+            predecodeChannelIconImages()
+            refreshNavigationDrawerSnapshot()
+        }
     }
     @Published var configuredBots: [GaryxConfiguredBot] = [] {
-        didSet { refreshNavigationDrawerSnapshot() }
+        didSet {
+            predecodeChannelIconImages()
+            refreshNavigationDrawerSnapshot()
+        }
     }
     @Published var botConsoles: [GaryxBotConsoleSummary] = [] {
-        didSet { refreshNavigationDrawerSnapshot() }
+        didSet {
+            predecodeChannelIconImages()
+            refreshNavigationDrawerSnapshot()
+        }
     }
     @Published var botStatusesById: [String: GaryxBotBindingResult] = [:]
     @Published var channelPlugins: [GaryxChannelPluginCatalogEntry] = [] {
-        didSet { refreshNavigationDrawerSnapshot() }
+        didSet {
+            predecodeChannelIconImages()
+            refreshNavigationDrawerSnapshot()
+        }
     }
     @Published var gatewaySettingsDocument: [String: GaryxJSONValue] = [:]
     @Published var isSavingBotSettings = false

@@ -1030,7 +1030,7 @@ extension GaryxMobileModel {
             // already shown by the caller, so this just brings it current.
             let transcript = try await fetchThreadTranscriptIncrementally(threadId: threadId)
             guard self.selectedThread?.id == threadId, selectedThreadHistoryRequestId == requestId else { return }
-            applySelectedThreadTranscript(transcript, threadId: threadId)
+            await applySelectedThreadTranscript(transcript, threadId: threadId)
         } catch {
             guard self.selectedThread?.id == threadId, selectedThreadHistoryRequestId == requestId else { return }
             if cachedMessages(for: threadId).isEmpty {
@@ -1040,8 +1040,8 @@ extension GaryxMobileModel {
         }
     }
 
-    func applySelectedThreadTranscript(_ transcript: GaryxThreadTranscript, threadId: String) {
-        applyThreadTranscriptToCache(
+    func applySelectedThreadTranscript(_ transcript: GaryxThreadTranscript, threadId: String) async {
+        await applyThreadTranscriptToCache(
             transcript,
             threadId: threadId,
             preservingLoadedOlderPages: true,
@@ -1055,10 +1055,31 @@ extension GaryxMobileModel {
         threadId: String,
         preservingLoadedOlderPages: Bool,
         scheduleRecoveryIfSelected: Bool
-    ) {
+    ) async {
+        let prepared = await prepareSelectedThreadTranscriptUpdate(
+            transcript,
+            threadId: threadId
+        )
+        applyPreparedSelectedThreadTranscriptToCache(
+            prepared,
+            transcript: transcript,
+            threadId: threadId,
+            preservingLoadedOlderPages: preservingLoadedOlderPages,
+            scheduleRecoveryIfSelected: scheduleRecoveryIfSelected
+        )
+    }
+
+    @discardableResult
+    func applyPreparedSelectedThreadTranscriptToCache(
+        _ prepared: GaryxPreparedSelectedThreadTranscriptUpdate,
+        transcript: GaryxThreadTranscript,
+        threadId: String,
+        preservingLoadedOlderPages: Bool,
+        scheduleRecoveryIfSelected: Bool
+    ) -> Bool {
         markThreadHistoryLoaded(threadId)
-        selectedThreadActivitySignatures[threadId] = GaryxThreadActivitySignature.make(from: transcript)
-        rebuildThreadRunState(threadId: threadId, messages: transcript.messages)
+        selectedThreadActivitySignatures[threadId] = prepared.activitySignature
+        applyTranscriptRunState(prepared.runState, threadId: threadId)
         if let runtime = transcript.threadRuntime {
             applyThreadRuntimeSummary(runtime, threadId: threadId)
         }
@@ -1069,20 +1090,28 @@ extension GaryxMobileModel {
                 preservingLoadedOlderPages: preservingLoadedOlderPages
             )
         }
-        let threadRunActive = isThreadBusy(threadId)
-        let remoteMessages = mobileMessages(from: transcript, threadId: threadId, live: threadRunActive)
-        setMessages(
-            mergedMessages(
-                remoteMessages,
-                withLocal: cachedMessages(for: threadId),
-                preserveRemoteBeforeIndex: preserveRemoteBeforeIndex(from: transcript)
-            ),
-            for: threadId,
-            reconcileActiveAssistant: true
-        )
+        setPreparedMessages(prepared.messages, for: threadId)
         if scheduleRecoveryIfSelected {
             scheduleSelectedThreadRecoveryIfNeeded(threadId: threadId)
         }
+        return prepared.threadRunActive
+    }
+
+    func prepareSelectedThreadTranscriptUpdate(
+        _ transcript: GaryxThreadTranscript,
+        threadId: String
+    ) async -> GaryxPreparedSelectedThreadTranscriptUpdate {
+        let localMessages = cachedMessages(for: threadId)
+        let localRunTrackerBusy = runTracker.isThreadBusy(threadId)
+        let activeAssistantMessageId = activeAssistantMessageIdsByThread[threadId]
+        return await Task.detached(priority: .utility) {
+            GaryxPreparedSelectedThreadTranscriptUpdate.make(
+                from: transcript,
+                localMessages: localMessages,
+                localRunTrackerBusy: localRunTrackerBusy,
+                activeAssistantMessageId: activeAssistantMessageId
+            )
+        }.value
     }
 
     @discardableResult
@@ -1438,24 +1467,18 @@ extension GaryxMobileModel {
             let transcript = try await fetchThreadTranscriptIncrementally(threadId: threadId)
             guard selectedThread?.id == threadId,
                   selectedThreadHistoryRequestId == observedHistoryRequestId else { return }
-            markThreadHistoryLoaded(threadId)
-            selectedThreadActivitySignatures[threadId] = GaryxThreadActivitySignature.make(from: transcript)
-            rebuildThreadRunState(threadId: threadId, messages: transcript.messages)
-            updateSelectedThreadHistoryPagination(
-                threadId: threadId,
-                transcript: transcript,
-                preservingLoadedOlderPages: true
+            let prepared = await prepareSelectedThreadTranscriptUpdate(
+                transcript,
+                threadId: threadId
             )
-            let threadRunActive = isThreadBusy(threadId)
-            let remoteMessages = mobileMessages(from: transcript, threadId: threadId, live: threadRunActive)
-            setMessages(
-                mergedMessages(
-                    remoteMessages,
-                    withLocal: cachedMessages(for: threadId),
-                    preserveRemoteBeforeIndex: preserveRemoteBeforeIndex(from: transcript)
-                ),
-                for: threadId,
-                reconcileActiveAssistant: true
+            guard selectedThread?.id == threadId,
+                  selectedThreadHistoryRequestId == observedHistoryRequestId else { return }
+            let threadRunActive = applyPreparedSelectedThreadTranscriptToCache(
+                prepared,
+                transcript: transcript,
+                threadId: threadId,
+                preservingLoadedOlderPages: true,
+                scheduleRecoveryIfSelected: false
             )
             if !threadRunActive {
                 await refreshThreads()
@@ -1524,29 +1547,23 @@ extension GaryxMobileModel {
             let transcript = try await fetchThreadTranscriptIncrementally(threadId: threadId)
             guard selectedThread?.id == threadId,
                   selectedThreadHistoryRequestId == observedHistoryRequestId else { return }
+            let prepared = await prepareSelectedThreadTranscriptUpdate(
+                transcript,
+                threadId: threadId
+            )
+            guard selectedThread?.id == threadId,
+                  selectedThreadHistoryRequestId == observedHistoryRequestId else { return }
             markThreadHistoryLoaded(threadId)
-            let signature = GaryxThreadActivitySignature.make(from: transcript)
-            if selectedThreadActivitySignatures[threadId] == signature {
-                rebuildThreadRunState(threadId: threadId, messages: transcript.messages)
+            if selectedThreadActivitySignatures[threadId] == prepared.activitySignature {
+                applyTranscriptRunState(prepared.runState, threadId: threadId)
                 return
             }
-            selectedThreadActivitySignatures[threadId] = signature
-            rebuildThreadRunState(threadId: threadId, messages: transcript.messages)
-            updateSelectedThreadHistoryPagination(
-                threadId: threadId,
+            let threadRunActive = applyPreparedSelectedThreadTranscriptToCache(
+                prepared,
                 transcript: transcript,
-                preservingLoadedOlderPages: true
-            )
-            let threadRunActive = isThreadBusy(threadId)
-            let remoteMessages = mobileMessages(from: transcript, threadId: threadId, live: threadRunActive)
-            setMessages(
-                mergedMessages(
-                    remoteMessages,
-                    withLocal: cachedMessages(for: threadId),
-                    preserveRemoteBeforeIndex: preserveRemoteBeforeIndex(from: transcript)
-                ),
-                for: threadId,
-                reconcileActiveAssistant: true
+                threadId: threadId,
+                preservingLoadedOlderPages: true,
+                scheduleRecoveryIfSelected: false
             )
             if !threadRunActive {
                 await refreshThreads()
