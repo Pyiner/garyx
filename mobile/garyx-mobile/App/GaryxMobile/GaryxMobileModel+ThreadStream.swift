@@ -29,8 +29,8 @@ extension GaryxMobileModel {
 
     /// Cursor the per-thread stream resumes from: the highest committed index we
     /// already hold (cache window or rendered history), as a seq (index + 1).
-    func selectedThreadStreamCursor(for threadId: String) -> Int {
-        let snapshot = transcriptSnapshot(for: threadId)
+    func selectedThreadStreamCursor(for threadId: String) async -> Int {
+        let snapshot = await transcriptSnapshotAsync(for: threadId)
         let hasRenderSnapshot = renderSnapshotsByThread[threadId] != nil || snapshot?.renderSnapshot != nil
         guard hasRenderSnapshot else {
             return 0
@@ -91,8 +91,12 @@ extension GaryxMobileModel {
             // Reset per-connection progress before (re)connecting.
             selectedThreadStreamConnectionLastSeq = 0
             do {
-                let cursor = selectedThreadStreamResumeOverride
-                    ?? selectedThreadStreamCursor(for: threadId)
+                let cursor: Int
+                if let resumeOverride = selectedThreadStreamResumeOverride {
+                    cursor = resumeOverride
+                } else {
+                    cursor = await selectedThreadStreamCursor(for: threadId)
+                }
                 selectedThreadStreamResumeOverride = nil
                 let request = try client().threadStreamRequest(threadId: threadId, afterSeq: cursor)
                 let (bytes, response) = try await URLSession.shared.bytes(for: request)
@@ -221,7 +225,7 @@ extension GaryxMobileModel {
         resetSelectedThreadHistoryPagination()
         clearMessages(for: threadId)
         await loadSelectedThreadHistory()
-        selectedThreadStreamResumeOverride = selectedThreadStreamCursor(for: threadId)
+        selectedThreadStreamResumeOverride = await selectedThreadStreamCursor(for: threadId)
     }
 
     /// Merge one durable committed row into the S2 cache (in-memory, cheap — keeps the
@@ -318,12 +322,6 @@ extension GaryxMobileModel {
         }.value
     }
 
-    private func persistTranscriptCacheWindowInBackground(_ window: GaryxCachedTranscript) {
-        let store = transcriptCacheStore
-        Task.detached(priority: .utility) {
-            store.save(window)
-        }
-    }
 }
 
 private enum GaryxSelectedThreadStreamPayload: Sendable {

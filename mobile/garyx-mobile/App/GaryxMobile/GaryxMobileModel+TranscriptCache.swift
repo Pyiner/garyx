@@ -19,9 +19,28 @@ extension GaryxMobileModel {
         return loaded
     }
 
+    func transcriptSnapshotAsync(for threadId: String) async -> GaryxCachedTranscript? {
+        if let cached = cachedTranscriptSnapshots[threadId] {
+            return cached
+        }
+        let store = transcriptCacheStore
+        guard let loaded = await GaryxTranscriptCachePersistenceQueue.shared.load(
+            threadId: threadId,
+            store: store
+        ) else {
+            return nil
+        }
+        cachedTranscriptSnapshots[threadId] = loaded
+        return loaded
+    }
+
     /// Forward cursor for the next incremental open, or nil to do a full fetch.
     func transcriptAfterCursor(for threadId: String) -> Int? {
         transcriptSnapshot(for: threadId)?.afterCursor
+    }
+
+    func transcriptAfterCursorAsync(for threadId: String) async -> Int? {
+        await transcriptSnapshotAsync(for: threadId)?.afterCursor
     }
 
     /// Rendered committed window for instant cold-start display before the network
@@ -51,20 +70,25 @@ extension GaryxMobileModel {
         fetched: GaryxThreadTranscript,
         direction: GaryxTranscriptCacheMergeDirection,
         committedOnly: Bool
-    ) -> GaryxCachedTranscript {
-        let window = GaryxTranscriptCacheLogic.merged(
-            into: transcriptSnapshot(for: threadId),
-            threadId: threadId,
-            fetched: fetched.messages,
-            pageInfo: fetched.pageInfo,
-            direction: direction,
-            savedAt: Date()
-        )
-        let fetchedRunState = GaryxTranscriptRunStateReducer.reduce(fetched.messages)
-        let idle = !fetchedRunState.busy
-        if committedOnly || idle {
+    ) async -> GaryxCachedTranscript {
+        let existing = await transcriptSnapshotAsync(for: threadId)
+        let savedAt = Date()
+        let prepared = await Task.detached(priority: .utility) {
+            let window = GaryxTranscriptCacheLogic.merged(
+                into: existing,
+                threadId: threadId,
+                fetched: fetched.messages,
+                pageInfo: fetched.pageInfo,
+                direction: direction,
+                savedAt: savedAt
+            )
+            let fetchedRunState = GaryxTranscriptRunStateReducer.reduce(fetched.messages)
+            return (window, !fetchedRunState.busy)
+        }.value
+        let window = prepared.0
+        if committedOnly || prepared.1 {
             cachedTranscriptSnapshots[threadId] = window
-            transcriptCacheStore.save(window)
+            persistTranscriptCacheWindowInBackground(window)
         }
         return window
     }
@@ -99,14 +123,14 @@ extension GaryxMobileModel {
     /// freeze the displayed tail). Falls back to the full recent-turns window when
     /// there is no cache. Returns a full-window transcript (cache ∪ delta).
     func fetchThreadTranscriptIncrementally(threadId: String) async throws -> GaryxThreadTranscript {
-        guard transcriptAfterCursor(for: threadId) != nil else {
+        guard await transcriptAfterCursorAsync(for: threadId) != nil else {
             return try await fullThreadTranscript(threadId: threadId)
         }
         var lastPage: GaryxThreadTranscript?
         var window: GaryxCachedTranscript?
         var previousCursor = -1
         pageLoop: for _ in 0..<Self.threadHistoryMaxForwardPages {
-            guard let cursor = transcriptAfterCursor(for: threadId), cursor != previousCursor else {
+            guard let cursor = await transcriptAfterCursorAsync(for: threadId), cursor != previousCursor else {
                 break
             }
             previousCursor = cursor
@@ -132,7 +156,7 @@ extension GaryxMobileModel {
                 // the cache with it (older history pages in on scroll-up) rather than
                 // merging the skipped gap.
                 clearTranscriptCache(for: threadId)
-                window = updateTranscriptCache(
+                window = await updateTranscriptCache(
                     threadId: threadId,
                     fetched: page,
                     direction: .replaceLatest,
@@ -149,7 +173,7 @@ extension GaryxMobileModel {
                 // A committed-only (has_more_after) page withholds the overlay until the
                 // committed tail drains, so it persists + advances the cursor even
                 // mid-run; the final live page persists only when idle.
-                window = updateTranscriptCache(
+                window = await updateTranscriptCache(
                     threadId: threadId,
                     fetched: page,
                     direction: .forward,
@@ -171,7 +195,7 @@ extension GaryxMobileModel {
             limit: Self.threadHistoryPageLimit,
             userQueryLimit: Self.threadHistoryUserQueryLimit
         )
-        let window = updateTranscriptCache(
+        let window = await updateTranscriptCache(
             threadId: threadId,
             fetched: full,
             direction: .replaceLatest,
@@ -183,6 +207,36 @@ extension GaryxMobileModel {
     func clearTranscriptCache(for threadId: String) {
         cachedTranscriptSnapshots[threadId] = nil
         renderSnapshotsByThread[threadId] = nil
-        transcriptCacheStore.remove(threadId: threadId)
+        removeTranscriptCacheInBackground(threadId: threadId)
+    }
+
+    func persistTranscriptCacheWindowInBackground(_ window: GaryxCachedTranscript) {
+        let store = transcriptCacheStore
+        Task.detached(priority: .utility) {
+            await GaryxTranscriptCachePersistenceQueue.shared.save(window, store: store)
+        }
+    }
+
+    func removeTranscriptCacheInBackground(threadId: String) {
+        let store = transcriptCacheStore
+        Task.detached(priority: .utility) {
+            await GaryxTranscriptCachePersistenceQueue.shared.remove(threadId: threadId, store: store)
+        }
+    }
+}
+
+private actor GaryxTranscriptCachePersistenceQueue {
+    static let shared = GaryxTranscriptCachePersistenceQueue()
+
+    func load(threadId: String, store: GaryxTranscriptCacheStore) -> GaryxCachedTranscript? {
+        store.load(threadId: threadId)
+    }
+
+    func save(_ snapshot: GaryxCachedTranscript, store: GaryxTranscriptCacheStore) {
+        store.save(snapshot)
+    }
+
+    func remove(threadId: String, store: GaryxTranscriptCacheStore) {
+        store.remove(threadId: threadId)
     }
 }

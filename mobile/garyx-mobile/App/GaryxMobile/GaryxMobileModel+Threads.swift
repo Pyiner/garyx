@@ -1235,7 +1235,7 @@ extension GaryxMobileModel {
             // and survive a cold start, not just this session's memory. A
             // `before_index` page can never contain a transient live row, so it is
             // committed-only and safe to persist even while the run is active.
-            updateTranscriptCache(
+            await updateTranscriptCache(
                 threadId: threadId,
                 fetched: transcript,
                 direction: .older,
