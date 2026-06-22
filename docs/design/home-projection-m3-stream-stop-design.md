@@ -72,9 +72,24 @@ GaryxMobileModel startSelectedThreadStream
 ```
 
 The actor never mutates model state directly. It asks the main model for the
-initial cursor through an async closure and returns actions. This keeps local
-selection/cursor/cache state authoritative on the main actor while moving the
-byte loop and seq loop away from it.
+initial cursor through an async closure and sends actions through a strict
+serial async mailbox. The stream task awaits delivery of each action before it
+continues to the next frame when that action affects transcript state, cursor
+state, or reconnect decisions. This keeps local selection/cursor/cache state
+authoritative on the main actor while moving the byte loop and seq loop away
+from it.
+
+The blocking action contract is important for self-heal paths:
+
+- `applyCommittedMessages` is awaited before the actor advances to later
+  same-frame actions.
+- `refetchAfterControlRewrite` is awaited and returns the recomputed resume
+  cursor, after the main actor has cleared local transcript state, reloaded
+  authoritative history, and recalculated `selectedThreadStreamCursor(for:)`.
+- The actor must not request or reuse a resume cursor for the rewrite reconnect
+  until that refetch action has completed.
+- Non-mutating diagnostics may be fire-and-forget only if they cannot affect
+  cursor, reconnect, or lifecycle behavior.
 
 ## Seq and Self-Heal Invariants
 
@@ -101,7 +116,12 @@ the legacy planner contract for:
 - HTTP 404 fallback
 - control rewrite refetch
 
-The corpus must assert message ids and resume cursor values exactly.
+The corpus must assert message ids and resume cursor values exactly. The
+control-rewrite case must also assert action ordering: if a frame contains
+committed rows before `range_rewrite` or `transcript_reset`, the actor first
+emits and awaits `applyCommittedMessages(precedingRows)`, then emits and awaits
+`refetchAfterControlRewrite`, and only then reconnects using the cursor returned
+by the refetch action.
 
 ## Projection Input Boundary
 
@@ -128,23 +148,62 @@ actor:
 
 ## B2 Stop Stream
 
-`popToHome()` calls `stopSelectedThreadStream()` immediately. It still cancels
-selected-thread reconcile first, then starts the home/background reconcile path
-through the existing home snapshot refresh.
+There are two stop variants. The shared existing name keeps abort semantics, and
+home navigation uses a separate preserving stop.
 
-Stop behavior must preserve local resume state:
+`stopSelectedThreadStream()` remains synchronous abort/no-drain stop. It is used
+by stream ownership changes such as `startSelectedThreadStream` and by
+selection-clearing paths such as `openNewThreadDraft`. It cancels the active
+network loop, clears stream ownership/generation/resume override, cancels any
+delayed flush, and cancels any pending home-drain task. It must not run
+`flushSelectedThreadStreamWindow` for a thread that is being replaced or cleared,
+because that would leak selected-conversation lifecycle side effects into the
+new selection/draft path.
 
-- Do not clear cached transcript windows.
-- Do not clear render snapshots.
-- Do not reset the cursor derived from `selectedThreadStreamCursor(for:)`.
-- Cancel only the active network loop and the delayed stream flush task.
-- If a flush task is pending, drain the current cached window before clearing the
-  task so final run-state lifecycle side effects are not lost.
+`stopSelectedThreadStreamForHome()` is the B2 preserving stop used only by
+`popToHome()`. `popToHome()` remains a synchronous SwiftUI-facing method and
+calls this preserving stop immediately before it mutates navigation state to
+home. The preserving stop:
 
-When the user reopens the same thread, `selectThread` still calls
-`loadSelectedThreadHistory()` before the stream resumes. The stream then asks for
-the current cursor and resumes from the local committed window/render snapshot,
-so the reopened view cannot reuse a stale stream cursor.
+- captures the current selected thread id and stream generation
+- cancels the active network loop immediately, so no more SSE bytes are read
+- clears stream ownership/generation and the stopped connection's one-shot
+  `selectedThreadStreamResumeOverride`
+- preserves cached transcript windows and render snapshots
+- preserves the cursor derivable from `selectedThreadStreamCursor(for:)`
+- cancels the delayed flush task and schedules a single guarded drain task that
+  awaits `flushSelectedThreadStreamWindow(for: threadId)`
+
+The guarded drain runs on the main actor and keeps the existing
+`selectedThread?.id == threadId` check. In the normal B2 path, `popToHome()`
+does not clear `selectedThread`, so the guard passes and the current cached
+window is flushed before the flush task is forgotten, preserving terminal
+run-state lifecycle side effects. If the user immediately switches to another
+thread or opens a draft before the drain runs, the guard fails and no lifecycle
+side effects from the old conversation are applied to the new visible
+conversation. This is the caller contract that prevents the drain from being
+shared with restart/new-draft paths.
+
+Same-thread reopen also needs an explicit stream restart trigger because
+`popToHome()` keeps `selectedThread` unchanged. The implementation adds an
+`ensureSelectedThreadStreamForVisibleConversation()` helper that starts the
+selected-thread stream when all of these are true:
+
+- gateway settings are available and the gateway is ready
+- `navigationState.presentsContent` is true
+- `selectedThread?.id` is non-empty
+- there is no active stream already owned by that selected thread
+
+`openConversation()` calls this helper after it mutates navigation state to a
+visible conversation. `selectThread` additionally records whether it is
+reopening the already selected thread from home; for that same-thread reopen
+case it calls `ensureSelectedThreadStreamForVisibleConversation()` again after
+`await loadSelectedThreadHistory()`. That post-history call is the cursor-resume
+proof point: the stream asks for the current cursor after the authoritative
+history refresh, so it cannot resume from a stale pre-home cursor or from a
+cancelled connection's transient resume override. The helper is idempotent, so
+different-thread selection and non-row reopen paths keep their existing
+behavior.
 
 ## Running Dot
 
@@ -170,6 +229,10 @@ Design review must check:
   lifecycle side effects
 - B2 stop-stream preserves cursor resume and running-dot inputs
 - S5 404, gap reconnect, stale overlap, and control rewrite paths are unchanged
+- preserving home stop is not reused by restart or draft paths
+- same-thread reopen has a visible-conversation stream restart trigger
+- control rewrite applies preceding committed rows before refetch and awaits
+  refetch before reconnect cursor calculation
 
 Implementation validation:
 
