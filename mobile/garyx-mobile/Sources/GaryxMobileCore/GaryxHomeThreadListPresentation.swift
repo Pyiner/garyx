@@ -521,6 +521,222 @@ final class GaryxHomeThreadListStore: ObservableObject {
     }
 }
 
+struct GaryxRecentThreadsWidgetSnapshotInput: Equatable, Sendable {
+    var threads: [GaryxThreadSummary]
+    var agents: [GaryxAgentSummary]
+    var teams: [GaryxTeamSummary]
+    var pinnedThreadIds: [String]
+    var recentThreadIds: [String]
+
+    init(
+        threads: [GaryxThreadSummary],
+        agents: [GaryxAgentSummary],
+        teams: [GaryxTeamSummary],
+        pinnedThreadIds: [String],
+        recentThreadIds: [String]
+    ) {
+        self.threads = threads
+        self.agents = agents
+        self.teams = teams
+        self.pinnedThreadIds = pinnedThreadIds
+        self.recentThreadIds = recentThreadIds
+    }
+}
+
+enum GaryxRecentThreadsWidgetSnapshotProjector {
+    static func widgetThreads(from input: GaryxRecentThreadsWidgetSnapshotInput) -> [GaryxMobileWidgetThread] {
+        var summariesById: [String: GaryxThreadSummary] = [:]
+        for thread in input.threads where summariesById[thread.id] == nil {
+            summariesById[thread.id] = thread
+        }
+        var agentsById: [String: GaryxAgentSummary] = [:]
+        for agent in input.agents where agentsById[agent.id] == nil {
+            agentsById[agent.id] = agent
+        }
+        var teamsById: [String: GaryxTeamSummary] = [:]
+        for team in input.teams where teamsById[team.id] == nil {
+            teamsById[team.id] = team
+        }
+
+        return normalizedThreadIds(input.pinnedThreadIds + input.recentThreadIds).compactMap { threadId in
+            guard let thread = summariesById[threadId] else { return nil }
+            let workspaceName = thread.workspacePath?
+                .garyxLastPathComponent
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let identity = widgetAgentIdentity(for: thread, agentsById: agentsById, teamsById: teamsById)
+            return GaryxMobileWidgetThread(
+                id: thread.id,
+                title: thread.title,
+                workspaceName: workspaceName,
+                updatedAt: thread.updatedAt ?? thread.createdAt,
+                activeRunId: thread.activeRunId,
+                runState: thread.runState,
+                agentId: identity.id,
+                agentName: identity.name,
+                avatarDataUrl: identity.avatarDataUrl,
+                providerType: identity.providerType,
+                isTeam: identity.isTeam,
+                builtIn: identity.builtIn
+            )
+        }
+    }
+
+    private static func normalizedThreadIds(_ ids: [String]) -> [String] {
+        var seen = Set<String>()
+        var normalized: [String] = []
+        for rawId in ids {
+            let id = rawId.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !id.isEmpty, seen.insert(id).inserted else { continue }
+            normalized.append(id)
+        }
+        return normalized
+    }
+
+    private static func widgetAgentIdentity(
+        for thread: GaryxThreadSummary,
+        agentsById: [String: GaryxAgentSummary],
+        teamsById: [String: GaryxTeamSummary]
+    ) -> AgentIdentity {
+        let teamId = thread.teamId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !teamId.isEmpty {
+            if let team = teamsById[teamId] {
+                return AgentIdentity(
+                    id: team.id,
+                    name: team.displayName,
+                    avatarDataUrl: team.avatarDataUrl.isEmpty ? nil : team.avatarDataUrl,
+                    providerType: nil,
+                    isTeam: true,
+                    builtIn: false
+                )
+            }
+            return AgentIdentity(
+                id: teamId,
+                name: thread.teamName,
+                avatarDataUrl: nil,
+                providerType: nil,
+                isTeam: true,
+                builtIn: false
+            )
+        }
+
+        let agentId = thread.agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !agentId.isEmpty {
+            if let agent = agentsById[agentId] {
+                return AgentIdentity(
+                    id: agent.id,
+                    name: agent.displayName,
+                    avatarDataUrl: agent.avatarDataUrl.isEmpty ? nil : agent.avatarDataUrl,
+                    providerType: agent.providerType,
+                    isTeam: false,
+                    builtIn: agent.builtIn
+                )
+            }
+            return AgentIdentity(
+                id: agentId,
+                name: nil,
+                avatarDataUrl: nil,
+                providerType: thread.providerType,
+                isTeam: false,
+                builtIn: false
+            )
+        }
+
+        return AgentIdentity(
+            id: nil,
+            name: nil,
+            avatarDataUrl: nil,
+            providerType: thread.providerType,
+            isTeam: false,
+            builtIn: false
+        )
+    }
+
+    private struct AgentIdentity {
+        var id: String?
+        var name: String?
+        var avatarDataUrl: String?
+        var providerType: String?
+        var isTeam: Bool
+        var builtIn: Bool
+    }
+}
+
+final class GaryxRecentThreadsWidgetPersistencePlanner {
+    enum Decision: Equatable {
+        case skipUnchanged
+        case write([GaryxMobileWidgetThread])
+    }
+
+    private var lastWrittenThreads: [GaryxMobileWidgetThread]?
+
+    func nextWrite(for threads: [GaryxMobileWidgetThread]) -> Decision {
+        guard threads != lastWrittenThreads else {
+            return .skipUnchanged
+        }
+        lastWrittenThreads = threads
+        return .write(threads)
+    }
+}
+
+struct GaryxBackgroundCommittedRunReconcileDecision: Equatable, Sendable {
+    var candidateThreadIds: [String]
+    var refreshesThreads: Bool
+    var hydratesCandidateThreads: Bool
+
+    static let idle = GaryxBackgroundCommittedRunReconcileDecision(
+        candidateThreadIds: [],
+        refreshesThreads: false,
+        hydratesCandidateThreads: false
+    )
+}
+
+final class GaryxBackgroundCommittedRunReconcilePlanner {
+    private let minimumRefreshInterval: TimeInterval
+    private var lastRefreshAt: Date?
+    private var lastCandidateThreadIds: [String] = []
+
+    init(minimumRefreshInterval: TimeInterval) {
+        self.minimumRefreshInterval = minimumRefreshInterval
+    }
+
+    func nextDecision(
+        candidateThreadIds: [String],
+        now: Date = Date(),
+        forceRefresh: Bool = false
+    ) -> GaryxBackgroundCommittedRunReconcileDecision {
+        let normalizedIds = normalizedThreadIds(candidateThreadIds)
+        guard !normalizedIds.isEmpty else {
+            lastCandidateThreadIds = []
+            return .idle
+        }
+
+        let candidatesChanged = normalizedIds != lastCandidateThreadIds
+        let intervalElapsed = lastRefreshAt.map { now.timeIntervalSince($0) >= minimumRefreshInterval } ?? true
+        let shouldRefresh = forceRefresh || candidatesChanged || intervalElapsed
+        if shouldRefresh {
+            lastRefreshAt = now
+        }
+        lastCandidateThreadIds = normalizedIds
+
+        return GaryxBackgroundCommittedRunReconcileDecision(
+            candidateThreadIds: normalizedIds,
+            refreshesThreads: shouldRefresh,
+            hydratesCandidateThreads: true
+        )
+    }
+
+    private func normalizedThreadIds(_ ids: [String]) -> [String] {
+        var seen = Set<String>()
+        var normalized: [String] = []
+        for rawId in ids {
+            let id = rawId.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !id.isEmpty, seen.insert(id).inserted else { continue }
+            normalized.append(id)
+        }
+        return normalized.sorted()
+    }
+}
+
 enum GaryxEquatableAssignment {
     @discardableResult
     static func assignIfChanged<Value: Equatable>(

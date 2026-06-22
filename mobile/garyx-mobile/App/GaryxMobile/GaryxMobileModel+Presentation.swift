@@ -4,6 +4,42 @@ import UniformTypeIdentifiers
 import WidgetKit
 
 extension GaryxMobileModel {
+    func refreshShellChromeSnapshot() {
+        shellChromeStore.apply(
+            GaryxShellChromeSnapshot(
+                sidebarVisible: sidebarVisible,
+                leadingEdgeAction: mainPanelLeadingEdgeAction
+            )
+        )
+    }
+
+    func refreshNavigationDrawerSnapshot() {
+        navigationDrawerStore.apply(navigationDrawerSnapshot)
+    }
+
+    var navigationDrawerSnapshot: GaryxNavigationDrawerSnapshot {
+        GaryxNavigationDrawerSnapshot(
+            activePanel: activePanel,
+            gatewayIdentity: gatewaySwitcherIdentity,
+            gatewayRows: gatewaySwitcherRows,
+            botGroups: mobileBotGroups,
+            workspaceRows: navigationDrawerWorkspaceRows
+        )
+    }
+
+    var navigationDrawerWorkspaceRows: [GaryxNavigationDrawerWorkspaceRow] {
+        let paths = userWorkspacePaths
+        let duplicateNames = Dictionary(grouping: paths, by: { $0.garyxLastPathComponent })
+            .filter { !$0.key.isEmpty && $0.value.count > 1 }
+        return paths.map { path in
+            let name = path.garyxLastPathComponent.isEmpty ? path : path.garyxLastPathComponent
+            return GaryxNavigationDrawerWorkspaceRow(
+                path: path,
+                name: duplicateNames[name] == nil ? name : path.garyxDisambiguatedWorkspaceName
+            )
+        }
+    }
+
     func refreshHomeThreadListSnapshot() {
         #if DEBUG
         GaryxHomeScrollPerformanceProbe.shared.markHomeListStoreApply()
@@ -91,6 +127,17 @@ extension GaryxMobileModel {
             profiles: gatewayProfiles,
             currentGatewayURL: gatewayURL
         )
+    }
+
+    func switchGateway(from row: GaryxGatewaySwitcherRow) {
+        if row.isCurrent {
+            if !isGatewayConnectionReady {
+                Task { await connectAndRefresh() }
+            }
+            return
+        }
+        guard let profile = gatewayProfiles.first(where: { $0.id == row.profileId }) else { return }
+        Task { await activateGatewayProfile(profile) }
     }
 
     var isGatewayConnectionReady: Bool {

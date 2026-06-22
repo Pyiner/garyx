@@ -553,15 +553,30 @@ struct GaryxHomeHeaderView: View {
 /// Workspaces expanding inline like the Mac sidebar rail, and Settings plus
 /// the gateway identity bar at the bottom.
 struct GaryxNavigationDrawerView: View {
-    @EnvironmentObject private var model: GaryxMobileModel
+    @ObservedObject var drawerStore: GaryxNavigationDrawerStore
     @Environment(\.garyxSidebarDragActive) private var sidebarDragActive
+    let onOpenPanel: (GaryxMobilePanel) -> Void
+    let onOpenBotGroup: (GaryxMobileBotGroup) -> Void
+    let onOpenBotDrilldown: (String) -> Void
+    let onOpenWorkspaceDrilldown: (String) -> Void
+    let onOpenSettings: () -> Void
+    let onSwitchGateway: (GaryxGatewaySwitcherRow) -> Void
+    let onManageGateways: () -> Void
+    @Binding var debugShowsGatewaySwitcher: Bool
 
     var body: some View {
+        let snapshot = drawerStore.snapshot
         VStack(alignment: .leading, spacing: 0) {
             GaryxAdaptiveGlassContainer(spacing: 10) {
                 HStack(alignment: .center, spacing: 12) {
                     // The gateway identity IS the drawer title.
-                    GaryxSidebarGatewayIdentityControl()
+                    GaryxSidebarGatewayIdentityControl(
+                        identity: snapshot.gatewayIdentity,
+                        rows: snapshot.gatewayRows,
+                        onSwitch: onSwitchGateway,
+                        onManageGateways: onManageGateways,
+                        debugShowsGatewaySwitcher: $debugShowsGatewaySwitcher
+                    )
 
                     Spacer(minLength: 0)
                 }
@@ -574,17 +589,19 @@ struct GaryxNavigationDrawerView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     GaryxSidebarNavigationRow(
                         panel: .automations,
-                        isSelected: model.activePanel == .automations
+                        isSelected: snapshot.activePanel == .automations,
+                        action: { onOpenPanel(.automations) }
                     )
 
                     GaryxSidebarNavigationRow(
                         panel: .agents,
-                        isSelected: model.activePanel == .agents
+                        isSelected: snapshot.activePanel == .agents,
+                        action: { onOpenPanel(.agents) }
                     )
 
-                    if !model.mobileBotGroups.isEmpty {
+                    if !snapshot.botGroups.isEmpty {
                         GaryxDrawerSectionLabel(title: GaryxMobilePanel.bots.label)
-                        ForEach(model.mobileBotGroups) { group in
+                        ForEach(snapshot.botGroups) { group in
                             GaryxDrawerChildRow(title: group.title) {
                                 GaryxChannelLogoView(
                                     channel: group.channel,
@@ -598,16 +615,16 @@ struct GaryxNavigationDrawerView: View {
                         }
                     }
 
-                    if !model.sidebarWorkspaceThreadGroups.isEmpty {
+                    if !snapshot.workspaceRows.isEmpty {
                         GaryxDrawerSectionLabel(title: GaryxMobilePanel.workspaceBots.label)
-                        ForEach(model.sidebarWorkspaceThreadGroups) { group in
-                            GaryxDrawerChildRow(title: group.name) {
+                        ForEach(snapshot.workspaceRows) { row in
+                            GaryxDrawerChildRow(title: row.name) {
                                 Image(systemName: "folder")
                                     .font(GaryxFont.system(size: 15, weight: .semibold))
                                     .foregroundStyle(.secondary)
                                     .frame(width: 22, height: 22)
                             } action: {
-                                model.openWorkspaceBotsDrilldown(.workspace(group.path), source: .sidebar)
+                                onOpenWorkspaceDrilldown(row.path)
                             }
                         }
                     }
@@ -629,7 +646,7 @@ struct GaryxNavigationDrawerView: View {
                         title: "Settings",
                         iconSystemName: "gearshape",
                         style: .glass,
-                        action: { model.openSettings() }
+                        action: onOpenSettings
                     )
 
                     Spacer(minLength: 0)
@@ -645,10 +662,9 @@ struct GaryxNavigationDrawerView: View {
 
     private func openBotGroup(_ group: GaryxMobileBotGroup) {
         if group.rootCanOpen {
-            Task { await model.openBotGroup(group) }
-            model.setSidebarVisible(false)
+            onOpenBotGroup(group)
         } else {
-            model.openWorkspaceBotsDrilldown(.bot(group.id), source: .sidebar)
+            onOpenBotDrilldown(group.id)
         }
     }
 }
@@ -700,14 +716,12 @@ private struct GaryxDrawerChildRow<Icon: View>: View {
 }
 
 struct GaryxSidebarNavigationRow: View {
-    @EnvironmentObject private var model: GaryxMobileModel
     let panel: GaryxMobilePanel
     let isSelected: Bool
+    let action: () -> Void
 
     var body: some View {
-        Button {
-            model.openPanel(panel, source: .sidebar)
-        } label: {
+        Button(action: action) {
             HStack(spacing: 12) {
                 Image(systemName: panel.iconName)
                     .font(GaryxFont.system(size: 19, weight: .regular))
