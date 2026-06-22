@@ -111,6 +111,64 @@ final class GaryxHomeProductionAcceptanceTests: XCTestCase {
         )
     }
 
+    func testHomeListStoreAppliesActorSnapshotsWithSeqAndContentGuards() throws {
+        var base = GaryxHomeListFixture.makeInputs(threadCount: 20, pinnedCount: 2, runningCount: 0)
+        let store = GaryxHomeThreadListStore()
+        let initialSections = GaryxHomeThreadSectionsBuilder.build(GaryxHomeThreadSectionsInput(base))
+        let initialSnapshot = HomeSnapshot(
+            appliedSeq: 1,
+            sections: initialSections,
+            isLoadingThreads: false,
+            isHomeVisible: true
+        )
+
+        XCTAssertTrue(store.apply(actorSnapshot: initialSnapshot))
+        XCTAssertEqual(store.latestActorAppliedSeq, 1)
+        XCTAssertEqual(store.acceptedActorSnapshotCount, 1)
+        XCTAssertEqual(store.publishCount, 1)
+        XCTAssertEqual(store.sectionDerivationCount, 0)
+
+        let sameContentNewerSeq = HomeSnapshot(
+            appliedSeq: 2,
+            sections: initialSections,
+            isLoadingThreads: false,
+            isHomeVisible: true
+        )
+        XCTAssertFalse(
+            store.apply(actorSnapshot: sameContentNewerSeq),
+            "Actor no-op deltas may advance appliedSeq, but must not republish unchanged visible content."
+        )
+        XCTAssertEqual(store.latestActorAppliedSeq, 2)
+        XCTAssertEqual(store.acceptedActorSnapshotCount, 2)
+        XCTAssertEqual(store.publishCount, 1)
+        XCTAssertEqual(store.sectionDerivationCount, 0)
+
+        base.threads[0].title = "Stale title must not win"
+        let staleChangedSections = GaryxHomeThreadSectionsBuilder.build(GaryxHomeThreadSectionsInput(base))
+        let staleChangedSnapshot = HomeSnapshot(
+            appliedSeq: 1,
+            sections: staleChangedSections,
+            isLoadingThreads: false,
+            isHomeVisible: true
+        )
+        XCTAssertFalse(store.apply(actorSnapshot: staleChangedSnapshot))
+        XCTAssertEqual(store.snapshot.sections.pinned.first?.presentation.title, initialSections.pinned.first?.presentation.title)
+        XCTAssertEqual(store.publishCount, 1)
+
+        base.threads[0].title = "Fresh actor title"
+        let freshChangedSections = GaryxHomeThreadSectionsBuilder.build(GaryxHomeThreadSectionsInput(base))
+        XCTAssertTrue(store.apply(actorSnapshot: HomeSnapshot(
+            appliedSeq: 3,
+            sections: freshChangedSections,
+            isLoadingThreads: false,
+            isHomeVisible: true
+        )))
+        XCTAssertEqual(store.latestActorAppliedSeq, 3)
+        XCTAssertEqual(store.publishCount, 2)
+        XCTAssertEqual(store.snapshot.sections.pinned.first?.presentation.title, "Fresh actor title")
+        XCTAssertEqual(store.sectionDerivationCount, 0)
+    }
+
     func testHomeListStoreAppliesVisibleChangesDirectlyWithoutInteractionFreeze() throws {
         let base = GaryxHomeListFixture.makeInputs(threadCount: 50, runningCount: 0)
         let store = GaryxHomeThreadListStore()

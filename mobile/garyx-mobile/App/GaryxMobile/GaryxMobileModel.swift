@@ -93,7 +93,7 @@ final class GaryxMobileModel: ObservableObject {
     }
     @Published var threads: [GaryxThreadSummary] = [] {
         didSet {
-            refreshHomeThreadListSnapshot()
+            emitHomeProjectionSnapshot()
             refreshNavigationDrawerSnapshot()
         }
     }
@@ -102,7 +102,7 @@ final class GaryxMobileModel: ObservableObject {
             if !suppressesSelectedThreadStreamPolicy {
                 applySelectedThreadStreamPolicy(previousThreadId: oldValue?.id, selectedThreadId: selectedThread?.id)
             }
-            refreshHomeThreadListSnapshot()
+            emitHomeProjectionSnapshot()
         }
     }
     @Published var messages: [GaryxMobileMessage] = [] {
@@ -123,7 +123,7 @@ final class GaryxMobileModel: ObservableObject {
     @Published var composerContextVersion = 0
     @Published var composerAttachments: [GaryxMobileComposerAttachment] = []
     @Published var isLoadingThreads = false {
-        didSet { refreshHomeThreadListSnapshot() }
+        didSet { emitHomeProjectionSnapshot() }
     }
     @Published var isLoadingMoreThreads = false {
         didSet { refreshHomeObservationPaginationSnapshot() }
@@ -139,12 +139,10 @@ final class GaryxMobileModel: ObservableObject {
     /// `pendingChatStartThreadIds` / `terminatedActiveRunIdsByThread` flags;
     /// see docs/agents/conversation-state.md.
     @Published var runTracker = GaryxConversationRunTracker() {
-        didSet { refreshHomeThreadListSnapshot() }
+        didSet { emitHomeProjectionSnapshot() }
     }
     /// Server run-state rebuilt from committed transcript control records.
-    @Published var runStateByThread: [String: GaryxTranscriptRunState] = [:] {
-        didSet { refreshHomeThreadListSnapshot() }
-    }
+    @Published var runStateByThread: [String: GaryxTranscriptRunState] = [:]
     /// Server-rendered transcript snapshots keyed by thread. These snapshots own
     /// visible transcript rows; committed messages remain only the data pool they
     /// reference.
@@ -164,7 +162,7 @@ final class GaryxMobileModel: ObservableObject {
             rootNavigationPathStore.apply(navigationState: navigationState)
             refreshShellChromeSnapshot()
             refreshNavigationDrawerSnapshot()
-            refreshHomeThreadListSnapshot()
+            emitHomeProjectionSnapshot()
         }
     }
     @Published var pendingMobileRoute: GaryxMobileRoute?
@@ -186,10 +184,10 @@ final class GaryxMobileModel: ObservableObject {
         didSet { refreshShellChromeSnapshot() }
     }
     @Published var pinnedThreadIds: [String] = [] {
-        didSet { refreshHomeThreadListSnapshot() }
+        didSet { emitHomeProjectionSnapshot() }
     }
     @Published var recentThreadIds: [String] = [] {
-        didSet { refreshHomeThreadListSnapshot() }
+        didSet { emitHomeProjectionSnapshot() }
     }
     @Published var dreams: [GaryxDreamTopic] = []
     @Published var latestDreamScan: GaryxDreamScan?
@@ -199,13 +197,13 @@ final class GaryxMobileModel: ObservableObject {
     @Published var agents: [GaryxAgentSummary] = [] {
         didSet {
             predecodeAgentAvatarImages()
-            refreshHomeThreadListSnapshot()
+            emitHomeProjectionSnapshot()
         }
     }
     @Published var teams: [GaryxTeamSummary] = [] {
         didSet {
             predecodeAgentAvatarImages()
-            refreshHomeThreadListSnapshot()
+            emitHomeProjectionSnapshot()
         }
     }
     @Published var skills: [GaryxSkillSummary] = []
@@ -214,7 +212,7 @@ final class GaryxMobileModel: ObservableObject {
     @Published var workflowRunPanelState = GaryxWorkflowRunPanelState()
     @Published var selectedWorkflowRunThread: GaryxThreadSummary?
     @Published var automations: [GaryxAutomationSummary] = [] {
-        didSet { refreshHomeThreadListSnapshot() }
+        didSet { emitHomeProjectionSnapshot() }
     }
     @Published var remoteStateLoadPhase: GaryxMobileLoadPhase = .idle
     @Published var agentTargetsLoadPhase: GaryxMobileLoadPhase = .idle
@@ -415,10 +413,13 @@ final class GaryxMobileModel: ObservableObject {
         }
         #endif
         rootNavigationPathStore.apply(navigationState: navigationState)
+        homeProjectionGateway.setResultHandler { [weak self] result in
+            self?.applyHomeProjectionResult(result)
+        }
         refreshHomeObservationSnapshot()
         refreshShellChromeSnapshot()
         refreshNavigationDrawerSnapshot()
-        refreshHomeThreadListSnapshot()
+        emitHomeProjectionSnapshot()
         #if DEBUG
         GaryxHomeScrollPerformanceProbe.shared.attachModelObjectWillChange(objectWillChange)
         startHomeScrollPressureProbeIfRequested()

@@ -45,6 +45,56 @@ final class GaryxHomeObservationBridgeTests: XCTestCase {
         XCTAssertEqual(homeInvalidations, 1)
     }
 
+    func testHomeThreadListStorePublishesFromActorSnapshotsWithoutLegacyDerivation() async throws {
+        try XCTSkipIf(
+            !HomeProjectionLiveSourceConfiguration.usesActorSnapshots,
+            "Actor cutover bridge assertions are not meaningful while the rollback env flag is disabled."
+        )
+        let model = makeModel()
+        let thread = makeThread(id: "thread-actor-home")
+
+        model.threads = [thread]
+        model.recentThreadIds = [thread.id]
+        await model.homeProjectionGateway.waitForIdleForTesting()
+
+        XCTAssertEqual(model.homeThreadListStore.snapshot.sections.allRows.map(\.id), [thread.id])
+        XCTAssertEqual(model.homeThreadListStore.acceptedInputCount, 0)
+        XCTAssertGreaterThan(model.homeThreadListStore.acceptedActorSnapshotCount, 0)
+        XCTAssertEqual(
+            model.homeThreadListStore.sectionDerivationCount,
+            0,
+            "Actor-backed live rendering must not derive home sections in the legacy main-actor store."
+        )
+        XCTAssertEqual(model.homeProjectionGateway.parityMismatchCount, 0)
+    }
+
+    func testCommittedRunStateDeltaDoesNotAlsoEmitFullCaptureFromDictionaryDidSet() async throws {
+        try XCTSkipIf(
+            !HomeProjectionLiveSourceConfiguration.usesActorSnapshots,
+            "Actor cutover bridge assertions are not meaningful while the rollback env flag is disabled."
+        )
+        let model = makeModel()
+        let thread = makeThread(id: "thread-committed-delta")
+
+        model.threads = [thread]
+        model.recentThreadIds = [thread.id]
+        await model.homeProjectionGateway.waitForIdleForTesting()
+        let baselineEmitCount = model.homeProjectionGateway.snapshotEmitCount
+
+        model.applyTranscriptRunState(
+            GaryxTranscriptRunState(busy: true, activeRunId: "run-committed-delta", activity: .thinking),
+            threadId: thread.id
+        )
+        await model.homeProjectionGateway.waitForIdleForTesting()
+
+        XCTAssertEqual(model.homeProjectionGateway.snapshotEmitCount, baselineEmitCount + 1)
+        let row = try XCTUnwrap(model.homeThreadListStore.snapshot.sections.allRows.first { $0.id == thread.id })
+        XCTAssertTrue(row.presentation.isRunning)
+        XCTAssertEqual(model.homeThreadListStore.acceptedInputCount, 0)
+        XCTAssertEqual(model.homeThreadListStore.sectionDerivationCount, 0)
+        XCTAssertEqual(model.homeProjectionGateway.parityMismatchCount, 0)
+    }
+
     private func makeModel() -> GaryxMobileModel {
         let suiteName = "GaryxHomeObservationBridgeTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!

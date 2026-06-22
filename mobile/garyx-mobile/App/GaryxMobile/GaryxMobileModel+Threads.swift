@@ -1361,8 +1361,17 @@ extension GaryxMobileModel {
         refreshHomeThreadsAfterLocalRunStateChange()
     }
 
+    func replaceRunStateByThread(_ next: [String: GaryxTranscriptRunState]) {
+        guard runStateByThread != next else { return }
+        runStateByThread = next
+        emitHomeProjectionSnapshot()
+    }
+
     func emitCommittedRunStateProjectionDelta(threadId: String, state: GaryxTranscriptRunState) {
         homeProjectionGateway.captureCommittedRunStateDelta(threadId: threadId, isRunning: state.busy)
+        if !HomeProjectionLiveSourceConfiguration.usesActorSnapshots {
+            emitHomeProjectionSnapshot()
+        }
     }
 
     func summaryWithCommittedRunState(_ thread: GaryxThreadSummary) -> GaryxThreadSummary {

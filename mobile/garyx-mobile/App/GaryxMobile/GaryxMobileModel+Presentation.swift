@@ -80,25 +80,61 @@ extension GaryxMobileModel {
         }
     }
 
-    func refreshHomeThreadListSnapshot() {
-        #if DEBUG
-        GaryxHomeScrollPerformanceProbe.shared.markHomeListStoreApply()
-        #endif
+    func emitHomeProjectionSnapshot() {
+        if HomeProjectionLiveSourceConfiguration.usesActorSnapshots {
+            homeProjectionGateway.capture(homeProjectionCapture)
+            syncBackgroundCommittedRunReconcileLoopForHomeVisibility()
+            return
+        }
+
+        applyLegacyHomeThreadListSnapshot()
+    }
+
+    func applyLegacyHomeThreadListSnapshot() {
         let input = homeThreadListInput
-        homeThreadListStore.apply(input)
+        if homeThreadListStore.apply(input) {
+            #if DEBUG
+            GaryxHomeScrollPerformanceProbe.shared.markHomeListStoreApply()
+            #endif
+        }
         captureHomeProjectionShadow(input: input)
         syncBackgroundCommittedRunReconcileLoopForHomeVisibility()
     }
 
     func captureHomeProjectionShadow(input: GaryxHomeThreadListInput) {
+        guard HomeProjectionShadowConfiguration.isEnabled else { return }
         homeProjectionGateway.capture(
             HomeProjectionCapture(
                 legacyInput: input,
                 runTrackerBusyThreadIds: runTracker.busyThreadIds,
                 committedRunStateBusyByThreadId: runStateByThread.mapValues { $0.busy }
-            ),
-            liveLegacySnapshot: homeThreadListStore.snapshot
+            )
         )
+    }
+
+    var homeProjectionCapture: HomeProjectionCapture {
+        HomeProjectionCapture(
+            threads: threads,
+            recentThreadIds: recentThreadIds,
+            agents: agents,
+            teams: teams,
+            automations: automations,
+            pinnedThreadIds: pinnedThreadIds,
+            selectedThreadId: selectedThread?.id,
+            isLoadingThreads: isLoadingThreads,
+            isHomeVisible: isHomeVisible,
+            runTrackerBusyThreadIds: runTracker.busyThreadIds,
+            committedRunStateBusyByThreadId: runStateByThread.mapValues { $0.busy }
+        )
+    }
+
+    func applyHomeProjectionResult(_ result: HomeProjectionBoundaryResult) {
+        guard HomeProjectionLiveSourceConfiguration.usesActorSnapshots else { return }
+        if homeThreadListStore.apply(actorSnapshot: result.snapshot, difference: result.difference) {
+            #if DEBUG
+            GaryxHomeScrollPerformanceProbe.shared.markHomeListStoreApply()
+            #endif
+        }
     }
 
     var homeThreadListInput: GaryxHomeThreadListInput {
@@ -370,7 +406,7 @@ extension GaryxMobileModel {
         pinnedThreadIds = (0..<6).map { "thread-\($0)" }
         recentThreadIds = (0..<50).map { "thread-\($0)" }
         connectionState = .ready(version: "debug-home-scroll-probe")
-        refreshHomeThreadListSnapshot()
+        emitHomeProjectionSnapshot()
     }
     #endif
 

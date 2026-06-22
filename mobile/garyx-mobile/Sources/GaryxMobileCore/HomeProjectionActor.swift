@@ -346,6 +346,8 @@ actor HomeProjectionActor {
 
 @MainActor
 final class HomeProjectionGateway {
+    typealias ResultHandler = @MainActor (HomeProjectionBoundaryResult) -> Void
+
     private enum BoundaryPayload: Sendable {
         case capture(HomeProjectionCapture, GaryxHomeThreadListSnapshot?)
         case committedRunStateDelta(threadId: String, isRunning: Bool)
@@ -364,6 +366,7 @@ final class HomeProjectionGateway {
     private var pendingTransactionBoundary: Boundary?
     private var queuedBoundary: Boundary?
     private var inFlightTask: Task<Void, Never>?
+    private var resultHandler: ResultHandler?
 
     private(set) var latestResult: HomeProjectionBoundaryResult?
     private(set) var snapshotEmitCount = 0
@@ -371,10 +374,14 @@ final class HomeProjectionGateway {
 
     init(
         actor: HomeProjectionActor = HomeProjectionActor(),
-        isEnabled: Bool = HomeProjectionShadowConfiguration.isEnabled
+        isEnabled: Bool = HomeProjectionGatewayConfiguration.isEnabled
     ) {
         self.actor = actor
         self.isEnabled = isEnabled
+    }
+
+    func setResultHandler(_ handler: ResultHandler?) {
+        resultHandler = handler
     }
 
     @discardableResult
@@ -474,8 +481,30 @@ final class HomeProjectionGateway {
         latestResult = result
         snapshotEmitCount = result.snapshotEmitCount
         parityMismatchCount = result.parityMismatchCount
+        resultHandler?(result)
         inFlightTask = nil
         startDrainIfNeeded()
+    }
+}
+
+enum HomeProjectionGatewayConfiguration {
+    static var isEnabled: Bool {
+        HomeProjectionLiveSourceConfiguration.usesActorSnapshots
+            || HomeProjectionShadowConfiguration.isEnabled
+    }
+}
+
+enum HomeProjectionLiveSourceConfiguration {
+    static var usesActorSnapshots: Bool {
+        let rawValue = ProcessInfo.processInfo.environment["GARYX_MOBILE_HOME_PROJECTION_CUTOVER"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        switch rawValue {
+        case "0", "false", "no", "off":
+            return false
+        default:
+            return true
+        }
     }
 }
 
