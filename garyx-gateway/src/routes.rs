@@ -41,7 +41,7 @@ use crate::garyx_db::{GaryxDbError, PinnedThreadRecord, RecentThreadRecord, Thre
 use crate::provider_session_locator::{
     list_recent_local_provider_sessions, recover_local_provider_session,
 };
-use crate::recent_thread_projection::backfill_recent_thread_projection_if_incomplete;
+use crate::recent_thread_projection::{BridgeActiveRunProbe, backfill_recent_thread_projection_if_incomplete};
 use crate::server::AppState;
 use crate::skills::SkillStoreError;
 use crate::thread_meta_projection::backfill_thread_meta_projection_if_incomplete;
@@ -1620,10 +1620,12 @@ pub async fn list_recent_threads(
     Query(params): Query<ListRecentThreadsParams>,
 ) -> impl IntoResponse {
     let transcript_store = state.threads.history.transcript_store();
+    let active_run_probe = BridgeActiveRunProbe::new(Arc::downgrade(&state.integration.bridge));
     let _ = backfill_recent_thread_projection_if_incomplete(
         &state.threads.thread_store,
         &transcript_store,
         &state.ops.garyx_db,
+        &active_run_probe,
     )
     .await;
     let limit = params.limit.min(MAX_RECENT_THREAD_LIMIT);

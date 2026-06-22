@@ -29,8 +29,8 @@ use crate::garyx_db::GaryxDbService;
 use crate::health::HealthChecker;
 use crate::mcp_metrics::McpToolMetrics;
 use crate::recent_thread_projection::{
-    backfill_recent_thread_projection_if_incomplete, prune_excluded_recent_thread_projection,
-    reconcile_active_recent_thread_projection,
+    BridgeActiveRunProbe, backfill_recent_thread_projection_if_incomplete,
+    prune_excluded_recent_thread_projection, reconcile_active_recent_thread_projection,
 };
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
@@ -269,10 +269,13 @@ impl AppState {
         tokio::spawn(async move {
             let started = Instant::now();
             let transcript_store = state.threads.history.transcript_store();
+            let active_run_probe =
+                BridgeActiveRunProbe::new(Arc::downgrade(&state.integration.bridge));
             let recent_threads = backfill_recent_thread_projection_if_incomplete(
                 &state.threads.thread_store,
                 &transcript_store,
                 &state.ops.garyx_db,
+                &active_run_probe,
             )
             .await;
             let pruned_recent_threads = prune_excluded_recent_thread_projection(
@@ -284,6 +287,7 @@ impl AppState {
                 &state.threads.thread_store,
                 &transcript_store,
                 &state.ops.garyx_db,
+                &active_run_probe,
             )
             .await;
             let thread_meta_projection = backfill_thread_meta_projection_if_incomplete(
