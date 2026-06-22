@@ -22186,6 +22186,694 @@ button.new-thread-dreams-scan:hover {
   background: var(--color-token-error-foreground);
 }
 
+/* Task forest console */
+.task-forest-console {
+  position: relative;
+  display: grid;
+  grid-template-rows: 46px minmax(0, 1fr);
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  color: var(--color-token-text-primary);
+  background: var(--color-token-bg-tertiary);
+}
+
+.task-forest-topbar {
+  position: relative;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--color-token-border);
+  background: color-mix(in srgb, var(--color-token-bg-primary) 76%, transparent);
+  backdrop-filter: blur(20px) saturate(1.35);
+  -webkit-backdrop-filter: blur(20px) saturate(1.35);
+}
+
+.task-forest-brand,
+.task-forest-actions,
+.task-forest-status-chips,
+.task-forest-breadcrumb {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.task-forest-brand {
+  gap: 9px;
+  flex: none;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.task-forest-brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--color-token-foreground);
+  color: var(--color-token-bg-primary);
+}
+
+.task-forest-status-chips {
+  gap: 5px;
+  flex: none;
+}
+
+.task-forest-chip,
+.task-forest-button,
+.task-forest-icon-button {
+  border: 1px solid var(--color-token-border);
+  background: var(--color-token-bg-primary);
+  color: var(--color-token-text-primary);
+  font: inherit;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    transform 0.15s ease;
+}
+
+.task-forest-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 550;
+  white-space: nowrap;
+}
+
+.task-forest-chip:hover,
+.task-forest-button:hover,
+.task-forest-icon-button:hover {
+  background: var(--color-token-row-hover);
+}
+
+.task-forest-chip.active {
+  background: var(--color-token-row-selected);
+  border-color: var(--color-token-focus-border);
+}
+
+.task-forest-chip-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--task-forest-tone, var(--color-token-description-foreground));
+}
+
+.task-forest-chip.tone-progress,
+.task-forest-node.tone-progress,
+.task-forest-minimap .tone-progress {
+  --task-forest-tone: var(--color-token-warning-foreground);
+  --task-forest-tone-bg: var(--color-token-bg-warning);
+}
+
+.task-forest-chip.tone-review,
+.task-forest-node.tone-review,
+.task-forest-minimap .tone-review {
+  --task-forest-tone: #7345b6;
+  --task-forest-tone-bg: #f4ecff;
+}
+
+.task-forest-chip.tone-done,
+.task-forest-node.tone-done,
+.task-forest-minimap .tone-done {
+  --task-forest-tone: var(--color-token-success-foreground);
+  --task-forest-tone-bg: var(--color-token-bg-success);
+}
+
+.task-forest-chip.tone-todo,
+.task-forest-node.tone-todo,
+.task-forest-minimap .tone-todo {
+  --task-forest-tone: color-mix(in srgb, var(--color-token-text-primary) 42%, transparent);
+  --task-forest-tone-bg: var(--color-token-bg-secondary);
+}
+
+.task-forest-breadcrumb {
+  flex: 1;
+  gap: 4px;
+  overflow: hidden;
+  color: var(--color-token-description-foreground);
+  font-size: 11px;
+}
+
+.task-forest-breadcrumb button {
+  display: inline-flex;
+  gap: 4px;
+  max-width: 150px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  background: none;
+  color: var(--color-token-text-secondary);
+  font: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.task-forest-actions {
+  gap: 7px;
+  flex: none;
+}
+
+.task-forest-readout {
+  width: 40px;
+  color: var(--color-token-description-foreground);
+  font-size: 11px;
+  text-align: right;
+}
+
+.task-forest-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.task-forest-button.primary {
+  border-color: var(--color-token-foreground);
+  background: var(--color-token-foreground);
+  color: var(--color-token-bg-primary);
+}
+
+.task-forest-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 7px;
+}
+
+.task-forest-kbd {
+  color: var(--color-token-description-foreground);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.task-forest-stage {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background:
+    radial-gradient(rgba(26, 28, 31, 0.05) 1px, transparent 1px),
+    var(--color-token-bg-tertiary);
+  background-size: 24px 24px;
+  cursor: default;
+}
+
+.task-forest-console.space-panning .task-forest-stage,
+.task-forest-stage:active {
+  cursor: grabbing;
+}
+
+.task-forest-world {
+  cursor: grab;
+}
+
+.task-forest-world,
+.task-forest-edges {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+}
+
+.task-forest-world {
+  will-change: transform;
+}
+
+.task-forest-edges {
+  overflow: visible;
+  pointer-events: none;
+}
+
+.task-forest-edge {
+  fill: none;
+  stroke: color-mix(in srgb, var(--color-token-text-primary) 16%, transparent);
+  stroke-linecap: round;
+  stroke-width: 1.4;
+}
+
+.task-forest-edge.active {
+  stroke: color-mix(in srgb, var(--color-token-success-foreground) 70%, transparent);
+  stroke-dasharray: 6 12;
+  animation: task-forest-edge-flow 1.9s linear infinite;
+}
+
+@keyframes task-forest-edge-flow {
+  to {
+    stroke-dashoffset: -18;
+  }
+}
+
+.task-forest-node {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 11px 13px 10px 16px;
+  overflow: hidden;
+  border: 1px solid var(--color-token-border);
+  border-radius: 8px;
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.03);
+  background: var(--color-token-bg-primary);
+  color: var(--color-token-text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    opacity 0.2s ease,
+    transform 0.18s cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 0.18s cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 0.18s ease,
+    background 0.18s ease;
+}
+
+.task-forest-node::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 4px;
+  background: var(--task-forest-tone);
+}
+
+.task-forest-node:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    0 4px 12px rgba(0, 0, 0, 0.06),
+    0 1px 2px rgba(0, 0, 0, 0.02);
+}
+
+.task-forest-node.selected {
+  border-color: var(--color-token-focus-border);
+  background: var(--color-token-row-selected);
+}
+
+.task-forest-node.cursor:not(.selected) {
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--color-token-success-foreground) 38%, transparent),
+    0 4px 12px rgba(0, 0, 0, 0.06);
+}
+
+.task-forest-node.dimmed {
+  opacity: 0.36;
+}
+
+.task-forest-node.active-run {
+  background:
+    linear-gradient(180deg, var(--color-token-bg-success), var(--color-token-bg-primary) 70%);
+}
+
+.task-forest-node-row,
+.task-forest-node-meta {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.task-forest-node-row {
+  gap: 6px;
+  height: 18px;
+}
+
+.task-forest-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--task-forest-tone-bg);
+  color: var(--task-forest-tone);
+  font-size: 10px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.task-forest-pulse-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: task-forest-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes task-forest-pulse {
+  50% {
+    opacity: 0.35;
+    transform: scale(0.7);
+  }
+}
+
+.task-forest-node-id {
+  margin-left: auto;
+  color: var(--color-token-description-foreground);
+  font-size: 11px;
+}
+
+.task-forest-node-title {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--color-token-text-primary);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.32;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.task-forest-node-meta {
+  gap: 7px;
+  color: var(--color-token-description-foreground);
+  font-size: 11px;
+}
+
+.task-forest-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--task-forest-tone-bg) 84%, white 16%);
+  color: var(--task-forest-tone);
+  font-size: 9px;
+  font-weight: 750;
+}
+
+.task-forest-avatar.active {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-token-success-foreground) 18%, transparent);
+}
+
+.task-forest-rollup {
+  margin-left: auto;
+  color: var(--color-token-text-secondary);
+}
+
+.task-forest-legend,
+.task-forest-minimap {
+  position: absolute;
+  z-index: 3;
+  left: 16px;
+  border: 1px solid var(--color-token-border);
+  background: color-mix(in srgb, var(--color-token-bg-primary) 84%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.task-forest-legend {
+  bottom: 132px;
+  display: flex;
+  gap: 10px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  color: var(--color-token-text-secondary);
+  font-size: 11px;
+}
+
+.task-forest-minimap {
+  bottom: 16px;
+  width: 170px;
+  height: 108px;
+  border-radius: 8px;
+}
+
+.task-forest-minimap span {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border-radius: 2px;
+  background: var(--task-forest-tone);
+}
+
+.task-forest-minimap span.active {
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-token-success-foreground) 16%, transparent);
+}
+
+.task-forest-minimap span.dimmed {
+  opacity: 0.22;
+}
+
+.task-forest-state {
+  position: absolute;
+  z-index: 3;
+  top: 50%;
+  left: 50%;
+  padding: 10px 12px;
+  border: 1px solid var(--color-token-border);
+  border-radius: 8px;
+  background: var(--color-token-bg-primary);
+  color: var(--color-token-text-secondary);
+  transform: translate(-50%, -50%);
+}
+
+.task-forest-state.error {
+  background: var(--color-token-bg-error);
+  color: var(--color-token-error-foreground);
+}
+
+.task-forest-thread-panel {
+  position: absolute;
+  z-index: 5;
+  top: 46px;
+  right: 0;
+  bottom: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: clamp(520px, 34vw, 620px);
+  border-left: 1px solid var(--color-token-border);
+  background: var(--color-token-bg-primary);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.08);
+}
+
+.task-forest-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-width: 0;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--color-token-border-light);
+  background: var(--color-token-bg-primary);
+}
+
+.task-forest-panel-title {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.task-forest-panel-id {
+  color: var(--color-token-description-foreground);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.task-forest-panel-title h2 {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-forest-panel-title span:last-child {
+  color: var(--color-token-text-secondary);
+  font-size: 11px;
+}
+
+.task-forest-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+}
+
+.task-forest-status-select {
+  height: 28px;
+  border: 1px solid var(--color-token-border);
+  border-radius: 7px;
+  background: var(--color-token-bg-primary);
+  color: var(--color-token-text-primary);
+  font: inherit;
+  font-size: 12px;
+}
+
+.task-forest-thread-body {
+  min-width: 0;
+  min-height: 0;
+}
+
+.task-forest-thread-body .thread-layout {
+  height: 100%;
+}
+
+.task-forest-thread-empty {
+  display: grid;
+  place-content: center;
+  gap: 8px;
+  height: 100%;
+  color: var(--color-token-text-secondary);
+}
+
+.task-forest-palette-backdrop,
+.task-forest-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: start center;
+  padding-top: 15vh;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.task-forest-palette,
+.task-forest-create-panel {
+  width: min(620px, calc(100vw - 40px));
+  border: 1px solid var(--color-token-border);
+  border-radius: 10px;
+  background: var(--color-token-bg-primary);
+  box-shadow:
+    0 18px 48px rgba(0, 0, 0, 0.16),
+    0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.task-forest-palette-search {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--color-token-border-light);
+}
+
+.task-forest-palette-search input,
+.task-forest-create-panel input,
+.task-forest-create-panel select,
+.task-forest-create-panel textarea {
+  width: 100%;
+  border: 1px solid var(--color-token-input-border);
+  border-radius: 7px;
+  background: var(--color-token-input-background);
+  color: var(--color-token-input-foreground);
+  font: inherit;
+}
+
+.task-forest-palette-search input {
+  border: 0;
+  outline: none;
+}
+
+.task-forest-palette-list {
+  display: grid;
+  gap: 2px;
+  padding: 6px;
+}
+
+.task-forest-palette-list button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 34px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--color-token-text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.task-forest-palette-list button:hover {
+  background: var(--color-token-row-hover);
+}
+
+.task-forest-palette-list button span {
+  color: var(--color-token-description-foreground);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.task-forest-create-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.task-forest-create-panel header,
+.task-forest-create-panel footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.task-forest-create-panel h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.task-forest-create-panel header button {
+  border: 0;
+  background: none;
+  color: var(--color-token-text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.task-forest-create-panel label {
+  display: grid;
+  gap: 5px;
+  color: var(--color-token-text-secondary);
+  font-size: 12px;
+}
+
+.task-forest-create-panel input,
+.task-forest-create-panel select {
+  height: 32px;
+  padding: 0 9px;
+}
+
+.task-forest-create-panel textarea {
+  min-height: 92px;
+  padding: 8px 9px;
+  resize: vertical;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-forest-edge.active,
+  .task-forest-pulse-dot {
+    animation: none;
+  }
+
+  .task-forest-node,
+  .task-forest-chip,
+  .task-forest-button,
+  .task-forest-icon-button {
+    transition: none;
+  }
+}
+
 .gateway-identity-copy {
   display: flex;
   flex-direction: column;

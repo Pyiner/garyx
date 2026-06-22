@@ -273,7 +273,8 @@ type ThreadEntrySelectionSource =
   | "bot-root"
   | "bot-conversation"
   | "workspace-conversation"
-  | "dreams";
+  | "dreams"
+  | "tasks";
 
 type ThreadHistoryPaginationState = {
   hasMoreBefore: boolean;
@@ -3966,6 +3967,16 @@ export function AppShell() {
   ): Promise<boolean> {
     setError(null);
     setContentView("thread");
+    setNewThreadDraftActive(false);
+
+    return selectExistingThreadInPlace(threadId, entrySource);
+  }
+
+  async function selectExistingThreadInPlace(
+    threadId: string,
+    entrySource: ThreadEntrySelectionSource | null = null,
+  ): Promise<boolean> {
+    setError(null);
     setNewThreadDraftActive(false);
 
     try {
@@ -9513,6 +9524,275 @@ export function AppShell() {
       } as CSSProperties)
     : undefined;
 
+  function renderPrimaryThreadPage(
+    options: {
+      embedded?: boolean;
+      surfaceVariant?: "default" | "side-chat";
+    } = {},
+  ) {
+    const embedded = options.embedded === true;
+    return (
+      <ThreadPage
+        surfaceVariant={options.surfaceVariant}
+        agentLabel={composerAgentLabel}
+        composerAgentOptions={composerAgentOptions}
+        composerWorkflowOptions={composerWorkflowOptions}
+        composerWorkflowOptionsLoading={workflowDefinitionsLoading}
+        activeMessages={activeMessages}
+        activePendingAckIntents={visiblePendingAckIntents}
+        activePendingAutomationRun={activePendingAutomationRun}
+        activeToolGroupId={activeToolGroupId}
+        activeQueue={activeQueue}
+        renderState={activeRenderState}
+        activeThreadLogsHasUnread={embedded ? false : activeThreadLogsHasUnread}
+        activeThreadLogsPath={activeThreadLogsPath}
+        activeThreadSummary={activeThread || null}
+        activeThreadTitle={activeThread?.title || null}
+        activeThreadRunId={activeThreadRunId}
+        availableWorkspaceCount={availableWorkspaceCount}
+        clientThreadLogEntries={clientThreadLogEntries}
+        composer={composer}
+        composerAttachmentInputRef={composerAttachmentInputRef}
+        composerBrowserAnnotations={composerBrowserAnnotations}
+        composerFiles={composerFiles}
+        composerHasPayload={composerHasPayload}
+        composerImages={composerImages}
+        composerEditingLocked={composerEditingLocked}
+        composerLocked={composerLocked}
+        composerPlaceholder={composerPlaceholder}
+        composerProviderType={composerProviderType}
+        composerResetKey={composerResetKey}
+        composerWorkspaceBranch={composerWorkspaceBranch}
+        composerWorkspaceMode={composerWorkspaceMode}
+        activeThreadBot={activeThreadBot}
+        activeThreadBotId={activeThreadBotId}
+        botBindingDisabled={bindingMutation === "bot-binding"}
+        botGroups={botGroups}
+        slashCommands={commands}
+        slashCommandsLoaded={commandsLoaded}
+        slashCommandsLoading={commandsLoading}
+        composerTextareaRef={composerTextareaRef}
+        draggedQueueIntentId={draggedQueueIntentId}
+        expandedClientLogEntries={expandedClientLogEntries}
+        historyLoading={historyLoading}
+        historyLoadingEarlier={Boolean(activeHistoryPagination?.loadingBefore)}
+        ignoreComposerSubmitUntilRef={ignoreComposerSubmitUntilRef}
+        inspectorOpen={embedded ? false : inspectorOpen}
+        isActiveSendingThread={isActiveSendingThread}
+        canSteerQueuedPrompt={canSteerQueuedPrompt}
+        isComposingRef={isComposingRef}
+        messagesRef={messagesRef}
+        mobileThreadLogLines={mobileThreadLogLines}
+        newThreadSelectedAgentId={pendingAgentId}
+        newThreadSelectedWorkflowId={pendingWorkflowId}
+        newThreadProviderModels={pendingProviderModels}
+        newThreadAgentConfiguredModel={pendingAgent?.model || null}
+        newThreadSelectedModel={pendingModel}
+        newThreadSelectedReasoningEffort={pendingModelReasoningEffort}
+        newThreadSelectedServiceTier={pendingModelServiceTier}
+        threadProviderModels={activeThreadProviderModels}
+        threadEffectiveModel={activeThreadInfo?.model || null}
+        threadEffectiveReasoningEffort={activeThreadInfo?.modelReasoningEffort || null}
+        threadEffectiveServiceTier={activeThreadInfo?.modelServiceTier || null}
+        threadSelectedModel={activeThreadInfo?.modelOverride || null}
+        threadSelectedReasoningEffort={
+          activeThreadInfo?.modelReasoningEffortOverride || null
+        }
+        threadSelectedServiceTier={activeThreadInfo?.modelServiceTierOverride || null}
+        newThreadWorkspaceEntry={newThreadWorkspaceEntry}
+        newThreadWorkspaceMode={pendingWorkspaceMode}
+        onAddWorkspace={() => {
+          void handleAddWorkspace();
+        }}
+        onAppendComposerAttachments={(files) => {
+          void appendComposerAttachments(files);
+        }}
+        onCancelIntent={(threadId, intentId) => {
+          dispatchMessageState({
+            type: "intent/cancelled",
+            threadId,
+            intentId,
+          });
+        }}
+        onComposerChange={(value) => {
+          composerDraftRef.current = value;
+          const nextTextPresent = value.trim().length > 0;
+          setComposerTextPresent((current) =>
+            current === nextTextPresent ? current : nextTextPresent,
+          );
+          if (/^\/[a-z0-9_]*$/i.test(value) && !commandsLoaded && !commandsLoading) {
+            void loadSlashCommands();
+          }
+          syncComposerPhase(value);
+        }}
+        onComposerCompositionEnd={(value) => {
+          isComposingRef.current = false;
+          syncComposerPhase(value, false);
+          markIgnoreComposerSubmitWindow();
+        }}
+        onComposerCompositionStart={() => {
+          isComposingRef.current = true;
+          syncComposerPhase(composerDraftRef.current, true);
+        }}
+        onComposerInterrupt={() => {
+          void handleInterrupt();
+        }}
+        onComposerSubmit={handleComposerSubmit}
+        onJumpToLatestThreadLogs={() => {
+          if (threadLogsActiveTab === "client") {
+            setClientLogsHasUnread(false);
+          } else {
+            setThreadLogsHasUnread(false);
+          }
+          scrollThreadLogsToLatest("smooth");
+        }}
+        onLocalWorkspaceFileLinkClick={handleLocalFileLinkClick}
+        onMarkIgnoreComposerSubmitWindow={markIgnoreComposerSubmitWindow}
+        onMessagesScroll={() => {
+          const node = messagesRef.current;
+          shouldStickMessagesToBottomRef.current = messagesNearBottom(node);
+          if (selectedThreadId && node && messagesNearEarlierUserTurnBoundary(node)) {
+            void loadOlderThreadHistoryPage(selectedThreadId);
+          }
+        }}
+        onMessagesUserScrollIntent={cancelMessagesForceScrollBudget}
+        onQueueDropTargetChange={setQueueDropTarget}
+        onRemoveComposerFile={removeComposerFile}
+        onRemoveComposerImage={removeComposerImage}
+        onRemoveComposerBrowserAnnotation={removeComposerBrowserAnnotation}
+        onReorderQueuedIntent={reorderQueuedIntent}
+        onSelectNewThreadAgent={(agentId) => {
+          setPendingAgentId(agentId);
+          setPendingWorkflowId(null);
+        }}
+        onSelectNewThreadModel={setPendingModel}
+        onSelectNewThreadReasoningEffort={setPendingModelReasoningEffort}
+        onSelectNewThreadServiceTier={setPendingModelServiceTier}
+        onSelectThreadModel={(model) => {
+          void handleUpdateActiveThreadRuntimeSettings({ model });
+        }}
+        onSelectThreadReasoningEffort={(modelReasoningEffort) => {
+          void handleUpdateActiveThreadRuntimeSettings({
+            modelReasoningEffort,
+          });
+        }}
+        onSelectThreadServiceTier={(modelServiceTier) => {
+          void handleUpdateActiveThreadRuntimeSettings({
+            modelServiceTier,
+          });
+        }}
+        onSelectNewThreadWorkflow={(workflowId) => {
+          setPendingWorkflowId(workflowId);
+          setPendingAgentId("claude");
+        }}
+        onSelectNewThreadWorkspaceMode={setPendingWorkspaceMode}
+        onResumeProviderSession={handleResumeProviderSession}
+        onRetryFailedMessage={(message) => {
+          void handleRetryFailedMessage(message);
+        }}
+        onSelectBotBinding={(botId) => {
+          if (selectedThreadId) {
+            const threadId = selectedThreadId;
+            setOptimisticThreadBotBinding({ threadId, botId });
+            void handleSetBotBinding(botId).finally(() => {
+              setOptimisticThreadBotBinding((current) => {
+                return current?.threadId === threadId && current.botId === botId
+                  ? null
+                  : current;
+              });
+            });
+          } else {
+            setPendingBotId(botId);
+          }
+        }}
+        onSelectThreadLogsTab={(tab) => {
+          trackUiAction(`thread_logs.select_${tab}`, () => {
+            setThreadLogsActiveTab(tab);
+          });
+        }}
+        onOpenThreadById={(threadId) => {
+          if (embedded) {
+            void selectExistingThreadInPlace(threadId, "tasks");
+          } else {
+            void openExistingThread(threadId);
+          }
+        }}
+        onSelectWorkspace={(workspacePath) => {
+          setPendingWorkspaceMode("local");
+          void handleSelectWorkspace(workspacePath, null);
+        }}
+        onSetDraggedQueueIntentId={setDraggedQueueIntentId}
+        onSteerQueuedPrompt={(item) => {
+          void handleSteerQueuedPrompt(item);
+        }}
+        onThreadLogsContentScroll={() => {
+          if (threadLogsNearBottom()) {
+            if (threadLogsActiveTab === "client") {
+              setClientLogsHasUnread(false);
+            } else {
+              setThreadLogsHasUnread(false);
+            }
+          }
+        }}
+        onThreadLogsResizeKeyDown={embedded ? () => {} : handleThreadLogsResizeKeyDown}
+        onThreadLogsResizeStart={embedded ? () => {} : handleThreadLogsResizeStart}
+        onToggleClientLogEntry={(entryKey) => {
+          setExpandedClientLogEntries((current) => ({
+            ...current,
+            [entryKey]: !current[entryKey],
+          }));
+        }}
+        preferredWorkspaceForNewThread={preferredWorkspaceForNewThread}
+        queueDropTarget={queueDropTarget}
+        selectableNewThreadWorkspaces={selectableNewThreadWorkspaces}
+        selectedThreadId={selectedThreadId}
+        showAutomationRunInitialPlaceholder={showAutomationRunInitialPlaceholder}
+        showDreams={showDreamsFeature}
+        showHistoryLoadingPlaceholder={showHistoryLoadingPlaceholder}
+        showTailThinking={showTailThinking}
+        threadLayoutRef={threadLayoutRef}
+        threadLayoutStyle={
+          !embedded && threadLogsOpen
+            ? ({
+                "--thread-log-panel-width": `${threadLogsPanelWidth}px`,
+              } as CSSProperties)
+            : undefined
+        }
+        threadLogsActiveTab={threadLogsActiveTab}
+        threadLogsError={embedded ? null : threadLogsError}
+        threadLogsLoading={embedded ? false : threadLogsLoading}
+        threadLogsMaxWidth={
+          embedded
+            ? 0
+            : clampThreadLogsPanelWidth(
+                THREAD_LOG_PANEL_MAX_WIDTH,
+                currentThreadLayoutWidth(),
+              )
+        }
+        threadLogsOpen={embedded ? false : threadLogsOpen}
+        threadLogsPanelWidth={embedded ? 0 : threadLogsPanelWidth}
+        threadLogsRef={threadLogsRef}
+        threadLogsResizing={embedded ? false : threadLogsResizing}
+        teamAgentDisplayNamesById={teamAgentDisplayNamesById}
+        visibleRemoteAwaitingAckInputs={visibleRemoteAwaitingAckInputs}
+        visibleRemotePendingInputs={visibleRemotePendingInputs}
+        workflowRunContent={
+          !embedded && activeWorkflowRunThreadId ? (
+            <WorkflowRunsPanel
+              onOpenThread={(threadId) => {
+                void openExistingThread(threadId);
+              }}
+              onToast={pushToast}
+              t={t}
+              workflowRunId={activeWorkflowRunThreadId}
+            />
+          ) : null
+        }
+        workspaceMutation={workspaceMutation}
+      />
+    );
+  }
+
   if (loading) {
     return (
       <I18nProvider languagePreference={settingsDraft.languagePreference}>
@@ -10229,12 +10509,20 @@ export function AppShell() {
                     await openExistingThread(threadId);
                   });
                 }}
+                onOpenThreadInPanel={(threadId) => {
+                  return selectExistingThreadInPlace(threadId, "tasks");
+                }}
                 onOpenWorkflowTask={(task) => {
                   trackUiAction("tasks.open_workflow_task", () => {
                     openWorkflowTask(task);
                   });
                 }}
                 onToast={pushToast}
+                selectedThreadId={selectedThreadId}
+                selectedThreadPanel={renderPrimaryThreadPage({
+                  embedded: true,
+                  surfaceVariant: "side-chat",
+                })}
                 workspaces={workspacePickerWorkspaces}
                 workspaceMutation={workspaceMutation}
               />
@@ -10305,277 +10593,7 @@ export function AppShell() {
                 totalEndpoints={desktopState?.endpoints.length || 0}
               />
             ) : (
-              <ThreadPage
-                agentLabel={composerAgentLabel}
-                composerAgentOptions={composerAgentOptions}
-                composerWorkflowOptions={composerWorkflowOptions}
-                composerWorkflowOptionsLoading={workflowDefinitionsLoading}
-                activeMessages={activeMessages}
-                activePendingAckIntents={visiblePendingAckIntents}
-                activePendingAutomationRun={activePendingAutomationRun}
-                activeToolGroupId={activeToolGroupId}
-                activeQueue={activeQueue}
-                renderState={activeRenderState}
-                activeThreadLogsHasUnread={activeThreadLogsHasUnread}
-                activeThreadLogsPath={activeThreadLogsPath}
-                activeThreadSummary={activeThread || null}
-                activeThreadTitle={activeThread?.title || null}
-                activeThreadRunId={activeThreadRunId}
-                availableWorkspaceCount={availableWorkspaceCount}
-                clientThreadLogEntries={clientThreadLogEntries}
-                composer={composer}
-                composerAttachmentInputRef={composerAttachmentInputRef}
-                composerBrowserAnnotations={composerBrowserAnnotations}
-                composerFiles={composerFiles}
-                composerHasPayload={composerHasPayload}
-                composerImages={composerImages}
-                composerEditingLocked={composerEditingLocked}
-                composerLocked={composerLocked}
-                composerPlaceholder={composerPlaceholder}
-                composerProviderType={composerProviderType}
-                composerResetKey={composerResetKey}
-                composerWorkspaceBranch={composerWorkspaceBranch}
-                composerWorkspaceMode={composerWorkspaceMode}
-                activeThreadBot={activeThreadBot}
-                activeThreadBotId={activeThreadBotId}
-                botBindingDisabled={bindingMutation === "bot-binding"}
-                botGroups={botGroups}
-                slashCommands={commands}
-                slashCommandsLoaded={commandsLoaded}
-                slashCommandsLoading={commandsLoading}
-                composerTextareaRef={composerTextareaRef}
-                draggedQueueIntentId={draggedQueueIntentId}
-                expandedClientLogEntries={expandedClientLogEntries}
-                historyLoading={historyLoading}
-                historyLoadingEarlier={Boolean(
-                  activeHistoryPagination?.loadingBefore,
-                )}
-                ignoreComposerSubmitUntilRef={ignoreComposerSubmitUntilRef}
-                inspectorOpen={inspectorOpen}
-                isActiveSendingThread={isActiveSendingThread}
-                canSteerQueuedPrompt={canSteerQueuedPrompt}
-                isComposingRef={isComposingRef}
-                messagesRef={messagesRef}
-                mobileThreadLogLines={mobileThreadLogLines}
-                newThreadSelectedAgentId={pendingAgentId}
-                newThreadSelectedWorkflowId={pendingWorkflowId}
-                newThreadProviderModels={pendingProviderModels}
-                newThreadAgentConfiguredModel={pendingAgent?.model || null}
-                newThreadSelectedModel={pendingModel}
-                newThreadSelectedReasoningEffort={pendingModelReasoningEffort}
-                newThreadSelectedServiceTier={pendingModelServiceTier}
-                threadProviderModels={activeThreadProviderModels}
-                threadEffectiveModel={activeThreadInfo?.model || null}
-                threadEffectiveReasoningEffort={
-                  activeThreadInfo?.modelReasoningEffort || null
-                }
-                threadEffectiveServiceTier={
-                  activeThreadInfo?.modelServiceTier || null
-                }
-                threadSelectedModel={activeThreadInfo?.modelOverride || null}
-                threadSelectedReasoningEffort={
-                  activeThreadInfo?.modelReasoningEffortOverride || null
-                }
-                threadSelectedServiceTier={
-                  activeThreadInfo?.modelServiceTierOverride || null
-                }
-                newThreadWorkspaceEntry={newThreadWorkspaceEntry}
-                newThreadWorkspaceMode={pendingWorkspaceMode}
-                onAddWorkspace={() => {
-                  void handleAddWorkspace();
-                }}
-                onAppendComposerAttachments={(files) => {
-                  void appendComposerAttachments(files);
-                }}
-                onCancelIntent={(threadId, intentId) => {
-                  dispatchMessageState({
-                    type: "intent/cancelled",
-                    threadId,
-                    intentId,
-                  });
-                }}
-                onComposerChange={(value) => {
-                  composerDraftRef.current = value;
-                  const nextTextPresent = value.trim().length > 0;
-                  setComposerTextPresent((current) =>
-                    current === nextTextPresent ? current : nextTextPresent,
-                  );
-                  if (
-                    /^\/[a-z0-9_]*$/i.test(value) &&
-                    !commandsLoaded &&
-                    !commandsLoading
-                  ) {
-                    void loadSlashCommands();
-                  }
-                  syncComposerPhase(value);
-                }}
-                onComposerCompositionEnd={(value) => {
-                  isComposingRef.current = false;
-                  syncComposerPhase(value, false);
-                  markIgnoreComposerSubmitWindow();
-                }}
-                onComposerCompositionStart={() => {
-                  isComposingRef.current = true;
-                  syncComposerPhase(composerDraftRef.current, true);
-                }}
-                onComposerInterrupt={() => {
-                  void handleInterrupt();
-                }}
-                onComposerSubmit={handleComposerSubmit}
-                onJumpToLatestThreadLogs={() => {
-                  if (threadLogsActiveTab === "client") {
-                    setClientLogsHasUnread(false);
-                  } else {
-                    setThreadLogsHasUnread(false);
-                  }
-                  scrollThreadLogsToLatest("smooth");
-                }}
-                onLocalWorkspaceFileLinkClick={handleLocalFileLinkClick}
-                onMarkIgnoreComposerSubmitWindow={
-                  markIgnoreComposerSubmitWindow
-                }
-                onMessagesScroll={() => {
-                  const node = messagesRef.current;
-                  shouldStickMessagesToBottomRef.current =
-                    messagesNearBottom(node);
-                  if (
-                    selectedThreadId &&
-                    node &&
-                    messagesNearEarlierUserTurnBoundary(node)
-                  ) {
-                    void loadOlderThreadHistoryPage(selectedThreadId);
-                  }
-                }}
-                onMessagesUserScrollIntent={cancelMessagesForceScrollBudget}
-                onQueueDropTargetChange={setQueueDropTarget}
-                onRemoveComposerFile={removeComposerFile}
-                onRemoveComposerImage={removeComposerImage}
-                onRemoveComposerBrowserAnnotation={removeComposerBrowserAnnotation}
-                onReorderQueuedIntent={reorderQueuedIntent}
-                onSelectNewThreadAgent={(agentId) => {
-                  setPendingAgentId(agentId);
-                  setPendingWorkflowId(null);
-                }}
-                onSelectNewThreadModel={setPendingModel}
-                onSelectNewThreadReasoningEffort={setPendingModelReasoningEffort}
-                onSelectNewThreadServiceTier={setPendingModelServiceTier}
-                onSelectThreadModel={(model) => {
-                  void handleUpdateActiveThreadRuntimeSettings({ model });
-                }}
-                onSelectThreadReasoningEffort={(modelReasoningEffort) => {
-                  void handleUpdateActiveThreadRuntimeSettings({
-                    modelReasoningEffort,
-                  });
-                }}
-                onSelectThreadServiceTier={(modelServiceTier) => {
-                  void handleUpdateActiveThreadRuntimeSettings({
-                    modelServiceTier,
-                  });
-                }}
-                onSelectNewThreadWorkflow={(workflowId) => {
-                  setPendingWorkflowId(workflowId);
-                  setPendingAgentId("claude");
-                }}
-                onSelectNewThreadWorkspaceMode={setPendingWorkspaceMode}
-                onResumeProviderSession={handleResumeProviderSession}
-      onRetryFailedMessage={(message) => {
-        void handleRetryFailedMessage(message);
-      }}
-                onSelectBotBinding={(botId) => {
-                  if (selectedThreadId) {
-                    const threadId = selectedThreadId;
-                    setOptimisticThreadBotBinding({ threadId, botId });
-                    void handleSetBotBinding(botId).finally(() => {
-                      setOptimisticThreadBotBinding((current) => {
-                        return current?.threadId === threadId &&
-                          current.botId === botId
-                          ? null
-                          : current;
-                      });
-                    });
-                  } else {
-                    setPendingBotId(botId);
-                  }
-                }}
-                onSelectThreadLogsTab={(tab) => {
-                  trackUiAction(`thread_logs.select_${tab}`, () => {
-                    setThreadLogsActiveTab(tab);
-                  });
-                }}
-                onOpenThreadById={(threadId) => {
-                  void openExistingThread(threadId);
-                }}
-                onSelectWorkspace={(workspacePath) => {
-                  setPendingWorkspaceMode("local");
-                  void handleSelectWorkspace(workspacePath, null);
-                }}
-                onSetDraggedQueueIntentId={setDraggedQueueIntentId}
-                onSteerQueuedPrompt={(item) => {
-                  void handleSteerQueuedPrompt(item);
-                }}
-                onThreadLogsContentScroll={() => {
-                  if (threadLogsNearBottom()) {
-                    if (threadLogsActiveTab === "client") {
-                      setClientLogsHasUnread(false);
-                    } else {
-                      setThreadLogsHasUnread(false);
-                    }
-                  }
-                }}
-                onThreadLogsResizeKeyDown={handleThreadLogsResizeKeyDown}
-                onThreadLogsResizeStart={handleThreadLogsResizeStart}
-                onToggleClientLogEntry={(entryKey) => {
-                  setExpandedClientLogEntries((current) => ({
-                    ...current,
-                    [entryKey]: !current[entryKey],
-                  }));
-                }}
-                preferredWorkspaceForNewThread={preferredWorkspaceForNewThread}
-                queueDropTarget={queueDropTarget}
-                selectableNewThreadWorkspaces={selectableNewThreadWorkspaces}
-                selectedThreadId={selectedThreadId}
-                showAutomationRunInitialPlaceholder={
-                  showAutomationRunInitialPlaceholder
-                }
-                showDreams={showDreamsFeature}
-                showHistoryLoadingPlaceholder={showHistoryLoadingPlaceholder}
-                showTailThinking={showTailThinking}
-                threadLayoutRef={threadLayoutRef}
-                threadLayoutStyle={
-                  threadLogsOpen
-                    ? ({
-                        "--thread-log-panel-width": `${threadLogsPanelWidth}px`,
-                      } as CSSProperties)
-                    : undefined
-                }
-                threadLogsActiveTab={threadLogsActiveTab}
-                threadLogsError={threadLogsError}
-                threadLogsLoading={threadLogsLoading}
-                threadLogsMaxWidth={clampThreadLogsPanelWidth(
-                  THREAD_LOG_PANEL_MAX_WIDTH,
-                  currentThreadLayoutWidth(),
-                )}
-                threadLogsOpen={threadLogsOpen}
-                threadLogsPanelWidth={threadLogsPanelWidth}
-                threadLogsRef={threadLogsRef}
-                threadLogsResizing={threadLogsResizing}
-                teamAgentDisplayNamesById={teamAgentDisplayNamesById}
-                visibleRemoteAwaitingAckInputs={visibleRemoteAwaitingAckInputs}
-                visibleRemotePendingInputs={visibleRemotePendingInputs}
-                workflowRunContent={
-                  activeWorkflowRunThreadId ? (
-                    <WorkflowRunsPanel
-                      onOpenThread={(threadId) => {
-                        void openExistingThread(threadId);
-                      }}
-                      onToast={pushToast}
-                      t={t}
-                      workflowRunId={activeWorkflowRunThreadId}
-                    />
-                  ) : null
-                }
-                workspaceMutation={workspaceMutation}
-              />
+              renderPrimaryThreadPage()
             )}
             </Suspense>
           </section>

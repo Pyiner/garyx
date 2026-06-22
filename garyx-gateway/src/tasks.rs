@@ -28,6 +28,7 @@ use crate::agent_identity::{
 use crate::garyx_db::GaryxDbError;
 use crate::internal_inbound::{InternalDispatchOptions, dispatch_internal_message_to_thread};
 use crate::server::AppState;
+use crate::task_projection::backfill_task_projection_if_incomplete;
 use crate::workflows::{
     WorkflowError, get_workflow_definition_package, spawn_workflow_task_entrypoint,
 };
@@ -545,6 +546,42 @@ pub async fn list_tasks(
             })),
         ),
         Err(error) => task_error_response(error),
+    }
+}
+
+pub async fn list_task_forest(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<TaskListQuery>,
+) -> (StatusCode, Json<Value>) {
+    if task_service(&state).is_none() {
+        return tasks_disabled();
+    }
+    let filter = match task_list_filter(query) {
+        Ok(filter) => filter,
+        Err(error) => return task_error_response(error),
+    };
+    let projection_current_before = match state.ops.garyx_db.task_projection_is_current() {
+        Ok(current) => current,
+        Err(error) => return task_projection_error_response(error),
+    };
+    if !projection_current_before {
+        backfill_task_projection_if_incomplete(&state.threads.thread_store, &state.ops.garyx_db)
+            .await;
+    }
+    let projection_current = match state.ops.garyx_db.task_projection_is_current() {
+        Ok(current) => current,
+        Err(error) => return task_projection_error_response(error),
+    };
+    match state.ops.garyx_db.list_task_forest(&filter) {
+        Ok((tasks, total)) => (
+            StatusCode::OK,
+            Json(json!({
+                "tasks": tasks,
+                "total": total,
+                "projection_current": projection_current,
+            })),
+        ),
+        Err(error) => task_projection_error_response(error),
     }
 }
 
@@ -1492,6 +1529,16 @@ fn tasks_disabled() -> (StatusCode, Json<Value>) {
     )
 }
 
+fn task_projection_error_response(error: GaryxDbError) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({
+            "error": error.to_string(),
+            "code": "Internal",
+        })),
+    )
+}
+
 fn task_error_response(error: TaskServiceError) -> (StatusCode, Json<Value>) {
     let code = match &error {
         TaskServiceError::NotFound(_) => "NotFound",
@@ -1544,12 +1591,74 @@ mod tests {
     use super::*;
     use crate::agent_teams::AgentTeamStore;
     use crate::custom_agents::CustomAgentStore;
-    use crate::garyx_db::GaryxDbService;
+    use crate::garyx_db::{
+        CURRENT_TASK_PROJECTION_VERSION, GaryxDbService, RecentThreadDraft, TASK_PROJECTION_NAME,
+        TaskProjectionDraft,
+    };
     use crate::server::AppStateBuilder;
     use garyx_models::ProviderType;
     use garyx_models::config::GaryxConfig;
     use std::fs;
     use tempfile::tempdir;
+
+    fn route_task_source(thread_id: &str, task_id: &str) -> TaskSource {
+        TaskSource {
+            thread_id: Some(thread_id.to_owned()),
+            task_id: Some(task_id.to_owned()),
+            task_thread_id: Some(thread_id.to_owned()),
+            bot_id: None,
+            channel: None,
+            account_id: None,
+        }
+    }
+
+    fn route_task_projection_draft(
+        thread_id: &str,
+        number: u64,
+        status: TaskStatus,
+        updated_at: &str,
+        source: Option<TaskSource>,
+    ) -> TaskProjectionDraft {
+        let creator = Principal::Agent {
+            agent_id: "test-agent".to_owned(),
+        };
+        let assignee = Principal::Agent {
+            agent_id: "reviewer".to_owned(),
+        };
+        let updated_by = creator.clone();
+        let parent_task_number = source
+            .as_ref()
+            .and_then(|source| source.task_id.as_deref())
+            .and_then(|task_id| task_id.strip_prefix("#TASK-"))
+            .and_then(|number| number.parse::<u64>().ok());
+        TaskProjectionDraft {
+            thread_id: thread_id.to_owned(),
+            number,
+            status: status.as_str().to_owned(),
+            title: format!("Route task {number}"),
+            creator_json: serde_json::to_string(&creator).expect("creator json"),
+            creator_id: creator.id().to_owned(),
+            assignee_json: Some(serde_json::to_string(&assignee).expect("assignee json")),
+            assignee_id: Some(assignee.id().to_owned()),
+            updated_by_json: serde_json::to_string(&updated_by).expect("updated_by json"),
+            executor_json: None,
+            source_json: source
+                .as_ref()
+                .map(|source| serde_json::to_string(source).expect("source json")),
+            source_thread_id: source.as_ref().and_then(|source| source.thread_id.clone()),
+            source_task_thread_id: source
+                .as_ref()
+                .and_then(|source| source.task_thread_id.clone()),
+            source_task_id: source.as_ref().and_then(|source| source.task_id.clone()),
+            parent_task_number,
+            source_bot_id: None,
+            notification_thread_id: None,
+            created_at: "2026-01-01T00:00:00.000Z".to_owned(),
+            updated_at: updated_at.to_owned(),
+            source_updated_at: updated_at.to_owned(),
+            source_events_len: 1,
+        }
+    }
 
     async fn state_with_agent_default_workspace() -> Arc<AppState> {
         let custom_agents = Arc::new(CustomAgentStore::new());
@@ -1621,6 +1730,87 @@ mod tests {
             .with_custom_agent_store(custom_agents)
             .with_agent_team_store(agent_teams)
             .build()
+    }
+
+    #[tokio::test]
+    async fn list_task_forest_route_returns_projection_parent_and_run_state() {
+        let state = state_with_task_executors().await;
+        state
+            .ops
+            .garyx_db
+            .replace_task_projection(route_task_projection_draft(
+                "thread::route-parent",
+                1,
+                TaskStatus::InProgress,
+                "2026-01-01T00:00:01.000Z",
+                None,
+            ))
+            .expect("insert parent projection");
+        state
+            .ops
+            .garyx_db
+            .replace_task_projection(route_task_projection_draft(
+                "thread::route-child",
+                2,
+                TaskStatus::Todo,
+                "2026-01-01T00:00:02.000Z",
+                Some(route_task_source("thread::route-parent", "#TASK-1")),
+            ))
+            .expect("insert child projection");
+        state
+            .ops
+            .garyx_db
+            .upsert_recent_thread(RecentThreadDraft {
+                thread_id: "thread::route-child".to_owned(),
+                title: "Route Child".to_owned(),
+                workspace_dir: None,
+                thread_type: "chat".to_owned(),
+                provider_type: Some("claude_code".to_owned()),
+                agent_id: Some("claude".to_owned()),
+                message_count: 3,
+                last_message_preview: "running".to_owned(),
+                recent_run_id: Some("run::route-recent".to_owned()),
+                active_run_id: Some("run::route-active".to_owned()),
+                run_state: "running".to_owned(),
+                updated_at: Some("2026-01-01T00:00:03.000Z".to_owned()),
+                last_active_at: "2026-01-01T00:00:04.000Z".to_owned(),
+            })
+            .expect("insert route recent thread");
+        state
+            .ops
+            .garyx_db
+            .record_projection_state(TASK_PROJECTION_NAME, CURRENT_TASK_PROJECTION_VERSION, 2)
+            .expect("mark projection current");
+
+        let (status, Json(payload)) = list_task_forest(
+            State(state),
+            Query(TaskListQuery {
+                status: None,
+                assignee: None,
+                creator: None,
+                source_thread_id: None,
+                source_task_id: None,
+                source_bot_id: None,
+                include_done: true,
+                limit: None,
+                offset: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(payload["total"], 2);
+        assert_eq!(payload["projection_current"], true);
+        let tasks = payload["tasks"].as_array().expect("tasks array");
+        let child = tasks
+            .iter()
+            .find(|task| task["thread_id"] == "thread::route-child")
+            .expect("child task");
+        assert_eq!(child["parent_task_number"], 1);
+        assert_eq!(child["parent_thread_id"], "thread::route-parent");
+        assert_eq!(child["active_run_id"], "run::route-active");
+        assert_eq!(child["run_state"], "running");
+        assert_eq!(child["last_active_at"], "2026-01-01T00:00:04.000Z");
     }
 
     #[tokio::test]

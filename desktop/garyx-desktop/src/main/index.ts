@@ -64,6 +64,7 @@ import type {
   GatewaySettingsSaveRequestOptions,
   DeleteTaskInput,
   ListDreamsInput,
+  ListTaskForestInput,
   ListProviderRecentSessionsInput,
   ListTasksInput,
   ListWorkspaceFilesInput,
@@ -143,6 +144,7 @@ import {
   getWorkspaceGitStatus,
   interruptThread,
   listDreams,
+  listTaskForest,
   listTasks,
   listWorkflowDefinitions,
   listProviderRecentSessions,
@@ -878,6 +880,14 @@ function registerIpcHandlers(): void {
     const settings = await resolveSettings();
     return listTasks(settings, input || {});
   });
+
+  ipcMain.handle(
+    "garyx:list-task-forest",
+    async (_event, input?: ListTaskForestInput) => {
+      const settings = await resolveSettings();
+      return listTaskForest(settings, input || {});
+    },
+  );
 
   ipcMain.handle("garyx:get-task", async (_event, input: GetTaskInput) => {
     const settings = await resolveSettings();
