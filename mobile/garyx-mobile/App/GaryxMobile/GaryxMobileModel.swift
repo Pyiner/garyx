@@ -214,10 +214,8 @@ final class GaryxMobileModel: ObservableObject {
     @Published var workspaceListing: GaryxWorkspaceFileListing?
     @Published var workspacePreview: GaryxWorkspaceFilePreview?
     @Published var workspaceGitStatuses: [String: GaryxWorkspaceGitStatus] = [:]
-    #if DEBUG
     @Published var debugShowsWorkspaceModeSheet = false
     @Published var debugShowsGatewaySwitcher = false
-    #endif
     @Published var isUploadingWorkspaceFiles = false
     @Published var workspaceUploadStatus: String?
     @Published var slashCommands: [GaryxSlashCommand] = []
