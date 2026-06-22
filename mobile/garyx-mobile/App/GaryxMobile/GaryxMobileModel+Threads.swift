@@ -263,6 +263,31 @@ extension GaryxMobileModel {
         }
     }
 
+    func refreshHomeThreadsAfterLocalRunStart() {
+        refreshHomeThreadsAfterLocalRunStateChange()
+        scheduleHomeThreadsRunStateRefresh(after: 350_000_000)
+    }
+
+    func refreshHomeThreadsAfterLocalRunStateChange() {
+        scheduleHomeThreadsRunStateRefresh()
+    }
+
+    private func scheduleHomeThreadsRunStateRefresh(after delayNanos: UInt64? = nil) {
+        guard hasGatewaySettings else { return }
+        Task { [weak self] in
+            if let delayNanos {
+                try? await Task.sleep(nanoseconds: delayNanos)
+                guard !Task.isCancelled else { return }
+            }
+            await self?.refreshHomeThreadsRunStateIfConnected()
+        }
+    }
+
+    private func refreshHomeThreadsRunStateIfConnected() async {
+        guard hasGatewaySettings, case .ready = connectionState else { return }
+        await refreshThreads(silent: true)
+    }
+
     func applyRecentThreadsPage(_ page: GaryxRecentThreadsPage, preservesLoadedPages: Bool) {
         let pageIds = pendingThreadArchives.visibleThreads(page.threads).map(\.id)
         let returnedEnd = page.offset + page.count
@@ -1311,6 +1336,7 @@ extension GaryxMobileModel {
         } else {
             runTracker.completeCommittedRun(threadId: threadId)
         }
+        refreshHomeThreadsAfterLocalRunStateChange()
     }
 
     func summaryWithCommittedRunState(_ thread: GaryxThreadSummary) -> GaryxThreadSummary {
