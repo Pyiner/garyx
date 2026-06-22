@@ -1078,6 +1078,9 @@ fn remove_deleted_thread_projection_records(state: &Arc<AppState>, thread_id: &s
     if let Ok(value) = state.ops.garyx_db.remove_thread_meta_projection(thread_id) {
         removed |= value;
     }
+    if let Ok(value) = state.ops.garyx_db.remove_task_projection(thread_id) {
+        removed |= value;
+    }
     removed
 }
 
@@ -1438,7 +1441,7 @@ async fn recent_threads_payload(
 ) -> Value {
     let mut threads = Vec::with_capacity(records.len());
     for record in records {
-        let mut thread = serde_json::to_value(record).unwrap_or_else(|_| Value::Null);
+        let mut thread = serde_json::to_value(record).unwrap_or(Value::Null);
         attach_thread_runtime_summary(state, &record.thread_id, &mut thread).await;
         threads.push(thread);
     }
@@ -2068,12 +2071,7 @@ async fn thread_render_snapshot_at_seq(
         .transcript_store()
         .render_snapshot_at_seq(thread_id, seq)
         .await
-        .map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("failed to derive render snapshot: {error}"),
-            )
-        })
+        .map_err(|error| io::Error::other(format!("failed to derive render snapshot: {error}")))
 }
 
 fn thread_stream_frame_payload(
@@ -2543,9 +2541,7 @@ async fn automation_job_for_archive_conflict(
     state: &Arc<AppState>,
     thread_id: &str,
 ) -> Option<String> {
-    let Some(service) = state.ops.cron_service.as_ref() else {
-        return None;
-    };
+    let service = state.ops.cron_service.as_ref()?;
     service
         .list_all()
         .await

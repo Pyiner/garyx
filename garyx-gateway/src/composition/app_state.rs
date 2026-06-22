@@ -34,6 +34,7 @@ use crate::recent_thread_projection::{
 };
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
+use crate::task_projection::{backfill_task_projection_if_incomplete, reconcile_task_projection};
 use crate::thread_meta_projection::{
     backfill_thread_meta_projection_if_incomplete, list_channel_endpoints_with_projection_backfill,
 };
@@ -291,6 +292,13 @@ impl AppState {
                 &state.ops.garyx_db,
             )
             .await;
+            let task_projection = backfill_task_projection_if_incomplete(
+                &state.threads.thread_store,
+                &state.ops.garyx_db,
+            )
+            .await;
+            let reconciled_task_projection =
+                reconcile_task_projection(&state.threads.thread_store, &state.ops.garyx_db).await;
             let reconciled_workflows = crate::workflows::reconcile_interrupted_workflows(
                 &state,
                 &workflow_reconcile_cutoff,
@@ -310,6 +318,8 @@ impl AppState {
                 thread_meta_projection_message_routes = thread_meta_projection.message_routes,
                 thread_meta_projection_delivery_contexts =
                     thread_meta_projection.last_delivery_contexts,
+                task_projection_backfill_count = task_projection,
+                task_projection_reconcile_count = reconciled_task_projection,
                 workflow_reconcile_count = reconciled_workflows,
                 "gateway sync snapshots warmed"
             );

@@ -3,14 +3,19 @@ use std::io;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
-use chrono::{SecondsFormat, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
+use garyx_models::{Principal, TaskExecutor, TaskSource, TaskStatus};
 use garyx_router::KnownChannelEndpoint;
+use garyx_router::tasks::{TaskListFilter, TaskSummary};
+use rusqlite::types::{Type, Value as SqlValue};
 use rusqlite::{Connection, OptionalExtension, Transaction, params, params_from_iter};
-use serde::Serialize;
+use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use uuid::Uuid;
 
 const CURRENT_THREAD_META_PROJECTION_VERSION: i64 = 3;
+pub const CURRENT_TASK_PROJECTION_VERSION: i64 = 1;
+pub const TASK_PROJECTION_NAME: &str = "task_projection";
 
 #[derive(Debug, thiserror::Error)]
 pub enum GaryxDbError {
@@ -65,6 +70,31 @@ pub struct RecentThreadDraft {
     pub run_state: String,
     pub updated_at: Option<String>,
     pub last_active_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskProjectionDraft {
+    pub thread_id: String,
+    pub number: u64,
+    pub status: String,
+    pub title: String,
+    pub creator_json: String,
+    pub creator_id: String,
+    pub assignee_json: Option<String>,
+    pub assignee_id: Option<String>,
+    pub updated_by_json: String,
+    pub executor_json: Option<String>,
+    pub source_json: Option<String>,
+    pub source_thread_id: Option<String>,
+    pub source_task_thread_id: Option<String>,
+    pub source_task_id: Option<String>,
+    pub parent_task_number: Option<u64>,
+    pub source_bot_id: Option<String>,
+    pub notification_thread_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub source_updated_at: String,
+    pub source_events_len: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -434,6 +464,21 @@ struct DreamOverlapCandidate {
 
 pub struct GaryxDbService {
     conn: Mutex<Connection>,
+    task_projection_tombstones: Mutex<BTreeSet<String>>,
+    task_projection_backfill_lock: tokio::sync::Mutex<()>,
+    task_projection_backfill_active: Mutex<bool>,
+}
+
+pub(crate) struct TaskProjectionBackfillActivity<'a> {
+    db: &'a GaryxDbService,
+}
+
+impl Drop for TaskProjectionBackfillActivity<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut active) = self.db.task_projection_backfill_active.lock() {
+            *active = false;
+        }
+    }
 }
 
 impl GaryxDbService {
@@ -446,6 +491,9 @@ impl GaryxDbService {
         initialize_connection(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
+            task_projection_tombstones: Mutex::new(BTreeSet::new()),
+            task_projection_backfill_lock: tokio::sync::Mutex::new(()),
+            task_projection_backfill_active: Mutex::new(false),
         })
     }
 
@@ -454,11 +502,29 @@ impl GaryxDbService {
         initialize_connection(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
+            task_projection_tombstones: Mutex::new(BTreeSet::new()),
+            task_projection_backfill_lock: tokio::sync::Mutex::new(()),
+            task_projection_backfill_active: Mutex::new(false),
         })
     }
 
     fn conn(&self) -> GaryxDbResult<MutexGuard<'_, Connection>> {
         self.conn.lock().map_err(|_| GaryxDbError::LockPoisoned)
+    }
+
+    pub(crate) async fn lock_task_projection_backfill(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.task_projection_backfill_lock.lock().await
+    }
+
+    pub(crate) fn mark_task_projection_backfill_active(
+        &self,
+    ) -> GaryxDbResult<TaskProjectionBackfillActivity<'_>> {
+        let mut active = self
+            .task_projection_backfill_active
+            .lock()
+            .map_err(|_| GaryxDbError::LockPoisoned)?;
+        *active = true;
+        Ok(TaskProjectionBackfillActivity { db: self })
     }
 
     pub fn list_pinned_threads(&self) -> GaryxDbResult<Vec<PinnedThreadRecord>> {
@@ -726,6 +792,364 @@ impl GaryxDbService {
             ],
         )?;
         Ok(())
+    }
+
+    pub fn count_task_projection(&self) -> GaryxDbResult<usize> {
+        let conn = self.conn()?;
+        let count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM task_projection", [], |row| row.get(0))?;
+        Ok(usize::try_from(count).unwrap_or(usize::MAX))
+    }
+
+    pub fn task_projection_needs_backfill(&self) -> GaryxDbResult<bool> {
+        let conn = self.conn()?;
+        let state = conn
+            .query_row(
+                "SELECT projection_version, source_row_count
+                 FROM projection_states
+                 WHERE projection_name = ?1",
+                params![TASK_PROJECTION_NAME],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()?;
+        let Some((version, source_row_count)) = state else {
+            return Ok(true);
+        };
+        if version != CURRENT_TASK_PROJECTION_VERSION {
+            return Ok(true);
+        }
+        let current_count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM task_projection", [], |row| row.get(0))?;
+        Ok(source_row_count > 0 && current_count == 0)
+    }
+
+    pub fn task_projection_is_current(&self) -> GaryxDbResult<bool> {
+        Ok(!self.task_projection_needs_backfill()?)
+    }
+
+    pub fn replace_task_projection(&self, draft: TaskProjectionDraft) -> GaryxDbResult<()> {
+        let thread_id = normalize_thread_id(&draft.thread_id)?;
+        let mut draft = draft;
+        draft.thread_id = thread_id;
+        let projected_at = now_string();
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        upsert_task_projection(&tx, &draft, &projected_at)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn remove_task_projection(&self, thread_id: &str) -> GaryxDbResult<bool> {
+        let thread_id = normalize_thread_id(thread_id)?;
+        let conn = self.conn()?;
+        let removed = conn.execute(
+            "DELETE FROM task_projection WHERE thread_id = ?1",
+            params![thread_id],
+        )?;
+        let backfill_active = *self
+            .task_projection_backfill_active
+            .lock()
+            .map_err(|_| GaryxDbError::LockPoisoned)?;
+        if backfill_active {
+            let mut tombstones = self
+                .task_projection_tombstones
+                .lock()
+                .map_err(|_| GaryxDbError::LockPoisoned)?;
+            tombstones.insert(thread_id.clone());
+        }
+        Ok(removed > 0)
+    }
+
+    pub fn sync_task_projection_snapshot(
+        &self,
+        drafts: Vec<TaskProjectionDraft>,
+    ) -> GaryxDbResult<()> {
+        let projected_at = now_string();
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        for mut draft in drafts {
+            draft.thread_id = normalize_thread_id(&draft.thread_id)?;
+            upsert_task_projection(&tx, &draft, &projected_at)?;
+        }
+        tx.execute(
+            "DELETE FROM task_projection WHERE projection_version <> ?1",
+            params![CURRENT_TASK_PROJECTION_VERSION],
+        )?;
+        let tombstones = {
+            let mut tombstones = self
+                .task_projection_tombstones
+                .lock()
+                .map_err(|_| GaryxDbError::LockPoisoned)?;
+            let values = tombstones.iter().cloned().collect::<Vec<_>>();
+            tombstones.clear();
+            values
+        };
+        for thread_id in tombstones {
+            tx.execute(
+                "DELETE FROM task_projection WHERE thread_id = ?1",
+                params![thread_id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn task_index_rows(&self) -> GaryxDbResult<Vec<(u64, String)>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "WITH ranked AS (
+                SELECT number, thread_id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY number
+                           ORDER BY updated_at DESC, thread_id ASC
+                       ) AS rn
+                FROM task_projection
+                WHERE projection_version = ?1
+             )
+             SELECT number, thread_id
+             FROM ranked
+             WHERE rn = 1
+             ORDER BY number ASC",
+        )?;
+        let rows = stmt.query_map(params![CURRENT_TASK_PROJECTION_VERSION], |row| {
+            let number = row.get::<_, i64>(0)?;
+            Ok((number.max(0) as u64, row.get::<_, String>(1)?))
+        })?;
+        let mut values = Vec::new();
+        for row in rows {
+            values.push(row?);
+        }
+        Ok(values)
+    }
+
+    pub fn thread_id_for_number(&self, number: u64) -> GaryxDbResult<Option<String>> {
+        let number = i64::try_from(number).unwrap_or(i64::MAX);
+        let conn = self.conn()?;
+        conn.query_row(
+            "SELECT thread_id
+             FROM task_projection
+             WHERE number = ?1 AND projection_version = ?2
+             ORDER BY updated_at DESC, thread_id ASC
+             LIMIT 1",
+            params![number, CURRENT_TASK_PROJECTION_VERSION],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub fn has_running_subtask_targeting(&self, thread_id: &str) -> GaryxDbResult<bool> {
+        let thread_id = normalize_thread_id(thread_id)?;
+        let conn = self.conn()?;
+        let found: Option<i64> = conn
+            .query_row(
+                "SELECT 1
+                 FROM task_projection
+                 WHERE status = 'in_progress'
+                   AND notification_thread_id = ?1
+                   AND thread_id <> ?1
+                   AND projection_version = ?2
+                 LIMIT 1",
+                params![thread_id, CURRENT_TASK_PROJECTION_VERSION],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(found.is_some())
+    }
+
+    pub fn max_task_projection_number(&self) -> GaryxDbResult<Option<u64>> {
+        let conn = self.conn()?;
+        let value: Option<i64> = conn.query_row(
+            "SELECT MAX(number)
+             FROM task_projection
+             WHERE projection_version = ?1",
+            params![CURRENT_TASK_PROJECTION_VERSION],
+            |row| row.get(0),
+        )?;
+        Ok(value.map(|number| number.max(0) as u64))
+    }
+
+    pub fn list_task_projection_thread_ids(&self) -> GaryxDbResult<Vec<String>> {
+        let conn = self.conn()?;
+        let mut stmt =
+            conn.prepare("SELECT thread_id FROM task_projection ORDER BY thread_id ASC")?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        let mut thread_ids = Vec::new();
+        for row in rows {
+            thread_ids.push(row?);
+        }
+        Ok(thread_ids)
+    }
+
+    pub fn list_task_summaries(
+        &self,
+        filter: &TaskListFilter,
+    ) -> GaryxDbResult<(Vec<TaskSummary>, usize, bool)> {
+        let limit = filter.limit.unwrap_or(50).clamp(1, 200);
+        let offset = filter.offset.unwrap_or(0);
+        let (where_sql, bind_values) = task_projection_filter_sql(filter)?;
+        let duplicate_count_sql = format!(
+            "SELECT COUNT(*)
+             FROM (
+                SELECT number
+                FROM task_projection task
+                WHERE {where_sql}
+                GROUP BY number
+                HAVING COUNT(*) > 1
+             )"
+        );
+        let count_sql = format!(
+            "WITH filtered AS (
+                SELECT task.thread_id, task.number, task.updated_at,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY task.number
+                           ORDER BY task.updated_at DESC, task.thread_id ASC
+                       ) AS rn
+                FROM task_projection task
+                WHERE {where_sql}
+             )
+             SELECT COUNT(*) FROM filtered WHERE rn = 1"
+        );
+        let list_sql = format!(
+            "WITH filtered AS (
+                SELECT task.thread_id, task.number, task.status, task.title,
+                       task.creator_json, task.assignee_json, task.source_json,
+                       task.executor_json, task.updated_at, task.updated_by_json,
+                       COALESCE(meta.agent_id, '') AS runtime_agent_id,
+                       COALESCE(meta.message_count, 0) AS reply_count,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY task.number
+                           ORDER BY task.updated_at DESC, task.thread_id ASC
+                       ) AS rn
+                FROM task_projection task
+                LEFT JOIN thread_meta meta ON meta.thread_id = task.thread_id
+                WHERE {where_sql}
+             )
+             SELECT thread_id, number, status, title, creator_json, assignee_json,
+                    source_json, executor_json, updated_at, updated_by_json,
+                    runtime_agent_id, reply_count
+             FROM filtered
+             WHERE rn = 1
+             ORDER BY updated_at DESC, thread_id ASC
+             LIMIT ? OFFSET ?"
+        );
+
+        let conn = self.conn()?;
+        let duplicate_count: i64 = conn.query_row(
+            &duplicate_count_sql,
+            params_from_iter(bind_values.iter()),
+            |row| row.get(0),
+        )?;
+        if duplicate_count > 0 {
+            tracing::warn!(
+                duplicate_task_numbers = duplicate_count,
+                "task projection contains duplicate task numbers; list results are deduped"
+            );
+        }
+        let total: i64 =
+            conn.query_row(&count_sql, params_from_iter(bind_values.iter()), |row| {
+                row.get(0)
+            })?;
+        let mut list_bind_values = bind_values;
+        list_bind_values.push(SqlValue::Integer(i64::try_from(limit).unwrap_or(i64::MAX)));
+        list_bind_values.push(SqlValue::Integer(i64::try_from(offset).unwrap_or(i64::MAX)));
+        let mut stmt = conn.prepare(&list_sql)?;
+        let rows = stmt.query_map(
+            params_from_iter(list_bind_values.iter()),
+            task_summary_from_row,
+        )?;
+        let mut tasks = Vec::new();
+        for row in rows {
+            tasks.push(row?);
+        }
+        let total = usize::try_from(total).unwrap_or(usize::MAX);
+        let has_more = offset.saturating_add(tasks.len()) < total;
+        Ok((tasks, total, has_more))
+    }
+
+    pub fn task_subtree_summaries(&self, root_thread_id: &str) -> GaryxDbResult<Vec<TaskSummary>> {
+        let root_thread_id = normalize_thread_id(root_thread_id)?;
+        self.task_recursive_summaries(
+            "WITH RECURSIVE task_tree(depth, thread_id, path) AS (
+                SELECT 0, task.thread_id, ',' || task.thread_id || ','
+                FROM task_projection task
+                WHERE task.thread_id = ?1
+                  AND task.projection_version = ?2
+                UNION ALL
+                SELECT task_tree.depth + 1, child.thread_id,
+                       task_tree.path || child.thread_id || ','
+                FROM task_tree
+                JOIN task_projection parent ON parent.thread_id = task_tree.thread_id
+                JOIN task_projection child
+                  ON child.source_task_thread_id = task_tree.thread_id
+                  OR child.source_task_id = ('#TASK-' || parent.number) COLLATE NOCASE
+                WHERE child.projection_version = ?2
+                  AND task_tree.depth < 64
+                  AND instr(task_tree.path, ',' || child.thread_id || ',') = 0
+             )
+             SELECT task.thread_id, task.number, task.status, task.title,
+                    task.creator_json, task.assignee_json, task.source_json,
+                    task.executor_json, task.updated_at, task.updated_by_json,
+                    COALESCE(meta.agent_id, '') AS runtime_agent_id,
+                    COALESCE(meta.message_count, 0) AS reply_count
+             FROM task_tree
+             JOIN task_projection task ON task.thread_id = task_tree.thread_id
+             LEFT JOIN thread_meta meta ON meta.thread_id = task.thread_id
+             ORDER BY task_tree.depth ASC, task.number ASC, task.thread_id ASC",
+            &root_thread_id,
+        )
+    }
+
+    pub fn task_ancestor_summaries(&self, leaf_thread_id: &str) -> GaryxDbResult<Vec<TaskSummary>> {
+        let leaf_thread_id = normalize_thread_id(leaf_thread_id)?;
+        self.task_recursive_summaries(
+            "WITH RECURSIVE ancestors(depth, thread_id, path) AS (
+                SELECT 0, task.thread_id, ',' || task.thread_id || ','
+                FROM task_projection task
+                WHERE task.thread_id = ?1
+                  AND task.projection_version = ?2
+                UNION ALL
+                SELECT ancestors.depth + 1, parent.thread_id,
+                       ancestors.path || parent.thread_id || ','
+                FROM ancestors
+                JOIN task_projection child ON child.thread_id = ancestors.thread_id
+                JOIN task_projection parent
+                  ON parent.thread_id = child.source_task_thread_id
+                  OR parent.number = child.parent_task_number
+                  OR child.source_task_id = ('#TASK-' || parent.number) COLLATE NOCASE
+                WHERE parent.projection_version = ?2
+                  AND ancestors.depth < 64
+                  AND instr(ancestors.path, ',' || parent.thread_id || ',') = 0
+             )
+             SELECT task.thread_id, task.number, task.status, task.title,
+                    task.creator_json, task.assignee_json, task.source_json,
+                    task.executor_json, task.updated_at, task.updated_by_json,
+                    COALESCE(meta.agent_id, '') AS runtime_agent_id,
+                    COALESCE(meta.message_count, 0) AS reply_count
+             FROM ancestors
+             JOIN task_projection task ON task.thread_id = ancestors.thread_id
+             LEFT JOIN thread_meta meta ON meta.thread_id = task.thread_id
+             ORDER BY ancestors.depth DESC, task.number ASC, task.thread_id ASC",
+            &leaf_thread_id,
+        )
+    }
+
+    fn task_recursive_summaries(
+        &self,
+        sql: &str,
+        thread_id: &str,
+    ) -> GaryxDbResult<Vec<TaskSummary>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(sql)?;
+        let rows = stmt.query_map(
+            params![thread_id, CURRENT_TASK_PROJECTION_VERSION],
+            task_summary_from_row,
+        )?;
+        let mut tasks = Vec::new();
+        for row in rows {
+            tasks.push(row?);
+        }
+        Ok(tasks)
     }
 
     pub fn sync_recent_threads_snapshot(
@@ -1711,6 +2135,7 @@ impl GaryxDbService {
             .ok_or_else(|| GaryxDbError::BadRequest("workflow child run was not saved".to_owned()))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn finish_workflow_child_run(
         &self,
         workflow_id: &str,
@@ -2850,6 +3275,65 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             projected_at TEXT NOT NULL
         ) STRICT;
 
+        CREATE TABLE IF NOT EXISTS task_projection (
+            thread_id TEXT PRIMARY KEY,
+            number INTEGER NOT NULL CHECK (number > 0),
+            status TEXT NOT NULL CHECK (
+                status IN ('todo', 'in_progress', 'in_review', 'done')
+            ),
+            title TEXT NOT NULL,
+            creator_json TEXT NOT NULL,
+            creator_id TEXT NOT NULL,
+            assignee_json TEXT,
+            assignee_id TEXT,
+            updated_by_json TEXT NOT NULL,
+            executor_json TEXT,
+            source_json TEXT,
+            source_thread_id TEXT,
+            source_task_thread_id TEXT,
+            source_task_id TEXT COLLATE NOCASE,
+            parent_task_number INTEGER CHECK (
+                parent_task_number IS NULL OR parent_task_number > 0
+            ),
+            source_bot_id TEXT,
+            notification_thread_id TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            source_updated_at TEXT NOT NULL,
+            source_events_len INTEGER NOT NULL CHECK (source_events_len >= 0),
+            projection_version INTEGER NOT NULL DEFAULT 1,
+            projected_at TEXT NOT NULL
+        ) STRICT;
+
+        CREATE INDEX IF NOT EXISTS idx_task_projection_number
+            ON task_projection(number);
+        CREATE INDEX IF NOT EXISTS idx_task_projection_updated
+            ON task_projection(updated_at DESC, thread_id ASC);
+        CREATE INDEX IF NOT EXISTS idx_task_projection_open_updated
+            ON task_projection(updated_at DESC, thread_id ASC)
+            WHERE status <> 'done';
+        CREATE INDEX IF NOT EXISTS idx_task_projection_status_updated
+            ON task_projection(status, updated_at DESC, thread_id ASC);
+        CREATE INDEX IF NOT EXISTS idx_task_projection_assignee_status_updated
+            ON task_projection(assignee_id, status, updated_at DESC, thread_id ASC);
+        CREATE INDEX IF NOT EXISTS idx_task_projection_creator_status_updated
+            ON task_projection(creator_id, status, updated_at DESC, thread_id ASC);
+        CREATE INDEX IF NOT EXISTS idx_task_projection_source_thread_updated
+            ON task_projection(source_thread_id, updated_at DESC, thread_id ASC);
+        CREATE INDEX IF NOT EXISTS idx_task_projection_source_task_thread_updated
+            ON task_projection(source_task_thread_id, updated_at DESC, thread_id ASC);
+        CREATE INDEX IF NOT EXISTS idx_task_projection_source_task_updated
+            ON task_projection(source_task_id, updated_at DESC, thread_id ASC);
+        CREATE INDEX IF NOT EXISTS idx_task_projection_source_bot_updated
+            ON task_projection(source_bot_id, updated_at DESC, thread_id ASC);
+        CREATE INDEX IF NOT EXISTS idx_task_projection_notification_thread_status
+            ON task_projection(notification_thread_id, status, updated_at DESC)
+            WHERE status = 'in_progress';
+        CREATE INDEX IF NOT EXISTS idx_task_projection_parent_thread_updated
+            ON task_projection(source_task_thread_id, updated_at DESC, thread_id ASC);
+        CREATE INDEX IF NOT EXISTS idx_task_projection_parent_number_updated
+            ON task_projection(parent_task_number, updated_at DESC, thread_id ASC);
+
         CREATE TABLE IF NOT EXISTS thread_meta (
             thread_id TEXT PRIMARY KEY,
             workspace_dir TEXT,
@@ -3188,6 +3672,191 @@ fn remove_thread_meta_projection_tx(conn: &Connection, thread_id: &str) -> Garyx
         params![thread_id],
     )?;
     Ok(removed)
+}
+
+fn upsert_task_projection(
+    tx: &Transaction<'_>,
+    draft: &TaskProjectionDraft,
+    projected_at: &str,
+) -> GaryxDbResult<()> {
+    let number = i64::try_from(draft.number).unwrap_or(i64::MAX);
+    let parent_task_number = draft
+        .parent_task_number
+        .map(|number| i64::try_from(number).unwrap_or(i64::MAX));
+    let source_events_len = i64::try_from(draft.source_events_len).unwrap_or(i64::MAX);
+    tx.execute(
+        "INSERT INTO task_projection (
+            thread_id, number, status, title, creator_json, creator_id,
+            assignee_json, assignee_id, updated_by_json, executor_json,
+            source_json, source_thread_id, source_task_thread_id, source_task_id,
+            parent_task_number, source_bot_id, notification_thread_id,
+            created_at, updated_at, source_updated_at, source_events_len,
+            projection_version, projected_at
+         )
+         VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+            ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23
+         )
+         ON CONFLICT(thread_id) DO UPDATE SET
+            number = excluded.number,
+            status = excluded.status,
+            title = excluded.title,
+            creator_json = excluded.creator_json,
+            creator_id = excluded.creator_id,
+            assignee_json = excluded.assignee_json,
+            assignee_id = excluded.assignee_id,
+            updated_by_json = excluded.updated_by_json,
+            executor_json = excluded.executor_json,
+            source_json = excluded.source_json,
+            source_thread_id = excluded.source_thread_id,
+            source_task_thread_id = excluded.source_task_thread_id,
+            source_task_id = excluded.source_task_id,
+            parent_task_number = excluded.parent_task_number,
+            source_bot_id = excluded.source_bot_id,
+            notification_thread_id = excluded.notification_thread_id,
+            created_at = excluded.created_at,
+            updated_at = excluded.updated_at,
+            source_updated_at = excluded.source_updated_at,
+            source_events_len = excluded.source_events_len,
+            projection_version = excluded.projection_version,
+            projected_at = excluded.projected_at
+         WHERE task_projection.projection_version <> excluded.projection_version
+            OR (excluded.source_events_len, excluded.source_updated_at)
+             > (task_projection.source_events_len, task_projection.source_updated_at)",
+        params![
+            draft.thread_id,
+            number,
+            draft.status,
+            draft.title,
+            draft.creator_json,
+            draft.creator_id,
+            draft.assignee_json,
+            draft.assignee_id,
+            draft.updated_by_json,
+            draft.executor_json,
+            draft.source_json,
+            draft.source_thread_id,
+            draft.source_task_thread_id,
+            draft.source_task_id,
+            parent_task_number,
+            draft.source_bot_id,
+            draft.notification_thread_id,
+            draft.created_at,
+            draft.updated_at,
+            draft.source_updated_at,
+            source_events_len,
+            CURRENT_TASK_PROJECTION_VERSION,
+            projected_at,
+        ],
+    )?;
+    Ok(())
+}
+
+fn task_projection_filter_sql(filter: &TaskListFilter) -> GaryxDbResult<(String, Vec<SqlValue>)> {
+    let mut clauses = vec!["task.projection_version = ?".to_owned()];
+    let mut bind_values = vec![SqlValue::Integer(CURRENT_TASK_PROJECTION_VERSION)];
+
+    if !filter.include_done {
+        clauses.push("task.status <> 'done'".to_owned());
+    }
+    if let Some(status) = filter.status {
+        clauses.push("task.status = ?".to_owned());
+        bind_values.push(SqlValue::Text(status.as_str().to_owned()));
+    }
+    if let Some(assignee) = &filter.assignee {
+        clauses.push("task.assignee_json = ?".to_owned());
+        bind_values.push(SqlValue::Text(canonical_task_json("assignee", assignee)?));
+    }
+    if let Some(creator) = &filter.creator {
+        clauses.push("task.creator_json = ?".to_owned());
+        bind_values.push(SqlValue::Text(canonical_task_json("creator", creator)?));
+    }
+    if let Some(source_thread_id) = normalize_optional(filter.source_thread_id.as_deref()) {
+        clauses.push("(task.source_thread_id = ? OR task.source_task_thread_id = ?)".to_owned());
+        bind_values.push(SqlValue::Text(source_thread_id.clone()));
+        bind_values.push(SqlValue::Text(source_thread_id));
+    }
+    if let Some(source_task_id) = normalize_optional(filter.source_task_id.as_deref()) {
+        clauses.push("task.source_task_id = ? COLLATE NOCASE".to_owned());
+        bind_values.push(SqlValue::Text(source_task_id));
+    }
+    if let Some(source_bot_id) = normalize_optional(filter.source_bot_id.as_deref()) {
+        clauses.push("task.source_bot_id = ?".to_owned());
+        bind_values.push(SqlValue::Text(source_bot_id));
+    }
+
+    Ok((clauses.join(" AND "), bind_values))
+}
+
+fn canonical_task_json<T: Serialize>(field: &str, value: &T) -> GaryxDbResult<String> {
+    serde_json::to_string(value).map_err(|error| {
+        GaryxDbError::BadRequest(format!("failed to serialize task {field} filter: {error}"))
+    })
+}
+
+fn task_summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskSummary> {
+    let thread_id = row.get::<_, String>(0)?;
+    let number = row.get::<_, i64>(1)?.max(0) as u64;
+    let status = task_status_from_row(2, row.get::<_, String>(2)?)?;
+    let title = row.get::<_, String>(3)?;
+    let creator = json_from_row::<Principal>(4, row.get::<_, String>(4)?)?;
+    let assignee = optional_json_from_row::<Principal>(5, row.get::<_, Option<String>>(5)?)?;
+    let source = optional_json_from_row::<TaskSource>(6, row.get::<_, Option<String>>(6)?)?;
+    let executor = optional_json_from_row::<TaskExecutor>(7, row.get::<_, Option<String>>(7)?)?;
+    let updated_at = timestamp_from_row(8, row.get::<_, String>(8)?)?;
+    let updated_by = json_from_row::<Principal>(9, row.get::<_, String>(9)?)?;
+    let runtime_agent_id = row.get::<_, String>(10)?;
+    let reply_count = row.get::<_, i64>(11)?.clamp(0, i64::from(u32::MAX)) as u32;
+    Ok(TaskSummary {
+        thread_id,
+        task_id: format!("#TASK-{number}"),
+        number,
+        title,
+        status,
+        creator,
+        assignee,
+        source,
+        executor,
+        updated_at,
+        updated_by,
+        runtime_agent_id,
+        reply_count,
+    })
+}
+
+fn task_status_from_row(index: usize, value: String) -> rusqlite::Result<TaskStatus> {
+    match value.as_str() {
+        "todo" => Ok(TaskStatus::Todo),
+        "in_progress" => Ok(TaskStatus::InProgress),
+        "in_review" => Ok(TaskStatus::InReview),
+        "done" => Ok(TaskStatus::Done),
+        _ => Err(rusqlite::Error::FromSqlConversionFailure(
+            index,
+            Type::Text,
+            format!("unknown task status: {value}").into(),
+        )),
+    }
+}
+
+fn json_from_row<T: DeserializeOwned>(index: usize, value: String) -> rusqlite::Result<T> {
+    serde_json::from_str(&value).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(index, Type::Text, Box::new(error))
+    })
+}
+
+fn optional_json_from_row<T: DeserializeOwned>(
+    index: usize,
+    value: Option<String>,
+) -> rusqlite::Result<Option<T>> {
+    value.map(|value| json_from_row(index, value)).transpose()
+}
+
+fn timestamp_from_row(index: usize, value: String) -> rusqlite::Result<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(&value)
+        .map(|value| value.with_timezone(&Utc))
+        .map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(index, Type::Text, Box::new(error))
+        })
 }
 
 fn upsert_thread_meta(
@@ -3849,6 +4518,297 @@ fn attach_dream_spans(conn: &Connection, topics: &mut [DreamTopicRecord]) -> Gar
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn task_projection_draft(
+        thread_id: &str,
+        number: u64,
+        status: TaskStatus,
+        updated_at: &str,
+        source: Option<TaskSource>,
+        source_events_len: usize,
+    ) -> TaskProjectionDraft {
+        let creator = Principal::Agent {
+            agent_id: "test-agent".to_owned(),
+        };
+        let assignee = Principal::Human {
+            user_id: "1000000001".to_owned(),
+        };
+        let updated_by = creator.clone();
+        let parent_task_number = source
+            .as_ref()
+            .and_then(|source| source.task_id.as_deref())
+            .and_then(|task_id| task_id.strip_prefix("#TASK-"))
+            .and_then(|number| number.parse::<u64>().ok());
+        let source_bot_id = source
+            .as_ref()
+            .and_then(|source| source.bot_id.clone())
+            .or_else(|| {
+                source.as_ref().and_then(|source| {
+                    Some(format!(
+                        "{}:{}",
+                        source.channel.as_ref()?,
+                        source.account_id.as_ref()?
+                    ))
+                })
+            });
+        TaskProjectionDraft {
+            thread_id: thread_id.to_owned(),
+            number,
+            status: status.as_str().to_owned(),
+            title: format!("Task {number}"),
+            creator_json: serde_json::to_string(&creator).expect("creator json"),
+            creator_id: creator.id().to_owned(),
+            assignee_json: Some(serde_json::to_string(&assignee).expect("assignee json")),
+            assignee_id: Some(assignee.id().to_owned()),
+            updated_by_json: serde_json::to_string(&updated_by).expect("updated_by json"),
+            executor_json: None,
+            source_json: source
+                .as_ref()
+                .map(|source| serde_json::to_string(source).expect("source json")),
+            source_thread_id: source.as_ref().and_then(|source| source.thread_id.clone()),
+            source_task_thread_id: source
+                .as_ref()
+                .and_then(|source| source.task_thread_id.clone()),
+            source_task_id: source.as_ref().and_then(|source| source.task_id.clone()),
+            parent_task_number,
+            source_bot_id,
+            notification_thread_id: None,
+            created_at: "2026-01-01T00:00:00.000Z".to_owned(),
+            updated_at: updated_at.to_owned(),
+            source_updated_at: updated_at.to_owned(),
+            source_events_len,
+        }
+    }
+
+    fn thread_source(thread_id: &str, task_id: &str) -> TaskSource {
+        TaskSource {
+            thread_id: Some(thread_id.to_owned()),
+            task_id: Some(task_id.to_owned()),
+            task_thread_id: Some(thread_id.to_owned()),
+            bot_id: None,
+            channel: None,
+            account_id: None,
+        }
+    }
+
+    #[test]
+    fn task_projection_zero_task_state_does_not_repeat_backfill() {
+        let db = GaryxDbService::memory().expect("db opens");
+        assert!(
+            db.task_projection_needs_backfill()
+                .expect("new projection needs initial backfill")
+        );
+
+        db.sync_task_projection_snapshot(Vec::new())
+            .expect("sync empty snapshot");
+        db.record_projection_state(TASK_PROJECTION_NAME, CURRENT_TASK_PROJECTION_VERSION, 0)
+            .expect("record empty projection state");
+        assert!(
+            !db.task_projection_needs_backfill()
+                .expect("zero-task state is current")
+        );
+
+        db.replace_task_projection(task_projection_draft(
+            "thread::task-1",
+            1,
+            TaskStatus::Todo,
+            "2026-01-01T00:00:01.000Z",
+            None,
+            1,
+        ))
+        .expect("insert task projection");
+        db.record_projection_state(TASK_PROJECTION_NAME, CURRENT_TASK_PROJECTION_VERSION, 1)
+            .expect("record non-empty state");
+        db.remove_task_projection("thread::task-1")
+            .expect("remove projection");
+        assert!(
+            db.task_projection_needs_backfill()
+                .expect("unexpected empty after non-empty state needs backfill")
+        );
+    }
+
+    #[test]
+    fn task_projection_snapshot_cannot_overwrite_newer_revision() {
+        let db = GaryxDbService::memory().expect("db opens");
+        let stale = task_projection_draft(
+            "thread::task-1",
+            1,
+            TaskStatus::InProgress,
+            "2026-01-01T00:00:01.000Z",
+            None,
+            1,
+        );
+        let fresh = task_projection_draft(
+            "thread::task-1",
+            1,
+            TaskStatus::Done,
+            "2026-01-01T00:00:02.000Z",
+            None,
+            2,
+        );
+
+        db.replace_task_projection(fresh)
+            .expect("insert fresh realtime row");
+        db.sync_task_projection_snapshot(vec![stale])
+            .expect("sync stale snapshot row");
+
+        let (tasks, total, _) = db
+            .list_task_summaries(&TaskListFilter {
+                include_done: true,
+                ..Default::default()
+            })
+            .expect("list task projection");
+        assert_eq!(total, 1);
+        assert_eq!(tasks[0].status, TaskStatus::Done);
+    }
+
+    #[test]
+    fn task_projection_snapshot_applies_delete_tombstones() {
+        let db = GaryxDbService::memory().expect("db opens");
+        let _active = db
+            .mark_task_projection_backfill_active()
+            .expect("mark active backfill");
+        db.remove_task_projection("thread::deleted")
+            .expect("record delete tombstone");
+        db.sync_task_projection_snapshot(vec![task_projection_draft(
+            "thread::deleted",
+            7,
+            TaskStatus::InProgress,
+            "2026-01-01T00:00:01.000Z",
+            None,
+            1,
+        )])
+        .expect("sync snapshot with deleted row");
+        assert_eq!(
+            db.thread_id_for_number(7).expect("lookup deleted row"),
+            None
+        );
+    }
+
+    #[test]
+    fn task_projection_list_filters_and_dedupes_duplicate_numbers() {
+        let db = GaryxDbService::memory().expect("db opens");
+        let source = TaskSource {
+            thread_id: Some("thread::origin".to_owned()),
+            task_id: Some("#TASK-1".to_owned()),
+            task_thread_id: Some("thread::parent".to_owned()),
+            bot_id: None,
+            channel: Some("api".to_owned()),
+            account_id: Some("main".to_owned()),
+        };
+        db.replace_task_projection(task_projection_draft(
+            "thread::older",
+            42,
+            TaskStatus::InProgress,
+            "2026-01-01T00:00:01.000Z",
+            Some(source.clone()),
+            1,
+        ))
+        .expect("insert older duplicate");
+        db.replace_task_projection(task_projection_draft(
+            "thread::newer",
+            42,
+            TaskStatus::InReview,
+            "2026-01-01T00:00:02.000Z",
+            Some(source),
+            2,
+        ))
+        .expect("insert newer duplicate");
+        db.replace_task_projection(task_projection_draft(
+            "thread::done",
+            43,
+            TaskStatus::Done,
+            "2026-01-01T00:00:03.000Z",
+            None,
+            1,
+        ))
+        .expect("insert done row");
+
+        let (tasks, total, has_more) = db
+            .list_task_summaries(&TaskListFilter {
+                source_thread_id: Some("thread::parent".to_owned()),
+                source_task_id: Some("#task-1".to_owned()),
+                source_bot_id: Some("api:main".to_owned()),
+                include_done: false,
+                limit: Some(10),
+                offset: Some(0),
+                ..Default::default()
+            })
+            .expect("list filtered task projection");
+
+        assert_eq!(total, 1);
+        assert!(!has_more);
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].thread_id, "thread::newer");
+        assert_eq!(tasks[0].number, 42);
+        assert_eq!(tasks[0].status, TaskStatus::InReview);
+    }
+
+    #[test]
+    fn task_projection_recursive_ctes_use_thread_identity_and_guard_cycles() {
+        let db = GaryxDbService::memory().expect("db opens");
+        db.replace_task_projection(task_projection_draft(
+            "thread::parent",
+            1,
+            TaskStatus::InProgress,
+            "2026-01-01T00:00:01.000Z",
+            None,
+            1,
+        ))
+        .expect("insert parent");
+        db.replace_task_projection(task_projection_draft(
+            "thread::child",
+            2,
+            TaskStatus::InProgress,
+            "2026-01-01T00:00:02.000Z",
+            Some(thread_source("thread::parent", "#TASK-1")),
+            1,
+        ))
+        .expect("insert child");
+        db.replace_task_projection(task_projection_draft(
+            "thread::grandchild",
+            3,
+            TaskStatus::Todo,
+            "2026-01-01T00:00:03.000Z",
+            Some(thread_source("thread::child", "#TASK-2")),
+            1,
+        ))
+        .expect("insert grandchild");
+        db.replace_task_projection(task_projection_draft(
+            "thread::cycle",
+            4,
+            TaskStatus::Todo,
+            "2026-01-01T00:00:04.000Z",
+            Some(thread_source("thread::cycle", "#TASK-4")),
+            1,
+        ))
+        .expect("insert self cycle");
+
+        let subtree = db
+            .task_subtree_summaries("thread::parent")
+            .expect("subtree");
+        assert_eq!(
+            subtree
+                .iter()
+                .map(|task| task.thread_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["thread::parent", "thread::child", "thread::grandchild"]
+        );
+
+        let ancestors = db
+            .task_ancestor_summaries("thread::grandchild")
+            .expect("ancestors");
+        assert_eq!(
+            ancestors
+                .iter()
+                .map(|task| task.thread_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["thread::parent", "thread::child", "thread::grandchild"]
+        );
+
+        let cycle = db.task_subtree_summaries("thread::cycle").expect("cycle");
+        assert_eq!(cycle.len(), 1);
+    }
 
     #[test]
     fn opening_legacy_workflow_runs_db_adds_task_columns_before_indexes() {

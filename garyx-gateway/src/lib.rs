@@ -34,6 +34,7 @@ mod runtime_diagnostics;
 pub mod server;
 pub mod skills;
 mod task_notifications;
+mod task_projection;
 pub mod tasks;
 pub mod thread_logs;
 mod thread_meta_projection;

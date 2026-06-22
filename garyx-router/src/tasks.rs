@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 
+use async_trait::async_trait;
 use chrono::Utc;
 use garyx_models::{
     Principal, TASK_SCHEMA_VERSION_V1, TaskEvent, TaskEventKind, TaskExecutor,
@@ -36,6 +37,8 @@ struct TaskIndexState {
 
 static TASK_THREAD_LOCKS: OnceLock<StdMutex<HashMap<String, TaskThreadLock>>> = OnceLock::new();
 static TASK_INDEX: OnceLock<StdMutex<TaskIndexState>> = OnceLock::new();
+static TASK_PROJECTION_READERS: OnceLock<StdMutex<HashMap<usize, Arc<dyn TaskProjectionReader>>>> =
+    OnceLock::new();
 
 #[derive(Debug, thiserror::Error)]
 pub enum TaskServiceError {
@@ -158,6 +161,23 @@ pub struct TaskHistoryPage {
     pub has_more: bool,
 }
 
+#[async_trait]
+pub trait TaskProjectionReader: Send + Sync {
+    async fn is_current(&self) -> bool;
+    async fn ensure_current(&self) -> bool {
+        self.is_current().await
+    }
+    async fn task_index_rows(&self) -> Vec<(u64, String)>;
+    async fn thread_id_for_number(&self, number: u64) -> Option<String>;
+    async fn has_running_subtask_targeting(&self, thread_id: &str) -> bool;
+    async fn list_task_summaries(
+        &self,
+        filter: &TaskListFilter,
+    ) -> Option<(Vec<TaskSummary>, usize, bool)>;
+    async fn max_number(&self) -> Option<u64>;
+    async fn remove_thread(&self, _thread_id: &str) {}
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskId {
     ThreadId(String),
@@ -195,6 +215,7 @@ impl TaskId {
 pub struct TaskService {
     thread_store: Arc<dyn ThreadStore>,
     counter_store: Arc<dyn TaskCounterStore>,
+    projection_reader: Option<Arc<dyn TaskProjectionReader>>,
 }
 
 impl TaskService {
@@ -205,11 +226,23 @@ impl TaskService {
         Self {
             thread_store,
             counter_store,
+            projection_reader: None,
         }
+    }
+
+    pub fn with_projection_reader(mut self, reader: Arc<dyn TaskProjectionReader>) -> Self {
+        self.projection_reader = Some(reader);
+        self
     }
 
     fn index_store_id(&self) -> usize {
         thread_store_id(&self.thread_store)
+    }
+
+    fn projection_reader(&self) -> Option<Arc<dyn TaskProjectionReader>> {
+        self.projection_reader
+            .clone()
+            .or_else(|| task_projection_reader_for_store_id(self.index_store_id()))
     }
 
     pub async fn create_task(
@@ -349,6 +382,17 @@ impl TaskService {
             .unwrap_or(DEFAULT_TASK_LIST_LIMIT)
             .clamp(1, MAX_TASK_LIST_LIMIT);
         let offset = filter.offset.unwrap_or(0);
+        let filter = TaskListFilter {
+            limit: Some(limit),
+            offset: Some(offset),
+            ..filter
+        };
+        if let Some(reader) = self.projection_reader()
+            && reader.ensure_current().await
+            && let Some(page) = reader.list_task_summaries(&filter).await
+        {
+            return Ok(page);
+        }
         self.ensure_task_index().await?;
         let mut tasks = Vec::new();
         let mut stale_index_keys = Vec::new();
@@ -683,6 +727,22 @@ impl TaskService {
             return Ok(());
         }
 
+        if let Some(reader) = self.projection_reader() {
+            if !reader.ensure_current().await {
+                return Err(TaskServiceError::Store(
+                    "task projection backfill did not complete".to_owned(),
+                ));
+            }
+            let rebuilt = reader
+                .task_index_rows()
+                .await
+                .into_iter()
+                .map(|(number, thread_id)| (TaskIndexKey { store_id, number }, thread_id))
+                .collect::<HashMap<_, _>>();
+            task_index_bootstrap(store_id, rebuilt);
+            return Ok(());
+        }
+
         let mut rebuilt = HashMap::new();
         for key in self.thread_store.list_keys(None).await {
             if !is_thread_key(&key) {
@@ -715,8 +775,14 @@ impl TaskService {
         self.ensure_task_index().await?;
         let store_id = self.index_store_id();
         let mut number = self.counter_store.allocate().await?;
+        let projected_max_number = if let Some(reader) = self.projection_reader() {
+            reader.max_number().await.unwrap_or(0)
+        } else {
+            0
+        };
         while task_index_lookup(&TaskIndexKey { store_id, number }).is_some()
             || number <= task_index_max_number(store_id)
+            || number <= projected_max_number
         {
             number = self.counter_store.allocate().await?;
         }
@@ -759,6 +825,19 @@ impl TaskService {
     }
 
     async fn find_task_by_number(&self, number: u64) -> Result<(String, Value), TaskServiceError> {
+        if let Some(reader) = self.projection_reader()
+            && reader.ensure_current().await
+            && let Some(thread_id) = reader.thread_id_for_number(number).await
+        {
+            if let Some(record) = self.thread_store.get(&thread_id).await
+                && let Some(task) = task_from_record(&record)?
+                && task.number == number
+            {
+                task_index_upsert(self.index_store_id(), &thread_id, &task);
+                return Ok((thread_id, record));
+            }
+            reader.remove_thread(&thread_id).await;
+        }
         self.ensure_task_index().await?;
         let index_key = TaskIndexKey {
             store_id: self.index_store_id(),
@@ -876,6 +955,11 @@ pub async fn thread_task_has_running_subtasks(
     thread_id: &str,
 ) -> bool {
     let store_id = thread_store_id(thread_store);
+    if let Some(reader) = task_projection_reader_for_store_id(store_id)
+        && reader.ensure_current().await
+    {
+        return reader.has_running_subtask_targeting(thread_id).await;
+    }
     for (_, candidate_thread_id) in task_index_entries(store_id) {
         if candidate_thread_id == thread_id {
             continue;
@@ -1001,8 +1085,44 @@ fn task_index_state() -> &'static StdMutex<TaskIndexState> {
     TASK_INDEX.get_or_init(|| StdMutex::new(TaskIndexState::default()))
 }
 
-fn thread_store_id(thread_store: &Arc<dyn ThreadStore>) -> usize {
+pub fn thread_store_id(thread_store: &Arc<dyn ThreadStore>) -> usize {
     Arc::as_ptr(thread_store) as *const () as usize
+}
+
+fn task_projection_reader_state() -> &'static StdMutex<HashMap<usize, Arc<dyn TaskProjectionReader>>>
+{
+    TASK_PROJECTION_READERS.get_or_init(|| StdMutex::new(HashMap::new()))
+}
+
+pub fn register_task_projection_reader(
+    thread_store: &Arc<dyn ThreadStore>,
+    reader: Arc<dyn TaskProjectionReader>,
+) {
+    register_task_projection_reader_for_store_id(thread_store_id(thread_store), reader);
+}
+
+pub fn register_task_projection_reader_for_store_id(
+    store_id: usize,
+    reader: Arc<dyn TaskProjectionReader>,
+) {
+    let mut readers = task_projection_reader_state()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    readers.insert(store_id, reader);
+}
+
+pub fn remove_task_projection_reader(thread_store: &Arc<dyn ThreadStore>) {
+    let mut readers = task_projection_reader_state()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    readers.remove(&thread_store_id(thread_store));
+}
+
+fn task_projection_reader_for_store_id(store_id: usize) -> Option<Arc<dyn TaskProjectionReader>> {
+    let readers = task_projection_reader_state()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    readers.get(&store_id).cloned()
 }
 
 fn task_index_key(store_id: usize, task: &ThreadTask) -> TaskIndexKey {
@@ -1329,11 +1449,229 @@ mod tests {
     use super::*;
     use crate::{InMemoryTaskCounterStore, InMemoryThreadStore, update_thread_record};
 
+    struct StaticProjectionReader {
+        running_subtask: bool,
+    }
+
+    struct ListProjectionReader {
+        summary: TaskSummary,
+    }
+
+    #[async_trait]
+    impl TaskProjectionReader for StaticProjectionReader {
+        async fn is_current(&self) -> bool {
+            true
+        }
+
+        async fn task_index_rows(&self) -> Vec<(u64, String)> {
+            Vec::new()
+        }
+
+        async fn thread_id_for_number(&self, _number: u64) -> Option<String> {
+            None
+        }
+
+        async fn has_running_subtask_targeting(&self, _thread_id: &str) -> bool {
+            self.running_subtask
+        }
+
+        async fn list_task_summaries(
+            &self,
+            _filter: &TaskListFilter,
+        ) -> Option<(Vec<TaskSummary>, usize, bool)> {
+            None
+        }
+
+        async fn max_number(&self) -> Option<u64> {
+            None
+        }
+    }
+
+    #[async_trait]
+    impl TaskProjectionReader for ListProjectionReader {
+        async fn is_current(&self) -> bool {
+            true
+        }
+
+        async fn task_index_rows(&self) -> Vec<(u64, String)> {
+            vec![(self.summary.number, self.summary.thread_id.clone())]
+        }
+
+        async fn thread_id_for_number(&self, number: u64) -> Option<String> {
+            (number == self.summary.number).then(|| self.summary.thread_id.clone())
+        }
+
+        async fn has_running_subtask_targeting(&self, _thread_id: &str) -> bool {
+            false
+        }
+
+        async fn list_task_summaries(
+            &self,
+            _filter: &TaskListFilter,
+        ) -> Option<(Vec<TaskSummary>, usize, bool)> {
+            Some((vec![self.summary.clone()], 1, false))
+        }
+
+        async fn max_number(&self) -> Option<u64> {
+            Some(self.summary.number)
+        }
+    }
+
     fn service() -> TaskService {
         TaskService::new(
             Arc::new(InMemoryThreadStore::new()),
             Arc::new(InMemoryTaskCounterStore::new()),
         )
+    }
+
+    fn actor() -> Principal {
+        Principal::Agent {
+            agent_id: "cindy".to_owned(),
+        }
+    }
+
+    #[tokio::test]
+    async fn running_subtask_gate_uses_registered_projection_reader() {
+        let thread_store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        register_task_projection_reader(
+            &thread_store,
+            Arc::new(StaticProjectionReader {
+                running_subtask: true,
+            }),
+        );
+
+        assert!(
+            thread_task_has_running_subtasks(&thread_store, "thread::parent").await,
+            "registered projection reader should gate without a warmed TASK_INDEX"
+        );
+        remove_task_projection_reader(&thread_store);
+    }
+
+    #[tokio::test]
+    async fn list_tasks_uses_current_projection_reader_without_file_scan() {
+        let summary = TaskSummary {
+            thread_id: "thread::projected".to_owned(),
+            task_id: "#TASK-100".to_owned(),
+            number: 100,
+            title: "Projected".to_owned(),
+            status: TaskStatus::InProgress,
+            creator: actor(),
+            assignee: None,
+            source: None,
+            executor: None,
+            updated_at: Utc::now(),
+            updated_by: actor(),
+            runtime_agent_id: "cindy".to_owned(),
+            reply_count: 0,
+        };
+        let service = TaskService::new(
+            Arc::new(InMemoryThreadStore::new()),
+            Arc::new(InMemoryTaskCounterStore::new()),
+        )
+        .with_projection_reader(Arc::new(ListProjectionReader {
+            summary: summary.clone(),
+        }));
+
+        let (tasks, total, has_more) = service
+            .list_tasks(TaskListFilter {
+                include_done: true,
+                ..Default::default()
+            })
+            .await
+            .expect("list from projection reader");
+
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].thread_id, summary.thread_id);
+        assert_eq!(tasks[0].number, summary.number);
+        assert_eq!(tasks[0].title, summary.title);
+        assert_eq!(total, 1);
+        assert!(!has_more);
+    }
+
+    #[tokio::test]
+    async fn projected_task_mutations_increment_events_len() {
+        let service = service();
+        let (thread_id, created) = service
+            .create_task(CreateTaskInput {
+                title: Some("Projected task".to_owned()),
+                body: None,
+                assignee: None,
+                notification_target: None,
+                source: None,
+                executor: None,
+                start: false,
+                actor: Some(actor()),
+                agent_id: None,
+                workspace_dir: None,
+                runtime: None,
+            })
+            .await
+            .unwrap();
+        let mut previous_events_len = created.events.len();
+
+        let titled = service
+            .set_title(&thread_id, "Projected title".to_owned(), Some(actor()))
+            .await
+            .unwrap();
+        assert!(titled.events.len() > previous_events_len);
+        previous_events_len = titled.events.len();
+
+        let assigned = service
+            .assign_task(
+                &thread_id,
+                Principal::Agent {
+                    agent_id: "reviewer".to_owned(),
+                },
+                Some(actor()),
+            )
+            .await
+            .unwrap();
+        assert!(assigned.events.len() > previous_events_len);
+        previous_events_len = assigned.events.len();
+
+        let unassigned = service
+            .unassign_task(&thread_id, Some(actor()))
+            .await
+            .unwrap();
+        assert!(unassigned.events.len() > previous_events_len);
+        previous_events_len = unassigned.events.len();
+
+        let stopped = service.stop_task(&thread_id, Some(actor())).await.unwrap();
+        assert!(stopped.events.len() > previous_events_len);
+        previous_events_len = stopped.events.len();
+
+        let restarted = service
+            .update_status(UpdateTaskStatusInput {
+                task_id: thread_id.clone(),
+                to: TaskStatus::InProgress,
+                note: None,
+                force: false,
+                actor: Some(actor()),
+            })
+            .await
+            .unwrap();
+        assert!(restarted.events.len() > previous_events_len);
+        previous_events_len = restarted.events.len();
+
+        let review = mark_thread_task_in_review_if_in_progress(
+            &service.thread_store,
+            &thread_id,
+            actor(),
+            None,
+            None,
+        )
+        .await
+        .unwrap()
+        .expect("task enters review");
+        assert!(review.task.events.len() > previous_events_len);
+        previous_events_len = review.task.events.len();
+
+        let woken =
+            mark_thread_task_in_progress_on_wake(&service.thread_store, &thread_id, actor())
+                .await
+                .unwrap()
+                .expect("task wakes to in progress");
+        assert!(woken.events.len() > previous_events_len);
     }
 
     #[tokio::test]

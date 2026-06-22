@@ -43,6 +43,7 @@ use crate::mcp_metrics::McpToolMetrics;
 use crate::recent_thread_projection::RecentThreadProjectingStore;
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
+use crate::task_projection::register_gateway_task_projection_reader;
 use crate::wikis::WikiStore;
 use crate::workflows::WorkflowScheduler;
 
@@ -311,6 +312,7 @@ impl AppStateBuilder {
             self.garyx_db.clone(),
             self.thread_history.transcript_store(),
         ));
+        register_gateway_task_projection_reader(&thread_store, &self.garyx_db);
         let thread_history = ThreadHistoryRepository::new(
             thread_store.clone(),
             self.thread_history.transcript_store(),

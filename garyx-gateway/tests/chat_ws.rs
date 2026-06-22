@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use garyx_bridge::MultiProviderBridge;
 use garyx_bridge::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
+use garyx_gateway::garyx_db::GaryxDbService;
 use garyx_gateway::server::AppStateBuilder;
 use garyx_models::config::{ApiAccount, GaryxConfig};
 use garyx_models::provider::{
@@ -198,6 +199,7 @@ async fn start_test_gateway_with_provider(
 
     let state = AppStateBuilder::new(config)
         .with_bridge(bridge.clone())
+        .with_garyx_db(Arc::new(GaryxDbService::memory().expect("memory garyx db")))
         .build();
     bridge.set_event_tx(state.ops.events.sender()).await;
     bridge

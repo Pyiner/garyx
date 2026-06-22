@@ -8,6 +8,7 @@ use std::sync::Arc;
 use tracing::warn;
 
 use crate::garyx_db::{GaryxDbService, RecentThreadDraft};
+use crate::task_projection::task_projection_draft_from_thread_data;
 use crate::thread_meta_projection::thread_meta_projection_from_thread_data_with_active_run;
 use crate::transcript_run_projection::active_run_id_from_transcript_store;
 
@@ -56,6 +57,18 @@ impl RecentThreadProjectingStore {
                 }
             }
         }
+        match task_projection_draft_from_thread_data(thread_id, data) {
+            Some(draft) => {
+                if let Err(error) = self.garyx_db.replace_task_projection(draft) {
+                    warn!(thread_id, error = %error, "failed to upsert task projection");
+                }
+            }
+            None => {
+                if let Err(error) = self.garyx_db.remove_task_projection(thread_id) {
+                    warn!(thread_id, error = %error, "failed to remove task projection");
+                }
+            }
+        }
         if is_hidden_thread_value(data) {
             if let Err(error) = self.garyx_db.remove_recent_thread(thread_id) {
                 warn!(thread_id, error = %error, "failed to remove hidden thread from recent thread projection");
@@ -90,6 +103,9 @@ impl RecentThreadProjectingStore {
         }
         if let Err(error) = self.garyx_db.remove_thread_meta_projection(thread_id) {
             warn!(thread_id, error = %error, "failed to remove archived thread meta projection");
+        }
+        if let Err(error) = self.garyx_db.remove_task_projection(thread_id) {
+            warn!(thread_id, error = %error, "failed to remove archived task projection");
         }
     }
 
@@ -291,6 +307,12 @@ impl ThreadStore for RecentThreadProjectingStore {
             && let Err(error) = self.garyx_db.remove_thread_meta_projection(thread_id)
         {
             warn!(thread_id, error = %error, "failed to remove deleted thread meta projection");
+        }
+        if deleted
+            && is_thread_key(thread_id)
+            && let Err(error) = self.garyx_db.remove_task_projection(thread_id)
+        {
+            warn!(thread_id, error = %error, "failed to remove deleted task projection");
         }
         deleted
     }
