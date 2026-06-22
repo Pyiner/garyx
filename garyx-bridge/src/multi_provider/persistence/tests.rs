@@ -762,6 +762,7 @@ async fn test_control_records_stream_and_terminal_commit_to_transcript() {
             success: Some(true),
             error: None,
             thread_title: Some("Control Fixture".to_owned()),
+            rate_limit: None,
         }),
     )
     .await;

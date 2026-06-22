@@ -1414,6 +1414,14 @@ export interface RenderFilteredPlaceholder {
   reason: RenderPlaceholderFilterReason;
 }
 
+export interface RenderRateLimit {
+  provider?: string | null;
+  resetAt?: string | null;
+  window?: string | null;
+  message?: string | null;
+  willAutoResend: boolean;
+}
+
 export interface RenderState {
   based_on_seq: number;
   rows: RenderRow[];
@@ -1422,6 +1430,7 @@ export interface RenderState {
   progress_locus: RenderProgressLocus;
   visibleMessageIds: string[];
   filtered_placeholders: RenderFilteredPlaceholder[];
+  rateLimit?: RenderRateLimit | null;
 }
 
 export interface CommittedMessageEvent {

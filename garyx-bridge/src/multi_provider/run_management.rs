@@ -1856,6 +1856,15 @@ impl MultiProviderBridge {
                             res.thread_title.as_deref(),
                         )
                         .await;
+                        // Codex surfaces a usage-quota exhaustion as a soft
+                        // failure (`Ok` result with `success == false`), so the
+                        // rate-limit context is consumed here rather than on the
+                        // hard-error path below.
+                        let rate_limit = if res.success {
+                            None
+                        } else {
+                            provider.take_rate_limit(&thread_id_owned).await
+                        };
                         let terminal_committed = save_thread_messages_with_terminal_control(
                             store,
                             history,
@@ -1877,6 +1886,7 @@ impl MultiProviderBridge {
                                 success: Some(res.success),
                                 error: res.error.clone(),
                                 thread_title: applied_thread_title.clone(),
+                                rate_limit,
                             }),
                         )
                         .await;
@@ -2001,6 +2011,7 @@ impl MultiProviderBridge {
                     ) {
                         let user_images =
                             graph_state.run_options.images.clone().unwrap_or_default();
+                        let rate_limit = provider.take_rate_limit(&thread_id_owned).await;
                         let terminal_committed = save_failed_thread_messages_with_terminal_control(
                             store,
                             history,
@@ -2022,6 +2033,7 @@ impl MultiProviderBridge {
                                 success: Some(false),
                                 error: Some(e.to_string()),
                                 thread_title: None,
+                                rate_limit,
                             }),
                         )
                         .await;
@@ -2475,6 +2487,11 @@ impl MultiProviderBridge {
                         res.thread_title.as_deref(),
                     )
                     .await;
+                    let rate_limit = if res.success {
+                        None
+                    } else {
+                        provider.take_rate_limit(thread_id).await
+                    };
                     let terminal_committed = save_thread_messages_with_terminal_control(
                         store,
                         history,
@@ -2496,6 +2513,7 @@ impl MultiProviderBridge {
                             success: Some(res.success),
                             error: res.error.clone(),
                             thread_title: applied_thread_title.clone(),
+                            rate_limit,
                         }),
                     )
                     .await;
@@ -2538,6 +2556,7 @@ impl MultiProviderBridge {
                         .as_ref()
                         .map(|value| value.transcript_controls.as_slice())
                         .unwrap_or(&[]);
+                    let rate_limit = provider.take_rate_limit(thread_id).await;
                     let terminal_committed = save_failed_thread_messages_with_terminal_control(
                         store,
                         history,
@@ -2559,6 +2578,7 @@ impl MultiProviderBridge {
                             success: Some(false),
                             error: Some(error.to_string()),
                             thread_title: None,
+                            rate_limit,
                         }),
                     )
                     .await;

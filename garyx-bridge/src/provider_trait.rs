@@ -82,6 +82,19 @@ pub trait AgentLoopProvider: Send + Sync {
         false
     }
 
+    /// Consume any provider quota / rate-limit context staged for `thread_id`
+    /// when its most recent run terminated because the provider's rolling usage
+    /// quota was exhausted. Returns `None` for providers without quota tracking,
+    /// or when the last run did not hit a quota limit. The value is consumed
+    /// (taken) so it is reported against exactly one terminal run.
+    async fn take_rate_limit(
+        &self,
+        thread_id: &str,
+    ) -> Option<garyx_models::provider::ProviderRateLimit> {
+        let _ = thread_id;
+        None
+    }
+
     /// Whether this provider can accept additional user input while an
     /// existing streaming run is still active.
     fn supports_streaming_input(&self) -> bool {

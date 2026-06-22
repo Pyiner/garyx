@@ -1117,6 +1117,35 @@ pub struct ProviderRunOptions {
     pub metadata: HashMap<String, Value>,
 }
 
+/// Provider usage-quota / rate-limit context captured when a run terminates
+/// because the provider's rolling quota was exhausted (e.g. Codex's 5-hour or
+/// weekly ChatGPT-plan window). Sourced from the provider's own structured
+/// signal — for Codex, the `account/rateLimits/updated` snapshot plus the
+/// `usageLimitExceeded` error — so detection does not rely on error-text
+/// matching. The gateway turns this into a `run_complete` control record and an
+/// automatic resend scheduled at `reset_at`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct ProviderRateLimit {
+    /// Provider identity, e.g. `codex`.
+    pub provider: String,
+    /// ISO 8601 timestamp when the exhausted window resets, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset_at: Option<String>,
+    /// Which rolling window was exhausted: `primary` (5-hour session) or
+    /// `secondary` (weekly allowance).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<String>,
+    /// Percent of the exhausted window consumed (0-100), when reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub used_percent: Option<i64>,
+    /// Provider-reported reason classifier, e.g. `usage_limit_reached`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reached_type: Option<String>,
+    /// Human-readable detail reported by the provider, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
 /// Result of a provider-level agent run.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ProviderRunResult {

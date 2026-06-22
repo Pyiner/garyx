@@ -22,6 +22,7 @@ import type {
   DesktopWorkspace,
   DesktopWorkspaceMode,
   PendingThreadInput,
+  RenderRateLimit,
   RenderState,
   SlashCommand,
   TranscriptMessage,
@@ -34,6 +35,7 @@ import {
   type ComposerWorkflowOption,
 } from "../../ComposerForm";
 import { ComposerQueue } from "../../ComposerQueue";
+import { RateLimitBanner } from "./RateLimitBanner";
 import { NewThreadEmptyState } from "../../NewThreadEmptyState";
 import {
   RichMessageContent,
@@ -308,6 +310,7 @@ type ThreadPageProps = {
   showDreams: boolean;
   showHistoryLoadingPlaceholder: boolean;
   showTailThinking: boolean;
+  rateLimit?: RenderRateLimit | null;
   threadLayoutRef: RefObject<HTMLDivElement | null>;
   threadLayoutStyle?: CSSProperties;
   threadLogsActiveTab: ThreadLogTab;
@@ -491,6 +494,7 @@ export function ThreadPage({
   showDreams,
   showHistoryLoadingPlaceholder,
   showTailThinking,
+  rateLimit,
   threadLayoutRef,
   threadLayoutStyle,
   threadLogsActiveTab,
@@ -955,6 +959,8 @@ export function ThreadPage({
               </div>
             </article>
           ) : null}
+
+          <RateLimitBanner rateLimit={rateLimit} />
           </div>
         ) : null}
 

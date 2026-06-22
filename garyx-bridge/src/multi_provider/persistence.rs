@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use garyx_models::provider::{
-    ImagePayload, ProviderMessage, ProviderMessageRole, ProviderType, StreamEvent,
-    attachments_from_metadata, build_user_content_from_parts,
+    ImagePayload, ProviderMessage, ProviderMessageRole, ProviderRateLimit, ProviderType,
+    StreamEvent, attachments_from_metadata, build_user_content_from_parts,
 };
 use garyx_router::{
     DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, RECENT_COMMITTED_RUN_IDS_LIMIT,
@@ -557,6 +557,11 @@ pub(super) struct TerminalRunControl {
     pub success: Option<bool>,
     pub error: Option<String>,
     pub thread_title: Option<String>,
+    /// Present when the run failed because the provider's rolling usage quota
+    /// was exhausted. Promotes the terminal `run_complete` status to
+    /// `rate_limited` and embeds the reset context for the render layer and the
+    /// gateway auto-resend reactor.
+    pub rate_limit: Option<ProviderRateLimit>,
 }
 
 enum SdkSessionUpdate<'a> {
@@ -1032,6 +1037,44 @@ pub(super) async fn save_thread_messages(
     save_thread_messages_with_terminal_control(store, history, run, &[], None).await
 }
 
+/// Serialize a `ProviderRateLimit` into the `rate_limit` control payload shape
+/// consumed by the transcript run-state reducer. `will_auto_resend` is true
+/// whenever a concrete reset time is known: the gateway resends both the
+/// 5-hour and weekly windows the moment they recover.
+fn rate_limit_control_value(rate_limit: &ProviderRateLimit) -> Value {
+    let mut object = serde_json::Map::new();
+    object.insert(
+        "provider".to_owned(),
+        Value::String(rate_limit.provider.clone()),
+    );
+    if let Some(reset_at) = &rate_limit.reset_at {
+        object.insert("reset_at".to_owned(), Value::String(reset_at.clone()));
+    }
+    if let Some(window) = &rate_limit.window {
+        object.insert("window".to_owned(), Value::String(window.clone()));
+    }
+    if let Some(used_percent) = rate_limit.used_percent {
+        object.insert(
+            "used_percent".to_owned(),
+            Value::Number(used_percent.into()),
+        );
+    }
+    if let Some(reached_type) = &rate_limit.reached_type {
+        object.insert(
+            "reached_type".to_owned(),
+            Value::String(reached_type.clone()),
+        );
+    }
+    if let Some(message) = &rate_limit.message {
+        object.insert("message".to_owned(), Value::String(message.clone()));
+    }
+    object.insert(
+        "will_auto_resend".to_owned(),
+        Value::Bool(rate_limit.reset_at.is_some()),
+    );
+    Value::Object(object)
+}
+
 pub(super) async fn save_thread_messages_with_terminal_control(
     store: &Arc<dyn ThreadStore>,
     history: &Arc<ThreadHistoryRepository>,
@@ -1142,10 +1185,14 @@ async fn save_thread_messages_with_session_update(
                 Value::Number(serde_json::Number::from(duration_ms)),
             );
         }
-        let status = match terminal_control.success {
-            Some(true) => "completed",
-            Some(false) => "failed",
-            None => "completed",
+        let status = match (terminal_control.success, &terminal_control.rate_limit) {
+            // A quota-exhaustion failure is surfaced as its own terminal status
+            // so the render reducer can show a countdown banner and the gateway
+            // can schedule an automatic resend, rather than a generic failure.
+            (Some(false), Some(_)) => "rate_limited",
+            (Some(true), _) => "completed",
+            (Some(false), None) => "failed",
+            (None, _) => "completed",
         };
         payload.insert("status".to_owned(), Value::String(status.to_owned()));
         if let Some(error) = terminal_control
@@ -1155,6 +1202,12 @@ async fn save_thread_messages_with_session_update(
             .filter(|value| !value.is_empty())
         {
             payload.insert("error".to_owned(), Value::String(error.to_owned()));
+        }
+        if let Some(rate_limit) = &terminal_control.rate_limit {
+            payload.insert(
+                "rate_limit".to_owned(),
+                rate_limit_control_value(rate_limit),
+            );
         }
         transcript_controls.push(RunControlRecord::new(
             "run_complete",

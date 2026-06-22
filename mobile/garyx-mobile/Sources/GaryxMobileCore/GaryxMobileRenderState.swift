@@ -58,6 +58,7 @@ public struct GaryxRenderSnapshot: Codable, Equatable, Sendable {
     public var progressLocus: GaryxRenderProgressLocus
     public var visibleMessageIds: [String]
     public var filteredPlaceholders: [GaryxRenderFilteredPlaceholder]
+    public var rateLimit: GaryxRenderRateLimit?
 
     public init(
         basedOnSeq: Int,
@@ -66,7 +67,8 @@ public struct GaryxRenderSnapshot: Codable, Equatable, Sendable {
         activeToolGroupId: String? = nil,
         progressLocus: GaryxRenderProgressLocus = .none,
         visibleMessageIds: [String] = [],
-        filteredPlaceholders: [GaryxRenderFilteredPlaceholder] = []
+        filteredPlaceholders: [GaryxRenderFilteredPlaceholder] = [],
+        rateLimit: GaryxRenderRateLimit? = nil
     ) {
         self.basedOnSeq = basedOnSeq
         self.rows = rows
@@ -75,6 +77,7 @@ public struct GaryxRenderSnapshot: Codable, Equatable, Sendable {
         self.progressLocus = progressLocus
         self.visibleMessageIds = visibleMessageIds
         self.filteredPlaceholders = filteredPlaceholders
+        self.rateLimit = rateLimit
     }
 
     enum CodingKeys: String, CodingKey {
@@ -85,6 +88,51 @@ public struct GaryxRenderSnapshot: Codable, Equatable, Sendable {
         case progressLocus = "progress_locus"
         case visibleMessageIds
         case filteredPlaceholders = "filtered_placeholders"
+        case rateLimit
+    }
+}
+
+/// Provider quota / rate-limit context surfaced on the render snapshot when the
+/// thread's most recent run terminated because the provider's rolling usage
+/// quota was exhausted. The chat view renders a banner with a live countdown to
+/// `resetAt`; `willAutoResend` indicates the gateway scheduled an automatic
+/// resend of the original message when the window recovers.
+public struct GaryxRenderRateLimit: Codable, Equatable, Sendable {
+    public var provider: String?
+    public var resetAt: String?
+    public var window: String?
+    public var message: String?
+    public var willAutoResend: Bool
+
+    public init(
+        provider: String? = nil,
+        resetAt: String? = nil,
+        window: String? = nil,
+        message: String? = nil,
+        willAutoResend: Bool = false
+    ) {
+        self.provider = provider
+        self.resetAt = resetAt
+        self.window = window
+        self.message = message
+        self.willAutoResend = willAutoResend
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case provider
+        case resetAt
+        case window
+        case message
+        case willAutoResend
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        provider = try container.decodeIfPresent(String.self, forKey: .provider)
+        resetAt = try container.decodeIfPresent(String.self, forKey: .resetAt)
+        window = try container.decodeIfPresent(String.self, forKey: .window)
+        message = try container.decodeIfPresent(String.self, forKey: .message)
+        willAutoResend = try container.decodeIfPresent(Bool.self, forKey: .willAutoResend) ?? false
     }
 }
 
@@ -793,5 +841,108 @@ private extension String {
     var garyxRenderTrimmedNilIfEmpty: String? {
         let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+// MARK: - Rate-limit banner presentation
+
+/// Presentation model for the thread-tail quota / rate-limit banner. Pure
+/// formatting derived from `GaryxRenderSnapshot.rateLimit` plus a reference
+/// `now`, so the SwiftUI layer stays a dumb renderer and the countdown logic is
+/// unit-testable. Mirrors the desktop `RateLimitBanner` wording.
+///
+/// Defined here (rather than its own file) so it is picked up by both the
+/// SwiftPM target and the Xcode app target, which references Core sources by
+/// explicit file membership.
+public struct GaryxRateLimitBannerModel: Equatable, Sendable {
+    public let title: String
+    public let detail: String
+    /// True when the quota window has recovered and a resend is imminent — the
+    /// view can show an active/in-progress treatment.
+    public let isResending: Bool
+
+    public init(title: String, detail: String, isResending: Bool) {
+        self.title = title
+        self.detail = detail
+        self.isResending = isResending
+    }
+
+    /// Build banner content for a rate-limit context relative to `now`. Returns
+    /// `nil` when there is no rate-limit to display.
+    public static func make(
+        from rateLimit: GaryxRenderRateLimit?,
+        now: Date = Date()
+    ) -> GaryxRateLimitBannerModel? {
+        guard let rateLimit else { return nil }
+
+        let provider = providerLabel(rateLimit.provider)
+        let windowText = windowLabel(rateLimit.window)
+        let title = windowText.map { "\(provider) \($0) reached" }
+            ?? "\(provider) usage limit reached"
+
+        let resetDate = rateLimit.resetAt.flatMap(parseTimestamp)
+        let remaining = resetDate.map { $0.timeIntervalSince(now) }
+        let recovered = resetDate != nil && (remaining ?? -1) <= 0
+
+        var detail: String
+        var isResending = false
+        if rateLimit.willAutoResend {
+            if let remaining, !recovered {
+                detail = "Auto-resend in \(formatRemaining(remaining))"
+            } else if resetDate != nil {
+                detail = "Quota recovered — resending…"
+                isResending = true
+            } else {
+                detail = "Will auto-resend when the quota recovers."
+            }
+        } else if let remaining, !recovered {
+            detail = "Resets in \(formatRemaining(remaining))"
+        } else {
+            detail = "Try again shortly."
+        }
+
+        return GaryxRateLimitBannerModel(
+            title: title,
+            detail: detail,
+            isResending: isResending
+        )
+    }
+
+    static func providerLabel(_ provider: String?) -> String {
+        let slug = (provider ?? "").trimmingCharacters(in: .whitespaces).lowercased()
+        if slug.hasPrefix("codex") { return "Codex" }
+        if slug.hasPrefix("trae") { return "TRAE" }
+        let trimmed = provider?.trimmingCharacters(in: .whitespaces) ?? ""
+        return trimmed.isEmpty ? "Provider" : trimmed
+    }
+
+    static func windowLabel(_ window: String?) -> String? {
+        switch window {
+        case "primary": return "5-hour limit"
+        case "secondary": return "weekly limit"
+        default: return nil
+        }
+    }
+
+    static func formatRemaining(_ seconds: TimeInterval) -> String {
+        let total = max(0, Int(seconds.rounded(.down)))
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        let secs = total % 60
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, secs)
+        }
+        return String(format: "%02d:%02d", minutes, secs)
+    }
+
+    static func parseTimestamp(_ value: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: value) {
+            return date
+        }
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        return plain.date(from: value)
     }
 }

@@ -2865,6 +2865,7 @@ export function AppShell() {
   // window); the tool shimmer keys off `activeToolGroupId`. assistant_streaming
   // / tool_active are carried by the rows themselves, not a separate bubble.
   const activeToolGroupId = activeRenderState?.activeToolGroupId ?? null;
+  const activeRateLimit = activeRenderState?.rateLimit ?? null;
   const showTailThinking = Boolean(
     activeRenderState?.tailActivity === "thinking" || showPendingAckLoading,
   );
@@ -9822,6 +9823,7 @@ export function AppShell() {
         showDreams={showDreamsFeature}
         showHistoryLoadingPlaceholder={showHistoryLoadingPlaceholder}
         showTailThinking={showTailThinking}
+        rateLimit={activeRateLimit}
         threadLayoutRef={threadLayoutRef}
         threadLayoutStyle={
           !embedded && threadLogsOpen

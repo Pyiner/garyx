@@ -23,6 +23,25 @@ pub struct RenderSnapshot {
     #[serde(rename = "visibleMessageIds")]
     pub visible_message_ids: Vec<String>,
     pub filtered_placeholders: Vec<RenderFilteredPlaceholder>,
+    /// Present when the active run terminated because the provider's rolling
+    /// usage quota was exhausted. Clients render a banner + live countdown to
+    /// `reset_at` and surface whether an automatic resend is scheduled.
+    #[serde(rename = "rateLimit", default, skip_serializing_if = "Option::is_none")]
+    pub rate_limit: Option<RenderRateLimit>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderRateLimit {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(rename = "resetAt", default, skip_serializing_if = "Option::is_none")]
+    pub reset_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(rename = "willAutoResend", default)]
+    pub will_auto_resend: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -236,6 +255,16 @@ pub fn reduce_transcript_render_state_with_run_state<'a>(
     let rows = build_rows(&blocks, run_state);
     let (tail_activity, active_tool_group_id, progress_locus) =
         derive_tail_activity(blocks.last(), run_state);
+    let rate_limit = run_state
+        .rate_limit
+        .as_ref()
+        .map(|limit| RenderRateLimit {
+            provider: limit.provider.clone(),
+            reset_at: limit.reset_at.clone(),
+            window: limit.window.clone(),
+            message: limit.message.clone(),
+            will_auto_resend: limit.will_auto_resend,
+        });
 
     RenderSnapshot {
         based_on_seq,
@@ -245,6 +274,7 @@ pub fn reduce_transcript_render_state_with_run_state<'a>(
         progress_locus,
         visible_message_ids,
         filtered_placeholders,
+        rate_limit,
     }
 }
 
@@ -1296,6 +1326,76 @@ mod tests {
         ];
 
         assert_eq!(final_assistant_text_from_render_records(&records), None);
+    }
+
+    #[test]
+    fn rate_limited_run_complete_surfaces_render_rate_limit() {
+        let records = vec![
+            control_record(1, "run_start"),
+            message_record(2, json!({"role": "user", "content": "hi"})),
+            message_record(
+                3,
+                json!({
+                    "role": "system",
+                    "kind": "control",
+                    "internal": true,
+                    "internal_kind": "control",
+                    "control": {
+                        "kind": "run_complete",
+                        "thread_id": "thread::render-final",
+                        "run_id": "run::render-final",
+                        "at": "2026-01-01T00:00:00Z",
+                        "status": "rate_limited",
+                        "error": "usageLimitExceeded",
+                        "rate_limit": {
+                            "provider": "codex",
+                            "reset_at": "2026-01-01T05:00:00Z",
+                            "window": "primary",
+                            "will_auto_resend": true,
+                            "message": "You've hit your usage limit."
+                        }
+                    }
+                }),
+            ),
+        ];
+
+        let snapshot = reduce_transcript_render_state(&records);
+        let rate_limit = snapshot.rate_limit.expect("rate limit surfaced");
+        assert_eq!(rate_limit.provider.as_deref(), Some("codex"));
+        assert_eq!(rate_limit.reset_at.as_deref(), Some("2026-01-01T05:00:00Z"));
+        assert_eq!(rate_limit.window.as_deref(), Some("primary"));
+        assert!(rate_limit.will_auto_resend);
+        assert_eq!(
+            rate_limit.message.as_deref(),
+            Some("You've hit your usage limit.")
+        );
+    }
+
+    #[test]
+    fn fresh_run_start_clears_prior_render_rate_limit() {
+        let rate_limited = json!({
+            "role": "system",
+            "kind": "control",
+            "internal": true,
+            "internal_kind": "control",
+            "control": {
+                "kind": "run_complete",
+                "thread_id": "thread::render-final",
+                "run_id": "run::render-final",
+                "at": "2026-01-01T00:00:00Z",
+                "status": "rate_limited",
+                "rate_limit": { "provider": "codex", "reset_at": "2026-01-01T05:00:00Z", "will_auto_resend": true }
+            }
+        });
+        let records = vec![
+            control_record(1, "run_start"),
+            message_record(2, json!({"role": "user", "content": "hi"})),
+            message_record(3, rate_limited),
+            control_record(4, "run_start"),
+        ];
+
+        let snapshot = reduce_transcript_render_state(&records);
+        assert!(snapshot.rate_limit.is_none());
     }
 
     fn load_render_fixture() -> RenderFixture {

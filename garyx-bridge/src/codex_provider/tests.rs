@@ -12,6 +12,104 @@ fn test_matches_turn_exact() {
 }
 
 #[test]
+fn codex_error_usage_limit_detects_string_and_object_forms() {
+    assert!(codex_error_is_usage_limit(Some(&json!("usageLimitExceeded"))));
+    assert!(codex_error_is_usage_limit(Some(
+        &json!({ "usageLimitExceeded": {} })
+    )));
+    assert!(!codex_error_is_usage_limit(Some(&json!("serverOverloaded"))));
+    assert!(!codex_error_is_usage_limit(None));
+}
+
+#[test]
+fn build_codex_rate_limit_uses_snapshot_reset_for_primary_window() {
+    let snapshot = json!({
+        "planType": "pro",
+        "rateLimitReachedType": "rate_limit_reached",
+        "primary": { "usedPercent": 100, "resetsAt": 1_893_477_600_i64, "windowDurationMins": 300 },
+        "secondary": { "usedPercent": 42, "resetsAt": 1_893_900_000_i64, "windowDurationMins": 10080 }
+    });
+    let rate_limit = build_codex_rate_limit(
+        "codex_app_server",
+        true,
+        Some(&snapshot),
+        Some("You've hit your usage limit."),
+    )
+    .expect("rate limit built");
+    assert_eq!(rate_limit.provider, "codex_app_server");
+    assert_eq!(rate_limit.window.as_deref(), Some("primary"));
+    assert_eq!(rate_limit.used_percent, Some(100));
+    assert_eq!(
+        rate_limit.reset_at.as_deref(),
+        Some("2030-01-01T06:00:00+00:00")
+    );
+    assert_eq!(rate_limit.reached_type.as_deref(), Some("rate_limit_reached"));
+}
+
+#[test]
+fn build_codex_rate_limit_picks_weekly_window_when_it_is_the_exhausted_one() {
+    let snapshot = json!({
+        "primary": { "usedPercent": 80, "resetsAt": 1_893_477_600_i64 },
+        "secondary": { "usedPercent": 100, "resetsAt": 1_893_900_000_i64 }
+    });
+    let rate_limit =
+        build_codex_rate_limit("codex_app_server", true, Some(&snapshot), None).expect("built");
+    assert_eq!(rate_limit.window.as_deref(), Some("secondary"));
+    assert_eq!(
+        rate_limit.reset_at.as_deref(),
+        Some("2030-01-06T03:20:00+00:00")
+    );
+}
+
+#[test]
+fn build_codex_rate_limit_returns_none_without_quota_signal() {
+    let snapshot = json!({
+        "primary": { "usedPercent": 30, "resetsAt": 1_893_477_600_i64 },
+        "secondary": { "usedPercent": 10 }
+    });
+    assert!(build_codex_rate_limit("codex_app_server", false, Some(&snapshot), None).is_none());
+    assert!(build_codex_rate_limit("codex_app_server", false, None, None).is_none());
+}
+
+#[test]
+fn build_codex_rate_limit_ignores_bare_saturation_without_explicit_signal() {
+    // A window at 100% but no `usageLimitExceeded` error and no
+    // `rateLimitReachedType` must NOT be classified as a quota failure — the run
+    // failed for an unrelated reason while usage happened to be saturated.
+    let snapshot = json!({
+        "primary": { "usedPercent": 100, "resetsAt": 1_893_477_600_i64 },
+        "secondary": { "usedPercent": 40 }
+    });
+    assert!(build_codex_rate_limit("codex_app_server", false, Some(&snapshot), None).is_none());
+
+    // The same saturated snapshot WITH the explicit error is a real quota hit.
+    let rate_limit =
+        build_codex_rate_limit("codex_app_server", true, Some(&snapshot), None).expect("built");
+    assert_eq!(rate_limit.window.as_deref(), Some("primary"));
+
+    // A `rateLimitReachedType` alone (no per-turn error) also qualifies.
+    let reached = json!({
+        "rateLimitReachedType": "rate_limit_reached",
+        "primary": { "usedPercent": 100, "resetsAt": 1_893_477_600_i64 }
+    });
+    assert!(build_codex_rate_limit("codex_app_server", false, Some(&reached), None).is_some());
+}
+
+#[test]
+fn extract_rate_limit_snapshot_accepts_wrapped_and_flattened_shapes() {
+    let wrapped = json!({ "rateLimits": { "primary": { "usedPercent": 50 } } });
+    assert_eq!(
+        extract_rate_limit_snapshot(&wrapped),
+        Some(json!({ "primary": { "usedPercent": 50 } }))
+    );
+
+    let flattened = json!({ "primary": { "usedPercent": 50 }, "secondary": { "usedPercent": 10 } });
+    assert_eq!(extract_rate_limit_snapshot(&flattened), Some(flattened.clone()));
+
+    assert_eq!(extract_rate_limit_snapshot(&json!({ "unrelated": 1 })), None);
+}
+
+#[test]
 fn test_matches_turn_wrong_thread() {
     let params = json!({"threadId": "t2", "turnId": "u1"});
     assert!(!matches_turn(&params, "t1", "u1"));

@@ -19,7 +19,7 @@ use codex_sdk::{
 };
 use garyx_models::provider::{
     CodexAppServerConfig, ImagePayload, PromptAttachment, ProviderMessage, ProviderMessageRole,
-    ProviderRunOptions, ProviderRunResult, ProviderType, QueuedUserInput,
+    ProviderRateLimit, ProviderRunOptions, ProviderRunResult, ProviderType, QueuedUserInput,
     SDK_SESSION_FORK_METADATA_KEY, SDK_SESSION_ID_METADATA_KEY, StreamBoundaryKind, StreamEvent,
     attachments_from_metadata, build_prompt_message_with_attachments,
 };
@@ -106,6 +106,147 @@ fn matches_turn(params: &Value, thread_id: &str, turn_id: &str) -> bool {
         return false;
     }
     true
+}
+
+/// Whether Codex's `error.codexErrorInfo` classifier is a usage-limit
+/// exhaustion. `CodexErrorInfo` is a oneOf: the relevant case is the bare
+/// string `"usageLimitExceeded"`; tolerate an object-wrapped form too.
+fn codex_error_is_usage_limit(value: Option<&Value>) -> bool {
+    match value {
+        Some(Value::String(code)) => code == "usageLimitExceeded",
+        Some(Value::Object(map)) => map.contains_key("usageLimitExceeded"),
+        _ => false,
+    }
+}
+
+/// Extract the `RateLimitSnapshot` from an `account/rateLimits/updated`
+/// notification. Per the app-server schema the snapshot lives under
+/// `rateLimits`; tolerate a flattened shape (params *is* the snapshot) so a
+/// future wire change does not silently disable quota detection.
+fn extract_rate_limit_snapshot(params: &Value) -> Option<Value> {
+    if let Some(snapshot) = params.get("rateLimits") {
+        return Some(snapshot.clone());
+    }
+    if params.get("primary").is_some() || params.get("secondary").is_some() {
+        return Some(params.clone());
+    }
+    None
+}
+
+/// One rolling rate-limit window from a Codex `RateLimitSnapshot`.
+#[derive(Debug, Clone, Copy)]
+struct CodexRateWindow {
+    used_percent: i64,
+    /// Unix seconds at which the window resets, when reported by Codex.
+    resets_at: Option<i64>,
+}
+
+fn codex_rate_window(value: &Value) -> Option<CodexRateWindow> {
+    let object = value.as_object()?;
+    Some(CodexRateWindow {
+        used_percent: object
+            .get("usedPercent")
+            .and_then(Value::as_i64)
+            .unwrap_or(0),
+        resets_at: object.get("resetsAt").and_then(Value::as_i64),
+    })
+}
+
+fn window_reset_key(window: &CodexRateWindow) -> i64 {
+    window.resets_at.unwrap_or(i64::MIN)
+}
+
+/// Pick the binding rolling window: a saturated window blocks; when both are
+/// saturated the one that resets latest is the real constraint; otherwise the
+/// most-consumed window.
+fn choose_blocking_window(
+    primary: Option<CodexRateWindow>,
+    secondary: Option<CodexRateWindow>,
+) -> Option<(&'static str, CodexRateWindow)> {
+    match (primary, secondary) {
+        (Some(p), Some(s)) => {
+            let p_saturated = p.used_percent >= 100;
+            let s_saturated = s.used_percent >= 100;
+            let pick = if p_saturated && s_saturated {
+                if window_reset_key(&s) > window_reset_key(&p) {
+                    ("secondary", s)
+                } else {
+                    ("primary", p)
+                }
+            } else if s_saturated {
+                ("secondary", s)
+            } else if p_saturated {
+                ("primary", p)
+            } else if s.used_percent > p.used_percent {
+                ("secondary", s)
+            } else {
+                ("primary", p)
+            };
+            Some(pick)
+        }
+        (Some(p), None) => Some(("primary", p)),
+        (None, Some(s)) => Some(("secondary", s)),
+        (None, None) => None,
+    }
+}
+
+fn unix_to_rfc3339(secs: i64) -> Option<String> {
+    chrono::DateTime::<chrono::Utc>::from_timestamp(secs, 0).map(|dt| dt.to_rfc3339())
+}
+
+/// Build a `ProviderRateLimit` from Codex's structured quota signal. Returns
+/// `None` unless Codex actually reported a usage-limit error, a
+/// `rateLimitReachedType`, or a saturated window — so it is safe to call on
+/// every failed run.
+fn build_codex_rate_limit(
+    provider_slug: &str,
+    usage_limit_hit: bool,
+    snapshot: Option<&Value>,
+    message: Option<&str>,
+) -> Option<ProviderRateLimit> {
+    let snapshot_obj = snapshot.and_then(Value::as_object);
+    let reached_type = snapshot_obj
+        .and_then(|object| object.get("rateLimitReachedType"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let primary = snapshot_obj
+        .and_then(|object| object.get("primary"))
+        .and_then(codex_rate_window);
+    let secondary = snapshot_obj
+        .and_then(|object| object.get("secondary"))
+        .and_then(codex_rate_window);
+    let blocking = choose_blocking_window(primary, secondary);
+
+    // Classify as rate-limited only on an explicit quota signal: the current
+    // turn's `usageLimitExceeded` error, or a snapshot `rateLimitReachedType`
+    // (the schema only sets that when a limit was actually reached). A merely
+    // saturated window (`usedPercent >= 100`) without either signal is NOT
+    // enough — an account can sit at 100% on one window while a run fails for an
+    // unrelated reason, and misreading that as a quota exhaustion would resend
+    // the user's message spuriously. Saturation is still used to pick which
+    // window's reset time to report, just not to trigger.
+    if !usage_limit_hit && reached_type.is_none() {
+        return None;
+    }
+
+    let (window_label, window) = match blocking {
+        Some((label, window)) => (Some(label.to_owned()), Some(window)),
+        None => (None, None),
+    };
+
+    Some(ProviderRateLimit {
+        provider: provider_slug.to_owned(),
+        reset_at: window
+            .and_then(|window| window.resets_at)
+            .and_then(unix_to_rfc3339),
+        window: window_label,
+        used_percent: window.map(|window| window.used_percent),
+        reached_type,
+        message: message
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
+    })
 }
 
 /// Extract usage (input_tokens, output_tokens, cost) from a completed turn.
@@ -924,6 +1065,10 @@ pub struct CodexAgentProvider {
     active_session_callbacks: Mutex<HashMap<String, ActiveSessionCallback>>,
     /// thread_id -> (run_id, pending userMessage markers waiting for Codex item events)
     active_session_pending_acks: Mutex<HashMap<String, PendingCodexAcks>>,
+    /// thread_id -> rate-limit context captured when the last run terminated
+    /// because the ChatGPT-plan usage quota was exhausted. Consumed once by the
+    /// bridge run-completion path via `take_rate_limit`.
+    pending_rate_limits: Mutex<HashMap<String, ProviderRateLimit>>,
     ready: Mutex<bool>,
 }
 
@@ -1082,6 +1227,7 @@ impl CodexAgentProvider {
             active_session_turns: Mutex::new(HashMap::new()),
             active_session_callbacks: Mutex::new(HashMap::new()),
             active_session_pending_acks: Mutex::new(HashMap::new()),
+            pending_rate_limits: Mutex::new(HashMap::new()),
             ready: Mutex::new(false),
         }
     }
@@ -1196,6 +1342,36 @@ impl CodexAgentProvider {
         let slot = self.clients.lock().await.remove(garyx_thread_id);
         if let Some(slot) = slot {
             slot.shutdown().await;
+        }
+    }
+
+    /// Record quota-exhaustion context for a thread so the bridge run-completion
+    /// path can mark the run rate-limited and schedule an automatic resend.
+    /// No-op unless Codex's signal actually indicates a usage-limit failure.
+    async fn stash_rate_limit_if_quota_exhausted(
+        &self,
+        thread_id: &str,
+        usage_limit_hit: bool,
+        snapshot: Option<&Value>,
+        message: Option<&str>,
+    ) {
+        if let Some(rate_limit) = build_codex_rate_limit(
+            self.config.provider_type.as_slug(),
+            usage_limit_hit,
+            snapshot,
+            message,
+        ) {
+            tracing::warn!(
+                thread_id = %thread_id,
+                provider = %rate_limit.provider,
+                window = ?rate_limit.window,
+                reset_at = ?rate_limit.reset_at,
+                "codex run hit usage quota; staging rate-limit context for auto-resend",
+            );
+            self.pending_rate_limits
+                .lock()
+                .await
+                .insert(thread_id.to_owned(), rate_limit);
         }
     }
 
@@ -1450,6 +1626,15 @@ impl CodexAgentProvider {
                 )
             });
 
+        // Drop any quota stash left by a prior run on this thread so a stale
+        // entry (e.g. a usage-limit error that was followed by a successful
+        // turn, which never consumes the stash) can never be attributed to this
+        // run's terminal record.
+        self.pending_rate_limits
+            .lock()
+            .await
+            .remove(&options.thread_id);
+
         let start = Instant::now();
         let actual_model = resolve_codex_actual_model(&self.config, &options.metadata);
         let mut response_parts: Vec<String> = Vec::new();
@@ -1534,6 +1719,12 @@ impl CodexAgentProvider {
         // Notification loop
         let mut completed_turn: Option<Value> = None;
         let mut streamed_error_message: Option<String> = None;
+        // Latest `account/rateLimits/updated` snapshot seen during this run, and
+        // whether Codex reported a `usageLimitExceeded` error. Together these
+        // let us classify a quota-exhaustion failure and read the authoritative
+        // reset time straight from Codex's own structured signal.
+        let mut latest_rate_limit_snapshot: Option<Value> = None;
+        let mut usage_limit_hit = false;
         let mut current_agent_message_item_id: Option<String> = None;
         let mut current_agent_message_has_text = false;
         let mut thread_title: Option<String> = None;
@@ -1561,6 +1752,15 @@ impl CodexAgentProvider {
                         .unwrap_or("codex transport fatal error")
                         .to_owned();
                     return Err(BridgeError::RunFailed(error_msg));
+                }
+
+                // Rolling rate-limit snapshots are account-scoped (no turn id),
+                // so capture them before the turn-affinity gate would drop them.
+                if method == "account/rateLimits/updated" {
+                    if let Some(snapshot) = extract_rate_limit_snapshot(params) {
+                        latest_rate_limit_snapshot = Some(snapshot);
+                    }
+                    continue;
                 }
 
                 if !matches_turn(params, &thread_id, &turn_id) {
@@ -1646,6 +1846,9 @@ impl CodexAgentProvider {
                                     .unwrap_or("codex turn error")
                                     .to_owned(),
                             );
+                            if codex_error_is_usage_limit(err_obj.get("codexErrorInfo")) {
+                                usage_limit_hit = true;
+                            }
                         }
                     }
                     "turn/completed" => {
@@ -1676,6 +1879,13 @@ impl CodexAgentProvider {
         // If the loop errored, return a failure result
         if let Err(e) = loop_result {
             tracing::error!(error = %e, "codex provider run_streaming error");
+            self.stash_rate_limit_if_quota_exhausted(
+                &options.thread_id,
+                usage_limit_hit,
+                latest_rate_limit_snapshot.as_ref(),
+                streamed_error_message.as_deref(),
+            )
+            .await;
             return Ok(ProviderRunResult {
                 run_id,
                 thread_id: options.thread_id.clone(),
@@ -1726,6 +1936,13 @@ impl CodexAgentProvider {
                 error = %error.as_deref().unwrap_or("unknown codex turn failure"),
                 "codex turn completed with failure",
             );
+            self.stash_rate_limit_if_quota_exhausted(
+                &options.thread_id,
+                usage_limit_hit,
+                latest_rate_limit_snapshot.as_ref(),
+                error.as_deref(),
+            )
+            .await;
         }
 
         let (input_tokens, output_tokens, cost) = extract_usage(&completed);
@@ -1825,6 +2042,10 @@ impl AgentLoopProvider for CodexAgentProvider {
         }
 
         result
+    }
+
+    async fn take_rate_limit(&self, thread_id: &str) -> Option<ProviderRateLimit> {
+        self.pending_rate_limits.lock().await.remove(thread_id)
     }
 
     async fn abort(&self, run_id: &str) -> bool {
