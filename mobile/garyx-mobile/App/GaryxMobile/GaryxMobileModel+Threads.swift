@@ -77,6 +77,8 @@ extension GaryxMobileModel {
     func removeArchivedThreadLocally(_ threadId: String) {
         let normalizedId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedId.isEmpty else { return }
+        let transactionId = homeProjectionGateway.beginTransaction(label: "archive-local-remove")
+        defer { homeProjectionGateway.endTransaction(transactionId) }
         pinnedThreadIds.removeAll { $0 == normalizedId }
         recentThreadIds.removeAll { $0 == normalizedId }
         threads.removeAll { $0.id == normalizedId }
@@ -186,6 +188,8 @@ extension GaryxMobileModel {
 
     func refreshThreads(silent: Bool = false) async {
         guard hasGatewaySettings else { return }
+        let transactionId = homeProjectionGateway.beginTransaction(label: "refreshThreads")
+        defer { homeProjectionGateway.endTransaction(transactionId) }
         let runtimeGeneration = gatewayRuntimeGeneration
         let previousThreadSummaries = Self.mergedThreadSummaries(threads + [selectedThread].compactMap { $0 })
         let previouslyRemoteBusyThreadIds = remoteBusyThreadIds

@@ -339,6 +339,7 @@ final class GaryxMobileModel: ObservableObject {
     let rootNavigationPathStore = GaryxRootNavigationPathStore()
     let routeNotFoundStore = GaryxRouteNotFoundStore()
     let homeThreadListStore = GaryxHomeThreadListStore()
+    let homeProjectionGateway = HomeProjectionGateway()
     let shellChromeStore = GaryxShellChromeStore()
     let navigationDrawerStore = GaryxNavigationDrawerStore()
     let recentThreadsWidgetPersistenceQueue = GaryxRecentThreadsWidgetPersistenceQueue()

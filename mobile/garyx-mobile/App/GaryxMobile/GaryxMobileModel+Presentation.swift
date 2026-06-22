@@ -56,8 +56,21 @@ extension GaryxMobileModel {
         #if DEBUG
         GaryxHomeScrollPerformanceProbe.shared.markHomeListStoreApply()
         #endif
-        homeThreadListStore.apply(homeThreadListInput)
+        let input = homeThreadListInput
+        homeThreadListStore.apply(input)
+        captureHomeProjectionShadow(input: input)
         syncBackgroundCommittedRunReconcileLoopForHomeVisibility()
+    }
+
+    func captureHomeProjectionShadow(input: GaryxHomeThreadListInput) {
+        homeProjectionGateway.capture(
+            HomeProjectionCapture(
+                legacyInput: input,
+                runTrackerBusyThreadIds: runTracker.busyThreadIds,
+                committedRunStateBusyByThreadId: runStateByThread.mapValues { $0.busy }
+            ),
+            liveLegacySnapshot: homeThreadListStore.snapshot
+        )
     }
 
     var homeThreadListInput: GaryxHomeThreadListInput {
