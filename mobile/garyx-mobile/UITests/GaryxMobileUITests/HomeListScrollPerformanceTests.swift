@@ -14,8 +14,16 @@ final class HomeListScrollPerformanceTests: XCTestCase {
 
         XCTAssertTrue(app.staticTexts["Garyx"].waitForExistence(timeout: 10))
 
-        XCTAssertTrue(app.scrollViews.firstMatch.waitForExistence(timeout: 10))
-        let scrollView = try XCTUnwrap(visibleHomeScrollView(in: app))
+        // The native List surfaces as a collectionView, so poll for the home
+        // list container rather than `app.scrollViews` (which matched the old
+        // ScrollView+LazyVStack but not a List).
+        let deadline = Date().addingTimeInterval(10)
+        var homeList = visibleHomeScrollView(in: app)
+        while homeList == nil, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.25)
+            homeList = visibleHomeScrollView(in: app)
+        }
+        let scrollView = try XCTUnwrap(homeList)
 
         let runningRows = app.descendants(matching: .any).matching(identifier: "Running")
         print("PROFILE visible_running_accessibility_nodes=\(runningRows.count)")
@@ -53,7 +61,13 @@ final class HomeListScrollPerformanceTests: XCTestCase {
     }
 
     private func visibleHomeScrollView(in app: XCUIApplication) -> XCUIElement? {
-        app.scrollViews.allElementsBoundByIndex
+        // A native List surfaces as a collectionView (or table); the old
+        // ScrollView+LazyVStack surfaced as a scrollView. Accept any so this
+        // profile keeps working across the M6 container swap.
+        let candidates = app.collectionViews.allElementsBoundByIndex
+            + app.tables.allElementsBoundByIndex
+            + app.scrollViews.allElementsBoundByIndex
+        return candidates
             .filter { element in
                 element.exists
                     && element.isHittable
