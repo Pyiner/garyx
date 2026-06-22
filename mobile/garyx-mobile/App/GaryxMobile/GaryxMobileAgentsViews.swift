@@ -928,6 +928,8 @@ private struct GaryxAvatarEditorSection: View {
 
         guard let generated = await onGenerate(stylePrompt) else { return }
         guard canApplyCurrentResult(requestId: requestId, fingerprint: generationFingerprint) else { return }
+        await GaryxDataURLImageCache.predecodeAgentAvatar(from: generated)
+        guard canApplyCurrentResult(requestId: requestId, fingerprint: generationFingerprint) else { return }
         avatarDataUrl = generated
     }
 
@@ -954,6 +956,8 @@ private struct GaryxAvatarEditorSection: View {
             let prepared = try await Task.detached(priority: .utility) {
                 try GaryxMobileAvatarImageNormalizer.normalizedDataUrl(fromImageData: data)
             }.value
+            guard canApplyCurrentResult(requestId: requestId, fingerprint: uploadFingerprint) else { return }
+            await GaryxDataURLImageCache.predecodeAgentAvatar(from: prepared)
             guard canApplyCurrentResult(requestId: requestId, fingerprint: uploadFingerprint) else { return }
             avatarDataUrl = prepared
         } catch is CancellationError {

@@ -5,11 +5,14 @@ import SwiftUI
 /// long-press lists saved gateways for one-step switching. Gateway
 /// management (add/edit/delete/token) stays in Settings -> Gateway.
 struct GaryxSidebarGatewayIdentityControl: View {
-    @EnvironmentObject private var model: GaryxMobileModel
+    let identity: GaryxGatewaySwitcherIdentity
+    let rows: [GaryxGatewaySwitcherRow]
+    let onSwitch: (GaryxGatewaySwitcherRow) -> Void
+    let onManageGateways: () -> Void
+    @Binding var debugShowsGatewaySwitcher: Bool
     @State private var showsSwitcher = false
 
     var body: some View {
-        let identity = model.gatewaySwitcherIdentity
         if identity.isInteractive {
             Menu {
                 switcherMenuItems
@@ -28,7 +31,7 @@ struct GaryxSidebarGatewayIdentityControl: View {
             .onAppear {
                 presentDebugSwitcherIfNeeded()
             }
-            .onChange(of: model.debugShowsGatewaySwitcher) { _, _ in
+            .onChange(of: debugShowsGatewaySwitcher) { _, _ in
                 presentDebugSwitcherIfNeeded()
             }
             #endif
@@ -75,9 +78,9 @@ struct GaryxSidebarGatewayIdentityControl: View {
 
     @ViewBuilder
     private var switcherMenuItems: some View {
-        ForEach(model.gatewaySwitcherRows) { row in
+        ForEach(rows) { row in
             Button {
-                switchTo(row)
+                onSwitch(row)
             } label: {
                 GaryxMenuSelectionLabel(
                     title: row.title,
@@ -90,21 +93,10 @@ struct GaryxSidebarGatewayIdentityControl: View {
         Divider()
 
         Button {
-            model.openSettings(tab: .gateway)
+            onManageGateways()
         } label: {
             Label("Manage Gateways", systemImage: "gearshape")
         }
-    }
-
-    private func switchTo(_ row: GaryxGatewaySwitcherRow) {
-        if row.isCurrent {
-            if !model.isGatewayConnectionReady {
-                Task { await model.connectAndRefresh() }
-            }
-            return
-        }
-        guard let profile = model.gatewayProfiles.first(where: { $0.id == row.profileId }) else { return }
-        Task { await model.activateGatewayProfile(profile) }
     }
 
     private func accessibilityText(for identity: GaryxGatewaySwitcherIdentity) -> String {
@@ -116,8 +108,8 @@ struct GaryxSidebarGatewayIdentityControl: View {
 
     #if DEBUG
     private func presentDebugSwitcherIfNeeded() {
-        guard model.debugShowsGatewaySwitcher else { return }
-        model.debugShowsGatewaySwitcher = false
+        guard debugShowsGatewaySwitcher else { return }
+        debugShowsGatewaySwitcher = false
         showsSwitcher = true
     }
     #endif

@@ -205,6 +205,119 @@ final class GaryxHomeProductionAcceptanceTests: XCTestCase {
         XCTAssertEqual(publishes, 1)
     }
 
+    func testRecentThreadsWidgetSnapshotProjectionLivesInCoreAndDedupesBeforeWriting() throws {
+        let base = GaryxHomeListFixture.makeInputs(threadCount: 50, runningCount: 3)
+        let input = GaryxRecentThreadsWidgetSnapshotInput(
+            threads: base.threads,
+            agents: base.agents,
+            teams: base.teams,
+            pinnedThreadIds: base.pinnedThreadIds,
+            recentThreadIds: base.recentThreadIds
+        )
+
+        let projected = GaryxRecentThreadsWidgetSnapshotProjector.widgetThreads(from: input)
+        XCTAssertEqual(projected.count, 50)
+        XCTAssertEqual(projected.first?.id, "thread-0")
+        XCTAssertEqual(projected.first?.workspaceName, "project-0")
+        XCTAssertEqual(projected.first?.activeRunId, "run-0")
+
+        let writer = GaryxRecentThreadsWidgetPersistencePlanner()
+        XCTAssertEqual(writer.nextWrite(for: projected), .write(projected))
+        XCTAssertEqual(writer.nextWrite(for: projected), .skipUnchanged)
+
+        var changed = projected
+        changed[0].title = "Changed widget title"
+        XCTAssertEqual(writer.nextWrite(for: changed), .write(changed))
+    }
+
+    func testBackgroundCommittedRunReconcilePlannerDoesNotRefreshEveryTick() {
+        let planner = GaryxBackgroundCommittedRunReconcilePlanner(minimumRefreshInterval: 15)
+        let candidates = ["thread-1", "thread-2"]
+        var refreshes = 0
+        var hydrations = 0
+
+        for tick in 0..<40 {
+            let decision = planner.nextDecision(
+                candidateThreadIds: candidates,
+                now: Date(timeIntervalSince1970: Double(tick) * 1.5)
+            )
+            if decision.refreshesThreads {
+                refreshes += 1
+            }
+            if decision.hydratesCandidateThreads {
+                hydrations += 1
+            }
+        }
+
+        XCTAssertEqual(hydrations, 40)
+        XCTAssertLessThanOrEqual(refreshes, 4)
+    }
+
+    @MainActor
+    func testShellAndDrawerStoresPublishOnlyForTheirOwnSnapshots() {
+        let shellStore = GaryxShellChromeStore()
+        var shellPublishes = 0
+        let shellCancellable = shellStore.objectWillChange.sink { shellPublishes += 1 }
+        defer { shellCancellable.cancel() }
+
+        XCTAssertFalse(shellStore.apply(.init()))
+        XCTAssertEqual(shellPublishes, 0)
+        XCTAssertTrue(shellStore.apply(.init(sidebarVisible: true, leadingEdgeAction: .openSidebar)))
+        XCTAssertEqual(shellPublishes, 1)
+        XCTAssertFalse(shellStore.apply(.init(sidebarVisible: true, leadingEdgeAction: .openSidebar)))
+        XCTAssertEqual(shellPublishes, 1)
+
+        let drawerStore = GaryxNavigationDrawerStore()
+        var drawerPublishes = 0
+        let drawerCancellable = drawerStore.objectWillChange.sink { drawerPublishes += 1 }
+        defer { drawerCancellable.cancel() }
+
+        let snapshot = GaryxNavigationDrawerSnapshot(
+            activePanel: .chat,
+            gatewayIdentity: GaryxGatewaySwitcherIdentity(title: "Local", subtitle: nil, status: .connected, isInteractive: true),
+            gatewayRows: [],
+            botGroups: [],
+            workspaceRows: []
+        )
+        XCTAssertTrue(drawerStore.apply(snapshot))
+        XCTAssertEqual(drawerPublishes, 1)
+        XCTAssertFalse(drawerStore.apply(snapshot))
+        XCTAssertEqual(drawerPublishes, 1)
+
+        let changed = GaryxNavigationDrawerSnapshot(
+            activePanel: .agents,
+            gatewayIdentity: snapshot.gatewayIdentity,
+            gatewayRows: [],
+            botGroups: [],
+            workspaceRows: []
+        )
+        XCTAssertTrue(drawerStore.apply(changed))
+        XCTAssertEqual(drawerPublishes, 2)
+    }
+
+    func testTranscriptPreparationCanRunOffMainActor() async throws {
+        let message = try JSONDecoder().decode(
+            GaryxTranscriptMessage.self,
+            from: Data(#"{"index":0,"role":"assistant","text":"done","timestamp":"2030-01-01T00:00:00Z"}"#.utf8)
+        )
+        let transcript = GaryxThreadTranscript(
+            ok: true,
+            messages: [message],
+            pendingUserInputs: [],
+            threadRuntime: nil,
+            pageInfo: nil
+        )
+
+        let prepared = await Task.detached(priority: .utility) {
+            XCTAssertFalse(Thread.isMainThread)
+            return GaryxPreparedThreadTranscriptUpdate.make(from: transcript, live: false)
+        }.value
+
+        XCTAssertEqual(prepared.activitySignature, GaryxThreadActivitySignature.make(from: transcript))
+        XCTAssertFalse(prepared.runState.busy)
+        XCTAssertEqual(prepared.remoteMessages.map(\.id), [message.id])
+    }
+
 }
 
 private extension GaryxHomeThreadSectionsInput {

@@ -361,6 +361,89 @@ final class GaryxRootNavigationPathStore: ObservableObject {
     }
 }
 
+struct GaryxShellChromeSnapshot: Equatable, Sendable {
+    var sidebarVisible: Bool
+    var leadingEdgeAction: GaryxMobileLeadingEdgeAction
+
+    init(
+        sidebarVisible: Bool = false,
+        leadingEdgeAction: GaryxMobileLeadingEdgeAction = .openSidebar
+    ) {
+        self.sidebarVisible = sidebarVisible
+        self.leadingEdgeAction = leadingEdgeAction
+    }
+}
+
+@MainActor
+final class GaryxShellChromeStore: ObservableObject {
+    @Published private(set) var snapshot: GaryxShellChromeSnapshot
+    private(set) var publishCount = 0
+
+    init(snapshot: GaryxShellChromeSnapshot = .init()) {
+        self.snapshot = snapshot
+    }
+
+    @discardableResult
+    func apply(_ nextSnapshot: GaryxShellChromeSnapshot) -> Bool {
+        guard snapshot != nextSnapshot else { return false }
+        snapshot = nextSnapshot
+        publishCount += 1
+        return true
+    }
+}
+
+struct GaryxNavigationDrawerWorkspaceRow: Identifiable, Equatable, Sendable {
+    var path: String
+    var name: String
+
+    var id: String { path }
+}
+
+struct GaryxNavigationDrawerSnapshot: Equatable, Sendable {
+    var activePanel: GaryxMobilePanel
+    var gatewayIdentity: GaryxGatewaySwitcherIdentity
+    var gatewayRows: [GaryxGatewaySwitcherRow]
+    var botGroups: [GaryxMobileBotGroup]
+    var workspaceRows: [GaryxNavigationDrawerWorkspaceRow]
+
+    init(
+        activePanel: GaryxMobilePanel = .chat,
+        gatewayIdentity: GaryxGatewaySwitcherIdentity = GaryxGatewaySwitcherIdentity(
+            title: GaryxGatewaySwitcherPresentation.unconfiguredTitle,
+            subtitle: nil,
+            status: .notConnected,
+            isInteractive: false
+        ),
+        gatewayRows: [GaryxGatewaySwitcherRow] = [],
+        botGroups: [GaryxMobileBotGroup] = [],
+        workspaceRows: [GaryxNavigationDrawerWorkspaceRow] = []
+    ) {
+        self.activePanel = activePanel
+        self.gatewayIdentity = gatewayIdentity
+        self.gatewayRows = gatewayRows
+        self.botGroups = botGroups
+        self.workspaceRows = workspaceRows
+    }
+}
+
+@MainActor
+final class GaryxNavigationDrawerStore: ObservableObject {
+    @Published private(set) var snapshot: GaryxNavigationDrawerSnapshot
+    private(set) var publishCount = 0
+
+    init(snapshot: GaryxNavigationDrawerSnapshot = .init()) {
+        self.snapshot = snapshot
+    }
+
+    @discardableResult
+    func apply(_ nextSnapshot: GaryxNavigationDrawerSnapshot) -> Bool {
+        guard snapshot != nextSnapshot else { return false }
+        snapshot = nextSnapshot
+        publishCount += 1
+        return true
+    }
+}
+
 public enum GaryxMobilePanelOpenSource: Equatable, Sendable {
     case current
     case sidebar

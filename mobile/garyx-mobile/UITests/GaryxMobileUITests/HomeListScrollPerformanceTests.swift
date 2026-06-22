@@ -9,6 +9,7 @@ final class HomeListScrollPerformanceTests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["GARYX_MOBILE_DEBUG_SNAPSHOT"] = "1"
         app.launchEnvironment["GARYX_MOBILE_DEBUG_SIDEBAR"] = "1"
+        app.launchEnvironment["GARYX_MOBILE_HOME_SCROLL_PROBE"] = "1"
         app.launch()
 
         XCTAssertTrue(app.staticTexts["Garyx"].waitForExistence(timeout: 10))
@@ -28,6 +29,7 @@ final class HomeListScrollPerformanceTests: XCTestCase {
             options: measureOptions()
         ) {
             scrollView.swipeUp(velocity: .fast)
+            Thread.sleep(forTimeInterval: 2.0)
             scrollView.swipeDown(velocity: .fast)
         }
     }

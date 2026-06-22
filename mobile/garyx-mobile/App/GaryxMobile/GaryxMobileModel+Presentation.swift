@@ -4,6 +4,54 @@ import UniformTypeIdentifiers
 import WidgetKit
 
 extension GaryxMobileModel {
+    func refreshShellChromeSnapshot() {
+        shellChromeStore.apply(
+            GaryxShellChromeSnapshot(
+                sidebarVisible: sidebarVisible,
+                leadingEdgeAction: mainPanelLeadingEdgeAction
+            )
+        )
+    }
+
+    func refreshNavigationDrawerSnapshot() {
+        navigationDrawerStore.apply(navigationDrawerSnapshot)
+    }
+
+    func predecodeAgentAvatarImages() {
+        GaryxDataURLImageCache.predecodeAgentAvatars(
+            from: agents.map { Optional($0.avatarDataUrl) } + teams.map { Optional($0.avatarDataUrl) }
+        )
+    }
+
+    func predecodeChannelIconImages() {
+        GaryxDataURLImageCache.predecodeChannelIcons(
+            from: channelPlugins.map(\.iconDataUrl) + mobileBotGroups.map(\.iconDataUrl)
+        )
+    }
+
+    var navigationDrawerSnapshot: GaryxNavigationDrawerSnapshot {
+        GaryxNavigationDrawerSnapshot(
+            activePanel: activePanel,
+            gatewayIdentity: gatewaySwitcherIdentity,
+            gatewayRows: gatewaySwitcherRows,
+            botGroups: mobileBotGroups,
+            workspaceRows: navigationDrawerWorkspaceRows
+        )
+    }
+
+    var navigationDrawerWorkspaceRows: [GaryxNavigationDrawerWorkspaceRow] {
+        let paths = userWorkspacePaths
+        let duplicateNames = Dictionary(grouping: paths, by: { $0.garyxLastPathComponent })
+            .filter { !$0.key.isEmpty && $0.value.count > 1 }
+        return paths.map { path in
+            let name = path.garyxLastPathComponent.isEmpty ? path : path.garyxLastPathComponent
+            return GaryxNavigationDrawerWorkspaceRow(
+                path: path,
+                name: duplicateNames[name] == nil ? name : path.garyxDisambiguatedWorkspaceName
+            )
+        }
+    }
+
     func refreshHomeThreadListSnapshot() {
         #if DEBUG
         GaryxHomeScrollPerformanceProbe.shared.markHomeListStoreApply()
@@ -91,6 +139,17 @@ extension GaryxMobileModel {
             profiles: gatewayProfiles,
             currentGatewayURL: gatewayURL
         )
+    }
+
+    func switchGateway(from row: GaryxGatewaySwitcherRow) {
+        if row.isCurrent {
+            if !isGatewayConnectionReady {
+                Task { await connectAndRefresh() }
+            }
+            return
+        }
+        guard let profile = gatewayProfiles.first(where: { $0.id == row.profileId }) else { return }
+        Task { await activateGatewayProfile(profile) }
     }
 
     var isGatewayConnectionReady: Bool {
@@ -229,6 +288,26 @@ extension GaryxMobileModel {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         let now = Date()
+        let avatarDataURLs = [
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAFklEQVR42mNUcLj0nwEPYGIgAIaHAgBE3AJBVcnK6gAAAABJRU5ErkJggg==",
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAFklEQVR42mOM8VjwnwEPYGIgAIaHAgBXtgJTMAef0wAAAABJRU5ErkJggg==",
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAFklEQVR42mOUaYn5z4AHMDEQAMNDAQAOCgILqEOeygAAAABJRU5ErkJggg==",
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAFklEQVR42mNUcLj0nwEPYGIgAIaHAgBE3AJBVcnK6gAAAABJRU5ErkJggg==",
+        ]
+        agents = (0..<4).map { index in
+            GaryxAgentSummary(
+                id: "agent-\(index)",
+                displayName: "Synthetic Agent \(index)",
+                providerType: "codex",
+                model: "gpt-5-codex",
+                defaultWorkspaceDir: "/Users/test/workspaces/project-\(index)",
+                avatarDataUrl: avatarDataURLs[index],
+                builtIn: false,
+                standalone: true,
+                createdAt: formatter.string(from: now),
+                updatedAt: formatter.string(from: now)
+            )
+        }
         threads = (0..<50).map { index in
             GaryxThreadSummary(
                 id: "thread-\(index)",

@@ -17,7 +17,68 @@ struct GaryxRootView: View {
             GaryxTheme.background.ignoresSafeArea()
 
             if model.hasGatewaySettings, case .ready = model.connectionState {
-                GaryxShellView()
+                GaryxShellView(
+                    shellStore: model.shellChromeStore,
+                    drawerStore: model.navigationDrawerStore,
+                    navigationStore: model.rootNavigationPathStore,
+                    routeNotFoundStore: model.routeNotFoundStore,
+                    homeListStore: model.homeThreadListStore,
+                    onSetSidebarVisible: { visible, animated in
+                        model.setSidebarVisible(visible, animated: animated)
+                    },
+                    onPerformMainPanelLeadingEdgeAction: {
+                        model.performMainPanelLeadingEdgeAction()
+                    },
+                    applyRootNavigationPath: { model.applyRootNavigationPath($0) },
+                    onRefreshAll: {
+                        await model.refreshThreads(silent: true)
+                        await model.refreshRemoteState()
+                    },
+                    onRefreshSidebarThreads: { silent in
+                        await model.refreshThreads(silent: silent)
+                    },
+                    canRefreshSidebarThreads: {
+                        !model.isLoadingThreads && !model.isLoadingMoreThreads
+                    },
+                    onStartNewChat: {
+                        model.openNewThreadDraft()
+                    },
+                    onOpenThread: { thread in
+                        model.openThreadImmediately(thread, source: .replace)
+                    },
+                    onTogglePinnedThread: { threadId in
+                        model.togglePinnedThread(threadId)
+                    },
+                    onUnpinThread: { threadId in
+                        model.unpinThread(threadId)
+                    },
+                    onArchiveThread: { thread in
+                        await model.archiveThread(thread)
+                    },
+                    onOpenPanel: { panel in
+                        model.openPanel(panel, source: .sidebar)
+                    },
+                    onOpenBotGroup: { group in
+                        Task { await model.openBotGroup(group) }
+                    },
+                    onOpenBotDrilldown: { groupId in
+                        model.openWorkspaceBotsDrilldown(.bot(groupId), source: .sidebar)
+                    },
+                    onOpenWorkspaceDrilldown: { path in
+                        model.openWorkspaceBotsDrilldown(.workspace(path), source: .sidebar)
+                    },
+                    onOpenSettings: {
+                        model.openSettings()
+                    },
+                    onSwitchGateway: { row in
+                        model.switchGateway(from: row)
+                    },
+                    onManageGateways: {
+                        model.openSettings(tab: .gateway)
+                    },
+                    debugShowsGatewaySwitcher: $model.debugShowsGatewaySwitcher
+                )
+                .equatable()
             } else {
                 GaryxGatewaySetupView()
             }
@@ -380,9 +441,33 @@ private struct GaryxDrawerPanelClipShape: Shape {
     }
 }
 
-struct GaryxShellView: View {
-    @EnvironmentObject private var model: GaryxMobileModel
+struct GaryxShellView: View, Equatable {
+    @ObservedObject var shellStore: GaryxShellChromeStore
+    @ObservedObject var drawerStore: GaryxNavigationDrawerStore
+    @ObservedObject var navigationStore: GaryxRootNavigationPathStore
+    @ObservedObject var routeNotFoundStore: GaryxRouteNotFoundStore
+    @ObservedObject var homeListStore: GaryxHomeThreadListStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    let onSetSidebarVisible: (Bool, Bool) -> Void
+    let onPerformMainPanelLeadingEdgeAction: () -> Void
+    let applyRootNavigationPath: ([GaryxMobileRootRoute]) -> Void
+    let onRefreshAll: () async -> Void
+    let onRefreshSidebarThreads: (Bool) async -> Void
+    let canRefreshSidebarThreads: () -> Bool
+    let onStartNewChat: () -> Void
+    let onOpenThread: (GaryxThreadSummary) -> Void
+    let onTogglePinnedThread: (String) -> Void
+    let onUnpinThread: (String) -> Void
+    let onArchiveThread: (GaryxThreadSummary) async -> Void
+    let onOpenPanel: (GaryxMobilePanel) -> Void
+    let onOpenBotGroup: (GaryxMobileBotGroup) -> Void
+    let onOpenBotDrilldown: (String) -> Void
+    let onOpenWorkspaceDrilldown: (String) -> Void
+    let onOpenSettings: () -> Void
+    let onSwitchGateway: (GaryxGatewaySwitcherRow) -> Void
+    let onManageGateways: () -> Void
+    @Binding var debugShowsGatewaySwitcher: Bool
 
     @State private var sidebarDragOffset: CGFloat = 0
     @State private var sidebarDragAxis: GaryxSidebarDragAxis?
@@ -399,6 +484,15 @@ struct GaryxShellView: View {
     private let sidebarEdgeGestureWidth: CGFloat = 24
     private let sidebarAxisDecisionDistance: CGFloat = 14
     private let sidebarAxisDecisionRatio: CGFloat = 1.5
+
+    static func == (lhs: GaryxShellView, rhs: GaryxShellView) -> Bool {
+        lhs.shellStore === rhs.shellStore
+            && lhs.drawerStore === rhs.drawerStore
+            && lhs.navigationStore === rhs.navigationStore
+            && lhs.routeNotFoundStore === rhs.routeNotFoundStore
+            && lhs.homeListStore === rhs.homeListStore
+            && lhs.debugShowsGatewaySwitcher == rhs.debugShowsGatewaySwitcher
+    }
 
     var body: some View {
         GeometryReader { proxy in
@@ -453,7 +547,17 @@ struct GaryxShellView: View {
 
         return ZStack(alignment: .topLeading) {
             HStack(spacing: 0) {
-                GaryxNavigationDrawerView()
+                GaryxNavigationDrawerView(
+                    drawerStore: drawerStore,
+                    onOpenPanel: onOpenPanel,
+                    onOpenBotGroup: onOpenBotGroup,
+                    onOpenBotDrilldown: onOpenBotDrilldown,
+                    onOpenWorkspaceDrilldown: onOpenWorkspaceDrilldown,
+                    onOpenSettings: onOpenSettings,
+                    onSwitchGateway: onSwitchGateway,
+                    onManageGateways: onManageGateways,
+                    debugShowsGatewaySwitcher: $debugShowsGatewaySwitcher
+                )
                     .disabled(drawerDragActive)
                     .frame(width: width)
                     .frame(maxHeight: .infinity)
@@ -462,39 +566,22 @@ struct GaryxShellView: View {
                     .simultaneousGesture(closingSidebarGesture(sidebarWidth: width))
 
                 GaryxRootNavigationView(
-                    navigationStore: model.rootNavigationPathStore,
-                    routeNotFoundStore: model.routeNotFoundStore,
-                    homeListStore: model.homeThreadListStore,
+                    navigationStore: navigationStore,
+                    routeNotFoundStore: routeNotFoundStore,
+                    homeListStore: homeListStore,
                     isSidebarDragActive: drawerDragActive,
                     onOpenDrawer: {
-                        model.setSidebarVisible(true)
+                        onSetSidebarVisible(true, true)
                     },
-                    applyRootNavigationPath: { model.applyRootNavigationPath($0) },
-                    onRefreshAll: {
-                        await model.refreshThreads(silent: true)
-                        await model.refreshRemoteState()
-                    },
-                    onRefreshSidebarThreads: { silent in
-                        await model.refreshThreads(silent: silent)
-                    },
-                    canRefreshSidebarThreads: {
-                        !model.isLoadingThreads && !model.isLoadingMoreThreads
-                    },
-                    onStartNewChat: {
-                        model.openNewThreadDraft()
-                    },
-                    onOpenThread: { thread in
-                        model.openThreadImmediately(thread, source: .replace)
-                    },
-                    onTogglePinnedThread: { threadId in
-                        model.togglePinnedThread(threadId)
-                    },
-                    onUnpinThread: { threadId in
-                        model.unpinThread(threadId)
-                    },
-                    onArchiveThread: { thread in
-                        await model.archiveThread(thread)
-                    }
+                    applyRootNavigationPath: applyRootNavigationPath,
+                    onRefreshAll: onRefreshAll,
+                    onRefreshSidebarThreads: onRefreshSidebarThreads,
+                    canRefreshSidebarThreads: canRefreshSidebarThreads,
+                    onStartNewChat: onStartNewChat,
+                    onOpenThread: onOpenThread,
+                    onTogglePinnedThread: onTogglePinnedThread,
+                    onUnpinThread: onUnpinThread,
+                    onArchiveThread: onArchiveThread
                 )
                 .equatable()
                     .disabled(drawerDragActive)
@@ -562,7 +649,7 @@ struct GaryxShellView: View {
     }
 
     private func sidebarRevealWidth(for width: CGFloat) -> CGFloat {
-        if model.sidebarVisible {
+        if shellStore.snapshot.sidebarVisible {
             return max(0, min(width, width + sidebarDragOffset))
         }
         return max(0, min(width, sidebarDragOffset))
@@ -579,7 +666,7 @@ struct GaryxShellView: View {
                 state = true
             }
             .onChanged { value in
-                guard !model.sidebarVisible else { return }
+                guard !shellStore.snapshot.sidebarVisible else { return }
                 if sidebarDragAxis == nil {
                     sidebarDragAxis = decideSidebarAxis(
                         translation: value.translation,
@@ -588,7 +675,7 @@ struct GaryxShellView: View {
                     )
                 }
                 guard sidebarDragAxis == .horizontal else { return }
-                switch model.mainPanelLeadingEdgeAction {
+                switch shellStore.snapshot.leadingEdgeAction {
                 case .openSidebar:
                     sidebarDragOffset = max(0, min(sidebarWidth, value.translation.width))
                 case .popToHome, .mainPanelBack, .settingsOverview, .workspaceBotsOverview:
@@ -599,7 +686,7 @@ struct GaryxShellView: View {
                 // The closing gesture owns drags while the drawer is open;
                 // touching the shared axis/offset here would clobber its
                 // decision before it runs.
-                guard !model.sidebarVisible else { return }
+                guard !shellStore.snapshot.sidebarVisible else { return }
                 defer {
                     sidebarDragAxis = nil
                 }
@@ -609,7 +696,7 @@ struct GaryxShellView: View {
                 }
                 let shouldOpen = value.translation.width > sidebarWidth * 0.22
                     || value.predictedEndTranslation.width > sidebarWidth * 0.35
-                switch model.mainPanelLeadingEdgeAction {
+                switch shellStore.snapshot.leadingEdgeAction {
                 case .openSidebar:
                     finishGesture(open: shouldOpen)
                 case .popToHome, .mainPanelBack, .settingsOverview, .workspaceBotsOverview:
@@ -617,7 +704,7 @@ struct GaryxShellView: View {
                     if shouldOpen {
                         hideKeyboard()
                         withAnimation(GaryxMobileMotion.sidebarDrilldown) {
-                            model.performMainPanelLeadingEdgeAction()
+                            onPerformMainPanelLeadingEdgeAction()
                         }
                     }
                 }
@@ -630,7 +717,7 @@ struct GaryxShellView: View {
                 state = true
             }
             .onChanged { value in
-                guard model.sidebarVisible else { return }
+                guard shellStore.snapshot.sidebarVisible else { return }
                 if sidebarDragAxis == nil {
                     sidebarDragAxis = decideSidebarAxis(
                         translation: value.translation,
@@ -644,7 +731,7 @@ struct GaryxShellView: View {
             .onEnded { value in
                 // Mirror of the opening gesture: stay inert while the drawer
                 // is closed so the opening gesture's state is untouched.
-                guard model.sidebarVisible else { return }
+                guard shellStore.snapshot.sidebarVisible else { return }
                 defer {
                     sidebarDragAxis = nil
                 }
@@ -690,7 +777,7 @@ struct GaryxShellView: View {
     private func finishGesture(open: Bool) {
         hideKeyboard()
         withAnimation(GaryxMobileMotion.sidebar) {
-            model.setSidebarVisible(open, animated: false)
+            onSetSidebarVisible(open, false)
             sidebarDragOffset = 0
         }
     }

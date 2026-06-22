@@ -1,6 +1,6 @@
 import Foundation
 
-internal struct GaryxMobileBotGroup: Identifiable, Equatable {
+internal struct GaryxMobileBotGroup: Identifiable, Equatable, Sendable {
     let id: String
     let channel: String
     let channelDisplayName: String
@@ -104,7 +104,7 @@ internal enum GaryxMobileBotGroupBuilder {
     }
 }
 
-internal struct GaryxBotSidebarConversationEntry: Identifiable, Equatable {
+internal struct GaryxBotSidebarConversationEntry: Identifiable, Equatable, Sendable {
     let id: String
     let title: String
     let subtitle: String?

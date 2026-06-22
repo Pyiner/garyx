@@ -50,13 +50,15 @@ final class GaryxMobileModel: ObservableObject {
     // catches up any remainder. 50 * 100 = 5000 committed rows per catch-up.
     static let threadHistoryMaxForwardPages = 50
     static let selectedThreadReconcileIntervalNanos: UInt64 = 1_500_000_000
+    static let backgroundCommittedRunReconcileIntervalNanos: UInt64 = 15_000_000_000
+    static let backgroundCommittedRunThreadRefreshInterval: TimeInterval = 15
     /// Coalescing window for streamed committed rows: a large catch-up replays many
     /// committed messages back-to-back, so visible run-state, render, and
     /// disk-persist fold into one update per interval instead of flickering the list.
     static let streamedCommittedFlushDelayNanos = GaryxStreamUpdateCadence.committedMessageBatchWindowNanos
     static let selectedThreadHistoryRetryLimit = 8
 
-    struct MessageListSignature: Equatable {
+    struct MessageListSignature: Equatable, Sendable {
         let count: Int
         let fingerprint: Int
         let sampled: Bool
@@ -71,13 +73,22 @@ final class GaryxMobileModel: ObservableObject {
         var builtIn: Bool
     }
 
-    @Published var gatewayURL: String
+    @Published var gatewayURL: String {
+        didSet { refreshNavigationDrawerSnapshot() }
+    }
     @Published var gatewayAuthToken: String
-    @Published var gatewayProfiles: [GaryxGatewayProfile]
+    @Published var gatewayProfiles: [GaryxGatewayProfile] {
+        didSet { refreshNavigationDrawerSnapshot() }
+    }
     @Published var gatewaySettingsStatus: String?
-    @Published var connectionState: GaryxMobileConnectionState = .disconnected
+    @Published var connectionState: GaryxMobileConnectionState = .disconnected {
+        didSet { refreshNavigationDrawerSnapshot() }
+    }
     @Published var threads: [GaryxThreadSummary] = [] {
-        didSet { refreshHomeThreadListSnapshot() }
+        didSet {
+            refreshHomeThreadListSnapshot()
+            refreshNavigationDrawerSnapshot()
+        }
     }
     @Published var selectedThread: GaryxThreadSummary? {
         didSet {
@@ -138,6 +149,8 @@ final class GaryxMobileModel: ObservableObject {
     @Published var navigationState = GaryxMobileNavigationState() {
         didSet {
             rootNavigationPathStore.apply(navigationState: navigationState)
+            refreshShellChromeSnapshot()
+            refreshNavigationDrawerSnapshot()
             refreshHomeThreadListSnapshot()
         }
     }
@@ -152,7 +165,9 @@ final class GaryxMobileModel: ObservableObject {
         }
     }
     @Published var showsSettings = false
-    @Published var sidebarVisible = false
+    @Published var sidebarVisible = false {
+        didSet { refreshShellChromeSnapshot() }
+    }
     @Published var pinnedThreadIds: [String] = [] {
         didSet { refreshHomeThreadListSnapshot() }
     }
@@ -165,10 +180,16 @@ final class GaryxMobileModel: ObservableObject {
     @Published var dreamsAutoScanEnabled = false
     @Published var isSavingDreamsSettings = false
     @Published var agents: [GaryxAgentSummary] = [] {
-        didSet { refreshHomeThreadListSnapshot() }
+        didSet {
+            predecodeAgentAvatarImages()
+            refreshHomeThreadListSnapshot()
+        }
     }
     @Published var teams: [GaryxTeamSummary] = [] {
-        didSet { refreshHomeThreadListSnapshot() }
+        didSet {
+            predecodeAgentAvatarImages()
+            refreshHomeThreadListSnapshot()
+        }
     }
     @Published var skills: [GaryxSkillSummary] = []
     @Published var tasks: [GaryxTaskSummary] = []
@@ -187,7 +208,9 @@ final class GaryxMobileModel: ObservableObject {
     @Published var newThreadModelOverride = ""
     @Published var newThreadReasoningEffortOverride = ""
     @Published var newThreadServiceTierOverride = ""
-    @Published var workspaceCatalogState = GaryxMobileResourceState(value: [String]())
+    @Published var workspaceCatalogState = GaryxMobileResourceState(value: [String]()) {
+        didSet { refreshNavigationDrawerSnapshot() }
+    }
     @Published var draftTaskTitle = ""
     @Published var draftTaskBody = ""
     @Published var lastAutomationRun: GaryxAutomationActivityEntry?
@@ -197,19 +220,37 @@ final class GaryxMobileModel: ObservableObject {
     @Published var workspaceListing: GaryxWorkspaceFileListing?
     @Published var workspacePreview: GaryxWorkspaceFilePreview?
     @Published var workspaceGitStatuses: [String: GaryxWorkspaceGitStatus] = [:]
-    #if DEBUG
     @Published var debugShowsWorkspaceModeSheet = false
     @Published var debugShowsGatewaySwitcher = false
-    #endif
     @Published var isUploadingWorkspaceFiles = false
     @Published var workspaceUploadStatus: String?
     @Published var slashCommands: [GaryxSlashCommand] = []
     @Published var mcpServers: [GaryxMcpServer] = []
-    @Published var channelEndpoints: [GaryxChannelEndpoint] = []
-    @Published var configuredBots: [GaryxConfiguredBot] = []
-    @Published var botConsoles: [GaryxBotConsoleSummary] = []
+    @Published var channelEndpoints: [GaryxChannelEndpoint] = [] {
+        didSet {
+            predecodeChannelIconImages()
+            refreshNavigationDrawerSnapshot()
+        }
+    }
+    @Published var configuredBots: [GaryxConfiguredBot] = [] {
+        didSet {
+            predecodeChannelIconImages()
+            refreshNavigationDrawerSnapshot()
+        }
+    }
+    @Published var botConsoles: [GaryxBotConsoleSummary] = [] {
+        didSet {
+            predecodeChannelIconImages()
+            refreshNavigationDrawerSnapshot()
+        }
+    }
     @Published var botStatusesById: [String: GaryxBotBindingResult] = [:]
-    @Published var channelPlugins: [GaryxChannelPluginCatalogEntry] = []
+    @Published var channelPlugins: [GaryxChannelPluginCatalogEntry] = [] {
+        didSet {
+            predecodeChannelIconImages()
+            refreshNavigationDrawerSnapshot()
+        }
+    }
     @Published var gatewaySettingsDocument: [String: GaryxJSONValue] = [:]
     @Published var isSavingBotSettings = false
     @Published var providerModelsByType: [String: GaryxProviderModels] = [:]
@@ -271,6 +312,7 @@ final class GaryxMobileModel: ObservableObject {
         ttl: GaryxTranscriptFileCacheStore.defaultTTL
     )
     var cachedTranscriptSnapshots: [String: GaryxCachedTranscript] = [:]
+    var transcriptCachePersistenceGenerations: [String: UInt64] = [:]
     var selectedMessagesSignature = MessageListSignature(count: 0, fingerprint: 0, sampled: false)
     var pendingSelectedMessagesSignature: MessageListSignature?
     var activeAssistantMessageIdsByThread: [String: String] = [:]
@@ -294,10 +336,16 @@ final class GaryxMobileModel: ObservableObject {
     var agentTargetsStateRequestId: UUID?
     var workspaceRefreshRequestId: UUID?
     var nextThreadListOffset = 0
-    var lastPersistedWidgetThreads: [GaryxMobileWidgetThread]?
     let rootNavigationPathStore = GaryxRootNavigationPathStore()
     let routeNotFoundStore = GaryxRouteNotFoundStore()
     let homeThreadListStore = GaryxHomeThreadListStore()
+    let shellChromeStore = GaryxShellChromeStore()
+    let navigationDrawerStore = GaryxNavigationDrawerStore()
+    let recentThreadsWidgetPersistenceQueue = GaryxRecentThreadsWidgetPersistenceQueue()
+    let backgroundCommittedRunReconcilePlanner = GaryxBackgroundCommittedRunReconcilePlanner(
+        minimumRefreshInterval: GaryxMobileModel.backgroundCommittedRunThreadRefreshInterval
+    )
+    var recentThreadsWidgetPersistenceGeneration: UInt64 = 0
     var hasAttemptedLastOpenedThreadRestore = false
     var selectedThreadNextHistoryBeforeIndex: Int?
     var sceneRefreshTask: Task<Void, Never>?
@@ -350,6 +398,8 @@ final class GaryxMobileModel: ObservableObject {
         }
         #endif
         rootNavigationPathStore.apply(navigationState: navigationState)
+        refreshShellChromeSnapshot()
+        refreshNavigationDrawerSnapshot()
         refreshHomeThreadListSnapshot()
         #if DEBUG
         GaryxHomeScrollPerformanceProbe.shared.attachModelObjectWillChange(objectWillChange)

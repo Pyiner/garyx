@@ -78,6 +78,33 @@ extension GaryxMobileTranscriptMapper {
     }
 }
 
+struct GaryxPreparedThreadTranscriptUpdate: Equatable, Sendable {
+    var activitySignature: String
+    var runState: GaryxTranscriptRunState
+    var remoteMessages: [GaryxMobileMessage]
+
+    static func make(
+        from transcript: GaryxThreadTranscript,
+        live: Bool
+    ) -> GaryxPreparedThreadTranscriptUpdate {
+        let runState = GaryxTranscriptRunStateReducer.reduce(transcript.messages)
+        return GaryxPreparedThreadTranscriptUpdate(
+            activitySignature: GaryxThreadActivitySignature.make(from: transcript),
+            runState: runState,
+            remoteMessages: GaryxMobileTranscriptMapper.mobileMessages(from: transcript.messages, live: live)
+        )
+    }
+
+    static func make(from transcript: GaryxThreadTranscript) -> GaryxPreparedThreadTranscriptUpdate {
+        let runState = GaryxTranscriptRunStateReducer.reduce(transcript.messages)
+        return GaryxPreparedThreadTranscriptUpdate(
+            activitySignature: GaryxThreadActivitySignature.make(from: transcript),
+            runState: runState,
+            remoteMessages: GaryxMobileTranscriptMapper.mobileMessages(from: transcript.messages, live: runState.busy)
+        )
+    }
+}
+
 enum GaryxMobileToolTraceEventKind {
     case toolUse
     case toolResult

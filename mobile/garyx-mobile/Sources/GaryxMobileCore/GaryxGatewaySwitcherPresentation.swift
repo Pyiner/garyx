@@ -1,6 +1,6 @@
 import Foundation
 
-enum GaryxGatewaySwitcherStatus: Equatable {
+enum GaryxGatewaySwitcherStatus: Equatable, Sendable {
     case connected
     case connecting
     case failed
@@ -9,14 +9,14 @@ enum GaryxGatewaySwitcherStatus: Equatable {
 
 /// Root-sidebar gateway identity: what the header control shows for the
 /// currently selected gateway. Non-interactive when no gateway is configured.
-struct GaryxGatewaySwitcherIdentity: Equatable {
+struct GaryxGatewaySwitcherIdentity: Equatable, Sendable {
     let title: String
     let subtitle: String?
     let status: GaryxGatewaySwitcherStatus
     let isInteractive: Bool
 }
 
-struct GaryxGatewaySwitcherRow: Equatable, Identifiable {
+struct GaryxGatewaySwitcherRow: Equatable, Identifiable, Sendable {
     let id: String
     let title: String
     let subtitle: String
