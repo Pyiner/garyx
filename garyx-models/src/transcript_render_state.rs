@@ -382,36 +382,35 @@ impl ToolGroupBuilder {
     }
 
     fn push_tool_result(&mut self, message: ToolMessage) {
-        if let Some(tool_use_id) = message.tool_use_id.as_deref() {
-            if let Some(idx) = self.pending_by_id.remove(tool_use_id) {
-                if let Some(entry) = self.entries.get_mut(idx) {
-                    entry.absorb_result(message);
-                    return;
-                }
-            }
+        if let Some(tool_use_id) = message.tool_use_id.as_deref()
+            && let Some(idx) = self.pending_by_id.remove(tool_use_id)
+            && let Some(entry) = self.entries.get_mut(idx)
+        {
+            entry.absorb_result(message);
+            return;
         }
 
         while let Some(idx) = self.anonymous_pending.pop_front() {
-            if let Some(entry) = self.entries.get_mut(idx) {
-                if entry.is_pending() {
-                    entry.absorb_result(message);
-                    return;
-                }
+            if let Some(entry) = self.entries.get_mut(idx)
+                && entry.is_pending()
+            {
+                entry.absorb_result(message);
+                return;
             }
         }
 
-        if message.tool_use_id.is_none() && self.pending_by_id.len() == 1 {
-            if let Some((tool_use_id, idx)) = self
+        if message.tool_use_id.is_none()
+            && self.pending_by_id.len() == 1
+            && let Some((tool_use_id, idx)) = self
                 .pending_by_id
                 .iter()
                 .next()
                 .map(|(tool_use_id, idx)| (tool_use_id.clone(), *idx))
-            {
-                self.pending_by_id.remove(&tool_use_id);
-                if let Some(entry) = self.entries.get_mut(idx) {
-                    entry.absorb_result(message);
-                    return;
-                }
+        {
+            self.pending_by_id.remove(&tool_use_id);
+            if let Some(entry) = self.entries.get_mut(idx) {
+                entry.absorb_result(message);
+                return;
             }
         }
 
@@ -566,16 +565,15 @@ fn build_activity_rows(
     if blocks.is_empty() {
         return Vec::new();
     }
-    if blocks.len() == 1 {
-        if let RenderBlock::Message(message) = &blocks[0] {
-            if message.role == "assistant" {
-                return vec![RenderActivityRow::AssistantReply(RenderAssistantReplyRow {
-                    id: format!("assistant_reply:{}", message.reference.id),
-                    message: message.reference.clone(),
-                    streaming: message.streaming,
-                })];
-            }
-        }
+    if blocks.len() == 1
+        && let RenderBlock::Message(message) = &blocks[0]
+        && message.role == "assistant"
+    {
+        return vec![RenderActivityRow::AssistantReply(RenderAssistantReplyRow {
+            id: format!("assistant_reply:{}", message.reference.id),
+            message: message.reference.clone(),
+            streaming: message.streaming,
+        })];
     }
 
     let mut step_items = blocks.iter().map(step_item_from_block).collect::<Vec<_>>();
@@ -653,14 +651,14 @@ fn derive_tail_activity(
             RenderProgressLocus::Tail,
         );
     }
-    if let Some(RenderBlock::ToolGroup(group)) = tail_block {
-        if group.status == RenderToolGroupStatus::Active {
-            return (
-                RenderTailActivity::ToolActive,
-                Some(group.id.clone()),
-                RenderProgressLocus::ToolGroup,
-            );
-        }
+    if let Some(RenderBlock::ToolGroup(group)) = tail_block
+        && group.status == RenderToolGroupStatus::Active
+    {
+        return (
+            RenderTailActivity::ToolActive,
+            Some(group.id.clone()),
+            RenderProgressLocus::ToolGroup,
+        );
     }
     (
         RenderTailActivity::Thinking,
@@ -1179,7 +1177,7 @@ mod tests {
         let cold = reduce_transcript_render_state(&records);
         let live = (1..=records.len())
             .map(|len| reduce_transcript_render_state(&records[..len]))
-            .last()
+            .next_back()
             .expect("live final snapshot");
 
         assert_eq!(live, cold);

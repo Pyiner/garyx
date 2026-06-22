@@ -41,6 +41,7 @@ use crate::channel_plugin_host::default_plugin_install_root;
 
 /// Top-level error surface for `plugins install` / `list` /
 /// `uninstall`. Kept as a unified enum so `main.rs` can match once.
+#[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
 pub enum PluginsCliError {
     #[error("plugin inspection failed: {0}")]

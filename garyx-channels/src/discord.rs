@@ -2767,7 +2767,7 @@ mod tests {
         let mut requests = Vec::new();
         for _ in 0..20 {
             requests = server.received_requests().await.expect("received requests");
-            if requests.len() >= 1 {
+            if !requests.is_empty() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;

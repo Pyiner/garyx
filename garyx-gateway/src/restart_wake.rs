@@ -125,7 +125,7 @@ fn write_pending_restart_wake(
     dir: &Path,
     wake: &PendingRestartWake,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    fs::create_dir_all(&dir)?;
+    fs::create_dir_all(dir)?;
     let path = dir.join(format!("{}.json", wake.id));
     write_pending_restart_wake_path(&path, wake).map_err(std::io::Error::other)?;
     Ok(path)

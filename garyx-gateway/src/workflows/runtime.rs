@@ -955,6 +955,7 @@ impl WorkflowRuntime {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_child_thread(
         &self,
         workflow_run_id: &str,

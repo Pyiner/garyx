@@ -998,14 +998,14 @@ impl AgentLoopProvider for GaryxNativeProvider {
                         .metadata
                         .get("model_reasoning_effort")
                         .and_then(Value::as_str)
-                        .or_else(|| Some(self.config.model_reasoning_effort.as_str())),
+                        .or(Some(self.config.model_reasoning_effort.as_str())),
                 ),
                 service_tier: normalize_non_empty(
                     options
                         .metadata
                         .get("model_service_tier")
                         .and_then(Value::as_str)
-                        .or_else(|| Some(self.config.model_service_tier.as_str())),
+                        .or(Some(self.config.model_service_tier.as_str())),
                 ),
             },
             runtime: LlmRuntimeContext {

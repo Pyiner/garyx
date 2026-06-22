@@ -417,7 +417,7 @@ impl GoogleGenerativeAiAdapter {
         value
             .get("cloudaicompanionProject")
             .and_then(Value::as_str)
-            .and_then(|value| normalize_non_empty(value))
+            .and_then(normalize_non_empty)
             .or_else(|| preferred_project_id.and_then(normalize_non_empty))
     }
 
@@ -597,7 +597,8 @@ fn runtime_value(runtime: &LlmRuntimeContext, keys: &[&str]) -> Option<String> {
         if let Some(value) = runtime
             .env
             .get(*key)
-            .and_then(|value| normalize_non_empty(value))
+            .map(String::as_str)
+            .and_then(normalize_non_empty)
         {
             return Some(value);
         }

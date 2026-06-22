@@ -1182,11 +1182,10 @@ async fn create_thread_forks_provider_session_without_importing_visible_history(
         child_data["metadata"][FORK_FROM_PROVIDER_TYPE_METADATA_KEY],
         "claude_code"
     );
-    assert_eq!(
+    assert!(
         child_data["metadata"][SDK_SESSION_FORK_METADATA_KEY]
             .as_bool()
-            .unwrap_or(false),
-        true
+            .unwrap_or(false)
     );
     assert_eq!(history_message_count(&child_data), 0);
     assert!(

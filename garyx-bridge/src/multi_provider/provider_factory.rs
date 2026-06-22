@@ -39,56 +39,6 @@ fn build_claude_config(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn build_claude_config_carries_default_model_and_reasoning_effort() {
-        let agent_cfg = AgentProviderConfig {
-            provider_type: ProviderType::ClaudeCode.as_slug().to_owned(),
-            default_model: "claude-opus-4-8".to_owned(),
-            model_reasoning_effort: "max".to_owned(),
-            ..Default::default()
-        };
-
-        let config = build_claude_config(&agent_cfg, &None);
-
-        assert_eq!(config.default_model, "claude-opus-4-8");
-        assert_eq!(config.model_reasoning_effort, "max");
-    }
-
-    #[test]
-    fn compute_provider_key_keeps_default_claude_code_key_stable() {
-        let agent_cfg = AgentProviderConfig {
-            provider_type: ProviderType::ClaudeCode.as_slug().to_owned(),
-            ..Default::default()
-        };
-
-        assert_eq!(compute_provider_key(&agent_cfg, &None), "claude_code");
-    }
-
-    #[test]
-    fn compute_provider_key_changes_for_claude_cli_launcher_config() {
-        let cctty_cfg = AgentProviderConfig {
-            provider_type: ProviderType::ClaudeCode.as_slug().to_owned(),
-            claude_cli_mode: "cctty".to_owned(),
-            ..Default::default()
-        };
-        let path_cfg = AgentProviderConfig {
-            provider_type: ProviderType::ClaudeCode.as_slug().to_owned(),
-            claude_cli_path: "/opt/garyx/bin/custom-cctty".to_owned(),
-            ..Default::default()
-        };
-
-        let cctty_key = compute_provider_key(&cctty_cfg, &None);
-        let path_key = compute_provider_key(&path_cfg, &None);
-        assert!(cctty_key.starts_with("claude_code:cli:cctty:"));
-        assert!(path_key.starts_with("claude_code:cli:native:"));
-        assert_ne!(cctty_key, path_key);
-    }
-}
-
 /// Build a `CodexAppServerConfig` from an agent runtime config.
 ///
 /// Shared by the Codex and Traex providers: TRAE CLI (`traex`) is forked from
@@ -215,7 +165,6 @@ fn build_garyx_native_config(
         codex_home: agent_cfg.codex_home.clone(),
         max_tool_iterations: agent_cfg.max_tool_iterations,
         request_timeout_seconds: agent_cfg.request_timeout_seconds,
-        ..Default::default()
     }
 }
 
@@ -339,5 +288,55 @@ pub(super) async fn create_provider(
             "agent_team is a meta-provider and cannot be created from AgentProviderConfig"
                 .to_owned(),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_claude_config_carries_default_model_and_reasoning_effort() {
+        let agent_cfg = AgentProviderConfig {
+            provider_type: ProviderType::ClaudeCode.as_slug().to_owned(),
+            default_model: "claude-opus-4-8".to_owned(),
+            model_reasoning_effort: "max".to_owned(),
+            ..Default::default()
+        };
+
+        let config = build_claude_config(&agent_cfg, &None);
+
+        assert_eq!(config.default_model, "claude-opus-4-8");
+        assert_eq!(config.model_reasoning_effort, "max");
+    }
+
+    #[test]
+    fn compute_provider_key_keeps_default_claude_code_key_stable() {
+        let agent_cfg = AgentProviderConfig {
+            provider_type: ProviderType::ClaudeCode.as_slug().to_owned(),
+            ..Default::default()
+        };
+
+        assert_eq!(compute_provider_key(&agent_cfg, &None), "claude_code");
+    }
+
+    #[test]
+    fn compute_provider_key_changes_for_claude_cli_launcher_config() {
+        let cctty_cfg = AgentProviderConfig {
+            provider_type: ProviderType::ClaudeCode.as_slug().to_owned(),
+            claude_cli_mode: "cctty".to_owned(),
+            ..Default::default()
+        };
+        let path_cfg = AgentProviderConfig {
+            provider_type: ProviderType::ClaudeCode.as_slug().to_owned(),
+            claude_cli_path: "/opt/garyx/bin/custom-cctty".to_owned(),
+            ..Default::default()
+        };
+
+        let cctty_key = compute_provider_key(&cctty_cfg, &None);
+        let path_key = compute_provider_key(&path_cfg, &None);
+        assert!(cctty_key.starts_with("claude_code:cli:cctty:"));
+        assert!(path_key.starts_with("claude_code:cli:native:"));
+        assert_ne!(cctty_key, path_key);
     }
 }

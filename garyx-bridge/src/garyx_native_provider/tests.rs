@@ -233,13 +233,12 @@ async fn assistant_only_turn_streams_delta_and_persists_assistant_message() {
     assert_eq!(result.response, "done");
     assert_eq!(result.session_messages.len(), 1);
     assert_eq!(result.session_messages[0].text.as_deref(), Some("done"));
-    assert_eq!(
+    assert!(
         result
             .sdk_session_id
             .as_deref()
             .unwrap()
-            .starts_with("garyx-native-"),
-        true
+            .starts_with("garyx-native-")
     );
     let events = events.lock().unwrap().clone();
     assert!(matches!(events[0], StreamEvent::SessionBound { .. }));

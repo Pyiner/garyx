@@ -57,12 +57,12 @@ pub(super) fn validate_schema_shape(schema: &Value, depth: usize) -> Result<(), 
             )));
         }
     }
-    if let Some(enum_values) = object.get("enum") {
-        if !enum_values.is_array() {
-            return Err(WorkflowError::BadRequest(
-                "schema.enum must be an array".to_owned(),
-            ));
-        }
+    if let Some(enum_values) = object.get("enum")
+        && !enum_values.is_array()
+    {
+        return Err(WorkflowError::BadRequest(
+            "schema.enum must be an array".to_owned(),
+        ));
     }
     Ok(())
 }
@@ -143,7 +143,7 @@ pub(super) fn validate_payload_against_schema(
                 "{path}: expected number"
             )));
         }
-        "integer" if !payload.as_i64().is_some() && !payload.as_u64().is_some() => {
+        "integer" if payload.as_i64().is_none() && payload.as_u64().is_none() => {
             return Err(WorkflowError::BadRequest(format!(
                 "{path}: expected integer"
             )));
@@ -163,12 +163,12 @@ pub(super) fn validate_payload_against_schema(
             )));
         }
     }
-    if let Some(enum_values) = object.get("enum").and_then(Value::as_array) {
-        if !enum_values.iter().any(|candidate| candidate == payload) {
-            return Err(WorkflowError::BadRequest(format!(
-                "{path}: value is not allowed by enum"
-            )));
-        }
+    if let Some(enum_values) = object.get("enum").and_then(Value::as_array)
+        && !enum_values.iter().any(|candidate| candidate == payload)
+    {
+        return Err(WorkflowError::BadRequest(format!(
+            "{path}: value is not allowed by enum"
+        )));
     }
     Ok(())
 }

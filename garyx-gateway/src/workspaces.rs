@@ -145,8 +145,8 @@ async fn seed_workspaces_from_configuration_if_empty(
 
 pub(crate) fn workspace_display_name(path: &str) -> String {
     path.trim()
-        .trim_end_matches(|value| value == '/' || value == '\\')
-        .rsplit(|value| value == '/' || value == '\\')
+        .trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
         .next()
         .filter(|value| !value.is_empty())
         .unwrap_or(path)
@@ -271,6 +271,7 @@ pub async fn delete_workspace(
     workspace_list_response(&state).await
 }
 
+#[allow(clippy::items_after_test_module)]
 #[cfg(test)]
 mod tests {
     use super::*;

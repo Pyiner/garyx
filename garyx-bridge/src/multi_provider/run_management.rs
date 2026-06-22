@@ -317,12 +317,12 @@ fn forward_applied_thread_title_update(
     external_callback: Option<&Arc<dyn Fn(StreamEvent) + Send + Sync>>,
     applied_thread_title: Option<&str>,
 ) {
-    if let Some(title) = applied_thread_title {
-        if let Some(callback) = external_callback {
-            callback(StreamEvent::ThreadTitleUpdated {
-                title: title.to_owned(),
-            });
-        }
+    if let Some(title) = applied_thread_title
+        && let Some(callback) = external_callback
+    {
+        callback(StreamEvent::ThreadTitleUpdated {
+            title: title.to_owned(),
+        });
     }
 }
 
@@ -1093,7 +1093,6 @@ async fn mark_task_ready_for_review_after_stopped_run(
                         .with_field("task_id", json!(task_id)),
                 )
                 .await;
-                return;
             }
             Ok(None) => {}
             Err(error) => {
@@ -1111,7 +1110,6 @@ async fn mark_task_ready_for_review_after_stopped_run(
                         .with_field("error", json!(error.to_string())),
                 )
                 .await;
-                return;
             }
         }
     }
@@ -1643,12 +1641,12 @@ impl MultiProviderBridge {
                         None
                     }
                 } else {
-                    let _ = partial_persistence_tx.as_ref().map(|tx| {
-                        tx.send(ThreadPersistenceCommand::Stream {
+                    if let Some(tx) = partial_persistence_tx.as_ref() {
+                        let _ = tx.send(ThreadPersistenceCommand::Stream {
                             event: event.clone(),
                             after_commit: None,
-                        })
-                    });
+                        });
+                    }
                     None
                 };
                 tokio::spawn(async move {
@@ -1751,9 +1749,9 @@ impl MultiProviderBridge {
                 }
             };
             drop(removed_persistence);
-            let _ = partial_persistence_tx
-                .as_ref()
-                .map(|tx| tx.send(ThreadPersistenceCommand::Finish));
+            if let Some(tx) = partial_persistence_tx.as_ref() {
+                let _ = tx.send(ThreadPersistenceCommand::Finish);
+            }
             drop(partial_persistence_tx);
             let persistence_result = if let Some(task) = partial_persistence_task {
                 match task.await {
@@ -2303,12 +2301,12 @@ impl MultiProviderBridge {
                         None
                     }
                 } else {
-                    let _ = partial_persistence_tx.as_ref().map(|tx| {
-                        tx.send(ThreadPersistenceCommand::Stream {
+                    if let Some(tx) = partial_persistence_tx.as_ref() {
+                        let _ = tx.send(ThreadPersistenceCommand::Stream {
                             event: event.clone(),
                             after_commit: None,
-                        })
-                    });
+                        });
+                    }
                     None
                 };
                 tokio::spawn(async move {
@@ -2399,9 +2397,9 @@ impl MultiProviderBridge {
             }
         };
         drop(removed_persistence);
-        let _ = partial_persistence_tx
-            .as_ref()
-            .map(|tx| tx.send(ThreadPersistenceCommand::Finish));
+        if let Some(tx) = partial_persistence_tx.as_ref() {
+            let _ = tx.send(ThreadPersistenceCommand::Finish);
+        }
         drop(partial_persistence_tx);
         let persistence_result = if let Some(task) = partial_persistence_task {
             match task.await {

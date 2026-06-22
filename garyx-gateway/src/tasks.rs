@@ -291,12 +291,10 @@ pub async fn create_task(
         Ok(target) => target,
         Err(error) => return task_error_response(error),
     };
-    let default_workspace_agent = executor_agent_id
-        .as_deref()
-        .or_else(|| match &body.assignee {
-            Some(Principal::Agent { agent_id }) => Some(agent_id.as_str()),
-            _ => None,
-        });
+    let default_workspace_agent = executor_agent_id.as_deref().or(match &body.assignee {
+        Some(Principal::Agent { agent_id }) => Some(agent_id.as_str()),
+        _ => None,
+    });
     let mut runtime =
         match task_runtime_with_default_workspace(&state, runtime, default_workspace_agent).await {
             Ok(runtime) => runtime,

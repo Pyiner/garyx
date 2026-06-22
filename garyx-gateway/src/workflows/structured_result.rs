@@ -71,7 +71,7 @@ pub async fn submit_structured_result_for_thread(
     validate_json_size("result", &payload, MAX_RESULT_BYTES)?;
     let payload = normalize_submitted_payload(&context.schema_json, payload);
     validate_payload_against_schema(&context.schema_json, &payload, "$")?;
-    let preview = summarize(payload.as_str().unwrap_or_else(|| ""), 240);
+    let preview = summarize(payload.as_str().unwrap_or(""), 240);
     let preview = if preview.is_empty() {
         Some(summarize(&payload.to_string(), 240))
     } else {

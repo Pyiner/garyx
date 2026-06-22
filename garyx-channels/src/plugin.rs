@@ -2951,10 +2951,10 @@ impl ChannelPluginManager {
         match self.respawn_plugin(plugin_id, Some(current_accounts)).await {
             Ok(()) => Ok(()),
             Err(err) => {
-                if let Some(entry) = self.plugins.get_mut(plugin_id) {
-                    if let Some(sub) = entry.subprocess.as_mut() {
-                        sub.manifest = old_manifest_snapshot;
-                    }
+                if let Some(entry) = self.plugins.get_mut(plugin_id)
+                    && let Some(sub) = entry.subprocess.as_mut()
+                {
+                    sub.manifest = old_manifest_snapshot;
                 }
                 Err(err)
             }

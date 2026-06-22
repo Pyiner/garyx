@@ -1103,8 +1103,8 @@ impl CronService {
         .await
         .map_err(|error| format!("failed to create automation thread: {error}"))?;
 
-        if let Some(garyx_db) = garyx_db {
-            if let Err(error) = garyx_db.upsert_automation_thread_run(AutomationThreadRunDraft {
+        if let Some(garyx_db) = garyx_db
+            && let Err(error) = garyx_db.upsert_automation_thread_run(AutomationThreadRunDraft {
                 automation_id: current.id.clone(),
                 run_id: run_id.to_owned(),
                 thread_id: thread_id.clone(),
@@ -1115,12 +1115,12 @@ impl CronService {
                 status: "running".to_owned(),
                 started_at: Utc::now().to_rfc3339(),
                 finished_at: None,
-            }) {
-                let _ = delete_thread_record(&runtime.thread_store, &thread_id).await;
-                return Err(format!(
-                    "failed to record automation thread association: {error}"
-                ));
-            }
+            })
+        {
+            let _ = delete_thread_record(&runtime.thread_store, &thread_id).await;
+            return Err(format!(
+                "failed to record automation thread association: {error}"
+            ));
         }
 
         let mut updated = current;
@@ -1685,7 +1685,7 @@ impl CronService {
             "target".to_owned(),
             serde_json::json!(
                 configured_target
-                    .or_else(|| job.thread_id.as_deref())
+                    .or(job.thread_id.as_deref())
                     .unwrap_or("last")
             ),
         );

@@ -535,6 +535,7 @@ impl Channel for FeishuChannel {
 // WebSocket listener loop
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 async fn ws_listen_loop(
     account_id: &str,
     client: &FeishuClient,

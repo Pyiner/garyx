@@ -507,10 +507,10 @@ impl ClaudeSDKClient {
                                 }
                             };
 
-                            if let Some(resp) = resp {
-                                if let Ok(line) = serde_json::to_string(&resp) {
-                                    let _ = transport.write(&(line + "\n")).await;
-                                }
+                            if let Some(resp) = resp
+                                && let Ok(line) = serde_json::to_string(&resp)
+                            {
+                                let _ = transport.write(&(line + "\n")).await;
                             }
                             continue;
                         }

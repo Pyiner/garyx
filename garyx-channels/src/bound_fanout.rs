@@ -11,6 +11,8 @@ use crate::dispatcher::{
     ChannelDispatcher, StreamDispatchRole, StreamingDispatchTarget, build_stream_dispatch_callback,
 };
 
+type StreamCallback = Arc<dyn Fn(StreamEvent) + Send + Sync>;
+
 fn binding_delivery_thread_id(binding_key: &str, chat_id: &str) -> Option<String> {
     let binding_key = binding_key.trim();
     let chat_id = chat_id.trim();
@@ -72,7 +74,7 @@ async fn snapshot_bound_targets(
 
 #[derive(Default)]
 struct DeferredState {
-    callbacks: Option<Vec<Arc<dyn Fn(StreamEvent) + Send + Sync>>>,
+    callbacks: Option<Vec<StreamCallback>>,
     buffered: Vec<StreamEvent>,
 }
 

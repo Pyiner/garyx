@@ -372,19 +372,19 @@ async fn test_steer_turn() {
 
         match tokio::time::timeout(Duration::from_millis(500), event_rx.recv()).await {
             Ok(Ok(notif)) => match notif.method.as_str() {
-                "item/started" => {
-                    if notif.params.get("turnId").and_then(|v| v.as_str()) == Some(turn_id.as_str())
-                    {
-                        saw_turn_activity = true;
-                    }
+                "item/started"
+                    if notif.params.get("turnId").and_then(|v| v.as_str())
+                        == Some(turn_id.as_str()) =>
+                {
+                    saw_turn_activity = true;
                 }
-                "item/agentMessage/delta" => {
-                    if notif.params.get("turnId").and_then(|v| v.as_str()) == Some(turn_id.as_str())
-                    {
-                        saw_turn_activity = true;
-                        if let Some(delta) = notif.params.get("delta").and_then(|v| v.as_str()) {
-                            response.push_str(delta);
-                        }
+                "item/agentMessage/delta"
+                    if notif.params.get("turnId").and_then(|v| v.as_str())
+                        == Some(turn_id.as_str()) =>
+                {
+                    saw_turn_activity = true;
+                    if let Some(delta) = notif.params.get("delta").and_then(|v| v.as_str()) {
+                        response.push_str(delta);
                     }
                 }
                 "turn/completed" => {

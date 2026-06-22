@@ -7,19 +7,14 @@ use crate::transcript_kind::{
     is_tool_related_message, is_tool_result_trace, resolve_message_kind_for_object, tool_call_id,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TranscriptRunActivity {
+    #[default]
     Idle,
     Thinking,
     UsingTool,
     Reconciling,
-}
-
-impl Default for TranscriptRunActivity {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -72,15 +67,13 @@ pub fn apply_transcript_record(state: &mut TranscriptRunState, record: &Value) {
 
     match kind {
         "control" => apply_control_record(state, seq, message.get("control")),
-        "tool_trace" => {
-            if state.busy && state.activity != TranscriptRunActivity::Reconciling {
-                apply_tool_trace_record(state, &role, message);
-            }
+        "tool_trace" if state.busy && state.activity != TranscriptRunActivity::Reconciling => {
+            apply_tool_trace_record(state, &role, message);
         }
-        "assistant_reply" | "user_input" => {
-            if state.busy && state.activity != TranscriptRunActivity::Reconciling {
-                state.activity = activity_for_pending_tools(state);
-            }
+        "assistant_reply" | "user_input"
+            if state.busy && state.activity != TranscriptRunActivity::Reconciling =>
+        {
+            state.activity = activity_for_pending_tools(state);
         }
         _ => {}
     }
@@ -107,16 +100,14 @@ fn apply_control_record(state: &mut TranscriptRunState, seq: Option<u64>, contro
             state.last_user_ack_pending_input_id = control_string(control.get("pending_input_id"))
                 .or_else(|| control_string(control.get("pendingInputId")));
         }
-        "assistant_boundary" => {
-            if state.busy && state.activity != TranscriptRunActivity::Reconciling {
-                state.activity = activity_for_pending_tools(state);
-            }
+        "assistant_boundary"
+            if state.busy && state.activity != TranscriptRunActivity::Reconciling =>
+        {
+            state.activity = activity_for_pending_tools(state);
         }
-        "done" => {
-            if state.busy {
-                clear_pending_tools(state);
-                state.activity = TranscriptRunActivity::Reconciling;
-            }
+        "done" if state.busy => {
+            clear_pending_tools(state);
+            state.activity = TranscriptRunActivity::Reconciling;
         }
         "run_complete" => {
             state.busy = false;

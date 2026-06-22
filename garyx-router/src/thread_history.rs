@@ -201,19 +201,18 @@ impl ThreadTranscriptStore {
                     }
                 })?;
                 let mut existing = self.read_records_from_path(thread_id, &path).await?;
-                let mut next_seq = existing.last().map(|record| record.seq + 1).unwrap_or(1);
+                let next_seq = existing.last().map(|record| record.seq + 1).unwrap_or(1);
                 let trimmed_run_id = trim_non_empty(run_id);
                 let mut appended = Vec::with_capacity(messages.len());
-                for message in messages {
+                for (seq, message) in (next_seq..).zip(messages.iter()) {
                     let record = ThreadTranscriptRecord {
-                        seq: next_seq,
+                        seq,
                         thread_id: thread_id.to_owned(),
                         run_id: trimmed_run_id.clone(),
                         timestamp: message_timestamp(message)
                             .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
                         message: message.clone(),
                     };
-                    next_seq += 1;
                     appended.push(record.clone());
                     existing.push(record);
                 }
@@ -304,17 +303,16 @@ impl ThreadTranscriptStore {
                 let trimmed_run_id = trim_non_empty(run_id);
                 let mut guard = records.lock().await;
                 let entries = guard.entry(thread_id.to_owned()).or_default();
-                let mut next_seq = entries.last().map(|record| record.seq + 1).unwrap_or(1);
-                for message in messages {
+                let next_seq = entries.last().map(|record| record.seq + 1).unwrap_or(1);
+                for (seq, message) in (next_seq..).zip(messages.iter()) {
                     entries.push(ThreadTranscriptRecord {
-                        seq: next_seq,
+                        seq,
                         thread_id: thread_id.to_owned(),
                         run_id: trimmed_run_id.clone(),
                         timestamp: message_timestamp(message)
                             .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
                         message: message.clone(),
                     });
-                    next_seq += 1;
                 }
                 Ok(TranscriptAppendResult {
                     total_messages: entries.len(),
@@ -341,12 +339,12 @@ impl ThreadTranscriptStore {
                     }
                 })?;
                 let mut existing = self.read_records_from_path(thread_id, &path).await?;
-                let mut next_seq = existing.last().map(|record| record.seq + 1).unwrap_or(1);
+                let next_seq = existing.last().map(|record| record.seq + 1).unwrap_or(1);
                 let trimmed_run_id = trim_non_empty(run_id);
                 let mut appended_records = Vec::with_capacity(records.len());
-                for draft in records {
+                for (seq, draft) in (next_seq..).zip(records.iter()) {
                     let record = ThreadTranscriptRecord {
-                        seq: next_seq,
+                        seq,
                         thread_id: thread_id.to_owned(),
                         run_id: trimmed_run_id.clone(),
                         timestamp: draft
@@ -358,7 +356,6 @@ impl ThreadTranscriptStore {
                             .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
                         message: draft.message.clone(),
                     };
-                    next_seq += 1;
                     appended_records.push(record.clone());
                     existing.push(record);
                 }
@@ -451,11 +448,11 @@ impl ThreadTranscriptStore {
                 let trimmed_run_id = trim_non_empty(run_id);
                 let mut guard = store.lock().await;
                 let entries = guard.entry(thread_id.to_owned()).or_default();
-                let mut next_seq = entries.last().map(|record| record.seq + 1).unwrap_or(1);
+                let next_seq = entries.last().map(|record| record.seq + 1).unwrap_or(1);
                 let mut appended_records = Vec::with_capacity(records.len());
-                for draft in records {
+                for (seq, draft) in (next_seq..).zip(records.iter()) {
                     let record = ThreadTranscriptRecord {
-                        seq: next_seq,
+                        seq,
                         thread_id: thread_id.to_owned(),
                         run_id: trimmed_run_id.clone(),
                         timestamp: draft
@@ -469,7 +466,6 @@ impl ThreadTranscriptStore {
                     };
                     entries.push(record.clone());
                     appended_records.push(record);
-                    next_seq += 1;
                 }
                 Ok(TranscriptAppendRecordsResult {
                     total_messages: entries.len(),
@@ -706,18 +702,17 @@ impl ThreadTranscriptStore {
         // Divergent (a retry re-streamed different content, or the run shrank):
         // rewrite this run's tail so we keep only the final authoritative set.
         let mut rebuilt: Vec<ThreadTranscriptRecord> = records[..split].to_vec();
-        let mut next_seq = rebuilt.last().map(|record| record.seq + 1).unwrap_or(1);
+        let next_seq = rebuilt.last().map(|record| record.seq + 1).unwrap_or(1);
         let run_id_value = (!trimmed_run_id.is_empty()).then(|| trimmed_run_id.to_owned());
-        for message in authoritative {
+        for (seq, message) in (next_seq..).zip(authoritative.iter()) {
             rebuilt.push(ThreadTranscriptRecord {
-                seq: next_seq,
+                seq,
                 thread_id: thread_id.to_owned(),
                 run_id: run_id_value.clone(),
                 timestamp: message_timestamp(message)
                     .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
                 message: message.clone(),
             });
-            next_seq += 1;
         }
         self.write_records(thread_id, &rebuilt).await
     }
@@ -2197,10 +2192,9 @@ fn reconcile_rewrite_records(
         && authoritative_identity[..existing_identity.len()] == existing_identity[..]
     {
         let mut rebuilt = existing.to_vec();
-        let mut next_seq = rebuilt.last().map(|record| record.seq + 1).unwrap_or(1);
-        for message in &messages[existing.len()..] {
-            rebuilt.push(record_from_message(thread_id, next_seq, message));
-            next_seq += 1;
+        let next_seq = rebuilt.last().map(|record| record.seq + 1).unwrap_or(1);
+        for (seq, message) in (next_seq..).zip(messages[existing.len()..].iter()) {
+            rebuilt.push(record_from_message(thread_id, seq, message));
         }
         return rebuilt;
     }
@@ -2362,6 +2356,7 @@ fn append_thread_rewrite_marker_if_needed(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_range_rewrite_record(
     thread_id: &str,
     run_id: Option<&str>,

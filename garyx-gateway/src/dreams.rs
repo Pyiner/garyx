@@ -1019,14 +1019,16 @@ async fn run_temporary_claude(config: &GaryxConfig, prompt: String) -> Result<St
 
 fn temporary_claude_options(config: &GaryxConfig) -> ClaudeAgentOptions {
     let agent_cfg = configured_claude_agent_config(config);
-    let mut options = ClaudeAgentOptions::default();
-    options.system_prompt = Some(
-        "You are a Garyx Dream extractor. You classify user activity into topic spans. Return JSON only and never modify files.".to_owned(),
-    );
-    options.permission_mode = Some(PermissionMode::Default);
-    options.max_turns = Some(1);
-    options.max_buffer_size = Some(10 * 1024 * 1024);
-    options.setting_sources = Some(Vec::new());
+    let mut options = ClaudeAgentOptions {
+        system_prompt: Some(
+            "You are a Garyx Dream extractor. You classify user activity into topic spans. Return JSON only and never modify files.".to_owned(),
+        ),
+        permission_mode: Some(PermissionMode::Default),
+        max_turns: Some(1),
+        max_buffer_size: Some(10 * 1024 * 1024),
+        setting_sources: Some(Vec::new()),
+        ..Default::default()
+    };
     options.allowed_tools.clear();
     options.disallowed_tools.clear();
     options
@@ -1349,10 +1351,9 @@ fn reuse_existing_topic_ids_for_matching_spans(
             claimed.insert(dream_id.to_owned());
         } else if let Some(existing) =
             find_existing_topic_for_matching_spans(&topic.spans, existing_topics, &claimed)
+            && claimed.insert(existing.dream_id.clone())
         {
-            if claimed.insert(existing.dream_id.clone()) {
-                topic.dream_id = Some(existing.dream_id.clone());
-            }
+            topic.dream_id = Some(existing.dream_id.clone());
         }
         reused.push(topic);
     }

@@ -457,8 +457,8 @@ async fn builtin_discoverer_registers_discord_as_managed_builtin() {
         vec![crate::auth_flow::ConfigMethod::Form]
     );
     assert!(discord.auth_flow().is_none());
-    assert_eq!(discord.capabilities().outbound, true);
-    assert_eq!(discord.capabilities().inbound, true);
+    assert!(discord.capabilities().outbound);
+    assert!(discord.capabilities().inbound);
 }
 
 #[test]

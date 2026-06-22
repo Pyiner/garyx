@@ -241,14 +241,13 @@ impl SubprocessTransport {
         // normal transcript flushes as aggressively as an immediate kill.
         {
             let mut proc_guard = self.process.lock().await;
-            if let Some(mut proc) = proc_guard.take() {
-                if tokio::time::timeout(CLOSE_GRACE_TIMEOUT, proc.wait())
+            if let Some(mut proc) = proc_guard.take()
+                && tokio::time::timeout(CLOSE_GRACE_TIMEOUT, proc.wait())
                     .await
                     .is_err()
-                {
-                    let _ = proc.kill().await;
-                    let _ = proc.wait().await;
-                }
+            {
+                let _ = proc.kill().await;
+                let _ = proc.wait().await;
             }
         }
 

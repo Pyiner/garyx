@@ -335,10 +335,10 @@ impl PluginManifest {
             if let Some(m) = &update.manifest_url {
                 validate_update_template(m, false, path)?;
             }
-            if let Some(c) = &update.checksum_url_template {
-                if !c.is_empty() {
-                    validate_update_template(c, true, path)?;
-                }
+            if let Some(c) = &update.checksum_url_template
+                && !c.is_empty()
+            {
+                validate_update_template(c, true, path)?;
             }
             if let Some(b) = &update.binary_in_archive {
                 validate_update_template(b, false, path)?;

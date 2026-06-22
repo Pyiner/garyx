@@ -1649,13 +1649,12 @@ async fn workflow_entrypoint_success_without_run_moves_task_to_review() {
 
     let mut observed = None;
     for _ in 0..20 {
-        if let Some(record) = state.threads.thread_store.get(&task_thread_id).await {
-            if let Some(task) = task_from_record(&record).expect("task parse") {
-                if task.status == TaskStatus::InReview {
-                    observed = Some(task);
-                    break;
-                }
-            }
+        if let Some(record) = state.threads.thread_store.get(&task_thread_id).await
+            && let Some(task) = task_from_record(&record).expect("task parse")
+            && task.status == TaskStatus::InReview
+        {
+            observed = Some(task);
+            break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }

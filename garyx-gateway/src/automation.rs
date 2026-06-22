@@ -769,6 +769,7 @@ async fn automation_job(
     Ok((service, job))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_automation_job(
     automation_id: &str,
     label: &str,

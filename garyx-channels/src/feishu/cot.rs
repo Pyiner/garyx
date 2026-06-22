@@ -323,7 +323,7 @@ fn shrink_longest_string_fields(map: &mut Map<String, Value>) {
         .iter()
         .filter_map(|(key, value)| value.as_str().map(|text| (key.clone(), text.len())))
         .collect::<Vec<_>>();
-    keys.sort_by(|left, right| right.1.cmp(&left.1));
+    keys.sort_by_key(|entry| std::cmp::Reverse(entry.1));
 
     for (key, len) in keys {
         let Some(Value::String(text)) = map.get_mut(&key) else {
@@ -475,8 +475,8 @@ fn readable_tool_argument(message: &ProviderMessage) -> Option<String> {
     }
 
     let tool = tool_name(message).to_ascii_lowercase();
-    if contains_any(&tool, &["read", "write", "edit", "grep", "glob"]) {
-        if let Some(path) = readable_value_from_keys(
+    if contains_any(&tool, &["read", "write", "edit", "grep", "glob"])
+        && let Some(path) = readable_value_from_keys(
             &message.content,
             &[
                 "file_path",
@@ -489,26 +489,25 @@ fn readable_tool_argument(message: &ProviderMessage) -> Option<String> {
                 "pattern",
                 "glob",
             ],
-        ) {
-            return Some(path);
-        }
+        )
+    {
+        return Some(path);
     }
 
-    if contains_any(&tool, &["search", "webfetch", "fetch"]) {
-        if let Some(query) =
+    if contains_any(&tool, &["search", "webfetch", "fetch"])
+        && let Some(query) =
             readable_value_from_keys(&message.content, &["query", "queries", "url", "urls"])
-        {
-            return Some(query);
-        }
+    {
+        return Some(query);
     }
 
-    if contains_any(&tool, &["task", "skill"]) {
-        if let Some(prompt) = readable_value_from_keys(
+    if contains_any(&tool, &["task", "skill"])
+        && let Some(prompt) = readable_value_from_keys(
             &message.content,
             &["prompt", "task", "title", "description", "name", "skill"],
-        ) {
-            return Some(prompt);
-        }
+        )
+    {
+        return Some(prompt);
     }
 
     readable_value_from_keys(
@@ -780,9 +779,7 @@ fn tool_icon(tool_name: &str) -> &'static str {
     let value = tool_name.to_ascii_lowercase();
     if contains_any(&value, &["search", "web"]) {
         "search"
-    } else if contains_any(&value, &["read", "grep", "glob"]) {
-        "read"
-    } else if value.eq_ignore_ascii_case("imageview") {
+    } else if contains_any(&value, &["read", "grep", "glob"]) || value == "imageview" {
         "read"
     } else if contains_any(&value, &["write", "edit"]) {
         "write"

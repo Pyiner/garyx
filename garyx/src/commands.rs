@@ -8401,15 +8401,11 @@ async fn interactive_fill_channel_overrides(
         ))?);
     }
     match channel {
-        "telegram" => {
-            if overrides.token.is_none() {
-                overrides.token = Some(prompt_secret("Telegram Bot Token")?);
-            }
+        "telegram" if overrides.token.is_none() => {
+            overrides.token = Some(prompt_secret("Telegram Bot Token")?);
         }
-        "discord" => {
-            if overrides.token.is_none() {
-                overrides.token = Some(prompt_secret("Discord Bot Token")?);
-            }
+        "discord" if overrides.token.is_none() => {
+            overrides.token = Some(prompt_secret("Discord Bot Token")?);
         }
         "feishu" => {
             // If the caller already passed app_id + app_secret via flags,

@@ -206,7 +206,7 @@ fn rewrite_gemini_session_lines_for_fork(
 }
 
 fn fork_gemini_session_file(source: &Path) -> Result<String, BridgeError> {
-    let source_contents = std::fs::read_to_string(&source).map_err(|error| {
+    let source_contents = std::fs::read_to_string(source).map_err(|error| {
         BridgeError::SessionError(format!("read Gemini session file failed: {error}"))
     })?;
     let new_session_id = Uuid::new_v4().to_string();

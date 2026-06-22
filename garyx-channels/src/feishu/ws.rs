@@ -527,6 +527,7 @@ async fn ensure_cot_session(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn send_cot_events(
     client: &FeishuClient,
     state: &mut FeishuResponseStreamState,
@@ -773,6 +774,7 @@ async fn record_terminal_inbound_event(
         .await;
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn ws_listen_loop(
     account_id: &str,
     client: &FeishuClient,

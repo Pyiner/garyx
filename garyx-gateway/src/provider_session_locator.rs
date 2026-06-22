@@ -519,7 +519,7 @@ fn list_recent_claude_sessions(
             ));
         }
     }
-    candidates.sort_by(|left, right| right.0.cmp(&left.0));
+    candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.0));
     candidates.truncate(limit);
 
     let mut sessions = Vec::new();
@@ -906,7 +906,7 @@ fn list_recent_gemini_sessions(tmp_dir: &Path, limit: usize) -> Vec<RecentLocalP
             ));
         }
     }
-    candidates.sort_by(|left, right| right.0.cmp(&left.0));
+    candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.0));
     candidates.truncate(limit);
 
     let mut sessions = Vec::new();

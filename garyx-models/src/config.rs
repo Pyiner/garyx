@@ -1099,11 +1099,11 @@ impl Default for TasksConfig {
 /// the gateway periodically checks each installed subprocess plugin
 /// against its declared `[update].manifest_url`, downloads + verifies
 /// + atomically promotes a new bundle when available, then hot-swaps
-/// the live subprocess via the §9.4 respawn path. Plugins must opt
-/// in to the hot-swap via `[capabilities].survives_respawn = true`;
-/// for plugins without that flag the auto-updater still downloads
-/// the new bundle but leaves the running subprocess on the old image
-/// and logs a "restart required" hint.
+///   the live subprocess via the §9.4 respawn path. Plugins must opt
+///   in to the hot-swap via `[capabilities].survives_respawn = true`;
+///   for plugins without that flag the auto-updater still downloads
+///   the new bundle but leaves the running subprocess on the old image
+///   and logs a "restart required" hint.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PluginsConfig {
     /// Master switch. When `false`, no periodic check fires and no

@@ -151,7 +151,7 @@ pub fn available_codex_model_presets(
     mut remote_models: Vec<CodexModelInfo>,
     chatgpt_mode: bool,
 ) -> Vec<CodexModelPreset> {
-    remote_models.sort_by(|a, b| a.priority.cmp(&b.priority));
+    remote_models.sort_by_key(|model| model.priority);
 
     let mut presets: Vec<CodexModelPreset> = remote_models
         .into_iter()

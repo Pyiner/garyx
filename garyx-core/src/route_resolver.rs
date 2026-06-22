@@ -186,7 +186,8 @@ impl RouteResolver {
         }
 
         // Sort by priority (higher first)
-        self.bindings.sort_by(|a, b| b.priority.cmp(&a.priority));
+        self.bindings
+            .sort_by_key(|binding| std::cmp::Reverse(binding.priority));
     }
 
     fn parse_binding(&self, data: &serde_json::Value, index: usize) -> Option<RouteBinding> {
