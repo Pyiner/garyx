@@ -3,10 +3,79 @@ import Foundation
 public struct GaryxGatewayConfiguration: Equatable, Sendable {
     public var baseURL: URL
     public var authToken: String?
+    public var customHeaders: [String: String]
 
-    public init(baseURL: URL, authToken: String? = nil) {
+    public init(
+        baseURL: URL,
+        authToken: String? = nil,
+        customHeaders: [String: String] = [:]
+    ) {
         self.baseURL = baseURL
         self.authToken = authToken?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.customHeaders = GaryxGatewayHeaders.normalized(customHeaders)
+    }
+}
+
+public enum GaryxGatewayHeaders {
+    private static let headerNameAllowedScalars = CharacterSet.alphanumerics.union(
+        CharacterSet(charactersIn: "!#$%&'*+-.^_`|~")
+    )
+
+    public static func normalizedBlock(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .split(whereSeparator: \.isNewline)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+    }
+
+    public static func parse(_ value: String) -> [String: String] {
+        var headers: [String: String] = [:]
+        for line in normalizedBlock(value).split(whereSeparator: \.isNewline) {
+            let text = String(line)
+            guard !text.hasPrefix("#"),
+                  let separator = separatorIndex(in: text),
+                  separator > text.startIndex else {
+                continue
+            }
+            let name = String(text[..<separator]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let value = String(text[text.index(after: separator)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard isValidHeaderName(name) else { continue }
+            headers[name] = value
+        }
+        return headers
+    }
+
+    public static func normalized(_ headers: [String: String]) -> [String: String] {
+        var result: [String: String] = [:]
+        for (name, value) in headers where isValidHeaderName(name) {
+            result[name.trimmingCharacters(in: .whitespacesAndNewlines)] =
+                value.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return result
+    }
+
+    private static func separatorIndex(in text: String) -> String.Index? {
+        let colon = text.firstIndex(of: ":")
+        let equals = text.firstIndex(of: "=")
+        switch (colon, equals) {
+        case (.some(let colon), .some(let equals)):
+            return colon < equals ? colon : equals
+        case (.some(let colon), .none):
+            return colon
+        case (.none, .some(let equals)):
+            return equals
+        case (.none, .none):
+            return nil
+        }
+    }
+
+    private static func isValidHeaderName(_ name: String) -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        return trimmed.unicodeScalars.allSatisfy { headerNameAllowedScalars.contains($0) }
     }
 }
 
@@ -881,6 +950,9 @@ public final class GaryxGatewayClient {
         request.httpMethod = method
         if let timeoutInterval, timeoutInterval > 0 {
             request.timeoutInterval = timeoutInterval
+        }
+        for (name, value) in configuration.customHeaders.sorted(by: { $0.key < $1.key }) {
+            request.setValue(value, forHTTPHeaderField: name)
         }
         if let token = configuration.authToken, !token.isEmpty {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")

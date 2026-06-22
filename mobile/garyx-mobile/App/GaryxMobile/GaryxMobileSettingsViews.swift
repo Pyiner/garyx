@@ -348,6 +348,7 @@ struct GaryxSavedGatewayProfileRow: View {
     @State private var label = ""
     @State private var gatewayUrl = ""
     @State private var token = ""
+    @State private var headers = ""
 
     var body: some View {
         GaryxRowActionMenu(actions: profileSwipeActions) {
@@ -419,6 +420,16 @@ struct GaryxSavedGatewayProfileRow: View {
                             autocapitalization: .never,
                             autocorrectionDisabled: true
                         )
+                        Divider().padding(.leading, 16)
+                        GaryxFormTextAreaRow(
+                            title: "Headers",
+                            text: $headers,
+                            placeholder: "X-Garyx-Gateway: value",
+                            minHeight: 96,
+                            lineLimits: 2...8,
+                            autocapitalization: .never,
+                            autocorrectionDisabled: true
+                        )
                     }
                 }
             }
@@ -449,6 +460,7 @@ struct GaryxSavedGatewayProfileRow: View {
         label = profile.label
         gatewayUrl = profile.gatewayUrl
         token = model.gatewayProfileToken(profile)
+        headers = profile.gatewayHeaders
     }
 
     private var canSaveGateway: Bool {
@@ -461,7 +473,8 @@ struct GaryxSavedGatewayProfileRow: View {
             profile,
             label: label,
             gatewayUrl: gatewayUrl,
-            token: token
+            token: token,
+            headers: headers
         ) {
             showsEditForm = false
         }

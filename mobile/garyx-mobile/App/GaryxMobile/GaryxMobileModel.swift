@@ -77,6 +77,7 @@ final class GaryxMobileModel: ObservableObject {
         didSet { refreshNavigationDrawerSnapshot() }
     }
     @Published var gatewayAuthToken: String
+    @Published var gatewayHeaders: String
     @Published var gatewayProfiles: [GaryxGatewayProfile] {
         didSet { refreshNavigationDrawerSnapshot() }
     }
@@ -374,6 +375,9 @@ final class GaryxMobileModel: ObservableObject {
         let storedToken = keychain.readGatewayAuthToken()
         let legacyToken = defaults.string(forKey: GaryxMobileSettingsKeys.legacyGatewayToken) ?? ""
         gatewayAuthToken = storedToken.isEmpty ? legacyToken : storedToken
+        gatewayHeaders = GaryxGatewayHeaders.normalizedBlock(
+            defaults.string(forKey: GaryxMobileSettingsKeys.gatewayHeaders) ?? ""
+        )
         if !legacyToken.isEmpty && storedToken.isEmpty {
             keychain.saveGatewayAuthToken(legacyToken)
             defaults.removeObject(forKey: GaryxMobileSettingsKeys.legacyGatewayToken)

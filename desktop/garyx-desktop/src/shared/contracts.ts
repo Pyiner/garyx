@@ -4,6 +4,7 @@ export type DesktopFollowUpBehavior = "queue" | "steer";
 export interface DesktopSettings {
   gatewayUrl: string;
   gatewayAuthToken: string;
+  gatewayHeaders: string;
   accountId: string;
   fromId: string;
   timeoutSeconds: number;
@@ -21,6 +22,7 @@ export interface DesktopGatewayProfile {
   label: string;
   gatewayUrl: string;
   gatewayAuthToken: string;
+  gatewayHeaders: string;
   updatedAt: string;
 }
 
@@ -2039,12 +2041,14 @@ export interface GaryxDesktopApi {
     label?: string;
     gatewayUrl: string;
     gatewayAuthToken?: string;
+    gatewayHeaders?: string;
   }) => Promise<DesktopState>;
   updateGatewayProfile: (input: {
     profileId: string;
     label?: string;
     gatewayUrl: string;
     gatewayAuthToken?: string;
+    gatewayHeaders?: string;
   }) => Promise<DesktopState>;
   deleteGatewayProfile: (input: { profileId: string }) => Promise<DesktopState>;
   getGatewaySettings: () => Promise<GatewaySettingsPayload>;
@@ -2277,10 +2281,12 @@ export interface GaryxDesktopApi {
   checkConnection: (input?: {
     gatewayUrl?: string;
     gatewayAuthToken?: string;
+    gatewayHeaders?: string;
   }) => Promise<ConnectionStatus>;
   probeGateway: (input: {
     gatewayUrl: string;
     gatewayAuthToken: string;
+    gatewayHeaders?: string;
   }) => Promise<GatewayProbeResult>;
   listBrowserState: () => Promise<DesktopBrowserState>;
   createBrowserTab: (
@@ -2373,6 +2379,7 @@ export const DEFAULT_SESSION_TITLE = "Fresh Thread";
 export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   gatewayUrl: "http://127.0.0.1:31337",
   gatewayAuthToken: "",
+  gatewayHeaders: "",
   accountId: "main",
   fromId: "mac-desktop",
   timeoutSeconds: 120,

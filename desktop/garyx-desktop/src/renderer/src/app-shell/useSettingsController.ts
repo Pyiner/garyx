@@ -30,6 +30,7 @@ function desktopSettingsEqual(
   return (
     left.gatewayUrl === right.gatewayUrl &&
     left.gatewayAuthToken === right.gatewayAuthToken &&
+    left.gatewayHeaders === right.gatewayHeaders &&
     left.accountId === right.accountId &&
     left.fromId === right.fromId &&
     left.timeoutSeconds === right.timeoutSeconds &&
@@ -501,6 +502,7 @@ export function useSettingsController({
         const status = await window.garyxDesktop.checkConnection({
           gatewayUrl: draft.gatewayUrl,
           gatewayAuthToken: draft.gatewayAuthToken,
+          gatewayHeaders: draft.gatewayHeaders,
         });
         setConnection(status);
         if (!status.ok) {

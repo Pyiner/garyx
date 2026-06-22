@@ -3,6 +3,7 @@ import Security
 
 enum GaryxMobileSettingsKeys {
     static let gatewayUrl = "garyx.gatewayUrl"
+    static let gatewayHeaders = "garyx.gatewayHeaders"
     static let legacyGatewayURL = "garyx.mobile.gatewayURL"
     static let legacyGatewayToken = "garyx.mobile.gatewayToken"
     static let selectedAgentTargetId = "garyx.mobile.selectedAgentTargetId"

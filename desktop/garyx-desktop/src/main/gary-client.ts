@@ -119,6 +119,7 @@ import type {
   StartWorkflowThreadInput,
   StartWorkflowThreadResult,
 } from "@shared/contracts";
+import { parseGatewayHeadersBlock } from "../shared/gateway-headers.ts";
 import {
   decideStreamSeq,
   isControlTranscriptMessage,
@@ -1099,6 +1100,16 @@ function applyGatewayAuthHeader(
   return headers;
 }
 
+function applyGatewayCustomHeaders(
+  headers: Headers,
+  gatewayHeaders: string | null | undefined,
+): Headers {
+  for (const [name, value] of Object.entries(parseGatewayHeadersBlock(gatewayHeaders))) {
+    headers.set(name, value);
+  }
+  return headers;
+}
+
 function isLocalGatewayUrl(gatewayUrl: string): boolean {
   try {
     const parsed = new URL(normalizeGatewayUrl(gatewayUrl));
@@ -1323,7 +1334,10 @@ export async function streamThreadEvents(
 ): Promise<void> {
   const afterSeq = Math.max(0, Math.trunc(options?.afterSeq ?? 0));
   const headers = applyGatewayAuthHeader(
-    new Headers({ Accept: "text/event-stream" }),
+    applyGatewayCustomHeaders(
+      new Headers({ Accept: "text/event-stream" }),
+      settings.gatewayHeaders,
+    ),
     settings.gatewayAuthToken,
   );
   headers.set("Last-Event-ID", String(afterSeq));
@@ -1548,7 +1562,7 @@ export async function requestJson<T>(
   init?: RequestInit,
 ): Promise<T> {
   const headers = applyGatewayAuthHeader(
-    new Headers(init?.headers),
+    applyGatewayCustomHeaders(new Headers(init?.headers), settings.gatewayHeaders),
     settings.gatewayAuthToken,
   );
   headers.set("Accept", "application/json");
@@ -1583,11 +1597,12 @@ export async function requestJson<T>(
 async function requestJsonFromGatewayUrl<T>(
   gatewayUrl: string,
   gatewayAuthToken: string,
+  gatewayHeaders: string | null | undefined,
   path: string,
   init?: RequestInit,
 ): Promise<T> {
   const headers = applyGatewayAuthHeader(
-    new Headers(init?.headers),
+    applyGatewayCustomHeaders(new Headers(init?.headers), gatewayHeaders),
     gatewayAuthToken,
   );
   headers.set("Accept", "application/json");
@@ -2988,7 +3003,7 @@ export async function checkConnection(
 }
 
 export async function probeGateway(
-  input: { gatewayUrl: string; gatewayAuthToken: string },
+  input: { gatewayUrl: string; gatewayAuthToken: string; gatewayHeaders?: string },
 ): Promise<GatewayProbeResult> {
   const normalizedGatewayUrl = normalizeGatewayUrl(input.gatewayUrl);
   const path = "/runtime";
@@ -3007,6 +3022,7 @@ export async function probeGateway(
     const runtime = await requestJsonFromGatewayUrl<RuntimePayload>(
       normalizedGatewayUrl,
       input.gatewayAuthToken,
+      input.gatewayHeaders,
       path,
       {
         signal: AbortSignal.timeout(5000),

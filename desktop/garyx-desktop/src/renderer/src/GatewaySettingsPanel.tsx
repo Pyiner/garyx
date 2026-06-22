@@ -147,12 +147,14 @@ type GatewaySettingsPanelProps = {
     label?: string;
     gatewayUrl: string;
     gatewayAuthToken?: string;
+    gatewayHeaders?: string;
   }) => Promise<void>;
   onUpdateGatewayProfile?: (input: {
     profileId: string;
     label?: string;
     gatewayUrl: string;
     gatewayAuthToken?: string;
+    gatewayHeaders?: string;
   }) => Promise<void>;
   onDeleteGatewayProfile?: (profileId: string) => Promise<void>;
   onMutateGatewayDraft?: DraftMutator;
@@ -1241,12 +1243,14 @@ function GatewayProfileDialog({
     label?: string;
     gatewayUrl: string;
     gatewayAuthToken?: string;
+    gatewayHeaders?: string;
   }) => Promise<void>;
 }) {
   const { t } = useI18n();
   const [label, setLabel] = useState('');
   const [gatewayUrl, setGatewayUrl] = useState('');
   const [gatewayAuthToken, setGatewayAuthToken] = useState('');
+  const [gatewayHeaders, setGatewayHeaders] = useState('');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -1254,6 +1258,7 @@ function GatewayProfileDialog({
       setLabel(profile?.label ?? '');
       setGatewayUrl(profile?.gatewayUrl ?? '');
       setGatewayAuthToken(profile?.gatewayAuthToken ?? '');
+      setGatewayHeaders(profile?.gatewayHeaders ?? '');
     }
   }, [open, profile]);
 
@@ -1270,6 +1275,7 @@ function GatewayProfileDialog({
     setLabel('');
     setGatewayUrl('');
     setGatewayAuthToken('');
+    setGatewayHeaders('');
   }
 
   async function handleSave() {
@@ -1278,7 +1284,7 @@ function GatewayProfileDialog({
     }
     setSaving(true);
     try {
-      await onSubmit({ label, gatewayUrl, gatewayAuthToken });
+      await onSubmit({ label, gatewayUrl, gatewayAuthToken, gatewayHeaders });
       resetFields();
       onOpenChange(false);
     } finally {
@@ -1336,6 +1342,18 @@ function GatewayProfileDialog({
               type="password"
               value={gatewayAuthToken}
               onChange={(event) => setGatewayAuthToken(event.target.value)}
+            />
+          </label>
+          <label className="gateway-setup-field">
+            <span>{t('Headers')}</span>
+            <Textarea
+              autoCapitalize="off"
+              autoComplete="off"
+              className="gateway-profile-headers-editor"
+              placeholder="X-Garyx-Gateway: value"
+              spellCheck={false}
+              value={gatewayHeaders}
+              onChange={(event) => setGatewayHeaders(event.target.value)}
             />
           </label>
         </div>
@@ -2257,6 +2275,13 @@ export function GatewaySettingsPanel({
                 <span className="gateway-profile-row-copy">
                   <span className="gateway-profile-row-name">{profile.label}</span>
                   <span className="gateway-profile-row-url">{profile.gatewayUrl}</span>
+                  {countNonEmptyLines(profile.gatewayHeaders) > 0 ? (
+                    <span className="gateway-profile-row-url">
+                      {t('{count} custom headers', {
+                        count: countNonEmptyLines(profile.gatewayHeaders),
+                      })}
+                    </span>
+                  ) : null}
                 </span>
                 {isCurrent ? (
                   <span className="gateway-profile-current">{t('Current')}</span>

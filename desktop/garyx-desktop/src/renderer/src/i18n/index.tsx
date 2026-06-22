@@ -811,6 +811,7 @@ const zhCN: Record<string, string> = {
   'Global': '全局',
   'Global prompt shortcuts are loaded from the current Gateway config.': '全局提示词快捷指令会从当前 Gateway 配置加载。',
   'Headers': '标头',
+  '{count} custom headers': '{count} 个自定义标头',
   'Hide Advanced': '隐藏高级',
   'hours': '小时',
   'How should the team coordinate? (optional)': '团队应该如何协作？（可选）',

@@ -79,6 +79,7 @@ export function GatewayIdentityBar({
         label: gatewayHostLabel(currentGatewayUrl),
         gatewayUrl: currentGatewayUrl.trim(),
         gatewayAuthToken: '',
+        gatewayHeaders: '',
         updatedAt: '',
       });
     }

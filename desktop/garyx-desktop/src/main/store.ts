@@ -26,6 +26,7 @@ import {
   type StartWorkflowThreadResult,
 } from '@shared/contracts';
 import { desktopStateWithoutThread } from '@shared/desktop-state';
+import { normalizeGatewayHeadersBlock } from '../shared/gateway-headers.ts';
 import {
   archiveRemoteThread,
   createRemoteAutomation,
@@ -274,6 +275,7 @@ function normalizeSettings(value?: Partial<DesktopSettings>): DesktopSettings {
       typeof value?.gatewayAuthToken === 'string'
         ? value.gatewayAuthToken.trim()
         : DEFAULT_DESKTOP_SETTINGS.gatewayAuthToken,
+    gatewayHeaders: normalizeGatewayHeadersBlock(value?.gatewayHeaders),
     accountId: value?.accountId?.trim() || DEFAULT_DESKTOP_SETTINGS.accountId,
     fromId: value?.fromId?.trim() || DEFAULT_DESKTOP_SETTINGS.fromId,
     timeoutSeconds: Math.max(
@@ -336,6 +338,7 @@ function normalizeGatewayProfile(
     gatewayUrl,
     gatewayAuthToken:
       typeof value?.gatewayAuthToken === 'string' ? value.gatewayAuthToken.trim() : '',
+    gatewayHeaders: normalizeGatewayHeadersBlock(value?.gatewayHeaders),
     updatedAt,
   };
 }
@@ -381,6 +384,7 @@ function profileFromSettings(
     label: gatewayProfileLabel(gatewayUrl),
     gatewayUrl,
     gatewayAuthToken: settings.gatewayAuthToken.trim(),
+    gatewayHeaders: normalizeGatewayHeadersBlock(settings.gatewayHeaders),
     updatedAt,
   };
 }
@@ -1011,11 +1015,13 @@ export async function addDesktopGatewayProfile(input: {
   label?: string;
   gatewayUrl: string;
   gatewayAuthToken?: string;
+  gatewayHeaders?: string;
 }): Promise<DesktopState> {
   const profile = normalizeGatewayProfile({
     label: input.label,
     gatewayUrl: input.gatewayUrl,
     gatewayAuthToken: input.gatewayAuthToken,
+    gatewayHeaders: input.gatewayHeaders,
     updatedAt: new Date().toISOString(),
   });
   if (!profile) {
@@ -1040,6 +1046,7 @@ export async function updateDesktopGatewayProfile(input: {
   label?: string;
   gatewayUrl: string;
   gatewayAuthToken?: string;
+  gatewayHeaders?: string;
 }): Promise<DesktopState> {
   const current = await getLocalDesktopState();
   const normalizedId = input.profileId.trim();
@@ -1053,6 +1060,9 @@ export async function updateDesktopGatewayProfile(input: {
     gatewayAuthToken: typeof input.gatewayAuthToken === 'string'
       ? input.gatewayAuthToken
       : existing.gatewayAuthToken,
+    gatewayHeaders: typeof input.gatewayHeaders === 'string'
+      ? input.gatewayHeaders
+      : existing.gatewayHeaders,
     // Editing keeps the row where it was; only newly added profiles take a
     // fresh timestamp.
     updatedAt: existing.updatedAt,
@@ -1079,6 +1089,7 @@ export async function updateDesktopGatewayProfile(input: {
           ...current.settings,
           gatewayUrl: nextProfile.gatewayUrl,
           gatewayAuthToken: nextProfile.gatewayAuthToken,
+          gatewayHeaders: nextProfile.gatewayHeaders,
         })
       : current.settings,
   };

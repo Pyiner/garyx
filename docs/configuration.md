@@ -850,7 +850,7 @@ garyx gateway token
 
 If a protected gateway API returns an authorization error, the desktop app
 returns to the Gateway Setup screen so you can paste a fresh token and continue.
-Saving the gateway URL/token pair first verifies connectivity. Only verified
+Saving the gateway URL/token/header settings first verifies connectivity. Only verified
 saves are written to local desktop state and added to the Gateway URL history;
 the field can still be edited manually.
 
@@ -867,6 +867,8 @@ gateway connection shape:
 
 - `gatewayUrl`: the URL the phone can reach.
 - `gatewayAuthToken`: the token created by `garyx gateway token`.
+- `gatewayHeaders`: optional custom HTTP headers, one per line, for reverse
+  proxies or tunnels.
 
 For a physical phone, the gateway must be reachable from the LAN. A managed
 macOS gateway service is installed to listen on `0.0.0.0`; if you run the
@@ -881,8 +883,8 @@ The desktop app's Desktop Settings view can generate a Gary X Mobile QR/link:
 garyx://mobile/connect?gatewayUrl=...&gatewayAuthToken=...
 ```
 
-Opening that link on iOS imports the gateway URL and stores the gateway token
-in the iOS Keychain.
+Opening that link on iOS imports the gateway URL, optional custom headers, and
+stores the gateway token in the iOS Keychain.
 
 The mobile app mirrors the Mac app's operational surfaces through gateway APIs:
 thread chat/history, active agent or team selection for new threads, task

@@ -27,8 +27,10 @@ Remote mobile clients must include the gateway token. HTTP requests use:
 Authorization: Bearer ${GARYX_GATEWAY_TOKEN}
 ```
 
-Server-Sent Event requests use the same `Authorization` header as other HTTP
-requests.
+Optional custom gateway headers are configured as one header per line, using
+either `Header-Name: value` or `Header-Name=value`. HTTP requests and
+Server-Sent Event requests include those headers plus the same `Authorization`
+header as other gateway calls.
 
 For physical devices, the gateway URL must be reachable from the phone, usually
 the Mac's LAN IP such as `http://192.168.1.20:31337`. `http://127.0.0.1:31337`
@@ -39,6 +41,9 @@ The Mac app can hand these settings to iOS with:
 ```text
 garyx://mobile/connect?gatewayUrl=...&gatewayAuthToken=...
 ```
+
+Connect links may also include `gatewayHeaders=...` for reverse-proxy or tunnel
+headers.
 
 The mobile app stores `gatewayAuthToken` in the iOS Keychain. Model provider
 keys such as OpenAI, Anthropic, Claude, Codex, or Gemini credentials stay on the

@@ -468,6 +468,13 @@ code {
   box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.08);
 }
 
+.gateway-setup-textarea,
+.gateway-profile-headers-editor {
+  min-height: 92px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
 .gateway-url-input-shell {
   position: relative;
   width: 100%;

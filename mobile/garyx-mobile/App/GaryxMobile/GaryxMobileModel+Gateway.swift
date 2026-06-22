@@ -8,7 +8,9 @@ extension GaryxMobileModel {
         gatewaySettingsStatus = nil
         gatewayURL = normalizedGatewayURL(gatewayURL)
         gatewayAuthToken = gatewayAuthToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        gatewayHeaders = GaryxGatewayHeaders.normalizedBlock(gatewayHeaders)
         defaults.set(gatewayURL, forKey: GaryxMobileSettingsKeys.gatewayUrl)
+        defaults.set(gatewayHeaders, forKey: GaryxMobileSettingsKeys.gatewayHeaders)
         defaults.removeObject(forKey: GaryxMobileSettingsKeys.legacyGatewayURL)
         defaults.removeObject(forKey: GaryxMobileSettingsKeys.legacyGatewayToken)
         saveGatewayScopedUserState()
@@ -171,6 +173,7 @@ extension GaryxMobileModel {
         resetGatewayRuntimeState()
         gatewayURL = profile.gatewayUrl
         gatewayAuthToken = keychain.readGatewayProfileToken(profileId: profile.id)
+        gatewayHeaders = profile.gatewayHeaders
         loadGatewayScopedUserState(fallbackToLegacy: false)
         gatewaySettingsStatus = "Selected \(profile.label)"
         lastError = nil
@@ -190,7 +193,8 @@ extension GaryxMobileModel {
         _ profile: GaryxGatewayProfile,
         label: String,
         gatewayUrl: String,
-        token: String
+        token: String,
+        headers: String
     ) -> Bool {
         let normalizedURL = normalizedGatewayURL(gatewayUrl)
         guard parsedGatewayURL(from: normalizedURL) != nil else {
@@ -198,6 +202,7 @@ extension GaryxMobileModel {
             return false
         }
         let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedHeaders = GaryxGatewayHeaders.normalizedBlock(headers)
         let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextId = GaryxGatewayProfileStorage.stableId(for: normalizedURL)
         let currentURL = normalizedGatewayURL(gatewayURL)
@@ -207,10 +212,12 @@ extension GaryxMobileModel {
             || currentURL.lowercased() == normalizedURL.lowercased()
         let currentURLChanged = currentURL.lowercased() != normalizedURL.lowercased()
         let activeTokenChanged = gatewayAuthToken != trimmedToken
+        let activeHeadersChanged = gatewayHeaders != normalizedHeaders
         var nextProfile = profile
         nextProfile.id = nextId
         nextProfile.label = trimmedLabel.isEmpty ? GaryxGatewayProfileStorage.label(for: normalizedURL) : trimmedLabel
         nextProfile.gatewayUrl = normalizedURL
+        nextProfile.gatewayHeaders = normalizedHeaders
         nextProfile.updatedAt = Date()
         nextProfile.hasToken = !trimmedToken.isEmpty
 
@@ -228,13 +235,15 @@ extension GaryxMobileModel {
 
         if affectsCurrentProfile {
             saveGatewayScopedUserState()
-            let didResetRuntime = currentURLChanged || activeTokenChanged
+            let didResetRuntime = currentURLChanged || activeTokenChanged || activeHeadersChanged
             if didResetRuntime {
                 resetGatewayRuntimeState()
             }
             gatewayURL = normalizedURL
             gatewayAuthToken = trimmedToken
+            gatewayHeaders = normalizedHeaders
             defaults.set(gatewayURL, forKey: GaryxMobileSettingsKeys.gatewayUrl)
+            defaults.set(gatewayHeaders, forKey: GaryxMobileSettingsKeys.gatewayHeaders)
             defaults.removeObject(forKey: GaryxMobileSettingsKeys.legacyGatewayURL)
             defaults.removeObject(forKey: GaryxMobileSettingsKeys.legacyGatewayToken)
             keychain.saveGatewayAuthToken(gatewayAuthToken)
@@ -320,6 +329,7 @@ extension GaryxMobileModel {
                 gatewayUrl: url
             ),
             gatewayUrl: url,
+            gatewayHeaders: GaryxGatewayHeaders.normalizedBlock(gatewayHeaders),
             updatedAt: Date(),
             hasToken: !gatewayAuthToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         )
@@ -345,6 +355,7 @@ extension GaryxMobileModel {
         resetGatewayRuntimeState()
         gatewayURL = payload.gatewayUrl
         gatewayAuthToken = payload.gatewayAuthToken
+        gatewayHeaders = payload.gatewayHeaders
         loadGatewayScopedUserState(fallbackToLegacy: false)
         await connectAndRefresh()
     }

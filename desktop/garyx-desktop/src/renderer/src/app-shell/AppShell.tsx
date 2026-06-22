@@ -101,6 +101,7 @@ import { GatewayProfileHistoryButton } from "../GatewayProfileHistoryButton";
 import { GatewayIdentityBar } from "../GatewaySwitcher";
 import { SettingsErrorBoundary } from "../SettingsErrorBoundary";
 import { Input } from "../components/ui/input";
+import { Textarea } from "../components/ui/textarea";
 import { WorkspacePathPickerDialog } from "../components/WorkspacePathPicker";
 import { AddBotDialog } from "./components/AddBotDialog";
 import { DreamsPanel } from "./components/DreamsPanel";
@@ -2075,6 +2076,7 @@ export function AppShell() {
       const status = await window.garyxDesktop.checkConnection({
         gatewayUrl: savedSettings.gatewayUrl,
         gatewayAuthToken: savedSettings.gatewayAuthToken,
+        gatewayHeaders: savedSettings.gatewayHeaders,
       });
       setConnection(status);
       if (isConnectionValidForSettings(status, savedSettings)) {
@@ -2105,6 +2107,7 @@ export function AppShell() {
       ...current,
       gatewayUrl: savedSettings.gatewayUrl,
       gatewayAuthToken: savedSettings.gatewayAuthToken,
+      gatewayHeaders: savedSettings.gatewayHeaders,
     }));
     setConnection(savedConnection);
     setError(null);
@@ -9951,6 +9954,7 @@ export function AppShell() {
                         ...current,
                         gatewayUrl: profile.gatewayUrl,
                         gatewayAuthToken: profile.gatewayAuthToken,
+                        gatewayHeaders: profile.gatewayHeaders,
                       }));
                     }}
                   />
@@ -9972,6 +9976,25 @@ export function AppShell() {
                     setSettingsDraft((current) => ({
                       ...current,
                       gatewayAuthToken: event.target.value,
+                    }));
+                  }}
+                />
+              </label>
+
+              <label className="gateway-setup-field">
+                <span>{t('Headers')}</span>
+                <Textarea
+                  autoCapitalize="off"
+                  autoComplete="off"
+                  className="gateway-setup-textarea"
+                  placeholder="X-Garyx-Gateway: value"
+                  spellCheck={false}
+                  value={settingsDraft.gatewayHeaders}
+                  onChange={(event) => {
+                    setLocalSettingsStatus(null);
+                    setSettingsDraft((current) => ({
+                      ...current,
+                      gatewayHeaders: event.target.value,
                     }));
                   }}
                 />
@@ -10048,6 +10071,7 @@ export function AppShell() {
                   ...settingsDraft,
                   gatewayUrl: profile.gatewayUrl,
                   gatewayAuthToken: profile.gatewayAuthToken,
+                  gatewayHeaders: profile.gatewayHeaders,
                 },
                 { requireGatewayConnection: true },
               );
@@ -10447,6 +10471,7 @@ export function AppShell() {
                         ...current,
                         gatewayUrl: nextState.settings.gatewayUrl,
                         gatewayAuthToken: nextState.settings.gatewayAuthToken,
+                        gatewayHeaders: nextState.settings.gatewayHeaders,
                       }));
                       const status = await window.garyxDesktop.checkConnection();
                       setConnection(status);

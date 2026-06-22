@@ -3,23 +3,34 @@ import Foundation
 public struct GaryxMobileConnectPayload: Equatable, Sendable {
     public var gatewayUrl: String
     public var gatewayAuthToken: String
+    public var gatewayHeaders: String
 
-    public init(gatewayUrl: String, gatewayAuthToken: String) {
+    public init(gatewayUrl: String, gatewayAuthToken: String, gatewayHeaders: String = "") {
         self.gatewayUrl = gatewayUrl
         self.gatewayAuthToken = gatewayAuthToken
+        self.gatewayHeaders = GaryxGatewayHeaders.normalizedBlock(gatewayHeaders)
     }
 }
 
 public enum GaryxMobileConnectLink {
-    public static func make(gatewayUrl: String, gatewayAuthToken: String) -> URL? {
+    public static func make(
+        gatewayUrl: String,
+        gatewayAuthToken: String,
+        gatewayHeaders: String = ""
+    ) -> URL? {
         var components = URLComponents()
         components.scheme = "garyx"
         components.host = "mobile"
         components.path = "/connect"
-        components.queryItems = [
+        var queryItems = [
             URLQueryItem(name: "gatewayUrl", value: gatewayUrl),
             URLQueryItem(name: "gatewayAuthToken", value: gatewayAuthToken),
         ]
+        let normalizedHeaders = GaryxGatewayHeaders.normalizedBlock(gatewayHeaders)
+        if !normalizedHeaders.isEmpty {
+            queryItems.append(URLQueryItem(name: "gatewayHeaders", value: normalizedHeaders))
+        }
+        components.queryItems = queryItems
         return components.url
     }
 
@@ -54,7 +65,8 @@ public enum GaryxMobileConnectLink {
         }
         return GaryxMobileConnectPayload(
             gatewayUrl: gatewayUrl,
-            gatewayAuthToken: query("gatewayAuthToken", "gateway_auth_token", "token")
+            gatewayAuthToken: query("gatewayAuthToken", "gateway_auth_token", "token"),
+            gatewayHeaders: query("gatewayHeaders", "gateway_headers", "headers")
         )
     }
 }
