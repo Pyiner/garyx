@@ -202,9 +202,11 @@ function renderUserMessageBubbleParts({
       );
     }
 
+    const isTaskNotificationPart =
+      part.kind === "text" && parseTaskNotificationText(part.text) !== null;
     return (
       <article
-        className={`message-bubble user ${pending ? "pending" : ""} ${error ? "error" : ""}`}
+        className={`message-bubble ${isTaskNotificationPart ? "task-notification-message " : ""}user ${pending ? "pending" : ""} ${error ? "error" : ""}`}
         key={`${keyPrefix}:${part.key}`}
         {...userTurnMarker}
       >

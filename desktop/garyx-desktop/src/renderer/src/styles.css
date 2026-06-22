@@ -8656,12 +8656,12 @@ button.message-file-card {
   gap: 11px;
   width: min(100%, 680px);
   box-sizing: border-box;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
+  padding: 12px 12px 13px;
+  border: 1px solid color-mix(in oklab, var(--color-token-border) 84%, #ffffff);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--color-token-bg-primary) 92%, #f4f1eb);
   color: var(--color-token-text-primary);
-  box-shadow: none;
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.03);
 }
 
 .task-notification-header {
@@ -9641,16 +9641,14 @@ button.team-agent-speaker:focus-visible {
 }
 
 .message-bubble.task-notification-message {
+  align-self: flex-end;
+  width: min(77%, 680px);
+  max-width: 77%;
   padding: 0;
   border: 0;
   border-radius: 0;
   background: transparent;
   box-shadow: none;
-}
-
-.message-bubble.task-notification-message.user {
-  width: min(77%, 680px);
-  max-width: 77%;
 }
 
 .message-bubble.task-notification-message > .message-rich-content {
