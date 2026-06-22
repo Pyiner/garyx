@@ -11,8 +11,9 @@ struct GaryxMobileApp: App {
 
     var body: some Scene {
         WindowGroup {
-            GaryxRootView()
+            GaryxRootView(model: model)
                 .environmentObject(model)
+                .environment(model.homeObservationStore)
                 .onChange(of: scenePhase) { _, phase in
                     model.handleScenePhase(phase)
                 }

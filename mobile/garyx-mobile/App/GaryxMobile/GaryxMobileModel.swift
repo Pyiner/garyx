@@ -74,7 +74,10 @@ final class GaryxMobileModel: ObservableObject {
     }
 
     @Published var gatewayURL: String {
-        didSet { refreshNavigationDrawerSnapshot() }
+        didSet {
+            refreshNavigationDrawerSnapshot()
+            refreshHomeObservationConnectionSnapshot()
+        }
     }
     @Published var gatewayAuthToken: String
     @Published var gatewayHeaders: String
@@ -83,7 +86,10 @@ final class GaryxMobileModel: ObservableObject {
     }
     @Published var gatewaySettingsStatus: String?
     @Published var connectionState: GaryxMobileConnectionState = .disconnected {
-        didSet { refreshNavigationDrawerSnapshot() }
+        didSet {
+            refreshNavigationDrawerSnapshot()
+            refreshHomeObservationConnectionSnapshot()
+        }
     }
     @Published var threads: [GaryxThreadSummary] = [] {
         didSet {
@@ -93,7 +99,9 @@ final class GaryxMobileModel: ObservableObject {
     }
     @Published var selectedThread: GaryxThreadSummary? {
         didSet {
-            applySelectedThreadStreamPolicy(previousThreadId: oldValue?.id, selectedThreadId: selectedThread?.id)
+            if !suppressesSelectedThreadStreamPolicy {
+                applySelectedThreadStreamPolicy(previousThreadId: oldValue?.id, selectedThreadId: selectedThread?.id)
+            }
             refreshHomeThreadListSnapshot()
         }
     }
@@ -117,8 +125,12 @@ final class GaryxMobileModel: ObservableObject {
     @Published var isLoadingThreads = false {
         didSet { refreshHomeThreadListSnapshot() }
     }
-    @Published var isLoadingMoreThreads = false
-    @Published var hasMoreThreadSummaries = false
+    @Published var isLoadingMoreThreads = false {
+        didSet { refreshHomeObservationPaginationSnapshot() }
+    }
+    @Published var hasMoreThreadSummaries = false {
+        didSet { refreshHomeObservationPaginationSnapshot() }
+    }
     @Published var isLoadingSelectedThreadHistory = false
     @Published var isLoadingOlderThreadHistory = false
     @Published var selectedThreadHasMoreHistoryBefore = false
@@ -162,10 +174,14 @@ final class GaryxMobileModel: ObservableObject {
             storedLastError
         }
         set {
-            storedLastError = Self.presentableErrorMessage(newValue)
+            let message = Self.presentableErrorMessage(newValue)
+            storedLastError = message
+            homeObservationStore.setLastError(message)
         }
     }
-    @Published var showsSettings = false
+    @Published var showsSettings = false {
+        didSet { homeObservationStore.setShowsSettings(showsSettings) }
+    }
     @Published var sidebarVisible = false {
         didSet { refreshShellChromeSnapshot() }
     }
@@ -222,7 +238,9 @@ final class GaryxMobileModel: ObservableObject {
     @Published var workspacePreview: GaryxWorkspaceFilePreview?
     @Published var workspaceGitStatuses: [String: GaryxWorkspaceGitStatus] = [:]
     @Published var debugShowsWorkspaceModeSheet = false
-    @Published var debugShowsGatewaySwitcher = false
+    @Published var debugShowsGatewaySwitcher = false {
+        didSet { homeObservationStore.setDebugShowsGatewaySwitcher(debugShowsGatewaySwitcher) }
+    }
     @Published var isUploadingWorkspaceFiles = false
     @Published var workspaceUploadStatus: String?
     @Published var slashCommands: [GaryxSlashCommand] = []
@@ -289,19 +307,12 @@ final class GaryxMobileModel: ObservableObject {
     var selectedThreadStreamTask: Task<Void, Never>?
     var selectedThreadStreamGeneration: UUID?
     var streamOwnedThreadId: String?
-    /// Resume-cursor override for the next per-thread stream connection. Set when a
-    /// live seq gap is detected (a dropped broadcast event) so the reconnect replays
-    /// from the last contiguous seq and refills the hole, rather than from the cache
-    /// head (which would skip it).
-    var selectedThreadStreamResumeOverride: Int?
-    /// Highest committed seq applied on the CURRENT stream connection (0 = none yet).
-    /// Drives mid-stream seq-gap detection and per-connection progress; reset on each
-    /// (re)connect.
-    var selectedThreadStreamConnectionLastSeq: Int = 0
+    var suppressesSelectedThreadStreamPolicy = false
     /// Coalesces render + persist across a burst of streamed committed rows (a large
     /// catch-up). Each row merges into the in-memory window immediately; this task
     /// flushes the accumulated window to the view/disk once per interval.
     var selectedThreadStreamFlushTask: Task<Void, Never>?
+    var selectedThreadStreamDrainTask: Task<Void, Never>?
     var messagesByThread: [String: [GaryxMobileMessage]] = [:]
     var messageSignaturesByThread: [String: MessageListSignature] = [:]
     /// Persistent committed-transcript cache (S2/S3): instant cold-start display
@@ -339,7 +350,9 @@ final class GaryxMobileModel: ObservableObject {
     var nextThreadListOffset = 0
     let rootNavigationPathStore = GaryxRootNavigationPathStore()
     let routeNotFoundStore = GaryxRouteNotFoundStore()
+    let homeObservationStore = GaryxHomeObservationStore()
     let homeThreadListStore = GaryxHomeThreadListStore()
+    let homeProjectionGateway = HomeProjectionGateway()
     let shellChromeStore = GaryxShellChromeStore()
     let navigationDrawerStore = GaryxNavigationDrawerStore()
     let recentThreadsWidgetPersistenceQueue = GaryxRecentThreadsWidgetPersistenceQueue()
@@ -402,6 +415,7 @@ final class GaryxMobileModel: ObservableObject {
         }
         #endif
         rootNavigationPathStore.apply(navigationState: navigationState)
+        refreshHomeObservationSnapshot()
         refreshShellChromeSnapshot()
         refreshNavigationDrawerSnapshot()
         refreshHomeThreadListSnapshot()

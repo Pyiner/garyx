@@ -90,9 +90,10 @@ struct GaryxNotice: View {
 }
 
 struct GaryxGlobalErrorToastHost: View {
-    @EnvironmentObject private var model: GaryxMobileModel
+    @Environment(GaryxHomeObservationStore.self) private var homeObservationStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let topOffset: CGFloat
+    let onClearError: (String) -> Void
 
     @State private var visibleError: String?
     @State private var toastToken = 0
@@ -111,9 +112,9 @@ struct GaryxGlobalErrorToastHost: View {
         }
         .frame(maxWidth: .infinity, alignment: .top)
         .onAppear {
-            present(model.lastError)
+            present(homeObservationStore.lastError)
         }
-        .onChange(of: model.lastError) { _, newValue in
+        .onChange(of: homeObservationStore.lastError) { _, newValue in
             present(newValue)
         }
         .task(id: toastToken) {
@@ -159,9 +160,7 @@ struct GaryxGlobalErrorToastHost: View {
         withAnimation(toastAnimation) {
             visibleError = nil
         }
-        if model.lastError == message {
-            model.lastError = nil
-        }
+        onClearError(message)
     }
 }
 
