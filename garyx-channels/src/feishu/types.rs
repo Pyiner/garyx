@@ -90,6 +90,7 @@ pub(super) struct MentionTarget {
 #[derive(Default)]
 pub(super) struct FeishuResponseStreamState {
     pub(super) stream_text: String,
+    pub(super) last_assistant_text_for_reply: String,
     pub(super) processing_reaction_id: Option<String>,
     pub(super) processing_reaction_removed: bool,
     pub(super) cot: FeishuCotState,

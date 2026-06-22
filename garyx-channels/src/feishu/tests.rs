@@ -1397,6 +1397,240 @@ mod e2e_tests {
         }
     }
 
+    fn feishu_command_tool_pair(
+        id: &str,
+        command: &str,
+        output: &str,
+    ) -> (ProviderMessage, ProviderMessage) {
+        let tool_use = ProviderMessage::tool_use(
+            serde_json::json!({
+                "type": "commandExecution",
+                "command": command,
+                "status": "in_progress",
+            }),
+            Some(id.to_owned()),
+            Some("shell".to_owned()),
+        );
+        let tool_result = ProviderMessage::tool_result(
+            serde_json::json!({
+                "type": "commandExecution",
+                "command": command,
+                "status": "completed",
+                "output": output,
+                "exitCode": 0,
+            }),
+            Some(id.to_owned()),
+            Some("shell".to_owned()),
+            Some(false),
+        );
+        (tool_use, tool_result)
+    }
+
+    struct FeishuAssistantThenTrailingToolProvider;
+
+    #[async_trait]
+    impl AgentLoopProvider for FeishuAssistantThenTrailingToolProvider {
+        fn provider_type(&self) -> ProviderType {
+            ProviderType::CodexAppServer
+        }
+
+        fn is_ready(&self) -> bool {
+            true
+        }
+
+        async fn initialize(&mut self) -> Result<(), BridgeError> {
+            Ok(())
+        }
+
+        async fn shutdown(&mut self) -> Result<(), BridgeError> {
+            Ok(())
+        }
+
+        async fn run_streaming(
+            &self,
+            options: &ProviderRunOptions,
+            on_chunk: StreamCallback,
+        ) -> Result<ProviderRunResult, BridgeError> {
+            let tool_use = ProviderMessage::tool_use(
+                serde_json::json!({
+                    "type": "commandExecution",
+                    "command": "garyx task update #TASK-0000 --status done",
+                    "status": "in_progress",
+                }),
+                Some("tool-final-feishu-1".to_owned()),
+                Some("shell".to_owned()),
+            );
+            let tool_result = ProviderMessage::tool_result(
+                serde_json::json!({
+                    "type": "commandExecution",
+                    "command": "garyx task update #TASK-0000 --status done",
+                    "status": "completed",
+                    "output": "done",
+                    "exitCode": 0,
+                }),
+                Some("tool-final-feishu-1".to_owned()),
+                Some("shell".to_owned()),
+                Some(false),
+            );
+
+            on_chunk(StreamEvent::Delta {
+                text: "这是最终回答正文".to_owned(),
+            });
+            on_chunk(StreamEvent::ToolUse { message: tool_use });
+            on_chunk(StreamEvent::ToolResult {
+                message: tool_result,
+            });
+            on_chunk(StreamEvent::Done);
+
+            Ok(ProviderRunResult {
+                run_id: "feishu-assistant-then-trailing-tool".to_owned(),
+                thread_id: options.thread_id.clone(),
+                response: "这是最终回答正文".to_owned(),
+                session_messages: Vec::new(),
+                sdk_session_id: None,
+                actual_model: None,
+                thread_title: None,
+                success: true,
+                error: None,
+                input_tokens: 1,
+                output_tokens: 1,
+                cost: 0.0,
+                duration_ms: 1,
+            })
+        }
+
+        async fn get_or_create_session(&self, session_key: &str) -> Result<String, BridgeError> {
+            Ok(format!("sdk-{session_key}"))
+        }
+    }
+
+    struct FeishuMultipleAssistantSegmentsThenTrailingToolProvider;
+
+    #[async_trait]
+    impl AgentLoopProvider for FeishuMultipleAssistantSegmentsThenTrailingToolProvider {
+        fn provider_type(&self) -> ProviderType {
+            ProviderType::CodexAppServer
+        }
+
+        fn is_ready(&self) -> bool {
+            true
+        }
+
+        async fn initialize(&mut self) -> Result<(), BridgeError> {
+            Ok(())
+        }
+
+        async fn shutdown(&mut self) -> Result<(), BridgeError> {
+            Ok(())
+        }
+
+        async fn run_streaming(
+            &self,
+            options: &ProviderRunOptions,
+            on_chunk: StreamCallback,
+        ) -> Result<ProviderRunResult, BridgeError> {
+            let (first_tool_use, first_tool_result) =
+                feishu_command_tool_pair("tool-final-feishu-a", "pwd", "/tmp/workspace");
+            let (second_tool_use, second_tool_result) =
+                feishu_command_tool_pair("tool-final-feishu-b", "echo done", "done");
+
+            on_chunk(StreamEvent::Delta {
+                text: "前一段不该进最终回复".to_owned(),
+            });
+            on_chunk(StreamEvent::ToolUse {
+                message: first_tool_use,
+            });
+            on_chunk(StreamEvent::ToolResult {
+                message: first_tool_result,
+            });
+            on_chunk(StreamEvent::Delta {
+                text: "最后一段应该进最终回复".to_owned(),
+            });
+            on_chunk(StreamEvent::ToolUse {
+                message: second_tool_use,
+            });
+            on_chunk(StreamEvent::ToolResult {
+                message: second_tool_result,
+            });
+            on_chunk(StreamEvent::Done);
+
+            Ok(ProviderRunResult {
+                run_id: "feishu-multiple-assistant-segments-then-trailing-tool".to_owned(),
+                thread_id: options.thread_id.clone(),
+                response: "前一段不该进最终回复\n\n最后一段应该进最终回复".to_owned(),
+                session_messages: Vec::new(),
+                sdk_session_id: None,
+                actual_model: None,
+                thread_title: None,
+                success: true,
+                error: None,
+                input_tokens: 1,
+                output_tokens: 1,
+                cost: 0.0,
+                duration_ms: 1,
+            })
+        }
+
+        async fn get_or_create_session(&self, session_key: &str) -> Result<String, BridgeError> {
+            Ok(format!("sdk-{session_key}"))
+        }
+    }
+
+    struct FeishuTitleUpdateAfterAssistantProvider;
+
+    #[async_trait]
+    impl AgentLoopProvider for FeishuTitleUpdateAfterAssistantProvider {
+        fn provider_type(&self) -> ProviderType {
+            ProviderType::CodexAppServer
+        }
+
+        fn is_ready(&self) -> bool {
+            true
+        }
+
+        async fn initialize(&mut self) -> Result<(), BridgeError> {
+            Ok(())
+        }
+
+        async fn shutdown(&mut self) -> Result<(), BridgeError> {
+            Ok(())
+        }
+
+        async fn run_streaming(
+            &self,
+            options: &ProviderRunOptions,
+            on_chunk: StreamCallback,
+        ) -> Result<ProviderRunResult, BridgeError> {
+            on_chunk(StreamEvent::Delta {
+                text: "标题更新前的回复正文".to_owned(),
+            });
+            on_chunk(StreamEvent::ThreadTitleUpdated {
+                title: "新的线程标题".to_owned(),
+            });
+            on_chunk(StreamEvent::Done);
+
+            Ok(ProviderRunResult {
+                run_id: "feishu-title-update-after-assistant".to_owned(),
+                thread_id: options.thread_id.clone(),
+                response: "标题更新前的回复正文".to_owned(),
+                session_messages: Vec::new(),
+                sdk_session_id: None,
+                actual_model: None,
+                thread_title: Some("新的线程标题".to_owned()),
+                success: true,
+                error: None,
+                input_tokens: 1,
+                output_tokens: 1,
+                cost: 0.0,
+                duration_ms: 1,
+            })
+        }
+
+        async fn get_or_create_session(&self, session_key: &str) -> Result<String, BridgeError> {
+            Ok(format!("sdk-{session_key}"))
+        }
+    }
+
     struct FeishuImageGenerationProvider;
 
     struct FeishuReadFileProvider;
@@ -2473,6 +2707,248 @@ mod e2e_tests {
         assert!(
             !reply_text.contains("先说一句") && reply_text.contains("再接一句"),
             "pre-tool text should move into COT text, while final text stays in reply; reply_text={reply_text:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_e2e_feishu_trailing_tool_after_final_answer_keeps_reply_card() {
+        let (server, client) = setup_feishu_mock().await;
+        Mock::given(method("POST"))
+            .and(path("/im/v1/message_cot"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": 0,
+                "msg": "ok",
+                "data": {
+                    "cot_id": "cot_trailing_tool_001",
+                    "message_id": "om_cot_trailing_tool_001"
+                }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/im/v1/message_cot"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": 0,
+                "msg": "ok"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path_regex(r"^/im/v1/message_cot/complete/[^/]+$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": 0,
+                "msg": "ok"
+            })))
+            .mount(&server)
+            .await;
+
+        let provider = Arc::new(FeishuAssistantThenTrailingToolProvider);
+        let bridge = make_bridge_with(provider).await;
+        let router = make_router();
+        let account = make_default_account();
+
+        let event = FeishuEventBuilder::group("ou_user123", "oc_group456", "hi from group")
+            .with_root_id("om_thread_root")
+            .build();
+
+        dispatch_im_message_event(
+            "app1",
+            &event,
+            &router,
+            &bridge,
+            &client,
+            &account,
+            "",
+            &account.app_id,
+        )
+        .await;
+
+        let complete_calls = wait_for_matching_requests_quiet_window(
+            &server,
+            std::time::Duration::from_millis(200),
+            std::time::Duration::from_secs(5),
+            1,
+            |r| {
+                r.method.as_str() == "POST"
+                    && r.url.path() == "/im/v1/message_cot/complete/cot_trailing_tool_001"
+            },
+        )
+        .await;
+        assert_eq!(complete_calls.len(), 1, "COT run should be completed");
+
+        let requests = wait_for_request_quiet_window(
+            &server,
+            std::time::Duration::from_millis(200),
+            std::time::Duration::from_secs(5),
+            1,
+        )
+        .await;
+        let reply_calls = requests
+            .iter()
+            .filter(|request| request.url.path().contains("/reply"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            reply_calls.len(),
+            1,
+            "final assistant answer must be sent as a Feishu reply card even when a trailing tool follows it"
+        );
+        let reply_body: Value = serde_json::from_slice(&reply_calls[0].body).unwrap();
+        let reply_content: Value =
+            serde_json::from_str(reply_body["content"].as_str().unwrap()).unwrap();
+        let reply_text = reply_content["body"]["elements"][0]["content"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            reply_text.contains("这是最终回答正文"),
+            "final assistant text should stay in the reply card; reply_text={reply_text:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_e2e_feishu_trailing_tool_reply_uses_latest_assistant_segment_only() {
+        let (server, client) = setup_feishu_mock().await;
+        Mock::given(method("POST"))
+            .and(path("/im/v1/message_cot"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": 0,
+                "msg": "ok",
+                "data": {
+                    "cot_id": "cot_two_trailing_tools_001",
+                    "message_id": "om_cot_two_trailing_tools_001"
+                }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/im/v1/message_cot"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": 0,
+                "msg": "ok"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path_regex(r"^/im/v1/message_cot/complete/[^/]+$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": 0,
+                "msg": "ok"
+            })))
+            .mount(&server)
+            .await;
+
+        let provider = Arc::new(FeishuMultipleAssistantSegmentsThenTrailingToolProvider);
+        let bridge = make_bridge_with(provider).await;
+        let router = make_router();
+        let account = make_default_account();
+
+        let event = FeishuEventBuilder::group("ou_user123", "oc_group456", "hi from group")
+            .with_root_id("om_thread_root")
+            .build();
+
+        dispatch_im_message_event(
+            "app1",
+            &event,
+            &router,
+            &bridge,
+            &client,
+            &account,
+            "",
+            &account.app_id,
+        )
+        .await;
+
+        let complete_calls = wait_for_matching_requests_quiet_window(
+            &server,
+            std::time::Duration::from_millis(200),
+            std::time::Duration::from_secs(5),
+            1,
+            |r| {
+                r.method.as_str() == "POST"
+                    && r.url.path() == "/im/v1/message_cot/complete/cot_two_trailing_tools_001"
+            },
+        )
+        .await;
+        assert_eq!(complete_calls.len(), 1, "COT run should be completed");
+
+        let requests = wait_for_request_quiet_window(
+            &server,
+            std::time::Duration::from_millis(200),
+            std::time::Duration::from_secs(5),
+            1,
+        )
+        .await;
+        let reply_calls = requests
+            .iter()
+            .filter(|request| request.url.path().contains("/reply"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            reply_calls.len(),
+            1,
+            "final assistant answer should be sent once after a trailing tool"
+        );
+        let reply_body: Value = serde_json::from_slice(&reply_calls[0].body).unwrap();
+        let reply_content: Value =
+            serde_json::from_str(reply_body["content"].as_str().unwrap()).unwrap();
+        let reply_text = reply_content["body"]["elements"][0]["content"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            !reply_text.contains("前一段不该进最终回复")
+                && reply_text.contains("最后一段应该进最终回复"),
+            "final reply should use only the latest assistant segment before the trailing tool; reply_text={reply_text:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_e2e_feishu_thread_title_update_does_not_duplicate_reply_on_done() {
+        let (server, client) = setup_feishu_mock().await;
+
+        let provider = Arc::new(FeishuTitleUpdateAfterAssistantProvider);
+        let bridge = make_bridge_with(provider).await;
+        let router = make_router();
+        let account = make_default_account();
+
+        let event = FeishuEventBuilder::group("ou_user123", "oc_group456", "hi from group")
+            .with_root_id("om_thread_root")
+            .build();
+
+        dispatch_im_message_event(
+            "app1",
+            &event,
+            &router,
+            &bridge,
+            &client,
+            &account,
+            "",
+            &account.app_id,
+        )
+        .await;
+
+        let requests = wait_for_request_quiet_window(
+            &server,
+            std::time::Duration::from_millis(200),
+            std::time::Duration::from_secs(5),
+            1,
+        )
+        .await;
+        let reply_calls = requests
+            .iter()
+            .filter(|request| request.url.path().contains("/reply"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            reply_calls.len(),
+            1,
+            "ThreadTitleUpdated should not leave fallback text for Done to send again"
+        );
+        let reply_body: Value = serde_json::from_slice(&reply_calls[0].body).unwrap();
+        let reply_content: Value =
+            serde_json::from_str(reply_body["content"].as_str().unwrap()).unwrap();
+        let reply_text = reply_content["body"]["elements"][0]["content"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            reply_text.contains("标题更新前的回复正文"),
+            "assistant text should still be sent once; reply_text={reply_text:?}"
         );
     }
 
