@@ -2111,13 +2111,7 @@ private struct GaryxTaskNotificationCard: View {
                 onImageFilePreview: nil
             )
         }
-        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(GaryxTheme.surface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(GaryxTheme.hairline, lineWidth: 1)
-        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Task ready for review")
     }
