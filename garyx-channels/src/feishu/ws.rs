@@ -234,6 +234,7 @@ pub(crate) fn build_feishu_response_callback(
             let mut state = worker_state.lock().await;
             let mut text_to_send = String::new();
             let mut send_result: Option<Result<String, FeishuError>> = None;
+            let mut clear_reply_fallback = false;
             match event {
                 StreamEvent::SessionBound { .. } => {
                     continue;
@@ -249,6 +250,7 @@ pub(crate) fn build_feishu_response_callback(
                             &mut state.stream_text,
                             StreamBoundaryKind::UserAck,
                         );
+                        state.last_assistant_text_for_reply.clear();
                         drop(state);
 
                         if !boundary_text.is_empty()
@@ -277,6 +279,10 @@ pub(crate) fn build_feishu_response_callback(
                             &mut state.stream_text,
                             StreamBoundaryKind::AssistantSegment,
                         );
+                        crate::streaming_core::apply_stream_boundary_text(
+                            &mut state.last_assistant_text_for_reply,
+                            StreamBoundaryKind::AssistantSegment,
+                        );
                         continue;
                     }
                 },
@@ -285,6 +291,7 @@ pub(crate) fn build_feishu_response_callback(
                         continue;
                     }
                     state.stream_text = merge_stream_text(&state.stream_text, &text);
+                    state.last_assistant_text_for_reply = state.stream_text.clone();
                     continue;
                 }
                 StreamEvent::ToolUse { message } => {
@@ -388,11 +395,20 @@ pub(crate) fn build_feishu_response_callback(
                         &canonical_thread_id,
                     )
                     .await;
+                    if state.stream_text.trim().is_empty() {
+                        state.stream_text =
+                            std::mem::take(&mut state.last_assistant_text_for_reply);
+                    }
+                    clear_reply_fallback = true;
                 }
             }
 
+            let stream_text_was_available = !state.stream_text.trim().is_empty();
             let mut final_text = state.stream_text.clone();
             state.stream_text.clear();
+            if clear_reply_fallback || stream_text_was_available {
+                state.last_assistant_text_for_reply.clear();
+            }
 
             if !cfg.mention_prefix.is_empty() {
                 final_text = format!("{} {final_text}", cfg.mention_prefix);
