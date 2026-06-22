@@ -344,13 +344,13 @@ extension GaryxMobileModel {
         selectedAutomationEditor = nil
         selectedAgentDetail = nil
         selectedTeamDetail = nil
-        selectedRouteNotFound = nil
+        routeNotFoundStore.selection = nil
         closeSkillDetail()
     }
 
     private func showRouteNotFound(kind: String, id: String) {
         let target = id.trimmingCharacters(in: .whitespacesAndNewlines)
-        selectedRouteNotFound = GaryxMobileRouteNotFound(
+        routeNotFoundStore.selection = GaryxMobileRouteNotFound(
             title: "\(kind) Not Found",
             message: target.isEmpty
                 ? "Garyx could not find the requested \(kind.lowercased())."

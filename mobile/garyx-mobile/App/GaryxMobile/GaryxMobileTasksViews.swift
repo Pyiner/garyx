@@ -289,7 +289,7 @@ private struct GaryxTaskThreadButton: View {
     var body: some View {
         GaryxSwipeActionRow(id: "thread:\(thread.id)", actions: threadSwipeActions) {
             GaryxSidebarThreadRowView(
-                model: GaryxSidebarThreadRowPresentation(
+                presentation: GaryxSidebarThreadRowPresentation(
                     thread: thread,
                     isSelected: isSelected,
                     isPinned: isPinned,

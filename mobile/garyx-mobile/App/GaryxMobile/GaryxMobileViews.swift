@@ -461,7 +461,42 @@ struct GaryxShellView: View {
                     .allowsHitTesting(revealWidth > width * 0.82)
                     .simultaneousGesture(closingSidebarGesture(sidebarWidth: width))
 
-                GaryxRootNavigationView()
+                GaryxRootNavigationView(
+                    navigationStore: model.rootNavigationPathStore,
+                    routeNotFoundStore: model.routeNotFoundStore,
+                    homeListStore: model.homeThreadListStore,
+                    isSidebarDragActive: drawerDragActive,
+                    onOpenDrawer: {
+                        model.setSidebarVisible(true)
+                    },
+                    applyRootNavigationPath: { model.applyRootNavigationPath($0) },
+                    onRefreshAll: {
+                        await model.refreshThreads(silent: true)
+                        await model.refreshRemoteState()
+                    },
+                    onRefreshSidebarThreads: { silent in
+                        await model.refreshThreads(silent: silent)
+                    },
+                    canRefreshSidebarThreads: {
+                        !model.isLoadingThreads && !model.isLoadingMoreThreads
+                    },
+                    onStartNewChat: {
+                        model.openNewThreadDraft()
+                    },
+                    onOpenThread: { thread in
+                        model.openThreadImmediately(thread, source: .replace)
+                    },
+                    onTogglePinnedThread: { threadId in
+                        model.togglePinnedThread(threadId)
+                    },
+                    onUnpinThread: { threadId in
+                        model.unpinThread(threadId)
+                    },
+                    onArchiveThread: { thread in
+                        await model.archiveThread(thread)
+                    }
+                )
+                .equatable()
                     .disabled(drawerDragActive)
                     .allowsHitTesting(revealWidth == 0)
                     .overlay {

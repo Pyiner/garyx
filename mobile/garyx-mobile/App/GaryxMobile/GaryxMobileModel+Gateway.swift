@@ -160,7 +160,7 @@ extension GaryxMobileModel {
         selectedAutomationEditor = nil
         selectedAgentDetail = nil
         selectedTeamDetail = nil
-        selectedRouteNotFound = nil
+        routeNotFoundStore.selection = nil
         isLoadingThreads = false
         remoteStateLoadPhase = .idle
         isLoadingSelectedThreadHistory = false

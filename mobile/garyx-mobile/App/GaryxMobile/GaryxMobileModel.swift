@@ -34,6 +34,11 @@ struct GaryxMobileRouteNotFound: Identifiable, Equatable {
 }
 
 @MainActor
+final class GaryxRouteNotFoundStore: ObservableObject {
+    @Published var selection: GaryxMobileRouteNotFound?
+}
+
+@MainActor
 final class GaryxMobileModel: ObservableObject {
     static let threadListPageLimit = 30
     static let threadHistoryPageLimit = 100
@@ -132,7 +137,7 @@ final class GaryxMobileModel: ObservableObject {
     }
     @Published var navigationState = GaryxMobileNavigationState() {
         didSet {
-            endThreadListInteractionIfHomeBecameHidden(previousNavigationState: oldValue)
+            rootNavigationPathStore.apply(navigationState: navigationState)
             refreshHomeThreadListSnapshot()
         }
     }
@@ -215,7 +220,6 @@ final class GaryxMobileModel: ObservableObject {
     @Published var selectedAutomationEditor: GaryxAutomationSummary?
     @Published var selectedAgentDetail: GaryxAgentSummary?
     @Published var selectedTeamDetail: GaryxTeamSummary?
-    @Published var selectedRouteNotFound: GaryxMobileRouteNotFound?
     var skillEditorLoadRequestId: UUID?
     var skillFileLoadRequestId: UUID?
     @Published var draftThreadTitle = ""
@@ -291,9 +295,9 @@ final class GaryxMobileModel: ObservableObject {
     var workspaceRefreshRequestId: UUID?
     var nextThreadListOffset = 0
     var lastPersistedWidgetThreads: [GaryxMobileWidgetThread]?
-    var hasDeferredRecentThreadsWidgetSnapshotPersistence = false
+    let rootNavigationPathStore = GaryxRootNavigationPathStore()
+    let routeNotFoundStore = GaryxRouteNotFoundStore()
     let homeThreadListStore = GaryxHomeThreadListStore()
-    var isThreadListInteracting = false
     var hasAttemptedLastOpenedThreadRestore = false
     var selectedThreadNextHistoryBeforeIndex: Int?
     var sceneRefreshTask: Task<Void, Never>?
@@ -345,6 +349,11 @@ final class GaryxMobileModel: ObservableObject {
             )
         }
         #endif
+        rootNavigationPathStore.apply(navigationState: navigationState)
         refreshHomeThreadListSnapshot()
+        #if DEBUG
+        GaryxHomeScrollPerformanceProbe.shared.attachModelObjectWillChange(objectWillChange)
+        startHomeScrollPressureProbeIfRequested()
+        #endif
     }
 }
