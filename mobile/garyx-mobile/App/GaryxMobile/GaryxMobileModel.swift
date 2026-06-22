@@ -312,6 +312,7 @@ final class GaryxMobileModel: ObservableObject {
         ttl: GaryxTranscriptFileCacheStore.defaultTTL
     )
     var cachedTranscriptSnapshots: [String: GaryxCachedTranscript] = [:]
+    var transcriptCachePersistenceGenerations: [String: UInt64] = [:]
     var selectedMessagesSignature = MessageListSignature(count: 0, fingerprint: 0, sampled: false)
     var pendingSelectedMessagesSignature: MessageListSignature?
     var activeAssistantMessageIdsByThread: [String: String] = [:]

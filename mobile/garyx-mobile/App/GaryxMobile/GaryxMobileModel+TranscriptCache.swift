@@ -212,31 +212,64 @@ extension GaryxMobileModel {
 
     func persistTranscriptCacheWindowInBackground(_ window: GaryxCachedTranscript) {
         let store = transcriptCacheStore
+        let generation = nextTranscriptCachePersistenceGeneration(for: window.threadId)
         Task.detached(priority: .utility) {
-            await GaryxTranscriptCachePersistenceQueue.shared.save(window, store: store)
+            await GaryxTranscriptCachePersistenceQueue.shared.save(
+                window,
+                generation: generation,
+                store: store
+            )
         }
     }
 
     func removeTranscriptCacheInBackground(threadId: String) {
         let store = transcriptCacheStore
+        let generation = nextTranscriptCachePersistenceGeneration(for: threadId)
         Task.detached(priority: .utility) {
-            await GaryxTranscriptCachePersistenceQueue.shared.remove(threadId: threadId, store: store)
+            await GaryxTranscriptCachePersistenceQueue.shared.remove(
+                threadId: threadId,
+                generation: generation,
+                store: store
+            )
         }
+    }
+
+    private func nextTranscriptCachePersistenceGeneration(for threadId: String) -> UInt64 {
+        let next = (transcriptCachePersistenceGenerations[threadId] ?? 0) &+ 1
+        transcriptCachePersistenceGenerations[threadId] = next
+        return next
     }
 }
 
 private actor GaryxTranscriptCachePersistenceQueue {
     static let shared = GaryxTranscriptCachePersistenceQueue()
 
+    private var latestGenerationByThread: [String: UInt64] = [:]
+
     func load(threadId: String, store: GaryxTranscriptCacheStore) -> GaryxCachedTranscript? {
         store.load(threadId: threadId)
     }
 
-    func save(_ snapshot: GaryxCachedTranscript, store: GaryxTranscriptCacheStore) {
+    func save(
+        _ snapshot: GaryxCachedTranscript,
+        generation: UInt64,
+        store: GaryxTranscriptCacheStore
+    ) {
+        guard acceptGeneration(generation, threadId: snapshot.threadId) else { return }
         store.save(snapshot)
     }
 
-    func remove(threadId: String, store: GaryxTranscriptCacheStore) {
+    func remove(threadId: String, generation: UInt64, store: GaryxTranscriptCacheStore) {
+        guard acceptGeneration(generation, threadId: threadId) else { return }
         store.remove(threadId: threadId)
+    }
+
+    private func acceptGeneration(_ generation: UInt64, threadId: String) -> Bool {
+        let latest = latestGenerationByThread[threadId] ?? 0
+        guard generation >= latest else {
+            return false
+        }
+        latestGenerationByThread[threadId] = generation
+        return true
     }
 }
