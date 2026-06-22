@@ -10,13 +10,14 @@ enum GaryxMobileMotion {
 }
 
 struct GaryxRootView: View {
-    @EnvironmentObject private var model: GaryxMobileModel
+    let model: GaryxMobileModel
+    @Environment(GaryxHomeObservationStore.self) private var homeObservationStore
 
     var body: some View {
         ZStack {
             GaryxTheme.background.ignoresSafeArea()
 
-            if model.hasGatewaySettings, case .ready = model.connectionState {
+            if homeObservationStore.isGatewayConfigured, case .ready = homeObservationStore.connectionState {
                 GaryxShellView(
                     shellStore: model.shellChromeStore,
                     drawerStore: model.navigationDrawerStore,
@@ -39,6 +40,9 @@ struct GaryxRootView: View {
                     },
                     canRefreshSidebarThreads: {
                         !model.isLoadingThreads && !model.isLoadingMoreThreads
+                    },
+                    onLoadMoreThreads: {
+                        await model.loadMoreThreads()
                     },
                     onStartNewChat: {
                         model.openNewThreadDraft()
@@ -76,7 +80,10 @@ struct GaryxRootView: View {
                     onManageGateways: {
                         model.openSettings(tab: .gateway)
                     },
-                    debugShowsGatewaySwitcher: $model.debugShowsGatewaySwitcher
+                    debugShowsGatewaySwitcher: Binding(
+                        get: { homeObservationStore.debugShowsGatewaySwitcher },
+                        set: { model.debugShowsGatewaySwitcher = $0 }
+                    )
                 )
                 .equatable()
             } else {
@@ -84,7 +91,10 @@ struct GaryxRootView: View {
             }
         }
         .overlay(alignment: .top) {
-            GaryxGlobalErrorToastHost(topOffset: 72)
+            GaryxGlobalErrorToastHost(
+                topOffset: 72,
+                onClearError: model.clearLastErrorIfCurrent
+            )
         }
         .environment(\.garyxOpenSidebar) {
             model.setSidebarVisible(true)
@@ -105,7 +115,12 @@ struct GaryxRootView: View {
             #endif
             Task { await model.handleOpenURL(url) }
         }
-        .sheet(isPresented: $model.showsSettings) {
+        .sheet(
+            isPresented: Binding(
+                get: { homeObservationStore.showsSettings },
+                set: { model.showsSettings = $0 }
+            )
+        ) {
             GaryxGatewaySetupView(isSheet: true)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
@@ -165,7 +180,10 @@ struct GaryxGatewaySetupView: View {
             .onAppear(perform: initializeDraft)
             .overlay(alignment: .top) {
                 if isSheet {
-                    GaryxGlobalErrorToastHost(topOffset: 8)
+                    GaryxGlobalErrorToastHost(
+                        topOffset: 8,
+                        onClearError: model.clearLastErrorIfCurrent
+                    )
                 }
             }
         }
@@ -209,7 +227,10 @@ struct GaryxGatewaySetupView: View {
         }
         .onAppear(perform: initializeDraft)
         .overlay(alignment: .top) {
-            GaryxGlobalErrorToastHost(topOffset: 8)
+            GaryxGlobalErrorToastHost(
+                topOffset: 8,
+                onClearError: model.clearLastErrorIfCurrent
+            )
         }
     }
 
@@ -460,6 +481,7 @@ struct GaryxShellView: View, Equatable {
     let onRefreshAll: () async -> Void
     let onRefreshSidebarThreads: (Bool) async -> Void
     let canRefreshSidebarThreads: () -> Bool
+    let onLoadMoreThreads: () async -> Void
     let onStartNewChat: () -> Void
     let onOpenThread: (GaryxThreadSummary) -> Void
     let onTogglePinnedThread: (String) -> Void
@@ -582,6 +604,7 @@ struct GaryxShellView: View, Equatable {
                     onRefreshAll: onRefreshAll,
                     onRefreshSidebarThreads: onRefreshSidebarThreads,
                     canRefreshSidebarThreads: canRefreshSidebarThreads,
+                    onLoadMoreThreads: onLoadMoreThreads,
                     onStartNewChat: onStartNewChat,
                     onOpenThread: onOpenThread,
                     onTogglePinnedThread: onTogglePinnedThread,

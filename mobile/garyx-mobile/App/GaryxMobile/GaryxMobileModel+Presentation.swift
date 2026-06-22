@@ -17,6 +17,34 @@ extension GaryxMobileModel {
         navigationDrawerStore.apply(navigationDrawerSnapshot)
     }
 
+    func refreshHomeObservationSnapshot() {
+        refreshHomeObservationConnectionSnapshot()
+        refreshHomeObservationPaginationSnapshot()
+        homeObservationStore.setShowsSettings(showsSettings)
+        homeObservationStore.setDebugShowsGatewaySwitcher(debugShowsGatewaySwitcher)
+        homeObservationStore.setLastError(lastError)
+    }
+
+    func refreshHomeObservationConnectionSnapshot() {
+        homeObservationStore.applyConnection(
+            isGatewayConfigured: hasGatewaySettings,
+            connectionState: connectionState
+        )
+    }
+
+    func refreshHomeObservationPaginationSnapshot() {
+        homeObservationStore.applyPagination(
+            isLoadingMoreThreads: isLoadingMoreThreads,
+            hasMoreThreadSummaries: hasMoreThreadSummaries
+        )
+    }
+
+    func clearLastErrorIfCurrent(_ message: String) {
+        if lastError == message {
+            lastError = nil
+        }
+    }
+
     func predecodeAgentAvatarImages() {
         GaryxDataURLImageCache.predecodeAgentAvatars(
             from: agents.map { Optional($0.avatarDataUrl) } + teams.map { Optional($0.avatarDataUrl) }
@@ -56,8 +84,21 @@ extension GaryxMobileModel {
         #if DEBUG
         GaryxHomeScrollPerformanceProbe.shared.markHomeListStoreApply()
         #endif
-        homeThreadListStore.apply(homeThreadListInput)
+        let input = homeThreadListInput
+        homeThreadListStore.apply(input)
+        captureHomeProjectionShadow(input: input)
         syncBackgroundCommittedRunReconcileLoopForHomeVisibility()
+    }
+
+    func captureHomeProjectionShadow(input: GaryxHomeThreadListInput) {
+        homeProjectionGateway.capture(
+            HomeProjectionCapture(
+                legacyInput: input,
+                runTrackerBusyThreadIds: runTracker.busyThreadIds,
+                committedRunStateBusyByThreadId: runStateByThread.mapValues { $0.busy }
+            ),
+            liveLegacySnapshot: homeThreadListStore.snapshot
+        )
     }
 
     var homeThreadListInput: GaryxHomeThreadListInput {
