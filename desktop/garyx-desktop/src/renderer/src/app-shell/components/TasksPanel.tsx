@@ -1310,8 +1310,6 @@ export function TasksPanel({
 
       {viewMode === 'forest' ? (
         <TaskForestConsole
-          agents={agents}
-          botGroups={botGroups}
           onOpenThreadInPanel={onOpenThreadInPanel}
           onToast={onToast}
           pinnedThreadIds={pinnedThreadIds}
@@ -1319,8 +1317,6 @@ export function TasksPanel({
           selectedThreadId={selectedThreadId}
           selectedThreadPanel={selectedThreadPanel}
           sourceBot={botFilter || null}
-          workspaces={workspaces}
-          workspaceMutation={workspaceMutation}
         />
       ) : viewMode === 'board' ? (
         <div className="tasks-board" aria-busy={loading}>

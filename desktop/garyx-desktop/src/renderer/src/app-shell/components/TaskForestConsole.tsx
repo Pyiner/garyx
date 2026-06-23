@@ -4,35 +4,26 @@ import {
   useMemo,
   useRef,
   useState,
-  type FormEvent,
   type MouseEvent,
   type ReactNode,
   type WheelEvent,
 } from "react";
-import { createPortal } from "react-dom";
 import {
   CheckCircle2,
-  Command,
-  Crosshair,
   GitBranch,
   Maximize2,
   MessageSquare,
   PanelRightClose,
-  Plus,
   RefreshCcw,
-  Search,
   Send,
   Sparkles,
   type LucideIcon,
 } from "lucide-react";
 
 import type {
-  DesktopBotConsoleSummary,
-  DesktopCustomAgent,
   DesktopTaskForestNode,
   DesktopTaskForestTaskNode,
   DesktopTaskStatus,
-  DesktopWorkspace,
 } from "@shared/contracts";
 
 import { getDesktopApi } from "../../platform/desktop-api";
@@ -44,15 +35,11 @@ import {
 } from "./task-forest-layout";
 
 type TaskForestConsoleProps = {
-  agents: DesktopCustomAgent[];
-  botGroups: DesktopBotConsoleSummary[];
   pinnedThreadIds: string[];
   pinnedThreadsVersion: number;
   selectedThreadId: string | null;
   selectedThreadPanel: ReactNode;
   sourceBot: string | null;
-  workspaces: DesktopWorkspace[];
-  workspaceMutation: string | null;
   onOpenThreadInPanel: (threadId: string) => Promise<boolean> | boolean;
   onToast: (message: string, tone?: ToastTone) => void;
 };
@@ -61,15 +48,6 @@ type Camera = {
   x: number;
   y: number;
   z: number;
-};
-
-type NewTaskDraft = {
-  parent: DesktopTaskForestNode | null;
-  title: string;
-  body: string;
-  agentId: string;
-  workspaceDir: string;
-  notificationTarget: string;
 };
 
 const STATUS_META: Record<
@@ -182,53 +160,12 @@ function isEditableEventTarget(target: EventTarget | null): boolean {
   );
 }
 
-function taskSourceForChild(parent: DesktopTaskForestNode) {
-  if (parent.kind === "thread") {
-    return {
-      threadId: parent.threadId,
-      taskId: null,
-      taskThreadId: null,
-      botId: null,
-      channel: null,
-      accountId: null,
-    };
-  }
-  return {
-    threadId: parent.threadId,
-    taskId: displayTaskId(parent),
-    taskThreadId: parent.threadId,
-    botId: parent.source?.botId ?? null,
-    channel: parent.source?.channel ?? null,
-    accountId: parent.source?.accountId ?? null,
-  };
-}
-
-function defaultDraft(
-  parent: DesktopTaskForestNode | null,
-  agents: DesktopCustomAgent[],
-  workspaces: DesktopWorkspace[],
-): NewTaskDraft {
-  return {
-    parent,
-    title: "",
-    body: "",
-    agentId: agents[0]?.agentId || "",
-    workspaceDir:
-      workspaces.find((workspace) => workspace.available && workspace.path)?.path || "",
-    notificationTarget: "none",
-  };
-}
-
 export function TaskForestConsole({
-  agents,
-  botGroups,
   pinnedThreadIds,
   pinnedThreadsVersion,
   selectedThreadId,
   selectedThreadPanel,
   sourceBot,
-  workspaces,
-  workspaceMutation,
   onOpenThreadInPanel,
   onToast,
 }: TaskForestConsoleProps) {
@@ -261,20 +198,8 @@ export function TaskForestConsole({
   const [camera, setCamera] = useState<Camera>({ x: 48, y: 42, z: 1 });
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
   const [smoothCamera, setSmoothCamera] = useState(false);
-  const [paletteOpen, setPaletteOpen] = useState(false);
-  const [paletteQuery, setPaletteQuery] = useState("");
-  const [draft, setDraft] = useState<NewTaskDraft | null>(null);
   const [spacePanning, setSpacePanning] = useState(false);
-  const [creating, setCreating] = useState(false);
   const [mutatingTaskId, setMutatingTaskId] = useState<string | null>(null);
-
-  const selectableWorkspaces = useMemo(
-    () =>
-      workspaces.filter(
-        (workspace) => workspace.available && workspace.path && workspace.kind === "local",
-      ),
-    [workspaces],
-  );
 
   useEffect(() => {
     mountedRef.current = true;
@@ -533,27 +458,6 @@ export function TaskForestConsole({
     );
   }, [layout, moveCamera]);
 
-  const focusTask = useCallback(
-    (task: DesktopTaskForestNode) => {
-      const stage = stageRef.current;
-      const node = nodesById.get(task.nodeId);
-      if (!stage || !node) {
-        return;
-      }
-      const rect = stage.getBoundingClientRect();
-      const z = Math.max(0.82, Math.min(1.15, camera.z));
-      moveCamera(
-        {
-          z,
-          x: rect.width / 2 - (node.x + node.width / 2) * z,
-          y: rect.height / 2 - (node.y + node.height / 2) * z,
-        },
-        true,
-      );
-    },
-    [camera.z, moveCamera, nodesById],
-  );
-
   useEffect(() => {
     if (!forestFitSignature) {
       fittedSignatureRef.current = null;
@@ -587,17 +491,9 @@ export function TaskForestConsole({
       if (isEditableEventTarget(event.target)) {
         return;
       }
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        setPaletteOpen(true);
-        return;
-      }
-      if (event.key === " " && !paletteOpen && !draft) {
+      if (event.key === " ") {
         event.preventDefault();
         setSpacePanning(true);
-        return;
-      }
-      if (paletteOpen || draft) {
         return;
       }
       const ordered = layout.nodes
@@ -657,8 +553,6 @@ export function TaskForestConsole({
           event.preventDefault();
           void openTask(task);
         }
-      } else if (event.key === "Escape") {
-        setPaletteOpen(false);
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -672,7 +566,7 @@ export function TaskForestConsole({
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [cursorNodeId, draft, layout.nodes, nodesById, openTask, paletteOpen]);
+  }, [cursorNodeId, layout.nodes, nodesById, openTask]);
 
   function zoomAt(event: WheelEvent<HTMLDivElement>) {
     if (!event.ctrlKey && !event.metaKey) {
@@ -694,44 +588,6 @@ export function TaskForestConsole({
       x: event.clientX - rect.left - worldX * nextZ,
       y: event.clientY - rect.top - worldY * nextZ,
     });
-  }
-
-  async function submitDraft(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!draft || !draft.title.trim()) {
-      return;
-    }
-    setCreating(true);
-    try {
-      await getDesktopApi().createTask({
-        title: draft.title.trim(),
-        body: draft.body.trim() || null,
-        source: draft.parent ? taskSourceForChild(draft.parent) : null,
-        executor: draft.agentId ? { type: "agent", agentId: draft.agentId } : null,
-        start: Boolean(draft.agentId),
-        workspaceDir: draft.workspaceDir.trim() || null,
-        workspaceMode: "local",
-        notificationTarget:
-          draft.notificationTarget === "none"
-            ? { kind: "none" }
-            : (() => {
-                const bot = botGroups.find((candidate) => candidate.id === draft.notificationTarget);
-                return bot
-                  ? { kind: "bot" as const, channel: bot.channel, accountId: bot.accountId }
-                  : { kind: "none" as const };
-              })(),
-      });
-      setDraft(null);
-      await loadForest({ silent: true, force: true });
-      onToast(t("Task created."), "success");
-    } catch (createError) {
-      onToast(
-        createError instanceof Error ? createError.message : t("Task creation failed."),
-        "error",
-      );
-    } finally {
-      setCreating(false);
-    }
   }
 
   async function updateSelectedStatus(status: DesktopTaskStatus) {
@@ -756,27 +612,11 @@ export function TaskForestConsole({
     }
   }
 
-  const paletteMatches = useMemo(() => {
-    const query = paletteQuery.trim().toLowerCase();
-    return tasks
-      .filter((task) => {
-        if (!query) {
-          return true;
-        }
-        return (
-          task.title.toLowerCase().includes(query) ||
-          displayNodeId(task).toLowerCase().includes(query)
-        );
-      })
-      .slice(0, 8);
-  }, [paletteQuery, tasks]);
-
   const taskNodeCount = tasks.filter(isTaskNode).length;
   const activeNodeCount = tasks.filter(isActiveRun).length;
   const readout = `${Math.round(camera.z * 100)}%`;
   const worldWidth = Math.max(1, layout.bbox.maxX + 80);
   const worldHeight = Math.max(1, layout.bbox.maxY + 80);
-  const selectedRootTask = selectedPath[0] ?? selectedTask;
   const birdseye = camera.z < 0.58;
   const worldViewport = useMemo(() => {
     if (!stageSize.width || !stageSize.height || camera.z <= 0) {
@@ -933,22 +773,6 @@ export function TaskForestConsole({
             type="button"
           >
             <RefreshCcw aria-hidden size={14} />
-          </button>
-          <button
-            className="task-forest-button"
-            onClick={() => setPaletteOpen(true)}
-            type="button"
-          >
-            <Command aria-hidden size={14} />
-            <span className="task-forest-kbd">⌘K</span>
-          </button>
-          <button
-            className="task-forest-button primary"
-            onClick={() => setDraft(defaultDraft(null, agents, selectableWorkspaces))}
-            type="button"
-          >
-            <Plus aria-hidden size={14} />
-            {t("New")}
           </button>
         </div>
       </header>
@@ -1153,16 +977,6 @@ export function TaskForestConsole({
               ) : null}
               <button
                 className="task-forest-icon-button"
-                onClick={() =>
-                  setDraft(defaultDraft(selectedTask, agents, selectableWorkspaces))
-                }
-                title={t("New child task")}
-                type="button"
-              >
-                <Plus aria-hidden size={14} />
-              </button>
-              <button
-                className="task-forest-icon-button"
                 onClick={() => setSelectedNodeId(null)}
                 title={t("Close")}
                 type="button"
@@ -1183,177 +997,6 @@ export function TaskForestConsole({
           </div>
         </aside>
       ) : null}
-
-      {paletteOpen && typeof document !== "undefined"
-        ? createPortal(
-            <div className="task-forest-palette-backdrop" role="presentation">
-              <div className="task-forest-palette" role="dialog" aria-modal="true">
-                <label className="task-forest-palette-search">
-                  <Search aria-hidden size={15} />
-                  <input
-                    autoFocus
-                    onChange={(event) => setPaletteQuery(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Escape") {
-                        setPaletteOpen(false);
-                      }
-                    }}
-                    placeholder={t("Search tasks")}
-                    value={paletteQuery}
-                  />
-                </label>
-                <div className="task-forest-palette-list">
-                  <button onClick={fitForest} type="button">
-                    <Crosshair aria-hidden size={14} />
-                    {t("Fit forest")}
-                  </button>
-                  {selectedRootTask ? (
-                    <button onClick={() => focusTask(selectedRootTask)} type="button">
-                      <Crosshair aria-hidden size={14} />
-                      {t("Fit selected root")}
-                    </button>
-                  ) : null}
-                  <button
-                    onClick={() => {
-                      setPaletteOpen(false);
-                      setDraft(defaultDraft(null, agents, selectableWorkspaces));
-                    }}
-                    type="button"
-                  >
-                    <Plus aria-hidden size={14} />
-                    {t("Create root task")}
-                  </button>
-                  {paletteMatches.map((task) => (
-                    <button
-                      key={task.nodeId}
-                      onClick={() => {
-                        setPaletteOpen(false);
-                        void openTask(task);
-                      }}
-                      type="button"
-                    >
-                      <span>{displayNodeId(task)}</span>
-                      {task.title}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>,
-            document.body,
-          )
-        : null}
-
-      {draft && typeof document !== "undefined"
-        ? createPortal(
-            <div className="task-forest-modal-backdrop" role="presentation">
-              <form className="task-forest-create-panel" onSubmit={submitDraft}>
-                <header>
-                  <h2>{draft.parent ? t("New child task") : t("New task")}</h2>
-                  <button onClick={() => setDraft(null)} type="button">
-                    {t("Cancel")}
-                  </button>
-                </header>
-                <label>
-                  {t("Title")}
-                  <input
-                    autoFocus
-                    onChange={(event) =>
-                      setDraft((current) =>
-                        current ? { ...current, title: event.target.value } : current,
-                      )
-                    }
-                    value={draft.title}
-                  />
-                </label>
-                <label>
-                  {t("Executor")}
-                  <select
-                    onChange={(event) =>
-                      setDraft((current) =>
-                        current ? { ...current, agentId: event.target.value } : current,
-                      )
-                    }
-                    value={draft.agentId}
-                  >
-                    <option value="">{t("Unassigned")}</option>
-                    {agents.map((agent) => (
-                      <option key={agent.agentId} value={agent.agentId}>
-                        {agent.displayName || agent.agentId}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  {t("Workspace")}
-                  <select
-                    disabled={workspaceMutation === "add"}
-                    onChange={(event) =>
-                      setDraft((current) =>
-                        current ? { ...current, workspaceDir: event.target.value } : current,
-                      )
-                    }
-                    value={draft.workspaceDir}
-                  >
-                    <option value="">{t("No workspace")}</option>
-                    {selectableWorkspaces.map((workspace) => (
-                      <option key={workspace.path || workspace.name} value={workspace.path || ""}>
-                        {workspace.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  {t("Notification")}
-                  <select
-                    onChange={(event) =>
-                      setDraft((current) =>
-                        current
-                          ? { ...current, notificationTarget: event.target.value }
-                          : current,
-                      )
-                    }
-                    value={draft.notificationTarget}
-                  >
-                    <option value="none">{t("Do not notify")}</option>
-                    {botGroups.map((group) => (
-                      <option key={group.id} value={group.id}>
-                        {group.title || `${group.channel}:${group.accountId}`}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  {t("Body")}
-                  <textarea
-                    onChange={(event) =>
-                      setDraft((current) =>
-                        current ? { ...current, body: event.target.value } : current,
-                      )
-                    }
-                    value={draft.body}
-                  />
-                </label>
-                <footer>
-                  <button
-                    className="task-forest-button"
-                    onClick={() => setDraft(null)}
-                    type="button"
-                  >
-                    {t("Cancel")}
-                  </button>
-                  <button
-                    className="task-forest-button primary"
-                    disabled={!draft.title.trim() || creating}
-                    type="submit"
-                  >
-                    {creating ? t("Creating…") : t("Create")}
-                  </button>
-                </footer>
-              </form>
-            </div>,
-            document.body,
-          )
-        : null}
     </div>
   );
 }
