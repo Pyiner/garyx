@@ -37,6 +37,7 @@ impl LaunchdManager {
         if uid.is_empty() {
             return Err("empty uid from `id -u`".into());
         }
+        validate_service_uid(&uid)?;
         Ok(uid)
     }
 
@@ -215,6 +216,7 @@ impl ServiceManager for LaunchdManager {
     }
 
     fn install(&self, spec: &ServiceSpec) -> Result<InstallReport, Box<dyn std::error::Error>> {
+        self.uid()?;
         let plist_path = self.write_plist(spec)?;
         self.ensure_bootstrapped(&plist_path)?;
         self.kickstart(false)?;
@@ -226,6 +228,7 @@ impl ServiceManager for LaunchdManager {
     }
 
     fn uninstall(&self) -> Result<(), Box<dyn std::error::Error>> {
+        self.uid()?;
         // bootout first so launchd stops tracking the job, then rm the plist.
         self.bootout()?;
         let plist_path = self.plist_path()?;
@@ -236,6 +239,7 @@ impl ServiceManager for LaunchdManager {
     }
 
     fn start(&self) -> Result<(), Box<dyn std::error::Error>> {
+        self.uid()?;
         let plist_path = self.plist_path()?;
         if !plist_path.exists() {
             return Err(format!(
@@ -250,10 +254,12 @@ impl ServiceManager for LaunchdManager {
     }
 
     fn stop(&self) -> Result<(), Box<dyn std::error::Error>> {
+        self.uid()?;
         self.bootout()
     }
 
     fn restart(&self, spec: &ServiceSpec) -> Result<InstallReport, Box<dyn std::error::Error>> {
+        self.uid()?;
         let plist_path = self.write_plist(spec)?;
         self.ensure_bootstrapped(&plist_path)?;
         self.kickstart(true)?;
@@ -267,6 +273,16 @@ impl ServiceManager for LaunchdManager {
     fn is_installed(&self) -> bool {
         self.plist_path().map(|p| p.exists()).unwrap_or(false)
     }
+}
+
+fn validate_service_uid(uid: &str) -> Result<(), Box<dyn std::error::Error>> {
+    if uid == "0" {
+        return Err(
+            "`garyx gateway` service commands install a per-user macOS LaunchAgent; do not run them with sudo. Re-run as your normal login user, for example: `garyx gateway install`"
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 fn candidate_install_domains_for(

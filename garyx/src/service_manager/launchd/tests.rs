@@ -1,6 +1,17 @@
 use super::*;
 
 #[test]
+fn validate_service_uid_rejects_root() {
+    let err = validate_service_uid("0").expect_err("root should be rejected");
+    assert!(err.to_string().contains("do not run them with sudo"));
+}
+
+#[test]
+fn validate_service_uid_accepts_login_user() {
+    validate_service_uid("501").expect("login user uid should be accepted");
+}
+
+#[test]
 fn candidate_install_domains_prefers_gui_for_aqua_session() {
     assert_eq!(
         candidate_install_domains_for("501", true, true),
