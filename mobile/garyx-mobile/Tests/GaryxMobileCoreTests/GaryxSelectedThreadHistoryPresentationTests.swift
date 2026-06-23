@@ -65,6 +65,23 @@ final class GaryxSelectedThreadHistoryPresentationTests: XCTestCase {
         ))
     }
 
+    func testLiveRenderSnapshotWithUnresolvedRefsStillAwaitsInitialHistory() {
+        XCTAssertTrue(isAwaiting(
+            historyLoaded: true,
+            liveRenderSnapshot: renderSnapshot(),
+            cachedTranscript: cachedTranscript(messages: [])
+        ))
+    }
+
+    func testLiveRenderSnapshotResolvedByMobileMessagesStopsAwaitingInitialHistory() {
+        XCTAssertFalse(isAwaiting(
+            historyLoaded: true,
+            liveRenderSnapshot: renderSnapshot(),
+            cachedTranscript: cachedTranscript(messages: []),
+            resolvedHistoryIndexes: [0]
+        ))
+    }
+
     func testCachedRenderSnapshotStopsAwaitingInitialHistory() {
         XCTAssertFalse(isAwaiting(
             historyLoaded: true,
@@ -97,6 +114,8 @@ final class GaryxSelectedThreadHistoryPresentationTests: XCTestCase {
         historyLoaded: Bool,
         liveRenderSnapshot: GaryxRenderSnapshot? = nil,
         cachedTranscript: GaryxCachedTranscript?,
+        resolvedMessageIds: Set<String> = [],
+        resolvedHistoryIndexes: Set<Int> = [],
         hasRemoteFinalMessages: Bool = false
     ) -> Bool {
         GaryxSelectedThreadHistoryPresentation.isAwaitingInitialHistory(
@@ -104,6 +123,8 @@ final class GaryxSelectedThreadHistoryPresentationTests: XCTestCase {
             historyLoaded: historyLoaded,
             liveRenderSnapshot: liveRenderSnapshot,
             cachedTranscript: cachedTranscript,
+            resolvedMessageIds: resolvedMessageIds,
+            resolvedHistoryIndexes: resolvedHistoryIndexes,
             hasRemoteFinalMessages: hasRemoteFinalMessages
         )
     }

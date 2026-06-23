@@ -542,14 +542,21 @@ public enum GaryxSelectedThreadHistoryPresentation {
         historyLoaded: Bool,
         liveRenderSnapshot: GaryxRenderSnapshot?,
         cachedTranscript: GaryxCachedTranscript?,
+        resolvedMessageIds: Set<String> = [],
+        resolvedHistoryIndexes: Set<Int> = [],
         hasRemoteFinalMessages: Bool = false
     ) -> Bool {
         guard let threadId = threadId?.trimmingCharacters(in: .whitespacesAndNewlines),
               !threadId.isEmpty else {
             return false
         }
-        if liveRenderSnapshot != nil || cachedTranscript?.renderSnapshot != nil {
-            return false
+        if let snapshot = liveRenderSnapshot ?? cachedTranscript?.renderSnapshot {
+            return hasUnresolvedVisibleRefs(
+                snapshot: snapshot,
+                resolvedMessageIds: resolvedMessageIds,
+                resolvedHistoryIndexes: resolvedHistoryIndexes,
+                transcriptMessages: cachedTranscript?.messages ?? []
+            )
         }
         guard historyLoaded else {
             return true
@@ -558,6 +565,21 @@ public enum GaryxSelectedThreadHistoryPresentation {
         // rows can be renderable even when their individual messages are not
         // likely user-visible, while internal control rows never form turns.
         return hasRemoteFinalMessages || (cachedTranscript?.messages.contains { !$0.internalMessage } == true)
+    }
+
+    private static func hasUnresolvedVisibleRefs(
+        snapshot: GaryxRenderSnapshot,
+        resolvedMessageIds: Set<String>,
+        resolvedHistoryIndexes: Set<Int>,
+        transcriptMessages: [GaryxTranscriptMessage]
+    ) -> Bool {
+        let lookup = MessageLookup(messages: [], transcriptMessages: transcriptMessages)
+        return snapshot.rows.flatMap(\.messageRefs).contains { ref in
+            let historyIndex = max(ref.seq - 1, 0)
+            let resolvedByMobileCache =
+                resolvedMessageIds.contains(ref.id) || resolvedHistoryIndexes.contains(historyIndex)
+            return !resolvedByMobileCache && lookup.transcriptMessage(for: ref) == nil
+        }
     }
 }
 
@@ -638,7 +660,9 @@ private extension GaryxRenderRow {
 
 private extension GaryxRenderUserTurnRow {
     func mobileRow(lookup: MessageLookup) -> GaryxMobileTurnRow? {
-        let userBlock = user.flatMap { lookup.mobileMessage(for: $0) }.map(GaryxMobileTranscriptBlock.message)
+        let userBlock = user
+            .map { lookup.mobileMessage(for: $0) ?? .userStepPlaceholder(for: $0) }
+            .map(GaryxMobileTranscriptBlock.message)
         let activityRows = activity.compactMap { $0.mobileActivityRow(lookup: lookup) }
         guard userBlock != nil || !activityRows.isEmpty else { return nil }
         return GaryxMobileTurnRow(id: id, userBlock: userBlock, activityRows: activityRows)
@@ -689,6 +713,23 @@ private extension GaryxRenderStepItem {
 }
 
 private extension GaryxMobileMessage {
+    /// Body-less placeholder for a user turn whose server render row arrived
+    /// before the committed body reached the local message cache. The id and
+    /// history index mirror the committed body so the real message replaces it
+    /// in place.
+    static func userStepPlaceholder(for ref: GaryxRenderMessageRef) -> GaryxMobileMessage {
+        let historyIndex = max(ref.seq - 1, 0)
+        return GaryxMobileMessage(
+            id: "history:\(historyIndex)",
+            role: .user,
+            text: "",
+            timestamp: nil,
+            isStreaming: true,
+            localState: .remotePartial,
+            historyIndex: historyIndex
+        )
+    }
+
     /// Body-less placeholder for an assistant step whose committed body has not
     /// yet reached the local `messages` store (the synchronously-updated render
     /// snapshot can reference a seq before the throttled message flush ingests

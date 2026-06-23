@@ -281,7 +281,7 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
         XCTAssertEqual(rows.last?.userBlock?.message.text, "Still pending")
     }
 
-    func testMissingServerRefsAreSkippedInsteadOfSynthesizedFromMessages() {
+    func testMissingUserRefMapsToLoadingUserPlaceholder() throws {
         let snapshot = GaryxRenderSnapshot(
             basedOnSeq: 99,
             rows: [
@@ -299,7 +299,98 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
             transcriptMessages: []
         )
 
-        XCTAssertTrue(rows.isEmpty)
+        let row = try XCTUnwrap(rows.only)
+        let user = try XCTUnwrap(row.userBlock?.message)
+        XCTAssertEqual(user.id, "history:98")
+        XCTAssertEqual(user.historyIndex, 98)
+        XCTAssertEqual(user.role, .user)
+        XCTAssertEqual(user.text, "")
+        XCTAssertTrue(user.isStreaming)
+        XCTAssertEqual(user.localState, .remotePartial)
+    }
+
+    func testFullSnapshotWithOnlyNewestBodiesLeavesOlderTurnAsLoadingPlaceholder() throws {
+        let snapshot = GaryxRenderSnapshot(
+            basedOnSeq: 4,
+            rows: [
+                .userTurn(GaryxRenderUserTurnRow(
+                    id: "turn:old",
+                    user: ref(seq: 1, role: "user"),
+                    activity: [
+                        .assistantReply(GaryxRenderAssistantReplyRow(
+                            id: "reply:old",
+                            message: ref(seq: 2, role: "assistant")
+                        )),
+                    ]
+                )),
+                .userTurn(GaryxRenderUserTurnRow(
+                    id: "turn:new",
+                    user: ref(seq: 3, role: "user"),
+                    activity: [
+                        .assistantReply(GaryxRenderAssistantReplyRow(
+                            id: "reply:new",
+                            message: ref(seq: 4, role: "assistant")
+                        )),
+                    ]
+                )),
+            ]
+        )
+        let messages = [
+            mobileMessage(index: 2, role: .user, text: "Newest question"),
+            mobileMessage(index: 3, role: .assistant, text: "Newest answer"),
+        ]
+
+        let rows = GaryxMobileRenderStateMapper.rows(
+            snapshot: snapshot,
+            messages: messages,
+            transcriptMessages: []
+        )
+
+        XCTAssertEqual(rows.map(\.id), ["turn:old", "turn:new"])
+        XCTAssertEqual(rows[0].userBlock?.message.id, "history:0")
+        XCTAssertEqual(rows[0].userBlock?.message.localState, .remotePartial)
+        XCTAssertTrue(rows[0].activityRows.isEmpty)
+        XCTAssertEqual(rows[1].userBlock?.message.text, "Newest question")
+        guard case .flat(let newestAnswer) = try XCTUnwrap(rows[1].activityRows.only) else {
+            return XCTFail("newest assistant reply should resolve from the one-turn cache")
+        }
+        XCTAssertEqual(newestAnswer.message.text, "Newest answer")
+    }
+
+    func testWindowedSnapshotWithOneTurnBodiesMapsSingleCompleteTurn() throws {
+        let snapshot = GaryxRenderSnapshot(
+            basedOnSeq: 4,
+            rows: [
+                .userTurn(GaryxRenderUserTurnRow(
+                    id: "turn:new",
+                    user: ref(seq: 3, role: "user"),
+                    activity: [
+                        .assistantReply(GaryxRenderAssistantReplyRow(
+                            id: "reply:new",
+                            message: ref(seq: 4, role: "assistant")
+                        )),
+                    ]
+                )),
+            ]
+        )
+        let messages = [
+            mobileMessage(index: 2, role: .user, text: "Newest question"),
+            mobileMessage(index: 3, role: .assistant, text: "Newest answer"),
+        ]
+
+        let rows = GaryxMobileRenderStateMapper.rows(
+            snapshot: snapshot,
+            messages: messages,
+            transcriptMessages: []
+        )
+
+        let row = try XCTUnwrap(rows.only)
+        XCTAssertEqual(row.id, "turn:new")
+        XCTAssertEqual(row.userBlock?.message.text, "Newest question")
+        guard case .flat(let answer) = try XCTUnwrap(row.activityRows.only) else {
+            return XCTFail("assistant reply should map to a flat block")
+        }
+        XCTAssertEqual(answer.message.text, "Newest answer")
     }
 
     func testNilSnapshotRendersOptimisticUserRows() {
