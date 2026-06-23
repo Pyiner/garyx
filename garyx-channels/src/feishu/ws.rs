@@ -295,51 +295,47 @@ pub(crate) fn build_feishu_response_callback(
                     continue;
                 }
                 StreamEvent::ToolUse { message } => {
-                    if let Some(reply_message_id) = cfg.reply_message_id.as_deref() {
-                        send_pending_stream_text_cot_events(
-                            &cfg.client,
-                            &mut state,
-                            &cfg.account_id,
-                            &cfg.chat_id,
-                            &canonical_thread_id,
-                            reply_message_id,
-                        )
-                        .await;
-                        send_tool_use_cot_events(
-                            &cfg.client,
-                            &mut state,
-                            &cfg.account_id,
-                            &cfg.chat_id,
-                            &canonical_thread_id,
-                            reply_message_id,
-                            &message,
-                        )
-                        .await;
-                    }
+                    send_pending_stream_text_cot_events(
+                        &cfg.client,
+                        &mut state,
+                        &cfg.account_id,
+                        &cfg.chat_id,
+                        &canonical_thread_id,
+                        cfg.reply_message_id.as_deref(),
+                    )
+                    .await;
+                    send_tool_use_cot_events(
+                        &cfg.client,
+                        &mut state,
+                        &cfg.account_id,
+                        &cfg.chat_id,
+                        &canonical_thread_id,
+                        cfg.reply_message_id.as_deref(),
+                        &message,
+                    )
+                    .await;
                     continue;
                 }
                 StreamEvent::ToolResult { message } => {
-                    if let Some(reply_message_id) = cfg.reply_message_id.as_deref() {
-                        send_pending_stream_text_cot_events(
-                            &cfg.client,
-                            &mut state,
-                            &cfg.account_id,
-                            &cfg.chat_id,
-                            &canonical_thread_id,
-                            reply_message_id,
-                        )
-                        .await;
-                        send_tool_result_cot_events(
-                            &cfg.client,
-                            &mut state,
-                            &cfg.account_id,
-                            &cfg.chat_id,
-                            &canonical_thread_id,
-                            reply_message_id,
-                            &message,
-                        )
-                        .await;
-                    }
+                    send_pending_stream_text_cot_events(
+                        &cfg.client,
+                        &mut state,
+                        &cfg.account_id,
+                        &cfg.chat_id,
+                        &canonical_thread_id,
+                        cfg.reply_message_id.as_deref(),
+                    )
+                    .await;
+                    send_tool_result_cot_events(
+                        &cfg.client,
+                        &mut state,
+                        &cfg.account_id,
+                        &cfg.chat_id,
+                        &canonical_thread_id,
+                        cfg.reply_message_id.as_deref(),
+                        &message,
+                    )
+                    .await;
                     let Some(image) = extract_image_generation_result(&message) else {
                         continue;
                     };
@@ -512,7 +508,7 @@ async fn ensure_cot_session(
     account_id: &str,
     chat_id: &str,
     thread_id: &str,
-    origin_message_id: &str,
+    origin_message_id: Option<&str>,
 ) -> Option<super::cot::FeishuCotSession> {
     if state.cot.failed {
         return None;
@@ -523,7 +519,7 @@ async fn ensure_cot_session(
 
     let run_started = state.cot.run_started_event(thread_id, thread_id);
     match client
-        .create_cot_run_start_message(chat_id, thread_id, Some(origin_message_id), run_started)
+        .create_cot_run_start_message(chat_id, thread_id, origin_message_id, run_started)
         .await
     {
         Ok(session) => {
@@ -550,7 +546,7 @@ async fn send_cot_events(
     account_id: &str,
     chat_id: &str,
     thread_id: &str,
-    origin_message_id: &str,
+    origin_message_id: Option<&str>,
     events: Vec<FeishuCotEventRecord>,
     label: &str,
 ) {
@@ -647,7 +643,7 @@ async fn send_tool_use_cot_events(
     account_id: &str,
     chat_id: &str,
     thread_id: &str,
-    origin_message_id: &str,
+    origin_message_id: Option<&str>,
     message: &ProviderMessage,
 ) {
     let events = state.cot.tool_use_events(message);
@@ -670,7 +666,7 @@ async fn send_pending_stream_text_cot_events(
     account_id: &str,
     chat_id: &str,
     thread_id: &str,
-    origin_message_id: &str,
+    origin_message_id: Option<&str>,
 ) {
     let text = state.stream_text.trim().to_owned();
     if text.is_empty() {
@@ -699,7 +695,7 @@ async fn send_tool_result_cot_events(
     account_id: &str,
     chat_id: &str,
     thread_id: &str,
-    origin_message_id: &str,
+    origin_message_id: Option<&str>,
     message: &ProviderMessage,
 ) {
     let events = state.cot.tool_result_events(message);

@@ -2711,6 +2711,56 @@ mod e2e_tests {
     }
 
     #[tokio::test]
+    async fn cot_run_starts_without_origin_message_id_for_proactive_runs() {
+        let (server, client) = setup_feishu_mock().await;
+        Mock::given(method("POST"))
+            .and(path("/im/v1/message_cot"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": 0,
+                "msg": "ok",
+                "data": {
+                    "cot_id": "cot_proactive_001",
+                    "message_id": "om_cot_proactive_001"
+                }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/im/v1/message_cot"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": 0,
+                "msg": "ok"
+            })))
+            .mount(&server)
+            .await;
+
+        let mut state = super::cot::FeishuCotState::default();
+        let run_started = state.run_started_event("thread-proactive", "thread-proactive");
+        let session = client
+            .create_cot_run_start_message("oc_group456", "thread-proactive", None, run_started)
+            .await
+            .expect("proactive COT run should be created without a reply anchor");
+        assert_eq!(session.cot_id, "cot_proactive_001");
+        assert_eq!(session.message_id, "om_cot_proactive_001");
+
+        let create_calls = wait_for_matching_requests_quiet_window(
+            &server,
+            std::time::Duration::from_millis(200),
+            std::time::Duration::from_secs(5),
+            1,
+            |r| r.method.as_str() == "POST" && r.url.path() == "/im/v1/message_cot",
+        )
+        .await;
+        assert_eq!(create_calls.len(), 1, "COT run should be created once");
+        let create_body: Value = serde_json::from_slice(&create_calls[0].body).unwrap();
+        assert_eq!(create_body["receive_id"], "oc_group456");
+        assert!(
+            create_body.get("origin_message_id").is_none(),
+            "proactive COT run must omit origin_message_id: {create_body:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn test_e2e_feishu_trailing_tool_after_final_answer_keeps_reply_card() {
         let (server, client) = setup_feishu_mock().await;
         Mock::given(method("POST"))
