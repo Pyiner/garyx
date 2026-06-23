@@ -5973,8 +5973,19 @@ export function AppShell() {
     });
     updateMessagesByThread((current) => {
       const existing = current[threadId] || [];
-      let updated = false;
+      let assistantUpdated = false;
       const nextEntries = existing.map((entry) => {
+        if (
+          entry.role === "user" &&
+          entry.intentId === intentId &&
+          entry.localState !== "remote_final"
+        ) {
+          return {
+            ...entry,
+            error: true,
+            localState: "error" as TranscriptEntryState,
+          };
+        }
         if (
           entry.role !== "assistant" ||
           entry.intentId !== intentId ||
@@ -5982,7 +5993,7 @@ export function AppShell() {
         ) {
           return entry;
         }
-        updated = true;
+        assistantUpdated = true;
         return {
           ...entry,
           pending: false,
@@ -5991,7 +6002,7 @@ export function AppShell() {
           text: entry.pending ? message : entry.text || message,
         };
       });
-      if (updated) {
+      if (assistantUpdated) {
         return {
           ...current,
           [threadId]: nextEntries,
@@ -8421,8 +8432,19 @@ export function AppShell() {
         ...current,
         [threadId]: (() => {
           const existing = current[threadId] || [];
-          let updated = false;
+          let assistantUpdated = false;
           const next = existing.map((entry) => {
+            if (
+              entry.role === "user" &&
+              entry.intentId === failedIntentId &&
+              entry.localState !== "remote_final"
+            ) {
+              return {
+                ...entry,
+                error: true,
+                localState: errorState,
+              };
+            }
             const isTargetAssistant =
               entry.role === "assistant" &&
               entry.intentId === failedIntentId &&
@@ -8432,7 +8454,7 @@ export function AppShell() {
             if (!isTargetAssistant) {
               return entry;
             }
-            updated = true;
+            assistantUpdated = true;
             return {
               ...entry,
               pending: false,
@@ -8444,7 +8466,7 @@ export function AppShell() {
                 : entry.text || message,
             };
           });
-          if (updated) {
+          if (assistantUpdated) {
             return next;
           }
           return [
@@ -9070,6 +9092,18 @@ export function AppShell() {
     updateMessagesByThread((current) => ({
       ...current,
       [threadId]: (current[threadId] || []).map((entry) => {
+        if (
+          entry.role === "user" &&
+          entry.intentId &&
+          interruptedIntentIds.has(entry.intentId) &&
+          entry.localState !== "remote_final"
+        ) {
+          return {
+            ...entry,
+            error: true,
+            localState: "interrupted",
+          };
+        }
         if (entry.role !== "assistant") {
           return entry;
         }

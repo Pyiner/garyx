@@ -2,10 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import {
+import * as renderViewModel from './render-view-model.ts';
+
+const {
   buildThreadViewBlocks,
   buildThreadViewRows,
-} from './render-view-model.ts';
+  buildThreadViewRowsWithLocalUsers,
+} = renderViewModel;
 
 const renderFixture = JSON.parse(
   readFileSync(
@@ -237,6 +240,128 @@ test('origin user ids remain stable while the body resolves by seq', () => {
   assert.equal(rows[0].key, `user-turn:${originId}`);
   assert.equal(rows[0].userBlock.key, originId);
   assert.equal(rows[0].userBlock.entry.message.text, 'hello');
+});
+
+test('local optimistic user row renders before committed render_state includes it', () => {
+  const localUser = {
+    id: 'origin:intent-optimistic-1',
+    role: 'user',
+    text: 'Please run the desktop smoke test.',
+    timestamp: '2026-06-23T00:00:00.000Z',
+    intentId: 'intent-optimistic-1',
+    localState: 'optimistic',
+  };
+  const renderState = {
+    based_on_seq: 0,
+    rows: [],
+    tailActivity: 'none',
+    activeToolGroupId: null,
+    progress_locus: 'none',
+    visibleMessageIds: [],
+    filtered_placeholders: [],
+  };
+
+  const rows = buildThreadViewRowsWithLocalUsers(renderState, new Map(), [
+    localUser,
+  ]);
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].kind, 'user_turn');
+  assert.equal(rows[0].key, `user-turn:${localUser.id}`);
+  assert.equal(rows[0].userBlock.entry.message.text, localUser.text);
+});
+
+test('local optimistic user row dedupes once render_state represents its origin id', () => {
+  const originId = 'origin:intent-optimistic-2';
+  const renderState = {
+    based_on_seq: 3,
+    rows: [
+      {
+        kind: 'user_turn',
+        id: `user_turn:${originId}`,
+        user: { id: originId, seq: 3, role: 'user' },
+        activity: [],
+        started_at: null,
+        finished_at: null,
+      },
+    ],
+    tailActivity: 'none',
+    activeToolGroupId: null,
+    progress_locus: 'none',
+    visibleMessageIds: [originId],
+    filtered_placeholders: [],
+  };
+  const committed = {
+    id: originId,
+    seq: 3,
+    role: 'user',
+    text: 'Run the smoke test.',
+    localState: 'remote_final',
+  };
+  const optimistic = {
+    ...committed,
+    seq: undefined,
+    localState: 'optimistic',
+    intentId: 'intent-optimistic-2',
+  };
+
+  const rows = buildThreadViewRowsWithLocalUsers(
+    renderState,
+    new Map([[3, committed]]),
+    [optimistic],
+  );
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].kind, 'user_turn');
+  assert.equal(rows[0].userBlock.entry.message.text, committed.text);
+});
+
+test('local failed user row remains visible for retry chrome', () => {
+  const failedUser = {
+    id: 'origin:intent-failed-1',
+    role: 'user',
+    text: 'Deploy the staging build.',
+    timestamp: '2026-06-23T00:00:00.000Z',
+    intentId: 'intent-failed-1',
+    localState: 'error',
+    error: true,
+  };
+
+  const rows = buildThreadViewRowsWithLocalUsers(null, new Map(), [failedUser]);
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].kind, 'user_turn');
+  assert.equal(rows[0].userBlock.entry.message.error, true);
+  assert.equal(rows[0].userBlock.entry.message.localState, 'error');
+});
+
+test('local assistant error row does not render through the user overlay', () => {
+  const optimisticUser = {
+    id: 'origin:intent-failed-2',
+    role: 'user',
+    text: 'Deploy the staging build.',
+    timestamp: '2026-06-23T00:00:00.000Z',
+    intentId: 'intent-failed-2',
+    localState: 'optimistic',
+  };
+  const assistantError = {
+    id: 'assistant:error:intent-failed-2:synthetic',
+    role: 'assistant',
+    text: 'Gateway rejected the request.',
+    timestamp: '2026-06-23T00:00:01.000Z',
+    intentId: 'intent-failed-2',
+    localState: 'error',
+    error: true,
+  };
+
+  const rows = buildThreadViewRowsWithLocalUsers(null, new Map(), [
+    optimisticUser,
+    assistantError,
+  ]);
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].kind, 'user_turn');
+  assert.equal(rows[0].userBlock.entry.message.id, optimisticUser.id);
 });
 
 test('unloaded committed window: rows whose bodies are absent are skipped', () => {

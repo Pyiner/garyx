@@ -46,7 +46,7 @@ import { parseTaskNotificationText } from "../../task-notification";
 import { deriveThreadTeamView } from "../../thread-model";
 import {
   buildThreadViewBlocks,
-  buildThreadViewRows,
+  buildThreadViewRowsWithLocalUsers,
   type MessagesBySeq,
   type RenderTranscriptBlock,
   type TurnRow,
@@ -550,8 +550,14 @@ export function ThreadPage({
   // block list so per-agent speaker headers can be interleaved.
   const turnRows = useMemo(
     () =>
-      teamView.isTeam ? [] : buildThreadViewRows(renderState, messagesBySeq),
-    [renderState, messagesBySeq, teamView.isTeam],
+      teamView.isTeam
+        ? []
+        : buildThreadViewRowsWithLocalUsers(
+            renderState,
+            messagesBySeq,
+            activeMessages,
+          ),
+    [renderState, messagesBySeq, activeMessages, teamView.isTeam],
   );
   const teamBlocks = useMemo(
     () =>

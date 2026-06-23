@@ -79,6 +79,10 @@ export interface UserTurnRow {
 
 export type TurnRenderRow = FlatRow | TurnRow | UserTurnRow;
 
+type LocalTranscriptMessage = TranscriptMessage & {
+  localState?: string;
+};
+
 /**
  * Committed messages keyed by their raw transcript record `seq` (1-based),
  * stamped at the wire boundary (`TranscriptMessage.seq`). The message id is NOT
@@ -104,6 +108,69 @@ function messageBlock(message: TranscriptMessage): RenderTranscriptBlock {
     key: message.id,
     entry: { kind: 'message', key: message.id, message },
   };
+}
+
+function collectBlockMessageIds(
+  block: RenderTranscriptBlock | null | undefined,
+  ids: Set<string>,
+) {
+  if (!block) {
+    return;
+  }
+  if (block.kind === 'message') {
+    ids.add(block.entry.message.id);
+    return;
+  }
+  for (const entry of block.entries) {
+    if (entry.toolUse) {
+      ids.add(entry.toolUse.id);
+    }
+    if (entry.toolResult) {
+      ids.add(entry.toolResult.id);
+    }
+  }
+}
+
+function collectActivityRowMessageIds(
+  row: UserTurnActivityRow,
+  ids: Set<string>,
+) {
+  if (row.kind === 'flat') {
+    collectBlockMessageIds(row.block, ids);
+    return;
+  }
+  for (const block of row.steps) {
+    collectBlockMessageIds(block, ids);
+  }
+  collectBlockMessageIds(row.finalBlock, ids);
+}
+
+function representedMessageIdsForRows(rows: TurnRenderRow[]): Set<string> {
+  const ids = new Set<string>();
+  for (const row of rows) {
+    if (row.kind === 'flat') {
+      collectBlockMessageIds(row.block, ids);
+      continue;
+    }
+    if (row.kind === 'turn') {
+      collectActivityRowMessageIds(row, ids);
+      continue;
+    }
+    collectBlockMessageIds(row.userBlock, ids);
+    for (const activityRow of row.activityRows) {
+      collectActivityRowMessageIds(activityRow, ids);
+    }
+  }
+  return ids;
+}
+
+function isLocalUserMessage(message: LocalTranscriptMessage): boolean {
+  return (
+    message.role === 'user' &&
+    Boolean(message.localState) &&
+    message.localState !== 'remote_final' &&
+    !(Boolean(message.internal) && message.internalKind === 'loop_continuation')
+  );
 }
 
 function toolEntry(
@@ -227,6 +294,37 @@ export function buildThreadViewRows(
     rows.push(...activityRows);
   }
   return rows;
+}
+
+export function buildThreadViewRowsWithLocalUsers(
+  renderState: RenderState | null | undefined,
+  messages: MessagesBySeq,
+  activeMessages: readonly LocalTranscriptMessage[],
+): TurnRenderRow[] {
+  const rows = buildThreadViewRows(renderState, messages);
+  const representedMessageIds = representedMessageIdsForRows(rows);
+  const committedMessageIds = new Set(
+    [...messages.values()].map((message) => message.id),
+  );
+  const localRows: UserTurnRow[] = [];
+  for (const message of activeMessages) {
+    if (!isLocalUserMessage(message)) {
+      continue;
+    }
+    if (
+      representedMessageIds.has(message.id) ||
+      committedMessageIds.has(message.id)
+    ) {
+      continue;
+    }
+    localRows.push({
+      kind: 'user_turn',
+      key: `user-turn:${message.id}`,
+      userBlock: messageBlock(message),
+      activityRows: [],
+    });
+  }
+  return localRows.length ? [...rows, ...localRows] : rows;
 }
 
 /**
