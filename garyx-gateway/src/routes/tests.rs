@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use axum::body::Body;
+use futures_util::StreamExt;
 use garyx_bridge::MultiProviderBridge;
 use garyx_bridge::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
 use garyx_models::config::{
@@ -618,6 +619,148 @@ async fn thread_stream_replay_initial_user_turn_window_trims_and_carries_bodies(
             .and_then(Value::as_u64),
         Some(3)
     );
+}
+
+#[tokio::test]
+async fn thread_stream_handler_keeps_initial_floor_for_live_frames() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let (thread_id, _) = create_thread_record(
+        &state.threads.thread_store,
+        ThreadEnsureOptions {
+            label: Some("Initial floor live".to_owned()),
+            workspace_dir: None,
+            workspace_mode: Default::default(),
+            worktree_base_dir: None,
+            agent_id: None,
+            metadata: HashMap::new(),
+            provider_type: None,
+            sdk_session_id: None,
+            thread_kind: None,
+            origin_channel: None,
+            origin_account_id: None,
+            origin_from_id: None,
+            is_group: None,
+        },
+    )
+    .await
+    .unwrap();
+    state
+        .threads
+        .history
+        .transcript_store()
+        .append_run_records(
+            &thread_id,
+            Some("run::initial-floor-live"),
+            &[
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "user", "content": "older question"}),
+                    "2026-06-18T12:00:00Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "older answer"}),
+                    "2026-06-18T12:00:01Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "user", "content": "new question"}),
+                    "2026-06-18T12:00:02Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "new answer"}),
+                    "2026-06-18T12:00:03Z",
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let router = build_router(state.clone());
+    let request = authed_request()
+        .uri(format!(
+            "/api/threads/{thread_id}/stream?after_seq=4&replay_scope=initial&initial_user_turns=1"
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body();
+
+    let live_append = state
+        .threads
+        .history
+        .transcript_store()
+        .append_run_records(
+            &thread_id,
+            Some("run::initial-floor-live"),
+            &[RunTranscriptRecordDraft::with_timestamp(
+                json!({"role": "assistant", "content": "live continuation"}),
+                "2026-06-18T12:00:04Z",
+            )],
+        )
+        .await
+        .unwrap();
+    let live_record = live_append.appended_records.last().unwrap();
+    let live_payload = committed_thread_stream_replay_payload_value(&thread_id, live_record);
+    state
+        .ops
+        .events
+        .sender()
+        .send(live_payload.to_string())
+        .unwrap();
+
+    let frames = read_sse_data_frames(body, 2).await;
+    assert_eq!(
+        frames[0]
+            .get("render_state")
+            .and_then(|state| state.get("window"))
+            .and_then(|window| window.get("floor_seq"))
+            .and_then(Value::as_u64),
+        Some(3)
+    );
+    assert_eq!(
+        frames[1]
+            .get("render_state")
+            .and_then(|state| state.get("window"))
+            .and_then(|window| window.get("floor_seq"))
+            .and_then(Value::as_u64),
+        Some(3),
+        "thread_stream handler must wire initial replay's effective floor into live frames"
+    );
+    assert_eq!(
+        frames[1]
+            .get("render_state")
+            .and_then(|state| state.get("visibleMessageIds"))
+            .and_then(Value::as_array)
+            .map(|items| { items.iter().filter_map(Value::as_str).collect::<Vec<_>>() })
+            .unwrap(),
+        vec!["seq:3", "seq:4", "seq:5"]
+    );
+}
+
+async fn read_sse_data_frames(body: Body, count: usize) -> Vec<Value> {
+    let mut stream = body.into_data_stream();
+    let mut buffer = String::new();
+    let mut frames = Vec::new();
+    while frames.len() < count {
+        let chunk = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+            .await
+            .expect("timed out reading SSE chunk")
+            .expect("SSE stream ended before expected frame")
+            .expect("SSE chunk should be ok");
+        buffer.push_str(std::str::from_utf8(&chunk).expect("SSE should be utf8"));
+        while let Some(frame_end) = buffer.find("\n\n") {
+            let frame = buffer[..frame_end].to_owned();
+            buffer = buffer[frame_end + 2..].to_owned();
+            for line in frame.lines() {
+                if let Some(data) = line.strip_prefix("data:") {
+                    frames.push(serde_json::from_str(data.trim_start()).expect("SSE data json"));
+                    if frames.len() == count {
+                        return frames;
+                    }
+                }
+            }
+        }
+    }
+    frames
 }
 
 #[tokio::test]
