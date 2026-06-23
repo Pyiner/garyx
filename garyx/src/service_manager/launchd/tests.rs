@@ -1,6 +1,30 @@
 use super::*;
 
 #[test]
+fn candidate_install_domains_prefers_gui_for_aqua_session() {
+    assert_eq!(
+        candidate_install_domains_for("501", true, true),
+        vec!["gui/501".to_owned(), "user/501".to_owned()]
+    );
+}
+
+#[test]
+fn candidate_install_domains_prefers_existing_gui_domain_from_background_session() {
+    assert_eq!(
+        candidate_install_domains_for("501", false, true),
+        vec!["gui/501".to_owned(), "user/501".to_owned()]
+    );
+}
+
+#[test]
+fn candidate_install_domains_uses_user_domain_when_no_gui_domain_exists() {
+    assert_eq!(
+        candidate_install_domains_for("501", false, false),
+        vec!["user/501".to_owned()]
+    );
+}
+
+#[test]
 fn render_launch_agent_plist_uses_expected_label_and_program() {
     let plist = render_launch_agent_plist(
         Path::new("/opt/homebrew/bin/garyx"),

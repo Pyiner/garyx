@@ -53,23 +53,32 @@ impl LaunchdManager {
             .arg("managername")
             .output()
             .map(|out| {
-                out.status.success()
-                    && String::from_utf8_lossy(&out.stdout).trim() == "Aqua"
+                out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "Aqua"
             })
             .unwrap_or(false)
     }
 
+    fn domain_exists(&self, domain: &str) -> bool {
+        ProcessCommand::new(LAUNCHCTL_BIN)
+            .args(["print", domain])
+            .output()
+            .map(|out| out.status.success())
+            .unwrap_or(false)
+    }
+
     /// Domains to attempt when bootstrapping a not-yet-loaded agent, in
-    /// priority order. In an Aqua session we prefer `gui/<uid>` to keep parity
-    /// with historical desktop installs, falling back to the per-user domain;
-    /// over SSH the per-user domain is the only one available.
+    /// priority order. Prefer `gui/<uid>` when an Aqua login domain exists,
+    /// even if this command is invoked from an SSH / Background session: macOS
+    /// accepts bootstrapping into that existing GUI domain, while bootstrapping
+    /// the same LaunchAgent into `user/<uid>` can fail with launchctl error 5.
+    /// On truly headless sessions, fall back to the per-user domain.
     fn candidate_install_domains(&self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         let uid = self.uid()?;
-        if self.is_aqua_session() {
-            Ok(vec![format!("gui/{uid}"), format!("user/{uid}")])
-        } else {
-            Ok(vec![format!("user/{uid}")])
-        }
+        Ok(candidate_install_domains_for(
+            &uid,
+            self.is_aqua_session(),
+            self.domain_exists(&format!("gui/{uid}")),
+        ))
     }
 
     /// The domain the agent is currently loaded in, if any. Probing both
@@ -257,6 +266,20 @@ impl ServiceManager for LaunchdManager {
 
     fn is_installed(&self) -> bool {
         self.plist_path().map(|p| p.exists()).unwrap_or(false)
+    }
+}
+
+fn candidate_install_domains_for(
+    uid: &str,
+    is_aqua_session: bool,
+    gui_domain_exists: bool,
+) -> Vec<String> {
+    let gui_domain = format!("gui/{uid}");
+    let user_domain = format!("user/{uid}");
+    if is_aqua_session || gui_domain_exists {
+        vec![gui_domain, user_domain]
+    } else {
+        vec![user_domain]
     }
 }
 
