@@ -10605,22 +10605,12 @@ export function AppShell() {
                     await openExistingThread(threadId);
                   });
                 }}
-                onOpenThreadInPanel={(threadId) => {
-                  return selectExistingThreadInPlace(threadId, "tasks");
-                }}
                 onOpenWorkflowTask={(task) => {
                   trackUiAction("tasks.open_workflow_task", () => {
                     openWorkflowTask(task);
                   });
                 }}
                 onToast={pushToast}
-                pinnedThreadIds={pinnedThreadIds}
-                pinnedThreadsVersion={pinnedThreadsVersion}
-                selectedThreadId={selectedThreadId}
-                selectedThreadPanel={renderPrimaryThreadPage({
-                  embedded: true,
-                  surfaceVariant: "side-chat",
-                })}
                 workspaces={workspacePickerWorkspaces}
                 workspaceMutation={workspaceMutation}
               />

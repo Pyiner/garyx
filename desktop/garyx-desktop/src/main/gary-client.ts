@@ -5304,6 +5304,10 @@ export async function listTaskForest(
   if (input.scope) {
     query.set("scope", input.scope);
   }
+  const rootThreadId = input.rootThreadId?.trim() || "";
+  if (rootThreadId) {
+    query.set("root_thread_id", rootThreadId);
+  }
 
   const suffix = query.toString();
   const payload = await requestJson<TaskForestPayload>(

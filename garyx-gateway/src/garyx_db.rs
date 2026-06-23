@@ -1298,7 +1298,38 @@ impl GaryxDbService {
     }
 
     fn list_pinned_task_forest(&self, filter: &TaskListFilter) -> GaryxDbResult<TaskForestPage> {
+        self.task_forest_rooted_or_pinned(filter, None)
+    }
+
+    /// Forest rooted at a single explicit thread (e.g. the conversation open in
+    /// the thread detail pane), returning its recursive in_progress/in_review
+    /// subtask tree. Reuses the exact same recursive `task_tree` CTE and
+    /// retained-status assembly as the pinned forest.
+    pub fn list_task_forest_rooted(
+        &self,
+        root_thread_id: &str,
+        filter: &TaskListFilter,
+    ) -> GaryxDbResult<TaskForestPage> {
+        self.task_forest_rooted_or_pinned(filter, Some(root_thread_id))
+    }
+
+    /// Shared engine for both the pinned-roots forest and the single-thread
+    /// rooted forest. `root_override = Some(thread)` seeds the recursion from
+    /// that one thread (skipping the "skipped pinned" computation); `None`
+    /// keeps the original behaviour of rooting at every pinned thread.
+    fn task_forest_rooted_or_pinned(
+        &self,
+        filter: &TaskListFilter,
+        root_override: Option<&str>,
+    ) -> GaryxDbResult<TaskForestPage> {
         let (where_sql, bind_values) = task_projection_filter_sql(filter)?;
+        let pinned_cte = match root_override {
+            Some(_) => "SELECT ? AS thread_id, 1 AS root_rank".to_owned(),
+            None => "SELECT thread_id,
+                       ROW_NUMBER() OVER (ORDER BY pinned_at DESC, thread_id ASC) AS root_rank
+                FROM thread_pins"
+                .to_owned(),
+        };
         let skipped_sql = "WITH pinned AS (
                 SELECT thread_id, pinned_at
                 FROM thread_pins
@@ -1320,9 +1351,7 @@ impl GaryxDbService {
              ORDER BY pinned.pinned_at DESC, pinned.thread_id ASC";
         let list_sql = format!(
             "WITH RECURSIVE pinned AS (
-                SELECT thread_id,
-                       ROW_NUMBER() OVER (ORDER BY pinned_at DESC, thread_id ASC) AS root_rank
-                FROM thread_pins
+                {pinned_cte}
              ),
              filtered AS (
                 SELECT task.thread_id, task.number, task.status, task.title,
@@ -1454,18 +1483,26 @@ impl GaryxDbService {
         );
 
         let conn = self.conn()?;
-        let mut skipped_stmt = conn.prepare(skipped_sql)?;
-        let skipped_rows = skipped_stmt
-            .query_map(params![CURRENT_TASK_PROJECTION_VERSION], |row| {
-                row.get::<_, String>(0)
-            })?;
         let mut skipped_pinned_thread_ids = Vec::new();
-        for row in skipped_rows {
-            skipped_pinned_thread_ids.push(row?);
+        if root_override.is_none() {
+            let mut skipped_stmt = conn.prepare(skipped_sql)?;
+            let skipped_rows = skipped_stmt
+                .query_map(params![CURRENT_TASK_PROJECTION_VERSION], |row| {
+                    row.get::<_, String>(0)
+                })?;
+            for row in skipped_rows {
+                skipped_pinned_thread_ids.push(row?);
+            }
         }
 
+        let mut list_bind_values: Vec<SqlValue> = Vec::new();
+        if let Some(root) = root_override {
+            list_bind_values.push(SqlValue::Text(root.to_owned()));
+        }
+        list_bind_values.extend(bind_values);
+
         let mut stmt = conn.prepare(&list_sql)?;
-        let rows = stmt.query_map(params_from_iter(bind_values.iter()), |row| {
+        let rows = stmt.query_map(params_from_iter(list_bind_values.iter()), |row| {
             let root_thread_id = row.get::<_, String>(18)?;
             let source_task_id = row.get::<_, Option<String>>(20)?;
             let source_task_number = source_task_id.as_deref().and_then(task_number_from_task_id);

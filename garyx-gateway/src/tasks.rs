@@ -180,6 +180,8 @@ pub struct TaskListQuery {
     pub source_task_id: Option<String>,
     #[serde(default, alias = "sourceBotId")]
     pub source_bot_id: Option<String>,
+    #[serde(default, alias = "rootThreadId")]
+    pub root_thread_id: Option<String>,
     #[serde(default)]
     pub include_done: bool,
     #[serde(default)]
@@ -559,6 +561,7 @@ pub async fn list_task_forest(
         return tasks_disabled();
     }
     let scope = query.scope;
+    let root_thread_id = query.root_thread_id.clone();
     let filter = match task_list_filter(query) {
         Ok(filter) => filter,
         Err(error) => return task_error_response(error),
@@ -575,7 +578,11 @@ pub async fn list_task_forest(
         Ok(current) => current,
         Err(error) => return task_projection_error_response(error),
     };
-    match state.ops.garyx_db.list_task_forest(&filter, scope) {
+    let forest_result = match root_thread_id {
+        Some(root) => state.ops.garyx_db.list_task_forest_rooted(&root, &filter),
+        None => state.ops.garyx_db.list_task_forest(&filter, scope),
+    };
+    match forest_result {
         Ok(page) => (
             StatusCode::OK,
             Json(json!({
