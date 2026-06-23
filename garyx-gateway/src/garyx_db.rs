@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
@@ -208,6 +208,24 @@ pub enum TaskForestScope {
 impl Default for TaskForestScope {
     fn default() -> Self {
         Self::Pinned
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PinnedTaskForestRow {
+    root_thread_id: String,
+    thread_id: String,
+    number: u64,
+    status: TaskStatus,
+    parent_task_number: Option<u64>,
+    source_task_number: Option<u64>,
+    source_task_thread_id: Option<String>,
+    node: TaskForestNode,
+}
+
+impl PinnedTaskForestRow {
+    fn is_retained_status(&self) -> bool {
+        matches!(self.status, TaskStatus::InProgress | TaskStatus::InReview)
     }
 }
 
@@ -1426,7 +1444,9 @@ impl GaryxDbService {
                     deduped.last_active_at,
                     reached.root_rank,
                     reached.root_thread_id,
-                    reached.depth
+                    reached.depth,
+                    deduped.source_task_id,
+                    deduped.source_task_thread_id
                 FROM deduped
                 JOIN reached ON reached.thread_id = deduped.thread_id
              WHERE reached.reach_rn = 1
@@ -1446,33 +1466,94 @@ impl GaryxDbService {
 
         let mut stmt = conn.prepare(&list_sql)?;
         let rows = stmt.query_map(params_from_iter(bind_values.iter()), |row| {
-            let root_rank = row.get::<_, i64>(17)?;
             let root_thread_id = row.get::<_, String>(18)?;
-            let depth = row.get::<_, i64>(19)?;
-            let root_parent_thread_id = (depth == 1).then_some(root_thread_id.as_str());
-            let node = task_forest_task_from_row(row, root_parent_thread_id)?;
-            Ok((node, root_rank, root_thread_id, depth))
+            let source_task_id = row.get::<_, Option<String>>(20)?;
+            let source_task_number = source_task_id.as_deref().and_then(task_number_from_task_id);
+            let source_task_thread_id = row.get::<_, Option<String>>(21)?;
+            let node = task_forest_task_from_row(row, None)?;
+            let TaskForestNode::Task {
+                task,
+                parent_task_number,
+                ..
+            } = &node
+            else {
+                unreachable!("task forest SQL rows are task nodes");
+            };
+            Ok(PinnedTaskForestRow {
+                root_thread_id,
+                thread_id: task.thread_id.clone(),
+                number: task.number,
+                status: task.status,
+                parent_task_number: *parent_task_number,
+                source_task_number,
+                source_task_thread_id,
+                node,
+            })
         })?;
-        let mut task_nodes_by_root = Vec::new();
+        let mut reached_rows = Vec::new();
         let mut root_thread_ids = Vec::new();
         for row in rows {
-            let (node, _root_rank, root_thread_id, _depth) = row?;
+            let row = row?;
+            let root_thread_id = row.root_thread_id.clone();
             if !root_thread_ids.contains(&root_thread_id) {
                 root_thread_ids.push(root_thread_id.clone());
             }
-            task_nodes_by_root.push((root_thread_id, node));
+            reached_rows.push(row);
         }
-        let mut tasks = Vec::with_capacity(root_thread_ids.len() + task_nodes_by_root.len());
+        let mut tasks = Vec::with_capacity(root_thread_ids.len() + reached_rows.len());
         for root_thread_id in &root_thread_ids {
             tasks.push(task_forest_thread_root_from_conn(&conn, root_thread_id)?);
-            tasks.extend(
-                task_nodes_by_root
-                    .iter()
-                    .filter(|(candidate_root_thread_id, _)| {
-                        candidate_root_thread_id == root_thread_id
-                    })
-                    .map(|(_, node)| node.clone()),
-            );
+            let root_row_indices = reached_rows
+                .iter()
+                .enumerate()
+                .filter_map(|(index, row)| (row.root_thread_id == *root_thread_id).then_some(index))
+                .collect::<Vec<_>>();
+            let mut by_number = HashMap::new();
+            let mut by_thread = HashMap::new();
+            for index in &root_row_indices {
+                let row = &reached_rows[*index];
+                by_number.entry(row.number).or_insert(*index);
+                by_thread.entry(row.thread_id.clone()).or_insert(*index);
+            }
+            for index in root_row_indices {
+                let row = &reached_rows[index];
+                if !row.is_retained_status() {
+                    continue;
+                }
+                let mut node = row.node.clone();
+                let (parent_task_number, parent_thread_id, parent_node_id) =
+                    if let Some(parent_index) = task_forest_nearest_retained_parent_index(
+                        &reached_rows,
+                        index,
+                        &by_number,
+                        &by_thread,
+                    ) {
+                        let parent = &reached_rows[parent_index];
+                        (
+                            Some(parent.number),
+                            Some(parent.thread_id.clone()),
+                            Some(task_forest_task_node_id(&parent.thread_id)),
+                        )
+                    } else {
+                        (
+                            None,
+                            Some(root_thread_id.clone()),
+                            Some(task_forest_thread_root_node_id(root_thread_id)),
+                        )
+                    };
+                if let TaskForestNode::Task {
+                    parent_node_id: task_parent_node_id,
+                    parent_task_number: task_parent_task_number,
+                    parent_thread_id: task_parent_thread_id,
+                    ..
+                } = &mut node
+                {
+                    *task_parent_node_id = parent_node_id;
+                    *task_parent_task_number = parent_task_number;
+                    *task_parent_thread_id = parent_thread_id;
+                }
+                tasks.push(node);
+            }
         }
         let total = tasks.len();
         Ok(TaskForestPage {
@@ -4248,6 +4329,53 @@ fn task_forest_task_node_id(thread_id: &str) -> String {
     format!("task:{thread_id}")
 }
 
+fn task_number_from_task_id(task_id: &str) -> Option<u64> {
+    let trimmed = task_id.trim();
+    let candidate = trimmed.strip_prefix('#').unwrap_or(trimmed);
+    let (prefix, number) = candidate.split_once('-')?;
+    if !prefix.eq_ignore_ascii_case("TASK") {
+        return None;
+    }
+    number.parse::<u64>().ok().filter(|number| *number > 0)
+}
+
+fn task_forest_immediate_parent_index(
+    row: &PinnedTaskForestRow,
+    by_number: &HashMap<u64, usize>,
+    by_thread: &HashMap<String, usize>,
+) -> Option<usize> {
+    row.parent_task_number
+        .or(row.source_task_number)
+        .and_then(|number| by_number.get(&number).copied())
+        .or_else(|| {
+            row.source_task_thread_id
+                .as_ref()
+                .and_then(|thread_id| by_thread.get(thread_id).copied())
+        })
+}
+
+fn task_forest_nearest_retained_parent_index(
+    rows: &[PinnedTaskForestRow],
+    current_index: usize,
+    by_number: &HashMap<u64, usize>,
+    by_thread: &HashMap<String, usize>,
+) -> Option<usize> {
+    let mut seen = BTreeSet::new();
+    let mut parent_index =
+        task_forest_immediate_parent_index(&rows[current_index], by_number, by_thread);
+    while let Some(index) = parent_index {
+        if index == current_index || !seen.insert(index) {
+            break;
+        }
+        let parent = &rows[index];
+        if parent.is_retained_status() {
+            return Some(index);
+        }
+        parent_index = task_forest_immediate_parent_index(parent, by_number, by_thread);
+    }
+    None
+}
+
 fn task_forest_thread_root_from_conn(
     conn: &Connection,
     thread_id: &str,
@@ -5468,7 +5596,7 @@ mod tests {
         db.replace_task_projection(task_projection_draft(
             "thread::child-a",
             11,
-            TaskStatus::Todo,
+            TaskStatus::InProgress,
             "2026-01-01T00:00:02.000Z",
             Some(chat_source("thread::chat-a")),
             1,
@@ -5477,7 +5605,7 @@ mod tests {
         db.replace_task_projection(task_projection_draft(
             "thread::grandchild-a",
             12,
-            TaskStatus::Todo,
+            TaskStatus::InReview,
             "2026-01-01T00:00:03.000Z",
             Some(thread_source("thread::child-a", "#TASK-11")),
             1,
@@ -5486,7 +5614,7 @@ mod tests {
         db.replace_task_projection(task_projection_draft(
             "thread::child-b",
             21,
-            TaskStatus::Todo,
+            TaskStatus::InProgress,
             "2026-01-01T00:00:05.000Z",
             Some(chat_source("thread::chat-b")),
             1,
@@ -5567,6 +5695,136 @@ mod tests {
     }
 
     #[test]
+    fn pinned_task_forest_filters_inactive_tasks_and_reparents_active_descendants() {
+        let db = GaryxDbService::memory().expect("db opens");
+        db.replace_task_projection(task_projection_draft(
+            "thread::done-parent",
+            31,
+            TaskStatus::Done,
+            "2026-01-01T00:00:01.000Z",
+            Some(chat_source("thread::chat-active")),
+            1,
+        ))
+        .expect("insert done parent");
+        db.replace_task_projection(task_projection_draft(
+            "thread::todo-middle",
+            32,
+            TaskStatus::Todo,
+            "2026-01-01T00:00:02.000Z",
+            Some(thread_source("thread::done-parent", "#TASK-31")),
+            1,
+        ))
+        .expect("insert todo middle");
+        db.replace_task_projection(task_projection_draft(
+            "thread::active-leaf",
+            33,
+            TaskStatus::InProgress,
+            "2026-01-01T00:00:03.000Z",
+            Some(thread_source("thread::todo-middle", "#TASK-32")),
+            1,
+        ))
+        .expect("insert active leaf");
+        db.replace_task_projection(task_projection_draft(
+            "thread::review-child",
+            34,
+            TaskStatus::InReview,
+            "2026-01-01T00:00:04.000Z",
+            Some(thread_source("thread::active-leaf", "#TASK-33")),
+            1,
+        ))
+        .expect("insert review child");
+        db.replace_task_projection(task_projection_draft(
+            "thread::done-child",
+            35,
+            TaskStatus::Done,
+            "2026-01-01T00:00:05.000Z",
+            Some(thread_source("thread::active-leaf", "#TASK-33")),
+            1,
+        ))
+        .expect("insert done child");
+        db.replace_task_projection(task_projection_draft(
+            "thread::inactive-only",
+            41,
+            TaskStatus::Done,
+            "2026-01-01T00:00:06.000Z",
+            Some(chat_source("thread::chat-inactive")),
+            1,
+        ))
+        .expect("insert inactive-only child");
+        db.conn()
+            .expect("db connection")
+            .execute_batch(
+                "INSERT INTO thread_pins (thread_id, pinned_at)
+                 VALUES
+                   ('thread::chat-active', '2026-01-01T00:00:01.000Z'),
+                   ('thread::chat-inactive', '2026-01-01T00:00:02.000Z')",
+            )
+            .expect("insert pins");
+
+        let page = db
+            .list_task_forest(
+                &TaskListFilter {
+                    include_done: true,
+                    ..Default::default()
+                },
+                TaskForestScope::Pinned,
+            )
+            .expect("list pinned forest");
+
+        assert_eq!(
+            page.tasks
+                .iter()
+                .map(|node| node.thread_id())
+                .collect::<Vec<_>>(),
+            vec![
+                "thread::chat-inactive",
+                "thread::chat-active",
+                "thread::active-leaf",
+                "thread::review-child"
+            ]
+        );
+        assert_eq!(
+            page.root_thread_ids,
+            vec![
+                "thread::chat-inactive".to_owned(),
+                "thread::chat-active".to_owned()
+            ]
+        );
+        assert!(page.skipped_pinned_thread_ids.is_empty());
+        for node in &page.tasks {
+            if let TaskForestNode::Task { task, .. } = node {
+                assert!(
+                    matches!(task.status, TaskStatus::InProgress | TaskStatus::InReview),
+                    "inactive task leaked into pinned forest: {:?}",
+                    task.status
+                );
+            }
+        }
+        let active_leaf = page
+            .tasks
+            .iter()
+            .find(|node| node.thread_id() == "thread::active-leaf")
+            .expect("active leaf");
+        assert_eq!(active_leaf.parent_task_number(), None);
+        assert_eq!(active_leaf.parent_thread_id(), Some("thread::chat-active"));
+        assert_eq!(
+            active_leaf.parent_node_id(),
+            Some("thread-root:thread::chat-active")
+        );
+        let review_child = page
+            .tasks
+            .iter()
+            .find(|node| node.thread_id() == "thread::review-child")
+            .expect("review child");
+        assert_eq!(review_child.parent_task_number(), Some(33));
+        assert_eq!(review_child.parent_thread_id(), Some("thread::active-leaf"));
+        assert_eq!(
+            review_child.parent_node_id(),
+            Some("task:thread::active-leaf")
+        );
+    }
+
+    #[test]
     fn pinned_task_forest_prefers_pinned_seed_over_newer_duplicate_number() {
         let db = GaryxDbService::memory().expect("db opens");
         db.replace_task_projection(task_projection_draft(
@@ -5613,11 +5871,7 @@ mod tests {
                 .iter()
                 .map(|node| node.thread_id())
                 .collect::<Vec<_>>(),
-            vec![
-                "thread::pinned-chat",
-                "thread::pinned-direct",
-                "thread::child"
-            ]
+            vec!["thread::pinned-chat", "thread::pinned-direct"]
         );
         assert_eq!(page.root_thread_ids, vec!["thread::pinned-chat"]);
         assert!(

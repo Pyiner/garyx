@@ -89,6 +89,11 @@ const STATUS_ORDER: DesktopTaskStatus[] = [
   "done",
 ];
 
+const FOREST_CHIP_STATUS_ORDER: DesktopTaskStatus[] = [
+  "in_progress",
+  "in_review",
+];
+
 const REFRESH_INTERVAL_MS = 5000;
 const CULLING_NODE_THRESHOLD = 120;
 const CULLING_OVERSCAN_PX = 360;
@@ -886,7 +891,7 @@ export function TaskForestConsole({
           <span>{t("Task Forest")}</span>
         </div>
         <div className="task-forest-status-chips">
-          {STATUS_ORDER.map((status) => {
+          {FOREST_CHIP_STATUS_ORDER.map((status) => {
             const meta = STATUS_META[status];
             return (
               <button
@@ -1000,7 +1005,7 @@ export function TaskForestConsole({
         ) : !tasks.length ? (
           <div className="task-forest-state">
             {pinnedThreadIds.length
-              ? t("Pinned conversations with tasks will appear here.")
+              ? t("No active tasks right now.")
               : t("Pin conversations to add them to the operation room.")}
           </div>
         ) : null}

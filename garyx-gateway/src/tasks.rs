@@ -1929,7 +1929,7 @@ mod tests {
         .await;
 
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(payload["total"], 3);
+        assert_eq!(payload["total"], 2);
         assert_eq!(payload["projection_current"], true);
         assert_eq!(
             payload["root_thread_ids"],
@@ -1945,15 +1945,12 @@ mod tests {
                 .iter()
                 .map(|task| task["thread_id"].as_str().unwrap_or_default())
                 .collect::<Vec<_>>(),
-            vec![
-                "thread::route-chat-root",
-                "thread::route-child",
-                "thread::route-grandchild"
-            ]
+            vec!["thread::route-chat-root", "thread::route-grandchild"]
         );
         assert_eq!(tasks[0]["kind"], "thread");
         assert_eq!(tasks[0]["title"], "Route Chat Root");
         assert_eq!(tasks[1]["kind"], "task");
+        assert_eq!(tasks[1]["parent_task_number"], Value::Null);
         assert_eq!(tasks[1]["parent_thread_id"], "thread::route-chat-root");
         assert_eq!(
             tasks[1]["parent_node_id"],

@@ -9,6 +9,11 @@ is rendered as a root node using thread metadata, then the gateway attaches
 tasks whose `TaskSource.thread_id` points at that conversation and recursively
 attaches task children below them. Unrelated tasks are not returned.
 
+Follow-up: Task 1216 keeps the pinned-root contract but changes the default task
+node set to active statuses only. See
+`docs/design/task-1216-active-status-task-forest.md` for the status filter and
+reparenting rules.
+
 Keep the existing canvas, tidy-tree layout, cycle defense, node cards, node
 selection, thread detail panel, panning, zooming, minimap, and visual styling.
 This change only replaces the task set selection contract and wires the forest

@@ -294,7 +294,7 @@ export interface DesktopTaskForestPage {
   skippedPinnedThreadIds: string[];
 }
 
-export type DesktopTaskForestScope = 'all';
+export type DesktopTaskForestScope = 'pinned' | 'all';
 
 export interface DesktopDreamSpan {
   spanId: string;
