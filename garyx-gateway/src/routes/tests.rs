@@ -280,7 +280,7 @@ async fn thread_stream_replay_pages_when_tail_cap_overflows() {
         .await
         .unwrap();
 
-    let replay = build_thread_stream_replay(&state, &thread_id, 0).await;
+    let replay = build_thread_stream_replay(&state, &thread_id, 0, 0).await;
     assert_eq!(replay.events.len(), 1);
     assert_eq!(replay.sent_payloads.len(), THREAD_TRANSCRIPT_REPLAY_CAP + 2);
     assert_eq!(replay.max_seq, (THREAD_TRANSCRIPT_REPLAY_CAP + 2) as u64);
@@ -348,7 +348,7 @@ async fn thread_stream_replay_after_seq_emits_one_aligned_render_frame() {
         .await
         .unwrap();
 
-    let replay = build_thread_stream_replay(&state, thread_id, 1).await;
+    let replay = build_thread_stream_replay(&state, thread_id, 1, 0).await;
 
     assert_eq!(replay.events.len(), 1);
     assert_eq!(replay.max_seq, 3);
@@ -382,6 +382,86 @@ async fn thread_stream_replay_after_seq_emits_one_aligned_render_frame() {
             .unwrap(),
         vec!["seq:1", "seq:2", "seq:3"]
     );
+    assert!(
+        frame
+            .get("render_state")
+            .and_then(|state| state.get("window"))
+            .is_none(),
+        "default replay must not emit window metadata"
+    );
+}
+
+#[tokio::test]
+async fn thread_stream_replay_render_floor_windows_event_frame() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::render-replay-floor-events";
+    state
+        .threads
+        .history
+        .transcript_store()
+        .append_run_records(
+            thread_id,
+            Some("run::render-replay-floor-events"),
+            &[
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "user", "content": "older question"}),
+                    "2026-06-18T12:00:00Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "older answer"}),
+                    "2026-06-18T12:00:01Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "user", "content": "new question"}),
+                    "2026-06-18T12:00:02Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "new answer"}),
+                    "2026-06-18T12:00:03Z",
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let replay = build_thread_stream_replay(&state, thread_id, 2, 3).await;
+
+    assert_eq!(replay.events.len(), 1);
+    assert_eq!(replay.max_seq, 4);
+    let event = replay.events[0].as_ref().unwrap();
+    assert_eq!(event.id, 4);
+    let frame: Value = serde_json::from_str(&event.payload).unwrap();
+    let events = frame.get("events").and_then(Value::as_array).unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.get("seq").and_then(Value::as_u64).unwrap())
+            .collect::<Vec<_>>(),
+        vec![3, 4]
+    );
+    let render_state = frame.get("render_state").unwrap();
+    assert_eq!(
+        render_state
+            .get("visibleMessageIds")
+            .and_then(Value::as_array)
+            .map(|items| { items.iter().filter_map(Value::as_str).collect::<Vec<_>>() })
+            .unwrap(),
+        vec!["seq:3", "seq:4"]
+    );
+    assert_eq!(
+        render_state
+            .get("window")
+            .and_then(|window| window.get("floor_seq"))
+            .and_then(Value::as_u64),
+        Some(3)
+    );
+    assert_eq!(
+        render_state
+            .get("window")
+            .and_then(|window| window.get("has_more_above"))
+            .and_then(Value::as_bool),
+        Some(true)
+    );
 }
 
 #[tokio::test]
@@ -413,7 +493,7 @@ async fn thread_stream_replay_caught_up_emits_snapshot_only_frame() {
         .await
         .unwrap();
 
-    let replay = build_thread_stream_replay(&state, thread_id, 3).await;
+    let replay = build_thread_stream_replay(&state, thread_id, 3, 0).await;
 
     assert_eq!(replay.events.len(), 1);
     assert_eq!(replay.max_seq, 3);
@@ -438,6 +518,78 @@ async fn thread_stream_replay_caught_up_emits_snapshot_only_frame() {
             .map(|items| { items.iter().filter_map(Value::as_str).collect::<Vec<_>>() })
             .unwrap(),
         vec!["seq:1", "seq:2", "seq:3"]
+    );
+    assert!(
+        frame
+            .get("render_state")
+            .and_then(|state| state.get("window"))
+            .is_none(),
+        "default caught-up snapshot must remain full-history"
+    );
+}
+
+#[tokio::test]
+async fn thread_stream_replay_render_floor_windows_snapshot_only_frame() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::render-replay-floor-snapshot";
+    state
+        .threads
+        .history
+        .transcript_store()
+        .append_run_records(
+            thread_id,
+            Some("run::render-replay-floor-snapshot"),
+            &[
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "user", "content": "older question"}),
+                    "2026-06-18T12:00:00Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "older answer"}),
+                    "2026-06-18T12:00:01Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "user", "content": "new question"}),
+                    "2026-06-18T12:00:02Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "new answer"}),
+                    "2026-06-18T12:00:03Z",
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let replay = build_thread_stream_replay(&state, thread_id, 4, 3).await;
+
+    assert_eq!(replay.events.len(), 1);
+    assert_eq!(replay.max_seq, 4);
+    assert!(replay.sent_payloads.is_empty());
+    let event = replay.events[0].as_ref().unwrap();
+    assert_eq!(event.id, 4);
+    let frame: Value = serde_json::from_str(&event.payload).unwrap();
+    assert!(
+        frame
+            .get("events")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty)
+    );
+    let render_state = frame.get("render_state").unwrap();
+    assert_eq!(
+        render_state
+            .get("visibleMessageIds")
+            .and_then(Value::as_array)
+            .map(|items| { items.iter().filter_map(Value::as_str).collect::<Vec<_>>() })
+            .unwrap(),
+        vec!["seq:3", "seq:4"]
+    );
+    assert_eq!(
+        render_state
+            .get("window")
+            .and_then(|window| window.get("floor_seq"))
+            .and_then(Value::as_u64),
+        Some(3)
     );
 }
 
@@ -466,7 +618,7 @@ async fn thread_stream_replay_caught_up_clamps_overlarge_cursor_to_snapshot_seq(
         .await
         .unwrap();
 
-    let replay = build_thread_stream_replay(&state, thread_id, 99).await;
+    let replay = build_thread_stream_replay(&state, thread_id, 99, 0).await;
 
     assert_eq!(replay.events.len(), 1);
     assert_eq!(replay.max_seq, 2);
@@ -516,7 +668,7 @@ async fn thread_stream_live_event_carries_committed_payload_and_render_snapshot(
     let live_record = append.appended_records.last().unwrap();
     let payload = committed_thread_stream_replay_payload_value(thread_id, live_record);
 
-    let event = committed_thread_stream_live_event(&state, thread_id, live_record.seq, payload)
+    let event = committed_thread_stream_live_event(&state, thread_id, live_record.seq, payload, 0)
         .await
         .unwrap();
 
@@ -547,6 +699,65 @@ async fn thread_stream_live_event_carries_committed_payload_and_render_snapshot(
             .map(|items| { items.iter().filter_map(Value::as_str).collect::<Vec<_>>() })
             .unwrap(),
         vec!["seq:1", "seq:2"]
+    );
+}
+
+#[tokio::test]
+async fn thread_stream_live_event_respects_render_floor() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::render-live-frame-floor";
+    let append = state
+        .threads
+        .history
+        .transcript_store()
+        .append_run_records(
+            thread_id,
+            Some("run::render-live-frame-floor"),
+            &[
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "user", "content": "older question"}),
+                    "2026-06-18T12:00:00Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "older answer"}),
+                    "2026-06-18T12:00:01Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "user", "content": "new question"}),
+                    "2026-06-18T12:00:02Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "new answer"}),
+                    "2026-06-18T12:00:03Z",
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+    let live_record = append.appended_records.last().unwrap();
+    let payload = committed_thread_stream_replay_payload_value(thread_id, live_record);
+
+    let event = committed_thread_stream_live_event(&state, thread_id, live_record.seq, payload, 3)
+        .await
+        .unwrap();
+
+    assert_eq!(event.id, live_record.seq);
+    let frame: Value = serde_json::from_str(&event.payload).unwrap();
+    let render_state = frame.get("render_state").unwrap();
+    assert_eq!(
+        render_state
+            .get("visibleMessageIds")
+            .and_then(Value::as_array)
+            .map(|items| { items.iter().filter_map(Value::as_str).collect::<Vec<_>>() })
+            .unwrap(),
+        vec!["seq:3", "seq:4"]
+    );
+    assert_eq!(
+        render_state
+            .get("window")
+            .and_then(|window| window.get("floor_seq"))
+            .and_then(Value::as_u64),
+        Some(3)
     );
 }
 
@@ -1454,7 +1665,9 @@ async fn recent_threads_route_syncs_router_summary_to_garyx_db() {
     // Crash-orphan handling (dangling run with no live bridge run) is covered in
     // recent_thread_projection::tests.
     let state = AppStateBuilder::new(test_config())
-        .with_active_run_probe(Arc::new(crate::recent_thread_projection::AlwaysActiveRunProbe))
+        .with_active_run_probe(Arc::new(
+            crate::recent_thread_projection::AlwaysActiveRunProbe,
+        ))
         .build();
     state
         .threads

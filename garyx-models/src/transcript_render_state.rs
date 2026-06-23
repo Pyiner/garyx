@@ -28,6 +28,14 @@ pub struct RenderSnapshot {
     /// `reset_at` and surface whether an automatic resend is scheduled.
     #[serde(rename = "rateLimit", default, skip_serializing_if = "Option::is_none")]
     pub rate_limit: Option<RenderRateLimit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<RenderWindow>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderWindow {
+    pub floor_seq: u64,
+    pub has_more_above: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -255,16 +263,13 @@ pub fn reduce_transcript_render_state_with_run_state<'a>(
     let rows = build_rows(&blocks, run_state);
     let (tail_activity, active_tool_group_id, progress_locus) =
         derive_tail_activity(blocks.last(), run_state);
-    let rate_limit = run_state
-        .rate_limit
-        .as_ref()
-        .map(|limit| RenderRateLimit {
-            provider: limit.provider.clone(),
-            reset_at: limit.reset_at.clone(),
-            window: limit.window.clone(),
-            message: limit.message.clone(),
-            will_auto_resend: limit.will_auto_resend,
-        });
+    let rate_limit = run_state.rate_limit.as_ref().map(|limit| RenderRateLimit {
+        provider: limit.provider.clone(),
+        reset_at: limit.reset_at.clone(),
+        window: limit.window.clone(),
+        message: limit.message.clone(),
+        will_auto_resend: limit.will_auto_resend,
+    });
 
     RenderSnapshot {
         based_on_seq,
@@ -275,6 +280,7 @@ pub fn reduce_transcript_render_state_with_run_state<'a>(
         visible_message_ids,
         filtered_placeholders,
         rate_limit,
+        window: None,
     }
 }
 

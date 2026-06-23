@@ -88,9 +88,11 @@ Detailed data and runtime contracts: @docs/agents/repository-contracts.md and
   gateway sends it in per-thread `thread_render_frame` SSE. Desktop and mobile
   may map that snapshot into platform view models, but must not recompute
   transcript rows, tool grouping, active tool state, final-answer placement, or
-  tail thinking locally. Prioritize headless, no-UI tests for message-related
-  work by driving the server snapshot / real captured stream data and asserting
-  the mapped output.
+  tail thinking locally. `render_state.rows` may be narrowed by a
+  client-declared `render_floor`; `based_on_seq` remains the committed window
+  tail and event delivery is still governed by the SSE cursor. Prioritize
+  headless, no-UI tests for message-related work by driving the server snapshot
+  / real captured stream data and asserting the mapped output.
 - Keep mobile SwiftUI feature surfaces in feature-specific files.
 - Mobile page backgrounds and bottom floating controls should use the shared
   safe-area chrome helpers (`garyxPageBackground`, `garyxFloatingBottomChrome`)

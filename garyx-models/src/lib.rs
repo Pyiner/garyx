@@ -86,7 +86,7 @@ pub use transcript_render_state::{
     RenderActivityRow, RenderAssistantReplyRow, RenderAssistantStep, RenderFilteredPlaceholder,
     RenderMessageRef, RenderPlaceholderFilterReason, RenderProgressLocus, RenderRow,
     RenderSnapshot, RenderStepItem, RenderStepRow, RenderTailActivity, RenderToolEntry,
-    RenderToolEntryStatus, RenderToolGroup, RenderToolGroupStatus, RenderUserTurnRow,
+    RenderToolEntryStatus, RenderToolGroup, RenderToolGroupStatus, RenderUserTurnRow, RenderWindow,
     final_assistant_text_from_render_records, reduce_transcript_render_state,
     reduce_transcript_render_state_with_run_state,
 };

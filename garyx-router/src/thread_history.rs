@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use garyx_models::{
-    RenderSnapshot, TranscriptRunState, reduce_transcript_render_state, reduce_transcript_run_state,
+    RenderSnapshot, RenderWindow, TranscriptRunState, reduce_transcript_render_state,
+    reduce_transcript_render_state_with_run_state, reduce_transcript_run_state,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1165,6 +1166,40 @@ impl ThreadTranscriptStore {
             .filter_map(|record| serde_json::to_value(record).ok())
             .collect::<Vec<_>>();
         Ok(reduce_transcript_render_state(&values))
+    }
+
+    pub async fn render_snapshot_in_window(
+        &self,
+        thread_id: &str,
+        floor_seq: u64,
+        based_on_seq: u64,
+    ) -> Result<RenderSnapshot, ThreadHistoryError> {
+        let records = self.read_records(thread_id).await?;
+        let prefix = records
+            .iter()
+            .filter(|record| record.seq <= based_on_seq)
+            .collect::<Vec<_>>();
+        let actual_based_on_seq = prefix.iter().map(|record| record.seq).max().unwrap_or(0);
+        let full_values = prefix
+            .iter()
+            .filter_map(|record| serde_json::to_value(record).ok())
+            .collect::<Vec<_>>();
+        let run_state = reduce_transcript_run_state(&full_values);
+        let window_values = prefix
+            .iter()
+            .filter(|record| record.seq >= floor_seq)
+            .filter_map(|record| serde_json::to_value(record).ok())
+            .collect::<Vec<_>>();
+        let mut snapshot =
+            reduce_transcript_render_state_with_run_state(&window_values, &run_state);
+        if snapshot.based_on_seq == 0 {
+            snapshot.based_on_seq = actual_based_on_seq;
+        }
+        snapshot.window = Some(RenderWindow {
+            floor_seq,
+            has_more_above: prefix.iter().any(|record| record.seq < floor_seq),
+        });
+        Ok(snapshot)
     }
 
     /// Committed records with `seq > after_seq`, ascending, up to `limit`. Drives

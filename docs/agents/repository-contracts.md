@@ -44,6 +44,9 @@ reinterpreted in feature code.
   derive `render_state` from committed records up to the frame sequence.
   `render_state.based_on_seq` must match the frame sequence for normal replay
   and live frames.
+- `render_state.rows` may be narrowed by a client-declared `render_floor`.
+  `render_state.based_on_seq` remains the committed window tail, and event
+  delivery is still governed only by the SSE cursor and committed ledger.
 - A caught-up per-thread stream connection still sends a snapshot-only frame
   with `events: []`; its SSE id and replay cursor are
   `render_state.based_on_seq`, clamped to the actual committed ledger tail.

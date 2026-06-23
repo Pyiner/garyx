@@ -41,7 +41,9 @@ use crate::garyx_db::{GaryxDbError, PinnedThreadRecord, RecentThreadRecord, Thre
 use crate::provider_session_locator::{
     list_recent_local_provider_sessions, recover_local_provider_session,
 };
-use crate::recent_thread_projection::{BridgeActiveRunProbe, backfill_recent_thread_projection_if_incomplete};
+use crate::recent_thread_projection::{
+    BridgeActiveRunProbe, backfill_recent_thread_projection_if_incomplete,
+};
 use crate::server::AppState;
 use crate::skills::SkillStoreError;
 use crate::thread_meta_projection::backfill_thread_meta_projection_if_incomplete;
@@ -1764,6 +1766,19 @@ pub struct ThreadStreamParams {
     /// Resume cursor: replay committed messages with seq strictly greater than this.
     #[serde(default)]
     pub after_seq: u64,
+    #[serde(default)]
+    pub replay_scope: Option<ThreadStreamReplayScope>,
+    #[serde(default)]
+    pub initial_user_turns: Option<usize>,
+    #[serde(default)]
+    pub render_floor: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadStreamReplayScope {
+    Resume,
+    Initial,
 }
 
 /// GET /api/threads/:key/stream - resumable per-thread transcript stream (S5).
@@ -1794,12 +1809,13 @@ pub async fn thread_stream(
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.trim().parse::<u64>().ok())
         .unwrap_or(params.after_seq);
+    let render_floor = params.render_floor.unwrap_or(0);
 
     // Subscribe BEFORE reading the replay snapshot (no gap); seq dedup below makes
     // the overlap idempotent.
     let rx = state.ops.events.subscribe();
 
-    let replay = build_thread_stream_replay(&state, &thread_id, after_seq).await;
+    let replay = build_thread_stream_replay(&state, &thread_id, after_seq, render_floor).await;
     let replay_events = replay
         .events
         .into_iter()
@@ -1809,6 +1825,7 @@ pub async fn thread_stream(
     let thread_for_live = thread_id.clone();
     let state_for_live = state.clone();
     let state_for_drops = state.clone();
+    let render_floor_for_live = render_floor;
     let mut last_sent_seq = replay.max_seq;
     let live = BroadcastStream::new(rx)
         .then(move |item| {
@@ -1837,6 +1854,7 @@ pub async fn thread_stream(
                             &thread_for_live,
                             seq,
                             payload,
+                            render_floor_for_live,
                         )
                         .await,
                     ),
@@ -1886,6 +1904,7 @@ async fn build_thread_stream_replay(
     state: &Arc<AppState>,
     thread_id: &str,
     after_seq: u64,
+    render_floor: u64,
 ) -> ThreadStreamReplay {
     let tail = state
         .threads
@@ -1899,7 +1918,8 @@ async fn build_thread_stream_replay(
         .first()
         .is_some_and(|record| record.seq > after_seq.saturating_add(1));
     if !tail_has_gap {
-        return thread_stream_replay_from_records(state, thread_id, after_seq, tail).await;
+        return thread_stream_replay_from_records(state, thread_id, after_seq, tail, render_floor)
+            .await;
     }
 
     let mut cursor = after_seq;
@@ -1926,7 +1946,7 @@ async fn build_thread_stream_replay(
         }
         cursor = replay.max_seq;
     }
-    finalize_thread_stream_replay(state, thread_id, replay).await
+    finalize_thread_stream_replay(state, thread_id, replay, render_floor).await
 }
 
 async fn thread_stream_replay_from_records(
@@ -1934,6 +1954,7 @@ async fn thread_stream_replay_from_records(
     thread_id: &str,
     after_seq: u64,
     records: Vec<ThreadTranscriptRecord>,
+    render_floor: u64,
 ) -> ThreadStreamReplay {
     let mut replay = ThreadStreamReplayBuilder {
         event_payloads: Vec::with_capacity(records.len()),
@@ -1941,23 +1962,31 @@ async fn thread_stream_replay_from_records(
         sent_payloads: HashMap::new(),
     };
     append_thread_stream_replay_records(&mut replay, thread_id, records);
-    finalize_thread_stream_replay(state, thread_id, replay).await
+    finalize_thread_stream_replay(state, thread_id, replay, render_floor).await
 }
 
 async fn finalize_thread_stream_replay(
     state: &Arc<AppState>,
     thread_id: &str,
     replay: ThreadStreamReplayBuilder,
+    render_floor: u64,
 ) -> ThreadStreamReplay {
     let mut events = Vec::new();
     let mut max_seq = replay.max_seq;
     if !replay.event_payloads.is_empty() {
-        let event =
-            thread_stream_frame_event(state, thread_id, replay.max_seq, replay.event_payloads)
-                .await;
+        let event = thread_stream_frame_event(
+            state,
+            thread_id,
+            replay.max_seq,
+            replay.event_payloads,
+            render_floor,
+        )
+        .await;
         events.push(event);
     } else {
-        let event = thread_stream_snapshot_only_frame_event(state, thread_id, replay.max_seq).await;
+        let event =
+            thread_stream_snapshot_only_frame_event(state, thread_id, replay.max_seq, render_floor)
+                .await;
         if let Ok(event) = &event {
             max_seq = event.id;
         }
@@ -2027,16 +2056,19 @@ async fn committed_thread_stream_live_event(
     thread_id: &str,
     seq: u64,
     payload: Value,
+    render_floor: u64,
 ) -> Result<ThreadStreamEvent, io::Error> {
-    thread_stream_frame_event(state, thread_id, seq, vec![payload]).await
+    thread_stream_frame_event(state, thread_id, seq, vec![payload], render_floor).await
 }
 
 async fn thread_stream_snapshot_only_frame_event(
     state: &Arc<AppState>,
     thread_id: &str,
     requested_seq: u64,
+    render_floor: u64,
 ) -> Result<ThreadStreamEvent, io::Error> {
-    let render_state = thread_render_snapshot_at_seq(state, thread_id, requested_seq).await?;
+    let render_state =
+        thread_render_snapshot_at_seq(state, thread_id, requested_seq, render_floor).await?;
     let id = render_state.based_on_seq;
     Ok(ThreadStreamEvent {
         id,
@@ -2049,8 +2081,9 @@ async fn thread_stream_frame_event(
     thread_id: &str,
     seq: u64,
     event_payloads: Vec<Value>,
+    render_floor: u64,
 ) -> Result<ThreadStreamEvent, io::Error> {
-    let render_state = thread_render_snapshot_at_seq(state, thread_id, seq).await?;
+    let render_state = thread_render_snapshot_at_seq(state, thread_id, seq, render_floor).await?;
     if render_state.based_on_seq != seq {
         return Err(thread_stream_reconnect_error(
             "render snapshot seq mismatch",
@@ -2066,14 +2099,17 @@ async fn thread_render_snapshot_at_seq(
     state: &Arc<AppState>,
     thread_id: &str,
     seq: u64,
+    render_floor: u64,
 ) -> Result<RenderSnapshot, io::Error> {
-    state
-        .threads
-        .history
-        .transcript_store()
-        .render_snapshot_at_seq(thread_id, seq)
-        .await
-        .map_err(|error| io::Error::other(format!("failed to derive render snapshot: {error}")))
+    let store = state.threads.history.transcript_store();
+    let result = if render_floor > 0 {
+        store
+            .render_snapshot_in_window(thread_id, render_floor, seq)
+            .await
+    } else {
+        store.render_snapshot_at_seq(thread_id, seq).await
+    };
+    result.map_err(|error| io::Error::other(format!("failed to derive render snapshot: {error}")))
 }
 
 fn thread_stream_frame_payload(

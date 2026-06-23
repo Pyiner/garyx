@@ -200,6 +200,96 @@ async fn render_snapshot_at_seq_reports_dangling_run_activity() {
 }
 
 #[tokio::test]
+async fn render_snapshot_in_window_limits_rows_and_reports_window() {
+    let store = ThreadTranscriptStore::memory();
+    store
+        .append_run_records(
+            "thread::render-window",
+            Some("run-render-window"),
+            &[
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "user", "content": "older question"}),
+                    "2026-06-18T12:00:00Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "older answer"}),
+                    "2026-06-18T12:00:01Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "user", "content": "new question"}),
+                    "2026-06-18T12:00:02Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "new answer"}),
+                    "2026-06-18T12:00:03Z",
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let snapshot = store
+        .render_snapshot_in_window("thread::render-window", 3, 4)
+        .await
+        .unwrap();
+
+    assert_eq!(snapshot.based_on_seq, 4);
+    assert_eq!(snapshot.visible_message_ids, vec!["seq:3", "seq:4"]);
+    assert_eq!(
+        snapshot.window,
+        Some(garyx_models::RenderWindow {
+            floor_seq: 3,
+            has_more_above: true,
+        })
+    );
+}
+
+#[tokio::test]
+async fn render_snapshot_in_window_uses_full_prefix_run_state() {
+    let store = ThreadTranscriptStore::memory();
+    store
+        .append_run_records(
+            "thread::render-window-run-state",
+            Some("run-render-window-run-state"),
+            &[
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({
+                        "role": "system",
+                        "kind": "control",
+                        "internal": true,
+                        "internal_kind": "control",
+                        "control": {
+                            "kind": "run_start",
+                            "thread_id": "thread::render-window-run-state",
+                            "run_id": "run-render-window-run-state",
+                            "at": "2026-06-18T12:00:00Z"
+                        }
+                    }),
+                    "2026-06-18T12:00:00Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "user", "content": "new question"}),
+                    "2026-06-18T12:00:01Z",
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let snapshot = store
+        .render_snapshot_in_window("thread::render-window-run-state", 2, 2)
+        .await
+        .unwrap();
+
+    assert_eq!(snapshot.visible_message_ids, vec!["seq:2"]);
+    assert_eq!(
+        snapshot.tail_activity,
+        garyx_models::RenderTailActivity::Thinking,
+        "run_state must come from the full prefix, not only window records"
+    );
+}
+
+#[tokio::test]
 async fn repository_rejects_stale_history_count_without_transcript() {
     let thread_store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     thread_store
