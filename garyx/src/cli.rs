@@ -77,9 +77,6 @@ pub(crate) enum Commands {
         /// API account id to create or enable for gateway/API usage
         #[arg(long, default_value = "main")]
         api_account: String,
-        /// Search API key to persist in gateway.search.api_key
-        #[arg(long)]
-        search_api_key: Option<String>,
         /// Start the gateway after onboarding completes
         #[arg(long)]
         run_gateway: bool,

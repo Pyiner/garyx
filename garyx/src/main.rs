@@ -421,7 +421,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Commands::Onboard {
             force,
             api_account,
-            search_api_key,
             run_gateway: onboard_run_gateway,
             json,
         }) => {
@@ -431,7 +430,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     force,
                     json,
                     api_account,
-                    search_api_key,
                     run_gateway: onboard_run_gateway,
                     port_override: cli.port,
                     host_override: cli.host,

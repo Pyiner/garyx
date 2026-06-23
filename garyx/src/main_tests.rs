@@ -520,23 +520,28 @@ fn parse_onboard_flags() {
         "onboard",
         "--api-account",
         "gateway",
-        "--search-api-key",
-        "search-key",
         "--run-gateway",
     ]);
     match cli.command {
         Some(Commands::Onboard {
             api_account,
-            search_api_key,
             run_gateway,
             ..
         }) => {
             assert_eq!(api_account, "gateway");
-            assert_eq!(search_api_key.as_deref(), Some("search-key"));
             assert!(run_gateway);
         }
         _ => panic!("expected Onboard"),
     }
+}
+
+#[test]
+fn parse_onboard_rejects_search_api_key_flag() {
+    let result = Cli::try_parse_from(["garyx", "onboard", "--search-api-key", "search-key"]);
+    assert!(
+        result.is_err(),
+        "onboard should not accept unsupported search API key setup"
+    );
 }
 
 #[test]
@@ -1867,7 +1872,7 @@ fn load_config_or_default_missing_file() {
 }
 
 #[tokio::test]
-async fn onboard_writes_gateway_keys_and_api_account() {
+async fn onboard_writes_api_account_without_search_key_setup() {
     let tmp = tempfile::TempDir::new().unwrap();
     let config_path = tmp.path().join("gary.json");
 
@@ -1877,7 +1882,6 @@ async fn onboard_writes_gateway_keys_and_api_account() {
             force: false,
             json: true,
             api_account: "main".to_owned(),
-            search_api_key: Some("search-key".to_owned()),
             run_gateway: false,
             port_override: None,
             host_override: None,
@@ -1895,7 +1899,7 @@ async fn onboard_writes_gateway_keys_and_api_account() {
     let config = loaded.config;
     let api_account = config.channels.api.accounts.get("main").unwrap();
     assert!(api_account.enabled);
-    assert_eq!(config.gateway.search.api_key, "search-key");
+    assert!(config.gateway.search.api_key.is_empty());
 }
 
 #[tokio::test]
@@ -1924,7 +1928,6 @@ async fn onboard_updates_existing_config_without_resetting_other_fields() {
             force: false,
             json: true,
             api_account: "custom".to_owned(),
-            search_api_key: None,
             run_gateway: false,
             port_override: None,
             host_override: None,

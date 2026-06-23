@@ -78,7 +78,6 @@ pub(crate) struct OnboardCommandOptions {
     pub force: bool,
     pub json: bool,
     pub api_account: String,
-    pub search_api_key: Option<String>,
     pub run_gateway: bool,
     pub port_override: Option<u16>,
     pub host_override: Option<String>,
@@ -7395,13 +7394,6 @@ pub(crate) async fn cmd_doctor(
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SecretPromptUpdate {
-    Keep,
-    Clear,
-    Set,
-}
-
 #[derive(Debug, Serialize)]
 struct OnboardSummary {
     ok: bool,
@@ -7409,7 +7401,6 @@ struct OnboardSummary {
     created_config: bool,
     api_account: String,
     api_account_created: bool,
-    search_api_key_configured: bool,
     gateway_run_requested: bool,
     /// `channel.account` identifiers bound during this onboarding session.
     channels_bound: Vec<String>,
@@ -7437,14 +7428,6 @@ fn prompt_line(prompt: &str) -> Result<String, Box<dyn std::error::Error>> {
     Ok(buf.trim().to_owned())
 }
 
-fn prompt_secret_line(prompt: &str) -> Result<String, Box<dyn std::error::Error>> {
-    if stdin_is_interactive() {
-        Ok(rpassword::prompt_password(prompt)?.trim().to_owned())
-    } else {
-        prompt_line(prompt)
-    }
-}
-
 fn prompt_yes_no(prompt: &str, default: bool) -> Result<bool, Box<dyn std::error::Error>> {
     let suffix = if default { "[Y/n]" } else { "[y/N]" };
     loop {
@@ -7461,25 +7444,6 @@ fn prompt_yes_no(prompt: &str, default: bool) -> Result<bool, Box<dyn std::error
             }
         }
     }
-}
-
-fn prompt_secret_update(
-    label: &str,
-    configured: bool,
-) -> Result<(SecretPromptUpdate, Option<String>), Box<dyn std::error::Error>> {
-    let prompt = if configured {
-        format!("{label} (Enter keeps current, '-' clears): ")
-    } else {
-        format!("{label} (optional, Enter skips): ")
-    };
-    let value = prompt_secret_line(&prompt)?;
-    if value.is_empty() {
-        return Ok((SecretPromptUpdate::Keep, None));
-    }
-    if value == "-" {
-        return Ok((SecretPromptUpdate::Clear, None));
-    }
-    Ok((SecretPromptUpdate::Set, Some(value)))
 }
 
 fn ensure_onboard_api_account(config: &mut GaryxConfig, account_id: &str) -> bool {
@@ -7531,14 +7495,6 @@ fn print_onboard_summary(summary: &OnboardSummary) {
     } else {
         println!("API account: {} (enabled)", summary.api_account);
     }
-    println!(
-        "Search API key: {}",
-        if summary.search_api_key_configured {
-            "configured"
-        } else {
-            "missing"
-        }
-    );
     if summary.channels_bound.is_empty() {
         println!(
             "User-facing channels: {} configured (none bound this session)",
@@ -7578,10 +7534,6 @@ pub(crate) async fn cmd_onboard(
         trim_to_option(Some(options.api_account.as_str())).unwrap_or_else(|| "main".to_owned());
     let api_account_created = ensure_onboard_api_account(&mut cfg, &api_account);
 
-    if let Some(value) = trim_to_option(options.search_api_key.as_deref()) {
-        cfg.gateway.search.api_key = value;
-    }
-
     let interactive = !options.json && stdin_is_interactive();
     let mut channels_bound: Vec<String> = Vec::new();
     if interactive {
@@ -7592,22 +7544,6 @@ pub(crate) async fn cmd_onboard(
             println!("Using existing config at {}", config_path.display());
         }
         println!("Gateway/API account `{api_account}` will be available after setup.");
-
-        if options.search_api_key.is_none() {
-            let (action, value) = prompt_secret_update(
-                "Search API key",
-                !cfg.gateway.search.api_key.trim().is_empty(),
-            )?;
-            match action {
-                SecretPromptUpdate::Keep => {}
-                SecretPromptUpdate::Clear => cfg.gateway.search.api_key.clear(),
-                SecretPromptUpdate::Set => {
-                    if let Some(value) = value {
-                        cfg.gateway.search.api_key = value;
-                    }
-                }
-            }
-        }
 
         // ---- Channel binding ----
         // The api.* account auto-created above lets programs talk to gateway,
@@ -7659,7 +7595,6 @@ pub(crate) async fn cmd_onboard(
         created_config,
         api_account: api_account.clone(),
         api_account_created,
-        search_api_key_configured: !cfg.gateway.search.api_key.trim().is_empty(),
         gateway_run_requested: options.run_gateway,
         channels_bound,
         total_user_channel_accounts: user_channel_account_count(&cfg),
