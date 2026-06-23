@@ -1,5 +1,5 @@
 use super::*;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -160,6 +160,23 @@ fn committed_stream_dedupe_allows_same_seq_overwrite() {
 }
 
 #[test]
+fn thread_stream_replay_options_last_event_id_forces_resume() {
+    let params = ThreadStreamParams {
+        after_seq: 1,
+        replay_scope: Some(ThreadStreamReplayScope::Initial),
+        initial_user_turns: Some(1),
+        render_floor: Some(7),
+    };
+
+    let (after_seq, options) = thread_stream_replay_options(&params, Some(9), true);
+
+    assert_eq!(after_seq, 9);
+    assert_eq!(options.replay_scope, ThreadStreamReplayScope::Resume);
+    assert_eq!(options.initial_user_turns, None);
+    assert_eq!(options.render_floor, 7);
+}
+
+#[test]
 fn committed_stream_gap_forces_reconnect() {
     let mut sent_payloads = HashMap::new();
     let mut last_sent_seq = 1;
@@ -280,7 +297,9 @@ async fn thread_stream_replay_pages_when_tail_cap_overflows() {
         .await
         .unwrap();
 
-    let replay = build_thread_stream_replay(&state, &thread_id, 0, 0).await;
+    let replay =
+        build_thread_stream_replay(&state, &thread_id, 0, ThreadStreamReplayOptions::resume(0))
+            .await;
     assert_eq!(replay.events.len(), 1);
     assert_eq!(replay.sent_payloads.len(), THREAD_TRANSCRIPT_REPLAY_CAP + 2);
     assert_eq!(replay.max_seq, (THREAD_TRANSCRIPT_REPLAY_CAP + 2) as u64);
@@ -348,7 +367,9 @@ async fn thread_stream_replay_after_seq_emits_one_aligned_render_frame() {
         .await
         .unwrap();
 
-    let replay = build_thread_stream_replay(&state, thread_id, 1, 0).await;
+    let replay =
+        build_thread_stream_replay(&state, thread_id, 1, ThreadStreamReplayOptions::resume(0))
+            .await;
 
     assert_eq!(replay.events.len(), 1);
     assert_eq!(replay.max_seq, 3);
@@ -424,7 +445,9 @@ async fn thread_stream_replay_render_floor_windows_event_frame() {
         .await
         .unwrap();
 
-    let replay = build_thread_stream_replay(&state, thread_id, 2, 3).await;
+    let replay =
+        build_thread_stream_replay(&state, thread_id, 2, ThreadStreamReplayOptions::resume(3))
+            .await;
 
     assert_eq!(replay.events.len(), 1);
     assert_eq!(replay.max_seq, 4);
@@ -465,6 +488,91 @@ async fn thread_stream_replay_render_floor_windows_event_frame() {
 }
 
 #[tokio::test]
+async fn thread_stream_replay_initial_user_turn_window_trims_and_carries_bodies() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::render-replay-initial-window";
+    state
+        .threads
+        .history
+        .transcript_store()
+        .append_run_records(
+            thread_id,
+            Some("run::render-replay-initial-window"),
+            &[
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "user", "content": "older question"}),
+                    "2026-06-18T12:00:00Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "older answer"}),
+                    "2026-06-18T12:00:01Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "user", "content": "new question"}),
+                    "2026-06-18T12:00:02Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "new answer"}),
+                    "2026-06-18T12:00:03Z",
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let replay = build_thread_stream_replay(
+        &state,
+        thread_id,
+        4,
+        ThreadStreamReplayOptions {
+            replay_scope: ThreadStreamReplayScope::Initial,
+            initial_user_turns: Some(1),
+            render_floor: 0,
+        },
+    )
+    .await;
+
+    assert_eq!(replay.events.len(), 1);
+    assert_eq!(replay.max_seq, 4);
+    assert_eq!(
+        replay
+            .sent_payloads
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([3, 4])
+    );
+    let event = replay.events[0].as_ref().unwrap();
+    assert_eq!(event.id, 4);
+    let frame: Value = serde_json::from_str(&event.payload).unwrap();
+    let events = frame.get("events").and_then(Value::as_array).unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.get("seq").and_then(Value::as_u64).unwrap())
+            .collect::<Vec<_>>(),
+        vec![3, 4],
+        "initial replay must carry window bodies even when after_seq is already caught up"
+    );
+    let render_state = frame.get("render_state").unwrap();
+    assert_eq!(
+        render_state
+            .get("visibleMessageIds")
+            .and_then(Value::as_array)
+            .map(|items| { items.iter().filter_map(Value::as_str).collect::<Vec<_>>() })
+            .unwrap(),
+        vec!["seq:3", "seq:4"]
+    );
+    assert_eq!(
+        render_state
+            .get("window")
+            .and_then(|window| window.get("floor_seq"))
+            .and_then(Value::as_u64),
+        Some(3)
+    );
+}
+
+#[tokio::test]
 async fn thread_stream_replay_caught_up_emits_snapshot_only_frame() {
     let state = AppStateBuilder::new(test_config()).build();
     let thread_id = "thread::render-replay-caught-up";
@@ -493,7 +601,9 @@ async fn thread_stream_replay_caught_up_emits_snapshot_only_frame() {
         .await
         .unwrap();
 
-    let replay = build_thread_stream_replay(&state, thread_id, 3, 0).await;
+    let replay =
+        build_thread_stream_replay(&state, thread_id, 3, ThreadStreamReplayOptions::resume(0))
+            .await;
 
     assert_eq!(replay.events.len(), 1);
     assert_eq!(replay.max_seq, 3);
@@ -561,7 +671,9 @@ async fn thread_stream_replay_render_floor_windows_snapshot_only_frame() {
         .await
         .unwrap();
 
-    let replay = build_thread_stream_replay(&state, thread_id, 4, 3).await;
+    let replay =
+        build_thread_stream_replay(&state, thread_id, 4, ThreadStreamReplayOptions::resume(3))
+            .await;
 
     assert_eq!(replay.events.len(), 1);
     assert_eq!(replay.max_seq, 4);
@@ -618,7 +730,9 @@ async fn thread_stream_replay_caught_up_clamps_overlarge_cursor_to_snapshot_seq(
         .await
         .unwrap();
 
-    let replay = build_thread_stream_replay(&state, thread_id, 99, 0).await;
+    let replay =
+        build_thread_stream_replay(&state, thread_id, 99, ThreadStreamReplayOptions::resume(0))
+            .await;
 
     assert_eq!(replay.events.len(), 1);
     assert_eq!(replay.max_seq, 2);

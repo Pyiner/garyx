@@ -80,6 +80,13 @@ pub struct TranscriptAppendRecordsResult {
     pub appended_records: Vec<ThreadTranscriptRecord>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ThreadTranscriptWindow {
+    pub records: Vec<ThreadTranscriptRecord>,
+    pub floor_seq: u64,
+    pub has_more_above: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct ThreadHistorySnapshot {
     pub thread_id: String,
@@ -1129,6 +1136,48 @@ impl ThreadTranscriptStore {
             .map(|record| record.message.clone())
             .collect();
         Ok((messages, total, start))
+    }
+
+    pub async fn cold_open_user_turn_window(
+        &self,
+        thread_id: &str,
+        user_turns: usize,
+        cap: usize,
+    ) -> Result<ThreadTranscriptWindow, ThreadHistoryError> {
+        let records = self.read_records(thread_id).await?;
+        let total = records.len();
+        if total == 0 {
+            return Ok(ThreadTranscriptWindow {
+                records: Vec::new(),
+                floor_seq: 0,
+                has_more_above: false,
+            });
+        }
+
+        let target_user_turns = user_turns.max(1);
+        let mut start = total;
+        let mut user_queries = 0usize;
+        while start > 0 && user_queries < target_user_turns {
+            start -= 1;
+            if is_user_query_message(&records[start].message) {
+                user_queries += 1;
+            }
+        }
+
+        if user_queries == 0 {
+            start = total.saturating_sub(cap.max(1));
+        }
+        if total.saturating_sub(start) > cap {
+            start = total.saturating_sub(cap);
+        }
+
+        let window_records = records[start..total].to_vec();
+        let floor_seq = window_records.first().map(|record| record.seq).unwrap_or(0);
+        Ok(ThreadTranscriptWindow {
+            records: window_records,
+            floor_seq,
+            has_more_above: start > 0,
+        })
     }
 
     pub async fn message_count(&self, thread_id: &str) -> Result<usize, ThreadHistoryError> {

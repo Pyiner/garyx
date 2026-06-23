@@ -1781,6 +1781,51 @@ pub enum ThreadStreamReplayScope {
     Initial,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ThreadStreamReplayOptions {
+    replay_scope: ThreadStreamReplayScope,
+    initial_user_turns: Option<usize>,
+    render_floor: u64,
+}
+
+#[cfg(test)]
+impl ThreadStreamReplayOptions {
+    fn resume(render_floor: u64) -> Self {
+        Self {
+            replay_scope: ThreadStreamReplayScope::Resume,
+            initial_user_turns: None,
+            render_floor,
+        }
+    }
+}
+
+fn thread_stream_replay_options(
+    params: &ThreadStreamParams,
+    last_event_id: Option<u64>,
+    has_last_event_id: bool,
+) -> (u64, ThreadStreamReplayOptions) {
+    let after_seq = last_event_id.unwrap_or(params.after_seq);
+    let replay_scope = if has_last_event_id {
+        ThreadStreamReplayScope::Resume
+    } else {
+        params
+            .replay_scope
+            .unwrap_or(ThreadStreamReplayScope::Resume)
+    };
+    let initial_user_turns = match replay_scope {
+        ThreadStreamReplayScope::Initial => params.initial_user_turns,
+        ThreadStreamReplayScope::Resume => None,
+    };
+    (
+        after_seq,
+        ThreadStreamReplayOptions {
+            replay_scope,
+            initial_user_turns,
+            render_floor: params.render_floor.unwrap_or(0),
+        },
+    )
+}
+
 /// GET /api/threads/:key/stream - resumable per-thread transcript stream (S5).
 ///
 /// Replays committed messages with `seq > after_seq` (or the `Last-Event-ID`
@@ -1804,18 +1849,20 @@ pub async fn thread_stream(
     };
 
     // Resume via Last-Event-ID (standard SSE) or the after_seq query param.
-    let after_seq = headers
-        .get("last-event-id")
+    let last_event_id_header = headers.get("last-event-id");
+    let last_event_id = last_event_id_header
+        .as_ref()
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .unwrap_or(params.after_seq);
-    let render_floor = params.render_floor.unwrap_or(0);
+        .and_then(|value| value.trim().parse::<u64>().ok());
+    let (after_seq, replay_options) =
+        thread_stream_replay_options(&params, last_event_id, last_event_id_header.is_some());
+    let render_floor = replay_options.render_floor;
 
     // Subscribe BEFORE reading the replay snapshot (no gap); seq dedup below makes
     // the overlap idempotent.
     let rx = state.ops.events.subscribe();
 
-    let replay = build_thread_stream_replay(&state, &thread_id, after_seq, render_floor).await;
+    let replay = build_thread_stream_replay(&state, &thread_id, after_seq, replay_options).await;
     let replay_events = replay
         .events
         .into_iter()
@@ -1904,8 +1951,36 @@ async fn build_thread_stream_replay(
     state: &Arc<AppState>,
     thread_id: &str,
     after_seq: u64,
-    render_floor: u64,
+    options: ThreadStreamReplayOptions,
 ) -> ThreadStreamReplay {
+    if matches!(options.replay_scope, ThreadStreamReplayScope::Initial) {
+        if let Some(initial_user_turns) = options.initial_user_turns {
+            let window = state
+                .threads
+                .history
+                .transcript_store()
+                .cold_open_user_turn_window(
+                    thread_id,
+                    initial_user_turns,
+                    THREAD_TRANSCRIPT_REPLAY_CAP,
+                )
+                .await
+                .unwrap_or_else(|_| garyx_router::ThreadTranscriptWindow {
+                    records: Vec::new(),
+                    floor_seq: 0,
+                    has_more_above: false,
+                });
+            return thread_stream_replay_from_records(
+                state,
+                thread_id,
+                after_seq,
+                window.records,
+                window.floor_seq,
+            )
+            .await;
+        }
+    }
+
     let tail = state
         .threads
         .history
@@ -1918,8 +1993,14 @@ async fn build_thread_stream_replay(
         .first()
         .is_some_and(|record| record.seq > after_seq.saturating_add(1));
     if !tail_has_gap {
-        return thread_stream_replay_from_records(state, thread_id, after_seq, tail, render_floor)
-            .await;
+        return thread_stream_replay_from_records(
+            state,
+            thread_id,
+            after_seq,
+            tail,
+            options.render_floor,
+        )
+        .await;
     }
 
     let mut cursor = after_seq;
@@ -1946,7 +2027,7 @@ async fn build_thread_stream_replay(
         }
         cursor = replay.max_seq;
     }
-    finalize_thread_stream_replay(state, thread_id, replay, render_floor).await
+    finalize_thread_stream_replay(state, thread_id, replay, options.render_floor).await
 }
 
 async fn thread_stream_replay_from_records(

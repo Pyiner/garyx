@@ -39,8 +39,8 @@ pub mod storage {
         DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, RECENT_COMMITTED_RUN_IDS_LIMIT,
         THREAD_TRANSCRIPT_REPLAY_CAP, ThreadHistoryError, ThreadHistoryRepository,
         ThreadHistorySnapshot, ThreadTranscriptRecord, ThreadTranscriptStore,
-        count_user_query_messages, extract_run_id, history_message_count, is_user_query_message,
-        message_text,
+        ThreadTranscriptWindow, count_user_query_messages, extract_run_id, history_message_count,
+        is_user_query_message, message_text,
     };
 }
 
@@ -82,8 +82,8 @@ pub use thread_history::{
     DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, RECENT_COMMITTED_RUN_IDS_LIMIT,
     RunTranscriptRecordDraft, THREAD_TRANSCRIPT_REPLAY_CAP, ThreadHistoryError,
     ThreadHistoryRepository, ThreadHistorySnapshot, ThreadTranscriptRecord, ThreadTranscriptStore,
-    TranscriptAppendRecordsResult, count_user_query_messages, extract_run_id,
-    history_message_count, is_user_query_message, message_text,
+    ThreadTranscriptWindow, TranscriptAppendRecordsResult, count_user_query_messages,
+    extract_run_id, history_message_count, is_user_query_message, message_text,
 };
 pub use threads::{
     ChannelBinding, KnownChannelEndpoint, ThreadEnsureOptions, ThreadIndexStats,

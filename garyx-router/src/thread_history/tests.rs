@@ -290,6 +290,143 @@ async fn render_snapshot_in_window_uses_full_prefix_run_state() {
 }
 
 #[tokio::test]
+async fn cold_open_user_turn_window_selects_newest_user_turn() {
+    let store = ThreadTranscriptStore::memory();
+    store
+        .append_run_records(
+            "thread::cold-window",
+            Some("run-cold-window"),
+            &[
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "user", "content": "older question"}),
+                    "2026-06-18T12:00:00Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "older answer"}),
+                    "2026-06-18T12:00:01Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "user", "content": "new question"}),
+                    "2026-06-18T12:00:02Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "new answer"}),
+                    "2026-06-18T12:00:03Z",
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let window = store
+        .cold_open_user_turn_window("thread::cold-window", 1, THREAD_TRANSCRIPT_REPLAY_CAP)
+        .await
+        .unwrap();
+
+    assert_eq!(window.floor_seq, 3);
+    assert!(window.has_more_above);
+    assert_eq!(
+        window
+            .records
+            .iter()
+            .map(|record| record.seq)
+            .collect::<Vec<_>>(),
+        vec![3, 4]
+    );
+}
+
+#[tokio::test]
+async fn cold_open_user_turn_window_excludes_loop_continuation() {
+    let store = ThreadTranscriptStore::memory();
+    store
+        .append_run_records(
+            "thread::cold-window-loop-continuation",
+            Some("run-cold-window-loop-continuation"),
+            &[
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "user", "content": "real question"}),
+                    "2026-06-18T12:00:00Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({
+                        "role": "user",
+                        "content": "loop continuation",
+                        "internal_kind": "loop_continuation"
+                    }),
+                    "2026-06-18T12:00:01Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "answer"}),
+                    "2026-06-18T12:00:02Z",
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let window = store
+        .cold_open_user_turn_window(
+            "thread::cold-window-loop-continuation",
+            1,
+            THREAD_TRANSCRIPT_REPLAY_CAP,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(window.floor_seq, 1);
+    assert_eq!(
+        window
+            .records
+            .iter()
+            .map(|record| record.seq)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
+}
+
+#[tokio::test]
+async fn cold_open_user_turn_window_falls_back_without_user_turns() {
+    let store = ThreadTranscriptStore::memory();
+    store
+        .append_run_records(
+            "thread::cold-window-no-user",
+            Some("run-cold-window-no-user"),
+            &[
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "one"}),
+                    "2026-06-18T12:00:00Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "two"}),
+                    "2026-06-18T12:00:01Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "three"}),
+                    "2026-06-18T12:00:02Z",
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let window = store
+        .cold_open_user_turn_window("thread::cold-window-no-user", 1, 2)
+        .await
+        .unwrap();
+
+    assert_eq!(window.floor_seq, 2);
+    assert!(window.has_more_above);
+    assert_eq!(
+        window
+            .records
+            .iter()
+            .map(|record| record.seq)
+            .collect::<Vec<_>>(),
+        vec![2, 3]
+    );
+}
+
+#[tokio::test]
 async fn repository_rejects_stale_history_count_without_transcript() {
     let thread_store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     thread_store
