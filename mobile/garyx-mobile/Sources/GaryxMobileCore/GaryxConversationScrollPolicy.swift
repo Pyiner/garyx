@@ -71,6 +71,51 @@ public struct GaryxConversationLayoutMetrics: Equatable {
     }
 }
 
+// MARK: - Tail thinking presentation
+
+/// Presentation-only debounce for the server-owned tail thinking state.
+///
+/// The raw `tailActivity == .thinking` value still comes from render_state.
+/// This state only decides when the label should become visible, so quick
+/// thinking-to-text transitions do not flash a stale label.
+public struct GaryxTailThinkingPresentationState: Equatable {
+    public static let defaultDelay: TimeInterval = 0.2
+
+    public private(set) var isVisible: Bool = false
+    private var thinkingStartedAt: TimeInterval?
+
+    public init() {}
+
+    @discardableResult
+    public mutating func update(
+        isThinking: Bool,
+        now: TimeInterval,
+        delay: TimeInterval = Self.defaultDelay
+    ) -> Bool {
+        if !isThinking {
+            thinkingStartedAt = nil
+            isVisible = false
+            return isVisible
+        }
+
+        if thinkingStartedAt == nil {
+            thinkingStartedAt = now
+        }
+        if let thinkingStartedAt, now - thinkingStartedAt >= delay {
+            isVisible = true
+        }
+        return isVisible
+    }
+
+    public func nextVisibilityCheck(
+        now: TimeInterval,
+        delay: TimeInterval = Self.defaultDelay
+    ) -> TimeInterval? {
+        guard !isVisible, let thinkingStartedAt else { return nil }
+        return max(0, thinkingStartedAt + delay - now)
+    }
+}
+
 // MARK: - State management
 
 /// Unified scroll state machine for the conversation transcript.

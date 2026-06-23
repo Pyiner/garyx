@@ -485,3 +485,36 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         )
     }
 }
+
+final class GaryxTailThinkingPresentationStateTests: XCTestCase {
+    func testThinkingShorterThanDelayNeverBecomesVisible() {
+        var state = GaryxTailThinkingPresentationState()
+        XCTAssertFalse(state.update(isThinking: true, now: 1.0, delay: 0.2))
+        XCTAssertEqual(state.nextVisibilityCheck(now: 1.0, delay: 0.2) ?? -1, 0.2, accuracy: 0.001)
+
+        XCTAssertFalse(state.update(isThinking: false, now: 1.12, delay: 0.2))
+        XCTAssertNil(state.nextVisibilityCheck(now: 1.12, delay: 0.2))
+
+        XCTAssertFalse(state.update(isThinking: false, now: 1.25, delay: 0.2))
+    }
+
+    func testThinkingLongerThanDelayAppearsThenHidesWhenTextArrives() {
+        var state = GaryxTailThinkingPresentationState()
+        XCTAssertFalse(state.update(isThinking: true, now: 10.0, delay: 0.2))
+        XCTAssertFalse(state.update(isThinking: true, now: 10.19, delay: 0.2))
+        XCTAssertTrue(state.update(isThinking: true, now: 10.21, delay: 0.2))
+        XCTAssertNil(state.nextVisibilityCheck(now: 10.21, delay: 0.2))
+
+        XCTAssertFalse(state.update(isThinking: false, now: 10.3, delay: 0.2))
+    }
+
+    func testThinkingDelayRestartsAfterCancellation() {
+        var state = GaryxTailThinkingPresentationState()
+        XCTAssertFalse(state.update(isThinking: true, now: 2.0, delay: 0.2))
+        XCTAssertFalse(state.update(isThinking: false, now: 2.1, delay: 0.2))
+
+        XCTAssertFalse(state.update(isThinking: true, now: 3.0, delay: 0.2))
+        XCTAssertEqual(state.nextVisibilityCheck(now: 3.05, delay: 0.2) ?? -1, 0.15, accuracy: 0.001)
+        XCTAssertTrue(state.update(isThinking: true, now: 3.21, delay: 0.2))
+    }
+}

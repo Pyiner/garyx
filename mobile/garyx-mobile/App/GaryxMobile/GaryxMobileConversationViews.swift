@@ -143,6 +143,7 @@ private extension EnvironmentValues {
 struct GaryxConversationView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @Environment(\.garyxSidebarDragActive) private var sidebarDragActive
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var isComposerFocused: Bool
     /// Unified scroll state machine (GaryxMobileCore). The view feeds it
     /// events and executes the tail-scroll requests it returns; UI such as
@@ -157,6 +158,9 @@ struct GaryxConversationView: View {
     @State private var pendingHistoryPrefetchThreadId: String?
     @State private var bottomChromeHeight: CGFloat = 0
     @State private var tailScrollRequestGeneration = 0
+    @State private var tailThinkingPresentationState = GaryxTailThinkingPresentationState()
+    @State private var showsDebouncedTailThinking = false
+    @State private var tailThinkingDebounceGeneration = 0
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -228,11 +232,13 @@ struct GaryxConversationView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onAppear {
                     updateScrollState(proxy: proxy) { $0.threadOpened() }
+                    resetTailThinkingPresentation(proxy: proxy)
                 }
                 .onChange(of: model.selectedThread?.id) { _, _ in
                     scrollPreservationThreadId = model.selectedThread?.id
                     pendingHistoryPrefetchThreadId = nil
                     updateScrollState(proxy: proxy) { $0.threadOpened() }
+                    resetTailThinkingPresentation(proxy: proxy)
                 }
                 .onChange(of: model.messages) { oldValue, newValue in
                     defer {
@@ -249,13 +255,12 @@ struct GaryxConversationView: View {
                         $0.contentChanged(
                             isInitialLoad: oldValue.isEmpty,
                             isHistoryPrepend: isHistoryPrepend,
-                            hasTailContent: !newValue.isEmpty || model.showsTailThinkingIndicator
+                            hasTailContent: !newValue.isEmpty || showsDebouncedTailThinking
                         )
                     }
                 }
-                .onChange(of: model.showsTailThinkingIndicator) { _, visible in
-                    guard visible else { return }
-                    updateScrollState(proxy: proxy) { $0.thinkingIndicatorShown() }
+                .onChange(of: model.showsTailThinkingIndicator) { _, _ in
+                    syncTailThinkingPresentation(proxy: proxy)
                 }
                 .onChange(of: isComposerFocused) { _, isFocused in
                     guard isFocused else { return }
@@ -311,8 +316,11 @@ struct GaryxConversationView: View {
                         .padding(.top, 12)
                 } else if turnRows.isEmpty {
                     if model.showsTailThinkingIndicator {
-                        GaryxThinkingLabel()
-                            .padding(.top, 96)
+                        if showsDebouncedTailThinking {
+                            GaryxThinkingLabel()
+                                .padding(.top, 96)
+                                .transition(.opacity)
+                        }
                     } else if model.selectedThread != nil {
                         GaryxSelectedThreadEmptyConversationView()
                             .padding(.top, 96)
@@ -334,10 +342,10 @@ struct GaryxConversationView: View {
                     ) {
                         prefetchOlderHistoryIfNeeded(ignoreDistance: true)
                     }
-                    if model.showsTailThinkingIndicator {
+                    if showsDebouncedTailThinking {
                         GaryxThinkingLabel()
                             .id(tailThinkingAnchorId)
-                            .transition(.garyxTranscriptAppear)
+                            .transition(.opacity)
                     }
                     if let rateLimit = model.selectedThreadRateLimit {
                         GaryxRateLimitBanner(rateLimit: rateLimit)
@@ -444,7 +452,7 @@ struct GaryxConversationView: View {
         updateScrollState(proxy: proxy) {
             $0.metricsChanged(
                 metrics,
-                hasTailContent: !model.messages.isEmpty || model.showsTailThinkingIndicator
+                hasTailContent: !model.messages.isEmpty || showsDebouncedTailThinking
             )
         }
         prefetchOlderHistoryIfNeeded()
@@ -473,6 +481,58 @@ struct GaryxConversationView: View {
     ) {
         guard let request else { return }
         scheduleScrollToConversationTail(proxy, request: request)
+    }
+
+    private func resetTailThinkingPresentation(proxy: ScrollViewProxy) {
+        tailThinkingPresentationState = GaryxTailThinkingPresentationState()
+        setDebouncedTailThinking(false, proxy: proxy)
+        syncTailThinkingPresentation(proxy: proxy)
+    }
+
+    private func syncTailThinkingPresentation(proxy: ScrollViewProxy) {
+        tailThinkingDebounceGeneration += 1
+        let generation = tailThinkingDebounceGeneration
+        refreshTailThinkingPresentation(proxy: proxy, generation: generation)
+    }
+
+    private func refreshTailThinkingPresentation(proxy: ScrollViewProxy, generation: Int) {
+        let now = Date().timeIntervalSinceReferenceDate
+        let visible = tailThinkingPresentationState.update(
+            isThinking: model.showsTailThinkingIndicator,
+            now: now
+        )
+        setDebouncedTailThinking(visible, proxy: proxy)
+        if let delay = tailThinkingPresentationState.nextVisibilityCheck(now: now) {
+            scheduleTailThinkingVisibilityCheck(delay: delay, proxy: proxy, generation: generation)
+        }
+    }
+
+    private func scheduleTailThinkingVisibilityCheck(
+        delay: TimeInterval,
+        proxy: ScrollViewProxy,
+        generation: Int
+    ) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            DispatchQueue.main.async {
+                guard generation == tailThinkingDebounceGeneration else { return }
+                refreshTailThinkingPresentation(proxy: proxy, generation: generation)
+            }
+        }
+    }
+
+    private func setDebouncedTailThinking(_ visible: Bool, proxy: ScrollViewProxy) {
+        guard showsDebouncedTailThinking != visible else { return }
+        let update = {
+            showsDebouncedTailThinking = visible
+        }
+        if reduceMotion {
+            update()
+        } else {
+            withAnimation(.easeOut(duration: 0.15), update)
+        }
+        if visible {
+            updateScrollState(proxy: proxy) { $0.thinkingIndicatorShown() }
+        }
     }
 
     private func scrollToConversationTail(_ proxy: ScrollViewProxy) {
