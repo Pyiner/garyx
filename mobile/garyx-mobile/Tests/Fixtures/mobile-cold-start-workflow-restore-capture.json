@@ -1,0 +1,126 @@
+{
+  "schema": "garyx-mobile-cold-start-workflow-restore-simulator-capture.v1",
+  "capture": {
+    "capturedAt": "2026-06-23T07:30:04Z",
+    "simulator": {
+      "name": "Garyx Mobile UI QA",
+      "udid": "1317C3D8-106D-429F-9B65-4AD7E73E10EB",
+      "runtime": "iOS 26.2"
+    },
+    "app": {
+      "bundleId": "com.garyx.mobile",
+      "buildTool": "XcodeBuildMCP build_run_sim",
+      "buildArgs": [
+        "CODE_SIGNING_ALLOWED=NO"
+      ]
+    },
+    "gateway": {
+      "url": "http://127.0.0.1:31337",
+      "scopeId": "gateway::711d009cbb773339"
+    },
+    "commands": [
+      "garyx thread create --title Test Chat Before Workflow Restore --workspace-dir /Users/test/project --json",
+      "garyx task create --title Test Workflow Run Capture --body Synthetic task for mobile cold-start capture. --workflow thread-unify-smoke-20260603152639 --input Test workflow run for mobile cold-start capture --workspace-dir /Users/test/project --notify none --json",
+      "xcrun simctl openurl <sim> garyx://mobile/thread?threadId=<chat>",
+      "xcodebuildmcp.button home",
+      "xcrun simctl openurl <sim> garyx://mobile/thread?threadId=<workflow-run>",
+      "xcodebuildmcp.stop_app_sim",
+      "xcodebuildmcp.launch_app_sim"
+    ],
+    "privacy": "Derived from real simulator and gateway capture. Full raw plist/catalog and task source were not committed; this fixture keeps only public-safe fields required by the no-UI regression tests."
+  },
+  "gatewayRecords": {
+    "chatThread": {
+      "id": "thread::546f8e3d-057a-40d0-b44f-02c352f11290",
+      "title": "Test Chat Before Workflow Restore",
+      "createdAt": "2026-06-23T07:19:02.765496+00:00",
+      "updatedAt": "2026-06-23T07:19:02.765496+00:00",
+      "lastMessagePreview": "",
+      "workspacePath": "/Users/test/project",
+      "messageCount": 0,
+      "agentId": "claude",
+      "teamId": null,
+      "teamName": null,
+      "providerType": "claude_code",
+      "recentRunId": null,
+      "activeRunId": null,
+      "runState": null,
+      "worktreePath": null,
+      "threadType": "chat",
+      "workflowRunId": null
+    },
+    "chatTranscript": {
+      "source": null,
+      "messageCount": 0,
+      "returnedMessages": 0,
+      "threadType": "chat"
+    },
+    "workflowThread": {
+      "id": "thread::951a657f-e8a3-4202-8a38-96de8c76abf9",
+      "title": "Test Workflow Run Capture",
+      "createdAt": "2026-06-23T07:19:16.320229+00:00",
+      "updatedAt": "2026-06-23T07:19:16.520625+00:00",
+      "lastMessagePreview": "Synthetic task for mobile cold-start capture.",
+      "workspacePath": "/Users/test/project",
+      "messageCount": 0,
+      "agentId": "codex",
+      "teamId": null,
+      "teamName": null,
+      "providerType": "codex_app_server",
+      "recentRunId": null,
+      "activeRunId": null,
+      "runState": "succeeded",
+      "worktreePath": null,
+      "threadType": "workflow_run",
+      "workflowRunId": "thread::951a657f-e8a3-4202-8a38-96de8c76abf9"
+    },
+    "workflowRun": {
+      "threadId": "thread::951a657f-e8a3-4202-8a38-96de8c76abf9",
+      "workflowRunId": "thread::951a657f-e8a3-4202-8a38-96de8c76abf9",
+      "title": "Thread Unify Smoke 20260603152639",
+      "description": "Verifies workflow thread identity.",
+      "status": "succeeded",
+      "createdAt": "2026-06-23T07:19:16.506Z",
+      "updatedAt": "2026-06-23T07:19:16.516Z",
+      "workspaceDir": "/Users/test/project",
+      "eventCount": 3,
+      "latestEventSeq": 2490,
+      "terminalComplete": true,
+      "outcomeKind": "structuredOnly",
+      "childCount": 0
+    },
+    "workflowEvents": {
+      "count": 3,
+      "eventTypes": [
+        "workflow.created",
+        "smoke.started",
+        "workflow.completed"
+      ],
+      "nextAfter": 2490
+    }
+  },
+  "stateSequence": {
+    "chatBackground": {
+      "lastOpenedThreadId": "thread::546f8e3d-057a-40d0-b44f-02c352f11290",
+      "lastSessionOnThread": true
+    },
+    "workflowOpenAfterChatBackground": {
+      "lastOpenedThreadId": "thread::951a657f-e8a3-4202-8a38-96de8c76abf9",
+      "lastSessionOnThread": true
+    },
+    "coldLaunchAfterPollutedWorkflowOpen": {
+      "lastOpenedThreadId": "thread::951a657f-e8a3-4202-8a38-96de8c76abf9",
+      "lastSessionOnThread": true,
+      "restoredUITitle": "Thread Unify Smoke 20260603152639",
+      "restoredSurface": "workflowRun"
+    },
+    "workflowBackgroundControl": {
+      "lastOpenedThreadId": "thread::951a657f-e8a3-4202-8a38-96de8c76abf9",
+      "lastSessionOnThread": false
+    },
+    "coldLaunchAfterWorkflowBackgroundControl": {
+      "lastOpenedThreadId": "thread::951a657f-e8a3-4202-8a38-96de8c76abf9",
+      "lastSessionOnThread": false
+    }
+  }
+}

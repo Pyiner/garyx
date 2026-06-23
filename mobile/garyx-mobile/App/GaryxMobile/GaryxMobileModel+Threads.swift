@@ -99,6 +99,17 @@ extension GaryxMobileModel {
         defaults.set(normalizedId, forKey: scopedSettingsKey(GaryxMobileSettingsKeys.lastOpenedThreadId))
     }
 
+    func persistOpenedThreadDestination(_ destination: GaryxWorkflowRunDestination) {
+        let previousThreadId = persistedLastOpenedThreadId
+        guard let nextThreadId = GaryxLastOpenedThreadRestorationPolicy.persistedThreadId(
+            afterOpening: destination,
+            previousThreadId: previousThreadId
+        ) else {
+            return
+        }
+        persistLastOpenedThreadId(nextThreadId)
+    }
+
     func clearPersistedLastOpenedThreadId(ifMatches threadId: String) {
         let key = scopedSettingsKey(GaryxMobileSettingsKeys.lastOpenedThreadId)
         guard defaults.string(forKey: key) == threadId else { return }
@@ -121,10 +132,19 @@ extension GaryxMobileModel {
         #if DEBUG
         if debugSnapshotActive { return }
         #endif
-        let onThread = navigationState.presentsContent
-            && activePanel == .chat
-            && selectedThread != nil
+        let onThread = GaryxLastOpenedThreadRestorationPolicy.isCurrentSessionRestorable(
+            navigationState: navigationState,
+            selectedThreadId: selectedThread?.id,
+            activeWorkflowRunId: workflowRunPanelState.activeWorkflowRunId
+        )
         defaults.set(onThread, forKey: scopedSettingsKey(GaryxMobileSettingsKeys.lastSessionOnThread))
+    }
+
+    func persistLastSessionRestorable(_ restorable: Bool) {
+        #if DEBUG
+        if debugSnapshotActive { return }
+        #endif
+        defaults.set(restorable, forKey: scopedSettingsKey(GaryxMobileSettingsKeys.lastSessionOnThread))
     }
 
     var persistedLastSessionWasOnThread: Bool {
@@ -146,22 +166,18 @@ extension GaryxMobileModel {
         #if DEBUG
         guard !debugSnapshotActive else { return }
         #endif
-        guard selectedThread == nil,
-              pendingMobileRoute == nil,
-              !threadOpenState.hasPendingIntent,
-              activePanel == .chat,
-              // If the user already swiped the sidebar open while the
-              // connection was still being established, restoring would slam
-              // it shut mid-browse.
-              !sidebarVisible,
-              // Only an exit from the conversation page comes back to it;
-              // leaving from the home list (or anywhere else) relaunches
-              // into the list.
-              persistedLastSessionWasOnThread,
-              let threadId = persistedLastOpenedThreadId else {
+        guard let threadId = GaryxLastOpenedThreadRestorationPolicy.restoreThreadId(
+            persistedLastOpenedThreadId: persistedLastOpenedThreadId,
+            persistedLastSessionWasOnThread: persistedLastSessionWasOnThread,
+            selectedThreadId: selectedThread?.id,
+            hasPendingMobileRoute: pendingMobileRoute != nil,
+            hasPendingThreadIntent: threadOpenState.hasPendingIntent,
+            navigationState: navigationState,
+            sidebarVisible: sidebarVisible
+        ) else {
             return
         }
-        await openThread(id: threadId)
+        await restoreLastOpenedThread(id: threadId)
     }
 
     static func pinnedThreadIdsWith(
@@ -188,14 +204,14 @@ extension GaryxMobileModel {
 
     func refreshThreads(silent: Bool = false) async {
         guard hasGatewaySettings else { return }
-        let transactionId = homeProjectionGateway.beginTransaction(label: "refreshThreads")
-        defer { homeProjectionGateway.endTransaction(transactionId) }
         let runtimeGeneration = gatewayRuntimeGeneration
         let previousThreadSummaries = Self.mergedThreadSummaries(threads + [selectedThread].compactMap { $0 })
         let previouslyRemoteBusyThreadIds = remoteBusyThreadIds
         if !silent {
             isLoadingThreads = true
         }
+        let transactionId = homeProjectionGateway.beginTransaction(label: "refreshThreads")
+        defer { homeProjectionGateway.endTransaction(transactionId) }
         defer {
             if !silent, runtimeGeneration == gatewayRuntimeGeneration {
                 isLoadingThreads = false
@@ -735,7 +751,7 @@ extension GaryxMobileModel {
             suppressesSelectedThreadStreamPolicy = false
         }
         if !thread.excludeFromRecent {
-            persistLastOpenedThreadId(thread.id)
+            persistOpenedThreadDestination(.chat(threadId: thread.id))
         }
         clearPendingNewThreadAgentTarget()
         clearPendingBotDraft()

@@ -100,6 +100,32 @@ extension GaryxMobileModel {
         await openThread(id: id, requestId: requestId, source: source)
     }
 
+    func restoreLastOpenedThread(id: String) async {
+        let threadId = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !threadId.isEmpty, canContinueLastOpenedThreadRestore(threadId: threadId) else { return }
+
+        if let thread = threads.first(where: { $0.id == threadId }),
+           await restoreLastOpenedThread(thread, requestedThreadId: threadId) {
+            return
+        }
+
+        await refreshThreads()
+        guard canContinueLastOpenedThreadRestore(threadId: threadId) else { return }
+        if let thread = threads.first(where: { $0.id == threadId }),
+           await restoreLastOpenedThread(thread, requestedThreadId: threadId) {
+            return
+        }
+
+        do {
+            let thread = try await client().getThread(threadId: threadId)
+            guard canContinueLastOpenedThreadRestore(threadId: threadId) else { return }
+            _ = await restoreLastOpenedThread(thread, requestedThreadId: threadId)
+        } catch {
+            guard canContinueLastOpenedThreadRestore(threadId: threadId) else { return }
+            lastError = displayMessage(for: error)
+        }
+    }
+
     func openThreadImmediately(
         _ thread: GaryxThreadSummary,
         source: GaryxMobilePanelOpenSource = .replace
@@ -222,6 +248,89 @@ extension GaryxMobileModel {
             invalidatesPendingThreadOpen: invalidatesPendingThreadOpen,
             source: source
         )
+    }
+
+    private func canContinueLastOpenedThreadRestore(threadId: String) -> Bool {
+        GaryxLastOpenedThreadRestorationPolicy.restoreThreadId(
+            persistedLastOpenedThreadId: persistedLastOpenedThreadId,
+            persistedLastSessionWasOnThread: persistedLastSessionWasOnThread,
+            selectedThreadId: selectedThread?.id,
+            hasPendingMobileRoute: pendingMobileRoute != nil,
+            hasPendingThreadIntent: threadOpenState.hasPendingIntent,
+            navigationState: navigationState,
+            sidebarVisible: sidebarVisible
+        ) == threadId
+    }
+
+    @discardableResult
+    private func restoreLastOpenedThread(
+        _ thread: GaryxThreadSummary,
+        requestedThreadId: String
+    ) async -> Bool {
+        let destination = GaryxWorkflowRunDestination.destination(for: thread, fallbackThreadId: requestedThreadId)
+        guard let restorableThreadId = GaryxLastOpenedThreadRestorationPolicy.restoreThreadId(
+            persistedLastOpenedThreadId: persistedLastOpenedThreadId,
+            persistedLastSessionWasOnThread: persistedLastSessionWasOnThread,
+            selectedThreadId: selectedThread?.id,
+            hasPendingMobileRoute: pendingMobileRoute != nil,
+            hasPendingThreadIntent: threadOpenState.hasPendingIntent,
+            navigationState: navigationState,
+            sidebarVisible: sidebarVisible,
+            resolvedDestination: destination
+        ) else {
+            markLastOpenedThreadRestoreNonRestorable(destination, requestedThreadId: requestedThreadId)
+            return false
+        }
+
+        var restoredThread = thread
+        if restoredThread.id != restorableThreadId {
+            restoredThread = GaryxThreadSummary(
+                id: restorableThreadId,
+                title: thread.title,
+                createdAt: thread.createdAt,
+                updatedAt: thread.updatedAt,
+                lastMessagePreview: thread.lastMessagePreview,
+                workspacePath: thread.workspacePath,
+                messageCount: thread.messageCount,
+                agentId: thread.agentId,
+                teamId: thread.teamId,
+                teamName: thread.teamName,
+                providerType: thread.providerType,
+                recentRunId: thread.recentRunId,
+                activeRunId: thread.activeRunId,
+                runState: thread.runState,
+                worktreePath: thread.worktreePath,
+                automationId: thread.automationId,
+                automationThreadMode: thread.automationThreadMode,
+                threadType: thread.threadType,
+                workflowRunId: thread.workflowRunId,
+                excludeFromRecent: thread.excludeFromRecent,
+                threadRuntime: thread.threadRuntime
+            )
+        }
+        let resolvedThread = summaryWithCommittedRunState(restoredThread)
+        threads = Self.mergedThreadSummaries(threads + [resolvedThread])
+        clearWorkflowRunSurface()
+        await selectThread(
+            resolvedThread,
+            invalidatesPendingThreadOpen: false,
+            source: .replace
+        )
+        return true
+    }
+
+    private func markLastOpenedThreadRestoreNonRestorable(
+        _ destination: GaryxWorkflowRunDestination,
+        requestedThreadId: String
+    ) {
+        clearPersistedLastOpenedThreadId(ifMatches: requestedThreadId)
+        switch destination {
+        case .workflowRun(let workflowRunId):
+            clearPersistedLastOpenedThreadId(ifMatches: workflowRunId)
+        case .chat, .unresolved:
+            break
+        }
+        persistLastSessionRestorable(false)
     }
 
     private func openThreadDestination(

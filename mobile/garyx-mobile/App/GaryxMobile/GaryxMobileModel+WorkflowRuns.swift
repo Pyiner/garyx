@@ -70,7 +70,10 @@ extension GaryxMobileModel {
         workflowRunPanelState.beginRefresh(workflowRunId: workflowRunId)
         messages = []
         draftThreadTitle = thread?.title ?? "Workflow run"
-        persistLastOpenedThreadId(workflowRunId)
+        if let thread {
+            persistOpenedThreadDestination(GaryxWorkflowRunDestination.destination(for: thread))
+        }
+        persistLastSessionRestorable(false)
         openConversation(source: source, invalidatesPendingThreadOpen: false)
         setSidebarVisible(false)
         lastError = nil
