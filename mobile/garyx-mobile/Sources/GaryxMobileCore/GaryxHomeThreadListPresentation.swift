@@ -197,7 +197,18 @@ struct GaryxHomeThreadListSnapshot: Equatable, Sendable {
     var isLoadingThreads = false
     var isHomeVisible = false
 
+    var recentPlaceholder: GaryxHomeRecentPlaceholder {
+        guard sections.recent.isEmpty else { return .none }
+        return isLoadingThreads ? .loadingSkeleton(rowCount: 6) : .empty
+    }
+
     static let empty = GaryxHomeThreadListSnapshot()
+}
+
+enum GaryxHomeRecentPlaceholder: Equatable, Sendable {
+    case none
+    case loadingSkeleton(rowCount: Int)
+    case empty
 }
 
 struct GaryxHomeThreadRow: Identifiable, Equatable, Sendable {

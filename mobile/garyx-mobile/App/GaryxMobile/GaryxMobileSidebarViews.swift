@@ -408,13 +408,12 @@ struct GaryxHomeThreadListView: View, Equatable {
             .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
             .padding(.bottom, 4)
 
-        if sections.recent.isEmpty {
-            if snapshot.isLoadingThreads {
-                GaryxSidebarLoadingRow(title: "Loading recent threads")
-            } else {
-                GaryxSidebarEmptyRow(title: "No recent threads")
-            }
-        } else {
+        switch snapshot.recentPlaceholder {
+        case .loadingSkeleton(let rowCount):
+            GaryxSidebarSkeletonRows(rowCount: rowCount)
+        case .empty:
+            GaryxSidebarEmptyRow(title: "No recent threads")
+        case .none:
             ForEach(sections.recent) { row in
                 GaryxHomeThreadButton(
                     row: row,
@@ -817,20 +816,81 @@ private struct GaryxSidebarRowDivider: View {
     }
 }
 
-private struct GaryxSidebarLoadingRow: View {
-    let title: String
+private struct GaryxSidebarSkeletonRows: View {
+    private static let shimmerDuration: Double = 2.4
+    let rowCount: Int
 
     var body: some View {
-        HStack(spacing: 8) {
-            ProgressView()
-                .scaleEffect(0.68)
-            Text(title)
-                .font(GaryxFont.caption(weight: .semibold))
+        let count = max(0, rowCount)
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
+            let normalized = context.date.timeIntervalSinceReferenceDate
+                .truncatingRemainder(dividingBy: Self.shimmerDuration) / Self.shimmerDuration
+            let phase = CGFloat(normalized) * 2.0 - 0.5
+            let fill = LinearGradient(
+                colors: [
+                    Color.primary.opacity(0.045),
+                    Color.primary.opacity(0.105),
+                    Color.primary.opacity(0.045),
+                ],
+                startPoint: UnitPoint(x: phase - 0.6, y: 0.35),
+                endPoint: UnitPoint(x: phase + 0.6, y: 0.65)
+            )
+
+            VStack(spacing: 0) {
+                ForEach(0..<count, id: \.self) { index in
+                    GaryxSidebarSkeletonRow(index: index, fill: fill)
+                    if index < count - 1 {
+                        GaryxSidebarRowDivider()
+                    }
+                }
+            }
         }
-        .foregroundStyle(.secondary)
-        .frame(maxWidth: .infinity)
-        .frame(minHeight: 44)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading recent threads")
+    }
+}
+
+private struct GaryxSidebarSkeletonRow: View {
+    let index: Int
+    let fill: LinearGradient
+
+    private var titleWidth: CGFloat {
+        [154, 118, 142, 166, 132, 150][index % 6]
+    }
+
+    private var subtitleWidth: CGFloat {
+        [202, 172, 190, 154, 214, 178][index % 6]
+    }
+
+    private var timestampWidth: CGFloat {
+        [36, 44, 30, 50, 40, 34][index % 6]
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Circle()
+                .fill(fill)
+                .frame(width: 38, height: 38)
+
+            VStack(alignment: .leading, spacing: 7) {
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(fill)
+                    .frame(width: titleWidth, height: 12)
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(fill)
+                    .frame(width: subtitleWidth, height: 10)
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(fill)
+                    .frame(width: timestampWidth, height: 8)
+            }
+            .padding(.top, 2)
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 60)
         .padding(.horizontal, GaryxSidebarMetrics.rowOuterPadding)
+        .accessibilityHidden(true)
     }
 }
 

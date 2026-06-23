@@ -116,6 +116,42 @@ final class HomeProjectionActorTests: XCTestCase {
     }
 
     @MainActor
+    func testRefreshLoadingBoundaryPublishesSkeletonBeforeRefreshTransactionCompletes() async throws {
+        let fixture = GaryxHomeListFixture.makeInputs(
+            threadCount: 0,
+            agentCount: 0,
+            teamCount: 0,
+            automationCount: 0,
+            pinnedCount: 0,
+            runningCount: 0
+        )
+        let gateway = HomeProjectionGateway(isEnabled: true)
+        let store = GaryxHomeThreadListStore()
+        var placeholders: [GaryxHomeRecentPlaceholder] = []
+        gateway.setResultHandler { result in
+            _ = store.apply(actorSnapshot: result.snapshot, difference: result.difference)
+            placeholders.append(store.snapshot.recentPlaceholder)
+        }
+
+        gateway.capture(HomeProjectionCapture(
+            legacyInput: GaryxHomeThreadListInput(fixture, isLoadingThreads: true, isHomeVisible: true)
+        ))
+        await gateway.waitForIdleForTesting()
+
+        XCTAssertEqual(store.snapshot.recentPlaceholder, .loadingSkeleton(rowCount: 6))
+
+        let transactionId = gateway.beginTransaction(label: "refreshThreads")
+        gateway.capture(HomeProjectionCapture(
+            legacyInput: GaryxHomeThreadListInput(fixture, isLoadingThreads: false, isHomeVisible: true)
+        ))
+        gateway.endTransaction(transactionId)
+        await gateway.waitForIdleForTesting()
+
+        XCTAssertEqual(placeholders, [.loadingSkeleton(rowCount: 6), .empty])
+        XCTAssertEqual(store.snapshot.recentPlaceholder, .empty)
+    }
+
+    @MainActor
     func testDisabledGatewayDropsCapturesAndTransactions() async {
         let fixture = GaryxHomeListFixture.makeInputs(threadCount: 10, pinnedCount: 1, runningCount: 0)
         let gateway = HomeProjectionGateway(isEnabled: false)
