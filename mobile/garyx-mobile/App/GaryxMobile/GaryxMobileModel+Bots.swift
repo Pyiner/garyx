@@ -296,6 +296,8 @@ extension GaryxMobileModel {
         } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             pendingThreadArchives.resolveArchive(threadId: normalizedThreadId)
+            let transactionId = homeProjectionGateway.beginTransaction(label: "archive-rollback")
+            defer { homeProjectionGateway.endTransaction(transactionId) }
             pinnedThreadIds = previousPinnedThreadIds
             recentThreadIds = previousRecentThreadIds
             threads = previousThreads

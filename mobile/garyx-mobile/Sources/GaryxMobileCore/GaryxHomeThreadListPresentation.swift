@@ -436,7 +436,9 @@ final class GaryxHomeThreadListStore: ObservableObject {
     @Published private(set) var snapshot: GaryxHomeThreadListSnapshot
     private var previousInput: GaryxHomeThreadListInput?
     private let sectionsCache = GaryxHomeThreadSectionsCache()
+    private(set) var latestActorAppliedSeq = 0
     private(set) var acceptedInputCount = 0
+    private(set) var acceptedActorSnapshotCount = 0
     private(set) var publishCount = 0
 
     init(snapshot: GaryxHomeThreadListSnapshot = .empty) {
@@ -460,6 +462,27 @@ final class GaryxHomeThreadListStore: ObservableObject {
             sections: Self.sections(baseSections, runningThreadIds: input.runningThreadIds),
             isLoadingThreads: input.isLoadingThreads,
             isHomeVisible: input.isHomeVisible
+        )
+        guard snapshot != next else {
+            return false
+        }
+        snapshot = next
+        publishCount += 1
+        return true
+    }
+
+    @discardableResult
+    func apply(actorSnapshot: HomeSnapshot, difference _: CollectionDifference<String>? = nil) -> Bool {
+        guard actorSnapshot.appliedSeq > latestActorAppliedSeq else {
+            return false
+        }
+        latestActorAppliedSeq = actorSnapshot.appliedSeq
+        acceptedActorSnapshotCount += 1
+
+        let next = GaryxHomeThreadListSnapshot(
+            sections: actorSnapshot.sections,
+            isLoadingThreads: actorSnapshot.isLoadingThreads,
+            isHomeVisible: actorSnapshot.isHomeVisible
         )
         guard snapshot != next else {
             return false

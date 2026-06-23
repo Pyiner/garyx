@@ -17,6 +17,34 @@ extension GaryxMobileModel {
         navigationDrawerStore.apply(navigationDrawerSnapshot)
     }
 
+    func refreshHomeObservationSnapshot() {
+        refreshHomeObservationConnectionSnapshot()
+        refreshHomeObservationPaginationSnapshot()
+        homeObservationStore.setShowsSettings(showsSettings)
+        homeObservationStore.setDebugShowsGatewaySwitcher(debugShowsGatewaySwitcher)
+        homeObservationStore.setLastError(lastError)
+    }
+
+    func refreshHomeObservationConnectionSnapshot() {
+        homeObservationStore.applyConnection(
+            isGatewayConfigured: hasGatewaySettings,
+            connectionState: connectionState
+        )
+    }
+
+    func refreshHomeObservationPaginationSnapshot() {
+        homeObservationStore.applyPagination(
+            isLoadingMoreThreads: isLoadingMoreThreads,
+            hasMoreThreadSummaries: hasMoreThreadSummaries
+        )
+    }
+
+    func clearLastErrorIfCurrent(_ message: String) {
+        if lastError == message {
+            lastError = nil
+        }
+    }
+
     func predecodeAgentAvatarImages() {
         GaryxDataURLImageCache.predecodeAgentAvatars(
             from: agents.map { Optional($0.avatarDataUrl) } + teams.map { Optional($0.avatarDataUrl) }
@@ -52,12 +80,61 @@ extension GaryxMobileModel {
         }
     }
 
-    func refreshHomeThreadListSnapshot() {
-        #if DEBUG
-        GaryxHomeScrollPerformanceProbe.shared.markHomeListStoreApply()
-        #endif
-        homeThreadListStore.apply(homeThreadListInput)
+    func emitHomeProjectionSnapshot() {
+        if HomeProjectionLiveSourceConfiguration.usesActorSnapshots {
+            homeProjectionGateway.capture(homeProjectionCapture)
+            syncBackgroundCommittedRunReconcileLoopForHomeVisibility()
+            return
+        }
+
+        applyLegacyHomeThreadListSnapshot()
+    }
+
+    func applyLegacyHomeThreadListSnapshot() {
+        let input = homeThreadListInput
+        if homeThreadListStore.apply(input) {
+            #if DEBUG
+            GaryxHomeScrollPerformanceProbe.shared.markHomeListStoreApply()
+            #endif
+        }
+        captureHomeProjectionShadow(input: input)
         syncBackgroundCommittedRunReconcileLoopForHomeVisibility()
+    }
+
+    func captureHomeProjectionShadow(input: GaryxHomeThreadListInput) {
+        guard HomeProjectionShadowConfiguration.isEnabled else { return }
+        homeProjectionGateway.capture(
+            HomeProjectionCapture(
+                legacyInput: input,
+                runTrackerBusyThreadIds: runTracker.busyThreadIds,
+                committedRunStateBusyByThreadId: runStateByThread.mapValues { $0.busy }
+            )
+        )
+    }
+
+    var homeProjectionCapture: HomeProjectionCapture {
+        HomeProjectionCapture(
+            threads: threads,
+            recentThreadIds: recentThreadIds,
+            agents: agents,
+            teams: teams,
+            automations: automations,
+            pinnedThreadIds: pinnedThreadIds,
+            selectedThreadId: selectedThread?.id,
+            isLoadingThreads: isLoadingThreads,
+            isHomeVisible: isHomeVisible,
+            runTrackerBusyThreadIds: runTracker.busyThreadIds,
+            committedRunStateBusyByThreadId: runStateByThread.mapValues { $0.busy }
+        )
+    }
+
+    func applyHomeProjectionResult(_ result: HomeProjectionBoundaryResult) {
+        guard HomeProjectionLiveSourceConfiguration.usesActorSnapshots else { return }
+        if homeThreadListStore.apply(actorSnapshot: result.snapshot, difference: result.difference) {
+            #if DEBUG
+            GaryxHomeScrollPerformanceProbe.shared.markHomeListStoreApply()
+            #endif
+        }
     }
 
     var homeThreadListInput: GaryxHomeThreadListInput {
@@ -329,7 +406,7 @@ extension GaryxMobileModel {
         pinnedThreadIds = (0..<6).map { "thread-\($0)" }
         recentThreadIds = (0..<50).map { "thread-\($0)" }
         connectionState = .ready(version: "debug-home-scroll-probe")
-        refreshHomeThreadListSnapshot()
+        emitHomeProjectionSnapshot()
     }
     #endif
 

@@ -310,7 +310,7 @@ extension GaryxMobileModel {
             activeAssistantMessageIdsByThread[activeRunThreadId] = nil
         }
         runTracker = GaryxConversationRunTracker()
-        runStateByThread = [:]
+        replaceRunStateByThread([:])
     }
 
     func clearActiveRunState(for threadId: String) {
