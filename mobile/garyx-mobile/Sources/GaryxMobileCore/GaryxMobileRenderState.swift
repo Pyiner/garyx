@@ -59,6 +59,7 @@ public struct GaryxRenderSnapshot: Codable, Equatable, Sendable {
     public var visibleMessageIds: [String]
     public var filteredPlaceholders: [GaryxRenderFilteredPlaceholder]
     public var rateLimit: GaryxRenderRateLimit?
+    public var window: GaryxRenderWindow?
 
     public init(
         basedOnSeq: Int,
@@ -68,7 +69,8 @@ public struct GaryxRenderSnapshot: Codable, Equatable, Sendable {
         progressLocus: GaryxRenderProgressLocus = .none,
         visibleMessageIds: [String] = [],
         filteredPlaceholders: [GaryxRenderFilteredPlaceholder] = [],
-        rateLimit: GaryxRenderRateLimit? = nil
+        rateLimit: GaryxRenderRateLimit? = nil,
+        window: GaryxRenderWindow? = nil
     ) {
         self.basedOnSeq = basedOnSeq
         self.rows = rows
@@ -78,6 +80,7 @@ public struct GaryxRenderSnapshot: Codable, Equatable, Sendable {
         self.visibleMessageIds = visibleMessageIds
         self.filteredPlaceholders = filteredPlaceholders
         self.rateLimit = rateLimit
+        self.window = window
     }
 
     enum CodingKeys: String, CodingKey {
@@ -89,6 +92,22 @@ public struct GaryxRenderSnapshot: Codable, Equatable, Sendable {
         case visibleMessageIds
         case filteredPlaceholders = "filtered_placeholders"
         case rateLimit
+        case window
+    }
+}
+
+public struct GaryxRenderWindow: Codable, Equatable, Sendable {
+    public var floorSeq: Int
+    public var hasMoreAbove: Bool
+
+    public init(floorSeq: Int, hasMoreAbove: Bool) {
+        self.floorSeq = floorSeq
+        self.hasMoreAbove = hasMoreAbove
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case floorSeq = "floor_seq"
+        case hasMoreAbove = "has_more_above"
     }
 }
 

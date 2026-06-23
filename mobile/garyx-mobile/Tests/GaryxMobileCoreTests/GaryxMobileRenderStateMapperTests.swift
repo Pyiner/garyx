@@ -43,7 +43,11 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
                 "message": { "id": "seq:3", "seq": 3, "role": "assistant" },
                 "reason": "empty_streaming_assistant"
               }
-            ]
+            ],
+            "window": {
+              "floor_seq": 1,
+              "has_more_above": true
+            }
           }
         }
         """
@@ -60,6 +64,7 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
         XCTAssertEqual(frame.renderState.progressLocus, .toolGroup)
         XCTAssertEqual(frame.renderState.visibleMessageIds, ["seq:1", "seq:2"])
         XCTAssertEqual(frame.renderState.filteredPlaceholders.only?.reason, .emptyStreamingAssistant)
+        XCTAssertEqual(frame.renderState.window, GaryxRenderWindow(floorSeq: 1, hasMoreAbove: true))
     }
 
     func testFrameDecodesSnapshotOnlyInitialFrame() throws {

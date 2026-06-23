@@ -135,6 +135,67 @@ final class GatewayStreamActorTests: XCTestCase {
         XCTAssertEqual(actionNames, ["fallback:notFound404"])
     }
 
+    func testEndpointBuildsInitialWindowRequest() throws {
+        let request = try endpoint().threadStreamRequest(
+            threadId: "thread::window",
+            request: .initial(initialUserTurns: 1)
+        )
+        let queryItems = queryItems(in: request)
+
+        XCTAssertEqual(queryItems["after_seq"], "0")
+        XCTAssertEqual(queryItems["replay_scope"], "initial")
+        XCTAssertEqual(queryItems["initial_user_turns"], "1")
+        XCTAssertNil(queryItems["render_floor"])
+    }
+
+    func testActorGapReconnectResumesWithoutInitialParameters() async {
+        let gapPayload = framePayload(threadId: "thread-gap", basedOnSeq: 12, events: [
+            event(seq: 10, role: "assistant", text: "first visible row"),
+            event(seq: 12, role: "assistant", text: "gap"),
+        ])
+        let recorder = GatewayStreamTestRecorder(
+            connections: [
+                .init(statusCode: 200, lines: [
+                    "data: \(gapPayload)",
+                ]),
+                .init(statusCode: 404, lines: []),
+            ],
+            refetchCursor: 0
+        )
+        let actor = GatewayStreamActor(
+            endpoint: endpoint(),
+            transport: GatewayStreamTransport { request in
+                await recorder.connect(request)
+            },
+            reconnectDelayNanos: { _ in 0 }
+        )
+
+        await actor.run(
+            threadId: "thread-gap",
+            requestProvider: {
+                GatewayThreadStreamRequestState(
+                    afterSeq: 0,
+                    replayScope: .initial,
+                    initialUserTurns: 1,
+                    renderFloor: 7
+                )
+            },
+            shouldContinue: { true },
+            actionHandler: { action in
+                await recorder.handle(action)
+            }
+        )
+
+        let requestedCursors = await recorder.requestedCursors()
+        let replayScopes = await recorder.requestedQueryValues(name: "replay_scope")
+        let initialTurns = await recorder.requestedQueryValues(name: "initial_user_turns")
+        let renderFloors = await recorder.requestedQueryValues(name: "render_floor")
+        XCTAssertEqual(requestedCursors, [0, 10])
+        XCTAssertEqual(replayScopes, ["initial", "resume"])
+        XCTAssertEqual(initialTurns, ["1", nil])
+        XCTAssertEqual(renderFloors, ["7", "7"])
+    }
+
     private func committedIds(in actions: [GatewayStreamAction]) -> [[String]] {
         actions.compactMap { action in
             guard case .applyCommittedMessages(let messages) = action else { return nil }
@@ -153,6 +214,13 @@ final class GatewayStreamActorTests: XCTestCase {
                 authToken: "test-token"
             )
         )
+    }
+
+    private func queryItems(in request: URLRequest) -> [String: String] {
+        let items = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        return Dictionary(uniqueKeysWithValues: items.compactMap { item in
+            item.value.map { (item.name, $0) }
+        })
     }
 
     private func framePayload(
@@ -267,6 +335,15 @@ private actor GatewayStreamTestRecorder {
                 .first(where: { $0.name == "after_seq" })?
                 .value
                 .flatMap(Int.init) ?? -1
+        }
+    }
+
+    func requestedQueryValues(name: String) -> [String?] {
+        requests.map { request in
+            URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+                .queryItems?
+                .first(where: { $0.name == name })?
+                .value
         }
     }
 

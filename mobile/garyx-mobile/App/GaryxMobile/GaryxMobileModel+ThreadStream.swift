@@ -134,8 +134,9 @@ extension GaryxMobileModel {
         let actor = GatewayStreamActor(endpoint: GatewayStreamEndpoint(configuration: configuration))
         await actor.run(
             threadId: threadId,
-            cursorProvider: { [weak self] in
-                await self?.selectedThreadStreamCursorForActor(threadId: threadId, generation: generation) ?? 0
+            requestProvider: { [weak self] in
+                await self?.selectedThreadStreamRequestForActor(threadId: threadId, generation: generation)
+                    ?? .resume(afterSeq: 0)
             },
             shouldContinue: { [weak self] in
                 await self?.isSelectedThreadStreamCurrent(threadId: threadId, generation: generation) ?? false
@@ -146,9 +147,26 @@ extension GaryxMobileModel {
         )
     }
 
-    private func selectedThreadStreamCursorForActor(threadId: String, generation: UUID) async -> Int {
-        guard isSelectedThreadStreamCurrent(threadId: threadId, generation: generation) else { return 0 }
-        return await selectedThreadStreamCursor(for: threadId)
+    private func selectedThreadStreamRequestForActor(
+        threadId: String,
+        generation: UUID
+    ) async -> GatewayThreadStreamRequestState {
+        guard isSelectedThreadStreamCurrent(threadId: threadId, generation: generation) else {
+            return .resume(afterSeq: 0)
+        }
+        let snapshot = await transcriptSnapshotAsync(for: threadId)
+        let renderSnapshot = renderSnapshotsByThread[threadId] ?? snapshot?.renderSnapshot
+        let renderFloor = selectedThreadRenderFloorByThread[threadId]
+            ?? GaryxThreadWindowPlanner.floorSeq(from: renderSnapshot)
+        let afterSeq = GaryxStreamSeqPlanner.resumeCursor(
+            afterCursor: snapshot?.afterCursor,
+            fallbackMaxIndex: cachedMessages(for: threadId).compactMap(\.historyIndex).max()
+        )
+        return GaryxThreadWindowPlanner.streamRequest(
+            afterSeq: afterSeq,
+            renderFloor: renderFloor,
+            hasWindowedRenderSnapshot: renderSnapshot?.window != nil
+        )
     }
 
     private func isSelectedThreadStreamCurrent(threadId: String, generation: UUID) -> Bool {
@@ -218,6 +236,7 @@ extension GaryxMobileModel {
     private func applyThreadRenderSnapshot(_ snapshot: GaryxRenderSnapshot, threadId: String) {
         guard selectedThread?.id == threadId else { return }
         setRenderSnapshot(snapshot, for: threadId)
+        applyRenderWindowPagination(snapshot.window, threadId: threadId)
         let base = transcriptSnapshot(for: threadId)
         let window = GaryxCachedTranscript(
             threadId: threadId,
@@ -233,6 +252,22 @@ extension GaryxMobileModel {
         }
         markThreadHistoryLoaded(threadId)
         scheduleSelectedThreadStreamFlush(for: threadId)
+    }
+
+    private func applyRenderWindowPagination(_ renderWindow: GaryxRenderWindow?, threadId: String) {
+        guard selectedThread?.id == threadId else { return }
+        guard let renderWindow else {
+            selectedThreadRenderFloorByThread[threadId] = nil
+            return
+        }
+        selectedThreadRenderFloorByThread[threadId] = renderWindow.floorSeq
+        if renderWindow.hasMoreAbove, renderWindow.floorSeq > 1 {
+            selectedThreadHasMoreHistoryBefore = true
+            selectedThreadNextHistoryBeforeIndex = renderWindow.floorSeq - 1
+        } else {
+            selectedThreadHasMoreHistoryBefore = false
+            selectedThreadNextHistoryBeforeIndex = nil
+        }
     }
 
     /// Leading-throttle (mirrors scheduleAssistantDeltaFlush): the first row schedules

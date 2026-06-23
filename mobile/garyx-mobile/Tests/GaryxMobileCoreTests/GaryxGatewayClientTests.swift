@@ -34,6 +34,32 @@ final class GaryxGatewayClientTests: XCTestCase {
         )
     }
 
+    func testThreadStreamRequestEncodesReplayWindowParameters() throws {
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: URL(string: "http://127.0.0.1:31337/garyx")!,
+                authToken: "test-token"
+            )
+        )
+
+        let request = try client.threadStreamRequest(
+            threadId: "thread::test/child",
+            afterSeq: 9,
+            replayScope: .initial,
+            initialUserTurns: 1,
+            renderFloor: 7
+        )
+        let components = try XCTUnwrap(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false))
+        let queryItems = components.queryItems ?? []
+
+        XCTAssertEqual(components.percentEncodedPath, "/garyx/api/threads/thread%3A%3Atest%2Fchild/stream")
+        XCTAssertEqual(queryItems.first(where: { $0.name == "after_seq" })?.value, "9")
+        XCTAssertEqual(queryItems.first(where: { $0.name == "replay_scope" })?.value, "initial")
+        XCTAssertEqual(queryItems.first(where: { $0.name == "initial_user_turns" })?.value, "1")
+        XCTAssertEqual(queryItems.first(where: { $0.name == "render_floor" })?.value, "7")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/event-stream")
+    }
+
     func testArchiveThreadRequestEncodesEndpointKeys() throws {
         let request = GaryxArchiveThreadRequest(endpointKeys: [
             "telegram::main::1000000001",

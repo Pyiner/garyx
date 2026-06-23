@@ -86,6 +86,65 @@ public enum GaryxStreamSeqPlanner {
     }
 }
 
+public enum GatewayThreadStreamReplayScope: String, Equatable, Sendable {
+    case resume
+    case initial
+}
+
+public struct GatewayThreadStreamRequestState: Equatable, Sendable {
+    public var afterSeq: Int
+    public var replayScope: GatewayThreadStreamReplayScope?
+    public var initialUserTurns: Int?
+    public var renderFloor: Int?
+
+    public init(
+        afterSeq: Int,
+        replayScope: GatewayThreadStreamReplayScope? = nil,
+        initialUserTurns: Int? = nil,
+        renderFloor: Int? = nil
+    ) {
+        self.afterSeq = max(afterSeq, 0)
+        self.replayScope = replayScope
+        self.initialUserTurns = initialUserTurns.map { max($0, 0) }
+        self.renderFloor = renderFloor.map { max($0, 0) }
+    }
+
+    public static func resume(afterSeq: Int, renderFloor: Int? = nil) -> Self {
+        Self(afterSeq: afterSeq, replayScope: .resume, renderFloor: renderFloor)
+    }
+
+    public static func initial(initialUserTurns: Int = 1) -> Self {
+        Self(afterSeq: 0, replayScope: .initial, initialUserTurns: initialUserTurns)
+    }
+
+    public func resuming(afterSeq nextAfterSeq: Int) -> Self {
+        Self(afterSeq: nextAfterSeq, replayScope: .resume, renderFloor: renderFloor)
+    }
+}
+
+public enum GaryxThreadWindowPlanner {
+    public static let initialUserTurns = 1
+
+    public static func streamRequest(
+        afterSeq: Int,
+        renderFloor: Int?,
+        hasWindowedRenderSnapshot: Bool
+    ) -> GatewayThreadStreamRequestState {
+        guard hasWindowedRenderSnapshot else {
+            return .initial(initialUserTurns: initialUserTurns)
+        }
+        return .resume(afterSeq: afterSeq, renderFloor: renderFloor)
+    }
+
+    public static func floorSeq(from snapshot: GaryxRenderSnapshot?) -> Int? {
+        snapshot?.window?.floorSeq
+    }
+
+    public static func floorSeqForOlderPage(firstIndex: Int?) -> Int? {
+        firstIndex.map { max($0, 0) + 1 }
+    }
+}
+
 public enum GaryxTranscriptControlRewriteAction: Equatable, Sendable {
     /// Ordinary content/control row: merge it through the normal committed path.
     case none

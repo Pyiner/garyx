@@ -93,6 +93,7 @@ extension GaryxMobileModel {
         messageSignaturesByThread[threadId] = Self.messageListSignature(for: [])
         activeAssistantMessageIdsByThread[threadId] = nil
         renderSnapshotsByThread[threadId] = nil
+        selectedThreadRenderFloorByThread[threadId] = nil
         if selectedThread?.id == threadId {
             pendingSelectedMessagesSignature = messageSignaturesByThread[threadId]
             messages = []

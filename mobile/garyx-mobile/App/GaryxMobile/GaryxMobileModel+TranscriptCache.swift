@@ -207,6 +207,7 @@ extension GaryxMobileModel {
     func clearTranscriptCache(for threadId: String) {
         cachedTranscriptSnapshots[threadId] = nil
         renderSnapshotsByThread[threadId] = nil
+        selectedThreadRenderFloorByThread[threadId] = nil
         removeTranscriptCacheInBackground(threadId: threadId)
     }
 

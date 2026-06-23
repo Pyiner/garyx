@@ -79,6 +79,7 @@ final class GaryxTranscriptSyncPlannerTests: XCTestCase {
         // No prior row this connection (0): even a high seq applies, because a reset
         // replay can legitimately start above the cache cursor.
         XCTAssertEqual(GaryxStreamSeqPlanner.decide(incomingSeq: 100, connectionLastSeq: 0), .apply)
+        XCTAssertEqual(GaryxStreamSeqPlanner.decide(incomingSeq: 7, connectionLastSeq: 0), .apply)
         XCTAssertEqual(GaryxStreamSeqPlanner.decide(incomingSeq: 1, connectionLastSeq: 0), .apply)
     }
 
@@ -171,6 +172,42 @@ final class GaryxTranscriptSyncPlannerTests: XCTestCase {
 
     func testResumeCursorZeroWhenNothingCached() {
         XCTAssertEqual(GaryxStreamSeqPlanner.resumeCursor(afterCursor: nil, fallbackMaxIndex: nil), 0)
+    }
+
+    // MARK: - Stream render window
+
+    func testThreadWindowPlannerColdReconnectScrollUpSequence() {
+        let cold = GaryxThreadWindowPlanner.streamRequest(
+            afterSeq: 42,
+            renderFloor: nil,
+            hasWindowedRenderSnapshot: false
+        )
+        XCTAssertEqual(cold.afterSeq, 0)
+        XCTAssertEqual(cold.replayScope, .initial)
+        XCTAssertEqual(cold.initialUserTurns, 1)
+        XCTAssertNil(cold.renderFloor)
+
+        let reconnect = GaryxThreadWindowPlanner.streamRequest(
+            afterSeq: 9,
+            renderFloor: 7,
+            hasWindowedRenderSnapshot: true
+        )
+        XCTAssertEqual(reconnect.afterSeq, 9)
+        XCTAssertEqual(reconnect.replayScope, .resume)
+        XCTAssertNil(reconnect.initialUserTurns)
+        XCTAssertEqual(reconnect.renderFloor, 7)
+
+        let loweredFloor = GaryxThreadWindowPlanner.floorSeqForOlderPage(firstIndex: 3)
+        XCTAssertEqual(loweredFloor, 4)
+
+        let expandedReconnect = GaryxThreadWindowPlanner.streamRequest(
+            afterSeq: 11,
+            renderFloor: loweredFloor,
+            hasWindowedRenderSnapshot: true
+        )
+        XCTAssertEqual(expandedReconnect.afterSeq, 11)
+        XCTAssertEqual(expandedReconnect.replayScope, .resume)
+        XCTAssertEqual(expandedReconnect.renderFloor, 4)
     }
 
     private func controlMessage(index: Int, controlKind: String) -> GaryxTranscriptMessage {

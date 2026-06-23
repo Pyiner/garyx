@@ -360,6 +360,7 @@ final class GaryxMobileModel: ObservableObject {
     var recentThreadsWidgetPersistenceGeneration: UInt64 = 0
     var hasAttemptedLastOpenedThreadRestore = false
     var selectedThreadNextHistoryBeforeIndex: Int?
+    var selectedThreadRenderFloorByThread: [String: Int] = [:]
     var sceneRefreshTask: Task<Void, Never>?
     var pendingBotId: String?
     var pendingBotWorkspace: String?

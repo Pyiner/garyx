@@ -908,13 +908,29 @@ public final class GaryxGatewayClient {
 
     /// Resumable per-thread transcript stream (S5): replays committed messages with
     /// `seq > afterSeq`, then streams that thread's live events.
-    public func threadStreamRequest(threadId: String, afterSeq: Int) throws -> URLRequest {
+    public func threadStreamRequest(
+        threadId: String,
+        afterSeq: Int,
+        replayScope: GatewayThreadStreamReplayScope? = nil,
+        initialUserTurns: Int? = nil,
+        renderFloor: Int? = nil
+    ) throws -> URLRequest {
+        var queryItems = [
+            URLQueryItem(name: "after_seq", value: String(max(afterSeq, 0))),
+        ]
+        if let replayScope {
+            queryItems.append(URLQueryItem(name: "replay_scope", value: replayScope.rawValue))
+        }
+        if let initialUserTurns {
+            queryItems.append(URLQueryItem(name: "initial_user_turns", value: String(max(initialUserTurns, 0))))
+        }
+        if let renderFloor {
+            queryItems.append(URLQueryItem(name: "render_floor", value: String(max(renderFloor, 0))))
+        }
         var request = try makeRequest(
             path: "/api/threads/\(threadId.urlPathEncoded)/stream",
             method: "GET",
-            queryItems: [
-                URLQueryItem(name: "after_seq", value: String(max(afterSeq, 0))),
-            ]
+            queryItems: queryItems
         )
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         return request

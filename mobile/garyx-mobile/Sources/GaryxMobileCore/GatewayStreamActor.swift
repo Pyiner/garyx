@@ -62,6 +62,16 @@ public struct GatewayStreamEndpoint: Equatable, Sendable {
             afterSeq: afterSeq
         )
     }
+
+    public func threadStreamRequest(threadId: String, request: GatewayThreadStreamRequestState) throws -> URLRequest {
+        try GaryxGatewayClient(configuration: configuration).threadStreamRequest(
+            threadId: threadId,
+            afterSeq: request.afterSeq,
+            replayScope: request.replayScope,
+            initialUserTurns: request.initialUserTurns,
+            renderFloor: request.renderFloor
+        )
+    }
 }
 
 public struct GatewayStreamConnection: Sendable {
@@ -189,20 +199,36 @@ public actor GatewayStreamActor {
         shouldContinue: @escaping @Sendable () async -> Bool,
         actionHandler: @escaping @Sendable (GatewayStreamAction) async -> GatewayStreamActionResult
     ) async {
+        await run(
+            threadId: threadId,
+            requestProvider: {
+                GatewayThreadStreamRequestState(afterSeq: await cursorProvider())
+            },
+            shouldContinue: shouldContinue,
+            actionHandler: actionHandler
+        )
+    }
+
+    public func run(
+        threadId: String,
+        requestProvider: @escaping @Sendable () async -> GatewayThreadStreamRequestState,
+        shouldContinue: @escaping @Sendable () async -> Bool,
+        actionHandler: @escaping @Sendable (GatewayStreamAction) async -> GatewayStreamActionResult
+    ) async {
         var consecutiveFailures = 0
         var nextResumeOverride: Int?
 
         while !Task.isCancelled, await shouldContinue() {
             processor.resetConnection()
             do {
-                let cursor: Int
+                let streamRequest: GatewayThreadStreamRequestState
                 if let resumeOverride = nextResumeOverride {
-                    cursor = resumeOverride
+                    streamRequest = (await requestProvider()).resuming(afterSeq: resumeOverride)
                 } else {
-                    cursor = await cursorProvider()
+                    streamRequest = await requestProvider()
                 }
                 nextResumeOverride = nil
-                let request = try endpoint.threadStreamRequest(threadId: threadId, afterSeq: cursor)
+                let request = try endpoint.threadStreamRequest(threadId: threadId, request: streamRequest)
                 let reconnect: GatewayStreamReconnect?
                 if let transport {
                     let connection = try await transport.connect(request)

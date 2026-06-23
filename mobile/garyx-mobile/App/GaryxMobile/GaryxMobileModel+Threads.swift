@@ -1309,17 +1309,24 @@ extension GaryxMobileModel {
             // and survive a cold start, not just this session's memory. A
             // `before_index` page can never contain a transient live row, so it is
             // committed-only and safe to persist even while the run is active.
-            await updateTranscriptCache(
+            let window = await updateTranscriptCache(
                 threadId: threadId,
                 fetched: transcript,
                 direction: .older,
                 committedOnly: true
             )
+            if let floorSeq = GaryxThreadWindowPlanner.floorSeqForOlderPage(firstIndex: window.firstIndex) {
+                selectedThreadRenderFloorByThread[threadId] = floorSeq
+            }
             updateSelectedThreadHistoryPagination(threadId: threadId, transcript: transcript)
             prependOlderMessages(
                 mobileMessages(from: transcript.messages, live: false),
                 for: threadId
             )
+            if self.selectedThread?.id == threadId {
+                stopSelectedThreadStream()
+                startSelectedThreadStream(for: threadId)
+            }
         } catch {
             guard self.selectedThread?.id == threadId else { return }
             lastError = displayMessage(for: error)
