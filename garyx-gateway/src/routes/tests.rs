@@ -570,6 +570,54 @@ async fn thread_stream_replay_initial_user_turn_window_trims_and_carries_bodies(
             .and_then(Value::as_u64),
         Some(3)
     );
+    assert_eq!(
+        replay.render_floor, 3,
+        "same SSE connection live frames must keep the initial render window"
+    );
+
+    let live_append = state
+        .threads
+        .history
+        .transcript_store()
+        .append_run_records(
+            thread_id,
+            Some("run::render-replay-initial-window"),
+            &[RunTranscriptRecordDraft::with_timestamp(
+                json!({"role": "assistant", "content": "live continuation"}),
+                "2026-06-18T12:00:04Z",
+            )],
+        )
+        .await
+        .unwrap();
+    let live_record = live_append.appended_records.last().unwrap();
+    let live_payload = committed_thread_stream_replay_payload_value(thread_id, live_record);
+    let live_event = committed_thread_stream_live_event(
+        &state,
+        thread_id,
+        live_record.seq,
+        live_payload,
+        replay.render_floor,
+    )
+    .await
+    .unwrap();
+    let live_frame: Value = serde_json::from_str(&live_event.payload).unwrap();
+    let live_render_state = live_frame.get("render_state").unwrap();
+    assert_eq!(
+        live_render_state
+            .get("visibleMessageIds")
+            .and_then(Value::as_array)
+            .map(|items| { items.iter().filter_map(Value::as_str).collect::<Vec<_>>() })
+            .unwrap(),
+        vec!["seq:3", "seq:4", "seq:5"],
+        "live frame after initial replay must not widen back to the full transcript"
+    );
+    assert_eq!(
+        live_render_state
+            .get("window")
+            .and_then(|window| window.get("floor_seq"))
+            .and_then(Value::as_u64),
+        Some(3)
+    );
 }
 
 #[tokio::test]

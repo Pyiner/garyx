@@ -1856,13 +1856,13 @@ pub async fn thread_stream(
         .and_then(|value| value.trim().parse::<u64>().ok());
     let (after_seq, replay_options) =
         thread_stream_replay_options(&params, last_event_id, last_event_id_header.is_some());
-    let render_floor = replay_options.render_floor;
 
     // Subscribe BEFORE reading the replay snapshot (no gap); seq dedup below makes
     // the overlap idempotent.
     let rx = state.ops.events.subscribe();
 
     let replay = build_thread_stream_replay(&state, &thread_id, after_seq, replay_options).await;
+    let render_floor_for_live = replay.render_floor;
     let replay_events = replay
         .events
         .into_iter()
@@ -1872,7 +1872,6 @@ pub async fn thread_stream(
     let thread_for_live = thread_id.clone();
     let state_for_live = state.clone();
     let state_for_drops = state.clone();
-    let render_floor_for_live = render_floor;
     let mut last_sent_seq = replay.max_seq;
     let live = BroadcastStream::new(rx)
         .then(move |item| {
@@ -1928,6 +1927,7 @@ struct ThreadStreamReplay {
     events: Vec<Result<ThreadStreamEvent, io::Error>>,
     max_seq: u64,
     sent_payloads: HashMap<u64, String>,
+    render_floor: u64,
 }
 
 struct ThreadStreamReplayBuilder {
@@ -2077,6 +2077,7 @@ async fn finalize_thread_stream_replay(
         events,
         max_seq,
         sent_payloads: replay.sent_payloads,
+        render_floor,
     }
 }
 
