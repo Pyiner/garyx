@@ -1924,6 +1924,8 @@ struct GaryxMessageBubble: View {
                     if let notification = taskNotification {
                         GaryxTaskNotificationCard(notification: notification)
                             .garyxMessageInteraction(text: taskNotificationCopyText(notification), edge: .trailing)
+                    } else if messagePresentation == .historySkeleton {
+                        GaryxUserMessageLoadingBubble()
                     } else if !displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         GaryxMarkdownText(
                             text: displayText,
@@ -1956,8 +1958,8 @@ struct GaryxMessageBubble: View {
                         .garyxMessageCopyContext(text: messageCopyText)
                 }
                 if message.isStreaming && message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    if message.attachments.isEmpty {
-                        GaryxThinkingLabel()
+                    if case .thinkingLabel(let text) = messagePresentation {
+                        GaryxThinkingLabel(text: text)
                     }
                 } else if let notification = taskNotification {
                     GaryxTaskNotificationCard(notification: notification)
@@ -2005,16 +2007,12 @@ struct GaryxMessageBubble: View {
         }
     }
 
+    private var messagePresentation: GaryxMobileMessagePresentation {
+        GaryxMobileMessagePresentation.make(for: message)
+    }
+
     private var displayText: String {
-        if message.text.isEmpty, message.isStreaming { return "Thinking" }
-        if !message.attachments.isEmpty,
-           let summary = GaryxStructuredContentRenderer.attachmentSummary(
-            from: message.attachments.map(\.contentDescriptor)
-           ),
-           message.text == summary {
-            return ""
-        }
-        return message.text
+        messagePresentation.text
     }
 
     private var taskNotification: GaryxTaskNotification? {
@@ -2522,9 +2520,38 @@ struct GaryxMessageFileAttachmentView: View {
 }
 
 struct GaryxThinkingLabel: View {
+    var text: String = "Thinking"
+
     var body: some View {
-        GaryxShimmerText(text: "Thinking", font: GaryxFont.body())
+        GaryxShimmerText(text: text, font: GaryxFont.body())
             .frame(minHeight: 22)
+    }
+}
+
+struct GaryxUserMessageLoadingBubble: View {
+    private static let shimmerDuration: Double = 2.4
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
+            let normalized = context.date.timeIntervalSinceReferenceDate
+                .truncatingRemainder(dividingBy: Self.shimmerDuration) / Self.shimmerDuration
+            let phase = CGFloat(normalized) * 2.0 - 0.5
+            let fill = LinearGradient(
+                colors: [
+                    Color.primary.opacity(0.05),
+                    Color.primary.opacity(0.11),
+                    Color.primary.opacity(0.05),
+                ],
+                startPoint: UnitPoint(x: phase - 0.6, y: 0.35),
+                endPoint: UnitPoint(x: phase + 0.6, y: 0.65)
+            )
+
+            RoundedRectangle(cornerRadius: 19, style: .continuous)
+                .fill(fill)
+                .frame(width: 156, height: 38)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading message")
     }
 }
 

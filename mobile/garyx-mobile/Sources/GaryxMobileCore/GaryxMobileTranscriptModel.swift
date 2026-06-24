@@ -56,6 +56,47 @@ struct GaryxMobileMessageAttachment: Identifiable, Equatable {
     }
 }
 
+enum GaryxMobileMessagePresentation: Equatable {
+    case text(String)
+    case thinkingLabel(text: String)
+    case historySkeleton
+
+    var text: String {
+        switch self {
+        case .text(let text), .thinkingLabel(let text):
+            text
+        case .historySkeleton:
+            ""
+        }
+    }
+
+    static func make(for message: GaryxMobileMessage) -> GaryxMobileMessagePresentation {
+        let trimmedText = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if message.isStreaming, trimmedText.isEmpty {
+            guard message.attachments.isEmpty else { return .text("") }
+            switch message.role {
+            case .user:
+                return .historySkeleton
+            case .assistant:
+                return .thinkingLabel(text: "Thinking")
+            case .system, .tool:
+                return .text("")
+            }
+        }
+
+        if !message.attachments.isEmpty,
+           let summary = GaryxStructuredContentRenderer.attachmentSummary(
+            from: message.attachments.map(\.contentDescriptor)
+           ),
+           message.text == summary {
+            return .text("")
+        }
+
+        return .text(message.text)
+    }
+}
+
 enum GaryxMobileTranscriptMapper {}
 
 enum GaryxMobileToolTraceStatus: String, Equatable {

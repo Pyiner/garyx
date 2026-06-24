@@ -2,6 +2,40 @@ import XCTest
 @testable import GaryxMobileCore
 
 final class GaryxMobilePresentationModelsTests: XCTestCase {
+    func testBodylessStreamingUserPlaceholderPresentsAsHistorySkeleton() {
+        let message = GaryxMobileMessage(
+            id: "history:98",
+            role: .user,
+            text: "",
+            timestamp: nil,
+            isStreaming: true,
+            localState: .remotePartial,
+            historyIndex: 98
+        )
+
+        let presentation = GaryxMobileMessagePresentation.make(for: message)
+
+        XCTAssertEqual(presentation, .historySkeleton)
+        XCTAssertNotEqual(presentation.text, "Thinking")
+    }
+
+    func testBodylessStreamingAssistantStillPresentsAsThinkingLabel() {
+        let message = GaryxMobileMessage(
+            id: "history:99",
+            role: .assistant,
+            text: "",
+            timestamp: nil,
+            isStreaming: true,
+            localState: .remotePartial,
+            historyIndex: 99
+        )
+
+        let presentation = GaryxMobileMessagePresentation.make(for: message)
+
+        XCTAssertEqual(presentation, .thinkingLabel(text: "Thinking"))
+        XCTAssertEqual(presentation.text, "Thinking")
+    }
+
     func testRunStateResolverPreservesAPIRunStateWithoutCommittedOverride() {
         XCTAssertEqual(
             GaryxThreadSummaryRunStateResolver.resolvedRunState(
