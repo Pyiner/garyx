@@ -2996,6 +2996,9 @@ export function AppShell() {
     activeWorkspace?.available && activeWorkspace?.path
       ? activeWorkspace.path
       : "";
+  const handleWorkspacePreviewRequested = useCallback(() => {
+    setInspectorOpen(true);
+  }, []);
   const {
     activeWorkspaceDirectoryState,
     expandedWorkspaceDirectories,
@@ -3021,6 +3024,7 @@ export function AppShell() {
     workspaceUploadInputRef,
   } = useWorkspaceController({
     activeWorkspacePath,
+    onWorkspacePreviewRequested: handleWorkspacePreviewRequested,
     pushToast,
     setError,
     workspaces: desktopState?.workspaces || [],

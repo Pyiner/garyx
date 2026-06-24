@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   buildTaskRows,
   isCurrentTaskTreeNode,
+  shouldShowThreadTaskTreePopover,
   taskStatusLabel,
   taskStatusTone,
   taskTreeBadgeCount,
@@ -85,6 +86,41 @@ test("current node is local to selected thread", () => {
   const current = task({ number: 2, threadId: "thread::current" });
   assert.equal(isCurrentTaskTreeNode(current, "thread::current"), true);
   assert.equal(isCurrentTaskTreeNode(current, "thread::other"), false);
+});
+
+test("task tree popover yields to inspector panel", () => {
+  assert.equal(
+    shouldShowThreadTaskTreePopover({
+      hasWorkflowRunContent: false,
+      inspectorOpen: false,
+      selectedThreadId: "thread::current",
+    }),
+    true,
+  );
+  assert.equal(
+    shouldShowThreadTaskTreePopover({
+      hasWorkflowRunContent: false,
+      inspectorOpen: true,
+      selectedThreadId: "thread::current",
+    }),
+    false,
+  );
+  assert.equal(
+    shouldShowThreadTaskTreePopover({
+      hasWorkflowRunContent: true,
+      inspectorOpen: false,
+      selectedThreadId: "thread::current",
+    }),
+    false,
+  );
+  assert.equal(
+    shouldShowThreadTaskTreePopover({
+      hasWorkflowRunContent: false,
+      inspectorOpen: false,
+      selectedThreadId: null,
+    }),
+    false,
+  );
 });
 
 test("rows preserve original parent edges for done ancestors", () => {
