@@ -57,6 +57,7 @@ import { ToolTraceGroup } from "../../tool-trace";
 import { AgentAvatar } from "./AgentAvatar";
 import { ThreadLogPanel } from "./ThreadLogPanel";
 import { ThreadTaskTreePopover } from "./ThreadTaskTreePopover";
+import { shouldShowThreadTaskTreePopover } from "./thread-task-tree-popover-model";
 import { useI18n } from "../../i18n";
 import type {
   ClientLogEntry,
@@ -639,7 +640,11 @@ export function ThreadPage({
         className={`thread-main ${isSideChatSurface ? "thread-main--side-chat" : ""} ${emptyNewThread ? "new-thread-centered" : ""} ${hasWorkflowRunContent ? "has-workflow-run-content" : ""}`}
         ref={threadMainRef}
       >
-        {!hasWorkflowRunContent && selectedThreadId ? (
+        {shouldShowThreadTaskTreePopover({
+          hasWorkflowRunContent,
+          inspectorOpen,
+          selectedThreadId,
+        }) && selectedThreadId ? (
           <ThreadTaskTreePopover
             threadId={selectedThreadId}
             onOpenThread={onOpenThreadById}

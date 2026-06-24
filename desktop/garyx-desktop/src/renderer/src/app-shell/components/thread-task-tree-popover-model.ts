@@ -33,6 +33,18 @@ export function isCurrentTaskTreeNode(
   return !!threadId && task.threadId === threadId;
 }
 
+export function shouldShowThreadTaskTreePopover(input: {
+  hasWorkflowRunContent: boolean;
+  inspectorOpen: boolean;
+  selectedThreadId: string | null;
+}): boolean {
+  return Boolean(
+    input.selectedThreadId &&
+      !input.hasWorkflowRunContent &&
+      !input.inspectorOpen,
+  );
+}
+
 export function taskStatusTone(status: DesktopTaskStatus): string {
   switch (status) {
     case "in_review":

@@ -42,6 +42,10 @@ import { WorkspaceFilePreview } from "../../workspace-file-preview";
 import { PanelIcon } from "../icons";
 import { useI18n } from "../../i18n";
 import { workspaceFileAbsolutePath } from "../workspace-helpers";
+import {
+  shouldCollapseFileDirectoryForPreview,
+  workspacePreviewDirectoryCollapseKey,
+} from "./side-tools-panel-model";
 
 const SidePanelBrowserPage = lazy(() =>
   import("../../BrowserPage").then((module) => ({ default: module.BrowserPage }))
@@ -628,6 +632,7 @@ export function ThreadSideToolsPanel({
     useState<number | null>(null);
   const addToolShellRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const previewDirectoryCollapseKeyRef = useRef<string | null>(null);
   const filePathCopiedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeTool = activeToolId
     ? tools.find((tool) => tool.id === activeToolId) || null
@@ -645,6 +650,11 @@ export function ThreadSideToolsPanel({
       workspaceFilePreviewError ||
       workspaceFilePreview,
   );
+  const previewDirectoryCollapseKey = workspacePreviewDirectoryCollapseKey({
+    shouldShowWorkspacePreview,
+    workspaceFilePreviewPath: workspaceFilePreview?.path,
+    workspacePreviewTitle,
+  });
   const openToolDescriptors = openTools
     .map((toolId) => tools.find((tool) => tool.id === toolId))
     .filter((tool): tool is ToolDescriptor => Boolean(tool));
@@ -687,6 +697,23 @@ export function ThreadSideToolsPanel({
     );
     setActiveToolId("files");
   }, [shouldShowWorkspacePreview, workspaceFilePreview?.path, workspacePreviewTitle]);
+
+  useEffect(() => {
+    const previousPreviewKey = previewDirectoryCollapseKeyRef.current;
+    if (!previewDirectoryCollapseKey) {
+      previewDirectoryCollapseKeyRef.current = null;
+      return;
+    }
+    if (
+      shouldCollapseFileDirectoryForPreview({
+        previousPreviewKey,
+        nextPreviewKey: previewDirectoryCollapseKey,
+      })
+    ) {
+      setFileDirectoryCollapsed(true);
+    }
+    previewDirectoryCollapseKeyRef.current = previewDirectoryCollapseKey;
+  }, [previewDirectoryCollapseKey]);
 
   useEffect(() => {
     if (!menuOpen) {

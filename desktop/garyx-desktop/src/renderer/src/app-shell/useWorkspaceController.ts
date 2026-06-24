@@ -23,6 +23,7 @@ type UseWorkspaceControllerArgs = {
   workspaces: DesktopWorkspace[];
   setError: React.Dispatch<React.SetStateAction<string | null>>;
   pushToast: (message: string, tone?: ToastTone, durationMs?: number) => void;
+  onWorkspacePreviewRequested?: () => void;
 };
 
 function fileToBase64(file: File): Promise<string> {
@@ -49,6 +50,7 @@ export function useWorkspaceController({
   workspaces,
   setError,
   pushToast,
+  onWorkspacePreviewRequested,
 }: UseWorkspaceControllerArgs) {
   const [workspaceDirectories, setWorkspaceDirectories] = useState<
     Record<string, WorkspaceDirectoryState>
@@ -201,10 +203,11 @@ export function useWorkspaceController({
       }
 
       setError(null);
+      onWorkspacePreviewRequested?.();
       setWorkspacePreviewModalOpen(true);
       await loadWorkspaceFilePreview(target.workspacePath, target.filePath);
     })();
-  }, [setError, workspaces]);
+  }, [onWorkspacePreviewRequested, setError, workspaces]);
 
   function closeWorkspacePreview() {
     workspacePreviewRequestIdRef.current += 1;
