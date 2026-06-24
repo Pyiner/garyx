@@ -129,6 +129,7 @@ import {
 import {
   deriveThreadActivityModel,
 } from "./thread-activity";
+import { visibleRemotePendingInputsForThread } from "./pending-inputs";
 import { extractImageGenerationImageContent } from "./image-generation-content";
 import {
   getRendererPerformanceSnapshot,
@@ -2834,12 +2835,11 @@ export function AppShell() {
   const activeRemotePendingInputs = selectedThreadId
     ? pendingRemoteInputsByThread[selectedThreadId] || []
     : [];
-  const visibleRemotePendingInputs =
-    visiblePendingAckIntents.length > 0
-      ? []
-      : activeRemotePendingInputs.filter((input) => {
-          return input.status === "awaiting_ack";
-        });
+  const visibleRemotePendingInputs = visibleRemotePendingInputsForThread({
+    activeMessages,
+    visiblePendingAckIntentCount: visiblePendingAckIntents.length,
+    remotePendingInputs: activeRemotePendingInputs,
+  });
   const visibleRemoteAwaitingAckInputs = visibleRemotePendingInputs;
   const activePendingHistoryIntent = activeThreadMessageKey
     ? Object.values(messageState.intentsById).some((intent) => {
@@ -3411,12 +3411,13 @@ export function AppShell() {
   const sideChatRemotePendingInputs = sideChatThreadId
     ? pendingRemoteInputsByThread[sideChatThreadId] || []
     : [];
-  const sideChatVisibleRemotePendingInputs =
-    sideChatPendingAckIntents.length > 0
-      ? []
-      : sideChatRemotePendingInputs.filter((input) => {
-          return input.status === "awaiting_ack";
-        });
+  const sideChatVisibleRemotePendingInputs = visibleRemotePendingInputsForThread(
+    {
+      activeMessages: sideChatMessages,
+      visiblePendingAckIntentCount: sideChatVisiblePendingAckIntents.length,
+      remotePendingInputs: sideChatRemotePendingInputs,
+    },
+  );
   const sideChatPendingHistoryIntent = sideChatThreadId
     ? Object.values(messageState.intentsById).some((intent) => {
         return (
