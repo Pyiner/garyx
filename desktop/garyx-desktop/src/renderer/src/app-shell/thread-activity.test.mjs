@@ -58,6 +58,21 @@ test('thread activity model uses runtime busy as the remote business gate', () =
   assert.equal(model.canSteerQueuedPrompt, true);
 });
 
+test('server render thinking keeps the composer interruptible when local runtime is idle', () => {
+  const model = deriveThreadActivityModel({
+    messages: [message({ id: 'telegram-user-1' })],
+    runtimeBusy: false,
+    renderTailActivity: 'thinking',
+    renderActiveToolGroupId: null,
+    pendingAckIntentCount: 0,
+    remoteAwaitingAckInputCount: 0,
+    pendingHistoryIntent: false,
+  });
+
+  assert.equal(model.runActive, true);
+  assert.equal(model.canSteerQueuedPrompt, true);
+});
+
 test('thread activity model does not derive rendered loading from messages', () => {
   const model = deriveThreadActivityModel({
     messages: [
