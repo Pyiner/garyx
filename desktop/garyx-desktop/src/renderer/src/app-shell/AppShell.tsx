@@ -127,6 +127,7 @@ import {
   extractTranscriptText,
 } from "../message-rich-content";
 import {
+  deriveThreadComposerControlModel,
   deriveThreadActivityModel,
 } from "./thread-activity";
 import {
@@ -2891,9 +2892,12 @@ export function AppShell() {
         );
       })
     : false;
+  const activeRuntimeBusy = Boolean(
+    activeRuntime && isRuntimeBusy(activeRuntime.state),
+  );
   const threadActivity = deriveThreadActivityModel({
     messages: activeMessages,
-    runtimeBusy: Boolean(activeRuntime && isRuntimeBusy(activeRuntime.state)),
+    runtimeBusy: activeRuntimeBusy,
     pendingAckIntentCount: visiblePendingAckIntents.length,
     remoteAwaitingAckInputCount: visibleRemoteAwaitingAckInputs.length,
     pendingHistoryIntent: activePendingHistoryIntent,
@@ -2917,8 +2921,7 @@ export function AppShell() {
   );
   const isDraftSendingThread = Boolean(
     !selectedThreadId &&
-      ((activeRuntime && isRuntimeBusy(activeRuntime.state)) ||
-        isActiveStreamingThread),
+      (activeRuntimeBusy || isActiveStreamingThread),
   );
   const activeThreadId = selectGlobalActiveThreadId(messageState);
   const workspacePickerWorkspaces = useMemo(
@@ -3029,10 +3032,13 @@ export function AppShell() {
     setError,
     workspaces: desktopState?.workspaces || [],
   });
-  const isActiveSendingThread = Boolean(
-    selectedThreadId &&
-      (threadActivity.runActive || showPendingAckLoading),
-  );
+  const { isActiveSendingThread } = deriveThreadComposerControlModel({
+    hasThread: Boolean(selectedThreadId),
+    runtimeBusy: activeRuntimeBusy,
+    showPendingAckLoading,
+    renderTailActivity: activeRenderState?.tailActivity ?? null,
+    renderActiveToolGroupId: activeToolGroupId,
+  });
   const composerLocked =
     composerAttachmentUploadPending ||
     isDraftSendingThread ||
@@ -3481,11 +3487,12 @@ export function AppShell() {
         );
       })
     : false;
+  const sideChatRuntimeBusy = Boolean(
+    sideChatRuntime && isRuntimeBusy(sideChatRuntime.state),
+  );
   const sideChatThreadActivity = deriveThreadActivityModel({
     messages: sideChatMessages,
-    runtimeBusy: Boolean(
-      sideChatRuntime && isRuntimeBusy(sideChatRuntime.state),
-    ),
+    runtimeBusy: sideChatRuntimeBusy,
     pendingAckIntentCount: sideChatPendingAckIntents.length,
     remoteAwaitingAckInputCount: sideChatVisibleRemotePendingInputs.length,
     pendingHistoryIntent: sideChatPendingHistoryIntent,
@@ -3494,10 +3501,14 @@ export function AppShell() {
     sideChatThreadActivity.showPendingAckLoading;
   const sideChatCanSteerQueuedPrompt =
     sideChatThreadActivity.canSteerQueuedPrompt;
-  const sideChatIsSendingThread = Boolean(
-    sideChatThreadId &&
-      (sideChatThreadActivity.runActive || sideChatShowPendingAckLoading),
-  );
+  const { isActiveSendingThread: sideChatIsSendingThread } =
+    deriveThreadComposerControlModel({
+      hasThread: Boolean(sideChatThreadId),
+      runtimeBusy: sideChatRuntimeBusy,
+      showPendingAckLoading: sideChatShowPendingAckLoading,
+      renderTailActivity: sideChatRenderState?.tailActivity ?? null,
+      renderActiveToolGroupId: sideChatRenderState?.activeToolGroupId ?? null,
+    });
   const sideChatHistoryPagination = sideChatThreadId
     ? historyPaginationByThread[sideChatThreadId] || null
     : null;
@@ -9186,41 +9197,44 @@ export function AppShell() {
     }
 
     const runtime = selectThreadRuntime(messageStateRef.current, threadId);
-    if (!runtime || !isRuntimeBusy(runtime.state)) {
-      return;
-    }
-
-    const liveState = getLiveStreamState(threadId);
-    const interruptedIntentIds = [
-      runtime.activeIntentId,
-      ...(liveState?.pendingAckIntentIds || []),
-    ].filter((intentId, index, intents): intentId is string => {
-      return Boolean(intentId) && intents.indexOf(intentId) === index;
-    });
-
-    setThreadRuntimeState(threadId, "interrupting", {
-      activeIntentId: runtime.activeIntentId,
-      remoteRunId: runtime.remoteRunId,
-    });
-    for (const intentId of interruptedIntentIds) {
-      dispatchMessageState({
-        type: "intent/interrupted",
-        intentId,
-        error: "request interrupted",
-      });
-    }
-    markInterruptedAssistantEntries(
-      threadId,
-      interruptedIntentIds,
-      liveState?.assistantEntryId ?? null,
+    const hasLocalBusyRuntime = Boolean(
+      runtime && isRuntimeBusy(runtime.state),
     );
+    if (runtime && hasLocalBusyRuntime) {
+      const liveState = getLiveStreamState(threadId);
+      const interruptedIntentIds = [
+        runtime.activeIntentId,
+        ...(liveState?.pendingAckIntentIds || []),
+      ].filter((intentId, index, intents): intentId is string => {
+        return Boolean(intentId) && intents.indexOf(intentId) === index;
+      });
+
+      setThreadRuntimeState(threadId, "interrupting", {
+        activeIntentId: runtime.activeIntentId,
+        remoteRunId: runtime.remoteRunId,
+      });
+      for (const intentId of interruptedIntentIds) {
+        dispatchMessageState({
+          type: "intent/interrupted",
+          intentId,
+          error: "request interrupted",
+        });
+      }
+      markInterruptedAssistantEntries(
+        threadId,
+        interruptedIntentIds,
+        liveState?.assistantEntryId ?? null,
+      );
+    }
 
     await window.garyxDesktop.interruptThread(threadId);
-    clearLiveStreamState(threadId);
-    dispatchMessageState({
-      type: "thread/clear",
-      threadId: threadId,
-    });
+    if (hasLocalBusyRuntime) {
+      clearLiveStreamState(threadId);
+      dispatchMessageState({
+        type: "thread/clear",
+        threadId: threadId,
+      });
+    }
     scheduleHistoryRefresh(threadId, 2, 500);
     const status = await window.garyxDesktop.checkConnection();
     setConnection(status);

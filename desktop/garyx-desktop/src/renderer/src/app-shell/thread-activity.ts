@@ -1,4 +1,5 @@
 import type {
+  RenderTailActivity,
   TranscriptMessage,
 } from "@shared/contracts";
 
@@ -38,6 +39,10 @@ export type ThreadActivityModel = {
   showPendingAckLoading: boolean;
 };
 
+export type ThreadComposerControlModel = {
+  isActiveSendingThread: boolean;
+};
+
 // Cross-platform conversation-state contract (spec/conversation-state +
 // iOS conformance twin). This drives only non-render business gates: composer
 // lock, steer affordance, and optimistic pre-ack loading. Rendered rows,
@@ -60,5 +65,33 @@ export function deriveThreadActivityModel(input: {
     runActive,
     showPendingAckLoading,
     canSteerQueuedPrompt: showPendingAckLoading || runActive,
+  };
+}
+
+function renderStateIndicatesActiveRun(input: {
+  renderTailActivity?: RenderTailActivity | null;
+  renderActiveToolGroupId?: string | null;
+}): boolean {
+  return Boolean(
+    input.renderActiveToolGroupId ||
+      input.renderTailActivity === "thinking" ||
+      input.renderTailActivity === "assistant_streaming" ||
+      input.renderTailActivity === "tool_active",
+  );
+}
+
+export function deriveThreadComposerControlModel(input: {
+  hasThread: boolean;
+  runtimeBusy: boolean;
+  showPendingAckLoading: boolean;
+  renderTailActivity?: RenderTailActivity | null;
+  renderActiveToolGroupId?: string | null;
+}): ThreadComposerControlModel {
+  const renderActive = renderStateIndicatesActiveRun(input);
+  return {
+    isActiveSendingThread: Boolean(
+      input.hasThread &&
+        (input.showPendingAckLoading || input.runtimeBusy || renderActive),
+    ),
   };
 }
