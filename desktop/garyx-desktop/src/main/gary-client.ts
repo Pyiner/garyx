@@ -5304,9 +5304,9 @@ export async function listTaskForest(
   if (input.scope) {
     query.set("scope", input.scope);
   }
-  const rootThreadId = input.rootThreadId?.trim() || "";
-  if (rootThreadId) {
-    query.set("root_thread_id", rootThreadId);
+  const anchorThreadId = input.anchorThreadId?.trim() || "";
+  if (anchorThreadId) {
+    query.set("anchor_thread_id", anchorThreadId);
   }
 
   const suffix = query.toString();

@@ -23235,9 +23235,23 @@ button.new-thread-dreams-scan:hover {
   border-radius: 8px;
   cursor: pointer;
   padding: 8px;
+  position: relative;
   transition: background 0.12s ease;
 }
 .thread-subtask-item:hover { background: var(--row-hover, rgba(26, 28, 31, 0.053)); }
+.thread-subtask-item.current {
+  background: var(--orange-bg, #fcf1eb);
+}
+.thread-subtask-item.current::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 3px;
+  border-radius: 9999px;
+  background: var(--orange, #e25507);
+}
 .thread-subtask-item.depth-1 { padding-left: 24px; }
 .thread-subtask-item.depth-2 { padding-left: 40px; }
 .thread-subtask-item.depth-3 { padding-left: 56px; }
@@ -23245,6 +23259,8 @@ button.new-thread-dreams-scan:hover {
 .thread-subtask-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 9999px; }
 .thread-subtask-item.tone-progress .thread-subtask-dot { background: var(--orange, #e25507); }
 .thread-subtask-item.tone-review .thread-subtask-dot { background: var(--purple, #7345b6); }
+.thread-subtask-item.tone-todo .thread-subtask-dot,
+.thread-subtask-item.tone-done .thread-subtask-dot { background: var(--fg-disabled, #aaaaaa); }
 .thread-subtask-main { flex: 1; min-width: 0; }
 .thread-subtask-row1 { display: flex; align-items: baseline; gap: 7px; }
 .thread-subtask-num {
@@ -23262,6 +23278,15 @@ button.new-thread-dreams-scan:hover {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.thread-subtask-current {
+  flex: 0 0 auto;
+  border-radius: 9999px;
+  padding: 1px 6px;
+  background: var(--orange, #e25507);
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
 }
 .thread-subtask-row2 {
   margin-top: 4px;
@@ -23282,3 +23307,5 @@ button.new-thread-dreams-scan:hover {
 }
 .thread-subtask-status.tone-progress { background: var(--orange-bg, #fcf1eb); color: var(--orange, #e25507); }
 .thread-subtask-status.tone-review { background: var(--purple-bg, #f3eefb); color: var(--purple, #7345b6); }
+.thread-subtask-status.tone-todo,
+.thread-subtask-status.tone-done { background: var(--bg-tertiary, #f4f4f2); color: var(--fg-desc, rgba(26, 28, 31, 0.5)); }
