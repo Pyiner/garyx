@@ -36,6 +36,7 @@ pub mod server;
 pub mod skills;
 mod task_notifications;
 mod task_projection;
+mod task_tree;
 pub mod tasks;
 pub mod thread_logs;
 mod thread_meta_projection;

@@ -233,13 +233,14 @@ test("listTaskForest maps parent and run-state fields", async () => {
         status: "in_progress",
         sourceBot: "test-bot",
         includeDone: true,
+        anchorThreadId: "thread::forest-child",
       },
     );
 
     assert.equal(urls.length, 1);
     assert.equal(
       urls[0],
-      "http://127.0.0.1:31337/api/tasks/forest?status=in_progress&source_bot_id=test-bot&include_done=true",
+      "http://127.0.0.1:31337/api/tasks/forest?status=in_progress&source_bot_id=test-bot&include_done=true&anchor_thread_id=thread%3A%3Aforest-child",
     );
     assert.equal(page.total, 2);
     assert.equal(page.projectionCurrent, true);
@@ -251,7 +252,10 @@ test("listTaskForest maps parent and run-state fields", async () => {
     assert.equal(page.tasks[0].messageCount, 9);
     assert.equal(page.tasks[1].kind, "task");
     assert.equal(page.tasks[1].nodeId, "task:thread::forest-child");
-    assert.equal(page.tasks[1].parentNodeId, "thread-root:thread::forest-parent");
+    assert.equal(
+      page.tasks[1].parentNodeId,
+      "thread-root:thread::forest-parent",
+    );
     assert.equal(page.tasks[1].taskId, "#TASK-7");
     assert.equal(page.tasks[1].parentTaskNumber, 3);
     assert.equal(page.tasks[1].parentThreadId, "thread::forest-parent");

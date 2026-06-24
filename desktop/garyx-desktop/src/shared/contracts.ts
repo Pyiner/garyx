@@ -367,9 +367,8 @@ export interface ListTasksInput {
 
 export interface ListTaskForestInput extends ListTasksInput {
   scope?: DesktopTaskForestScope;
-  /** When set, return the recursive in_progress/in_review subtask tree rooted
-   *  at this single thread instead of the pinned/all scope. */
-  rootThreadId?: string | null;
+  /** When set, return the stable task tree containing this task thread. */
+  anchorThreadId?: string | null;
 }
 
 export interface GetTaskInput {

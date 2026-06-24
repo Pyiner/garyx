@@ -180,8 +180,8 @@ pub struct TaskListQuery {
     pub source_task_id: Option<String>,
     #[serde(default, alias = "sourceBotId")]
     pub source_bot_id: Option<String>,
-    #[serde(default, alias = "rootThreadId")]
-    pub root_thread_id: Option<String>,
+    #[serde(default, alias = "anchorThreadId")]
+    pub anchor_thread_id: Option<String>,
     #[serde(default)]
     pub include_done: bool,
     #[serde(default)]
@@ -561,7 +561,7 @@ pub async fn list_task_forest(
         return tasks_disabled();
     }
     let scope = query.scope;
-    let root_thread_id = query.root_thread_id.clone();
+    let anchor_thread_id = query.anchor_thread_id.clone();
     let filter = match task_list_filter(query) {
         Ok(filter) => filter,
         Err(error) => return task_error_response(error),
@@ -578,8 +578,11 @@ pub async fn list_task_forest(
         Ok(current) => current,
         Err(error) => return task_projection_error_response(error),
     };
-    let forest_result = match root_thread_id {
-        Some(root) => state.ops.garyx_db.list_task_forest_rooted(&root, &filter),
+    let forest_result = match anchor_thread_id {
+        Some(anchor) => state
+            .ops
+            .garyx_db
+            .list_task_forest_anchored(&anchor, &filter),
         None => state.ops.garyx_db.list_task_forest(&filter, scope),
     };
     match forest_result {
@@ -1814,7 +1817,7 @@ mod tests {
                 source_thread_id: None,
                 source_task_id: None,
                 source_bot_id: None,
-                root_thread_id: None,
+                anchor_thread_id: None,
                 include_done: true,
                 scope: TaskForestScope::All,
                 limit: None,
@@ -1928,7 +1931,7 @@ mod tests {
                 source_thread_id: None,
                 source_task_id: None,
                 source_bot_id: None,
-                root_thread_id: None,
+                anchor_thread_id: None,
                 include_done: true,
                 scope: TaskForestScope::default(),
                 limit: None,
@@ -1965,6 +1968,75 @@ mod tests {
             tasks[1]["parent_node_id"],
             "thread-root:thread::route-chat-root"
         );
+    }
+
+    #[tokio::test]
+    async fn list_task_forest_route_supports_anchor_thread_id() {
+        let state = state_with_task_executors().await;
+        state
+            .ops
+            .garyx_db
+            .replace_task_projection(route_task_projection_draft(
+                "thread::route-root",
+                10,
+                TaskStatus::Done,
+                "2026-01-01T00:00:01.000Z",
+                None,
+            ))
+            .expect("insert root projection");
+        state
+            .ops
+            .garyx_db
+            .replace_task_projection(route_task_projection_draft(
+                "thread::route-child",
+                11,
+                TaskStatus::InReview,
+                "2026-01-01T00:00:02.000Z",
+                Some(route_task_source("thread::route-root", "#TASK-10")),
+            ))
+            .expect("insert child projection");
+        state
+            .ops
+            .garyx_db
+            .record_projection_state(TASK_PROJECTION_NAME, CURRENT_TASK_PROJECTION_VERSION, 2)
+            .expect("mark projection current");
+
+        let (status, Json(payload)) = list_task_forest(
+            State(state),
+            Query(TaskListQuery {
+                status: None,
+                assignee: None,
+                creator: None,
+                source_thread_id: None,
+                source_task_id: None,
+                source_bot_id: None,
+                anchor_thread_id: Some("thread::route-child".to_owned()),
+                include_done: false,
+                scope: TaskForestScope::default(),
+                limit: None,
+                offset: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(payload["total"], 2);
+        assert_eq!(
+            payload["root_thread_ids"],
+            serde_json::json!(["thread::route-root"])
+        );
+        assert_eq!(payload["skipped_pinned_thread_ids"], serde_json::json!([]));
+        let tasks = payload["tasks"].as_array().expect("tasks array");
+        assert_eq!(
+            tasks
+                .iter()
+                .map(|task| task["thread_id"].as_str().unwrap_or_default())
+                .collect::<Vec<_>>(),
+            vec!["thread::route-root", "thread::route-child"]
+        );
+        assert_eq!(tasks[0]["kind"], "task");
+        assert_eq!(tasks[0]["status"], "done");
+        assert_eq!(tasks[1]["parent_node_id"], "task:thread::route-root");
     }
 
     #[tokio::test]

@@ -1,22 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ListTree } from "lucide-react";
 
-import type {
-  DesktopTaskForestNode,
-  DesktopTaskForestTaskNode,
-} from "@shared/contracts";
+import type { DesktopTaskForestTaskNode } from "@shared/contracts";
 
 import { getDesktopApi } from "../../platform/desktop-api";
 import { useI18n } from "../../i18n";
 import { AgentOptionAvatar } from "./AgentOptionAvatar";
+import {
+  buildTaskRows,
+  isCurrentTaskTreeNode,
+  taskStatusLabel,
+  taskStatusTone,
+  taskTreeBadgeCount,
+  visibleTaskTreeTasks,
+} from "./thread-task-tree-popover-model";
 
 const REFRESH_MS = 5000;
-
-function isTaskNode(
-  node: DesktopTaskForestNode,
-): node is DesktopTaskForestTaskNode {
-  return node.kind === "task";
-}
 
 function displayTaskId(task: DesktopTaskForestTaskNode): string {
   return task.taskId || `#TASK-${task.number}`;
@@ -39,39 +38,6 @@ function assigneeLabel(task: DesktopTaskForestTaskNode): string {
   return task.runtimeAgentId || "unassigned";
 }
 
-type TaskRow = { task: DesktopTaskForestTaskNode; depth: number };
-
-/** Depth-order the tasks into a tree via parentNodeId; nodes whose parent
- *  isn't in the set become roots (depth 0). */
-function buildTaskRows(tasks: DesktopTaskForestTaskNode[]): TaskRow[] {
-  const ids = new Set(tasks.map((task) => task.nodeId));
-  const childrenByParent = new Map<string, DesktopTaskForestTaskNode[]>();
-  for (const task of tasks) {
-    const parent =
-      task.parentNodeId && ids.has(task.parentNodeId) ? task.parentNodeId : "";
-    const list = childrenByParent.get(parent) ?? [];
-    list.push(task);
-    childrenByParent.set(parent, list);
-  }
-  for (const list of childrenByParent.values()) {
-    list.sort((a, b) => a.number - b.number);
-  }
-  const rows: TaskRow[] = [];
-  const visited = new Set<string>();
-  const walk = (parent: string, depth: number) => {
-    for (const task of childrenByParent.get(parent) ?? []) {
-      if (visited.has(task.nodeId)) {
-        continue;
-      }
-      visited.add(task.nodeId);
-      rows.push({ task, depth });
-      walk(task.nodeId, Math.min(depth + 1, 4));
-    }
-  };
-  walk("", 0);
-  return rows;
-}
-
 type ThreadTaskTreePopoverProps = {
   threadId: string | null;
   onOpenThread: (threadId: string) => void;
@@ -84,6 +50,7 @@ export function ThreadTaskTreePopover({
   const { t } = useI18n();
   const [tasks, setTasks] = useState<DesktopTaskForestTaskNode[]>([]);
   const mountedRef = useRef(true);
+  const currentThreadRef = useRef<string | null>(threadId);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -92,6 +59,10 @@ export function ThreadTaskTreePopover({
     };
   }, []);
 
+  useEffect(() => {
+    currentThreadRef.current = threadId;
+  }, [threadId]);
+
   const load = useCallback(async () => {
     if (!threadId) {
       setTasks([]);
@@ -99,19 +70,12 @@ export function ThreadTaskTreePopover({
     }
     try {
       const page = await getDesktopApi().listTaskForest({
-        rootThreadId: threadId,
+        anchorThreadId: threadId,
       });
-      if (!mountedRef.current) {
+      if (!mountedRef.current || currentThreadRef.current !== threadId) {
         return;
       }
-      setTasks(
-        page.tasks
-          .filter(isTaskNode)
-          .filter(
-            (task) =>
-              task.status === "in_progress" || task.status === "in_review",
-          ),
-      );
+      setTasks(visibleTaskTreeTasks(page.tasks));
     } catch {
       /* leave previous state on transient errors */
     }
@@ -130,8 +94,9 @@ export function ThreadTaskTreePopover({
   }, [load]);
 
   const rows = useMemo(() => buildTaskRows(tasks), [tasks]);
+  const activeCount = useMemo(() => taskTreeBadgeCount(tasks), [tasks]);
 
-  // Nothing to show when this conversation hasn't spawned any active task.
+  // Nothing to show when this conversation has no anchored active task tree.
   if (!threadId || tasks.length === 0) {
     return null;
   }
@@ -140,29 +105,42 @@ export function ThreadTaskTreePopover({
     <div className="thread-subtask-pop">
       <div className="thread-subtask-head">
         <ListTree aria-hidden size={13} />
-        <span className="thread-subtask-head-title">{t("Subtask tree")}</span>
-        <span className="thread-subtask-count">{tasks.length}</span>
+        <span className="thread-subtask-head-title">{t("Task tree")}</span>
+        <span className="thread-subtask-count">{activeCount}</span>
       </div>
       <div className="thread-subtask-list">
         {rows.map(({ task, depth }) => {
-          const tone = task.status === "in_review" ? "review" : "progress";
+          const tone = taskStatusTone(task.status);
+          const current = isCurrentTaskTreeNode(task, threadId);
           return (
             <button
               key={task.nodeId}
-              className={`thread-subtask-item depth-${depth}`}
+              className={`thread-subtask-item depth-${depth} tone-${tone}${current ? " current" : ""}`}
               onClick={() => onOpenThread(task.threadId)}
               type="button"
             >
               <span className="thread-subtask-main">
                 <span className="thread-subtask-row1">
-                  <span className="thread-subtask-num mono">{displayTaskId(task)}</span>
+                  <span className="thread-subtask-num mono">
+                    {displayTaskId(task)}
+                  </span>
                   <span className="thread-subtask-title">{task.title}</span>
+                  {current ? (
+                    <span className="thread-subtask-current">
+                      {t("Current")}
+                    </span>
+                  ) : null}
                 </span>
                 <span className="thread-subtask-row2">
-                  <AgentOptionAvatar agentId={assigneeAgentId(task)} size="sm" />
-                  <span className="thread-subtask-agent">{assigneeLabel(task)}</span>
+                  <AgentOptionAvatar
+                    agentId={assigneeAgentId(task)}
+                    size="sm"
+                  />
+                  <span className="thread-subtask-agent">
+                    {assigneeLabel(task)}
+                  </span>
                   <span className={`thread-subtask-status tone-${tone}`}>
-                    {task.status === "in_review" ? t("In Review") : t("In Progress")}
+                    {t(taskStatusLabel(task.status))}
                   </span>
                 </span>
               </span>
