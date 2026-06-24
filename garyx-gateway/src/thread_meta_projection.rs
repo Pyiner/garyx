@@ -6,8 +6,7 @@ use garyx_models::routing::{
 use garyx_router::{
     KnownChannelEndpoint, ThreadStore, ThreadTranscriptStore, agent_id_from_value,
     bindings_from_value, history_message_count, is_default_thread_list_hidden, is_thread_key,
-    label_from_value, list_registry_channel_endpoints, thread_kind_from_value,
-    workspace_dir_from_value,
+    label_from_value, list_registry_channel_endpoints, workspace_dir_from_value,
 };
 use serde_json::Value;
 use tracing::warn;
@@ -16,6 +15,7 @@ use crate::garyx_db::{
     GaryxDbService, ThreadMessageRouteDraft, ThreadMetaDraft, ThreadMetaProjectionDraft,
     ThreadMetaProjectionSnapshot,
 };
+use crate::thread_type::thread_summary_type_from_record;
 use crate::transcript_run_projection::active_run_id_from_transcript_store;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -175,7 +175,7 @@ pub(crate) fn thread_meta_projection_from_thread_data_with_active_run(
     let thread_meta = ThreadMetaDraft {
         thread_id: thread_id.to_owned(),
         workspace_dir: workspace_dir.clone(),
-        thread_type: thread_kind_from_value(data).unwrap_or_else(|| "chat".to_owned()),
+        thread_type: thread_summary_type_from_record(data),
         thread_label: thread_label.clone(),
         agent_id: agent_id_from_value(data),
         provider_type: string_field(data, "provider_type"),

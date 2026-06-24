@@ -5579,6 +5579,60 @@ async fn thread_metadata_omits_team_block_for_standalone_agent_thread() {
 }
 
 #[tokio::test]
+async fn thread_metadata_preserves_workflow_thread_type() {
+    let (state, _logger, _dir) = test_state().await;
+    let thread_id = "thread::workflow-metadata";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "thread_kind": "workflow_run",
+                "workflow_run_id": thread_id,
+                "workflow_definition_id": "test-workflow",
+            }),
+        )
+        .await;
+
+    let data = state
+        .threads
+        .thread_store
+        .get(thread_id)
+        .await
+        .expect("thread data");
+    let response = thread_metadata_response(&state, thread_id, &data).await;
+    assert_eq!(response["thread_type"], "workflow_run");
+}
+
+#[tokio::test]
+async fn thread_metadata_defaults_missing_thread_kind_to_chat() {
+    let (state, _logger, _dir) = test_state().await;
+    let thread_id = "cron::legacy-metadata";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "Legacy cron-shaped metadata",
+            }),
+        )
+        .await;
+
+    let data = state
+        .threads
+        .thread_store
+        .get(thread_id)
+        .await
+        .expect("thread data");
+    let response = thread_metadata_response(&state, thread_id, &data).await;
+    assert_eq!(response["thread_type"], "chat");
+}
+
+#[tokio::test]
 async fn thread_metadata_emits_empty_child_map_when_group_never_persisted() {
     let (state, _logger, _dir) = test_state().await;
     seed_product_ship_team(&state).await;

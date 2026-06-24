@@ -16,9 +16,7 @@ use garyx_models::{Principal, TaskNotificationTarget};
 use garyx_router::{
     CreateTaskInput, FileTaskCounterStore, TaskRuntimeInput, TaskService, WorkspaceMode,
 };
-use garyx_router::{
-    history_message_count, is_thread_key, thread_kind_from_value, workspace_dir_from_value,
-};
+use garyx_router::{history_message_count, is_thread_key, workspace_dir_from_value};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -31,6 +29,7 @@ use crate::app_db::{
 use crate::cron::{CronJob, JobRunStatus, RunRecord};
 use crate::garyx_db::AutomationThreadRunRecord;
 use crate::server::AppState;
+use crate::thread_type::thread_summary_type_from_record;
 use crate::transcript_run_projection::active_run_id_from_transcript_store;
 
 const AUTOMATION_KEY_PREFIX: &str = "automation::";
@@ -1111,7 +1110,7 @@ fn automation_thread_summary(
     json!({
         "id": thread_id,
         "threadId": thread_id,
-        "threadType": thread_kind_from_value(data).unwrap_or_else(|| "chat".to_owned()),
+        "threadType": thread_summary_type_from_record(data),
         "title": title,
         "label": title,
         "workspaceDir": workspace_dir_from_value(data),

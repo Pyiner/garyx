@@ -24,8 +24,8 @@ use garyx_models::routing::{DELIVERY_TARGET_TYPE_CHAT_ID, DELIVERY_TARGET_TYPE_O
 use garyx_router::{
     ChannelBinding, KnownChannelEndpoint, THREAD_TRANSCRIPT_REPLAY_CAP, ThreadEnsureOptions,
     ThreadTranscriptRecord, WorkspaceMode, bindings_from_value, detach_endpoint_from_thread,
-    history_message_count, is_thread_key, thread_kind_from_value, update_thread_record,
-    workspace_dir_from_value, workspace_git_status as router_workspace_git_status,
+    history_message_count, is_thread_key, update_thread_record, workspace_dir_from_value,
+    workspace_git_status as router_workspace_git_status,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -48,6 +48,7 @@ use crate::server::AppState;
 use crate::skills::SkillStoreError;
 use crate::thread_meta_projection::backfill_thread_meta_projection_if_incomplete;
 use crate::thread_runtime::build_thread_runtime_summary;
+use crate::thread_type::thread_summary_type_from_record;
 use crate::workspace_mode::{
     ensure_implicit_thread_workspace_for_config, worktree_base_dir_for_config,
 };
@@ -1372,7 +1373,7 @@ pub(crate) fn thread_summary(thread_id: &str, data: &Value) -> Value {
     json!({
         "thread_id": thread_id,
         "thread_key": thread_id,
-        "thread_type": thread_kind_from_value(data).unwrap_or_else(|| "chat".to_owned()),
+        "thread_type": thread_summary_type_from_record(data),
         "label": label,
         "workspace_dir": workspace_dir,
         "channel_bindings": channel_bindings,
@@ -1537,6 +1538,10 @@ async fn thread_metadata_response(state: &Arc<AppState>, thread_id: &str, data: 
             .or_insert_with(|| Value::String(thread_id.to_owned()));
         obj.entry("thread_key".to_owned())
             .or_insert_with(|| Value::String(thread_id.to_owned()));
+        obj.insert(
+            "thread_type".to_owned(),
+            Value::String(thread_summary_type_from_record(data)),
+        );
         if let Some(block) = team_block {
             obj.insert("team".to_owned(), block);
         }
