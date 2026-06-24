@@ -1302,14 +1302,13 @@ impl GaryxDbService {
     pub fn list_task_forest_anchored(
         &self,
         anchor_thread_id: &str,
-        filter: &TaskListFilter,
+        _filter: &TaskListFilter,
     ) -> GaryxDbResult<TaskForestPage> {
         let anchor_thread_id = normalize_thread_id(anchor_thread_id)?;
-        let mut raw_filter = filter.clone();
-        raw_filter.status = None;
-        raw_filter.include_done = true;
-        raw_filter.limit = None;
-        raw_filter.offset = None;
+        let raw_filter = TaskListFilter {
+            include_done: true,
+            ..TaskListFilter::default()
+        };
         let (where_sql, bind_values) = task_projection_filter_sql(&raw_filter)?;
         let list_sql = format!(
             "WITH RECURSIVE filtered AS (
@@ -5421,6 +5420,29 @@ mod tests {
         }
     }
 
+    fn bot_thread_source(thread_id: &str, task_id: &str, bot_id: &str) -> TaskSource {
+        TaskSource {
+            thread_id: Some(thread_id.to_owned()),
+            task_id: Some(task_id.to_owned()),
+            task_thread_id: Some(thread_id.to_owned()),
+            bot_id: Some(bot_id.to_owned()),
+            channel: None,
+            account_id: None,
+        }
+    }
+
+    fn with_creator(mut draft: TaskProjectionDraft, creator: &Principal) -> TaskProjectionDraft {
+        draft.creator_json = serde_json::to_string(creator).expect("creator json");
+        draft.creator_id = creator.id().to_owned();
+        draft
+    }
+
+    fn with_assignee(mut draft: TaskProjectionDraft, assignee: &Principal) -> TaskProjectionDraft {
+        draft.assignee_json = Some(serde_json::to_string(assignee).expect("assignee json"));
+        draft.assignee_id = Some(assignee.id().to_owned());
+        draft
+    }
+
     #[test]
     fn task_projection_zero_task_state_does_not_repeat_backfill() {
         let db = GaryxDbService::memory().expect("db opens");
@@ -6214,6 +6236,103 @@ mod tests {
             .expect("bare anchored forest");
         assert!(bare.tasks.is_empty());
         assert!(bare.root_thread_ids.is_empty());
+    }
+
+    #[test]
+    fn anchored_task_forest_ignores_caller_filters_for_raw_tree() {
+        let db = GaryxDbService::memory().expect("db opens");
+        let target_creator = Principal::Agent {
+            agent_id: "target-creator".to_owned(),
+        };
+        let target_assignee = Principal::Human {
+            user_id: "1000000002".to_owned(),
+        };
+
+        db.replace_task_projection(task_projection_draft(
+            "thread::filter-root",
+            300,
+            TaskStatus::Done,
+            "2026-01-01T00:00:01.000Z",
+            None,
+            1,
+        ))
+        .expect("insert root");
+        db.replace_task_projection(task_projection_draft(
+            "thread::filter-sibling",
+            301,
+            TaskStatus::InReview,
+            "2026-01-01T00:00:02.000Z",
+            Some(thread_source("thread::filter-root", "#TASK-300")),
+            1,
+        ))
+        .expect("insert sibling");
+        db.replace_task_projection(task_projection_draft(
+            "thread::filter-child",
+            302,
+            TaskStatus::InProgress,
+            "2026-01-01T00:00:03.000Z",
+            Some(thread_source("thread::filter-root", "#TASK-300")),
+            1,
+        ))
+        .expect("insert child");
+        db.replace_task_projection(with_assignee(
+            with_creator(
+                task_projection_draft(
+                    "thread::filter-leaf",
+                    303,
+                    TaskStatus::InProgress,
+                    "2026-01-01T00:00:04.000Z",
+                    Some(bot_thread_source(
+                        "thread::filter-child",
+                        "#TASK-302",
+                        "api:target",
+                    )),
+                    1,
+                ),
+                &target_creator,
+            ),
+            &target_assignee,
+        ))
+        .expect("insert leaf");
+
+        let page = db
+            .list_task_forest_anchored(
+                "thread::filter-leaf",
+                &TaskListFilter {
+                    status: Some(TaskStatus::Done),
+                    assignee: Some(target_assignee),
+                    creator: Some(target_creator),
+                    source_thread_id: Some("thread::filter-child".to_owned()),
+                    source_task_id: Some("#TASK-302".to_owned()),
+                    source_bot_id: Some("api:target".to_owned()),
+                    include_done: false,
+                    limit: Some(1),
+                    offset: Some(99),
+                },
+            )
+            .expect("anchored forest");
+
+        assert_eq!(page.root_thread_ids, vec!["thread::filter-root"]);
+        assert_eq!(page.total, 4);
+        assert_eq!(
+            page.tasks
+                .iter()
+                .map(|node| node.thread_id())
+                .collect::<Vec<_>>(),
+            vec![
+                "thread::filter-root",
+                "thread::filter-sibling",
+                "thread::filter-child",
+                "thread::filter-leaf",
+            ]
+        );
+        let leaf = page
+            .tasks
+            .iter()
+            .find(|node| node.thread_id() == "thread::filter-leaf")
+            .expect("leaf");
+        assert_eq!(leaf.parent_task_number(), Some(302));
+        assert_eq!(leaf.parent_thread_id(), Some("thread::filter-child"));
     }
 
     #[test]
