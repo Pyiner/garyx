@@ -147,8 +147,8 @@ Provider-ack helpers (also fixture-covered):
 ## Activity And Render State
 
 The conversation-state activity derivation is intentionally narrow. It drives
-only local business gates: composer send/lock affordances, steer affordance, and
-the optimistic pending-ack loading window.
+only local business gates: composer lock affordance, steer affordance, and the
+optimistic pending-ack loading window.
 
 Inputs: transcript messages (role and loop-continuation marker), `runtimeBusy`,
 `pendingAckIntentCount`, `remoteAwaitingAckInputCount`, and
@@ -161,6 +161,15 @@ Outputs:
   inputs > 0 ∨ (an intent awaits history ∧ the latest non-loop-continuation
   user message has no assistant/tool progress after it).
 - `canSteerQueuedPrompt` = `showPendingAckLoading` ∨ `runActive`.
+
+Mac desktop has one renderer-local carve-out: the selected-thread composer
+send/interrupt button is not itself a `ThreadActivityModel.runActive` output.
+For an existing thread, desktop may combine this local activity model with the
+selected thread's server `render_state.tailActivity` and
+`render_state.activeToolGroupId` to decide whether the button shows Interrupt
+instead of Send. That keeps interruption controls aligned with the transcript's
+server-derived thinking/tool activity without changing the shared
+conversation-state contract or iOS twin.
 
 Everything that is rendered inside the transcript comes from the server
 `render_state` reducer:

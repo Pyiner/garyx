@@ -26,27 +26,57 @@ That splits the visible transcript state from the interrupt affordance:
 
 ## Design
 
-Extend `deriveThreadActivityModel` with optional render activity inputs:
+Keep `deriveThreadActivityModel` unchanged. It is the cross-platform
+conversation-state activity contract used by desktop, iOS, and shared fixtures;
+its `runActive` output remains the local runtime business gate.
 
-- `renderTailActivity`
-- `renderActiveToolGroupId`
+Add a narrow desktop renderer selector in `app-shell/thread-activity.ts`, for
+example `deriveThreadComposerControlModel`, with inputs:
 
-When a render snapshot is present, `runActive` is derived from the render
-snapshot:
+- `hasThread`: whether this composer is bound to an existing selected thread.
+- `renderTailActivity`: selected thread `render_state.tailActivity`, or `null`
+  when no render snapshot exists yet.
+- `renderActiveToolGroupId`: selected thread `render_state.activeToolGroupId`,
+  or `null`.
+- `runtimeBusy`: the existing local message-machine runtime busy value.
+- `showPendingAckLoading`: the existing `deriveThreadActivityModel` output for
+  the optimistic pre-ack window.
+
+The selector returns `isActiveSendingThread`, the exact value passed to
+`ComposerForm`/`ComposerQueue`.
+
+Remote run activity is derived from the server render snapshot:
 
 - `tailActivity` of `thinking`, `assistant_streaming`, or `tool_active` means
   active.
 - A non-null `activeToolGroupId` also means active.
-- `tailActivity: "none"` with no active tool group means idle.
 
-When no render snapshot is available yet, keep the existing local runtime
-fallback so very early local sends remain gated before the first
-`thread_render_frame` arrives.
+The race-safe composer rule is:
 
-Then pass the selected thread and side-chat `render_state` fields into
-`deriveThreadActivityModel`. `isActiveSendingThread` and side-chat equivalent
-continue to use `threadActivity.runActive || showPendingAckLoading`, but
-`runActive` is now server-render-state-first instead of local-runtime-only.
+```
+hasThread && (showPendingAckLoading || runtimeBusy || renderActive)
+```
+
+This is an OR, not a render snapshot replacement. It prevents a stale idle
+render snapshot from making the stop button flash back to send while a local
+runtime is already busy and the new `thread_render_frame` has not arrived yet.
+It also covers cold-open/reconnect/cross-entry opens because `renderActive` is
+true even when local runtime is idle.
+
+In all cases, `showPendingAckLoading` also keeps the composer in stop mode for
+newly submitted local input before server render activity appears. This means
+`deriveThreadActivityModel` is still reused for the local pending-ack window and
+queue-steering gates, while server `render_state` owns the durable running
+truth for an opened thread.
+
+Do not make this selector responsible for clearing stale local runtime. Runtime
+convergence remains owned by the existing committed-event/run-state paths that
+drive `thread/runtime` back to idle. Once runtime and render activity are both
+idle, the selector restores the send arrow.
+
+Pass the selected thread and side-chat render activity fields into this selector
+and replace the local inline `Boolean(selectedThreadId && ...)` computation in
+both call sites. Do not add ad hoc booleans in `AppShell`.
 
 Update `interruptThread` so it always calls
 `window.garyxDesktop.interruptThread(threadId)` for a valid thread id. If a
@@ -59,8 +89,10 @@ gateway interrupt plus the scheduled history refresh to converge the renderer.
 - Main composer and side-chat composer get the same behavior.
 - Cold-open/reconnect/deep-link/task/list opens work because selected-thread
   `render_state` is keyed by thread id, not by local run ownership.
-- A stale local runtime no longer keeps the stop button active once a present
-  server render snapshot says the run is idle.
+- The shared conversation-state activity contract, fixtures, and iOS twin are
+  not changed. Add a carve-out to `docs/agents/conversation-state.md` that the
+  Mac composer interrupt/send toggle is a desktop renderer control, not a
+  `ThreadActivityModel.runActive` output.
 - No server, preload, or main-process API change is needed; the existing
   interrupt endpoint already accepts `threadId`.
 
@@ -68,9 +100,13 @@ gateway interrupt plus the scheduled history refresh to converge the renderer.
 
 - Red/green renderer logic test:
   `node --experimental-strip-types --test desktop/garyx-desktop/src/renderer/src/app-shell/thread-activity.test.mjs`
-- Add active-tool coverage in the same pure test file.
+- Cover thinking, active tool group, stale idle render plus local runtime busy,
+  and no-thread idle cases in the same pure test file.
 - Run the desktop unit/conformance subset affected by this model:
   `node --experimental-strip-types --test desktop/garyx-desktop/src/renderer/src/app-shell/thread-activity.test.mjs desktop/garyx-desktop/src/renderer/src/conversation-state-conformance.test.mjs`
+- The shared fixture file and iOS implementation are intentionally unchanged;
+  the desktop conformance test proves `deriveThreadActivityModel` still matches
+  the existing contract.
 - Run TypeScript/build validation if the reviewer requests broader proof:
   `npm --prefix desktop/garyx-desktop run build:ui`
 
