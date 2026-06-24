@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  deriveThreadComposerControlModel,
   deriveThreadActivityModel,
   latestUserMessageAwaitsAssistant,
 } from './thread-activity.ts';
@@ -58,19 +59,52 @@ test('thread activity model uses runtime busy as the remote business gate', () =
   assert.equal(model.canSteerQueuedPrompt, true);
 });
 
-test('server render thinking keeps the composer interruptible when local runtime is idle', () => {
-  const model = deriveThreadActivityModel({
-    messages: [message({ id: 'telegram-user-1' })],
+test('composer control uses server render thinking when local runtime is idle', () => {
+  const model = deriveThreadComposerControlModel({
+    hasThread: true,
     runtimeBusy: false,
+    showPendingAckLoading: false,
     renderTailActivity: 'thinking',
     renderActiveToolGroupId: null,
-    pendingAckIntentCount: 0,
-    remoteAwaitingAckInputCount: 0,
-    pendingHistoryIntent: false,
   });
 
-  assert.equal(model.runActive, true);
-  assert.equal(model.canSteerQueuedPrompt, true);
+  assert.equal(model.isActiveSendingThread, true);
+});
+
+test('composer control treats an active server tool group as interruptible', () => {
+  const model = deriveThreadComposerControlModel({
+    hasThread: true,
+    runtimeBusy: false,
+    showPendingAckLoading: false,
+    renderTailActivity: 'tool_active',
+    renderActiveToolGroupId: 'tool-group-1',
+  });
+
+  assert.equal(model.isActiveSendingThread, true);
+});
+
+test('composer control keeps local runtime busy through a stale idle render snapshot', () => {
+  const model = deriveThreadComposerControlModel({
+    hasThread: true,
+    runtimeBusy: true,
+    showPendingAckLoading: false,
+    renderTailActivity: 'none',
+    renderActiveToolGroupId: null,
+  });
+
+  assert.equal(model.isActiveSendingThread, true);
+});
+
+test('composer control stays idle when there is no selected thread', () => {
+  const model = deriveThreadComposerControlModel({
+    hasThread: false,
+    runtimeBusy: true,
+    showPendingAckLoading: true,
+    renderTailActivity: 'thinking',
+    renderActiveToolGroupId: 'tool-group-1',
+  });
+
+  assert.equal(model.isActiveSendingThread, false);
 });
 
 test('thread activity model does not derive rendered loading from messages', () => {
