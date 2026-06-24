@@ -93,3 +93,97 @@ test('visible local pending ack intents suppress remote pending input chrome', (
 
   assert.deepEqual(visible, []);
 });
+
+test('queued follow-up pending input dedupes after committed origin row materializes', () => {
+  const pendingInput = {
+    id: 'queued_input:test-follow-up',
+    runId: 'run:test',
+    text: 'Test queued follow-up',
+    content: 'Test queued follow-up',
+    timestamp: '2026-06-24T06:32:44.000Z',
+    status: 'awaiting_ack',
+    active: true,
+  };
+  const committedUser = {
+    id: 'origin:intent:test-follow-up',
+    seq: 249,
+    role: 'user',
+    text: 'Test queued follow-up',
+    content: 'Test queued follow-up',
+    timestamp: '2026-06-24T06:33:03.000Z',
+    metadata: {
+      origin_id: 'intent:test-follow-up',
+    },
+    localState: 'remote_final',
+  };
+  const pendingInputOriginRefs = [
+    {
+      pendingInputId: 'queued_input:test-follow-up',
+      originId: 'intent:test-follow-up',
+    },
+  ];
+
+  const beforeCommitRemote = visibleRemotePendingInputsForThread({
+    activeMessages: [],
+    visiblePendingAckIntentCount: 1,
+    remotePendingInputs: [pendingInput],
+    pendingInputOriginRefs,
+  });
+  assert.deepEqual(
+    beforeCommitRemote,
+    [],
+    'local pending ack chrome owns the queued message before commit',
+  );
+
+  const afterCommitRemote = visibleRemotePendingInputsForThread({
+    activeMessages: [committedUser],
+    visiblePendingAckIntentCount: 0,
+    remotePendingInputs: [pendingInput],
+    pendingInputOriginRefs,
+  });
+  const renderedUserLikeRows = 1 + afterCommitRemote.length;
+
+  assert.equal(
+    renderedUserLikeRows,
+    1,
+    'committed origin row should suppress the stale remote pending bubble',
+  );
+});
+
+test('pending input origin refs do not hide a different queued input', () => {
+  const committedUser = {
+    id: 'origin:intent:committed',
+    seq: 249,
+    role: 'user',
+    text: 'Committed queued follow-up',
+    metadata: {
+      origin_id: 'intent:committed',
+    },
+    localState: 'remote_final',
+  };
+  const stillQueued = {
+    id: 'queued_input:still-queued',
+    runId: 'run:test',
+    text: 'Still queued follow-up',
+    status: 'awaiting_ack',
+    active: true,
+  };
+
+  const visible = visibleRemotePendingInputsForThread({
+    activeMessages: [committedUser],
+    visiblePendingAckIntentCount: 0,
+    remotePendingInputs: [stillQueued],
+    pendingInputOriginRefs: [
+      {
+        pendingInputId: 'queued_input:committed',
+        originId: 'intent:committed',
+      },
+      {
+        pendingInputId: 'queued_input:still-queued',
+        originId: 'intent:still-queued',
+      },
+    ],
+  });
+
+  assert.deepEqual(visible, [stillQueued]);
+});

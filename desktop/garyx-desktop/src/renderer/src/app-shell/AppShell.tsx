@@ -129,7 +129,10 @@ import {
 import {
   deriveThreadActivityModel,
 } from "./thread-activity";
-import { visibleRemotePendingInputsForThread } from "./pending-inputs";
+import {
+  visibleRemotePendingInputsForThread,
+  type PendingInputOriginRef,
+} from "./pending-inputs";
 import { extractImageGenerationImageContent } from "./image-generation-content";
 import {
   getRendererPerformanceSnapshot,
@@ -756,6 +759,30 @@ function transcriptMessageMatchesIntent(
   intent: MessageIntent,
 ): boolean {
   return messageOriginId(message) === intent.intentId;
+}
+
+function pendingInputOriginRefsForThread(
+  intentsById: Record<string, MessageIntent>,
+  threadId: string | null,
+): PendingInputOriginRef[] {
+  if (!threadId) {
+    return [];
+  }
+  return Object.values(intentsById).flatMap((intent) => {
+    if (intent.threadId !== threadId) {
+      return [];
+    }
+    const pendingInputId = intent.pendingInputId?.trim() || "";
+    const originId = intent.intentId.trim();
+    return pendingInputId && originId
+      ? [
+          {
+            pendingInputId,
+            originId,
+          },
+        ]
+      : [];
+  });
 }
 
 function fileToBase64(file: File): Promise<string> {
@@ -2835,10 +2862,19 @@ export function AppShell() {
   const activeRemotePendingInputs = selectedThreadId
     ? pendingRemoteInputsByThread[selectedThreadId] || []
     : [];
+  const activePendingInputOriginRefs = useMemo(
+    () =>
+      pendingInputOriginRefsForThread(
+        messageState.intentsById,
+        activeThreadMessageKey,
+      ),
+    [messageState.intentsById, activeThreadMessageKey],
+  );
   const visibleRemotePendingInputs = visibleRemotePendingInputsForThread({
     activeMessages,
     visiblePendingAckIntentCount: visiblePendingAckIntents.length,
     remotePendingInputs: activeRemotePendingInputs,
+    pendingInputOriginRefs: activePendingInputOriginRefs,
   });
   const visibleRemoteAwaitingAckInputs = visibleRemotePendingInputs;
   const activePendingHistoryIntent = activeThreadMessageKey
@@ -3411,11 +3447,20 @@ export function AppShell() {
   const sideChatRemotePendingInputs = sideChatThreadId
     ? pendingRemoteInputsByThread[sideChatThreadId] || []
     : [];
+  const sideChatPendingInputOriginRefs = useMemo(
+    () =>
+      pendingInputOriginRefsForThread(
+        messageState.intentsById,
+        sideChatThreadId,
+      ),
+    [messageState.intentsById, sideChatThreadId],
+  );
   const sideChatVisibleRemotePendingInputs = visibleRemotePendingInputsForThread(
     {
       activeMessages: sideChatMessages,
       visiblePendingAckIntentCount: sideChatVisiblePendingAckIntents.length,
       remotePendingInputs: sideChatRemotePendingInputs,
+      pendingInputOriginRefs: sideChatPendingInputOriginRefs,
     },
   );
   const sideChatPendingHistoryIntent = sideChatThreadId
