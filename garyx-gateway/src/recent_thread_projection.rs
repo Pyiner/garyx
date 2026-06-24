@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use garyx_bridge::MultiProviderBridge;
 use garyx_router::{
     ThreadStore, ThreadStoreError, ThreadTranscriptStore, history_message_count,
-    is_hidden_thread_value, is_thread_key, thread_kind_from_value, workspace_dir_from_value,
+    is_hidden_thread_value, is_thread_key, workspace_dir_from_value,
 };
 use serde_json::Value;
 use std::sync::{Arc, Weak};
@@ -11,6 +11,7 @@ use tracing::warn;
 use crate::garyx_db::{GaryxDbService, RecentThreadDraft};
 use crate::task_projection::task_projection_draft_from_thread_data;
 use crate::thread_meta_projection::thread_meta_projection_from_thread_data_with_active_run;
+use crate::thread_type::thread_summary_type_from_record;
 use crate::transcript_run_projection::active_run_id_from_transcript_store;
 
 pub(crate) const RECENT_THREAD_MISSING_TIMESTAMP: &str = "1970-01-01T00:00:00.000Z";
@@ -429,7 +430,7 @@ fn recent_thread_draft_from_thread_data_with_active_run(
         .unwrap_or("New Thread")
         .to_owned();
     let workspace_dir = workspace_dir_from_value(data);
-    let thread_type = thread_kind_from_value(data).unwrap_or_else(|| "chat".to_owned());
+    let thread_type = thread_summary_type_from_record(data);
     let provider_type = data
         .get("provider_type")
         .and_then(Value::as_str)

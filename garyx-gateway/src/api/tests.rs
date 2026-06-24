@@ -1123,6 +1123,81 @@ async fn test_thread_history_detail_with_thread_id_and_tool_messages() {
 }
 
 #[tokio::test]
+async fn test_thread_history_detail_preserves_workflow_thread_type() {
+    let state = test_state();
+    seed_transcript_backed_thread(
+        &state,
+        "thread::workflow-history",
+        json!({
+            "thread_kind": "workflow_run",
+            "workflow_run_id": "thread::workflow-history",
+            "workflow_definition_id": "test-workflow",
+            "label": "Synthetic workflow run",
+            "messages": [
+                {"role": "assistant", "content": "workflow output", "timestamp": "2026-03-01T00:00:01Z"}
+            ]
+        }),
+    )
+    .await;
+
+    let router = api_router(state);
+
+    let req = Request::builder()
+        .uri("/api/threads/history?thread_id=thread%3A%3Aworkflow-history&limit=10")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["thread"]["thread_type"], "workflow_run");
+    assert_eq!(json["session"]["thread_type"], "workflow_run");
+    assert_eq!(json["thread"]["session_type"], "workflow_run");
+    assert_eq!(json["session"]["session_type"], "workflow_run");
+}
+
+#[tokio::test]
+async fn test_thread_history_detail_defaults_missing_thread_kind_to_chat() {
+    let state = test_state();
+    seed_transcript_backed_thread(
+        &state,
+        "cron::legacy-history",
+        json!({
+            "label": "Legacy cron-shaped thread",
+            "messages": [
+                {"role": "assistant", "content": "legacy output", "timestamp": "2026-03-01T00:00:01Z"}
+            ]
+        }),
+    )
+    .await;
+
+    let router = api_router(state);
+
+    let req = Request::builder()
+        .uri("/api/threads/history?thread_id=cron%3A%3Alegacy-history&limit=10")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["thread"]["thread_type"], "chat");
+    assert_eq!(json["session"]["thread_type"], "chat");
+    assert_eq!(json["thread"]["session_type"], "chat");
+    assert_eq!(json["session"]["session_type"], "chat");
+}
+
+#[tokio::test]
 async fn test_thread_history_detail_pages_before_global_index() {
     let state = test_state();
     seed_transcript_backed_thread(

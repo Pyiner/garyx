@@ -34,6 +34,7 @@ use crate::agent_teams::UpsertAgentTeamRequest;
 use crate::custom_agents::UpsertCustomAgentRequest;
 use crate::server::AppState;
 use crate::thread_runtime::{build_thread_runtime_summary, provider_type_from_key};
+use crate::thread_type::thread_summary_type_from_record;
 use crate::wikis::UpsertWikiRequest;
 
 // ---------------------------------------------------------------------------
@@ -1228,6 +1229,7 @@ pub(crate) async fn thread_history_for_key(
 
 fn summarize_thread(thread_id: &str, data: &Value, messages: &[Value]) -> Value {
     let message_count = history_message_count(data);
+    let thread_type = thread_summary_type_from_record(data);
 
     let last_user_message = last_message_content(messages, "user");
     let last_assistant_message = last_message_content(messages, "assistant");
@@ -1253,8 +1255,8 @@ fn summarize_thread(thread_id: &str, data: &Value, messages: &[Value]) -> Value 
         "created_at": get_value("created_at", "_created_at"),
         "last_user_message": last_user_message,
         "last_assistant_message": last_assistant_message,
-        "session_type": infer_thread_type(thread_id),
-        "thread_type": infer_thread_type(thread_id),
+        "session_type": thread_type.clone(),
+        "thread_type": thread_type,
     })
 }
 
@@ -1278,16 +1280,6 @@ fn last_message_content(messages: &[Value], role: &str) -> Option<String> {
         }
     }
     None
-}
-
-fn infer_thread_type(thread_id: &str) -> &'static str {
-    if thread_id.starts_with("cron::") {
-        "cron"
-    } else if thread_id.contains("::group::") {
-        "group"
-    } else {
-        "chat"
-    }
 }
 
 fn raw_content_type_name(content: &Value) -> &'static str {

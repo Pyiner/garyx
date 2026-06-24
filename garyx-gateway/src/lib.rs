@@ -40,6 +40,7 @@ pub mod tasks;
 pub mod thread_logs;
 mod thread_meta_projection;
 mod thread_runtime;
+mod thread_type;
 mod tool_image;
 mod transcript_run_projection;
 mod wikis;
