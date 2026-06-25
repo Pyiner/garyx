@@ -30,7 +30,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use garyx_bridge::MultiProviderBridge;
-use garyx_channels::dispatcher::{ChannelDispatcher, OutboundMessage, SwappableDispatcher};
+use garyx_channels::dispatcher::{
+    ChannelDispatcher, OutboundMessage, StreamDispatchRole, StreamingDispatchTarget,
+    SwappableDispatcher, build_stream_dispatch_callback,
+};
 use garyx_channels::plugin::ChannelPluginManager;
 use garyx_channels::plugin_host::{
     AccountDescriptor, AttachmentRef, BackfillOutcome, HostContext, InboundHandler,
@@ -367,17 +370,6 @@ impl HostInboundHandler {
 
         let thread_holder: Arc<StdMutex<Option<String>>> = Arc::new(StdMutex::new(None));
 
-        let response_callback = build_response_callback(StreamCallbackCtx {
-            plugin_id: self.plugin_id.clone(),
-            account_id: parsed.account_id.clone(),
-            chat_id: parsed.thread_binding_key.clone(),
-            stream_id: stream_id.clone(),
-            swap: self.swap.clone(),
-            streams: self.streams.clone(),
-            thread_holder: thread_holder.clone(),
-            live_streams: self.live_streams.clone(),
-        });
-
         // Ensure a stable, non-empty run id so the committed-stream replay
         // adapter can filter this run's records (plugins may omit run_id). The
         // subprocess protocol frames carry the local stream_id/seq, not run_id,
@@ -411,6 +403,38 @@ impl HostInboundHandler {
             &parsed.account_id,
             &parsed.thread_binding_key,
         );
+        let origin_native_stream = self
+            .swap
+            .plugin_sender(&self.plugin_id)
+            .filter(|sender| sender.capabilities().dispatch_stream_event)
+            .map(|_| {
+                DeferredOriginNativeStream::new(DeferredOriginNativeStreamCtx {
+                    plugin_id: self.plugin_id.clone(),
+                    account_id: parsed.account_id.clone(),
+                    chat_id: parsed.thread_binding_key.clone(),
+                    stream_id: stream_id.clone(),
+                    run_id: run_id.clone(),
+                    endpoint_identity: origin_endpoint_identity.clone(),
+                    router: self.router.clone(),
+                    dispatcher: self.swap.clone(),
+                    streams: self.streams.clone(),
+                    live_streams: self.live_streams.clone(),
+                })
+            });
+        let response_callback = if let Some(origin_native_stream) = origin_native_stream.as_ref() {
+            origin_native_stream.consumer()
+        } else {
+            build_response_callback(StreamCallbackCtx {
+                plugin_id: self.plugin_id.clone(),
+                account_id: parsed.account_id.clone(),
+                chat_id: parsed.thread_binding_key.clone(),
+                stream_id: stream_id.clone(),
+                swap: self.swap.clone(),
+                streams: self.streams.clone(),
+                thread_holder: thread_holder.clone(),
+                live_streams: self.live_streams.clone(),
+            })
+        };
         let deferred_fanout = garyx_channels::bound_fanout::DeferredBoundStreamFanout::new(
             self.router.clone(),
             self.swap.clone(),
@@ -468,6 +492,9 @@ impl HostInboundHandler {
             Ok(result) => result,
             Err(err) => {
                 replay_subscription.abort();
+                if let Some(origin_native_stream) = origin_native_stream.as_ref() {
+                    origin_native_stream.finish_without_stream();
+                }
                 return Err((PluginErrorCode::InternalError.as_i32(), err));
             }
         };
@@ -475,9 +502,15 @@ impl HostInboundHandler {
         if let Ok(mut holder) = thread_holder.lock() {
             *holder = Some(result.thread_id.clone());
         }
+        if let Some(origin_native_stream) = origin_native_stream.as_ref() {
+            origin_native_stream.attach_thread(&result.thread_id).await;
+        }
         deferred_fanout.attach_thread(&result.thread_id).await;
         if result.local_reply.is_some() {
             replay_subscription.abort();
+            if let Some(origin_native_stream) = origin_native_stream.as_ref() {
+                origin_native_stream.finish_without_stream();
+            }
         } else {
             replay_subscription.detach();
         }
@@ -571,6 +604,227 @@ struct StreamCallbackCtx {
     /// stream-idle gate (and `abandon_inbound`'s "is this id live"
     /// check) would see a 0 count while Claude is still streaming.
     live_streams: Arc<StdMutex<HashSet<String>>>,
+}
+
+struct DeferredOriginNativeStreamCtx {
+    plugin_id: String,
+    account_id: String,
+    chat_id: String,
+    stream_id: String,
+    run_id: String,
+    endpoint_identity: String,
+    router: Arc<Mutex<MessageRouter>>,
+    dispatcher: Arc<dyn ChannelDispatcher>,
+    streams: Arc<StreamRegistry>,
+    live_streams: Arc<StdMutex<HashSet<String>>>,
+}
+
+type StreamCallback = Arc<dyn Fn(StreamEvent) + Send + Sync>;
+
+#[derive(Default)]
+struct DeferredOriginNativeStreamState {
+    attached: bool,
+    closed: bool,
+    callback: Option<StreamCallback>,
+    buffered: Vec<StreamEvent>,
+}
+
+struct DeferredOriginNativeStreamInner {
+    plugin_id: String,
+    account_id: String,
+    chat_id: String,
+    stream_id: String,
+    run_id: String,
+    endpoint_identity: String,
+    router: Arc<Mutex<MessageRouter>>,
+    dispatcher: Arc<dyn ChannelDispatcher>,
+    streams: Arc<StreamRegistry>,
+    typed_stream_id: StreamId,
+    live_streams: Arc<StdMutex<HashSet<String>>>,
+    state: StdMutex<DeferredOriginNativeStreamState>,
+}
+
+#[derive(Clone)]
+struct DeferredOriginNativeStream {
+    inner: Arc<DeferredOriginNativeStreamInner>,
+}
+
+impl DeferredOriginNativeStream {
+    fn new(ctx: DeferredOriginNativeStreamCtx) -> Self {
+        Self {
+            inner: Arc::new(DeferredOriginNativeStreamInner {
+                typed_stream_id: StreamId::from(ctx.stream_id.as_str()),
+                plugin_id: ctx.plugin_id,
+                account_id: ctx.account_id,
+                chat_id: ctx.chat_id,
+                stream_id: ctx.stream_id,
+                run_id: ctx.run_id,
+                endpoint_identity: ctx.endpoint_identity,
+                router: ctx.router,
+                dispatcher: ctx.dispatcher,
+                streams: ctx.streams,
+                live_streams: ctx.live_streams,
+                state: StdMutex::new(DeferredOriginNativeStreamState::default()),
+            }),
+        }
+    }
+
+    fn consumer(&self) -> StreamCallback {
+        let inner = self.inner.clone();
+        Arc::new(move |event| {
+            inner.dispatch_or_buffer(event);
+        })
+    }
+
+    async fn attach_thread(&self, thread_id: &str) {
+        self.inner.attach_thread(thread_id).await;
+    }
+
+    fn finish_without_stream(&self) {
+        self.inner.close_stream();
+    }
+}
+
+impl DeferredOriginNativeStreamInner {
+    fn dispatch_or_buffer(&self, event: StreamEvent) {
+        if self.streams.is_tombstoned(&self.typed_stream_id) {
+            if matches!(event, StreamEvent::Done) {
+                self.close_stream();
+            }
+            return;
+        }
+
+        let callback = {
+            let mut state = match self.state.lock() {
+                Ok(state) => state,
+                Err(_) => {
+                    warn!("deferred origin stream state lock poisoned");
+                    return;
+                }
+            };
+            if state.closed {
+                return;
+            }
+            if !state.attached {
+                state.buffered.push(event);
+                return;
+            }
+            state.callback.clone()
+        };
+
+        self.dispatch_attached_event(callback.as_ref(), event);
+    }
+
+    async fn attach_thread(&self, thread_id: &str) {
+        let already_attached_or_closed = match self.state.lock() {
+            Ok(state) => state.attached || state.closed,
+            Err(_) => {
+                warn!("deferred origin stream state lock poisoned");
+                return;
+            }
+        };
+        if already_attached_or_closed {
+            return;
+        }
+
+        let target = StreamingDispatchTarget {
+            target_thread_id: thread_id.to_owned(),
+            endpoint_identity: self.endpoint_identity.clone(),
+            run_id: self.run_id.clone(),
+            channel: self.plugin_id.clone(),
+            account_id: self.account_id.clone(),
+            chat_id: self.chat_id.clone(),
+            delivery_target_type: "chat_id".to_owned(),
+            delivery_target_id: self.chat_id.clone(),
+            thread_id: None,
+        };
+        let callback = build_stream_dispatch_callback(
+            self.dispatcher.clone(),
+            target,
+            self.router.clone(),
+            StreamDispatchRole::Origin,
+        );
+        if callback.is_some() {
+            info!(
+                plugin_id = %self.plugin_id,
+                stream_id = %self.stream_id,
+                run_id = %self.run_id,
+                thread_id = %thread_id,
+                endpoint_identity = %self.endpoint_identity,
+                "using native plugin origin stream dispatch_stream_event"
+            );
+        } else {
+            warn!(
+                plugin_id = %self.plugin_id,
+                stream_id = %self.stream_id,
+                run_id = %self.run_id,
+                thread_id = %thread_id,
+                endpoint_identity = %self.endpoint_identity,
+                "plugin advertised native stream dispatch but no dispatch_stream_event callback was available"
+            );
+        }
+
+        loop {
+            let buffered = {
+                let mut state = match self.state.lock() {
+                    Ok(state) => state,
+                    Err(_) => {
+                        warn!("deferred origin stream state lock poisoned");
+                        return;
+                    }
+                };
+                if state.attached || state.closed {
+                    return;
+                }
+                if state.buffered.is_empty() {
+                    state.callback = callback.clone();
+                    state.attached = true;
+                    return;
+                }
+                std::mem::take(&mut state.buffered)
+            };
+
+            for event in buffered {
+                self.dispatch_attached_event(callback.as_ref(), event);
+            }
+        }
+    }
+
+    fn dispatch_attached_event(&self, callback: Option<&StreamCallback>, event: StreamEvent) {
+        if self.streams.is_tombstoned(&self.typed_stream_id) {
+            if matches!(event, StreamEvent::Done) {
+                self.close_stream();
+            }
+            return;
+        }
+
+        if let Some(callback) = callback {
+            callback(event.clone());
+        }
+
+        if matches!(event, StreamEvent::Done) {
+            info!(
+                plugin_id = %self.plugin_id,
+                stream_id = %self.stream_id,
+                run_id = %self.run_id,
+                "emitted plugin origin stream done via dispatch_stream_event"
+            );
+            self.close_stream();
+        }
+    }
+
+    fn close_stream(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            if state.closed {
+                return;
+            }
+            state.closed = true;
+            state.buffered.clear();
+        }
+        if let Ok(mut guard) = self.live_streams.lock() {
+            guard.remove(&self.stream_id);
+        }
+    }
 }
 
 /// Build the stream callback that does TWO things on every agent

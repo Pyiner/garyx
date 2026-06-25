@@ -1,8 +1,54 @@
 use super::*;
-use garyx_channels::dispatcher::ChannelDispatcherImpl;
+use garyx_channels::channel_trait::ChannelError;
+use garyx_channels::dispatcher::{
+    ChannelDispatcherImpl, ChannelInfo, SendMessageResult, StreamDispatchCallback,
+    StreamDispatchEnvelope, StreamingDispatchTarget,
+};
 use garyx_router::{InMemoryThreadStore, ThreadStore};
 use std::collections::HashMap;
 use std::sync::Arc;
+
+#[derive(Default)]
+struct RecordingOriginNativeDispatcher {
+    envelopes: Arc<StdMutex<Vec<StreamDispatchEnvelope>>>,
+}
+
+impl RecordingOriginNativeDispatcher {
+    fn envelopes(&self) -> Vec<StreamDispatchEnvelope> {
+        self.envelopes
+            .lock()
+            .expect("recording native origin stream dispatcher lock poisoned")
+            .clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl ChannelDispatcher for RecordingOriginNativeDispatcher {
+    async fn send_message(
+        &self,
+        _request: OutboundMessage,
+    ) -> Result<SendMessageResult, ChannelError> {
+        unreachable!("native origin stream test should not call send_message")
+    }
+
+    fn available_channels(&self) -> Vec<ChannelInfo> {
+        Vec::new()
+    }
+
+    fn build_stream_event_callback(
+        &self,
+        _target: StreamingDispatchTarget,
+        _router: Arc<Mutex<MessageRouter>>,
+    ) -> Option<StreamDispatchCallback> {
+        let envelopes = self.envelopes.clone();
+        Some(Arc::new(move |envelope| {
+            envelopes
+                .lock()
+                .expect("recording native origin stream dispatcher lock poisoned")
+                .push(envelope);
+        }))
+    }
+}
 
 fn build_handler() -> HostInboundHandler {
     build_handler_with_config(GaryxConfig::default())
@@ -113,6 +159,65 @@ fn active_stream_count_reflects_live_streams_set_cardinality() {
         guard.remove("str_active_b");
     }
     assert_eq!(handler.active_stream_count(), 0);
+}
+
+#[tokio::test]
+async fn deferred_origin_native_stream_buffers_until_thread_attached() {
+    let handler = build_handler();
+    let dispatcher = Arc::new(RecordingOriginNativeDispatcher::default());
+    let stream_id = "str_origin_native_1".to_owned();
+    handler
+        .live_streams
+        .lock()
+        .expect("live stream lock")
+        .insert(stream_id.clone());
+
+    let origin = DeferredOriginNativeStream::new(DeferredOriginNativeStreamCtx {
+        plugin_id: "minolab".to_owned(),
+        account_id: "main".to_owned(),
+        chat_id: "chat-1".to_owned(),
+        stream_id: stream_id.clone(),
+        run_id: "run-origin-native".to_owned(),
+        endpoint_identity: "minolab::main::chat-1".to_owned(),
+        router: handler.router.clone(),
+        dispatcher: dispatcher.clone(),
+        streams: handler.streams.clone(),
+        live_streams: handler.live_streams.clone(),
+    });
+    let consumer = origin.consumer();
+
+    consumer(StreamEvent::Delta {
+        text: "first".to_owned(),
+    });
+    assert!(
+        dispatcher.envelopes().is_empty(),
+        "origin stream events must wait for canonical thread id"
+    );
+
+    origin.attach_thread("thread::origin-native").await;
+    let envelopes = dispatcher.envelopes();
+    assert_eq!(envelopes.len(), 1);
+    assert_eq!(envelopes[0].thread_id, "thread::origin-native");
+    assert_eq!(envelopes[0].run_id, "run-origin-native");
+    assert_eq!(envelopes[0].endpoint_identity, "minolab::main::chat-1");
+    assert_eq!(envelopes[0].chat_id, "chat-1");
+    assert!(matches!(
+        envelopes[0].event,
+        StreamEvent::Delta { ref text } if text == "first"
+    ));
+
+    consumer(StreamEvent::Done);
+    let envelopes = dispatcher.envelopes();
+    assert_eq!(envelopes.len(), 2);
+    assert!(matches!(envelopes[1].event, StreamEvent::Done));
+    assert!(
+        !handler
+            .live_streams
+            .lock()
+            .expect("live stream lock")
+            .contains(&stream_id),
+        "native origin stream must clear the live stream gate on Done"
+    );
 }
 
 #[test]
