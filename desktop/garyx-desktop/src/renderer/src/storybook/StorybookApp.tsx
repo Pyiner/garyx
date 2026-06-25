@@ -3,9 +3,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ThreadPage } from '../app-shell/components/ThreadPage';
 import { deriveThreadActivityModel } from '../app-shell/thread-activity';
 import { isRuntimeBusy } from '../message-machine';
+import { buildThreadAvatarCatalog } from '../thread-avatar';
 import { buildStories, type Story, type StoryStep } from './scenarios';
 
 const PLAY_INTERVAL_MS = 1600;
+const EMPTY_THREAD_AVATAR_CATALOG = buildThreadAvatarCatalog([], []);
 
 function noop() {}
 
@@ -136,6 +138,7 @@ function ThreadStage({ step }: { step: StoryStep }) {
       threadLogsPanelWidth={0}
       threadLogsRef={threadLogsRef}
       threadLogsResizing={false}
+      threadAvatarCatalog={EMPTY_THREAD_AVATAR_CATALOG}
       teamAgentDisplayNamesById={{}}
       visibleRemoteAwaitingAckInputs={[]}
       visibleRemotePendingInputs={[]}

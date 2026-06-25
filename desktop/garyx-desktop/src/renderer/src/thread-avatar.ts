@@ -2,6 +2,7 @@ import type {
   DesktopApiProviderType,
   DesktopCustomAgent,
   DesktopProviderIconDescriptor,
+  DesktopTaskSummary,
   DesktopTeam,
   DesktopThreadSummary,
 } from "@shared/contracts";
@@ -39,6 +40,58 @@ export function buildThreadAvatarCatalog(
   };
 }
 
+function teamAvatarIdentity(
+  teamId: string,
+  catalog: ThreadAvatarCatalog,
+  fallbackLabel?: string | null,
+): ThreadAvatarIdentity {
+  const team = catalog.teamById.get(teamId);
+  return {
+    agentId: team?.teamId || teamId,
+    avatarDataUrl: nullableTrimmed(team?.avatarDataUrl),
+    kind: "team",
+    label: trimmed(team?.displayName) || trimmed(fallbackLabel) || teamId,
+    providerIcon: null,
+    providerType: null,
+  };
+}
+
+function agentAvatarIdentity(
+  agentId: string,
+  catalog: ThreadAvatarCatalog,
+  fallbackLabel?: string | null,
+): ThreadAvatarIdentity {
+  const agent = catalog.agentById.get(agentId);
+  return {
+    agentId: agent?.agentId || agentId,
+    avatarDataUrl: nullableTrimmed(agent?.avatarDataUrl),
+    kind: agent?.builtIn ? "builtin" : "agent",
+    label: trimmed(agent?.displayName) || trimmed(fallbackLabel) || agentId,
+    providerIcon: agent?.providerIcon || null,
+    providerType: agent?.providerType || null,
+  };
+}
+
+function agentOrTeamAvatarIdentity(
+  agentId: string,
+  catalog: ThreadAvatarCatalog,
+): ThreadAvatarIdentity {
+  return catalog.teamById.has(agentId)
+    ? teamAvatarIdentity(agentId, catalog)
+    : agentAvatarIdentity(agentId, catalog);
+}
+
+function fallbackAvatarIdentity(label: string): ThreadAvatarIdentity {
+  return {
+    agentId: null,
+    avatarDataUrl: null,
+    kind: "agent",
+    label,
+    providerIcon: null,
+    providerType: null,
+  };
+}
+
 export function resolveThreadAvatarIdentity(
   thread: DesktopThreadSummary,
   catalog: ThreadAvatarCatalog,
@@ -51,39 +104,43 @@ export function resolveThreadAvatarIdentity(
     (threadAgentId && catalog.teamById.has(threadAgentId) ? threadAgentId : "");
 
   if (teamId) {
-    const team = catalog.teamById.get(teamId);
-    return {
-      agentId: team?.teamId || teamId,
-      avatarDataUrl: nullableTrimmed(team?.avatarDataUrl),
-      kind: "team",
-      label:
-        trimmed(team?.displayName) ||
-        trimmed(thread.team?.display_name) ||
-        trimmed(thread.teamName) ||
-        teamId,
-      providerIcon: null,
-      providerType: null,
-    };
+    return teamAvatarIdentity(
+      teamId,
+      catalog,
+      trimmed(thread.team?.display_name) || trimmed(thread.teamName),
+    );
   }
 
   if (threadAgentId) {
-    const agent = catalog.agentById.get(threadAgentId);
-    return {
-      agentId: agent?.agentId || threadAgentId,
-      avatarDataUrl: nullableTrimmed(agent?.avatarDataUrl),
-      kind: agent?.builtIn ? "builtin" : "agent",
-      label: trimmed(agent?.displayName) || threadAgentId,
-      providerIcon: agent?.providerIcon || null,
-      providerType: agent?.providerType || null,
-    };
+    return agentAvatarIdentity(threadAgentId, catalog);
   }
 
-  return {
-    agentId: null,
-    avatarDataUrl: null,
-    kind: "agent",
-    label: trimmed(thread.title) || "Thread",
-    providerIcon: null,
-    providerType: null,
-  };
+  return fallbackAvatarIdentity(trimmed(thread.title) || "Thread");
+}
+
+export function resolveTaskAvatarIdentity(
+  task: Pick<DesktopTaskSummary, "assignee" | "executor" | "runtimeAgentId">,
+  catalog: ThreadAvatarCatalog,
+): ThreadAvatarIdentity {
+  const executor = task.executor;
+  if (executor?.type === "team") {
+    return teamAvatarIdentity(executor.teamId, catalog);
+  }
+  if (executor?.type === "agent") {
+    return agentAvatarIdentity(executor.agentId, catalog);
+  }
+
+  if (task.assignee?.kind === "agent") {
+    return agentOrTeamAvatarIdentity(task.assignee.agentId, catalog);
+  }
+  if (task.assignee?.kind === "human") {
+    return fallbackAvatarIdentity(`@${task.assignee.userId}`);
+  }
+
+  const runtimeAgentId = trimmed(task.runtimeAgentId);
+  if (runtimeAgentId) {
+    return agentOrTeamAvatarIdentity(runtimeAgentId, catalog);
+  }
+
+  return fallbackAvatarIdentity("unassigned");
 }

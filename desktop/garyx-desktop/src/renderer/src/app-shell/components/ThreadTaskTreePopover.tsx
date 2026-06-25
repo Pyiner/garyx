@@ -5,6 +5,10 @@ import type { DesktopTaskForestTaskNode } from "@shared/contracts";
 
 import { getDesktopApi } from "../../platform/desktop-api";
 import { useI18n } from "../../i18n";
+import {
+  resolveTaskAvatarIdentity,
+  type ThreadAvatarCatalog,
+} from "../../thread-avatar";
 import { AgentOptionAvatar } from "./AgentOptionAvatar";
 import {
   buildTaskRows,
@@ -21,30 +25,15 @@ function displayTaskId(task: DesktopTaskForestTaskNode): string {
   return task.taskId || `#TASK-${task.number}`;
 }
 
-function assigneeAgentId(task: DesktopTaskForestTaskNode): string | null {
-  if (task.assignee?.kind === "agent") {
-    return task.assignee.agentId;
-  }
-  return task.runtimeAgentId ?? null;
-}
-
-function assigneeLabel(task: DesktopTaskForestTaskNode): string {
-  if (task.assignee?.kind === "agent") {
-    return task.assignee.agentId;
-  }
-  if (task.assignee?.kind === "human") {
-    return `@${task.assignee.userId}`;
-  }
-  return task.runtimeAgentId || "unassigned";
-}
-
 type ThreadTaskTreePopoverProps = {
   threadId: string | null;
+  threadAvatarCatalog: ThreadAvatarCatalog;
   onOpenThread: (threadId: string) => void;
 };
 
 export function ThreadTaskTreePopover({
   threadId,
+  threadAvatarCatalog,
   onOpenThread,
 }: ThreadTaskTreePopoverProps) {
   const { t } = useI18n();
@@ -112,6 +101,7 @@ export function ThreadTaskTreePopover({
         {rows.map(({ task, depth }) => {
           const tone = taskStatusTone(task.status);
           const current = isCurrentTaskTreeNode(task, threadId);
+          const avatar = resolveTaskAvatarIdentity(task, threadAvatarCatalog);
           return (
             <button
               key={task.nodeId}
@@ -133,11 +123,16 @@ export function ThreadTaskTreePopover({
                 </span>
                 <span className="thread-subtask-row2">
                   <AgentOptionAvatar
-                    agentId={assigneeAgentId(task)}
+                    agentId={avatar.agentId}
+                    avatarDataUrl={avatar.avatarDataUrl}
+                    kind={avatar.kind}
+                    label={avatar.label}
+                    providerIcon={avatar.providerIcon}
+                    providerType={avatar.providerType}
                     size="sm"
                   />
                   <span className="thread-subtask-agent">
-                    {assigneeLabel(task)}
+                    {avatar.label}
                   </span>
                   <span className={`thread-subtask-status tone-${tone}`}>
                     {t(taskStatusLabel(task.status))}

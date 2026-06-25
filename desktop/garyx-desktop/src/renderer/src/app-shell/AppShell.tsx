@@ -9632,6 +9632,7 @@ export function AppShell() {
       threadLogsPanelWidth={0}
       threadLogsRef={threadLogsRef}
       threadLogsResizing={false}
+      threadAvatarCatalog={threadAvatarCatalog}
       teamAgentDisplayNamesById={teamAgentDisplayNamesById}
       visibleRemoteAwaitingAckInputs={sideChatVisibleRemotePendingInputs}
       visibleRemotePendingInputs={sideChatVisibleRemotePendingInputs}
@@ -9954,6 +9955,7 @@ export function AppShell() {
         threadLogsPanelWidth={embedded ? 0 : threadLogsPanelWidth}
         threadLogsRef={threadLogsRef}
         threadLogsResizing={embedded ? false : threadLogsResizing}
+        threadAvatarCatalog={threadAvatarCatalog}
         teamAgentDisplayNamesById={teamAgentDisplayNamesById}
         visibleRemoteAwaitingAckInputs={visibleRemoteAwaitingAckInputs}
         visibleRemotePendingInputs={visibleRemotePendingInputs}

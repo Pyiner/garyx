@@ -44,6 +44,7 @@ import {
 } from "../../message-rich-content";
 import { parseTaskNotificationText } from "../../task-notification";
 import { deriveThreadTeamView } from "../../thread-model";
+import type { ThreadAvatarCatalog } from "../../thread-avatar";
 import {
   buildThreadViewBlocks,
   buildThreadViewRowsWithLocalUsers,
@@ -325,6 +326,7 @@ type ThreadPageProps = {
   threadLogsPanelWidth: number;
   threadLogsRef: RefObject<HTMLDivElement | null>;
   threadLogsResizing: boolean;
+  threadAvatarCatalog: ThreadAvatarCatalog;
   teamAgentDisplayNamesById: Record<string, string>;
   visibleRemoteAwaitingAckInputs: PendingThreadInput[];
   visibleRemotePendingInputs: PendingThreadInput[];
@@ -509,6 +511,7 @@ export function ThreadPage({
   threadLogsPanelWidth,
   threadLogsRef,
   threadLogsResizing,
+  threadAvatarCatalog,
   teamAgentDisplayNamesById,
   visibleRemoteAwaitingAckInputs,
   visibleRemotePendingInputs,
@@ -647,6 +650,7 @@ export function ThreadPage({
         }) && selectedThreadId ? (
           <ThreadTaskTreePopover
             threadId={selectedThreadId}
+            threadAvatarCatalog={threadAvatarCatalog}
             onOpenThread={onOpenThreadById}
           />
         ) : null}
