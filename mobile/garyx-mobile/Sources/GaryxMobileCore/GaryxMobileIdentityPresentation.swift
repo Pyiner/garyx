@@ -10,11 +10,26 @@ public enum GaryxProviderIdentityKind: String, Equatable {
     case generic
 }
 
+public struct GaryxProviderFallbackRGB: Equatable, Sendable {
+    public let red: Double
+    public let green: Double
+    public let blue: Double
+
+    public init(red: Double, green: Double, blue: Double) {
+        self.red = red
+        self.green = green
+        self.blue = blue
+    }
+}
+
 public struct GaryxProviderPresentation: Equatable {
     public let kind: GaryxProviderIdentityKind
     public let displayName: String
     public let symbolName: String?
     public let fallbackInitials: String
+    public let fallbackBackgroundRGB: GaryxProviderFallbackRGB
+    public let iconSizeFactor: Double
+    public let prefersLightFallbackForeground: Bool
 
     public static func make(providerType: String) -> GaryxProviderPresentation {
         let normalized = providerType.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -23,7 +38,10 @@ public struct GaryxProviderPresentation: Equatable {
             kind: kind,
             displayName: displayName(for: normalized, kind: kind),
             symbolName: symbolName(for: kind),
-            fallbackInitials: initials(for: displayName(for: normalized, kind: kind), fallback: "P")
+            fallbackInitials: initials(for: displayName(for: normalized, kind: kind), fallback: "P"),
+            fallbackBackgroundRGB: fallbackBackgroundRGB(for: kind),
+            iconSizeFactor: iconSizeFactor(for: kind),
+            prefersLightFallbackForeground: prefersLightFallbackForeground(for: kind)
         )
     }
 
@@ -43,7 +61,10 @@ public struct GaryxProviderPresentation: Equatable {
             kind: kind,
             displayName: display,
             symbolName: symbolName(for: kind),
-            fallbackInitials: initials(for: label.isEmpty ? display : label, fallback: "A")
+            fallbackInitials: initials(for: label.isEmpty ? display : label, fallback: "A"),
+            fallbackBackgroundRGB: fallbackBackgroundRGB(for: kind),
+            iconSizeFactor: iconSizeFactor(for: kind),
+            prefersLightFallbackForeground: prefersLightFallbackForeground(for: kind)
         )
     }
 
@@ -108,6 +129,44 @@ public struct GaryxProviderPresentation: Equatable {
         case .generic:
             nil
         }
+    }
+
+    private static func fallbackBackgroundRGB(for kind: GaryxProviderIdentityKind) -> GaryxProviderFallbackRGB {
+        switch kind {
+        case .antigravity:
+            GaryxProviderFallbackRGB(red: 0.15, green: 0.36, blue: 0.30)
+        case .codex, .traex:
+            GaryxProviderFallbackRGB(red: 0.08, green: 0.10, blue: 0.12)
+        case .openAI:
+            GaryxProviderFallbackRGB(red: 0.10, green: 0.47, blue: 0.40)
+        case .claude:
+            GaryxProviderFallbackRGB(red: 0.50, green: 0.37, blue: 0.26)
+        case .gemini:
+            GaryxProviderFallbackRGB(red: 0.23, green: 0.38, blue: 0.86)
+        case .generic:
+            GaryxProviderFallbackRGB(red: 0.95, green: 0.95, blue: 0.97)
+        }
+    }
+
+    private static func iconSizeFactor(for kind: GaryxProviderIdentityKind) -> Double {
+        switch kind {
+        case .antigravity:
+            0.36
+        case .codex, .traex:
+            0.32
+        case .openAI:
+            0.42
+        case .claude:
+            0.40
+        case .gemini:
+            0.34
+        case .generic:
+            0.36
+        }
+    }
+
+    private static func prefersLightFallbackForeground(for kind: GaryxProviderIdentityKind) -> Bool {
+        kind != .generic
     }
 
     private static func displayName(for providerType: String, kind: GaryxProviderIdentityKind) -> String {

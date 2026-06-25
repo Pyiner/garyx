@@ -49,6 +49,24 @@ extension GaryxMobileModel {
         GaryxDataURLImageCache.predecodeAgentAvatars(
             from: agents.map { Optional($0.avatarDataUrl) } + teams.map { Optional($0.avatarDataUrl) }
         )
+        writeThroughAgentAvatarImages()
+    }
+
+    func writeThroughAgentAvatarImages() {
+        let upserts = GaryxAvatarWriteThroughPlan.candidates(
+            scope: currentGatewayScopeId,
+            agents: agents,
+            teams: teams
+        )
+        guard !upserts.isEmpty else { return }
+        let store = avatarStore
+        Task.detached(priority: .utility) {
+            await store.upsert(
+                upserts,
+                validator: GaryxAvatarCGImageValidator(),
+                now: Date()
+            )
+        }
     }
 
     func predecodeChannelIconImages() {

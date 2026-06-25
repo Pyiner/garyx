@@ -540,24 +540,30 @@ struct GaryxRecentThreadsWidgetSnapshotInput: Equatable, Sendable {
     var teams: [GaryxTeamSummary]
     var pinnedThreadIds: [String]
     var recentThreadIds: [String]
+    var gatewayScopeId: String
 
     init(
         threads: [GaryxThreadSummary],
         agents: [GaryxAgentSummary],
         teams: [GaryxTeamSummary],
         pinnedThreadIds: [String],
-        recentThreadIds: [String]
+        recentThreadIds: [String],
+        gatewayScopeId: String = ""
     ) {
         self.threads = threads
         self.agents = agents
         self.teams = teams
         self.pinnedThreadIds = pinnedThreadIds
         self.recentThreadIds = recentThreadIds
+        self.gatewayScopeId = gatewayScopeId
     }
 }
 
 enum GaryxRecentThreadsWidgetSnapshotProjector {
-    static func widgetThreads(from input: GaryxRecentThreadsWidgetSnapshotInput) -> [GaryxMobileWidgetThread] {
+    static func widgetThreads(
+        from input: GaryxRecentThreadsWidgetSnapshotInput,
+        avatarFallback: [GaryxAvatarIdentity: String] = [:]
+    ) -> [GaryxMobileWidgetThread] {
         var summariesById: [String: GaryxThreadSummary] = [:]
         for thread in input.threads where summariesById[thread.id] == nil {
             summariesById[thread.id] = thread
@@ -586,12 +592,46 @@ enum GaryxRecentThreadsWidgetSnapshotProjector {
                 runState: thread.runState,
                 agentId: identity.id,
                 agentName: identity.name,
-                avatarDataUrl: identity.avatarDataUrl,
+                avatarDataUrl: widgetAvatarDataUrl(
+                    identity: identity,
+                    gatewayScopeId: input.gatewayScopeId,
+                    avatarFallback: avatarFallback
+                ),
+                avatarScope: widgetAvatarScope(
+                    identity: identity,
+                    gatewayScopeId: input.gatewayScopeId,
+                    avatarFallback: avatarFallback
+                ),
+                avatarFingerprint: widgetAvatarFingerprint(
+                    identity: identity,
+                    gatewayScopeId: input.gatewayScopeId,
+                    avatarFallback: avatarFallback
+                ),
                 providerType: identity.providerType,
                 isTeam: identity.isTeam,
                 builtIn: identity.builtIn
             )
         }
+    }
+
+    static func avatarIdentities(from input: GaryxRecentThreadsWidgetSnapshotInput) -> [GaryxAvatarIdentity] {
+        let scope = input.gatewayScopeId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !scope.isEmpty else { return [] }
+        var summariesById: [String: GaryxThreadSummary] = [:]
+        for thread in input.threads where summariesById[thread.id] == nil {
+            summariesById[thread.id] = thread
+        }
+        var identities: [GaryxAvatarIdentity] = []
+        var seen = Set<String>()
+        for threadId in normalizedThreadIds(input.pinnedThreadIds + input.recentThreadIds) {
+            guard let thread = summariesById[threadId],
+                  let identity = avatarIdentity(for: thread, scope: scope) else {
+                continue
+            }
+            guard seen.insert(identity.storageKey).inserted else { continue }
+            identities.append(identity)
+        }
+        return identities
     }
 
     private static func normalizedThreadIds(_ ids: [String]) -> [String] {
@@ -603,6 +643,64 @@ enum GaryxRecentThreadsWidgetSnapshotProjector {
             normalized.append(id)
         }
         return normalized
+    }
+
+    private static func widgetAvatarDataUrl(
+        identity: AgentIdentity,
+        gatewayScopeId: String,
+        avatarFallback: [GaryxAvatarIdentity: String]
+    ) -> String? {
+        let scope = gatewayScopeId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !scope.isEmpty else {
+            return identity.avatarDataUrl
+        }
+        guard avatarIdentity(identity: identity, scope: scope) != nil else {
+            return identity.avatarDataUrl
+        }
+        return nil
+    }
+
+    private static func widgetAvatarScope(
+        identity: AgentIdentity,
+        gatewayScopeId: String,
+        avatarFallback: [GaryxAvatarIdentity: String]
+    ) -> String? {
+        guard let avatarIdentity = avatarIdentity(identity: identity, scope: gatewayScopeId),
+              avatarFallback[avatarIdentity] != nil else {
+            return nil
+        }
+        return avatarIdentity.scope
+    }
+
+    private static func widgetAvatarFingerprint(
+        identity: AgentIdentity,
+        gatewayScopeId: String,
+        avatarFallback: [GaryxAvatarIdentity: String]
+    ) -> String? {
+        guard let avatarIdentity = avatarIdentity(identity: identity, scope: gatewayScopeId) else {
+            return nil
+        }
+        return avatarFallback[avatarIdentity]
+    }
+
+    private static func avatarIdentity(for thread: GaryxThreadSummary, scope: String) -> GaryxAvatarIdentity? {
+        let teamId = thread.teamId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !teamId.isEmpty {
+            return GaryxAvatarIdentity(scope: scope, kind: .team, id: teamId)
+        }
+        let agentId = thread.agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !agentId.isEmpty else { return nil }
+        return GaryxAvatarIdentity(scope: scope, kind: .agent, id: agentId)
+    }
+
+    private static func avatarIdentity(identity: AgentIdentity, scope: String) -> GaryxAvatarIdentity? {
+        let scope = scope.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !scope.isEmpty,
+              let id = identity.id?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !id.isEmpty else {
+            return nil
+        }
+        return GaryxAvatarIdentity(scope: scope, kind: identity.isTeam ? .team : .agent, id: id)
     }
 
     private static func widgetAgentIdentity(

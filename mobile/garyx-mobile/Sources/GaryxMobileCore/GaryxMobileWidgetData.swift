@@ -10,9 +10,12 @@ public struct GaryxMobileWidgetThread: Codable, Equatable, Identifiable, Sendabl
     public var agentId: String?
     public var agentName: String?
     public var avatarDataUrl: String?
+    public var avatarScope: String?
+    public var avatarFingerprint: String?
     public var providerType: String?
     public var isTeam: Bool
     public var builtIn: Bool
+    public var avatarPayloadData: Data?
 
     public init(
         id: String,
@@ -24,9 +27,12 @@ public struct GaryxMobileWidgetThread: Codable, Equatable, Identifiable, Sendabl
         agentId: String? = nil,
         agentName: String? = nil,
         avatarDataUrl: String? = nil,
+        avatarScope: String? = nil,
+        avatarFingerprint: String? = nil,
         providerType: String? = nil,
         isTeam: Bool = false,
-        builtIn: Bool = false
+        builtIn: Bool = false,
+        avatarPayloadData: Data? = nil
     ) {
         self.id = id
         self.title = title
@@ -37,9 +43,12 @@ public struct GaryxMobileWidgetThread: Codable, Equatable, Identifiable, Sendabl
         self.agentId = agentId
         self.agentName = agentName
         self.avatarDataUrl = avatarDataUrl
+        self.avatarScope = avatarScope
+        self.avatarFingerprint = avatarFingerprint
         self.providerType = providerType
         self.isTeam = isTeam
         self.builtIn = builtIn
+        self.avatarPayloadData = avatarPayloadData
     }
 
     enum CodingKeys: String, CodingKey {
@@ -52,6 +61,8 @@ public struct GaryxMobileWidgetThread: Codable, Equatable, Identifiable, Sendabl
         case agentId
         case agentName
         case avatarDataUrl
+        case avatarScope
+        case avatarFingerprint
         case providerType
         case isTeam
         case builtIn
@@ -68,9 +79,12 @@ public struct GaryxMobileWidgetThread: Codable, Equatable, Identifiable, Sendabl
         agentId = try container.decodeIfPresent(String.self, forKey: .agentId)
         agentName = try container.decodeIfPresent(String.self, forKey: .agentName)
         avatarDataUrl = try container.decodeIfPresent(String.self, forKey: .avatarDataUrl)
+        avatarScope = try container.decodeIfPresent(String.self, forKey: .avatarScope)
+        avatarFingerprint = try container.decodeIfPresent(String.self, forKey: .avatarFingerprint)
         providerType = try container.decodeIfPresent(String.self, forKey: .providerType)
         isTeam = try container.decodeIfPresent(Bool.self, forKey: .isTeam) ?? false
         builtIn = try container.decodeIfPresent(Bool.self, forKey: .builtIn) ?? false
+        avatarPayloadData = nil
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -84,6 +98,8 @@ public struct GaryxMobileWidgetThread: Codable, Equatable, Identifiable, Sendabl
         try container.encodeIfPresent(agentId, forKey: .agentId)
         try container.encodeIfPresent(agentName, forKey: .agentName)
         try container.encodeIfPresent(avatarDataUrl, forKey: .avatarDataUrl)
+        try container.encodeIfPresent(avatarScope, forKey: .avatarScope)
+        try container.encodeIfPresent(avatarFingerprint, forKey: .avatarFingerprint)
         try container.encodeIfPresent(providerType, forKey: .providerType)
         try container.encode(isTeam, forKey: .isTeam)
         try container.encode(builtIn, forKey: .builtIn)

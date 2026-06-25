@@ -37,6 +37,17 @@ final class GaryxMobileIdentityPresentationTests: XCTestCase {
         XCTAssertEqual(presentation.displayName, "Claude Code")
     }
 
+    func testProviderPresentationExposesAvatarFallbackStyleData() {
+        let codex = GaryxProviderPresentation.make(providerType: "codex_app_server")
+        XCTAssertEqual(codex.fallbackBackgroundRGB, GaryxProviderFallbackRGB(red: 0.08, green: 0.10, blue: 0.12))
+        XCTAssertEqual(codex.iconSizeFactor, 0.32)
+        XCTAssertTrue(codex.prefersLightFallbackForeground)
+
+        let generic = GaryxProviderPresentation.make(providerType: "")
+        XCTAssertEqual(generic.iconSizeFactor, 0.36)
+        XCTAssertFalse(generic.prefersLightFallbackForeground)
+    }
+
     func testChannelPresentationNormalizesDisplayNamesAssetsAndInitials() {
         let telegram = GaryxChannelIdentityPresentation.make(channel: "telegram", label: "Mobile Bot")
         XCTAssertEqual(telegram.displayName, "Telegram")

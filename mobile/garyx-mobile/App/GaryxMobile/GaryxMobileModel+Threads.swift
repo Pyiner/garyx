@@ -7,10 +7,30 @@ actor GaryxRecentThreadsWidgetPersistenceQueue {
     private let planner = GaryxRecentThreadsWidgetPersistencePlanner()
     private var latestGeneration: UInt64 = 0
 
-    func persist(input: GaryxRecentThreadsWidgetSnapshotInput, generation: UInt64) {
+    func persist(
+        input: GaryxRecentThreadsWidgetSnapshotInput,
+        generation: UInt64,
+        avatarStore: any GaryxAvatarStore,
+        validator: any GaryxAvatarImageValidating
+    ) async {
         latestGeneration = max(latestGeneration, generation)
         guard generation == latestGeneration else { return }
-        let widgetThreads = GaryxRecentThreadsWidgetSnapshotProjector.widgetThreads(from: input)
+        let upserts = GaryxAvatarWriteThroughPlan.candidates(
+            scope: input.gatewayScopeId,
+            agents: input.agents,
+            teams: input.teams
+        )
+        if !upserts.isEmpty {
+            await avatarStore.upsert(upserts, validator: validator, now: Date())
+        }
+        guard generation == latestGeneration else { return }
+        let avatarIdentities = GaryxRecentThreadsWidgetSnapshotProjector.avatarIdentities(from: input)
+        let avatarFallback = await avatarStore.avatarFingerprints(for: avatarIdentities, now: Date())
+        guard generation == latestGeneration else { return }
+        let widgetThreads = GaryxRecentThreadsWidgetSnapshotProjector.widgetThreads(
+            from: input,
+            avatarFallback: avatarFallback
+        )
         guard generation == latestGeneration else { return }
         switch planner.nextWrite(for: widgetThreads) {
         case .skipUnchanged:
@@ -340,11 +360,18 @@ extension GaryxMobileModel {
             agents: agents,
             teams: teams,
             pinnedThreadIds: pinnedThreadIds,
-            recentThreadIds: recentThreadIds
+            recentThreadIds: recentThreadIds,
+            gatewayScopeId: currentGatewayScopeId
         )
         let queue = recentThreadsWidgetPersistenceQueue
+        let store = avatarStore
         Task.detached(priority: .utility) {
-            await queue.persist(input: input, generation: generation)
+            await queue.persist(
+                input: input,
+                generation: generation,
+                avatarStore: store,
+                validator: GaryxAvatarCGImageValidator()
+            )
         }
     }
 

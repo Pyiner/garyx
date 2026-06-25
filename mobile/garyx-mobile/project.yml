@@ -70,6 +70,7 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - path: Widget/GaryxRecentThreadsWidget
+      - path: Sources/GaryxMobileCore/GaryxAvatarCache.swift
       - path: Sources/GaryxMobileCore/GaryxMobileIdentityPresentation.swift
       - path: Sources/GaryxMobileCore/GaryxMobileWidgetData.swift
       - path: Sources/GaryxMobileCore/GaryxMobileUsageWidgetData.swift

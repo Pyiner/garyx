@@ -55,6 +55,14 @@ enum GaryxDataURLImageCache {
         return cache.object(forKey: cacheKey(for: raw, maxPixelSize: maxPixelSize))
     }
 
+    static func cachedAvatarImage(
+        identity: GaryxAvatarIdentity,
+        fingerprint: String,
+        maxPixelSize: CGFloat
+    ) -> UIImage? {
+        cache.object(forKey: avatarCacheKey(identity: identity, fingerprint: fingerprint, maxPixelSize: maxPixelSize))
+    }
+
     static func image(from rawValue: String?) -> UIImage? {
         guard let raw = normalizedRawValue(rawValue) else { return nil }
         let cacheKey = cacheKey(for: raw, maxPixelSize: nil)
@@ -65,6 +73,30 @@ enum GaryxDataURLImageCache {
             return nil
         }
         cache.setObject(image, forKey: cacheKey, cost: raw.utf8.count)
+        return image
+    }
+
+    static func image(from rawValue: String?, maxPixelSize: CGFloat) -> UIImage? {
+        guard let raw = normalizedRawValue(rawValue) else { return nil }
+        let cacheKey = cacheKey(for: raw, maxPixelSize: maxPixelSize)
+        if let cached = cache.object(forKey: cacheKey) {
+            return cached
+        }
+        guard let image = decodedImage(from: raw, maxPixelSize: maxPixelSize) else {
+            return nil
+        }
+        cache.setObject(image, forKey: cacheKey, cost: cost(for: image, raw: raw))
+        return image
+    }
+
+    static func image(from data: Data, cacheKey key: NSString, maxPixelSize: CGFloat) -> UIImage? {
+        if let cached = cache.object(forKey: key) {
+            return cached
+        }
+        guard let image = GaryxImageDecoder.image(from: data, maxPixelSize: maxPixelSize) else {
+            return nil
+        }
+        cache.setObject(image, forKey: key, cost: cost(for: image, byteCount: data.count))
         return image
     }
 
@@ -108,6 +140,14 @@ enum GaryxDataURLImageCache {
             return NSString(string: "\(Int(maxPixelSize.rounded(.up)))|\(raw)")
         }
         return NSString(string: "full|\(raw)")
+    }
+
+    static func avatarCacheKey(
+        identity: GaryxAvatarIdentity,
+        fingerprint: String,
+        maxPixelSize: CGFloat
+    ) -> NSString {
+        NSString(string: "avatar|\(Int(maxPixelSize.rounded(.up)))|\(identity.storageKey)|\(fingerprint)")
     }
 
     private static func predecodeJob(for rawValue: String?, maxPixelSize: CGFloat) -> PredecodeJob? {
@@ -160,6 +200,13 @@ enum GaryxDataURLImageCache {
             return max(raw.utf8.count, cgImage.bytesPerRow * cgImage.height)
         }
         return raw.utf8.count
+    }
+
+    private static func cost(for image: UIImage, byteCount: Int) -> Int {
+        if let cgImage = image.cgImage {
+            return max(byteCount, cgImage.bytesPerRow * cgImage.height)
+        }
+        return byteCount
     }
 
     private struct PredecodeJob: Sendable {

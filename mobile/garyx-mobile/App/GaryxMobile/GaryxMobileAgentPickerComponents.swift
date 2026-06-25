@@ -116,7 +116,13 @@ struct GaryxAgentAvatarView: View {
     var builtIn: Bool = false
     var diameter: CGFloat = 34
 
+    @Environment(\.garyxAvatarImageProvider) private var avatarImageProvider
+    @Environment(\.garyxAvatarScopeId) private var avatarScopeId
+    @State private var resolvedImage: UIImage?
+    @State private var resolvedRequestKey: GaryxAvatarRequestKey?
+
     var body: some View {
+        let request = avatarRequest
         ZStack {
             Circle()
                 .fill(fallbackBackground)
@@ -138,8 +144,6 @@ struct GaryxAgentAvatarView: View {
                 }
                 .frame(width: diameter, height: diameter)
                 .clipShape(Circle())
-            } else if kind == .team {
-                fallbackContent
             } else {
                 fallbackContent
             }
@@ -150,10 +154,20 @@ struct GaryxAgentAvatarView: View {
                 .stroke(Color.primary.opacity(0.06), lineWidth: 1)
         }
         .accessibilityHidden(true)
+        .task(id: request.key) {
+            await resolveAvatarImage(for: request)
+        }
     }
 
     private var visibleDecodedImage: UIImage? {
-        guard remoteAvatarURL == nil else { return nil }
+        let request = avatarRequest
+        guard request.remoteAvatarURL == nil else { return nil }
+        if resolvedRequestKey == request.key, let resolvedImage {
+            return resolvedImage
+        }
+        if let image = avatarImageProvider?.syncImage(request) {
+            return image
+        }
         return GaryxDataURLImageCache.cachedImage(
             from: avatarDataUrl,
             maxPixelSize: GaryxDataURLImageCache.agentAvatarMaxPixelSize
@@ -161,9 +175,44 @@ struct GaryxAgentAvatarView: View {
     }
 
     private var remoteAvatarURL: URL? {
-        let raw = avatarDataUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard raw.hasPrefix("http://") || raw.hasPrefix("https://") else { return nil }
-        return URL(string: raw)
+        avatarRequest.remoteAvatarURL
+    }
+
+    private var avatarRequest: GaryxAvatarRequest {
+        GaryxAvatarRequest(
+            identity: avatarIdentity,
+            liveDataUrl: avatarDataUrl
+        )
+    }
+
+    private var avatarIdentity: GaryxAvatarIdentity? {
+        let scope = avatarScopeId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let id = agentId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !scope.isEmpty, !id.isEmpty else { return nil }
+        return GaryxAvatarIdentity(
+            scope: scope,
+            kind: kind == .team ? .team : .agent,
+            id: id
+        )
+    }
+
+    @MainActor
+    private func resolveAvatarImage(for request: GaryxAvatarRequest) async {
+        guard let avatarImageProvider else {
+            resolvedRequestKey = request.key
+            resolvedImage = nil
+            return
+        }
+        resolvedRequestKey = request.key
+        if let syncImage = avatarImageProvider.syncImage(request) {
+            resolvedImage = syncImage
+            return
+        }
+        resolvedImage = nil
+        let image = await avatarImageProvider.resolve(request)
+        guard !Task.isCancelled else { return }
+        resolvedRequestKey = request.key
+        resolvedImage = image
     }
 
     @ViewBuilder
@@ -211,43 +260,18 @@ struct GaryxAgentAvatarView: View {
             return Color(.systemGray)
         }
         if builtIn {
-            return providerPresentation.kind == .generic ? Color(.secondaryLabel) : Color.white
+            return providerPresentation.prefersLightFallbackForeground ? Color.white : Color(.secondaryLabel)
         }
         return GaryxTheme.accent
     }
 
     private var providerBackground: Color {
-        switch providerPresentation.kind {
-        case .antigravity:
-            Color(red: 0.15, green: 0.36, blue: 0.30)
-        case .codex, .traex:
-            Color(red: 0.08, green: 0.10, blue: 0.12)
-        case .openAI:
-            Color(red: 0.10, green: 0.47, blue: 0.40)
-        case .claude:
-            Color(red: 0.50, green: 0.37, blue: 0.26)
-        case .gemini:
-            Color(red: 0.23, green: 0.38, blue: 0.86)
-        case .generic:
-            Color(.secondarySystemBackground)
-        }
+        let rgb = providerPresentation.fallbackBackgroundRGB
+        return Color(red: rgb.red, green: rgb.green, blue: rgb.blue)
     }
 
     private var providerIconSize: CGFloat {
-        switch providerPresentation.kind {
-        case .antigravity:
-            diameter * 0.36
-        case .codex, .traex:
-            diameter * 0.32
-        case .openAI:
-            diameter * 0.42
-        case .claude:
-            diameter * 0.40
-        case .gemini:
-            diameter * 0.34
-        case .generic:
-            diameter * 0.36
-        }
+        diameter * CGFloat(providerPresentation.iconSizeFactor)
     }
 }
 

@@ -711,6 +711,7 @@ extension GaryxMobileModel {
                 )
             )
             guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
+            await storeAvatarIfPresent(kind: .agent, id: agent.id, dataUrl: agent.avatarDataUrl.isEmpty ? avatarDataUrl : agent.avatarDataUrl, sourceUpdatedAt: agent.updatedAt)
             replaceAgent(agent)
             setSelectedAgentTarget(agent.id)
             return true
@@ -730,6 +731,7 @@ extension GaryxMobileModel {
         modelReasoningEffort: String? = nil,
         workspace: String,
         avatarDataUrl: String,
+        clearsAvatar: Bool = false,
         systemPrompt: String
     ) async -> GaryxAgentSummary? {
         let nextAgentId = agentId.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -758,6 +760,12 @@ extension GaryxMobileModel {
             // nil keeps the stored thinking level; an explicit value (or "") replaces it.
             let nextReasoningEffort = modelReasoningEffort?.trimmingCharacters(in: .whitespacesAndNewlines)
                 ?? baseAgent.modelReasoningEffort
+            let requestAvatarDataUrl: String?
+            if nextAvatarDataUrl.isEmpty {
+                requestAvatarDataUrl = clearsAvatar ? "" : nil
+            } else {
+                requestAvatarDataUrl = nextAvatarDataUrl
+            }
             let updated = try await client().updateAgent(
                 agentId: agent.id,
                 request: GaryxCustomAgentRequest(
@@ -774,12 +782,23 @@ extension GaryxMobileModel {
                     maxToolIterations: baseAgent.maxToolIterations,
                     requestTimeoutSeconds: baseAgent.requestTimeoutSeconds,
                     defaultWorkspaceDir: nextWorkspace.isEmpty ? nil : nextWorkspace,
-                    avatarDataUrl: nextAvatarDataUrl.isEmpty ? nil : nextAvatarDataUrl,
+                    avatarDataUrl: requestAvatarDataUrl,
                     systemPrompt: preservedSystemPrompt ? baseAgent.systemPrompt : systemPrompt
                 )
             )
             guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
-            replaceAgent(updated)
+            let didClearAvatar = clearsAvatar && nextAvatarDataUrl.isEmpty
+            let didStoreAvatar: Bool
+            if didClearAvatar {
+                await removeAvatar(kind: .agent, id: updated.id)
+                didStoreAvatar = false
+            } else {
+                didStoreAvatar = await storeAvatarIfPresent(kind: .agent, id: updated.id, dataUrl: updated.avatarDataUrl.isEmpty ? nextAvatarDataUrl : updated.avatarDataUrl, sourceUpdatedAt: updated.updatedAt)
+            }
+            if updated.id != agent.id, didClearAvatar || didStoreAvatar {
+                await removeAvatar(kind: .agent, id: agent.id)
+            }
+            replaceAgent(updated, replacing: agent.id)
             setSelectedAgentTarget(updated.id)
             return updated
         } catch {
@@ -796,7 +815,8 @@ extension GaryxMobileModel {
         leaderAgentId: String,
         memberAgentIds: String,
         workflowText: String,
-        avatarDataUrl: String
+        avatarDataUrl: String,
+        clearsAvatar: Bool = false
     ) async -> GaryxTeamSummary? {
         let nextTeamId = teamId.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextDisplayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -807,6 +827,12 @@ extension GaryxMobileModel {
         guard !nextTeamId.isEmpty, !nextDisplayName.isEmpty, !nextLeader.isEmpty else { return nil }
         let runtimeGeneration = gatewayRuntimeGeneration
         do {
+            let requestAvatarDataUrl: String?
+            if nextAvatarDataUrl.isEmpty {
+                requestAvatarDataUrl = clearsAvatar ? "" : nil
+            } else {
+                requestAvatarDataUrl = nextAvatarDataUrl
+            }
             let updated = try await client().updateTeam(
                 teamId: team.id,
                 request: GaryxTeamRequest(
@@ -815,11 +841,22 @@ extension GaryxMobileModel {
                     leaderAgentId: nextLeader,
                     memberAgentIds: nextMembers,
                     workflowText: nextWorkflow,
-                    avatarDataUrl: nextAvatarDataUrl.isEmpty ? nil : nextAvatarDataUrl
+                    avatarDataUrl: requestAvatarDataUrl
                 )
             )
             guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
-            replaceTeam(updated)
+            let didClearAvatar = clearsAvatar && nextAvatarDataUrl.isEmpty
+            let didStoreAvatar: Bool
+            if didClearAvatar {
+                await removeAvatar(kind: .team, id: updated.id)
+                didStoreAvatar = false
+            } else {
+                didStoreAvatar = await storeAvatarIfPresent(kind: .team, id: updated.id, dataUrl: updated.avatarDataUrl.isEmpty ? nextAvatarDataUrl : updated.avatarDataUrl)
+            }
+            if updated.id != team.id, didClearAvatar || didStoreAvatar {
+                await removeAvatar(kind: .team, id: team.id)
+            }
+            replaceTeam(updated, replacing: team.id)
             setSelectedAgentTarget(updated.id)
             return updated
         } catch {
@@ -835,6 +872,7 @@ extension GaryxMobileModel {
         do {
             _ = try await client().deleteAgent(agentId: agent.id)
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            await removeAvatar(kind: .agent, id: agent.id)
             agents.removeAll { $0.id == agent.id }
             ensureSelectedAgentTarget()
             persistCatalogCacheSnapshot()
@@ -931,6 +969,7 @@ extension GaryxMobileModel {
                 )
             )
             guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
+            await storeAvatarIfPresent(kind: .team, id: team.id, dataUrl: team.avatarDataUrl.isEmpty ? avatarDataUrl : team.avatarDataUrl)
             replaceTeam(team)
             setSelectedAgentTarget(team.id)
             return true
@@ -946,6 +985,7 @@ extension GaryxMobileModel {
         do {
             _ = try await client().deleteTeam(teamId: team.id)
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            await removeAvatar(kind: .team, id: team.id)
             teams.removeAll { $0.id == team.id }
             ensureSelectedAgentTarget()
             persistCatalogCacheSnapshot()
@@ -1301,11 +1341,20 @@ extension GaryxMobileModel {
         }
     }
 
-    func replaceAgent(_ agent: GaryxAgentSummary) {
-        if let index = agents.firstIndex(where: { $0.id == agent.id }) {
-            agents[index] = agent
+    func replaceAgent(_ agent: GaryxAgentSummary, replacing oldId: String? = nil) {
+        var next = agents
+        if let oldId = oldId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !oldId.isEmpty,
+           oldId != agent.id {
+            next.removeAll { $0.id == oldId }
+        }
+        if let index = next.firstIndex(where: { $0.id == agent.id }) {
+            next[index] = agent
         } else {
-            agents.insert(agent, at: 0)
+            next.insert(agent, at: 0)
+        }
+        if next != agents {
+            agents = next
         }
         if !threads.isEmpty {
             persistRecentThreadsWidgetSnapshot()
@@ -1313,16 +1362,51 @@ extension GaryxMobileModel {
         persistCatalogCacheSnapshot()
     }
 
-    func replaceTeam(_ team: GaryxTeamSummary) {
-        if let index = teams.firstIndex(where: { $0.id == team.id }) {
-            teams[index] = team
+    func replaceTeam(_ team: GaryxTeamSummary, replacing oldId: String? = nil) {
+        var next = teams
+        if let oldId = oldId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !oldId.isEmpty,
+           oldId != team.id {
+            next.removeAll { $0.id == oldId }
+        }
+        if let index = next.firstIndex(where: { $0.id == team.id }) {
+            next[index] = team
         } else {
-            teams.insert(team, at: 0)
+            next.insert(team, at: 0)
+        }
+        if next != teams {
+            teams = next
         }
         if !threads.isEmpty {
             persistRecentThreadsWidgetSnapshot()
         }
         persistCatalogCacheSnapshot()
+    }
+
+    @discardableResult
+    func storeAvatarIfPresent(
+        kind: GaryxAvatarKind,
+        id: String,
+        dataUrl: String,
+        sourceUpdatedAt: String? = nil
+    ) async -> Bool {
+        let identity = GaryxAvatarIdentity(scope: currentGatewayScopeId, kind: kind, id: id)
+        guard identity.isUsable else { return false }
+        let dataUrl = dataUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !dataUrl.isEmpty else { return false }
+        await avatarStore.upsert(
+            [GaryxAvatarUpsert(identity: identity, dataUrl: dataUrl, sourceUpdatedAt: sourceUpdatedAt)],
+            validator: GaryxAvatarCGImageValidator(),
+            now: Date()
+        )
+        return !(await avatarStore.avatarFingerprints(for: [identity], now: Date())).isEmpty
+    }
+
+    func removeAvatar(kind: GaryxAvatarKind, id: String) async {
+        let identity = GaryxAvatarIdentity(scope: currentGatewayScopeId, kind: kind, id: id)
+        guard identity.isUsable else { return }
+        await avatarStore.remove(identity)
+        avatarImageProvider.invalidate(identity: identity)
     }
 
     static func normalizedTeamMemberIds(_ rawValue: String, leaderAgentId: String) -> [String] {

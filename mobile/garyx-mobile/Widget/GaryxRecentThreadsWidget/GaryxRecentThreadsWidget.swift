@@ -50,12 +50,12 @@ struct GaryxRecentThreadsProvider: TimelineProvider {
     }
 
     func getSnapshot(in context: Context, completion: @escaping (GaryxRecentThreadsEntry) -> Void) {
-        completion(GaryxRecentThreadsEntry(date: Date(), snapshot: GaryxMobileWidgetStore.loadRecentThreads()))
+        completion(GaryxRecentThreadsEntry(date: Date(), snapshot: GaryxWidgetAvatarPayloadLoader.enrichedSnapshot()))
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<GaryxRecentThreadsEntry>) -> Void) {
         let now = Date()
-        let entry = GaryxRecentThreadsEntry(date: now, snapshot: GaryxMobileWidgetStore.loadRecentThreads())
+        let entry = GaryxRecentThreadsEntry(date: now, snapshot: GaryxWidgetAvatarPayloadLoader.enrichedSnapshot())
         let nextRefresh = Calendar.current.date(byAdding: .minute, value: 10, to: now) ?? now.addingTimeInterval(600)
         completion(Timeline(entries: [entry], policy: .after(nextRefresh)))
     }
@@ -265,7 +265,10 @@ private struct GaryxWidgetAgentAvatar: View {
             Circle()
                 .fill(Color.primary.opacity(0.08))
 
-            if let image = GaryxWidgetDataURLImageCache.image(from: thread.avatarDataUrl) {
+            if let image = GaryxWidgetDataURLImageCache.image(
+                fromPayloadData: thread.avatarPayloadData,
+                fingerprint: thread.avatarFingerprint
+            ) ?? GaryxWidgetDataURLImageCache.image(from: thread.avatarDataUrl) {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
@@ -325,6 +328,76 @@ private enum GaryxWidgetDataURLImageCache {
         }
         cache.setObject(image, forKey: cacheKey, cost: data.count)
         return image
+    }
+
+    static func image(fromPayloadData data: Data?, fingerprint: String?) -> UIImage? {
+        guard let data,
+              !data.isEmpty,
+              let fingerprint = fingerprint?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !fingerprint.isEmpty else {
+            return nil
+        }
+        let cacheKey = NSString(string: "payload|\(fingerprint)")
+        if let cached = cache.object(forKey: cacheKey) {
+            return cached
+        }
+        guard let image = UIImage(data: data) else {
+            return nil
+        }
+        cache.setObject(image, forKey: cacheKey, cost: data.count)
+        return image
+    }
+}
+
+private enum GaryxWidgetAvatarPayloadLoader {
+    static func enrichedSnapshot() -> GaryxMobileWidgetSnapshot {
+        let snapshot = GaryxMobileWidgetStore.loadRecentThreads()
+        guard let index = loadIndex(), !index.entries.isEmpty else {
+            return snapshot
+        }
+        let threads = snapshot.threads.map { thread -> GaryxMobileWidgetThread in
+            var enriched = thread
+            enriched.avatarPayloadData = payload(for: thread, index: index)
+            return enriched
+        }
+        return GaryxMobileWidgetSnapshot(threads: threads, refreshedAt: snapshot.refreshedAt)
+    }
+
+    private static func payload(for thread: GaryxMobileWidgetThread, index: GaryxAvatarStoreIndex) -> Data? {
+        guard let scope = thread.avatarScope?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !scope.isEmpty,
+              let id = thread.agentId?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !id.isEmpty,
+              let fingerprint = thread.avatarFingerprint?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !fingerprint.isEmpty else {
+            return nil
+        }
+        let identity = GaryxAvatarIdentity(scope: scope, kind: thread.isTeam ? .team : .agent, id: id)
+        guard let entry = index.entries[identity.storageKey],
+              entry.fingerprint == fingerprint else {
+            return nil
+        }
+        let url = avatarDirectory().appendingPathComponent(entry.fileName, isDirectory: false)
+        return try? Data(contentsOf: url)
+    }
+
+    private static func loadIndex() -> GaryxAvatarStoreIndex? {
+        let url = avatarDirectory().appendingPathComponent("index.json", isDirectory: false)
+        guard let data = try? Data(contentsOf: url) else {
+            return nil
+        }
+        return GaryxAvatarStoreIndex.decodeCurrent(from: data)
+    }
+
+    private static func avatarDirectory() -> URL {
+        let fileManager = FileManager.default
+        let base = fileManager.containerURL(
+            forSecurityApplicationGroupIdentifier: GaryxMobileWidgetStore.appGroupIdentifier
+        ) ?? fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        return base
+            .appendingPathComponent("GaryxAvatarCache", isDirectory: true)
+            .appendingPathComponent("v1", isDirectory: true)
     }
 }
 

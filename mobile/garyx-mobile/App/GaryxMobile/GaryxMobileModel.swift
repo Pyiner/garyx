@@ -354,6 +354,8 @@ final class GaryxMobileModel: ObservableObject {
     let shellChromeStore = GaryxShellChromeStore()
     let navigationDrawerStore = GaryxNavigationDrawerStore()
     let recentThreadsWidgetPersistenceQueue = GaryxRecentThreadsWidgetPersistenceQueue()
+    let avatarStore: GaryxAvatarDiskStore
+    let avatarImageProvider: GaryxAvatarImageProvider
     let backgroundCommittedRunReconcilePlanner = GaryxBackgroundCommittedRunReconcilePlanner(
         minimumRefreshInterval: GaryxMobileModel.backgroundCommittedRunThreadRefreshInterval
     )
@@ -380,6 +382,12 @@ final class GaryxMobileModel: ObservableObject {
     init(defaults: UserDefaults = .standard, keychain: GaryxMobileKeychain = .shared) {
         self.defaults = defaults
         self.keychain = keychain
+        let avatarStore = GaryxAvatarDiskStore()
+        self.avatarStore = avatarStore
+        self.avatarImageProvider = GaryxAvatarImageProvider(
+            store: avatarStore,
+            validator: GaryxAvatarCGImageValidator()
+        )
         gatewayURL = Self.firstNonEmpty(
             defaults.string(forKey: GaryxMobileSettingsKeys.gatewayUrl),
             defaults.string(forKey: GaryxMobileSettingsKeys.legacyGatewayURL)
@@ -425,5 +433,8 @@ final class GaryxMobileModel: ObservableObject {
         GaryxHomeScrollPerformanceProbe.shared.attachModelObjectWillChange(objectWillChange)
         startHomeScrollPressureProbeIfRequested()
         #endif
+        Task.detached(priority: .utility) {
+            await avatarStore.warm()
+        }
     }
 }
