@@ -118,7 +118,22 @@ test('indented code limitation (tag still surfaced; exact whitespace is don\'t-c
 test('non-tag <', () => assert.equal(escapeNonHtmlTagsOutsideCode('a < b and 5 < 10'), 'a < b and 5 < 10'));
 test('no-op byte-identical', () => { assert.equal(prepareMessageMarkdown('\nhello\n'),'\nhello\n'); assert.equal(prepareMessageMarkdown('    code line'),'    code line'); assert.equal(prepareMessageMarkdown('hard break  \nnext'),'hard break  \nnext'); assert.equal(prepareMessageMarkdown('```\n\n\n\nx\n```'),'```\n\n\n\nx\n```'); });
 test('combined', () => { const o = prepareMessageMarkdown('<garyx_thread_metadata>x</garyx_thread_metadata>\n\n<custom>\n## Hi\n</custom>'); noGaryx(o); assert.match(o,/&lt;custom&gt;/); assert.match(o,/\n## Hi\n/); });
-test('assistant mode keeps custom XML raw for Streamdown sanitization', () => {
+test('custom XML is surfaced by default instead of being consumed as HTML', () => {
+  const input = [
+    'call',
+    '<invoke name="Bash">',
+    '<parameter name="command">cd /Users/test/project',
+    "grep -nE 'forward_stream|stream_event' src/main.rs</parameter>",
+    '<parameter name="description">inspect stream logs</parameter>',
+    '</invoke>',
+  ].join('\n');
+  const o = prepareMessageMarkdown(input);
+  assert.match(o, /&lt;invoke name="Bash"&gt;/);
+  assert.match(o, /&lt;parameter name="command"&gt;cd \/Users\/test\/project/);
+  assert.match(o, /forward_stream\|stream_event/);
+  assert.match(o, /&lt;\/invoke&gt;/);
+});
+test('custom XML raw mode remains available for explicit Streamdown sanitization', () => {
   const o = prepareMessageMarkdown('<custom>\n## Hi\n</custom>', { surfaceCustomXmlTags: false });
   assert.equal(o, '<custom>\n## Hi\n</custom>');
 });

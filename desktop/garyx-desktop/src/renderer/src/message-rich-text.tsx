@@ -119,9 +119,9 @@ export const RichMessageText = memo(function RichMessageText({
   surfaceCustomXmlTags?: boolean;
 }) {
   const translations = useStreamdownTranslations();
-  // Hide Garyx-internal injected tags before Streamdown renders. User text can
-  // opt into surfacing custom XML literally; agent output lets Streamdown
-  // sanitize unknown tags so protocol wrappers don't leak into chat.
+  // Hide Garyx-internal injected tags before Streamdown renders. Unknown XML
+  // should remain visible text, otherwise Streamdown treats it like HTML and
+  // drops the tags while keeping their children.
   const prepared = useMemo(
     () => prepareMessageMarkdown(text, { surfaceCustomXmlTags }),
     [surfaceCustomXmlTags, text],

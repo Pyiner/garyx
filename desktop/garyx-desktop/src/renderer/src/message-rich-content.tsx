@@ -99,7 +99,6 @@ function TaskNotificationCard({
 
       <div className="task-notification-body">
         <RichMessageText
-          surfaceCustomXmlTags={false}
           text={notification.finalMessage}
           tone="assistant"
         />
@@ -707,7 +706,6 @@ export const RichMessageContent = memo(function RichMessageContent({
         <RichMessageText
           key={segment.key}
           onLocalFileLinkClick={onLocalFileLinkClick}
-          surfaceCustomXmlTags={altPrefix === "user"}
           text={segment.text}
           tone={tone}
         />
