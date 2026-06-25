@@ -39,8 +39,8 @@ function task(overrides) {
   };
 }
 
-test("keeps task nodes regardless of status for server-pruned tree", () => {
-  const threadRoot = {
+function threadRoot(overrides = {}) {
+  return {
     kind: "thread",
     nodeId: "thread-root:thread::root",
     threadId: "thread::root",
@@ -54,7 +54,12 @@ test("keeps task nodes regardless of status for server-pruned tree", () => {
     runState: "idle",
     updatedAt: null,
     lastActiveAt: null,
+    ...overrides,
   };
+}
+
+test("keeps task nodes regardless of status for server-pruned tree", () => {
+  const root = threadRoot();
   const doneAncestor = task({ number: 1, status: "done" });
   const activeChild = task({
     number: 2,
@@ -65,7 +70,7 @@ test("keeps task nodes regardless of status for server-pruned tree", () => {
   });
 
   assert.deepEqual(
-    visibleTaskTreeTasks([threadRoot, doneAncestor, activeChild]),
+    visibleTaskTreeTasks([root, doneAncestor, activeChild]),
     [doneAncestor, activeChild],
   );
 });
@@ -73,12 +78,41 @@ test("keeps task nodes regardless of status for server-pruned tree", () => {
 test("badge counts only active tasks", () => {
   assert.equal(
     taskTreeBadgeCount([
+      threadRoot(),
       task({ number: 1, status: "done" }),
       task({ number: 2, status: "in_progress" }),
       task({ number: 3, status: "in_review" }),
       task({ number: 4, status: "todo" }),
     ]),
     2,
+  );
+});
+
+test("rows build from mixed forest without rendering thread root row", () => {
+  const root = threadRoot();
+  const derivedRoot = task({
+    number: 1,
+    status: "in_progress",
+    parentNodeId: root.nodeId,
+    parentThreadId: root.threadId,
+  });
+  const grandchild = task({
+    number: 2,
+    status: "in_review",
+    parentNodeId: derivedRoot.nodeId,
+    parentTaskNumber: 1,
+    parentThreadId: derivedRoot.threadId,
+  });
+
+  assert.deepEqual(
+    buildTaskRows([root, derivedRoot, grandchild]).map(({ task, depth }) => [
+      task.number,
+      depth,
+    ]),
+    [
+      [1, 0],
+      [2, 1],
+    ],
   );
 });
 

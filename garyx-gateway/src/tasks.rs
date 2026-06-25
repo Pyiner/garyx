@@ -2040,6 +2040,112 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_task_forest_route_supports_conversation_anchor_thread_id() {
+        let state = state_with_task_executors().await;
+        state
+            .ops
+            .garyx_db
+            .upsert_recent_thread(RecentThreadDraft {
+                thread_id: "thread::route-origin-chat".to_owned(),
+                title: "Route Origin Chat".to_owned(),
+                workspace_dir: None,
+                thread_type: "chat".to_owned(),
+                provider_type: Some("codex".to_owned()),
+                agent_id: Some("codex".to_owned()),
+                message_count: 6,
+                last_message_preview: "Derived route tasks".to_owned(),
+                recent_run_id: None,
+                active_run_id: None,
+                run_state: "idle".to_owned(),
+                updated_at: Some("2026-01-01T00:00:01.000Z".to_owned()),
+                last_active_at: "2026-01-01T00:00:01.000Z".to_owned(),
+            })
+            .expect("insert route origin recent thread");
+        state
+            .ops
+            .garyx_db
+            .replace_task_projection(route_task_projection_draft(
+                "thread::route-derived-root",
+                30,
+                TaskStatus::InProgress,
+                "2026-01-01T00:00:02.000Z",
+                Some(route_chat_source("thread::route-origin-chat")),
+            ))
+            .expect("insert derived root projection");
+        state
+            .ops
+            .garyx_db
+            .replace_task_projection(route_task_projection_draft(
+                "thread::route-derived-child",
+                31,
+                TaskStatus::InReview,
+                "2026-01-01T00:00:03.000Z",
+                Some(route_task_source("thread::route-derived-root", "#TASK-30")),
+            ))
+            .expect("insert derived child projection");
+        state
+            .ops
+            .garyx_db
+            .record_projection_state(TASK_PROJECTION_NAME, CURRENT_TASK_PROJECTION_VERSION, 2)
+            .expect("mark projection current");
+
+        let (status, Json(payload)) = list_task_forest(
+            State(state),
+            Query(TaskListQuery {
+                status: Some(TaskStatus::Done),
+                assignee: None,
+                creator: None,
+                source_thread_id: Some("thread::unrelated".to_owned()),
+                source_task_id: Some("#TASK-999".to_owned()),
+                source_bot_id: Some("api:unrelated".to_owned()),
+                anchor_thread_id: Some("thread::route-origin-chat".to_owned()),
+                include_done: false,
+                scope: TaskForestScope::default(),
+                limit: Some(1),
+                offset: Some(99),
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(payload["total"], 3);
+        assert_eq!(payload["projection_current"], true);
+        assert_eq!(
+            payload["root_thread_ids"],
+            serde_json::json!(["thread::route-origin-chat"])
+        );
+        assert_eq!(payload["skipped_pinned_thread_ids"], serde_json::json!([]));
+        let tasks = payload["tasks"].as_array().expect("tasks array");
+        assert_eq!(
+            tasks
+                .iter()
+                .map(|task| task["thread_id"].as_str().unwrap_or_default())
+                .collect::<Vec<_>>(),
+            vec![
+                "thread::route-origin-chat",
+                "thread::route-derived-root",
+                "thread::route-derived-child"
+            ]
+        );
+        assert_eq!(tasks[0]["kind"], "thread");
+        assert_eq!(tasks[0]["title"], "Route Origin Chat");
+        assert_eq!(tasks[1]["kind"], "task");
+        assert_eq!(
+            tasks[1]["parent_node_id"],
+            "thread-root:thread::route-origin-chat"
+        );
+        assert_eq!(tasks[1]["parent_thread_id"], "thread::route-origin-chat");
+        assert_eq!(tasks[1]["parent_task_number"], Value::Null);
+        assert_eq!(tasks[2]["kind"], "task");
+        assert_eq!(
+            tasks[2]["parent_node_id"],
+            "task:thread::route-derived-root"
+        );
+        assert_eq!(tasks[2]["parent_thread_id"], "thread::route-derived-root");
+        assert_eq!(tasks[2]["parent_task_number"], 30);
+    }
+
+    #[tokio::test]
     async fn task_runtime_uses_assignee_default_workspace_when_unset() {
         let state = state_with_agent_default_workspace().await;
         let runtime = task_runtime_with_default_workspace(&state, None, Some("reviewer"))

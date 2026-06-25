@@ -36,9 +36,7 @@ pub(crate) fn prune_anchored_task_tree(
         by_thread.entry(node.thread_id.clone()).or_insert(index);
     }
 
-    let Some(anchor_index) = by_thread.get(anchor_thread_id).copied() else {
-        return Vec::new();
-    };
+    let anchor_is_task = by_thread.contains_key(anchor_thread_id);
     let active_indices = raw
         .iter()
         .enumerate()
@@ -54,11 +52,15 @@ pub(crate) fn prune_anchored_task_tree(
         .collect::<Vec<_>>();
 
     let mut retained = BTreeSet::new();
-    for index in active_indices
-        .into_iter()
-        .chain(std::iter::once(anchor_index))
-    {
+    for index in active_indices {
         retain_path(index, &parent_indices, &mut retained);
+    }
+    if anchor_is_task {
+        let anchor_index = by_thread
+            .get(anchor_thread_id)
+            .copied()
+            .expect("anchor_is_task was derived from by_thread");
+        retain_path(anchor_index, &parent_indices, &mut retained);
     }
 
     raw.iter()
@@ -68,9 +70,17 @@ pub(crate) fn prune_anchored_task_tree(
                 return None;
             }
             let mut node = row.node.clone();
-            let parent = parent_indices[index]
+            let parent_task = parent_indices[index]
                 .filter(|parent_index| retained.contains(parent_index))
                 .map(|parent_index| &raw[parent_index]);
+            let parent = match parent_task {
+                Some(parent) => ResolvedParent::Task(parent),
+                None if !anchor_is_task => ResolvedParent::Thread {
+                    node_id: thread_root_node_id(anchor_thread_id),
+                    thread_id: anchor_thread_id.to_owned(),
+                },
+                None => ResolvedParent::None,
+            };
             set_original_parent(&mut node, parent);
             Some(node)
         })
@@ -108,7 +118,13 @@ fn retain_path(
     }
 }
 
-fn set_original_parent(node: &mut TaskForestNode, parent: Option<&RawTaskNode>) {
+enum ResolvedParent<'a> {
+    Task(&'a RawTaskNode),
+    Thread { node_id: String, thread_id: String },
+    None,
+}
+
+fn set_original_parent(node: &mut TaskForestNode, parent: ResolvedParent<'_>) {
     let TaskForestNode::Task {
         parent_node_id,
         parent_task_number,
@@ -118,19 +134,31 @@ fn set_original_parent(node: &mut TaskForestNode, parent: Option<&RawTaskNode>) 
     else {
         return;
     };
-    if let Some(parent) = parent {
-        *parent_node_id = Some(task_node_id(&parent.thread_id));
-        *parent_task_number = Some(parent.number);
-        *parent_thread_id = Some(parent.thread_id.clone());
-    } else {
-        *parent_node_id = None;
-        *parent_task_number = None;
-        *parent_thread_id = None;
+    match parent {
+        ResolvedParent::Task(parent) => {
+            *parent_node_id = Some(task_node_id(&parent.thread_id));
+            *parent_task_number = Some(parent.number);
+            *parent_thread_id = Some(parent.thread_id.clone());
+        }
+        ResolvedParent::Thread { node_id, thread_id } => {
+            *parent_node_id = Some(node_id);
+            *parent_task_number = None;
+            *parent_thread_id = Some(thread_id);
+        }
+        ResolvedParent::None => {
+            *parent_node_id = None;
+            *parent_task_number = None;
+            *parent_thread_id = None;
+        }
     }
 }
 
-fn task_node_id(thread_id: &str) -> String {
+pub(crate) fn task_node_id(thread_id: &str) -> String {
     format!("task:{thread_id}")
+}
+
+pub(crate) fn thread_root_node_id(thread_id: &str) -> String {
+    format!("thread-root:{thread_id}")
 }
 
 #[cfg(test)]
@@ -239,6 +267,28 @@ mod tests {
         })
     }
 
+    fn parent_thread_id(nodes: &[TaskForestNode], number: u64) -> Option<String> {
+        nodes.iter().find_map(|node| match node {
+            TaskForestNode::Task {
+                task,
+                parent_thread_id,
+                ..
+            } if task.number == number => parent_thread_id.clone(),
+            _ => None,
+        })
+    }
+
+    fn parent_task_number(nodes: &[TaskForestNode], number: u64) -> Option<u64> {
+        nodes.iter().find_map(|node| match node {
+            TaskForestNode::Task {
+                task,
+                parent_task_number,
+                ..
+            } if task.number == number => *parent_task_number,
+            _ => None,
+        })
+    }
+
     #[test]
     fn scenario_01_chain_current_root() {
         let out = prune_anchored_task_tree(
@@ -306,6 +356,16 @@ mod tests {
         assert_eq!(
             parent_node_id(&out, 1305).as_deref(),
             Some("task:thread::1300")
+        );
+        assert!(
+            out.iter().all(|node| match node {
+                TaskForestNode::Task { parent_node_id, .. } => !parent_node_id
+                    .as_deref()
+                    .unwrap_or_default()
+                    .starts_with("thread-root:"),
+                TaskForestNode::Thread { .. } => true,
+            }),
+            "task anchors must not point at synthetic thread roots"
         );
         assert_eq!(active_count(&out), 2);
     }
@@ -406,5 +466,110 @@ mod tests {
         assert_eq!(parent_node_id(&out, 4).as_deref(), Some("task:thread::1"));
         assert_eq!(parent_node_id(&out, 5).as_deref(), Some("task:thread::2"));
         assert_eq!(parent_node_id(&out, 6).as_deref(), Some("task:thread::3"));
+    }
+
+    #[test]
+    fn conversation_anchor_single_derived_root_points_to_thread_root() {
+        let out = prune_anchored_task_tree(
+            vec![node(1400, TaskStatus::InProgress, None)],
+            "thread::conversation",
+        );
+
+        assert_eq!(numbers(&out), vec![1400]);
+        assert_eq!(
+            parent_node_id(&out, 1400).as_deref(),
+            Some("thread-root:thread::conversation")
+        );
+        assert_eq!(
+            parent_thread_id(&out, 1400).as_deref(),
+            Some("thread::conversation")
+        );
+        assert_eq!(parent_task_number(&out, 1400), None);
+    }
+
+    #[test]
+    fn conversation_anchor_keeps_multi_level_task_parents() {
+        let out = prune_anchored_task_tree(
+            vec![
+                node(1400, TaskStatus::InProgress, None),
+                node(1401, TaskStatus::InProgress, Some(1400)),
+                node(1402, TaskStatus::InReview, Some(1401)),
+            ],
+            "thread::conversation",
+        );
+
+        assert_eq!(numbers(&out), vec![1400, 1401, 1402]);
+        assert_eq!(
+            parent_node_id(&out, 1400).as_deref(),
+            Some("thread-root:thread::conversation")
+        );
+        assert_eq!(
+            parent_node_id(&out, 1401).as_deref(),
+            Some("task:thread::1400")
+        );
+        assert_eq!(
+            parent_node_id(&out, 1402).as_deref(),
+            Some("task:thread::1401")
+        );
+    }
+
+    #[test]
+    fn conversation_anchor_retains_done_ancestor_but_prunes_done_leaf() {
+        let done_ancestor = prune_anchored_task_tree(
+            vec![
+                node(1400, TaskStatus::Done, None),
+                node(1401, TaskStatus::InProgress, Some(1400)),
+            ],
+            "thread::conversation",
+        );
+        assert_eq!(numbers(&done_ancestor), vec![1400, 1401]);
+        assert_eq!(
+            parent_node_id(&done_ancestor, 1400).as_deref(),
+            Some("thread-root:thread::conversation")
+        );
+        assert_eq!(active_count(&done_ancestor), 1);
+
+        let done_leaf = prune_anchored_task_tree(
+            vec![
+                node(1400, TaskStatus::InProgress, None),
+                node(1401, TaskStatus::Done, Some(1400)),
+            ],
+            "thread::conversation",
+        );
+        assert_eq!(numbers(&done_leaf), vec![1400]);
+    }
+
+    #[test]
+    fn conversation_anchor_all_done_is_empty_without_thread_node() {
+        let out = prune_anchored_task_tree(
+            vec![
+                node(1400, TaskStatus::Done, None),
+                node(1401, TaskStatus::Done, Some(1400)),
+            ],
+            "thread::conversation",
+        );
+
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn conversation_anchor_supports_multiple_derived_roots() {
+        let out = prune_anchored_task_tree(
+            vec![
+                node(1400, TaskStatus::InProgress, None),
+                node(1500, TaskStatus::InReview, None),
+            ],
+            "thread::conversation",
+        );
+
+        assert_eq!(numbers(&out), vec![1400, 1500]);
+        assert_eq!(
+            parent_node_id(&out, 1400).as_deref(),
+            Some("thread-root:thread::conversation")
+        );
+        assert_eq!(
+            parent_node_id(&out, 1500).as_deref(),
+            Some("thread-root:thread::conversation")
+        );
     }
 }

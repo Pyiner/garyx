@@ -22,8 +22,8 @@ export function isActiveTaskStatus(status: DesktopTaskStatus): boolean {
   return status === "in_progress" || status === "in_review";
 }
 
-export function taskTreeBadgeCount(tasks: DesktopTaskForestTaskNode[]): number {
-  return tasks.filter((task) => isActiveTaskStatus(task.status)).length;
+export function taskTreeBadgeCount(nodes: DesktopTaskForestNode[]): number {
+  return nodes.filter((node) => isTaskNode(node) && isActiveTaskStatus(node.status)).length;
 }
 
 export function isCurrentTaskTreeNode(
@@ -76,30 +76,48 @@ export function taskStatusLabel(status: DesktopTaskStatus): string {
 /** Depth-order the tasks into a tree via parentNodeId; nodes whose parent
  *  isn't in the set become roots (depth 0). */
 export function buildTaskRows(
-  tasks: DesktopTaskForestTaskNode[],
+  nodes: DesktopTaskForestNode[],
 ): TaskTreeRow[] {
-  const ids = new Set(tasks.map((task) => task.nodeId));
-  const childrenByParent = new Map<string, DesktopTaskForestTaskNode[]>();
-  for (const task of tasks) {
+  const ids = new Set(nodes.map((node) => node.nodeId));
+  const originalIndex = new Map(nodes.map((node, index) => [node.nodeId, index]));
+  const childrenByParent = new Map<string, DesktopTaskForestNode[]>();
+  for (const node of nodes) {
     const parent =
-      task.parentNodeId && ids.has(task.parentNodeId) ? task.parentNodeId : "";
+      node.kind === "task" && node.parentNodeId && ids.has(node.parentNodeId)
+        ? node.parentNodeId
+        : "";
     const list = childrenByParent.get(parent) ?? [];
-    list.push(task);
+    list.push(node);
     childrenByParent.set(parent, list);
   }
   for (const list of childrenByParent.values()) {
-    list.sort((a, b) => a.number - b.number);
+    list.sort((a, b) => {
+      if (a.kind === "task" && b.kind === "task") {
+        return a.number - b.number;
+      }
+      if (a.kind === "thread" && b.kind === "task") {
+        return -1;
+      }
+      if (a.kind === "task" && b.kind === "thread") {
+        return 1;
+      }
+      return (originalIndex.get(a.nodeId) ?? 0) - (originalIndex.get(b.nodeId) ?? 0);
+    });
   }
   const rows: TaskTreeRow[] = [];
   const visited = new Set<string>();
   const walk = (parent: string, depth: number) => {
-    for (const task of childrenByParent.get(parent) ?? []) {
-      if (visited.has(task.nodeId)) {
+    for (const node of childrenByParent.get(parent) ?? []) {
+      if (visited.has(node.nodeId)) {
         continue;
       }
-      visited.add(task.nodeId);
-      rows.push({ task, depth });
-      walk(task.nodeId, Math.min(depth + 1, 4));
+      visited.add(node.nodeId);
+      if (node.kind === "thread") {
+        walk(node.nodeId, depth);
+      } else {
+        rows.push({ task: node, depth });
+        walk(node.nodeId, Math.min(depth + 1, 4));
+      }
     }
   };
   walk("", 0);

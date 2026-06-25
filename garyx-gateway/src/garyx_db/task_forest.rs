@@ -7,7 +7,7 @@ use rusqlite::types::{Type, Value as SqlValue};
 use rusqlite::{Connection, OptionalExtension, Transaction, params, params_from_iter};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-use crate::task_tree::{RawTaskNode, prune_anchored_task_tree};
+use crate::task_tree::{RawTaskNode, prune_anchored_task_tree, task_node_id, thread_root_node_id};
 
 use super::{
     GaryxDbError, GaryxDbResult, GaryxDbService, normalize_optional, normalize_thread_id,
@@ -580,11 +580,172 @@ impl GaryxDbService {
         _filter: &TaskListFilter,
     ) -> GaryxDbResult<TaskForestPage> {
         let anchor_thread_id = normalize_thread_id(anchor_thread_id)?;
+        let conn = self.conn()?;
+        let anchor_is_task = conn.query_row(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM task_projection
+                WHERE thread_id = ?1
+                  AND projection_version = ?2
+             )",
+            params![anchor_thread_id, CURRENT_TASK_PROJECTION_VERSION],
+            |row| row.get::<_, i64>(0).map(|value| value != 0),
+        )?;
         let raw_filter = TaskListFilter {
             include_done: true,
             ..TaskListFilter::default()
         };
         let (where_sql, bind_values) = task_projection_filter_sql(&raw_filter)?;
+
+        if anchor_is_task {
+            let list_sql = format!(
+                "WITH RECURSIVE filtered AS (
+                    SELECT task.thread_id, task.number, task.status, task.title,
+                           task.creator_json, task.assignee_json, task.source_json,
+                           task.executor_json, task.updated_at, task.updated_by_json,
+                           COALESCE(meta.agent_id, '') AS runtime_agent_id,
+                           COALESCE(meta.message_count, 0) AS reply_count,
+                           task.parent_task_number,
+                           task.source_task_thread_id,
+                           task.source_task_id,
+                           recent.active_run_id,
+                           recent.run_state,
+                           recent.last_active_at,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY task.number
+                               ORDER BY task.updated_at DESC, task.thread_id ASC
+                           ) AS rn
+                    FROM task_projection task
+                    LEFT JOIN thread_meta meta ON meta.thread_id = task.thread_id
+                    LEFT JOIN recent_threads recent ON recent.thread_id = task.thread_id
+                    WHERE {where_sql}
+                 ),
+                 deduped AS (
+                    SELECT * FROM filtered WHERE rn = 1
+                 ),
+                 parent_edges AS (
+                    SELECT child.thread_id,
+                           COALESCE(
+                               (
+                                   SELECT parent.thread_id
+                                   FROM deduped parent
+                                   WHERE (
+                                         child.parent_task_number IS NOT NULL
+                                     AND parent.number = child.parent_task_number
+                                   )
+                                      OR (
+                                         child.parent_task_number IS NULL
+                                     AND child.source_task_id = ('#TASK-' || parent.number) COLLATE NOCASE
+                                      )
+                                   ORDER BY parent.updated_at DESC, parent.thread_id ASC
+                                   LIMIT 1
+                               ),
+                               child.source_task_thread_id
+                           ) AS parent_thread_id
+                    FROM deduped child
+                 ),
+                 up(thread_id, number, depth, path) AS (
+                    SELECT d.thread_id, d.number, 0, ',' || d.thread_id || ','
+                    FROM deduped d
+                    WHERE d.thread_id = ?
+                    UNION ALL
+                    SELECT parent.thread_id, parent.number, up.depth + 1,
+                           up.path || parent.thread_id || ','
+                    FROM up
+                    JOIN parent_edges edge ON edge.thread_id = up.thread_id
+                    JOIN deduped parent ON parent.thread_id = edge.parent_thread_id
+                    WHERE up.depth < 64
+                      AND instr(up.path, ',' || parent.thread_id || ',') = 0
+                 ),
+                 root AS (
+                    SELECT thread_id
+                    FROM up
+                    ORDER BY depth DESC, thread_id ASC
+                    LIMIT 1
+                 ),
+                 down(thread_id, number, depth, path) AS (
+                    SELECT root.thread_id, d.number, 0, ',' || root.thread_id || ','
+                    FROM root
+                    JOIN deduped d ON d.thread_id = root.thread_id
+                    UNION ALL
+                    SELECT child.thread_id, child.number, down.depth + 1,
+                           down.path || child.thread_id || ','
+                    FROM down
+                    JOIN parent_edges edge ON edge.parent_thread_id = down.thread_id
+                    JOIN deduped child ON child.thread_id = edge.thread_id
+                    WHERE down.depth < 64
+                      AND instr(down.path, ',' || child.thread_id || ',') = 0
+                 )
+                 SELECT deduped.thread_id, deduped.number, deduped.status, deduped.title,
+                        deduped.creator_json, deduped.assignee_json,
+                        deduped.source_json, deduped.executor_json,
+                        deduped.updated_at, deduped.updated_by_json,
+                        deduped.runtime_agent_id, deduped.reply_count,
+                        deduped.parent_task_number,
+                        edge.parent_thread_id,
+                        deduped.active_run_id,
+                        COALESCE(deduped.run_state, 'idle') AS run_state,
+                        deduped.last_active_at,
+                        deduped.source_task_id,
+                        deduped.source_task_thread_id,
+                        (SELECT thread_id FROM root) AS root_thread_id
+                 FROM down
+                 JOIN deduped ON deduped.thread_id = down.thread_id
+                 LEFT JOIN parent_edges edge ON edge.thread_id = deduped.thread_id
+                 ORDER BY down.depth ASC, deduped.number ASC, deduped.thread_id ASC"
+            );
+
+            let mut list_bind_values = bind_values;
+            list_bind_values.push(SqlValue::Text(anchor_thread_id.clone()));
+            let mut stmt = conn.prepare(&list_sql)?;
+            let rows = stmt.query_map(params_from_iter(list_bind_values.iter()), |row| {
+                let source_task_id = row.get::<_, Option<String>>(17)?;
+                let source_task_number =
+                    source_task_id.as_deref().and_then(task_number_from_task_id);
+                let source_task_thread_id = row.get::<_, Option<String>>(18)?;
+                let root_thread_id = row.get::<_, String>(19)?;
+                let node = task_forest_task_from_row(row, None)?;
+                let TaskForestNode::Task {
+                    task,
+                    parent_task_number,
+                    ..
+                } = &node
+                else {
+                    unreachable!("anchored task tree SQL rows are task nodes");
+                };
+                Ok((
+                    root_thread_id,
+                    RawTaskNode {
+                        thread_id: task.thread_id.clone(),
+                        number: task.number,
+                        status: task.status,
+                        parent_task_number: *parent_task_number,
+                        source_task_number,
+                        source_task_thread_id,
+                        node,
+                    },
+                ))
+            })?;
+
+            let mut raw = Vec::new();
+            let mut root_thread_ids = Vec::new();
+            for row in rows {
+                let (root_thread_id, raw_node) = row?;
+                if !root_thread_ids.contains(&root_thread_id) {
+                    root_thread_ids.push(root_thread_id);
+                }
+                raw.push(raw_node);
+            }
+
+            let tasks = prune_anchored_task_tree(raw, &anchor_thread_id);
+            return Ok(TaskForestPage {
+                total: tasks.len(),
+                tasks,
+                root_thread_ids,
+                skipped_pinned_thread_ids: Vec::new(),
+            });
+        }
+
         let list_sql = format!(
             "WITH RECURSIVE filtered AS (
                 SELECT task.thread_id, task.number, task.status, task.title,
@@ -593,6 +754,7 @@ impl GaryxDbService {
                        COALESCE(meta.agent_id, '') AS runtime_agent_id,
                        COALESCE(meta.message_count, 0) AS reply_count,
                        task.parent_task_number,
+                       task.source_thread_id,
                        task.source_task_thread_id,
                        task.source_task_id,
                        recent.active_run_id,
@@ -631,29 +793,16 @@ impl GaryxDbService {
                        ) AS parent_thread_id
                 FROM deduped child
              ),
-             up(thread_id, number, depth, path) AS (
-                SELECT d.thread_id, d.number, 0, ',' || d.thread_id || ','
-                FROM deduped d
-                WHERE d.thread_id = ?
-                UNION ALL
-                SELECT parent.thread_id, parent.number, up.depth + 1,
-                       up.path || parent.thread_id || ','
-                FROM up
-                JOIN parent_edges edge ON edge.thread_id = up.thread_id
-                JOIN deduped parent ON parent.thread_id = edge.parent_thread_id
-                WHERE up.depth < 64
-                  AND instr(up.path, ',' || parent.thread_id || ',') = 0
-             ),
-             root AS (
-                SELECT thread_id
-                FROM up
-                ORDER BY depth DESC, thread_id ASC
-                LIMIT 1
+             seeds AS (
+                SELECT thread_id, number
+                FROM deduped
+                WHERE source_thread_id = ?
+                  AND parent_task_number IS NULL
+                  AND source_task_id IS NULL
              ),
              down(thread_id, number, depth, path) AS (
-                SELECT root.thread_id, d.number, 0, ',' || root.thread_id || ','
-                FROM root
-                JOIN deduped d ON d.thread_id = root.thread_id
+                SELECT s.thread_id, s.number, 0, ',' || s.thread_id || ','
+                FROM seeds s
                 UNION ALL
                 SELECT child.thread_id, child.number, down.depth + 1,
                        down.path || child.thread_id || ','
@@ -675,22 +824,22 @@ impl GaryxDbService {
                     deduped.last_active_at,
                     deduped.source_task_id,
                     deduped.source_task_thread_id,
-                    (SELECT thread_id FROM root) AS root_thread_id
+                    ? AS root_thread_id
              FROM down
              JOIN deduped ON deduped.thread_id = down.thread_id
              LEFT JOIN parent_edges edge ON edge.thread_id = deduped.thread_id
              ORDER BY down.depth ASC, deduped.number ASC, deduped.thread_id ASC"
         );
 
-        let conn = self.conn()?;
         let mut list_bind_values = bind_values;
+        list_bind_values.push(SqlValue::Text(anchor_thread_id.clone()));
         list_bind_values.push(SqlValue::Text(anchor_thread_id.clone()));
         let mut stmt = conn.prepare(&list_sql)?;
         let rows = stmt.query_map(params_from_iter(list_bind_values.iter()), |row| {
             let source_task_id = row.get::<_, Option<String>>(17)?;
             let source_task_number = source_task_id.as_deref().and_then(task_number_from_task_id);
             let source_task_thread_id = row.get::<_, Option<String>>(18)?;
-            let root_thread_id = row.get::<_, String>(19)?;
+            let _root_thread_id = row.get::<_, String>(19)?;
             let node = task_forest_task_from_row(row, None)?;
             let TaskForestNode::Task {
                 task,
@@ -698,33 +847,34 @@ impl GaryxDbService {
                 ..
             } = &node
             else {
-                unreachable!("anchored task tree SQL rows are task nodes");
+                unreachable!("anchored source-thread tree SQL rows are task nodes");
             };
-            Ok((
-                root_thread_id,
-                RawTaskNode {
-                    thread_id: task.thread_id.clone(),
-                    number: task.number,
-                    status: task.status,
-                    parent_task_number: *parent_task_number,
-                    source_task_number,
-                    source_task_thread_id,
-                    node,
-                },
-            ))
+            Ok(RawTaskNode {
+                thread_id: task.thread_id.clone(),
+                number: task.number,
+                status: task.status,
+                parent_task_number: *parent_task_number,
+                source_task_number,
+                source_task_thread_id,
+                node,
+            })
         })?;
 
         let mut raw = Vec::new();
-        let mut root_thread_ids = Vec::new();
         for row in rows {
-            let (root_thread_id, raw_node) = row?;
-            if !root_thread_ids.contains(&root_thread_id) {
-                root_thread_ids.push(root_thread_id);
-            }
-            raw.push(raw_node);
+            raw.push(row?);
         }
 
-        let tasks = prune_anchored_task_tree(raw, &anchor_thread_id);
+        let mut tasks = prune_anchored_task_tree(raw, &anchor_thread_id);
+        let root_thread_ids = if tasks.is_empty() {
+            Vec::new()
+        } else {
+            tasks.insert(
+                0,
+                task_forest_thread_root_from_conn(&conn, &anchor_thread_id)?,
+            );
+            vec![anchor_thread_id]
+        };
         Ok(TaskForestPage {
             total: tasks.len(),
             tasks,
@@ -981,13 +1131,13 @@ impl GaryxDbService {
                         (
                             Some(parent.number),
                             Some(parent.thread_id.clone()),
-                            Some(task_forest_task_node_id(&parent.thread_id)),
+                            Some(task_node_id(&parent.thread_id)),
                         )
                     } else {
                         (
                             None,
                             Some(root_thread_id.clone()),
-                            Some(task_forest_thread_root_node_id(root_thread_id)),
+                            Some(thread_root_node_id(root_thread_id)),
                         )
                     };
                 if let TaskForestNode::Task {
@@ -1249,14 +1399,6 @@ fn task_summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskSummar
     })
 }
 
-fn task_forest_thread_root_node_id(thread_id: &str) -> String {
-    format!("thread-root:{thread_id}")
-}
-
-fn task_forest_task_node_id(thread_id: &str) -> String {
-    format!("task:{thread_id}")
-}
-
 fn task_number_from_task_id(task_id: &str) -> Option<u64> {
     let trimmed = task_id.trim();
     let candidate = trimmed.strip_prefix('#').unwrap_or(trimmed);
@@ -1310,8 +1452,8 @@ fn task_forest_thread_root_from_conn(
 ) -> rusqlite::Result<TaskForestNode> {
     let row = conn
         .query_row(
-            "SELECT pinned.thread_id,
-                    COALESCE(NULLIF(recent.title, ''), NULLIF(meta.thread_label, ''), pinned.thread_id) AS title,
+            "SELECT base.thread_id,
+                    COALESCE(NULLIF(recent.title, ''), NULLIF(meta.thread_label, ''), base.thread_id) AS title,
                     COALESCE(NULLIF(recent.thread_type, ''), NULLIF(meta.thread_type, ''), 'chat') AS thread_type,
                     COALESCE(recent.provider_type, meta.provider_type) AS provider_type,
                     COALESCE(recent.agent_id, meta.agent_id) AS agent_id,
@@ -1330,14 +1472,14 @@ fn task_forest_thread_root_from_conn(
                     ) AS run_state,
                     COALESCE(recent.updated_at, meta.updated_at) AS updated_at,
                     COALESCE(recent.last_active_at, meta.updated_at, meta.projected_at) AS last_active_at
-             FROM thread_pins pinned
-             LEFT JOIN recent_threads recent ON recent.thread_id = pinned.thread_id
-             LEFT JOIN thread_meta meta ON meta.thread_id = pinned.thread_id
-             WHERE pinned.thread_id = ?1",
+             FROM (SELECT ?1 AS thread_id) base
+             LEFT JOIN recent_threads recent ON recent.thread_id = base.thread_id
+             LEFT JOIN thread_meta meta ON meta.thread_id = base.thread_id
+             WHERE base.thread_id = ?1",
             params![thread_id],
             |row| {
                 Ok(TaskForestNode::Thread {
-                    node_id: task_forest_thread_root_node_id(&row.get::<_, String>(0)?),
+                    node_id: thread_root_node_id(&row.get::<_, String>(0)?),
                     thread_id: row.get(0)?,
                     title: row.get(1)?,
                     thread_type: row.get(2)?,
@@ -1356,7 +1498,7 @@ fn task_forest_thread_root_from_conn(
         )
         .optional()?;
     Ok(row.unwrap_or_else(|| TaskForestNode::Thread {
-        node_id: task_forest_thread_root_node_id(thread_id),
+        node_id: thread_root_node_id(thread_id),
         thread_id: thread_id.to_owned(),
         title: thread_id.to_owned(),
         thread_type: "chat".to_owned(),
@@ -1382,10 +1524,10 @@ fn task_forest_task_from_row(
         .filter(|value| *value > 0);
     let parent_thread_id = row.get::<_, Option<String>>(13)?;
     let parent_node_id = root_parent_thread_id
-        .map(task_forest_thread_root_node_id)
-        .or_else(|| parent_thread_id.as_deref().map(task_forest_task_node_id));
+        .map(thread_root_node_id)
+        .or_else(|| parent_thread_id.as_deref().map(task_node_id));
     Ok(TaskForestNode::Task {
-        node_id: task_forest_task_node_id(&task.thread_id),
+        node_id: task_node_id(&task.thread_id),
         parent_node_id,
         task,
         parent_task_number,
@@ -2121,6 +2263,53 @@ mod tests {
     }
 
     #[test]
+    fn pinned_task_forest_wire_json_regression_for_thread_root_helper() {
+        let db = GaryxDbService::memory().expect("db opens");
+        db.upsert_recent_thread(RecentThreadDraft {
+            thread_id: "thread::wire-chat".to_owned(),
+            title: "Wire Chat".to_owned(),
+            workspace_dir: None,
+            thread_type: "chat".to_owned(),
+            provider_type: Some("codex".to_owned()),
+            agent_id: Some("codex".to_owned()),
+            message_count: 2,
+            last_message_preview: "Wire preview".to_owned(),
+            recent_run_id: None,
+            active_run_id: None,
+            run_state: "idle".to_owned(),
+            updated_at: Some("2026-01-01T00:00:01.000Z".to_owned()),
+            last_active_at: "2026-01-01T00:00:01.000Z".to_owned(),
+        })
+        .expect("insert wire chat");
+        db.replace_task_projection(task_projection_draft(
+            "thread::wire-child",
+            61,
+            TaskStatus::InProgress,
+            "2026-01-01T00:00:02.000Z",
+            Some(chat_source("thread::wire-chat")),
+            1,
+        ))
+        .expect("insert wire child");
+        db.pin_thread("thread::wire-chat").expect("pin wire chat");
+
+        let page = db
+            .list_task_forest(
+                &TaskListFilter {
+                    include_done: true,
+                    ..Default::default()
+                },
+                TaskForestScope::Pinned,
+            )
+            .expect("list pinned forest");
+        let wire = serde_json::to_string(&page).expect("serialize pinned forest");
+
+        assert_eq!(
+            wire,
+            r##"{"tasks":[{"kind":"thread","node_id":"thread-root:thread::wire-chat","thread_id":"thread::wire-chat","title":"Wire Chat","thread_type":"chat","provider_type":"codex","agent_id":"codex","message_count":2,"last_message_preview":"Wire preview","active_run_id":null,"run_state":"idle","updated_at":"2026-01-01T00:00:01.000Z","last_active_at":"2026-01-01T00:00:01.000Z"},{"kind":"task","node_id":"task:thread::wire-child","parent_node_id":"thread-root:thread::wire-chat","thread_id":"thread::wire-child","task_id":"#TASK-61","number":61,"title":"Task 61","status":"in_progress","creator":{"kind":"agent","agent_id":"test-agent"},"assignee":{"kind":"human","user_id":"1000000001"},"source":{"thread_id":"thread::wire-chat"},"updated_at":"2026-01-01T00:00:02Z","updated_by":{"kind":"agent","agent_id":"test-agent"},"runtime_agent_id":"","reply_count":0,"parent_task_number":null,"parent_thread_id":"thread::wire-chat","active_run_id":null,"run_state":"idle","last_active_at":null}],"total":2,"root_thread_ids":["thread::wire-chat"],"skipped_pinned_thread_ids":[]}"##
+        );
+    }
+
+    #[test]
     fn anchored_task_forest_climbs_to_root_and_keeps_done_ancestors() {
         let db = GaryxDbService::memory().expect("db opens");
         db.replace_task_projection(task_projection_draft(
@@ -2432,6 +2621,162 @@ mod tests {
             .expect("leaf");
         assert_eq!(leaf.parent_task_number(), Some(302));
         assert_eq!(leaf.parent_thread_id(), Some("thread::filter-child"));
+    }
+
+    #[test]
+    fn anchored_task_forest_source_thread_anchor_returns_thread_root_and_subtree() {
+        let db = GaryxDbService::memory().expect("db opens");
+        db.upsert_recent_thread(RecentThreadDraft {
+            thread_id: "thread::origin-chat".to_owned(),
+            title: "Origin chat".to_owned(),
+            workspace_dir: None,
+            thread_type: "chat".to_owned(),
+            provider_type: Some("codex".to_owned()),
+            agent_id: Some("codex".to_owned()),
+            message_count: 8,
+            last_message_preview: "Spawned task work".to_owned(),
+            recent_run_id: None,
+            active_run_id: None,
+            run_state: "idle".to_owned(),
+            updated_at: Some("2026-01-01T00:00:00.500Z".to_owned()),
+            last_active_at: "2026-01-01T00:00:00.500Z".to_owned(),
+        })
+        .expect("insert origin chat");
+        db.replace_task_projection(task_projection_draft(
+            "thread::derived-root",
+            401,
+            TaskStatus::InProgress,
+            "2026-01-01T00:00:01.000Z",
+            Some(chat_source("thread::origin-chat")),
+            1,
+        ))
+        .expect("insert derived root");
+        db.replace_task_projection(task_projection_draft(
+            "thread::derived-child",
+            402,
+            TaskStatus::InReview,
+            "2026-01-01T00:00:02.000Z",
+            Some(thread_source("thread::derived-root", "#TASK-401")),
+            1,
+        ))
+        .expect("insert derived child");
+        db.replace_task_projection(task_projection_draft(
+            "thread::other-derived",
+            499,
+            TaskStatus::InProgress,
+            "2026-01-01T00:00:03.000Z",
+            Some(chat_source("thread::other-chat")),
+            1,
+        ))
+        .expect("insert other conversation task");
+
+        let page = db
+            .list_task_forest_anchored(
+                "thread::origin-chat",
+                &TaskListFilter {
+                    status: Some(TaskStatus::Done),
+                    assignee: Some(Principal::Human {
+                        user_id: "1000000009".to_owned(),
+                    }),
+                    creator: Some(Principal::Agent {
+                        agent_id: "hostile-creator".to_owned(),
+                    }),
+                    source_thread_id: Some("thread::other-chat".to_owned()),
+                    source_task_id: Some("#TASK-499".to_owned()),
+                    source_bot_id: Some("api:hostile".to_owned()),
+                    include_done: false,
+                    limit: Some(1),
+                    offset: Some(99),
+                },
+            )
+            .expect("source-thread anchored forest");
+
+        assert_eq!(page.root_thread_ids, vec!["thread::origin-chat"]);
+        assert_eq!(page.skipped_pinned_thread_ids, Vec::<String>::new());
+        assert_eq!(page.total, 3);
+        assert_eq!(
+            page.tasks
+                .iter()
+                .map(|node| node.thread_id())
+                .collect::<Vec<_>>(),
+            vec![
+                "thread::origin-chat",
+                "thread::derived-root",
+                "thread::derived-child",
+            ]
+        );
+        match &page.tasks[0] {
+            TaskForestNode::Thread { title, .. } => assert_eq!(title, "Origin chat"),
+            TaskForestNode::Task { .. } => panic!("source-thread anchor must prepend thread root"),
+        }
+        let derived_root = page
+            .tasks
+            .iter()
+            .find(|node| node.thread_id() == "thread::derived-root")
+            .expect("derived root");
+        assert_eq!(
+            derived_root.parent_node_id(),
+            Some("thread-root:thread::origin-chat")
+        );
+        assert_eq!(derived_root.parent_thread_id(), Some("thread::origin-chat"));
+        assert_eq!(derived_root.parent_task_number(), None);
+        let derived_child = page
+            .tasks
+            .iter()
+            .find(|node| node.thread_id() == "thread::derived-child")
+            .expect("derived child");
+        assert_eq!(
+            derived_child.parent_node_id(),
+            Some("task:thread::derived-root")
+        );
+        assert_eq!(
+            derived_child.parent_thread_id(),
+            Some("thread::derived-root")
+        );
+        assert_eq!(derived_child.parent_task_number(), Some(401));
+        assert!(
+            !page
+                .tasks
+                .iter()
+                .any(|node| node.thread_id() == "thread::other-derived"),
+            "source-thread anchor must exclude tasks from other conversations"
+        );
+
+        let task_anchor = db
+            .list_task_forest_anchored("thread::derived-root", &TaskListFilter::default())
+            .expect("task anchored forest");
+        assert!(
+            task_anchor
+                .tasks
+                .iter()
+                .all(|node| matches!(node, TaskForestNode::Task { .. })),
+            "task anchors must never receive a synthetic thread root"
+        );
+
+        db.replace_task_projection(task_projection_draft(
+            "thread::done-derived",
+            501,
+            TaskStatus::Done,
+            "2026-01-01T00:00:04.000Z",
+            Some(chat_source("thread::done-chat")),
+            1,
+        ))
+        .expect("insert done source-thread root");
+        db.replace_task_projection(task_projection_draft(
+            "thread::done-derived-child",
+            502,
+            TaskStatus::Done,
+            "2026-01-01T00:00:05.000Z",
+            Some(thread_source("thread::done-derived", "#TASK-501")),
+            1,
+        ))
+        .expect("insert done source-thread child");
+        let done_page = db
+            .list_task_forest_anchored("thread::done-chat", &TaskListFilter::default())
+            .expect("done source-thread anchored forest");
+        assert_eq!(done_page.total, 0);
+        assert!(done_page.tasks.is_empty());
+        assert!(done_page.root_thread_ids.is_empty());
     }
 
     #[test]

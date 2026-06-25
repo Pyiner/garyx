@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ListTree } from "lucide-react";
 
-import type { DesktopTaskForestTaskNode } from "@shared/contracts";
+import type {
+  DesktopTaskForestNode,
+  DesktopTaskForestTaskNode,
+} from "@shared/contracts";
 
 import { getDesktopApi } from "../../platform/desktop-api";
 import { useI18n } from "../../i18n";
@@ -16,7 +19,6 @@ import {
   taskStatusLabel,
   taskStatusTone,
   taskTreeBadgeCount,
-  visibleTaskTreeTasks,
 } from "./thread-task-tree-popover-model";
 
 const REFRESH_MS = 5000;
@@ -37,7 +39,7 @@ export function ThreadTaskTreePopover({
   onOpenThread,
 }: ThreadTaskTreePopoverProps) {
   const { t } = useI18n();
-  const [tasks, setTasks] = useState<DesktopTaskForestTaskNode[]>([]);
+  const [nodes, setNodes] = useState<DesktopTaskForestNode[]>([]);
   const mountedRef = useRef(true);
   const currentThreadRef = useRef<string | null>(threadId);
 
@@ -54,7 +56,7 @@ export function ThreadTaskTreePopover({
 
   const load = useCallback(async () => {
     if (!threadId) {
-      setTasks([]);
+      setNodes([]);
       return;
     }
     try {
@@ -64,7 +66,7 @@ export function ThreadTaskTreePopover({
       if (!mountedRef.current || currentThreadRef.current !== threadId) {
         return;
       }
-      setTasks(visibleTaskTreeTasks(page.tasks));
+      setNodes(page.tasks);
     } catch {
       /* leave previous state on transient errors */
     }
@@ -73,7 +75,7 @@ export function ThreadTaskTreePopover({
   // Reset + reload whenever the active thread changes so the list always
   // reflects the conversation currently open in the detail pane.
   useEffect(() => {
-    setTasks([]);
+    setNodes([]);
     void load();
   }, [load]);
 
@@ -82,11 +84,11 @@ export function ThreadTaskTreePopover({
     return () => window.clearInterval(interval);
   }, [load]);
 
-  const rows = useMemo(() => buildTaskRows(tasks), [tasks]);
-  const activeCount = useMemo(() => taskTreeBadgeCount(tasks), [tasks]);
+  const rows = useMemo(() => buildTaskRows(nodes), [nodes]);
+  const activeCount = useMemo(() => taskTreeBadgeCount(nodes), [nodes]);
 
   // Nothing to show when this conversation has no anchored active task tree.
-  if (!threadId || tasks.length === 0) {
+  if (!threadId || rows.length === 0) {
     return null;
   }
 
