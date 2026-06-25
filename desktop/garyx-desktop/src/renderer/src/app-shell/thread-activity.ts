@@ -53,6 +53,8 @@ export function deriveThreadActivityModel(input: {
   pendingAckIntentCount: number;
   remoteAwaitingAckInputCount: number;
   pendingHistoryIntent: boolean;
+  renderTailActivity?: RenderTailActivity | null;
+  renderActiveToolGroupId?: string | null;
 }): ThreadActivityModel {
   const latestUserAwaitsAssistant = latestUserMessageAwaitsAssistant(input.messages);
   const showPendingAckLoading = Boolean(
@@ -61,10 +63,11 @@ export function deriveThreadActivityModel(input: {
       (input.pendingHistoryIntent && latestUserAwaitsAssistant),
   );
   const runActive = Boolean(input.runtimeBusy);
+  const renderActive = renderStateIndicatesActiveRun(input);
   return {
     runActive,
     showPendingAckLoading,
-    canSteerQueuedPrompt: showPendingAckLoading || runActive,
+    canSteerQueuedPrompt: showPendingAckLoading || runActive || renderActive,
   };
 }
 

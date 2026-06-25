@@ -2901,6 +2901,8 @@ export function AppShell() {
     pendingAckIntentCount: visiblePendingAckIntents.length,
     remoteAwaitingAckInputCount: visibleRemoteAwaitingAckInputs.length,
     pendingHistoryIntent: activePendingHistoryIntent,
+    renderTailActivity: activeRenderState?.tailActivity ?? null,
+    renderActiveToolGroupId: activeRenderState?.activeToolGroupId ?? null,
   });
   const showPendingAckLoading = threadActivity.showPendingAckLoading;
   const canSteerQueuedPrompt = threadActivity.canSteerQueuedPrompt;
@@ -3496,6 +3498,8 @@ export function AppShell() {
     pendingAckIntentCount: sideChatPendingAckIntents.length,
     remoteAwaitingAckInputCount: sideChatVisibleRemotePendingInputs.length,
     pendingHistoryIntent: sideChatPendingHistoryIntent,
+    renderTailActivity: sideChatRenderState?.tailActivity ?? null,
+    renderActiveToolGroupId: sideChatRenderState?.activeToolGroupId ?? null,
   });
   const sideChatShowPendingAckLoading =
     sideChatThreadActivity.showPendingAckLoading;

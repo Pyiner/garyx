@@ -59,6 +59,22 @@ test('thread activity model uses runtime busy as the remote business gate', () =
   assert.equal(model.canSteerQueuedPrompt, true);
 });
 
+test('thread activity model allows steering from server render activity', () => {
+  const model = deriveThreadActivityModel({
+    messages: [],
+    runtimeBusy: false,
+    pendingAckIntentCount: 0,
+    remoteAwaitingAckInputCount: 0,
+    pendingHistoryIntent: false,
+    renderTailActivity: 'thinking',
+    renderActiveToolGroupId: null,
+  });
+
+  assert.equal(model.runActive, false);
+  assert.equal(model.showPendingAckLoading, false);
+  assert.equal(model.canSteerQueuedPrompt, true);
+});
+
 test('composer control uses server render thinking when local runtime is idle', () => {
   const model = deriveThreadComposerControlModel({
     hasThread: true,
