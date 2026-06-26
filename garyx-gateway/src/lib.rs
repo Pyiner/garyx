@@ -7,6 +7,7 @@ mod application;
 pub mod automation;
 mod channel_catalog;
 pub mod chat;
+mod claude_oauth;
 pub mod coding_usage;
 pub mod commands;
 mod composition;

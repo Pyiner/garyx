@@ -1,6 +1,8 @@
-use std::collections::HashSet;
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
 use std::process::Stdio;
-use std::time::Duration;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use garyx_models::codex_models::{
     CODEX_MODELS_CLIENT_VERSION_FLOOR, CodexModelPreset, CodexModelServiceTier,
@@ -25,6 +27,9 @@ const GEMINI_ACP_MODEL_METHODS: &[&str] = &[
     "session/models",
     "list_models",
 ];
+const CLAUDE_MODELS_BASE_URL: &str = "https://api.anthropic.com";
+const CLAUDE_MODELS_TIMEOUT: Duration = Duration::from_secs(5);
+const PROVIDER_MODEL_DISCOVERY_SUCCESS_TTL: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ProviderModelOption {
@@ -86,7 +91,8 @@ struct GeminiModelDiscovery {
     default_model: Option<String>,
 }
 
-struct GptModelDiscovery {
+#[derive(Debug, Clone)]
+struct ProviderModelDiscovery {
     models: Vec<ProviderModelOption>,
     default_model: Option<String>,
     reasoning_efforts: Vec<ProviderReasoningEffortOption>,
@@ -94,6 +100,8 @@ struct GptModelDiscovery {
     source: &'static str,
     error: Option<String>,
 }
+
+type GptModelDiscovery = ProviderModelDiscovery;
 
 pub(crate) async fn list_provider_models(
     config: &GaryxConfig,
@@ -119,26 +127,36 @@ pub(crate) async fn list_provider_models(
                 configured_default_model(config, ProviderType::GeminiCli, aliases);
             let configured_default_reasoning_effort =
                 configured_default_reasoning_effort(config, ProviderType::GeminiCli, aliases);
-            match fetch_gemini_acp_models(config).await {
-                Ok(discovery) if !discovery.models.is_empty() => ProviderModelsResponse {
-                    provider_type,
-                    supports_model_selection: true,
-                    models: discovery.models,
-                    supports_reasoning_effort_selection: false,
-                    reasoning_efforts: Vec::new(),
-                    supports_service_tier_selection: false,
-                    service_tiers: Vec::new(),
-                    default_model: configured_default.or(discovery.default_model),
-                    default_reasoning_effort: configured_default_reasoning_effort,
-                    source: "gemini_acp",
-                    error: None,
-                },
-                Ok(_) => unsupported(
-                    provider_type,
-                    "gemini_acp",
-                    Some("local Gemini ACP returned no models".to_owned()),
-                ),
-                Err(error) => unsupported(provider_type, "gemini_acp", Some(error)),
+            let discovery = match fresh_cached_discovery("gemini_cli") {
+                Some(discovery) => discovery,
+                None => {
+                    let result = fetch_gemini_acp_models(config).await.map(|discovery| {
+                        ProviderModelDiscovery {
+                            models: discovery.models,
+                            default_model: discovery.default_model,
+                            reasoning_efforts: Vec::new(),
+                            service_tiers: Vec::new(),
+                            source: "gemini_acp",
+                            error: None,
+                        }
+                    });
+                    discover_or_fallback("gemini_cli", result, gemini_cli_preset_models)
+                }
+            };
+            let supports_reasoning_effort_selection =
+                provider_supports_reasoning_effort_selection(&discovery.models);
+            ProviderModelsResponse {
+                provider_type,
+                supports_model_selection: !discovery.models.is_empty(),
+                supports_reasoning_effort_selection,
+                reasoning_efforts: discovery.reasoning_efforts,
+                models: discovery.models,
+                supports_service_tier_selection: !discovery.service_tiers.is_empty(),
+                service_tiers: discovery.service_tiers,
+                default_model: configured_default.or(discovery.default_model),
+                default_reasoning_effort: configured_default_reasoning_effort,
+                source: discovery.source,
+                error: discovery.error,
             }
         }
         ProviderType::ClaudeCode => {
@@ -146,24 +164,34 @@ pub(crate) async fn list_provider_models(
             // statically knowable unless the gateway config pins one. Without
             // a chosen model, only the levels every model supports are offered.
             let aliases = &["claude", "claude_code", "claude_tty"];
-            let models = claude_code_models();
-            let reasoning_efforts = common_reasoning_efforts(&models);
+            let default_model = configured_default_model(config, ProviderType::ClaudeCode, aliases);
+            let default_reasoning_effort =
+                configured_default_reasoning_effort(config, ProviderType::ClaudeCode, aliases);
+            let mut discovery = match fresh_cached_discovery("claude_code") {
+                Some(discovery) => discovery,
+                None => {
+                    let result = fetch_claude_code_models().await;
+                    discover_or_fallback("claude_code", result, |error| {
+                        claude_code_builtin_models(Some(error))
+                    })
+                }
+            };
+            discovery.reasoning_efforts =
+                reasoning_efforts_for_default_model(&discovery.models, default_model.as_deref());
+            let supports_reasoning_effort_selection =
+                provider_supports_reasoning_effort_selection(&discovery.models);
             ProviderModelsResponse {
                 provider_type,
                 supports_model_selection: true,
-                supports_reasoning_effort_selection: !reasoning_efforts.is_empty(),
-                reasoning_efforts,
-                models,
+                supports_reasoning_effort_selection,
+                reasoning_efforts: discovery.reasoning_efforts,
+                models: discovery.models,
                 supports_service_tier_selection: false,
                 service_tiers: Vec::new(),
-                default_model: configured_default_model(config, ProviderType::ClaudeCode, aliases),
-                default_reasoning_effort: configured_default_reasoning_effort(
-                    config,
-                    ProviderType::ClaudeCode,
-                    aliases,
-                ),
-                source: "claude_code_builtin",
-                error: None,
+                default_model,
+                default_reasoning_effort,
+                source: discovery.source,
+                error: discovery.error,
             }
         }
         ProviderType::CodexAppServer | ProviderType::Traex => {
@@ -183,20 +211,23 @@ pub(crate) async fn list_provider_models(
             let configured_default_reasoning_effort =
                 configured_default_reasoning_effort(config, provider_type.clone(), aliases);
             let bin = app_server_model_bin(&provider_type);
-            let mut discovery = match fetch_app_server_models(bin, source).await {
-                Ok(discovery) => discovery,
-                // Traex has no static catalog: report empty/unavailable rather
-                // than falling back to Codex's GPT presets (which would show
-                // wrong models and reasoning/tier options for Trae).
-                Err(error) if provider_type == ProviderType::Traex => GptModelDiscovery {
-                    models: Vec::new(),
-                    default_model: None,
-                    reasoning_efforts: Vec::new(),
-                    service_tiers: Vec::new(),
-                    source: "traex_app_server",
-                    error: Some(error),
-                },
-                Err(_) => gpt_builtin_models(None),
+            let cache_key = if provider_type == ProviderType::Traex {
+                "traex"
+            } else {
+                "codex_app_server"
+            };
+            let mut discovery = match fresh_cached_discovery(cache_key) {
+                Some(discovery) => discovery,
+                None => {
+                    let result = fetch_app_server_models(bin, source).await;
+                    if provider_type == ProviderType::Traex {
+                        discover_or_fallback(cache_key, result, traex_unavailable_models)
+                    } else {
+                        discover_or_fallback(cache_key, result, |error| {
+                            gpt_builtin_models(Some(error))
+                        })
+                    }
+                }
             };
             if let Some(default_model) =
                 configured_default_model(config, provider_type.clone(), aliases)
@@ -207,14 +238,16 @@ pub(crate) async fn list_provider_models(
                 // keeps the backend-reported default.
                 discovery.default_model = None;
             }
+            let supports_reasoning_effort_selection =
+                provider_supports_reasoning_effort_selection(&discovery.models);
             ProviderModelsResponse {
                 provider_type,
                 supports_model_selection: !discovery.models.is_empty(),
                 models: discovery.models,
-                // Derive from the discovered catalog: some backends (e.g. the
-                // Traex `trae` provider) advertise models with no selectable
-                // reasoning efforts, so we must not claim a reasoning picker.
-                supports_reasoning_effort_selection: !discovery.reasoning_efforts.is_empty(),
+                // Derive from the full discovered catalog: some providers expose
+                // a default model with no effort controls while another model
+                // does support them.
+                supports_reasoning_effort_selection,
                 reasoning_efforts: discovery.reasoning_efforts,
                 supports_service_tier_selection: !discovery.service_tiers.is_empty(),
                 service_tiers: discovery.service_tiers,
@@ -231,11 +264,13 @@ pub(crate) async fn list_provider_models(
                     discovery,
                     configured_default_model(config, ProviderType::Gpt, aliases),
                 );
+                let supports_reasoning_effort_selection =
+                    provider_supports_reasoning_effort_selection(&discovery.models);
                 ProviderModelsResponse {
                     provider_type,
                     supports_model_selection: true,
                     models: discovery.models,
-                    supports_reasoning_effort_selection: true,
+                    supports_reasoning_effort_selection,
                     reasoning_efforts: discovery.reasoning_efforts,
                     supports_service_tier_selection: !discovery.service_tiers.is_empty(),
                     service_tiers: discovery.service_tiers,
@@ -260,11 +295,13 @@ pub(crate) async fn list_provider_models(
                     gpt_builtin_models(Some(error)),
                     configured_default_model(config, ProviderType::Gpt, aliases),
                 );
+                let supports_reasoning_effort_selection =
+                    provider_supports_reasoning_effort_selection(&discovery.models);
                 ProviderModelsResponse {
                     provider_type,
                     supports_model_selection: true,
                     models: discovery.models,
-                    supports_reasoning_effort_selection: true,
+                    supports_reasoning_effort_selection,
                     reasoning_efforts: discovery.reasoning_efforts,
                     supports_service_tier_selection: !discovery.service_tiers.is_empty(),
                     service_tiers: discovery.service_tiers,
@@ -396,6 +433,103 @@ fn unsupported(
     }
 }
 
+#[derive(Debug, Clone)]
+struct ProviderModelDiscoveryCacheEntry {
+    fetched_at: Instant,
+    discovery: ProviderModelDiscovery,
+}
+
+fn provider_model_discovery_cache()
+-> &'static Mutex<HashMap<&'static str, ProviderModelDiscoveryCacheEntry>> {
+    static CACHE: OnceLock<Mutex<HashMap<&'static str, ProviderModelDiscoveryCacheEntry>>> =
+        OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn fresh_cached_discovery(cache_key: &'static str) -> Option<ProviderModelDiscovery> {
+    let guard = provider_model_discovery_cache().lock().ok()?;
+    let entry = guard.get(cache_key)?;
+    (entry.fetched_at.elapsed() < PROVIDER_MODEL_DISCOVERY_SUCCESS_TTL)
+        .then(|| entry.discovery.clone())
+}
+
+fn cached_discovery(cache_key: &'static str) -> Option<ProviderModelDiscovery> {
+    let guard = provider_model_discovery_cache().lock().ok()?;
+    guard.get(cache_key).map(|entry| entry.discovery.clone())
+}
+
+fn store_discovery(cache_key: &'static str, discovery: ProviderModelDiscovery) {
+    if let Ok(mut guard) = provider_model_discovery_cache().lock() {
+        guard.insert(
+            cache_key,
+            ProviderModelDiscoveryCacheEntry {
+                fetched_at: Instant::now(),
+                discovery,
+            },
+        );
+    }
+}
+
+fn discover_or_fallback(
+    cache_key: &'static str,
+    discover_result: Result<ProviderModelDiscovery, String>,
+    fallback: impl FnOnce(String) -> ProviderModelDiscovery,
+) -> ProviderModelDiscovery {
+    match discover_result {
+        Ok(discovery) if !discovery.models.is_empty() => {
+            store_discovery(cache_key, discovery.clone());
+            discovery
+        }
+        Ok(discovery) => {
+            let error = format!("{} returned no models", discovery.source);
+            stale_or_fallback(cache_key, error, fallback)
+        }
+        Err(error) => stale_or_fallback(cache_key, error, fallback),
+    }
+}
+
+fn stale_or_fallback(
+    cache_key: &'static str,
+    error: String,
+    fallback: impl FnOnce(String) -> ProviderModelDiscovery,
+) -> ProviderModelDiscovery {
+    if let Some(mut discovery) = cached_discovery(cache_key) {
+        discovery.error = Some(error);
+        return discovery;
+    }
+    fallback(error)
+}
+
+#[cfg(test)]
+fn clear_provider_model_discovery_cache_for_tests() {
+    if let Ok(mut guard) = provider_model_discovery_cache().lock() {
+        guard.clear();
+    }
+}
+
+fn provider_supports_reasoning_effort_selection(models: &[ProviderModelOption]) -> bool {
+    models
+        .iter()
+        .any(|model| !model.supported_reasoning_efforts.is_empty())
+}
+
+fn reasoning_efforts_for_default_model(
+    models: &[ProviderModelOption],
+    default_model: Option<&str>,
+) -> Vec<ProviderReasoningEffortOption> {
+    if let Some(default_model) = default_model
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return models
+            .iter()
+            .find(|model| model.id == default_model)
+            .map(|model| model.supported_reasoning_efforts.clone())
+            .unwrap_or_default();
+    }
+    common_reasoning_efforts(models)
+}
+
 fn configured_agent_provider_config(
     config: &GaryxConfig,
     provider_type: ProviderType,
@@ -432,6 +566,236 @@ fn configured_default_reasoning_effort(
     configured_agent_provider_config(config, provider_type, keys)
         .map(|config| config.model_reasoning_effort.trim().to_owned())
         .filter(|effort| !effort.is_empty())
+}
+
+async fn fetch_claude_code_models() -> Result<ProviderModelDiscovery, String> {
+    #[cfg(test)]
+    if std::env::var_os("GARYX_ALLOW_REAL_CLAUDE_MODEL_FETCH").is_none() {
+        return Err("Claude model catalog fetch disabled in tests".to_owned());
+    }
+
+    let token = crate::claude_oauth::read_oauth_token().await?;
+    fetch_claude_code_models_from_endpoint(CLAUDE_MODELS_BASE_URL, &token, CLAUDE_MODELS_TIMEOUT)
+        .await
+}
+
+async fn fetch_claude_code_models_from_endpoint(
+    base_url: &str,
+    token: &str,
+    request_timeout: Duration,
+) -> Result<ProviderModelDiscovery, String> {
+    let token = token.trim();
+    if token.is_empty() {
+        return Err("Claude OAuth token was empty".to_owned());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(request_timeout)
+        .build()
+        .map_err(|error| format!("failed to build Claude model catalog HTTP client: {error}"))?;
+    let endpoint = format!("{}/v1/models", base_url.trim_end_matches('/'));
+    let response = timeout(
+        request_timeout,
+        client
+            .get(endpoint)
+            .bearer_auth(token)
+            .header(
+                "anthropic-version",
+                crate::claude_oauth::CLAUDE_ANTHROPIC_VERSION,
+            )
+            .header("anthropic-beta", crate::claude_oauth::CLAUDE_OAUTH_BETA)
+            .header(
+                reqwest::header::USER_AGENT,
+                crate::claude_oauth::CLAUDE_USER_AGENT,
+            )
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send(),
+    )
+    .await
+    .map_err(|_| "Claude model catalog request timed out".to_owned())?
+    .map_err(|error| {
+        if error.is_timeout() {
+            "Claude model catalog request timed out".to_owned()
+        } else {
+            format!("Claude model catalog request failed: {error}")
+        }
+    })?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!(
+            "Claude model catalog request returned HTTP {status}"
+        ));
+    }
+    let value = response
+        .json::<Value>()
+        .await
+        .map_err(|error| format!("Claude model catalog response was invalid: {error}"))?;
+    Ok(parse_claude_code_models_response(&value))
+}
+
+#[derive(Debug)]
+struct ClaudeApiModelOption {
+    index: usize,
+    created_at: Option<String>,
+    model: ProviderModelOption,
+}
+
+fn parse_claude_code_models_response(value: &Value) -> ProviderModelDiscovery {
+    let entries = value
+        .get("data")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut seen = HashSet::new();
+    let mut models = Vec::new();
+    for (index, entry) in entries.into_iter().enumerate() {
+        let Some(id) = entry
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        if !seen.insert(id.to_owned()) {
+            continue;
+        }
+        let label = entry
+            .get("display_name")
+            .or_else(|| entry.get("displayName"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| friendly_model_label(id));
+        let description = entry
+            .get("description")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let created_at = entry
+            .get("created_at")
+            .or_else(|| entry.get("createdAt"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        models.push(ClaudeApiModelOption {
+            index,
+            created_at,
+            model: ProviderModelOption {
+                id: id.to_owned(),
+                label,
+                description,
+                recommended: false,
+                default_reasoning_effort: None,
+                supported_reasoning_efforts: parse_claude_code_model_reasoning_efforts(&entry),
+                service_tiers: Vec::new(),
+            },
+        });
+    }
+    models.sort_by(compare_claude_api_models);
+    let models = models
+        .into_iter()
+        .map(|entry| entry.model)
+        .collect::<Vec<_>>();
+    let reasoning_efforts = common_reasoning_efforts(&models);
+    ProviderModelDiscovery {
+        models,
+        default_model: None,
+        reasoning_efforts,
+        service_tiers: Vec::new(),
+        source: "claude_code_api",
+        error: None,
+    }
+}
+
+fn compare_claude_api_models(
+    left: &ClaudeApiModelOption,
+    right: &ClaudeApiModelOption,
+) -> Ordering {
+    match (&left.created_at, &right.created_at) {
+        (Some(left_created), Some(right_created)) => right_created
+            .cmp(left_created)
+            .then_with(|| left.model.id.cmp(&right.model.id)),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => left
+            .index
+            .cmp(&right.index)
+            .then_with(|| left.model.id.cmp(&right.model.id)),
+    }
+}
+
+fn parse_claude_code_model_reasoning_efforts(entry: &Value) -> Vec<ProviderReasoningEffortOption> {
+    let Some(effort) = entry
+        .get("capabilities")
+        .and_then(|capabilities| capabilities.get("effort"))
+    else {
+        return Vec::new();
+    };
+    if effort.get("supported").and_then(Value::as_bool) != Some(true) {
+        return Vec::new();
+    }
+    ["low", "medium", "high", "xhigh", "max"]
+        .iter()
+        .filter_map(|id| {
+            let supported = effort
+                .get(*id)
+                .and_then(|value| value.get("supported"))
+                .and_then(Value::as_bool)
+                == Some(true);
+            if !supported {
+                return None;
+            }
+            native_reasoning_effort_metadata(id).map(|(id, label, description)| {
+                ProviderReasoningEffortOption {
+                    id: id.to_owned(),
+                    label: label.to_owned(),
+                    description: Some(description.to_owned()),
+                    recommended: false,
+                }
+            })
+        })
+        .collect()
+}
+
+fn friendly_model_label(id: &str) -> String {
+    let without_prefix = id.strip_prefix("models/").unwrap_or(id);
+    let mut parts = without_prefix
+        .split(['-', '_'])
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if parts
+        .last()
+        .is_some_and(|part| part.len() >= 6 && part.chars().all(|ch| ch.is_ascii_digit()))
+    {
+        parts.pop();
+    }
+    let label = parts
+        .into_iter()
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => {
+                    format!(
+                        "{}{}",
+                        first.to_ascii_uppercase(),
+                        chars.as_str().to_ascii_lowercase()
+                    )
+                }
+                None => String::new(),
+            }
+        })
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if label.is_empty() {
+        id.to_owned()
+    } else {
+        label
+    }
 }
 
 async fn fetch_gpt_codex_models(config: &GaryxConfig) -> Result<GptModelDiscovery, String> {
@@ -480,6 +844,70 @@ async fn fetch_gpt_codex_models(config: &GaryxConfig) -> Result<GptModelDiscover
 
 fn gpt_builtin_models(error: Option<String>) -> GptModelDiscovery {
     gpt_discovery_from_presets(codex_builtin_model_presets(), "codex_builtin", error)
+}
+
+fn claude_code_builtin_models(error: Option<String>) -> ProviderModelDiscovery {
+    let models = claude_code_models();
+    let reasoning_efforts = common_reasoning_efforts(&models);
+    ProviderModelDiscovery {
+        models,
+        default_model: None,
+        reasoning_efforts,
+        service_tiers: Vec::new(),
+        source: "claude_code_builtin",
+        error,
+    }
+}
+
+fn gemini_cli_preset_models(error: String) -> ProviderModelDiscovery {
+    let models = vec![
+        ProviderModelOption {
+            id: "gemini-3-flash-preview".to_owned(),
+            label: "Gemini 3 Flash Preview".to_owned(),
+            description: Some("Default Gemini CLI model fallback.".to_owned()),
+            recommended: true,
+            default_reasoning_effort: None,
+            supported_reasoning_efforts: Vec::new(),
+            service_tiers: Vec::new(),
+        },
+        ProviderModelOption {
+            id: "gemini-2.5-pro".to_owned(),
+            label: "Gemini 2.5 Pro".to_owned(),
+            description: Some("Stable pro Gemini CLI model fallback.".to_owned()),
+            recommended: false,
+            default_reasoning_effort: None,
+            supported_reasoning_efforts: Vec::new(),
+            service_tiers: Vec::new(),
+        },
+        ProviderModelOption {
+            id: "gemini-2.5-flash".to_owned(),
+            label: "Gemini 2.5 Flash".to_owned(),
+            description: Some("Lower-latency Gemini CLI model fallback.".to_owned()),
+            recommended: false,
+            default_reasoning_effort: None,
+            supported_reasoning_efforts: Vec::new(),
+            service_tiers: Vec::new(),
+        },
+    ];
+    ProviderModelDiscovery {
+        models,
+        default_model: Some("gemini-3-flash-preview".to_owned()),
+        reasoning_efforts: Vec::new(),
+        service_tiers: Vec::new(),
+        source: "gemini_cli_builtin",
+        error: Some(error),
+    }
+}
+
+fn traex_unavailable_models(error: String) -> ProviderModelDiscovery {
+    ProviderModelDiscovery {
+        models: Vec::new(),
+        default_model: None,
+        reasoning_efforts: Vec::new(),
+        service_tiers: Vec::new(),
+        source: "traex_app_server",
+        error: Some(error),
+    }
 }
 
 fn apply_default_model_to_gpt_discovery(
@@ -614,11 +1042,12 @@ fn native_model_catalog_response(
         .or_else(|| models.first())
         .map(|model| model.supported_reasoning_efforts.clone())
         .unwrap_or_default();
+    let supports_reasoning_effort_selection = provider_supports_reasoning_effort_selection(&models);
     ProviderModelsResponse {
         provider_type,
         supports_model_selection: true,
         models,
-        supports_reasoning_effort_selection: !reasoning_efforts.is_empty(),
+        supports_reasoning_effort_selection,
         reasoning_efforts,
         supports_service_tier_selection: false,
         service_tiers: Vec::new(),
@@ -1194,6 +1623,7 @@ fn parse_app_server_models(result: &Value, source: &'static str) -> GptModelDisc
     let mut first_reasoning: Vec<ProviderReasoningEffortOption> = Vec::new();
     let mut default_service_tiers: Vec<ProviderModelOption> = Vec::new();
     let mut first_service_tiers: Vec<ProviderModelOption> = Vec::new();
+    let mut saw_default_model = false;
 
     for entry in entries {
         if entry
@@ -1244,6 +1674,7 @@ fn parse_app_server_models(result: &Value, source: &'static str) -> GptModelDisc
             first_service_tiers = service_tiers.clone();
         }
         if is_default {
+            saw_default_model = true;
             default_reasoning = supported.clone();
             default_service_tiers = service_tiers.clone();
         }
@@ -1311,15 +1742,15 @@ fn parse_app_server_models(result: &Value, source: &'static str) -> GptModelDisc
         }
     }
 
-    let reasoning_efforts = if default_reasoning.is_empty() {
-        first_reasoning
-    } else {
+    let reasoning_efforts = if saw_default_model {
         default_reasoning
-    };
-    let service_tiers = if default_service_tiers.is_empty() {
-        first_service_tiers
     } else {
+        first_reasoning
+    };
+    let service_tiers = if saw_default_model {
         default_service_tiers
+    } else {
+        first_service_tiers
     };
 
     GptModelDiscovery {
@@ -1656,6 +2087,8 @@ fn string_field(value: &Value, keys: &[&str]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
     fn parses_flexible_model_payloads() {
@@ -1851,6 +2284,293 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn claude_code_dynamic_catalog_maps_models_and_efforts() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .and(header("authorization", "Bearer test-claude-token"))
+            .and(header("anthropic-version", "2023-06-01"))
+            .and(header("anthropic-beta", "oauth-2025-04-20"))
+            .and(header("user-agent", crate::claude_oauth::CLAUDE_USER_AGENT))
+            .and(header("accept", "application/json"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [
+                    {
+                        "id": "claude-empty-effort-20260101",
+                        "display_name": "Claude Empty Effort",
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "capabilities": {
+                            "effort": {
+                                "supported": true,
+                                "low": { "supported": false },
+                                "medium": { "supported": false }
+                            }
+                        }
+                    },
+                    {
+                        "id": "claude-opus-4-8-20260201",
+                        "display_name": "  Claude Opus 4.8  ",
+                        "created_at": "2026-02-01T00:00:00Z",
+                        "capabilities": {
+                            "effort": {
+                                "supported": true,
+                                "low": { "supported": true },
+                                "medium": { "supported": true },
+                                "high": { "supported": true },
+                                "xhigh": { "supported": true },
+                                "max": { "supported": true }
+                            }
+                        }
+                    },
+                    {
+                        "id": "claude-sonnet-4-6-20260115",
+                        "display_name": "",
+                        "created_at": "2026-01-15T00:00:00Z",
+                        "capabilities": {
+                            "effort": {
+                                "supported": true,
+                                "low": { "supported": true },
+                                "medium": { "supported": true },
+                                "high": { "supported": true }
+                            }
+                        }
+                    },
+                    {
+                        "id": "claude-haiku-4-5-20251215",
+                        "display_name": "Claude Haiku 4.5",
+                        "created_at": "2025-12-15T00:00:00Z",
+                        "capabilities": {
+                            "effort": {
+                                "supported": true,
+                                "low": { "supported": true },
+                                "medium": { "supported": true },
+                                "high": { "supported": true }
+                            }
+                        }
+                    },
+                    {
+                        "id": "claude-fable-5-20251201",
+                        "display_name": "Claude Fable 5",
+                        "created_at": "2025-12-01T00:00:00Z",
+                        "capabilities": {
+                            "effort": {
+                                "supported": true,
+                                "low": { "supported": true },
+                                "medium": { "supported": true },
+                                "high": { "supported": true },
+                                "xhigh": { "supported": true },
+                                "max": { "supported": true }
+                            }
+                        }
+                    },
+                    {
+                        "id": "claude-opus-4-7-20251101",
+                        "display_name": "Claude Opus 4.7",
+                        "created_at": "2025-11-01T00:00:00Z",
+                        "capabilities": {
+                            "effort": {
+                                "supported": true,
+                                "low": { "supported": true },
+                                "medium": { "supported": true },
+                                "high": { "supported": true },
+                                "xhigh": { "supported": true }
+                            }
+                        }
+                    },
+                    {
+                        "id": "claude-sonnet-4-5-20251001",
+                        "display_name": "Claude Sonnet 4.5",
+                        "created_at": "2025-10-01T00:00:00Z",
+                        "capabilities": {
+                            "effort": {
+                                "supported": true,
+                                "low": { "supported": true },
+                                "medium": { "supported": true },
+                                "high": { "supported": true },
+                                "max": { "supported": true }
+                            }
+                        }
+                    },
+                    {
+                        "id": "claude-no-effort",
+                        "display_name": "Claude No Effort",
+                        "created_at": null,
+                        "capabilities": { "effort": { "supported": false } }
+                    },
+                    {
+                        "id": "claude-missing-created-b",
+                        "display_name": "Claude Missing Created B",
+                        "created_at": null,
+                        "capabilities": { "effort": { "supported": false } }
+                    },
+                    {
+                        "id": "",
+                        "display_name": "Skipped"
+                    }
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let discovery = fetch_claude_code_models_from_endpoint(
+            &server.uri(),
+            "test-claude-token",
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("mock Claude model catalog");
+
+        assert_eq!(discovery.source, "claude_code_api");
+        assert_eq!(
+            discovery
+                .models
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "claude-opus-4-8-20260201",
+                "claude-sonnet-4-6-20260115",
+                "claude-empty-effort-20260101",
+                "claude-haiku-4-5-20251215",
+                "claude-fable-5-20251201",
+                "claude-opus-4-7-20251101",
+                "claude-sonnet-4-5-20251001",
+                "claude-no-effort",
+                "claude-missing-created-b",
+            ]
+        );
+        let opus = &discovery.models[0];
+        assert_eq!(opus.label, "Claude Opus 4.8");
+        assert_eq!(opus.default_reasoning_effort, None);
+        assert_eq!(
+            opus.supported_reasoning_efforts
+                .iter()
+                .map(|effort| effort.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["low", "medium", "high", "xhigh", "max"]
+        );
+        let sonnet = &discovery.models[1];
+        assert_eq!(sonnet.label, "Claude Sonnet 4 6");
+        assert_eq!(
+            sonnet
+                .supported_reasoning_efforts
+                .iter()
+                .map(|effort| effort.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["low", "medium", "high"]
+        );
+        assert_eq!(discovery.models.len(), 9);
+        assert!(discovery.models[2].supported_reasoning_efforts.is_empty());
+        assert!(discovery.models[7].supported_reasoning_efforts.is_empty());
+        assert!(discovery.models[8].supported_reasoning_efforts.is_empty());
+        assert!(discovery.default_model.is_none());
+        assert!(discovery.reasoning_efforts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn claude_code_dynamic_catalog_non_200_and_timeout_are_errors() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("upstream details stay short"))
+            .mount(&server)
+            .await;
+
+        let error = fetch_claude_code_models_from_endpoint(
+            &server.uri(),
+            "test-claude-token",
+            Duration::from_secs(5),
+        )
+        .await
+        .expect_err("non-200 should error");
+        assert!(error.contains("HTTP 503"), "unexpected error: {error}");
+        assert!(!error.contains("upstream details stay short"));
+
+        let slow_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_millis(50))
+                    .set_body_json(json!({ "data": [] })),
+            )
+            .mount(&slow_server)
+            .await;
+        let error = fetch_claude_code_models_from_endpoint(
+            &slow_server.uri(),
+            "test-claude-token",
+            Duration::from_millis(1),
+        )
+        .await
+        .expect_err("timeout should error");
+        assert!(error.contains("timed out"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn claude_code_fallback_preserves_nonempty_builtin_catalog() {
+        clear_provider_model_discovery_cache_for_tests();
+
+        let discovery = discover_or_fallback(
+            "test_claude_fallback",
+            Err("Claude OAuth token unavailable".to_owned()),
+            |error| claude_code_builtin_models(Some(error)),
+        );
+
+        assert_eq!(discovery.source, "claude_code_builtin");
+        assert!(discovery.error.as_deref().unwrap_or("").contains("OAuth"));
+        assert!(!discovery.models.is_empty());
+        assert!(provider_supports_reasoning_effort_selection(
+            &discovery.models
+        ));
+    }
+
+    #[test]
+    fn discover_or_fallback_prefers_stale_success_before_builtin_preset() {
+        clear_provider_model_discovery_cache_for_tests();
+        let cached = ProviderModelDiscovery {
+            models: vec![ProviderModelOption {
+                id: "claude-stale".to_owned(),
+                label: "Claude Stale".to_owned(),
+                description: None,
+                recommended: false,
+                default_reasoning_effort: None,
+                supported_reasoning_efforts: native_reasoning_efforts("low", &["low"]),
+                service_tiers: Vec::new(),
+            }],
+            default_model: None,
+            reasoning_efforts: Vec::new(),
+            service_tiers: Vec::new(),
+            source: "claude_code_api",
+            error: None,
+        };
+        let success = discover_or_fallback("test_claude_stale", Ok(cached), |error| {
+            claude_code_builtin_models(Some(error))
+        });
+        assert_eq!(success.source, "claude_code_api");
+
+        let stale = discover_or_fallback(
+            "test_claude_stale",
+            Err("network down".to_owned()),
+            |error| claude_code_builtin_models(Some(error)),
+        );
+
+        assert_eq!(stale.source, "claude_code_api");
+        assert_eq!(stale.models[0].id, "claude-stale");
+        assert_eq!(stale.error.as_deref(), Some("network down"));
+    }
+
+    #[tokio::test]
+    async fn gemini_cli_discovery_failure_uses_nonempty_preset() {
+        let response = list_provider_models(&GaryxConfig::default(), ProviderType::GeminiCli).await;
+
+        assert_eq!(response.provider_type, ProviderType::GeminiCli);
+        assert!(response.supports_model_selection);
+        assert_eq!(response.source, "gemini_cli_builtin");
+        assert!(response.error.is_some());
+        assert!(!response.models.is_empty());
+    }
+
+    #[tokio::test]
     async fn claude_code_catalog_uses_configured_provider_default_model() {
         let mut config = GaryxConfig::default();
         config.agents.insert(
@@ -1973,6 +2693,50 @@ mod tests {
     }
 
     #[test]
+    fn provider_reasoning_support_uses_any_model_effort() {
+        let result = json!({
+            "data": [
+                {
+                    "id": "doubao-empty", "model": "doubao-empty", "displayName": "Doubao",
+                    "isDefault": true, "hidden": false, "supportedReasoningEfforts": []
+                },
+                {
+                    "id": "openrouter-3o", "model": "openrouter-3o", "displayName": null,
+                    "isDefault": false, "hidden": false,
+                    "supportedReasoningEfforts": [
+                        {"reasoningEffort": "low"},
+                        {"reasoningEffort": "medium"},
+                        {"reasoningEffort": "high"},
+                        {"reasoningEffort": "xhigh"},
+                        {"reasoningEffort": "max"}
+                    ]
+                }
+            ]
+        });
+
+        let discovery = parse_app_server_models(&result, "traex_app_server");
+
+        assert!(discovery.reasoning_efforts.is_empty());
+        assert!(provider_supports_reasoning_effort_selection(
+            &discovery.models
+        ));
+        let openrouter = discovery
+            .models
+            .iter()
+            .find(|model| model.id == "openrouter-3o")
+            .expect("openrouter model");
+        assert_eq!(openrouter.label, "openrouter-3o");
+        assert_eq!(
+            openrouter
+                .supported_reasoning_efforts
+                .iter()
+                .map(|effort| effort.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["low", "medium", "high", "xhigh", "max"]
+        );
+    }
+
+    #[test]
     fn parse_app_server_models_expands_context_window_variants() {
         let result = json!({
             "data": [
@@ -2027,9 +2791,10 @@ mod tests {
             "expected dynamically discovered traex models"
         );
         assert!(response.supports_model_selection);
-        // The Traex backend advertises models with no selectable reasoning
-        // efforts, so the reasoning picker must be off.
-        assert!(!response.supports_reasoning_effort_selection);
+        // The picker should be available when any discovered Traex model
+        // advertises selectable reasoning efforts, even if the default model does
+        // not.
+        assert!(response.supports_reasoning_effort_selection);
     }
 
     #[tokio::test]

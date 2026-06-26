@@ -6,8 +6,8 @@
 //! how much of the allowance remains.
 //!
 //! Source of truth for each tool:
-//! - Claude Code: `~/.claude/.credentials.json` if present, otherwise the macOS
-//!   keychain item `Claude Code-credentials`; usage from
+//! - Claude Code: OAuth env token if present, then `~/.claude/.credentials.json`,
+//!   then the macOS keychain item `Claude Code-credentials`; usage from
 //!   `GET https://api.anthropic.com/api/oauth/usage`.
 //! - Codex: `~/.codex/auth.json` (`tokens.access_token` + `account_id`); usage
 //!   from `GET https://chatgpt.com/backend-api/wham/usage`.
@@ -33,11 +33,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::time::timeout;
 
+use crate::claude_oauth;
 use crate::server::AppState;
 
 const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
-const CLAUDE_USER_AGENT: &str = "claude-code/2.0.32";
-const CLAUDE_OAUTH_BETA: &str = "oauth-2025-04-20";
 
 const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 const CODEX_USER_AGENT: &str = "codex_cli_rs";
@@ -252,25 +251,14 @@ async fn resolve_provider(
 // ---------------------------------------------------------------------------
 
 async fn fetch_claude_usage() -> Result<ProviderUsage, String> {
-    let credentials = read_claude_credentials().await?;
-    let token = credentials
-        .get("claudeAiOauth")
-        .and_then(|oauth| oauth.get("accessToken"))
-        .and_then(Value::as_str)
-        .filter(|token| !token.trim().is_empty())
-        .ok_or_else(|| "Claude credentials missing claudeAiOauth.accessToken".to_string())?;
-    let plan = credentials
-        .get("claudeAiOauth")
-        .and_then(|oauth| oauth.get("subscriptionType"))
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
+    let (token, plan) = claude_oauth::read_oauth_token_and_subscription().await?;
 
     let client = http_client()?;
     let response = client
         .get(CLAUDE_USAGE_URL)
-        .bearer_auth(token)
-        .header("anthropic-beta", CLAUDE_OAUTH_BETA)
-        .header(reqwest::header::USER_AGENT, CLAUDE_USER_AGENT)
+        .bearer_auth(&token)
+        .header("anthropic-beta", claude_oauth::CLAUDE_OAUTH_BETA)
+        .header(reqwest::header::USER_AGENT, claude_oauth::CLAUDE_USER_AGENT)
         .header(reqwest::header::ACCEPT, "application/json")
         .send()
         .await
@@ -323,48 +311,6 @@ fn parse_claude_window(window: &Value) -> Option<UsageWindow> {
         resets_at,
         reset_after_seconds,
     ))
-}
-
-/// Read the Claude credential JSON, preferring an on-disk credentials file and
-/// falling back to the macOS keychain.
-async fn read_claude_credentials() -> Result<Value, String> {
-    if let Some(home) = garyx_models::local_paths::home_dir() {
-        let path = home.join(".claude").join(".credentials.json");
-        if let Ok(contents) = tokio::fs::read_to_string(&path).await {
-            return serde_json::from_str(&contents).map_err(|error| {
-                format!("Claude credentials file (~/.claude/.credentials.json) was not valid JSON: {error}")
-            });
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        read_claude_keychain().await
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        Err("Claude credentials not found (~/.claude/.credentials.json missing)".to_string())
-    }
-}
-
-#[cfg(target_os = "macos")]
-async fn read_claude_keychain() -> Result<Value, String> {
-    let output = tokio::process::Command::new("security")
-        .args([
-            "find-generic-password",
-            "-s",
-            "Claude Code-credentials",
-            "-w",
-        ])
-        .output()
-        .await
-        .map_err(|error| format!("Claude keychain lookup failed to launch: {error}"))?;
-    if !output.status.success() {
-        return Err("Claude credentials not found in keychain".to_string());
-    }
-    let raw = String::from_utf8_lossy(&output.stdout);
-    serde_json::from_str(raw.trim())
-        .map_err(|error| format!("Claude keychain entry was not JSON: {error}"))
 }
 
 // ---------------------------------------------------------------------------
