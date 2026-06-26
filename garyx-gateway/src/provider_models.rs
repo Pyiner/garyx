@@ -67,6 +67,8 @@ pub(crate) struct ProviderModelsResponse {
     pub service_tiers: Vec<ProviderModelOption>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_reasoning_effort: Option<String>,
     pub source: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -99,25 +101,24 @@ pub(crate) async fn list_provider_models(
 ) -> ProviderModelsResponse {
     match provider_type {
         ProviderType::AntigravityCli => {
-            let default_model = configured_default_model(
-                config,
-                ProviderType::AntigravityCli,
-                &["antigravity", "agy", "antigravity_cli"],
-            )
-            .unwrap_or_else(garyx_models::provider::default_antigravity_model);
+            let aliases = &["antigravity", "agy", "antigravity_cli"];
+            let default_model =
+                configured_default_model(config, ProviderType::AntigravityCli, aliases)
+                    .unwrap_or_else(garyx_models::provider::default_antigravity_model);
             native_model_catalog_response(
                 provider_type,
                 "antigravity_builtin",
                 antigravity_models(),
                 &default_model,
+                configured_default_reasoning_effort(config, ProviderType::AntigravityCli, aliases),
             )
         }
         ProviderType::GeminiCli => {
-            let configured_default = configured_default_model(
-                config,
-                ProviderType::GeminiCli,
-                &["gemini", "gemini_cli"],
-            );
+            let aliases = &["gemini", "gemini_cli"];
+            let configured_default =
+                configured_default_model(config, ProviderType::GeminiCli, aliases);
+            let configured_default_reasoning_effort =
+                configured_default_reasoning_effort(config, ProviderType::GeminiCli, aliases);
             match fetch_gemini_acp_models(config).await {
                 Ok(discovery) if !discovery.models.is_empty() => ProviderModelsResponse {
                     provider_type,
@@ -128,6 +129,7 @@ pub(crate) async fn list_provider_models(
                     supports_service_tier_selection: false,
                     service_tiers: Vec::new(),
                     default_model: configured_default.or(discovery.default_model),
+                    default_reasoning_effort: configured_default_reasoning_effort,
                     source: "gemini_acp",
                     error: None,
                 },
@@ -143,6 +145,7 @@ pub(crate) async fn list_provider_models(
             // The CLI's actual default model is account/plan dependent and not
             // statically knowable unless the gateway config pins one. Without
             // a chosen model, only the levels every model supports are offered.
+            let aliases = &["claude", "claude_code", "claude_tty"];
             let models = claude_code_models();
             let reasoning_efforts = common_reasoning_efforts(&models);
             ProviderModelsResponse {
@@ -153,10 +156,11 @@ pub(crate) async fn list_provider_models(
                 models,
                 supports_service_tier_selection: false,
                 service_tiers: Vec::new(),
-                default_model: configured_default_model(
+                default_model: configured_default_model(config, ProviderType::ClaudeCode, aliases),
+                default_reasoning_effort: configured_default_reasoning_effort(
                     config,
                     ProviderType::ClaudeCode,
-                    &["claude", "claude_code", "claude_tty"],
+                    aliases,
                 ),
                 source: "claude_code_builtin",
                 error: None,
@@ -176,6 +180,8 @@ pub(crate) async fn list_provider_models(
             } else {
                 "codex_app_server"
             };
+            let configured_default_reasoning_effort =
+                configured_default_reasoning_effort(config, provider_type.clone(), aliases);
             let bin = app_server_model_bin(&provider_type);
             let mut discovery = match fetch_app_server_models(bin, source).await {
                 Ok(discovery) => discovery,
@@ -213,19 +219,17 @@ pub(crate) async fn list_provider_models(
                 supports_service_tier_selection: !discovery.service_tiers.is_empty(),
                 service_tiers: discovery.service_tiers,
                 default_model: discovery.default_model,
+                default_reasoning_effort: configured_default_reasoning_effort,
                 source: discovery.source,
                 error: discovery.error,
             }
         }
         ProviderType::Gpt => match fetch_gpt_codex_models(config).await {
             Ok(discovery) if !discovery.models.is_empty() => {
+                let aliases = &["gpt", "openai", "garyx", "garyx_native", "native"];
                 let discovery = apply_default_model_to_gpt_discovery(
                     discovery,
-                    configured_default_model(
-                        config,
-                        ProviderType::Gpt,
-                        &["gpt", "openai", "garyx", "garyx_native", "native"],
-                    ),
+                    configured_default_model(config, ProviderType::Gpt, aliases),
                 );
                 ProviderModelsResponse {
                     provider_type,
@@ -236,6 +240,11 @@ pub(crate) async fn list_provider_models(
                     supports_service_tier_selection: !discovery.service_tiers.is_empty(),
                     service_tiers: discovery.service_tiers,
                     default_model: discovery.default_model,
+                    default_reasoning_effort: configured_default_reasoning_effort(
+                        config,
+                        ProviderType::Gpt,
+                        aliases,
+                    ),
                     source: discovery.source,
                     error: discovery.error,
                 }
@@ -246,13 +255,10 @@ pub(crate) async fn list_provider_models(
                 Some("Codex model catalog returned no picker-visible models".to_owned()),
             ),
             Err(error) => {
+                let aliases = &["gpt", "openai", "garyx", "garyx_native", "native"];
                 let discovery = apply_default_model_to_gpt_discovery(
                     gpt_builtin_models(Some(error)),
-                    configured_default_model(
-                        config,
-                        ProviderType::Gpt,
-                        &["gpt", "openai", "garyx", "garyx_native", "native"],
-                    ),
+                    configured_default_model(config, ProviderType::Gpt, aliases),
                 );
                 ProviderModelsResponse {
                     provider_type,
@@ -263,37 +269,38 @@ pub(crate) async fn list_provider_models(
                     supports_service_tier_selection: !discovery.service_tiers.is_empty(),
                     service_tiers: discovery.service_tiers,
                     default_model: discovery.default_model,
+                    default_reasoning_effort: configured_default_reasoning_effort(
+                        config,
+                        ProviderType::Gpt,
+                        aliases,
+                    ),
                     source: discovery.source,
                     error: discovery.error,
                 }
             }
         },
         ProviderType::ClaudeLlm => {
-            let default_model = configured_default_model(
-                config,
-                ProviderType::ClaudeLlm,
-                &["anthropic", "claude_llm"],
-            )
-            .unwrap_or_else(|| "claude-sonnet-4-6".to_owned());
+            let aliases = &["anthropic", "claude_llm"];
+            let default_model = configured_default_model(config, ProviderType::ClaudeLlm, aliases)
+                .unwrap_or_else(|| "claude-sonnet-4-6".to_owned());
             native_model_catalog_response(
                 provider_type,
                 "native_builtin",
                 native_claude_models(),
                 &default_model,
+                configured_default_reasoning_effort(config, ProviderType::ClaudeLlm, aliases),
             )
         }
         ProviderType::GeminiLlm => {
-            let default_model = configured_default_model(
-                config,
-                ProviderType::GeminiLlm,
-                &["google", "gemini_llm"],
-            )
-            .unwrap_or_else(|| "gemini-3-flash-preview".to_owned());
+            let aliases = &["google", "gemini_llm"];
+            let default_model = configured_default_model(config, ProviderType::GeminiLlm, aliases)
+                .unwrap_or_else(|| "gemini-3-flash-preview".to_owned());
             native_model_catalog_response(
                 provider_type,
                 "native_builtin",
                 native_gemini_models(),
                 &default_model,
+                configured_default_reasoning_effort(config, ProviderType::GeminiLlm, aliases),
             )
         }
         ProviderType::AgentTeam => unsupported(provider_type, "provider", None),
@@ -318,6 +325,7 @@ pub(crate) fn builtin_provider_catalog_default(
                 "native_builtin",
                 native_claude_models(),
                 "claude-sonnet-4-6",
+                None,
             );
             ProviderCatalogDefault {
                 model: response.default_model,
@@ -331,6 +339,7 @@ pub(crate) fn builtin_provider_catalog_default(
                 "native_builtin",
                 native_gemini_models(),
                 "gemini-3-flash-preview",
+                None,
             );
             ProviderCatalogDefault {
                 model: response.default_model,
@@ -381,6 +390,7 @@ fn unsupported(
         supports_service_tier_selection: false,
         service_tiers: Vec::new(),
         default_model: None,
+        default_reasoning_effort: None,
         source,
         error,
     }
@@ -412,6 +422,16 @@ fn configured_default_model(
     configured_agent_provider_config(config, provider_type, keys)
         .map(|config| config.default_model.trim().to_owned())
         .filter(|model| !model.is_empty())
+}
+
+fn configured_default_reasoning_effort(
+    config: &GaryxConfig,
+    provider_type: ProviderType,
+    keys: &[&str],
+) -> Option<String> {
+    configured_agent_provider_config(config, provider_type, keys)
+        .map(|config| config.model_reasoning_effort.trim().to_owned())
+        .filter(|effort| !effort.is_empty())
 }
 
 async fn fetch_gpt_codex_models(config: &GaryxConfig) -> Result<GptModelDiscovery, String> {
@@ -586,6 +606,7 @@ fn native_model_catalog_response(
     source: &'static str,
     models: Vec<ProviderModelOption>,
     default_model: &str,
+    default_reasoning_effort: Option<String>,
 ) -> ProviderModelsResponse {
     let reasoning_efforts = models
         .iter()
@@ -602,6 +623,7 @@ fn native_model_catalog_response(
         supports_service_tier_selection: false,
         service_tiers: Vec::new(),
         default_model: Some(default_model.to_owned()),
+        default_reasoning_effort,
         source,
         error: None,
     }
@@ -1728,6 +1750,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn claude_code_catalog_ignores_empty_configured_provider_default_reasoning_effort() {
+        let mut config = GaryxConfig::default();
+        config.agents.insert(
+            "claude".to_owned(),
+            json!({
+                "provider_type": "claude_code",
+                "default_model": "claude-opus-4-8",
+                "model_reasoning_effort": "  "
+            }),
+        );
+
+        let response = list_provider_models(&config, ProviderType::ClaudeCode).await;
+        let payload = serde_json::to_value(response).expect("provider models response");
+
+        assert_eq!(payload["default_model"], "claude-opus-4-8");
+        assert!(payload.get("default_reasoning_effort").is_none());
+    }
+
+    #[tokio::test]
     async fn antigravity_model_catalog_defaults_to_claude_opus() {
         let response =
             list_provider_models(&GaryxConfig::default(), ProviderType::AntigravityCli).await;
@@ -1824,6 +1865,24 @@ mod tests {
         let response = list_provider_models(&config, ProviderType::ClaudeCode).await;
 
         assert_eq!(response.default_model.as_deref(), Some("claude-opus-4-8"));
+    }
+
+    #[tokio::test]
+    async fn claude_code_catalog_exposes_configured_provider_default_reasoning_effort() {
+        let mut config = GaryxConfig::default();
+        config.agents.insert(
+            "claude".to_owned(),
+            json!({
+                "provider_type": "claude_code",
+                "default_model": "claude-opus-4-8",
+                "model_reasoning_effort": "max"
+            }),
+        );
+
+        let response = list_provider_models(&config, ProviderType::ClaudeCode).await;
+        let payload = serde_json::to_value(response).expect("provider models response");
+
+        assert_eq!(payload["default_reasoning_effort"], "max");
     }
 
     #[tokio::test]

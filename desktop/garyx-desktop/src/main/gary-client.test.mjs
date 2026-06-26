@@ -9,6 +9,7 @@ import {
   getWorkflowRun,
   getTask,
   listTaskForest,
+  listProviderModels,
   streamThreadEvents,
 } from "./gary-client.ts";
 
@@ -120,6 +121,48 @@ test("fetchThreadHistory sends configured gateway headers", async () => {
     assert.equal(capturedHeaders.get("Authorization"), "Bearer test-token");
     assert.equal(capturedHeaders.get("X-Garyx-Proxy"), "proxy-token");
     assert.equal(capturedHeaders.get("X-Trace-Id"), "trace-123");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("listProviderModels maps provider default reasoning effort", async () => {
+  const originalFetch = globalThis.fetch;
+  let capturedUrl = "";
+  globalThis.fetch = async (url) => {
+    capturedUrl = String(url);
+    return new Response(
+      JSON.stringify({
+        provider_type: "claude_code",
+        supports_model_selection: true,
+        models: [],
+        supports_reasoning_effort_selection: true,
+        reasoning_efforts: [],
+        supports_service_tier_selection: false,
+        service_tiers: [],
+        default_model: "claude-opus-4-8",
+        default_reasoning_effort: "max",
+        source: "claude_code_builtin",
+      }),
+      { status: 200, statusText: "OK" },
+    );
+  };
+
+  try {
+    const providerModels = await listProviderModels(
+      {
+        gatewayUrl: "http://127.0.0.1:31337",
+        gatewayAuthToken: "",
+      },
+      "claude_code",
+    );
+
+    assert.equal(
+      capturedUrl,
+      "http://127.0.0.1:31337/api/provider-models/claude_code",
+    );
+    assert.equal(providerModels.defaultModel, "claude-opus-4-8");
+    assert.equal(providerModels.defaultReasoningEffort, "max");
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -65,6 +65,7 @@ export interface DesktopProviderModels {
   supportsServiceTierSelection?: boolean;
   serviceTiers?: DesktopProviderModelOption[];
   defaultModel?: string | null;
+  defaultReasoningEffort?: string | null;
   source: string;
   error?: string | null;
 }
