@@ -176,6 +176,23 @@ final class GaryxTranscriptSyncPlannerTests: XCTestCase {
 
     // MARK: - Stream render window
 
+    func testCapturedOneTurnInitialWindowRequiresLargerMobileDefault() throws {
+        let frames = try Self.scrubbedCapturedInitialWindowFrames()
+        XCTAssertEqual(frames.map { $0.renderState.rows.count }, [1, 1])
+        XCTAssertEqual(frames.first?.renderState.window, GaryxRenderWindow(floorSeq: 2, hasMoreAbove: true))
+
+        let cold = GaryxThreadWindowPlanner.streamRequest(
+            afterSeq: 42,
+            renderFloor: nil,
+            hasWindowedRenderSnapshot: false
+        )
+        XCTAssertGreaterThanOrEqual(
+            cold.initialUserTurns ?? 0,
+            3,
+            "A one-turn cold render window is too small and makes the top boundary appear immediately."
+        )
+    }
+
     func testThreadWindowPlannerColdReconnectScrollUpSequence() {
         let cold = GaryxThreadWindowPlanner.streamRequest(
             afterSeq: 42,
@@ -184,7 +201,7 @@ final class GaryxTranscriptSyncPlannerTests: XCTestCase {
         )
         XCTAssertEqual(cold.afterSeq, 0)
         XCTAssertEqual(cold.replayScope, .initial)
-        XCTAssertEqual(cold.initialUserTurns, 1)
+        XCTAssertEqual(cold.initialUserTurns, 3)
         XCTAssertNil(cold.renderFloor)
 
         let reconnect = GaryxThreadWindowPlanner.streamRequest(
@@ -208,6 +225,58 @@ final class GaryxTranscriptSyncPlannerTests: XCTestCase {
         XCTAssertEqual(expandedReconnect.afterSeq, 11)
         XCTAssertEqual(expandedReconnect.replayScope, .resume)
         XCTAssertEqual(expandedReconnect.renderFloor, 4)
+    }
+
+    private static func scrubbedCapturedInitialWindowFrames() throws -> [GaryxThreadRenderFrame] {
+        let json = """
+        [
+          {
+            "type": "thread_render_frame",
+            "thread_id": "thread::fixture",
+            "events": [],
+            "render_state": {
+              "based_on_seq": 166,
+              "rows": [
+                {
+                  "kind": "user_turn",
+                  "id": "turn:captured-tail",
+                  "user": { "id": "seq:2", "seq": 2, "role": "user" },
+                  "activity": []
+                }
+              ],
+              "tailActivity": "none",
+              "activeToolGroupId": null,
+              "progress_locus": "none",
+              "visibleMessageIds": ["seq:2"],
+              "filtered_placeholders": [],
+              "window": { "floor_seq": 2, "has_more_above": true }
+            }
+          },
+          {
+            "type": "thread_render_frame",
+            "thread_id": "thread::fixture",
+            "events": [],
+            "render_state": {
+              "based_on_seq": 167,
+              "rows": [
+                {
+                  "kind": "user_turn",
+                  "id": "turn:captured-tail",
+                  "user": { "id": "seq:2", "seq": 2, "role": "user" },
+                  "activity": []
+                }
+              ],
+              "tailActivity": "none",
+              "activeToolGroupId": null,
+              "progress_locus": "none",
+              "visibleMessageIds": ["seq:2"],
+              "filtered_placeholders": [],
+              "window": { "floor_seq": 2, "has_more_above": true }
+            }
+          }
+        ]
+        """
+        return try JSONDecoder().decode([GaryxThreadRenderFrame].self, from: Data(json.utf8))
     }
 
     private func controlMessage(index: Int, controlKind: String) -> GaryxTranscriptMessage {

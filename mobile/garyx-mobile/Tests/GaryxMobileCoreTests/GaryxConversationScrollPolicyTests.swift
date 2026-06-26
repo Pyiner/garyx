@@ -395,56 +395,151 @@ final class GaryxConversationScrollStateTests: XCTestCase {
             state.shouldPrefetchOlderHistory(
                 hasMoreHistoryBefore: true,
                 isLoadingOlderHistory: false,
-                hasPendingPrefetch: false,
-                ignoreDistance: true
+                hasPendingPrefetch: false
             )
         )
 
         simulateUserScroll(&state)
-        _ = state.metricsChanged(browsingMetrics(), hasTailContent: true)
+        _ = state.metricsChanged(
+            GaryxConversationLayoutMetrics(
+                contentTopOffset: -400,
+                contentBottomOffset: 2_600,
+                viewportHeight: 800
+            ),
+            hasTailContent: true
+        )
         XCTAssertTrue(
             state.shouldPrefetchOlderHistory(
                 hasMoreHistoryBefore: true,
                 isLoadingOlderHistory: false,
-                hasPendingPrefetch: false,
-                ignoreDistance: true
+                hasPendingPrefetch: false
             )
         )
         XCTAssertFalse(
             state.shouldPrefetchOlderHistory(
                 hasMoreHistoryBefore: false,
                 isLoadingOlderHistory: false,
-                hasPendingPrefetch: false,
-                ignoreDistance: true
+                hasPendingPrefetch: false
             )
         )
         XCTAssertFalse(
             state.shouldPrefetchOlderHistory(
                 hasMoreHistoryBefore: true,
                 isLoadingOlderHistory: true,
-                hasPendingPrefetch: false,
-                ignoreDistance: true
+                hasPendingPrefetch: false
             )
         )
         XCTAssertFalse(
             state.shouldPrefetchOlderHistory(
                 hasMoreHistoryBefore: true,
                 isLoadingOlderHistory: false,
-                hasPendingPrefetch: true,
-                ignoreDistance: true
+                hasPendingPrefetch: true
             )
         )
 
         // Distance gate: browsing metrics put the loaded start 2000pt above
         // the viewport, beyond the 1.5x viewport prefetch distance.
+        _ = state.metricsChanged(browsingMetrics(), hasTailContent: true)
         XCTAssertFalse(
             state.shouldPrefetchOlderHistory(
                 hasMoreHistoryBefore: true,
                 isLoadingOlderHistory: false,
-                hasPendingPrefetch: false,
-                ignoreDistance: false
+                hasPendingPrefetch: false
             )
         )
+    }
+
+    func testCapturedSmallWindowDoesNotAutoPrefetchAfterLightScroll() {
+        var state = GaryxConversationScrollState()
+        _ = state.contentChanged(isInitialLoad: true, isHistoryPrepend: false, hasTailContent: true)
+        _ = state.userScrollInteractionChanged(isInteracting: true)
+        _ = state.metricsChanged(
+            GaryxConversationLayoutMetrics(
+                contentTopOffset: -80,
+                contentBottomOffset: 980,
+                viewportHeight: 800
+            ),
+            hasTailContent: true
+        )
+        _ = state.userScrollInteractionChanged(isInteracting: false)
+
+        XCTAssertFalse(
+            state.shouldPrefetchOlderHistory(
+                hasMoreHistoryBefore: true,
+                isLoadingOlderHistory: false,
+                hasPendingPrefetch: false
+            ),
+            "A barely scrollable one-turn window must not auto-page older history from top-row onAppear."
+        )
+    }
+
+    func testTopRowAppearanceStillHonorsDistanceFromLoadedHistoryStart() {
+        var state = GaryxConversationScrollState()
+        _ = state.contentChanged(isInitialLoad: true, isHistoryPrepend: false, hasTailContent: true)
+        simulateUserScroll(&state)
+        _ = state.metricsChanged(
+            GaryxConversationLayoutMetrics(
+                contentTopOffset: -2_000,
+                contentBottomOffset: 2_600,
+                viewportHeight: 800
+            ),
+            hasTailContent: true
+        )
+
+        XCTAssertFalse(
+            state.shouldPrefetchOlderHistory(
+                hasMoreHistoryBefore: true,
+                isLoadingOlderHistory: false,
+                hasPendingPrefetch: false
+            ),
+            "Top-row onAppear is a row-materialization signal, not permission to bypass scroll distance."
+        )
+    }
+
+    func testRenderRowPrependPreservesScrollWhenMessagesDidNotChange() {
+        let transcriptMessages = [
+            transcriptMessage(index: 0, role: .user, text: "Older question"),
+            transcriptMessage(index: 2, role: .user, text: "Current question"),
+        ]
+        let previousSnapshot = renderSnapshot(
+            rows: [
+                userTurn(id: "turn:seq3", seq: 3),
+            ],
+            floorSeq: 3
+        )
+        let currentSnapshot = renderSnapshot(
+            rows: [
+                userTurn(id: "turn:seq1", seq: 1),
+                userTurn(id: "turn:seq3", seq: 3),
+            ],
+            floorSeq: 1
+        )
+
+        let previousRowIds = GaryxMobileRenderStateMapper.rows(
+            snapshot: previousSnapshot,
+            messages: [],
+            transcriptMessages: transcriptMessages
+        ).map(\.id)
+        let currentRowIds = GaryxMobileRenderStateMapper.rows(
+            snapshot: currentSnapshot,
+            messages: [],
+            transcriptMessages: transcriptMessages
+        ).map(\.id)
+
+        XCTAssertEqual(transcriptMessages.map(\.id), ["history:0", "history:2"])
+        XCTAssertEqual(previousRowIds, ["turn:seq3"])
+        XCTAssertEqual(currentRowIds, ["turn:seq1", "turn:seq3"])
+
+        var state = GaryxConversationScrollState()
+        let request = state.renderRowsChanged(
+            previousIds: previousRowIds,
+            currentIds: currentRowIds,
+            threadUnchanged: true,
+            hasTailContent: true
+        )
+
+        XCTAssertNil(request)
+        XCTAssertTrue(state.hasTailContent)
     }
 
     func testPreservesScrollForPrependedHistory() {
@@ -483,6 +578,30 @@ final class GaryxConversationScrollStateTests: XCTestCase {
                 threadUnchanged: true
             )
         )
+    }
+
+    private func renderSnapshot(rows: [GaryxRenderRow], floorSeq: Int) -> GaryxRenderSnapshot {
+        GaryxRenderSnapshot(
+            basedOnSeq: 4,
+            rows: rows,
+            window: GaryxRenderWindow(floorSeq: floorSeq, hasMoreAbove: floorSeq > 1)
+        )
+    }
+
+    private func userTurn(id: String, seq: Int) -> GaryxRenderRow {
+        .userTurn(GaryxRenderUserTurnRow(
+            id: id,
+            user: GaryxRenderMessageRef(id: "seq:\(seq)", seq: seq, role: "user"),
+            activity: []
+        ))
+    }
+
+    private func transcriptMessage(
+        index: Int,
+        role: GaryxTranscriptRole,
+        text: String
+    ) -> GaryxTranscriptMessage {
+        GaryxTranscriptMessage(index: index, role: role, text: text)
     }
 }
 

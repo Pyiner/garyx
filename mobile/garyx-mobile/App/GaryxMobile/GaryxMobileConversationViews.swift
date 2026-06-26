@@ -155,6 +155,7 @@ struct GaryxConversationView: View {
     @State private var scrollStateBox = GaryxConversationScrollStateBox()
     @State private var showsScrollToBottomButton = false
     @State private var scrollPreservationThreadId: String?
+    @State private var rowScrollPreservationThreadId: String?
     @State private var pendingHistoryPrefetchThreadId: String?
     @State private var bottomChromeHeight: CGFloat = 0
     @State private var tailScrollRequestGeneration = 0
@@ -236,6 +237,7 @@ struct GaryxConversationView: View {
                 }
                 .onChange(of: model.selectedThread?.id) { _, _ in
                     scrollPreservationThreadId = model.selectedThread?.id
+                    rowScrollPreservationThreadId = model.selectedThread?.id
                     pendingHistoryPrefetchThreadId = nil
                     updateScrollState(proxy: proxy) { $0.threadOpened() }
                     resetTailThinkingPresentation(proxy: proxy)
@@ -255,6 +257,18 @@ struct GaryxConversationView: View {
                         $0.contentChanged(
                             isInitialLoad: oldValue.isEmpty,
                             isHistoryPrepend: isHistoryPrepend,
+                            hasTailContent: !newValue.isEmpty || showsDebouncedTailThinking
+                        )
+                    }
+                }
+                .onChange(of: model.selectedThreadTurnRows().map(\.id)) { oldValue, newValue in
+                    let threadUnchanged = model.selectedThread?.id == rowScrollPreservationThreadId
+                    rowScrollPreservationThreadId = model.selectedThread?.id
+                    updateScrollState(proxy: proxy) {
+                        $0.renderRowsChanged(
+                            previousIds: oldValue,
+                            currentIds: newValue,
+                            threadUnchanged: threadUnchanged,
                             hasTailContent: !newValue.isEmpty || showsDebouncedTailThinking
                         )
                     }
@@ -333,14 +347,14 @@ struct GaryxConversationView: View {
                             }
                         }
                         .onAppear {
-                            prefetchOlderHistoryIfNeeded(ignoreDistance: true)
+                            prefetchOlderHistoryIfNeeded()
                         }
                     }
                     GaryxMobileTurnRowsView(
                         rows: turnRows,
                         prefetchBoundaryRowCount: garyxHistoryPrefetchBoundaryRows
                     ) {
-                        prefetchOlderHistoryIfNeeded(ignoreDistance: true)
+                        prefetchOlderHistoryIfNeeded()
                     }
                     if showsDebouncedTailThinking {
                         GaryxThinkingLabel()
@@ -617,13 +631,12 @@ struct GaryxConversationView: View {
         ].joined(separator: "|")
     }
 
-    private func prefetchOlderHistoryIfNeeded(ignoreDistance: Bool = false) {
+    private func prefetchOlderHistoryIfNeeded() {
         guard let threadId = model.selectedThread?.id,
               scrollStateBox.state.shouldPrefetchOlderHistory(
                 hasMoreHistoryBefore: model.selectedThreadHasMoreHistoryBefore,
                 isLoadingOlderHistory: model.isLoadingOlderThreadHistory,
-                hasPendingPrefetch: pendingHistoryPrefetchThreadId == threadId,
-                ignoreDistance: ignoreDistance
+                hasPendingPrefetch: pendingHistoryPrefetchThreadId == threadId
               ) else {
             return
         }
