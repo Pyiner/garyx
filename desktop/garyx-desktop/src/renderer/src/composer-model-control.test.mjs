@@ -82,6 +82,40 @@ test('effective model can still act as default when no override is selected', ()
   assert.equal(state.triggerLabel, 'Claude Opus 4.8');
 });
 
+test('default catalog model labels the trigger before the user selects an override', () => {
+  const state = resolve({
+    providerModels: {
+      ...providerModels,
+      defaultModel: 'claude-opus-4-8',
+    },
+    agentConfiguredModel: null,
+    effectiveModel: null,
+    selectedModel: null,
+  });
+
+  assert.equal(state.effectiveModelId, '');
+  assert.equal(state.defaultModelId, 'claude-opus-4-8');
+  assert.equal(state.defaultModelLabel, 'Claude Opus 4.8');
+  assert.equal(state.triggerLabel, 'Claude Opus 4.8');
+});
+
+test('default catalog model keeps the selected reasoning effort suffix', () => {
+  const state = resolve({
+    providerModels: {
+      ...providerModels,
+      defaultModel: 'claude-opus-4-8',
+    },
+    agentConfiguredModel: null,
+    effectiveModel: null,
+    selectedModel: null,
+    selectedReasoningEffort: 'high',
+  });
+
+  assert.equal(state.effectiveModelId, '');
+  assert.equal(state.effectiveReasoningEffortId, 'high');
+  assert.equal(state.triggerLabel, 'Claude Opus 4.8 · High');
+});
+
 test('model-less Claude Code menu keeps provider-level reasoning intersection', () => {
   const state = resolve();
 

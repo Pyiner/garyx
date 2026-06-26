@@ -120,13 +120,10 @@ export function resolveComposerModelControlState({
           { id: effectiveServiceTierId, label: effectiveServiceTierId, recommended: false },
         ]
       : catalogServiceTiers;
-  const triggerLabel = effectiveModelOption
-    ? selectedEffortOption
-      ? `${effectiveModelOption.label} · ${selectedEffortOption.label}`
-      : effectiveModelOption.label
-    : selectedEffortOption
-      ? `${modelFallbackLabel} · ${selectedEffortOption.label}`
-      : modelFallbackLabel;
+  const triggerModelLabel = effectiveModelOption?.label ?? defaultModelLabel;
+  const triggerLabel = selectedEffortOption
+    ? `${triggerModelLabel} · ${selectedEffortOption.label}`
+    : triggerModelLabel;
 
   return {
     models,
