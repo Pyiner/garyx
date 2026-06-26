@@ -905,6 +905,8 @@ interface ProviderModelsPayload {
   serviceTiers?: unknown;
   default_model?: unknown;
   defaultModel?: unknown;
+  default_reasoning_effort?: unknown;
+  defaultReasoningEffort?: unknown;
   source?: unknown;
   error?: unknown;
 }
@@ -2958,6 +2960,12 @@ function mapProviderModels(value: ProviderModelsPayload): DesktopProviderModels 
         ? value.default_model
         : typeof value.defaultModel === "string"
           ? value.defaultModel
+          : null,
+    defaultReasoningEffort:
+      typeof value.default_reasoning_effort === "string"
+        ? value.default_reasoning_effort
+        : typeof value.defaultReasoningEffort === "string"
+          ? value.defaultReasoningEffort
           : null,
     source: typeof value.source === "string" ? value.source : "",
     error: typeof value.error === "string" ? value.error : null,

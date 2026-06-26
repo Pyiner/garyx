@@ -96,7 +96,15 @@ export function resolveComposerModelControlState({
   const selectedEffortOption = effectiveReasoningEffortId
     ? reasoningEfforts.find((option) => option.id === effectiveReasoningEffortId)
     : undefined;
+  const configuredDefaultReasoningEffortId =
+    providerModels.defaultReasoningEffort?.trim() || '';
+  const supportedConfiguredDefaultReasoningEffortId =
+    configuredDefaultReasoningEffortId &&
+    reasoningEfforts.some((option) => option.id === configuredDefaultReasoningEffortId)
+      ? configuredDefaultReasoningEffortId
+      : '';
   const defaultReasoningEffortId =
+    supportedConfiguredDefaultReasoningEffortId ||
     effortFilterModelOption?.defaultReasoningEffort?.trim() ||
     reasoningEfforts.find((option) => option.recommended)?.id ||
     reasoningEfforts[0]?.id ||

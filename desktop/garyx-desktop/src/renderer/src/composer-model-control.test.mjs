@@ -137,6 +137,80 @@ test('default catalog model labels the trigger with its default reasoning effort
   assert.equal(state.triggerLabel, 'Claude Opus 4.8 · High');
 });
 
+test('default catalog model prefers supported provider default reasoning effort', () => {
+  const state = resolve({
+    providerModels: {
+      ...providerModels,
+      defaultModel: 'claude-opus-4-8',
+      defaultReasoningEffort: 'max',
+    },
+    agentConfiguredModel: null,
+    effectiveModel: null,
+    selectedModel: null,
+    effectiveReasoningEffort: null,
+    selectedReasoningEffort: null,
+  });
+
+  assert.equal(state.effectiveModelId, '');
+  assert.equal(state.defaultReasoningEffortId, 'max');
+  assert.equal(state.triggerLabel, 'Claude Opus 4.8 · Max');
+});
+
+test('empty provider default reasoning effort falls back to model default', () => {
+  const state = resolve({
+    providerModels: {
+      ...providerModels,
+      defaultModel: 'claude-opus-4-8',
+      defaultReasoningEffort: '  ',
+    },
+    agentConfiguredModel: null,
+    effectiveModel: null,
+    selectedModel: null,
+    effectiveReasoningEffort: null,
+    selectedReasoningEffort: null,
+  });
+
+  assert.equal(state.defaultReasoningEffortId, 'high');
+  assert.equal(state.triggerLabel, 'Claude Opus 4.8 · High');
+});
+
+test('unsupported provider default reasoning effort falls back to model default', () => {
+  const state = resolve({
+    providerModels: {
+      ...providerModels,
+      defaultModel: 'claude-haiku-4-5',
+      defaultReasoningEffort: 'max',
+    },
+    agentConfiguredModel: null,
+    effectiveModel: null,
+    selectedModel: null,
+    effectiveReasoningEffort: null,
+    selectedReasoningEffort: null,
+  });
+
+  assert.equal(state.defaultReasoningEffortId, 'high');
+  assert.equal(state.triggerLabel, 'Claude Haiku 4.5 · High');
+});
+
+test('selected reasoning effort labels trigger before provider default', () => {
+  const state = resolve({
+    providerModels: {
+      ...providerModels,
+      defaultModel: 'claude-opus-4-8',
+      defaultReasoningEffort: 'max',
+    },
+    agentConfiguredModel: null,
+    effectiveModel: null,
+    selectedModel: null,
+    effectiveReasoningEffort: null,
+    selectedReasoningEffort: 'high',
+  });
+
+  assert.equal(state.defaultReasoningEffortId, 'max');
+  assert.equal(state.effectiveReasoningEffortId, 'high');
+  assert.equal(state.triggerLabel, 'Claude Opus 4.8 · High');
+});
+
 test('default catalog model keeps the selected reasoning effort suffix', () => {
   const state = resolve({
     providerModels: {
