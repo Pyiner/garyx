@@ -5149,9 +5149,17 @@ code {
   border-bottom: 0.5px solid var(--color-token-border);
 }
 
-.thread-log-panel-tabs {
+.thread-log-panel-title {
   min-width: 0;
-  flex-wrap: wrap;
+  overflow: hidden;
+  color: var(--color-token-text-secondary);
+  font-size: var(--text-xs-plus);
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .thread-log-panel-latest {
@@ -5169,6 +5177,7 @@ code {
 }
 
 .thread-log-panel-content {
+  grid-row: 3;
   min-height: 0;
   margin: 0;
   padding: 10px 2px 18px;
@@ -5186,8 +5195,6 @@ code {
   display: block;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  content-visibility: auto;
-  contain-intrinsic-size: auto 24px;
 }
 
 .thread-log-line-text {
@@ -5209,33 +5216,6 @@ code {
   contain-intrinsic-size: auto 44px;
 }
 
-.thread-log-client-entry-error {
-  border-color: color-mix(
-    in oklab,
-    var(--color-token-error-foreground) 18%,
-    transparent
-  );
-}
-
-.thread-log-client-entry-toggle {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 10px 12px;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  font: inherit;
-  text-align: left;
-}
-
-.thread-log-client-entry-toggle:hover {
-  background: color-mix(in oklab, var(--color-token-row-hover) 76%, white 24%);
-}
-
 .thread-log-client-entry-type {
   display: inline-flex;
   align-items: center;
@@ -5255,36 +5235,12 @@ code {
   text-transform: uppercase;
 }
 
-.thread-log-client-entry-type.type-assistant-delta {
-  background: color-mix(in oklab, #dbeafe 72%, white 28%);
-  color: var(--color-accent-foreground, #0f6cbd);
-}
-
-.thread-log-client-entry-type.type-tool-use,
-.thread-log-client-entry-type.type-tool-result {
-  background: color-mix(in oklab, #ede9fe 72%, white 28%);
-  color: #6d28d9;
-}
-
-.thread-log-client-entry-type.type-error {
-  background: color-mix(in oklab, #fee2e2 76%, white 24%);
-  color: var(--color-token-error-foreground);
-}
-
 .thread-log-client-entry-summary {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--color-token-text-primary);
-}
-
-.thread-log-client-entry-caret {
-  color: var(--color-token-description-foreground);
-  font-size: 10.5px;
-  font-weight: 700;
-  line-height: 1;
-  text-transform: uppercase;
 }
 
 .thread-log-client-entry-detail {

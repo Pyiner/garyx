@@ -1,9 +1,9 @@
+import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import type { RefObject } from 'react';
 
 import { Button } from '@/components/ui/button';
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 
-import type { ClientLogEntry, ThreadLogLine, ThreadLogTab } from '../types';
+import type { ThreadLogLine } from '../types';
 import { useI18n } from '../../i18n';
 
 type ThreadLogPanelProps = {
@@ -11,17 +11,12 @@ type ThreadLogPanelProps = {
   selectedThreadId: string | null;
   activeThreadLogsPath: string;
   activeThreadLogsHasUnread: boolean;
-  threadLogsActiveTab: ThreadLogTab;
   threadLogsError: string | null;
   threadLogsLoading: boolean;
-  clientThreadLogEntries: ClientLogEntry[];
-  mobileThreadLogLines: ThreadLogLine[];
-  expandedClientLogEntries: Record<string, boolean>;
+  threadLogLines: ThreadLogLine[];
   threadLogsRef: RefObject<HTMLDivElement | null>;
   onJumpToLatest: () => void;
-  onSelectTab: (tab: ThreadLogTab) => void;
   onContentScroll: () => void;
-  onToggleClientLogEntry: (entryKey: string) => void;
 };
 
 export function ThreadLogPanel({
@@ -29,20 +24,98 @@ export function ThreadLogPanel({
   selectedThreadId,
   activeThreadLogsPath,
   activeThreadLogsHasUnread,
-  threadLogsActiveTab,
   threadLogsError,
   threadLogsLoading,
-  clientThreadLogEntries,
-  mobileThreadLogLines,
-  expandedClientLogEntries,
+  threadLogLines,
   threadLogsRef,
   onJumpToLatest,
-  onSelectTab,
   onContentScroll,
-  onToggleClientLogEntry,
 }: ThreadLogPanelProps) {
   const { t } = useI18n();
   const threadLogsLabel = activeThreadTitle || selectedThreadId || t('Current thread logs');
+  const shouldFollowTailRef = useRef(true);
+  const followTailFrameRef = useRef<number | null>(null);
+  const latestLogLineKey = threadLogLines[threadLogLines.length - 1]?.key ?? '';
+
+  const cancelScheduledFollowTailScroll = useCallback(() => {
+    if (followTailFrameRef.current !== null) {
+      window.cancelAnimationFrame(followTailFrameRef.current);
+      followTailFrameRef.current = null;
+    }
+  }, []);
+
+  const scrollToLatestIfFollowing = useCallback(
+    (behavior: ScrollBehavior = 'auto', force = false) => {
+      if (force) {
+        shouldFollowTailRef.current = true;
+      }
+      const scrollOnce = (scrollBehavior: ScrollBehavior, allowForce = false) => {
+        if (!allowForce && !shouldFollowTailRef.current) {
+          return;
+        }
+        const node = threadLogsRef.current;
+        if (!node) {
+          return;
+        }
+        node.scrollTo({
+          top: node.scrollHeight,
+          behavior: scrollBehavior,
+        });
+      };
+
+      cancelScheduledFollowTailScroll();
+      scrollOnce(behavior, force);
+
+      let frameCount = 0;
+      const scheduleNextFrame = () => {
+        followTailFrameRef.current = window.requestAnimationFrame(() => {
+          followTailFrameRef.current = null;
+          if (!shouldFollowTailRef.current) {
+            return;
+          }
+          scrollOnce('auto');
+          const node = threadLogsRef.current;
+          const bottomDelta = node
+            ? node.scrollHeight - node.scrollTop - node.clientHeight
+            : 0;
+          if (bottomDelta > 2 && frameCount < 10) {
+            frameCount += 1;
+            scheduleNextFrame();
+          }
+        });
+      };
+
+      scheduleNextFrame();
+    },
+    [cancelScheduledFollowTailScroll, threadLogsRef],
+  );
+
+  useLayoutEffect(() => {
+    scrollToLatestIfFollowing('auto', true);
+  }, [scrollToLatestIfFollowing, selectedThreadId]);
+
+  useLayoutEffect(() => {
+    if (!threadLogLines.length) {
+      return;
+    }
+    scrollToLatestIfFollowing('auto');
+  }, [latestLogLineKey, scrollToLatestIfFollowing, threadLogLines.length]);
+
+  useEffect(() => cancelScheduledFollowTailScroll, [cancelScheduledFollowTailScroll]);
+
+  function handleJumpToLatest() {
+    scrollToLatestIfFollowing('smooth', true);
+    onJumpToLatest();
+  }
+
+  function handleContentScroll() {
+    const node = threadLogsRef.current;
+    if (node) {
+      shouldFollowTailRef.current =
+        node.scrollHeight - node.scrollTop - node.clientHeight < 48;
+    }
+    onContentScroll();
+  }
 
   return (
     <aside
@@ -51,98 +124,44 @@ export function ThreadLogPanel({
       title={activeThreadLogsPath}
     >
       <div className="thread-log-panel-toolbar">
-        <ToggleGroup
-          aria-label={t('Log sources')}
-          className="thread-log-panel-tabs"
-          onValueChange={(value) => {
-            if (value === 'client' || value === 'mobile') {
-              onSelectTab(value);
-            }
-          }}
-          size="sm"
-          spacing={0}
-          type="single"
-          value={threadLogsActiveTab}
-          variant="outline"
-        >
-          <ToggleGroupItem value="client">{t('Client Logs')}</ToggleGroupItem>
-          <ToggleGroupItem value="mobile">{t('Gateway Logs')}</ToggleGroupItem>
-        </ToggleGroup>
-        <div className="thread-log-panel-actions">
-          {activeThreadLogsHasUnread ? (
+        <div className="thread-log-panel-title">{t('Gateway Logs')}</div>
+        {activeThreadLogsHasUnread ? (
+          <div className="thread-log-panel-actions">
             <Button
               className="thread-log-panel-latest"
-              onClick={onJumpToLatest}
+              onClick={handleJumpToLatest}
               size="xs"
               type="button"
               variant="ghost"
             >
               {t('Latest')}
             </Button>
-          ) : null}
-        </div>
+          </div>
+        ) : null}
       </div>
 
-      {threadLogsActiveTab === 'mobile' && threadLogsError ? (
+      {threadLogsError ? (
         <div className="thread-log-panel-error">{threadLogsError}</div>
       ) : null}
 
       <div
         className="thread-log-panel-content"
-        onScroll={onContentScroll}
+        onScroll={handleContentScroll}
         ref={threadLogsRef}
       >
-        {threadLogsActiveTab === 'client' ? (
-          clientThreadLogEntries.length ? (
-            <div className="thread-log-client-list">
-              {clientThreadLogEntries.map((entry) => {
-                const expanded = Boolean(expandedClientLogEntries[entry.key]);
-                return (
-                  <div
-                    className={`thread-log-client-entry ${entry.level === 'error' ? 'thread-log-client-entry-error' : ''}`}
-                    key={entry.key}
-                  >
-                    <button
-                      aria-expanded={expanded}
-                      className="thread-log-client-entry-toggle"
-                      onClick={() => {
-                        onToggleClientLogEntry(entry.key);
-                      }}
-                      type="button"
-                    >
-                      <span className={`thread-log-client-entry-type type-${entry.eventType.replace(/_/g, '-')}`}>
-                        {entry.eventType}
-                      </span>
-                      <span className="thread-log-client-entry-summary" title={entry.summary}>
-                        {entry.summary || '\u00A0'}
-                      </span>
-                      <span className="thread-log-client-entry-caret">{expanded ? t('Hide') : t('Show')}</span>
-                    </button>
-                    {expanded ? (
-                      <pre className="thread-log-client-entry-detail">{entry.detail}</pre>
-                    ) : null}
-                  </div>
-                );
-              })}
+        {threadLogLines.length ? (
+          threadLogLines.map((line) => (
+            <div
+              className={`thread-log-line ${line.level === 'error' ? 'thread-log-line-error' : ''}`}
+              key={line.key}
+            >
+              <span className="thread-log-line-text">{line.text || '\u00A0'}</span>
             </div>
-          ) : (
-            <div className="thread-log-panel-empty">{t('No client stream events yet.')}</div>
-          )
+          ))
         ) : (
-          mobileThreadLogLines.length ? (
-            mobileThreadLogLines.map((line) => (
-              <div
-                className={`thread-log-line ${line.level === 'error' ? 'thread-log-line-error' : ''}`}
-                key={line.key}
-              >
-                <span className="thread-log-line-text">{line.text || '\u00A0'}</span>
-              </div>
-            ))
-          ) : (
-            <div className="thread-log-panel-empty">
-              {threadLogsLoading ? t('Loading logs…') : t('No logs yet.')}
-            </div>
-          )
+          <div className="thread-log-panel-empty">
+            {threadLogsLoading ? t('Loading logs…') : t('No logs yet.')}
+          </div>
         )}
       </div>
     </aside>

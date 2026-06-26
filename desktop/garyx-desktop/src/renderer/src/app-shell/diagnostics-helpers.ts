@@ -1,12 +1,8 @@
-import type {
-  ConnectionStatus,
-  DesktopChatStreamEvent,
-} from '@shared/contracts';
+import type { ConnectionStatus } from '@shared/contracts';
 
-import type { ClientLogEntry, GatewayIndicatorTone, ThreadLogLine } from './types';
+import type { GatewayIndicatorTone, ThreadLogLine } from './types';
 
 const THREAD_LOG_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\S+\s+/;
-export const MAX_CLIENT_STREAM_LOG_ENTRIES = 180;
 export const MAX_GATEWAY_THREAD_LOG_LINES = 100;
 export const THREAD_LOG_PANEL_MIN_WIDTH = 280;
 export const THREAD_LOG_PANEL_MAX_WIDTH = 760;
@@ -72,93 +68,6 @@ function formatThreadLogTimestamp(value: string): string | undefined {
     .find((part) => part.type === 'timeZoneName')
     ?.value;
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}${timezone ? ` ${timezone}` : ''}`;
-}
-
-function formatThreadLogClock(value: number): string {
-  const date = new Date(value);
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  const seconds = String(date.getSeconds()).padStart(2, '0');
-  const milliseconds = String(date.getMilliseconds()).padStart(3, '0');
-  return `${hours}:${minutes}:${seconds}.${milliseconds}`;
-}
-
-function compactClientLogText(value: string): string {
-  return value.replace(/\s+/g, ' ').trim();
-}
-
-function truncateClientLogText(value: string, maxChars = 160): string {
-  if (value.length <= maxChars) {
-    return value;
-  }
-  return `${value.slice(0, Math.max(0, maxChars - 1))}…`;
-}
-
-function stringifyClientLogPayload(value: unknown, maxChars = 4_000): string {
-  const text = typeof value === 'string'
-    ? value
-    : (() => {
-        try {
-          return JSON.stringify(value, null, 2);
-        } catch {
-          return String(value);
-        }
-      })();
-  if (text.length <= maxChars) {
-    return text;
-  }
-  return `${text.slice(0, maxChars)}\n…[truncated ${text.length - maxChars} chars]`;
-}
-
-function summarizeClientStreamEvent(event: DesktopChatStreamEvent): string {
-  switch (event.type) {
-    case 'error':
-      return truncateClientLogText(compactClientLogText(event.error), 220);
-    case 'committed_message':
-      return `seq=${event.seq} · ${event.message.kind || event.message.role}`;
-    default:
-      return '';
-  }
-}
-
-function buildClientStreamLogDetail(event: DesktopChatStreamEvent): string {
-  switch (event.type) {
-    case 'error':
-      return stringifyClientLogPayload({
-        type: event.type,
-        runId: event.runId,
-        error: event.error,
-      });
-    default:
-      return stringifyClientLogPayload(event);
-  }
-}
-
-export function buildClientStreamLogEntry(
-  event: DesktopChatStreamEvent,
-  key: string,
-): ClientLogEntry {
-  const now = Date.now();
-  return {
-    key,
-    timestamp: formatThreadLogClock(now),
-    eventType: event.type,
-    runId: 'runId' in event ? event.runId : undefined,
-    summary: summarizeClientStreamEvent(event),
-    detail: buildClientStreamLogDetail(event),
-    level: event.type === 'error' ? 'error' : 'default',
-  };
-}
-
-export function appendClientStreamLogEntry(
-  existing: ClientLogEntry[],
-  nextEntry: ClientLogEntry,
-  maxEntries = MAX_CLIENT_STREAM_LOG_ENTRIES,
-): ClientLogEntry[] {
-  const nextEntries = [...existing, nextEntry];
-  return maxEntries > 0 && nextEntries.length > maxEntries
-    ? nextEntries.slice(nextEntries.length - maxEntries)
-    : nextEntries;
 }
 
 export function clampThreadLogsPanelWidth(

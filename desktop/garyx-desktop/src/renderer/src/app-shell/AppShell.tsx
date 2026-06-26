@@ -200,7 +200,6 @@ import type {
   AutomationDraft,
   AutomationDialogState,
   BoundBot,
-  ClientLogEntry,
   ContentView,
   GatewayIndicatorTone,
   LiveStreamState,
@@ -209,23 +208,18 @@ import type {
   PendingAutomationRun,
   PendingThreadInputMap,
   ThreadLogLine,
-  ThreadLogTab,
   TranscriptEntryState,
   UiTranscriptMessage,
   WorkspaceDirectoryState,
 } from "./types";
-import { ThreadLogPanel } from "./components/ThreadLogPanel";
 import { AppLeftRail } from "./components/AppLeftRail";
 import { ThreadPage } from "./components/ThreadPage";
 import { useAutomationController } from "./useAutomationController";
 import {
-  MAX_CLIENT_STREAM_LOG_ENTRIES,
-  appendClientStreamLogEntry,
   SIDE_TOOLS_PANEL_MAX_WIDTH,
   SIDE_TOOLS_PANEL_MIN_WIDTH,
   THREAD_LOG_PANEL_MAX_WIDTH,
   THREAD_LOG_PANEL_MIN_WIDTH,
-  buildClientStreamLogEntry,
   buildThreadLogLines,
   clampSideToolsPanelWidth,
   clampThreadLogsPanelWidth,
@@ -1642,24 +1636,15 @@ export function AppShell() {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [workspaceFileFilter, setWorkspaceFileFilter] = useState("");
   const [threadLogsOpen, setThreadLogsOpen] = useState(false);
-  const [threadLogsActiveTab, setThreadLogsActiveTab] =
-    useState<ThreadLogTab>("client");
   const [threadLogsText, setThreadLogsText] = useState("");
   const [threadLogsPath, setThreadLogsPath] = useState("");
   const [threadLogsCursor, setThreadLogsCursor] = useState(0);
   const [threadLogsLoading, setThreadLogsLoading] = useState(false);
   const [threadLogsError, setThreadLogsError] = useState<string | null>(null);
   const [threadLogsHasUnread, setThreadLogsHasUnread] = useState(false);
-  const [clientLogsByThread, setClientLogsByThread] = useState<
-    Record<string, ClientLogEntry[]>
-  >({});
-  const [clientLogsHasUnread, setClientLogsHasUnread] = useState(false);
   const [performanceSnapshot, setPerformanceSnapshot] = useState(
     () => getRendererPerformanceSnapshot(),
   );
-  const [expandedClientLogEntries, setExpandedClientLogEntries] = useState<
-    Record<string, boolean>
-  >({});
   const [threadLogsPanelWidth, setThreadLogsPanelWidth] = useState(
     DEFAULT_DESKTOP_SETTINGS.threadLogsPanelWidth,
   );
@@ -1783,11 +1768,6 @@ export function AppShell() {
   const sideIsComposingRef = useRef(false);
   const sideIgnoreComposerSubmitUntilRef = useRef(0);
   const newThreadInitialDispatchLockRef = useRef(false);
-  const threadLogsOpenRef = useRef(false);
-  const threadLogsActiveTabRef = useRef<ThreadLogTab>("client");
-  const clientLogSequenceRef = useRef(1);
-  const pendingClientLogEventsRef = useRef<DesktopChatStreamEvent[]>([]);
-  const clientLogFlushFrameRef = useRef<number | null>(null);
   const messagesByThreadRef = useRef<MessageMap>({});
   const renderStateByThreadRef = useRef<Record<string, RenderState>>({});
   const transcriptSnapshotByThreadRef = useRef<Record<string, ThreadTranscript>>(
@@ -2769,21 +2749,12 @@ export function AppShell() {
     recovering: hasGatewayRecoveryActivity(),
     reason: gatewayStatusHint || connection?.error || null,
   });
-  const mobileThreadLogLines = useMemo(
+  const threadLogLines = useMemo(
     () => buildThreadLogLines(threadLogsText),
     [threadLogsText],
   );
-  const clientThreadLogEntries = selectedThreadId
-    ? clientLogsByThread[selectedThreadId] || []
-    : [];
-  const activeThreadLogsPath =
-    threadLogsActiveTab === "client"
-      ? "Renderer stream events received by desktop app"
-      : threadLogsPath || "Waiting for log file";
-  const activeThreadLogsHasUnread =
-    threadLogsActiveTab === "client"
-      ? clientLogsHasUnread
-      : threadLogsHasUnread;
+  const activeThreadLogsPath = threadLogsPath || "Waiting for log file";
+  const activeThreadLogsHasUnread = threadLogsHasUnread;
   const selectedWorkspaceEntry = selectedWorkspace(
     desktopState,
     desktopState?.selectedWorkspacePath || null,
@@ -4393,10 +4364,6 @@ export function AppShell() {
         window.cancelAnimationFrame(messagesStickScrollFrameRef.current);
         messagesStickScrollFrameRef.current = null;
       }
-      if (clientLogFlushFrameRef.current !== null) {
-        window.cancelAnimationFrame(clientLogFlushFrameRef.current);
-        clientLogFlushFrameRef.current = null;
-      }
     };
   }, []);
 
@@ -4472,16 +4439,7 @@ export function AppShell() {
   }, [pendingBotId]);
 
   useEffect(() => {
-    threadLogsOpenRef.current = threadLogsOpen;
-  }, [threadLogsOpen]);
-
-  useEffect(() => {
-    threadLogsActiveTabRef.current = threadLogsActiveTab;
-  }, [threadLogsActiveTab]);
-
-  useEffect(() => {
     const listener = (event: DesktopChatStreamEvent) => {
-      enqueueClientLogEvent(event);
       if (chatStreamEventHasRunLifecycle(event)) {
         scheduleDesktopStateRefresh();
       }
@@ -5434,12 +5392,6 @@ export function AppShell() {
   }, [selectedThreadId, threadLogsOpen]);
 
   useEffect(() => {
-    if (!selectedThreadId) {
-      setClientLogsHasUnread(false);
-    }
-  }, [selectedThreadId]);
-
-  useEffect(() => {
     if (!threadLogsOpen || contentView !== "thread" || !selectedThreadId) {
       return;
     }
@@ -5531,15 +5483,11 @@ export function AppShell() {
     ) {
       return;
     }
-    if (threadLogsActiveTab === "client") {
-      setClientLogsHasUnread(false);
-    } else {
-      setThreadLogsHasUnread(false);
-    }
+    setThreadLogsHasUnread(false);
     window.requestAnimationFrame(() => {
       scrollThreadLogsToLatest("auto");
     });
-  }, [selectedThreadId, threadLogsActiveTab, threadLogsOpen]);
+  }, [selectedThreadId, threadLogsOpen]);
 
   function syncComposerPhase(
     nextText: string,
@@ -5725,65 +5673,6 @@ export function AppShell() {
       ...current,
       [threadId]: renderState,
     }));
-  }
-
-  function flushPendingClientLogEvents() {
-    clientLogFlushFrameRef.current = null;
-    const events = pendingClientLogEventsRef.current;
-    if (!events.length) {
-      return;
-    }
-    pendingClientLogEventsRef.current = [];
-
-    setClientLogsByThread((current) => {
-      let next = current;
-      for (const event of events) {
-        const key = `client-log-line-${clientLogSequenceRef.current}`;
-        clientLogSequenceRef.current += 1;
-        const nextEntry = buildClientStreamLogEntry(event, key);
-        const existing = next[event.threadId] || [];
-        const nextEntries = appendClientStreamLogEntry(
-          existing,
-          nextEntry,
-          MAX_CLIENT_STREAM_LOG_ENTRIES,
-        );
-        if (nextEntries === existing) {
-          continue;
-        }
-        next = {
-          ...next,
-          [event.threadId]: nextEntries,
-        };
-      }
-      return next;
-    });
-
-    const selectedThread = selectedThreadIdRef.current;
-    if (!selectedThread || !events.some((event) => event.threadId === selectedThread)) {
-      return;
-    }
-    const shouldAutoScroll =
-      threadLogsOpenRef.current &&
-      threadLogsActiveTabRef.current === "client" &&
-      threadLogsNearBottom();
-    if (shouldAutoScroll) {
-      setClientLogsHasUnread(false);
-      window.requestAnimationFrame(() => {
-        scrollThreadLogsToLatest("auto");
-      });
-    } else {
-      setClientLogsHasUnread(true);
-    }
-  }
-
-  function enqueueClientLogEvent(event: DesktopChatStreamEvent) {
-    pendingClientLogEventsRef.current.push(event);
-    if (clientLogFlushFrameRef.current !== null) {
-      return;
-    }
-    clientLogFlushFrameRef.current = window.requestAnimationFrame(
-      flushPendingClientLogEvents,
-    );
   }
 
   function requestMessagesBottomSnap(
@@ -9478,9 +9367,6 @@ export function AppShell() {
         sideChatLiveStream?.runId || sideChatThreadSummary?.recentRunId || null
       }
       availableWorkspaceCount={availableWorkspaceCount}
-      clientThreadLogEntries={
-        sideChatThreadId ? clientLogsByThread[sideChatThreadId] || [] : []
-      }
       composer={sideComposerDraft.text}
       composerAttachmentInputRef={sideComposerAttachmentInputRef}
       composerBrowserAnnotations={sideComposerDraft.browserAnnotations}
@@ -9503,7 +9389,6 @@ export function AppShell() {
       slashCommandsLoading={commandsLoading}
       composerTextareaRef={sideComposerTextareaRef}
       draggedQueueIntentId={draggedQueueIntentId}
-      expandedClientLogEntries={{}}
       historyLoading={sideChatHistoryLoading}
       historyLoadingEarlier={Boolean(sideChatHistoryPagination?.loadingBefore)}
       ignoreComposerSubmitUntilRef={sideIgnoreComposerSubmitUntilRef}
@@ -9512,7 +9397,7 @@ export function AppShell() {
       canSteerQueuedPrompt={sideChatCanSteerQueuedPrompt}
       isComposingRef={sideIsComposingRef}
       messagesRef={sideChatMessagesRef}
-      mobileThreadLogLines={[]}
+      threadLogLines={[]}
       newThreadSelectedAgentId={sideChatThreadSummary?.agentId || pendingAgentId}
       newThreadSelectedWorkflowId={null}
       newThreadWorkspaceEntry={newThreadWorkspaceEntry}
@@ -9599,7 +9484,6 @@ export function AppShell() {
           void syncThreadBotBinding(sideChatThreadId, botId);
         }
       }}
-      onSelectThreadLogsTab={() => {}}
       onOpenThreadById={(threadId) => {
         void openExistingThread(threadId);
       }}
@@ -9611,7 +9495,6 @@ export function AppShell() {
       onThreadLogsContentScroll={() => {}}
       onThreadLogsResizeKeyDown={() => {}}
       onThreadLogsResizeStart={() => {}}
-      onToggleClientLogEntry={() => {}}
       preferredWorkspaceForNewThread={preferredWorkspaceForNewThread}
       queueDropTarget={queueDropTarget}
       selectableNewThreadWorkspaces={selectableNewThreadWorkspaces}
@@ -9624,7 +9507,6 @@ export function AppShell() {
       showHistoryLoadingPlaceholder={false}
       showTailThinking={sideChatShowTailThinking}
       threadLayoutRef={sideChatThreadLayoutRef}
-      threadLogsActiveTab="client"
       threadLogsError={null}
       threadLogsLoading={false}
       threadLogsMaxWidth={0}
@@ -9731,7 +9613,6 @@ export function AppShell() {
         activeThreadTitle={activeThread?.title || null}
         activeThreadRunId={activeThreadRunId}
         availableWorkspaceCount={availableWorkspaceCount}
-        clientThreadLogEntries={clientThreadLogEntries}
         composer={composer}
         composerAttachmentInputRef={composerAttachmentInputRef}
         composerBrowserAnnotations={composerBrowserAnnotations}
@@ -9754,7 +9635,6 @@ export function AppShell() {
         slashCommandsLoading={commandsLoading}
         composerTextareaRef={composerTextareaRef}
         draggedQueueIntentId={draggedQueueIntentId}
-        expandedClientLogEntries={expandedClientLogEntries}
         historyLoading={historyLoading}
         historyLoadingEarlier={Boolean(activeHistoryPagination?.loadingBefore)}
         ignoreComposerSubmitUntilRef={ignoreComposerSubmitUntilRef}
@@ -9763,7 +9643,7 @@ export function AppShell() {
         canSteerQueuedPrompt={canSteerQueuedPrompt}
         isComposingRef={isComposingRef}
         messagesRef={messagesRef}
-        mobileThreadLogLines={mobileThreadLogLines}
+        threadLogLines={threadLogLines}
         newThreadSelectedAgentId={pendingAgentId}
         newThreadSelectedWorkflowId={pendingWorkflowId}
         newThreadProviderModels={pendingProviderModels}
@@ -9820,11 +9700,7 @@ export function AppShell() {
         }}
         onComposerSubmit={handleComposerSubmit}
         onJumpToLatestThreadLogs={() => {
-          if (threadLogsActiveTab === "client") {
-            setClientLogsHasUnread(false);
-          } else {
-            setThreadLogsHasUnread(false);
-          }
+          setThreadLogsHasUnread(false);
           scrollThreadLogsToLatest("smooth");
         }}
         onLocalWorkspaceFileLinkClick={handleLocalFileLinkClick}
@@ -9886,11 +9762,6 @@ export function AppShell() {
             setPendingBotId(botId);
           }
         }}
-        onSelectThreadLogsTab={(tab) => {
-          trackUiAction(`thread_logs.select_${tab}`, () => {
-            setThreadLogsActiveTab(tab);
-          });
-        }}
         onOpenThreadById={(threadId) => {
           if (embedded) {
             void selectExistingThreadInPlace(threadId, "tasks");
@@ -9908,21 +9779,11 @@ export function AppShell() {
         }}
         onThreadLogsContentScroll={() => {
           if (threadLogsNearBottom()) {
-            if (threadLogsActiveTab === "client") {
-              setClientLogsHasUnread(false);
-            } else {
-              setThreadLogsHasUnread(false);
-            }
+            setThreadLogsHasUnread(false);
           }
         }}
         onThreadLogsResizeKeyDown={embedded ? () => {} : handleThreadLogsResizeKeyDown}
         onThreadLogsResizeStart={embedded ? () => {} : handleThreadLogsResizeStart}
-        onToggleClientLogEntry={(entryKey) => {
-          setExpandedClientLogEntries((current) => ({
-            ...current,
-            [entryKey]: !current[entryKey],
-          }));
-        }}
         preferredWorkspaceForNewThread={preferredWorkspaceForNewThread}
         queueDropTarget={queueDropTarget}
         selectableNewThreadWorkspaces={selectableNewThreadWorkspaces}
@@ -9940,7 +9801,6 @@ export function AppShell() {
               } as CSSProperties)
             : undefined
         }
-        threadLogsActiveTab={threadLogsActiveTab}
         threadLogsError={embedded ? null : threadLogsError}
         threadLogsLoading={embedded ? false : threadLogsLoading}
         threadLogsMaxWidth={
@@ -10495,7 +10355,7 @@ export function AppShell() {
                 teamSummary={activeTeamSummary}
                 threadInfo={activeThreadInfo}
                 threadInfoLoaded={activeThreadInfoLoaded}
-                threadLogsHasUnread={threadLogsHasUnread || clientLogsHasUnread}
+                threadLogsHasUnread={threadLogsHasUnread}
                 threadLogsOpen={threadLogsOpen}
                 onCreateAutomation={() => {
                   trackUiAction("automation.open_create_dialog", () => {
