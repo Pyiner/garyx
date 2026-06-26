@@ -41,7 +41,7 @@ test('keeps markdown-like final text without requiring strict XML content', () =
 <garyx_task_notification event="ready_for_review" task_id="#TASK-7" status="in_review">
 Task #TASK-7 is ready for review: Review renderer output
 
-527 skill 审查 + 验证充分:
+527 skill review with enough validation:
 
 - <review> should not become a visible wrapper.
 - command stayed safe & readable.

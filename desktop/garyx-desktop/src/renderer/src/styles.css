@@ -23129,7 +23129,7 @@ button.new-thread-dreams-scan:hover {
 }
 
 /* ============================================================
-   Thread 详情右上角 — 子 task 树浮窗
+   Top-right child task tree popover on thread detail
    ============================================================ */
 .thread-subtask-pop {
   position: absolute;
@@ -23145,15 +23145,15 @@ button.new-thread-dreams-scan:hover {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1), 0 2px 6px rgba(0, 0, 0, 0.05);
   padding: 6px;
 }
-/* 浮窗横向独占右侧:给 thread-main 加 padding-right,把消息(content 流内)
-   挤到左区;浮窗 absolute right:18 相对 padding box 右边(= border box 右,
-   不受 padding-right 影响),自然贴在让出的右侧条里、不覆盖消息。
-   :has() 动态——没 active 子 task(浮窗不渲染)时不留白。 */
+/* Reserve the right rail for the popover: padding-right narrows in-flow
+   message content while the absolute popover stays pinned to the border box.
+   The :has() selector avoids reserving space when no active child task
+   popover is rendered. */
 .thread-main:has(.thread-subtask-pop) {
   padding-right: 360px;
 }
-/* composer 是 absolute(不吃 padding-right),要单独给同样的右侧 reserve,
-   才能和消息区一起缩到左区、左右居中对齐(不脱节)。 */
+/* The composer is absolute and does not consume padding-right, so reserve the
+   same right rail explicitly to keep it aligned with the message column. */
 .thread-main:has(.thread-subtask-pop) .composer-shell-wrap {
   right: 360px;
   width: min(var(--container-2xl), calc(100% - 360px));
