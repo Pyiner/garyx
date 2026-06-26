@@ -5149,9 +5149,17 @@ code {
   border-bottom: 0.5px solid var(--color-token-border);
 }
 
-.thread-log-panel-tabs {
+.thread-log-panel-title {
   min-width: 0;
-  flex-wrap: wrap;
+  overflow: hidden;
+  color: var(--color-token-text-secondary);
+  font-size: var(--text-xs-plus);
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .thread-log-panel-latest {
@@ -5169,6 +5177,7 @@ code {
 }
 
 .thread-log-panel-content {
+  grid-row: 3;
   min-height: 0;
   margin: 0;
   padding: 10px 2px 18px;
@@ -5186,8 +5195,6 @@ code {
   display: block;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  content-visibility: auto;
-  contain-intrinsic-size: auto 24px;
 }
 
 .thread-log-line-text {
@@ -5209,33 +5216,6 @@ code {
   contain-intrinsic-size: auto 44px;
 }
 
-.thread-log-client-entry-error {
-  border-color: color-mix(
-    in oklab,
-    var(--color-token-error-foreground) 18%,
-    transparent
-  );
-}
-
-.thread-log-client-entry-toggle {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 10px 12px;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  font: inherit;
-  text-align: left;
-}
-
-.thread-log-client-entry-toggle:hover {
-  background: color-mix(in oklab, var(--color-token-row-hover) 76%, white 24%);
-}
-
 .thread-log-client-entry-type {
   display: inline-flex;
   align-items: center;
@@ -5255,36 +5235,12 @@ code {
   text-transform: uppercase;
 }
 
-.thread-log-client-entry-type.type-assistant-delta {
-  background: color-mix(in oklab, #dbeafe 72%, white 28%);
-  color: var(--color-accent-foreground, #0f6cbd);
-}
-
-.thread-log-client-entry-type.type-tool-use,
-.thread-log-client-entry-type.type-tool-result {
-  background: color-mix(in oklab, #ede9fe 72%, white 28%);
-  color: #6d28d9;
-}
-
-.thread-log-client-entry-type.type-error {
-  background: color-mix(in oklab, #fee2e2 76%, white 24%);
-  color: var(--color-token-error-foreground);
-}
-
 .thread-log-client-entry-summary {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--color-token-text-primary);
-}
-
-.thread-log-client-entry-caret {
-  color: var(--color-token-description-foreground);
-  font-size: 10.5px;
-  font-weight: 700;
-  line-height: 1;
-  text-transform: uppercase;
 }
 
 .thread-log-client-entry-detail {
@@ -23129,7 +23085,7 @@ button.new-thread-dreams-scan:hover {
 }
 
 /* ============================================================
-   Thread 详情右上角 — 子 task 树浮窗
+   Top-right child task tree popover on thread detail
    ============================================================ */
 .thread-subtask-pop {
   position: absolute;
@@ -23145,15 +23101,15 @@ button.new-thread-dreams-scan:hover {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1), 0 2px 6px rgba(0, 0, 0, 0.05);
   padding: 6px;
 }
-/* 浮窗横向独占右侧:给 thread-main 加 padding-right,把消息(content 流内)
-   挤到左区;浮窗 absolute right:18 相对 padding box 右边(= border box 右,
-   不受 padding-right 影响),自然贴在让出的右侧条里、不覆盖消息。
-   :has() 动态——没 active 子 task(浮窗不渲染)时不留白。 */
+/* Reserve the right rail for the popover: padding-right narrows in-flow
+   message content while the absolute popover stays pinned to the border box.
+   The :has() selector avoids reserving space when no active child task
+   popover is rendered. */
 .thread-main:has(.thread-subtask-pop) {
   padding-right: 360px;
 }
-/* composer 是 absolute(不吃 padding-right),要单独给同样的右侧 reserve,
-   才能和消息区一起缩到左区、左右居中对齐(不脱节)。 */
+/* The composer is absolute and does not consume padding-right, so reserve the
+   same right rail explicitly to keep it aligned with the message column. */
 .thread-main:has(.thread-subtask-pop) .composer-shell-wrap {
   right: 360px;
   width: min(var(--container-2xl), calc(100% - 360px));

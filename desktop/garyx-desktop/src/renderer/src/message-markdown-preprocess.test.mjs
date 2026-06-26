@@ -91,19 +91,19 @@ test('R10 P1b streaming partial self-closing internal stripped', () => {
 });
 test('R10 P1b /foo still surfaced (not over-stripped)', () => assert.match(stripGaryxInternalTags('<garyx_models/foo\nVISIBLE'), /VISIBLE/));
 
-// 自定义标签可见
+// Custom tags are visible.
 test('custom tag visible, block md preserved', () => { const o = escapeNonHtmlTagsOutsideCode('<custom a="1">\n## Title\n</custom>'); assert.match(o,/&lt;custom a="1"&gt;/); assert.match(o,/&lt;\/custom&gt;/); assert.match(o,/\n## Title\n/); });
 test('self-closing custom escaped', () => assert.equal(escapeNonHtmlTagsOutsideCode('<skill name="x" />'), '&lt;skill name="x" /&gt;'));
 test('custom > in attr escaped', () => { const o = escapeNonHtmlTagsOutsideCode('<custom data=">">x</custom>'); assert.match(o,/&lt;custom data="&gt;"&gt;/); assert.match(o,/x/); assert.match(o,/&lt;\/custom&gt;/); });
 test('article surfaced', () => assert.equal(escapeNonHtmlTagsOutsideCode('<article>x</article>'), '&lt;article&gt;x&lt;/article&gt;'));
 test('underscore tag escaped', () => assert.equal(escapeNonHtmlTagsOutsideCode('<_custom>x</_custom>'), '&lt;_custom&gt;x&lt;/_custom&gt;'));
 
-// 零回归 + 白名单
+// No-op regressions and allowlist coverage.
 test('allowlist no regression', () => { assert.equal(escapeNonHtmlTagsOutsideCode('a<br>b'),'a<br>b'); assert.equal(escapeNonHtmlTagsOutsideCode('<sub>x</sub>'),'<sub>x</sub>'); assert.equal(escapeNonHtmlTagsOutsideCode('<strike>x</strike> <tt>y</tt>'),'<strike>x</strike> <tt>y</tt>'); });
 test('pin allowlist', () => assert.deepEqual([...HTML_TAG_NAMES].sort(), [...(defaultSchema.tagNames||[])].sort()));
 test('a<b>c keeps b', () => assert.equal(escapeNonHtmlTagsOutsideCode('a<b>c'), 'a<b>c'));
 
-// 代码区跳过
+// Code regions are skipped.
 test('fenced untouched', () => { const i='```\n<custom>hi</custom>\n```'; assert.equal(escapeNonHtmlTagsOutsideCode(i), i); });
 test('4-backtick fence', () => { const i='````\n<custom>x</custom>\n````'; assert.equal(escapeNonHtmlTagsOutsideCode(i), i); });
 test('mixed-char no close', () => { const i='```\n<custom>\n~~~\nstill code\n```'; assert.equal(escapeNonHtmlTagsOutsideCode(i), i); });
@@ -114,7 +114,7 @@ test('inline exact-length', () => { const i='`code `` still code <custom> end`';
 test('double-backtick inline', () => assert.equal(escapeNonHtmlTagsOutsideCode('``<custom>``'), '``<custom>``'));
 test('indented code limitation (tag still surfaced; exact whitespace is don\'t-care)', () => assert.match(escapeNonHtmlTagsOutsideCode('    <custom>'), /&lt;custom&gt;/));
 
-// 非标签 / no-op
+// Non-tags and no-op cases.
 test('non-tag <', () => assert.equal(escapeNonHtmlTagsOutsideCode('a < b and 5 < 10'), 'a < b and 5 < 10'));
 test('no-op byte-identical', () => { assert.equal(prepareMessageMarkdown('\nhello\n'),'\nhello\n'); assert.equal(prepareMessageMarkdown('    code line'),'    code line'); assert.equal(prepareMessageMarkdown('hard break  \nnext'),'hard break  \nnext'); assert.equal(prepareMessageMarkdown('```\n\n\n\nx\n```'),'```\n\n\n\nx\n```'); });
 test('combined', () => { const o = prepareMessageMarkdown('<garyx_thread_metadata>x</garyx_thread_metadata>\n\n<custom>\n## Hi\n</custom>'); noGaryx(o); assert.match(o,/&lt;custom&gt;/); assert.match(o,/\n## Hi\n/); });
@@ -151,7 +151,7 @@ test('R-final2 descending unmatched backtick runs stay linear & unchanged', () =
   assert.equal(escapeNonHtmlTagsOutsideCode(s), s); // must not hang (was O(n^1.5))
 });
 
-// XML 折行:被显示的独占一行的标签各自成行(前后空行);行内标签不拆
+// XML line breaks: standalone surfaced tags get their own lines; inline tags stay inline.
 test('LB standalone surfaced tag gets its own line (blank lines around)', () => {
   assert.equal(escapeNonHtmlTagsOutsideCode('p\n<note>\nq'), 'p\n\n&lt;note&gt;\n\nq');
 });

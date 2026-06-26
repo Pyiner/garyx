@@ -2,7 +2,6 @@ import type {
   DesktopAutomationActivityFeed,
   DesktopAutomationSchedule,
   DesktopBotConsoleSummary,
-  DesktopChatStreamEvent,
   DesktopChannelEndpoint,
   DesktopWorkspaceFileListing,
   DesktopWorkspaceFilePreview,
@@ -94,20 +93,6 @@ export type ThreadLogLine = {
   text: string;
   level: 'default' | 'error';
 };
-
-export type ClientLogEntry = {
-  key: string;
-  timestamp: string;
-  eventType: DesktopChatStreamEvent['type'];
-  runId?: string;
-  count?: number;
-  totalChars?: number;
-  summary: string;
-  detail: string;
-  level: 'default' | 'error';
-};
-
-export type ThreadLogTab = 'mobile' | 'client';
 
 export type WorkspaceDirectoryState = {
   entries: DesktopWorkspaceFileListing['entries'];
