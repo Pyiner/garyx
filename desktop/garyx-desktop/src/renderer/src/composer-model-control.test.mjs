@@ -271,6 +271,45 @@ test('selected sonnet model keeps its four reasoning efforts without default suf
   );
 });
 
+test('selected model supplies reasoning efforts when provider-level efforts are empty', () => {
+  const state = resolve({
+    providerModels: {
+      ...providerModels,
+      models: [
+        {
+          id: 'doubao-empty',
+          label: 'Doubao',
+          recommended: true,
+          supportedReasoningEfforts: [],
+          serviceTiers: [],
+        },
+        {
+          id: 'openrouter-3o',
+          label: 'openrouter-3o',
+          recommended: false,
+          supportedReasoningEfforts: [
+            { id: 'low', label: 'Low', recommended: false },
+            { id: 'medium', label: 'Medium', recommended: false },
+            { id: 'high', label: 'High', recommended: false },
+            { id: 'xhigh', label: 'Extra High', recommended: false },
+            { id: 'max', label: 'Max', recommended: false },
+          ],
+          serviceTiers: [],
+        },
+      ],
+      reasoningEfforts: [],
+      defaultModel: 'doubao-empty',
+    },
+    selectedModel: 'openrouter-3o',
+  });
+
+  assert.equal(state.effectiveModelId, 'openrouter-3o');
+  assert.deepEqual(
+    state.reasoningEfforts.map((option) => option.id),
+    ['low', 'medium', 'high', 'xhigh', 'max'],
+  );
+});
+
 test('default catalog model without reasoning efforts does not add a trigger suffix', () => {
   const state = resolve({
     providerModels: {
