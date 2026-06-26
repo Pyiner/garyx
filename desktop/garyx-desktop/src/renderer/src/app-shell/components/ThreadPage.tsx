@@ -61,10 +61,8 @@ import { ThreadTaskTreePopover } from "./ThreadTaskTreePopover";
 import { shouldShowThreadTaskTreePopover } from "./thread-task-tree-popover-model";
 import { useI18n } from "../../i18n";
 import type {
-  ClientLogEntry,
   PendingAutomationRun,
   ThreadLogLine,
-  ThreadLogTab,
   UiTranscriptMessage,
 } from "../types";
 import { RUN_LOADING_LABEL } from "../loading-labels";
@@ -262,7 +260,6 @@ type ThreadPageProps = {
   activeThreadTitle: string | null;
   activeThreadRunId: string | null;
   availableWorkspaceCount: number;
-  clientThreadLogEntries: ClientLogEntry[];
   composer: string;
   composerAttachmentInputRef: RefObject<HTMLInputElement | null>;
   composerBrowserAnnotations: BrowserAnnotationCommentRequest[];
@@ -284,14 +281,13 @@ type ThreadPageProps = {
   slashCommandsLoaded: boolean;
   slashCommandsLoading: boolean;
   draggedQueueIntentId: string | null;
-  expandedClientLogEntries: Record<string, boolean>;
   historyLoading: boolean;
   historyLoadingEarlier: boolean;
   inspectorOpen: boolean;
   isActiveSendingThread: boolean;
   canSteerQueuedPrompt: boolean;
   messagesRef: RefObject<HTMLDivElement | null>;
-  mobileThreadLogLines: ThreadLogLine[];
+  threadLogLines: ThreadLogLine[];
   newThreadSelectedAgentId: string;
   newThreadSelectedWorkflowId?: string | null;
   newThreadProviderModels?: DesktopProviderModels | null;
@@ -318,7 +314,6 @@ type ThreadPageProps = {
   rateLimit?: RenderRateLimit | null;
   threadLayoutRef: RefObject<HTMLDivElement | null>;
   threadLayoutStyle?: CSSProperties;
-  threadLogsActiveTab: ThreadLogTab;
   threadLogsError: string | null;
   threadLogsLoading: boolean;
   threadLogsMaxWidth: number;
@@ -371,7 +366,6 @@ type ThreadPageProps = {
   onSelectNewThreadWorkspaceMode: (mode: DesktopWorkspaceMode) => void;
   onResumeProviderSession: (sessionId: string) => Promise<void>;
   onRetryFailedMessage?: (message: UiTranscriptMessage) => void;
-  onSelectThreadLogsTab: (tab: ThreadLogTab) => void;
   onSelectBotBinding: (botId: string | null) => void;
   onSelectWorkspace: (workspacePath: string) => void;
   onSetDraggedQueueIntentId: (intentId: string | null) => void;
@@ -380,7 +374,6 @@ type ThreadPageProps = {
     event: React.KeyboardEvent<HTMLDivElement>,
   ) => void;
   onThreadLogsResizeStart: (event: React.PointerEvent<HTMLDivElement>) => void;
-  onToggleClientLogEntry: (entryKey: string) => void;
   onSteerQueuedPrompt: (intent: MessageIntent) => void;
   onOpenThreadById: (threadId: string) => void;
   preferredWorkspaceForNewThread: DesktopWorkspace | null;
@@ -404,7 +397,6 @@ export function ThreadPage({
   activeThreadTitle,
   activeThreadRunId,
   availableWorkspaceCount,
-  clientThreadLogEntries,
   composer,
   composerAttachmentInputRef,
   composerBrowserAnnotations,
@@ -427,7 +419,6 @@ export function ThreadPage({
   slashCommandsLoading,
   composerTextareaRef,
   draggedQueueIntentId,
-  expandedClientLogEntries,
   historyLoading,
   historyLoadingEarlier,
   ignoreComposerSubmitUntilRef,
@@ -436,7 +427,7 @@ export function ThreadPage({
   canSteerQueuedPrompt,
   isComposingRef,
   messagesRef,
-  mobileThreadLogLines,
+  threadLogLines,
   newThreadSelectedAgentId,
   newThreadSelectedWorkflowId,
   newThreadProviderModels,
@@ -483,7 +474,6 @@ export function ThreadPage({
   onResumeProviderSession,
   onRetryFailedMessage,
   onSelectBotBinding,
-  onSelectThreadLogsTab,
   onSelectWorkspace,
   onSetDraggedQueueIntentId,
   onSteerQueuedPrompt,
@@ -491,7 +481,6 @@ export function ThreadPage({
   onThreadLogsContentScroll,
   onThreadLogsResizeKeyDown,
   onThreadLogsResizeStart,
-  onToggleClientLogEntry,
   preferredWorkspaceForNewThread,
   queueDropTarget,
   selectableNewThreadWorkspaces,
@@ -503,7 +492,6 @@ export function ThreadPage({
   rateLimit,
   threadLayoutRef,
   threadLayoutStyle,
-  threadLogsActiveTab,
   threadLogsError,
   threadLogsLoading,
   threadLogsMaxWidth,
@@ -647,6 +635,7 @@ export function ThreadPage({
           hasWorkflowRunContent,
           inspectorOpen,
           selectedThreadId,
+          threadLogsOpen,
         }) && selectedThreadId ? (
           <ThreadTaskTreePopover
             threadId={selectedThreadId}
@@ -1198,15 +1187,10 @@ export function ThreadPage({
             activeThreadLogsHasUnread={activeThreadLogsHasUnread}
             activeThreadLogsPath={activeThreadLogsPath}
             activeThreadTitle={activeThreadTitle}
-            clientThreadLogEntries={clientThreadLogEntries}
-            expandedClientLogEntries={expandedClientLogEntries}
-            mobileThreadLogLines={mobileThreadLogLines}
+            threadLogLines={threadLogLines}
             onContentScroll={onThreadLogsContentScroll}
             onJumpToLatest={onJumpToLatestThreadLogs}
-            onSelectTab={onSelectThreadLogsTab}
-            onToggleClientLogEntry={onToggleClientLogEntry}
             selectedThreadId={selectedThreadId}
-            threadLogsActiveTab={threadLogsActiveTab}
             threadLogsError={threadLogsError}
             threadLogsLoading={threadLogsLoading}
             threadLogsRef={threadLogsRef}

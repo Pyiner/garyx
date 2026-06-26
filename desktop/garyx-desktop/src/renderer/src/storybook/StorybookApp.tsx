@@ -51,7 +51,6 @@ function ThreadStage({ step }: { step: StoryStep }) {
       activeThreadTitle="Conversation State Storybook"
       activeThreadRunId={state.activeRunId}
       availableWorkspaceCount={1}
-      clientThreadLogEntries={[]}
       composer=""
       composerAttachmentInputRef={composerAttachmentInputRef}
       composerBrowserAnnotations={[]}
@@ -74,7 +73,6 @@ function ThreadStage({ step }: { step: StoryStep }) {
       slashCommandsLoading={false}
       composerTextareaRef={composerTextareaRef}
       draggedQueueIntentId={null}
-      expandedClientLogEntries={{}}
       historyLoading={state.historyLoading}
       historyLoadingEarlier={state.historyLoadingEarlier}
       ignoreComposerSubmitUntilRef={ignoreComposerSubmitUntilRef}
@@ -83,7 +81,7 @@ function ThreadStage({ step }: { step: StoryStep }) {
       canSteerQueuedPrompt={activity.canSteerQueuedPrompt}
       isComposingRef={isComposingRef}
       messagesRef={messagesRef}
-      mobileThreadLogLines={[]}
+      threadLogLines={[]}
       newThreadSelectedAgentId="claude"
       newThreadSelectedWorkflowId={null}
       newThreadWorkspaceEntry={null}
@@ -112,7 +110,6 @@ function ThreadStage({ step }: { step: StoryStep }) {
       onResumeProviderSession={async () => {}}
       onRetryFailedMessage={noop}
       onSelectBotBinding={noop}
-      onSelectThreadLogsTab={noop}
       onOpenThreadById={noop}
       onSelectWorkspace={noop}
       onSetDraggedQueueIntentId={noop}
@@ -120,7 +117,6 @@ function ThreadStage({ step }: { step: StoryStep }) {
       onThreadLogsContentScroll={noop}
       onThreadLogsResizeKeyDown={noop}
       onThreadLogsResizeStart={noop}
-      onToggleClientLogEntry={noop}
       preferredWorkspaceForNewThread={null}
       queueDropTarget={null}
       selectableNewThreadWorkspaces={[]}
@@ -130,7 +126,6 @@ function ThreadStage({ step }: { step: StoryStep }) {
       showHistoryLoadingPlaceholder={state.showHistoryLoadingPlaceholder}
       showTailThinking={activity.showPendingAckLoading}
       threadLayoutRef={threadLayoutRef}
-      threadLogsActiveTab="client"
       threadLogsError={null}
       threadLogsLoading={false}
       threadLogsMaxWidth={0}

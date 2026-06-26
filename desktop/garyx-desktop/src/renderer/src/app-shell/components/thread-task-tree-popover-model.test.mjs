@@ -128,6 +128,7 @@ test("task tree popover yields to inspector panel", () => {
       hasWorkflowRunContent: false,
       inspectorOpen: false,
       selectedThreadId: "thread::current",
+      threadLogsOpen: false,
     }),
     true,
   );
@@ -136,6 +137,7 @@ test("task tree popover yields to inspector panel", () => {
       hasWorkflowRunContent: false,
       inspectorOpen: true,
       selectedThreadId: "thread::current",
+      threadLogsOpen: false,
     }),
     false,
   );
@@ -144,6 +146,16 @@ test("task tree popover yields to inspector panel", () => {
       hasWorkflowRunContent: true,
       inspectorOpen: false,
       selectedThreadId: "thread::current",
+      threadLogsOpen: false,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldShowThreadTaskTreePopover({
+      hasWorkflowRunContent: false,
+      inspectorOpen: false,
+      selectedThreadId: "thread::current",
+      threadLogsOpen: true,
     }),
     false,
   );
@@ -152,6 +164,7 @@ test("task tree popover yields to inspector panel", () => {
       hasWorkflowRunContent: false,
       inspectorOpen: false,
       selectedThreadId: null,
+      threadLogsOpen: false,
     }),
     false,
   );
