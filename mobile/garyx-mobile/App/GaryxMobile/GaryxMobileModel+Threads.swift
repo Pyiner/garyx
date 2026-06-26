@@ -1516,21 +1516,44 @@ extension GaryxMobileModel {
         preservingLoadedOlderPages: Bool = false
     ) {
         guard selectedThread?.id == threadId else { return }
-        if preservingLoadedOlderPages,
-           let oldestLoadedIndex = oldestLoadedHistoryIndex(for: threadId),
-           let latestPageStartIndex = preserveRemoteBeforeIndex(from: transcript),
-           oldestLoadedIndex < latestPageStartIndex {
-            if oldestLoadedIndex > 0 {
-                selectedThreadHasMoreHistoryBefore = true
-                selectedThreadNextHistoryBeforeIndex = oldestLoadedIndex
-            } else {
-                selectedThreadHasMoreHistoryBefore = false
-                selectedThreadNextHistoryBeforeIndex = nil
-            }
-            return
+        let page = GaryxHistoryPaginationPage(
+            hasMoreBefore: transcript.pageInfo?.hasMoreBefore ?? false,
+            nextBeforeIndex: transcript.pageInfo?.nextBeforeIndex,
+            oldestLoadedIndex: oldestLoadedHistoryIndex(for: threadId),
+            latestPageStartIndex: preserveRemoteBeforeIndex(from: transcript)
+        )
+        let next = GaryxHistoryPaginationPlanner.applyingTranscriptPage(
+            page,
+            current: selectedHistoryPaginationState(),
+            preservingLoadedOlderPages: preservingLoadedOlderPages
+        )
+        applySelectedThreadHistoryPagination(next)
+    }
+
+    func selectedHistoryPaginationState() -> GaryxHistoryPaginationState {
+        GaryxHistoryPaginationState(
+            hasMoreBefore: selectedThreadHasMoreHistoryBefore,
+            nextBeforeIndex: selectedThreadNextHistoryBeforeIndex
+        )
+    }
+
+    func cachedHistoryPaginationState(for threadId: String) -> GaryxHistoryPaginationState? {
+        guard let snapshot = transcriptSnapshot(for: threadId) else {
+            return nil
         }
-        selectedThreadHasMoreHistoryBefore = transcript.pageInfo?.hasMoreBefore ?? false
-        selectedThreadNextHistoryBeforeIndex = transcript.pageInfo?.nextBeforeIndex
+        return GaryxHistoryPaginationState(
+            hasMoreBefore: snapshot.hasMoreBefore,
+            nextBeforeIndex: snapshot.nextBeforeIndex
+        )
+    }
+
+    func applySelectedThreadHistoryPagination(_ state: GaryxHistoryPaginationState) {
+        if selectedThreadHasMoreHistoryBefore != state.hasMoreBefore {
+            selectedThreadHasMoreHistoryBefore = state.hasMoreBefore
+        }
+        if selectedThreadNextHistoryBeforeIndex != state.nextBeforeIndex {
+            selectedThreadNextHistoryBeforeIndex = state.nextBeforeIndex
+        }
     }
 
     func oldestLoadedHistoryIndex(for threadId: String) -> Int? {

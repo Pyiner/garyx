@@ -40,6 +40,11 @@ public struct GaryxConversationLayoutMetrics: Equatable {
         contentBottomOffset - viewportHeight
     }
 
+    public var contentHeight: CGFloat? {
+        guard let contentTopOffset else { return nil }
+        return contentBottomOffset - contentTopOffset
+    }
+
     /// Whether the transcript tail is visible (or the content is shorter
     /// than the viewport, where the tail is always visible).
     public var isNearBottom: Bool {
@@ -68,6 +73,15 @@ public struct GaryxConversationLayoutMetrics: Equatable {
             viewportHeight * Self.historyPrefetchViewportMultiplier
         )
         return contentTopOffset >= -prefetchDistance
+    }
+
+    /// A tiny cold-open transcript can place the loaded-start row on screen
+    /// immediately. Automatic history prefetch only arms after the measured
+    /// content has at least one viewport of scrollable overflow.
+    public var isLargeEnoughForAutomaticHistoryPrefetch: Bool {
+        guard let contentHeight, viewportHeight > 0 else { return false }
+        let requiredOverflow = max(Self.historyPrefetchMinDistance, viewportHeight)
+        return contentHeight - viewportHeight >= requiredOverflow
     }
 }
 
@@ -348,8 +362,7 @@ public struct GaryxConversationScrollState: Equatable {
     public func shouldPrefetchOlderHistory(
         hasMoreHistoryBefore: Bool,
         isLoadingOlderHistory: Bool,
-        hasPendingPrefetch: Bool,
-        ignoreDistance: Bool
+        hasPendingPrefetch: Bool
     ) -> Bool {
         guard hasMoreHistoryBefore,
               !isLoadingOlderHistory,
@@ -357,7 +370,30 @@ public struct GaryxConversationScrollState: Equatable {
               hasMovedTowardOlderHistory else {
             return false
         }
-        return ignoreDistance || metrics.isNearLoadedHistoryStart
+        return metrics.isLargeEnoughForAutomaticHistoryPrefetch
+            && metrics.isNearLoadedHistoryStart
+    }
+
+    /// Visible render rows changed after a render snapshot update. This covers
+    /// older-history expansion where cached messages were already prepended, but
+    /// the server row window only lowered its floor on the next stream frame.
+    public mutating func renderRowsChanged(
+        previousIds: [String],
+        currentIds: [String],
+        threadUnchanged: Bool,
+        hasTailContent: Bool
+    ) -> TailScrollRequest? {
+        let isHistoryPrepend = Self.preservesScrollForPrependedHistory(
+            previousIds: previousIds,
+            currentIds: currentIds,
+            threadUnchanged: threadUnchanged
+        )
+        guard isHistoryPrepend else { return nil }
+        return contentChanged(
+            isInitialLoad: false,
+            isHistoryPrepend: true,
+            hasTailContent: hasTailContent
+        )
     }
 
     /// Whether a messages change is an older-history prepend whose reading

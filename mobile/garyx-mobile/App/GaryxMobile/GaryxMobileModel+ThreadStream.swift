@@ -236,15 +236,24 @@ extension GaryxMobileModel {
     private func applyThreadRenderSnapshot(_ snapshot: GaryxRenderSnapshot, threadId: String) {
         guard selectedThread?.id == threadId else { return }
         setRenderSnapshot(snapshot, for: threadId)
-        applyRenderWindowPagination(snapshot.window, threadId: threadId)
+        let pagination = applyRenderWindowPagination(snapshot.window, threadId: threadId)
         let base = transcriptSnapshot(for: threadId)
+        let windowHasMoreBefore: Bool
+        let windowNextBeforeIndex: Int?
+        if let pagination {
+            windowHasMoreBefore = pagination.hasMoreBefore
+            windowNextBeforeIndex = pagination.nextBeforeIndex
+        } else {
+            windowHasMoreBefore = base?.hasMoreBefore ?? false
+            windowNextBeforeIndex = base?.nextBeforeIndex
+        }
         let window = GaryxCachedTranscript(
             threadId: threadId,
             savedAt: Date(),
             messages: base?.messages ?? [],
             renderSnapshot: snapshot,
-            hasMoreBefore: base?.hasMoreBefore ?? false,
-            nextBeforeIndex: base?.nextBeforeIndex
+            hasMoreBefore: windowHasMoreBefore,
+            nextBeforeIndex: windowNextBeforeIndex
         )
         cachedTranscriptSnapshots[threadId] = window
         if !isThreadBusy(threadId) {
@@ -254,20 +263,24 @@ extension GaryxMobileModel {
         scheduleSelectedThreadStreamFlush(for: threadId)
     }
 
-    private func applyRenderWindowPagination(_ renderWindow: GaryxRenderWindow?, threadId: String) {
-        guard selectedThread?.id == threadId else { return }
+    @discardableResult
+    private func applyRenderWindowPagination(
+        _ renderWindow: GaryxRenderWindow?,
+        threadId: String
+    ) -> GaryxHistoryPaginationState? {
+        guard selectedThread?.id == threadId else { return nil }
         guard let renderWindow else {
             selectedThreadRenderFloorByThread[threadId] = nil
-            return
+            return nil
         }
         selectedThreadRenderFloorByThread[threadId] = renderWindow.floorSeq
-        if renderWindow.hasMoreAbove, renderWindow.floorSeq > 1 {
-            selectedThreadHasMoreHistoryBefore = true
-            selectedThreadNextHistoryBeforeIndex = renderWindow.floorSeq - 1
-        } else {
-            selectedThreadHasMoreHistoryBefore = false
-            selectedThreadNextHistoryBeforeIndex = nil
-        }
+        let next = GaryxHistoryPaginationPlanner.applyingRenderWindow(
+            renderWindow,
+            current: selectedHistoryPaginationState(),
+            cached: cachedHistoryPaginationState(for: threadId)
+        )
+        applySelectedThreadHistoryPagination(next)
+        return next
     }
 
     /// Leading-throttle (mirrors scheduleAssistantDeltaFlush): the first row schedules

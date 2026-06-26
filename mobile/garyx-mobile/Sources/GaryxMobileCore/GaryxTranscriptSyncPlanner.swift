@@ -113,7 +113,7 @@ public struct GatewayThreadStreamRequestState: Equatable, Sendable {
         Self(afterSeq: afterSeq, replayScope: .resume, renderFloor: renderFloor)
     }
 
-    public static func initial(initialUserTurns: Int = 1) -> Self {
+    public static func initial(initialUserTurns: Int = 3) -> Self {
         Self(afterSeq: 0, replayScope: .initial, initialUserTurns: initialUserTurns)
     }
 
@@ -123,7 +123,7 @@ public struct GatewayThreadStreamRequestState: Equatable, Sendable {
 }
 
 public enum GaryxThreadWindowPlanner {
-    public static let initialUserTurns = 1
+    public static let initialUserTurns = 3
 
     public static func streamRequest(
         afterSeq: Int,
@@ -142,6 +142,92 @@ public enum GaryxThreadWindowPlanner {
 
     public static func floorSeqForOlderPage(firstIndex: Int?) -> Int? {
         firstIndex.map { max($0, 0) + 1 }
+    }
+}
+
+public struct GaryxHistoryPaginationState: Equatable, Sendable {
+    public static let empty = GaryxHistoryPaginationState(
+        hasMoreBefore: false,
+        nextBeforeIndex: nil
+    )
+
+    public var hasMoreBefore: Bool
+    public var nextBeforeIndex: Int?
+
+    public init(hasMoreBefore: Bool, nextBeforeIndex: Int?) {
+        self.hasMoreBefore = hasMoreBefore
+        self.nextBeforeIndex = nextBeforeIndex
+    }
+}
+
+public struct GaryxHistoryPaginationPage: Equatable, Sendable {
+    public var hasMoreBefore: Bool
+    public var nextBeforeIndex: Int?
+    public var oldestLoadedIndex: Int?
+    public var latestPageStartIndex: Int?
+
+    public init(
+        hasMoreBefore: Bool,
+        nextBeforeIndex: Int?,
+        oldestLoadedIndex: Int?,
+        latestPageStartIndex: Int?
+    ) {
+        self.hasMoreBefore = hasMoreBefore
+        self.nextBeforeIndex = nextBeforeIndex
+        self.oldestLoadedIndex = oldestLoadedIndex
+        self.latestPageStartIndex = latestPageStartIndex
+    }
+}
+
+public enum GaryxHistoryPaginationPlanner {
+    public static func applyingRenderWindow(
+        _ window: GaryxRenderWindow?,
+        current: GaryxHistoryPaginationState,
+        cached: GaryxHistoryPaginationState?
+    ) -> GaryxHistoryPaginationState {
+        guard let window else {
+            return current
+        }
+        if window.hasMoreAbove, window.floorSeq > 1 {
+            return GaryxHistoryPaginationState(
+                hasMoreBefore: true,
+                nextBeforeIndex: window.floorSeq - 1
+            )
+        }
+        guard let cached else {
+            return current
+        }
+        if cached.hasMoreBefore {
+            return cached
+        }
+        return .empty
+    }
+
+    public static func applyingTranscriptPage(
+        _ page: GaryxHistoryPaginationPage,
+        current: GaryxHistoryPaginationState,
+        preservingLoadedOlderPages: Bool
+    ) -> GaryxHistoryPaginationState {
+        if preservingLoadedOlderPages,
+           let oldestLoadedIndex = page.oldestLoadedIndex,
+           let latestPageStartIndex = page.latestPageStartIndex,
+           oldestLoadedIndex < latestPageStartIndex {
+            guard oldestLoadedIndex > 0 else {
+                return .empty
+            }
+            return GaryxHistoryPaginationState(
+                hasMoreBefore: true,
+                nextBeforeIndex: oldestLoadedIndex
+            )
+        }
+
+        if page.hasMoreBefore {
+            return GaryxHistoryPaginationState(
+                hasMoreBefore: true,
+                nextBeforeIndex: page.nextBeforeIndex
+            )
+        }
+        return .empty
     }
 }
 
