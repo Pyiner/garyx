@@ -78,7 +78,7 @@ export function resolveComposerModelControlState({
     ? models.find((option) => option.id === defaultModelId)
     : undefined;
   const defaultModelLabel = defaultModelOption?.label || defaultModelId || modelFallbackLabel;
-  const effortFilterModelOption = selectedModelOption || effectiveModelOption;
+  const effortFilterModelOption = selectedModelOption || effectiveModelOption || defaultModelOption;
   const catalogReasoningEfforts =
     effortFilterModelOption?.supportedReasoningEfforts?.length
       ? effortFilterModelOption.supportedReasoningEfforts
@@ -121,8 +121,11 @@ export function resolveComposerModelControlState({
         ]
       : catalogServiceTiers;
   const triggerModelLabel = effectiveModelOption?.label ?? defaultModelLabel;
-  const triggerLabel = selectedEffortOption
-    ? `${triggerModelLabel} · ${selectedEffortOption.label}`
+  const defaultTriggerEffortOption =
+    defaultModelOption && !effectiveModelOption ? defaultEffortOption : undefined;
+  const triggerEffortOption = selectedEffortOption ?? defaultTriggerEffortOption;
+  const triggerLabel = triggerEffortOption
+    ? `${triggerModelLabel} · ${triggerEffortOption.label}`
     : triggerModelLabel;
 
   return {
