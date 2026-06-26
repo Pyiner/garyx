@@ -474,7 +474,8 @@ extension GaryxMobileModel {
     var newThreadEffortFilterModel: String? {
         GaryxThreadModelOverridePresentation.effortFilterModel(
             override: newThreadModelOverride,
-            agentConfiguredModel: newThreadAgentTarget?.model
+            agentConfiguredModel: newThreadAgentTarget?.model,
+            providerModels: newThreadProviderModels
         )
     }
 

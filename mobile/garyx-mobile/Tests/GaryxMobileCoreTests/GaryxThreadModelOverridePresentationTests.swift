@@ -16,6 +16,17 @@ final class GaryxThreadModelOverridePresentationTests: XCTestCase {
         )
     }
 
+    func testProviderLevelDefaultReasoningEffortDecodesSnakeAndCamelKeys() throws {
+        XCTAssertEqual(
+            try decodeProviderModels(#"{ "default_reasoning_effort": "max" }"#).defaultReasoningEffort,
+            "max"
+        )
+        XCTAssertEqual(
+            try decodeProviderModels(#"{ "defaultReasoningEffort": "high" }"#).defaultReasoningEffort,
+            "high"
+        )
+    }
+
     func testReasoningEffortOptionsFollowSelectedModel() throws {
         let providerModels = try decodeProviderModels(claudeProviderJSON)
 
@@ -36,6 +47,76 @@ final class GaryxThreadModelOverridePresentationTests: XCTestCase {
             model: "not-in-catalog"
         )
         XCTAssertEqual(unknownModelOptions.map(\.id), ["low", "high"])
+    }
+
+    func testDefaultStateUsesProviderDefaultModelAndConfiguredReasoningEffort() throws {
+        let providerModels = try decodeProviderModels(configuredClaudeProviderJSON)
+
+        let defaultOptions = GaryxThreadModelOverridePresentation.reasoningEffortOptions(
+            providerModels: providerModels,
+            model: nil
+        )
+        XCTAssertEqual(defaultOptions.map(\.id), ["low", "high", "max"])
+
+        XCTAssertEqual(
+            GaryxThreadModelOverridePresentation.defaultReasoningEffort(
+                providerModels: providerModels,
+                model: nil
+            ),
+            "max"
+        )
+
+        XCTAssertEqual(
+            GaryxThreadModelOverridePresentation.controlLabel(
+                providerModels: providerModels,
+                model: nil,
+                reasoningEffort: nil,
+                fallback: "Model"
+            ),
+            "Claude Opus 4.8 · Max"
+        )
+    }
+
+    func testConfiguredProviderDefaultReasoningEffortMustBeSupportedByCurrentModel() throws {
+        let providerModels = try decodeProviderModels(configuredClaudeProviderJSON)
+
+        let sonnetOptions = GaryxThreadModelOverridePresentation.reasoningEffortOptions(
+            providerModels: providerModels,
+            model: "claude-sonnet-4-6"
+        )
+        XCTAssertEqual(sonnetOptions.map(\.id), ["low", "high"])
+
+        XCTAssertEqual(
+            GaryxThreadModelOverridePresentation.defaultReasoningEffort(
+                providerModels: providerModels,
+                model: "claude-sonnet-4-6"
+            ),
+            "high"
+        )
+    }
+
+    func testTraexPerModelReasoningEffortsRenderThroughGatewayShape() throws {
+        let providerModels = try decodeProviderModels(traexProviderJSON)
+
+        let reasonerOptions = GaryxThreadModelOverridePresentation.reasoningEffortOptions(
+            providerModels: providerModels,
+            model: "traex-reasoner"
+        )
+        XCTAssertEqual(reasonerOptions.map(\.id), ["medium", "max"])
+        XCTAssertEqual(reasonerOptions.map(\.label), ["Medium", "max"])
+        XCTAssertTrue(
+            GaryxThreadModelOverridePresentation.reasoningEffortOptions(
+                providerModels: providerModels,
+                model: "traex-fast"
+            ).isEmpty
+        )
+        XCTAssertEqual(
+            GaryxThreadModelOverridePresentation.modelLabel(
+                providerModels: providerModels,
+                model: "traex-reasoner"
+            ),
+            "traex-reasoner"
+        )
     }
 
     func testReasoningEffortOptionsEmptyWhenSelectionUnsupported() throws {
@@ -158,20 +239,32 @@ final class GaryxThreadModelOverridePresentationTests: XCTestCase {
         )
     }
 
-    func testEffortFilterModelPrefersOverrideThenAgentModel() {
+    func testEffortFilterModelPrefersOverrideThenAgentModel() throws {
+        let providerModels = try decodeProviderModels(configuredClaudeProviderJSON)
+
         XCTAssertEqual(
             GaryxThreadModelOverridePresentation.effortFilterModel(
                 override: "claude-opus-4-8",
-                agentConfiguredModel: "claude-haiku-4-5"
+                agentConfiguredModel: "claude-haiku-4-5",
+                providerModels: providerModels
             ),
             "claude-opus-4-8"
         )
         XCTAssertEqual(
             GaryxThreadModelOverridePresentation.effortFilterModel(
                 override: "  ",
-                agentConfiguredModel: "claude-haiku-4-5"
+                agentConfiguredModel: "claude-haiku-4-5",
+                providerModels: providerModels
             ),
             "claude-haiku-4-5"
+        )
+        XCTAssertEqual(
+            GaryxThreadModelOverridePresentation.effortFilterModel(
+                override: nil,
+                agentConfiguredModel: "",
+                providerModels: providerModels
+            ),
+            "claude-opus-4-8"
         )
         XCTAssertNil(
             GaryxThreadModelOverridePresentation.effortFilterModel(
@@ -235,6 +328,69 @@ final class GaryxThreadModelOverridePresentationTests: XCTestCase {
                     { "id": "low", "label": "Low", "recommended": false },
                     { "id": "high", "label": "High", "recommended": true },
                     { "id": "xhigh", "label": "Extra High", "recommended": false }
+                ]
+            }
+        ]
+    }
+    """
+
+    private let configuredClaudeProviderJSON = """
+    {
+        "provider_type": "claude_code",
+        "supports_model_selection": true,
+        "supports_reasoning_effort_selection": true,
+        "default_model": "claude-opus-4-8",
+        "default_reasoning_effort": "max",
+        "source": "claude_code_builtin",
+        "reasoning_efforts": [
+            { "id": "low", "label": "Low", "recommended": false },
+            { "id": "high", "label": "High", "recommended": true }
+        ],
+        "models": [
+            {
+                "id": "claude-sonnet-4-6",
+                "label": "Claude Sonnet 4.6",
+                "recommended": true,
+                "supported_reasoning_efforts": [
+                    { "id": "low", "label": "Low", "recommended": false },
+                    { "id": "high", "label": "High", "recommended": true }
+                ]
+            },
+            {
+                "id": "claude-opus-4-8",
+                "label": "Claude Opus 4.8",
+                "recommended": false,
+                "supported_reasoning_efforts": [
+                    { "id": "low", "label": "Low", "recommended": false },
+                    { "id": "high", "label": "High", "recommended": true },
+                    { "id": "max", "label": "Max", "recommended": false }
+                ]
+            }
+        ]
+    }
+    """
+
+    private let traexProviderJSON = """
+    {
+        "provider_type": "traex",
+        "supports_model_selection": true,
+        "supports_reasoning_effort_selection": true,
+        "default_model": "traex-fast",
+        "source": "traex_builtin",
+        "reasoning_efforts": [],
+        "models": [
+            {
+                "id": "traex-fast",
+                "label": "TRAE Fast",
+                "recommended": true,
+                "supported_reasoning_efforts": []
+            },
+            {
+                "id": "traex-reasoner",
+                "recommended": false,
+                "supported_reasoning_efforts": [
+                    { "id": "medium", "label": "Medium", "recommended": true },
+                    { "id": "max", "recommended": false }
                 ]
             }
         ]

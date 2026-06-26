@@ -280,6 +280,7 @@ public struct GaryxProviderModels: Decodable, Equatable, Sendable {
     public var supportsServiceTierSelection: Bool
     public var serviceTiers: [GaryxProviderModelOption]
     public var defaultModel: String?
+    public var defaultReasoningEffort: String?
     public var source: String
     public var error: String?
 
@@ -299,6 +300,8 @@ public struct GaryxProviderModels: Decodable, Equatable, Sendable {
         case serviceTiersSnake = "service_tiers"
         case defaultModel
         case defaultModelSnake = "default_model"
+        case defaultReasoningEffort
+        case defaultReasoningEffortSnake = "default_reasoning_effort"
         case source
         case error
     }
@@ -327,6 +330,10 @@ public struct GaryxProviderModels: Decodable, Equatable, Sendable {
             ?? container.decodeIfPresent([GaryxProviderModelOption].self, forKey: .serviceTiersSnake)
             ?? []
         defaultModel = try container.garyxDecodeFirstString(.defaultModel, .defaultModelSnake)
+        defaultReasoningEffort = try container.garyxDecodeFirstString(
+            .defaultReasoningEffort,
+            .defaultReasoningEffortSnake
+        )
         source = try container.garyxDecodeFirstString(.source) ?? ""
         error = try container.garyxDecodeFirstString(.error)
     }

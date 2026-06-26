@@ -10,12 +10,16 @@ public enum GaryxThreadModelOverridePresentation {
     }
 
     /// The model that will actually run and should filter thinking levels:
-    /// the per-thread override when chosen, else the agent's configured model.
+    /// the per-thread override when chosen, else the agent's configured model,
+    /// else the provider's default model.
     public static func effortFilterModel(
         override modelOverride: String?,
-        agentConfiguredModel: String?
+        agentConfiguredModel: String?,
+        providerModels: GaryxProviderModels? = nil
     ) -> String? {
-        normalized(modelOverride) ?? normalized(agentConfiguredModel)
+        normalized(modelOverride)
+            ?? normalized(agentConfiguredModel)
+            ?? normalized(providerModels?.defaultModel)
     }
 
     /// Thinking levels valid for the current selection: the chosen model's own
@@ -27,7 +31,7 @@ public enum GaryxThreadModelOverridePresentation {
         guard let providerModels, providerModels.supportsReasoningEffortSelection else {
             return []
         }
-        if let model = normalized(model),
+        if let model = effortScopedModel(providerModels: providerModels, model: model),
            let modelOption = providerModels.models.first(where: { $0.id == model }),
            !modelOption.supportedReasoningEfforts.isEmpty {
             return modelOption.supportedReasoningEfforts
@@ -41,15 +45,23 @@ public enum GaryxThreadModelOverridePresentation {
         providerModels: GaryxProviderModels?,
         model: String?
     ) -> String? {
-        guard let model = normalized(model) else {
+        let explicitModel = normalized(model)
+        if let configuredDefault = supportedConfiguredDefaultReasoningEffort(
+            providerModels: providerModels,
+            model: model
+        ) {
+            return configuredDefault
+        }
+        guard let model = explicitModel else {
             return nil
         }
         if let modelOption = providerModels?.models.first(where: { $0.id == model }),
            let effort = normalized(modelOption.defaultReasoningEffort) {
             return effort
         }
-        return providerModels?.reasoningEfforts.first(where: { $0.recommended }).flatMap { normalized($0.id) }
-            ?? providerModels?.reasoningEfforts.first.flatMap { normalized($0.id) }
+        let options = reasoningEffortOptions(providerModels: providerModels, model: model)
+        return options.first(where: { $0.recommended }).flatMap { normalized($0.id) }
+            ?? options.first.flatMap { normalized($0.id) }
     }
 
     /// The option id a model / thinking-level picker should mark as selected,
@@ -155,6 +167,18 @@ public enum GaryxThreadModelOverridePresentation {
         reasoningEffort: String?,
         fallback: String
     ) -> String {
+        if normalized(model) == nil,
+           normalized(reasoningEffort) == nil,
+           let defaultModel = normalized(providerModels?.defaultModel),
+           let defaultEffort = supportedConfiguredDefaultReasoningEffort(providerModels: providerModels, model: nil) {
+            let defaultEffortLabel = reasoningEffortLabel(
+                providerModels: providerModels,
+                model: defaultModel,
+                reasoningEffort: defaultEffort
+            ) ?? defaultEffort
+            let defaultModelLabel = modelLabel(providerModels: providerModels, model: defaultModel) ?? defaultModel
+            return "\(defaultModelLabel) · \(defaultEffortLabel)"
+        }
         let modelLabel = modelLabel(providerModels: providerModels, model: model)
         let effortLabel = reasoningEffortLabel(
             providerModels: providerModels,
@@ -178,5 +202,23 @@ public enum GaryxThreadModelOverridePresentation {
             return nil
         }
         return value
+    }
+
+    private static func effortScopedModel(
+        providerModels: GaryxProviderModels?,
+        model: String?
+    ) -> String? {
+        normalized(model) ?? normalized(providerModels?.defaultModel)
+    }
+
+    private static func supportedConfiguredDefaultReasoningEffort(
+        providerModels: GaryxProviderModels?,
+        model: String?
+    ) -> String? {
+        guard let configuredDefault = normalized(providerModels?.defaultReasoningEffort) else {
+            return nil
+        }
+        let options = reasoningEffortOptions(providerModels: providerModels, model: model)
+        return options.contains(where: { $0.id == configuredDefault }) ? configuredDefault : nil
     }
 }

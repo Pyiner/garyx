@@ -947,7 +947,8 @@ private struct GaryxThreadRuntimeSettingsSheet: View {
     private var effortFilterModel: String? {
         GaryxThreadModelOverridePresentation.effortFilterModel(
             override: modelOverride,
-            agentConfiguredModel: effectiveModel
+            agentConfiguredModel: effectiveModel,
+            providerModels: providerModels
         )
     }
 
