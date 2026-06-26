@@ -85,7 +85,9 @@ function ChannelPluginRow({ entry }: ChannelPluginRowProps): ReactElement {
       </div>
       <div className="channel-plugin-catalog-row-body">
         <div className="channel-plugin-catalog-row-title">
-          {entry.display_name || entry.id}
+          <span className="channel-plugin-catalog-row-name">
+            {entry.display_name || entry.id}
+          </span>
           <span className="channel-plugin-catalog-row-version">
             v{entry.version}
           </span>

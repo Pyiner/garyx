@@ -5513,6 +5513,10 @@ code {
   width: min(100%, 1120px);
 }
 
+.settings-content-provider .settings-content-column {
+  width: min(100%, 1120px);
+}
+
 .settings-page-header {
   display: flex;
   align-items: flex-start;
@@ -16229,7 +16233,8 @@ button.codex-list-row {
 
 .provider-config-table table {
   width: 100%;
-  min-width: 1060px;
+  min-width: 720px;
+  table-layout: fixed;
   border-collapse: collapse;
 }
 
@@ -16257,7 +16262,7 @@ button.codex-list-row {
 
 .provider-config-table th {
   height: auto;
-  padding: 12px 20px;
+  padding: 12px 14px;
   color: rgba(26, 28, 31, 0.46);
   font-size: 10.5px;
   font-weight: 600;
@@ -16267,7 +16272,7 @@ button.codex-list-row {
 }
 
 .provider-config-table td {
-  padding: 13px 20px;
+  padding: 13px 14px;
   color: var(--color-token-text-primary);
   font-size: 13px;
   line-height: 1.35;
@@ -16275,34 +16280,35 @@ button.codex-list-row {
 }
 
 .provider-config-col-provider {
-  width: 210px;
+  width: 18%;
 }
 
 .provider-config-col-kind {
-  width: 150px;
+  width: 14%;
+  overflow: hidden;
 }
 
 .provider-config-col-auth {
-  width: 150px;
+  width: 13%;
 }
 
 .provider-config-col-model {
-  max-width: 240px;
+  width: 22%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .provider-config-col-usage {
-  width: 280px;
+  width: 15%;
 }
 
 .provider-config-col-status {
-  width: 132px;
+  width: 9%;
 }
 
 .provider-config-col-actions {
-  width: 112px;
+  width: 9%;
   text-align: right;
 }
 
@@ -16352,12 +16358,18 @@ button.codex-list-row {
 }
 
 .provider-config-col-kind code {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
   padding: 2px 6px;
   border-radius: 6px;
   background: var(--color-token-bg-fog);
   color: var(--color-token-text-secondary);
   font-family: var(--message-code-font);
-  font-size: 11.5px;
+  font-size: 11px;
 }
 
 .provider-config-name-cell {
@@ -20087,93 +20099,84 @@ button.codex-list-row {
 
 .channel-plugin-catalog-list {
   list-style: none;
-  display: flex;
-  gap: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(224px, 1fr));
+  gap: 8px;
   margin: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
   padding: 0 0 4px;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(26, 28, 31, 0.18) transparent;
-}
-
-.channel-plugin-catalog-list::-webkit-scrollbar {
-  height: 6px;
-}
-
-.channel-plugin-catalog-list::-webkit-scrollbar-thumb {
-  border-radius: 999px;
-  background: rgba(26, 28, 31, 0.16);
-}
-
-.channel-plugin-catalog-list::-webkit-scrollbar-track {
-  background: transparent;
 }
 
 .channel-plugin-catalog-row {
   display: flex;
-  flex: 0 0 calc((100% - 30px) / 4);
   min-width: 0;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 14px 14px 12px;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
   background: #ffffff;
   border: 1px solid rgba(26, 28, 31, 0.08);
-  border-radius: 12px;
+  border-radius: 10px;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.018);
 }
 
 .channel-plugin-catalog-row-logo {
-  flex: 0 0 32px;
+  flex: 0 0 28px;
 }
 
 .channel-plugin-catalog-icon {
   display: block;
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
   object-fit: contain;
 }
 
 .channel-plugin-catalog-icon-fallback {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
   background: #f4f4f2;
   color: #4a4a4a;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
 }
 
 .channel-plugin-catalog-row-body {
   flex: 1 1 auto;
   min-width: 0;
+  overflow: hidden;
 }
 
 .channel-plugin-catalog-row-title {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: 5px;
   min-width: 0;
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 600;
   color: #191c1f;
   letter-spacing: -0.005em;
   white-space: nowrap;
+}
+
+.channel-plugin-catalog-row-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .channel-plugin-catalog-row-version {
   flex: 0 0 auto;
+  flex-shrink: 0;
+  white-space: nowrap;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 400;
   color: #9a9b9d;
-  letter-spacing: 0.02em;
+  letter-spacing: 0;
 }
 
 .channel-plugin-catalog-row-meta {
