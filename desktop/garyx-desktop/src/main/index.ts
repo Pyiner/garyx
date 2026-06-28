@@ -44,6 +44,7 @@ import type {
   CreateTaskInput,
   CreateAutomationInput,
   CreateThreadInput,
+  DeleteCapsuleInput,
   DesktopDeepLinkEvent,
   DesktopApiProviderType,
   DeleteSkillEntryInput,
@@ -120,6 +121,7 @@ import {
   createSlashCommand,
   bindRemoteChannelEndpoint,
   checkConnection,
+  deleteCapsule,
   deleteCustomAgent,
   deleteTeam,
   deleteMcpServer,
@@ -137,12 +139,15 @@ import {
   fetchThreadHistory,
   fetchThreadLogs,
   getCodingUsage,
+  getCapsule,
+  getCapsuleHtml,
   getDream,
   getTask,
   getWorkflowDefinitionSource,
   getWorkflowRun,
   getWorkspaceGitStatus,
   interruptThread,
+  listCapsules,
   listDreams,
   listTaskForest,
   listTasks,
@@ -923,6 +928,29 @@ function registerIpcHandlers(): void {
     const settings = await resolveSettings();
     return getDream(settings, dreamId);
   });
+
+  ipcMain.handle("garyx:list-capsules", async () => {
+    const settings = await resolveSettings();
+    return listCapsules(settings);
+  });
+
+  ipcMain.handle("garyx:get-capsule", async (_event, capsuleId: string) => {
+    const settings = await resolveSettings();
+    return getCapsule(settings, capsuleId);
+  });
+
+  ipcMain.handle("garyx:get-capsule-html", async (_event, capsuleId: string) => {
+    const settings = await resolveSettings();
+    return getCapsuleHtml(settings, capsuleId);
+  });
+
+  ipcMain.handle(
+    "garyx:delete-capsule",
+    async (_event, input: DeleteCapsuleInput) => {
+      const settings = await resolveSettings();
+      return deleteCapsule(settings, input);
+    },
+  );
 
   ipcMain.handle(
     "garyx:create-task",

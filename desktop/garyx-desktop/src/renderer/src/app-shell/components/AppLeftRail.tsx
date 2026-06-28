@@ -13,6 +13,7 @@ import {
   AgentsIcon,
   AutomationIcon,
   BackIcon,
+  CapsulesIcon,
   DreamsIcon,
   NewThreadIcon,
   RecentIcon,
@@ -27,6 +28,7 @@ type AppLeftRailProps = {
   gatewayIdentitySlot?: React.ReactNode;
   isSettingsView: boolean;
   isAutomationView: boolean;
+  isCapsulesView: boolean;
   isAgentsView: boolean;
   isTeamsView: boolean;
   isSkillsView: boolean;
@@ -50,6 +52,7 @@ type AppLeftRailProps = {
   onNewThread: () => void;
   onOpenRecent: () => void;
   onSelectAutomation: (automationId: string | null) => void;
+  onOpenCapsules: () => void;
   onOpenAgents: () => void;
   onOpenSkills: () => void;
   onOpenTasks: () => void;
@@ -75,6 +78,7 @@ export function AppLeftRail({
   gatewayIdentitySlot,
   isSettingsView,
   isAutomationView,
+  isCapsulesView,
   isAgentsView,
   isTeamsView,
   isSkillsView,
@@ -98,6 +102,7 @@ export function AppLeftRail({
   onNewThread,
   onOpenRecent,
   onSelectAutomation,
+  onOpenCapsules,
   onOpenAgents,
   onOpenSkills,
   onOpenTasks,
@@ -119,7 +124,7 @@ export function AppLeftRail({
   formatThreadTimestamp,
 }: AppLeftRailProps) {
   const { t } = useI18n();
-  const isThreadView = !isSettingsView && !isAutomationView && !isAgentsView && !isTeamsView && !isSkillsView && !isTasksView && !isDreamsView && !isBrowserView;
+  const isThreadView = !isSettingsView && !isAutomationView && !isCapsulesView && !isAgentsView && !isTeamsView && !isSkillsView && !isTasksView && !isDreamsView && !isBrowserView;
   const visibleSelectedThreadId = isThreadView ? selectedThreadId : null;
   return (
     <aside className={`left-rail ${isSettingsView ? 'settings-rail-shell' : ''}`}>
@@ -192,6 +197,14 @@ export function AppLeftRail({
                 <span>{t('Dreams')}</span>
               </button>
             ) : null}
+            <button
+              className={`sidebar-action ${isCapsulesView ? 'active' : ''}`}
+              onClick={onOpenCapsules}
+              type="button"
+            >
+              <CapsulesIcon />
+              <span>{t('Capsules')}</span>
+            </button>
             <button
               className={`sidebar-action ${isTasksView ? 'active' : ''}`}
               onClick={onOpenTasks}

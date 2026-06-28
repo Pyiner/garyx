@@ -19,6 +19,7 @@ export type DesktopRoute =
 const SIMPLE_VIEW_SEGMENTS: Record<string, Exclude<ContentView, 'thread' | 'workflow' | 'automation' | 'settings'>> = {
   browser: 'browser',
   bots: 'bots',
+  capsules: 'capsules',
   agents: 'agents',
   teams: 'teams',
   skills: 'skills',

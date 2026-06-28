@@ -4,6 +4,7 @@ import {
   Command,
   Cpu,
   History,
+  Package,
   ListTodo,
   MoonStar,
   Router,
@@ -152,6 +153,10 @@ export function DreamsIcon() {
   return (
     <SettingsRailIcon glyph={MoonStar} />
   );
+}
+
+export function CapsulesIcon() {
+  return <SettingsRailIcon glyph={Package} />;
 }
 
 export function AgentsIcon() {

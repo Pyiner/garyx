@@ -3,6 +3,7 @@ import type {
   CreateTeamInput,
   CreateSkillInput,
   CreateTaskInput,
+  DeleteCapsuleInput,
   DeleteCustomAgentInput,
   DeleteTaskInput,
   DeleteTeamInput,
@@ -13,6 +14,8 @@ import type {
   DesktopAutomationStatus,
   DesktopApiProviderType,
   DesktopAutomationSummary,
+  DesktopCapsuleSummary,
+  DesktopCapsulesPage,
   ChannelPluginCatalogEntry,
   ConnectionStatus,
   DesktopCodingUsage,
@@ -674,6 +677,34 @@ interface DreamsPayload {
   latest_scan?: DreamScanPayload | null;
   latestScan?: DreamScanPayload | null;
   scan?: DreamScanPayload | null;
+}
+
+interface CapsulePayload {
+  id?: string;
+  title?: string | null;
+  description?: string | null;
+  thread_id?: string | null;
+  threadId?: string | null;
+  run_id?: string | null;
+  runId?: string | null;
+  agent_id?: string | null;
+  agentId?: string | null;
+  provider_type?: string | null;
+  providerType?: string | null;
+  html_sha256?: string | null;
+  htmlSha256?: string | null;
+  byte_size?: number | null;
+  byteSize?: number | null;
+  revision?: number | null;
+  created_at?: string | null;
+  createdAt?: string | null;
+  updated_at?: string | null;
+  updatedAt?: string | null;
+}
+
+interface CapsulesPayload {
+  capsules?: CapsulePayload[];
+  capsule?: CapsulePayload | null;
 }
 
 interface AutomationActivityPayload {
@@ -1577,6 +1608,20 @@ function stripNullObjectFields(value: unknown): unknown {
   return Object.fromEntries(entries);
 }
 
+export class GatewayRequestError extends Error {
+  status: number;
+  statusText: string;
+  body: string;
+
+  constructor(status: number, statusText: string, message: string, body: string) {
+    super(message);
+    this.name = "GatewayRequestError";
+    this.status = status;
+    this.statusText = statusText;
+    this.body = body;
+  }
+}
+
 export async function requestJson<T>(
   settings: DesktopSettings,
   path: string,
@@ -1599,11 +1644,11 @@ export async function requestJson<T>(
   const payload = tryParseJson<T>(body);
 
   if (!response.ok) {
-    throw new Error(
+    const message =
       errorMessageFromPayload(payload) ||
-        messageFromPlainTextBody(body) ||
-        `${response.status} ${response.statusText}`,
-    );
+      messageFromPlainTextBody(body) ||
+      `${response.status} ${response.statusText}`;
+    throw new GatewayRequestError(response.status, response.statusText, message, body);
   }
 
   if (payload === null) {
@@ -1613,6 +1658,38 @@ export async function requestJson<T>(
   }
 
   return payload;
+}
+
+export async function requestText(
+  settings: DesktopSettings,
+  path: string,
+  init?: RequestInit,
+): Promise<string> {
+  const headers = applyGatewayAuthHeader(
+    applyGatewayCustomHeaders(new Headers(init?.headers), settings.gatewayHeaders),
+    settings.gatewayAuthToken,
+  );
+  headers.set("Accept", "text/html, text/plain;q=0.9, */*;q=0.1");
+  if (init?.body && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  const response = await fetch(buildUrl(settings, path), {
+    ...init,
+    headers,
+  });
+  const body = await response.text();
+  const payload = tryParseJson<unknown>(body);
+
+  if (!response.ok) {
+    const message =
+      errorMessageFromPayload(payload) ||
+      messageFromPlainTextBody(body) ||
+      `${response.status} ${response.statusText}`;
+    throw new GatewayRequestError(response.status, response.statusText, message, body);
+  }
+
+  return body;
 }
 
 async function requestJsonFromGatewayUrl<T>(
@@ -4732,6 +4809,108 @@ export async function getDream(
     { signal: AbortSignal.timeout(8000) },
   );
   return payload.dream ? mapDreamTopic(payload.dream) : null;
+}
+
+function normalizeCapsuleProviderType(value: unknown): DesktopCapsuleSummary["providerType"] {
+  return asString(value) || null;
+}
+
+function mapCapsuleSummary(value: CapsulePayload): DesktopCapsuleSummary | null {
+  const id = asString(value.id);
+  if (!id) {
+    return null;
+  }
+  const byteSize =
+    asFiniteNumber(value.byte_size) ?? asFiniteNumber(value.byteSize) ?? 0;
+  const revision = asFiniteNumber(value.revision) ?? 1;
+  return {
+    id,
+    title: asString(value.title) || "Untitled Capsule",
+    description: asString(value.description) || "",
+    threadId: asString(value.thread_id) || asString(value.threadId) || null,
+    runId: asString(value.run_id) || asString(value.runId) || null,
+    agentId: asString(value.agent_id) || asString(value.agentId) || null,
+    providerType: normalizeCapsuleProviderType(value.provider_type ?? value.providerType),
+    htmlSha256: asString(value.html_sha256) || asString(value.htmlSha256) || "",
+    byteSize: Math.max(0, Math.trunc(byteSize)),
+    revision: Math.max(1, Math.trunc(revision)),
+    createdAt:
+      asString(value.created_at) ||
+      asString(value.createdAt) ||
+      new Date(0).toISOString(),
+    updatedAt:
+      asString(value.updated_at) ||
+      asString(value.updatedAt) ||
+      new Date(0).toISOString(),
+  };
+}
+
+function mapCapsulesPage(payload: CapsulesPayload): DesktopCapsulesPage {
+  const capsules = Array.isArray(payload.capsules)
+    ? payload.capsules
+        .map(mapCapsuleSummary)
+        .filter((capsule): capsule is DesktopCapsuleSummary => Boolean(capsule))
+    : [];
+  return { capsules };
+}
+
+export async function listCapsules(
+  settings: DesktopSettings,
+): Promise<DesktopCapsulesPage> {
+  const payload = await requestJson<CapsulesPayload>(settings, "/api/capsules", {
+    signal: AbortSignal.timeout(8000),
+  });
+  return mapCapsulesPage(payload);
+}
+
+export async function getCapsule(
+  settings: DesktopSettings,
+  capsuleId: string,
+): Promise<DesktopCapsuleSummary | null> {
+  const id = capsuleId?.trim() || "";
+  if (!id) {
+    throw new Error("capsuleId is required");
+  }
+  try {
+    const payload = await requestJson<CapsulesPayload>(
+      settings,
+      `/api/capsules/${encodeURIComponent(id)}`,
+      { signal: AbortSignal.timeout(8000) },
+    );
+    return payload.capsule ? mapCapsuleSummary(payload.capsule) : null;
+  } catch (error) {
+    if (error instanceof GatewayRequestError && error.status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export async function getCapsuleHtml(
+  settings: DesktopSettings,
+  capsuleId: string,
+): Promise<string> {
+  const id = capsuleId?.trim() || "";
+  if (!id) {
+    throw new Error("capsuleId is required");
+  }
+  return requestText(settings, `/api/capsules/${encodeURIComponent(id)}/serve`, {
+    signal: AbortSignal.timeout(15000),
+  });
+}
+
+export async function deleteCapsule(
+  settings: DesktopSettings,
+  input: DeleteCapsuleInput,
+): Promise<void> {
+  const id = input.capsuleId?.trim() || "";
+  if (!id) {
+    throw new Error("capsuleId is required");
+  }
+  await requestJson<unknown>(settings, `/api/capsules/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    signal: AbortSignal.timeout(8000),
+  });
 }
 
 function asRecordOrNull(value: unknown): Record<string, unknown> | null {

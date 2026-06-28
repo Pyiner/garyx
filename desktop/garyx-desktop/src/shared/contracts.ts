@@ -345,6 +345,30 @@ export interface DesktopDreamsPage {
   scan?: DesktopDreamScan | null;
 }
 
+export interface DesktopCapsuleSummary {
+  id: string;
+  title: string;
+  description: string;
+  threadId?: string | null;
+  runId?: string | null;
+  agentId?: string | null;
+  providerType?: DesktopApiProviderType | string | null;
+  htmlSha256: string;
+  byteSize: number;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DesktopCapsulesPage {
+  capsules: DesktopCapsuleSummary[];
+}
+
+export interface DeleteCapsuleInput {
+  capsuleId: string;
+}
+
+
 export interface ListDreamsInput {
   from?: string | null;
   to?: string | null;
@@ -2171,6 +2195,10 @@ export interface GaryxDesktopApi {
   listDreams: (input?: ListDreamsInput) => Promise<DesktopDreamsPage>;
   scanDreams: (input?: ScanDreamsInput) => Promise<DesktopDreamsPage>;
   getDream: (dreamId: string) => Promise<DesktopDreamTopic | null>;
+  listCapsules: () => Promise<DesktopCapsulesPage>;
+  getCapsule: (capsuleId: string) => Promise<DesktopCapsuleSummary | null>;
+  getCapsuleHtml: (capsuleId: string) => Promise<string>;
+  deleteCapsule: (input: DeleteCapsuleInput) => Promise<void>;
   listSkills: () => Promise<DesktopSkillInfo[]>;
   listCustomAgents: () => Promise<DesktopCustomAgent[]>;
   listProviderModels: (

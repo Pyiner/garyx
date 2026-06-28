@@ -78,6 +78,11 @@ test('parses utility views', () => {
     kind: 'view',
     view: 'tasks',
   });
+  assert.deepEqual(parseDesktopRoute('file:///Garyx.app/index.html#/capsules'), {
+    kind: 'view',
+    view: 'capsules',
+  });
+  assert.equal(buildDesktopRouteHash({ kind: 'view', view: 'capsules' }), '#/capsules');
   assert.deepEqual(parseDesktopRoute('file:///Garyx.app/index.html#/workflow/%23TASK-258'), {
     kind: 'workflow-task',
     taskId: '#TASK-258',

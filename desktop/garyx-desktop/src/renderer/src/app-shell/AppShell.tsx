@@ -327,6 +327,11 @@ const TasksPanel = lazy(() =>
     default: module.TasksPanel,
   })),
 );
+const CapsulesPanel = lazy(() =>
+  import("./components/CapsulesPanel").then((module) => ({
+    default: module.CapsulesPanel,
+  })),
+);
 const WorkflowRunsPanel = lazy(() =>
   import("./components/WorkflowRunsPanel").then((module) => ({
     default: module.WorkflowRunsPanel,
@@ -1298,6 +1303,7 @@ function savedContentView(): ContentView {
     "browser",
     "bots",
     "automation",
+    "capsules",
     "agents",
     "teams",
     "skills",
@@ -3118,6 +3124,7 @@ export function AppShell() {
   const isBrowserView = contentView === "browser";
   const isBotsView = contentView === "bots";
   const isAutomationView = contentView === "automation";
+  const isCapsulesView = contentView === "capsules";
   const showDreamsFeature = Boolean(gatewaySettingsDraft?.dreams?.enabled);
   const isAgentsView = contentView === "agents";
   const isTeamsView = contentView === "teams";
@@ -3326,6 +3333,7 @@ export function AppShell() {
   const showStaticWindowToolbar =
     isSettingsView ||
     isAutomationView ||
+    isCapsulesView ||
     isAgentsView ||
     isTeamsView ||
     isSkillsView;
@@ -3333,6 +3341,7 @@ export function AppShell() {
     activeThread &&
     !activeAutomationThread &&
     !isAutomationView &&
+    !isCapsulesView &&
     !isSkillsView &&
     !isTasksView &&
     !isWorkflowView &&
@@ -3525,6 +3534,8 @@ export function AppShell() {
   );
   const conversationContextText = isAutomationView
     ? `${desktopState?.automations.length || 0} scheduled runs`
+    : isCapsulesView
+      ? "Self-contained HTML capsules"
     : isSkillsView
       ? "Local and project skill registry"
     : isTasksView
@@ -9573,6 +9584,7 @@ export function AppShell() {
   const conversationClassName = [
     "conversation",
     isSettingsView ? "settings-view" : null,
+    isCapsulesView ? "capsules-view" : null,
     isTasksView ? "tasks-view" : null,
     isWorkflowView ? "workflow-view" : null,
     isDreamsView ? "dreams-view" : null,
@@ -10048,6 +10060,7 @@ export function AppShell() {
         botGroups={visibleBotGroups}
         formatThreadTimestamp={formatThreadTimestamp}
         isAutomationView={isAutomationView}
+        isCapsulesView={isCapsulesView}
         showDreams={showDreamsFeature}
         isAgentsView={isAgentsView}
         isBrowserView={isBrowserView}
@@ -10141,6 +10154,11 @@ export function AppShell() {
         onOpenSkills={() => {
           trackUiAction("nav.open_skills", () => {
             setContentView("skills");
+          });
+        }}
+        onOpenCapsules={() => {
+          trackUiAction("nav.open_capsules", () => {
+            setContentView("capsules");
           });
         }}
         onOpenTasks={() => {
@@ -10305,7 +10323,7 @@ export function AppShell() {
           ref={conversationRef}
           style={conversationStyle}
         >
-          {isTasksView || isWorkflowView || isDreamsView ? null : showStaticWindowToolbar ? (
+          {isCapsulesView || isTasksView || isWorkflowView || isDreamsView ? null : showStaticWindowToolbar ? (
             <div aria-hidden="true" className="settings-window-toolbar" />
           ) : (
             <header className="conversation-header">
@@ -10559,6 +10577,11 @@ export function AppShell() {
               />
             ) : isSkillsView ? (
               <SkillsPanel onToast={pushToast} />
+            ) : isCapsulesView ? (
+              <CapsulesPanel
+                agents={desktopAgents}
+                onToast={pushToast}
+              />
             ) : isTasksView ? (
               <TasksPanel
                 agents={desktopAgents}
