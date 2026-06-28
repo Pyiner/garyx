@@ -1,11 +1,14 @@
 use std::sync::Arc;
 
 use axum::{Router, extract::DefaultBodyLimit};
+use tower::ServiceBuilder;
+use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::server::AppState;
 use crate::{
-    api, app_db, automation, chat, coding_usage, commands, dashboard, dreams, gateway_auth, mcp,
-    mcp_config, routes, tasks, tool_image, workflows, workspace_files, workspaces,
+    api, app_db, automation, capsules, chat, coding_usage, commands, dashboard, dreams,
+    gateway_auth, mcp, mcp_config, routes, tasks, tool_image, workflows, workspace_files,
+    workspaces,
 };
 
 pub fn build_router(state: Arc<AppState>) -> Router {
@@ -201,6 +204,15 @@ fn thread_routes() -> Router<Arc<AppState>> {
             axum::routing::get(workspaces::list_workspaces)
                 .post(workspaces::upsert_workspace)
                 .delete(workspaces::delete_workspace),
+        )
+        .route("/api/capsules", axum::routing::get(capsules::list_capsules))
+        .route(
+            "/api/capsules/{id}",
+            axum::routing::get(capsules::get_capsule).delete(capsules::delete_capsule),
+        )
+        .route(
+            "/api/capsules/{id}/serve",
+            axum::routing::get(capsules::serve_capsule),
         )
         .route(
             "/api/configured-bots",
@@ -463,6 +475,11 @@ fn operations_routes() -> Router<Arc<AppState>> {
 
 fn mcp_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
     let mcp_service = mcp::create_mcp_service(state, tokio_util::sync::CancellationToken::new());
+    let mcp_service = ServiceBuilder::new()
+        .layer(RequestBodyLimitLayer::new(
+            capsules::CAPSULE_MCP_BODY_LIMIT_BYTES,
+        ))
+        .service(mcp_service);
     // Claude Code CLI strips custom headers and query params from MCP tool
     // call requests, so we encode `{thread_id}` and `{run_id}` directly in
     // the URL path: clients call `/mcp/{thread_id}/{run_id}` (Claude Code),

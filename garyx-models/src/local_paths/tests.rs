@@ -88,3 +88,10 @@ fn automation_memory_dir_sanitizes_id() {
         Some("automation-morning-digest")
     );
 }
+
+#[test]
+fn default_capsules_dir_points_to_garyx_capsules() {
+    let path = super::default_capsules_dir();
+
+    assert!(path.ends_with(".garyx/capsules"));
+}

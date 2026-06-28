@@ -47,6 +47,8 @@ serde_yaml = "0.9"
 toml = "0.8"
 futures-util = "0.3"
 urlencoding = "2"
+sha2 = "0.10"
+tower-http = { version = "0.6", features = ["limit"] }
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -409,6 +409,9 @@ fn test_mcp_tool_router_excludes_cron_management() {
         .collect::<Vec<_>>();
 
     assert!(names.iter().any(|name| name == "status"));
+    assert!(names.iter().any(|name| name == "capsule_create"));
+    assert!(names.iter().any(|name| name == "capsule_update"));
+    assert!(names.iter().any(|name| name == "capsule_list"));
     assert!(
         !names.iter().any(|name| name == "message"),
         "outbound message sending must stay out of MCP tools: {names:?}"
@@ -451,6 +454,273 @@ fn test_mcp_tool_router_does_not_advertise_image_generation() {
         !instructions.contains("message"),
         "server instructions still mention the removed message tool: {instructions}"
     );
+    assert!(instructions.contains("capsule_create"));
+    assert!(instructions.contains("capsule_update"));
+    assert!(instructions.contains("capsule_list"));
+}
+
+#[tokio::test]
+async fn test_capsule_create_uses_thread_context_and_derives_agent_from_thread() {
+    let server = test_server();
+    let thread_id = "thread::capsule-create";
+    server
+        .app_state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "agent_id": "agent::capsule",
+                "provider_type": "codex"
+            }),
+        )
+        .await;
+    let temp = tempfile::tempdir().expect("temp dir");
+    let _guard = crate::capsules::tests_support::set_test_capsules_dir_for_test(
+        temp.path().join("capsules"),
+    );
+
+    let result = tools::capsule::create_inner(
+        &server,
+        RunContext {
+            thread_id: Some(thread_id.to_owned()),
+            run_id: Some("run::capsule-create".to_owned()),
+            ..Default::default()
+        },
+        CapsuleCreateParams {
+            title: " Demo Capsule ".to_owned(),
+            description: Some(" demo description ".to_owned()),
+            html: Some("<html><body><h1>Demo</h1></body></html>".to_owned()),
+            html_path: None,
+        },
+    )
+    .await
+    .expect("create capsule");
+
+    assert_eq!(result["tool"], "capsule_create");
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["title"], "Demo Capsule");
+    assert_eq!(result["description"], "demo description");
+    assert_eq!(result["thread_id"], thread_id);
+    assert_eq!(result["run_id"], "run::capsule-create");
+    assert_eq!(result["agent_id"], "agent::capsule");
+    assert_eq!(result["provider_type"], "codex_app_server");
+    let capsule_id = result["capsule_id"].as_str().expect("capsule id");
+    assert!(Uuid::parse_str(capsule_id).is_ok());
+    assert_eq!(result["open_url"], format!("garyx://capsules/{capsule_id}"));
+    assert_eq!(
+        result["serve_path"],
+        format!("/api/capsules/{capsule_id}/serve")
+    );
+    assert!(
+        crate::capsules::capsule_file_path(capsule_id)
+            .unwrap()
+            .is_file()
+    );
+
+    let record = server
+        .app_state
+        .ops
+        .garyx_db
+        .get_capsule(capsule_id)
+        .unwrap()
+        .expect("stored capsule");
+    assert_eq!(record.thread_id.as_deref(), Some(thread_id));
+    assert_eq!(record.agent_id.as_deref(), Some("agent::capsule"));
+    assert_eq!(record.provider_type.as_deref(), Some("codex_app_server"));
+}
+
+#[tokio::test]
+async fn test_capsule_create_rejects_conflicting_missing_and_bad_html() {
+    let server = test_server();
+    let thread_id = "thread::capsule-reject";
+    server
+        .app_state
+        .threads
+        .thread_store
+        .set(thread_id, json!({ "thread_id": thread_id }))
+        .await;
+    let run_ctx = RunContext {
+        thread_id: Some(thread_id.to_owned()),
+        ..Default::default()
+    };
+    let both = tools::capsule::create_inner(
+        &server,
+        run_ctx.clone(),
+        CapsuleCreateParams {
+            title: "Bad".to_owned(),
+            description: None,
+            html: Some("<html></html>".to_owned()),
+            html_path: Some("/tmp/test.html".to_owned()),
+        },
+    )
+    .await
+    .expect_err("both html and html_path rejected");
+    assert!(both.contains("exactly one"));
+
+    let neither = tools::capsule::create_inner(
+        &server,
+        run_ctx.clone(),
+        CapsuleCreateParams {
+            title: "Bad".to_owned(),
+            description: None,
+            html: None,
+            html_path: None,
+        },
+    )
+    .await
+    .expect_err("missing html rejected");
+    assert!(neither.contains("exactly one"));
+
+    let bad_html = tools::capsule::create_inner(
+        &server,
+        run_ctx.clone(),
+        CapsuleCreateParams {
+            title: "Bad".to_owned(),
+            description: None,
+            html: Some("<img src=\"asset.png\">".to_owned()),
+            html_path: None,
+        },
+    )
+    .await
+    .expect_err("relative html rejected");
+    assert!(bad_html.contains("self-contained"));
+
+    let oversized = tools::capsule::create_inner(
+        &server,
+        run_ctx,
+        CapsuleCreateParams {
+            title: "Bad".to_owned(),
+            description: None,
+            html: Some("a".repeat(crate::capsules::CAPSULE_MAX_HTML_BYTES + 1)),
+            html_path: None,
+        },
+    )
+    .await
+    .expect_err("oversized html rejected");
+    assert!(oversized.contains("exceeds"));
+}
+
+#[tokio::test]
+async fn test_capsule_create_reads_absolute_html_path() {
+    let server = test_server();
+    let thread_id = "thread::capsule-html-path";
+    server
+        .app_state
+        .threads
+        .thread_store
+        .set(thread_id, json!({ "thread_id": thread_id }))
+        .await;
+    let temp = tempfile::tempdir().expect("temp dir");
+    let _guard = crate::capsules::tests_support::set_test_capsules_dir_for_test(
+        temp.path().join("capsules"),
+    );
+    let html_path = temp.path().join("input.html");
+    std::fs::write(&html_path, "<html><body>from path</body></html>").expect("write html path");
+
+    let result = tools::capsule::create_inner(
+        &server,
+        RunContext {
+            thread_id: Some(thread_id.to_owned()),
+            ..Default::default()
+        },
+        CapsuleCreateParams {
+            title: "Path Capsule".to_owned(),
+            description: None,
+            html: None,
+            html_path: Some(html_path.to_string_lossy().into_owned()),
+        },
+    )
+    .await
+    .expect("create capsule from html_path");
+
+    let capsule_id = result["capsule_id"].as_str().unwrap();
+    let stored = std::fs::read_to_string(crate::capsules::capsule_file_path(capsule_id).unwrap())
+        .expect("stored capsule file");
+    assert!(stored.contains("from path"));
+}
+
+#[tokio::test]
+async fn test_capsule_update_rewrites_file_and_list_filters_thread() {
+    let server = test_server();
+    let temp = tempfile::tempdir().expect("temp dir");
+    let _guard = crate::capsules::tests_support::set_test_capsules_dir_for_test(
+        temp.path().join("capsules"),
+    );
+    for thread_id in ["thread::capsule-a", "thread::capsule-b"] {
+        server
+            .app_state
+            .threads
+            .thread_store
+            .set(thread_id, json!({ "thread_id": thread_id }))
+            .await;
+    }
+
+    let first = tools::capsule::create_inner(
+        &server,
+        RunContext {
+            thread_id: Some("thread::capsule-a".to_owned()),
+            ..Default::default()
+        },
+        CapsuleCreateParams {
+            title: "First".to_owned(),
+            description: None,
+            html: Some("<html><body>first</body></html>".to_owned()),
+            html_path: None,
+        },
+    )
+    .await
+    .expect("create first");
+    let second = tools::capsule::create_inner(
+        &server,
+        RunContext {
+            thread_id: Some("thread::capsule-b".to_owned()),
+            ..Default::default()
+        },
+        CapsuleCreateParams {
+            title: "Second".to_owned(),
+            description: None,
+            html: Some("<html><body>second</body></html>".to_owned()),
+            html_path: None,
+        },
+    )
+    .await
+    .expect("create second");
+    assert_ne!(first["capsule_id"], second["capsule_id"]);
+    let capsule_id = first["capsule_id"].as_str().unwrap();
+
+    let updated = tools::capsule::update_inner(
+        &server,
+        RunContext::default(),
+        CapsuleUpdateParams {
+            capsule_id: capsule_id.to_owned(),
+            title: Some("First Updated".to_owned()),
+            description: Some("updated".to_owned()),
+            html: Some("<html><body>updated</body></html>".to_owned()),
+            html_path: None,
+        },
+    )
+    .await
+    .expect("update capsule");
+    assert_eq!(updated["tool"], "capsule_update");
+    assert_eq!(updated["revision"], 2);
+    let file = std::fs::read_to_string(crate::capsules::capsule_file_path(capsule_id).unwrap())
+        .expect("capsule file");
+    assert!(file.contains("updated"));
+
+    let listed = tools::capsule::list_inner(
+        &server,
+        RunContext {
+            thread_id: Some("thread::capsule-a".to_owned()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("list capsules");
+    let capsules = listed["capsules"].as_array().unwrap();
+    assert_eq!(capsules.len(), 1);
+    assert_eq!(capsules[0]["id"], capsule_id);
 }
 
 #[tokio::test]

@@ -5,6 +5,7 @@ pub mod api;
 pub mod app_db;
 mod application;
 pub mod automation;
+pub mod capsules;
 mod channel_catalog;
 pub mod chat;
 mod claude_oauth;

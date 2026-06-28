@@ -109,6 +109,10 @@ pub fn default_skills_dir() -> PathBuf {
     gary_home_dir().join("skills")
 }
 
+pub fn default_capsules_dir() -> PathBuf {
+    gary_home_dir().join("capsules")
+}
+
 pub fn default_log_file_path() -> PathBuf {
     gary_home_dir().join("logs").join("stderr.log")
 }

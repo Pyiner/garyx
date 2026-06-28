@@ -356,6 +356,43 @@ pub struct WorkspaceDraft {
     pub path: String,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CapsuleRecord {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub thread_id: Option<String>,
+    pub run_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub provider_type: Option<String>,
+    pub html_sha256: String,
+    pub byte_size: i64,
+    pub revision: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapsuleCreateDraft {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub thread_id: Option<String>,
+    pub run_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub provider_type: Option<String>,
+    pub html_sha256: String,
+    pub byte_size: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CapsuleUpdateDraft {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub html_sha256: Option<String>,
+    pub byte_size: Option<i64>,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct DreamSpanRecord {
     pub span_id: String,
@@ -643,6 +680,124 @@ impl GaryxDbService {
         }
         tx.commit()?;
         Ok(true)
+    }
+
+    pub fn create_capsule(&self, draft: CapsuleCreateDraft) -> GaryxDbResult<CapsuleRecord> {
+        let id = normalize_capsule_id(&draft.id)?;
+        let title = normalize_capsule_text(&draft.title);
+        let description = normalize_capsule_text(&draft.description);
+        let thread_id = normalize_optional(draft.thread_id.as_deref());
+        let run_id = normalize_optional(draft.run_id.as_deref());
+        let agent_id = normalize_optional(draft.agent_id.as_deref());
+        let provider_type = normalize_optional(draft.provider_type.as_deref());
+        let html_sha256 = normalize_capsule_sha256(&draft.html_sha256)?;
+        let byte_size = normalize_capsule_byte_size(draft.byte_size)?;
+        let now = now_string();
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT INTO capsules (
+                id, title, description, thread_id, run_id, agent_id, provider_type,
+                html_sha256, byte_size, revision, created_at, updated_at
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, ?10, ?10)",
+            params![
+                id,
+                title,
+                description,
+                thread_id,
+                run_id,
+                agent_id,
+                provider_type,
+                html_sha256,
+                byte_size,
+                now,
+            ],
+        )?;
+        capsule_by_id(&conn, &id)?
+            .ok_or_else(|| GaryxDbError::BadRequest("capsule was not saved".to_owned()))
+    }
+
+    pub fn update_capsule(
+        &self,
+        id: &str,
+        draft: CapsuleUpdateDraft,
+    ) -> GaryxDbResult<Option<CapsuleRecord>> {
+        let id = normalize_capsule_id(id)?;
+        let title = draft.title.as_deref().map(normalize_capsule_text);
+        let description = draft.description.as_deref().map(normalize_capsule_text);
+        let html_sha256 = draft
+            .html_sha256
+            .as_deref()
+            .map(normalize_capsule_sha256)
+            .transpose()?;
+        let byte_size = draft
+            .byte_size
+            .map(normalize_capsule_byte_size)
+            .transpose()?;
+        let now = now_string();
+        let conn = self.conn()?;
+        let updated = conn.execute(
+            "UPDATE capsules
+             SET title = COALESCE(?2, title),
+                 description = COALESCE(?3, description),
+                 html_sha256 = COALESCE(?4, html_sha256),
+                 byte_size = COALESCE(?5, byte_size),
+                 revision = revision + 1,
+                 updated_at = ?6
+             WHERE id = ?1",
+            params![id, title, description, html_sha256, byte_size, now],
+        )?;
+        if updated == 0 {
+            return Ok(None);
+        }
+        capsule_by_id(&conn, &id)
+    }
+
+    pub fn get_capsule(&self, id: &str) -> GaryxDbResult<Option<CapsuleRecord>> {
+        let id = normalize_capsule_id(id)?;
+        let conn = self.conn()?;
+        capsule_by_id(&conn, &id)
+    }
+
+    pub fn list_capsules(&self) -> GaryxDbResult<Vec<CapsuleRecord>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, title, description, thread_id, run_id, agent_id, provider_type,
+                    html_sha256, byte_size, revision, created_at, updated_at
+             FROM capsules
+             ORDER BY updated_at DESC, id ASC",
+        )?;
+        let rows = stmt.query_map([], capsule_from_row)?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row?);
+        }
+        Ok(records)
+    }
+
+    pub fn list_capsules_for_thread(&self, thread_id: &str) -> GaryxDbResult<Vec<CapsuleRecord>> {
+        let thread_id = normalize_thread_id(thread_id)?;
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, title, description, thread_id, run_id, agent_id, provider_type,
+                    html_sha256, byte_size, revision, created_at, updated_at
+             FROM capsules
+             WHERE thread_id = ?1
+             ORDER BY updated_at DESC, id ASC",
+        )?;
+        let rows = stmt.query_map(params![thread_id], capsule_from_row)?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row?);
+        }
+        Ok(records)
+    }
+
+    pub fn delete_capsule(&self, id: &str) -> GaryxDbResult<bool> {
+        let id = normalize_capsule_id(id)?;
+        let conn = self.conn()?;
+        let removed = conn.execute("DELETE FROM capsules WHERE id = ?1", params![id])?;
+        Ok(removed > 0)
     }
 
     pub fn list_recent_threads(
@@ -3115,6 +3270,26 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             deleted_at TEXT
         ) STRICT;
 
+        CREATE TABLE IF NOT EXISTS capsules (
+            id            TEXT PRIMARY KEY,
+            title         TEXT NOT NULL DEFAULT '',
+            description   TEXT NOT NULL DEFAULT '',
+            thread_id     TEXT,
+            run_id        TEXT,
+            agent_id      TEXT,
+            provider_type TEXT,
+            html_sha256   TEXT NOT NULL,
+            byte_size     INTEGER NOT NULL DEFAULT 0,
+            revision      INTEGER NOT NULL DEFAULT 1,
+            created_at    TEXT NOT NULL,
+            updated_at    TEXT NOT NULL
+        ) STRICT;
+
+        CREATE INDEX IF NOT EXISTS idx_capsules_updated
+            ON capsules(updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_capsules_thread
+            ON capsules(thread_id);
+
         CREATE TABLE IF NOT EXISTS dream_topics (
             dream_id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
@@ -3509,6 +3684,41 @@ fn normalize_workspace_path(path: &str) -> GaryxDbResult<String> {
     Ok(normalized)
 }
 
+fn normalize_capsule_id(id: &str) -> GaryxDbResult<String> {
+    let trimmed = id.trim();
+    if trimmed.is_empty() {
+        return Err(GaryxDbError::BadRequest(
+            "capsule id must not be empty".to_owned(),
+        ));
+    }
+    Uuid::parse_str(trimmed)
+        .map(|uuid| uuid.to_string())
+        .map_err(|_| GaryxDbError::BadRequest("capsule id must be a UUID".to_owned()))
+}
+
+fn normalize_capsule_text(value: &str) -> String {
+    value.trim().to_owned()
+}
+
+fn normalize_capsule_sha256(value: &str) -> GaryxDbResult<String> {
+    let trimmed = normalize_required("html_sha256", value)?.to_ascii_lowercase();
+    if trimmed.len() != 64 || !trimmed.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(GaryxDbError::BadRequest(
+            "html_sha256 must be 64 hex characters".to_owned(),
+        ));
+    }
+    Ok(trimmed)
+}
+
+fn normalize_capsule_byte_size(value: i64) -> GaryxDbResult<i64> {
+    if value < 0 {
+        return Err(GaryxDbError::BadRequest(
+            "byte_size must be non-negative".to_owned(),
+        ));
+    }
+    Ok(value)
+}
+
 fn is_absolute_workspace_path(path: &str) -> bool {
     if path.starts_with('/') || path.starts_with("//") {
         return true;
@@ -3647,6 +3857,36 @@ fn workspace_by_path(conn: &Connection, path: &str) -> GaryxDbResult<Option<Work
             "SELECT name, path, created_at, updated_at FROM workspaces WHERE path = ?1",
             params![path],
             workspace_from_row,
+        )
+        .optional()?)
+}
+
+fn capsule_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CapsuleRecord> {
+    Ok(CapsuleRecord {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        description: row.get(2)?,
+        thread_id: row.get(3)?,
+        run_id: row.get(4)?,
+        agent_id: row.get(5)?,
+        provider_type: row.get(6)?,
+        html_sha256: row.get(7)?,
+        byte_size: row.get(8)?,
+        revision: row.get(9)?,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
+    })
+}
+
+fn capsule_by_id(conn: &Connection, id: &str) -> GaryxDbResult<Option<CapsuleRecord>> {
+    Ok(conn
+        .query_row(
+            "SELECT id, title, description, thread_id, run_id, agent_id, provider_type,
+                    html_sha256, byte_size, revision, created_at, updated_at
+             FROM capsules
+             WHERE id = ?1",
+            params![id],
+            capsule_from_row,
         )
         .optional()?)
 }
@@ -4642,6 +4882,138 @@ mod tests {
                 name: None,
                 path: "relative/project".to_owned(),
             }),
+            Err(GaryxDbError::BadRequest(_))
+        ));
+    }
+
+    fn capsule_draft(id: &str, title: &str, thread_id: &str) -> CapsuleCreateDraft {
+        CapsuleCreateDraft {
+            id: id.to_owned(),
+            title: title.to_owned(),
+            description: format!("{} description", title.trim()),
+            thread_id: Some(thread_id.to_owned()),
+            run_id: Some(format!("run::{title}")),
+            agent_id: Some("agent::capsule".to_owned()),
+            provider_type: Some("codex_app_server".to_owned()),
+            html_sha256: "a".repeat(64),
+            byte_size: 42,
+        }
+    }
+
+    #[test]
+    fn capsules_crud_create_update_get_list_delete() {
+        let db = GaryxDbService::memory().expect("db opens");
+        let id = Uuid::new_v4().to_string();
+        let created = db
+            .create_capsule(capsule_draft(&id, " Demo ", "thread::capsules"))
+            .expect("create capsule");
+        assert_eq!(created.id, id);
+        assert_eq!(created.title, "Demo");
+        assert_eq!(created.description, "Demo description");
+        assert_eq!(created.thread_id.as_deref(), Some("thread::capsules"));
+        assert_eq!(created.run_id.as_deref(), Some("run:: Demo"));
+        assert_eq!(created.agent_id.as_deref(), Some("agent::capsule"));
+        assert_eq!(created.provider_type.as_deref(), Some("codex_app_server"));
+        assert_eq!(created.byte_size, 42);
+        assert_eq!(created.revision, 1);
+        assert_eq!(created.created_at, created.updated_at);
+
+        let fetched = db
+            .get_capsule(&id)
+            .expect("get capsule")
+            .expect("capsule exists");
+        assert_eq!(fetched, created);
+
+        let updated = db
+            .update_capsule(
+                &id,
+                CapsuleUpdateDraft {
+                    title: Some("Updated".to_owned()),
+                    description: Some("New description".to_owned()),
+                    html_sha256: Some("b".repeat(64)),
+                    byte_size: Some(84),
+                },
+            )
+            .expect("update capsule")
+            .expect("updated capsule");
+        assert_eq!(updated.title, "Updated");
+        assert_eq!(updated.description, "New description");
+        assert_eq!(updated.html_sha256, "b".repeat(64));
+        assert_eq!(updated.byte_size, 84);
+        assert_eq!(updated.revision, 2);
+        assert_eq!(updated.created_at, created.created_at);
+        assert_eq!(updated.thread_id, created.thread_id);
+        assert_eq!(updated.agent_id, created.agent_id);
+        assert_eq!(
+            db.list_capsules().expect("list capsules"),
+            vec![updated.clone()]
+        );
+
+        assert!(db.delete_capsule(&id).expect("delete capsule"));
+        assert!(!db.delete_capsule(&id).expect("delete missing capsule"));
+        assert!(db.get_capsule(&id).expect("get after delete").is_none());
+    }
+
+    #[test]
+    fn capsules_list_orders_updated_desc_and_filters_thread() {
+        let db = GaryxDbService::memory().expect("db opens");
+        let first_id = Uuid::new_v4().to_string();
+        let second_id = Uuid::new_v4().to_string();
+        let other_id = Uuid::new_v4().to_string();
+        db.create_capsule(capsule_draft(&first_id, "First", "thread::one"))
+            .expect("create first");
+        db.create_capsule(capsule_draft(&second_id, "Second", "thread::one"))
+            .expect("create second");
+        db.create_capsule(capsule_draft(&other_id, "Other", "thread::two"))
+            .expect("create other");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        db.update_capsule(
+            &first_id,
+            CapsuleUpdateDraft {
+                title: Some("First updated".to_owned()),
+                ..Default::default()
+            },
+        )
+        .expect("update first");
+
+        let all = db.list_capsules().expect("list all");
+        assert_eq!(all[0].id, first_id);
+        let thread_one = db
+            .list_capsules_for_thread("thread::one")
+            .expect("list thread one");
+        assert_eq!(thread_one.len(), 2);
+        assert_eq!(thread_one[0].id, first_id);
+        assert!(thread_one.iter().any(|record| record.id == first_id));
+        assert!(thread_one.iter().any(|record| record.id == second_id));
+        assert!(
+            thread_one
+                .iter()
+                .all(|record| record.thread_id.as_deref() == Some("thread::one"))
+        );
+    }
+
+    #[test]
+    fn capsules_reject_invalid_uuid_hash_and_size() {
+        let db = GaryxDbService::memory().expect("db opens");
+        assert!(matches!(
+            db.create_capsule(capsule_draft("not-a-uuid", "Bad", "thread::bad")),
+            Err(GaryxDbError::BadRequest(_))
+        ));
+        let id = Uuid::new_v4().to_string();
+        let mut bad_hash = capsule_draft(&id, "Bad Hash", "thread::bad");
+        bad_hash.html_sha256 = "not-hex".to_owned();
+        assert!(matches!(
+            db.create_capsule(bad_hash),
+            Err(GaryxDbError::BadRequest(_))
+        ));
+        let mut bad_size = capsule_draft(&id, "Bad Size", "thread::bad");
+        bad_size.byte_size = -1;
+        assert!(matches!(
+            db.create_capsule(bad_size),
+            Err(GaryxDbError::BadRequest(_))
+        ));
+        assert!(matches!(
+            db.get_capsule("../escape"),
             Err(GaryxDbError::BadRequest(_))
         ));
     }

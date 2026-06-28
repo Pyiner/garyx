@@ -108,6 +108,40 @@ pub struct ScheduleFollowupParams {
     pub reason: Option<String>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CapsuleCreateParams {
+    /// User-facing capsule title.
+    pub title: String,
+    /// Optional short description shown in Capsule lists.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Inline self-contained HTML. Exactly one of `html` or `html_path` is required.
+    #[serde(default)]
+    pub html: Option<String>,
+    /// Absolute path to a self-contained HTML file. Exactly one of `html` or `html_path` is required.
+    #[serde(default, alias = "htmlPath")]
+    pub html_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CapsuleUpdateParams {
+    /// Capsule UUID returned by `capsule_create` or `capsule_list`.
+    #[serde(alias = "capsuleId")]
+    pub capsule_id: String,
+    /// New title. Omit to keep the existing title.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// New description. Omit to keep the existing description.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Replacement self-contained HTML. At most one of `html` or `html_path` may be set.
+    #[serde(default)]
+    pub html: Option<String>,
+    /// Absolute path to replacement self-contained HTML. At most one of `html` or `html_path` may be set.
+    #[serde(default, alias = "htmlPath")]
+    pub html_path: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Original URI extension (set by middleware before nest_service strips prefix)
 // ---------------------------------------------------------------------------
@@ -321,6 +355,35 @@ impl GaryMcpServer {
     ) -> Result<String, String> {
         tools::schedule_followup::run(self, ctx, params).await
     }
+
+    #[tool(
+        description = "Create a Capsule: a self-contained single-file HTML explanation, visualization, or demo for the current thread. Provide exactly one of `html` or absolute `html_path`; HTML must be UTF-8, <=5 MiB, and self-contained (inline/data/blob/https resources only)."
+    )]
+    async fn capsule_create(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(params): Parameters<CapsuleCreateParams>,
+    ) -> Result<String, String> {
+        tools::capsule::create(self, ctx, params).await
+    }
+
+    #[tool(
+        description = "Update an existing Capsule by UUID. Provide at least one of title, description, html, or html_path; replacement HTML must be UTF-8, <=5 MiB, and self-contained."
+    )]
+    async fn capsule_update(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(params): Parameters<CapsuleUpdateParams>,
+    ) -> Result<String, String> {
+        tools::capsule::update(self, ctx, params).await
+    }
+
+    #[tool(
+        description = "List Capsules created by the current thread, returning ids, titles, revisions, timestamps, and serve paths so a later run can update the right Capsule."
+    )]
+    async fn capsule_list(&self, ctx: RequestContext<RoleServer>) -> Result<String, String> {
+        tools::capsule::list(self, ctx).await
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -344,7 +407,7 @@ impl ServerHandler for GaryMcpServer {
                 website_url: None,
             },
             instructions: Some(
-                "Garyx MCP server. Tools: status, search, schedule_followup. Threads that require a structured result also expose a dynamic submit_result tool."
+                "Garyx MCP server. Tools: status, search, schedule_followup, capsule_create, capsule_update, capsule_list. Threads that require a structured result also expose a dynamic submit_result tool."
                     .to_owned(),
             ),
         }
