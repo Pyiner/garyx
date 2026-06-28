@@ -259,6 +259,8 @@ private struct GaryxRootRouteContentView: View {
             GaryxWorkspacesView()
         case .automations:
             GaryxAutomationsView()
+        case .capsules:
+            GaryxCapsulesView()
         case .workspaceBots:
             GaryxWorkspaceBotsView()
         case .agents:
@@ -595,6 +597,12 @@ struct GaryxNavigationDrawerView: View {
                         panel: .automations,
                         isSelected: snapshot.activePanel == .automations,
                         action: { onOpenPanel(.automations) }
+                    )
+
+                    GaryxSidebarNavigationRow(
+                        panel: .capsules,
+                        isSelected: snapshot.activePanel == .capsules,
+                        action: { onOpenPanel(.capsules) }
                     )
 
                     GaryxSidebarNavigationRow(

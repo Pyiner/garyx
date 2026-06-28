@@ -2249,6 +2249,121 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertFalse(GaryxGatewayRetryClassifier.isRetryableStatus(404, idempotent: true))
     }
 
+    func testCapsuleHTMLFetchUsesAuthenticatedServeRouteAndReturnsUTF8Text() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        GaryxURLProtocolStub.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(
+                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.percentEncodedPath,
+                "/garyx/api/capsules/01900000-0000-7000-8000-000000000001/serve"
+            )
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/html")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test token")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-Garyx-Proxy"), "proxy-token")
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "text/html; charset=utf-8"]
+                )
+            )
+            return (response, Data("<html><body>Capsule ✓</body></html>".utf8))
+        }
+
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/garyx")),
+                authToken: "test token",
+                customHeaders: ["X-Garyx-Proxy": "proxy-token"]
+            ),
+            session: session,
+            retryPolicy: .disabled
+        )
+
+        let html = try await client.capsuleHTML(id: "01900000-0000-7000-8000-000000000001")
+
+        XCTAssertEqual(html, "<html><body>Capsule ✓</body></html>")
+    }
+
+    func testListAndDeleteCapsulesUseGatewayRoutes() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        let counter = GaryxAtomicCounter()
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        GaryxURLProtocolStub.requestHandler = { request in
+            let call = counter.increment()
+            let path = URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.percentEncodedPath
+            if call == 1 {
+                XCTAssertEqual(request.httpMethod, "GET")
+                XCTAssertEqual(path, "/garyx/api/capsules")
+                let response = try XCTUnwrap(
+                    HTTPURLResponse(
+                        url: try XCTUnwrap(request.url),
+                        statusCode: 200,
+                        httpVersion: nil,
+                        headerFields: ["Content-Type": "application/json"]
+                    )
+                )
+                return (
+                    response,
+                    Data(
+                        """
+                        {
+                          "capsules": [
+                            {
+                              "id": "01900000-0000-7000-8000-000000000001",
+                              "title": "Synthetic Capsule",
+                              "html_sha256": "abc123",
+                              "byte_size": 42,
+                              "revision": 1
+                            }
+                          ]
+                        }
+                        """.utf8
+                    )
+                )
+            }
+            XCTAssertEqual(request.httpMethod, "DELETE")
+            XCTAssertEqual(path, "/garyx/api/capsules/01900000-0000-7000-8000-000000000001")
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (response, Data(#"{"deleted":true}"#.utf8))
+        }
+
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/garyx"))
+            ),
+            session: session,
+            retryPolicy: .disabled
+        )
+
+        let capsules = try await client.listCapsules()
+        XCTAssertEqual(capsules.map(\.id), ["01900000-0000-7000-8000-000000000001"])
+        let result = try await client.deleteCapsule(id: "01900000-0000-7000-8000-000000000001")
+        XCTAssertEqual(result.deleted, true)
+        XCTAssertEqual(counter.value(), 2)
+    }
+
     func testMobileFileLinkParsesAbsoluteAndFileURLs() throws {
         XCTAssertEqual(
             GaryxMobileFileLink.localFilePath(from: "/workspace/project/docs/page.html?tab=preview#top"),

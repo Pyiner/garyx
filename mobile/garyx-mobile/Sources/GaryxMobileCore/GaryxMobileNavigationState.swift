@@ -27,6 +27,7 @@ public enum GaryxMobilePanel: String, CaseIterable, Identifiable, Sendable {
     case tasks
     case workspaces
     case automations
+    case capsules
     case agents
     case skills
     case commands
@@ -49,6 +50,8 @@ public enum GaryxMobilePanel: String, CaseIterable, Identifiable, Sendable {
             "Workspaces"
         case .automations:
             "Automation"
+        case .capsules:
+            "Capsules"
         case .agents:
             "Agents"
         case .skills:
@@ -78,6 +81,8 @@ public enum GaryxMobilePanel: String, CaseIterable, Identifiable, Sendable {
             "folder"
         case .automations:
             "clock.arrow.circlepath"
+        case .capsules:
+            "capsule.fill"
         case .agents:
             "person.2.fill"
         case .skills:

@@ -129,6 +129,9 @@ extension GaryxMobileModel {
         agents = []
         teams = []
         skills = []
+        capsules = []
+        capsuleHTMLState = GaryxCapsuleHTMLLoadState()
+        capsuleHTMLCache = [:]
         tasks = []
         tasksPanelState.clearSourceFilter()
         automations = []
@@ -527,6 +530,7 @@ extension GaryxMobileModel {
             async let agentsResult = garyxCaptureCatalog { try await gateway.listAgents() }
             async let teamsResult = garyxCaptureCatalog { try await gateway.listTeams() }
             async let skillsResult = garyxCaptureCatalog { try await gateway.listSkills() }
+            async let capsulesResult = garyxCaptureCatalog { try await gateway.listCapsules() }
             async let tasksResult = garyxCaptureCatalog { try await gateway.listTasks(includeDone: true, limit: 120) }
             async let dreamsResult: GaryxDreamsPage? = try? gateway.listDreams(sinceHours: 24, limit: 80)
             async let gatewaySettingsResult: [String: GaryxJSONValue]? = try? gateway.gatewaySettings()
@@ -561,6 +565,7 @@ extension GaryxMobileModel {
             }
 
             let nextSkills = await skillsResult
+            let nextCapsules = await capsulesResult
             let nextTasksPage = await tasksResult
             let nextDreamsPage = await dreamsResult
             let nextGatewaySettings = await gatewaySettingsResult
@@ -577,6 +582,7 @@ extension GaryxMobileModel {
                 .init(nextAgents),
                 .init(nextTeams),
                 .init(nextSkills),
+                .init(nextCapsules),
                 .init(nextTasksPage),
                 .init(nextAutomations),
                 .init(nextSlashCommands),
@@ -591,6 +597,9 @@ extension GaryxMobileModel {
 
             if case let .success(value) = nextSkills {
                 skills = value
+            }
+            if case let .success(value) = nextCapsules {
+                capsules = value
             }
             if case let .success(page) = nextTasksPage {
                 tasks = page.tasks

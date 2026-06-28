@@ -15,6 +15,8 @@ final class GaryxMobileRouteLinkTests: XCTestCase {
             .panel(.tasks),
             .task("task-1"),
             .panel(.automations),
+            .panel(.capsules),
+            .capsule("01900000-0000-7000-8000-000000000001"),
             .automation("automation-1"),
             .automationThreads("automation-1"),
             .panel(.agents),
@@ -61,6 +63,10 @@ final class GaryxMobileRouteLinkTests: XCTestCase {
         XCTAssertEqual(
             GaryxMobileRouteLink.parse(try XCTUnwrap(URL(string: "garyx://mobile/workspace-bots?automation_id=automation-1"))),
             .automationThreads("automation-1")
+        )
+        XCTAssertEqual(
+            GaryxMobileRouteLink.parse(try XCTUnwrap(URL(string: "garyx://mobile/capsule?capsule_id=01900000-0000-7000-8000-000000000001"))),
+            .capsule("01900000-0000-7000-8000-000000000001")
         )
     }
 

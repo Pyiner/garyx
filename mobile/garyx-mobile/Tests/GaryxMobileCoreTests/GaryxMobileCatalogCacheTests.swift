@@ -160,4 +160,49 @@ final class GaryxMobileCatalogCacheTests: XCTestCase {
         XCTAssertEqual(restoredAccount.config, ["token": .string("${TOKEN}")])
         XCTAssertEqual(restoredAccount.workspaceMode, "worktree")
     }
+
+    func testSnapshotPreservesCapsuleMetadataWithoutHTMLBody() throws {
+        let capsule = GaryxCapsuleSummary(
+            id: "01900000-0000-7000-8000-000000000001",
+            title: "Synthetic Capsule",
+            description: "A safe synthetic HTML demo.",
+            threadId: "thread::capsule",
+            runId: "run-capsule",
+            agentId: "codex",
+            providerType: "codex_app_server",
+            htmlSha256: "abc123",
+            byteSize: 42,
+            revision: 3,
+            createdAt: "2026-06-28T10:00:00Z",
+            updatedAt: "2026-06-28T11:00:00Z"
+        )
+        let snapshot = GaryxMobileCatalogCacheSnapshot(
+            agents: [],
+            teams: [],
+            workspacePaths: [],
+            skills: [],
+            tasks: [],
+            capsules: [capsule],
+            automations: [],
+            slashCommands: [],
+            mcpServers: [],
+            channelEndpoints: [],
+            configuredBots: [],
+            configuredBotAccounts: [],
+            botConsoles: [],
+            channelPlugins: [],
+            savedAt: Date(timeIntervalSince1970: 1)
+        )
+
+        let data = try JSONEncoder().encode(snapshot)
+        let encoded = String(decoding: data, as: UTF8.self)
+        XCTAssertTrue(encoded.contains("Synthetic Capsule"))
+        XCTAssertFalse(encoded.contains("<html"))
+
+        let decoded = try JSONDecoder().decode(GaryxMobileCatalogCacheSnapshot.self, from: data)
+        XCTAssertEqual(decoded.version, GaryxMobileCatalogCacheSnapshot.currentVersion)
+        let restored = try XCTUnwrap(decoded.capsules.first?.model)
+        XCTAssertEqual(restored, capsule)
+    }
+
 }

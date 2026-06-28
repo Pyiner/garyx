@@ -1,7 +1,7 @@
 import Foundation
 
 struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
-    static let currentVersion = 2
+    static let currentVersion = 3
 
     var version: Int
     var savedAt: Date
@@ -10,6 +10,7 @@ struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
     var workspacePaths: [String]
     var skills: [GaryxCachedSkill]
     var tasks: [GaryxCachedTask]
+    var capsules: [GaryxCachedCapsule]
     var automations: [GaryxCachedAutomation]
     var slashCommands: [GaryxCachedSlashCommand]
     var mcpServers: [GaryxCachedMcpServer]
@@ -27,6 +28,7 @@ struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
         workspacePaths: [String],
         skills: [GaryxCachedSkill],
         tasks: [GaryxCachedTask],
+        capsules: [GaryxCachedCapsule] = [],
         automations: [GaryxCachedAutomation],
         slashCommands: [GaryxCachedSlashCommand],
         mcpServers: [GaryxCachedMcpServer],
@@ -43,6 +45,7 @@ struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
         self.workspacePaths = workspacePaths
         self.skills = skills
         self.tasks = tasks
+        self.capsules = capsules
         self.automations = automations
         self.slashCommands = slashCommands
         self.mcpServers = mcpServers
@@ -59,6 +62,7 @@ struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
         workspacePaths: [String],
         skills: [GaryxSkillSummary],
         tasks: [GaryxTaskSummary],
+        capsules: [GaryxCapsuleSummary] = [],
         automations: [GaryxAutomationSummary],
         slashCommands: [GaryxSlashCommand],
         mcpServers: [GaryxMcpServer],
@@ -76,6 +80,7 @@ struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
             workspacePaths: workspacePaths,
             skills: skills.map(GaryxCachedSkill.init),
             tasks: tasks.map(GaryxCachedTask.init),
+            capsules: capsules.map(GaryxCachedCapsule.init),
             automations: automations.map(GaryxCachedAutomation.init),
             slashCommands: slashCommands.map(GaryxCachedSlashCommand.init),
             mcpServers: mcpServers.map(GaryxCachedMcpServer.init),
@@ -282,6 +287,53 @@ struct GaryxCachedTask: Codable, Equatable {
             updatedBy: updatedBy?.model,
             runtimeAgentId: runtimeAgentId,
             replyCount: replyCount,
+            updatedAt: updatedAt
+        )
+    }
+}
+
+struct GaryxCachedCapsule: Codable, Equatable {
+    var id: String
+    var title: String
+    var description: String
+    var threadId: String?
+    var runId: String?
+    var agentId: String?
+    var providerType: String?
+    var htmlSha256: String
+    var byteSize: Int
+    var revision: Int
+    var createdAt: String?
+    var updatedAt: String?
+
+    init(_ capsule: GaryxCapsuleSummary) {
+        id = capsule.id
+        title = capsule.title
+        description = capsule.description
+        threadId = capsule.threadId
+        runId = capsule.runId
+        agentId = capsule.agentId
+        providerType = capsule.providerType
+        htmlSha256 = capsule.htmlSha256
+        byteSize = capsule.byteSize
+        revision = capsule.revision
+        createdAt = capsule.createdAt
+        updatedAt = capsule.updatedAt
+    }
+
+    var model: GaryxCapsuleSummary {
+        GaryxCapsuleSummary(
+            id: id,
+            title: title,
+            description: description,
+            threadId: threadId,
+            runId: runId,
+            agentId: agentId,
+            providerType: providerType,
+            htmlSha256: htmlSha256,
+            byteSize: byteSize,
+            revision: revision,
+            createdAt: createdAt,
             updatedAt: updatedAt
         )
     }
