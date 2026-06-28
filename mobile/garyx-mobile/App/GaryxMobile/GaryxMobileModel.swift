@@ -207,6 +207,9 @@ final class GaryxMobileModel: ObservableObject {
         }
     }
     @Published var skills: [GaryxSkillSummary] = []
+    @Published var capsules: [GaryxCapsuleSummary] = []
+    @Published var capsuleHTMLState = GaryxCapsuleHTMLLoadState()
+    var capsuleHTMLCache: [GaryxCapsuleHTMLCacheKey: String] = [:]
     @Published var tasks: [GaryxTaskSummary] = []
     @Published var tasksPanelState = GaryxMobileTasksPanelState()
     @Published var workflowRunPanelState = GaryxWorkflowRunPanelState()

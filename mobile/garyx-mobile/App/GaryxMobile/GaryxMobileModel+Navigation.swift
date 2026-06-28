@@ -218,6 +218,8 @@ extension GaryxMobileModel {
             await openAutomationRoute(id, source: source)
         case let .automationThreads(id):
             await openAutomationThreadsRoute(id, source: source)
+        case let .capsule(id):
+            await openCapsuleRoute(id, source: source)
         case let .agent(id):
             await openAgentRoute(id, source: source)
         case let .team(id):
@@ -269,6 +271,18 @@ extension GaryxMobileModel {
         if automations.isEmpty {
             await refreshRemoteState()
         }
+    }
+
+    private func openCapsuleRoute(_ id: String, source: GaryxMobilePanelOpenSource) async {
+        let capsuleId = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !capsuleId.isEmpty else { return }
+        openPanel(.capsules, source: source)
+        await refreshCapsules()
+        guard let capsule = capsules.first(where: { $0.id == capsuleId }) else {
+            showRouteNotFound(kind: "Capsule", id: capsuleId)
+            return
+        }
+        await openCapsule(capsule)
     }
 
     private func openAgentRoute(_ id: String, source: GaryxMobilePanelOpenSource) async {
@@ -352,6 +366,7 @@ extension GaryxMobileModel {
         selectedAutomationEditor = nil
         selectedAgentDetail = nil
         selectedTeamDetail = nil
+        clearCapsuleDetailState()
         routeNotFoundStore.selection = nil
         closeSkillDetail()
     }
