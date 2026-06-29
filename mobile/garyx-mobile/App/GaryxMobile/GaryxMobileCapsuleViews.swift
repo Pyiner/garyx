@@ -9,10 +9,7 @@ struct GaryxCapsulesView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @Environment(\.garyxOpenSidebar) private var openSidebar
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @StateObject private var previewLoad = GaryxCapsulePreviewLoadCoordinator(maxActive: 2)
     @State private var deletionCandidate: GaryxCapsuleSummary?
-
-    private var maxActivePreviews: Int { horizontalSizeClass == .regular ? 4 : 2 }
 
     private var columns: [GridItem] {
         horizontalSizeClass == .regular
@@ -43,11 +40,6 @@ struct GaryxCapsulesView: View {
             }
             .refreshable {
                 await model.refreshCapsules()
-            }
-            .onAppear { previewLoad.setMaxActive(maxActivePreviews) }
-            .onChange(of: horizontalSizeClass) { _, _ in previewLoad.setMaxActive(maxActivePreviews) }
-            .onChange(of: model.capsules.map(\.id)) { _, ids in
-                previewLoad.prune(validIds: Set(ids))
             }
             .fullScreenCover(item: $model.galleryFocusedCapsule) { capsule in
                 GaryxCapsuleFocusedPreviewView(capsule: capsule)
@@ -88,7 +80,6 @@ struct GaryxCapsulesView: View {
                     ForEach(model.capsules) { capsule in
                         GaryxCapsuleGalleryCard(
                             capsule: capsule,
-                            previewLoad: previewLoad,
                             onOpen: { model.galleryFocusedCapsule = capsule },
                             onDelete: { deletionCandidate = capsule }
                         )
@@ -129,7 +120,6 @@ struct GaryxCapsulesView: View {
 private struct GaryxCapsuleGalleryCard: View {
     @EnvironmentObject private var model: GaryxMobileModel
     let capsule: GaryxCapsuleSummary
-    @ObservedObject var previewLoad: GaryxCapsulePreviewLoadCoordinator
     let onOpen: () -> Void
     let onDelete: () -> Void
 
@@ -139,14 +129,12 @@ private struct GaryxCapsuleGalleryCard: View {
                 GaryxCapsulePreviewThumbnail(
                     capsuleId: capsule.id,
                     revision: capsule.revision,
-                    isActive: previewLoad.isActive(capsule.id),
+                    rendition: .gallery,
                     cacheEpoch: model.capsuleHTMLCacheEpoch,
                     cornerRadius: 0,
                     showsBorder: false
                 )
                 .aspectRatio(16.0 / 10.0, contentMode: .fit)
-                .onAppear { previewLoad.markVisible(capsule.id) }
-                .onDisappear { previewLoad.markHidden(capsule.id) }
 
                 // Hairline divider between the full-bleed preview and the meta,
                 // mirroring Mac `.capsule-card-preview-shell` border-bottom.
@@ -204,15 +192,18 @@ private struct GaryxCapsuleGalleryCard: View {
 
 // MARK: - Shared preview thumbnail
 
-/// Live capsule preview thumbnail. Mounts a non-interactive `WKWebView` only
-/// when `isActive` (planner-approved). `cacheEpoch` is part of the `.task`
-/// identity so an already-mounted thumbnail re-reconciles when the preview-HTML
-/// cache is invalidated (e.g. a capsule was deleted and its cache pruned),
-/// re-fetching `/serve` and resolving to `.deleted`.
+/// Capsule preview thumbnail. Displays a **cached rendered image** — zero live
+/// `WKWebView`. A cache miss renders once through the model's thumbnail stack
+/// (`capsuleThumbnail`), which writes through to memory + disk. `cacheEpoch` is
+/// part of the `.task` identity so an already-mounted thumbnail re-reconciles
+/// when the cache is invalidated (delete/prune), re-resolving to the new image
+/// or `.deleted`.
 struct GaryxCapsulePreviewThumbnail: View {
     let capsuleId: String
     let revision: Int
-    let isActive: Bool
+    /// The surface shape: gallery cards are 16:10, chat cards 16:9. Part of the
+    /// cache key so a snapshot is never served cropped-wrong to the other.
+    let rendition: GaryxCapsuleThumbnailRendition
     let cacheEpoch: Int
     let cornerRadius: CGFloat
     /// Full-bleed card previews suppress the thumbnail's own rounded border so
@@ -225,8 +216,7 @@ struct GaryxCapsulePreviewThumbnail: View {
 
     enum Phase: Equatable {
         case idle
-        case loading
-        case loaded(String)
+        case image(UIImage)
         case deleted
         case failed
     }
@@ -234,7 +224,6 @@ struct GaryxCapsulePreviewThumbnail: View {
     private struct LoadKey: Equatable {
         let capsuleId: String
         let revision: Int
-        let isActive: Bool
         let epoch: Int
     }
 
@@ -251,7 +240,7 @@ struct GaryxCapsulePreviewThumbnail: View {
                     .stroke(GaryxTheme.hairline, lineWidth: 1)
             }
         }
-        .task(id: LoadKey(capsuleId: capsuleId, revision: revision, isActive: isActive, epoch: cacheEpoch)) {
+        .task(id: LoadKey(capsuleId: capsuleId, revision: revision, epoch: cacheEpoch)) {
             await reconcile()
         }
     }
@@ -259,15 +248,18 @@ struct GaryxCapsulePreviewThumbnail: View {
     @ViewBuilder
     private var content: some View {
         switch phase {
-        case let .loaded(html) where isActive:
-            GaryxCapsuleThumbnailWebView(html: html)
+        case let .image(image):
+            Image(uiImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
         case .deleted:
             placeholder(systemName: "trash", text: "Capsule deleted")
         case .failed:
             placeholder(systemName: "exclamationmark.triangle", text: "Preview unavailable")
-        default:
-            Image(systemName: GaryxMobilePanel.capsules.iconName)
-                .font(GaryxFont.system(size: 22, weight: .semibold))
+        case .idle:
+            // Pre-render placeholder: the capsule gem glyph, faint.
+            GaryxCapsuleGlyph()
+                .frame(width: 30, height: 30)
                 .foregroundStyle(.tertiary)
         }
     }
@@ -285,88 +277,18 @@ struct GaryxCapsulePreviewThumbnail: View {
     }
 
     private func reconcile() async {
-        guard isActive else { return }
-        if case .idle = phase { phase = .loading }
-        let result = await model.loadCapsulePreviewHTML(capsuleId: capsuleId, revision: revision)
+        let result = await model.capsuleThumbnail(
+            capsuleId: capsuleId,
+            revision: revision,
+            rendition: rendition
+        )
         switch result {
-        case let .html(html):
-            phase = .loaded(html)
+        case let .image(image):
+            phase = .image(image)
         case .deleted:
             phase = .deleted
         case .failed:
             phase = .failed
-        }
-    }
-}
-
-/// Renders capsule HTML into a fixed virtual canvas scaled to the card width, so
-/// the page lays out at a stable desktop-ish viewport and is shrunk to a
-/// thumbnail. Non-interactive and opaque-origin sandboxed (no bridge, no
-/// persistence, `baseURL: nil` so the meta CSP still governs).
-private struct GaryxCapsuleThumbnailWebView: View {
-    let html: String
-    private let virtualWidth: CGFloat = 760
-
-    var body: some View {
-        GeometryReader { geometry in
-            let scale = geometry.size.width / virtualWidth
-            let virtualHeight = scale > 0 ? geometry.size.height / scale : geometry.size.height
-            GaryxCapsuleThumbnailWebRepresentable(html: html)
-                .frame(width: virtualWidth, height: max(1, virtualHeight))
-                .scaleEffect(scale, anchor: .topLeading)
-                .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
-                .clipped()
-                .allowsHitTesting(false)
-        }
-    }
-}
-
-private struct GaryxCapsuleThumbnailWebRepresentable: UIViewRepresentable {
-    let html: String
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    func makeUIView(context: Context) -> WKWebView {
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .nonPersistent()
-        configuration.defaultWebpagePreferences.allowsContentJavaScript = true
-        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
-
-        let webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.navigationDelegate = context.coordinator
-        webView.isUserInteractionEnabled = false
-        webView.scrollView.isScrollEnabled = false
-        webView.scrollView.bounces = false
-        webView.scrollView.contentInsetAdjustmentBehavior = .never
-        webView.isOpaque = false
-        webView.backgroundColor = .clear
-        webView.scrollView.backgroundColor = .clear
-        return webView
-    }
-
-    func updateUIView(_ webView: WKWebView, context: Context) {
-        let token = "\(html.count):\(html.hashValue)"
-        guard context.coordinator.loadedToken != token else { return }
-        context.coordinator.loadedToken = token
-        webView.loadHTMLString(html, baseURL: nil)
-    }
-
-    final class Coordinator: NSObject, WKNavigationDelegate {
-        var loadedToken: String?
-
-        func webView(
-            _ webView: WKWebView,
-            decidePolicyFor navigationAction: WKNavigationAction,
-            decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
-        ) {
-            // Non-interactive thumbnail: allow sub-frames and the initial
-            // about:blank load, cancel any main-frame navigation away.
-            guard navigationAction.targetFrame?.isMainFrame != false else {
-                decisionHandler(.allow)
-                return
-            }
-            let scheme = navigationAction.request.url?.scheme?.lowercased() ?? ""
-            decisionHandler(scheme == "about" ? .allow : .cancel)
         }
     }
 }
@@ -590,15 +512,11 @@ struct GaryxMobileCapsuleChatCardsView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     let turnId: String
     let cards: [GaryxRenderCapsuleCard]
-    let activeKeys: Set<String>
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(cards) { card in
-                GaryxMobileCapsuleChatCard(
-                    card: card,
-                    isActive: activeKeys.contains("\(turnId):\(card.capsuleId)")
-                ) {
+                GaryxMobileCapsuleChatCard(card: card) {
                     Task { await model.openMobileRoute(.capsule(card.capsuleId), source: .conversation) }
                 }
             }
@@ -610,7 +528,6 @@ struct GaryxMobileCapsuleChatCardsView: View {
 private struct GaryxMobileCapsuleChatCard: View {
     @EnvironmentObject private var model: GaryxMobileModel
     let card: GaryxRenderCapsuleCard
-    let isActive: Bool
     let onOpen: () -> Void
 
     var body: some View {
@@ -619,7 +536,7 @@ private struct GaryxMobileCapsuleChatCard: View {
                 GaryxCapsulePreviewThumbnail(
                     capsuleId: card.capsuleId,
                     revision: card.revision,
-                    isActive: isActive,
+                    rendition: .chatCard,
                     cacheEpoch: model.capsuleHTMLCacheEpoch,
                     cornerRadius: 0,
                     showsBorder: false
@@ -654,48 +571,6 @@ private struct GaryxMobileCapsuleChatCard: View {
     private var displayTitle: String {
         let trimmed = card.title.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "Untitled Capsule" : trimmed
-    }
-}
-
-// MARK: - Preview load coordinator
-
-/// App-target observable wrapper around the pure `GaryxCapsulePreviewLoadPlanner`
-/// for the gallery. A narrow store so cards observe only admission changes, not
-/// the whole model. Publishes only when the active set actually changes.
-@MainActor
-final class GaryxCapsulePreviewLoadCoordinator: ObservableObject {
-    @Published private(set) var activeIds: Set<String> = []
-    private var planner: GaryxCapsulePreviewLoadPlanner
-
-    init(maxActive: Int) {
-        planner = GaryxCapsulePreviewLoadPlanner(maxActive: maxActive)
-    }
-
-    func isActive(_ id: String) -> Bool { activeIds.contains(id) }
-
-    func setMaxActive(_ n: Int) {
-        guard planner.maxActive != max(0, n) else { return }
-        planner.setMaxActive(n)
-        recompute()
-    }
-
-    func markVisible(_ id: String) {
-        if planner.markVisible(id) { recompute() }
-    }
-
-    func markHidden(_ id: String) {
-        if planner.markHidden(id) { recompute() }
-    }
-
-    func prune(validIds: Set<String>) {
-        let before = planner.visibleIds
-        planner.prune(keeping: validIds)
-        if planner.visibleIds != before { recompute() }
-    }
-
-    private func recompute() {
-        let next = Set(planner.activeIds)
-        if next != activeIds { activeIds = next }
     }
 }
 

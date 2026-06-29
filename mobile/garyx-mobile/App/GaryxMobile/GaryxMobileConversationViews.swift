@@ -308,19 +308,6 @@ struct GaryxConversationView: View {
         }
     }
 
-    /// Conversation-level admission keys for chat capsule-card thumbnails. The
-    /// transcript is an eager `VStack`, so visibility is not an `onAppear`
-    /// signal; admit the most-recent N across all turns (see
-    /// `GaryxCapsuleChatCardAdmission`).
-    private func capsuleCardActiveKeys(for rows: [GaryxMobileTurnRow]) -> Set<String> {
-        let ordered = rows.flatMap { row in
-            row.capsuleCards.map { "\(row.id):\($0.capsuleId)" }
-        }
-        guard !ordered.isEmpty else { return [] }
-        let maxActive = horizontalSizeClass == .regular ? 4 : 2
-        return Set(GaryxCapsuleChatCardAdmission.activeKeys(orderedKeys: ordered, maxActive: maxActive))
-    }
-
     private var messageBubbleActions: GaryxMessageBubbleActions {
         GaryxMessageBubbleActions(
             model: model,
@@ -382,8 +369,7 @@ struct GaryxConversationView: View {
                     }
                     GaryxMobileTurnRowsView(
                         rows: turnRows,
-                        prefetchBoundaryRowCount: garyxHistoryPrefetchBoundaryRows,
-                        activeCapsuleCardKeys: capsuleCardActiveKeys(for: turnRows)
+                        prefetchBoundaryRowCount: garyxHistoryPrefetchBoundaryRows
                     ) {
                         prefetchOlderHistoryIfNeeded()
                     }

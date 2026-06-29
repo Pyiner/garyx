@@ -735,8 +735,7 @@ struct GaryxSidebarNavigationRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 12) {
-                Image(systemName: panel.iconName)
-                    .font(GaryxFont.system(size: 19, weight: .regular))
+                GaryxPanelIconView(systemName: panel.iconName, size: 19)
                     .foregroundStyle(iconColor)
                     .frame(width: 26, height: 26)
 

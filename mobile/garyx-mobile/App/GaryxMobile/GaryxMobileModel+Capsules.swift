@@ -1,5 +1,15 @@
 import Foundation
 import SwiftUI
+import UIKit
+
+/// Outcome of resolving a capsule's rendered thumbnail image by
+/// `(id, revision, rendition)`. `.deleted`/`.failed` mirror the HTML loader's
+/// deletion-vs-transient distinction.
+enum GaryxCapsuleThumbnailResult: Equatable {
+    case image(UIImage)
+    case deleted
+    case failed
+}
 
 /// Outcome of fetching a capsule's preview HTML by id. `/serve` is the single
 /// deletion authority: a 404 means the capsule was deleted (render-state markers
@@ -124,8 +134,67 @@ extension GaryxMobileModel {
             validCapsules: validCapsules
         )
         capsuleHTMLCache = result.cache
-        if result.didEvict {
+        // Rendered thumbnails follow the same authority: drop deleted capsules
+        // from the in-memory image cache now (synchronous, so a remotely-deleted
+        // capsule's chat-card thumbnail re-validates) and prune the disk cache
+        // off the main actor. Bump the epoch when anything is evicted so mounted
+        // thumbnails re-reconcile.
+        let validIds = Set(validCapsules.map { $0.id.trimmingCharacters(in: .whitespacesAndNewlines) })
+        let memoryEvicted = capsuleThumbnailMemory.retainOnly(validIds: validIds)
+        if result.didEvict || memoryEvicted {
             capsuleHTMLCacheEpoch &+= 1
         }
+        Task { [weak self] in
+            guard let self else { return }
+            let diskEvicted = await self.capsuleThumbnailStore.pruneToValid(validCapsules)
+            if diskEvicted { self.capsuleHTMLCacheEpoch &+= 1 }
+        }
+    }
+
+    /// Resolve a capsule's rendered thumbnail image for a surface (gallery 16:10,
+    /// chat card 16:9). Memory → disk → render-once. The gallery and chat cards
+    /// display this image with **no live `WKWebView`**; the one-shot render on a
+    /// miss is concurrency-capped by `GaryxCapsuleThumbnailRenderer`, so visible
+    /// cards are never starved (A1) and the crop is a fixed 16:rendition cover
+    /// over an opaque backing (A2).
+    func capsuleThumbnail(
+        capsuleId: String,
+        revision: Int,
+        rendition: GaryxCapsuleThumbnailRendition
+    ) async -> GaryxCapsuleThumbnailResult {
+        let key = GaryxCapsuleThumbnailCacheKey(id: capsuleId, revision: revision, rendition: rendition)
+        if let cached = capsuleThumbnailMemory.image(for: key) {
+            return .image(cached)
+        }
+        if let data = await capsuleThumbnailStore.data(for: key),
+           let image = await Self.decodeThumbnail(data) {
+            capsuleThumbnailMemory.set(image, for: key)
+            return .image(image)
+        }
+        // Miss: reuse the HTML loader (it owns `/serve`, the 404 deletion
+        // authority, and transient/offline handling), then render once.
+        switch await loadCapsulePreviewHTML(capsuleId: capsuleId, revision: revision) {
+        case .deleted:
+            capsuleThumbnailMemory.evict(capsuleId: capsuleId)
+            if await capsuleThumbnailStore.evict(capsuleId: capsuleId) {
+                capsuleHTMLCacheEpoch &+= 1
+            }
+            return .deleted
+        case .failed:
+            return .failed
+        case let .html(html):
+            let plan = GaryxCapsuleThumbnailSnapshotPlan(rendition: rendition)
+            guard let png = await capsuleThumbnailRenderer.renderPNG(html: html, plan: plan),
+                  let image = await Self.decodeThumbnail(png) else {
+                return .failed
+            }
+            await capsuleThumbnailStore.store(png, for: key)
+            capsuleThumbnailMemory.set(image, for: key)
+            return .image(image)
+        }
+    }
+
+    private static func decodeThumbnail(_ data: Data) async -> UIImage? {
+        await Task.detached(priority: .utility) { UIImage(data: data) }.value
     }
 }

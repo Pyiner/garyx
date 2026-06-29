@@ -12,21 +12,15 @@ extension AnyTransition {
 struct GaryxMobileTurnRowsView: View {
     let rows: [GaryxMobileTurnRow]
     let prefetchBoundaryRowCount: Int
-    /// Conversation-level set of admitted chat capsule-card instance keys
-    /// (`"<turnId>:<capsuleId>"`) — bounds live preview WKWebViews across the
-    /// eager transcript stack (see `GaryxCapsuleChatCardAdmission`).
-    let activeCapsuleCardKeys: Set<String>
     let onNearHistoryBoundary: () -> Void
 
     init(
         rows: [GaryxMobileTurnRow],
         prefetchBoundaryRowCount: Int = 0,
-        activeCapsuleCardKeys: Set<String> = [],
         onNearHistoryBoundary: @escaping () -> Void = {}
     ) {
         self.rows = rows
         self.prefetchBoundaryRowCount = prefetchBoundaryRowCount
-        self.activeCapsuleCardKeys = activeCapsuleCardKeys
         self.onNearHistoryBoundary = onNearHistoryBoundary
     }
 
@@ -57,8 +51,7 @@ struct GaryxMobileTurnRowsView: View {
         if !row.capsuleCards.isEmpty {
             GaryxMobileCapsuleChatCardsView(
                 turnId: row.id,
-                cards: row.capsuleCards,
-                activeKeys: activeCapsuleCardKeys
+                cards: row.capsuleCards
             )
             .transition(.garyxTranscriptAppear)
         }

@@ -1,80 +1,11 @@
 import Foundation
 
-/// Visibility-based admission for capsule preview thumbnails in the **gallery**.
-///
-/// The gallery is a `LazyVGrid`, so `onAppear`/`onDisappear` are true visibility
-/// signals. Cards report visible ids (in appearance order); the planner admits
-/// the first `maxActive` still-visible ids (FIFO) to mount a `WKWebView`. The
-/// rest render a skeleton until an earlier card scrolls off and frees a slot.
-///
-/// Pure value type so the admission policy is unit-testable without SwiftUI. The
-/// chat transcript uses a different policy (`GaryxCapsuleChatCardAdmission`)
-/// because it is an eager `VStack` where `onAppear` is not a visibility signal.
-public struct GaryxCapsulePreviewLoadPlanner: Equatable, Sendable {
-    public private(set) var maxActive: Int
-    private var visibleOrder: [String]
-
-    public init(maxActive: Int, visibleOrder: [String] = []) {
-        self.maxActive = max(0, maxActive)
-        self.visibleOrder = visibleOrder
-    }
-
-    public var visibleIds: [String] { visibleOrder }
-
-    /// The first `maxActive` still-visible ids, in appearance order.
-    public var activeIds: [String] { Array(visibleOrder.prefix(maxActive)) }
-
-    public func isActive(_ id: String) -> Bool {
-        guard let index = visibleOrder.firstIndex(of: id) else { return false }
-        return index < maxActive
-    }
-
-    /// Append on first appearance; idempotent (never reorders an already-visible
-    /// id). Returns whether the visible set changed.
-    @discardableResult
-    public mutating func markVisible(_ id: String) -> Bool {
-        guard !visibleOrder.contains(id) else { return false }
-        visibleOrder.append(id)
-        return true
-    }
-
-    @discardableResult
-    public mutating func markHidden(_ id: String) -> Bool {
-        guard let index = visibleOrder.firstIndex(of: id) else { return false }
-        visibleOrder.remove(at: index)
-        return true
-    }
-
-    public mutating func setMaxActive(_ n: Int) {
-        maxActive = max(0, n)
-    }
-
-    /// Drop visible ids that are no longer valid (e.g. capsule deleted), keeping
-    /// appearance order for the survivors.
-    public mutating func prune(keeping valid: Set<String>) {
-        visibleOrder = visibleOrder.filter { valid.contains($0) }
-    }
-}
-
-/// Conversation-level admission for capsule preview thumbnails in the **chat
-/// transcript**.
-///
-/// The transcript is a deliberately eager `VStack` (see
-/// `GaryxMobileConversationViews`), so every turn — and therefore every capsule
-/// card — is mounted at once and `onAppear` is not a visibility signal. A
-/// per-turn cap would let N historical turns each mount their own thumbnails and
-/// blow past the global WKWebView budget. Instead the conversation flattens all
-/// capsule-card instance keys in transcript order and admits the most-recent
-/// `maxActive` (the tail), since the transcript opens scrolled to the bottom so
-/// the newest cards are the ones most likely on screen. Non-admitted cards show
-/// a static shell and still open the focused preview on tap.
-public enum GaryxCapsuleChatCardAdmission {
-    /// `orderedKeys` are per-instance keys (`"<turnId>:<capsuleId>"`) in
-    /// transcript order, newest last. Returns the most-recent `maxActive`.
-    public static func activeKeys(orderedKeys: [String], maxActive: Int) -> [String] {
-        Array(orderedKeys.suffix(max(0, maxActive)))
-    }
-}
+// Capsule preview thumbnails are now cached rendered images (see
+// `GaryxCapsuleThumbnailRendering` + the app-target store/renderer), so the old
+// visibility-admission planner and chat-card admission that bounded live
+// `WKWebView`s are gone — display no longer needs gating, and the one-shot
+// render on a cache miss is concurrency-capped at render time. The pure
+// presentation helpers below remain in use by the gallery and chat cards.
 
 /// Pure presentation for a chat capsule card's secondary line. Keeps the
 /// action→label mapping in Core so the SwiftUI card stays a dumb renderer.
