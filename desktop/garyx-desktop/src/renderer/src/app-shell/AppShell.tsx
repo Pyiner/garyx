@@ -104,6 +104,9 @@ import { GatewayIdentityBar } from "../GatewaySwitcher";
 import { SettingsErrorBoundary } from "../SettingsErrorBoundary";
 import { Input } from "../components/ui/input";
 import { WorkspacePathPickerDialog } from "../components/WorkspacePathPicker";
+// Side-effect import: wires cross-store capsule cache invalidation (a `/serve`
+// 404 in either the HTML or thumbnail store tombstones the other for that id).
+import "./capsule-cache";
 import { AddBotDialog } from "./components/AddBotDialog";
 import { DreamsPanel } from "./components/DreamsPanel";
 import {

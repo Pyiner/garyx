@@ -26,6 +26,10 @@ import {
   FloatingActionMenuItem,
 } from '../../components/ui/floating-action-menu';
 import { capsuleHtmlStore } from '../capsule-html-store';
+import {
+  capsuleThumbnailStore,
+  GALLERY_RENDITION,
+} from '../capsule-thumbnail-store';
 import { useInViewport } from '../use-in-viewport';
 import { CapsuleLivePreviewFrame } from './CapsuleLivePreviewFrame';
 
@@ -137,6 +141,7 @@ function CapsuleGalleryCard({
           active={visible}
           capsuleId={capsule.id}
           mode="card"
+          rendition={GALLERY_RENDITION}
           revision={capsule.revision}
           title={title}
         />
@@ -406,6 +411,7 @@ export function CapsulesPanel({
     try {
       await window.garyxDesktop.deleteCapsule({ capsuleId: previewCapsule.id });
       capsuleHtmlStore.invalidateCapsule(previewCapsule.id);
+      capsuleThumbnailStore.invalidateCapsule(previewCapsule.id);
       onCloseCapsulePreview();
       await loadCapsules();
       onToast?.(t('Capsule deleted.'), 'success');

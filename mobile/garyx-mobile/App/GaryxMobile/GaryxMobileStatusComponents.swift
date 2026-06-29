@@ -275,9 +275,22 @@ struct GaryxStateView: View {
             ProgressView()
                 .controlSize(.regular)
         case .empty(let icon):
-            Image(systemName: icon)
-                .font(iconFont)
-                .foregroundStyle(.secondary)
+            if icon == GaryxMobilePanel.capsules.iconName {
+                // Capsules empty state uses the gem glyph in the accent gradient.
+                GaryxCapsuleGlyph(style: .accent)
+                    .frame(width: emptyGlyphSize, height: emptyGlyphSize)
+            } else {
+                Image(systemName: icon)
+                    .font(iconFont)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var emptyGlyphSize: CGFloat {
+        switch style {
+        case .panel: return 40
+        case .inline: return 30
         }
     }
 

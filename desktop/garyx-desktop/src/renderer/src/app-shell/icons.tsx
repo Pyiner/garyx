@@ -4,7 +4,6 @@ import {
   Command,
   Cpu,
   History,
-  Package,
   ListTodo,
   MoonStar,
   Router,
@@ -155,8 +154,29 @@ export function DreamsIcon() {
   );
 }
 
+// Capsules product glyph — a small vial holding a faceted gem ("a container of
+// something precious"), matching the iOS `GaryxCapsuleGlyph`. Authored in a
+// 24×24 box; vial body + lip stroked in currentColor, gem filled.
 export function CapsulesIcon() {
-  return <SettingsRailIcon glyph={Package} />;
+  return (
+    <svg
+      aria-hidden
+      className="icon"
+      fill="none"
+      height="16"
+      viewBox="0 0 24 24"
+      width="16"
+    >
+      <path
+        d="M9 3h6M10 3v3.2c0 .5-.2 1-.6 1.4C8 9 7.5 10.4 7.5 12v5.5A3 3 0 0 0 10.5 20.5h3A3 3 0 0 0 16.5 17.5V12c0-1.6-.5-3-1.9-4.4-.4-.4-.6-.9-.6-1.4V3"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={1.6}
+      />
+      <path d="M12 11l2 2-2 2-2-2 2-2Z" fill="currentColor" />
+    </svg>
+  );
 }
 
 export function AgentsIcon() {

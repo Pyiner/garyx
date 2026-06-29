@@ -181,6 +181,13 @@ const api: GaryxDesktopApi = {
   listCapsules: () => ipcRenderer.invoke("garyx:list-capsules"),
   getCapsule: (capsuleId) => ipcRenderer.invoke("garyx:get-capsule", capsuleId),
   getCapsuleHtml: (capsuleId) => ipcRenderer.invoke("garyx:get-capsule-html", capsuleId),
+  getCapsuleThumbnail: (capsuleId, revision, rendition) =>
+    ipcRenderer.invoke(
+      "garyx:get-capsule-thumbnail",
+      capsuleId,
+      revision,
+      rendition,
+    ),
   deleteCapsule: (input) => ipcRenderer.invoke("garyx:delete-capsule", input),
   getTask: (input) => ipcRenderer.invoke("garyx:get-task", input),
   createTask: (input) => ipcRenderer.invoke("garyx:create-task", input),

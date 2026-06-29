@@ -222,10 +222,18 @@ final class GaryxMobileModel: ObservableObject {
     /// hosts and dismisses its own preview.
     @Published var conversationCapsulePreview: GaryxCapsuleSummary?
     var capsuleHTMLCache: [GaryxCapsuleHTMLCacheKey: String] = [:]
-    /// Bumped whenever cached preview HTML is evicted (prune or focused 404), so
-    /// `GaryxCapsulePreviewThumbnail` can include it in its `.task` identity and
-    /// re-validate already-mounted thumbnails.
+    /// Bumped whenever cached preview HTML or a rendered thumbnail is evicted
+    /// (prune or `/serve` 404), so `GaryxCapsulePreviewThumbnail` can include it
+    /// in its `.task` identity and re-validate already-mounted thumbnails.
     @Published var capsuleHTMLCacheEpoch: Int = 0
+    /// Rendered-thumbnail cache stack: the gallery and chat cards display a
+    /// cached PNG (zero live `WKWebView`); a miss renders once via
+    /// `GaryxCapsuleThumbnailRenderer` and writes through to disk + memory. This
+    /// removes the live-render concurrency cap that starved gallery cards (A1)
+    /// and pins a fixed 16:rendition cover crop (A2).
+    let capsuleThumbnailStore = GaryxCapsuleThumbnailDiskStore()
+    let capsuleThumbnailRenderer = GaryxCapsuleThumbnailRenderer()
+    let capsuleThumbnailMemory = GaryxCapsuleThumbnailMemoryCache()
     @Published var tasks: [GaryxTaskSummary] = []
     @Published var tasksPanelState = GaryxMobileTasksPanelState()
     @Published var workflowRunPanelState = GaryxWorkflowRunPanelState()

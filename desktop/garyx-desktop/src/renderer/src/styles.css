@@ -17799,27 +17799,31 @@ button.codex-list-row {
   box-shadow: 0 1px 4px color-mix(in oklab, var(--color-token-text-primary) 8%, transparent);
 }
 
-/* Thumbnail: fixed aspect, untrusted iframe scaled to fit and frozen. */
+/* Thumbnail: fixed aspect, a cached PNG cover-cropped from the top (no live
+   iframe). The shell backing is the capsule-dark neutral the snapshot composites
+   over, so a still-loading or short capsule reads as intentional backing. */
 .capsule-card-preview-shell {
   position: relative;
   display: block;
   width: 100%;
   aspect-ratio: 16 / 10;
   overflow: hidden;
-  background: #fff;
+  background: #0a0e16;
   border-bottom: 0.5px solid color-mix(in oklab, var(--color-token-border) 72%, transparent);
   pointer-events: none;
 }
 
-.capsule-card-frame-canvas {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
+/* Chat capsule cards crop 16:9 (the gallery is 16:10). */
+.capsule-chat-card-preview-shell {
+  aspect-ratio: 16 / 9;
 }
 
-.capsule-card-frame-canvas .capsule-live-frame {
-  transform: scale(var(--capsule-card-scale, 0.21));
-  transform-origin: top left;
+.capsule-card-thumb {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top;
 }
 
 .capsule-card-meta {

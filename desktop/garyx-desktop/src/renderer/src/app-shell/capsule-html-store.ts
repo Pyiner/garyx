@@ -48,6 +48,15 @@ class CapsuleHtmlStore {
   private activeCount = 0;
   private listeners = new Set<() => void>();
   private fetcher: Fetcher = defaultFetcher;
+  // Cross-store tombstone: a `/serve` 404 here means the capsule is gone, so the
+  // rendered-thumbnail store must drop its cached PNGs too. Injected (not a
+  // direct import) so the two stores stay decoupled with no import cycle; wired
+  // by `capsule-cache.ts`.
+  private crossInvalidate: ((id: string) => void) | null = null;
+
+  setCrossInvalidate(fn: ((id: string) => void) | null): void {
+    this.crossInvalidate = fn;
+  }
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -163,7 +172,11 @@ class CapsuleHtmlStore {
       } else if (result && result.status === 'ok') {
         this.setEntry(job.key, { status: 'ready', html: result.html });
       } else {
+        // The capsule is gone (`/serve` 404). Tombstone this preview and
+        // cross-invalidate the rendered-thumbnail store so the gallery/chat
+        // cards for the same id do not keep serving a stale cached PNG.
         this.setEntry(job.key, DELETED);
+        this.crossInvalidate?.(job.id);
       }
     }
     this.drain();
@@ -183,6 +196,7 @@ class CapsuleHtmlStore {
     this.activeCount = 0;
     this.listeners.clear();
     this.fetcher = defaultFetcher;
+    this.crossInvalidate = null;
   }
 
   __activeCount(): number {
