@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Copy, Link2, MoreHorizontal, RefreshCw, Trash2 } from 'lucide-react';
+import {
+  ArrowLeft,
+  Copy,
+  Link2,
+  MessageSquare,
+  MoreHorizontal,
+  RefreshCw,
+  Trash2,
+} from 'lucide-react';
 
 import type {
   DesktopCapsuleSummary,
@@ -28,6 +36,8 @@ type CapsulesPanelProps = {
   selectedCapsuleIdFromRoute: string | null;
   onOpenCapsulePreview: (capsuleId: string) => void;
   onCloseCapsulePreview: () => void;
+  /** Open the Capsule's source conversation thread as a normal thread view. */
+  onOpenThread: (threadId: string) => void;
 };
 
 function capsuleTitle(capsule: DesktopCapsuleSummary | null | undefined, t: Translate): string {
@@ -145,19 +155,23 @@ function CapsulePreviewPage({
   capsule,
   missing,
   deleting,
+  sourceThreadId,
   onBack,
   onRefresh,
   onCopyLink,
   onCopyId,
+  onOpenSourceThread,
   onDelete,
 }: {
   capsule: DesktopCapsuleSummary | null;
   missing: boolean;
   deleting: boolean;
+  sourceThreadId: string | null;
   onBack: () => void;
   onRefresh: () => void;
   onCopyLink: () => void;
   onCopyId: () => void;
+  onOpenSourceThread: () => void;
   onDelete: () => void;
 }) {
   const { t } = useI18n();
@@ -209,6 +223,12 @@ function CapsulePreviewPage({
               </button>
             </DropdownMenuTrigger>
             <FloatingActionMenuContent align="end" sideOffset={4}>
+              {sourceThreadId ? (
+                <FloatingActionMenuItem onSelect={onOpenSourceThread}>
+                  <MessageSquare aria-hidden />
+                  {t('Open source conversation')}
+                </FloatingActionMenuItem>
+              ) : null}
               <FloatingActionMenuItem onSelect={onCopyId}>
                 <Copy aria-hidden />
                 {t('Copy ID')}
@@ -252,6 +272,7 @@ export function CapsulesPanel({
   selectedCapsuleIdFromRoute,
   onOpenCapsulePreview,
   onCloseCapsulePreview,
+  onOpenThread,
 }: CapsulesPanelProps) {
   const { t } = useI18n();
   const [page, setPage] = useState<DesktopCapsulesPage | null>(null);
@@ -403,6 +424,7 @@ export function CapsulesPanel({
           capsule={previewCapsule}
           deleting={deletingId === previewCapsule?.id}
           missing={fallbackMissing}
+          sourceThreadId={previewCapsule?.threadId?.trim() || null}
           onBack={onCloseCapsulePreview}
           onCopyId={() => {
             void handleCopyId();
@@ -412,6 +434,12 @@ export function CapsulesPanel({
           }}
           onDelete={() => {
             void handleDelete();
+          }}
+          onOpenSourceThread={() => {
+            const threadId = previewCapsule?.threadId?.trim();
+            if (threadId) {
+              onOpenThread(threadId);
+            }
           }}
           onRefresh={handleRefresh}
         />

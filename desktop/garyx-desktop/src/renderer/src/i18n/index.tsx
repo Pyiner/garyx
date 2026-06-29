@@ -115,6 +115,7 @@ const zhCN: Record<string, string> = {
   'Failed to delete Capsule.': '删除 Capsule 失败。',
   'More actions': '更多操作',
   'No Capsules yet.': '还没有 Capsule。',
+  'Open source conversation': '打开来源对话',
   'Revision': '版本',
   'Self-contained HTML created by agents.': 'Agent 生成的自包含 HTML。',
   'Untitled Capsule': '未命名 Capsule',

@@ -10585,6 +10585,11 @@ export function AppShell() {
                 onCloseCapsulePreview={() => {
                   setCapsulePreviewId(null);
                 }}
+                onOpenThread={(threadId) => {
+                  trackUiAction("capsules.open_thread", async () => {
+                    await openExistingThread(threadId);
+                  });
+                }}
               />
             ) : isTasksView ? (
               <TasksPanel

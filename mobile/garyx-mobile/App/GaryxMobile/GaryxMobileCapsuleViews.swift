@@ -135,36 +135,45 @@ private struct GaryxCapsuleGalleryCard: View {
 
     var body: some View {
         Button(action: onOpen) {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 0) {
                 GaryxCapsulePreviewThumbnail(
                     capsuleId: capsule.id,
                     revision: capsule.revision,
                     isActive: previewLoad.isActive(capsule.id),
                     cacheEpoch: model.capsuleHTMLCacheEpoch,
-                    cornerRadius: 14
+                    cornerRadius: 0,
+                    showsBorder: false
                 )
                 .aspectRatio(16.0 / 10.0, contentMode: .fit)
                 .onAppear { previewLoad.markVisible(capsule.id) }
                 .onDisappear { previewLoad.markHidden(capsule.id) }
 
-                VStack(alignment: .leading, spacing: 5) {
+                // Hairline divider between the full-bleed preview and the meta,
+                // mirroring Mac `.capsule-card-preview-shell` border-bottom.
+                Rectangle()
+                    .fill(GaryxTheme.hairline)
+                    .frame(height: 0.5)
+
+                VStack(alignment: .leading, spacing: 3) {
                     Text(capsule.displayTitle)
                         .font(GaryxFont.subheadline(weight: .semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
-                    HStack(spacing: 6) {
-                        if let timestamp = capsule.formattedUpdatedAt, !timestamp.isEmpty {
-                            GaryxCapsuleMetadataChip(text: timestamp, systemImage: "clock")
-                        }
-                        GaryxCapsuleOwnerBadge(capsule: capsule, agents: model.agents, teams: model.teams)
-                    }
+                    Text(subline)
+                        .font(GaryxFont.caption())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.top, 10)
+                .padding(.bottom, 12)
             }
-            .padding(8)
-            .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .background(Color.primary.opacity(0.03))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .stroke(GaryxTheme.hairline, lineWidth: 1)
             }
             .contentShape(Rectangle())
@@ -175,6 +184,21 @@ private struct GaryxCapsuleGalleryCard: View {
                 Label("Delete", systemImage: "trash")
             }
         }
+    }
+
+    /// Mac-style single-line subinfo ("time · creator"), derived in Core so the
+    /// card stays a dumb renderer (no pill chips, no local switch tables).
+    private var subline: String {
+        let creator = GaryxCapsuleGalleryCardPresentation.creatorName(
+            agentId: capsule.agentId,
+            providerType: capsule.providerType,
+            agents: model.agents,
+            teams: model.teams
+        )
+        return GaryxCapsuleGalleryCardPresentation.subline(
+            timeDisplay: capsule.formattedUpdatedAt,
+            creator: creator
+        )
     }
 }
 
@@ -191,6 +215,10 @@ struct GaryxCapsulePreviewThumbnail: View {
     let isActive: Bool
     let cacheEpoch: Int
     let cornerRadius: CGFloat
+    /// Gallery cards render the preview full-bleed (top corners rounded by the
+    /// card clip, a hairline divider below), so they suppress the thumbnail's own
+    /// rounded border. Chat-card and focused thumbnails keep it (default true).
+    var showsBorder: Bool = true
 
     @EnvironmentObject private var model: GaryxMobileModel
     @State private var phase: Phase = .idle
@@ -218,8 +246,10 @@ struct GaryxCapsulePreviewThumbnail: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .stroke(GaryxTheme.hairline, lineWidth: 1)
+            if showsBorder {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(GaryxTheme.hairline, lineWidth: 1)
+            }
         }
         .task(id: LoadKey(capsuleId: capsuleId, revision: revision, isActive: isActive, epoch: cacheEpoch)) {
             await reconcile()
@@ -382,6 +412,18 @@ struct GaryxCapsuleFocusedPreviewView: View {
                         .accessibilityLabel("Reload Capsule")
 
                         Menu {
+                            if let sourceThreadId = capsule.threadId?
+                                .trimmingCharacters(in: .whitespacesAndNewlines),
+                               !sourceThreadId.isEmpty {
+                                Button {
+                                    Task { await model.openMobileRoute(.thread(sourceThreadId)) }
+                                } label: {
+                                    Label(
+                                        "Open source conversation",
+                                        systemImage: "bubble.left.and.bubble.right"
+                                    )
+                                }
+                            }
                             Button { copyLink() } label: { Label("Copy Link", systemImage: "link") }
                             Button { copyID() } label: { Label("Copy ID", systemImage: "number") }
                             Button(role: .destructive) {
@@ -642,53 +684,6 @@ final class GaryxCapsulePreviewLoadCoordinator: ObservableObject {
     private func recompute() {
         let next = Set(planner.activeIds)
         if next != activeIds { activeIds = next }
-    }
-}
-
-// MARK: - Shared metadata chrome
-
-private struct GaryxCapsuleMetadataChip: View {
-    let text: String
-    var systemImage: String?
-
-    var body: some View {
-        HStack(spacing: 4) {
-            if let systemImage {
-                Image(systemName: systemImage)
-                    .font(GaryxFont.system(size: 9, weight: .semibold))
-            }
-            Text(text)
-                .lineLimit(1)
-        }
-        .font(GaryxFont.caption(weight: .medium))
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 3)
-        .background(Color.primary.opacity(0.05), in: Capsule())
-    }
-}
-
-private struct GaryxCapsuleOwnerBadge: View {
-    let capsule: GaryxCapsuleSummary
-    let agents: [GaryxAgentSummary]
-    let teams: [GaryxTeamSummary]
-
-    var body: some View {
-        let presentation = ownerPresentation
-        GaryxCapsuleMetadataChip(text: presentation.displayName, systemImage: presentation.symbolName)
-    }
-
-    private var ownerPresentation: GaryxProviderPresentation {
-        let agentId = capsule.agentId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let fallbackName = agentId.flatMap { id in
-            agents.first { $0.id == id }?.displayName
-                ?? teams.first { $0.id == id }?.displayName
-        }
-        return GaryxProviderPresentation.make(
-            agentId: agentId,
-            providerType: capsule.providerType,
-            fallbackName: fallbackName
-        )
     }
 }
 
