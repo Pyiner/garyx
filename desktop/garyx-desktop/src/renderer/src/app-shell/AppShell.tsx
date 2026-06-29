@@ -5128,6 +5128,14 @@ export function AppShell() {
     const handleVisibilityChange = () => {
       if (!document.hidden) {
         void refreshSilently();
+        // Defensive: the persistent main-process stream may have silently died
+        // while hidden; re-fetch the open thread's canonical transcript so it
+        // converges to the server's latest state on return, instead of relying
+        // solely on the connection never stopping (#TASK-1449 symptom 2).
+        const openThreadId = selectedThreadIdRef.current;
+        if (openThreadId) {
+          scheduleHistoryRefresh(openThreadId, 1, 0, true);
+        }
       }
     };
 
