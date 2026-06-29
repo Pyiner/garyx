@@ -17632,11 +17632,7 @@ button.codex-list-row {
 }
 
 .capsules-page-title-row,
-.capsules-header-actions,
-.capsules-detail-actions,
-.capsules-detail-meta,
-.capsules-list-meta,
-.capsules-agent-badge {
+.capsules-header-actions {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -17658,192 +17654,114 @@ button.codex-list-row {
   font-size: var(--text-sm);
 }
 
-.capsules-layout {
-  display: grid;
-  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
-  gap: 12px;
-  min-height: 0;
-  flex: 1 1 0;
-}
-
-.capsules-list,
-.capsules-detail {
-  min-width: 0;
-  min-height: 0;
-  border: 0.5px solid color-mix(in oklab, var(--color-token-border) 86%, transparent);
-  border-radius: 10px;
-  background: color-mix(in oklab, var(--color-token-bg-secondary) 78%, var(--color-token-bg-primary));
-}
-
-.capsules-list {
-  display: flex;
-  flex-direction: column;
-  overflow: auto;
-  scrollbar-width: none;
-}
-
-.capsules-list::-webkit-scrollbar {
-  display: none;
-  width: 0;
-}
-
-.capsules-list-row {
-  appearance: none;
-  display: grid;
-  gap: 8px;
-  width: 100%;
-  min-width: 0;
-  padding: 12px 13px;
-  border: 0;
-  border-bottom: 0.5px solid color-mix(in oklab, var(--color-token-border) 72%, transparent);
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition:
-    background var(--duration-fast) var(--ease-standard),
-    color var(--duration-fast) var(--ease-standard);
-}
-
-.capsules-list-row:last-child {
-  border-bottom: 0;
-}
-
-.capsules-list-row:hover,
-.capsules-list-row.active {
-  background: color-mix(in oklab, var(--color-token-bg-primary) 82%, var(--color-token-border));
-}
-
-.capsules-list-row-main {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.capsules-list-title,
-.capsules-agent-label,
-.capsules-detail-id {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.capsules-list-title {
-  color: var(--color-token-text-primary);
-  font-size: 14px;
-  font-weight: 610;
-}
-
-.capsules-list-description {
-  display: -webkit-box;
-  overflow: hidden;
-  color: var(--color-token-description-foreground);
-  font-size: var(--text-xs-plus);
-  line-height: 1.35;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-
-.capsules-list-meta,
-.capsules-detail-meta {
-  gap: 9px;
-  color: var(--color-token-description-foreground);
-  font-size: var(--text-xs-plus);
-}
-
-.capsules-agent-badge {
-  width: fit-content;
-  max-width: 100%;
-  min-height: 24px;
-  gap: 6px;
-  padding: 2px 7px 2px 3px;
-  border: 0.5px solid color-mix(in oklab, var(--color-token-border) 74%, transparent);
-  border-radius: 999px;
-  background: color-mix(in oklab, var(--color-token-bg-primary) 78%, transparent);
-  color: var(--color-token-text-secondary);
-  font-size: 11px;
-}
-
-.capsules-agent-badge .agent-option-avatar {
-  width: 18px;
-  height: 18px;
-}
-
-.capsules-agent-label {
-  max-width: 180px;
-}
-
-.capsules-detail {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 14px;
-  overflow: hidden;
-}
-
-.capsules-detail-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  min-width: 0;
-  flex-wrap: wrap;
-}
-
-.capsules-detail-copy {
-  display: grid;
-  gap: 5px;
-  min-width: 220px;
-  flex: 1 1 320px;
-}
-
-.capsules-detail-copy h2 {
-  margin: 0;
-  color: var(--color-token-text-primary);
-  font-size: 17px;
-  font-weight: 630;
-}
-
-.capsules-detail-copy p {
-  margin: 0;
-  color: var(--color-token-description-foreground);
-  font-size: var(--text-sm);
-  line-height: 1.38;
-}
-
-.capsules-detail-actions {
-  justify-content: flex-end;
-}
-
-.capsules-action-button,
 .capsules-refresh-button {
   min-height: 26px;
   padding: 0 9px;
   border-radius: 7px;
 }
 
-.capsules-delete-button {
-  color: var(--color-destructive);
+/* Focused preview removes the page padding so the Capsule reads near-full. */
+.capsules-page-preview {
+  padding: 0;
+  gap: 0;
 }
 
-.capsules-delete-button:hover:not(:disabled) {
-  border-color: color-mix(in oklab, var(--color-destructive) 34%, transparent);
-  background: color-mix(in oklab, var(--color-destructive) 7%, transparent);
-}
-
-.capsules-runner-shell {
+/* Gallery grid of live-preview cards. */
+.capsules-gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px;
+  align-content: start;
+  min-height: 0;
   flex: 1 1 0;
-  min-width: 0;
-  min-height: 260px;
-  overflow: hidden;
-  border: 0.5px solid color-mix(in oklab, var(--color-token-border) 84%, transparent);
-  border-radius: 10px;
-  background: #fff;
+  overflow: auto;
+  scrollbar-width: none;
+  padding-bottom: 20px;
 }
 
-.capsules-runner-frame {
+.capsules-gallery-grid::-webkit-scrollbar {
+  display: none;
+  width: 0;
+}
+
+.capsule-gallery-card {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-width: 320px;
+  padding: 0;
+  border: 0.5px solid color-mix(in oklab, var(--color-token-border) 86%, transparent);
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--color-token-bg-secondary) 78%, var(--color-token-bg-primary));
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  transition:
+    border-color var(--duration-fast) var(--ease-standard),
+    background var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard);
+}
+
+.capsule-gallery-card:hover {
+  border-color: color-mix(in oklab, var(--color-token-border) 100%, transparent);
+  background: color-mix(in oklab, var(--color-token-bg-primary) 88%, var(--color-token-border));
+  box-shadow: 0 1px 4px color-mix(in oklab, var(--color-token-text-primary) 8%, transparent);
+}
+
+/* Thumbnail: fixed aspect, untrusted iframe scaled to fit and frozen. */
+.capsule-card-preview-shell {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  background: #fff;
+  border-bottom: 0.5px solid color-mix(in oklab, var(--color-token-border) 72%, transparent);
+  pointer-events: none;
+}
+
+.capsule-card-frame-canvas {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.capsule-card-frame-canvas .capsule-live-frame {
+  transform: scale(var(--capsule-card-scale, 0.21));
+  transform-origin: top left;
+}
+
+.capsule-card-meta {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px 12px 12px;
+}
+
+.capsule-card-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-token-text-primary);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.capsule-card-subline {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-token-description-foreground);
+  font-size: var(--text-xs-plus);
+}
+
+/* The single Capsule renderer (card + preview share this opaque-origin frame). */
+.capsule-live-frame {
   display: block;
   width: 100%;
   height: 100%;
@@ -17851,17 +17769,158 @@ button.codex-list-row {
   background: #fff;
 }
 
-@media (max-width: 900px) {
-  .capsules-layout {
-    grid-template-columns: minmax(0, 1fr);
-  }
+.capsule-frame-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  padding: 14px;
+  color: var(--color-token-description-foreground);
+  font-size: var(--text-xs-plus);
+  text-align: center;
+  background: color-mix(in oklab, var(--color-token-bg-secondary) 62%, var(--color-token-bg-primary));
+}
 
-  .capsules-list {
-    max-height: 280px;
-  }
+.capsule-frame-error-text {
+  max-width: 320px;
+}
 
-  .capsules-detail-actions {
-    justify-content: flex-start;
+/* De-nested focused preview: thin translucent toolbar over a full-bleed frame. */
+.capsule-preview-page {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  background: #fff;
+}
+
+.capsule-preview-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 40px;
+  height: 40px;
+  padding: 0 8px 0 10px;
+  border-bottom: 0.5px solid color-mix(in oklab, var(--color-token-border) 72%, transparent);
+  background: color-mix(in oklab, var(--color-token-bg-primary) 70%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.capsule-preview-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-token-text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.capsule-preview-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.capsule-toolbar-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--color-token-text-secondary);
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.capsule-toolbar-button:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--color-token-text-primary) 8%, transparent);
+  color: var(--color-token-text-primary);
+}
+
+.capsule-toolbar-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.capsule-preview-body {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #fff;
+}
+
+.capsule-menu-destructive {
+  color: var(--color-destructive);
+}
+
+/* In-chat Capsule cards (rendered after a turn's final answer). */
+.capsule-chat-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.capsule-chat-card {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 360px;
+  padding: 0;
+  border: 0.5px solid color-mix(in oklab, var(--color-token-border) 86%, transparent);
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--color-token-bg-secondary) 78%, var(--color-token-bg-primary));
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  transition:
+    border-color var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard);
+}
+
+.capsule-chat-card:hover {
+  border-color: color-mix(in oklab, var(--color-token-border) 100%, transparent);
+  box-shadow: 0 1px 4px color-mix(in oklab, var(--color-token-text-primary) 8%, transparent);
+}
+
+.capsule-chat-card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 12px;
+}
+
+.capsule-chat-card-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-token-text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+@media (max-width: 720px) {
+  .capsules-gallery-grid {
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   }
 }
 

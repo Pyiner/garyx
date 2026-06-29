@@ -564,6 +564,8 @@ function queueDeepLink(rawUrl: string): void {
         ? `new-thread:${event.workspacePath || "default"}`
       : event.type === "resume-session"
         ? `resume-session:${event.providerHint || "auto"}`
+      : event.type === "open-capsule"
+        ? `open-capsule:${event.capsuleId}`
         : `error:${event.error}`;
   writeBootstrapTrace(`deepLink:${traceLabel}`);
   showMainWindow();

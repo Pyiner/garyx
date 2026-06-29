@@ -5,7 +5,7 @@ import type {
 
 export const GARYX_PROTOCOL = "garyx";
 const DEEP_LINK_USAGE =
-  "Use garyx://thread/<thread-id>, garyx://new?workspace=<path>, garyx://resume/<session-id>, or garyx://resume/<provider>/<session-id>.";
+  "Use garyx://thread/<thread-id>, garyx://new?workspace=<path>, garyx://capsules/<capsule-id>, garyx://resume/<session-id>, or garyx://resume/<provider>/<session-id>.";
 
 function decodeLoose(value: string | null | undefined): string | null {
   if (!value) {
@@ -133,6 +133,32 @@ export function parseDesktopDeepLink(rawUrl: string): DesktopDeepLinkEvent {
         decodeLoose(url.searchParams.get("workspacePath")) ||
         firstSegment,
       agentId: decodeLoose(url.searchParams.get("agent")),
+    };
+  }
+
+  if (action === "capsules" || action === "capsule") {
+    if (url.search) {
+      return deepLinkError(
+        normalizedUrl,
+        `Unsupported garyx:// format. ${DEEP_LINK_USAGE}`,
+      );
+    }
+    if (!firstSegment) {
+      return deepLinkError(
+        normalizedUrl,
+        "Missing capsule id. Use garyx://capsules/<capsule-id>.",
+      );
+    }
+    if (segments.length > 1) {
+      return deepLinkError(
+        normalizedUrl,
+        `Unsupported garyx:// format. ${DEEP_LINK_USAGE}`,
+      );
+    }
+    return {
+      type: "open-capsule",
+      url: normalizedUrl,
+      capsuleId: firstSegment,
     };
   }
 

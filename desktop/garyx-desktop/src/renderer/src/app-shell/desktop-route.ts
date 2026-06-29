@@ -14,6 +14,7 @@ export type DesktopRoute =
   | { kind: 'workflow-task'; taskId: string }
   | { kind: 'automation'; automationId?: string | null }
   | { kind: 'settings'; tabId?: SettingsTabId | null }
+  | { kind: 'capsule'; capsuleId: string }
   | { kind: 'view'; view: Exclude<ContentView, 'thread' | 'workflow' | 'automation' | 'settings'> };
 
 const SIMPLE_VIEW_SEGMENTS: Record<string, Exclude<ContentView, 'thread' | 'workflow' | 'automation' | 'settings'>> = {
@@ -162,6 +163,12 @@ export function parseDesktopRoute(href?: string): DesktopRoute {
     };
   }
 
+  // `#/capsules/<id>` opens the in-app Capsule preview; `#/capsules` stays the
+  // gallery view below.
+  if (first === 'capsules' && second) {
+    return { kind: 'capsule', capsuleId: second };
+  }
+
   const simpleView = SIMPLE_VIEW_SEGMENTS[first];
   if (simpleView) {
     return { kind: 'view', view: simpleView };
@@ -182,6 +189,8 @@ export function contentViewForDesktopRoute(route: DesktopRoute): ContentView | n
       return 'workflow';
     case 'settings':
       return 'settings';
+    case 'capsule':
+      return 'capsules';
     case 'view':
       return route.view;
   }
@@ -215,10 +224,62 @@ export function buildDesktopRouteHash(route: DesktopRoute): string {
       return route.tabId
         ? `#/settings/${encodeSegment(route.tabId)}`
         : '#/settings';
+    case 'capsule':
+      return `#/capsules/${encodeSegment(route.capsuleId)}`;
     case 'view': {
       return `#/${route.view}`;
     }
   }
+}
+
+/**
+ * Map app-shell view state back to a canonical route, so the renderer can keep
+ * the URL hash in sync. Lives here (not in AppShell) so the round-trip is pure
+ * and headless-testable; AppShell imports it.
+ */
+export function currentDesktopRoute(input: {
+  contentView: ContentView;
+  newThreadDraftActive: boolean;
+  pendingAgentId: string | null;
+  pendingWorkflowId: string | null;
+  pendingWorkspacePath: string | null;
+  selectedAutomationId: string | null;
+  selectedWorkflowTaskId: string | null;
+  selectedThreadId: string | null;
+  settingsActiveTab: SettingsTabId;
+  capsulePreviewId: string | null;
+}): DesktopRoute {
+  if (input.contentView === 'thread') {
+    if (input.selectedThreadId) {
+      return { kind: 'thread', threadId: input.selectedThreadId };
+    }
+    if (input.newThreadDraftActive || input.pendingWorkspacePath) {
+      return {
+        kind: 'new-thread',
+        workspacePath: input.pendingWorkspacePath,
+        agentId: input.pendingAgentId,
+        workflowId: input.pendingWorkflowId,
+      };
+    }
+    return { kind: 'thread-home' };
+  }
+  if (input.contentView === 'automation') {
+    return { kind: 'automation', automationId: input.selectedAutomationId };
+  }
+  if (input.contentView === 'settings') {
+    return { kind: 'settings', tabId: input.settingsActiveTab };
+  }
+  if (input.contentView === 'workflow') {
+    return input.selectedWorkflowTaskId
+      ? { kind: 'workflow-task', taskId: input.selectedWorkflowTaskId }
+      : { kind: 'view', view: 'tasks' };
+  }
+  if (input.contentView === 'capsules') {
+    return input.capsulePreviewId
+      ? { kind: 'capsule', capsuleId: input.capsulePreviewId }
+      : { kind: 'view', view: 'capsules' };
+  }
+  return { kind: 'view', view: input.contentView };
 }
 
 export function replaceDesktopRoute(route: DesktopRoute): void {

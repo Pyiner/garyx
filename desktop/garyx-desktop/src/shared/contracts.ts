@@ -364,6 +364,14 @@ export interface DesktopCapsulesPage {
   capsules: DesktopCapsuleSummary[];
 }
 
+// Result of fetching a Capsule's served HTML through the main process. A hard
+// delete surfaces as a value (`deleted`) so chat cards / preview can render a
+// disabled tombstone; transient/5xx/offline failures stay rejections so the
+// renderer keeps them retryable and never mislabels them deleted.
+export type DesktopCapsuleHtmlResult =
+  | { status: "ok"; html: string }
+  | { status: "deleted" };
+
 export interface DeleteCapsuleInput {
   capsuleId: string;
 }
@@ -1571,6 +1579,11 @@ export type DesktopDeepLinkEvent =
       providerHint?: DesktopSessionProviderHint | null;
     }
   | {
+      type: "open-capsule";
+      url: string;
+      capsuleId: string;
+    }
+  | {
       type: "error";
       url: string;
       error: string;
@@ -2208,7 +2221,7 @@ export interface GaryxDesktopApi {
   getDream: (dreamId: string) => Promise<DesktopDreamTopic | null>;
   listCapsules: () => Promise<DesktopCapsulesPage>;
   getCapsule: (capsuleId: string) => Promise<DesktopCapsuleSummary | null>;
-  getCapsuleHtml: (capsuleId: string) => Promise<string>;
+  getCapsuleHtml: (capsuleId: string) => Promise<DesktopCapsuleHtmlResult>;
   deleteCapsule: (input: DeleteCapsuleInput) => Promise<void>;
   listSkills: () => Promise<DesktopSkillInfo[]>;
   listCustomAgents: () => Promise<DesktopCustomAgent[]>;

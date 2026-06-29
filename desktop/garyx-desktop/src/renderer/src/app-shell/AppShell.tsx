@@ -252,6 +252,7 @@ import { isRunLoadingPlaceholderMessage } from "./loading-labels";
 import garyxIconUrl from "../assets/garyx-icon.png";
 import {
   contentViewForDesktopRoute,
+  currentDesktopRoute,
   parseDesktopRoute,
   replaceDesktopRoute,
   type DesktopRoute,
@@ -1321,45 +1322,6 @@ function initialContentView(route: DesktopRoute): ContentView {
   return contentViewForDesktopRoute(route) || savedContentView();
 }
 
-function currentDesktopRoute(input: {
-  contentView: ContentView;
-  newThreadDraftActive: boolean;
-  pendingAgentId: string | null;
-  pendingWorkflowId: string | null;
-  pendingWorkspacePath: string | null;
-  selectedAutomationId: string | null;
-  selectedWorkflowTaskId: string | null;
-  selectedThreadId: string | null;
-  settingsActiveTab: SettingsTabId;
-}): DesktopRoute {
-  if (input.contentView === "thread") {
-    if (input.selectedThreadId) {
-      return { kind: "thread", threadId: input.selectedThreadId };
-    }
-    if (input.newThreadDraftActive || input.pendingWorkspacePath) {
-      return {
-        kind: "new-thread",
-        workspacePath: input.pendingWorkspacePath,
-        agentId: input.pendingAgentId,
-        workflowId: input.pendingWorkflowId,
-      };
-    }
-    return { kind: "thread-home" };
-  }
-  if (input.contentView === "automation") {
-    return { kind: "automation", automationId: input.selectedAutomationId };
-  }
-  if (input.contentView === "settings") {
-    return { kind: "settings", tabId: input.settingsActiveTab };
-  }
-  if (input.contentView === "workflow") {
-    return input.selectedWorkflowTaskId
-      ? { kind: "workflow-task", taskId: input.selectedWorkflowTaskId }
-      : { kind: "view", view: "tasks" };
-  }
-  return { kind: "view", view: input.contentView };
-}
-
 function waitForMs(ms: number): Promise<void> {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
@@ -1536,6 +1498,13 @@ export function AppShell() {
   const [gatewaySetupCanCancel, setGatewaySetupCanCancel] = useState(false);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(() =>
     initialRouteValue.kind === "thread" ? initialRouteValue.threadId : null,
+  );
+  // Capsule preview selection lives here (single source of truth) so the route,
+  // deep links, gallery clicks, and chat-card clicks all flow through one path.
+  // Seed it from the initial route so a cold-started #/capsules/<id> lands on
+  // the preview instead of being rewritten to #/capsules by the replace effect.
+  const [capsulePreviewId, setCapsulePreviewId] = useState<string | null>(() =>
+    initialRouteValue.kind === "capsule" ? initialRouteValue.capsuleId : null,
   );
   const [selectedWorkflowTask, setSelectedWorkflowTask] =
     useState<DesktopTaskSummary | null>(null);
@@ -4158,8 +4127,17 @@ export function AppShell() {
           setSelectedWorkflowRunId(null);
           setContentView("workflow");
           return;
+        case "capsule":
+          setContentView("capsules");
+          setCapsulePreviewId(route.capsuleId);
+          return;
         case "view":
           setContentView(route.view);
+          // Entering the Capsules gallery from the rail/route clears any open
+          // preview so #/capsules shows the gallery, not a stale preview.
+          if (route.view === "capsules") {
+            setCapsulePreviewId(null);
+          }
           return;
         case "thread-home":
           setContentView("thread");
@@ -4259,6 +4237,7 @@ export function AppShell() {
         selectedWorkflowTaskId,
         selectedThreadId,
         settingsActiveTab,
+        capsulePreviewId,
       }),
     );
   }, [
@@ -4272,6 +4251,7 @@ export function AppShell() {
     selectedWorkflowTaskId,
     selectedThreadId,
     settingsActiveTab,
+    capsulePreviewId,
   ]);
 
   function requestComposerFocus() {
@@ -6855,6 +6835,12 @@ export function AppShell() {
                 event.sessionId,
                 event.providerHint,
               );
+              return;
+            case "open-capsule":
+              await applyDesktopRoute({
+                kind: "capsule",
+                capsuleId: event.capsuleId,
+              });
               return;
           }
         } catch (deepLinkError) {
@@ -9498,6 +9484,10 @@ export function AppShell() {
       onOpenThreadById={(threadId) => {
         void openExistingThread(threadId);
       }}
+      onOpenCapsule={(capsuleId) => {
+        setContentView("capsules");
+        setCapsulePreviewId(capsuleId);
+      }}
       onSelectWorkspace={() => {}}
       onSetDraggedQueueIntentId={setDraggedQueueIntentId}
       onSteerQueuedPrompt={(item) => {
@@ -9780,6 +9770,10 @@ export function AppShell() {
           } else {
             void openExistingThread(threadId);
           }
+        }}
+        onOpenCapsule={(capsuleId) => {
+          setContentView("capsules");
+          setCapsulePreviewId(capsuleId);
         }}
         onSelectWorkspace={(workspacePath) => {
           setPendingWorkspaceMode("local");
@@ -10159,6 +10153,7 @@ export function AppShell() {
         onOpenCapsules={() => {
           trackUiAction("nav.open_capsules", () => {
             setContentView("capsules");
+            setCapsulePreviewId(null);
           });
         }}
         onOpenTasks={() => {
@@ -10581,6 +10576,15 @@ export function AppShell() {
               <CapsulesPanel
                 agents={desktopAgents}
                 onToast={pushToast}
+                selectedCapsuleIdFromRoute={
+                  isCapsulesView ? capsulePreviewId : null
+                }
+                onOpenCapsulePreview={(capsuleId) => {
+                  setCapsulePreviewId(capsuleId);
+                }}
+                onCloseCapsulePreview={() => {
+                  setCapsulePreviewId(null);
+                }}
               />
             ) : isTasksView ? (
               <TasksPanel
