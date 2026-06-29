@@ -1,7 +1,8 @@
 # Mobile Message-State Parity: Diagnosis & Alignment Design
 
-Task: #TASK-1449. Status: **walkthrough + design only** (no implementation, no
-product-behavior change in this phase).
+Task: #TASK-1449. Status: **implemented** — designs ① ② PASSed (codex #TASK-1450)
+and ③ revised + PASSed (codex #TASK-1451); all three fixes landed on branch
+`garyx/90e323ef`. See "Implementation status" at the end.
 
 ## Framing (oracle-first, both ends)
 
@@ -579,3 +580,26 @@ any run-truth signal.
   (desktop correct); symptom 2 = iOS primary + desktop defensive; symptom 3 =
   iOS loading-settle only (no run-truth rebind; desktop has no equivalent
   stuck-spinner).
+
+## Implementation status (#TASK-1449)
+
+Implemented on branch `garyx/90e323ef` (design ① ② PASSed by codex #TASK-1450;
+③ revision PASSed by codex #TASK-1451). Each Core decider is pure + unit-tested;
+the App/renderer wiring computes inputs → calls the decider → drives effects.
+
+| Symptom | Commit | Change | Validation |
+| --- | --- | --- | --- |
+| ① surface kind | `iOS: derive conversation surface kind…` | `GaryxConversationSurfaceKind` (Core) + `showsWorkflowRunSurface` view branch + `popToHome` clears the surface | Core tests + `xcodebuild` |
+| ② foreground (iOS) | `iOS: reconnect + resync the open thread…` | `GaryxForegroundSyncPlan` (Core) + `handleScenePhase(.active)` reconnects when not ready, then resync + restart stream | Core tests + `xcodebuild` |
+| ② foreground (desktop) | `desktop: defensively resync…` | visibility-regain schedules a canonical history refresh for the open thread | `tsc --noEmit` + `test:unit` |
+| ③ loading settle | `iOS: settle the loading indicator…` | `isAwaitingInitialHistory` settles once `historyLoaded` (window applied); out-of-window refs are placeholdered, not loading. No run-truth binding. | Core tests + `xcodebuild` |
+
+Validation snapshot: `swift test` 554 / 0 failures (incl.
+`GaryxConversationSurfaceKindTests`, `GaryxForegroundSyncPlanTests`, the flipped
+`GaryxSelectedThreadHistoryPresentationTests`, and the updated
+`GaryxMobileMessageStateParityReproTests`); `xcodebuild -scheme GaryxMobile`
+BUILD SUCCEEDED; desktop `tsc --noEmit` clean + `test:unit` 258 / 0.
+
+The earlier "Acceptance tests" red specs for ① and ② are now the committed
+green decider tests; ③'s settle is the flipped predicate test. No gateway /
+router / bridge changes (server truth unchanged).
