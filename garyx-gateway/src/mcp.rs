@@ -357,7 +357,7 @@ impl GaryMcpServer {
     }
 
     #[tool(
-        description = "Create a Capsule: a self-contained single-file HTML explanation, visualization, or demo for the current thread. Provide exactly one of `html` or absolute `html_path`; HTML must be UTF-8, <=5 MiB, and self-contained (inline/data/blob/https resources only)."
+        description = "Create a Capsule: a self-contained single-file HTML explanation, visualization, or demo for the current thread. Provide exactly one of `html` or absolute `html_path`; HTML must be UTF-8, <=5 MiB, and self-contained (resources inline or via data:/blob:/https: only). Returns the new capsule's `capsule_id` (UUID) and `serve_path`; pass that `capsule_id` to `capsule_update` to revise it later."
     )]
     async fn capsule_create(
         &self,
@@ -368,7 +368,7 @@ impl GaryMcpServer {
     }
 
     #[tool(
-        description = "Update an existing Capsule by UUID. Provide at least one of title, description, html, or html_path; replacement HTML must be UTF-8, <=5 MiB, and self-contained."
+        description = "Update an existing Capsule by `capsule_id` (UUID from `capsule_create` or `capsule_list`). Provide at least one of title, description, html, or html_path; omit a field to leave it unchanged. Replacement HTML must be UTF-8, <=5 MiB, and self-contained (resources inline or via data:/blob:/https: only). Returns the capsule's `capsule_id` (UUID) and updated metadata."
     )]
     async fn capsule_update(
         &self,
@@ -379,7 +379,7 @@ impl GaryMcpServer {
     }
 
     #[tool(
-        description = "List Capsules created by the current thread, returning ids, titles, revisions, timestamps, and serve paths so a later run can update the right Capsule."
+        description = "List Capsules created by the current thread, returning each `capsule_id` (UUID), title, revision, timestamp, and `serve_path` so a later run can pick the right one and revise it with `capsule_update`."
     )]
     async fn capsule_list(&self, ctx: RequestContext<RoleServer>) -> Result<String, String> {
         tools::capsule::list(self, ctx).await
