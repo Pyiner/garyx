@@ -24,6 +24,7 @@ import type {
   PendingThreadInput,
   RenderRateLimit,
   RenderState,
+  RenderCapsuleCard,
   SlashCommand,
   TranscriptMessage,
 } from "@shared/contracts";
@@ -380,7 +381,7 @@ type ThreadPageProps = {
   onThreadLogsResizeStart: (event: React.PointerEvent<HTMLDivElement>) => void;
   onSteerQueuedPrompt: (intent: MessageIntent) => void;
   onOpenThreadById: (threadId: string) => void;
-  onOpenCapsule?: (capsuleId: string) => void;
+  onOpenCapsule?: (card: RenderCapsuleCard) => void;
   preferredWorkspaceForNewThread: DesktopWorkspace | null;
 };
 

@@ -50,6 +50,7 @@ import {
   type MessageFileAttachment,
   type MessageImageAttachment,
   type PendingThreadInput,
+  type RenderCapsuleCard,
   type RenderState,
   type SlashCommand,
   type ThreadRuntimeInfo,
@@ -213,6 +214,7 @@ import type {
   WorkspaceDirectoryState,
 } from "./types";
 import { AppLeftRail } from "./components/AppLeftRail";
+import { CapsuleConversationPanel } from "./components/CapsuleConversationPanel";
 import { ThreadPage } from "./components/ThreadPage";
 import { useAutomationController } from "./useAutomationController";
 import {
@@ -1500,12 +1502,16 @@ export function AppShell() {
     initialRouteValue.kind === "thread" ? initialRouteValue.threadId : null,
   );
   // Capsule preview selection lives here (single source of truth) so the route,
-  // deep links, gallery clicks, and chat-card clicks all flow through one path.
+  // deep links, and gallery clicks all flow through one path.
   // Seed it from the initial route so a cold-started #/capsules/<id> lands on
   // the preview instead of being rewritten to #/capsules by the replace effect.
   const [capsulePreviewId, setCapsulePreviewId] = useState<string | null>(() =>
     initialRouteValue.kind === "capsule" ? initialRouteValue.capsuleId : null,
   );
+  const [capsulePanelCard, setCapsulePanelCard] = useState<{
+    card: RenderCapsuleCard;
+    threadId: string;
+  } | null>(null);
   const [selectedWorkflowTask, setSelectedWorkflowTask] =
     useState<DesktopTaskSummary | null>(null);
   const [selectedWorkflowTaskId, setSelectedWorkflowTaskId] = useState<
@@ -5012,6 +5018,10 @@ export function AppShell() {
 
   useEffect(() => {
     setEditingThreadTitle(false);
+  }, [contentView, selectedThreadId]);
+
+  useEffect(() => {
+    setCapsulePanelCard(null);
   }, [contentView, selectedThreadId]);
 
   useEffect(() => {
@@ -9484,9 +9494,9 @@ export function AppShell() {
       onOpenThreadById={(threadId) => {
         void openExistingThread(threadId);
       }}
-      onOpenCapsule={(capsuleId) => {
+      onOpenCapsule={(card) => {
         setContentView("capsules");
-        setCapsulePreviewId(capsuleId);
+        setCapsulePreviewId(card.capsule_id);
       }}
       onSelectWorkspace={() => {}}
       onSetDraggedQueueIntentId={setDraggedQueueIntentId}
@@ -9568,9 +9578,14 @@ export function AppShell() {
     />
   ) : null;
 
+  const showConversationCapsulePanel = Boolean(
+    capsulePanelCard &&
+      capsulePanelCard.threadId === selectedThreadId &&
+      contentView === "thread",
+  );
   const showConversationSideTools = Boolean(
     inspectorOpen && contentView === "thread" && sideToolsPanel,
-  );
+  ) && !showConversationCapsulePanel;
   const conversationClassName = [
     "conversation",
     isSettingsView ? "settings-view" : null,
@@ -9579,6 +9594,7 @@ export function AppShell() {
     isWorkflowView ? "workflow-view" : null,
     isDreamsView ? "dreams-view" : null,
     showConversationSideTools ? "with-side-tools" : null,
+    showConversationCapsulePanel ? "with-capsule-panel" : null,
     sideToolsResizing ? "side-tools-resizing" : null,
   ]
     .filter(Boolean)
@@ -9771,9 +9787,13 @@ export function AppShell() {
             void openExistingThread(threadId);
           }
         }}
-        onOpenCapsule={(capsuleId) => {
-          setContentView("capsules");
-          setCapsulePreviewId(capsuleId);
+        onOpenCapsule={(card) => {
+          if (!selectedThreadId) {
+            return;
+          }
+          setCapsulePanelCard({ card, threadId: selectedThreadId });
+          setInspectorOpen(false);
+          setThreadLogsOpen(false);
         }}
         onSelectWorkspace={(workspacePath) => {
           setPendingWorkspaceMode("local");
@@ -10387,12 +10407,14 @@ export function AppShell() {
                 }}
                 onToggleInspector={() => {
                   trackUiAction("thread.toggle_inspector", () => {
+                    setCapsulePanelCard(null);
                     setThreadLogsOpen(false);
                     setInspectorOpen((current) => !current);
                   });
                 }}
                 onToggleThreadLogs={() => {
                   trackUiAction("thread.toggle_logs", () => {
+                    setCapsulePanelCard(null);
                     setInspectorOpen(false);
                     setThreadLogsOpen((current) => !current);
                   });
@@ -10681,7 +10703,16 @@ export function AppShell() {
             )}
             </Suspense>
           </section>
-          {showConversationSideTools ? (
+          {showConversationCapsulePanel && capsulePanelCard ? (
+            <CapsuleConversationPanel
+              capsuleId={capsulePanelCard.card.capsule_id}
+              revision={capsulePanelCard.card.revision}
+              title={
+                capsulePanelCard.card.title?.trim() || t("Untitled Capsule")
+              }
+              onClose={() => setCapsulePanelCard(null)}
+            />
+          ) : showConversationSideTools ? (
             <>
               <div
                 aria-label={t("Resize side tools")}

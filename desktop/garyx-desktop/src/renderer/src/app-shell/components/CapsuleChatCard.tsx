@@ -11,7 +11,7 @@ function CapsuleChatCard({
   onOpenCapsule,
 }: {
   card: RenderCapsuleCard;
-  onOpenCapsule?: (capsuleId: string) => void;
+  onOpenCapsule?: (card: RenderCapsuleCard) => void;
 }) {
   const { t } = useI18n();
   const ref = useRef<HTMLButtonElement | null>(null);
@@ -21,7 +21,7 @@ function CapsuleChatCard({
     <button
       ref={ref}
       className="capsule-chat-card"
-      onClick={() => onOpenCapsule?.(card.capsule_id)}
+      onClick={() => onOpenCapsule?.(card)}
       title={title}
       type="button"
     >
@@ -51,7 +51,7 @@ export function CapsuleChatCardList({
   onOpenCapsule,
 }: {
   cards: RenderCapsuleCard[];
-  onOpenCapsule?: (capsuleId: string) => void;
+  onOpenCapsule?: (card: RenderCapsuleCard) => void;
 }) {
   if (!cards.length) {
     return null;

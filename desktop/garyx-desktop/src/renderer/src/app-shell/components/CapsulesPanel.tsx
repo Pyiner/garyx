@@ -453,7 +453,6 @@ export function CapsulesPanel({
         <div className="capsules-page-title-block">
           <div className="capsules-page-title-row">
             <h1 className="capsules-page-title">{t('Capsules')}</h1>
-            <span className="tasks-status-chip tone-progress">{capsules.length}</span>
           </div>
           <p className="capsules-page-subtitle">
             {t('Self-contained HTML created by agents.')}
