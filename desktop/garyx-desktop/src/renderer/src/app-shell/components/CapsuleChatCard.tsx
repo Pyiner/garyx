@@ -3,6 +3,7 @@ import { useRef } from 'react';
 import type { RenderCapsuleCard } from '@shared/contracts';
 
 import { useI18n } from '../../i18n';
+import { CHAT_CARD_RENDITION } from '../capsule-thumbnail-store';
 import { useInViewport } from '../use-in-viewport';
 import { CapsuleLivePreviewFrame } from './CapsuleLivePreviewFrame';
 
@@ -25,11 +26,12 @@ function CapsuleChatCard({
       title={title}
       type="button"
     >
-      <span className="capsule-card-preview-shell">
+      <span className="capsule-card-preview-shell capsule-chat-card-preview-shell">
         <CapsuleLivePreviewFrame
           active={visible}
           capsuleId={card.capsule_id}
           mode="card"
+          rendition={CHAT_CARD_RENDITION}
           revision={card.revision}
           title={title}
         />

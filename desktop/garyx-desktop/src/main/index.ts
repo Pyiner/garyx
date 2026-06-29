@@ -202,6 +202,10 @@ import {
 } from "./channel-setup";
 import { generateCustomAgentAvatar } from "./agent-avatar";
 import {
+  evictCapsuleThumbnails,
+  renderCapsuleThumbnail,
+} from "./capsule-thumbnail";
+import {
   addDesktopWorkspace,
   archiveDesktopThread,
   createDesktopAutomation,
@@ -947,10 +951,26 @@ function registerIpcHandlers(): void {
   });
 
   ipcMain.handle(
+    "garyx:get-capsule-thumbnail",
+    async (
+      _event,
+      capsuleId: string,
+      revision: number,
+      rendition: { aspectWidth: number; aspectHeight: number },
+    ) => {
+      const settings = await resolveSettings();
+      return renderCapsuleThumbnail(settings, capsuleId, revision, rendition);
+    },
+  );
+
+  ipcMain.handle(
     "garyx:delete-capsule",
     async (_event, input: DeleteCapsuleInput) => {
       const settings = await resolveSettings();
-      return deleteCapsule(settings, input);
+      await deleteCapsule(settings, input);
+      // Drop the rendered-thumbnail cache for this capsule so a re-created id
+      // can never serve a stale crop.
+      await evictCapsuleThumbnails(input.capsuleId);
     },
   );
 

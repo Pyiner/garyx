@@ -372,6 +372,16 @@ export type DesktopCapsuleHtmlResult =
   | { status: "ok"; html: string }
   | { status: "deleted" };
 
+// Result of rendering a Capsule into a cached thumbnail PNG (gallery 16:10 /
+// chat card 16:9). Mirrors `DesktopCapsuleHtmlResult`: `deleted` is a value so
+// cards flip to a tombstone, while transient render/network failures surface as
+// `error` and stay retryable. `dataUrl` is a `data:image/png;base64,…` string
+// ready to bind to `<img src=…>`.
+export type DesktopCapsuleThumbnailResult =
+  | { status: "ok"; dataUrl: string }
+  | { status: "deleted" }
+  | { status: "error"; message: string };
+
 export interface DeleteCapsuleInput {
   capsuleId: string;
 }
@@ -2222,6 +2232,11 @@ export interface GaryxDesktopApi {
   listCapsules: () => Promise<DesktopCapsulesPage>;
   getCapsule: (capsuleId: string) => Promise<DesktopCapsuleSummary | null>;
   getCapsuleHtml: (capsuleId: string) => Promise<DesktopCapsuleHtmlResult>;
+  getCapsuleThumbnail: (
+    capsuleId: string,
+    revision: number,
+    rendition: { aspectWidth: number; aspectHeight: number },
+  ) => Promise<DesktopCapsuleThumbnailResult>;
   deleteCapsule: (input: DeleteCapsuleInput) => Promise<void>;
   listSkills: () => Promise<DesktopSkillInfo[]>;
   listCustomAgents: () => Promise<DesktopCustomAgent[]>;
