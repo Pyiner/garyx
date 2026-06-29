@@ -167,7 +167,13 @@ public enum GaryxTranscriptRunStateReducer {
     public static func apply(message: GaryxTranscriptMessage, seq: Int?, to state: inout GaryxTranscriptRunState) {
         switch GaryxTranscriptKindResolver.kind(for: message) {
         case .control:
-            applyControl(message.control ?? nestedControl(from: message.content), seq: seq, to: &state)
+            applyControl(
+                message.control
+                    ?? nestedControl(from: message.message)
+                    ?? nestedControl(from: message.content),
+                seq: seq,
+                to: &state
+            )
         case .toolTrace:
             if state.busy && state.activity != .reconciling {
                 applyToolTrace(message, to: &state)
