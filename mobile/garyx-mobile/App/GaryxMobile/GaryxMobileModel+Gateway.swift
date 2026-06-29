@@ -129,8 +129,9 @@ extension GaryxMobileModel {
         agents = []
         teams = []
         skills = []
+        galleryFocusedCapsule = nil
+        conversationCapsulePreview = nil
         capsules = []
-        capsuleHTMLState = GaryxCapsuleHTMLLoadState()
         capsuleHTMLCache = [:]
         tasks = []
         tasksPanelState.clearSourceFilter()

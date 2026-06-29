@@ -99,123 +99,50 @@ public struct GaryxCapsuleSummary: Decodable, Identifiable, Equatable, Sendable 
     }
 }
 
+/// Shared preview-HTML cache key. Deliberately `(id, revision)` only — chat
+/// cards carry no `html_sha256`, so including the sha would split the cache into
+/// `id:rev:sha` (gallery/focused) and `id:rev` (chat) and double-fetch the same
+/// capsule. `update_capsule` always bumps `revision` (even metadata-only), so
+/// `(id, revision)` is a conservative invalidation key: it may over-invalidate a
+/// metadata-only update by one refetch, but never serves stale content.
 public struct GaryxCapsuleHTMLCacheKey: Hashable, Equatable, Sendable {
     public var id: String
     public var revision: Int
-    public var htmlSha256: String
 
-    public init(id: String, revision: Int, htmlSha256: String) {
+    public init(id: String, revision: Int) {
         self.id = id.trimmingCharacters(in: .whitespacesAndNewlines)
         self.revision = revision
-        self.htmlSha256 = htmlSha256.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     public init(capsule: GaryxCapsuleSummary) {
-        self.init(id: capsule.id, revision: capsule.revision, htmlSha256: capsule.htmlSha256)
+        self.init(id: capsule.id, revision: capsule.revision)
     }
 }
 
-public struct GaryxCapsuleHTMLLoadState: Equatable, Sendable {
-    public private(set) var selectedCapsuleId: String?
-    public private(set) var requestedKey: GaryxCapsuleHTMLCacheKey?
-    public private(set) var loadedKey: GaryxCapsuleHTMLCacheKey?
-    public private(set) var html: String?
-    public private(set) var isLoading: Bool
-    public private(set) var errorMessage: String?
-
-    public init(
-        selectedCapsuleId: String? = nil,
-        requestedKey: GaryxCapsuleHTMLCacheKey? = nil,
-        loadedKey: GaryxCapsuleHTMLCacheKey? = nil,
-        html: String? = nil,
-        isLoading: Bool = false,
-        errorMessage: String? = nil
-    ) {
-        self.selectedCapsuleId = selectedCapsuleId
-        self.requestedKey = requestedKey
-        self.loadedKey = loadedKey
-        self.html = html
-        self.isLoading = isLoading
-        self.errorMessage = errorMessage
+/// Pure prune of the preview-HTML cache against the authoritative capsules list.
+/// Extracted from the model so the "did anything get evicted" signal that drives
+/// the cache epoch is headless-testable. A deleted capsule (id absent from the
+/// list) or a superseded revision drops out of the valid key set and is evicted.
+public enum GaryxCapsuleHTMLCachePruner {
+    public static func pruned(
+        cache: [GaryxCapsuleHTMLCacheKey: String],
+        validCapsules: [GaryxCapsuleSummary]
+    ) -> (cache: [GaryxCapsuleHTMLCacheKey: String], didEvict: Bool) {
+        let validKeys = Set(validCapsules.map(GaryxCapsuleHTMLCacheKey.init))
+        let next = cache.filter { validKeys.contains($0.key) }
+        return (next, next.count != cache.count)
     }
 
-    public var hasSelection: Bool {
-        selectedCapsuleId != nil
-    }
-
-    public mutating func select(_ capsule: GaryxCapsuleSummary?) {
-        let nextId = capsule?.id.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard selectedCapsuleId != nextId else { return }
-        selectedCapsuleId = nextId?.isEmpty == true ? nil : nextId
-        requestedKey = nil
-        loadedKey = nil
-        html = nil
-        isLoading = false
-        errorMessage = nil
-    }
-
-    @discardableResult
-    public mutating func beginHTMLLoad(for capsule: GaryxCapsuleSummary) -> GaryxCapsuleHTMLCacheKey {
-        let key = GaryxCapsuleHTMLCacheKey(capsule: capsule)
-        selectedCapsuleId = key.id
-        requestedKey = key
-        isLoading = true
-        errorMessage = nil
-        if loadedKey != key {
-            loadedKey = nil
-            html = nil
-        }
-        return key
-    }
-
-    @discardableResult
-    public mutating func applyHTML(_ html: String, for key: GaryxCapsuleHTMLCacheKey) -> Bool {
-        guard isCurrent(key) else { return false }
-        requestedKey = nil
-        loadedKey = key
-        self.html = html
-        isLoading = false
-        errorMessage = nil
-        return true
-    }
-
-    @discardableResult
-    public mutating func applyHTMLFailure(_ message: String, for key: GaryxCapsuleHTMLCacheKey) -> Bool {
-        guard isCurrent(key) else { return false }
-        requestedKey = nil
-        isLoading = false
-        errorMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        if loadedKey != key {
-            loadedKey = nil
-            html = nil
-        }
-        return true
-    }
-
-    @discardableResult
-    public mutating func applyCachedHTML(_ html: String, for key: GaryxCapsuleHTMLCacheKey) -> Bool {
-        guard selectedCapsuleId == nil || selectedCapsuleId == key.id else { return false }
-        selectedCapsuleId = key.id
-        requestedKey = nil
-        loadedKey = key
-        self.html = html
-        isLoading = false
-        errorMessage = nil
-        return true
-    }
-
-    public mutating func remove(id: String) {
-        let normalized = id.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard selectedCapsuleId == normalized else { return }
-        selectedCapsuleId = nil
-        requestedKey = nil
-        loadedKey = nil
-        html = nil
-        isLoading = false
-        errorMessage = nil
-    }
-
-    private func isCurrent(_ key: GaryxCapsuleHTMLCacheKey) -> Bool {
-        selectedCapsuleId == key.id && requestedKey == key
+    /// Evict every cached revision of one capsule. A `/serve` 404 means the
+    /// whole capsule is gone, so all `(id, *)` entries — not just the requested
+    /// revision — must drop, otherwise another turn's card at a different
+    /// revision keeps serving stale HTML from the cache-first path.
+    public static func evictingCapsule(
+        cache: [GaryxCapsuleHTMLCacheKey: String],
+        capsuleId: String
+    ) -> (cache: [GaryxCapsuleHTMLCacheKey: String], didEvict: Bool) {
+        let id = capsuleId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let next = cache.filter { $0.key.id != id }
+        return (next, next.count != cache.count)
     }
 }

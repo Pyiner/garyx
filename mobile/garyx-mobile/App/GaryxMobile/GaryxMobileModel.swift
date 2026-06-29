@@ -207,9 +207,25 @@ final class GaryxMobileModel: ObservableObject {
         }
     }
     @Published var skills: [GaryxSkillSummary] = []
-    @Published var capsules: [GaryxCapsuleSummary] = []
-    @Published var capsuleHTMLState = GaryxCapsuleHTMLLoadState()
+    /// Any capsules-list update (central catalog refresh, gallery refresh, local
+    /// delete, gateway reset) prunes stale preview HTML so a remotely-deleted
+    /// capsule's cached page cannot be served — and bumps the cache epoch so
+    /// already-mounted thumbnails re-reconcile. See `pruneCapsuleHTMLCache`.
+    @Published var capsules: [GaryxCapsuleSummary] = [] {
+        didSet { pruneCapsuleHTMLCache(validCapsules: capsules) }
+    }
+    /// Focused capsule preview presented over the Capsules gallery (card tap or
+    /// `garyx://mobile/capsule` deep link).
+    @Published var galleryFocusedCapsule: GaryxCapsuleSummary?
+    /// Focused capsule preview presented over the current conversation (chat
+    /// capsule-card tap). Kept separate from the gallery cover so each surface
+    /// hosts and dismisses its own preview.
+    @Published var conversationCapsulePreview: GaryxCapsuleSummary?
     var capsuleHTMLCache: [GaryxCapsuleHTMLCacheKey: String] = [:]
+    /// Bumped whenever cached preview HTML is evicted (prune or focused 404), so
+    /// `GaryxCapsulePreviewThumbnail` can include it in its `.task` identity and
+    /// re-validate already-mounted thumbnails.
+    @Published var capsuleHTMLCacheEpoch: Int = 0
     @Published var tasks: [GaryxTaskSummary] = []
     @Published var tasksPanelState = GaryxMobileTasksPanelState()
     @Published var workflowRunPanelState = GaryxWorkflowRunPanelState()

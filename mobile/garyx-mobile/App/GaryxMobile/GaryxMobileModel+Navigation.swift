@@ -276,13 +276,19 @@ extension GaryxMobileModel {
     private func openCapsuleRoute(_ id: String, source: GaryxMobilePanelOpenSource) async {
         let capsuleId = id.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !capsuleId.isEmpty else { return }
+        // In-transcript capsule cards present over the conversation and dismiss
+        // back to it, instead of switching to the Capsules overview.
+        if source == .conversation {
+            await presentConversationCapsulePreview(capsuleId)
+            return
+        }
         openPanel(.capsules, source: source)
         await refreshCapsules()
         guard let capsule = capsules.first(where: { $0.id == capsuleId }) else {
             showRouteNotFound(kind: "Capsule", id: capsuleId)
             return
         }
-        await openCapsule(capsule)
+        galleryFocusedCapsule = capsule
     }
 
     private func openAgentRoute(_ id: String, source: GaryxMobilePanelOpenSource) async {
@@ -366,7 +372,8 @@ extension GaryxMobileModel {
         selectedAutomationEditor = nil
         selectedAgentDetail = nil
         selectedTeamDetail = nil
-        clearCapsuleDetailState()
+        galleryFocusedCapsule = nil
+        conversationCapsulePreview = nil
         routeNotFoundStore.selection = nil
         closeSkillDetail()
     }

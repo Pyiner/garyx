@@ -453,6 +453,13 @@ public enum GaryxMobilePanelOpenSource: Equatable, Sendable {
     case current
     case sidebar
     case replace
+    /// Present a focused detail above the current conversation and dismiss back
+    /// to it, instead of switching to that detail's management panel. Used by
+    /// in-transcript capsule cards so opening a capsule never lands the user on
+    /// the Capsules overview (mobile-ui: drilldowns never back to an overview).
+    /// The capsule route handles this before `openRoute`; this case maps to a
+    /// fresh content stack only for exhaustiveness.
+    case conversation
 }
 
 public enum GaryxWorkspaceBotsDrilldown: Equatable, Sendable {
@@ -587,7 +594,7 @@ public struct GaryxMobileNavigationState: Equatable, Sendable {
             if presentsContent, previousRoute != route, mainPanelBackStack.last != previousRoute {
                 mainPanelBackStack.append(previousRoute)
             }
-        case .sidebar, .replace:
+        case .sidebar, .replace, .conversation:
             mainPanelBackStack.removeAll()
         }
 

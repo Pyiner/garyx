@@ -81,4 +81,68 @@ final class GaryxGatewayCapsuleModelsTests: XCTestCase {
         XCTAssertEqual(GaryxMobilePanel.capsules.label, "Capsules")
         XCTAssertEqual(GaryxMobilePanel.capsules.iconName, "capsule.fill")
     }
+
+    // MARK: - GaryxCapsuleHTMLCacheKey (shared (id, revision) preview cache key)
+
+    func testHTMLCacheKeyIsIdAndRevisionOnly() {
+        // The chat-card wire carries no html_sha256; the key must be shared
+        // across gallery/focused/chat, so the sha must not participate.
+        let sameSha = GaryxCapsuleHTMLCacheKey(capsule: capsule(id: "c-1", revision: 1, htmlSha256: "aaa"))
+        let diffSha = GaryxCapsuleHTMLCacheKey(capsule: capsule(id: "c-1", revision: 1, htmlSha256: "bbb"))
+        let diffRev = GaryxCapsuleHTMLCacheKey(capsule: capsule(id: "c-1", revision: 2, htmlSha256: "aaa"))
+
+        XCTAssertEqual(sameSha, diffSha, "differing sha at same (id, revision) must be the same cache entry")
+        XCTAssertNotEqual(sameSha, diffRev, "revision must distinguish the cache key")
+        XCTAssertEqual(sameSha.id, "c-1")
+        XCTAssertEqual(sameSha.revision, 1)
+        XCTAssertEqual(GaryxCapsuleHTMLCacheKey(id: "  c-1  ", revision: 1), sameSha, "id is trimmed")
+    }
+
+    func testHTMLCachePrunerEvictsDeletedAndSupersededRevisions() {
+        let cache: [GaryxCapsuleHTMLCacheKey: String] = [
+            GaryxCapsuleHTMLCacheKey(id: "live", revision: 2): "<live/>",
+            GaryxCapsuleHTMLCacheKey(id: "live", revision: 1): "<old/>",   // superseded revision
+            GaryxCapsuleHTMLCacheKey(id: "gone", revision: 1): "<gone/>",  // deleted capsule
+        ]
+        let result = GaryxCapsuleHTMLCachePruner.pruned(
+            cache: cache,
+            validCapsules: [capsule(id: "live", revision: 2, htmlSha256: "x")]
+        )
+        XCTAssertTrue(result.didEvict)
+        XCTAssertEqual(Set(result.cache.keys), [GaryxCapsuleHTMLCacheKey(id: "live", revision: 2)])
+    }
+
+    func testHTMLCachePrunerReportsNoEvictionWhenNothingChanges() {
+        let cache = [GaryxCapsuleHTMLCacheKey(id: "live", revision: 2): "<live/>"]
+        let result = GaryxCapsuleHTMLCachePruner.pruned(
+            cache: cache,
+            validCapsules: [capsule(id: "live", revision: 2, htmlSha256: "x")]
+        )
+        XCTAssertFalse(result.didEvict)
+        XCTAssertEqual(result.cache, cache)
+    }
+
+    func testEvictingCapsuleDropsEveryRevisionOfTheId() {
+        // A /serve 404 means the whole capsule is gone — both cached revisions
+        // of "gone" must drop, not just the requested one.
+        let cache: [GaryxCapsuleHTMLCacheKey: String] = [
+            GaryxCapsuleHTMLCacheKey(id: "gone", revision: 1): "<r1/>",
+            GaryxCapsuleHTMLCacheKey(id: "gone", revision: 2): "<r2/>",
+            GaryxCapsuleHTMLCacheKey(id: "keep", revision: 1): "<keep/>",
+        ]
+        let result = GaryxCapsuleHTMLCachePruner.evictingCapsule(cache: cache, capsuleId: "gone")
+        XCTAssertTrue(result.didEvict)
+        XCTAssertEqual(Set(result.cache.keys), [GaryxCapsuleHTMLCacheKey(id: "keep", revision: 1)])
+    }
+
+    func testEvictingCapsuleReportsNoEvictionWhenAbsent() {
+        let cache = [GaryxCapsuleHTMLCacheKey(id: "keep", revision: 1): "<keep/>"]
+        let result = GaryxCapsuleHTMLCachePruner.evictingCapsule(cache: cache, capsuleId: "missing")
+        XCTAssertFalse(result.didEvict)
+        XCTAssertEqual(result.cache, cache)
+    }
+
+    private func capsule(id: String, revision: Int, htmlSha256: String) -> GaryxCapsuleSummary {
+        GaryxCapsuleSummary(id: id, title: "Capsule", htmlSha256: htmlSha256, byteSize: 10, revision: revision)
+    }
 }
