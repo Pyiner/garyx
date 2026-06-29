@@ -1512,6 +1512,7 @@ export function AppShell() {
     card: RenderCapsuleCard;
     threadId: string;
   } | null>(null);
+  const [capsulePanelFullscreen, setCapsulePanelFullscreen] = useState(false);
   const [selectedWorkflowTask, setSelectedWorkflowTask] =
     useState<DesktopTaskSummary | null>(null);
   const [selectedWorkflowTaskId, setSelectedWorkflowTaskId] = useState<
@@ -2954,6 +2955,8 @@ export function AppShell() {
       ? activeWorkspace.path
       : "";
   const handleWorkspacePreviewRequested = useCallback(() => {
+    setCapsulePanelCard(null);
+    setCapsulePanelFullscreen(false);
     setInspectorOpen(true);
   }, []);
   const {
@@ -5022,6 +5025,7 @@ export function AppShell() {
 
   useEffect(() => {
     setCapsulePanelCard(null);
+    setCapsulePanelFullscreen(false);
   }, [contentView, selectedThreadId]);
 
   useEffect(() => {
@@ -5306,12 +5310,16 @@ export function AppShell() {
   }, [activeThreadMessageKey]);
 
   useEffect(() => {
-    if (!inspectorOpen && !threadLogsOpen) {
+    if (!capsulePanelFullscreen && !inspectorOpen && !threadLogsOpen) {
       return;
     }
 
     function handleKeydown(event: KeyboardEvent) {
       if (event.key === "Escape") {
+        if (capsulePanelFullscreen) {
+          setCapsulePanelFullscreen(false);
+          return;
+        }
         if (threadLogsOpen) {
           setThreadLogsOpen(false);
           return;
@@ -5324,7 +5332,7 @@ export function AppShell() {
     return () => {
       window.removeEventListener("keydown", handleKeydown);
     };
-  }, [inspectorOpen, threadLogsOpen]);
+  }, [capsulePanelFullscreen, inspectorOpen, threadLogsOpen]);
 
   useEffect(() => {
     if (!editingThreadTitle) {
@@ -5363,6 +5371,8 @@ export function AppShell() {
     if (!workspacePreviewModalOpen || contentView !== "thread") {
       return;
     }
+    setCapsulePanelCard(null);
+    setCapsulePanelFullscreen(false);
     setThreadLogsOpen(false);
     setInspectorOpen(true);
   }, [contentView, workspacePreviewModalOpen]);
@@ -9595,6 +9605,9 @@ export function AppShell() {
     isDreamsView ? "dreams-view" : null,
     showConversationSideTools ? "with-side-tools" : null,
     showConversationCapsulePanel ? "with-capsule-panel" : null,
+    showConversationCapsulePanel && capsulePanelFullscreen
+      ? "capsule-panel-fullscreen"
+      : null,
     sideToolsResizing ? "side-tools-resizing" : null,
   ]
     .filter(Boolean)
@@ -9792,6 +9805,7 @@ export function AppShell() {
             return;
           }
           setCapsulePanelCard({ card, threadId: selectedThreadId });
+          setCapsulePanelFullscreen(false);
           setInspectorOpen(false);
           setThreadLogsOpen(false);
         }}
@@ -10408,6 +10422,7 @@ export function AppShell() {
                 onToggleInspector={() => {
                   trackUiAction("thread.toggle_inspector", () => {
                     setCapsulePanelCard(null);
+                    setCapsulePanelFullscreen(false);
                     setThreadLogsOpen(false);
                     setInspectorOpen((current) => !current);
                   });
@@ -10415,6 +10430,7 @@ export function AppShell() {
                 onToggleThreadLogs={() => {
                   trackUiAction("thread.toggle_logs", () => {
                     setCapsulePanelCard(null);
+                    setCapsulePanelFullscreen(false);
                     setInspectorOpen(false);
                     setThreadLogsOpen((current) => !current);
                   });
@@ -10710,7 +10726,14 @@ export function AppShell() {
               title={
                 capsulePanelCard.card.title?.trim() || t("Untitled Capsule")
               }
-              onClose={() => setCapsulePanelCard(null)}
+              isFullscreen={capsulePanelFullscreen}
+              onToggleFullscreen={() => {
+                setCapsulePanelFullscreen((current) => !current);
+              }}
+              onClose={() => {
+                setCapsulePanelCard(null);
+                setCapsulePanelFullscreen(false);
+              }}
             />
           ) : showConversationSideTools ? (
             <>

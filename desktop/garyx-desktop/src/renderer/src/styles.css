@@ -2661,7 +2661,7 @@ code {
 }
 
 .conversation.with-capsule-panel {
-  grid-template-columns: minmax(0, 1fr) clamp(360px, 40%, 540px);
+  grid-template-columns: minmax(0, 1fr) clamp(480px, 52%, 860px);
   grid-template-rows: auto minmax(0, 1fr);
 }
 
@@ -2678,6 +2678,22 @@ code {
 .conversation.with-capsule-panel .capsule-conversation-panel {
   grid-column: 2;
   grid-row: 1 / span 2;
+}
+
+.conversation.with-capsule-panel.capsule-panel-fullscreen {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.conversation.with-capsule-panel.capsule-panel-fullscreen .conversation-header,
+.conversation.with-capsule-panel.capsule-panel-fullscreen .conversation-body {
+  display: none;
+}
+
+.conversation.with-capsule-panel.capsule-panel-fullscreen .capsule-conversation-panel {
+  grid-column: 1;
+  grid-row: 1;
+  border-left: 0;
 }
 
 .conversation.side-tools-resizing {
