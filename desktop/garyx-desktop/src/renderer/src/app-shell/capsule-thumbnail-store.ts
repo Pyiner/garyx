@@ -90,6 +90,14 @@ class CapsuleThumbnailStore {
   private activeCount = 0;
   private listeners = new Set<() => void>();
   private fetcher: Fetcher = defaultFetcher;
+  // Cross-store tombstone: a `/serve` 404 discovered while rendering a thumbnail
+  // means the capsule is gone, so the HTML store (focused preview) must drop its
+  // cached document too. Injected (no import cycle); wired by `capsule-cache.ts`.
+  private crossInvalidate: ((id: string) => void) | null = null;
+
+  setCrossInvalidate(fn: ((id: string) => void) | null): void {
+    this.crossInvalidate = fn;
+  }
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -217,8 +225,10 @@ class CapsuleThumbnailStore {
         // rendition/revision for this id — not just the requested key — so a
         // sibling card at another rendition (gallery 16:10 vs chat 16:9) does
         // not keep serving a stale `ready` image. Mirrors the iOS
-        // `evictingCapsule` (all `(id, *, *)`) semantics.
+        // `evictingCapsule` (all `(id, *, *)`) semantics, and cross-invalidates
+        // the HTML store so a re-opened focused preview is not stale either.
         this.invalidateCapsule(job.id);
+        this.crossInvalidate?.(job.id);
       } else {
         // Unexpected empty result: tombstone just this key (retryable shape unknown).
         this.setEntry(job.key, DELETED);
@@ -241,6 +251,7 @@ class CapsuleThumbnailStore {
     this.activeCount = 0;
     this.listeners.clear();
     this.fetcher = defaultFetcher;
+    this.crossInvalidate = null;
   }
 
   __activeCount(): number {
