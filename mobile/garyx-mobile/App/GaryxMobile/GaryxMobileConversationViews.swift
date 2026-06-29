@@ -144,6 +144,7 @@ struct GaryxConversationView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @Environment(\.garyxSidebarDragActive) private var sidebarDragActive
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @FocusState private var isComposerFocused: Bool
     /// Unified scroll state machine (GaryxMobileCore). The view feeds it
     /// events and executes the tail-scroll requests it returns; UI such as
@@ -289,6 +290,37 @@ struct GaryxConversationView: View {
             GaryxConversationHeader()
         }
         .environment(\.garyxMessageBubbleActions, messageBubbleActions)
+        // Capsule card tapped in the transcript: present the focused preview
+        // above this conversation and dismiss back to it (never switch to the
+        // Capsules overview).
+        .fullScreenCover(item: $model.conversationCapsulePreview) { capsule in
+            GaryxCapsuleFocusedPreviewView(capsule: capsule)
+        }
+        .task(id: model.selectedThread?.id) {
+            await refreshCapsulesIfThreadHasCards()
+        }
+    }
+
+    /// Route-time deletion validation for in-transcript capsule cards: when the
+    /// opened thread has capsule cards, refresh the capsules list so a remotely
+    /// deleted capsule's cached preview HTML is pruned (and the cache epoch
+    /// bumped), making mounted chat thumbnails re-validate to "deleted".
+    private func refreshCapsulesIfThreadHasCards() async {
+        guard model.selectedThreadTurnRows().contains(where: { !$0.capsuleCards.isEmpty }) else { return }
+        await model.refreshCapsules()
+    }
+
+    /// Conversation-level admission keys for chat capsule-card thumbnails. The
+    /// transcript is an eager `VStack`, so visibility is not an `onAppear`
+    /// signal; admit the most-recent N across all turns (see
+    /// `GaryxCapsuleChatCardAdmission`).
+    private func capsuleCardActiveKeys(for rows: [GaryxMobileTurnRow]) -> Set<String> {
+        let ordered = rows.flatMap { row in
+            row.capsuleCards.map { "\(row.id):\($0.capsuleId)" }
+        }
+        guard !ordered.isEmpty else { return [] }
+        let maxActive = horizontalSizeClass == .regular ? 4 : 2
+        return Set(GaryxCapsuleChatCardAdmission.activeKeys(orderedKeys: ordered, maxActive: maxActive))
     }
 
     private var messageBubbleActions: GaryxMessageBubbleActions {
@@ -352,7 +384,8 @@ struct GaryxConversationView: View {
                     }
                     GaryxMobileTurnRowsView(
                         rows: turnRows,
-                        prefetchBoundaryRowCount: garyxHistoryPrefetchBoundaryRows
+                        prefetchBoundaryRowCount: garyxHistoryPrefetchBoundaryRows,
+                        activeCapsuleCardKeys: capsuleCardActiveKeys(for: turnRows)
                     ) {
                         prefetchOlderHistoryIfNeeded()
                     }
