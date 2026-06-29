@@ -51,10 +51,65 @@ final class GaryxCapsuleCacheEpochTests: XCTestCase {
         XCTAssertNil(model.capsuleHTMLCache[GaryxCapsuleHTMLCacheKey(id: "doc", revision: 1)])
     }
 
+    func testSelectedThreadHasCapsuleCardsReadsRawSnapshot() {
+        let model = makeModel()
+        let thread = makeThread(id: "thread-capsule-cards")
+        model.selectedThread = thread
+
+        XCTAssertFalse(model.selectedThreadHasCapsuleCards, "no snapshot -> no cards")
+
+        model.setRenderSnapshot(
+            GaryxRenderSnapshot(basedOnSeq: 1, rows: [
+                .userTurn(GaryxRenderUserTurnRow(
+                    id: "turn:1",
+                    user: nil,
+                    activity: [],
+                    capsuleCards: [GaryxRenderCapsuleCard(
+                        id: "capsule_card:c1",
+                        capsuleId: "c1",
+                        title: "C1",
+                        revision: 1,
+                        action: .created
+                    )]
+                ))
+            ]),
+            for: thread.id
+        )
+        XCTAssertTrue(model.selectedThreadHasCapsuleCards, "snapshot with a capsule card -> true")
+
+        model.setRenderSnapshot(
+            GaryxRenderSnapshot(basedOnSeq: 2, rows: [
+                .userTurn(GaryxRenderUserTurnRow(id: "turn:2", user: nil, activity: []))
+            ]),
+            for: thread.id
+        )
+        XCTAssertFalse(model.selectedThreadHasCapsuleCards, "snapshot without cards -> false")
+    }
+
     private func makeModel() -> GaryxMobileModel {
         let suiteName = "GaryxCapsuleCacheEpochTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         return GaryxMobileModel(defaults: defaults)
+    }
+
+    private func makeThread(id: String) -> GaryxThreadSummary {
+        GaryxThreadSummary(
+            id: id,
+            title: "Capsule Thread",
+            createdAt: nil,
+            updatedAt: nil,
+            lastMessagePreview: "",
+            workspacePath: nil,
+            messageCount: nil,
+            agentId: nil,
+            teamId: nil,
+            teamName: nil,
+            providerType: nil,
+            recentRunId: nil,
+            activeRunId: nil,
+            runState: nil,
+            worktreePath: nil
+        )
     }
 }

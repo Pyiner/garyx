@@ -132,4 +132,17 @@ public enum GaryxCapsuleHTMLCachePruner {
         let next = cache.filter { validKeys.contains($0.key) }
         return (next, next.count != cache.count)
     }
+
+    /// Evict every cached revision of one capsule. A `/serve` 404 means the
+    /// whole capsule is gone, so all `(id, *)` entries — not just the requested
+    /// revision — must drop, otherwise another turn's card at a different
+    /// revision keeps serving stale HTML from the cache-first path.
+    public static func evictingCapsule(
+        cache: [GaryxCapsuleHTMLCacheKey: String],
+        capsuleId: String
+    ) -> (cache: [GaryxCapsuleHTMLCacheKey: String], didEvict: Bool) {
+        let id = capsuleId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let next = cache.filter { $0.key.id != id }
+        return (next, next.count != cache.count)
+    }
 }

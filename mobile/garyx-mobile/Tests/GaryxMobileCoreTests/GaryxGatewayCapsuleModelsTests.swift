@@ -122,6 +122,26 @@ final class GaryxGatewayCapsuleModelsTests: XCTestCase {
         XCTAssertEqual(result.cache, cache)
     }
 
+    func testEvictingCapsuleDropsEveryRevisionOfTheId() {
+        // A /serve 404 means the whole capsule is gone — both cached revisions
+        // of "gone" must drop, not just the requested one.
+        let cache: [GaryxCapsuleHTMLCacheKey: String] = [
+            GaryxCapsuleHTMLCacheKey(id: "gone", revision: 1): "<r1/>",
+            GaryxCapsuleHTMLCacheKey(id: "gone", revision: 2): "<r2/>",
+            GaryxCapsuleHTMLCacheKey(id: "keep", revision: 1): "<keep/>",
+        ]
+        let result = GaryxCapsuleHTMLCachePruner.evictingCapsule(cache: cache, capsuleId: "gone")
+        XCTAssertTrue(result.didEvict)
+        XCTAssertEqual(Set(result.cache.keys), [GaryxCapsuleHTMLCacheKey(id: "keep", revision: 1)])
+    }
+
+    func testEvictingCapsuleReportsNoEvictionWhenAbsent() {
+        let cache = [GaryxCapsuleHTMLCacheKey(id: "keep", revision: 1): "<keep/>"]
+        let result = GaryxCapsuleHTMLCachePruner.evictingCapsule(cache: cache, capsuleId: "missing")
+        XCTAssertFalse(result.didEvict)
+        XCTAssertEqual(result.cache, cache)
+    }
+
     private func capsule(id: String, revision: Int, htmlSha256: String) -> GaryxCapsuleSummary {
         GaryxCapsuleSummary(id: id, title: "Capsule", htmlSha256: htmlSha256, byteSize: 10, revision: revision)
     }

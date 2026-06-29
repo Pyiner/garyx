@@ -12,6 +12,21 @@ enum GaryxCapsulePreviewHTMLResult: Equatable {
 }
 
 extension GaryxMobileModel {
+    /// Cheap check of whether the selected thread's render state carries any
+    /// capsule cards, read straight off the raw snapshot rows so it can drive
+    /// route-time deletion validation without the cost of the full
+    /// `selectedThreadTurnRows()` mapping on every render.
+    var selectedThreadHasCapsuleCards: Bool {
+        guard let threadId = selectedThread?.id,
+              let snapshot = renderSnapshot(for: threadId) else { return false }
+        return snapshot.rows.contains { row in
+            if case let .userTurn(turn) = row {
+                return !turn.capsuleCards.isEmpty
+            }
+            return false
+        }
+    }
+
     func refreshCapsules() async {
         guard hasGatewaySettings else { return }
         let runtimeGeneration = gatewayRuntimeGeneration
@@ -52,12 +67,15 @@ extension GaryxMobileModel {
         } catch let error as GaryxGatewayError {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return .failed }
             if case .httpStatus(404, _) = error {
-                // Evict any stale entry and bump the epoch so sibling thumbnails
-                // of the same capsule re-validate to `.deleted` too.
-                if capsuleHTMLCache[key] != nil {
-                    capsuleHTMLCache[key] = nil
-                    capsuleHTMLCacheEpoch &+= 1
-                }
+                // The whole capsule is gone: evict every cached revision (not just
+                // this key) and bump the epoch so sibling thumbnails — including a
+                // card at another revision — re-validate to `.deleted` too.
+                let evicted = GaryxCapsuleHTMLCachePruner.evictingCapsule(
+                    cache: capsuleHTMLCache,
+                    capsuleId: capsuleId
+                )
+                capsuleHTMLCache = evicted.cache
+                if evicted.didEvict { capsuleHTMLCacheEpoch &+= 1 }
                 return .deleted
             }
             return .failed

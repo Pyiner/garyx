@@ -296,18 +296,16 @@ struct GaryxConversationView: View {
         .fullScreenCover(item: $model.conversationCapsulePreview) { capsule in
             GaryxCapsuleFocusedPreviewView(capsule: capsule)
         }
-        .task(id: model.selectedThread?.id) {
-            await refreshCapsulesIfThreadHasCards()
+        // Route-time deletion validation: re-fires when the thread changes and
+        // when capsule cards first appear (history can arrive after the thread is
+        // selected, so a one-shot check on thread id alone would miss them).
+        // Refreshing the capsules list prunes a remotely-deleted capsule's cached
+        // preview HTML and bumps the cache epoch, so mounted chat thumbnails
+        // re-validate to "deleted".
+        .task(id: "\(model.selectedThread?.id ?? ""):\(model.selectedThreadHasCapsuleCards)") {
+            guard model.selectedThreadHasCapsuleCards else { return }
+            await model.refreshCapsules()
         }
-    }
-
-    /// Route-time deletion validation for in-transcript capsule cards: when the
-    /// opened thread has capsule cards, refresh the capsules list so a remotely
-    /// deleted capsule's cached preview HTML is pruned (and the cache epoch
-    /// bumped), making mounted chat thumbnails re-validate to "deleted".
-    private func refreshCapsulesIfThreadHasCards() async {
-        guard model.selectedThreadTurnRows().contains(where: { !$0.capsuleCards.isEmpty }) else { return }
-        await model.refreshCapsules()
     }
 
     /// Conversation-level admission keys for chat capsule-card thumbnails. The

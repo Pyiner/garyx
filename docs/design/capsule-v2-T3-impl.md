@@ -385,8 +385,12 @@ func loadCapsulePreviewHTML(capsuleId, revision, forceRefresh: Bool = false) asy
          guard gen == gatewayRuntimeGeneration else { return .failed }
          capsuleHTMLCache[key] = html; return .html(html) }
     catch let e as GaryxGatewayError {
-        if case .httpStatus(404, _) = e {                       // 404 → evict + bump epoch + deleted
-            if capsuleHTMLCache[key] != nil { capsuleHTMLCache[key] = nil; capsuleHTMLCacheEpoch &+= 1 }
+        if case .httpStatus(404, _) = e {                       // 404 = 整 capsule 没了
+            // 驱逐**全部** (id,*)（非仅当前 rev）+ bump epoch：否则同 capsule 另一 rev 的缓存缩略图
+            // 经 epoch 重跑仍 cache-first 返回陈旧（codex code-review blocker 1）。
+            let ev = GaryxCapsuleHTMLCachePruner.evictingCapsule(cache: capsuleHTMLCache, capsuleId: capsuleId)
+            capsuleHTMLCache = ev.cache
+            if ev.didEvict { capsuleHTMLCacheEpoch &+= 1 }
             return .deleted }
         return .failed }
     catch { return .failed }   // 瞬态/5xx/离线 → 可重试，绝不误标 deleted（doc §6）
@@ -429,9 +433,13 @@ catalog 刷新**（`+Gateway.swift:533 listCapsules` → `:602 capsules = value`
    （rare）→ 无重渲风暴；仍存在 capsule 重对账是 cache 命中、无 fetch。
 2. **focused 打开 force-refresh**：focused `.task` 走 `loadCapsulePreviewHTML(..., forceRefresh:true)` →
    永远 `/serve` → 即时权威 404（用户实际打开的全屏面永不陈旧）。
-3. **会话 route-time 校验**：`GaryxConversationView` 当 `turnRows` 含 capsule 卡时，appear/线程切换
-   触发一次 `await model.refreshCapsules()`（stale-while-refresh，幂等）→ 更新 `capsules` → 经 #1 prune
-   → 聊天缩略图对已删 capsule re-fetch → 404 → "deleted"。无 capsule 卡的线程不触发（省网络）。
+3. **会话 route-time 校验**：`GaryxConversationView` `.task(id: "\(threadId):\(hasCapsuleCards)")` —— 用
+   便宜的 `model.selectedThreadHasCapsuleCards`（直接扫原始快照 row 的 `capsuleCards`，不做整
+   `selectedThreadTurnRows()` 映射）作 token 的一部分。token 在**换线程**与**capsule 卡首次出现**
+   （history 晚于 selectedThread 到达）时都变 → 触发 `await model.refreshCapsules()`（幂等
+   stale-while-refresh）→ 经 #1 prune+epoch → 聊天缩略图对已删 re-fetch → 404 → "deleted"。修
+   codex code-review blocker 2（只 key 在 `selectedThread.id`、rows 未到就 return 之后不补跑的盲点）。
+   无 capsule 卡的线程不触发（省网络）。
 - 综合：focused 即时权威；缩略图经任一 capsules 刷新（中心 catalog / 画廊 / 会话 route-time）→ prune
   bump epoch → **已挂载**缩略图重对账失效 → 至多陈旧到「下次刷新/重开」（parent §6『重开后更新』可接受）。
   **关键保证**：缩略图即便暂时陈旧也无「陈旧*交互*」——用户**点卡**走 focused force-refresh→404→
