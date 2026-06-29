@@ -139,6 +139,30 @@ test('maps deleted results and keeps transient failures retryable', async () => 
   assert.match(thrown.message, /network down/);
 });
 
+test('a deleted result for one rendition tombstones every rendition of that id', async () => {
+  const { calls, fetcher } = makeController();
+  __setCapsuleThumbnailFetcherForTest(fetcher);
+
+  // Warm both renditions of the same capsule to ready.
+  capsuleThumbnailStore.request('victim', 3, GALLERY_RENDITION, {});
+  capsuleThumbnailStore.request('victim', 3, CHAT_CARD_RENDITION, {});
+  calls[0].resolve({ status: 'ok', dataUrl: 'data:image/png;base64,GAL' });
+  calls[1].resolve({ status: 'ok', dataUrl: 'data:image/png;base64,CHAT' });
+  await flush();
+  assert.equal(stateOf('victim', 3, GALLERY_RENDITION).status, 'ready');
+  assert.equal(stateOf('victim', 3, CHAT_CARD_RENDITION).status, 'ready');
+
+  // Re-validate just the gallery key; the capsule is gone (`/serve` 404).
+  capsuleThumbnailStore.request('victim', 3, GALLERY_RENDITION, { force: true });
+  calls[2].resolve({ status: 'deleted' });
+  await flush();
+
+  // Both renditions must flip to deleted — not just the requested one — so the
+  // chat card never keeps serving its stale ready image.
+  assert.equal(stateOf('victim', 3, GALLERY_RENDITION).status, 'deleted');
+  assert.equal(stateOf('victim', 3, CHAT_CARD_RENDITION).status, 'deleted');
+});
+
 test('delete while inflight: late result discarded, stays deleted across renditions', async () => {
   const { calls, fetcher } = makeController();
   __setCapsuleThumbnailFetcherForTest(fetcher);

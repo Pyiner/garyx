@@ -212,8 +212,15 @@ class CapsuleThumbnailStore {
       } else if (result && result.status === 'error') {
         // Transient render/network failure: keep retryable, never tombstone.
         this.setEntry(job.key, { status: 'error', message: result.message });
+      } else if (result && result.status === 'deleted') {
+        // The whole capsule is gone (a `/serve` 404). Tombstone *every*
+        // rendition/revision for this id — not just the requested key — so a
+        // sibling card at another rendition (gallery 16:10 vs chat 16:9) does
+        // not keep serving a stale `ready` image. Mirrors the iOS
+        // `evictingCapsule` (all `(id, *, *)`) semantics.
+        this.invalidateCapsule(job.id);
       } else {
-        // status === 'deleted' (or an unexpected empty result).
+        // Unexpected empty result: tombstone just this key (retryable shape unknown).
         this.setEntry(job.key, DELETED);
       }
     }

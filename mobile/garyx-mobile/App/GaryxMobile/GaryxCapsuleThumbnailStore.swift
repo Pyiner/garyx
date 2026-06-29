@@ -28,13 +28,16 @@ final class GaryxCapsuleThumbnailMemoryCache {
     }
 
     /// Evict every cached rendition/revision of one capsule (a `/serve` 404).
-    func evict(capsuleId: String) {
+    /// Returns whether anything was evicted so the caller can bump the epoch.
+    @discardableResult
+    func evict(capsuleId: String) -> Bool {
         let id = capsuleId.trimmingCharacters(in: .whitespacesAndNewlines)
         let prefix = id + "."
         let dropped = order.filter { $0.hasPrefix(prefix) }
-        guard !dropped.isEmpty else { return }
+        guard !dropped.isEmpty else { return false }
         for token in dropped { images.removeValue(forKey: token) }
         order.removeAll { $0.hasPrefix(prefix) }
+        return true
     }
 
     /// Drop entries for capsules no longer in the authoritative list (a remote

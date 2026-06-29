@@ -77,20 +77,36 @@ extension GaryxMobileModel {
         } catch let error as GaryxGatewayError {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return .failed }
             if case .httpStatus(404, _) = error {
-                // The whole capsule is gone: evict every cached revision (not just
-                // this key) and bump the epoch so sibling thumbnails — including a
-                // card at another revision — re-validate to `.deleted` too.
-                let evicted = GaryxCapsuleHTMLCachePruner.evictingCapsule(
-                    cache: capsuleHTMLCache,
-                    capsuleId: capsuleId
-                )
-                capsuleHTMLCache = evicted.cache
-                if evicted.didEvict { capsuleHTMLCacheEpoch &+= 1 }
+                // The whole capsule is gone. Centralized eviction so *every*
+                // surface re-validates: HTML cache, rendered-thumbnail memory +
+                // disk (all renditions/revisions), and the cache epoch — even
+                // when the focused preview discovered the 404 and only the
+                // thumbnail caches hold this id.
+                await evictDeletedCapsuleCaches(capsuleId: capsuleId)
                 return .deleted
             }
             return .failed
         } catch {
             return .failed
+        }
+    }
+
+    /// Centralized `/serve` 404 handling: the capsule is gone, so evict its HTML
+    /// cache **and** its rendered-thumbnail memory + disk caches (every
+    /// rendition/revision), then bump the cache epoch so mounted gallery/chat
+    /// thumbnails for the same id re-validate to `.deleted` instead of serving a
+    /// stale cached PNG. Bumps even when no HTML entry was present (the focused
+    /// preview can discover the 404 while only the thumbnail caches hold the id).
+    func evictDeletedCapsuleCaches(capsuleId: String) async {
+        let htmlEvicted = GaryxCapsuleHTMLCachePruner.evictingCapsule(
+            cache: capsuleHTMLCache,
+            capsuleId: capsuleId
+        )
+        capsuleHTMLCache = htmlEvicted.cache
+        let memoryEvicted = capsuleThumbnailMemory.evict(capsuleId: capsuleId)
+        let diskEvicted = await capsuleThumbnailStore.evict(capsuleId: capsuleId)
+        if htmlEvicted.didEvict || memoryEvicted || diskEvicted {
+            capsuleHTMLCacheEpoch &+= 1
         }
     }
 
@@ -172,13 +188,11 @@ extension GaryxMobileModel {
             return .image(image)
         }
         // Miss: reuse the HTML loader (it owns `/serve`, the 404 deletion
-        // authority, and transient/offline handling), then render once.
+        // authority, and transient/offline handling), then render once. A 404
+        // inside `loadCapsulePreviewHTML` already evicted every cache for this id
+        // via `evictDeletedCapsuleCaches`, so `.deleted` just reports the state.
         switch await loadCapsulePreviewHTML(capsuleId: capsuleId, revision: revision) {
         case .deleted:
-            capsuleThumbnailMemory.evict(capsuleId: capsuleId)
-            if await capsuleThumbnailStore.evict(capsuleId: capsuleId) {
-                capsuleHTMLCacheEpoch &+= 1
-            }
             return .deleted
         case .failed:
             return .failed
