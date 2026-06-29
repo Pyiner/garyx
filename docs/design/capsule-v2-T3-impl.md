@@ -385,11 +385,16 @@ func loadCapsulePreviewHTML(capsuleId, revision, forceRefresh: Bool = false) asy
          guard gen == gatewayRuntimeGeneration else { return .failed }
          capsuleHTMLCache[key] = html; return .html(html) }
     catch let e as GaryxGatewayError {
-        if case .httpStatus(404, _) = e { capsuleHTMLCache[key] = nil; return .deleted }   // 404→evict+deleted
+        if case .httpStatus(404, _) = e {                       // 404 → evict + bump epoch + deleted
+            if capsuleHTMLCache[key] != nil { capsuleHTMLCache[key] = nil; capsuleHTMLCacheEpoch &+= 1 }
+            return .deleted }
         return .failed }
     catch { return .failed }   // 瞬态/5xx/离线 → 可重试，绝不误标 deleted（doc §6）
 }
 ```
+> prune 逻辑抽成 Core 纯函数 `GaryxCapsuleHTMLCachePruner.pruned(cache:validCapsules:) -> (cache,
+> didEvict)` 便于 headless 测试 prune-bump；`pruneCapsuleHTMLCache` 调它、`didEvict` 时 bump epoch。
+> 404-bump 显式如上（codex r4 非阻断）。测试覆盖：prune 真驱逐→didEvict=true；无变化→false。
 - 只写非-@Published `capsuleHTMLCache`，结果回各视图 `@State`（不触发整会话/网格重渲，守
   [[project_ios_home_list_scroll_jank]]）。
 - update freshness：server render_state 升 revision（T1 全局最新）→ 卡 `(id,rev)` 键变 → 缩略图/预览
