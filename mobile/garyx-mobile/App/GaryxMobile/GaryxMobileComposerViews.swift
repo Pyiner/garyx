@@ -75,8 +75,18 @@ struct GaryxComposer: View {
         model.canSendComposerPayload(text: draftText, attachments: model.composerAttachments)
     }
 
+    /// Composer affordances as a pure function of the thread's real run state +
+    /// local draft (#TASK-1453 problem A). Workflow-run threads present a
+    /// separate surface with no composer, so run state alone gates this.
+    private var composerPresentation: GaryxComposerPresentation {
+        GaryxComposerPresentationResolver.resolve(
+            isThreadBusy: model.isSelectedThreadSending,
+            hasLocalPayload: hasLocalPayload
+        )
+    }
+
     private var showsSendButton: Bool {
-        !model.isSelectedThreadSending || hasLocalPayload
+        composerPresentation.showsSendButton
     }
 
     private var canChangeWorkspaceMode: Bool {
@@ -395,7 +405,15 @@ struct GaryxComposer: View {
     }
 
     private var placeholderText: String {
-        model.selectedThread == nil ? "Ask Garyx anything..." : "Ask for follow-up changes"
+        // The follow-up placeholder is a busy/active-run affordance, not an
+        // "is a thread open" one (#TASK-1453 problem A): an idle thread — even
+        // one whose tail row is a capsule card — shows the normal prompt.
+        switch composerPresentation.placeholder {
+        case .prompt:
+            return "Ask Garyx anything..."
+        case .followUp:
+            return "Ask for follow-up changes"
+        }
     }
 
     private var composerBottomBar: some View {
@@ -404,7 +422,7 @@ struct GaryxComposer: View {
 
             Spacer(minLength: 0)
 
-            if model.isSelectedThreadSending {
+            if composerPresentation.showsStopButton {
                 Button {
                     Task { await model.interruptActiveRun() }
                 } label: {
