@@ -1,5 +1,6 @@
 import type {
   RenderActivityRow,
+  RenderCapsuleCard,
   RenderMessageRef,
   RenderState,
   RenderStepRow,
@@ -45,6 +46,13 @@ export type RenderTranscriptBlock =
       key: string;
       defaultExpanded: boolean;
       entries: Array<Extract<RenderTranscriptEntry, { kind: 'tool' }>>;
+    }
+  // Server-derived Capsule cards, surfaced after a turn's activity in the team
+  // flatten path (solo threads carry them on `UserTurnRow.capsuleCards`).
+  | {
+      kind: 'capsule_cards';
+      key: string;
+      cards: RenderCapsuleCard[];
     };
 
 export interface TurnRow {
@@ -75,9 +83,22 @@ export interface UserTurnRow {
   key: string;
   userBlock: RenderTranscriptBlock;
   activityRows: UserTurnActivityRow[];
+  /** Server-derived Capsule cards, rendered after this turn's activity. */
+  capsuleCards: RenderCapsuleCard[];
 }
 
-export type TurnRenderRow = FlatRow | TurnRow | UserTurnRow;
+/**
+ * A turn whose user body isn't loaded (orphan) but which still carries server
+ * Capsule cards: surfaced at the top level so the cards aren't dropped, without
+ * fabricating a fake user bubble.
+ */
+export interface CapsuleOnlyRow {
+  kind: 'capsule_only';
+  key: string;
+  capsuleCards: RenderCapsuleCard[];
+}
+
+export type TurnRenderRow = FlatRow | TurnRow | UserTurnRow | CapsuleOnlyRow;
 
 type LocalTranscriptMessage = TranscriptMessage & {
   localState?: string;
@@ -121,6 +142,10 @@ function collectBlockMessageIds(
     ids.add(block.entry.message.id);
     return;
   }
+  // Capsule cards aren't messages: they never contribute visible message ids.
+  if (block.kind === 'capsule_cards') {
+    return;
+  }
   for (const entry of block.entries) {
     if (entry.toolUse) {
       ids.add(entry.toolUse.id);
@@ -154,6 +179,10 @@ function representedMessageIdsForRows(rows: TurnRenderRow[]): Set<string> {
     }
     if (row.kind === 'turn') {
       collectActivityRowMessageIds(row, ids);
+      continue;
+    }
+    // Capsule-only rows carry no messages.
+    if (row.kind === 'capsule_only') {
       continue;
     }
     collectBlockMessageIds(row.userBlock, ids);
@@ -284,6 +313,7 @@ export function buildThreadViewRows(
     const activityRows = row.activity
       .map((activity) => activityToRow(activity, messages))
       .filter((activity): activity is UserTurnActivityRow => activity !== null);
+    const capsuleCards = row.capsule_cards ?? [];
     const user = lookup(messages, row.user);
     if (user) {
       rows.push({
@@ -291,12 +321,22 @@ export function buildThreadViewRows(
         key: `user-turn:${user.id}`,
         userBlock: messageBlock(user),
         activityRows,
+        capsuleCards,
       });
       continue;
     }
     // Orphan turn (server `user=null`, or the user body isn't loaded yet):
     // surface its activity at the top level, mirroring the old orphan handling.
     rows.push(...activityRows);
+    // Don't fabricate a fake user bubble just to hang the cards: surface them as
+    // a dedicated top-level row so server Capsule cards still render.
+    if (capsuleCards.length) {
+      rows.push({
+        kind: 'capsule_only',
+        key: `capsule-cards:${row.id}`,
+        capsuleCards,
+      });
+    }
   }
   return rows;
 }
@@ -327,6 +367,7 @@ export function buildThreadViewRowsWithLocalUsers(
       key: `user-turn:${message.id}`,
       userBlock: messageBlock(message),
       activityRows: [],
+      capsuleCards: [],
     });
   }
   return localRows.length ? [...rows, ...localRows] : rows;
@@ -368,6 +409,15 @@ export function buildThreadViewBlocks(
           blocks.push(messageBlock(finalMessage));
         }
       }
+    }
+    // Server Capsule cards render after this turn's activity in the flat list,
+    // structurally (no tool-result scan, no capsule list lookup).
+    if (row.capsule_cards?.length) {
+      blocks.push({
+        kind: 'capsule_cards',
+        key: `capsule-cards:${row.id}`,
+        cards: row.capsule_cards,
+      });
     }
   }
   return blocks;

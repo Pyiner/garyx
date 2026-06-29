@@ -60,7 +60,7 @@ test("rejects legacy query-based thread links", () => {
     type: "error",
     url: "garyx://open?thread=thread::abc123",
     error:
-      "Unsupported garyx:// target. Use garyx://thread/<thread-id>, garyx://new?workspace=<path>, garyx://resume/<session-id>, or garyx://resume/<provider>/<session-id>.",
+      "Unsupported garyx:// target. Use garyx://thread/<thread-id>, garyx://new?workspace=<path>, garyx://capsules/<capsule-id>, garyx://resume/<session-id>, or garyx://resume/<provider>/<session-id>.",
   });
 });
 
@@ -79,7 +79,32 @@ test("rejects extra path segments", () => {
       type: "error",
       url: "garyx://resume/codex/session-123/extra",
       error:
-        "Unsupported garyx:// format. Use garyx://thread/<thread-id>, garyx://new?workspace=<path>, garyx://resume/<session-id>, or garyx://resume/<provider>/<session-id>.",
+        "Unsupported garyx:// format. Use garyx://thread/<thread-id>, garyx://new?workspace=<path>, garyx://capsules/<capsule-id>, garyx://resume/<session-id>, or garyx://resume/<provider>/<session-id>.",
     },
   );
+});
+
+test("parses canonical capsule deep link", () => {
+  assert.deepEqual(
+    parseDesktopDeepLink("garyx://capsules/01900000-0000-7000-8000-000000000001"),
+    {
+      type: "open-capsule",
+      url: "garyx://capsules/01900000-0000-7000-8000-000000000001",
+      capsuleId: "01900000-0000-7000-8000-000000000001",
+    },
+  );
+});
+
+test("accepts the singular capsule host", () => {
+  const event = parseDesktopDeepLink(
+    "garyx://capsule/01900000-0000-7000-8000-000000000001",
+  );
+  assert.equal(event.type, "open-capsule");
+  assert.equal(event.capsuleId, "01900000-0000-7000-8000-000000000001");
+});
+
+test("rejects capsule links without an id, with a query, or with extra segments", () => {
+  assert.equal(parseDesktopDeepLink("garyx://capsules").type, "error");
+  assert.equal(parseDesktopDeepLink("garyx://capsules/abc?focus=1").type, "error");
+  assert.equal(parseDesktopDeepLink("garyx://capsules/abc/extra").type, "error");
 });

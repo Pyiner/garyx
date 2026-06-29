@@ -81,6 +81,9 @@ function blockMessageIds(blocks) {
       ids.push(block.entry.message.id);
       continue;
     }
+    if (block.kind === 'capsule_cards') {
+      continue;
+    }
     for (const entry of block.entries) {
       if (entry.toolUse) ids.push(entry.toolUse.id);
       if (entry.toolResult) ids.push(entry.toolResult.id);
@@ -469,7 +472,15 @@ test('team flatten preserves block order and per-message metadata', () => {
   assert.deepEqual(agentIds, [null, 'alpha', 'alpha', null, 'beta']);
 });
 
-test('capsule_cards are tolerated but not rendered by the T1 desktop mapper', () => {
+const capsuleCardFixture = {
+  id: 'capsule_card:01900000-0000-7000-8000-000000000903',
+  capsule_id: '01900000-0000-7000-8000-000000000903',
+  title: 'Desktop Contract Capsule',
+  revision: 2,
+  action: 'updated',
+};
+
+test('solo capsule_cards pass through the turn without entering visible ids/blocks', () => {
   const renderState = {
     based_on_seq: 2,
     rows: [
@@ -487,15 +498,7 @@ test('capsule_cards are tolerated but not rendered by the T1 desktop mapper', ()
         ],
         started_at: null,
         finished_at: null,
-        capsule_cards: [
-          {
-            id: 'capsule_card:01900000-0000-7000-8000-000000000903',
-            capsule_id: '01900000-0000-7000-8000-000000000903',
-            title: 'Desktop Contract Capsule',
-            revision: 1,
-            action: 'created',
-          },
-        ],
+        capsule_cards: [capsuleCardFixture],
       },
     ],
     tailActivity: 'none',
@@ -512,7 +515,87 @@ test('capsule_cards are tolerated but not rendered by the T1 desktop mapper', ()
   assert.equal(rows.length, 1);
   assert.equal(rows[0].kind, 'user_turn');
   assert.equal(rows[0].activityRows.length, 1);
+  // The cards pass through on the turn...
+  assert.deepEqual(rows[0].capsuleCards, [capsuleCardFixture]);
+  // ...but are never messages: visible ids and the team flatten stay clean.
   assert.deepEqual(blockMessageIds(blocks), ['seq:1', 'seq:2']);
+});
+
+test('orphan turn with capsule_cards surfaces a top-level capsule_only row', () => {
+  const renderState = {
+    based_on_seq: 3,
+    rows: [
+      {
+        kind: 'user_turn',
+        id: 'user_turn:seq:1',
+        user: { id: 'seq:1', seq: 1, role: 'user' },
+        activity: [
+          {
+            kind: 'assistant_reply',
+            id: 'assistant_reply:seq:2',
+            message: { id: 'seq:2', seq: 2, role: 'assistant' },
+            streaming: false,
+          },
+        ],
+        started_at: null,
+        finished_at: null,
+        capsule_cards: [capsuleCardFixture],
+      },
+    ],
+    tailActivity: 'none',
+    activeToolGroupId: null,
+    progress_locus: 'none',
+    visibleMessageIds: ['seq:1', 'seq:2'],
+    filtered_placeholders: [],
+  };
+  // Drop the user body (seq 1): the turn becomes an orphan, but its cards must
+  // still surface via a dedicated capsule_only row (no fake user bubble).
+  const messages = messagesBySeqFor(renderState);
+  messages.delete(1);
+
+  const rows = buildThreadViewRows(renderState, messages);
+  assert.ok(rows.every((row) => row.kind !== 'user_turn'));
+  const capsuleOnly = rows.find((row) => row.kind === 'capsule_only');
+  assert.ok(capsuleOnly, 'orphan cards should produce a capsule_only row');
+  assert.deepEqual(capsuleOnly.capsuleCards, [capsuleCardFixture]);
+});
+
+test('team flatten emits a capsule_cards block after the turn, not a message', () => {
+  const renderState = {
+    based_on_seq: 2,
+    rows: [
+      {
+        kind: 'user_turn',
+        id: 'user_turn:seq:1',
+        user: { id: 'seq:1', seq: 1, role: 'user' },
+        activity: [
+          {
+            kind: 'assistant_reply',
+            id: 'assistant_reply:seq:2',
+            message: { id: 'seq:2', seq: 2, role: 'assistant' },
+            streaming: false,
+          },
+        ],
+        started_at: null,
+        finished_at: null,
+        capsule_cards: [capsuleCardFixture],
+      },
+    ],
+    tailActivity: 'none',
+    activeToolGroupId: null,
+    progress_locus: 'none',
+    visibleMessageIds: ['seq:1', 'seq:2'],
+    filtered_placeholders: [],
+  };
+  const messages = messagesBySeqFor(renderState);
+
+  const blocks = buildThreadViewBlocks(renderState, messages);
+  const capsuleBlock = blocks.find((block) => block.kind === 'capsule_cards');
+  assert.ok(capsuleBlock, 'team flatten should emit a capsule_cards block');
+  assert.deepEqual(capsuleBlock.cards, [capsuleCardFixture]);
+  // The block sits after the turn's message blocks and contributes no ids.
+  assert.deepEqual(blockMessageIds(blocks), ['seq:1', 'seq:2']);
+  assert.equal(blocks[blocks.length - 1].kind, 'capsule_cards');
 });
 
 test('unknown render activity and step item kinds are skipped', () => {

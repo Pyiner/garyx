@@ -14,6 +14,7 @@ import type {
   DesktopAutomationStatus,
   DesktopApiProviderType,
   DesktopAutomationSummary,
+  DesktopCapsuleHtmlResult,
   DesktopCapsuleSummary,
   DesktopCapsulesPage,
   ChannelPluginCatalogEntry,
@@ -4889,14 +4890,27 @@ export async function getCapsule(
 export async function getCapsuleHtml(
   settings: DesktopSettings,
   capsuleId: string,
-): Promise<string> {
+): Promise<DesktopCapsuleHtmlResult> {
   const id = capsuleId?.trim() || "";
   if (!id) {
     throw new Error("capsuleId is required");
   }
-  return requestText(settings, `/api/capsules/${encodeURIComponent(id)}/serve`, {
-    signal: AbortSignal.timeout(15000),
-  });
+  try {
+    const html = await requestText(
+      settings,
+      `/api/capsules/${encodeURIComponent(id)}/serve`,
+      { signal: AbortSignal.timeout(15000) },
+    );
+    return { status: "ok", html };
+  } catch (error) {
+    // A hard delete returns 404 from `/serve`: surface it as a value so callers
+    // render a "Capsule deleted" tombstone. Transient/5xx/offline failures stay
+    // rejections so the renderer keeps them retryable and never mislabels them.
+    if (error instanceof GatewayRequestError && error.status === 404) {
+      return { status: "deleted" };
+    }
+    throw error;
+  }
 }
 
 export async function deleteCapsule(

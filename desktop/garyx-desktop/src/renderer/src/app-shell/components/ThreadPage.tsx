@@ -56,6 +56,7 @@ import {
 import { TurnSummary } from "../../turn-summary";
 import { ToolTraceGroup } from "../../tool-trace";
 import { AgentAvatar } from "./AgentAvatar";
+import { CapsuleChatCardList } from "./CapsuleChatCard";
 import { ThreadLogPanel } from "./ThreadLogPanel";
 import { ThreadTaskTreePopover } from "./ThreadTaskTreePopover";
 import { shouldShowThreadTaskTreePopover } from "./thread-task-tree-popover-model";
@@ -137,6 +138,9 @@ function speakerForTranscriptBlock(
     childThreadIds: Record<string, string>;
   },
 ): TeamSpeaker | null {
+  if (block.kind === "capsule_cards") {
+    return null;
+  }
   if (block.kind === "message") {
     if (block.entry.message.role !== "assistant") {
       return null;
@@ -376,6 +380,7 @@ type ThreadPageProps = {
   onThreadLogsResizeStart: (event: React.PointerEvent<HTMLDivElement>) => void;
   onSteerQueuedPrompt: (intent: MessageIntent) => void;
   onOpenThreadById: (threadId: string) => void;
+  onOpenCapsule?: (capsuleId: string) => void;
   preferredWorkspaceForNewThread: DesktopWorkspace | null;
 };
 
@@ -478,6 +483,7 @@ export function ThreadPage({
   onSetDraggedQueueIntentId,
   onSteerQueuedPrompt,
   onOpenThreadById,
+  onOpenCapsule,
   onThreadLogsContentScroll,
   onThreadLogsResizeKeyDown,
   onThreadLogsResizeStart,
@@ -743,6 +749,15 @@ export function ThreadPage({
               block: RenderTranscriptBlock,
               options: { markUserTurnStart?: boolean } = {},
             ): ReactNode => {
+              if (block.kind === "capsule_cards") {
+                return (
+                  <CapsuleChatCardList
+                    cards={block.cards}
+                    key={`${block.key}:body`}
+                    onOpenCapsule={onOpenCapsule}
+                  />
+                );
+              }
               if (block.kind === "tool_group") {
                 return (
                   <article
@@ -925,6 +940,15 @@ export function ThreadPage({
                   <Fragment key={row.key}>{renderActivityRow(row)}</Fragment>
                 );
               }
+              if (row.kind === "capsule_only") {
+                return (
+                  <CapsuleChatCardList
+                    cards={row.capsuleCards}
+                    key={row.key}
+                    onOpenCapsule={onOpenCapsule}
+                  />
+                );
+              }
               return (
                 <Fragment key={row.key}>
                   {renderBlockBody(row.userBlock, {
@@ -933,6 +957,12 @@ export function ThreadPage({
                   {row.activityRows.map((activityRow) =>
                     renderActivityRow(activityRow),
                   )}
+                  {row.capsuleCards.length ? (
+                    <CapsuleChatCardList
+                      cards={row.capsuleCards}
+                      onOpenCapsule={onOpenCapsule}
+                    />
+                  ) : null}
                 </Fragment>
               );
             });
