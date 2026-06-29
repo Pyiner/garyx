@@ -268,6 +268,9 @@ const THREAD_HISTORY_PAGE_SIZE = 100;
 const THREAD_HISTORY_USER_QUERY_LIMIT = 10;
 const THREAD_HISTORY_FORWARD_PAGE_LIMIT = 50;
 const USER_TURN_PREFETCH_THRESHOLD = 3;
+const CAPSULE_PANEL_MIN_WIDTH = 360;
+const CAPSULE_PANEL_MAIN_MIN_WIDTH = 360;
+const CAPSULE_PANEL_RESIZER_WIDTH = 10;
 const SELECTED_THREAD_STREAM_CONSUMER_ID = "selected-thread";
 
 type ThreadEntrySelectionSource =
@@ -1635,6 +1638,10 @@ export function AppShell() {
     defaultSideToolsPanelWidth(null),
   );
   const [sideToolsResizing, setSideToolsResizing] = useState(false);
+  const [capsulePanelWidth, setCapsulePanelWidth] = useState<number | null>(
+    null,
+  );
+  const [capsulePanelResizing, setCapsulePanelResizing] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(245);
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [railWidth, setRailWidth] = useState(258);
@@ -1803,6 +1810,13 @@ export function AppShell() {
     startWidth: number;
   } | null>(null);
   const sideToolsPanelWidthCustomizedRef = useRef(false);
+  const capsulePanelWidthRef = useRef<number | null>(null);
+  const capsulePanelResizeStateRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startWidth: number;
+    target: HTMLDivElement;
+  } | null>(null);
   const pendingThreadBottomSnapRef = useRef<string | null>(null);
   const pendingMessagesPrependAnchorRef = useRef<{
     threadId: string;
@@ -2139,6 +2153,41 @@ export function AppShell() {
     return conversationRef.current?.clientWidth || null;
   }
 
+  function clampCapsulePanelWidth(
+    nextWidth: number,
+    layoutWidth: number | null,
+  ): number {
+    const roundedWidth = Math.round(nextWidth);
+    if (!layoutWidth) {
+      return Math.max(CAPSULE_PANEL_MIN_WIDTH, roundedWidth);
+    }
+    const maxWidth = Math.max(
+      CAPSULE_PANEL_MIN_WIDTH,
+      layoutWidth - CAPSULE_PANEL_RESIZER_WIDTH - CAPSULE_PANEL_MAIN_MIN_WIDTH,
+    );
+    return Math.max(
+      CAPSULE_PANEL_MIN_WIDTH,
+      Math.min(maxWidth, roundedWidth),
+    );
+  }
+
+  function defaultCapsulePanelWidth(layoutWidth: number | null): number {
+    if (!layoutWidth) {
+      return CAPSULE_PANEL_MIN_WIDTH;
+    }
+    return clampCapsulePanelWidth(
+      (layoutWidth - CAPSULE_PANEL_RESIZER_WIDTH) / 2.3,
+      layoutWidth,
+    );
+  }
+
+  function maxCapsulePanelWidth(layoutWidth: number | null): number {
+    if (!layoutWidth) {
+      return CAPSULE_PANEL_MIN_WIDTH;
+    }
+    return clampCapsulePanelWidth(Number.POSITIVE_INFINITY, layoutWidth);
+  }
+
   function hasGatewayRecoveryActivity(): boolean {
     const hasBusyStream = Object.values(liveStreamStateRef.current).some(
       (stream) => {
@@ -2379,6 +2428,71 @@ export function AppShell() {
                 layoutWidth,
               );
     setSideToolsPanelWidth(nextWidth);
+  }
+
+  function currentCapsulePanelElementWidth(
+    resizer: HTMLDivElement | null,
+  ): number {
+    const panel = resizer?.nextElementSibling;
+    if (panel instanceof HTMLElement) {
+      const measuredWidth = panel.getBoundingClientRect().width;
+      if (measuredWidth > 0) {
+        return measuredWidth;
+      }
+    }
+    return (
+      capsulePanelWidthRef.current ??
+      defaultCapsulePanelWidth(currentConversationWidth())
+    );
+  }
+
+  function handleCapsulePanelResizeStart(
+    event: React.PointerEvent<HTMLDivElement>,
+  ) {
+    if (!showConversationCapsulePanel || capsulePanelFullscreen) {
+      return;
+    }
+    event.currentTarget.setPointerCapture(event.pointerId);
+    capsulePanelResizeStateRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: clampCapsulePanelWidth(
+        currentCapsulePanelElementWidth(event.currentTarget),
+        currentConversationWidth(),
+      ),
+      target: event.currentTarget,
+    };
+    setCapsulePanelResizing(true);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    event.preventDefault();
+  }
+
+  function handleCapsulePanelResizeKeyDown(
+    event: React.KeyboardEvent<HTMLDivElement>,
+  ) {
+    if (!showConversationCapsulePanel || capsulePanelFullscreen) {
+      return;
+    }
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+      return;
+    }
+
+    event.preventDefault();
+    const step = event.shiftKey ? 56 : 28;
+    const layoutWidth = currentConversationWidth();
+    const currentWidth = currentCapsulePanelElementWidth(event.currentTarget);
+    const nextWidth =
+      event.key === "Home"
+        ? CAPSULE_PANEL_MIN_WIDTH
+        : event.key === "End"
+          ? layoutWidth
+            ? clampCapsulePanelWidth(Number.POSITIVE_INFINITY, layoutWidth)
+            : currentWidth
+          : event.key === "ArrowLeft"
+            ? clampCapsulePanelWidth(currentWidth + step, layoutWidth)
+            : clampCapsulePanelWidth(currentWidth - step, layoutWidth);
+    setCapsulePanelWidth(nextWidth);
   }
 
   const activeThread = selectedThread(desktopState, selectedThreadId);
@@ -4376,6 +4490,10 @@ export function AppShell() {
   }, [sideToolsPanelWidth]);
 
   useEffect(() => {
+    capsulePanelWidthRef.current = capsulePanelWidth;
+  }, [capsulePanelWidth]);
+
+  useEffect(() => {
     const nextWidth = clampThreadLogsPanelWidth(
       desktopState?.settings.threadLogsPanelWidth ??
         DEFAULT_DESKTOP_SETTINGS.threadLogsPanelWidth,
@@ -4509,6 +4627,19 @@ export function AppShell() {
         : defaultSideToolsPanelWidth(conversationWidth);
       if (nextSideToolsWidth !== sideToolsPanelWidthRef.current) {
         setSideToolsPanelWidth(nextSideToolsWidth);
+      }
+      const nextCapsuleWidth =
+        capsulePanelWidthRef.current === null
+          ? null
+          : clampCapsulePanelWidth(
+              capsulePanelWidthRef.current,
+              conversationWidth,
+            );
+      if (
+        nextCapsuleWidth !== null &&
+        nextCapsuleWidth !== capsulePanelWidthRef.current
+      ) {
+        setCapsulePanelWidth(nextCapsuleWidth);
       }
     };
     window.addEventListener("resize", handleResize);
@@ -4675,6 +4806,46 @@ export function AppShell() {
       window.removeEventListener("pointercancel", finishResize);
     };
   }, [sideToolsResizing]);
+
+  useEffect(() => {
+    if (!capsulePanelResizing) {
+      return;
+    }
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const resizeState = capsulePanelResizeStateRef.current;
+      if (!resizeState) {
+        return;
+      }
+      const nextWidth = clampCapsulePanelWidth(
+        resizeState.startWidth + (resizeState.startX - event.clientX),
+        currentConversationWidth(),
+      );
+      setCapsulePanelWidth(nextWidth);
+    };
+
+    const finishResize = () => {
+      const resizeState = capsulePanelResizeStateRef.current;
+      if (resizeState?.target.hasPointerCapture(resizeState.pointerId)) {
+        resizeState.target.releasePointerCapture(resizeState.pointerId);
+      }
+      capsulePanelResizeStateRef.current = null;
+      setCapsulePanelResizing(false);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", finishResize);
+    window.addEventListener("pointercancel", finishResize);
+    return () => {
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", finishResize);
+      window.removeEventListener("pointercancel", finishResize);
+    };
+  }, [capsulePanelResizing]);
 
   useEffect(() => {
     syncComposerPhase(composer, isComposingRef.current);
@@ -9609,6 +9780,7 @@ export function AppShell() {
       ? "capsule-panel-fullscreen"
       : null,
     sideToolsResizing ? "side-tools-resizing" : null,
+    capsulePanelResizing ? "capsule-panel-resizing" : null,
   ]
     .filter(Boolean)
     .join(" ");
@@ -9616,6 +9788,10 @@ export function AppShell() {
     ? ({
         "--side-tools-panel-width": `${sideToolsPanelWidth}px`,
       } as CSSProperties)
+    : showConversationCapsulePanel && capsulePanelWidth !== null
+      ? ({
+          "--capsule-panel-width": `${capsulePanelWidth}px`,
+        } as CSSProperties)
     : undefined;
 
   function renderPrimaryThreadPage(
@@ -10720,21 +10896,42 @@ export function AppShell() {
             </Suspense>
           </section>
           {showConversationCapsulePanel && capsulePanelCard ? (
-            <CapsuleConversationPanel
-              capsuleId={capsulePanelCard.card.capsule_id}
-              revision={capsulePanelCard.card.revision}
-              title={
-                capsulePanelCard.card.title?.trim() || t("Untitled Capsule")
-              }
-              isFullscreen={capsulePanelFullscreen}
-              onToggleFullscreen={() => {
-                setCapsulePanelFullscreen((current) => !current);
-              }}
-              onClose={() => {
-                setCapsulePanelCard(null);
-                setCapsulePanelFullscreen(false);
-              }}
-            />
+            <>
+              <div
+                aria-hidden={capsulePanelFullscreen}
+                aria-label={t("Resize Capsule preview")}
+                aria-orientation="vertical"
+                aria-valuemax={maxCapsulePanelWidth(currentConversationWidth())}
+                aria-valuemin={CAPSULE_PANEL_MIN_WIDTH}
+                aria-valuenow={
+                  capsulePanelWidth ??
+                  defaultCapsulePanelWidth(currentConversationWidth())
+                }
+                className="capsule-panel-resizer"
+                onKeyDown={handleCapsulePanelResizeKeyDown}
+                onPointerDown={handleCapsulePanelResizeStart}
+                role="separator"
+                tabIndex={capsulePanelFullscreen ? -1 : 0}
+              />
+              <CapsuleConversationPanel
+                capsuleId={capsulePanelCard.card.capsule_id}
+                revision={capsulePanelCard.card.revision}
+                title={
+                  capsulePanelCard.card.title?.trim() || t("Untitled Capsule")
+                }
+                isFullscreen={capsulePanelFullscreen}
+                onToggleFullscreen={() => {
+                  setCapsulePanelFullscreen((current) => !current);
+                }}
+                onClose={() => {
+                  setCapsulePanelCard(null);
+                  setCapsulePanelFullscreen(false);
+                }}
+              />
+              {capsulePanelResizing ? (
+                <div className="capsule-panel-resize-shield" aria-hidden="true" />
+              ) : null}
+            </>
           ) : showConversationSideTools ? (
             <>
               <div

@@ -2661,7 +2661,12 @@ code {
 }
 
 .conversation.with-capsule-panel {
-  grid-template-columns: minmax(0, 1fr) clamp(480px, 52%, 860px);
+  --capsule-panel-resizer-width: 10px;
+  position: relative;
+  grid-template-columns:
+    minmax(0, 1.3fr)
+    var(--capsule-panel-resizer-width)
+    minmax(360px, var(--capsule-panel-width, 1fr));
   grid-template-rows: auto minmax(0, 1fr);
 }
 
@@ -2675,8 +2680,13 @@ code {
   grid-row: 2;
 }
 
-.conversation.with-capsule-panel .capsule-conversation-panel {
+.conversation.with-capsule-panel .capsule-panel-resizer {
   grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+.conversation.with-capsule-panel .capsule-conversation-panel {
+  grid-column: 3;
   grid-row: 1 / span 2;
 }
 
@@ -2685,6 +2695,7 @@ code {
   grid-template-rows: minmax(0, 1fr);
 }
 
+.conversation.with-capsule-panel.capsule-panel-fullscreen .capsule-panel-resizer,
 .conversation.with-capsule-panel.capsule-panel-fullscreen .conversation-header,
 .conversation.with-capsule-panel.capsule-panel-fullscreen .conversation-body {
   display: none;
@@ -2698,6 +2709,18 @@ code {
 
 .conversation.side-tools-resizing {
   cursor: col-resize;
+}
+
+.conversation.capsule-panel-resizing {
+  cursor: col-resize;
+}
+
+.capsule-panel-resize-shield {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  cursor: col-resize;
+  -webkit-app-region: no-drag;
 }
 
 .conversation.browser-view {
@@ -5139,17 +5162,27 @@ code {
   touch-action: none;
 }
 
-.side-tools-resizer {
+.side-tools-resizer,
+.capsule-panel-resizer {
   position: relative;
-  width: var(--side-tools-resizer-width, 10px);
-  min-width: var(--side-tools-resizer-width, 10px);
   cursor: col-resize;
   touch-action: none;
   -webkit-app-region: no-drag;
 }
 
+.side-tools-resizer {
+  width: var(--side-tools-resizer-width, 10px);
+  min-width: var(--side-tools-resizer-width, 10px);
+}
+
+.capsule-panel-resizer {
+  width: var(--capsule-panel-resizer-width, 10px);
+  min-width: var(--capsule-panel-resizer-width, 10px);
+}
+
 .thread-log-resizer::before,
-.side-tools-resizer::before {
+.side-tools-resizer::before,
+.capsule-panel-resizer::before {
   content: "";
   position: absolute;
   top: 0;
@@ -5166,7 +5199,10 @@ code {
 .thread-layout.log-panel-resizing .thread-log-resizer::before,
 .side-tools-resizer:hover::before,
 .side-tools-resizer:focus-visible::before,
-.conversation.side-tools-resizing .side-tools-resizer::before {
+.conversation.side-tools-resizing .side-tools-resizer::before,
+.capsule-panel-resizer:hover::before,
+.capsule-panel-resizer:focus-visible::before,
+.conversation.capsule-panel-resizing .capsule-panel-resizer::before {
   background: color-mix(
     in srgb,
     var(--color-token-foreground) 22%,
@@ -17528,7 +17564,8 @@ button.codex-list-row {
   }
 
   .thread-log-resizer,
-  .side-tools-resizer {
+  .side-tools-resizer,
+  .capsule-panel-resizer {
     display: none;
   }
 
