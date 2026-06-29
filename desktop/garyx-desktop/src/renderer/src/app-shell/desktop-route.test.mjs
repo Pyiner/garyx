@@ -122,16 +122,16 @@ test('falls back unknown hash routes to thread home', () => {
 
 test('parses and builds capsule preview routes', () => {
   const route = parseDesktopRoute(
-    'file:///Garyx.app/index.html#/capsules/019f0ec9-1ef7-79e0-8001-8863e59efa67',
+    'file:///Garyx.app/index.html#/capsules/01900000-0000-7000-8000-000000000001',
   );
   assert.deepEqual(route, {
     kind: 'capsule',
-    capsuleId: '019f0ec9-1ef7-79e0-8001-8863e59efa67',
+    capsuleId: '01900000-0000-7000-8000-000000000001',
   });
   assert.equal(contentViewForDesktopRoute(route), 'capsules');
   assert.equal(
     buildDesktopRouteHash(route),
-    '#/capsules/019f0ec9-1ef7-79e0-8001-8863e59efa67',
+    '#/capsules/01900000-0000-7000-8000-000000000001',
   );
   // The bare gallery route is unchanged (regression guard for the parse order).
   assert.deepEqual(parseDesktopRoute('file:///Garyx.app/index.html#/capsules'), {
@@ -148,9 +148,9 @@ test('currentDesktopRoute round-trips the capsule preview id (cold-start guard)'
     currentDesktopRoute({
       ...baseRouteInput,
       contentView: 'capsules',
-      capsulePreviewId: '019f0ec9-1ef7-79e0-8001-8863e59efa67',
+      capsulePreviewId: '01900000-0000-7000-8000-000000000001',
     }),
-    { kind: 'capsule', capsuleId: '019f0ec9-1ef7-79e0-8001-8863e59efa67' },
+    { kind: 'capsule', capsuleId: '01900000-0000-7000-8000-000000000001' },
   );
   // Gallery (no preview id) serializes to the plain view route.
   assert.deepEqual(
@@ -163,7 +163,7 @@ test('currentDesktopRoute round-trips the capsule preview id (cold-start guard)'
       ...baseRouteInput,
       contentView: 'thread',
       selectedThreadId: 'thread::abc',
-      capsulePreviewId: '019f0ec9-1ef7-79e0-8001-8863e59efa67',
+      capsulePreviewId: '01900000-0000-7000-8000-000000000001',
     }),
     { kind: 'thread', threadId: 'thread::abc' },
   );

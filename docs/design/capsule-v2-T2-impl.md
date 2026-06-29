@@ -38,8 +38,8 @@
   已含 `desktop-route.test.mjs`、`render-view-model.test.mjs`、`gary-client.test.mjs`；
   `render-view-model.test.mjs:472` 的 “capsule_cards are tolerated but not rendered” 是 **T1 现态断言**，
   T2 要改成“透传但不计入 visible/blocks”。`getCapsuleHtml`/`listCapsules` **未**被任何 mjs 测试/electron-smoke 引用。
-- 本地 gateway（:31337）真有 3 条 capsule，含任务点名 `019f0ec9-…`「Capsule 功能讲解」(14KB) +
-  两条 T1 合成 fixture（codex/claude）→ CDP 验收有真数据。
+- 本地 gateway（:31337）真有 3 条 capsule，含一条 dogfood 讲解页 capsule(14KB) +
+  两条 T1 合成 fixture（codex/claude）→ CDP 验收有真数据（验收时按本地实际 id 取，勿把真 id 写进提交物）。
 - 约束：desktop `CLAUDE.md`（`*:focus{outline:none}` 有意保留、公共仓库无个人数据、暖中性+绿强调仅语义态、
   light only）；`desktop-ui.md` + product-ui skill（用 lucide、选中态单色非绿、provider/agent 走共享展示助手、
   transcript 一律 server render_state 派生不本地重算）。
@@ -411,9 +411,9 @@ Copy link 用 `garyx://capsules/<id>`（不带 token）；title/meta 是 native 
 
 - `npm run build:ui`（tsc --noEmit + electron-vite build）绿；`npm run test:unit` 绿（含新增/改 4 类测试）。
 - `npm run dist:dir` 装包 + 退旧进程 + CDP attach（`playwright-cli -s=<s> attach --cdp=http://127.0.0.1:39222`，连本地真 gateway :31337）：
-  1. gallery 显示 3 条真 capsule（`019f0ec9` 等），卡片上半 live 预览渲染（非空白）。
+  1. gallery 显示 3 条真 capsule（本地已有），卡片上半 live 预览渲染（非空白）。
   2. 点卡 → 去 chrome 预览近全屏；toolbar 有 Back/Refresh/Copy link/⋯；Back 回 gallery。
-  3. 聊天里（开 `thread::8c689df7-…` 等带 capsule 的线程）final 后出现 capsule 卡片，点击进 preview。
+  3. 聊天里（开一条带 capsule 的线程）final 后出现 capsule 卡片，点击进 preview。
   4. **冷启动（修 R1-B1 复核）**：以 `#/capsules/<id>` hash 启动 app → 直接落 preview（非 gallery），hash 不被抹成 `#/capsules`。
   5. DOM 断言（**限定 capsule iframe**）：`[...document.querySelectorAll('.capsule-live-frame')].every(f => !f.sandbox.contains('allow-same-origin'))`、
      `document.querySelectorAll('webview').length===0`。

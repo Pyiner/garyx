@@ -87,7 +87,9 @@ export function CapsuleLivePreviewFrame({
     const observer = new ResizeObserver(apply);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [mode]);
+    // Re-run when the canvas mounts (status → ready) so the observer attaches
+    // and the thumbnail scales to the real card width instead of the CSS default.
+  }, [mode, state.status]);
 
   if (state.status === 'deleted') {
     return (

@@ -86,21 +86,21 @@ test("rejects extra path segments", () => {
 
 test("parses canonical capsule deep link", () => {
   assert.deepEqual(
-    parseDesktopDeepLink("garyx://capsules/019f0ec9-1ef7-79e0-8001-8863e59efa67"),
+    parseDesktopDeepLink("garyx://capsules/01900000-0000-7000-8000-000000000001"),
     {
       type: "open-capsule",
-      url: "garyx://capsules/019f0ec9-1ef7-79e0-8001-8863e59efa67",
-      capsuleId: "019f0ec9-1ef7-79e0-8001-8863e59efa67",
+      url: "garyx://capsules/01900000-0000-7000-8000-000000000001",
+      capsuleId: "01900000-0000-7000-8000-000000000001",
     },
   );
 });
 
 test("accepts the singular capsule host", () => {
   const event = parseDesktopDeepLink(
-    "garyx://capsule/019f0ec9-1ef7-79e0-8001-8863e59efa67",
+    "garyx://capsule/01900000-0000-7000-8000-000000000001",
   );
   assert.equal(event.type, "open-capsule");
-  assert.equal(event.capsuleId, "019f0ec9-1ef7-79e0-8001-8863e59efa67");
+  assert.equal(event.capsuleId, "01900000-0000-7000-8000-000000000001");
 });
 
 test("rejects capsule links without an id, with a query, or with extra segments", () => {
