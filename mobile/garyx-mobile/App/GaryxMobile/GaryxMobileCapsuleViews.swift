@@ -215,9 +215,9 @@ struct GaryxCapsulePreviewThumbnail: View {
     let isActive: Bool
     let cacheEpoch: Int
     let cornerRadius: CGFloat
-    /// Gallery cards render the preview full-bleed (top corners rounded by the
-    /// card clip, a hairline divider below), so they suppress the thumbnail's own
-    /// rounded border. Chat-card and focused thumbnails keep it (default true).
+    /// Full-bleed card previews suppress the thumbnail's own rounded border so
+    /// the containing card owns clipping and outlining. Focused thumbnails keep
+    /// it by default.
     var showsBorder: Bool = true
 
     @EnvironmentObject private var model: GaryxMobileModel
@@ -606,13 +606,14 @@ private struct GaryxMobileCapsuleChatCard: View {
 
     var body: some View {
         Button(action: onOpen) {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 0) {
                 GaryxCapsulePreviewThumbnail(
                     capsuleId: card.capsuleId,
                     revision: card.revision,
                     isActive: isActive,
                     cacheEpoch: model.capsuleHTMLCacheEpoch,
-                    cornerRadius: 12
+                    cornerRadius: 0,
+                    showsBorder: false
                 )
                 .aspectRatio(16.0 / 9.0, contentMode: .fit)
 
@@ -626,11 +627,13 @@ private struct GaryxMobileCapsuleChatCard: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
             }
-            .padding(10)
-            .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(Color.primary.opacity(0.03))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .stroke(GaryxTheme.hairline, lineWidth: 1)
             }
             .contentShape(Rectangle())
