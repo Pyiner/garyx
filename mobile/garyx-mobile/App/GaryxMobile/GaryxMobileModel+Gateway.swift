@@ -281,31 +281,40 @@ extension GaryxMobileModel {
         case .active:
             sceneRefreshTask?.cancel()
             let selectedThreadId = selectedThread?.id
+            let plan = GaryxForegroundSyncPlan.plan(
+                connectionState: connectionState,
+                selectedThreadId: selectedThreadId
+            )
             sceneRefreshTask = Task { [weak self] in
                 guard let self else { return }
-                switch connectionState {
-                case .ready:
-                    startBackgroundCommittedRunReconcileLoop()
-                    startSelectedThreadReconcileLoop()
-                    async let agentTargetsRefresh: Void = refreshAgentTargets()
-                    await refreshThreads()
-                    await agentTargetsRefresh
+                // If the connection dropped/changed while backgrounded, reconnect
+                // first so the open thread can converge to the server's latest
+                // state on return. The previous logic no-op'd whenever the cached
+                // connection state was not `.ready`, leaving the open thread frozen
+                // until a manual re-open (#TASK-1449 symptom 2).
+                if plan.reconnect, canConnectGateway {
+                    await connectAndRefresh()
                     guard !Task.isCancelled else { return }
-                    if let selectedThreadId, selectedThread?.id == selectedThreadId {
-                        await loadSelectedThreadHistory()
-                        // Re-establish the resumable per-thread stream (it was stopped
-                        // on background); it resumes from the cursor and cancels the
-                        // baseline reconcile poll started above.
+                }
+                guard case .ready = connectionState else { return }
+                startBackgroundCommittedRunReconcileLoop()
+                startSelectedThreadReconcileLoop()
+                async let agentTargetsRefresh: Void = refreshAgentTargets()
+                await refreshThreads()
+                await agentTargetsRefresh
+                guard !Task.isCancelled else { return }
+                if plan.resyncOpenThread, let selectedThreadId, selectedThread?.id == selectedThreadId {
+                    await loadSelectedThreadHistory()
+                    // Re-establish the resumable per-thread stream (it was stopped
+                    // on background); it resumes from the cursor and cancels the
+                    // baseline reconcile poll started above.
+                    if plan.restartStream {
                         startSelectedThreadStream(for: selectedThreadId)
                     }
-                    startWorkflowRunPollingIfNeeded()
-                    guard !Task.isCancelled else { return }
-                    await refreshCodingUsageWidget()
-                case .checking:
-                    break
-                case .disconnected, .failed:
-                    break
                 }
+                startWorkflowRunPollingIfNeeded()
+                guard !Task.isCancelled else { return }
+                await refreshCodingUsageWidget()
             }
         case .background:
             // Remember where the user left: only an exit from the
