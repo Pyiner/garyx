@@ -228,7 +228,7 @@ private struct GaryxRootRouteContentView: View {
     var body: some View {
         switch route {
         case .conversation:
-            if model.isWorkflowRunSurfaceActive {
+            if model.showsWorkflowRunSurface {
                 GaryxWorkflowRunView()
             } else {
                 GaryxConversationView()
@@ -242,7 +242,7 @@ private struct GaryxRootRouteContentView: View {
     private func panelContent(for panel: GaryxMobilePanel) -> some View {
         switch panel {
         case .chat:
-            if model.isWorkflowRunSurfaceActive {
+            if model.showsWorkflowRunSurface {
                 GaryxWorkflowRunView()
             } else {
                 GaryxConversationView()

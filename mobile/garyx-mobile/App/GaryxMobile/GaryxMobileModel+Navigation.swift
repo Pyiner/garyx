@@ -58,7 +58,9 @@ extension GaryxMobileModel {
         invalidatePendingThreadOpen()
         stopSelectedThreadStreamForHome()
         cancelSelectedThreadReconcileLoop()
-        cancelWorkflowRunPolling()
+        // Reset the workflow-run surface (not just polling) so its state never
+        // carries into the next navigation (#TASK-1449 symptom 1).
+        clearWorkflowRunSurface()
         var nextState = navigationState
         nextState.popToHome()
         navigationState = nextState
