@@ -680,12 +680,22 @@ public enum GaryxSelectedThreadHistoryPresentation {
             return false
         }
         if let snapshot = liveRenderSnapshot ?? cachedTranscript?.renderSnapshot {
-            return hasUnresolvedVisibleRefs(
-                snapshot: snapshot,
-                resolvedMessageIds: resolvedMessageIds,
-                resolvedHistoryIndexes: resolvedHistoryIndexes,
-                transcriptMessages: cachedTranscript?.messages ?? []
-            )
+            // Once the committed window has been applied (`historyLoaded`), the
+            // initial history has loaded. Any still-unresolved row refs are
+            // out-of-window / live-delta rows that the mapper renders as
+            // placeholders (GaryxRenderUserTurnRow.mobileRow), so they must NOT
+            // keep the loading indicator stuck on — it must settle (#TASK-1449
+            // symptom 3). Before the window is applied, an unresolved visible ref
+            // is a genuine in-flight resolve and keeps the indicator on.
+            guard historyLoaded else {
+                return hasUnresolvedVisibleRefs(
+                    snapshot: snapshot,
+                    resolvedMessageIds: resolvedMessageIds,
+                    resolvedHistoryIndexes: resolvedHistoryIndexes,
+                    transcriptMessages: cachedTranscript?.messages ?? []
+                )
+            }
+            return false
         }
         guard historyLoaded else {
             return true

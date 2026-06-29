@@ -65,9 +65,22 @@ final class GaryxSelectedThreadHistoryPresentationTests: XCTestCase {
         ))
     }
 
-    func testLiveRenderSnapshotWithUnresolvedRefsStillAwaitsInitialHistory() {
-        XCTAssertTrue(isAwaiting(
+    func testLiveRenderSnapshotWithUnresolvedRefsSettlesOnceWindowApplied() {
+        // #TASK-1449 symptom 3: once the committed window is applied
+        // (historyLoaded), an out-of-window / unresolved ref the mapper renders as
+        // a placeholder must NOT keep the loading indicator stuck on — it settles.
+        XCTAssertFalse(isAwaiting(
             historyLoaded: true,
+            liveRenderSnapshot: renderSnapshot(),
+            cachedTranscript: cachedTranscript(messages: [])
+        ))
+    }
+
+    func testLiveRenderSnapshotWithUnresolvedRefsStillAwaitsBeforeWindowApplied() {
+        // Before the window is applied (historyLoaded == false), an unresolved
+        // visible ref is a genuine in-flight resolve and keeps the indicator on.
+        XCTAssertTrue(isAwaiting(
+            historyLoaded: false,
             liveRenderSnapshot: renderSnapshot(),
             cachedTranscript: cachedTranscript(messages: [])
         ))

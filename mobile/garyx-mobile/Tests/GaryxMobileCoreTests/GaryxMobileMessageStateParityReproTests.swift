@@ -70,27 +70,23 @@ final class GaryxMobileMessageStateParityReproTests: XCTestCase {
     // MARK: Symptom 3 — loading indicator stays stuck after the transcript renders
 
     /// The top spinner is a LOADING indicator (initial history / render
-    /// resolution), which is the correct, intended role. The bug is that its
-    /// loading-complete predicate is STRICTER than the render predicate, so it
-    /// never settles after the window has loaded:
+    /// resolution), which is the correct, intended role. The fix aligns the
+    /// loading-complete predicate with the render predicate so the indicator
+    /// settles once the window is applied:
     ///
     /// - The mapper renders EVERY snapshot row, substituting a placeholder for an
     ///   unresolved ref (`GaryxRenderUserTurnRow.mobileRow`:
     ///   `mobileMessage(for:) ?? .userStepPlaceholder(for:)`,
-    ///   GaryxMobileRenderState.swift:797) — so the transcript is NOT blank.
-    /// - `isAwaitingInitialHistory` returns true while ANY snapshot row ref is
-    ///   unresolved (`hasUnresolvedVisibleRefs`, GaryxMobileRenderState.swift:699-712);
-    ///   "resolved" = the ref's id/historyIndex is among `cachedMessages`
-    ///   (GaryxMobileModel+Presentation.swift:254-261), and render-time
-    ///   placeholders are NOT in that set.
-    ///
-    /// ⇒ a fully-rendered transcript whose snapshot references an out-of-window /
-    /// not-yet-materialized message keeps the spinner stuck on, until the user
-    /// re-enters (selectThread resets pagination + reloads).
-    func testLoadingIndicatorStaysStuckWhileTranscriptIsAlreadyRendered() {
+    ///   GaryxMobileRenderState.swift) — so the transcript is NOT blank.
+    /// - `isAwaitingInitialHistory` now settles to false once `historyLoaded` is
+    ///   true (the committed window is applied); out-of-window / unresolved refs
+    ///   are placeholdered, not "still loading" (#TASK-1449 symptom 3). Before the
+    ///   window is applied it still reports an in-flight resolve.
+    func testLoadingIndicatorSettlesOnceWindowAppliedEvenWithOutOfWindowRefs() {
         let snapshot = snapshotWithUnresolvedRef()
 
-        // The transcript renders: the mapper emits a (placeholder) row.
+        // The transcript renders: the mapper emits a (placeholder) row even though
+        // the ref is not present in the local cache.
         let renderedRows = GaryxMobileRenderStateMapper.rows(
             snapshot: snapshot,
             messages: [],
@@ -98,25 +94,30 @@ final class GaryxMobileMessageStateParityReproTests: XCTestCase {
         )
         XCTAssertGreaterThanOrEqual(renderedRows.count, 1, "mapper renders a placeholder row — transcript is not blank")
 
-        // Yet the loading-complete predicate says we are still awaiting initial
-        // history, even though the committed window is loaded (historyLoaded).
-        let awaiting = GaryxSelectedThreadHistoryPresentation.isAwaitingInitialHistory(
+        // Once the committed window is applied (historyLoaded), the loading
+        // indicator settles even though the snapshot has an out-of-window ref.
+        let awaitingAfterWindowApplied = GaryxSelectedThreadHistoryPresentation.isAwaitingInitialHistory(
             threadId: "thread::T",
             historyLoaded: true,
             liveRenderSnapshot: snapshot,
             cachedTranscript: nil
         )
-        let isLoadingSelectedThreadHistory = false // no fetch in flight
-        let headerSpinnerShows = isLoadingSelectedThreadHistory || awaiting // mirrors Presentation.swift:271-273
+        XCTAssertFalse(awaitingAfterWindowApplied, "loaded + rendered ⇒ indicator settles (no stuck spinner)")
+        let headerSpinnerShows = false /* isLoadingSelectedThreadHistory */ || awaitingAfterWindowApplied
+        XCTAssertFalse(headerSpinnerShows, "spinner is off over a fully-rendered, loaded transcript")
 
-        XCTAssertTrue(awaiting, "BUG: window loaded + transcript rendered, but the indicator still 'awaits initial history'")
-        XCTAssertTrue(headerSpinnerShows, "BUG: spinner stuck on over a fully-rendered transcript")
-
-        // ORACLE: once the committed window is applied (historyLoaded == true), the
-        // initial history has loaded; an out-of-window / placeholdered ref must NOT
-        // keep the loading indicator on. The fix settles `isAwaitingInitialHistory`
-        // to false here (see the red acceptance spec in the design doc). The
-        // indicator carries NO running semantics — it is purely a loading state.
+        // Before the window is applied, an unresolved visible ref is a genuine
+        // in-flight resolve and the indicator stays on.
+        XCTAssertTrue(
+            GaryxSelectedThreadHistoryPresentation.isAwaitingInitialHistory(
+                threadId: "thread::T",
+                historyLoaded: false,
+                liveRenderSnapshot: snapshot,
+                cachedTranscript: nil
+            ),
+            "pre-window: still resolving"
+        )
+        // The indicator carries NO running semantics — purely a loading state.
     }
 
     // MARK: Fixtures
