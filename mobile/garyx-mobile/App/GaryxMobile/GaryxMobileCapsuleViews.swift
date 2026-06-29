@@ -534,6 +534,12 @@ struct GaryxCapsuleWebView: UIViewRepresentable {
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
         webView.scrollView.contentInsetAdjustmentBehavior = .never
+        // Full-screen detail renders like a browser: fill the width and never
+        // zoom. The injected viewport meta drives this; disabling pinch is a
+        // belt-and-suspenders guarantee (#TASK-1453 problem B). Vertical
+        // scrolling stays enabled — the card can be taller than the screen.
+        webView.scrollView.pinchGestureRecognizer?.isEnabled = false
+        webView.scrollView.bouncesZoom = false
         return webView
     }
 
@@ -541,7 +547,10 @@ struct GaryxCapsuleWebView: UIViewRepresentable {
         let token = "\(html.count):\(html.hashValue)"
         guard context.coordinator.loadedToken != token else { return }
         context.coordinator.loadedToken = token
-        webView.loadHTMLString(html, baseURL: nil)
+        // Force a device-width, non-zoomable viewport so the self-contained card
+        // (served with only a CSP meta, no viewport) fills the screen instead of
+        // laying out at WKWebView's desktop default and shrinking with gutters.
+        webView.loadHTMLString(GaryxCapsuleViewport.ensuringMobileViewport(in: html), baseURL: nil)
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate {
