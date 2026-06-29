@@ -18,7 +18,7 @@ use garyx_models::{
 use garyx_router::{
     InMemoryThreadStore, ThreadHistoryRepository, ThreadStore, ThreadTranscriptStore,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::sync::{Mutex, Notify, mpsc};
 
 use super::MultiProviderBridge;
@@ -179,6 +179,8 @@ struct CheckpointingProvider {
 }
 
 struct SegmentedResponseProvider;
+
+struct CapsuleStreamingProvider;
 
 struct FailingCheckpointProvider {
     delta_sent: Arc<Notify>,
@@ -767,6 +769,79 @@ impl AgentLoopProvider for QueuedInputProvider {
 }
 
 #[async_trait::async_trait]
+impl AgentLoopProvider for CapsuleStreamingProvider {
+    fn provider_type(&self) -> ProviderType {
+        ProviderType::ClaudeCode
+    }
+
+    fn is_ready(&self) -> bool {
+        true
+    }
+
+    async fn initialize(&mut self) -> Result<(), BridgeError> {
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> Result<(), BridgeError> {
+        Ok(())
+    }
+
+    async fn run_streaming(
+        &self,
+        options: &ProviderRunOptions,
+        on_chunk: StreamCallback,
+    ) -> Result<ProviderRunResult, BridgeError> {
+        let tool_use = ProviderMessage::tool_use(
+            json!({"tool": "mcp__garyx__capsule_create", "input": {"title": "Test Capsule"}}),
+            Some("toolu_fixture_capsule_create".to_owned()),
+            Some("mcp__garyx__capsule_create".to_owned()),
+        );
+        let tool_result = ProviderMessage::tool_result(
+            json!({
+                "result": [{
+                    "type": "text",
+                    "text": "{\"tool\":\"capsule_create\",\"status\":\"ok\",\"capsule_id\":\"01900000-0000-7000-8000-000000000006\",\"id\":\"01900000-0000-7000-8000-000000000006\",\"title\":\"Provider Stream Capsule\",\"revision\":1,\"open_url\":\"garyx://capsules/01900000-0000-7000-8000-000000000006\"}"
+                }],
+                "text": ""
+            }),
+            Some("toolu_fixture_capsule_create".to_owned()),
+            None,
+            Some(false),
+        );
+        let final_message = ProviderMessage::assistant_text("final answer after capsule");
+        on_chunk(StreamEvent::ToolUse {
+            message: tool_use.clone(),
+        });
+        on_chunk(StreamEvent::ToolResult {
+            message: tool_result.clone(),
+        });
+        on_chunk(StreamEvent::Delta {
+            text: "final answer after capsule".to_owned(),
+        });
+        on_chunk(StreamEvent::Done);
+        Ok(ProviderRunResult {
+            run_id: "provider-capsule-run".to_owned(),
+            thread_id: options.thread_id.clone(),
+            response: "final answer after capsule".to_owned(),
+            session_messages: vec![tool_use, tool_result, final_message],
+            sdk_session_id: None,
+            actual_model: None,
+            thread_title: None,
+            success: true,
+            error: None,
+            input_tokens: 10,
+            output_tokens: 5,
+            cost: 0.001,
+            duration_ms: 42,
+        })
+    }
+
+    async fn get_or_create_session(&self, session_key: &str) -> Result<String, BridgeError> {
+        Ok(format!("sdk-{session_key}"))
+    }
+}
+
+#[async_trait::async_trait]
 impl AgentLoopProvider for FailingCheckpointProvider {
     fn provider_type(&self) -> ProviderType {
         ProviderType::ClaudeCode
@@ -1331,6 +1406,93 @@ async fn test_resolve_provider_for_request_prefers_requested_type() {
         )
         .await;
     assert_eq!(resolved, Some("codex-default".to_owned()));
+}
+
+#[tokio::test]
+async fn test_start_agent_run_streams_capsule_attached_control_from_tool_result() {
+    let bridge = MultiProviderBridge::new();
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let history = make_history(store.clone());
+    bridge.set_thread_store(store.clone()).await;
+    bridge.set_thread_history(history.clone());
+    bridge
+        .register_provider("p1", Arc::new(CapsuleStreamingProvider))
+        .await;
+    bridge.set_default_provider_key("p1").await;
+
+    bridge
+        .start_agent_run(
+            run_request(
+                "thread::capsule-stream",
+                "create capsule",
+                "run-capsule-stream",
+                "api",
+                "main",
+            ),
+            None,
+        )
+        .await
+        .unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while bridge.is_run_active("run-capsule-stream").await {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("capsule stream run should finish");
+
+    let records = history
+        .transcript_store()
+        .records("thread::capsule-stream")
+        .await
+        .expect("records load");
+    let control_kinds = records
+        .iter()
+        .filter_map(|record| {
+            record
+                .message
+                .pointer("/control/kind")
+                .and_then(Value::as_str)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        control_kinds,
+        vec!["run_start", "capsule_attached", "done", "run_complete"]
+    );
+    let capsule_index = records
+        .iter()
+        .position(|record| {
+            record
+                .message
+                .pointer("/control/kind")
+                .and_then(Value::as_str)
+                == Some("capsule_attached")
+        })
+        .expect("capsule marker committed");
+    assert_eq!(
+        records[capsule_index].message["control"]["capsule_id"],
+        "01900000-0000-7000-8000-000000000006"
+    );
+    assert_eq!(
+        records[capsule_index].message["control"]["title"],
+        "Provider Stream Capsule"
+    );
+    assert_eq!(records[capsule_index].message["control"]["revision"], 1);
+    assert_eq!(
+        records[capsule_index].message["control"]["action"],
+        "created"
+    );
+    assert_eq!(
+        records[capsule_index.saturating_sub(1)].message["role"],
+        "tool_result",
+        "marker should be committed immediately after the successful capsule tool_result"
+    );
+    assert_eq!(
+        records[capsule_index + 1].message["role"],
+        "assistant",
+        "marker should precede the final assistant content in the authoritative run records"
+    );
 }
 
 #[tokio::test]

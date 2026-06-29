@@ -50,6 +50,25 @@ public struct GaryxThreadRenderFrameEvent: Decodable, Equatable, Sendable {
     }
 }
 
+private struct GaryxLossyDecodableArray<Element: Decodable>: Decodable {
+    var elements: [Element]
+
+    init(from decoder: Decoder) throws {
+        var container = try decoder.unkeyedContainer()
+        var decoded: [Element] = []
+        while !container.isAtEnd {
+            if let element = try? container.decode(Element.self) {
+                decoded.append(element)
+            } else {
+                _ = try? container.decode(GaryxDiscardedDecodable.self)
+            }
+        }
+        elements = decoded
+    }
+}
+
+private struct GaryxDiscardedDecodable: Decodable {}
+
 public struct GaryxRenderSnapshot: Codable, Equatable, Sendable {
     public var basedOnSeq: Int
     public var rows: [GaryxRenderRow]
@@ -93,6 +112,32 @@ public struct GaryxRenderSnapshot: Codable, Equatable, Sendable {
         case filteredPlaceholders = "filtered_placeholders"
         case rateLimit
         case window
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        basedOnSeq = try container.decodeIfPresent(Int.self, forKey: .basedOnSeq) ?? 0
+        rows = try container.decodeIfPresent(GaryxLossyDecodableArray<GaryxRenderRow>.self, forKey: .rows)?.elements ?? []
+        tailActivity = try container.decodeIfPresent(GaryxRenderTailActivity.self, forKey: .tailActivity) ?? .none
+        activeToolGroupId = try container.decodeIfPresent(String.self, forKey: .activeToolGroupId)
+        progressLocus = try container.decodeIfPresent(GaryxRenderProgressLocus.self, forKey: .progressLocus) ?? .none
+        visibleMessageIds = try container.decodeIfPresent([String].self, forKey: .visibleMessageIds) ?? []
+        filteredPlaceholders = try container.decodeIfPresent([GaryxRenderFilteredPlaceholder].self, forKey: .filteredPlaceholders) ?? []
+        rateLimit = try container.decodeIfPresent(GaryxRenderRateLimit.self, forKey: .rateLimit)
+        window = try container.decodeIfPresent(GaryxRenderWindow.self, forKey: .window)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(basedOnSeq, forKey: .basedOnSeq)
+        try container.encode(rows, forKey: .rows)
+        try container.encode(tailActivity, forKey: .tailActivity)
+        try container.encodeIfPresent(activeToolGroupId, forKey: .activeToolGroupId)
+        try container.encode(progressLocus, forKey: .progressLocus)
+        try container.encode(visibleMessageIds, forKey: .visibleMessageIds)
+        try container.encode(filteredPlaceholders, forKey: .filteredPlaceholders)
+        try container.encodeIfPresent(rateLimit, forKey: .rateLimit)
+        try container.encodeIfPresent(window, forKey: .window)
     }
 }
 
@@ -170,6 +215,7 @@ public enum GaryxRenderProgressLocus: String, Codable, Equatable, Sendable {
 
 public enum GaryxRenderRow: Codable, Equatable, Sendable {
     case userTurn(GaryxRenderUserTurnRow)
+    case unknown
 
     enum CodingKeys: String, CodingKey {
         case kind
@@ -181,18 +227,59 @@ public enum GaryxRenderRow: Codable, Equatable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let kind = try container.decode(Kind.self, forKey: .kind)
+        guard let kind = try? container.decode(Kind.self, forKey: .kind) else {
+            self = .unknown
+            return
+        }
         switch kind {
         case .userTurn:
-            self = .userTurn(try GaryxRenderUserTurnRow(from: decoder))
+            self = try .userTurn(GaryxRenderUserTurnRow(from: decoder))
         }
     }
 
     public func encode(to encoder: Encoder) throws {
         switch self {
-        case .userTurn(let row):
+        case let .userTurn(row):
             try row.encode(to: encoder)
+        case .unknown:
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode("unknown", forKey: .kind)
         }
+    }
+}
+
+public enum GaryxRenderCapsuleAction: String, Codable, Equatable, Sendable {
+    case created
+    case updated
+}
+
+public struct GaryxRenderCapsuleCard: Codable, Equatable, Identifiable, Sendable {
+    public var id: String
+    public var capsuleId: String
+    public var title: String
+    public var revision: Int
+    public var action: GaryxRenderCapsuleAction
+
+    public init(
+        id: String,
+        capsuleId: String,
+        title: String,
+        revision: Int,
+        action: GaryxRenderCapsuleAction
+    ) {
+        self.id = id
+        self.capsuleId = capsuleId
+        self.title = title
+        self.revision = revision
+        self.action = action
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case capsuleId = "capsule_id"
+        case title
+        case revision
+        case action
     }
 }
 
@@ -202,19 +289,22 @@ public struct GaryxRenderUserTurnRow: Codable, Equatable, Sendable {
     public var activity: [GaryxRenderActivityRow]
     public var startedAt: String?
     public var finishedAt: String?
+    public var capsuleCards: [GaryxRenderCapsuleCard]
 
     public init(
         id: String,
         user: GaryxRenderMessageRef?,
         activity: [GaryxRenderActivityRow],
         startedAt: String? = nil,
-        finishedAt: String? = nil
+        finishedAt: String? = nil,
+        capsuleCards: [GaryxRenderCapsuleCard] = []
     ) {
         self.id = id
         self.user = user
         self.activity = activity
         self.startedAt = startedAt
         self.finishedAt = finishedAt
+        self.capsuleCards = capsuleCards
     }
 
     enum CodingKeys: String, CodingKey {
@@ -224,15 +314,17 @@ public struct GaryxRenderUserTurnRow: Codable, Equatable, Sendable {
         case activity
         case startedAt = "started_at"
         case finishedAt = "finished_at"
+        case capsuleCards = "capsule_cards"
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
         user = try container.decodeIfPresent(GaryxRenderMessageRef.self, forKey: .user)
-        activity = try container.decodeIfPresent([GaryxRenderActivityRow].self, forKey: .activity) ?? []
+        activity = try container.decodeIfPresent(GaryxLossyDecodableArray<GaryxRenderActivityRow>.self, forKey: .activity)?.elements ?? []
         startedAt = try container.decodeIfPresent(String.self, forKey: .startedAt)
         finishedAt = try container.decodeIfPresent(String.self, forKey: .finishedAt)
+        capsuleCards = try container.decodeIfPresent([GaryxRenderCapsuleCard].self, forKey: .capsuleCards) ?? []
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -243,12 +335,16 @@ public struct GaryxRenderUserTurnRow: Codable, Equatable, Sendable {
         try container.encode(activity, forKey: .activity)
         try container.encodeIfPresent(startedAt, forKey: .startedAt)
         try container.encodeIfPresent(finishedAt, forKey: .finishedAt)
+        if !capsuleCards.isEmpty {
+            try container.encode(capsuleCards, forKey: .capsuleCards)
+        }
     }
 }
 
 public enum GaryxRenderActivityRow: Codable, Equatable, Sendable {
     case assistantReply(GaryxRenderAssistantReplyRow)
     case step(GaryxRenderStepRow)
+    case unknown
 
     enum CodingKeys: String, CodingKey {
         case kind
@@ -261,21 +357,27 @@ public enum GaryxRenderActivityRow: Codable, Equatable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let kind = try container.decode(Kind.self, forKey: .kind)
+        guard let kind = try? container.decode(Kind.self, forKey: .kind) else {
+            self = .unknown
+            return
+        }
         switch kind {
         case .assistantReply:
-            self = .assistantReply(try GaryxRenderAssistantReplyRow(from: decoder))
+            self = try .assistantReply(GaryxRenderAssistantReplyRow(from: decoder))
         case .step:
-            self = .step(try GaryxRenderStepRow(from: decoder))
+            self = try .step(GaryxRenderStepRow(from: decoder))
         }
     }
 
     public func encode(to encoder: Encoder) throws {
         switch self {
-        case .assistantReply(let row):
+        case let .assistantReply(row):
             try row.encode(to: encoder)
-        case .step(let row):
+        case let .step(row):
             try row.encode(to: encoder)
+        case .unknown:
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode("unknown", forKey: .kind)
         }
     }
 }
@@ -351,7 +453,7 @@ public struct GaryxRenderStepRow: Codable, Equatable, Sendable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
-        steps = try container.decodeIfPresent([GaryxRenderStepItem].self, forKey: .steps) ?? []
+        steps = try container.decodeIfPresent(GaryxLossyDecodableArray<GaryxRenderStepItem>.self, forKey: .steps)?.elements ?? []
         finalMessage = try container.decodeIfPresent(GaryxRenderMessageRef.self, forKey: .finalMessage)
         running = try container.decodeIfPresent(Bool.self, forKey: .running) ?? false
         startedAt = try container.decodeIfPresent(String.self, forKey: .startedAt)
@@ -373,6 +475,7 @@ public struct GaryxRenderStepRow: Codable, Equatable, Sendable {
 public enum GaryxRenderStepItem: Codable, Equatable, Sendable {
     case assistantMessage(GaryxRenderAssistantStep)
     case toolGroup(GaryxRenderToolGroup)
+    case unknown
 
     enum CodingKeys: String, CodingKey {
         case kind
@@ -385,21 +488,27 @@ public enum GaryxRenderStepItem: Codable, Equatable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let kind = try container.decode(Kind.self, forKey: .kind)
+        guard let kind = try? container.decode(Kind.self, forKey: .kind) else {
+            self = .unknown
+            return
+        }
         switch kind {
         case .assistantMessage:
-            self = .assistantMessage(try GaryxRenderAssistantStep(from: decoder))
+            self = try .assistantMessage(GaryxRenderAssistantStep(from: decoder))
         case .toolGroup:
-            self = .toolGroup(try GaryxRenderToolGroup(from: decoder))
+            self = try .toolGroup(GaryxRenderToolGroup(from: decoder))
         }
     }
 
     public func encode(to encoder: Encoder) throws {
         switch self {
-        case .assistantMessage(let step):
+        case let .assistantMessage(step):
             try step.encode(to: encoder)
-        case .toolGroup(let group):
+        case let .toolGroup(group):
             try group.encode(to: encoder)
+        case .unknown:
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode("unknown", forKey: .kind)
         }
     }
 }
@@ -566,7 +675,8 @@ public enum GaryxSelectedThreadHistoryPresentation {
         hasRemoteFinalMessages: Bool = false
     ) -> Bool {
         guard let threadId = threadId?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !threadId.isEmpty else {
+              !threadId.isEmpty
+        else {
             return false
         }
         if let snapshot = liveRenderSnapshot ?? cachedTranscript?.renderSnapshot {
@@ -625,13 +735,15 @@ enum GaryxMobileRenderStateMapper {
             guard message.role == .user,
                   message.localState != nil,
                   message.localState != .remoteFinal,
-                  !representedMessageIds.contains(message.id) else {
+                  !representedMessageIds.contains(message.id)
+            else {
                 return nil
             }
             return GaryxMobileTurnRow(
                 id: "user_turn:\(message.id)",
                 userBlock: .message(message),
-                activityRows: []
+                activityRows: [],
+                capsuleCards: []
             )
         }
     }
@@ -671,8 +783,10 @@ private struct MessageLookup {
 private extension GaryxRenderRow {
     func mobileRow(lookup: MessageLookup) -> GaryxMobileTurnRow? {
         switch self {
-        case .userTurn(let row):
+        case let .userTurn(row):
             return row.mobileRow(lookup: lookup)
+        case .unknown:
+            return nil
         }
     }
 }
@@ -684,17 +798,22 @@ private extension GaryxRenderUserTurnRow {
             .map(GaryxMobileTranscriptBlock.message)
         let activityRows = activity.compactMap { $0.mobileActivityRow(lookup: lookup) }
         guard userBlock != nil || !activityRows.isEmpty else { return nil }
-        return GaryxMobileTurnRow(id: id, userBlock: userBlock, activityRows: activityRows)
+        return GaryxMobileTurnRow(
+            id: id,
+            userBlock: userBlock,
+            activityRows: activityRows,
+            capsuleCards: capsuleCards
+        )
     }
 }
 
 private extension GaryxRenderActivityRow {
     func mobileActivityRow(lookup: MessageLookup) -> GaryxMobileTurnRow.ActivityRow? {
         switch self {
-        case .assistantReply(let row):
+        case let .assistantReply(row):
             guard let message = lookup.mobileMessage(for: row.message) else { return nil }
             return .flat(.message(message))
-        case .step(let row):
+        case let .step(row):
             let steps = row.steps.compactMap { $0.mobileBlock(lookup: lookup) }
             let finalBlock = row.finalMessage
                 .flatMap { lookup.mobileMessage(for: $0) }
@@ -708,6 +827,8 @@ private extension GaryxRenderActivityRow {
                 startedAt: row.startedAt,
                 finishedAt: row.finishedAt
             ))
+        case .unknown:
+            return nil
         }
     }
 }
@@ -715,7 +836,7 @@ private extension GaryxRenderActivityRow {
 private extension GaryxRenderStepItem {
     func mobileBlock(lookup: MessageLookup) -> GaryxMobileTranscriptBlock? {
         switch self {
-        case .assistantMessage(let step):
+        case let .assistantMessage(step):
             // The server `render_state` owns the step structure: this assistant
             // sits between two tool groups. If its body has not yet reached the
             // local message store, fall back to a placeholder instead of dropping
@@ -725,8 +846,10 @@ private extension GaryxRenderStepItem {
             let message = lookup.mobileMessage(for: step.message)
                 ?? .assistantStepPlaceholder(for: step.message)
             return .message(message)
-        case .toolGroup(let group):
+        case let .toolGroup(group):
             return group.mobileBlock(lookup: lookup)
+        case .unknown:
+            return nil
         }
     }
 }
@@ -837,8 +960,10 @@ private extension GaryxRenderToolEntry {
 private extension GaryxRenderRow {
     var messageRefs: [GaryxRenderMessageRef] {
         switch self {
-        case .userTurn(let row):
+        case let .userTurn(row):
             return row.messageRefs
+        case .unknown:
+            return []
         }
     }
 }
@@ -857,14 +982,16 @@ private extension GaryxRenderUserTurnRow {
 private extension GaryxRenderActivityRow {
     var messageRefs: [GaryxRenderMessageRef] {
         switch self {
-        case .assistantReply(let row):
+        case let .assistantReply(row):
             return [row.message]
-        case .step(let row):
+        case let .step(row):
             var refs = row.steps.flatMap(\.messageRefs)
             if let finalMessage = row.finalMessage {
                 refs.append(finalMessage)
             }
             return refs
+        case .unknown:
+            return []
         }
     }
 }
@@ -872,10 +999,12 @@ private extension GaryxRenderActivityRow {
 private extension GaryxRenderStepItem {
     var messageRefs: [GaryxRenderMessageRef] {
         switch self {
-        case .assistantMessage(let step):
+        case let .assistantMessage(step):
             return [step.message]
-        case .toolGroup(let group):
+        case let .toolGroup(group):
             return group.entries.flatMap(\.messageRefs)
+        case .unknown:
+            return []
         }
     }
 }
@@ -889,7 +1018,7 @@ private extension GaryxRenderToolEntry {
 private extension Optional where Wrapped == String {
     var garyxRenderTrimmedNilIfEmpty: String? {
         switch self {
-        case .some(let value):
+        case let .some(value):
             return value.garyxRenderTrimmedNilIfEmpty
         case .none:
             return nil

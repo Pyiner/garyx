@@ -62,6 +62,24 @@ final class GatewayStreamActorTests: XCTestCase {
         XCTAssertEqual(result.actions[1], .refetchAfterControlRewrite)
     }
 
+    func testCapsuleAttachedControlAdvancesCursorWithoutRefetch() {
+        var processor = GatewayStreamFrameProcessor()
+
+        let result = processor.processPayload(
+            framePayload(threadId: "thread-capsule", basedOnSeq: 13, events: [
+                event(seq: 11, role: "assistant", text: "before capsule"),
+                controlEvent(seq: 12, kind: "capsule_attached"),
+                event(seq: 13, role: "assistant", text: "after capsule"),
+            ]),
+            threadId: "thread-capsule"
+        )
+
+        XCTAssertNil(result.reconnect)
+        XCTAssertEqual(committedIds(in: result.actions), [["history:10", "history:11", "history:12"]])
+        XCTAssertEqual(committedRoles(in: result.actions), [[.assistant, .system, .assistant]])
+        XCTAssertEqual(renderSnapshotSeqs(in: result.actions), [13])
+    }
+
     func testActorAwaitsControlRewriteRefetchBeforeReconnectCursor() async {
         let rewritePayload = framePayload(threadId: "thread-rewrite", basedOnSeq: 12, events: [
             event(seq: 11, role: "assistant", text: "before rewrite"),
@@ -205,6 +223,20 @@ final class GatewayStreamActorTests: XCTestCase {
 
     private func messageTexts(_ messages: [GaryxTranscriptMessage]) -> [String] {
         messages.map(\.text)
+    }
+
+    private func committedRoles(in actions: [GatewayStreamAction]) -> [[GaryxTranscriptRole]] {
+        actions.compactMap { action in
+            guard case let .applyCommittedMessages(messages) = action else { return nil }
+            return messages.map(\.role)
+        }
+    }
+
+    private func renderSnapshotSeqs(in actions: [GatewayStreamAction]) -> [Int] {
+        actions.compactMap { action in
+            guard case let .applyRenderSnapshot(snapshot) = action else { return nil }
+            return snapshot.basedOnSeq
+        }
     }
 
     private func endpoint() -> GatewayStreamEndpoint {

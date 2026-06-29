@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -76,12 +76,30 @@ pub enum RenderRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderCapsuleCard {
+    pub id: String,
+    pub capsule_id: String,
+    pub title: String,
+    pub revision: i64,
+    pub action: RenderCapsuleAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RenderCapsuleAction {
+    Created,
+    Updated,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RenderUserTurnRow {
     pub id: String,
     pub user: Option<RenderMessageRef>,
     pub activity: Vec<RenderActivityRow>,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capsule_cards: Vec<RenderCapsuleCard>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -205,9 +223,11 @@ pub fn reduce_transcript_render_state_with_run_state<'a>(
         .filter_map(|record| record_seq(record))
         .max()
         .unwrap_or(0);
+    let latest_capsules = latest_capsules_by_id(records.iter().copied());
     let mut visible_message_ids = Vec::new();
     let mut filtered_placeholders = Vec::new();
     let mut blocks = Vec::new();
+    let mut capsule_marks = Vec::new();
     let mut current_tool_group = ToolGroupBuilder::default();
 
     for record in records {
@@ -220,6 +240,10 @@ pub fn reduce_transcript_render_state_with_run_state<'a>(
         let role = normalized_role(message);
         let reference = message_ref(seq, &role, message);
         if is_control_message(message) {
+            if let Some(mark) = capsule_mark_from_message(seq, message) {
+                current_tool_group.flush_into(&mut blocks);
+                capsule_marks.push(mark);
+            }
             continue;
         }
         let tool_related = is_tool_related_message(&role, message);
@@ -260,7 +284,7 @@ pub fn reduce_transcript_render_state_with_run_state<'a>(
     current_tool_group.flush_into(&mut blocks);
     apply_tool_group_statuses(&mut blocks, run_state);
 
-    let rows = build_rows(&blocks, run_state);
+    let rows = build_rows(&blocks, &capsule_marks, &latest_capsules, run_state);
     let (tail_activity, active_tool_group_id, progress_locus) =
         derive_tail_activity(blocks.last(), run_state);
     let rate_limit = run_state.rate_limit.as_ref().map(|limit| RenderRateLimit {
@@ -312,6 +336,15 @@ impl RenderBlock {
             }) if role == "assistant"
         )
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CapsuleMark {
+    seq: u64,
+    capsule_id: String,
+    title: String,
+    revision: i64,
+    action: RenderCapsuleAction,
 }
 
 #[derive(Debug, Clone)]
@@ -503,7 +536,148 @@ impl ToolGroupBuilder {
     }
 }
 
-fn build_rows(blocks: &[RenderBlock], run_state: &TranscriptRunState) -> Vec<RenderRow> {
+fn latest_capsules_by_id<'a>(
+    records: impl IntoIterator<Item = &'a Value>,
+) -> HashMap<String, CapsuleMark> {
+    let mut latest = HashMap::<String, CapsuleMark>::new();
+    for record in records {
+        let Some(seq) = record_seq(record) else {
+            continue;
+        };
+        let Some(message) = record_message(record) else {
+            continue;
+        };
+        let Some(mark) = capsule_mark_from_message(seq, message) else {
+            continue;
+        };
+        latest
+            .entry(mark.capsule_id.clone())
+            .and_modify(|existing| {
+                if mark.revision > existing.revision
+                    || (mark.revision == existing.revision && mark.seq > existing.seq)
+                {
+                    *existing = mark.clone();
+                }
+            })
+            .or_insert(mark);
+    }
+    latest
+}
+
+fn capsule_mark_from_message(seq: u64, message: &Map<String, Value>) -> Option<CapsuleMark> {
+    let control = message.get("control").and_then(Value::as_object)?;
+    if control.get("kind").and_then(Value::as_str) != Some("capsule_attached") {
+        return None;
+    }
+    let capsule_id = control
+        .get("capsule_id")
+        .or_else(|| control.get("capsuleId"))
+        .or_else(|| control.get("id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_owned();
+    let revision = control
+        .get("revision")
+        .and_then(Value::as_i64)
+        .filter(|revision| *revision >= 0)?;
+    let title = control
+        .get("title")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_owned();
+    let action = match control
+        .get("action")
+        .and_then(Value::as_str)
+        .unwrap_or("created")
+    {
+        "created" => RenderCapsuleAction::Created,
+        "updated" => RenderCapsuleAction::Updated,
+        _ => return None,
+    };
+    Some(CapsuleMark {
+        seq,
+        capsule_id,
+        title,
+        revision,
+        action,
+    })
+}
+
+fn capsule_cards_for_turn(
+    turn_start_seq: Option<u64>,
+    turn_end_seq: Option<u64>,
+    capsule_marks: &[CapsuleMark],
+    latest_capsules: &HashMap<String, CapsuleMark>,
+) -> Vec<RenderCapsuleCard> {
+    let Some(turn_start_seq) = turn_start_seq else {
+        return Vec::new();
+    };
+    let mut by_capsule = HashMap::<String, CapsuleMark>::new();
+    let mut first_seq_by_capsule = HashMap::<String, u64>::new();
+    for mark in capsule_marks.iter().filter(|mark| {
+        mark.seq >= turn_start_seq && turn_end_seq.is_none_or(|end_seq| mark.seq < end_seq)
+    }) {
+        first_seq_by_capsule
+            .entry(mark.capsule_id.clone())
+            .or_insert(mark.seq);
+        by_capsule
+            .entry(mark.capsule_id.clone())
+            .and_modify(|existing| {
+                if mark.revision > existing.revision
+                    || (mark.revision == existing.revision && mark.seq > existing.seq)
+                {
+                    *existing = mark.clone();
+                }
+            })
+            .or_insert_with(|| mark.clone());
+    }
+
+    let mut cards = by_capsule.into_iter().collect::<Vec<_>>();
+    cards.sort_by_key(|(capsule_id, mark)| {
+        (
+            first_seq_by_capsule
+                .get(capsule_id)
+                .copied()
+                .unwrap_or(mark.seq),
+            mark.seq,
+        )
+    });
+    cards
+        .into_iter()
+        .map(|(capsule_id, mark)| {
+            let latest = latest_capsules.get(&capsule_id).unwrap_or(&mark);
+            RenderCapsuleCard {
+                id: format!("capsule_card:{capsule_id}"),
+                capsule_id,
+                title: latest.title.clone(),
+                revision: latest.revision,
+                action: mark.action,
+            }
+        })
+        .collect()
+}
+
+fn block_first_seq(block: &RenderBlock) -> Option<u64> {
+    match block {
+        RenderBlock::Message(message) => Some(message.reference.seq),
+        RenderBlock::ToolGroup(group) => group
+            .entries
+            .iter()
+            .flat_map(|entry| [entry.tool_use.as_ref(), entry.tool_result.as_ref()])
+            .flatten()
+            .map(|reference| reference.seq)
+            .min(),
+    }
+}
+
+fn build_rows(
+    blocks: &[RenderBlock],
+    capsule_marks: &[CapsuleMark],
+    latest_capsules: &HashMap<String, CapsuleMark>,
+    run_state: &TranscriptRunState,
+) -> Vec<RenderRow> {
     let mut rows = Vec::new();
     let mut current_user: Option<RenderMessageBlock> = None;
     let mut current_blocks: Vec<RenderBlock> = Vec::new();
@@ -516,7 +690,10 @@ fn build_rows(blocks: &[RenderBlock], run_state: &TranscriptRunState) -> Vec<Ren
                 &mut current_user,
                 &mut current_blocks,
                 &mut preceding_user_ts,
+                block_first_seq(block),
                 false,
+                capsule_marks,
+                latest_capsules,
                 run_state,
             );
             if let RenderBlock::Message(message) = block {
@@ -533,7 +710,10 @@ fn build_rows(blocks: &[RenderBlock], run_state: &TranscriptRunState) -> Vec<Ren
         &mut current_user,
         &mut current_blocks,
         &mut preceding_user_ts,
+        None,
         true,
+        capsule_marks,
+        latest_capsules,
         run_state,
     );
 
@@ -545,7 +725,10 @@ fn flush_turn(
     current_user: &mut Option<RenderMessageBlock>,
     current_blocks: &mut Vec<RenderBlock>,
     preceding_user_ts: &mut Option<String>,
+    turn_end_seq: Option<u64>,
     is_trailing_turn: bool,
+    capsule_marks: &[CapsuleMark],
+    latest_capsules: &HashMap<String, CapsuleMark>,
     run_state: &TranscriptRunState,
 ) {
     let activity = build_activity_rows(
@@ -581,12 +764,22 @@ fn flush_turn(
             .to_owned();
         format!("user_turn:orphan:{first_id}")
     };
+    let turn_start_seq = user
+        .as_ref()
+        .map(|block| block.reference.seq)
+        .or_else(|| current_blocks.iter().filter_map(block_first_seq).min());
+    let capsule_cards = if is_trailing_turn && run_state.busy {
+        Vec::new()
+    } else {
+        capsule_cards_for_turn(turn_start_seq, turn_end_seq, capsule_marks, latest_capsules)
+    };
     rows.push(RenderRow::UserTurn(RenderUserTurnRow {
         id,
         user: user.map(|block| block.reference),
         activity,
         started_at,
         finished_at,
+        capsule_cards,
     }));
     current_blocks.clear();
     *preceding_user_ts = None;
@@ -1335,6 +1528,252 @@ mod tests {
     }
 
     #[test]
+    fn capsule_card_after_final_for_create() {
+        let records = vec![
+            control_record(1, "run_start"),
+            user_record(2, "Create capsule", "00000000-0000-0000-0000-000000000101"),
+            tool_use_record(3, "toolu-capsule-1", "mcp__garyx__capsule_create"),
+            tool_result_record(4, "toolu-capsule-1", false),
+            capsule_attached_record(
+                5,
+                "01900000-0000-7000-8000-000000000101",
+                "Created Capsule",
+                1,
+                "created",
+            ),
+            assistant_record(6, "Final answer"),
+            control_record(7, "run_complete"),
+        ];
+
+        let snapshot = reduce_transcript_render_state(&records);
+        let row = expect_user_turn(&snapshot.rows[0]);
+        let step = expect_step(&row.activity[0]);
+
+        assert_eq!(
+            step.final_message.as_ref().map(|message| message.seq),
+            Some(6)
+        );
+        assert_eq!(row.capsule_cards.len(), 1);
+        assert_eq!(
+            row.capsule_cards[0].id,
+            "capsule_card:01900000-0000-7000-8000-000000000101"
+        );
+        assert_eq!(
+            row.capsule_cards[0].capsule_id,
+            "01900000-0000-7000-8000-000000000101"
+        );
+        assert_eq!(row.capsule_cards[0].title, "Created Capsule");
+        assert_eq!(row.capsule_cards[0].revision, 1);
+        assert_eq!(row.capsule_cards[0].action, RenderCapsuleAction::Created);
+    }
+
+    #[test]
+    fn capsule_card_waits_until_not_busy() {
+        let records = vec![
+            control_record(1, "run_start"),
+            user_record(2, "Create capsule", "00000000-0000-0000-0000-000000000102"),
+            tool_use_record(3, "toolu-capsule-1", "mcp__garyx__capsule_create"),
+            tool_result_record(4, "toolu-capsule-1", false),
+            capsule_attached_record(
+                5,
+                "01900000-0000-7000-8000-000000000102",
+                "Busy Hidden Capsule",
+                1,
+                "created",
+            ),
+        ];
+        let mut busy = TranscriptRunState::default();
+        busy.busy = true;
+        busy.activity = TranscriptRunActivity::Thinking;
+
+        let busy_snapshot = reduce_transcript_render_state_with_run_state(&records, &busy);
+        assert!(
+            expect_user_turn(&busy_snapshot.rows[0])
+                .capsule_cards
+                .is_empty()
+        );
+
+        let idle_snapshot =
+            reduce_transcript_render_state_with_run_state(&records, &TranscriptRunState::default());
+        assert_eq!(
+            expect_user_turn(&idle_snapshot.rows[0]).capsule_cards.len(),
+            1
+        );
+    }
+
+    #[test]
+    fn same_run_create_then_update_dedupes_to_latest_revision() {
+        let records = vec![
+            user_record(
+                1,
+                "Create and update",
+                "00000000-0000-0000-0000-000000000103",
+            ),
+            tool_use_record(2, "toolu-create", "mcp__garyx__capsule_create"),
+            tool_result_record(3, "toolu-create", false),
+            capsule_attached_record(
+                4,
+                "01900000-0000-7000-8000-000000000103",
+                "Draft Capsule",
+                1,
+                "created",
+            ),
+            tool_use_record(5, "toolu-update", "mcp__garyx__capsule_update"),
+            tool_result_record(6, "toolu-update", false),
+            capsule_attached_record(
+                7,
+                "01900000-0000-7000-8000-000000000103",
+                "Updated Capsule",
+                2,
+                "updated",
+            ),
+            assistant_record(8, "Final answer"),
+        ];
+
+        let snapshot = reduce_transcript_render_state(&records);
+        let cards = &expect_user_turn(&snapshot.rows[0]).capsule_cards;
+
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].capsule_id, "01900000-0000-7000-8000-000000000103");
+        assert_eq!(cards[0].title, "Updated Capsule");
+        assert_eq!(cards[0].revision, 2);
+        assert_eq!(cards[0].action, RenderCapsuleAction::Updated);
+    }
+
+    #[test]
+    fn multiple_capsules_order_by_first_mark_seq() {
+        let records = vec![
+            user_record(1, "Create two", "00000000-0000-0000-0000-000000000104"),
+            capsule_attached_record(
+                2,
+                "01900000-0000-7000-8000-000000000201",
+                "First Capsule",
+                1,
+                "created",
+            ),
+            capsule_attached_record(
+                3,
+                "01900000-0000-7000-8000-000000000202",
+                "Second Capsule",
+                1,
+                "created",
+            ),
+            capsule_attached_record(
+                4,
+                "01900000-0000-7000-8000-000000000201",
+                "First Capsule Updated",
+                2,
+                "updated",
+            ),
+            assistant_record(5, "Done"),
+        ];
+
+        let snapshot = reduce_transcript_render_state(&records);
+        let cards = &expect_user_turn(&snapshot.rows[0]).capsule_cards;
+
+        assert_eq!(
+            cards
+                .iter()
+                .map(|card| card.capsule_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "01900000-0000-7000-8000-000000000201",
+                "01900000-0000-7000-8000-000000000202",
+            ]
+        );
+        assert_eq!(cards[0].revision, 2);
+        assert_eq!(cards[0].action, RenderCapsuleAction::Updated);
+    }
+
+    #[test]
+    fn later_run_update_bumps_revision_on_all_cards() {
+        let capsule_id = "01900000-0000-7000-8000-000000000301";
+        let records = vec![
+            user_record(1, "Create", "00000000-0000-0000-0000-000000000301"),
+            capsule_attached_record(2, capsule_id, "Original Capsule", 1, "created"),
+            assistant_record(3, "Created"),
+            user_record(4, "Update", "00000000-0000-0000-0000-000000000302"),
+            capsule_attached_record(5, capsule_id, "Latest Capsule", 2, "updated"),
+            assistant_record(6, "Updated"),
+        ];
+
+        let snapshot = reduce_transcript_render_state(&records);
+        let first = expect_user_turn(&snapshot.rows[0]);
+        let second = expect_user_turn(&snapshot.rows[1]);
+
+        assert_eq!(first.capsule_cards.len(), 1);
+        assert_eq!(first.capsule_cards[0].revision, 2);
+        assert_eq!(first.capsule_cards[0].title, "Latest Capsule");
+        assert_eq!(first.capsule_cards[0].action, RenderCapsuleAction::Created);
+        assert_eq!(second.capsule_cards[0].revision, 2);
+        assert_eq!(second.capsule_cards[0].action, RenderCapsuleAction::Updated);
+    }
+
+    #[test]
+    fn marker_below_render_floor_omits_card() {
+        let records = vec![
+            user_record(10, "Create", "00000000-0000-0000-0000-000000000401"),
+            assistant_record(12, "Created"),
+        ];
+
+        let snapshot = reduce_transcript_render_state(&records);
+
+        assert!(expect_user_turn(&snapshot.rows[0]).capsule_cards.is_empty());
+    }
+
+    #[test]
+    fn non_capsule_control_does_not_emit_card() {
+        let records = vec![
+            user_record(1, "No capsule", "00000000-0000-0000-0000-000000000501"),
+            control_record(2, "thread_title_updated"),
+            assistant_record(3, "Done"),
+        ];
+
+        let snapshot = reduce_transcript_render_state(&records);
+
+        assert!(expect_user_turn(&snapshot.rows[0]).capsule_cards.is_empty());
+    }
+
+    #[test]
+    fn capsule_mark_does_not_break_tail_activity_or_tool_group_status() {
+        let records = vec![
+            control_record(1, "run_start"),
+            user_record(2, "Create", "00000000-0000-0000-0000-000000000601"),
+            tool_use_record(3, "toolu-pending", "mcp__garyx__capsule_create"),
+            capsule_attached_record(
+                4,
+                "01900000-0000-7000-8000-000000000601",
+                "Pending Capsule",
+                1,
+                "created",
+            ),
+        ];
+        let run_state = reduce_transcript_run_state(&records);
+
+        let snapshot = reduce_transcript_render_state_with_run_state(&records, &run_state);
+        let row = expect_user_turn(&snapshot.rows[0]);
+        let step = expect_step(&row.activity[0]);
+
+        assert!(
+            row.capsule_cards.is_empty(),
+            "busy trailing turn must hide cards"
+        );
+        assert_eq!(snapshot.tail_activity, RenderTailActivity::ToolActive);
+        assert_eq!(snapshot.progress_locus, RenderProgressLocus::ToolGroup);
+        assert_eq!(
+            snapshot.active_tool_group_id.as_deref(),
+            Some("tool_group:toolu-pending")
+        );
+        match &step.steps[0] {
+            RenderStepItem::ToolGroup(group) => {
+                assert_eq!(group.status, RenderToolGroupStatus::Active);
+                assert_eq!(group.entries[0].status, RenderToolEntryStatus::Running);
+            }
+            other => panic!("expected tool group, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn rate_limited_run_complete_surfaces_render_rate_limit() {
         let records = vec![
             control_record(1, "run_start"),
@@ -1507,6 +1946,65 @@ mod tests {
                     "run_id": "run::render-final",
                     "pending_input_id": pending_input_id,
                     "at": "2026-01-01T00:00:00Z"
+                }
+            }),
+        )
+    }
+
+    fn tool_use_record(seq: u64, tool_use_id: &str, tool_name: &str) -> Value {
+        message_record(
+            seq,
+            json!({
+                "role": "tool_use",
+                "content": {
+                    "tool": tool_name,
+                    "input": {}
+                },
+                "tool_use_id": tool_use_id,
+                "tool_name": tool_name,
+                "timestamp": "2026-01-01T00:00:02Z"
+            }),
+        )
+    }
+
+    fn tool_result_record(seq: u64, tool_use_id: &str, is_error: bool) -> Value {
+        message_record(
+            seq,
+            json!({
+                "role": "tool_result",
+                "content": {
+                    "result": "ok"
+                },
+                "tool_use_id": tool_use_id,
+                "is_error": is_error,
+                "timestamp": "2026-01-01T00:00:03Z"
+            }),
+        )
+    }
+
+    fn capsule_attached_record(
+        seq: u64,
+        capsule_id: &str,
+        title: &str,
+        revision: i64,
+        action: &str,
+    ) -> Value {
+        message_record(
+            seq,
+            json!({
+                "role": "system",
+                "kind": "control",
+                "internal": true,
+                "internal_kind": "control",
+                "control": {
+                    "kind": "capsule_attached",
+                    "thread_id": "thread::render-final",
+                    "run_id": "run::render-final",
+                    "at": "2026-01-01T00:00:00Z",
+                    "capsule_id": capsule_id,
+                    "revision": revision,
+                    "action": action,
+                    "title": title
                 }
             }),
         )

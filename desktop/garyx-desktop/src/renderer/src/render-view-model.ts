@@ -215,9 +215,11 @@ function stepBlocks(
       }
       continue;
     }
-    const block = toolGroupBlock(item, messages);
-    if (block) {
-      blocks.push(block);
+    if (item.kind === 'tool_group') {
+      const block = toolGroupBlock(item, messages);
+      if (block) {
+        blocks.push(block);
+      }
     }
   }
   return blocks;
@@ -256,7 +258,10 @@ function activityToRow(
     const block = messageBlock(message);
     return { kind: 'flat', key: block.key, block };
   }
-  return stepToTurnRow(activity, messages);
+  if (activity.kind === 'step') {
+    return stepToTurnRow(activity, messages);
+  }
+  return null;
 }
 
 /**
@@ -356,10 +361,12 @@ export function buildThreadViewBlocks(
         }
         continue;
       }
-      blocks.push(...stepBlocks(activity, messages));
-      const finalMessage = lookup(messages, activity.final_message);
-      if (finalMessage) {
-        blocks.push(messageBlock(finalMessage));
+      if (activity.kind === 'step') {
+        blocks.push(...stepBlocks(activity, messages));
+        const finalMessage = lookup(messages, activity.final_message);
+        if (finalMessage) {
+          blocks.push(messageBlock(finalMessage));
+        }
       }
     }
   }

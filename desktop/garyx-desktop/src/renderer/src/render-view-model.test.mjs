@@ -29,16 +29,25 @@ function collectRefs(renderState) {
     if (ref) refs.push(ref);
   };
   for (const row of renderState.rows) {
+    if (row.kind !== 'user_turn') {
+      continue;
+    }
     pushRef(row.user);
     for (const activity of row.activity) {
       if (activity.kind === 'assistant_reply') {
         pushRef(activity.message);
         continue;
       }
+      if (activity.kind !== 'step') {
+        continue;
+      }
       pushRef(activity.final_message);
       for (const item of activity.steps) {
         if (item.kind === 'assistant_message') {
           pushRef(item.message);
+          continue;
+        }
+        if (item.kind !== 'tool_group') {
           continue;
         }
         for (const entry of item.entries) {
@@ -458,4 +467,117 @@ test('team flatten preserves block order and per-message metadata', () => {
     (block) => block.entry.message.metadata?.agent_id ?? null,
   );
   assert.deepEqual(agentIds, [null, 'alpha', 'alpha', null, 'beta']);
+});
+
+test('capsule_cards are tolerated but not rendered by the T1 desktop mapper', () => {
+  const renderState = {
+    based_on_seq: 2,
+    rows: [
+      {
+        kind: 'user_turn',
+        id: 'user_turn:seq:1',
+        user: { id: 'seq:1', seq: 1, role: 'user' },
+        activity: [
+          {
+            kind: 'assistant_reply',
+            id: 'assistant_reply:seq:2',
+            message: { id: 'seq:2', seq: 2, role: 'assistant' },
+            streaming: false,
+          },
+        ],
+        started_at: null,
+        finished_at: null,
+        capsule_cards: [
+          {
+            id: 'capsule_card:01900000-0000-7000-8000-000000000903',
+            capsule_id: '01900000-0000-7000-8000-000000000903',
+            title: 'Desktop Contract Capsule',
+            revision: 1,
+            action: 'created',
+          },
+        ],
+      },
+    ],
+    tailActivity: 'none',
+    activeToolGroupId: null,
+    progress_locus: 'none',
+    visibleMessageIds: ['seq:1', 'seq:2'],
+    filtered_placeholders: [],
+  };
+  const messages = messagesBySeqFor(renderState);
+
+  const rows = buildThreadViewRows(renderState, messages);
+  const blocks = buildThreadViewBlocks(renderState, messages);
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].kind, 'user_turn');
+  assert.equal(rows[0].activityRows.length, 1);
+  assert.deepEqual(blockMessageIds(blocks), ['seq:1', 'seq:2']);
+});
+
+test('unknown render activity and step item kinds are skipped', () => {
+  const renderState = {
+    based_on_seq: 4,
+    rows: [
+      {
+        kind: 'future_top_level_row',
+        id: 'future:top-level',
+      },
+      {
+        kind: 'user_turn',
+        id: 'user_turn:seq:1',
+        user: { id: 'seq:1', seq: 1, role: 'user' },
+        activity: [
+          {
+            kind: 'future_activity',
+            id: 'future:activity',
+            message: { id: 'seq:999', seq: 999, role: 'assistant' },
+          },
+          {
+            kind: 'step',
+            id: 'step:seq:2',
+            steps: [
+              {
+                kind: 'future_step_item',
+                id: 'future:step',
+                message: { id: 'seq:998', seq: 998, role: 'assistant' },
+              },
+              {
+                kind: 'assistant_message',
+                id: 'assistant_step:seq:2',
+                message: { id: 'seq:2', seq: 2, role: 'assistant' },
+                streaming: false,
+              },
+            ],
+            final_message: { id: 'seq:3', seq: 3, role: 'assistant' },
+            running: false,
+            started_at: null,
+            finished_at: null,
+          },
+        ],
+        started_at: null,
+        finished_at: null,
+      },
+    ],
+    tailActivity: 'none',
+    activeToolGroupId: null,
+    progress_locus: 'none',
+    visibleMessageIds: ['seq:1', 'seq:2', 'seq:3'],
+    filtered_placeholders: [],
+  };
+  const messages = messagesBySeqFor(renderState);
+
+  const rows = buildThreadViewRows(renderState, messages);
+  const blocks = buildThreadViewBlocks(renderState, messages);
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].kind, 'user_turn');
+  const turn = rows[0].activityRows.find((row) => row.kind === 'turn');
+  assert.ok(turn);
+  assert.ok(turn.finalBlock);
+  assert.deepEqual(
+    [...turn.steps.map((block) => block.key), turn.finalBlock.key],
+    ['seq:2', 'seq:3'],
+  );
+  assert.deepEqual(blockMessageIds(blocks), ['seq:1', 'seq:2', 'seq:3']);
 });

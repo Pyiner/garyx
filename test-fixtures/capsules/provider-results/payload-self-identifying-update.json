@@ -1,0 +1,17 @@
+{
+  "provider": "payload_self_identifying",
+  "note": "Synthetic fallback fixture: result has no usable provider tool name but the payload self-identifies via tool/open_url.",
+  "tool_result": {
+    "role": "tool_result",
+    "tool_use_id": "call_fixture_capsule_update",
+    "is_error": false,
+    "content": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"tool\":\"capsule_update\",\"status\":\"ok\",\"capsule_id\":\"01900000-0000-7000-8000-000000000003\",\"id\":\"01900000-0000-7000-8000-000000000003\",\"title\":\"Updated Test Capsule\",\"revision\":2,\"open_url\":\"garyx://capsules/01900000-0000-7000-8000-000000000003\",\"thread_id\":\"thread::fixture-capsule\",\"run_id\":\"run::fixture-capsule\"}"
+        }
+      ]
+    }
+  }
+}

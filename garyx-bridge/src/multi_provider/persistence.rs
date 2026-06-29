@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -305,6 +305,267 @@ impl RunControlRecord {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum CapsuleAttachmentAction {
+    Created,
+    Updated,
+}
+
+impl CapsuleAttachmentAction {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::Updated => "updated",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct CapsuleMutationAttachment {
+    pub action: CapsuleAttachmentAction,
+    pub capsule_id: String,
+    pub title: String,
+    pub revision: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(super) struct CapsuleAttachmentMarkerKey {
+    tool_use_id: Option<String>,
+    after_content_count: Option<usize>,
+    capsule_id: String,
+    revision: i64,
+    action: CapsuleAttachmentAction,
+}
+
+impl CapsuleMutationAttachment {
+    pub(super) fn marker_key(
+        &self,
+        tool_use_id: Option<&str>,
+        after_content_count: usize,
+    ) -> CapsuleAttachmentMarkerKey {
+        let tool_use_id = tool_use_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let after_content_count = if tool_use_id.is_some() {
+            None
+        } else {
+            Some(after_content_count)
+        };
+        CapsuleAttachmentMarkerKey {
+            tool_use_id,
+            after_content_count,
+            capsule_id: self.capsule_id.clone(),
+            revision: self.revision,
+            action: self.action,
+        }
+    }
+}
+
+fn remember_capsule_tool_name(
+    tool_names_by_id: &mut HashMap<String, String>,
+    message: &ProviderMessage,
+) {
+    let Some(tool_use_id) = message
+        .tool_use_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let Some(tool_name) = message
+        .tool_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    tool_names_by_id.insert(tool_use_id.to_owned(), tool_name.to_owned());
+}
+
+pub(super) fn capsule_attached_control_record(
+    thread_id: &str,
+    run_id: &str,
+    attachment: &CapsuleMutationAttachment,
+    after_content_count: usize,
+) -> RunControlRecord {
+    let mut payload = serde_json::Map::new();
+    payload.insert(
+        "capsule_id".to_owned(),
+        Value::String(attachment.capsule_id.clone()),
+    );
+    payload.insert(
+        "revision".to_owned(),
+        Value::Number(serde_json::Number::from(attachment.revision)),
+    );
+    payload.insert(
+        "action".to_owned(),
+        Value::String(attachment.action.as_str().to_owned()),
+    );
+    payload.insert("title".to_owned(), Value::String(attachment.title.clone()));
+    RunControlRecord::new(
+        "capsule_attached",
+        thread_id,
+        run_id,
+        Utc::now().to_rfc3339(),
+        payload,
+        after_content_count,
+    )
+}
+
+pub(super) fn extract_capsule_attachment_from_tool_result(
+    message: &ProviderMessage,
+    tool_names_by_id: &HashMap<String, String>,
+) -> Option<CapsuleMutationAttachment> {
+    if message.is_error == Some(true) {
+        return None;
+    }
+
+    let action_hint = message
+        .tool_name
+        .as_deref()
+        .and_then(capsule_action_from_tool_name)
+        .or_else(|| {
+            message
+                .tool_use_id
+                .as_deref()
+                .and_then(|tool_use_id| tool_names_by_id.get(tool_use_id))
+                .and_then(|tool_name| capsule_action_from_tool_name(tool_name))
+        });
+
+    extract_capsule_attachment_from_value(&message.content, action_hint, 0)
+}
+
+fn capsule_action_from_tool_name(tool_name: &str) -> Option<CapsuleAttachmentAction> {
+    let normalized = tool_name.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return None;
+    }
+    let tool = normalized
+        .rsplit([':', '_'])
+        .next()
+        .unwrap_or(normalized.as_str());
+    if normalized == "capsule_create"
+        || normalized.ends_with(":capsule_create")
+        || normalized.ends_with("__capsule_create")
+        || tool == "capsule_create"
+    {
+        return Some(CapsuleAttachmentAction::Created);
+    }
+    if normalized == "capsule_update"
+        || normalized.ends_with(":capsule_update")
+        || normalized.ends_with("__capsule_update")
+        || tool == "capsule_update"
+    {
+        return Some(CapsuleAttachmentAction::Updated);
+    }
+    None
+}
+
+fn extract_capsule_attachment_from_value(
+    value: &Value,
+    action_hint: Option<CapsuleAttachmentAction>,
+    depth: usize,
+) -> Option<CapsuleMutationAttachment> {
+    if depth > 24 {
+        return None;
+    }
+    match value {
+        Value::Object(object) => {
+            if let Some(attachment) = capsule_attachment_from_object(object, action_hint) {
+                return Some(attachment);
+            }
+            for nested in object.values() {
+                if let Some(attachment) =
+                    extract_capsule_attachment_from_value(nested, action_hint, depth + 1)
+                {
+                    return Some(attachment);
+                }
+            }
+            None
+        }
+        Value::Array(items) => items
+            .iter()
+            .find_map(|item| extract_capsule_attachment_from_value(item, action_hint, depth + 1)),
+        Value::String(text) => parse_nested_json_value(text).and_then(|value| {
+            extract_capsule_attachment_from_value(&value, action_hint, depth + 1)
+        }),
+        _ => None,
+    }
+}
+
+fn capsule_attachment_from_object(
+    object: &serde_json::Map<String, Value>,
+    action_hint: Option<CapsuleAttachmentAction>,
+) -> Option<CapsuleMutationAttachment> {
+    let action = action_hint.or_else(|| capsule_action_from_payload_object(object))?;
+    let capsule_id = object
+        .get("capsule_id")
+        .or_else(|| object.get("capsuleId"))
+        .or_else(|| object.get("id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_owned();
+    let revision = object.get("revision").and_then(value_i64)?;
+    let title = object
+        .get("title")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_owned();
+
+    if action_hint.is_none() && !capsule_payload_self_identifies(object) {
+        return None;
+    }
+
+    Some(CapsuleMutationAttachment {
+        action,
+        capsule_id,
+        title,
+        revision,
+    })
+}
+
+fn capsule_action_from_payload_object(
+    object: &serde_json::Map<String, Value>,
+) -> Option<CapsuleAttachmentAction> {
+    ["tool", "tool_name", "toolName", "name"]
+        .into_iter()
+        .find_map(|key| object.get(key).and_then(Value::as_str))
+        .and_then(capsule_action_from_tool_name)
+}
+
+fn capsule_payload_self_identifies(object: &serde_json::Map<String, Value>) -> bool {
+    capsule_action_from_payload_object(object).is_some()
+        || object
+            .get("open_url")
+            .or_else(|| object.get("openUrl"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .is_some_and(|value| value.starts_with("garyx://capsules/"))
+}
+
+fn value_i64(value: &Value) -> Option<i64> {
+    match value {
+        Value::Number(number) => number
+            .as_i64()
+            .or_else(|| number.as_u64().and_then(|value| i64::try_from(value).ok())),
+        Value::String(text) => text.trim().parse::<i64>().ok(),
+        _ => None,
+    }
+}
+
+fn parse_nested_json_value(text: &str) -> Option<Value> {
+    let trimmed = text.trim();
+    if !(trimmed.starts_with('{') || trimmed.starts_with('[')) {
+        return None;
+    }
+    serde_json::from_str::<Value>(trimmed).ok()
+}
+
 pub(super) enum ThreadPersistenceCommand {
     Stream {
         event: StreamEvent,
@@ -363,8 +624,24 @@ pub(super) struct StreamingRunSnapshot {
     pub assistant_response: String,
     pub session_messages: Vec<ProviderMessage>,
     pub sdk_session_id: Option<String>,
+    pub capsule_tool_names_by_id: HashMap<String, String>,
+    pub emitted_capsule_markers: HashSet<CapsuleAttachmentMarkerKey>,
     start_new_assistant_segment: bool,
     current_assistant_metadata: Option<HashMap<String, Value>>,
+}
+
+fn provider_message_with_timestamp(message: &ProviderMessage) -> ProviderMessage {
+    let mut message = message.clone();
+    if message
+        .timestamp
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        message.timestamp = Some(Utc::now().to_rfc3339());
+    }
+    message
 }
 
 impl StreamingRunSnapshot {
@@ -401,13 +678,16 @@ impl StreamingRunSnapshot {
                 true
             }
             StreamEvent::ToolUse { message } => {
-                self.session_messages.push(message.clone());
+                let message = provider_message_with_timestamp(message);
+                self.remember_tool_name(&message);
+                self.session_messages.push(message);
                 self.start_new_assistant_segment = true;
                 self.current_assistant_metadata = None;
                 true
             }
             StreamEvent::ToolResult { message } => {
-                self.session_messages.push(message.clone());
+                self.session_messages
+                    .push(provider_message_with_timestamp(message));
                 self.start_new_assistant_segment = true;
                 self.current_assistant_metadata = None;
                 true
@@ -424,6 +704,17 @@ impl StreamingRunSnapshot {
                 true
             }
         }
+    }
+
+    fn remember_tool_name(&mut self, message: &ProviderMessage) {
+        remember_capsule_tool_name(&mut self.capsule_tool_names_by_id, message);
+    }
+
+    pub(super) fn capsule_attachment_for_tool_result(
+        &self,
+        message: &ProviderMessage,
+    ) -> Option<CapsuleMutationAttachment> {
+        extract_capsule_attachment_from_tool_result(message, &self.capsule_tool_names_by_id)
     }
 
     pub fn acknowledge_pending_input(&mut self, pending_input: &PendingUserInput) -> bool {

@@ -1450,6 +1450,16 @@ export interface RenderAssistantReplyRow {
 
 export type RenderActivityRow = RenderAssistantReplyRow | RenderStepRow;
 
+export type RenderCapsuleAction = "created" | "updated";
+
+export interface RenderCapsuleCard {
+  id: string;
+  capsule_id: string;
+  title: string;
+  revision: number;
+  action: RenderCapsuleAction;
+}
+
 export interface RenderUserTurnRow {
   kind: "user_turn";
   id: string;
@@ -1457,6 +1467,7 @@ export interface RenderUserTurnRow {
   activity: RenderActivityRow[];
   started_at: string | null;
   finished_at: string | null;
+  capsule_cards?: RenderCapsuleCard[];
 }
 
 export type RenderRow = RenderUserTurnRow;

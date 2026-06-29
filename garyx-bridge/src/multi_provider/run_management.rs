@@ -27,7 +27,7 @@ use crate::run_graph::{RunGraphState, execute_agent_run};
 use super::MultiProviderBridge;
 use super::persistence::{
     PendingUserInput, PendingUserInputStatus, PersistedRun, RunControlRecord, StreamingRunSnapshot,
-    TerminalRunControl, ThreadPersistenceCommand,
+    TerminalRunControl, ThreadPersistenceCommand, capsule_attached_control_record,
     save_failed_thread_messages_with_terminal_control, save_streaming_partial,
     save_thread_messages_with_terminal_control,
 };
@@ -313,6 +313,30 @@ fn abort_terminal_control_record(
     )
 }
 
+fn maybe_push_capsule_attachment_control(
+    thread_id: &str,
+    run_id: &str,
+    snapshot: &mut StreamingRunSnapshot,
+    message: &garyx_models::provider::ProviderMessage,
+    transcript_controls: &mut Vec<RunControlRecord>,
+) -> bool {
+    let Some(attachment) = snapshot.capsule_attachment_for_tool_result(message) else {
+        return false;
+    };
+    let after_content_count = 1 + snapshot.session_messages.len();
+    let key = attachment.marker_key(message.tool_use_id.as_deref(), after_content_count);
+    if !snapshot.emitted_capsule_markers.insert(key) {
+        return false;
+    }
+    transcript_controls.push(capsule_attached_control_record(
+        thread_id,
+        run_id,
+        &attachment,
+        after_content_count,
+    ));
+    true
+}
+
 fn forward_applied_thread_title_update(
     external_callback: Option<&Arc<dyn Fn(StreamEvent) + Send + Sync>>,
     applied_thread_title: Option<&str>,
@@ -487,6 +511,17 @@ fn spawn_partial_thread_persistence_worker(
                         other => {
                             dirty |= snapshot.apply_stream_event(&other);
                             if let Some(run_id) = committed_event_run_id.as_deref()
+                                && let StreamEvent::ToolResult { message } = &other
+                            {
+                                dirty |= maybe_push_capsule_attachment_control(
+                                    &thread_id,
+                                    run_id,
+                                    &mut snapshot,
+                                    message,
+                                    &mut transcript_controls,
+                                );
+                            }
+                            if let Some(run_id) = committed_event_run_id.as_deref()
                                 && let Some(control) = control_record_for_stream_event(
                                     &thread_id,
                                     run_id,
@@ -561,6 +596,17 @@ fn spawn_partial_thread_persistence_worker(
                             }
                             other => {
                                 dirty |= snapshot.apply_stream_event(&other);
+                                if let Some(run_id) = committed_event_run_id.as_deref()
+                                    && let StreamEvent::ToolResult { message } = &other
+                                {
+                                    dirty |= maybe_push_capsule_attachment_control(
+                                        &thread_id,
+                                        run_id,
+                                        &mut snapshot,
+                                        message,
+                                        &mut transcript_controls,
+                                    );
+                                }
                                 if let Some(run_id) = committed_event_run_id.as_deref()
                                     && let Some(control) = control_record_for_stream_event(
                                         &thread_id,

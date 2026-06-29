@@ -1,5 +1,5 @@
-import XCTest
 @testable import GaryxMobileCore
+import XCTest
 
 final class GaryxMobileRenderStateMapperTests: XCTestCase {
     func testFrameDecodesServerFieldNames() throws {
@@ -95,6 +95,186 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
         XCTAssertEqual(frame.renderState.tailActivity, .none)
     }
 
+    func testUserTurnDecodesMissingCapsuleCardsAsEmpty() throws {
+        let row = try decodeRenderUserTurnRow(#"""
+        {
+          "kind": "user_turn",
+          "id": "turn:missing-capsules",
+          "user": { "id": "seq:1", "seq": 1, "role": "user" },
+          "activity": [],
+          "started_at": null,
+          "finished_at": null
+        }
+        """#)
+
+        XCTAssertTrue(row.capsuleCards.isEmpty)
+    }
+
+    func testCapsuleCardsDecodeAndMapAsRenderStatePassthrough() throws {
+        let snapshot = try decodeRenderSnapshot(#"""
+        {
+          "based_on_seq": 2,
+          "rows": [
+            {
+              "kind": "user_turn",
+              "id": "turn:capsule",
+              "user": { "id": "seq:1", "seq": 1, "role": "user" },
+              "activity": [],
+              "started_at": null,
+              "finished_at": null,
+              "capsule_cards": [
+                {
+                  "id": "capsule_card:01900000-0000-7000-8000-000000000901",
+                  "capsule_id": "01900000-0000-7000-8000-000000000901",
+                  "title": "Test Capsule",
+                  "revision": 2,
+                  "action": "updated"
+                }
+              ]
+            }
+          ],
+          "tailActivity": "none",
+          "activeToolGroupId": null,
+          "progress_locus": "none",
+          "visibleMessageIds": ["seq:1"],
+          "filtered_placeholders": []
+        }
+        """#)
+
+        guard case let .userTurn(renderRow) = try XCTUnwrap(snapshot.rows.only) else {
+            return XCTFail("expected user_turn")
+        }
+        let renderCard = try XCTUnwrap(renderRow.capsuleCards.only)
+        XCTAssertEqual(renderCard.capsuleId, "01900000-0000-7000-8000-000000000901")
+        XCTAssertEqual(renderCard.title, "Test Capsule")
+        XCTAssertEqual(renderCard.revision, 2)
+        XCTAssertEqual(renderCard.action, .updated)
+
+        let rows = GaryxMobileRenderStateMapper.rows(
+            snapshot: snapshot,
+            messages: [mobileMessage(index: 0, role: .user, text: "Create a capsule")],
+            transcriptMessages: []
+        )
+
+        let mappedCard = try XCTUnwrap(try XCTUnwrap(rows.only).capsuleCards.only)
+        XCTAssertEqual(mappedCard, renderCard)
+    }
+
+    func testUnknownRenderKindsAreLossyAndDoNotDropSnapshot() throws {
+        let snapshot = try decodeRenderSnapshot(#"""
+        {
+          "based_on_seq": 4,
+          "rows": [
+            {
+              "kind": "future_row",
+              "id": "future:row",
+              "payload": { "ignored": true }
+            },
+            {
+              "kind": "user_turn",
+              "id": "turn:known",
+              "user": { "id": "seq:1", "seq": 1, "role": "user" },
+              "activity": [
+                {
+                  "kind": "future_activity",
+                  "id": "future:activity",
+                  "message": { "id": "seq:999", "seq": 999, "role": "assistant" }
+                },
+                {
+                  "kind": "step",
+                  "id": "step:known",
+                  "steps": [
+                    {
+                      "kind": "future_step_item",
+                      "id": "future:step",
+                      "message": { "id": "seq:998", "seq": 998, "role": "assistant" }
+                    },
+                    {
+                      "kind": "assistant_message",
+                      "id": "assistant_step:seq:2",
+                      "message": { "id": "seq:2", "seq": 2, "role": "assistant" },
+                      "streaming": false
+                    }
+                  ],
+                  "final_message": { "id": "seq:3", "seq": 3, "role": "assistant" },
+                  "running": false,
+                  "started_at": null,
+                  "finished_at": null
+                }
+              ],
+              "started_at": null,
+              "finished_at": null
+            }
+          ],
+          "tailActivity": "none",
+          "activeToolGroupId": null,
+          "progress_locus": "none",
+          "visibleMessageIds": ["seq:1", "seq:2", "seq:3"],
+          "filtered_placeholders": []
+        }
+        """#)
+
+        XCTAssertEqual(snapshot.rows.count, 2)
+
+        let rows = GaryxMobileRenderStateMapper.rows(
+            snapshot: snapshot,
+            messages: [
+                mobileMessage(index: 0, role: .user, text: "Question"),
+                mobileMessage(index: 1, role: .assistant, text: "Intermediate"),
+                mobileMessage(index: 2, role: .assistant, text: "Final"),
+            ],
+            transcriptMessages: []
+        )
+
+        let row = try XCTUnwrap(rows.only)
+        guard case let .turn(turn) = try XCTUnwrap(row.activityRows.only) else {
+            return XCTFail("known step should survive unknown siblings")
+        }
+        XCTAssertEqual(turn.steps.map(\.message.id), ["history:1"])
+        XCTAssertEqual(turn.finalBlock?.message.id, "history:2")
+    }
+
+    func testCapsuleCardsDoNotCreateUnresolvedVisibleRefs() {
+        let snapshot = GaryxRenderSnapshot(
+            basedOnSeq: 1,
+            rows: [
+                .userTurn(GaryxRenderUserTurnRow(
+                    id: "turn:capsule-only",
+                    user: ref(seq: 1, role: "user"),
+                    activity: [],
+                    capsuleCards: [
+                        GaryxRenderCapsuleCard(
+                            id: "capsule_card:01900000-0000-7000-8000-000000000902",
+                            capsuleId: "01900000-0000-7000-8000-000000000902",
+                            title: "Ignored for refs",
+                            revision: 1,
+                            action: .created
+                        ),
+                    ]
+                )),
+            ]
+        )
+        let cached = GaryxCachedTranscript(
+            threadId: "thread::capsule-ref-test",
+            savedAt: Date(timeIntervalSince1970: 0),
+            messages: [
+                GaryxTranscriptMessage(index: 0, role: .user, text: "Create capsule"),
+            ],
+            renderSnapshot: snapshot,
+            hasMoreBefore: false,
+            nextBeforeIndex: nil
+        )
+
+        let awaiting = GaryxSelectedThreadHistoryPresentation.isAwaitingInitialHistory(
+            threadId: "thread::capsule-ref-test",
+            historyLoaded: true,
+            liveRenderSnapshot: nil,
+            cachedTranscript: cached
+        )
+
+        XCTAssertFalse(awaiting)
+    }
+
     func testMapsAssistantReplyFromServerRowsUsingSeqPrimaryRefs() throws {
         let messages = [
             mobileMessage(index: 0, role: .user, text: "Question", id: "local-user"),
@@ -125,7 +305,7 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
         let row = try XCTUnwrap(rows.only)
         XCTAssertEqual(row.id, "turn:seq1")
         XCTAssertEqual(row.userBlock?.message.id, "local-user")
-        guard case .flat(let block) = try XCTUnwrap(row.activityRows.only) else {
+        guard case let .flat(block) = try XCTUnwrap(row.activityRows.only) else {
             return XCTFail("assistant_reply should map to a flat block")
         }
         XCTAssertEqual(block.message.text, "Answer")
@@ -177,13 +357,13 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
             transcriptMessages: transcriptMessages
         )
 
-        guard case .turn(let turn) = try XCTUnwrap(try XCTUnwrap(rows.only).activityRows.only) else {
+        guard case let .turn(turn) = try XCTUnwrap(try XCTUnwrap(rows.only).activityRows.only) else {
             return XCTFail("step should map to an agent turn")
         }
         XCTAssertFalse(turn.isRunning)
         XCTAssertEqual(turn.finalBlock?.message.text, "Done")
         let toolBlock = try XCTUnwrap(turn.steps.only)
-        guard case .toolGroup(let toolMessage) = toolBlock else {
+        guard case let .toolGroup(toolMessage) = toolBlock else {
             return XCTFail("expected tool group block")
         }
         XCTAssertEqual(toolMessage.text, "Ran 1 command")
@@ -226,11 +406,11 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
             transcriptMessages: []
         )
 
-        guard case .turn(let turn) = try XCTUnwrap(try XCTUnwrap(rows.only).activityRows.only) else {
+        guard case let .turn(turn) = try XCTUnwrap(try XCTUnwrap(rows.only).activityRows.only) else {
             return XCTFail("expected generic tool group turn")
         }
         XCTAssertTrue(turn.isRunning)
-        guard case .toolGroup(let toolMessage) = try XCTUnwrap(turn.steps.only) else {
+        guard case let .toolGroup(toolMessage) = try XCTUnwrap(turn.steps.only) else {
             return XCTFail("expected generic tool group")
         }
         XCTAssertTrue(toolMessage.isStreaming)
@@ -239,7 +419,7 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
         XCTAssertEqual(entry.status, .running)
     }
 
-    func testOptimisticUserRowsAppendUntilOriginMaterializes() throws {
+    func testOptimisticUserRowsAppendUntilOriginMaterializes() {
         let materializedOrigin = "00000000-0000-0000-0000-000000000001"
         let pendingOrigin = "00000000-0000-0000-0000-000000000002"
         var materialized = mobileMessage(
@@ -356,7 +536,7 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
         XCTAssertEqual(rows[0].userBlock?.message.localState, .remotePartial)
         XCTAssertTrue(rows[0].activityRows.isEmpty)
         XCTAssertEqual(rows[1].userBlock?.message.text, "Newest question")
-        guard case .flat(let newestAnswer) = try XCTUnwrap(rows[1].activityRows.only) else {
+        guard case let .flat(newestAnswer) = try XCTUnwrap(rows[1].activityRows.only) else {
             return XCTFail("newest assistant reply should resolve from the one-turn cache")
         }
         XCTAssertEqual(newestAnswer.message.text, "Newest answer")
@@ -392,7 +572,7 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
         let row = try XCTUnwrap(rows.only)
         XCTAssertEqual(row.id, "turn:new")
         XCTAssertEqual(row.userBlock?.message.text, "Newest question")
-        guard case .flat(let answer) = try XCTUnwrap(row.activityRows.only) else {
+        guard case let .flat(answer) = try XCTUnwrap(row.activityRows.only) else {
             return XCTFail("assistant reply should map to a flat block")
         }
         XCTAssertEqual(answer.message.text, "Newest answer")
@@ -461,7 +641,7 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
         XCTAssertEqual(mobileMessages.only?.clientIntentId, originId)
     }
 
-    func testToolPayloadEnvelopeStillParsesButDoesNotDecideVisibility() throws {
+    func testToolPayloadEnvelopeStillParsesButDoesNotDecideVisibility() {
         let child = GaryxTranscriptMessage(
             index: 1,
             role: .toolUse,
@@ -495,6 +675,14 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
 
     private func ref(seq: Int, role: String, id: String? = nil) -> GaryxRenderMessageRef {
         GaryxRenderMessageRef(id: id ?? "seq:\(seq)", seq: seq, role: role)
+    }
+
+    private func decodeRenderSnapshot(_ raw: String) throws -> GaryxRenderSnapshot {
+        try JSONDecoder().decode(GaryxRenderSnapshot.self, from: Data(raw.utf8))
+    }
+
+    private func decodeRenderUserTurnRow(_ raw: String) throws -> GaryxRenderUserTurnRow {
+        try JSONDecoder().decode(GaryxRenderUserTurnRow.self, from: Data(raw.utf8))
     }
 
     private func toolUse(index: Int, toolUseId: String, command: String) -> GaryxTranscriptMessage {

@@ -156,6 +156,100 @@ async fn render_snapshot_at_seq_uses_committed_records_up_to_bound() {
 }
 
 #[tokio::test]
+async fn render_snapshot_at_seq_does_not_backfill_capsule_before_marker() {
+    let store = ThreadTranscriptStore::memory();
+    store
+        .append_run_records(
+            "thread::render-capsule-bound",
+            Some("run-render-capsule"),
+            &[
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "user", "content": "create capsule"}),
+                    "2026-06-18T12:00:00Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "before marker"}),
+                    "2026-06-18T12:00:01Z",
+                ),
+                control_draft_with_payload(
+                    "capsule_attached",
+                    "2026-06-18T12:00:02Z",
+                    json!({
+                        "capsule_id": "01900000-0000-7000-8000-000000000701",
+                        "revision": 1,
+                        "action": "created",
+                        "title": "Snapshot Capsule"
+                    }),
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let before_marker = store
+        .render_snapshot_at_seq("thread::render-capsule-bound", 2)
+        .await
+        .unwrap();
+    let after_marker = store
+        .render_snapshot_at_seq("thread::render-capsule-bound", 3)
+        .await
+        .unwrap();
+
+    assert_eq!(before_marker.based_on_seq, 2);
+    assert!(first_capsule_cards(&before_marker).is_empty());
+    assert_eq!(after_marker.based_on_seq, 3);
+    assert_eq!(first_capsule_cards(&after_marker).len(), 1);
+}
+
+#[tokio::test]
+async fn render_snapshot_in_window_omits_capsule_marker_below_floor() {
+    let store = ThreadTranscriptStore::memory();
+    store
+        .append_run_records(
+            "thread::render-capsule-window",
+            Some("run-render-capsule-window"),
+            &[
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "user", "content": "create capsule"}),
+                    "2026-06-18T12:00:00Z",
+                ),
+                control_draft_with_payload(
+                    "capsule_attached",
+                    "2026-06-18T12:00:01Z",
+                    json!({
+                        "capsule_id": "01900000-0000-7000-8000-000000000702",
+                        "revision": 1,
+                        "action": "created",
+                        "title": "Window Capsule"
+                    }),
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "created"}),
+                    "2026-06-18T12:00:02Z",
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let snapshot = store
+        .render_snapshot_in_window("thread::render-capsule-window", 3, 3)
+        .await
+        .unwrap();
+
+    assert_eq!(snapshot.based_on_seq, 3);
+    assert_eq!(snapshot.visible_message_ids, vec!["seq:3"]);
+    assert!(first_capsule_cards(&snapshot).is_empty());
+    assert_eq!(
+        snapshot.window,
+        Some(garyx_models::RenderWindow {
+            floor_seq: 3,
+            has_more_above: true,
+        })
+    );
+}
+
+#[tokio::test]
 async fn render_snapshot_at_seq_reports_dangling_run_activity() {
     let store = ThreadTranscriptStore::memory();
     store
@@ -769,6 +863,45 @@ async fn reconcile_run_tail_empty_run_id_is_noop_not_double_append() {
 
 fn draft(message: serde_json::Value) -> RunTranscriptRecordDraft {
     RunTranscriptRecordDraft::from_message(message)
+}
+
+fn first_capsule_cards(
+    snapshot: &garyx_models::RenderSnapshot,
+) -> Vec<garyx_models::RenderCapsuleCard> {
+    snapshot
+        .rows
+        .first()
+        .map(|row| match row {
+            garyx_models::RenderRow::UserTurn(row) => row.capsule_cards.clone(),
+        })
+        .unwrap_or_default()
+}
+
+fn control_draft_with_payload(
+    kind: &str,
+    at: &str,
+    payload: serde_json::Value,
+) -> RunTranscriptRecordDraft {
+    let mut control = serde_json::Map::new();
+    control.insert("kind".to_owned(), json!(kind));
+    control.insert("thread_id".to_owned(), json!("thread::control-aware"));
+    control.insert("run_id".to_owned(), json!("run-control"));
+    control.insert("at".to_owned(), json!(at));
+    if let Some(payload) = payload.as_object() {
+        for (key, value) in payload {
+            control.insert(key.clone(), value.clone());
+        }
+    }
+    RunTranscriptRecordDraft::with_timestamp(
+        json!({
+            "role": "system",
+            "kind": "control",
+            "internal": true,
+            "internal_kind": "control",
+            "control": control,
+        }),
+        at,
+    )
 }
 
 fn control_draft(kind: &str, at: &str) -> RunTranscriptRecordDraft {

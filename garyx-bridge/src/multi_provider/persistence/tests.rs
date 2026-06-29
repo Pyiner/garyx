@@ -9,6 +9,273 @@ fn make_history(store: Arc<dyn ThreadStore>) -> Arc<ThreadHistoryRepository> {
     ))
 }
 
+fn fixture_root() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("repo root")
+        .join("test-fixtures")
+}
+
+fn load_capsule_provider_fixture(name: &str) -> Value {
+    let path = fixture_root().join("capsules/provider-results").join(name);
+    let raw = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    serde_json::from_str(&raw).unwrap_or_else(|error| panic!("parse {}: {error}", path.display()))
+}
+
+fn provider_message_from_fixture(fixture: &Value, key: &str) -> ProviderMessage {
+    serde_json::from_value(
+        fixture
+            .get(key)
+            .cloned()
+            .unwrap_or_else(|| panic!("fixture missing {key}")),
+    )
+    .unwrap_or_else(|error| panic!("decode {key}: {error}"))
+}
+
+#[test]
+fn test_extract_capsule_attachment_from_claude_fixture_correlates_tool_use_id() {
+    let fixture = load_capsule_provider_fixture("claude-capsule-create.json");
+    let tool_use = provider_message_from_fixture(&fixture, "tool_use");
+    let tool_result = provider_message_from_fixture(&fixture, "tool_result");
+    let mut snapshot = StreamingRunSnapshot::default();
+    snapshot.apply_stream_event(&StreamEvent::ToolUse { message: tool_use });
+
+    let attachment = snapshot
+        .capsule_attachment_for_tool_result(&tool_result)
+        .expect("Claude anonymous tool_result should correlate by tool_use_id");
+
+    assert_eq!(attachment.action, CapsuleAttachmentAction::Created);
+    assert_eq!(
+        attachment.capsule_id,
+        "01900000-0000-7000-8000-000000000001"
+    );
+    assert_eq!(attachment.title, "Test Capsule");
+    assert_eq!(attachment.revision, 1);
+}
+
+#[test]
+fn test_extract_capsule_attachment_from_codex_fixture_uses_direct_tool_name() {
+    let fixture = load_capsule_provider_fixture("codex-capsule-create.json");
+    let tool_result = provider_message_from_fixture(&fixture, "tool_result");
+
+    let attachment = extract_capsule_attachment_from_tool_result(&tool_result, &HashMap::new())
+        .expect("Codex direct mcp tool_result should extract capsule attachment");
+
+    assert_eq!(attachment.action, CapsuleAttachmentAction::Created);
+    assert_eq!(
+        attachment.capsule_id,
+        "01900000-0000-7000-8000-000000000002"
+    );
+    assert_eq!(attachment.title, "Test Capsule");
+    assert_eq!(attachment.revision, 1);
+}
+
+#[test]
+fn test_extract_capsule_attachment_from_payload_self_identifying_update_fixture() {
+    let fixture = load_capsule_provider_fixture("payload-self-identifying-update.json");
+    let tool_result = provider_message_from_fixture(&fixture, "tool_result");
+
+    let attachment = extract_capsule_attachment_from_tool_result(&tool_result, &HashMap::new())
+        .expect("self-identifying payload should extract capsule update attachment");
+
+    assert_eq!(attachment.action, CapsuleAttachmentAction::Updated);
+    assert_eq!(
+        attachment.capsule_id,
+        "01900000-0000-7000-8000-000000000003"
+    );
+    assert_eq!(attachment.title, "Updated Test Capsule");
+    assert_eq!(attachment.revision, 2);
+}
+
+#[test]
+fn test_capsule_attachment_marker_key_dedupes_repeated_tool_use_id() {
+    let attachment = CapsuleMutationAttachment {
+        action: CapsuleAttachmentAction::Created,
+        capsule_id: "01900000-0000-7000-8000-000000000007".to_owned(),
+        title: "Repeated Result Capsule".to_owned(),
+        revision: 1,
+    };
+
+    assert_eq!(
+        attachment.marker_key(Some("toolu_fixture_repeat"), 3),
+        attachment.marker_key(Some("toolu_fixture_repeat"), 4),
+        "a repeated completed result with the same tool_use_id must not emit another marker just because the content count advanced"
+    );
+    assert_ne!(
+        attachment.marker_key(None, 3),
+        attachment.marker_key(None, 4),
+        "anonymous results still fall back to their physical content position"
+    );
+}
+
+#[test]
+fn test_capsule_attached_run_control_has_control_envelope() {
+    let attachment = CapsuleMutationAttachment {
+        action: CapsuleAttachmentAction::Updated,
+        capsule_id: "01900000-0000-7000-8000-000000000004".to_owned(),
+        title: "Envelope Test Capsule".to_owned(),
+        revision: 3,
+    };
+
+    let control = capsule_attached_control_record(
+        "thread::fixture-capsule",
+        "run::fixture-capsule",
+        &attachment,
+        4,
+    );
+
+    assert_eq!(control.after_content_count, 4);
+    assert_eq!(control.message["role"], "system");
+    assert_eq!(control.message["kind"], "control");
+    assert_eq!(control.message["internal"], true);
+    assert_eq!(control.message["internal_kind"], "control");
+    assert_eq!(control.message["control"]["kind"], "capsule_attached");
+    assert_eq!(
+        control.message["control"]["thread_id"],
+        "thread::fixture-capsule"
+    );
+    assert_eq!(control.message["control"]["run_id"], "run::fixture-capsule");
+    assert_eq!(
+        control.message["control"]["capsule_id"],
+        attachment.capsule_id
+    );
+    assert_eq!(control.message["control"]["revision"], 3);
+    assert_eq!(control.message["control"]["action"], "updated");
+    assert_eq!(control.message["control"]["title"], "Envelope Test Capsule");
+}
+
+#[tokio::test]
+async fn test_capsule_attached_survives_terminal_reconcile_without_range_rewrite() {
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let history = make_history(store.clone());
+    let thread_id = "thread::capsule-reconcile";
+    let run_id = "run::capsule-reconcile";
+    let metadata = HashMap::from([("bridge_run_id".to_owned(), json!(run_id))]);
+    let session_messages = vec![
+        ProviderMessage::tool_use(
+            json!({"tool": "mcp__garyx__capsule_create", "input": {"title": "Test Capsule"}}),
+            Some("toolu_fixture_capsule_create".to_owned()),
+            Some("mcp__garyx__capsule_create".to_owned()),
+        )
+        .with_timestamp("2026-06-29T00:00:01Z"),
+        ProviderMessage::tool_result(
+            json!({
+                "result": [{
+                    "type": "text",
+                    "text": "{\"tool\":\"capsule_create\",\"status\":\"ok\",\"capsule_id\":\"01900000-0000-7000-8000-000000000005\",\"id\":\"01900000-0000-7000-8000-000000000005\",\"title\":\"Survives Reconcile Capsule\",\"revision\":1,\"open_url\":\"garyx://capsules/01900000-0000-7000-8000-000000000005\"}"
+                }],
+                "text": ""
+            }),
+            Some("toolu_fixture_capsule_create".to_owned()),
+            None,
+            Some(false),
+        )
+        .with_timestamp("2026-06-29T00:00:02Z"),
+        ProviderMessage::assistant_text("final answer").with_timestamp("2026-06-29T00:00:03Z"),
+    ];
+    let mut tool_names = HashMap::new();
+    tool_names.insert(
+        "toolu_fixture_capsule_create".to_owned(),
+        "mcp__garyx__capsule_create".to_owned(),
+    );
+    let attachment = extract_capsule_attachment_from_tool_result(&session_messages[1], &tool_names)
+        .expect("fixture result extracts attachment");
+    let controls = vec![capsule_attached_control_record(
+        thread_id,
+        run_id,
+        &attachment,
+        3,
+    )];
+
+    let (appended, committed) = save_streaming_partial(
+        &store,
+        &history,
+        PersistedRun {
+            thread_id,
+            user_message: "create a capsule",
+            user_timestamp: Some("2026-06-29T00:00:00Z"),
+            user_images: &[],
+            assistant_response: "final answer",
+            sdk_session_id: None,
+            provider_key: "provider::capsule",
+            provider_type: ProviderType::ClaudeCode,
+            session_messages: &session_messages,
+            metadata: &metadata,
+        },
+        &[],
+        &controls,
+        2,
+        0,
+    )
+    .await;
+    assert_eq!(appended, 4);
+    assert!(
+        committed.iter().any(|(_, message)| message
+            .pointer("/control/kind")
+            .and_then(Value::as_str)
+            == Some("capsule_attached")),
+        "streaming partial must commit the capsule marker once the tool_result is finalized"
+    );
+
+    let terminal = save_thread_messages_with_terminal_control(
+        &store,
+        &history,
+        PersistedRun {
+            thread_id,
+            user_message: "create a capsule",
+            user_timestamp: Some("2026-06-29T00:00:00Z"),
+            user_images: &[],
+            assistant_response: "final answer",
+            sdk_session_id: None,
+            provider_key: "provider::capsule",
+            provider_type: ProviderType::ClaudeCode,
+            session_messages: &session_messages,
+            metadata: &metadata,
+        },
+        &controls,
+        None,
+    )
+    .await;
+    assert!(
+        terminal.iter().all(|(_, message)| message
+            .pointer("/control/kind")
+            .and_then(Value::as_str)
+            != Some("range_rewrite")),
+        "terminal reconcile may append the trailing assistant, but not a range_rewrite"
+    );
+
+    let records = history
+        .transcript_store()
+        .records(thread_id)
+        .await
+        .expect("records load");
+    let control_kinds = records
+        .iter()
+        .filter_map(|record| {
+            record
+                .message
+                .pointer("/control/kind")
+                .and_then(Value::as_str)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(control_kinds, vec!["capsule_attached"]);
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record
+                .message
+                .pointer("/control/kind")
+                .and_then(Value::as_str)
+                == Some("range_rewrite"))
+            .count(),
+        0,
+        "authoritative capsule marker path must not create a range_rewrite"
+    );
+    assert_eq!(records[3].message["control"]["kind"], "capsule_attached");
+    assert_eq!(records[4].message["content"], "final answer");
+}
+
 #[tokio::test]
 async fn test_save_thread_messages_preserves_provider_message_order() {
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());

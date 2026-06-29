@@ -6,20 +6,20 @@ enum GaryxMobileTranscriptBlock: Identifiable, Equatable {
 
     var id: String {
         switch self {
-        case .message(let message), .toolGroup(let message):
+        case let .message(message), let .toolGroup(message):
             message.id
         }
     }
 
     var message: GaryxMobileMessage {
         switch self {
-        case .message(let message), .toolGroup(let message):
+        case let .message(message), let .toolGroup(message):
             message
         }
     }
 
     var isUserMessage: Bool {
-        if case .message(let message) = self {
+        if case let .message(message) = self {
             return message.role == .user
         }
         return false
@@ -37,9 +37,9 @@ struct GaryxMobileTurnRow: Identifiable, Equatable {
 
         var id: String {
             switch self {
-            case .flat(let block):
+            case let .flat(block):
                 "flat:\(block.id)"
-            case .turn(let turn):
+            case let .turn(turn):
                 turn.id
             }
         }
@@ -48,6 +48,19 @@ struct GaryxMobileTurnRow: Identifiable, Equatable {
     let id: String
     let userBlock: GaryxMobileTranscriptBlock?
     let activityRows: [ActivityRow]
+    let capsuleCards: [GaryxRenderCapsuleCard]
+
+    init(
+        id: String,
+        userBlock: GaryxMobileTranscriptBlock?,
+        activityRows: [ActivityRow],
+        capsuleCards: [GaryxRenderCapsuleCard] = []
+    ) {
+        self.id = id
+        self.userBlock = userBlock
+        self.activityRows = activityRows
+        self.capsuleCards = capsuleCards
+    }
 }
 
 struct GaryxMobileAgentTurn: Identifiable, Equatable {
