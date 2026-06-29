@@ -61,11 +61,16 @@
 
 ---
 
-## 2. 共享 contract 与纯助手
+## 2. 共享 contract 与 404→deleted（结构化 IPC result）
 
-### 2.1 `src/shared/contracts.ts`（仅加 deep-link 变体）
+> R1 评审采纳：放弃「`Promise<string>` + 跨 IPC 哨兵字符串」，改为**结构化 IPC result**（codex 评审更干净，且
+> 彻底消除 Electron 给 IPC 异常 message 加前缀的脆弱性）。`getCapsuleHtml` 现仅 CapsulesPanel 用（被本任务重写）、
+> 未被任何 mjs 测试/electron-smoke/mock 引用（已 grep 证），改返回类型 blast radius 受控。**deleted 是值、瞬态是 reject**：
+> 删除→`/serve` 404→`{status:'deleted'}`；5xx/网络/离线→**抛原始错误**→renderer 归类 retryable，绝不误判 deleted（守 §6）。
 
-`DesktopDeepLinkEvent` union（:1555）追加：
+### 2.1 `src/shared/contracts.ts`
+
+(a) `DesktopDeepLinkEvent` union（:1555）追加：
 
 ```ts
   | {
@@ -75,57 +80,55 @@
     }
 ```
 
+(b) 新增 capsule HTML 取数 result 类型 + 改 `GaryxDesktopApi.getCapsuleHtml` 签名（:2211）：
+
+```ts
+export type DesktopCapsuleHtmlResult =
+  | { status: "ok"; html: string }
+  | { status: "deleted" };
+// GaryxDesktopApi：
+//   getCapsuleHtml: (capsuleId: string) => Promise<DesktopCapsuleHtmlResult>;
+```
+
 `RenderCapsuleCard`/`RenderCapsuleAction`/`RenderUserTurnRow.capsule_cards?` T1 已建，不改。
 
-### 2.2 新 `src/shared/capsule-html.ts`（纯助手，可 headless 测）
+### 2.2 `gary-client.ts` / `main/index.ts` / `preload`：结构化 404→deleted
 
-集中三处复用的 cache key、404 哨兵、错误分类，避免 m6「`id:revision` 单键」在三处漂移成两套：
-
-```ts
-/** 主进程把 /serve 的 404（capsule 已删）翻成这个稳定哨兵跨 IPC；renderer 据此渲染 disabled tombstone。*/
-export const CAPSULE_HTML_NOT_FOUND_SENTINEL = "capsule-html:not-found";
-
-/** 统一缓存键（§3.3 / §5.5 / m6）：gallery / preview / 聊天卡共用，绝不带 sha。*/
-export function capsuleHtmlCacheKey(id: string, revision: number): string {
-  return `${id}:${revision}`;
-}
-
-export type CapsuleHtmlClassification = "deleted" | "error";
-
-/** Electron 会给 IPC 异常 message 加前缀，故用 includes 而非 ===。*/
-export function classifyCapsuleHtmlError(message: string): CapsuleHtmlClassification {
-  return message.includes(CAPSULE_HTML_NOT_FOUND_SENTINEL) ? "deleted" : "error";
-}
-```
-
-### 2.3 `main/index.ts` IPC：404 → 哨兵（不改 `getCapsuleHtml` 的 `Promise<string>` 契约）
-
-`garyx:get-capsule-html` handler（:942）包一层（`GatewayRequestError` 从 `gary-client.ts` 导入，已在同一 main bundle）：
+`gary-client.ts getCapsuleHtml`（:4889）返回 `Promise<DesktopCapsuleHtmlResult>`：成功 `{status:'ok',html}`；
+`catch (GatewayRequestError && status===404)` → `{status:'deleted'}`；**其它错误原样 rethrow**（瞬态 → renderer reject → retryable）。
+`main/index.ts:942` IPC handler 与 `preload/index.ts:183` 原样转发（无需 try/catch，deleted 已是返回值）。
 
 ```ts
-ipcMain.handle("garyx:get-capsule-html", async (_event, capsuleId: string) => {
-  const settings = await resolveSettings();
+// gary-client.ts
+export async function getCapsuleHtml(
+  settings: DesktopSettings,
+  capsuleId: string,
+): Promise<DesktopCapsuleHtmlResult> {
+  const id = capsuleId?.trim() || "";
+  if (!id) throw new Error("capsuleId is required");
   try {
-    return await getCapsuleHtml(settings, capsuleId);
+    const html = await requestText(settings, `/api/capsules/${encodeURIComponent(id)}/serve`, {
+      signal: AbortSignal.timeout(15000),
+    });
+    return { status: "ok", html };
   } catch (error) {
     if (error instanceof GatewayRequestError && error.status === 404) {
-      throw new Error(CAPSULE_HTML_NOT_FOUND_SENTINEL);
+      return { status: "deleted" };
     }
-    throw error;
+    throw error; // 瞬态/5xx/离线 → retryable，绝不当 deleted
   }
-});
+}
 ```
 
-> 选哨兵而非「改 IPC 返回结构化 union」：`getCapsuleHtml: (id)=>Promise<string>` 是 `GaryxDesktopApi` 共享契约，
-> 现仅 CapsulesPanel 用（被本任务重写），但保持 `Promise<string>` 把 blast radius 压到最小；哨兵是**我方主进程
-> 在 status===404 时刻意发出的确定信号**，非「message 里找 404」的脆弱嗅探。瞬态/5xx/离线仍抛原始错误 →
-> renderer 归类为 retryable error，绝不误判 deleted（守 §6）。
+> 统一缓存键 `capsuleHtmlCacheKey(id, revision) = `${id}:${revision}``（§3.3 / m6，绝不带 sha）由 §4 的 store 模块
+> 导出（store + `CapsuleLivePreviewFrame` 的 iframe `key` 共用），不再单独建 `capsule-html.ts`。砍掉 CapsulesPanel
+> 现 3 段键（:26-28）。
 
 ---
 
 ## 3. 路由：`#/capsules/<id>`
 
-### 3.1 `desktop-route.ts`
+### 3.1 `desktop-route.ts`（含把 `currentDesktopRoute` 迁来，便于 headless round-trip 测）
 
 - `DesktopRoute` union（:5）加 `| { kind: 'capsule'; capsuleId: string }`。
 - `parseDesktopRoute`：在 `SIMPLE_VIEW_SEGMENTS` 查表（:165）**之前**插分支：
@@ -133,10 +136,22 @@ ipcMain.handle("garyx:get-capsule-html", async (_event, capsuleId: string) => {
   （`#/capsules`（无 second）仍落 simpleView → `{kind:'view',view:'capsules'}` gallery，不变）。
 - `contentViewForDesktopRoute`：`case 'capsule': return 'capsules';`。
 - `buildDesktopRouteHash`：`case 'capsule': return `#/capsules/${encodeSegment(route.capsuleId)}`;`。
+- **把 `currentDesktopRoute`（现 AppShell.tsx:1324 module-scope 纯函数）迁入 `desktop-route.ts` 并 `export`**：
+  它只用纯输入对象 + `ContentView`/`SettingsTabId`（两类型 desktop-route.ts 已 import），无 React 依赖，迁移是干净重构、
+  且让 round-trip 可 headless 单测（AppShell.tsx 因 import 海量 React/CSS 无法被 node:test 直接 import）。入参加
+  `capsulePreviewId: string|null`；`view==='capsules'` 分支：`return capsulePreviewId ? {kind:'capsule',capsuleId:capsulePreviewId} : {kind:'view',view:'capsules'}`。
+  AppShell 改为 `import { currentDesktopRoute } from './desktop-route'`。
 
-### 3.2 AppShell：lifted `capsulePreviewId`
+### 3.2 AppShell：lifted `capsulePreviewId`（**含冷启动 seed，修 R1-B1**）
 
-- 新 state `const [capsulePreviewId, setCapsulePreviewId] = useState<string|null>(null)`。
+- **冷启动 seed**：`initialRouteValue`（AppShell:1521，mount 时 `parseDesktopRoute()` 一次）已含初始 route。
+  state 初值必须从它派生，否则冷启动 `#/capsules/<id>` 会：`contentView` 初始化成 `capsules`（`contentViewForDesktopRoute`），
+  但 `capsulePreviewId` 仍 `null` → replace effect（:4247）反写 `#/capsules` 把 id 抹掉。修法：
+  ```ts
+  const [capsulePreviewId, setCapsulePreviewId] = useState<string | null>(
+    initialRouteValue.kind === "capsule" ? initialRouteValue.capsuleId : null,
+  );
+  ```
 - `applyDesktopRoute`（:4124 switch）加：
   ```ts
   case 'capsule':
@@ -145,15 +160,15 @@ ipcMain.handle("garyx:get-capsule-html", async (_event, capsuleId: string) => {
     return;
   ```
   并在 `case 'view'`（:4161）里：当 `route.view==='capsules'` 时 `setCapsulePreviewId(null)`（rail/gallery 语境清预览）。
-- `currentDesktopRoute`（:1324）：入参加 `capsulePreviewId: string|null`；末尾 `view==='capsules'` 时
-  `return capsulePreviewId ? {kind:'capsule',capsuleId:capsulePreviewId} : {kind:'view',view:'capsules'}`（其余 view 不变）。
-- `replaceDesktopRoute` effect（:4247）：`currentDesktopRoute({..., capsulePreviewId})`，依赖数组加 `capsulePreviewId`。
+- `replaceDesktopRoute` effect（:4247）：`currentDesktopRoute({..., capsulePreviewId})`（已迁 desktop-route.ts），依赖数组加 `capsulePreviewId`。
 - rail `onOpenCapsules`（:10159）：`setContentView('capsules'); setCapsulePreviewId(null);`（rail 进 gallery 不带预览）。
 - `<CapsulesPanel>`（:10581）传：`selectedCapsuleIdFromRoute={isCapsulesView ? capsulePreviewId : null}`、
   `onOpenCapsulePreview={(id)=>setCapsulePreviewId(id)}`、`onCloseCapsulePreview={()=>setCapsulePreviewId(null)}`。
 
 > 路由是单一真相：CapsulesPanel **不自持** preview 选择，全部从 `selectedCapsuleIdFromRoute` 派生、改动经
-> `onOpen/onClose` 冒泡到 AppShell→hash。这样 deep link / 聊天卡 / gallery 点击三入口统一，Back=清 id=回 gallery。
+> `onOpen/onClose` 冒泡到 AppShell→hash。这样 deep link / 聊天卡 / gallery 点击 / **冷启动** 四入口统一，Back=清 id=回 gallery。
+> 冷启动正确性由 §10.1 的 `currentDesktopRoute({view:'capsules', capsulePreviewId:'X'})→capsule 路由` round-trip 测 +
+> `parse('#/capsules/<id>')→capsule` 测共同守护，并在 §12 CDP 用「带 `#/capsules/<id>` hash 启动→直接落预览非 gallery」复核。
 
 ### 3.3 deep link `garyx://capsules/<id>`
 
@@ -172,7 +187,8 @@ ipcMain.handle("garyx:get-capsule-html", async (_event, capsuleId: string) => {
 `htmlByKey` 塞进 AppShell 的 `useState`（避免每次 HTML 落地整 shell 重渲——守 iOS 雅克教训的“窄观测”），
 组件按 key 订阅，capsule A 的加载不触发 capsule B 的卡片重渲。
 
-状态（`Map<cacheKey, Entry>`，`Entry = { status:'loading'|'ready'|'deleted'|'error', html?, error? }`）。API：
+状态（`Map<cacheKey, Entry>`，`Entry = { status:'loading'|'ready'|'deleted'|'error', html?, error? }`）+
+`generationById: Map<id, number>`（per-id epoch，**修 R1-B3 删除竞态**）。API：
 
 ```ts
 export type CapsuleHtmlState =
@@ -182,9 +198,11 @@ export type CapsuleHtmlState =
   | { status: 'deleted' }
   | { status: 'error'; message: string };
 
+// 统一缓存键（§2.2，三处共用，不带 sha）
+export function capsuleHtmlCacheKey(id: string, revision: number): string;
 // 命令式（供事件回调/刷新/删除用）
 capsuleHtmlStore.request(id, revision, { force?: boolean }): void   // 入队，遵守并发上限
-capsuleHtmlStore.invalidateCapsule(id): void                        // 删该 capsule 所有 revision 键
+capsuleHtmlStore.invalidateCapsule(id): void                        // 删除后调用：清队列 + bump generation + 置 deleted
 // React hook（组件用）：active=false 时不请求、返回 idle/缓存命中
 useCapsuleHtml(id: string, revision: number, opts: { active: boolean }): CapsuleHtmlState
 ```
@@ -192,10 +210,20 @@ useCapsuleHtml(id: string, revision: number, opts: { active: boolean }): Capsule
 并发：内部 `maxConcurrent = 4`，`inflight` 计数 + 待处理队列；`request` 命中缓存（ready/deleted）直接返回，
 loading 中去重，否则入队，slot 空出再 `getCapsuleHtml`。`force` 跳过缓存并把该 key 置回 loading 重取
 （serve 永远给最新内容；revision 升时键本就变，force 用于「内容原地被改但 revision 没变」的手动刷新）。
-失败：`classifyCapsuleHtmlError(message)` → `deleted` 或 `error{message}`。
+
+**结果分类（结构化，无哨兵）**：`getCapsuleHtml` resolve `{status:'ok',html}`→`ready`；`{status:'deleted'}`→`deleted`；
+**reject**（瞬态/5xx/离线）→`error{message}`（retryable，绝不当 deleted，守 §6）。
+
+**删除竞态 stale guard（R1-B3 核心）**：每次入队/起飞的 job 捕获起飞时的 `gen = generationById.get(id) ?? 0`。
+`invalidateCapsule(id)` 做三件事：① `generationById.set(id, gen+1)`；② 从待处理队列移除该 id 的所有 job；
+③ 把该 id 现有 keys 的 Entry 直接置 `{status:'deleted'}`（让当前已挂载的聊天卡/预览**立即**翻 tombstone，无需重 fetch）。
+任何 in-flight job 完成时（resolve 或 reject）**先校验** `(generationById.get(id) ?? 0) === job.gen`，不等则**丢弃结果不写 store**
+（IPC 无法真 abort 主进程 fetch，靠 gen 守卫吞掉迟到写）。→ 删除时同 id 正在飞的 fetch 完成后不会把已删 HTML 写回（守 §6
+「删除后 /serve 404 → deleted」）。
 
 取数 fetcher 默认 `window.garyxDesktop.getCapsuleHtml`，暴露 `__setCapsuleHtmlFetcherForTest(fn)` +
-`__resetCapsuleHtmlStoreForTest()` 供 headless 测（注入受控 fetcher 验并发上限 / dedupe / deleted 分类 / prune）。
+`__resetCapsuleHtmlStoreForTest()` 供 headless 测（注入受控 fetcher 验并发上限 / dedupe / 缓存命中 / force 重取 /
+deleted 分类 / **delete-while-inflight 迟到写被丢弃**）。
 
 > 「mounted iframe 数」由组件侧 IntersectionObserver 决定（只可视区挂 iframe）；「同时 fetch 数 ≤4」由 store 决定。
 > 二者正交：gallery 滚动只让可视卡 `active=true` 去 `useCapsuleHtml` 请求，离屏卸载 iframe（脚本停跑）。
@@ -269,43 +297,59 @@ selectedCapsuleIdFromRoute != null  → <CapsulePreviewPage capsuleId=...>
 
 ## 7. 聊天 final 后 capsule 卡片（哑渲染）
 
-### 7.1 `render-view-model.ts`（纯透传，守文件头契约）
+### 7.1 `render-view-model.ts`（纯结构翻译，**solo 与 team 双通道都摆卡**，守文件头契约）
+
+> R1-B2 评审采纳：team 线程走 `buildThreadViewBlocks`（ThreadPage:556），与 solo 的 `buildThreadViewRowsWithLocalUsers`
+> 互斥。若只在 solo 通道摆卡，team 线程会**丢掉 server 已派生的 capsule 卡**（违父契约 §1.3「某 run create/update 过
+> capsule → final 后由 server render_state 加卡」）。修法：两通道都**结构性**把 `row.capsule_cards` 摆在该 turn activity
+> 之后——solo 用字段，team 用新增 block kind。零分组/配对/插位（位置 server reducer 已定，排 final 后）。
+
+**(a) solo 通道（`buildThreadViewRows`，:272）**：
 
 - `UserTurnRow`（:73-78）加 `capsuleCards: RenderCapsuleCard[]`（import 类型）。
-- `buildThreadViewRows`（:280 循环）：user 解析到时
-  `rows.push({ kind:'user_turn', key, userBlock, activityRows, capsuleCards: row.capsule_cards ?? [] })`；
-  orphan 分支（:299）在 `rows.push(...activityRows)` 后，若 `row.capsule_cards?.length` 也把卡接到 activity 之后
-  （包成同一 user_turn 壳但 `userBlock` 用合成占位？——**否**：orphan 无 user 行，直接追加一个轻量
-  `{kind:'capsule_only', key, capsuleCards}` 顶层行，ThreadPage 单独渲染；避免给 orphan 造假 userBlock）。
-  → 故 `TurnRenderRow` 加 `| CapsuleOnlyRow { kind:'capsule_only'; key; capsuleCards }`（仅当 orphan 且有卡才产）。
-- `buildThreadViewRowsWithLocalUsers`（:304）的本地乐观 user 行 `capsuleCards: []`。
-- `capsuleCards` **不计入** `collectBlockMessageIds`/`representedMessageIds`（:113-165）——卡片不是消息，
-  否则 `buildThreadViewRowsWithLocalUsers` 的 represented 判定 / visible id 会被污染。
-- `buildThreadViewBlocks`（team 模式，:340）**不渲染** capsule 卡（团队线性流不插卡，保持与 server 一致最小面）。
+- user 解析到时 `rows.push({ kind:'user_turn', key, userBlock, activityRows, capsuleCards: row.capsule_cards ?? [] })`。
+- orphan 分支（:299）：orphan 无 user 行，**不造假 userBlock**；若 `row.capsule_cards?.length`，在 `rows.push(...activityRows)`
+  后追加轻量顶层行 `{ kind:'capsule_only', key:`capsule-cards:${row.id}`, capsuleCards }`。
+  → `TurnRenderRow` 加 `| { kind:'capsule_only'; key:string; capsuleCards: RenderCapsuleCard[] }`（仅 orphan 且有卡才产）。
+- `buildThreadViewRowsWithLocalUsers`（:304）本地乐观 user 行 `capsuleCards: []`。
+- `capsuleCards`/`capsule_only` **不计入** `collectBlockMessageIds`/`representedMessageIds`（:113-165）——卡片不是消息，
+  否则 represented 判定 / visible id 被污染。`representedMessageIdsForRows`（:148）的 row switch 对 `capsule_only` 直接跳过。
 
-> 这一步是“摆字段”，零分组/配对/插位逻辑（卡片位置 server reducer 已定，排在 final 之后）。
+**(b) team 通道（`buildThreadViewBlocks`，:340）——新增 `capsule_cards` block kind**：
 
-### 7.2 `ThreadPage.tsx`
+- `RenderTranscriptBlock` union（:37-48）加 `| { kind:'capsule_cards'; key:string; cards: RenderCapsuleCard[] }`。
+- `buildThreadViewBlocks` 每个 `user_turn` row 渲完其 activity blocks 后，若 `row.capsule_cards?.length`，push
+  `{ kind:'capsule_cards', key:`capsule-cards:${row.id}`, cards: row.capsule_cards }`（结构性接在该 turn 之后，
+  不扫 tool result、不查 capsule list）。
+- `collectBlockMessageIds`（:113）加 guard：`if (block.kind === 'capsule_cards') return;`（无 message id；否则
+  现有 `for (const entry of block.entries)` 会因 `entries` undefined 崩）。
+- 三端 TS 穷尽：新 block kind 触及的 `block.kind` 分发点见 §7.2（`renderBlockBody`/`speakerForTranscriptBlock`）。
 
-- `ThreadPageProps`（:245）加 `onOpenCapsule?: (capsuleId: string) => void`（仿 `onOpenThreadById`）。
-- user_turn 渲染分支（:928-937）在 `activityRows.map(...)` **之后**追加：
-  ```tsx
-  {row.capsuleCards.length ? (
-    <CapsuleChatCardList cards={row.capsuleCards} onOpenCapsule={onOpenCapsule} />
-  ) : null}
-  ```
-  并加 `case 'capsule_only'`（顶层）渲染 `<CapsuleChatCardList>`。
+### 7.2 `ThreadPage.tsx`（solo 行 + team block 都渲卡）
+
+- `ThreadPageProps`（:245）加 `onOpenCapsule?: (capsuleId: string) => void`（仿 `onOpenThreadById`:378）。
+- **solo**：user_turn 渲染分支（:928-937）在 `activityRows.map(...)` **之后**追加
+  `{row.capsuleCards.length ? <CapsuleChatCardList cards={row.capsuleCards} onOpenCapsule={onOpenCapsule}/> : null}`；
+  顶层 row 渲染加 `case 'capsule_only'` → `<CapsuleChatCardList>`。
+- **team**：`renderBlockBody`（:742，现 `if tool_group … else message`）**首部**加
+  `if (block.kind === 'capsule_cards') return <CapsuleChatCardList cards={block.cards} onOpenCapsule={onOpenCapsule}/>;`
+  （否则会落进 message 分支 `const entry = block.entry` 而 entry undefined 崩）；
+  `speakerForTranscriptBlock`（:132，现 `if message … else for entries`）**首部**加
+  `if (block.kind === 'capsule_cards') return null;`（无 speaker → team loop `if (!speaker) return blockBody`，无 speaker header）。
 - 新 `src/renderer/src/app-shell/components/CapsuleChatCard.tsx`：
-  - `CapsuleChatCardList`：横向窄列表或单列 compact（首版单列、卡宽上限 ~360px）。
-  - 每卡 `<button onClick={()=>onOpenCapsule?.(card.capsule_id)}>`：上半 `<CapsuleLivePreviewFrame mode="card" active={visible}>`（`visible` 由 IntersectionObserver；**聊天卡更保守**：同时 active ≤ 2，由 store 并发上限 + 组件可视区门控共同保证），下半 title + `action`（Created/Updated）小标。
+  - `CapsuleChatCardList`：单列 compact（首版卡宽上限 ~360px）。
+  - 每卡 `<button onClick={()=>onOpenCapsule?.(card.capsule_id)}>`：上半 `<CapsuleLivePreviewFrame mode="card" active={visible}>`（`visible` 由 IntersectionObserver；**聊天卡更保守**：同时 active ≤ 2，由 store 并发上限 + 可视区门控共同保证），下半 title + `action`（Created/Updated）小标。
   - serve 404 → `state.status==='deleted'` → disabled「Capsule deleted」，不重试加载（store 已缓存 deleted）。
 - AppShell 两处 `<ThreadPage>`（:9361 side-chat、:9610 main）都传
   `onOpenCapsule={(id)=>{ setContentView('capsules'); setCapsulePreviewId(id); }}`（点聊天卡→app 内 preview，Back 回 gallery，守 §3.4）。
 
-### 7.3 `render-view-model.test.mjs`：改 T1 断言（:472）
+### 7.3 `render-view-model.test.mjs`：改 T1 断言（:472）+ 新增
 
-把 “tolerated but not rendered” 改成：`rows[0].capsuleCards` 长度 1、`capsule_id` 对、**且** `visibleMessageIds`/
-`blockMessageIds(blocks)` 仍只含 `seq:1,seq:2`（卡片不入 visible/blocks）。新增 orphan→`capsule_only` 行用例。
+- 改 :472「tolerated but not rendered」→ 断言 solo `rows[0].capsuleCards` 长度 1、`capsule_id` 对、**且** `visibleMessageIds`/
+  `blockMessageIds(blocks)` 仍只含 `seq:1,seq:2`（卡片不入 visible/blocks）。这是**加强**断言非放松。
+- 新增：orphan（user 解析不到）+ `capsule_cards` → 顶层 `capsule_only` 行；
+  **team** fixture（带 capsule_cards 的 user_turn）→ `buildThreadViewBlocks` 末尾出 `{kind:'capsule_cards'}` block 且
+  `blockMessageIds` 不含卡片（守 B2 修复）。
 
 ---
 
@@ -331,16 +375,19 @@ soft border、subtle shadow，守 desktop `CLAUDE.md` 审美。Delete 用 `--col
 
 ## 10. 测试（headless 优先）
 
-均登记进 `package.json` `test:unit`：
+均登记进 `package.json` `test:unit`（**显式列表，新文件必登记**）：
 
-1. `desktop-route.test.mjs`（改）：`#/capsules/<uuid>`→`{kind:'capsule',capsuleId}` + `contentViewForDesktopRoute==='capsules'`；
-   `buildDesktopRouteHash({kind:'capsule',capsuleId})==='#/capsules/<encoded>'`；`#/capsules`（无 id）仍 `view:'capsules'`（回归保护）。
-2. `render-view-model.test.mjs`（改 :472 + 新增）：capsuleCards 透传、不入 visible/blocks；orphan→`capsule_only`；本地乐观 user 行 capsuleCards=[]。
-3. **新** `src/shared/capsule-html.test.mjs`：`capsuleHtmlCacheKey` 形态；`classifyCapsuleHtmlError(含哨兵)==='deleted'`、`其它==='error'`；前缀化 message（模拟 Electron `Error invoking remote method…: Error: capsule-html:not-found`）仍判 deleted。
-4. **新** `src/main/deep-link.test.mjs`：`garyx://capsules/<id>`→`{type:'open-capsule',capsuleId}`；带 query / 多段报错；
+1. `desktop-route.test.mjs`（改）：`parse('#/capsules/<uuid>')→{kind:'capsule',capsuleId}` + `contentViewForDesktopRoute==='capsules'`；
+   `buildDesktopRouteHash({kind:'capsule'})==='#/capsules/<encoded>'`；`#/capsules`（无 id）仍 `view:'capsules'`（回归保护）；
+   **冷启动 round-trip（修 R1-B1）**：`currentDesktopRoute({contentView:'capsules', capsulePreviewId:'X', …})==={kind:'capsule',capsuleId:'X'}`、
+   `capsulePreviewId:null` 时回 `{kind:'view',view:'capsules'}`（即 `currentDesktopRoute` 已迁 desktop-route.ts，可直接 import 测）。
+2. `render-view-model.test.mjs`（改 :472 + 新增）：solo capsuleCards 透传、不入 visible/blocks；orphan→`capsule_only`；
+   本地乐观 user 行 capsuleCards=[]；**team `buildThreadViewBlocks` 末尾出 `capsule_cards` block 且 blockMessageIds 不含卡片（修 R1-B2）**。
+3. **新** `src/main/deep-link.test.mjs`：`garyx://capsules/<id>`→`{type:'open-capsule',capsuleId}`；带 query / 多段报错；
    顺带覆盖既有 thread/new/resume（补 deep-link 现无测试的缺口，最小）。
-5. **新** `src/renderer/src/app-shell/capsule-html-store.test.mjs`：注入受控 fetcher 验
-   并发 ≤4、同 key dedupe、缓存命中不重取、`force` 重取、`deleted` 分类、`invalidateCapsule` prune。
+4. **新** `src/renderer/src/app-shell/capsule-html-store.test.mjs`：注入受控 fetcher 验
+   并发 ≤4、同 key dedupe、缓存命中不重取、`force` 重取、`{status:'deleted'}` 分类、瞬态 reject→error、
+   **delete-while-inflight：invalidate 后迟到 resolve 被 gen 守卫丢弃、Entry 维持 deleted（修 R1-B3）**；`capsuleHtmlCacheKey` 形态。
 
 > `CapsuleLivePreviewFrame`/gallery/preview/chat card 是 React DOM 组件（iframe/IntersectionObserver），
 > headless node:test 不覆盖，靠 build:ui 类型 + CDP 实测把关（守任务“reviewer 真 build+CDP 实测”）。
@@ -349,9 +396,11 @@ soft border、subtle shadow，守 desktop `CLAUDE.md` 审美。Delete 用 `--col
 
 ## 11. 安全 / 性能不变量（验收 checklist）
 
-安全（守 §8）：所有 iframe `sandbox="allow-scripts"` 且**无** `allow-same-origin`；无 Electron `<webview>`（CDP `webviewCount===0`）；
-HTML 经主进程 auth fetch（renderer 不直连 gateway、不持 token）；Copy link 用 `garyx://capsules/<id>`（不带 token）；
-title/meta 是 native text 非 HTML 注入；card 模式 `pointer-events:none`+`tabIndex:-1`。
+安全（守 §8）：**capsule iframe**（`.capsule-live-frame`，三处统一组件）`sandbox="allow-scripts"` 且**无** `allow-same-origin`；
+无 Electron `<webview>`（CDP `webviewCount===0`）；HTML 经主进程 auth fetch（renderer 不直连 gateway、不持 token）；
+Copy link 用 `garyx://capsules/<id>`（不带 token）；title/meta 是 native text 非 HTML 注入；card 模式 `pointer-events:none`+`tabIndex:-1`。
+> 注（R1 非阻断采纳）：CDP 断言**限定 capsule iframe**（按 class/选择器），不全局扫所有 `<iframe>`——仓库存在
+> 非 capsule 的 `allow-same-origin` iframe，全局扫会误报。
 
 性能（守 §7）：gallery/聊天卡 IntersectionObserver 懒挂载（离屏卸载 iframe）；store 同时 fetch ≤4；聊天卡同时 active ≤2；
 离开 `contentView!=='capsules'` / preview 关闭 → 相关 iframe 卸载；HTML cache `id:revision` 命中复用、delete prune。
@@ -360,12 +409,14 @@ title/meta 是 native text 非 HTML 注入；card 模式 `pointer-events:none`+`
 
 ## 12. 验收
 
-- `npm run build:ui`（tsc --noEmit + electron-vite build）绿；`npm run test:unit` 绿（含新增 5 类测试）。
+- `npm run build:ui`（tsc --noEmit + electron-vite build）绿；`npm run test:unit` 绿（含新增/改 4 类测试）。
 - `npm run dist:dir` 装包 + 退旧进程 + CDP attach（`playwright-cli -s=<s> attach --cdp=http://127.0.0.1:39222`，连本地真 gateway :31337）：
   1. gallery 显示 3 条真 capsule（`019f0ec9` 等），卡片上半 live 预览渲染（非空白）。
   2. 点卡 → 去 chrome 预览近全屏；toolbar 有 Back/Refresh/Copy link/⋯；Back 回 gallery。
   3. 聊天里（开 `thread::8c689df7-…` 等带 capsule 的线程）final 后出现 capsule 卡片，点击进 preview。
-  4. DOM 断言：`document.querySelectorAll('iframe').forEach(f => f.sandbox 不含 'allow-same-origin')`、`webview` 计数 0。
+  4. **冷启动（修 R1-B1 复核）**：以 `#/capsules/<id>` hash 启动 app → 直接落 preview（非 gallery），hash 不被抹成 `#/capsules`。
+  5. DOM 断言（**限定 capsule iframe**）：`[...document.querySelectorAll('.capsule-live-frame')].every(f => !f.sandbox.contains('allow-same-origin'))`、
+     `document.querySelectorAll('webview').length===0`。
 
 ---
 
@@ -374,23 +425,24 @@ title/meta 是 native text 非 HTML 注入；card 模式 `pointer-events:none`+`
 | # | 风险 | 缓解 |
 |---|---|---|
 | D1 | AppShell 巨组件接线（lifted state + 两处 ThreadPage + route 反推）易漏依赖/竞态 | 单一真相=route；`capsulePreviewId` 进 `currentDesktopRoute` 入参 + effect 依赖；rail/gallery/deep-link/聊天卡四入口都经 `applyDesktopRoute`/`setCapsulePreviewId` 同一路径；改完 grep `capsulePreviewId` 核全用点 |
-| D2 | 404→deleted 跨 IPC 误判（瞬态当 deleted） | 仅 `GatewayRequestError.status===401? no →===404` 才翻哨兵；其余原样抛→`error` retryable；`classifyCapsuleHtmlError` 单测含前缀化 message |
+| D2 | 404→deleted 误判（瞬态当 deleted） | 结构化 result：`getCapsuleHtml` 仅 `GatewayRequestError.status===404` 返 `{status:'deleted'}`，其余原样 rethrow→renderer `error` retryable；store 测覆盖瞬态 reject |
 | D3 | card 模式 scale 计算每帧测量抖动/性能 | 首版用固定卡宽推导常量 scale（CSS var），不用每帧 ResizeObserver；虚拟视口固定 1024×640 |
-| D4 | 共享 store 并发/dedupe 写错致重复 fetch 或卡死 | store 纯逻辑抽出 + headless 注入 fetcher 测并发上限/dedupe/prune |
+| D4 | 共享 store 并发/dedupe/删除竞态写错 | store 纯逻辑抽出 + headless 注入 fetcher 测并发上限/dedupe/force/缓存命中/**delete-while-inflight gen 守卫** |
 | D5 | orphan turn 插卡破坏“纯结构翻译”契约 | 不给 orphan 造假 userBlock；新增独立 `capsule_only` 顶层行，零分组逻辑 |
 | D6 | 聊天卡导致 thread 上下文丢失（点卡跳走） | 父稿 §3.4 已批准：首版 Back 统一回 gallery，不维护跨-view return stack |
 | D7 | 改 `render-view-model.test.mjs:472` 被当“放松测试” | 改后断言更强（透传 + 仍不入 visible/blocks），非删除；保留 unknown-kind 容错用例 |
+| **R1-B1** | 冷启动 `#/capsules/<id>` 被抹成 gallery | `capsulePreviewId` 从 `initialRouteValue` seed（§3.2）+ `currentDesktopRoute` 迁 desktop-route.ts 加 round-trip 测 + CDP 冷启动复核 |
+| **R1-B2** | team 线程丢 server capsule 卡 | team `buildThreadViewBlocks` 加 `capsule_cards` block kind 结构性接在 turn 后（§7.1b）；3 处 `block.kind` guard + team block 测 |
+| **R1-B3** | 删除时同 id in-flight fetch 把已删 HTML 写回 | store per-id generation 守卫 + `invalidateCapsule` 清队列/置 deleted（§4）+ delete-while-inflight 测 |
 
 ---
 
 ## 14. 实现顺序（worktree）
 
-1. `shared/capsule-html.ts` + test → `contracts.ts`(deep-link 变体) → `main/deep-link.ts`(+test) → `main/index.ts`(404 哨兵 + trace)。
-2. `desktop-route.ts`(+test) → AppShell route/deeplink/lifted state 接线。
-3. `capsule-html-store.ts`(+test) → `CapsuleLivePreviewFrame.tsx`。
+1. `contracts.ts`（deep-link 变体 + `DesktopCapsuleHtmlResult` + getCapsuleHtml 签名）→ `gary-client.ts`(结构化 404→deleted) → `main/deep-link.ts`(+test) → `main/index.ts`(trace label)。
+2. `desktop-route.ts`(迁入 currentDesktopRoute + capsule 路由 + test) → AppShell route/deeplink/lifted state 接线（含冷启动 seed）。
+3. `capsule-html-store.ts`(+test，含 gen 守卫) → `CapsuleLivePreviewFrame.tsx`。
 4. `CapsulesPanel.tsx` 重写（gallery + preview）+ CSS。
-5. `render-view-model.ts`(+test) → `CapsuleChatCard.tsx` → `ThreadPage.tsx` → AppShell 传 `onOpenCapsule`。
-6. i18n 补串 → `build:ui` + `test:unit` 绿 → `dist:dir` + CDP 实测。
+5. `render-view-model.ts`(solo 字段 + team `capsule_cards` block + test) → `CapsuleChatCard.tsx` → `ThreadPage.tsx`(solo 行 + team block 渲染 + onOpenCapsule) → AppShell 传 `onOpenCapsule`。
+6. i18n 补串 → `build:ui` + `test:unit` 绿 → `dist:dir` + CDP 实测（含冷启动）。
 7. 自开 code review 给 codex 到 100% PASS → 合 main。
-</content>
-</invoke>
