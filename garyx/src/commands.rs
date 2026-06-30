@@ -5477,6 +5477,7 @@ pub(crate) async fn cmd_task_create(
     // bare task with no executor is created as a `todo` placeholder.
     let start = executor.is_some();
     let notification_target = task_notification_target_payload(notify)?;
+    let notify_current_thread = notification_targets_current_thread(&notification_target);
     let source = task_source_payload_from_env();
     let workspace_dir = workspace_dir
         .map(|value| value.trim().to_owned())
@@ -5506,7 +5507,29 @@ pub(crate) async fn cmd_task_create(
         return print_pretty_json(&payload);
     }
     print_task_summary(&payload);
+    if notify_current_thread {
+        println!();
+        println!(
+            "You don't need to poll this task or hold this turn open — Garyx will message this thread automatically when it finishes. You can stop now."
+        );
+    }
     Ok(())
+}
+
+/// True when the resolved notification target points at the thread this CLI run
+/// is executing inside (the default "notify the current thread" case). Used to
+/// reassure an agent caller that it can stop instead of polling the new task.
+fn notification_targets_current_thread(target: &Value) -> bool {
+    if target.get("kind").and_then(Value::as_str) != Some("thread") {
+        return false;
+    }
+    match (
+        target.get("thread_id").and_then(Value::as_str),
+        env_nonempty("GARYX_THREAD_ID"),
+    ) {
+        (Some(target_thread), Some(current_thread)) => target_thread == current_thread,
+        _ => false,
+    }
 }
 
 fn task_executor_payload(

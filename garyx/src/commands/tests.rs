@@ -2395,6 +2395,34 @@ fn task_notification_target_defaults_to_none_outside_a_thread() {
 }
 
 #[test]
+fn notification_targets_current_thread_matches_running_thread() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _thread_id = ScopedEnvVar::set_string("GARYX_THREAD_ID", "thread::current");
+
+    assert!(notification_targets_current_thread(
+        &json!({ "kind": "thread", "thread_id": "thread::current" })
+    ));
+    // A different thread, or a non-thread target, is not the current thread.
+    assert!(!notification_targets_current_thread(
+        &json!({ "kind": "thread", "thread_id": "thread::other" })
+    ));
+    assert!(!notification_targets_current_thread(&json!({ "kind": "none" })));
+    assert!(!notification_targets_current_thread(
+        &json!({ "kind": "bot", "channel": "telegram", "account_id": "main" })
+    ));
+}
+
+#[test]
+fn notification_targets_current_thread_false_without_env() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _thread_id = ScopedEnvVar::remove("GARYX_THREAD_ID");
+
+    assert!(!notification_targets_current_thread(
+        &json!({ "kind": "thread", "thread_id": "thread::current" })
+    ));
+}
+
+#[test]
 fn task_source_payload_reads_runtime_env() {
     let _guard = ENV_LOCK.lock().unwrap();
     let _thread_id = ScopedEnvVar::set_string("GARYX_THREAD_ID", "thread::current");
