@@ -18,16 +18,20 @@ pub(crate) async fn read_oauth_token() -> Result<String, String> {
 
 pub(crate) async fn read_oauth_token_and_subscription() -> Result<(String, Option<String>), String>
 {
-    match read_oauth_credentials().await {
-        Ok(credentials) => {
-            let token = oauth_token_from_credentials(&credentials)?;
-            let subscription = oauth_subscription_from_credentials(&credentials);
-            Ok((token, subscription))
-        }
+    match read_stored_oauth_token_and_subscription().await {
+        Ok(credentials) => Ok(credentials),
         Err(credentials_error) => read_env_oauth_token()
             .map(|token| (token, None))
             .ok_or(credentials_error),
     }
+}
+
+pub(crate) async fn read_stored_oauth_token_and_subscription()
+-> Result<(String, Option<String>), String> {
+    let credentials = read_oauth_credentials().await?;
+    let token = oauth_token_from_credentials(&credentials)?;
+    let subscription = oauth_subscription_from_credentials(&credentials);
+    Ok((token, subscription))
 }
 
 fn read_env_oauth_token() -> Option<String> {
@@ -181,7 +185,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn credentials_file_takes_precedence_over_env_oauth_token() {
+    async fn stored_credentials_reader_ignores_env_oauth_token() {
         let _lock = env_lock().lock().expect("env lock");
         let temp = tempdir().expect("temp dir");
         let claude_dir = temp.path().join(".claude");
@@ -207,11 +211,11 @@ mod tests {
         ]);
         EnvRestore::set("HOME", temp.path());
         EnvRestore::remove("USERPROFILE");
-        EnvRestore::set("CLAUDE_CODE_OAUTH_TOKEN", "bad-env-token");
+        EnvRestore::set("CLAUDE_CODE_OAUTH_TOKEN", "ignored-env-token");
         EnvRestore::remove("ANTHROPIC_AUTH_TOKEN");
         EnvRestore::remove("CLAUDE_OAUTH_TOKEN");
 
-        let (token, subscription) = read_oauth_token_and_subscription().await.unwrap();
+        let (token, subscription) = read_stored_oauth_token_and_subscription().await.unwrap();
 
         assert_eq!(token, "file-token");
         assert_eq!(subscription.as_deref(), Some("max"));

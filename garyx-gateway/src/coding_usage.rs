@@ -7,7 +7,7 @@
 //!
 //! Source of truth for each tool:
 //! - Claude Code: `~/.claude/.credentials.json`, then the macOS keychain item
-//!   `Claude Code-credentials`, then an OAuth env token fallback; usage from
+//!   `Claude Code-credentials`; usage from
 //!   `GET https://api.anthropic.com/api/oauth/usage`.
 //! - Codex: `~/.codex/auth.json` (`tokens.access_token` + `account_id`); usage
 //!   from `GET https://chatgpt.com/backend-api/wham/usage`.
@@ -251,7 +251,7 @@ async fn resolve_provider(
 // ---------------------------------------------------------------------------
 
 async fn fetch_claude_usage() -> Result<ProviderUsage, String> {
-    let (token, plan) = claude_oauth::read_oauth_token_and_subscription().await?;
+    let (token, plan) = claude_oauth::read_stored_oauth_token_and_subscription().await?;
 
     let client = http_client()?;
     let response = client
