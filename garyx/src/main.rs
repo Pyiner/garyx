@@ -218,8 +218,47 @@ fn validate_bot_selector(bot: &str) -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
+/// Root-level `-V` / `--version` short-circuit.
+///
+/// `garyx --version` must be a pure, side-effect-free version print so
+/// it is safe for the auto-update version-probe to run against any
+/// staged binary (B0 in the autoupdate-version-loop-fix spec). The
+/// normal `main()` path runs `migrate_legacy_homes()` (which does
+/// `create_dir_all` + `rename` under `~/.garyx`) *before* clap parses
+/// args, so the clap-provided root `--version` would mutate the user's
+/// home. We pre-scan argv before any of that side-effecting work.
+///
+/// Match is intentionally restricted to **`argv[1]`** (the first token
+/// after the program name). A full-argv scan would misfire on
+/// `garyx update --version <ver>` — where `--version` selects the
+/// upgrade target rather than asking for the program version — and
+/// short-circuit a real upgrade. Restricting to `argv[1]` keeps the
+/// semantics identical to clap's root-level `--version` while moving it
+/// ahead of the side effects.
+fn is_root_version_query() -> bool {
+    is_root_version_token(std::env::args().nth(1).as_deref())
+}
+
+/// Pure half of [`is_root_version_query`]: decide whether the first
+/// token after the program name is a root-level version query. Split
+/// out so the `argv[1]`-only contract is unit-testable without
+/// mutating the process argv.
+fn is_root_version_token(first_arg: Option<&str>) -> bool {
+    matches!(first_arg, Some("-V") | Some("--version"))
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // B0: side-effect-free `--version`. Must run before
+    // `run_embedded_cctty_if_requested` / `migrate_legacy_homes()` so
+    // the auto-update probe can interrogate a staged binary without
+    // touching the real `~/.garyx`. Mirrors clap's root `--version`
+    // output (`garyx <version>`) exactly so behavior is unchanged.
+    if is_root_version_query() {
+        println!("garyx {}", commands::VERSION);
+        return Ok(());
+    }
+
     if run_embedded_cctty_if_requested().await? {
         return Ok(());
     }

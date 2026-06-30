@@ -1896,6 +1896,260 @@ fn parse_sha256_checksum_accepts_standard_release_file() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// B1: staged-binary version verification (pre-rename gate).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn parse_self_reported_version_extracts_from_clap_output() {
+    // `garyx <version>` is the clap default printed by the root command
+    // and the B0 short-circuit. We take the trailing token of the first
+    // non-empty line and strip any leading `v`.
+    assert_eq!(
+        parse_self_reported_version("garyx 0.1.32\n").as_deref(),
+        Some("0.1.32")
+    );
+    assert_eq!(
+        parse_self_reported_version("garyx v0.1.32").as_deref(),
+        Some("0.1.32")
+    );
+    assert_eq!(
+        parse_self_reported_version("garyx 0.1.33-rc.1\n").as_deref(),
+        Some("0.1.33-rc.1")
+    );
+    // Leading blank line(s) skipped to the first real line.
+    assert_eq!(
+        parse_self_reported_version("\n\ngaryx 0.1.32\n").as_deref(),
+        Some("0.1.32")
+    );
+}
+
+#[test]
+fn parse_self_reported_version_rejects_empty_or_blank() {
+    assert_eq!(parse_self_reported_version(""), None);
+    assert_eq!(parse_self_reported_version("   \n\t\n"), None);
+    // A lone `v` normalizes to empty and is rejected.
+    assert_eq!(parse_self_reported_version("garyx v"), None);
+}
+
+#[test]
+fn verify_staged_version_accepts_exact_match() {
+    assert_eq!(
+        verify_staged_version(Some("0.1.32"), "0.1.32"),
+        Ok("0.1.32".to_owned())
+    );
+}
+
+#[test]
+fn verify_staged_version_rejects_mismatch_with_typed_error() {
+    // The canonical "version loop" shape: requested tag advanced but
+    // the staged binary still self-reports the old version.
+    assert_eq!(
+        verify_staged_version(Some("0.1.29"), "0.1.32"),
+        Err(SwapError::VersionMismatch {
+            measured: "0.1.29".to_owned(),
+            expected: "0.1.32".to_owned(),
+        })
+    );
+}
+
+#[test]
+fn verify_staged_version_uses_exact_equality_not_greater_or_equal() {
+    // A binary that self-reports a HIGHER version than the requested
+    // tag must still be rejected: the contract is "self-reports the tag
+    // it was published under", not ">=". This is the exact-match
+    // prerelease guard (spec test 6).
+    assert_eq!(
+        verify_staged_version(Some("0.1.33"), "0.1.32"),
+        Err(SwapError::VersionMismatch {
+            measured: "0.1.33".to_owned(),
+            expected: "0.1.32".to_owned(),
+        })
+    );
+    // And prerelease exact-match passes.
+    assert_eq!(
+        verify_staged_version(Some("0.1.33-rc.1"), "0.1.33-rc.1"),
+        Ok("0.1.33-rc.1".to_owned())
+    );
+    assert_eq!(
+        verify_staged_version(Some("0.1.33"), "0.1.33-rc.1"),
+        Err(SwapError::VersionMismatch {
+            measured: "0.1.33".to_owned(),
+            expected: "0.1.33-rc.1".to_owned(),
+        })
+    );
+}
+
+#[test]
+fn verify_staged_version_missing_measurement_is_probe_failure() {
+    assert_eq!(
+        verify_staged_version(None, "0.1.32"),
+        Err(SwapError::ProbeFailed {
+            reason: "empty or malformed --version output".to_owned(),
+        })
+    );
+}
+
+/// Write an executable fake "staged binary" shell script that prints
+/// `body` to stdout, exits with `exit_code`, and — to prove HOME
+/// isolation — creates `$HOME/.garyx/probe-marker` as a side effect
+/// before exiting. The marker lets a test assert the probe ran the
+/// binary under an isolated HOME rather than the caller's real home.
+#[cfg(unix)]
+fn write_fake_staged_binary(dir: &Path, body: &str, exit_code: i32) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = dir.join(format!(".garyx-update-{}.tmp", Uuid::new_v4().simple()));
+    let script = format!(
+        "#!/bin/sh\nmkdir -p \"$HOME/.garyx\"\n: > \"$HOME/.garyx/probe-marker\"\n{body}\nexit {exit_code}\n"
+    );
+    std::fs::write(&path, script).expect("write fake staged binary");
+    let mut perms = std::fs::metadata(&path).expect("metadata").permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&path, perms).expect("chmod fake staged binary");
+    path
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn probe_staged_binary_version_reads_self_reported_version() {
+    let dir = tempdir().expect("tempdir");
+    let staged = write_fake_staged_binary(dir.path(), "echo 'garyx 0.1.32'", 0);
+
+    let measured = probe_staged_binary_version(&staged)
+        .await
+        .expect("probe should succeed");
+    assert_eq!(measured, "0.1.32");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn probe_staged_binary_version_isolates_home() {
+    // The probe must NOT touch the caller's real HOME. We point HOME at
+    // a sentinel dir the fake binary is forbidden to write under (the
+    // probe sets its own isolated HOME), then assert no `.garyx` shows
+    // up there even though the fake binary tries to create one.
+    let _guard = ENV_LOCK.lock().expect("env lock");
+    let real_home = tempdir().expect("real home");
+    let _home = ScopedEnvVar::set_path("HOME", real_home.path());
+
+    let staged_dir = tempdir().expect("staged dir");
+    let staged = write_fake_staged_binary(staged_dir.path(), "echo 'garyx 0.1.32'", 0);
+
+    let measured = probe_staged_binary_version(&staged)
+        .await
+        .expect("probe should succeed");
+    assert_eq!(measured, "0.1.32");
+
+    // The fake binary creates `$HOME/.garyx/probe-marker`. If isolation
+    // works, that landed in the probe's throwaway HOME (already dropped)
+    // and NOT under the caller's HOME.
+    assert!(
+        !real_home.path().join(".garyx").exists(),
+        "version probe leaked into the caller's HOME"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn probe_staged_binary_version_nonzero_exit_is_probe_failure() {
+    let dir = tempdir().expect("tempdir");
+    let staged = write_fake_staged_binary(dir.path(), "echo 'garyx 0.1.32'", 3);
+
+    let err = probe_staged_binary_version(&staged)
+        .await
+        .expect_err("nonzero exit should fail the probe");
+    assert!(matches!(err, SwapError::ProbeFailed { .. }), "got {err:?}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn probe_staged_binary_version_empty_stdout_is_probe_failure() {
+    let dir = tempdir().expect("tempdir");
+    // Exit 0 but print nothing usable.
+    let staged = write_fake_staged_binary(dir.path(), "true", 0);
+
+    let err = probe_staged_binary_version(&staged)
+        .await
+        .expect_err("empty stdout should fail the probe");
+    assert!(matches!(err, SwapError::ProbeFailed { .. }), "got {err:?}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn probe_staged_binary_version_times_out() {
+    // A binary that hangs must be killed by the timeout and surfaced as
+    // a probe failure, never stalling the auto-update loop. We drive the
+    // injectable-timeout inner fn with a tiny timeout so the test is
+    // fast; the slow binary sleeps far longer than that.
+    let dir = tempdir().expect("tempdir");
+    let staged = write_fake_staged_binary(dir.path(), "sleep 30", 0);
+
+    let err = probe_staged_binary_version_with_timeout(&staged, Duration::from_millis(150))
+        .await
+        .expect_err("hanging binary should fail the probe");
+    assert!(matches!(err, SwapError::ProbeFailed { .. }), "got {err:?}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn probe_and_verify_removes_staged_file_on_version_mismatch() {
+    // The staged binary is already `fs::copy`'d into the install dir by
+    // the time verification runs. A bad release (tag advanced, binary
+    // self-reports the old version) must NOT leave a `.garyx-update-*`
+    // orphan behind — otherwise every auto-update retry tick leaks one.
+    let dir = tempdir().expect("tempdir");
+    let staged = write_fake_staged_binary(dir.path(), "echo 'garyx 0.1.29'", 0);
+    assert!(staged.exists(), "fake staged binary should exist pre-verify");
+
+    let err = probe_and_verify_staged_version(&staged, "0.1.32")
+        .await
+        .expect_err("version mismatch should be rejected");
+    assert!(
+        matches!(err, SwapError::VersionMismatch { .. }),
+        "got {err:?}"
+    );
+    assert!(
+        !staged.exists(),
+        "staged temp file must be cleaned up on the reject path"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn probe_and_verify_removes_staged_file_on_probe_failure() {
+    // Probe failures (nonzero exit here) take the same cleanup path.
+    let dir = tempdir().expect("tempdir");
+    let staged = write_fake_staged_binary(dir.path(), "echo 'garyx 0.1.32'", 3);
+    assert!(staged.exists());
+
+    let err = probe_and_verify_staged_version(&staged, "0.1.32")
+        .await
+        .expect_err("probe failure should be rejected");
+    assert!(matches!(err, SwapError::ProbeFailed { .. }), "got {err:?}");
+    assert!(
+        !staged.exists(),
+        "staged temp file must be cleaned up on probe failure"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn probe_and_verify_keeps_staged_file_on_success() {
+    // On the happy path the staged file must SURVIVE so the caller can
+    // `fs::rename` it into the install path.
+    let dir = tempdir().expect("tempdir");
+    let staged = write_fake_staged_binary(dir.path(), "echo 'garyx 0.1.32'", 0);
+
+    let measured = probe_and_verify_staged_version(&staged, "0.1.32")
+        .await
+        .expect("matching version should pass");
+    assert_eq!(measured, "0.1.32");
+    assert!(
+        staged.exists(),
+        "staged temp file must remain for the caller to rename on success"
+    );
+}
+
 #[test]
 fn image_generation_prompt_preserves_user_prompt() {
     let user_prompt = "first line\nsecond line with [brackets]";
