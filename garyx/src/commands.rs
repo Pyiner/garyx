@@ -5382,6 +5382,7 @@ pub(crate) async fn cmd_task_list(
     let tasks = payload["tasks"].as_array().cloned().unwrap_or_default();
     if tasks.is_empty() {
         println!("Tasks: (none)");
+        println!("Filter: --status <todo|in_progress|in_review|done>");
         return Ok(());
     }
     let shown = tasks.len();

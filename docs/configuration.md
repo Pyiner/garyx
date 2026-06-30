@@ -752,7 +752,7 @@ Custom agents can also store an optional `default_workspace_dir`. It is a path
 string, not a Workspace entity. New bot/channel threads use
 `account.workspace_dir` first, then the Agent default, then the provider's
 home/root fallback. Direct task creation uses explicit
-`garyx task create --workspace-dir` first, then the assignee Agent default,
+`garyx task create --workspace-dir` first, then the executor Agent default,
 then the same fallback.
 
 New local threads and task backing threads can opt into a managed Git worktree:

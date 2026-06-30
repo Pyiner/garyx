@@ -55,7 +55,7 @@ final class GaryxMarkdownBlockParserTests: XCTestCase {
         Delegate work with:
 
         \(zeroWidthSpace)```bash
-        garyx task create --title "<title>" --body "<complete request>" --assignee <agent_id>
+        garyx task create --title "<title>" --body "<complete request>" --agent <agent_id>
         \(zeroWidthSpace)```
 
         Your custom agents are listed by `garyx agent list`.

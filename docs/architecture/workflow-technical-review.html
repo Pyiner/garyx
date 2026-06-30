@@ -913,7 +913,7 @@ garyx workflow events run-abc</code></pre>
 
           <h3>6.3 文本优先输入</h3>
           <p>
-            产品层面 Workflow 复用 Task 正文作为大文本输入，不在 Workflow tab 里再放一套输入框。需要结构化数据时，Workflow 的第一步应使用 Agent 把文本结构化。<code>--input-json</code> 只保留给高级自动化参数，不作为普通产品入口。
+            产品层面 Workflow 复用 Task 正文作为大文本输入，不在 Workflow tab 里再放一套输入框。CLI 只接受单个纯文本 <code>--input</code>；需要结构化数据时，Workflow 的第一步应使用 Agent 把文本结构化，而不是引入结构化输入入口。
           </p>
         </section>
 
