@@ -9,6 +9,14 @@ import type {
   DesktopSettings,
 } from "@shared/contracts";
 
+import {
+  CAPSULE_THUMBNAIL_DEVICE_WIDTH,
+  capsuleThumbnailFillScript,
+  capsuleThumbnailStorageToken,
+  ensureMobileViewport,
+  evictingStaleSchemaTokens,
+  type CapsuleThumbnailRendition,
+} from "./capsule-thumbnail-html";
 import { getCapsuleHtml } from "./gary-client";
 
 /**
@@ -27,27 +35,27 @@ import { getCapsuleHtml } from "./gary-client";
  * and a throwaway in-memory session — never given access to the app surface.
  */
 
-type CapsuleThumbnailRendition = {
-  aspectWidth: number;
-  aspectHeight: number;
-};
-
-// Layout viewport the capsule HTML is rendered into (CSS px), matching the
-// long-standing thumbnail virtual canvas the desktop card used. A device-width
-// viewport is injected (see `ensureMobileViewport`) so a capsule that declares
-// none does NOT fall back to the ~980px desktop width and leave side gutters.
-const LAYOUT_WIDTH = 1024;
-// Output PNG is rendered at 2x the layout band for crisp downscaling into cards.
-const PIXEL_SCALE = 2;
-// Capsule-dark neutral (~#0a0e16): cropped/letterboxed regions read as
-// intentional backing instead of the card's translucent fill. Matches iOS.
-const BACKING_COLOR = "#0a0e16";
+// CSS layout viewport (device logical width) the capsule is rendered into, so
+// it fills like a phone full-screen view instead of being centered with white
+// side gutters (#TASK-1458). A device-width viewport is injected (see
+// `ensureMobileViewport`) for capsules that declare none.
+const DEVICE_CSS_WIDTH = CAPSULE_THUMBNAIL_DEVICE_WIDTH; // 390
+// Render at 2x zoom: the window content width is DEVICE_CSS_WIDTH * RENDER_ZOOM,
+// so `window content width / zoomFactor == DEVICE_CSS_WIDTH` — the page lays out
+// at the device width while painting at 2x for a crisp native capture.
+const RENDER_ZOOM = 2;
+const WINDOW_WIDTH = DEVICE_CSS_WIDTH * RENDER_ZOOM; // 780 → CSS viewport 390
+// Output PNG width = device width * 3 (matches the iOS 1170px thumbnail), so the
+// captured band downscales crisply into small cards.
+const OUTPUT_WIDTH = DEVICE_CSS_WIDTH * 3; // 1170
 // Cap concurrent offscreen renders so a fresh, all-miss gallery does not spin
 // up many hidden windows at once. Unlike a display planner this never starves a
 // card: every visible card still gets its one-shot render as the queue drains.
 const MAX_CONCURRENT_RENDERS = 2;
 // Settle delay after `did-finish-load` for final layout / inline-JS paint.
 const SETTLE_MS = 160;
+// Settle after the fill transform is applied, before capturing.
+const FILL_SETTLE_MS = 80;
 // Safety net: capsule HTML is self-contained (CSP blocks external fetches) so a
 // load is fast; this only guards a pathological page from hanging a slot.
 const LOAD_TIMEOUT_MS = 6000;
@@ -58,43 +66,8 @@ const MAX_CACHE_RECORDS = 240;
 
 const CACHE_SUBDIR = join("GaryxCapsuleThumbnailCache", "v1");
 
-function renditionToken(rendition: CapsuleThumbnailRendition): string {
-  const w = Math.max(1, Math.trunc(rendition.aspectWidth));
-  const h = Math.max(1, Math.trunc(rendition.aspectHeight));
-  return `${w}x${h}`;
-}
-
-/** Stable, filesystem-key token, e.g. `<id>.r3.16x10`. */
-export function capsuleThumbnailStorageToken(
-  id: string,
-  revision: number,
-  rendition: CapsuleThumbnailRendition,
-): string {
-  return `${id.trim()}.r${revision}.${renditionToken(rendition)}`;
-}
-
 function pngBufferToDataUrl(buffer: Buffer): string {
   return `data:image/png;base64,${buffer.toString("base64")}`;
-}
-
-/**
- * Returns `html` guaranteed to carry a device-width viewport meta. Inserts it
- * right after an existing `<head …>` open tag, otherwise prepends it (mirroring
- * the gateway's CSP injection and the iOS `GaryxCapsuleViewport`). HTML that
- * already declares a viewport is returned unchanged.
- */
-export function ensureMobileViewport(html: string): string {
-  const VIEWPORT_META =
-    '<meta name="viewport" content="width=device-width, initial-scale=1">';
-  if (/<meta[^>]*name\s*=\s*["']?viewport["']?/i.test(html)) {
-    return html;
-  }
-  const headOpen = /<head\b[^>]*>/i.exec(html);
-  if (headOpen) {
-    const insertAt = headOpen.index + headOpen[0].length;
-    return html.slice(0, insertAt) + VIEWPORT_META + html.slice(insertAt);
-  }
-  return VIEWPORT_META + html;
 }
 
 /** Caps concurrent offscreen renders; releasing hands the slot to the next FIFO waiter. */
@@ -136,16 +109,16 @@ async function renderThumbnailPng(
   await renderGate.acquire();
   let window: BrowserWindow | null = null;
   try {
-    const layoutHeight = Math.round(
-      (LAYOUT_WIDTH * Math.max(1, rendition.aspectHeight)) /
-        Math.max(1, rendition.aspectWidth),
-    );
+    const aspectW = Math.max(1, rendition.aspectWidth);
+    const aspectH = Math.max(1, rendition.aspectHeight);
+    const windowHeight = Math.round((WINDOW_WIDTH * aspectH) / aspectW);
     window = new BrowserWindow({
       show: false,
-      width: LAYOUT_WIDTH,
-      height: layoutHeight,
+      width: WINDOW_WIDTH,
+      height: windowHeight,
       useContentSize: true,
-      backgroundColor: BACKING_COLOR,
+      // No backgroundColor: the page fills the frame (device-width layout +
+      // fill transform), so the thumbnail is content — never a painted backing.
       webPreferences: {
         // Untrusted capsule HTML: lock it down hard.
         sandbox: true,
@@ -158,8 +131,9 @@ async function renderThumbnailPng(
           .toString(36)
           .slice(2)}`,
         backgroundThrottling: false,
-        // Paint content at 2x so the captured band downscales crisply.
-        zoomFactor: PIXEL_SCALE,
+        // window content width / zoomFactor == DEVICE_CSS_WIDTH (390): the page
+        // lays out at the device width and paints at 2x for a crisp capture.
+        zoomFactor: RENDER_ZOOM,
       },
     });
 
@@ -182,26 +156,38 @@ async function renderThumbnailPng(
       encodeURIComponent(ensureMobileViewport(html));
     await window.loadURL(dataUrl);
     await finished;
-    // Brief settle for final layout / inline-JS paint before capturing.
+    // Brief settle for final layout / inline-JS paint before measuring.
     await new Promise<void>((resolve) => setTimeout(resolve, SETTLE_MS));
 
     if (window.isDestroyed()) {
       return null;
     }
+    // Make the content fill the width (scale-to-fill for narrow content); a
+    // no-op when it already fills. Then let the transform paint.
+    try {
+      await window.webContents.executeJavaScript(capsuleThumbnailFillScript);
+    } catch {
+      // Best-effort fill: capture the untransformed page on error.
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, FILL_SETTLE_MS));
+    if (window.isDestroyed()) {
+      return null;
+    }
+
     // Capture the top band only (cover, top-anchored). `zoomFactor` already
-    // scales painted content, so the captured NativeImage is ~2x; resize to a
-    // deterministic pixel size to absorb DPR differences across displays.
+    // scales painted content; resize to a deterministic pixel size to absorb
+    // DPR differences across displays.
     const image = await window.webContents.capturePage({
       x: 0,
       y: 0,
-      width: LAYOUT_WIDTH,
-      height: layoutHeight,
+      width: WINDOW_WIDTH,
+      height: windowHeight,
     });
     if (image.isEmpty()) {
       return null;
     }
-    const pixelWidth = Math.round(LAYOUT_WIDTH * PIXEL_SCALE);
-    const pixelHeight = Math.round(layoutHeight * PIXEL_SCALE);
+    const pixelWidth = OUTPUT_WIDTH;
+    const pixelHeight = Math.round((OUTPUT_WIDTH * aspectH) / aspectW);
     const resized = image.resize({ width: pixelWidth, height: pixelHeight });
     const png = resized.toPNG();
     return png.length > 0 ? png : null;
@@ -265,6 +251,36 @@ class CapsuleThumbnailDiskStore {
     } catch {
       this.index = new Map();
     }
+    await this.purgeStaleSchemaEntries();
+  }
+
+  /**
+   * Drop renders from a previous schema version (a renderer change bumped the
+   * schema embedded in the token) so stale images re-render instead of being
+   * served. Each entry's *current* token is recomputed from its stored metadata;
+   * a token written under an older schema (or a legacy token with no schema
+   * suffix) differs and is evicted. Mirrors the iOS stale-schema warm purge.
+   */
+  private async purgeStaleSchemaEntries(): Promise<void> {
+    const entries = [...this.index.entries()].map(([token, entry]) => ({
+      token,
+      currentToken: capsuleThumbnailStorageToken(entry.id, entry.revision, {
+        aspectWidth: entry.aspectWidth,
+        aspectHeight: entry.aspectHeight,
+      }),
+    }));
+    const { evict } = evictingStaleSchemaTokens(entries);
+    if (evict.length === 0) {
+      return;
+    }
+    for (const token of evict) {
+      const entry = this.index.get(token);
+      if (entry) {
+        await this.removeFile(entry.fileName);
+        this.index.delete(token);
+      }
+    }
+    await this.flushIndex();
   }
 
   /** Run a mutation serialized after any in-flight index work. */

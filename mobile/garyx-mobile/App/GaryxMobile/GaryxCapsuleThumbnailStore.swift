@@ -120,6 +120,25 @@ actor GaryxCapsuleThumbnailDiskStore {
         } catch {
             index = [:]
         }
+        evictStaleSchemaEntries()
+    }
+
+    /// Drop renders from a previous schema version (the renderer changed and
+    /// `GaryxCapsuleThumbnailRenderSchema.version` was bumped), so the stale
+    /// images re-render instead of being served. Each entry's key is rebuilt
+    /// from stored metadata and carries the current schema; a token written
+    /// under an older schema (or a legacy token with no schema suffix) differs.
+    private func evictStaleSchemaEntries() {
+        let entries = index.map { (token: $0.key, key: $0.value.cacheKey) }
+        let split = GaryxCapsuleThumbnailCachePruner.evictingStaleSchema(entries: entries)
+        guard !split.evictTokens.isEmpty else { return }
+        for token in split.evictTokens {
+            if let entry = index.removeValue(forKey: token) {
+                let url = directory.appendingPathComponent(entry.fileName, isDirectory: false)
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+        writeIndex()
     }
 
     /// Cached PNG bytes for a key, touching last-access for LRU. Returns nil on a

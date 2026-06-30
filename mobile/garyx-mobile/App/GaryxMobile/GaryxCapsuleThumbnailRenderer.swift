@@ -4,30 +4,27 @@ import WebKit
 /// Renders a capsule's HTML once into a fixed-ratio thumbnail PNG.
 ///
 /// This is the live-render step that the cached-image gallery defers to only on
-/// a cache miss (first sight or after a `revision` bump). It:
-/// - injects a device-width viewport so a capsule that declares none does not
-///   fall back to the ~980px desktop width and leave side gutters (A2);
-/// - renders into a fixed `layoutWidth × (16:rendition)` band over an opaque
-///   neutral backing, so transparent capsule bodies never flash the card's fill;
-/// - top-anchors the crop (cover): taller content is cropped at the bottom,
-///   shorter content shows the backing color.
+/// a cache miss (first sight or after a `revision` bump). It renders the capsule
+/// exactly as it would appear full-screen on a phone — at the device logical
+/// width (`plan.layoutWidth`) with a device-width viewport — so author content
+/// fills the frame instead of sitting centered with white side gutters (the
+/// #TASK-1458 root cause: the old 760pt render viewport let a `max-width`
+/// container center). After layout settles, `GaryxCapsuleThumbnailFill` measures
+/// the content and uniformly scales the page so it fills the width even when the
+/// author's `max-width` is narrower than the device — never by painting a
+/// backing color behind the content. The top `16:rendition` band is captured
+/// (cover, top-anchored): taller content is cropped at the bottom.
 ///
 /// Concurrent renders are capped so a fresh, all-miss gallery does not spin up
 /// many `WKWebView`s at once — but unlike the old display planner this never
 /// starves a card: every card shows its image once its one-shot render drains
-/// the queue (A1).
+/// the queue.
 @MainActor
 final class GaryxCapsuleThumbnailRenderer {
     private let gate: RenderGate
-    private let backingColor: UIColor
 
-    /// Capsule-dark neutral (~`#0a0e16`), matching the aesthetic most capsules
-    /// author for, so cropped/letterboxed regions read as intentional backing.
-    static let defaultBackingColor = UIColor(red: 0.039, green: 0.055, blue: 0.086, alpha: 1)
-
-    init(maxConcurrent: Int = 2, backingColor: UIColor? = nil) {
+    init(maxConcurrent: Int = 2) {
         self.gate = RenderGate(limit: maxConcurrent)
-        self.backingColor = backingColor ?? GaryxCapsuleThumbnailRenderer.defaultBackingColor
     }
 
     func renderPNG(html: String, plan: GaryxCapsuleThumbnailSnapshotPlan) async -> Data? {
@@ -47,9 +44,9 @@ final class GaryxCapsuleThumbnailRenderer {
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
 
         let webView = WKWebView(frame: CGRect(origin: .zero, size: layout), configuration: configuration)
+        // Opaque so the snapshot has no alpha; the page itself paints the frame
+        // (content fills via the fill transform) — no injected backing color.
         webView.isOpaque = true
-        webView.backgroundColor = backingColor
-        webView.scrollView.backgroundColor = backingColor
         webView.scrollView.isScrollEnabled = false
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         webView.isUserInteractionEnabled = false
@@ -64,8 +61,12 @@ final class GaryxCapsuleThumbnailRenderer {
 
         webView.loadHTMLString(GaryxCapsuleViewport.ensuringMobileViewport(in: html), baseURL: nil)
         await coordinator.waitUntilDone(timeout: 6.0)
-        // Brief settle for final layout / inline JS paint before capturing.
+        // Brief settle for final layout / inline JS paint before measuring.
         try? await Task.sleep(nanoseconds: 140_000_000)
+        // Make the content fill the width (scale-to-fill for narrow content);
+        // a no-op when it already fills. Then let the transform paint.
+        _ = try? await webView.evaluateJavaScript(GaryxCapsuleThumbnailFill.fillScript)
+        try? await Task.sleep(nanoseconds: 60_000_000)
 
         let snapConfig = WKSnapshotConfiguration()
         snapConfig.rect = CGRect(origin: .zero, size: layout)
@@ -77,18 +78,17 @@ final class GaryxCapsuleThumbnailRenderer {
         }
     }
 
-    /// Redraw the captured band into a deterministic pixel size over the opaque
-    /// backing. Source and target share the rendition aspect, so this is a pure
-    /// scale (no crop) onto a solid ground.
+    /// Redraw the captured band into a deterministic pixel size. Source and
+    /// target share the rendition aspect, so this is a pure scale (no crop). The
+    /// captured snapshot is opaque (content fills the frame), so there is no
+    /// backing to fill — just the scale.
     private func encodePNG(_ image: UIImage, pixelSize: CGSize) -> Data? {
         guard pixelSize.width >= 1, pixelSize.height >= 1 else { return nil }
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         format.opaque = true
         let renderer = UIGraphicsImageRenderer(size: pixelSize, format: format)
-        let output = renderer.image { context in
-            backingColor.setFill()
-            context.fill(CGRect(origin: .zero, size: pixelSize))
+        let output = renderer.image { _ in
             image.draw(in: CGRect(origin: .zero, size: pixelSize))
         }
         return output.pngData()
