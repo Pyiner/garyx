@@ -1955,6 +1955,9 @@ struct GaryxMessageBubble: View {
                     if let notification = taskNotification {
                         GaryxTaskNotificationCard(notification: notification)
                             .garyxMessageInteraction(text: taskNotificationCopyText(notification), edge: .trailing)
+                    } else if let restart = restartNotice {
+                        GaryxRestartNoticeCard(notice: restart)
+                            .garyxMessageInteraction(text: restart.message, edge: .trailing)
                     } else if messagePresentation == .historySkeleton {
                         GaryxUserMessageLoadingBubble()
                     } else if !displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -1995,6 +1998,9 @@ struct GaryxMessageBubble: View {
                 } else if let notification = taskNotification {
                     GaryxTaskNotificationCard(notification: notification)
                         .garyxMessageInteraction(text: taskNotificationCopyText(notification))
+                } else if let restart = restartNotice {
+                    GaryxRestartNoticeCard(notice: restart)
+                        .garyxMessageInteraction(text: restart.message)
                 } else if !displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     GaryxMarkdownText(
                         text: displayText,
@@ -2049,6 +2055,11 @@ struct GaryxMessageBubble: View {
     private var taskNotification: GaryxTaskNotification? {
         guard !message.isStreaming else { return nil }
         return GaryxTaskNotificationPresentation.parse(displayText)
+    }
+
+    private var restartNotice: GaryxRestartNotice? {
+        guard !message.isStreaming else { return nil }
+        return GaryxRestartNoticePresentation.parse(displayText)
     }
 
     private func taskNotificationCopyText(_ notification: GaryxTaskNotification) -> String {
@@ -2209,6 +2220,45 @@ private struct GaryxTaskNotificationCard: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Task ready for review")
+    }
+}
+
+private struct GaryxRestartNoticeCard: View {
+    let notice: GaryxRestartNotice
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(GaryxTheme.accent)
+                    .frame(width: 7, height: 7)
+                Text("Garyx restarted")
+                    .font(GaryxFont.caption(weight: .semibold))
+                    .foregroundStyle(GaryxTheme.secondaryText)
+            }
+
+            Rectangle()
+                .fill(GaryxTheme.hairline)
+                .frame(height: 1)
+
+            GaryxMarkdownText(
+                text: notice.message,
+                foreground: GaryxTheme.primaryText,
+                allowsRelativeFileLinks: true,
+                allowsTextSelection: false,
+                onFileLinkTap: nil,
+                onImageFilePreview: nil
+            )
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(GaryxTheme.surface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(GaryxTheme.hairline, lineWidth: 1)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Garyx restarted")
     }
 }
 

@@ -146,26 +146,35 @@ fn resolve_thread_send_destination(
     }
 }
 
+fn default_restart_wake_message() -> String {
+    garyx_gateway::restart_wake::RESTART_WAKE_DEFAULT_MESSAGE.to_owned()
+}
+
+/// Decide what (if anything) a `gateway restart` should resume after the service
+/// comes back. The default — a bare restart with no flags — resumes every thread
+/// that was actively running (wake-all), so an agent restarting the gateway is
+/// continued automatically. `--no-wake` opts out; `--wake thread|task|bot
+/// <target>` narrows to a single target. When no `--wake-message` is given the
+/// structured restart-notice message is used so clients can render it as a card.
 fn resolve_gateway_restart_wake_destination(
     wake: Vec<String>,
     wake_message: Option<String>,
+    no_wake: bool,
 ) -> Result<Option<GatewayRestartWakeDecision>, Box<dyn std::error::Error>> {
-    if wake.is_empty() {
+    if no_wake {
         return Ok(None);
     }
-    if wake.len() == 1 {
-        if wake[0].trim() != "all" {
-            return Err("single-token wake target must be `all`".into());
-        }
-        let message = trim_optional(wake_message).unwrap_or_else(|| "continue".to_owned());
+    let message = trim_optional(wake_message).unwrap_or_else(default_restart_wake_message);
+    // No `--wake`, or `--wake all`: resume every running thread.
+    if wake.is_empty() || (wake.len() == 1 && wake[0].trim() == "all") {
         return Ok(Some(GatewayRestartWakeDecision::All { message }));
+    }
+    if wake.len() == 1 {
+        return Err("single-token wake target must be `all`".into());
     }
     if wake.len() != 2 {
         return Err("wake target must be `all` or `thread|task|bot <target>`".into());
     }
-    let message = trim_optional(wake_message).ok_or_else(|| {
-        "wake message is required: use `--wake-message \"...\"` with `--wake`".to_owned()
-    })?;
     resolve_thread_send_destination(
         Some(wake[0].clone()),
         Some(wake[1].clone()),
@@ -174,21 +183,6 @@ fn resolve_gateway_restart_wake_destination(
     )
     .map(GatewayRestartWakeDecision::Single)
     .map(Some)
-}
-
-fn validate_gateway_restart_wake_decision(has_wake: bool, no_wake: bool) -> Result<(), String> {
-    if has_wake || no_wake {
-        return Ok(());
-    }
-    Err("gateway restart requires an explicit wake decision.\n\
-Agent safety: when you restart the gateway from an agent thread, queue a wake so the new gateway resumes the same thread after restart. Do not run a bare restart from agent work.\n\
-Use one of:\n\
-  garyx gateway restart --wake thread <thread_id> --wake-message \"...\"\n\
-  garyx gateway restart --wake task <task_id> --wake-message \"...\"\n\
-  garyx gateway restart --wake bot <channel:account_id> --wake-message \"...\"\n\
-If you intentionally want no continuation, run:\n\
-  garyx gateway restart --no-wake"
-        .to_owned())
 }
 
 fn trim_optional(value: Option<String>) -> Option<String> {
@@ -272,13 +266,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 wake_json,
             } => {
                 let wake_destination =
-                    resolve_gateway_restart_wake_destination(wake, wake_message)?;
-                if let Err(message) =
-                    validate_gateway_restart_wake_decision(wake_destination.is_some(), no_wake)
-                {
-                    eprintln!("{message}");
-                    std::process::exit(2);
-                }
+                    resolve_gateway_restart_wake_destination(wake, wake_message, no_wake)?;
                 if let Some(destination) = wake_destination.as_ref() {
                     match destination {
                         GatewayRestartWakeDecision::Single(destination) => {
