@@ -9,6 +9,7 @@ import {
 
 import { useI18n } from './i18n';
 import { prepareMessageMarkdown } from './message-markdown-preprocess';
+import { CHAT_MESSAGE_REMARK_PLUGINS } from './message-rich-text-plugins';
 
 type RichMessageTone = 'default' | 'assistant';
 
@@ -176,6 +177,7 @@ export const RichMessageText = memo(function RichMessageText({
         mode="streaming"
         normalizeHtmlIndentation
         plugins={{ cjk, code: garyxCodePlugin }}
+        remarkPlugins={CHAT_MESSAGE_REMARK_PLUGINS}
         translations={translations}
         urlTransform={streamdownUrlTransform}
       >
