@@ -28,6 +28,7 @@ final class GatewayStreamActorTests: XCTestCase {
 
     func testGapReconnectAppliesPrecedingRowsAndReturnsExactCursor() {
         var processor = GatewayStreamFrameProcessor()
+        processor.resetConnection(afterSeq: 1, replayScope: .resume)
 
         let result = processor.processPayload(
             framePayload(threadId: "thread-gap", basedOnSeq: 5, events: [
@@ -43,6 +44,7 @@ final class GatewayStreamActorTests: XCTestCase {
 
     func testControlRewriteAppliesPrecedingRowsBeforeRefetch() {
         var processor = GatewayStreamFrameProcessor()
+        processor.resetConnection(afterSeq: 10, replayScope: .resume)
 
         let result = processor.processPayload(
             framePayload(threadId: "thread-rewrite", basedOnSeq: 12, events: [
@@ -64,6 +66,7 @@ final class GatewayStreamActorTests: XCTestCase {
 
     func testCapsuleAttachedControlAdvancesCursorWithoutRefetch() {
         var processor = GatewayStreamFrameProcessor()
+        processor.resetConnection(afterSeq: 10, replayScope: .resume)
 
         let result = processor.processPayload(
             framePayload(threadId: "thread-capsule", basedOnSeq: 13, events: [
@@ -78,6 +81,53 @@ final class GatewayStreamActorTests: XCTestCase {
         XCTAssertEqual(committedIds(in: result.actions), [["history:10", "history:11", "history:12"]])
         XCTAssertEqual(committedRoles(in: result.actions), [[.assistant, .system, .assistant]])
         XCTAssertEqual(renderSnapshotSeqs(in: result.actions), [13])
+    }
+
+    func testRenderOnlyFrameDoesNotAdvanceCommittedFrontier() {
+        var processor = GatewayStreamFrameProcessor()
+
+        let result = processor.processPayload(
+            framePayload(threadId: "thread-render-only", basedOnSeq: 95, events: []),
+            threadId: "thread-render-only"
+        )
+
+        XCTAssertEqual(committedIds(in: result.actions), [])
+        XCTAssertEqual(renderSnapshotSeqs(in: result.actions), [95])
+        XCTAssertEqual(processor.connectionLastSeq, 0)
+        XCTAssertTrue(processor.madeProgressOnConnection)
+    }
+
+    func testResumeFirstHighSeqReconnectsFromHeldCursor() {
+        var processor = GatewayStreamFrameProcessor()
+        processor.resetConnection(afterSeq: 94, replayScope: .resume)
+
+        let result = processor.processPayload(
+            framePayload(threadId: "thread-resume-gap", basedOnSeq: 113, events: [
+                event(seq: 113, role: "assistant", text: "later"),
+            ]),
+            threadId: "thread-resume-gap"
+        )
+
+        XCTAssertEqual(committedIds(in: result.actions), [])
+        XCTAssertEqual(result.reconnect, .gap(resumeAfterSeq: 94))
+        XCTAssertEqual(processor.connectionLastSeq, 94)
+    }
+
+    func testInitialWindowAllowsFirstHighSeq() {
+        var processor = GatewayStreamFrameProcessor()
+        processor.resetConnection(afterSeq: 0, replayScope: .initial)
+
+        let result = processor.processPayload(
+            framePayload(threadId: "thread-initial", basedOnSeq: 12, events: [
+                event(seq: 11, role: "user", text: "window start"),
+                event(seq: 12, role: "assistant", text: "window next"),
+            ]),
+            threadId: "thread-initial"
+        )
+
+        XCTAssertNil(result.reconnect)
+        XCTAssertEqual(committedIds(in: result.actions), [["history:10", "history:11"]])
+        XCTAssertEqual(processor.connectionLastSeq, 12)
     }
 
     func testActorAwaitsControlRewriteRefetchBeforeReconnectCursor() async {
@@ -151,6 +201,33 @@ final class GatewayStreamActorTests: XCTestCase {
         let actionNames = await recorder.actionNames()
         XCTAssertEqual(requestedCursors, [7])
         XCTAssertEqual(actionNames, ["fallback:notFound404"])
+    }
+
+    func testActorResumeAfterSeqDoesNotMaskPersistentFailures() async {
+        let recorder = GatewayStreamFailureRecorder()
+        let actor = GatewayStreamActor(
+            endpoint: endpoint(),
+            transport: GatewayStreamTransport { request in
+                try await recorder.connect(request)
+            },
+            reconnectDelayNanos: { _ in 0 }
+        )
+
+        await actor.run(
+            threadId: "thread-failing",
+            requestProvider: {
+                .resume(afterSeq: 7)
+            },
+            shouldContinue: { true },
+            actionHandler: { action in
+                await recorder.handle(action)
+            }
+        )
+
+        let requestedCursors = await recorder.requestedCursors()
+        let actionNames = await recorder.actionNames()
+        XCTAssertEqual(requestedCursors, [7, 7, 7, 7])
+        XCTAssertEqual(actionNames, ["fallback:persistentFailure"])
     }
 
     func testEndpointBuildsInitialWindowRequest() throws {
@@ -400,6 +477,48 @@ private actor GatewayStreamTestRecorder {
         actions.compactMap { action in
             guard case .applyCommittedMessages(let messages) = action else { return nil }
             return messages.map(\.id)
+        }
+    }
+}
+
+private actor GatewayStreamFailureRecorder {
+    private var requests: [URLRequest] = []
+    private var actions: [GatewayStreamAction] = []
+
+    func connect(_ request: URLRequest) throws -> GatewayStreamConnection {
+        requests.append(request)
+        throw URLError(.notConnectedToInternet)
+    }
+
+    func handle(_ action: GatewayStreamAction) -> GatewayStreamActionResult {
+        actions.append(action)
+        return .none
+    }
+
+    func requestedCursors() -> [Int] {
+        requests.map { request in
+            URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+                .queryItems?
+                .first(where: { $0.name == "after_seq" })?
+                .value
+                .flatMap(Int.init) ?? -1
+        }
+    }
+
+    func actionNames() -> [String] {
+        actions.map { action in
+            switch action {
+            case .applyCommittedMessages:
+                return "applyCommittedMessages"
+            case .applyRenderSnapshot:
+                return "applyRenderSnapshot"
+            case .refetchAfterControlRewrite:
+                return "refetchAfterControlRewrite"
+            case .fallback(.notFound404):
+                return "fallback:notFound404"
+            case .fallback(.persistentFailure):
+                return "fallback:persistentFailure"
+            }
         }
     }
 }

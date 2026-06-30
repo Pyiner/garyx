@@ -762,6 +762,8 @@ enum GaryxMobileRenderStateMapper {
 private struct MessageLookup {
     private var mobileByHistoryIndex: [Int: GaryxMobileMessage] = [:]
     private var mobileById: [String: GaryxMobileMessage] = [:]
+    private var transcriptMobileByHistoryIndex: [Int: GaryxMobileMessage] = [:]
+    private var transcriptMobileById: [String: GaryxMobileMessage] = [:]
     private var transcriptByHistoryIndex: [Int: GaryxTranscriptMessage] = [:]
     private var transcriptById: [String: GaryxTranscriptMessage] = [:]
 
@@ -777,11 +779,21 @@ private struct MessageLookup {
             if let index = message.index {
                 transcriptByHistoryIndex[index] = message
             }
+            guard let mobileMessage = GaryxMobileTranscriptMapper.mobileMessages(from: [message]).first else {
+                continue
+            }
+            transcriptMobileById[message.id] = mobileMessage
+            if let index = message.index {
+                transcriptMobileByHistoryIndex[index] = mobileMessage
+            }
         }
     }
 
     func mobileMessage(for ref: GaryxRenderMessageRef) -> GaryxMobileMessage? {
-        mobileByHistoryIndex[ref.seq - 1] ?? mobileById[ref.id]
+        mobileByHistoryIndex[ref.seq - 1]
+            ?? mobileById[ref.id]
+            ?? transcriptMobileByHistoryIndex[ref.seq - 1]
+            ?? transcriptMobileById[ref.id]
     }
 
     func transcriptMessage(for ref: GaryxRenderMessageRef?) -> GaryxTranscriptMessage? {

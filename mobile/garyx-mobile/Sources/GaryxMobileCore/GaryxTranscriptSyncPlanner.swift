@@ -59,11 +59,18 @@ public enum GaryxStreamSeqDecision: Equatable, Sendable {
 
 public enum GaryxStreamSeqPlanner {
     /// Decide how to handle an incoming committed seq relative to the highest seq
-    /// applied on the current connection (`0` = none yet). The first row of a
-    /// connection always applies — the replay may legitimately start above the cursor
-    /// when the far-behind window was reset.
-    public static func decide(incomingSeq: Int, connectionLastSeq: Int) -> GaryxStreamSeqDecision {
-        if connectionLastSeq > 0, incomingSeq > connectionLastSeq + 1 {
+    /// applied on the current connection. Initial-window replay may legitimately
+    /// start above the cursor; resume replay must stay contiguous with the body
+    /// frontier already held by the client.
+    public static func decide(
+        incomingSeq: Int,
+        connectionLastSeq: Int,
+        allowsNonContiguousFirstSeq: Bool = true
+    ) -> GaryxStreamSeqDecision {
+        if incomingSeq > connectionLastSeq + 1 {
+            if connectionLastSeq == 0, allowsNonContiguousFirstSeq {
+                return .apply
+            }
             return .gapReconnect(resumeAfterSeq: connectionLastSeq)
         }
         if incomingSeq < connectionLastSeq {

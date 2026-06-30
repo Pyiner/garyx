@@ -94,11 +94,22 @@ public struct GatewayStreamTransport: Sendable {
 
 public struct GatewayStreamFrameProcessor: Sendable {
     public private(set) var connectionLastSeq: Int = 0
+    public private(set) var madeProgressOnConnection: Bool = false
+    private var allowsNonContiguousFirstSeq: Bool = false
 
     public init() {}
 
     public mutating func resetConnection() {
+        resetConnection(afterSeq: 0, replayScope: .resume)
+    }
+
+    public mutating func resetConnection(afterSeq: Int, replayScope: GatewayThreadStreamReplayScope?) {
         connectionLastSeq = 0
+        madeProgressOnConnection = false
+        allowsNonContiguousFirstSeq = replayScope == .initial
+        if replayScope != .initial {
+            connectionLastSeq = max(afterSeq, 0)
+        }
     }
 
     public mutating func processDataLine(_ line: String, threadId: String) -> GatewayStreamPayloadResult {
@@ -127,6 +138,7 @@ public struct GatewayStreamFrameProcessor: Sendable {
         guard frameThreadId.isEmpty || frameThreadId == threadId else {
             return GatewayStreamPayloadResult()
         }
+        madeProgressOnConnection = true
 
         var actions: [GatewayStreamAction] = []
         var committedMessages: [GaryxTranscriptMessage] = []
@@ -138,7 +150,8 @@ public struct GatewayStreamFrameProcessor: Sendable {
             }
             switch GaryxStreamSeqPlanner.decide(
                 incomingSeq: seq,
-                connectionLastSeq: connectionLastSeq
+                connectionLastSeq: connectionLastSeq,
+                allowsNonContiguousFirstSeq: allowsNonContiguousFirstSeq
             ) {
             case .gapReconnect(let resumeAfterSeq):
                 if !committedMessages.isEmpty {
@@ -155,6 +168,7 @@ public struct GatewayStreamFrameProcessor: Sendable {
                 message.id = "history:\(seq - 1)"
                 if GaryxTranscriptControlRewritePlanner.action(for: message) == .refetchAuthoritativeTranscript {
                     connectionLastSeq = max(connectionLastSeq, seq)
+                    madeProgressOnConnection = true
                     if !committedMessages.isEmpty {
                         actions.append(.applyCommittedMessages(committedMessages))
                     }
@@ -163,13 +177,13 @@ public struct GatewayStreamFrameProcessor: Sendable {
                 }
                 committedMessages.append(message)
                 connectionLastSeq = seq
+                madeProgressOnConnection = true
             }
         }
 
         if !committedMessages.isEmpty {
             actions.append(.applyCommittedMessages(committedMessages))
         }
-        connectionLastSeq = max(connectionLastSeq, frame.renderState.basedOnSeq)
         actions.append(.applyRenderSnapshot(frame.renderState))
         return GatewayStreamPayloadResult(actions: actions)
     }
@@ -228,6 +242,7 @@ public actor GatewayStreamActor {
                     streamRequest = await requestProvider()
                 }
                 nextResumeOverride = nil
+                processor.resetConnection(afterSeq: streamRequest.afterSeq, replayScope: streamRequest.replayScope)
                 let request = try endpoint.threadStreamRequest(threadId: threadId, request: streamRequest)
                 let reconnect: GatewayStreamReconnect?
                 if let transport {
@@ -266,7 +281,7 @@ public actor GatewayStreamActor {
             }
 
             guard !Task.isCancelled, await shouldContinue() else { break }
-            if processor.connectionLastSeq > 0 {
+            if processor.madeProgressOnConnection {
                 consecutiveFailures = 0
             }
             if consecutiveFailures >= 4 {
