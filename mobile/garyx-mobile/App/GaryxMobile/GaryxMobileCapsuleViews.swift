@@ -301,6 +301,13 @@ struct GaryxCapsuleFocusedPreviewView: View {
     let capsule: GaryxCapsuleSummary
     @State private var phase: Phase = .loading
     @State private var showsDeleteConfirmation = false
+    // Photos-style pull-to-dismiss state (#TASK-1470). The phase is decided once
+    // per drag (idle -> engaged/ignored) and locked, so a drag started off-top
+    // never hijacks content scrolling and a mid-drag scroll-to-top can't snap it
+    // into a dismiss. `webAtTop` is reported by the web view's scroll position.
+    @State private var dragPhase: GaryxCapsuleDragPhase = .idle
+    @State private var dragOffset: CGFloat = 0
+    @State private var webAtTop = true
 
     enum Phase: Equatable {
         case loading
@@ -310,6 +317,41 @@ struct GaryxCapsuleFocusedPreviewView: View {
     }
 
     var body: some View {
+        ZStack {
+            // Backdrop revealed as the card is pulled down; darkens with the pull
+            // so the dismiss reads like a Photos-style interactive drop.
+            Color.black
+                .opacity(GaryxCapsuleDragDismiss.dragProgress(offset: dragOffset) * 0.5)
+                .ignoresSafeArea()
+
+            previewSurface
+                .offset(y: dragOffset)
+                .scaleEffect(
+                    1 - GaryxCapsuleDragDismiss.dragProgress(offset: dragOffset) * 0.06
+                )
+                .simultaneousGesture(dismissDragGesture)
+        }
+        // Focused open is the authoritative surface: always force-refresh so
+        // a since-deleted capsule resolves to 404 -> deleted immediately.
+        .task(id: "\(capsule.id):\(capsule.revision)") { await load(forceRefresh: true) }
+        .confirmationDialog(
+            "Delete capsule?",
+            isPresented: $showsDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                Task {
+                    await model.deleteCapsule(capsule)
+                    dismiss()
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the Capsule metadata and HTML file.")
+        }
+    }
+
+    private var previewSurface: some View {
         content
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .garyxPageBackground()
@@ -364,23 +406,39 @@ struct GaryxCapsuleFocusedPreviewView: View {
                     .padding(.bottom, 8)
                 }
             }
-            // Focused open is the authoritative surface: always force-refresh so
-            // a since-deleted capsule resolves to 404 -> deleted immediately.
-            .task(id: "\(capsule.id):\(capsule.revision)") { await load(forceRefresh: true) }
-            .confirmationDialog(
-                "Delete capsule?",
-                isPresented: $showsDeleteConfirmation,
-                titleVisibility: .visible
-            ) {
-                Button("Delete", role: .destructive) {
-                    Task {
-                        await model.deleteCapsule(capsule)
-                        dismiss()
+    }
+
+    /// Photos-style interactive pull-to-dismiss. Runs simultaneously with the web
+    /// view's scroll; only an engaged drag (started at the top, pulling down)
+    /// moves the card, so content scrolling is never disturbed (#TASK-1470).
+    private var dismissDragGesture: some Gesture {
+        DragGesture(minimumDistance: 8, coordinateSpace: .local)
+            .onChanged { value in
+                if dragPhase == .idle {
+                    dragPhase = GaryxCapsuleDragDismiss.decideInitialPhase(
+                        atTop: webAtTop,
+                        translationY: value.translation.height
+                    )
+                }
+                dragOffset = GaryxCapsuleDragDismiss.resolvedOffset(
+                    phase: dragPhase,
+                    translationY: value.translation.height
+                )
+            }
+            .onEnded { value in
+                let willDismiss = GaryxCapsuleDragDismiss.shouldDismiss(
+                    phase: dragPhase,
+                    offset: dragOffset,
+                    predictedTranslationY: value.predictedEndTranslation.height
+                )
+                dragPhase = .idle
+                if willDismiss {
+                    dismiss()
+                } else {
+                    withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
+                        dragOffset = 0
                     }
                 }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("This removes the Capsule metadata and HTML file.")
             }
     }
 
@@ -390,7 +448,7 @@ struct GaryxCapsuleFocusedPreviewView: View {
         case .loading:
             GaryxLoadingPanelView(title: "Loading capsule...")
         case let .html(html):
-            GaryxCapsuleWebView(html: html)
+            GaryxCapsuleWebView(html: html, onScrollAtTopChange: { webAtTop = $0 })
         case .deleted:
             GaryxEmptyPanelView(
                 icon: "trash",
@@ -441,6 +499,10 @@ struct GaryxCapsuleFocusedPreviewView: View {
 /// bridge, `baseURL: nil` so the injected meta CSP governs.
 struct GaryxCapsuleWebView: UIViewRepresentable {
     let html: String
+    /// Reports whether the web content is scrolled to the very top. Drives the
+    /// full-screen pull-to-dismiss so a downward drag only dismisses from the top
+    /// and never fights content scrolling (#TASK-1470).
+    var onScrollAtTopChange: ((Bool) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -462,10 +524,17 @@ struct GaryxCapsuleWebView: UIViewRepresentable {
         // scrolling stays enabled — the card can be taller than the screen.
         webView.scrollView.pinchGestureRecognizer?.isEnabled = false
         webView.scrollView.bouncesZoom = false
+        // Disable vertical rubber-banding so a downward pull at the top isn't
+        // swallowed by an overscroll bounce — it's left for the pull-to-dismiss
+        // gesture (#TASK-1470). Scrolling within content is unaffected.
+        webView.scrollView.bounces = false
+        webView.scrollView.delegate = context.coordinator
+        context.coordinator.onScrollAtTopChange = onScrollAtTopChange
         return webView
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
+        context.coordinator.onScrollAtTopChange = onScrollAtTopChange
         let token = "\(html.count):\(html.hashValue)"
         guard context.coordinator.loadedToken != token else { return }
         context.coordinator.loadedToken = token
@@ -475,8 +544,17 @@ struct GaryxCapsuleWebView: UIViewRepresentable {
         webView.loadHTMLString(GaryxCapsuleViewport.ensuringMobileViewport(in: html), baseURL: nil)
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate {
+    final class Coordinator: NSObject, WKNavigationDelegate, UIScrollViewDelegate {
         var loadedToken: String?
+        var onScrollAtTopChange: ((Bool) -> Void)?
+        private var lastAtTop = true
+
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            let atTop = scrollView.contentOffset.y <= 0.5
+            guard atTop != lastAtTop else { return }
+            lastAtTop = atTop
+            onScrollAtTopChange?(atTop)
+        }
 
         func webView(
             _ webView: WKWebView,
