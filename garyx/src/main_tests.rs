@@ -22,6 +22,26 @@ fn verify_cli() {
 }
 
 #[test]
+fn root_version_token_matches_only_first_arg() {
+    // B0: `-V` / `--version` as argv[1] are the side-effect-free
+    // version query that gets short-circuited before home migration.
+    assert!(crate::is_root_version_token(Some("--version")));
+    assert!(crate::is_root_version_token(Some("-V")));
+}
+
+#[test]
+fn root_version_token_ignores_update_version_flag() {
+    // `garyx update --version <ver>` puts `--version` at argv[2], not
+    // argv[1]; a full-argv scan would wrongly short-circuit the update.
+    // The pre-scan only ever inspects argv[1], so it must NOT match the
+    // `update` subcommand token here.
+    assert!(!crate::is_root_version_token(Some("update")));
+    assert!(!crate::is_root_version_token(Some("gateway")));
+    assert!(!crate::is_root_version_token(Some("-v")));
+    assert!(!crate::is_root_version_token(None));
+}
+
+#[test]
 fn parse_no_args_requires_explicit_subcommand() {
     let cli = Cli::parse_from(["garyx"]);
     assert!(cli.command.is_none());
