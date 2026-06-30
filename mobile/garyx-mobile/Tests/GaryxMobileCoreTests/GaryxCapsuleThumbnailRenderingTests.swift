@@ -25,13 +25,39 @@ final class GaryxCapsuleThumbnailRenderingTests: XCTestCase {
         let chat = GaryxCapsuleThumbnailCacheKey(id: "cap", revision: 3, rendition: .chatCard)
         XCTAssertNotEqual(gallery, chat)
         XCTAssertNotEqual(gallery.storageToken, chat.storageToken)
-        XCTAssertEqual(gallery.storageToken, "cap.r3.16x10")
-        XCTAssertEqual(chat.storageToken, "cap.r3.16x9")
+        let v = GaryxCapsuleThumbnailRenderSchema.version
+        XCTAssertEqual(gallery.storageToken, "cap.r3.16x10.s\(v)")
+        XCTAssertEqual(chat.storageToken, "cap.r3.16x9.s\(v)")
     }
 
     func testCacheKeyTrimsId() {
         let key = GaryxCapsuleThumbnailCacheKey(id: "  cap  ", revision: 1, rendition: .gallery)
         XCTAssertEqual(key.id, "cap")
+    }
+
+    // MARK: - Render-schema version: bump invalidates every old token
+
+    func testStorageTokenEmbedsSchemaVersion() {
+        let key = GaryxCapsuleThumbnailCacheKey(id: "cap", revision: 1, rendition: .gallery, schemaVersion: 7)
+        XCTAssertEqual(key.storageToken, "cap.r1.16x10.s7")
+    }
+
+    func testSchemaBumpProducesADistinctTokenSoOldCachesMiss() {
+        let old = GaryxCapsuleThumbnailCacheKey(id: "cap", revision: 3, rendition: .gallery, schemaVersion: 1)
+        let new = GaryxCapsuleThumbnailCacheKey(id: "cap", revision: 3, rendition: .gallery, schemaVersion: 2)
+        XCTAssertNotEqual(old, new)
+        XCTAssertNotEqual(
+            old.storageToken, new.storageToken,
+            "a schema bump must change the storage token so the old render is never read back"
+        )
+    }
+
+    /// The current renderer (device-width fill, no backing) is schema 2: an
+    /// implicit-default key carries the current version, not the original v1.
+    func testCurrentSchemaIsBumpedPastTheOriginalRender() {
+        XCTAssertGreaterThanOrEqual(GaryxCapsuleThumbnailRenderSchema.version, 2)
+        let key = GaryxCapsuleThumbnailCacheKey(id: "cap", revision: 1, rendition: .gallery)
+        XCTAssertEqual(key.schemaVersion, GaryxCapsuleThumbnailRenderSchema.version)
     }
 
     func testRenditionTokensAreStable() {
@@ -64,6 +90,18 @@ final class GaryxCapsuleThumbnailRenderingTests: XCTestCase {
         XCTAssertEqual(p1.layoutHeight, p3.layoutHeight)
         XCTAssertEqual(p3.pixelWidth, p1.pixelWidth * 3)
         XCTAssertEqual(p3.pixelHeight, p1.pixelHeight * 3)
+    }
+
+    /// The default plan lays out at the device logical width (390), not the old
+    /// desktop-wide 760 — so author `max-width` content fills like a phone
+    /// full-screen render — and renders at 3x for crisp small cards.
+    func testDefaultPlanUsesDeviceWidthAtThreeX() {
+        XCTAssertEqual(GaryxCapsuleThumbnailSnapshotPlan.deviceLayoutWidth, 390)
+        let plan = GaryxCapsuleThumbnailSnapshotPlan(rendition: .gallery)
+        XCTAssertEqual(plan.layoutWidth, 390)
+        XCTAssertEqual(plan.layoutHeight, 244)   // round(390 * 10/16 = 243.75)
+        XCTAssertEqual(plan.pixelWidth, 1170)    // 390 * 3
+        XCTAssertEqual(plan.pixelHeight, 732)    // 244 * 3
     }
 
     // MARK: - Pruner: revision supersede / deletion / rendition coverage
@@ -119,5 +157,33 @@ final class GaryxCapsuleThumbnailRenderingTests: XCTestCase {
         XCTAssertEqual(result.keep, [GaryxCapsuleThumbnailCacheKey(id: "b", revision: 1, rendition: .gallery)])
         XCTAssertEqual(result.evict.count, 2)
         XCTAssertTrue(result.evict.allSatisfy { $0.id == "a" })
+    }
+
+    // MARK: - Stale-schema purge on warm (cache invalidation after a bump)
+
+    /// On warm, the disk store rebuilds each entry's key from stored metadata
+    /// (so it carries the *current* schema) and compares it to the on-disk
+    /// token. A token from an older schema — or a legacy token with no schema
+    /// suffix — no longer matches and is evicted; the current-schema token stays.
+    func testEvictingStaleSchemaDropsOldAndLegacyTokensKeepsCurrent() {
+        let current = GaryxCapsuleThumbnailCacheKey(id: "cap", revision: 3, rendition: .gallery)
+        let v = GaryxCapsuleThumbnailRenderSchema.version
+        let entries: [(token: String, key: GaryxCapsuleThumbnailCacheKey)] = [
+            (token: "cap.r3.16x10", key: current),        // legacy: no schema suffix
+            (token: "cap.r3.16x10.s1", key: current),     // older schema
+            (token: "cap.r3.16x10.s\(v)", key: current),  // current schema
+        ]
+        let result = GaryxCapsuleThumbnailCachePruner.evictingStaleSchema(entries: entries)
+        XCTAssertEqual(result.keepTokens, ["cap.r3.16x10.s\(v)"])
+        XCTAssertEqual(Set(result.evictTokens), ["cap.r3.16x10", "cap.r3.16x10.s1"])
+    }
+
+    func testEvictingStaleSchemaKeepsAllWhenEverythingIsCurrent() {
+        let g = GaryxCapsuleThumbnailCacheKey(id: "a", revision: 1, rendition: .gallery)
+        let c = GaryxCapsuleThumbnailCacheKey(id: "a", revision: 1, rendition: .chatCard)
+        let entries = [(token: g.storageToken, key: g), (token: c.storageToken, key: c)]
+        let result = GaryxCapsuleThumbnailCachePruner.evictingStaleSchema(entries: entries)
+        XCTAssertTrue(result.evictTokens.isEmpty)
+        XCTAssertEqual(Set(result.keepTokens), Set([g.storageToken, c.storageToken]))
     }
 }
