@@ -250,10 +250,10 @@ pub(crate) enum GatewayAction {
     Start,
     /// Restart the managed gateway service (refreshes the unit / plist file first)
     #[command(
-        long_about = "Restart the managed gateway service and refresh its unit/plist first.\n\nAgent safety: if you are running inside an agent thread, do not use a bare restart. Queue a wake so the new gateway can resume this same thread after the service comes back:\n  garyx gateway restart --wake thread <thread_id> --wake-message \"continue\"\n\nUse --no-wake only when you intentionally want the gateway to restart without resuming any agent thread."
+        long_about = "Restart the managed gateway service and refresh its unit/plist first.\n\nBy default this resumes every thread that was actively running when the gateway went down (wake-all), so an agent that restarts the gateway is continued automatically — a bare `garyx gateway restart` is safe.\n\nUse --no-wake to restart without resuming anything, or --wake thread|task|bot <target> to resume just one target. With no --wake-message, a structured restart notice is sent."
     )]
     Restart {
-        /// Wake a target after restart: `all`, `thread <thread_id>`, `task <task_id>`, or `bot <channel:account_id>`
+        /// Narrow the resume to one target instead of the default wake-all: `all`, `thread <thread_id>`, `task <task_id>`, or `bot <channel:account_id>`
         #[arg(
             long,
             value_names = ["KIND", "TARGET"],
@@ -261,14 +261,14 @@ pub(crate) enum GatewayAction {
             conflicts_with = "no_wake"
         )]
         wake: Vec<String>,
-        /// Message to send to the wake target after the gateway is healthy
+        /// Message to send to the wake target; defaults to a structured restart notice when omitted
         #[arg(long, value_name = "MESSAGE")]
         wake_message: Option<String>,
-        /// Intentionally restart without resuming any thread; agents should only use this when no continuation is needed
+        /// Restart without resuming any thread (opt out of the default wake-all)
         #[arg(long = "no-wake")]
         no_wake: bool,
-        /// Output raw JSON events for the wake run
-        #[arg(long, requires = "wake")]
+        /// Output the queued wake as JSON (works with the default wake-all too)
+        #[arg(long)]
         wake_json: bool,
     },
     /// Stop the managed gateway service

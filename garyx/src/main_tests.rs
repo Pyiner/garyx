@@ -272,13 +272,35 @@ fn parse_gateway_restart_wake_all() {
 }
 
 #[test]
-fn resolve_gateway_restart_wake_all_defaults_message() {
-    let decision = super::resolve_gateway_restart_wake_destination(vec!["all".to_owned()], None)
+fn resolve_gateway_restart_wake_defaults_to_all_with_structured_message() {
+    // A bare restart (no --wake, no --no-wake) resumes every running thread.
+    let decision = super::resolve_gateway_restart_wake_destination(vec![], None, false)
         .unwrap()
         .expect("wake decision");
     match decision {
         super::GatewayRestartWakeDecision::All { message } => {
-            assert_eq!(message, "continue");
+            assert_eq!(
+                message,
+                garyx_gateway::restart_wake::RESTART_WAKE_DEFAULT_MESSAGE
+            );
+            assert!(message.contains("garyx_restarted"));
+        }
+        _ => panic!("expected wake all"),
+    }
+}
+
+#[test]
+fn resolve_gateway_restart_wake_all_token_defaults_message() {
+    let decision =
+        super::resolve_gateway_restart_wake_destination(vec!["all".to_owned()], None, false)
+            .unwrap()
+            .expect("wake decision");
+    match decision {
+        super::GatewayRestartWakeDecision::All { message } => {
+            assert_eq!(
+                message,
+                garyx_gateway::restart_wake::RESTART_WAKE_DEFAULT_MESSAGE
+            );
         }
         _ => panic!("expected wake all"),
     }
@@ -289,6 +311,7 @@ fn resolve_gateway_restart_wake_all_accepts_custom_message() {
     let decision = super::resolve_gateway_restart_wake_destination(
         vec!["all".to_owned()],
         Some("resume all".to_owned()),
+        false,
     )
     .unwrap()
     .expect("wake decision");
@@ -301,27 +324,33 @@ fn resolve_gateway_restart_wake_all_accepts_custom_message() {
 }
 
 #[test]
-fn resolve_gateway_restart_wake_single_target_still_requires_message() {
-    let error = super::resolve_gateway_restart_wake_destination(
+fn resolve_gateway_restart_wake_single_target_defaults_message() {
+    // A single target no longer requires --wake-message; it falls back to the
+    // structured restart notice.
+    let decision = super::resolve_gateway_restart_wake_destination(
         vec!["thread".to_owned(), "thread::abc".to_owned()],
         None,
+        false,
     )
-    .expect_err("single target wake should require message")
-    .to_string();
-    assert!(error.contains("wake message is required"));
+    .unwrap()
+    .expect("wake decision");
+    match decision {
+        super::GatewayRestartWakeDecision::Single(destination) => {
+            assert_eq!(
+                destination.message_parts.join(" "),
+                garyx_gateway::restart_wake::RESTART_WAKE_DEFAULT_MESSAGE
+            );
+        }
+        _ => panic!("expected single wake target"),
+    }
 }
 
 #[test]
-fn gateway_restart_requires_explicit_wake_decision() {
-    assert!(super::validate_gateway_restart_wake_decision(true, false).is_ok());
-    assert!(super::validate_gateway_restart_wake_decision(false, true).is_ok());
-    let error = super::validate_gateway_restart_wake_decision(false, false)
-        .expect_err("bare restart should be blocked")
-        .to_string();
-    assert!(error.contains("Agent safety"));
-    assert!(error.contains("Do not run a bare restart from agent work"));
-    assert!(error.contains("--wake thread"));
-    assert!(error.contains("--no-wake"));
+fn resolve_gateway_restart_no_wake_returns_none() {
+    // --no-wake opts out of the default wake-all.
+    let decision =
+        super::resolve_gateway_restart_wake_destination(vec![], None, true).unwrap();
+    assert!(decision.is_none());
 }
 
 #[test]

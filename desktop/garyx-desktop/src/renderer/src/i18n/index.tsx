@@ -313,6 +313,7 @@ const zhCN: Record<string, string> = {
   'Tasks': '任务',
   'Task': '任务',
   'Task ready for review': '任务待审查',
+  'Garyx restarted': 'Garyx 已重启',
   'Task view': '任务视图',
   '{count} tasks': '{count} 个任务',
   '{count} ahead': '领先 {count}',

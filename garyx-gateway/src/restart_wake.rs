@@ -18,6 +18,12 @@ use crate::server::AppState;
 
 const WAKE_ALL_KIND: &str = "all";
 const WAKE_ALL_TARGET: &str = "all";
+/// Default message injected when a restart wakes a thread and the caller did not
+/// pass an explicit `--wake-message`. Wrapped in the `garyx_restarted` tag so
+/// clients render it as a restart-notice card (mirrors the task-notification
+/// card); an agent receiving it should simply continue its interrupted work.
+pub const RESTART_WAKE_DEFAULT_MESSAGE: &str =
+    "<garyx_restarted>Garyx has restarted. Continue your task.</garyx_restarted>";
 const MAX_RESTART_WAKE_ALL_THREADS: usize = 16;
 const MAX_RESTART_WAKE_ALL_ATTEMPTS: u32 = 8;
 const STALE_PROCESSING_WAKE_AGE: Duration = Duration::from_secs(120);

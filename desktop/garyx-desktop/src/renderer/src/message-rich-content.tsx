@@ -22,6 +22,10 @@ import {
   parseTaskNotificationText,
   type ParsedTaskNotification,
 } from "./task-notification";
+import {
+  parseRestartNoticeText,
+  type ParsedRestartNotice,
+} from "./restart-notice";
 
 type TranscriptSegment =
   | {
@@ -102,6 +106,24 @@ function TaskNotificationCard({
           text={notification.finalMessage}
           tone="assistant"
         />
+      </div>
+    </section>
+  );
+}
+
+function RestartNoticeCard({
+  notice,
+}: {
+  notice: ParsedRestartNotice;
+}) {
+  const { t } = useI18n();
+  return (
+    <section className="restart-notice-card" aria-label={t("Garyx restarted")}>
+      <div className="restart-notice-header">
+        <span className="restart-notice-kicker">{t("Garyx restarted")}</span>
+      </div>
+      <div className="restart-notice-body">
+        <RichMessageText text={notice.message} tone="assistant" />
       </div>
     </section>
   );
@@ -701,6 +723,10 @@ export const RichMessageContent = memo(function RichMessageContent({
             notification={taskNotification}
           />
         );
+      }
+      const restartNotice = parseRestartNoticeText(segment.text);
+      if (restartNotice) {
+        return <RestartNoticeCard key={segment.key} notice={restartNotice} />;
       }
       return (
         <RichMessageText

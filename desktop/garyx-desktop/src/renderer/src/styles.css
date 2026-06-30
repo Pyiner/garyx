@@ -8694,6 +8694,52 @@ button.message-file-card {
   color: var(--color-token-text-primary);
 }
 
+.restart-notice-card {
+  display: grid;
+  gap: 9px;
+  width: min(100%, 680px);
+  box-sizing: border-box;
+  padding: 11px 12px 12px;
+  border: 1px solid color-mix(in oklab, var(--color-token-border) 84%, #ffffff);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--color-token-bg-primary) 92%, #f4f1eb);
+  color: var(--color-token-text-primary);
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.03);
+}
+
+.restart-notice-header {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.restart-notice-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-xs-plus);
+  line-height: 1.25;
+  font-weight: var(--font-weight-semibold);
+  color: color-mix(in oklab, var(--color-token-text-secondary) 88%, #2e7d32);
+}
+
+.restart-notice-kicker::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--color-token-accent, #2e7d32);
+}
+
+.restart-notice-body {
+  padding: 9px 0 0;
+  border-top: 1px solid color-mix(in oklab, var(--color-token-border) 70%, transparent);
+}
+
+.restart-notice-body .message-rich {
+  color: var(--color-token-text-primary);
+}
+
 .message-rich-json {
   margin: 0;
   padding: 8px 10px;
