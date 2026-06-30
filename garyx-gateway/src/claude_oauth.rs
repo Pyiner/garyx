@@ -18,14 +18,16 @@ pub(crate) async fn read_oauth_token() -> Result<String, String> {
 
 pub(crate) async fn read_oauth_token_and_subscription() -> Result<(String, Option<String>), String>
 {
-    if let Some(token) = read_env_oauth_token() {
-        return Ok((token, None));
+    match read_oauth_credentials().await {
+        Ok(credentials) => {
+            let token = oauth_token_from_credentials(&credentials)?;
+            let subscription = oauth_subscription_from_credentials(&credentials);
+            Ok((token, subscription))
+        }
+        Err(credentials_error) => read_env_oauth_token()
+            .map(|token| (token, None))
+            .ok_or(credentials_error),
     }
-
-    let credentials = read_oauth_credentials().await?;
-    let token = oauth_token_from_credentials(&credentials)?;
-    let subscription = oauth_subscription_from_credentials(&credentials);
-    Ok((token, subscription))
 }
 
 fn read_env_oauth_token() -> Option<String> {
@@ -103,7 +105,53 @@ async fn read_oauth_keychain() -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::{OsStr, OsString};
+    use std::sync::{Mutex, OnceLock};
+
     use serde_json::json;
+    use tempfile::tempdir;
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvRestore {
+        values: Vec<(&'static str, Option<OsString>)>,
+    }
+
+    impl EnvRestore {
+        fn capture(keys: &[&'static str]) -> Self {
+            let values = keys
+                .iter()
+                .map(|key| (*key, std::env::var_os(key)))
+                .collect();
+            Self { values }
+        }
+
+        fn set(key: &str, value: impl AsRef<OsStr>) {
+            unsafe {
+                std::env::set_var(key, value);
+            }
+        }
+
+        fn remove(key: &str) {
+            unsafe {
+                std::env::remove_var(key);
+            }
+        }
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            for (key, value) in &self.values {
+                match value {
+                    Some(value) => Self::set(key, value),
+                    None => Self::remove(key),
+                }
+            }
+        }
+    }
 
     #[test]
     fn reads_token_and_subscription_from_credentials_payload() {
@@ -130,5 +178,42 @@ mod tests {
 
         let error = oauth_token_from_credentials(&credentials).unwrap_err();
         assert!(error.contains("claudeAiOauth.accessToken"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn credentials_file_takes_precedence_over_env_oauth_token() {
+        let _lock = env_lock().lock().expect("env lock");
+        let temp = tempdir().expect("temp dir");
+        let claude_dir = temp.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).expect("claude dir");
+        std::fs::write(
+            claude_dir.join(".credentials.json"),
+            json!({
+                "claudeAiOauth": {
+                    "accessToken": "file-token",
+                    "subscriptionType": "max"
+                }
+            })
+            .to_string(),
+        )
+        .expect("credentials");
+
+        let _env = EnvRestore::capture(&[
+            "HOME",
+            "USERPROFILE",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "ANTHROPIC_AUTH_TOKEN",
+            "CLAUDE_OAUTH_TOKEN",
+        ]);
+        EnvRestore::set("HOME", temp.path());
+        EnvRestore::remove("USERPROFILE");
+        EnvRestore::set("CLAUDE_CODE_OAUTH_TOKEN", "bad-env-token");
+        EnvRestore::remove("ANTHROPIC_AUTH_TOKEN");
+        EnvRestore::remove("CLAUDE_OAUTH_TOKEN");
+
+        let (token, subscription) = read_oauth_token_and_subscription().await.unwrap();
+
+        assert_eq!(token, "file-token");
+        assert_eq!(subscription.as_deref(), Some("max"));
     }
 }
