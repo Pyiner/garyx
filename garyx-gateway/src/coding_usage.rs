@@ -6,8 +6,8 @@
 //! how much of the allowance remains.
 //!
 //! Source of truth for each tool:
-//! - Claude Code: OAuth env token if present, then `~/.claude/.credentials.json`,
-//!   then the macOS keychain item `Claude Code-credentials`; usage from
+//! - Claude Code: `~/.claude/.credentials.json`, then the macOS keychain item
+//!   `Claude Code-credentials`, then an OAuth env token fallback; usage from
 //!   `GET https://api.anthropic.com/api/oauth/usage`.
 //! - Codex: `~/.codex/auth.json` (`tokens.access_token` + `account_id`); usage
 //!   from `GET https://chatgpt.com/backend-api/wham/usage`.
