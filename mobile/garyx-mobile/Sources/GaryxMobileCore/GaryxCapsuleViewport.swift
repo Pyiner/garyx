@@ -44,6 +44,46 @@ public enum GaryxCapsuleViewport {
         return metaRegex.firstMatch(in: html, range: range) != nil
     }
 
+    // MARK: Thumbnail capture (#TASK-1478)
+
+    /// Marker id on the injected style so a double-prepare is a no-op.
+    static let scrollbarHideStyleID = "garyx-thumbnail-scrollbar-hide"
+
+    /// Style that hides every scrollbar while a capsule is captured into a
+    /// thumbnail. A capsule is authored for a full phone screen, so its content
+    /// is far taller than the short band the thumbnail captures; WebKit would
+    /// otherwise paint a root vertical scrollbar (and any inner `overflow:auto`
+    /// container's scrollbar) straight into the static PNG. `::-webkit-scrollbar`
+    /// is a universal selector (root + every inner element);
+    /// `scrollbar-width:none` covers the standard property. `!important` so an
+    /// author's own scrollbar styling can't re-enable it. This only suppresses
+    /// the scrollbar chrome — content still overflows and the top band is
+    /// captured top-anchored (cover), so the visible crop is unchanged. Kept in
+    /// sync with the desktop `capsuleThumbnailScrollbarHidingStyle`.
+    public static let scrollbarHidingStyle =
+        #"<style id="garyx-thumbnail-scrollbar-hide">html{scrollbar-width:none!important}::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}</style>"#
+
+    /// Returns `html` with the scrollbar-hiding style injected (right after an
+    /// existing `<head …>` open tag, otherwise prepended — mirroring
+    /// `ensuringMobileViewport`). A no-op when the style is already present.
+    public static func hidingScrollbars(in html: String) -> String {
+        guard !html.contains(scrollbarHideStyleID) else { return html }
+        if let headEnd = headOpenTagEnd(in: html) {
+            var output = html
+            output.insert(contentsOf: scrollbarHidingStyle, at: headEnd)
+            return output
+        }
+        return scrollbarHidingStyle + html
+    }
+
+    /// Prepare served capsule HTML for a one-shot thumbnail capture: guarantee a
+    /// device-width viewport and hide scrollbars. Used only by the thumbnail
+    /// renderer — the full-screen detail web view keeps its scrollbars. Mirrors
+    /// the desktop `prepareThumbnailHtml`.
+    public static func preparingForThumbnail(in html: String) -> String {
+        hidingScrollbars(in: ensuringMobileViewport(in: html))
+    }
+
     /// The index just after the first `<head …>` open tag, if any.
     private static func headOpenTagEnd(in html: String) -> String.Index? {
         guard let headRegex = try? NSRegularExpression(

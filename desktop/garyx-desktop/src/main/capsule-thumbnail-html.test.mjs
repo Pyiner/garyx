@@ -5,10 +5,13 @@ import {
   CAPSULE_THUMBNAIL_DEVICE_WIDTH,
   CAPSULE_THUMBNAIL_SCHEMA_VERSION,
   capsuleThumbnailFillScript,
+  capsuleThumbnailScrollbarHidingStyle,
   capsuleThumbnailStorageToken,
   ensureMobileViewport,
   evictingStaleSchemaTokens,
   fillTransform,
+  hideScrollbars,
+  prepareThumbnailHtml,
 } from './capsule-thumbnail-html.ts';
 
 const GALLERY = { aspectWidth: 16, aspectHeight: 10 };
@@ -109,6 +112,48 @@ test('injects device-width viewport when absent', () => {
 test('leaves an author-declared viewport untouched', () => {
   const html = '<head><meta name="viewport" content="width=320"></head><body>b</body>';
   assert.equal(ensureMobileViewport(html), html);
+});
+
+// --- scrollbar hiding during capture (#TASK-1478) ----------------------------
+
+test('scrollbar-hiding style hides webkit (root + inner) and firefox scrollbars', () => {
+  assert.match(capsuleThumbnailScrollbarHidingStyle, /::-webkit-scrollbar\s*{[^}]*display:\s*none/);
+  assert.match(capsuleThumbnailScrollbarHidingStyle, /scrollbar-width:\s*none/);
+  // !important so an author's own scrollbar styling can't re-enable it.
+  assert.match(capsuleThumbnailScrollbarHidingStyle, /display:\s*none\s*!important/);
+});
+
+test('hideScrollbars injects the style after <head> open', () => {
+  const out = hideScrollbars('<head><title>x</title></head><body>b</body>');
+  assert.match(out, /<head><style id="garyx-thumbnail-scrollbar-hide"/);
+  assert.match(out, /::-webkit-scrollbar/);
+  assert.match(out, /<title>x<\/title>/); // original markup preserved
+});
+
+test('hideScrollbars prepends when there is no <head>', () => {
+  const out = hideScrollbars('<main>demo</main>');
+  assert.ok(out.startsWith('<style id="garyx-thumbnail-scrollbar-hide"'));
+  assert.ok(out.endsWith('<main>demo</main>'));
+});
+
+test('hideScrollbars is idempotent (no double injection)', () => {
+  const once = hideScrollbars('<head></head><body>b</body>');
+  assert.equal(hideScrollbars(once), once);
+  assert.equal(once.match(/garyx-thumbnail-scrollbar-hide/g).length, 1);
+});
+
+test('prepareThumbnailHtml guarantees both a device-width viewport and hidden scrollbars', () => {
+  const out = prepareThumbnailHtml('<head><title>x</title></head><body>b</body>');
+  assert.match(out, /width=device-width/);
+  assert.match(out, /::-webkit-scrollbar/);
+});
+
+test('prepareThumbnailHtml respects an author viewport but still hides scrollbars', () => {
+  const html = '<head><meta name="viewport" content="width=320"></head><body>b</body>';
+  const out = prepareThumbnailHtml(html);
+  assert.match(out, /width=320/); // author viewport untouched
+  assert.ok(!out.includes('width=device-width'));
+  assert.match(out, /garyx-thumbnail-scrollbar-hide/); // scrollbars still hidden
 });
 
 // --- the injected JS mirrors fillTransform -----------------------------------

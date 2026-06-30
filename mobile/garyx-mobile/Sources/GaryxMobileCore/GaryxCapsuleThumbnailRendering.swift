@@ -32,8 +32,10 @@ public struct GaryxCapsuleThumbnailRendition: Hashable, Sendable {
 /// - `1`: original wide (760pt) render viewport with an opaque dark backing.
 /// - `2`: device-width (390pt) render + horizontal content-fill, no backing
 ///   (#TASK-1458) — content fills the frame instead of being letterboxed.
+/// - `3`: scrollbars hidden during capture (#TASK-1478) — content taller than
+///   the captured band no longer paints a root/inner overflow scrollbar.
 public enum GaryxCapsuleThumbnailRenderSchema {
-    public static let version = 2
+    public static let version = 3
 }
 
 /// Cache key for a *rendered* capsule thumbnail image.
@@ -64,7 +66,7 @@ public struct GaryxCapsuleThumbnailCacheKey: Hashable, Sendable {
         self.schemaVersion = schemaVersion
     }
 
-    /// Stable, filesystem-safe storage token, e.g. `<id>.r3.16x10.s2`.
+    /// Stable, filesystem-safe storage token, e.g. `<id>.r3.16x10.s3`.
     public var storageToken: String { "\(id).r\(revision).\(rendition.token).s\(schemaVersion)" }
 }
 

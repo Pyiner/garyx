@@ -13,8 +13,8 @@ import {
   CAPSULE_THUMBNAIL_DEVICE_WIDTH,
   capsuleThumbnailFillScript,
   capsuleThumbnailStorageToken,
-  ensureMobileViewport,
   evictingStaleSchemaTokens,
+  prepareThumbnailHtml,
   type CapsuleThumbnailRendition,
 } from "./capsule-thumbnail-html";
 import { getCapsuleHtml } from "./gary-client";
@@ -153,7 +153,7 @@ async function renderThumbnailPng(
 
     const dataUrl =
       "data:text/html;charset=utf-8," +
-      encodeURIComponent(ensureMobileViewport(html));
+      encodeURIComponent(prepareThumbnailHtml(html));
     await window.loadURL(dataUrl);
     await finished;
     // Brief settle for final layout / inline-JS paint before measuring.

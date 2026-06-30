@@ -48,6 +48,10 @@ final class GaryxCapsuleThumbnailRenderer {
         // (content fills via the fill transform) — no injected backing color.
         webView.isOpaque = true
         webView.scrollView.isScrollEnabled = false
+        // Belt-and-suspenders with the injected scrollbar-hiding CSS (#TASK-1478):
+        // never let a native scroll indicator land in the captured snapshot.
+        webView.scrollView.showsVerticalScrollIndicator = false
+        webView.scrollView.showsHorizontalScrollIndicator = false
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         webView.isUserInteractionEnabled = false
         let coordinator = NavigationCoordinator()
@@ -59,7 +63,7 @@ final class GaryxCapsuleThumbnailRenderer {
         host.addSubview(webView)
         defer { webView.removeFromSuperview() }
 
-        webView.loadHTMLString(GaryxCapsuleViewport.ensuringMobileViewport(in: html), baseURL: nil)
+        webView.loadHTMLString(GaryxCapsuleViewport.preparingForThumbnail(in: html), baseURL: nil)
         await coordinator.waitUntilDone(timeout: 6.0)
         // Brief settle for final layout / inline JS paint before measuring.
         try? await Task.sleep(nanoseconds: 140_000_000)

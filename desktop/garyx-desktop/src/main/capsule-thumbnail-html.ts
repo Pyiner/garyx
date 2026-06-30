@@ -26,8 +26,10 @@ export interface CapsuleThumbnailRendition {
  *
  * - `1`: original wide (1024pt) render viewport with an opaque dark backing.
  * - `2`: device-width (390pt) render + horizontal content-fill, no backing.
+ * - `3`: scrollbars hidden during capture (#TASK-1478) — content taller than the
+ *   captured band no longer paints a root/inner overflow scrollbar into the PNG.
  */
-export const CAPSULE_THUMBNAIL_SCHEMA_VERSION = 2;
+export const CAPSULE_THUMBNAIL_SCHEMA_VERSION = 3;
 
 /**
  * Standard device logical width (CSS px) the capsule is laid out into, so it
@@ -42,7 +44,7 @@ export function renditionToken(rendition: CapsuleThumbnailRendition): string {
   return `${w}x${h}`;
 }
 
-/** Stable, filesystem-key token, e.g. `<id>.r3.16x10.s2`. */
+/** Stable, filesystem-key token, e.g. `<id>.r3.16x10.s3`. */
 export function capsuleThumbnailStorageToken(
   id: string,
   revision: number,
@@ -70,6 +72,60 @@ export function ensureMobileViewport(html: string): string {
     return html.slice(0, insertAt) + VIEWPORT_META + html.slice(insertAt);
   }
   return VIEWPORT_META + html;
+}
+
+/**
+ * Marker id on the injected style so a double-prepare is a no-op (#TASK-1478).
+ */
+const SCROLLBAR_HIDE_STYLE_ID = "garyx-thumbnail-scrollbar-hide";
+
+/**
+ * Style that hides every scrollbar while the capsule is captured. A capsule is
+ * authored for a full phone screen, so its content is far taller than the short
+ * `16:rendition` band the thumbnail captures; the engine would otherwise paint a
+ * root vertical scrollbar (and any inner `overflow:auto` container's scrollbar)
+ * straight into the static PNG. `::-webkit-scrollbar` is a universal selector
+ * (root + every inner element) understood by Chromium and WKWebView alike;
+ * `scrollbar-width:none` covers the Firefox-style property. `!important` so an
+ * author's own scrollbar styling can't re-enable it. This only suppresses the
+ * scrollbar chrome — content still overflows and the top band is captured
+ * top-anchored (cover), so the visible crop is unchanged.
+ */
+export const capsuleThumbnailScrollbarHidingStyle =
+  `<style id="${SCROLLBAR_HIDE_STYLE_ID}">` +
+  "html{scrollbar-width:none!important}" +
+  "::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}" +
+  "</style>";
+
+/**
+ * Returns `html` with the scrollbar-hiding style injected (right after an
+ * existing `<head …>` open tag, otherwise prepended — mirroring
+ * `ensureMobileViewport`). A no-op when the style is already present.
+ */
+export function hideScrollbars(html: string): string {
+  if (html.includes(SCROLLBAR_HIDE_STYLE_ID)) {
+    return html;
+  }
+  const headOpen = /<head\b[^>]*>/i.exec(html);
+  if (headOpen) {
+    const insertAt = headOpen.index + headOpen[0].length;
+    return (
+      html.slice(0, insertAt) +
+      capsuleThumbnailScrollbarHidingStyle +
+      html.slice(insertAt)
+    );
+  }
+  return capsuleThumbnailScrollbarHidingStyle + html;
+}
+
+/**
+ * Prepare served capsule HTML for a one-shot thumbnail capture: guarantee a
+ * device-width viewport and hide scrollbars. Used only by the thumbnail
+ * renderer — the live interactive preview keeps its scrollbars. Mirrors iOS
+ * `GaryxCapsuleViewport.preparingForThumbnail`.
+ */
+export function prepareThumbnailHtml(html: string): string {
+  return hideScrollbars(ensureMobileViewport(html));
 }
 
 /**
