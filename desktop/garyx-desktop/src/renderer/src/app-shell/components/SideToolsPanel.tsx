@@ -39,19 +39,34 @@ import type {
 } from "@shared/contracts";
 
 import { WorkspaceFilePreview } from "../../workspace-file-preview";
+import { Package } from "lucide-react";
 import { PanelIcon } from "../icons";
 import { useI18n } from "../../i18n";
 import { workspaceFileAbsolutePath } from "../workspace-helpers";
+import { CapsuleLivePreviewFrame } from "./CapsuleLivePreviewFrame";
 import {
+  capsuleIdFromTabKey,
+  capsuleTabKey,
+  closeTab,
+  isCapsuleTabKey,
   shouldCollapseFileDirectoryForPreview,
   workspacePreviewDirectoryCollapseKey,
+  type SideTabKey,
+  type ThreadSideToolId,
 } from "./side-tools-panel-model";
 
 const SidePanelBrowserPage = lazy(() =>
   import("../../BrowserPage").then((module) => ({ default: module.BrowserPage }))
 );
 
-export type ThreadSideToolId = "files" | "tasks" | "chat" | "browser" | "terminal";
+export type { ThreadSideToolId } from "./side-tools-panel-model";
+
+/** A capsule open as a tab in the dock (#TASK-1470). */
+export type SideCapsuleTab = {
+  capsuleId: string;
+  revision: number;
+  title: string;
+};
 
 export type SideToolWorkspaceFile = {
   name: string;
@@ -75,6 +90,15 @@ type ThreadSideToolsPanelProps = {
   workspacePreviewOpen?: boolean;
   workspacePreviewTitle?: string;
   sideChatPanel: ReactNode;
+  /** Whether a workspace is attached. Built-in tools (files/terminal/…) need
+   * one; without it the dock only hosts capsule tabs and hides the add menu. */
+  hasWorkspace: boolean;
+  /** Capsules currently open as tabs (gateway-owned; #TASK-1470). */
+  openCapsuleTabs: SideCapsuleTab[];
+  /** Capsule to activate next; consumed via onActivatePendingCapsuleHandled. */
+  pendingActiveCapsuleId?: string | null;
+  onActivatePendingCapsuleHandled: () => void;
+  onCloseCapsuleTab: (capsuleId: string) => void;
   onCloseWorkspacePreview?: () => void;
   onLocalFileLinkClick?: (absolutePath: string) => void;
   onRevealSelectedWorkspaceFile?: () => Promise<void> | void;
@@ -596,6 +620,11 @@ export function ThreadSideToolsPanel({
   workspaceFilePreviewLoading = false,
   workspacePreviewOpen = false,
   workspacePreviewTitle = "",
+  hasWorkspace,
+  openCapsuleTabs,
+  pendingActiveCapsuleId = null,
+  onActivatePendingCapsuleHandled,
+  onCloseCapsuleTab,
   onCloseWorkspacePreview,
   onLocalFileLinkClick,
   onRevealSelectedWorkspaceFile,
@@ -619,9 +648,10 @@ export function ThreadSideToolsPanel({
   // The panel opens with no tool chosen so the body shows a tool picker;
   // workspace file previews still force the Files tool open below.
   const [openTools, setOpenTools] = useState<ThreadSideToolId[]>([]);
-  const [activeToolId, setActiveToolId] = useState<ThreadSideToolId | null>(
-    null,
-  );
+  // The active tab can be a built-in tool or a capsule (`capsule:<id>`); the
+  // panel owns this single source of truth so closing a tab repicks across
+  // both kinds without crossing component boundaries (#TASK-1470).
+  const [activeTabKey, setActiveTabKey] = useState<SideTabKey | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [taskThreadTabTitle, setTaskThreadTabTitle] = useState<string | null>(
     null,
@@ -634,9 +664,14 @@ export function ThreadSideToolsPanel({
   const menuRef = useRef<HTMLDivElement | null>(null);
   const previewDirectoryCollapseKeyRef = useRef<string | null>(null);
   const filePathCopiedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const activeTool = activeToolId
-    ? tools.find((tool) => tool.id === activeToolId) || null
-    : null;
+  const activeTool =
+    activeTabKey && !isCapsuleTabKey(activeTabKey)
+      ? tools.find((tool) => tool.id === activeTabKey) || null
+      : null;
+  const activeCapsuleId =
+    activeTabKey && isCapsuleTabKey(activeTabKey)
+      ? capsuleIdFromTabKey(activeTabKey)
+      : null;
   const FileDirectoryToggleIcon = fileDirectoryCollapsed
     ? PanelRightOpen
     : PanelRightClose;
@@ -658,6 +693,12 @@ export function ThreadSideToolsPanel({
   const openToolDescriptors = openTools
     .map((toolId) => tools.find((tool) => tool.id === toolId))
     .filter((tool): tool is ToolDescriptor => Boolean(tool));
+  // Built-in tool tabs first, then capsule tabs, in open order. Closing repicks
+  // the active tab across this combined list.
+  const combinedOpenTabs: SideTabKey[] = [
+    ...openTools,
+    ...openCapsuleTabs.map((capsule) => capsuleTabKey(capsule.capsuleId)),
+  ];
   useEffect(() => {
     return () => {
       if (filePathCopiedTimeoutRef.current) {
@@ -675,7 +716,7 @@ export function ThreadSideToolsPanel({
   }, [activeThreadId]);
 
   useEffect(() => {
-    if (activeToolId === "browser") {
+    if (activeTabKey === "browser") {
       return;
     }
 
@@ -686,7 +727,7 @@ export function ThreadSideToolsPanel({
       height: 0,
       visible: false,
     });
-  }, [activeToolId]);
+  }, [activeTabKey]);
 
   useEffect(() => {
     if (!shouldShowWorkspacePreview) {
@@ -695,8 +736,37 @@ export function ThreadSideToolsPanel({
     setOpenTools((current) =>
       current.includes("files") ? current : ["files", ...current],
     );
-    setActiveToolId("files");
+    setActiveTabKey("files");
   }, [shouldShowWorkspacePreview, workspaceFilePreview?.path, workspacePreviewTitle]);
+
+  // A capsule open request (from a transcript capsule card) opens/activates its
+  // tab, then is consumed so re-clicking the same capsule re-activates it.
+  useEffect(() => {
+    if (!pendingActiveCapsuleId) {
+      return;
+    }
+    setActiveTabKey(capsuleTabKey(pendingActiveCapsuleId));
+    onActivatePendingCapsuleHandled();
+  }, [pendingActiveCapsuleId, onActivatePendingCapsuleHandled]);
+
+  // If the active capsule tab is removed externally (closed elsewhere or cleared
+  // on a thread switch), repick the last remaining tab so nothing dangles.
+  useEffect(() => {
+    if (!activeTabKey || !isCapsuleTabKey(activeTabKey)) {
+      return;
+    }
+    const stillOpen = openCapsuleTabs.some(
+      (capsule) => capsuleTabKey(capsule.capsuleId) === activeTabKey,
+    );
+    if (stillOpen) {
+      return;
+    }
+    const remaining: SideTabKey[] = [
+      ...openTools,
+      ...openCapsuleTabs.map((capsule) => capsuleTabKey(capsule.capsuleId)),
+    ];
+    setActiveTabKey(remaining.length ? remaining[remaining.length - 1] : null);
+  }, [openCapsuleTabs, openTools, activeTabKey]);
 
   useEffect(() => {
     const previousPreviewKey = previewDirectoryCollapseKeyRef.current;
@@ -742,7 +812,7 @@ export function ThreadSideToolsPanel({
   }, [menuOpen]);
 
   useEffect(() => {
-    if (!menuOpen || activeToolId !== "browser") {
+    if (!menuOpen || activeTabKey !== "browser") {
       return;
     }
 
@@ -753,10 +823,10 @@ export function ThreadSideToolsPanel({
     return () => {
       window.garyxDesktop.unsubscribeBrowserPageMouseDown(handleBrowserMouseDown);
     };
-  }, [activeToolId, menuOpen]);
+  }, [activeTabKey, menuOpen]);
 
   useLayoutEffect(() => {
-    if (!menuOpen || activeToolId !== "browser") {
+    if (!menuOpen || activeTabKey !== "browser") {
       setBrowserMenuObstructionBottom(null);
       return;
     }
@@ -778,7 +848,7 @@ export function ThreadSideToolsPanel({
       window.removeEventListener("resize", measure);
       window.removeEventListener("scroll", measure, true);
     };
-  }, [activeToolId, menuOpen]);
+  }, [activeTabKey, menuOpen]);
 
   async function copySelectedWorkspaceFilePath() {
     if (!previewCopyPath) {
@@ -809,7 +879,7 @@ export function ThreadSideToolsPanel({
     setOpenTools((current) =>
       current.includes(toolId) ? current : [...current, toolId],
     );
-    setActiveToolId(toolId);
+    setActiveTabKey(toolId);
     setMenuOpen(false);
     if (toolId === "chat") {
       setTaskThreadTabTitle(options?.taskThreadTabTitle || null);
@@ -829,18 +899,18 @@ export function ThreadSideToolsPanel({
     }
   }
 
-  function closeTool(toolId: ThreadSideToolId) {
-    setOpenTools((current) => {
-      const next = current.filter((id) => id !== toolId);
-      if (!next.length) {
-        setActiveToolId(null);
-        return next;
-      }
-      if (activeToolId === toolId) {
-        setActiveToolId(next[next.length - 1]);
-      }
-      return next;
-    });
+  function closeTabByKey(key: SideTabKey) {
+    // Repick the active tab across the combined (built-in + capsule) track, then
+    // dispatch the removal to the owning store: capsule tabs are gateway-owned
+    // (AppShell), built-in tools are local to this panel.
+    const { activeKey } = closeTab(combinedOpenTabs, activeTabKey, key);
+    setActiveTabKey(activeKey);
+    const capsuleId = capsuleIdFromTabKey(key);
+    if (capsuleId !== null) {
+      onCloseCapsuleTab(capsuleId);
+    } else {
+      setOpenTools((current) => current.filter((id) => id !== key));
+    }
   }
 
   function closeSideTools() {
@@ -856,14 +926,14 @@ export function ThreadSideToolsPanel({
 
   return (
     <aside
-      className={`thread-side-tools-panel is-${activeToolId ?? "picker"}-active`}
+      className={`thread-side-tools-panel is-${activeCapsuleId ? "capsule" : activeTabKey ?? "picker"}-active`}
     >
       <div className="side-tools-tabs">
         <div className="side-tools-tab-cluster">
           <div className="side-tools-tab-track" role="tablist">
             {openToolDescriptors.map((tool) => {
               const Icon = tool.icon;
-              const selected = tool.id === activeToolId;
+              const selected = tool.id === activeTabKey;
               const tabLabel =
                 tool.id === "chat" && taskThreadTabTitle
                   ? taskThreadTabTitle
@@ -877,7 +947,7 @@ export function ThreadSideToolsPanel({
                     aria-selected={selected}
                     className={`side-tools-tab ${selected ? "is-active" : ""}`}
                     onClick={() => {
-                      setActiveToolId(tool.id);
+                      setActiveTabKey(tool.id);
                       if (tool.id === "chat" && !taskThreadTabTitle) {
                         onOpenSideChat();
                       }
@@ -897,7 +967,45 @@ export function ThreadSideToolsPanel({
                     }}
                     onClick={(event) => {
                       event.stopPropagation();
-                      closeTool(tool.id);
+                      closeTabByKey(tool.id);
+                    }}
+                    title={t("Close")}
+                    type="button"
+                  >
+                    <X aria-hidden size={12} strokeWidth={1.9} />
+                  </button>
+                </div>
+              );
+            })}
+            {openCapsuleTabs.map((capsule) => {
+              const key = capsuleTabKey(capsule.capsuleId);
+              const selected = key === activeTabKey;
+              const tabLabel = capsule.title.trim() || t("Untitled Capsule");
+              return (
+                <div
+                  className={`side-tools-tab-shell ${selected ? "is-active" : ""}`}
+                  key={key}
+                >
+                  <button
+                    aria-selected={selected}
+                    className={`side-tools-tab ${selected ? "is-active" : ""}`}
+                    onClick={() => setActiveTabKey(key)}
+                    role="tab"
+                    title={tabLabel}
+                    type="button"
+                  >
+                    <Package aria-hidden size={14} strokeWidth={1.8} />
+                    <span className="side-tools-tab-label">{tabLabel}</span>
+                  </button>
+                  <button
+                    aria-label={t("Close")}
+                    className="side-tools-tab-close"
+                    onPointerDown={(event) => {
+                      event.stopPropagation();
+                    }}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      closeTabByKey(key);
                     }}
                     title={t("Close")}
                     type="button"
@@ -908,38 +1016,40 @@ export function ThreadSideToolsPanel({
               );
             })}
           </div>
-          <div className="side-tools-add-shell" ref={addToolShellRef}>
-            <button
-              aria-expanded={menuOpen}
-              aria-haspopup="menu"
-              className="codex-icon-button side-tools-add"
-              onClick={() => setMenuOpen((current) => !current)}
-              title={t("Add tool")}
-              type="button"
-            >
-              <Plus aria-hidden />
-            </button>
-            {menuOpen ? (
-              <div className="side-tools-menu" ref={menuRef} role="menu">
-                {tools.map((tool) => {
-                  const Icon = tool.icon;
-                  return (
-                    <button
-                      className="side-tools-menu-item"
-                      key={tool.id}
-                      onClick={() => openTool(tool.id)}
-                      role="menuitem"
-                      type="button"
-                    >
-                      <Icon aria-hidden size={15} strokeWidth={1.8} />
-                      <span>{tool.label}</span>
-                      {tool.shortcut ? <kbd>{tool.shortcut}</kbd> : null}
-                    </button>
-                  );
-                })}
-              </div>
-            ) : null}
-          </div>
+          {hasWorkspace ? (
+            <div className="side-tools-add-shell" ref={addToolShellRef}>
+              <button
+                aria-expanded={menuOpen}
+                aria-haspopup="menu"
+                className="codex-icon-button side-tools-add"
+                onClick={() => setMenuOpen((current) => !current)}
+                title={t("Add tool")}
+                type="button"
+              >
+                <Plus aria-hidden />
+              </button>
+              {menuOpen ? (
+                <div className="side-tools-menu" ref={menuRef} role="menu">
+                  {tools.map((tool) => {
+                    const Icon = tool.icon;
+                    return (
+                      <button
+                        className="side-tools-menu-item"
+                        key={tool.id}
+                        onClick={() => openTool(tool.id)}
+                        role="menuitem"
+                        type="button"
+                      >
+                        <Icon aria-hidden size={15} strokeWidth={1.8} />
+                        <span>{tool.label}</span>
+                        {tool.shortcut ? <kbd>{tool.shortcut}</kbd> : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
         <div className="side-tools-header-actions">
           <button
@@ -954,8 +1064,12 @@ export function ThreadSideToolsPanel({
         </div>
       </div>
 
-      <div className={`side-tools-body is-${activeTool?.id ?? "picker"}`}>
-        {!activeTool ? (
+      <div
+        className={`side-tools-body is-${
+          activeCapsuleId ? "capsule" : activeTool?.id ?? "picker"
+        }`}
+      >
+        {!activeTool && !activeCapsuleId && hasWorkspace ? (
           <div className="side-tools-picker">
             <div className="side-tools-picker-list">
               {tools.map((tool) => {
@@ -976,6 +1090,26 @@ export function ThreadSideToolsPanel({
             </div>
           </div>
         ) : null}
+        {openCapsuleTabs.map((capsule) => {
+          const key = capsuleTabKey(capsule.capsuleId);
+          // Keep only the active capsule's frame mounted (matches the built-in
+          // tool bodies); the shared HTML store caches so re-activating reloads
+          // fast. `active` gates the iframe HTML fetch.
+          if (key !== activeTabKey) {
+            return null;
+          }
+          return (
+            <div className="side-tool-capsule" key={key}>
+              <CapsuleLivePreviewFrame
+                active
+                capsuleId={capsule.capsuleId}
+                mode="preview"
+                revision={capsule.revision}
+                title={capsule.title.trim() || t("Untitled Capsule")}
+              />
+            </div>
+          );
+        })}
         {activeTool?.id === "files" ? (
           <div
             className={`side-tool-files ${

@@ -2,6 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  capsuleIdFromTabKey,
+  capsuleTabKey,
+  closeTab,
+  isCapsuleTabKey,
   shouldCollapseFileDirectoryForPreview,
   workspacePreviewDirectoryCollapseKey,
 } from "./side-tools-panel-model.ts";
@@ -44,6 +48,35 @@ test("workspace preview collapse key falls back to preview path", () => {
       workspacePreviewTitle: "Select a file",
     }),
     "path:src/index.ts",
+  );
+});
+
+test("capsule tab keys round-trip and are distinguished from built-in tools", () => {
+  const key = capsuleTabKey("cap-123");
+  assert.equal(key, "capsule:cap-123");
+  assert.equal(isCapsuleTabKey(key), true);
+  assert.equal(isCapsuleTabKey("files"), false);
+  assert.equal(capsuleIdFromTabKey(key), "cap-123");
+  assert.equal(capsuleIdFromTabKey("files"), null);
+  // Capsule ids may themselves contain a colon; only the first prefix is stripped.
+  assert.equal(capsuleIdFromTabKey("capsule:a:b"), "a:b");
+});
+
+test("closeTab removes the tab and repicks the active when it was active", () => {
+  // Closing the active tab activates the last remaining tab.
+  assert.deepEqual(
+    closeTab(["files", "chat", "capsule:x"], "chat", "chat"),
+    { openTabs: ["files", "capsule:x"], activeKey: "capsule:x" },
+  );
+  // Closing a non-active tab leaves the active key untouched.
+  assert.deepEqual(
+    closeTab(["files", "chat", "capsule:x"], "capsule:x", "files"),
+    { openTabs: ["chat", "capsule:x"], activeKey: "capsule:x" },
+  );
+  // Closing the last tab clears the active key.
+  assert.deepEqual(
+    closeTab(["capsule:x"], "capsule:x", "capsule:x"),
+    { openTabs: [], activeKey: null },
   );
 });
 

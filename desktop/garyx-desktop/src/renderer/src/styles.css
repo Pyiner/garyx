@@ -2660,67 +2660,8 @@ code {
   grid-row: 1 / span 2;
 }
 
-.conversation.with-capsule-panel {
-  --capsule-panel-resizer-width: 10px;
-  position: relative;
-  grid-template-columns:
-    minmax(0, 1.3fr)
-    var(--capsule-panel-resizer-width)
-    minmax(360px, var(--capsule-panel-width, 1fr));
-  grid-template-rows: auto minmax(0, 1fr);
-}
-
-.conversation.with-capsule-panel .conversation-header {
-  grid-column: 1;
-  grid-row: 1;
-}
-
-.conversation.with-capsule-panel .conversation-body {
-  grid-column: 1;
-  grid-row: 2;
-}
-
-.conversation.with-capsule-panel .capsule-panel-resizer {
-  grid-column: 2;
-  grid-row: 1 / span 2;
-}
-
-.conversation.with-capsule-panel .capsule-conversation-panel {
-  grid-column: 3;
-  grid-row: 1 / span 2;
-}
-
-.conversation.with-capsule-panel.capsule-panel-fullscreen {
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr);
-}
-
-.conversation.with-capsule-panel.capsule-panel-fullscreen .capsule-panel-resizer,
-.conversation.with-capsule-panel.capsule-panel-fullscreen .conversation-header,
-.conversation.with-capsule-panel.capsule-panel-fullscreen .conversation-body {
-  display: none;
-}
-
-.conversation.with-capsule-panel.capsule-panel-fullscreen .capsule-conversation-panel {
-  grid-column: 1;
-  grid-row: 1;
-  border-left: 0;
-}
-
 .conversation.side-tools-resizing {
   cursor: col-resize;
-}
-
-.conversation.capsule-panel-resizing {
-  cursor: col-resize;
-}
-
-.capsule-panel-resize-shield {
-  position: absolute;
-  inset: 0;
-  z-index: 20;
-  cursor: col-resize;
-  -webkit-app-region: no-drag;
 }
 
 .conversation.browser-view {
@@ -4240,21 +4181,6 @@ code {
   .thread-side-tools-panel {
     animation: none;
   }
-
-  .capsule-conversation-panel {
-    animation: none;
-  }
-}
-
-.capsule-conversation-panel {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  background: #fff;
-  border-left: 0.5px solid var(--color-token-border);
-  animation: side-tools-panel-enter 170ms var(--ease-out-expo) both;
 }
 
 .thread-side-tools-panel {
@@ -4538,6 +4464,7 @@ code {
 .side-tool-chat-thread,
 .side-tool-tasks,
 .side-tool-terminal,
+.side-tool-capsule,
 .side-tools-body .browser-page {
   min-width: 0;
   min-height: 0;
@@ -5162,8 +5089,7 @@ code {
   touch-action: none;
 }
 
-.side-tools-resizer,
-.capsule-panel-resizer {
+.side-tools-resizer {
   position: relative;
   cursor: col-resize;
   touch-action: none;
@@ -5175,14 +5101,8 @@ code {
   min-width: var(--side-tools-resizer-width, 10px);
 }
 
-.capsule-panel-resizer {
-  width: var(--capsule-panel-resizer-width, 10px);
-  min-width: var(--capsule-panel-resizer-width, 10px);
-}
-
 .thread-log-resizer::before,
-.side-tools-resizer::before,
-.capsule-panel-resizer::before {
+.side-tools-resizer::before {
   content: "";
   position: absolute;
   top: 0;
@@ -5199,10 +5119,7 @@ code {
 .thread-layout.log-panel-resizing .thread-log-resizer::before,
 .side-tools-resizer:hover::before,
 .side-tools-resizer:focus-visible::before,
-.conversation.side-tools-resizing .side-tools-resizer::before,
-.capsule-panel-resizer:hover::before,
-.capsule-panel-resizer:focus-visible::before,
-.conversation.capsule-panel-resizing .capsule-panel-resizer::before {
+.conversation.side-tools-resizing .side-tools-resizer::before {
   background: color-mix(
     in srgb,
     var(--color-token-foreground) 22%,
@@ -17631,8 +17548,7 @@ button.codex-list-row {
   }
 
   .thread-log-resizer,
-  .side-tools-resizer,
-  .capsule-panel-resizer {
+  .side-tools-resizer {
     display: none;
   }
 

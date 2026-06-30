@@ -50,7 +50,6 @@ import {
   type MessageFileAttachment,
   type MessageImageAttachment,
   type PendingThreadInput,
-  type RenderCapsuleCard,
   type RenderState,
   type SlashCommand,
   type ThreadRuntimeInfo,
@@ -111,6 +110,7 @@ import { AddBotDialog } from "./components/AddBotDialog";
 import { DreamsPanel } from "./components/DreamsPanel";
 import {
   ThreadSideToolsPanel,
+  type SideCapsuleTab,
   type SideToolWorkspaceFile,
 } from "./components/SideToolsPanel";
 import { BotConversationSidebar } from "../BotConversationSidebar";
@@ -217,7 +217,6 @@ import type {
   WorkspaceDirectoryState,
 } from "./types";
 import { AppLeftRail } from "./components/AppLeftRail";
-import { CapsuleConversationPanel } from "./components/CapsuleConversationPanel";
 import { ThreadPage } from "./components/ThreadPage";
 import { useAutomationController } from "./useAutomationController";
 import {
@@ -271,9 +270,6 @@ const THREAD_HISTORY_PAGE_SIZE = 100;
 const THREAD_HISTORY_USER_QUERY_LIMIT = 10;
 const THREAD_HISTORY_FORWARD_PAGE_LIMIT = 50;
 const USER_TURN_PREFETCH_THRESHOLD = 3;
-const CAPSULE_PANEL_MIN_WIDTH = 360;
-const CAPSULE_PANEL_MAIN_MIN_WIDTH = 360;
-const CAPSULE_PANEL_RESIZER_WIDTH = 10;
 const SELECTED_THREAD_STREAM_CONSUMER_ID = "selected-thread";
 
 type ThreadEntrySelectionSource =
@@ -1514,11 +1510,14 @@ export function AppShell() {
   const [capsulePreviewId, setCapsulePreviewId] = useState<string | null>(() =>
     initialRouteValue.kind === "capsule" ? initialRouteValue.capsuleId : null,
   );
-  const [capsulePanelCard, setCapsulePanelCard] = useState<{
-    card: RenderCapsuleCard;
-    threadId: string;
-  } | null>(null);
-  const [capsulePanelFullscreen, setCapsulePanelFullscreen] = useState(false);
+  // Capsules opened as tabs in the right side-tools dock (#TASK-1470). AppShell
+  // owns the list so the dock can show without a workspace; the panel renders
+  // these and owns active-tab selection. `pendingActiveCapsuleId` is a one-shot
+  // request to activate a capsule's tab (consumed by the panel).
+  const [openCapsuleTabs, setOpenCapsuleTabs] = useState<SideCapsuleTab[]>([]);
+  const [pendingActiveCapsuleId, setPendingActiveCapsuleId] = useState<
+    string | null
+  >(null);
   const [selectedWorkflowTask, setSelectedWorkflowTask] =
     useState<DesktopTaskSummary | null>(null);
   const [selectedWorkflowTaskId, setSelectedWorkflowTaskId] = useState<
@@ -1641,10 +1640,6 @@ export function AppShell() {
     defaultSideToolsPanelWidth(null),
   );
   const [sideToolsResizing, setSideToolsResizing] = useState(false);
-  const [capsulePanelWidth, setCapsulePanelWidth] = useState<number | null>(
-    null,
-  );
-  const [capsulePanelResizing, setCapsulePanelResizing] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(245);
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [railWidth, setRailWidth] = useState(258);
@@ -1813,13 +1808,6 @@ export function AppShell() {
     startWidth: number;
   } | null>(null);
   const sideToolsPanelWidthCustomizedRef = useRef(false);
-  const capsulePanelWidthRef = useRef<number | null>(null);
-  const capsulePanelResizeStateRef = useRef<{
-    pointerId: number;
-    startX: number;
-    startWidth: number;
-    target: HTMLDivElement;
-  } | null>(null);
   const pendingThreadBottomSnapRef = useRef<string | null>(null);
   const pendingMessagesPrependAnchorRef = useRef<{
     threadId: string;
@@ -2156,41 +2144,6 @@ export function AppShell() {
     return conversationRef.current?.clientWidth || null;
   }
 
-  function clampCapsulePanelWidth(
-    nextWidth: number,
-    layoutWidth: number | null,
-  ): number {
-    const roundedWidth = Math.round(nextWidth);
-    if (!layoutWidth) {
-      return Math.max(CAPSULE_PANEL_MIN_WIDTH, roundedWidth);
-    }
-    const maxWidth = Math.max(
-      CAPSULE_PANEL_MIN_WIDTH,
-      layoutWidth - CAPSULE_PANEL_RESIZER_WIDTH - CAPSULE_PANEL_MAIN_MIN_WIDTH,
-    );
-    return Math.max(
-      CAPSULE_PANEL_MIN_WIDTH,
-      Math.min(maxWidth, roundedWidth),
-    );
-  }
-
-  function defaultCapsulePanelWidth(layoutWidth: number | null): number {
-    if (!layoutWidth) {
-      return CAPSULE_PANEL_MIN_WIDTH;
-    }
-    return clampCapsulePanelWidth(
-      (layoutWidth - CAPSULE_PANEL_RESIZER_WIDTH) / 2.3,
-      layoutWidth,
-    );
-  }
-
-  function maxCapsulePanelWidth(layoutWidth: number | null): number {
-    if (!layoutWidth) {
-      return CAPSULE_PANEL_MIN_WIDTH;
-    }
-    return clampCapsulePanelWidth(Number.POSITIVE_INFINITY, layoutWidth);
-  }
-
   function hasGatewayRecoveryActivity(): boolean {
     const hasBusyStream = Object.values(liveStreamStateRef.current).some(
       (stream) => {
@@ -2385,7 +2338,9 @@ export function AppShell() {
   function handleSideToolsResizeStart(
     event: React.PointerEvent<HTMLDivElement>,
   ) {
-    if (!inspectorOpen || contentView !== "thread" || !activeWorkspacePath) {
+    // Resize works whenever the dock is shown, including the no-workspace
+    // capsule-only dock (#TASK-1470); it no longer gates on a workspace.
+    if (!showConversationSideTools) {
       return;
     }
     sideToolsPanelWidthCustomizedRef.current = true;
@@ -2402,7 +2357,7 @@ export function AppShell() {
   function handleSideToolsResizeKeyDown(
     event: React.KeyboardEvent<HTMLDivElement>,
   ) {
-    if (!inspectorOpen || contentView !== "thread" || !activeWorkspacePath) {
+    if (!showConversationSideTools) {
       return;
     }
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
@@ -2431,71 +2386,6 @@ export function AppShell() {
                 layoutWidth,
               );
     setSideToolsPanelWidth(nextWidth);
-  }
-
-  function currentCapsulePanelElementWidth(
-    resizer: HTMLDivElement | null,
-  ): number {
-    const panel = resizer?.nextElementSibling;
-    if (panel instanceof HTMLElement) {
-      const measuredWidth = panel.getBoundingClientRect().width;
-      if (measuredWidth > 0) {
-        return measuredWidth;
-      }
-    }
-    return (
-      capsulePanelWidthRef.current ??
-      defaultCapsulePanelWidth(currentConversationWidth())
-    );
-  }
-
-  function handleCapsulePanelResizeStart(
-    event: React.PointerEvent<HTMLDivElement>,
-  ) {
-    if (!showConversationCapsulePanel || capsulePanelFullscreen) {
-      return;
-    }
-    event.currentTarget.setPointerCapture(event.pointerId);
-    capsulePanelResizeStateRef.current = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startWidth: clampCapsulePanelWidth(
-        currentCapsulePanelElementWidth(event.currentTarget),
-        currentConversationWidth(),
-      ),
-      target: event.currentTarget,
-    };
-    setCapsulePanelResizing(true);
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-    event.preventDefault();
-  }
-
-  function handleCapsulePanelResizeKeyDown(
-    event: React.KeyboardEvent<HTMLDivElement>,
-  ) {
-    if (!showConversationCapsulePanel || capsulePanelFullscreen) {
-      return;
-    }
-    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
-      return;
-    }
-
-    event.preventDefault();
-    const step = event.shiftKey ? 56 : 28;
-    const layoutWidth = currentConversationWidth();
-    const currentWidth = currentCapsulePanelElementWidth(event.currentTarget);
-    const nextWidth =
-      event.key === "Home"
-        ? CAPSULE_PANEL_MIN_WIDTH
-        : event.key === "End"
-          ? layoutWidth
-            ? clampCapsulePanelWidth(Number.POSITIVE_INFINITY, layoutWidth)
-            : currentWidth
-          : event.key === "ArrowLeft"
-            ? clampCapsulePanelWidth(currentWidth + step, layoutWidth)
-            : clampCapsulePanelWidth(currentWidth - step, layoutWidth);
-    setCapsulePanelWidth(nextWidth);
   }
 
   const activeThread = selectedThread(desktopState, selectedThreadId);
@@ -3072,8 +2962,6 @@ export function AppShell() {
       ? activeWorkspace.path
       : "";
   const handleWorkspacePreviewRequested = useCallback(() => {
-    setCapsulePanelCard(null);
-    setCapsulePanelFullscreen(false);
     setInspectorOpen(true);
   }, []);
   const {
@@ -4493,10 +4381,6 @@ export function AppShell() {
   }, [sideToolsPanelWidth]);
 
   useEffect(() => {
-    capsulePanelWidthRef.current = capsulePanelWidth;
-  }, [capsulePanelWidth]);
-
-  useEffect(() => {
     const nextWidth = clampThreadLogsPanelWidth(
       desktopState?.settings.threadLogsPanelWidth ??
         DEFAULT_DESKTOP_SETTINGS.threadLogsPanelWidth,
@@ -4515,7 +4399,12 @@ export function AppShell() {
   }, [desktopState?.settings.threadLogsPanelWidth]);
 
   useLayoutEffect(() => {
-    if (!inspectorOpen || contentView !== "thread" || !activeWorkspacePath) {
+    // Initialize/clamp the dock width whenever the dock is shown — including the
+    // no-workspace capsule-only dock (#TASK-1470); width is workspace-agnostic.
+    if (
+      contentView !== "thread" ||
+      !(inspectorOpen || openCapsuleTabs.length > 0)
+    ) {
       return;
     }
 
@@ -4532,7 +4421,7 @@ export function AppShell() {
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [activeWorkspacePath, contentView, inspectorOpen]);
+  }, [contentView, inspectorOpen, openCapsuleTabs.length]);
 
   useEffect(() => {
     streamEventHandlerRef.current = handleChatStreamEvent;
@@ -4630,19 +4519,6 @@ export function AppShell() {
         : defaultSideToolsPanelWidth(conversationWidth);
       if (nextSideToolsWidth !== sideToolsPanelWidthRef.current) {
         setSideToolsPanelWidth(nextSideToolsWidth);
-      }
-      const nextCapsuleWidth =
-        capsulePanelWidthRef.current === null
-          ? null
-          : clampCapsulePanelWidth(
-              capsulePanelWidthRef.current,
-              conversationWidth,
-            );
-      if (
-        nextCapsuleWidth !== null &&
-        nextCapsuleWidth !== capsulePanelWidthRef.current
-      ) {
-        setCapsulePanelWidth(nextCapsuleWidth);
       }
     };
     window.addEventListener("resize", handleResize);
@@ -4809,46 +4685,6 @@ export function AppShell() {
       window.removeEventListener("pointercancel", finishResize);
     };
   }, [sideToolsResizing]);
-
-  useEffect(() => {
-    if (!capsulePanelResizing) {
-      return;
-    }
-
-    const handlePointerMove = (event: PointerEvent) => {
-      const resizeState = capsulePanelResizeStateRef.current;
-      if (!resizeState) {
-        return;
-      }
-      const nextWidth = clampCapsulePanelWidth(
-        resizeState.startWidth + (resizeState.startX - event.clientX),
-        currentConversationWidth(),
-      );
-      setCapsulePanelWidth(nextWidth);
-    };
-
-    const finishResize = () => {
-      const resizeState = capsulePanelResizeStateRef.current;
-      if (resizeState?.target.hasPointerCapture(resizeState.pointerId)) {
-        resizeState.target.releasePointerCapture(resizeState.pointerId);
-      }
-      capsulePanelResizeStateRef.current = null;
-      setCapsulePanelResizing(false);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-    };
-
-    window.addEventListener("pointermove", handlePointerMove);
-    window.addEventListener("pointerup", finishResize);
-    window.addEventListener("pointercancel", finishResize);
-    return () => {
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", finishResize);
-      window.removeEventListener("pointercancel", finishResize);
-    };
-  }, [capsulePanelResizing]);
 
   useEffect(() => {
     syncComposerPhase(composer, isComposingRef.current);
@@ -5206,8 +5042,11 @@ export function AppShell() {
   }, [contentView, selectedThreadId]);
 
   useEffect(() => {
-    setCapsulePanelCard(null);
-    setCapsulePanelFullscreen(false);
+    // Capsule tabs are scoped to the current thread; drop them when the thread
+    // or content view changes so a different thread's capsules never linger in
+    // the dock (#TASK-1470).
+    setOpenCapsuleTabs([]);
+    setPendingActiveCapsuleId(null);
   }, [contentView, selectedThreadId]);
 
   useEffect(() => {
@@ -5492,16 +5331,12 @@ export function AppShell() {
   }, [activeThreadMessageKey]);
 
   useEffect(() => {
-    if (!capsulePanelFullscreen && !inspectorOpen && !threadLogsOpen) {
+    if (!inspectorOpen && !threadLogsOpen) {
       return;
     }
 
     function handleKeydown(event: KeyboardEvent) {
       if (event.key === "Escape") {
-        if (capsulePanelFullscreen) {
-          setCapsulePanelFullscreen(false);
-          return;
-        }
         if (threadLogsOpen) {
           setThreadLogsOpen(false);
           return;
@@ -5514,7 +5349,7 @@ export function AppShell() {
     return () => {
       window.removeEventListener("keydown", handleKeydown);
     };
-  }, [capsulePanelFullscreen, inspectorOpen, threadLogsOpen]);
+  }, [inspectorOpen, threadLogsOpen]);
 
   useEffect(() => {
     if (!editingThreadTitle) {
@@ -5553,8 +5388,6 @@ export function AppShell() {
     if (!workspacePreviewModalOpen || contentView !== "thread") {
       return;
     }
-    setCapsulePanelCard(null);
-    setCapsulePanelFullscreen(false);
     setThreadLogsOpen(false);
     setInspectorOpen(true);
   }, [contentView, workspacePreviewModalOpen]);
@@ -9732,7 +9565,10 @@ export function AppShell() {
     </div>
   );
 
-  const sideToolsPanel = activeWorkspacePath ? (
+  // The dock is built for any thread (not only workspace threads) so it can host
+  // capsule tabs opened from the transcript even when no workspace is attached
+  // (#TASK-1470). Built-in workspace tools stay gated by `hasWorkspace` inside.
+  const sideToolsPanel = contentView === "thread" ? (
     <ThreadSideToolsPanel
       activeWorkspaceName={activeWorkspace?.name || null}
       activeWorkspacePath={activeWorkspacePath}
@@ -9748,13 +9584,28 @@ export function AppShell() {
       workspaceMode={composerWorkspaceMode || "local"}
       workspacePreviewOpen={workspacePreviewModalOpen}
       workspacePreviewTitle={workspacePreviewTitle}
+      hasWorkspace={Boolean(activeWorkspacePath)}
+      openCapsuleTabs={openCapsuleTabs}
+      pendingActiveCapsuleId={pendingActiveCapsuleId}
+      onActivatePendingCapsuleHandled={() => setPendingActiveCapsuleId(null)}
+      onCloseCapsuleTab={(capsuleId) => {
+        setOpenCapsuleTabs((tabs) =>
+          tabs.filter((tab) => tab.capsuleId !== capsuleId),
+        );
+      }}
       onCloseWorkspacePreview={closeWorkspacePreview}
       onLocalFileLinkClick={handleLocalFileLinkClick}
       onRevealSelectedWorkspaceFile={handleRevealSelectedWorkspaceFile}
       onAddBrowserAnnotationComment={handleAddBrowserAnnotationComment}
       onCloseSideTools={() => {
+        // "Hide side tools" closes the whole dock. Since capsule tabs keep the
+        // dock visible independently of inspectorOpen, clear them too so the
+        // button works in a capsule-only dock and in Files+capsule docks
+        // (#TASK-1470).
         trackUiAction("thread.close_inspector", () => {
           setInspectorOpen(false);
+          setOpenCapsuleTabs([]);
+          setPendingActiveCapsuleId(null);
         });
       }}
       onOpenTaskThread={(task) =>
@@ -9770,14 +9621,12 @@ export function AppShell() {
     />
   ) : null;
 
-  const showConversationCapsulePanel = Boolean(
-    capsulePanelCard &&
-      capsulePanelCard.threadId === selectedThreadId &&
-      contentView === "thread",
-  );
+  // The dock shows when the inspector is open (workspace tools) or any capsule
+  // tab is open. Capsule visibility is independent of `inspectorOpen` so it is
+  // not force-closed for no-workspace threads (#TASK-1470).
   const showConversationSideTools = Boolean(
-    inspectorOpen && contentView === "thread" && sideToolsPanel,
-  ) && !showConversationCapsulePanel;
+    sideToolsPanel && (inspectorOpen || openCapsuleTabs.length > 0),
+  );
   const conversationClassName = [
     "conversation",
     isSettingsView ? "settings-view" : null,
@@ -9786,12 +9635,7 @@ export function AppShell() {
     isWorkflowView ? "workflow-view" : null,
     isDreamsView ? "dreams-view" : null,
     showConversationSideTools ? "with-side-tools" : null,
-    showConversationCapsulePanel ? "with-capsule-panel" : null,
-    showConversationCapsulePanel && capsulePanelFullscreen
-      ? "capsule-panel-fullscreen"
-      : null,
     sideToolsResizing ? "side-tools-resizing" : null,
-    capsulePanelResizing ? "capsule-panel-resizing" : null,
   ]
     .filter(Boolean)
     .join(" ");
@@ -9799,10 +9643,6 @@ export function AppShell() {
     ? ({
         "--side-tools-panel-width": `${sideToolsPanelWidth}px`,
       } as CSSProperties)
-    : showConversationCapsulePanel && capsulePanelWidth !== null
-      ? ({
-          "--capsule-panel-width": `${capsulePanelWidth}px`,
-        } as CSSProperties)
     : undefined;
 
   function renderPrimaryThreadPage(
@@ -9856,7 +9696,7 @@ export function AppShell() {
         historyLoading={historyLoading}
         historyLoadingEarlier={Boolean(activeHistoryPagination?.loadingBefore)}
         ignoreComposerSubmitUntilRef={ignoreComposerSubmitUntilRef}
-        inspectorOpen={embedded ? false : inspectorOpen}
+        inspectorOpen={embedded ? false : showConversationSideTools}
         isActiveSendingThread={isActiveSendingThread}
         canSteerQueuedPrompt={canSteerQueuedPrompt}
         isComposingRef={isComposingRef}
@@ -9991,10 +9831,26 @@ export function AppShell() {
           if (!selectedThreadId) {
             return;
           }
-          setCapsulePanelCard({ card, threadId: selectedThreadId });
-          setCapsulePanelFullscreen(false);
-          setInspectorOpen(false);
-          setThreadLogsOpen(false);
+          // Open/activate this capsule as a tab in the right dock (#TASK-1470).
+          // Dedup by id; refresh title/revision if it is already open. Does not
+          // touch inspectorOpen — the capsule path drives the dock on its own.
+          trackUiAction("thread.open_capsule_tab", () => {
+            const capsuleId = card.capsule_id;
+            const title = card.title?.trim() || "";
+            setOpenCapsuleTabs((tabs) =>
+              tabs.some((tab) => tab.capsuleId === capsuleId)
+                ? tabs.map((tab) =>
+                    tab.capsuleId === capsuleId
+                      ? { ...tab, revision: card.revision, title: title || tab.title }
+                      : tab,
+                  )
+                : [
+                    ...tabs,
+                    { capsuleId, revision: card.revision, title },
+                  ],
+            );
+            setPendingActiveCapsuleId(capsuleId);
+          });
         }}
         onSelectWorkspace={(workspacePath) => {
           setPendingWorkspaceMode("local");
@@ -10608,16 +10464,16 @@ export function AppShell() {
                 }}
                 onToggleInspector={() => {
                   trackUiAction("thread.toggle_inspector", () => {
-                    setCapsulePanelCard(null);
-                    setCapsulePanelFullscreen(false);
                     setThreadLogsOpen(false);
                     setInspectorOpen((current) => !current);
                   });
                 }}
                 onToggleThreadLogs={() => {
                   trackUiAction("thread.toggle_logs", () => {
-                    setCapsulePanelCard(null);
-                    setCapsulePanelFullscreen(false);
+                    // Logs and the side-tools dock are mutually exclusive right
+                    // panels; opening logs closes the dock, capsule tabs included.
+                    setOpenCapsuleTabs([]);
+                    setPendingActiveCapsuleId(null);
                     setInspectorOpen(false);
                     setThreadLogsOpen((current) => !current);
                   });
@@ -10906,44 +10762,7 @@ export function AppShell() {
             )}
             </Suspense>
           </section>
-          {showConversationCapsulePanel && capsulePanelCard ? (
-            <>
-              <div
-                aria-hidden={capsulePanelFullscreen}
-                aria-label={t("Resize Capsule preview")}
-                aria-orientation="vertical"
-                aria-valuemax={maxCapsulePanelWidth(currentConversationWidth())}
-                aria-valuemin={CAPSULE_PANEL_MIN_WIDTH}
-                aria-valuenow={
-                  capsulePanelWidth ??
-                  defaultCapsulePanelWidth(currentConversationWidth())
-                }
-                className="capsule-panel-resizer"
-                onKeyDown={handleCapsulePanelResizeKeyDown}
-                onPointerDown={handleCapsulePanelResizeStart}
-                role="separator"
-                tabIndex={capsulePanelFullscreen ? -1 : 0}
-              />
-              <CapsuleConversationPanel
-                capsuleId={capsulePanelCard.card.capsule_id}
-                revision={capsulePanelCard.card.revision}
-                title={
-                  capsulePanelCard.card.title?.trim() || t("Untitled Capsule")
-                }
-                isFullscreen={capsulePanelFullscreen}
-                onToggleFullscreen={() => {
-                  setCapsulePanelFullscreen((current) => !current);
-                }}
-                onClose={() => {
-                  setCapsulePanelCard(null);
-                  setCapsulePanelFullscreen(false);
-                }}
-              />
-              {capsulePanelResizing ? (
-                <div className="capsule-panel-resize-shield" aria-hidden="true" />
-              ) : null}
-            </>
-          ) : showConversationSideTools ? (
+          {showConversationSideTools ? (
             <>
               <div
                 aria-label={t("Resize side tools")}
