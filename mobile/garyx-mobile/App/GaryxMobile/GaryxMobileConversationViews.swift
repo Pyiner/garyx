@@ -2244,6 +2244,7 @@ private struct GaryxRestartNoticeCard: View {
             GaryxMarkdownText(
                 text: notice.message,
                 foreground: GaryxTheme.primaryText,
+                fillsAvailableWidth: false,
                 allowsRelativeFileLinks: true,
                 allowsTextSelection: false,
                 onFileLinkTap: nil,
@@ -2251,7 +2252,9 @@ private struct GaryxRestartNoticeCard: View {
             )
         }
         .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // Restart notice is short — hug the content instead of stretching to the
+        // full message width (which leaves the right side empty).
+        .fixedSize(horizontal: true, vertical: false)
         .background(GaryxTheme.surface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 8, style: .continuous)

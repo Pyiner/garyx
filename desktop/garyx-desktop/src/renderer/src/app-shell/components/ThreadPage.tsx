@@ -44,6 +44,7 @@ import {
   splitRichMessageContentIntoBubbleParts,
 } from "../../message-rich-content";
 import { parseTaskNotificationText } from "../../task-notification";
+import { parseRestartNoticeText } from "../../restart-notice";
 import { deriveThreadTeamView } from "../../thread-model";
 import type { ThreadAvatarCatalog } from "../../thread-avatar";
 import {
@@ -208,11 +209,17 @@ function renderUserMessageBubbleParts({
       );
     }
 
-    const isTaskNotificationPart =
-      part.kind === "text" && parseTaskNotificationText(part.text) !== null;
+    const cardPartClass =
+      part.kind !== "text"
+        ? ""
+        : parseTaskNotificationText(part.text) !== null
+          ? "task-notification-message "
+          : parseRestartNoticeText(part.text) !== null
+            ? "restart-notice-message "
+            : "";
     return (
       <article
-        className={`message-bubble ${isTaskNotificationPart ? "task-notification-message " : ""}user ${pending ? "pending" : ""} ${error ? "error" : ""}`}
+        className={`message-bubble ${cardPartClass}user ${pending ? "pending" : ""} ${error ? "error" : ""}`}
         key={`${keyPrefix}:${part.key}`}
         {...userTurnMarker}
       >
@@ -777,15 +784,19 @@ export function ThreadPage({
               const entry = block.entry;
               const loopContinuation = isLoopContinuationMessage(entry.message);
               const displayText = displayTranscriptMessageText(entry.message);
-              const isTaskNotificationMessage =
-                !entry.message.pending &&
-                !loopContinuation &&
-                parseTaskNotificationText(displayText) !== null;
-              if (isTaskNotificationMessage) {
+              const cardMessageClass =
+                entry.message.pending || loopContinuation
+                  ? null
+                  : parseTaskNotificationText(displayText) !== null
+                    ? "task-notification-message"
+                    : parseRestartNoticeText(displayText) !== null
+                      ? "restart-notice-message"
+                      : null;
+              if (cardMessageClass) {
                 return (
                   <article
                     key={`${block.key}:body`}
-                    className={`message-bubble task-notification-message ${entry.message.role} ${entry.message.error ? "error" : ""}`}
+                    className={`message-bubble ${cardMessageClass} ${entry.message.role} ${entry.message.error ? "error" : ""}`}
                   >
                     <RichMessageContent
                       altPrefix={entry.message.role}
