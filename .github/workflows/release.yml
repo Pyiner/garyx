@@ -43,6 +43,39 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # Install cargo-edit for its `cargo set-version` subcommand. We use
+      # a TOML-aware tool rather than `sed` so only the `[workspace.package]`
+      # version is touched (a global sed would clobber dependency version
+      # specs and other `version =` lines).
+      - name: Install cargo-edit (set-version)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-edit
+
+      # Sync the workspace version to the release tag BEFORE building so
+      # the binary's compile-time `CARGO_PKG_VERSION` can never lag the
+      # tag. This is the root-cause fix for the "version loop": releases
+      # used to be tagged on commits that skipped the manual version bump,
+      # shipping binaries that self-reported a stale version. set-version
+      # also rewrites Cargo.lock's local-package versions so the later
+      # `--locked`-style build stays consistent.
+      - name: Sync crate version to tag
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cargo set-version --workspace "${VERSION}"
+          echo "--- Cargo.toml [workspace.package] after set-version ---"
+          grep -n '^version' Cargo.toml || true
+          # Sanity-check the manifest now reports the tag (covers EVERY
+          # matrix target, including ones we cannot execute on the runner).
+          MANIFEST_VERSION="$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c 'import json,sys; pkgs=json.load(sys.stdin)["packages"]; print(next(p["version"] for p in pkgs if p["name"]=="garyx"))')"
+          echo "garyx manifest version: ${MANIFEST_VERSION} (tag: ${VERSION})"
+          if [[ "${MANIFEST_VERSION}" != "${VERSION}" ]]; then
+            echo "ERROR: garyx crate version '${MANIFEST_VERSION}' != tag '${VERSION}' after set-version"
+            exit 1
+          fi
+
       # Linux targets go through `cargo-zigbuild` so we can pin a low glibc
       # floor (2.17, covers RHEL 7 / Debian 8+ and older enterprise hosts
       # that shipped with glibc 2.31 or 2.34). The ubuntu-22.04
@@ -102,7 +135,15 @@ jobs:
       - name: Smoke test binary
         if: matrix.target != 'aarch64-unknown-linux-gnu'
         run: |
-          ./target/${{ matrix.target }}/release/garyx --version
+          # Hard assertion: the built binary must self-report EXACTLY the
+          # release tag. `garyx --version` prints `garyx <version>`, so the
+          # second whitespace token is the version. This is what stops a
+          # stale-version release from ever shipping again (and what the
+          # auto-update probe later relies on at runtime).
+          VERSION="${GITHUB_REF_NAME#v}"
+          reported="$(./target/${{ matrix.target }}/release/garyx --version | awk '{print $2}')"
+          echo "garyx --version reported: ${reported} (tag: ${VERSION})"
+          test "${reported}" = "${VERSION}"
           set +e
           ./target/${{ matrix.target }}/release/garyx __cctty-mcp-proxy 2>/tmp/garyx-cctty-smoke.err
           code=$?

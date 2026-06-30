@@ -112,6 +112,191 @@ fn normalize_release_version(value: &str) -> String {
     value.trim().trim_start_matches('v').to_owned()
 }
 
+/// Hard cap on the staged-binary version probe (B1). Auto-update must
+/// never stall the gateway (`gateway_auto_update.rs` contract), so a
+/// staged binary that hangs on `--version` is treated as a probe
+/// failure rather than blocking the swap path forever.
+const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Typed failure of the pre-rename version verification (B1). Both
+/// variants mean "do NOT swap": the caller returns `Err` and the
+/// gateway loop takes its warn-and-retry branch instead of `exit(0)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SwapError {
+    /// Staged binary self-reported a version that is not exactly the
+    /// requested release tag. `==` (not `>=`) on purpose: the goal is
+    /// "binary self-reports the tag it was published under"; a `>=`
+    /// check would wave through a mis-tagged release.
+    VersionMismatch { measured: String, expected: String },
+    /// Probe could not produce a usable version string: timeout,
+    /// nonzero exit, or empty/garbled stdout. Folded into the same
+    /// "refuse to swap" outcome as a mismatch.
+    ProbeFailed { reason: String },
+}
+
+impl std::fmt::Display for SwapError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SwapError::VersionMismatch { measured, expected } => write!(
+                f,
+                "staged binary self-reported version {measured} != requested {expected}"
+            ),
+            SwapError::ProbeFailed { reason } => {
+                write!(f, "staged binary version probe failed: {reason}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SwapError {}
+
+/// Extract the version token from `garyx --version` output.
+///
+/// The root command prints `garyx <version>` (clap default for
+/// `#[command(name = "garyx", version = ...)]`, matched by the B0
+/// short-circuit in `main.rs`). We take the last whitespace-separated
+/// token of the first non-empty line and strip any leading `v` so the
+/// comparison is apples-to-apples with the normalized requested tag.
+/// Returns `None` for empty / malformed output.
+fn parse_self_reported_version(stdout: &str) -> Option<String> {
+    let line = stdout.lines().find(|l| !l.trim().is_empty())?;
+    let token = line.split_whitespace().last()?;
+    let normalized = normalize_release_version(token);
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+/// Probe the staged binary, verify its self-reported version, and on
+/// ANY rejection delete the staged file before returning the typed
+/// error (B1 cleanup).
+///
+/// `staged_path` has already been `fs::copy`'d into the install
+/// directory by the time we get here, so a bare `?` propagation on a
+/// bad release would leave a `.garyx-update-*.tmp` orphan in the
+/// install dir on every auto-update tick — a slow disk leak. We instead
+/// remove the staged file on the reject path (best-effort: cleanup
+/// errors are swallowed since the caller already failed and will retry).
+/// On success the file stays so the caller can `fs::rename` it into
+/// place.
+async fn probe_and_verify_staged_version(
+    staged_path: &Path,
+    requested_version: &str,
+) -> Result<String, SwapError> {
+    // A probe failure is already a `SwapError`; on success run the
+    // exact-match verify. Either way this collapses to one typed result.
+    let result = match probe_staged_binary_version(staged_path).await {
+        Ok(measured) => verify_staged_version(Some(&measured), requested_version),
+        Err(probe_err) => Err(probe_err),
+    };
+
+    if result.is_err() {
+        // Best-effort cleanup so a bad release does not leak a staged
+        // temp file into the install dir on every retry tick. The caller
+        // already failed and will retry; a cleanup error is non-fatal.
+        let _ = fs::remove_file(staged_path);
+    }
+    result
+}
+
+/// Pure decision point for B1: given the version a staged binary
+/// self-reported (if any) and the requested tag, decide whether the
+/// swap may proceed. Extracted so the accept/reject logic is unit
+/// testable without spawning a process.
+fn verify_staged_version(
+    measured: Option<&str>,
+    requested_version: &str,
+) -> Result<String, SwapError> {
+    match measured {
+        Some(measured) if measured == requested_version => Ok(measured.to_owned()),
+        Some(measured) => Err(SwapError::VersionMismatch {
+            measured: measured.to_owned(),
+            expected: requested_version.to_owned(),
+        }),
+        None => Err(SwapError::ProbeFailed {
+            reason: "empty or malformed --version output".to_owned(),
+        }),
+    }
+}
+
+/// Run the staged binary's `--version` and return its self-reported
+/// version, the side-effect-free way (B1).
+///
+/// * `staged_path` is absolute (UUID-named temp, already `0755`) to
+///   avoid PATH injection.
+/// * Executes under an isolated `HOME` (+ defensive `USERPROFILE`)
+///   pointing at a throwaway tempdir. `local_paths::home_dir()` reads
+///   `$HOME` then `$USERPROFILE` — it does NOT consult `GARYX_HOME` or
+///   `dirs::home_dir()` — so overriding `HOME` is sufficient to keep an
+///   un-B0'd old binary's `migrate_legacy_homes()` away from the real
+///   `~/.garyx`.
+/// * Bounded by `VERSION_PROBE_TIMEOUT`; timeout / nonzero exit /
+///   unusable stdout all collapse into `SwapError::ProbeFailed`.
+async fn probe_staged_binary_version(staged_path: &Path) -> Result<String, SwapError> {
+    probe_staged_binary_version_with_timeout(staged_path, VERSION_PROBE_TIMEOUT).await
+}
+
+/// Inner implementation of [`probe_staged_binary_version`] with an
+/// injectable timeout so the timeout branch is unit-testable without a
+/// 10s wait.
+async fn probe_staged_binary_version_with_timeout(
+    staged_path: &Path,
+    timeout: Duration,
+) -> Result<String, SwapError> {
+    let probe_home = tempfile::tempdir().map_err(|e| SwapError::ProbeFailed {
+        reason: format!("could not create isolated probe HOME: {e}"),
+    })?;
+
+    // Honor the "absolute staged path" contract before spawning: a
+    // relative `--path` (e.g. `garyx update --path ./garyx`) would
+    // otherwise let us spawn the wrong binary from the probe's working
+    // directory. The staged temp was just created, so canonicalize
+    // succeeds and also collapses any symlink ambiguity.
+    let staged_path = staged_path.canonicalize().map_err(|e| SwapError::ProbeFailed {
+        reason: format!(
+            "could not resolve staged binary to an absolute path ({}): {e}",
+            staged_path.display()
+        ),
+    })?;
+
+    let mut command = Command::new(&staged_path);
+    command
+        .arg("--version")
+        .env("HOME", probe_home.path())
+        .env("USERPROFILE", probe_home.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+
+    let output = match tokio::time::timeout(timeout, command.output()).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(e)) => {
+            return Err(SwapError::ProbeFailed {
+                reason: format!("failed to spawn staged binary for version probe: {e}"),
+            });
+        }
+        Err(_) => {
+            return Err(SwapError::ProbeFailed {
+                reason: format!("version probe timed out after {timeout:?}"),
+            });
+        }
+    };
+
+    if !output.status.success() {
+        return Err(SwapError::ProbeFailed {
+            reason: format!("staged binary --version exited with {}", output.status),
+        });
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_self_reported_version(&stdout).ok_or_else(|| SwapError::ProbeFailed {
+        reason: "empty or malformed --version output".to_owned(),
+    })
+}
+
 fn detect_release_target_for(os: &str, arch: &str) -> Result<&'static str, String> {
     match (os, arch) {
         ("macos", "aarch64") => Ok("aarch64-apple-darwin"),
@@ -1245,7 +1430,9 @@ pub(crate) async fn cmd_status(
 pub(crate) struct SwapOutcome {
     /// Version that was installed pre-swap.
     pub from_version: String,
-    /// Version that was installed post-swap (= the requested version).
+    /// Version that was installed post-swap — the staged binary's
+    /// MEASURED self-reported version (B1), which the pre-rename gate
+    /// guarantees equals the requested tag.
     pub to_version: String,
     /// Final path of the installed binary on disk.
     pub install_path: PathBuf,
@@ -1341,6 +1528,23 @@ pub(crate) async fn try_swap_garyx_binary(
         fs::set_permissions(&staged_path, perms)?;
     }
     ad_hoc_codesign_macos_binary(&staged_path)?;
+
+    // B1: verify the staged binary self-reports EXACTLY the requested
+    // tag BEFORE it lands. Guards against the "version loop" where a
+    // mis-tagged release (tag advanced, `CARGO_PKG_VERSION` stale) is
+    // forever judged "newer" by `should_upgrade`, swapped in, and then
+    // re-detected as out of date — driving the gateway into an endless
+    // swap + exit(0) + relaunch cycle. The probe runs against the
+    // absolute, already-codesigned staged path under an isolated HOME
+    // with a timeout, so it is PATH-injection-safe, side-effect-free,
+    // and cannot stall the auto-update loop. On any mismatch / probe
+    // failure we bail out via `Err` (no rename, no exit) — the caller's
+    // loop then just warn-logs and retries next tick. The reject path
+    // also deletes the staged temp file so a bad release does not leak a
+    // `.garyx-update-*.tmp` into the install dir on every tick.
+    let measured_version =
+        probe_and_verify_staged_version(&staged_path, requested_version).await?;
+
     let cctty_destination = parent.join("cctty");
     let cctty_staged_path = if extracted_cctty.is_file() {
         let staged = parent.join(format!(".cctty-update-{}.tmp", Uuid::new_v4().simple()));
@@ -1364,7 +1568,14 @@ pub(crate) async fn try_swap_garyx_binary(
 
     Ok(SwapOutcome {
         from_version: VERSION.to_owned(),
-        to_version: requested_version.to_owned(),
+        // B1: report the MEASURED self-reported version, not the
+        // requested tag. Previously this echoed the request, which
+        // produced a "swapped from X to Y" log line even when the new
+        // binary still self-reported X — masking the very version loop
+        // this fix targets. After the `verify_staged_version` gate
+        // above, `measured_version == requested_version`, but we record
+        // the measured value to keep the log honest at the source.
+        to_version: measured_version,
         install_path: destination_path.to_path_buf(),
     })
 }
