@@ -47,9 +47,9 @@ use commands::{
     cmd_endpoint_list, cmd_gateway_install, cmd_gateway_reload_config, cmd_gateway_restart,
     cmd_gateway_start, cmd_gateway_stop, cmd_gateway_token, cmd_gateway_uninstall, cmd_logs_clear,
     cmd_logs_path, cmd_logs_tail, cmd_onboard, cmd_send_message, cmd_status, cmd_task_assign,
-    cmd_task_claim, cmd_task_create, cmd_task_delete, cmd_task_get, cmd_task_history,
-    cmd_task_list, cmd_task_release, cmd_task_reopen, cmd_task_set_title, cmd_task_stop,
-    cmd_task_unassign, cmd_task_update, cmd_thread_create, cmd_thread_get, cmd_thread_history,
+    cmd_task_create, cmd_task_delete, cmd_task_get, cmd_task_history,
+    cmd_task_list, cmd_task_reopen, cmd_task_set_title, cmd_task_stop,
+    cmd_task_update, cmd_thread_create, cmd_thread_get, cmd_thread_history,
     cmd_thread_list, cmd_thread_send, cmd_thread_send_to_bot, cmd_thread_send_to_task,
     cmd_tool_image, cmd_tool_search, cmd_update, cmd_workflow_cancel, cmd_workflow_definition_get,
     cmd_workflow_definition_list, cmd_workflow_definition_upsert, cmd_workflow_events,
@@ -1092,7 +1092,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 source_thread,
                 source_task,
                 source_bot,
-                include_done,
                 limit,
                 offset,
                 json,
@@ -1104,7 +1103,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     source_thread.as_deref(),
                     source_task.as_deref(),
                     source_bot.as_deref(),
-                    include_done,
                     limit,
                     offset,
                     json,
@@ -1115,16 +1113,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             TaskAction::Create {
                 title,
                 body,
-                assignee,
-                start,
                 workspace_dir,
                 worktree,
                 agent,
                 team,
                 workflow,
                 input,
-                input_file,
-                input_json,
                 notify,
                 json,
             } => {
@@ -1132,28 +1126,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     config_path,
                     title,
                     body,
-                    assignee.as_deref(),
-                    start,
                     workspace_dir,
                     worktree,
                     agent,
                     team,
                     workflow,
                     input,
-                    input_file,
-                    input_json,
                     notify,
                     json,
                 )
                 .await
-            }
-            TaskAction::Claim {
-                task_id,
-                actor,
-                json,
-            } => cmd_task_claim(config_path, &task_id, actor.as_deref(), json).await,
-            TaskAction::Release { task_id, json } => {
-                cmd_task_release(config_path, &task_id, json).await
             }
             TaskAction::Stop { task_id, json } => cmd_task_stop(config_path, &task_id, json).await,
             TaskAction::Delete { task_id, json } => {
@@ -1164,9 +1146,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 principal,
                 json,
             } => cmd_task_assign(config_path, &task_id, &principal, json).await,
-            TaskAction::Unassign { task_id, json } => {
-                cmd_task_unassign(config_path, &task_id, json).await
-            }
             TaskAction::Update {
                 task_id,
                 status,

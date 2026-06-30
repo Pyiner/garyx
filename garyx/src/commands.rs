@@ -5341,7 +5341,6 @@ pub(crate) async fn cmd_task_list(
     source_thread: Option<&str>,
     source_task: Option<&str>,
     source_bot: Option<&str>,
-    include_done: bool,
     limit: usize,
     offset: usize,
     json_output: bool,
@@ -5349,6 +5348,8 @@ pub(crate) async fn cmd_task_list(
     let mut params = vec![
         ("limit".to_owned(), limit.clamp(1, 200).to_string()),
         ("offset".to_owned(), offset.to_string()),
+        // Done tasks are shown by default; the gateway hides them unless asked.
+        ("include_done".to_owned(), "true".to_owned()),
     ];
     if let Some(status) = status {
         params.push(("status".to_owned(), normalize_task_status(status)?));
@@ -5368,9 +5369,6 @@ pub(crate) async fn cmd_task_list(
     if let Some(source_bot) = source_bot.map(str::trim).filter(|value| !value.is_empty()) {
         params.push(("source_bot_id".to_owned(), source_bot.to_owned()));
     }
-    if include_done {
-        params.push(("include_done".to_owned(), "true".to_owned()));
-    }
     let query = params
         .iter()
         .map(|(key, value)| format!("{key}={}", urlencoding::encode(value)))
@@ -5386,13 +5384,19 @@ pub(crate) async fn cmd_task_list(
         println!("Tasks: (none)");
         return Ok(());
     }
+    let shown = tasks.len();
     for task in tasks {
         print_task_summary(&task);
         println!();
     }
-    if payload["has_more"].as_bool().unwrap_or(false) {
-        println!("More tasks available; increase --offset to continue.");
+    match payload["total"].as_u64() {
+        Some(total) => println!("Showing {shown} of {total} tasks (offset {offset})."),
+        None => println!("Showing {shown} tasks (offset {offset})."),
     }
+    if payload["has_more"].as_bool().unwrap_or(false) {
+        println!("Next page: --offset {}", offset.saturating_add(shown));
+    }
+    println!("Filter: --status <todo|in_progress|in_review|done>");
     Ok(())
 }
 
@@ -5458,33 +5462,19 @@ pub(crate) async fn cmd_task_create(
     config_path: &str,
     title: Option<String>,
     body: Option<String>,
-    assignee: Option<&str>,
-    start: bool,
     workspace_dir: Option<String>,
     worktree: bool,
     agent: Option<String>,
     team: Option<String>,
     workflow: Option<String>,
     input: Option<String>,
-    input_file: Option<PathBuf>,
-    input_json: Option<String>,
     notify: Vec<String>,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let executor = task_executor_payload(agent, team, workflow, input, input_file, input_json)?;
-    let assignee = if executor.is_some() {
-        if assignee
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty())
-        {
-            return Err("task executor cannot be combined with --assignee".into());
-        }
-        None
-    } else {
-        task_create_assignee_payload(assignee)?
-    };
-    let runtime_agent_id = task_runtime_agent_id_from_assignee(&assignee);
-    let start = start || assignee.is_some() || executor.is_some();
+    let executor = task_executor_payload(agent, team, workflow, input)?;
+    // Picking an executor (agent/team/workflow) starts the task immediately; a
+    // bare task with no executor is created as a `todo` placeholder.
+    let start = executor.is_some();
     let notification_target = task_notification_target_payload(notify)?;
     let source = task_source_payload_from_env();
     let workspace_dir = workspace_dir
@@ -5498,12 +5488,12 @@ pub(crate) async fn cmd_task_create(
     let request = json!({
         "title": title,
         "body": body,
-        "assignee": assignee,
+        "assignee": Value::Null,
         "start": start,
         "workspace_dir": workflow_workspace_dir,
         "executor": executor,
         "runtime": {
-            "agent_id": runtime_agent_id,
+            "agent_id": Value::Null,
             "workspace_dir": workspace_dir,
             "workspace_mode": if worktree { "worktree" } else { "local" },
         },
@@ -5523,8 +5513,6 @@ fn task_executor_payload(
     team: Option<String>,
     workflow: Option<String>,
     input: Option<String>,
-    input_file: Option<PathBuf>,
-    input_json: Option<String>,
 ) -> Result<Option<Value>, Box<dyn std::error::Error>> {
     let agent_id = agent
         .map(|value| value.trim().to_owned())
@@ -5556,60 +5544,17 @@ fn task_executor_payload(
     let Some(workflow_id) = workflow_id else {
         return Ok(None);
     };
-    let input = workflow_task_input_payload(input, input_file, input_json)?;
+    // Workflow input is a single plain-text string; a workflow that needs
+    // structured data parses this text in its first step.
+    let input = match trim_optional_cli(input) {
+        Some(text) => Value::String(text),
+        None => Value::Null,
+    };
     Ok(Some(json!({
         "type": "workflow",
         "workflowId": workflow_id,
         "input": input,
     })))
-}
-
-fn workflow_task_input_payload(
-    input: Option<String>,
-    input_file: Option<PathBuf>,
-    input_json: Option<String>,
-) -> Result<Value, Box<dyn std::error::Error>> {
-    let text_input = trim_optional_cli(input);
-    let json_input = trim_optional_cli(input_json);
-    let provided_count = usize::from(text_input.is_some())
-        + usize::from(input_file.is_some())
-        + usize::from(json_input.is_some());
-    if provided_count > 1 {
-        return Err(
-            "choose only one workflow input: --input, --input-file, or --input-json".into(),
-        );
-    }
-    if let Some(text) = text_input {
-        return Ok(Value::String(text));
-    }
-    if let Some(path) = input_file {
-        let contents = fs::read_to_string(&path)?;
-        return Ok(if contents.trim().is_empty() {
-            Value::Null
-        } else {
-            Value::String(contents)
-        });
-    }
-    if let Some(raw) = json_input {
-        return Ok(serde_json::from_str::<Value>(&raw)?);
-    }
-    Ok(Value::Null)
-}
-
-fn task_create_assignee_payload(
-    assignee: Option<&str>,
-) -> Result<Option<Value>, Box<dyn std::error::Error>> {
-    assignee.map(principal_payload).transpose()
-}
-
-fn task_runtime_agent_id_from_assignee(assignee: &Option<Value>) -> Option<String> {
-    let assignee = assignee.as_ref()?.as_object()?;
-    (assignee.get("kind").and_then(Value::as_str) == Some("agent"))
-        .then(|| assignee.get("agent_id").and_then(Value::as_str))
-        .flatten()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
 }
 
 fn task_source_payload_from_env() -> Option<Value> {
@@ -5658,7 +5603,14 @@ fn task_notification_target_payload(
         .filter(|part| !part.is_empty())
         .collect();
     if parts.is_empty() {
-        return Err("--notify is required for task creation; use --notify current-thread, --notify bot <channel:account_id>, --notify thread <thread_id>, or --notify none".into());
+        // No `--notify` given: notify the current thread when running inside one
+        // (e.g. an agent delegating a task), otherwise stay silent.
+        return Ok(match env_nonempty("GARYX_THREAD_ID") {
+            Some(thread_id) if is_thread_key(&thread_id) => {
+                json!({ "kind": "thread", "thread_id": thread_id })
+            }
+            _ => json!({ "kind": "none" }),
+        });
     }
     let target = parts[0].to_ascii_lowercase().replace('-', "_");
     match target.as_str() {
@@ -5718,63 +5670,6 @@ fn task_notification_target_payload(
         )
         .into()),
     }
-}
-
-pub(crate) async fn cmd_task_claim(
-    config_path: &str,
-    task_id: &str,
-    actor: Option<&str>,
-    json_output: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let gateway = gateway_endpoint(config_path)?;
-    let encoded_id = encode_task_id(task_id)?;
-    let assignee = actor
-        .map(principal_payload)
-        .transpose()?
-        .unwrap_or_else(cli_actor_payload);
-    let assign_path = format!("/api/tasks/{encoded_id}/assign");
-    let payload = patch_gateway_json_as_cli_actor(
-        &gateway,
-        &assign_path,
-        &json!({
-            "to": assignee.clone(),
-        }),
-    )
-    .await?;
-    if json_output {
-        return print_pretty_json(&payload);
-    }
-    print_task_summary(&payload);
-    Ok(())
-}
-
-pub(crate) async fn cmd_task_release(
-    config_path: &str,
-    task_id: &str,
-    json_output: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let gateway = gateway_endpoint(config_path)?;
-    let encoded_id = encode_task_id(task_id)?;
-    let status_path = format!("/api/tasks/{encoded_id}/status");
-    let assign_path = format!("/api/tasks/{encoded_id}/assign");
-    patch_gateway_json_as_cli_actor(
-        &gateway,
-        &status_path,
-        &json!({
-            "to": "todo",
-            "note": Value::Null,
-            "force": false,
-        }),
-    )
-    .await?;
-    let payload = delete_gateway_json_as_cli_actor(&gateway, &assign_path)
-        .await
-        .map_err(|error| format!("status moved to todo but unassign failed: {error}"))?;
-    if json_output {
-        return print_pretty_json(&payload);
-    }
-    print_task_summary(&payload);
-    Ok(())
 }
 
 pub(crate) async fn cmd_task_stop(
@@ -5873,24 +5768,6 @@ pub(crate) async fn cmd_task_assign(
         &json!({
             "to": principal_payload(principal)?,
         }),
-    )
-    .await?;
-    if json_output {
-        return print_pretty_json(&payload);
-    }
-    print_task_summary(&payload);
-    Ok(())
-}
-
-pub(crate) async fn cmd_task_unassign(
-    config_path: &str,
-    task_id: &str,
-    json_output: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let gateway = gateway_endpoint(config_path)?;
-    let payload = delete_gateway_json_as_cli_actor(
-        &gateway,
-        &format!("/api/tasks/{}/assign", encode_task_id(task_id)?),
     )
     .await?;
     if json_output {

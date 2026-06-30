@@ -88,9 +88,11 @@ reinterpreted in feature code.
 - Reusable workflow definitions are file-backed packages rooted by
   `garyx.workflow.json`. Gateway list/get/install APIs should read and copy
   those packages; do not store workflow definitions as runtime database rows.
-- Workflow task input is text-first in product surfaces. CLIs should offer
-  plain-text `--input` / `--input-file` paths by default; JSON input is an
-  advanced automation path, not the source for generated product forms.
+- Workflow task input is a single plain-text string in every surface. The CLI
+  offers one `--input <text>` flag; a workflow that needs structured data
+  parses that text in its own first step. Do not add per-source input flags
+  (`--input-file` / `--input-json`) or treat input as the source for generated
+  product forms.
 - Gateway workflow APIs provide observability, durable run/event storage, hidden
   child-thread execution, and structured child results for Task-backed workflow
   runs. SDKs connect those APIs with ordinary user code through explicit options

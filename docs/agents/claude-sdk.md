@@ -23,8 +23,9 @@
   plain-text input string. Do not build product forms directly from workflow
   definition metadata; a workflow that needs structured input should structure the
   text in its own first step.
-- CLI workflow task creation should also be text-first through `--input` or
-  `--input-file`; reserve `--input-json` for advanced automation knobs.
+- CLI workflow task creation is text-first through a single `--input <text>`
+  flag; a workflow that needs structured data parses that text in its first
+  step. There are no `--input-file` / `--input-json` variants.
 - Do not add a Garyx interpreter for Claude Code workflow scripts, and do not
   try to execute Claude Code's generated workflow files directly.
 - The gateway side of workflows should provide observability, hidden child

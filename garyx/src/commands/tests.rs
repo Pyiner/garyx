@@ -988,13 +988,9 @@ async fn cmd_task_create_posts_worktree_runtime_mode() {
         config_path.to_str().expect("config path"),
         Some("Task worktree".to_owned()),
         Some("Do the work".to_owned()),
-        Some("agent:claude"),
-        false,
         Some("/tmp/garyx-repo".to_owned()),
         true,
-        None,
-        None,
-        None,
+        Some("claude".to_owned()),
         None,
         None,
         None,
@@ -1029,13 +1025,9 @@ async fn cmd_task_create_posts_agent_executor() {
         config_path.to_str().expect("config path"),
         Some("Agent task".to_owned()),
         Some("Do the work".to_owned()),
-        None,
-        false,
         Some("/tmp/garyx-repo".to_owned()),
         false,
         Some("claude".to_owned()),
-        None,
-        None,
         None,
         None,
         None,
@@ -1073,11 +1065,7 @@ async fn cmd_task_create_posts_team_executor() {
         None,
         false,
         None,
-        false,
-        None,
         Some("product-ship".to_owned()),
-        None,
-        None,
         None,
         None,
         vec!["none".to_owned()],
@@ -1097,38 +1085,6 @@ async fn cmd_task_create_posts_team_executor() {
 }
 
 #[tokio::test]
-async fn cmd_task_create_rejects_executor_with_assignee() {
-    let dir = tempdir().expect("tempdir");
-    let config_path = write_test_gateway_config(&dir, "http://127.0.0.1:9");
-
-    let error = cmd_task_create(
-        config_path.to_str().expect("config path"),
-        Some("Mixed task".to_owned()),
-        None,
-        Some("agent:reviewer"),
-        false,
-        None,
-        false,
-        Some("claude".to_owned()),
-        None,
-        None,
-        None,
-        None,
-        None,
-        vec!["none".to_owned()],
-        true,
-    )
-    .await
-    .unwrap_err();
-
-    assert!(
-        error
-            .to_string()
-            .contains("executor cannot be combined with --assignee")
-    );
-}
-
-#[tokio::test]
 async fn cmd_task_create_posts_workflow_workspace_at_top_level() {
     let requests = StdArc::new(Mutex::new(Vec::new()));
     let (base_url, handle) = spawn_thread_task_http_test_server(requests.clone()).await;
@@ -1139,16 +1095,12 @@ async fn cmd_task_create_posts_workflow_workspace_at_top_level() {
         config_path.to_str().expect("config path"),
         Some("Workflow task".to_owned()),
         None,
-        None,
-        false,
         Some("/tmp/garyx-workflow".to_owned()),
         false,
         None,
         None,
         Some("smoke".to_owned()),
-        None,
-        None,
-        Some(r#"{"question":"smoke"}"#.to_owned()),
+        Some("smoke question".to_owned()),
         vec!["none".to_owned()],
         true,
     )
@@ -1163,7 +1115,7 @@ async fn cmd_task_create_posts_workflow_workspace_at_top_level() {
     assert_eq!(records[0].path, "/api/tasks");
     assert_eq!(records[0].body["executor"]["type"], "workflow");
     assert_eq!(records[0].body["executor"]["workflowId"], "smoke");
-    assert_eq!(records[0].body["executor"]["input"]["question"], "smoke");
+    assert_eq!(records[0].body["executor"]["input"], "smoke question");
     assert_eq!(records[0].body["workspace_dir"], "/tmp/garyx-workflow");
     assert_eq!(
         records[0].body["runtime"]["workspace_dir"],
@@ -1185,13 +1137,9 @@ async fn cmd_task_create_posts_workflow_plain_text_input() {
         None,
         false,
         None,
-        false,
-        None,
         None,
         Some("smoke".to_owned()),
         Some("Summarize this bug report".to_owned()),
-        None,
-        None,
         vec!["none".to_owned()],
         true,
     )
@@ -1207,46 +1155,6 @@ async fn cmd_task_create_posts_workflow_plain_text_input() {
     assert_eq!(
         records[0].body["executor"]["input"],
         "Summarize this bug report"
-    );
-}
-
-#[tokio::test]
-async fn cmd_task_create_posts_workflow_input_file_as_plain_text() {
-    let requests = StdArc::new(Mutex::new(Vec::new()));
-    let (base_url, handle) = spawn_thread_task_http_test_server(requests.clone()).await;
-    let dir = tempdir().expect("tempdir");
-    let input_path = dir.path().join("workflow-input.txt");
-    std::fs::write(&input_path, "First line\nSecond line\n").expect("input file");
-    let config_path = write_test_gateway_config(&dir, &base_url);
-
-    cmd_task_create(
-        config_path.to_str().expect("config path"),
-        Some("Workflow file task".to_owned()),
-        None,
-        None,
-        false,
-        None,
-        false,
-        None,
-        None,
-        Some("smoke".to_owned()),
-        None,
-        Some(input_path),
-        None,
-        vec!["none".to_owned()],
-        true,
-    )
-    .await
-    .expect("task create should succeed");
-
-    handle.abort();
-
-    let records = requests.lock().expect("request lock");
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].body["executor"]["type"], "workflow");
-    assert_eq!(
-        records[0].body["executor"]["input"],
-        "First line\nSecond line\n"
     );
 }
 
@@ -2439,33 +2347,6 @@ fn validate_channel_account_configs_uses_installed_plugin_required_fields() {
 }
 
 #[test]
-fn task_create_assignee_accepts_bare_agent_id() {
-    let payload = task_create_assignee_payload(Some(" plain-claude ")).unwrap();
-
-    assert_eq!(
-        payload,
-        Some(json!({ "kind": "agent", "agent_id": "plain-claude" }))
-    );
-}
-
-#[test]
-fn task_runtime_agent_id_is_derived_from_agent_assignee() {
-    let payload = task_create_assignee_payload(Some("agent:reviewer")).unwrap();
-
-    assert_eq!(
-        task_runtime_agent_id_from_assignee(&payload).as_deref(),
-        Some("reviewer")
-    );
-}
-
-#[test]
-fn task_runtime_agent_id_is_not_derived_from_human_assignee() {
-    let payload = task_create_assignee_payload(Some("human:alice")).unwrap();
-
-    assert_eq!(task_runtime_agent_id_from_assignee(&payload), None);
-}
-
-#[test]
 fn task_notification_target_accepts_bot_and_none() {
     assert_eq!(
         task_notification_target_payload(vec!["none".to_owned()]).unwrap(),
@@ -2486,6 +2367,30 @@ fn task_notification_target_resolves_current_thread_from_env() {
     assert_eq!(
         task_notification_target_payload(vec!["current-thread".to_owned()]).unwrap(),
         json!({ "kind": "thread", "thread_id": "thread::current" })
+    );
+}
+
+#[test]
+fn task_notification_target_defaults_to_current_thread_when_unset() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _thread_id = ScopedEnvVar::set_string("GARYX_THREAD_ID", "thread::current");
+
+    // No `--notify` given while running inside a thread defaults to that thread.
+    assert_eq!(
+        task_notification_target_payload(vec![]).unwrap(),
+        json!({ "kind": "thread", "thread_id": "thread::current" })
+    );
+}
+
+#[test]
+fn task_notification_target_defaults_to_none_outside_a_thread() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _thread_id = ScopedEnvVar::remove("GARYX_THREAD_ID");
+
+    // No `--notify` and no surrounding thread (e.g. a plain terminal) stays silent.
+    assert_eq!(
+        task_notification_target_payload(vec![]).unwrap(),
+        json!({ "kind": "none" })
     );
 }
 

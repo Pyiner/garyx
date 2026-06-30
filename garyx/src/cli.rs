@@ -1460,8 +1460,9 @@ pub(crate) enum DreamAction {
 
 #[derive(Subcommand)]
 pub(crate) enum TaskAction {
-    /// List tasks
+    /// List tasks (done tasks are included by default)
     List {
+        /// Filter by status: todo, in_progress, in_review, or done
         #[arg(long)]
         status: Option<String>,
         #[arg(long)]
@@ -1472,8 +1473,6 @@ pub(crate) enum TaskAction {
         source_task: Option<String>,
         #[arg(long)]
         source_bot: Option<String>,
-        #[arg(long)]
-        include_done: bool,
         #[arg(long, default_value_t = 50)]
         limit: usize,
         #[arg(long, default_value_t = 0)]
@@ -1494,10 +1493,6 @@ pub(crate) enum TaskAction {
         #[arg(long)]
         body: Option<String>,
         #[arg(long)]
-        assignee: Option<String>,
-        #[arg(long)]
-        start: bool,
-        #[arg(long)]
         workspace_dir: Option<String>,
         /// Create the backing thread in a managed git worktree. Requires workspace-dir to be a git repo root.
         #[arg(long)]
@@ -1511,32 +1506,12 @@ pub(crate) enum TaskAction {
         /// Run this task with a reusable workflow definition instead of an agent
         #[arg(long, conflicts_with_all = ["agent", "team"])]
         workflow: Option<String>,
-        /// Plain-text input passed to the workflow entrypoint
-        #[arg(long, requires = "workflow", conflicts_with_all = ["input_file", "input_json"])]
+        /// Plain-text input passed to the workflow entrypoint (a workflow that needs structured data parses this text in its first step)
+        #[arg(long, requires = "workflow")]
         input: Option<String>,
-        /// Read plain-text input for the workflow entrypoint from a file
-        #[arg(long, requires = "workflow", conflicts_with_all = ["input", "input_json"])]
-        input_file: Option<PathBuf>,
-        /// JSON input passed to the workflow entrypoint
-        #[arg(long, requires = "workflow", conflicts_with_all = ["input", "input_file"])]
-        input_json: Option<String>,
-        /// Required notification target when the task enters review: `none`, `current-thread`, `thread <thread_id>`, or `bot <channel:account_id>`
+        /// Notification target when the task enters review. Defaults to the current thread (or `none` outside a thread). Override with `none`, `current-thread`, `thread <thread_id>`, or `bot <channel:account_id>`.
         #[arg(long, value_name = "TARGET", num_args = 1..=2)]
         notify: Vec<String>,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Claim a task
-    Claim {
-        task_id: String,
-        #[arg(long)]
-        actor: Option<String>,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Release a task
-    Release {
-        task_id: String,
         #[arg(long)]
         json: bool,
     },
@@ -1559,15 +1534,10 @@ pub(crate) enum TaskAction {
         #[arg(long)]
         json: bool,
     },
-    /// Clear task assignee
-    Unassign {
-        task_id: String,
-        #[arg(long)]
-        json: bool,
-    },
     /// Update task status
     Update {
         task_id: String,
+        /// New status: todo, in_progress, in_review, or done
         #[arg(long)]
         status: String,
         #[arg(long)]

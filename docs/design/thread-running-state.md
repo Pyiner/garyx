@@ -145,4 +145,4 @@ never delays the off. Ship without it first.
 - Cross-end: one running thread, assert badge parity across desktop + iOS +
   widget + `/api/recent-threads`.
 - Review: Claude implements → Codex adversarial review (`garyx task create
-  --assignee codex --workspace-dir <worktree> --notify current-thread`).
+  --agent codex --workspace-dir <worktree>`).

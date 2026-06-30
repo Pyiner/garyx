@@ -139,11 +139,11 @@ garyx task create \
   --notify none
 ```
 
-Use `--input-file prompt.md` for larger prompts. `--input-json` remains
-available for advanced automation knobs, but reusable workflow definitions
-should describe user-facing input with an `input` text metadata object, not an
-input contract. If a user-facing workflow needs structured data, make the first
-workflow step structure the plain-text request.
+`--input` is a single plain-text string (for a larger prompt, pass it inline or
+via your shell, e.g. `--input "$(cat prompt.md)"`). Reusable workflow
+definitions should describe user-facing input with an `input` text metadata
+object, not an input contract. If a user-facing workflow needs structured data,
+make the first workflow step structure the plain-text request.
 
 `workflow.ts` receives `GARYX_WORKFLOW_THREAD_ID`, `GARYX_WORKFLOW_RUN_ID`,
 `GARYX_TASK_ID`, `GARYX_TASK_THREAD_ID`, `GARYX_PARENT_THREAD_ID`,
@@ -180,19 +180,7 @@ garyx workflow definition upsert --file packages/garyx-workflow/examples/develop
 garyx workflow definition get development-loop
 ```
 
-Run a cheap dry run that validates package loading, task-backed execution, SDK
-context, and workflow completion without launching child agents:
-
-```sh
-garyx task create \
-  --title "Dry run development workflow" \
-  --workflow development-loop \
-  --workspace-dir /Users/test/project \
-  --input-json '{"goal":"verify the workflow package shape","mode":"dry_run","targetSurface":"mac_app"}' \
-  --notify none
-```
-
-Run the real implementation/review loop:
+Run the implementation/review loop with a plain-text goal:
 
 ```sh
 garyx task create \
@@ -203,26 +191,10 @@ garyx task create \
   --notify none
 ```
 
-Use JSON only when you need advanced knobs such as role-specific agents or
-validation command hints:
-
-```sh
-garyx task create \
-  --title "Implement Mac workflow UI" \
-  --workflow development-loop \
-  --workspace-dir /Users/test/project \
-  --input-json '{
-    "goal": "Implement the Mac app workflow management surface",
-    "targetSurface": "mac_app",
-    "targetPaths": ["desktop/garyx-desktop"],
-    "validationCommands": ["cd desktop/garyx-desktop && npm run build:ui"],
-    "childAgentId": "claude"
-  }'
-```
-
-`childAgentId` is the default child profile for planner, implementer, and
-reviewer. Use `plannerAgentId`, `implementerAgentId`, or `reviewerAgentId` to
-split roles across profiles.
+`--input` is a single plain-text string, which the workflow uses as its goal.
+Advanced options (a dry-run mode, target paths, validation commands, or
+role-specific child agents) are only available to programmatic SDK callers that
+invoke the workflow with an object input; they are not a CLI input format.
 
 Garyx-managed workflow processes resolve `@garyx/workflow` through the gateway's
 runtime package. User-run scripts may instead install this package however they

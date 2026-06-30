@@ -118,13 +118,13 @@ requested window.
 
 | Command | Use it for |
 | --- | --- |
-| `garyx task list` | List tasks. |
-| `garyx task create [--title <title>] [--body <body>] [--agent <id> \| --team <id> \| --workflow <id> \| --assignee <principal>] [--workspace-dir <path>] --notify <target>` | Create a task thread backed by an Agent, Agent Team, or Workflow executor. Legacy `--assignee <principal>` still works for compatibility, and assigned tasks start automatically. Notification targets are `current-thread`, `thread <thread_id>`, `bot <channel:account_id>`, or `none`. |
+| `garyx task list [--status <status>] [--limit <n>] [--offset <n>]` | List tasks, done tasks included. Filter with `--status todo\|in_progress\|in_review\|done`; page with `--limit` / `--offset`. |
+| `garyx task create [--title <title>] [--body <body>] [--agent <id> \| --team <id> \| --workflow <id>] [--workspace-dir <path>] [--notify <target>]` | Create a task thread backed by an Agent, Agent Team, or Workflow executor; picking an executor starts the run immediately, otherwise the task is created as a `todo` placeholder. `--notify` defaults to the current thread (or `none` outside a thread); override with `current-thread`, `thread <thread_id>`, `bot <channel:account_id>`, or `none`. |
 | `garyx task get <task_ref>` | Fetch one task. |
 | `garyx task update <task_ref> --status <status> [--note <note>]` | Move a task through its lifecycle. Garyx moves an in-progress task to review when its agent run stops; only mark `done` after explicit approval. |
 | `garyx task stop <task_ref>` | Interrupt the active run on the task's backing thread, if one exists, then release the task back to a non-running state. |
 | `garyx task delete <task_ref>` | Delete task metadata so it leaves task lists. The backing thread and transcript are retained for audit. |
-| `garyx task claim / release / assign / unassign` | Manage task ownership. |
+| `garyx task assign <task_ref> <principal>` | Hand a task to an agent or human (`agent:<id>`, `human:<id>`, or a bare agent id). Assigning an agent starts a run on the task. |
 | `garyx task set-title / reopen / history` | Rename, reopen, or inspect task history. |
 
 ## Agents and teams
@@ -139,7 +139,7 @@ requested window.
 | Command | Use it for |
 | --- | --- |
 | `garyx workflow definition list / get / upsert --file <package>` | Manage global file-backed workflow packages rooted by `garyx.workflow.json`. |
-| `garyx task create --workflow <workflow_id> --input-json '<json>'` | Execute a workflow definition through a Task executor. This is the user-facing execution path. |
+| `garyx task create --workflow <workflow_id> --input '<text>'` | Execute a workflow definition through a Task executor. `--input` is a single plain-text string; a workflow that needs structured data parses it in its first step. |
 | `garyx workflow list / get / events / cancel` | Inspect or cancel existing workflow runs. Runs are execution records under Tasks, not standalone product entries. |
 
 ## Tools
