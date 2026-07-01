@@ -1378,6 +1378,37 @@ function mapThreadRenderFrameEvent(
   };
 }
 
+/**
+ * Gateway HTTP transport.
+ *
+ * Defaults to the global `fetch` so this module stays free of `electron`
+ * imports and unit tests can keep stubbing `globalThis.fetch`. The Electron main
+ * entry injects `net.fetch` via {@link setGatewayFetch} at startup so gateway
+ * requests go through Chromium's network stack and honor the macOS system proxy
+ * (e.g. Surge). Node's global `fetch` (undici) ignores the system proxy and does
+ * local DNS, so a remote gateway whose hostname resolves to a private/off-LAN
+ * address (split-horizon) is unreachable directly; routing through the system
+ * proxy lets it tunnel, while localhost gateways stay on a direct connection
+ * (Chromium bypasses the proxy for loopback).
+ */
+export type GatewayFetch = (
+  input: string,
+  init?: RequestInit,
+) => Promise<Response>;
+
+let gatewayFetchImpl: GatewayFetch | null = null;
+
+export function setGatewayFetch(fetchImpl: GatewayFetch | null): void {
+  gatewayFetchImpl = fetchImpl;
+}
+
+function gatewayFetch(input: string, init?: RequestInit): Promise<Response> {
+  if (gatewayFetchImpl) {
+    return gatewayFetchImpl(input, init);
+  }
+  return globalThis.fetch(input, init);
+}
+
 export async function streamThreadEvents(
   settings: DesktopSettings,
   threadId: string,
@@ -1394,7 +1425,7 @@ export async function streamThreadEvents(
     settings.gatewayAuthToken,
   );
   headers.set("Last-Event-ID", String(afterSeq));
-  const response = await fetch(
+  const response = await gatewayFetch(
     buildUrl(
       settings,
       `/api/threads/${encodeURIComponent(threadId)}/stream?after_seq=${afterSeq}`,
@@ -1637,7 +1668,7 @@ export async function requestJson<T>(
     headers.set("Content-Type", "application/json");
   }
 
-  const response = await fetch(buildUrl(settings, path), {
+  const response = await gatewayFetch(buildUrl(settings, path), {
     ...init,
     headers,
   });
@@ -1675,7 +1706,7 @@ export async function requestText(
     headers.set("Content-Type", "application/json");
   }
 
-  const response = await fetch(buildUrl(settings, path), {
+  const response = await gatewayFetch(buildUrl(settings, path), {
     ...init,
     headers,
   });
@@ -1709,7 +1740,7 @@ async function requestJsonFromGatewayUrl<T>(
     headers.set("Content-Type", "application/json");
   }
 
-  const response = await fetch(buildUrlFromGatewayUrl(gatewayUrl, path), {
+  const response = await gatewayFetch(buildUrlFromGatewayUrl(gatewayUrl, path), {
     ...init,
     headers,
   });
