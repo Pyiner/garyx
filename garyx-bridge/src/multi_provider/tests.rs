@@ -22,7 +22,9 @@ use serde_json::{Value, json};
 use tokio::sync::{Mutex, Notify, mpsc};
 
 use super::MultiProviderBridge;
-use crate::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
+use crate::provider_trait::{
+    AgentLoopProvider, BridgeError, ProviderRuntimeSelection, StreamCallback,
+};
 
 fn run_request(
     thread_id: &str,
@@ -129,6 +131,7 @@ struct MockProvider {
     metadata_snapshots: std::sync::Mutex<Vec<HashMap<String, serde_json::Value>>>,
     workspace_dirs: std::sync::Mutex<Vec<Option<String>>>,
     run_delay_ms: u64,
+    runtime_selection: ProviderRuntimeSelection,
 }
 
 impl MockProvider {
@@ -140,6 +143,7 @@ impl MockProvider {
             metadata_snapshots: std::sync::Mutex::new(Vec::new()),
             workspace_dirs: std::sync::Mutex::new(Vec::new()),
             run_delay_ms: 0,
+            runtime_selection: ProviderRuntimeSelection::default(),
         }
     }
 
@@ -151,6 +155,28 @@ impl MockProvider {
             metadata_snapshots: std::sync::Mutex::new(Vec::new()),
             workspace_dirs: std::sync::Mutex::new(Vec::new()),
             run_delay_ms,
+            runtime_selection: ProviderRuntimeSelection::default(),
+        }
+    }
+
+    fn with_runtime_selection(
+        ptype: ProviderType,
+        model: Option<&str>,
+        reasoning_effort: Option<&str>,
+        service_tier: Option<&str>,
+    ) -> Self {
+        Self {
+            ready: AtomicBool::new(true),
+            ptype,
+            image_counts: std::sync::Mutex::new(Vec::new()),
+            metadata_snapshots: std::sync::Mutex::new(Vec::new()),
+            workspace_dirs: std::sync::Mutex::new(Vec::new()),
+            run_delay_ms: 0,
+            runtime_selection: ProviderRuntimeSelection {
+                model: model.map(ToOwned::to_owned),
+                model_reasoning_effort: reasoning_effort.map(ToOwned::to_owned),
+                model_service_tier: service_tier.map(ToOwned::to_owned),
+            },
         }
     }
 
@@ -532,6 +558,10 @@ impl AgentLoopProvider for MockProvider {
 
     async fn get_or_create_session(&self, session_key: &str) -> Result<String, BridgeError> {
         Ok(format!("sdk-{session_key}"))
+    }
+
+    fn resolve_runtime_selection(&self, _options: &ProviderRunOptions) -> ProviderRuntimeSelection {
+        self.runtime_selection.clone()
     }
 }
 
@@ -4426,6 +4456,246 @@ async fn test_start_run_attaches_bridge_run_id_metadata() {
     assert_eq!(
         snapshots[0].get("client_run_id"),
         Some(&serde_json::Value::String("external-run".to_owned()))
+    );
+}
+
+#[tokio::test]
+async fn test_start_agent_run_persists_runtime_snapshot_on_first_non_override_run() {
+    let bridge = MultiProviderBridge::new();
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let history = make_history(store.clone());
+    let thread_id = "thread::runtime-snapshot-first-run";
+    store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "provider_type": "claude_code",
+                "metadata": {},
+            }),
+        )
+        .await;
+    bridge.set_thread_store(store.clone()).await;
+    bridge.set_thread_history(history);
+    let provider = Arc::new(MockProvider::with_runtime_selection(
+        ProviderType::ClaudeCode,
+        Some("provider-default-v1"),
+        Some("high"),
+        Some("flex"),
+    ));
+    bridge.register_provider("p1", provider).await;
+    bridge.set_default_provider_key("p1").await;
+
+    bridge
+        .start_agent_run(
+            run_request(
+                thread_id,
+                "pin runtime",
+                "run-runtime-snapshot-first",
+                "api",
+                "main",
+            ),
+            None,
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while bridge.is_run_active("run-runtime-snapshot-first").await {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("run should finish");
+
+    let data = store.get(thread_id).await.expect("thread data");
+    assert_eq!(data["metadata"]["model"], "provider-default-v1");
+    assert_eq!(data["metadata"]["model_reasoning_effort"], "high");
+    assert_eq!(data["metadata"]["model_service_tier"], "flex");
+}
+
+#[tokio::test]
+async fn test_start_agent_run_skips_snapshot_fields_controlled_by_override() {
+    let bridge = MultiProviderBridge::new();
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let history = make_history(store.clone());
+    let thread_id = "thread::runtime-snapshot-override";
+    store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "provider_type": "claude_code",
+                "metadata": {
+                    "model_override": "override-model",
+                },
+            }),
+        )
+        .await;
+    bridge.set_thread_store(store.clone()).await;
+    bridge.set_thread_history(history);
+    let provider = Arc::new(MockProvider::with_runtime_selection(
+        ProviderType::ClaudeCode,
+        Some("override-model"),
+        Some("high"),
+        Some("flex"),
+    ));
+    bridge.register_provider("p1", provider).await;
+    bridge.set_default_provider_key("p1").await;
+
+    bridge
+        .start_agent_run(
+            run_request(
+                thread_id,
+                "use override once",
+                "run-runtime-snapshot-override",
+                "api",
+                "main",
+            ),
+            None,
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while bridge.is_run_active("run-runtime-snapshot-override").await {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("run should finish");
+
+    let data = store.get(thread_id).await.expect("thread data");
+    assert_eq!(data["metadata"]["model_override"], "override-model");
+    assert!(data["metadata"]["model"].is_null());
+    assert_eq!(data["metadata"]["model_reasoning_effort"], "high");
+    assert_eq!(data["metadata"]["model_service_tier"], "flex");
+}
+
+#[tokio::test]
+async fn test_start_agent_run_does_not_overwrite_existing_runtime_snapshot() {
+    let bridge = MultiProviderBridge::new();
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let history = make_history(store.clone());
+    let thread_id = "thread::runtime-snapshot-existing";
+    store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "provider_type": "claude_code",
+                "metadata": {
+                    "model": "provider-default-v1",
+                    "model_reasoning_effort": "high",
+                },
+            }),
+        )
+        .await;
+    bridge.set_thread_store(store.clone()).await;
+    bridge.set_thread_history(history);
+    let provider = Arc::new(MockProvider::with_runtime_selection(
+        ProviderType::ClaudeCode,
+        Some("provider-default-v2"),
+        Some("max"),
+        Some("flex"),
+    ));
+    bridge.register_provider("p1", provider).await;
+    bridge.set_default_provider_key("p1").await;
+
+    bridge
+        .start_agent_run(
+            run_request(
+                thread_id,
+                "keep runtime",
+                "run-runtime-snapshot-existing",
+                "api",
+                "main",
+            ),
+            None,
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while bridge.is_run_active("run-runtime-snapshot-existing").await {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("run should finish");
+
+    let data = store.get(thread_id).await.expect("thread data");
+    assert_eq!(data["metadata"]["model"], "provider-default-v1");
+    assert_eq!(data["metadata"]["model_reasoning_effort"], "high");
+    assert_eq!(data["metadata"]["model_service_tier"], "flex");
+}
+
+#[tokio::test]
+async fn test_start_agent_run_uses_thread_snapshot_before_agent_profile_metadata() {
+    let bridge = MultiProviderBridge::new();
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let history = make_history(store.clone());
+    let thread_id = "thread::runtime-snapshot-run-metadata";
+    store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "agent_id": "test-agent",
+                "provider_type": "claude_code",
+                "metadata": {
+                    "model": "provider-default-v1",
+                    "model_reasoning_effort": "high",
+                },
+            }),
+        )
+        .await;
+    bridge.set_thread_store(store).await;
+    bridge.set_thread_history(history);
+    bridge
+        .replace_agent_profiles(vec![custom_agent(
+            "test-agent",
+            "Test Agent",
+            ProviderType::ClaudeCode,
+            "agent-model-v2",
+            "Synthetic test agent.",
+        )])
+        .await;
+    let provider = Arc::new(MockProvider::new(ProviderType::ClaudeCode));
+    bridge.register_provider("p1", provider.clone()).await;
+    bridge.set_default_provider_key("p1").await;
+
+    bridge
+        .start_agent_run(
+            run_request(
+                thread_id,
+                "use pinned runtime",
+                "run-runtime-snapshot-metadata",
+                "api",
+                "main",
+            ),
+            None,
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while bridge.is_run_active("run-runtime-snapshot-metadata").await {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("run should finish");
+
+    let snapshots = provider.metadata_snapshots();
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(
+        snapshots[0].get("model"),
+        Some(&serde_json::Value::String("provider-default-v1".to_owned()))
+    );
+    assert_eq!(
+        snapshots[0].get("model_reasoning_effort"),
+        Some(&serde_json::Value::String("high".to_owned()))
+    );
+    assert_eq!(
+        snapshots[0].get("agent_display_name"),
+        Some(&serde_json::Value::String("Test Agent".to_owned()))
     );
 }
 

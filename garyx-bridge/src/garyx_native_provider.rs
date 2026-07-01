@@ -47,7 +47,9 @@ use crate::gary_prompt::{
 use crate::native_capabilities::{
     capability_instructions, capability_tool_schemas, is_capability_tool, run_capability_tool,
 };
-use crate::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
+use crate::provider_trait::{
+    AgentLoopProvider, BridgeError, ProviderRuntimeSelection, StreamCallback,
+};
 
 pub(crate) const SESSION_MESSAGES_METADATA_KEY: &str = "garyx_session_messages";
 const DEFAULT_REQUEST_TIMEOUT_SECS: f64 = 300.0;
@@ -947,6 +949,30 @@ impl AgentLoopProvider for GaryxNativeProvider {
 
     fn is_ready(&self) -> bool {
         self.ready.try_lock().map(|value| *value).unwrap_or(false)
+    }
+
+    fn resolve_runtime_selection(&self, options: &ProviderRunOptions) -> ProviderRuntimeSelection {
+        ProviderRuntimeSelection {
+            model: Some(model_id(
+                &self.config,
+                &options.metadata,
+                self.default_model,
+            )),
+            model_reasoning_effort: normalize_non_empty(
+                options
+                    .metadata
+                    .get("model_reasoning_effort")
+                    .and_then(Value::as_str)
+                    .or(Some(self.config.model_reasoning_effort.as_str())),
+            ),
+            model_service_tier: normalize_non_empty(
+                options
+                    .metadata
+                    .get("model_service_tier")
+                    .and_then(Value::as_str)
+                    .or(Some(self.config.model_service_tier.as_str())),
+            ),
+        }
     }
 
     async fn initialize(&mut self) -> Result<(), BridgeError> {

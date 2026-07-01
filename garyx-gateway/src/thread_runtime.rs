@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use garyx_models::config::{AgentProviderConfig, GaryxConfig};
 use garyx_models::provider::{
-    MODEL_OVERRIDE_METADATA_KEY, MODEL_REASONING_EFFORT_OVERRIDE_METADATA_KEY,
+    MODEL_METADATA_KEY, MODEL_OVERRIDE_METADATA_KEY, MODEL_REASONING_EFFORT_METADATA_KEY,
+    MODEL_REASONING_EFFORT_OVERRIDE_METADATA_KEY, MODEL_SERVICE_TIER_METADATA_KEY,
     MODEL_SERVICE_TIER_OVERRIDE_METADATA_KEY, ProviderType,
 };
 use garyx_models::{agent_runtime_metadata, resolve_agent_reference};
@@ -153,24 +154,31 @@ pub(crate) async fn build_thread_runtime_summary(
         thread_metadata_string(thread_value, MODEL_REASONING_EFFORT_OVERRIDE_METADATA_KEY);
     let service_tier_override =
         thread_metadata_string(thread_value, MODEL_SERVICE_TIER_OVERRIDE_METADATA_KEY);
-    let agent_model = trimmed_json_string(agent_metadata.get("model"))
-        .or_else(|| thread_metadata_string(thread_value, "model"));
-    let agent_reasoning_effort = trimmed_json_string(agent_metadata.get("model_reasoning_effort"))
-        .or_else(|| thread_metadata_string(thread_value, "model_reasoning_effort"));
-    let agent_service_tier = trimmed_json_string(agent_metadata.get("model_service_tier"))
-        .or_else(|| thread_metadata_string(thread_value, "model_service_tier"));
+    let snapshot_model = thread_metadata_string(thread_value, MODEL_METADATA_KEY);
+    let snapshot_reasoning_effort =
+        thread_metadata_string(thread_value, MODEL_REASONING_EFFORT_METADATA_KEY);
+    let snapshot_service_tier =
+        thread_metadata_string(thread_value, MODEL_SERVICE_TIER_METADATA_KEY);
+    let agent_model = trimmed_json_string(agent_metadata.get(MODEL_METADATA_KEY));
+    let agent_reasoning_effort =
+        trimmed_json_string(agent_metadata.get(MODEL_REASONING_EFFORT_METADATA_KEY));
+    let agent_service_tier =
+        trimmed_json_string(agent_metadata.get(MODEL_SERVICE_TIER_METADATA_KEY));
     let model = model_override
         .clone()
+        .or(snapshot_model)
         .or(agent_model)
         .or(provider_default_model)
         .or(provider_catalog_default.model);
     let reasoning_effort = reasoning_effort_override
         .clone()
+        .or(snapshot_reasoning_effort)
         .or(agent_reasoning_effort)
         .or(provider_default_reasoning_effort)
         .or(provider_catalog_default.reasoning_effort);
     let service_tier = service_tier_override
         .clone()
+        .or(snapshot_service_tier)
         .or(agent_service_tier)
         .or(provider_default_service_tier)
         .or(provider_catalog_default.service_tier);

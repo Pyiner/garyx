@@ -22,7 +22,9 @@ use crate::gary_prompt::{
     compose_gary_instructions, prepend_initial_context_to_user_message, task_cli_env,
 };
 use crate::native_slash::build_native_skill_prompt;
-use crate::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
+use crate::provider_trait::{
+    AgentLoopProvider, BridgeError, ProviderRuntimeSelection, StreamCallback,
+};
 
 // ---------------------------------------------------------------------------
 // Retry configuration
@@ -1637,6 +1639,14 @@ impl AgentLoopProvider for ClaudeCliProvider {
 
     fn is_ready(&self) -> bool {
         self.ready
+    }
+
+    fn resolve_runtime_selection(&self, options: &ProviderRunOptions) -> ProviderRuntimeSelection {
+        ProviderRuntimeSelection {
+            model: resolve_requested_model(&self.config, &options.metadata),
+            model_reasoning_effort: resolve_requested_effort(&self.config, &options.metadata),
+            model_service_tier: None,
+        }
     }
 
     async fn initialize(&mut self) -> Result<(), BridgeError> {

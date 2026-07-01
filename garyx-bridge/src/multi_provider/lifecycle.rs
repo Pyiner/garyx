@@ -506,12 +506,13 @@ impl MultiProviderBridge {
 
     /// Backfill run metadata with the thread's runtime configuration:
     /// per-thread provider overrides first (model, reasoning effort, service
-    /// tier chosen at thread creation), then the bound agent's profile
+    /// tier chosen at thread creation), then stored thread runtime snapshot
+    /// fields, then the bound agent's profile
     /// (model, effort, tier, system prompt, identity). Shared providers only
     /// see per-run metadata, so a dispatch that carries no such fields would
     /// otherwise run the provider's defaults. Existing metadata values always
     /// win, giving the precedence: explicit request > thread override >
-    /// agent profile default.
+    /// thread snapshot > agent profile default.
     pub(super) async fn backfill_bound_agent_runtime_metadata(
         &self,
         thread_id: &str,
@@ -525,6 +526,7 @@ impl MultiProviderBridge {
         };
         if let Some(record) = thread_record.as_ref() {
             garyx_models::provider::merge_thread_provider_overrides(record, metadata);
+            garyx_models::provider::merge_thread_runtime_snapshot(record, metadata);
         }
 
         let metadata_agent_id = metadata

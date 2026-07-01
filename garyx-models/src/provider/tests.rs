@@ -111,6 +111,74 @@ fn test_provider_type_slug_round_trip() {
 }
 
 #[test]
+fn merge_thread_runtime_snapshot_applies_stored_runtime_fields() {
+    let thread_data = serde_json::json!({
+        "metadata": {
+            "model": "provider-default-v1",
+            "model_reasoning_effort": "high",
+            "model_service_tier": "flex",
+        }
+    });
+    let mut run_metadata = std::collections::HashMap::new();
+
+    merge_thread_runtime_snapshot(&thread_data, &mut run_metadata);
+
+    assert_eq!(
+        run_metadata.get("model"),
+        Some(&serde_json::Value::String("provider-default-v1".to_owned()))
+    );
+    assert_eq!(
+        run_metadata.get("model_reasoning_effort"),
+        Some(&serde_json::Value::String("high".to_owned()))
+    );
+    assert_eq!(
+        run_metadata.get("model_service_tier"),
+        Some(&serde_json::Value::String("flex".to_owned()))
+    );
+}
+
+#[test]
+fn merge_thread_runtime_snapshot_keeps_request_metadata_priority() {
+    let thread_data = serde_json::json!({
+        "metadata": {
+            "model": "provider-default-v1",
+            "model_reasoning_effort": "high",
+        }
+    });
+    let mut run_metadata = std::collections::HashMap::from([(
+        "model".to_owned(),
+        serde_json::Value::String("request-model".to_owned()),
+    )]);
+
+    merge_thread_runtime_snapshot(&thread_data, &mut run_metadata);
+
+    assert_eq!(
+        run_metadata.get("model"),
+        Some(&serde_json::Value::String("request-model".to_owned()))
+    );
+    assert_eq!(
+        run_metadata.get("model_reasoning_effort"),
+        Some(&serde_json::Value::String("high".to_owned()))
+    );
+}
+
+#[test]
+fn merge_thread_runtime_snapshot_ignores_blank_and_missing_values() {
+    let thread_data = serde_json::json!({
+        "metadata": {
+            "model": "   ",
+        }
+    });
+    let mut run_metadata = std::collections::HashMap::new();
+
+    merge_thread_runtime_snapshot(&thread_data, &mut run_metadata);
+    assert!(run_metadata.is_empty());
+
+    merge_thread_runtime_snapshot(&serde_json::json!({}), &mut run_metadata);
+    assert!(run_metadata.is_empty());
+}
+
+#[test]
 fn test_stream_boundary_kind_serde() {
     let kind = StreamBoundaryKind::UserAck;
     let json = serde_json::to_string(&kind).unwrap();

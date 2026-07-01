@@ -30,7 +30,9 @@ use crate::gary_prompt::{
     compose_gary_instructions, prepend_initial_context_to_user_message, task_cli_env,
 };
 use crate::native_slash::build_native_skill_prompt;
-use crate::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
+use crate::provider_trait::{
+    AgentLoopProvider, BridgeError, ProviderRuntimeSelection, StreamCallback,
+};
 
 const CODEX_CLIENT_IDLE_TTL: Duration = Duration::from_secs(180);
 // `turn/steer` only acknowledges that follow-up input was queued into the
@@ -1979,6 +1981,17 @@ impl AgentLoopProvider for CodexAgentProvider {
     fn is_ready(&self) -> bool {
         // Use try_lock to avoid blocking; if lock is held, provider is busy but ready
         self.ready.try_lock().map(|g| *g).unwrap_or(false)
+    }
+
+    fn resolve_runtime_selection(&self, options: &ProviderRunOptions) -> ProviderRuntimeSelection {
+        ProviderRuntimeSelection {
+            model: resolve_codex_request_model(&self.config, &options.metadata),
+            model_reasoning_effort: resolve_codex_request_reasoning_effort(
+                &self.config,
+                &options.metadata,
+            ),
+            model_service_tier: resolve_codex_request_service_tier(&self.config, &options.metadata),
+        }
     }
 
     async fn initialize(&mut self) -> Result<(), BridgeError> {

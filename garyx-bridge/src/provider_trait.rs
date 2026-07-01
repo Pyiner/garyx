@@ -46,6 +46,32 @@ pub enum BridgeError {
 /// Streaming callback receives structured stream events.
 pub type StreamCallback = Box<dyn Fn(StreamEvent) + Send + Sync>;
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProviderRuntimeSelection {
+    pub model: Option<String>,
+    pub model_reasoning_effort: Option<String>,
+    pub model_service_tier: Option<String>,
+}
+
+impl ProviderRuntimeSelection {
+    pub fn from_metadata(metadata: &HashMap<String, Value>) -> Self {
+        Self {
+            model: runtime_metadata_string(metadata, "model"),
+            model_reasoning_effort: runtime_metadata_string(metadata, "model_reasoning_effort"),
+            model_service_tier: runtime_metadata_string(metadata, "model_service_tier"),
+        }
+    }
+}
+
+fn runtime_metadata_string(metadata: &HashMap<String, Value>, key: &str) -> Option<String> {
+    metadata
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 // ---------------------------------------------------------------------------
 // AgentLoopProvider trait
 // ---------------------------------------------------------------------------
@@ -75,6 +101,13 @@ pub trait AgentLoopProvider: Send + Sync {
         options: &ProviderRunOptions,
         on_chunk: StreamCallback,
     ) -> Result<ProviderRunResult, BridgeError>;
+
+    /// Resolve the runtime values Garyx will request from the provider for a run.
+    /// Providers with config-level defaults should override this so bridge-level
+    /// snapshotting observes the same values as the provider request builder.
+    fn resolve_runtime_selection(&self, options: &ProviderRunOptions) -> ProviderRuntimeSelection {
+        ProviderRuntimeSelection::from_metadata(&options.metadata)
+    }
 
     /// Abort a running request. Returns `true` if the abort was acted upon.
     async fn abort(&self, run_id: &str) -> bool {

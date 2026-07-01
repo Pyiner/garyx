@@ -5,10 +5,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use chrono::Utc;
 use garyx_models::provider::{
     AgentRunRequest, FORK_FROM_PROVIDER_TYPE_METADATA_KEY, FORK_FROM_SDK_SESSION_ID_METADATA_KEY,
-    FilePayload, ImagePayload, PromptAttachment, ProviderMessage, ProviderRunOptions,
-    ProviderRunResult, ProviderType, QueuedUserInput, SDK_SESSION_FORK_METADATA_KEY,
-    SDK_SESSION_ID_METADATA_KEY, StreamEvent, attachments_from_metadata,
-    build_user_content_from_parts, stage_file_payloads_for_prompt, stage_image_payloads_for_prompt,
+    FilePayload, ImagePayload, MODEL_METADATA_KEY, MODEL_OVERRIDE_METADATA_KEY,
+    MODEL_REASONING_EFFORT_METADATA_KEY, MODEL_REASONING_EFFORT_OVERRIDE_METADATA_KEY,
+    MODEL_SERVICE_TIER_METADATA_KEY, MODEL_SERVICE_TIER_OVERRIDE_METADATA_KEY, PromptAttachment,
+    ProviderMessage, ProviderRunOptions, ProviderRunResult, ProviderType, QueuedUserInput,
+    SDK_SESSION_FORK_METADATA_KEY, SDK_SESSION_ID_METADATA_KEY, StreamEvent,
+    attachments_from_metadata, build_user_content_from_parts, stage_file_payloads_for_prompt,
+    stage_image_payloads_for_prompt,
 };
 use garyx_models::thread_logs::{ThreadLogEvent, ThreadLogSink, resolve_thread_log_thread_id};
 use garyx_models::{Principal, final_assistant_text_from_render_records};
@@ -16,12 +19,12 @@ use garyx_router::{
     ThreadHistoryRepository, ThreadStore, mark_thread_task_in_progress_on_wake,
     mark_thread_task_in_review_if_in_progress, thread_metadata_from_value,
 };
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep};
 
-use crate::provider_trait::{AgentLoopProvider, BridgeError};
+use crate::provider_trait::{AgentLoopProvider, BridgeError, ProviderRuntimeSelection};
 use crate::run_graph::{RunGraphState, execute_agent_run};
 
 use super::MultiProviderBridge;
@@ -79,6 +82,121 @@ fn metadata_string(metadata: &HashMap<String, Value>, key: &str) -> Option<Strin
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn thread_value_string(thread_data: &Value, key: &str) -> Option<String> {
+    thread_data
+        .get("metadata")
+        .and_then(Value::as_object)
+        .and_then(|metadata| metadata.get(key))
+        .or_else(|| thread_data.get(key))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn has_thread_value(thread_data: &Value, key: &str) -> bool {
+    thread_value_string(thread_data, key).is_some()
+}
+
+fn insert_snapshot_field(
+    metadata: &mut Map<String, Value>,
+    snapshot_key: &str,
+    override_key: &str,
+    value: Option<&str>,
+) -> bool {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return false;
+    };
+    let has_snapshot = metadata
+        .get(snapshot_key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some();
+    let has_override = metadata
+        .get(override_key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some();
+    if has_snapshot || has_override {
+        return false;
+    }
+    metadata.insert(snapshot_key.to_owned(), Value::String(value.to_owned()));
+    true
+}
+
+async fn persist_thread_runtime_snapshot(
+    store: Option<Arc<dyn ThreadStore>>,
+    thread_id: &str,
+    selection: &ProviderRuntimeSelection,
+) {
+    let Some(store) = store else {
+        return;
+    };
+    let Some(mut thread_data) = store.get(thread_id).await else {
+        return;
+    };
+    let existing_top_level_overrides = [
+        MODEL_OVERRIDE_METADATA_KEY,
+        MODEL_REASONING_EFFORT_OVERRIDE_METADATA_KEY,
+        MODEL_SERVICE_TIER_OVERRIDE_METADATA_KEY,
+    ]
+    .map(|key| has_thread_value(&thread_data, key));
+    let existing_snapshot_fields = [
+        MODEL_METADATA_KEY,
+        MODEL_REASONING_EFFORT_METADATA_KEY,
+        MODEL_SERVICE_TIER_METADATA_KEY,
+    ]
+    .map(|key| has_thread_value(&thread_data, key));
+    let Some(thread_object) = thread_data.as_object_mut() else {
+        return;
+    };
+    let metadata_value = thread_object
+        .entry("metadata".to_owned())
+        .or_insert_with(|| Value::Object(Map::new()));
+    if !metadata_value.is_object() {
+        *metadata_value = Value::Object(Map::new());
+    }
+    let Some(metadata) = metadata_value.as_object_mut() else {
+        return;
+    };
+
+    let mut changed = false;
+    if !existing_top_level_overrides[0] && !existing_snapshot_fields[0] {
+        changed |= insert_snapshot_field(
+            metadata,
+            MODEL_METADATA_KEY,
+            MODEL_OVERRIDE_METADATA_KEY,
+            selection.model.as_deref(),
+        );
+    }
+    if !existing_top_level_overrides[1] && !existing_snapshot_fields[1] {
+        changed |= insert_snapshot_field(
+            metadata,
+            MODEL_REASONING_EFFORT_METADATA_KEY,
+            MODEL_REASONING_EFFORT_OVERRIDE_METADATA_KEY,
+            selection.model_reasoning_effort.as_deref(),
+        );
+    }
+    if !existing_top_level_overrides[2] && !existing_snapshot_fields[2] {
+        changed |= insert_snapshot_field(
+            metadata,
+            MODEL_SERVICE_TIER_METADATA_KEY,
+            MODEL_SERVICE_TIER_OVERRIDE_METADATA_KEY,
+            selection.model_service_tier.as_deref(),
+        );
+    }
+    if !changed {
+        return;
+    }
+    thread_object.insert(
+        "updated_at".to_owned(),
+        Value::String(Utc::now().to_rfc3339()),
+    );
+    store.set(thread_id, thread_data).await;
 }
 
 fn summarize_text(value: &str, limit: usize) -> String {
@@ -1615,6 +1733,14 @@ impl MultiProviderBridge {
             );
         }
 
+        let runtime_selection = provider.resolve_runtime_selection(&options);
+        persist_thread_runtime_snapshot(
+            self.inner.thread_store.read().await.clone(),
+            &thread_id,
+            &runtime_selection,
+        )
+        .await;
+
         let run_started_at = chrono::Utc::now().to_rfc3339();
         let partial_user_images = options.images.clone().unwrap_or_default();
         let partial_metadata = options.metadata.clone();
@@ -2290,6 +2416,14 @@ impl MultiProviderBridge {
                 &resolved_provider_type,
             );
         }
+
+        let runtime_selection = provider.resolve_runtime_selection(&options);
+        persist_thread_runtime_snapshot(
+            self.inner.thread_store.read().await.clone(),
+            thread_id,
+            &runtime_selection,
+        )
+        .await;
 
         let run_started_at = chrono::Utc::now().to_rfc3339();
         let partial_user_images = options.images.clone().unwrap_or_default();

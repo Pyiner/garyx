@@ -3045,6 +3045,70 @@ async fn thread_history_runtime_reports_provider_default_alias() {
 }
 
 #[tokio::test]
+async fn thread_history_runtime_prefers_thread_snapshot_over_current_agent_profile() {
+    let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
+    custom_agents
+        .upsert_agent(crate::custom_agents::UpsertCustomAgentRequest {
+            agent_id: "test-agent".to_owned(),
+            display_name: "Test Agent".to_owned(),
+            provider_type: ProviderType::ClaudeCode,
+            model: Some("agent-model-v2".to_owned()),
+            model_reasoning_effort: Some("max".to_owned()),
+            model_service_tier: Some("auto".to_owned()),
+            provider_env: None,
+            auth_source: None,
+            base_url: None,
+            codex_home: None,
+            max_tool_iterations: None,
+            request_timeout_seconds: None,
+            default_workspace_dir: None,
+            avatar_data_url: None,
+            system_prompt: "Synthetic test agent.".to_owned(),
+        })
+        .await
+        .expect("custom agent");
+    let state = AppStateBuilder::new(test_config())
+        .with_custom_agent_store(custom_agents)
+        .with_agent_team_store(Arc::new(crate::agent_teams::AgentTeamStore::new()))
+        .build();
+    let thread_id = "thread::runtime-snapshot-agent-profile";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "Runtime snapshot over agent profile",
+                "agent_id": "test-agent",
+                "provider_type": "claude_code",
+                "metadata": {
+                    "model": "provider-default-v1",
+                    "model_reasoning_effort": "high",
+                    "model_service_tier": "flex",
+                },
+            }),
+        )
+        .await;
+
+    let router = build_router(state);
+    let request = authed_request()
+        .uri("/api/threads/history?thread_id=thread%3A%3Aruntime-snapshot-agent-profile&limit=1")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["thread_runtime"]["agent_id"], "test-agent");
+    assert_eq!(payload["thread_runtime"]["model"], "provider-default-v1");
+    assert_eq!(payload["thread_runtime"]["model_reasoning_effort"], "high");
+    assert_eq!(payload["thread_runtime"]["model_service_tier"], "flex");
+}
+
+#[tokio::test]
 async fn thread_history_runtime_leaves_cli_provider_defaults_empty() {
     let (state, _logger, _dir) = test_state().await;
     for (thread_id, provider_type) in [

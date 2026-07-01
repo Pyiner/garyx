@@ -289,6 +289,109 @@ async fn prepare_chat_request_resolves_provider_and_system_prompt_from_thread_ag
     assert_eq!(runtime_context["task"]["status"], "todo");
 }
 
+#[tokio::test]
+async fn prepare_chat_request_prefers_thread_snapshot_before_agent_runtime_metadata() {
+    let state = test_state();
+    state
+        .ops
+        .custom_agents
+        .upsert_agent(crate::custom_agents::UpsertCustomAgentRequest {
+            agent_id: "snapshot-agent".to_owned(),
+            display_name: "Snapshot Agent".to_owned(),
+            provider_type: ProviderType::ClaudeCode,
+            model: Some("agent-model-v2".to_owned()),
+            model_reasoning_effort: Some("max".to_owned()),
+            model_service_tier: Some("auto".to_owned()),
+            provider_env: None,
+            auth_source: None,
+            base_url: None,
+            codex_home: None,
+            max_tool_iterations: None,
+            request_timeout_seconds: None,
+            default_workspace_dir: None,
+            avatar_data_url: None,
+            system_prompt: "Use the agent persona.".to_owned(),
+        })
+        .await
+        .expect("custom agent saved");
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::snapshot-agent-bound",
+            json!({
+                "thread_id": "thread::snapshot-agent-bound",
+                "thread_mode": "single_agent",
+                "agent_id": "snapshot-agent",
+                "channel": "api",
+                "account_id": "main",
+                "from_id": "api-user",
+                "messages": [],
+                "metadata": {
+                    "model": "provider-default-v1",
+                    "model_reasoning_effort": "high",
+                    "model_service_tier": "flex",
+                },
+            }),
+        )
+        .await;
+
+    let prepared = prepare_chat_request(
+        &state,
+        ChatRequest {
+            thread_id: Some("thread::snapshot-agent-bound".to_owned()),
+            message: "Continue".to_owned(),
+            attachments: Vec::new(),
+            images: Vec::new(),
+            files: Vec::new(),
+            client_intent_id: None,
+            from_id: "api-user".to_owned(),
+            account_id: "main".to_owned(),
+            bot: None,
+            wait_for_response: true,
+            workspace_path: None,
+            provider_type: None,
+            metadata: HashMap::new(),
+            provider_metadata: HashMap::new(),
+        },
+    )
+    .await
+    .expect("prepare chat request");
+
+    assert_eq!(
+        prepared.metadata.get("model").and_then(Value::as_str),
+        Some("provider-default-v1")
+    );
+    assert_eq!(
+        prepared
+            .metadata
+            .get("model_reasoning_effort")
+            .and_then(Value::as_str),
+        Some("high")
+    );
+    assert_eq!(
+        prepared
+            .metadata
+            .get("model_service_tier")
+            .and_then(Value::as_str),
+        Some("flex")
+    );
+    assert_eq!(
+        prepared
+            .metadata
+            .get("agent_display_name")
+            .and_then(Value::as_str),
+        Some("Snapshot Agent")
+    );
+    assert_eq!(
+        prepared
+            .metadata
+            .get("system_prompt")
+            .and_then(Value::as_str),
+        Some("Use the agent persona.")
+    );
+}
+
 #[test]
 fn merge_thread_provider_overrides_applies_thread_override_keys() {
     let thread_data = json!({
