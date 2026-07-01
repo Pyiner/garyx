@@ -257,6 +257,8 @@ enum GaryxMobileTranscriptToolTraceClassifier {
             return .toolUse
         case .toolResult:
             return .toolResult
+        case .user:
+            return nil
         default:
             break
         }
