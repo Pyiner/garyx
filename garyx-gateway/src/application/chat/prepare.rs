@@ -7,10 +7,12 @@ use garyx_models::provider::{
     ATTACHMENTS_METADATA_KEY, ImagePayload, ProviderType, attachments_to_metadata_value,
     merge_thread_model_cells, stage_file_payloads_for_prompt, stage_image_payloads_for_prompt,
 };
+use garyx_models::routing::DELIVERY_TARGET_TYPE_CHAT_ID;
 use garyx_models::thread_logs::ThreadLogEvent;
 use garyx_router::{
-    NATIVE_COMMAND_TEXT_METADATA_KEY, build_runtime_context_metadata, is_thread_key,
-    normalize_workspace_dir, update_thread_record, workspace_dir_from_value,
+    ChannelBinding, NATIVE_COMMAND_TEXT_METADATA_KEY, bind_endpoint_to_thread,
+    build_runtime_context_metadata, is_thread_key, normalize_workspace_dir, update_thread_record,
+    workspace_dir_from_value,
 };
 use serde_json::{Value, json};
 
@@ -484,13 +486,20 @@ async fn resolve_chat_target(
                 tracing::warn!(thread_id = trimmed, error = %error, "failed to check archived thread before chat start");
             }
         }
+        let thread_cache_maybe_stale = persist_explicit_api_thread_binding(
+            state,
+            trimmed,
+            req.account_id.as_str(),
+            req.from_id.as_str(),
+        )
+        .await?;
         return Ok(ResolvedChatTarget {
             thread_id: trimmed.to_owned(),
             channel: "api".to_owned(),
             account_id: req.account_id.clone(),
             from_id: req.from_id.clone(),
             metadata: HashMap::new(),
-            thread_cache_maybe_stale: false,
+            thread_cache_maybe_stale,
         });
     }
 
@@ -579,6 +588,42 @@ async fn resolve_chat_target(
         metadata: HashMap::new(),
         thread_cache_maybe_stale: true,
     })
+}
+
+async fn persist_explicit_api_thread_binding(
+    state: &Arc<AppState>,
+    thread_id: &str,
+    account_id: &str,
+    from_id: &str,
+) -> Result<bool, ChatPreparationError> {
+    let account_id = account_id.trim();
+    let from_id = from_id.trim();
+    if account_id.is_empty() || from_id.is_empty() {
+        return Ok(false);
+    }
+    if state.threads.thread_store.get(thread_id).await.is_none() {
+        return Ok(false);
+    }
+
+    let binding = ChannelBinding {
+        channel: "api".to_owned(),
+        account_id: account_id.to_owned(),
+        binding_key: from_id.to_owned(),
+        chat_id: from_id.to_owned(),
+        delivery_target_type: DELIVERY_TARGET_TYPE_CHAT_ID.to_owned(),
+        delivery_target_id: from_id.to_owned(),
+        display_label: format!("api/{account_id}/{from_id}"),
+        last_inbound_at: Some(chrono::Utc::now().to_rfc3339()),
+        last_delivery_at: None,
+    };
+
+    bind_endpoint_to_thread(&state.threads.thread_store, thread_id, binding)
+        .await
+        .map_err(|error| ChatPreparationError::ThreadUpdateConflict {
+            thread_id: thread_id.to_owned(),
+            error,
+        })?;
+    Ok(true)
 }
 
 fn endpoint_chat_metadata(
