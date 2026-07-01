@@ -707,7 +707,7 @@ extension GaryxMobileModel {
         ]
         if let selectedThread {
             messagesByThread[selectedThread.id] = messages
-            messageSignaturesByThread[selectedThread.id] = Self.messageListSignature(for: messages)
+            messageSignaturesByThread[selectedThread.id] = GaryxMessageListSignature.make(for: messages)
         }
 
         agents = Self.decodeDebugFixture(GaryxAgentsPage.self, from: """

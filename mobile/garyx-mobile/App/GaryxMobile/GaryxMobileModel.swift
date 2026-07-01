@@ -58,11 +58,7 @@ final class GaryxMobileModel: ObservableObject {
     static let streamedCommittedFlushDelayNanos = GaryxStreamUpdateCadence.committedMessageBatchWindowNanos
     static let selectedThreadHistoryRetryLimit = 8
 
-    struct MessageListSignature: Equatable, Sendable {
-        let count: Int
-        let fingerprint: Int
-        let sampled: Bool
-    }
+    typealias MessageListSignature = GaryxMessageListSignature
 
     struct WidgetAgentIdentity {
         var id: String?
@@ -111,7 +107,7 @@ final class GaryxMobileModel: ObservableObject {
                 selectedMessagesSignature = pendingSelectedMessagesSignature
                 self.pendingSelectedMessagesSignature = nil
             } else {
-                selectedMessagesSignature = Self.messageListSignature(for: messages)
+                selectedMessagesSignature = GaryxMessageListSignature.make(for: messages)
             }
         }
     }
