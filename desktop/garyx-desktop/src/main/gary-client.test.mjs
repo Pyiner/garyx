@@ -10,6 +10,8 @@ import {
   getTask,
   listTaskForest,
   listProviderModels,
+  requestJson,
+  setGatewayFetch,
   streamThreadEvents,
 } from "./gary-client.ts";
 
@@ -641,6 +643,65 @@ test("streamThreadEvents ignores non-render per-thread frames", async () => {
     assert.equal(events[0].threadId, "thread::per-thread-failed");
     assert.equal(events[0].events[0].seq, 1);
     assert.equal(events[0].events[0].message.text, "committed");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("setGatewayFetch routes gateway requests through the injected transport", async () => {
+  // The Electron main entry injects net.fetch so gateway requests honor the
+  // system proxy. When a transport is injected, gatewayFetch must use it and
+  // NOT fall through to globalThis.fetch.
+  const injectedUrls = [];
+  const originalFetch = globalThis.fetch;
+  let globalFetchCalled = false;
+  globalThis.fetch = async () => {
+    globalFetchCalled = true;
+    throw new Error("globalThis.fetch must not be used when a transport is injected");
+  };
+  setGatewayFetch(async (url) => {
+    injectedUrls.push(String(url));
+    return new Response(JSON.stringify({ ok: true, via: "injected" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  });
+  try {
+    const result = await requestJson(
+      { gatewayUrl: "https://garyx.example.test", gatewayAuthToken: "" },
+      "/api/thing",
+    );
+    assert.deepEqual(result, { ok: true, via: "injected" });
+    assert.equal(injectedUrls.length, 1);
+    assert.equal(injectedUrls[0], "https://garyx.example.test/api/thing");
+    assert.equal(globalFetchCalled, false);
+  } finally {
+    setGatewayFetch(null);
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("gatewayFetch falls back to globalThis.fetch when no transport is injected", async () => {
+  // Outside Electron (unit tests / tooling) no transport is injected, so
+  // gatewayFetch must read the live globalThis.fetch each call so stubs work.
+  const originalFetch = globalThis.fetch;
+  setGatewayFetch(null);
+  const seen = [];
+  globalThis.fetch = async (url) => {
+    seen.push(String(url));
+    return new Response(JSON.stringify({ ok: true, via: "global" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  try {
+    const result = await requestJson(
+      { gatewayUrl: "http://127.0.0.1:31337", gatewayAuthToken: "" },
+      "/api/thing",
+    );
+    assert.deepEqual(result, { ok: true, via: "global" });
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0], "http://127.0.0.1:31337/api/thing");
   } finally {
     globalThis.fetch = originalFetch;
   }
