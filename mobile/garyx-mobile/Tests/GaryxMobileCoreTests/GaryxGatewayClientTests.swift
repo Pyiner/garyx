@@ -1036,6 +1036,14 @@ final class GaryxGatewayClientTests: XCTestCase {
                     },
                     {
                       "index": 3,
+                      "role": "user",
+                      "kind": "user_input",
+                      "tool_related": true,
+                      "likely_user_visible": true,
+                      "text": "Tool-related user text"
+                    },
+                    {
+                      "index": 4,
                       "role": "assistant",
                       "kind": "assistant_reply",
                       "tool_related": false,
@@ -1044,7 +1052,7 @@ final class GaryxGatewayClientTests: XCTestCase {
                     }
                   ],
                   "pending_user_inputs": [],
-                  "message_stats": { "returned_messages": 3 }
+                  "message_stats": { "returned_messages": 4 }
                 }
                 """.utf8
             )
@@ -1059,6 +1067,7 @@ final class GaryxGatewayClientTests: XCTestCase {
             .toolResult
         )
         XCTAssertNil(GaryxMobileTranscriptToolTraceClassifier.kind(for: transcript.messages[2]))
+        XCTAssertNil(GaryxMobileTranscriptToolTraceClassifier.kind(for: transcript.messages[3]))
     }
 
     func testStructuredContentRendererExtractsTextAndAttachments() {

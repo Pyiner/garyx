@@ -1,6 +1,12 @@
 # TASK-1502 iOS Historical User Skeleton Diagnosis
 
-Status: design review PASS; final SwiftPM and xcodebuild validation complete.
+Status: superseded by `docs/design/task-1502-ios-historical-user-skeleton-tool-related-user-red.md`.
+
+This earlier diagnosis incorrectly treated a healthy server snapshot as enough
+to rule out the current bug. A latest-build, fresh-install report disproved the
+stale-build/cache hypothesis. A later sparse-initial replay hypothesis was also
+falsified by current server source and raw SSE captures. The follow-up document
+contains the current RED tests and client-side mapper root cause.
 
 This document intentionally avoids production thread ids, user ids, bot ids,
 local personal paths, tokens, and real message bodies. Runtime observations below
