@@ -417,20 +417,51 @@ struct GaryxGatewayHeadersEditor: View {
     @Binding var text: String
     @State private var rows: [GaryxGatewayHeaderDraftRow] = []
     @State private var lastText = ""
+    // Headers are an advanced field, so keep them collapsed by default; only
+    // start expanded when the profile already carries configured headers.
+    @State private var isExpanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center, spacing: 12) {
-                GaryxFormFieldTitle(title: "Headers")
-                Spacer(minLength: 0)
-                Button(action: addRow) {
-                    Label("Add Header", systemImage: "plus")
-                        .font(GaryxFont.caption(weight: .semibold))
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        isExpanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        GaryxFormFieldTitle(title: "Headers")
+                        Image(systemName: "chevron.right")
+                            .font(GaryxFont.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                        if !isExpanded, configuredHeaderCount > 0 {
+                            Text("\(configuredHeaderCount)")
+                                .font(GaryxFont.caption(weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 1)
+                                .background(.quaternary.opacity(0.5), in: Capsule())
+                        }
+                    }
+                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .buttonStyle(.plain)
+                .accessibilityLabel(isExpanded ? "Hide headers" : "Show headers")
+
+                Spacer(minLength: 0)
+
+                if isExpanded {
+                    Button(action: addRow) {
+                        Label("Add Header", systemImage: "plus")
+                            .font(GaryxFont.caption(weight: .semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
             }
 
+            if isExpanded {
             VStack(spacing: 12) {
                 ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                     VStack(alignment: .leading, spacing: 8) {
@@ -478,17 +509,23 @@ struct GaryxGatewayHeadersEditor: View {
                     }
                 }
             }
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
         .onAppear {
             resetRows(from: text)
+            isExpanded = configuredHeaderCount > 0
         }
         .onChange(of: text) { _, newValue in
             if newValue != lastText {
                 resetRows(from: newValue)
             }
         }
+    }
+
+    private var configuredHeaderCount: Int {
+        GaryxGatewayHeaders.parseEntries(text).count
     }
 
     private func value(for id: UUID) -> GaryxGatewayHeaderDraftRow {

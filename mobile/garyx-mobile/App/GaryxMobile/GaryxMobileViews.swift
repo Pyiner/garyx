@@ -377,12 +377,16 @@ struct GaryxGatewaySetupView: View {
         model.gatewayURL = draftGatewayURL
         model.gatewayAuthToken = draftGatewayAuthToken
         model.gatewayHeaders = draftGatewayHeaders
+        // Persist the gateway locally before probing the connection. A saved
+        // gateway must stick around even when it cannot be reached, so the user
+        // can retry it later instead of it silently disappearing. Saving with
+        // the user-entered name up front also keeps the reconnect-time remember
+        // inside `connectAndRefresh` from overwriting it with the URL-derived
+        // default name.
+        model.rememberCurrentGatewayProfile(label: draftGatewayLabel)
         await model.connectAndRefresh()
-        if case .ready = model.connectionState {
-            model.rememberCurrentGatewayProfile(label: draftGatewayLabel)
-            if isSheet {
-                closeSettingsSheet()
-            }
+        if isSheet, case .ready = model.connectionState {
+            closeSettingsSheet()
         }
     }
 

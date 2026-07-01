@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { ChevronRight, Plus, Trash2 } from 'lucide-react';
 
 import {
   formatGatewayHeaderEntries,
@@ -49,6 +49,11 @@ export function GatewayHeadersEditor({
   const { t } = useI18n();
   const lastValueRef = useRef(value);
   const [rows, setRows] = useState<GatewayHeaderRow[]>(() => rowsFromValue(value));
+  // Headers are an advanced field, so keep them collapsed by default; only
+  // start expanded when the profile already carries configured headers.
+  const [expanded, setExpanded] = useState(
+    () => parseGatewayHeaderEntries(value).length > 0,
+  );
 
   useEffect(() => {
     if (value === lastValueRef.current) {
@@ -57,6 +62,8 @@ export function GatewayHeadersEditor({
     lastValueRef.current = value;
     setRows(rowsFromValue(value));
   }, [value]);
+
+  const configuredCount = parseGatewayHeaderEntries(value).length;
 
   function emit(nextRows: GatewayHeaderRow[]) {
     setRows(nextRows);
@@ -80,7 +87,24 @@ export function GatewayHeadersEditor({
 
   return (
     <div className={['gateway-headers-editor', className].filter(Boolean).join(' ')}>
-      <div className="gateway-headers-editor-list">
+      <button
+        type="button"
+        className="gateway-headers-editor-toggle"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((current) => !current)}
+      >
+        <ChevronRight
+          aria-hidden
+          className={`gateway-headers-editor-toggle-icon${expanded ? ' expanded' : ''}`}
+        />
+        <span>{t('Headers')}</span>
+        {configuredCount > 0 ? (
+          <span className="gateway-headers-editor-count">{configuredCount}</span>
+        ) : null}
+      </button>
+      {!expanded ? null : (
+        <>
+          <div className="gateway-headers-editor-list">
         {rows.map((row) => (
           <div className="gateway-headers-editor-row" key={row.id}>
             <Input
@@ -129,6 +153,8 @@ export function GatewayHeadersEditor({
         <Plus aria-hidden />
         {t('Add header')}
       </Button>
+        </>
+      )}
     </div>
   );
 }
