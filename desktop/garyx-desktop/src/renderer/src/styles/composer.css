@@ -1,0 +1,1339 @@
+/* Composer shell, command panel, queue, attachments, provider pills. */
+
+.composer-shell-wrap {
+  position: absolute;
+  right: 0;
+  /* Float 12px above the thread-main bottom so the composer's 4×16
+     drop shadow doesn't get clipped by thread-main's overflow:hidden. */
+  bottom: 12px;
+  left: 0;
+  z-index: 10;
+  width: min(var(--container-2xl), 100%);
+  margin: 0 auto;
+  overflow: visible;
+}
+
+/* When a side panel (inspector / logs) is open, thread-main narrows and
+   the composer would fill it edge-to-edge — `thread-main { overflow: hidden }`
+   then clips the composer-surface's 1px ring + 16px drop shadow on the
+   left and right. Shrink the wrap so the shadow has 16px of breathing room
+   on each side. */
+.thread-layout.with-inspector-panel .composer-shell-wrap,
+.thread-layout.with-log-panel .composer-shell-wrap {
+  width: min(var(--container-2xl), calc(100% - 32px));
+}
+
+.composer-shell-wrap::before {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 0;
+  height: calc(var(--composer-scroll-clip-height) + 1px);
+  background: var(--color-token-bg-primary);
+  content: "";
+  pointer-events: none;
+}
+
+.composer-command-panel {
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  left: 0;
+  z-index: 12;
+  overflow: hidden;
+  border: 1px solid rgba(26, 28, 31, 0.06);
+  border-bottom: 0;
+  border-radius: 14px 14px 0 0;
+  background: #fff;
+  box-shadow: none;
+  display: flex;
+  max-height: 440px;
+  flex-direction: column;
+  padding: 8px 0 0;
+  transform-origin: bottom center;
+  animation: composer-command-panel-in 140ms var(--ease-out-quart);
+}
+
+.composer-command-panel::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 1px;
+  background: rgba(26, 28, 31, 0.035);
+  content: "";
+  pointer-events: none;
+  transform: scaleY(0.5);
+  transform-origin: bottom;
+}
+
+.composer-command-list {
+  display: flex;
+  max-height: min(432px, calc(100vh - 220px));
+  flex-direction: column;
+  gap: 0;
+  overflow: auto;
+  padding: 4px 6px 6px;
+}
+
+.composer-command-item {
+  display: grid;
+  grid-template-columns: 22px 84px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  height: 34px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-token-text-primary);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    background var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard),
+    transform var(--duration-fast) var(--ease-standard);
+}
+
+.composer-command-item:hover {
+  background: rgba(26, 28, 31, 0.035);
+}
+
+.composer-command-item.active,
+.composer-command-item[aria-selected="true"] {
+  background: rgba(26, 28, 31, 0.035);
+  color: var(--color-token-text-primary);
+}
+
+.composer-command-item:active {
+  transform: translateY(1px);
+}
+
+.composer-command-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  color: rgba(26, 28, 31, 0.7);
+}
+
+.composer-command-item.active .composer-command-icon,
+.composer-command-item[aria-selected="true"] .composer-command-icon {
+  color: rgba(26, 28, 31, 0.78);
+}
+
+.composer-command-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-token-text-primary);
+  font-size: var(--text-md);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: 0;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-command-item.active .composer-command-name,
+.composer-command-item[aria-selected="true"] .composer-command-name {
+  color: var(--color-token-text-primary);
+  font-weight: var(--font-weight-medium);
+}
+
+.composer-command-item-copy {
+  min-width: 0;
+}
+
+.composer-command-item-copy strong {
+  overflow: hidden;
+  color: var(--color-token-text-primary);
+  font-size: var(--text-base);
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-command-item-copy span {
+  overflow: hidden;
+  color: rgba(26, 28, 31, 0.52);
+  display: block;
+  font-size: var(--text-md);
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-command-shortcut {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 18px;
+  height: 18px;
+}
+
+.composer-command-empty {
+  display: grid;
+  gap: 4px;
+  padding: 14px 12px;
+  border-radius: 8px;
+  color: var(--color-token-text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.composer-command-empty strong {
+  color: var(--color-token-text-primary);
+  font-size: var(--text-base);
+  font-weight: var(--font-weight-semibold);
+}
+
+@keyframes composer-command-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.995);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-command-panel {
+    animation: none;
+  }
+}
+
+.composer-shell {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 0;
+  width: min(var(--container-2xl), 100%);
+  margin: 0 auto;
+  overflow: visible;
+  border: 0;
+  /* Match Codex's `rounded-3xl` (25px effective) pillowy composer. */
+  border-radius: 25px;
+  background: transparent;
+  box-shadow: none;
+  transition:
+    box-shadow var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard);
+}
+
+.composer-shell-wrap:has(.composer-command-panel) .composer-shell {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 14px;
+  border-bottom-left-radius: 14px;
+  box-shadow: none;
+}
+
+.composer-shell-wrap:has(.composer-command-panel) .composer-surface {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 14px;
+  border-bottom-left-radius: 14px;
+  border-top-color: transparent;
+}
+
+.composer-shell:focus-within {
+  box-shadow: none;
+}
+
+.composer-shell:focus-within .composer-surface {
+  border-color: rgba(13, 13, 13, 0.14);
+}
+
+.composer {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  /* Tightened to match Codex's 96px tall composer — minHeight 80 + 4/6
+     vertical padding + editor minHeight 44 + 32-tall footer ≈ 96. */
+  min-height: 80px;
+  margin: 0;
+  padding: 8px 10px 6px;
+  border: 0;
+  border-radius: 25px;
+  background: transparent;
+  box-shadow: none;
+  isolation: isolate;
+}
+
+.composer:focus-within {
+  box-shadow: none;
+}
+
+.composer-surface {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  /* Codex-style frosted glass: semi-transparent fill + backdrop blur, with
+     a 1px ring + soft 4×16 drop for native-Mac depth. The card sits on
+     top of the messages scroll-clip layer, so when the user scrolls fast
+     the blur reveals just enough content to feel alive. */
+  border: 0;
+  border-radius: 25px;
+  background: color-mix(
+    in srgb,
+    var(--color-token-bg-primary) 86%,
+    transparent
+  );
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter: blur(16px) saturate(140%);
+  /* 1:1 with Codex: 1px ring at 10% black + 4×16 soft drop at 5% black. */
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.1),
+    0 4px 16px 0 rgba(0, 0, 0, 0.05);
+}
+
+.composer-shell.has-queue .composer {
+  margin-top: 0;
+}
+
+.composer > :not(.composer-surface) {
+  position: relative;
+  z-index: 1;
+}
+
+.composer-queue {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  width: calc(100% - clamp(22px, 3vw, 44px));
+  max-height: min(36dvh, 360px);
+  margin: 0 auto;
+  flex-direction: column;
+  gap: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 5px 12px;
+  border: 1px solid rgba(26, 28, 31, 0.048);
+  border-bottom: 0;
+  border-radius: 18px 18px 0 0;
+  background: var(--color-token-bg-primary);
+  color: rgb(26, 28, 31);
+  font-family: var(--message-reading-font);
+  font-size: 13px;
+  font-weight: var(--font-weight-normal);
+  line-height: 18.5714px;
+  scrollbar-color: rgba(13, 13, 13, 0.18) transparent;
+  scrollbar-width: thin;
+}
+
+.composer-queue::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+.composer-queue::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.composer-queue::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(13, 13, 13, 0.16);
+}
+
+.composer-queue-list {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.composer-queue-item {
+  position: relative;
+  z-index: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  min-height: 28px;
+  margin-top: 0;
+  margin-bottom: 0;
+  overflow: visible;
+  padding: 2px 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--color-token-foreground);
+  font-family: var(--message-reading-font);
+  font-size: 13px;
+  font-weight: var(--font-weight-normal);
+  line-height: 18.5714px;
+  transition:
+    opacity var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard);
+  user-select: none;
+  -webkit-user-select: none;
+  will-change: transform;
+}
+
+.composer-queue-item:hover,
+.composer-queue-item:focus-within {
+  background: transparent;
+  box-shadow: none;
+}
+
+.composer-queue-item.dragging {
+  z-index: 10;
+  background: transparent;
+  cursor: grabbing;
+  outline: 0;
+  box-shadow: 0 8px 20px rgba(13, 13, 13, 0.06);
+  opacity: 0.94;
+}
+
+.composer-queue-primary {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 0%;
+  align-items: center;
+  gap: 8px;
+}
+
+.composer-queue-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 5px;
+  opacity: 1;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+
+.composer-queue-item:hover .composer-queue-actions,
+.composer-queue-item:focus-within .composer-queue-actions {
+  opacity: 1;
+}
+
+.queue-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 24px;
+  flex-shrink: 0;
+  border: 1px solid transparent;
+  padding: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(26, 28, 31, 0.38);
+  cursor: grab;
+  font-size: 13px;
+  line-height: 18.5714px;
+  touch-action: none;
+  transition:
+    background var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.queue-drag-handle:active {
+  cursor: grabbing;
+}
+
+.composer-queue-item.dragging .queue-drag-handle {
+  background: transparent;
+  color: rgba(26, 28, 31, 0.54);
+  cursor: grabbing;
+}
+
+.queue-drag-handle:disabled {
+  cursor: default;
+}
+
+.composer-queue-item-icon {
+  width: 12px;
+  height: 12px;
+}
+
+.queue-grip-icon {
+  display: block;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
+.composer-queue-text {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: rgb(26, 28, 31);
+  font-size: 13px;
+  font-weight: var(--font-weight-normal);
+  line-height: 18.5714px;
+  text-overflow: ellipsis;
+  user-select: none;
+  -webkit-user-select: none;
+  white-space: nowrap;
+}
+
+.queue-steer-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 2px 8px;
+  flex-shrink: 0;
+  border: 1px solid transparent;
+  border-radius: 9999px;
+  background: transparent;
+  color: rgba(26, 28, 31, 0.494);
+  font-size: 13px;
+  font-weight: var(--font-weight-normal);
+  line-height: 18px;
+  transition:
+    background var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+  white-space: nowrap;
+}
+
+.queue-steer-button:hover {
+  background: rgba(26, 28, 31, 0.04);
+  color: rgba(26, 28, 31, 0.64);
+}
+
+.queue-steer-icon,
+.queue-remove-button > svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
+.queue-remove-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border: 1px solid transparent;
+  padding: 4px;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-token-error-foreground);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 18.5714px;
+  transition:
+    background var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.queue-remove-button:disabled {
+  cursor: not-allowed;
+}
+
+.queue-drag-handle:hover,
+.queue-remove-button:hover {
+  background: var(--color-token-bg-error);
+  color: var(--color-token-error-foreground);
+  box-shadow: none;
+  transform: none;
+}
+
+.composer-queue .ghost-button:hover,
+.composer-queue button:hover {
+  box-shadow: none;
+  transform: none;
+}
+
+.queue-drag-handle:disabled:hover,
+.queue-remove-button:disabled:hover {
+  background: transparent;
+  color: var(--color-token-description-foreground);
+}
+
+.composer-editor,
+.settings-form input {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--color-token-foreground);
+}
+
+.composer-editor::placeholder,
+.settings-form input::placeholder {
+  color: rgba(13, 13, 13, 0.42);
+}
+
+.composer-editor {
+  /* Match Codex's editor minHeight = 44 (we shaved 8px off the old 52). */
+  min-height: 44px;
+  max-height: 199px;
+  padding: 4px 8px 0;
+  overflow-y: hidden;
+  resize: none;
+  font-family: -apple-system, "system-ui", "Segoe UI", sans-serif;
+  /* Bump to Codex's 14/20 so the input copy matches the chat-body type
+     scale instead of looking a touch smaller. */
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 20px;
+  caret-color: var(--color-token-foreground);
+}
+
+.composer-editor:disabled {
+  cursor: not-allowed;
+}
+
+.composer-attachment-input {
+  display: none;
+}
+
+.composer-attachment-strip {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 12px 4px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(13, 13, 13, 0.18) transparent;
+}
+
+.composer-attachment-chip {
+  position: relative;
+  flex-shrink: 0;
+  border: 1px solid rgba(13, 13, 13, 0.08);
+  border-radius: 12px;
+  background: color-mix(
+    in oklab,
+    var(--color-token-bg-secondary) 78%,
+    var(--color-token-bg-primary)
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    0 1px 2px rgba(13, 13, 13, 0.04);
+  transition:
+    border-color var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard);
+}
+
+.composer-attachment-chip:hover,
+.composer-attachment-chip:focus-within {
+  border-color: rgba(13, 13, 13, 0.12);
+  background: var(--color-token-bg-primary);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.86),
+    0 2px 5px rgba(13, 13, 13, 0.07);
+}
+
+.composer-image-chip {
+  display: flex;
+  padding: 3px;
+}
+
+.composer-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 48px;
+  max-width: min(260px, 58vw);
+  padding: 8px 34px 8px 8px;
+}
+
+.composer-file-chip-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: color-mix(
+    in oklab,
+    var(--color-token-foreground) 8%,
+    transparent
+  );
+  color: var(--color-token-text-secondary);
+  flex-shrink: 0;
+}
+
+.composer-file-chip-label {
+  min-width: 0;
+  color: var(--color-token-text-primary);
+  font-size: var(--text-sm);
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.composer-browser-annotation-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 52px;
+  max-width: min(340px, 70vw);
+  padding: 8px 34px 8px 8px;
+}
+
+.composer-browser-annotation-chip-icon {
+  color: var(--color-token-text-secondary);
+}
+
+.composer-browser-annotation-chip-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.composer-browser-annotation-chip-label {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-token-text-primary);
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-browser-annotation-chip-meta {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-token-text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-image-chip-preview {
+  display: block;
+  width: 72px;
+  height: 56px;
+  border-radius: 9px;
+  object-fit: cover;
+  background: var(--color-token-bg-secondary);
+}
+
+.composer-attachment-remove {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.46);
+  border-radius: 9999px;
+  background: rgba(21, 22, 22, 0.68);
+  color: rgba(255, 255, 255, 0.96);
+  cursor: pointer;
+  opacity: 0;
+  box-shadow: 0 1px 3px rgba(13, 13, 13, 0.24);
+  transform: scale(0.96);
+  transition:
+    opacity var(--duration-fast) var(--ease-standard),
+    transform var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
+}
+
+.composer-attachment-chip:hover .composer-attachment-remove,
+.composer-attachment-chip:focus-within .composer-attachment-remove {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.composer-attachment-remove:hover {
+  border-color: rgba(255, 255, 255, 0.68);
+  background: rgba(13, 13, 13, 0.86);
+}
+
+.composer-attachment-remove:active {
+  transform: scale(0.94);
+}
+
+.composer-attachment-remove:focus-visible {
+  opacity: 1;
+  outline: 2px solid rgba(13, 13, 13, 0.22);
+  outline-offset: 2px;
+  transform: scale(1);
+}
+
+.composer-attach-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 9999px;
+}
+
+.composer-plus-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  padding: 0;
+  border: 1px solid color-mix(
+    in oklab,
+    var(--color-token-foreground) 7%,
+    transparent
+  );
+  border-radius: 9999px;
+  background: rgba(250, 250, 249, 0.92);
+  color: rgba(13, 13, 13, 0.56);
+  box-shadow: none;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard),
+    transform var(--duration-fast) var(--ease-standard);
+}
+
+.composer-plus-trigger:hover,
+.composer-plus-trigger[data-state="open"] {
+  border-color: color-mix(
+    in oklab,
+    var(--color-token-foreground) 11%,
+    transparent
+  );
+  background: #f4f4f2;
+  color: rgba(13, 13, 13, 0.78);
+}
+
+.composer-plus-trigger:active {
+  transform: translateY(1px);
+}
+
+.composer-plus-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.floating-action-menu {
+  min-width: 10rem;
+  max-width: min(220px, calc(100vw - 32px));
+}
+
+.floating-action-menu-row {
+  min-height: 34px;
+  color: var(--color-token-text-primary);
+  font-weight: var(--font-weight-normal);
+  line-height: 1;
+}
+
+.floating-action-menu-row > svg:first-child {
+  color: rgba(13, 13, 13, 0.52);
+}
+
+.floating-action-menu-row--destructive,
+[data-slot="dropdown-menu-item"][data-variant="destructive"] {
+  color: var(--color-token-error-foreground);
+}
+
+.floating-action-menu-row--destructive > svg:first-child,
+[data-slot="dropdown-menu-item"][data-variant="destructive"] > svg:first-child {
+  color: currentColor;
+}
+
+.floating-action-menu-row--destructive[data-highlighted],
+[data-slot="dropdown-menu-item"][data-variant="destructive"][data-highlighted] {
+  background: var(--color-token-bg-error);
+  color: var(--color-token-error-foreground);
+}
+
+.agent-option-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border: 0.5px solid var(--color-token-border);
+  background: color-mix(in oklab, var(--color-token-foreground) 6%, transparent);
+  color: var(--color-token-text-secondary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.agent-option-avatar [data-slot="avatar-fallback"] {
+  background: transparent;
+  color: inherit;
+  font-size: 10px;
+  font-weight: 680;
+  letter-spacing: 0;
+}
+
+.agent-option-avatar--team {
+  background: color-mix(in oklab, var(--color-accent-green) 14%, transparent);
+  color: color-mix(in oklab, var(--color-accent-green) 78%, black);
+}
+
+.agent-option-avatar--provider {
+  background: white;
+}
+
+.agent-option-avatar--missing {
+  border-color: color-mix(in oklab, var(--color-destructive) 42%, transparent);
+  color: var(--color-destructive);
+}
+
+.agent-option-row {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-option-copy {
+  display: inline-flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.agent-option-label {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-token-text-primary);
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-normal);
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-option-detail {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-token-text-tertiary);
+  font-size: var(--text-xs-plus);
+  font-weight: var(--font-weight-normal);
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-agent-option-icon {
+  border-radius: 6px;
+}
+
+.composer-provider-workflow-icon,
+.composer-workflow-option-row .composer-provider-workflow-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(64, 118, 89, 0.18);
+  border-radius: 999px;
+  background: rgba(53, 139, 91, 0.12);
+  color: #1d7a46;
+}
+
+.composer-workflow-option-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.composer-workflow-option-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.composer-workflow-option-label,
+.composer-workflow-option-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-workflow-option-label {
+  color: var(--color-token-text-primary);
+}
+
+.composer-workflow-option-detail {
+  max-width: 220px;
+  color: var(--color-token-text-tertiary);
+  font-size: var(--text-xs-plus);
+}
+
+.floating-action-menu-subtrigger.selected .composer-menu-label {
+  font-weight: var(--font-weight-normal);
+}
+
+.composer-menu-label {
+  min-width: 0;
+  overflow: hidden;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-model-menu-options {
+  max-height: calc(34px * 5);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.composer-bot-menu-item.muted {
+  color: var(--color-token-description-foreground);
+}
+
+.composer-menu-bot-logo,
+.composer-bot-menu-item > .icon {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+}
+
+.composer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.composer-footer {
+  min-height: 28px;
+  padding: 0 8px;
+}
+
+.thread-composer-status {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 0 8px;
+}
+
+.thread-composer-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  max-width: 160px;
+  padding: 0 6px;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 9999px;
+  color: rgba(26, 28, 31, 0.494);
+  font-size: 13px;
+  font-weight: var(--font-weight-normal);
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.thread-composer-status-pill svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  color: currentColor;
+}
+
+.thread-composer-status-pill span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.thread-composer-status-mode {
+  min-width: 104px;
+}
+
+.thread-composer-status-branch {
+  min-width: 0;
+}
+
+.composer-provider-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: rgba(13, 13, 13, 0.035);
+  color: rgba(13, 13, 13, 0.6);
+  box-shadow: none;
+  cursor: default;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.composer-provider-control:hover {
+  border-color: rgba(13, 13, 13, 0.045);
+  background: rgba(13, 13, 13, 0.055);
+  color: rgba(13, 13, 13, 0.76);
+}
+
+.composer-provider-control .icon,
+.composer-provider-icon {
+  width: 14px;
+  height: 14px;
+  color: currentColor;
+  flex-shrink: 0;
+}
+
+.composer-provider-agent-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  color: currentColor;
+  flex-shrink: 0;
+}
+
+.composer-provider-agent-icon .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.composer-provider-lobe-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.composer-provider-lobe-svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+.composer-provider-label {
+  min-width: 0;
+  color: currentColor;
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-normal);
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+
+.composer-provider-chevron {
+  flex-shrink: 0;
+  opacity: 0.6;
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.composer-provider-control:hover .composer-provider-chevron {
+  opacity: 0.9;
+}
+
+.composer-provider-control:focus-within {
+  background: rgba(13, 13, 13, 0.04);
+}
+
+/* Interactive dropdown variant (new-thread mode). Mirrors the static
+   .composer-provider-control pill but is a real SelectTrigger button. */
+button.composer-provider-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  width: auto;
+  min-height: 0;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: rgba(13, 13, 13, 0.035);
+  color: rgba(13, 13, 13, 0.62);
+  box-shadow: none;
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-normal);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+button.composer-provider-trigger:hover {
+  border-color: rgba(13, 13, 13, 0.045);
+  background: rgba(13, 13, 13, 0.055);
+  color: rgba(13, 13, 13, 0.78);
+}
+
+button.composer-provider-trigger[data-state="open"] {
+  border-color: rgba(13, 13, 13, 0.06);
+  background: rgba(13, 13, 13, 0.07);
+  color: rgba(13, 13, 13, 0.88);
+}
+
+/* New-thread model override pill stays quiet until an override is chosen. */
+button.composer-provider-trigger[data-muted] {
+  background: transparent;
+  color: rgba(13, 13, 13, 0.45);
+}
+
+button.composer-provider-trigger[data-muted]:hover {
+  background: rgba(13, 13, 13, 0.045);
+  color: rgba(13, 13, 13, 0.7);
+}
+
+/* Tame the SelectTrigger's built-in chevron so it matches the static pill. */
+button.composer-provider-trigger > svg:last-child {
+  width: 10px;
+  height: 10px;
+  opacity: 0.55;
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+button.composer-provider-trigger[data-state="open"] > svg:last-child {
+  opacity: 0.95;
+}
+
+[data-slot="dropdown-menu-item"][data-active] {
+  font-weight: var(--font-weight-normal);
+  color: var(--color-token-text-primary);
+}
+
+[data-slot="dropdown-menu-item"][data-active]::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  margin-left: auto;
+  border-radius: 999px;
+  background: var(--color-token-text-primary);
+}
+
+.composer-buttons {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.composer-image-button {
+  height: 28px;
+  padding-inline: 10px;
+  font-size: var(--text-sm);
+  border-radius: var(--radius-full);
+}
+
+.primary-send-button {
+  position: relative;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0;
+  gap: 0;
+  border-radius: 9999px;
+  box-shadow: none;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    opacity var(--duration-fast) var(--ease-standard);
+}
+
+.primary-send-button:not(:disabled):hover {
+  background: rgba(13, 13, 13, 0.85);
+}
+
+.primary-send-button:not(:disabled):active {
+  background: rgba(13, 13, 13, 0.75);
+}
+
+.primary-send-button:disabled {
+  opacity: 1;
+  background: color-mix(
+    in oklab,
+    var(--color-token-foreground) 24%,
+    transparent
+  );
+  color: var(--color-token-bg-primary);
+  box-shadow: none;
+}
+
+.primary-send-button .icon {
+  margin: 0;
+}
+
+.primary-stop-button {
+  background: var(--color-token-foreground);
+  color: var(--color-token-bg-primary);
+  box-shadow: none;
+}
+
+.queue-image-note {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 10px;
+  border-radius: var(--radius-full);
+  background: var(--color-token-row-selected);
+  color: var(--color-token-text-secondary);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.small-note {
+  margin: 0;
+  font-size: var(--text-base);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.workspace-upload-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.workspace-directory-tree {
+  height: 100%;
+  overflow: auto;
+  padding: 2px 2px 18px;
+  overscroll-behavior: contain;
+}
