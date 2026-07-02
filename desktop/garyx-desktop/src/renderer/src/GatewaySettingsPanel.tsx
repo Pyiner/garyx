@@ -1346,7 +1346,6 @@ function GatewayProfileDialog({
             />
           </label>
           <div className="gateway-setup-field">
-            <span>{t('Headers')}</span>
             <GatewayHeadersEditor
               value={gatewayHeaders}
               onChange={setGatewayHeaders}

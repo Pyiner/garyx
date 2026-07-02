@@ -475,6 +475,45 @@ code {
   width: 100%;
 }
 
+.gateway-headers-editor-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-weight: 600;
+  color: var(--color-token-text-primary);
+  cursor: pointer;
+}
+
+.gateway-headers-editor-toggle-icon {
+  width: 14px;
+  height: 14px;
+  color: var(--color-token-text-secondary);
+  transition: transform 0.15s ease;
+}
+
+.gateway-headers-editor-toggle-icon.expanded {
+  transform: rotate(90deg);
+}
+
+.gateway-headers-editor-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: rgba(15, 23, 42, 0.08);
+  color: var(--color-token-text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
 .gateway-headers-editor-list {
   display: flex;
   flex-direction: column;

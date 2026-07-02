@@ -10031,7 +10031,6 @@ export function AppShell() {
               </label>
 
               <div className="gateway-setup-field">
-                <span>{t('Headers')}</span>
                 <GatewayHeadersEditor
                   value={settingsDraft.gatewayHeaders}
                   onChange={(value) => {
