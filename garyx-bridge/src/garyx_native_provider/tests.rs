@@ -737,3 +737,69 @@ fn native_auth_reads_chatgpt_token_from_codex_auth_file() {
     assert_eq!(auth.base_url, CHATGPT_CODEX_BASE_URL);
     assert_eq!(auth.account_id.as_deref(), Some("test-account"));
 }
+
+#[tokio::test]
+async fn run_streaming_keeps_started_run_model_when_defaults_reload_mid_run() {
+    let client = Arc::new(FakeModelAdapter::new(vec![NativeModelResponse {
+        outputs: vec![NativeModelOutput::Text("done".to_owned())],
+        input_tokens: 1,
+        output_tokens: 1,
+        actual_model: None,
+    }]));
+    let mut config = GaryxNativeConfig::default();
+    config.model = "gpt-old".to_owned();
+    let provider = initialized_provider(config, client.clone()).await;
+
+    // Pre-create the session and hold its lock so the run parks after it has
+    // registered itself as active (and, with the fix, after it captured the
+    // effective config) but before it can build the model request.
+    let run_options = options(None);
+    let session = provider.ensure_session(&run_options).await;
+    let session_guard = session.lock().await;
+
+    let run_future = provider.run_streaming(&run_options, Box::new(|_| {}));
+
+    let orchestrate = async {
+        // The run inserts into active_runs before it awaits the session lock;
+        // once the run id is visible the config capture (which happens even
+        // earlier) is guaranteed to have completed.
+        for _ in 0..500 {
+            if provider
+                .active_runs
+                .lock()
+                .await
+                .contains_key("run-native-test")
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert!(
+            provider
+                .active_runs
+                .lock()
+                .await
+                .contains_key("run-native-test"),
+            "run never registered as active"
+        );
+        provider.update_model_defaults(&ProviderModelDefaults {
+            model: "gpt-new".to_owned(),
+            default_model: "gpt-new".to_owned(),
+            model_reasoning_effort: String::new(),
+            model_service_tier: String::new(),
+        });
+        drop(session_guard);
+    };
+
+    let (result, ()) = tokio::join!(run_future, orchestrate);
+    let result = result.expect("run should succeed");
+    assert!(result.success, "run failed: {:?}", result.error);
+
+    let requests = client.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].model, "gpt-old",
+        "an already-started run must keep the model captured at run start, \
+         not pick up defaults reloaded mid-run"
+    );
+}

@@ -1034,6 +1034,10 @@ impl AgentLoopProvider for GaryxNativeProvider {
     ) -> Result<ProviderRunResult, BridgeError> {
         let start = Instant::now();
         let run_id = resolve_run_id(&options.metadata);
+        // Snapshot the hot-reloadable defaults before the run becomes active:
+        // a defaults reload landing mid-run must not change the model this
+        // already-started run sends to the agent loop.
+        let effective_config = self.effective_config();
         let workspace_dir = resolve_workspace_dir(&self.config, options);
         let session = self.ensure_session(options).await;
         let cancel = Arc::new(AtomicBool::new(false));
@@ -1054,7 +1058,6 @@ impl AgentLoopProvider for GaryxNativeProvider {
             }
             state.sdk_session_id.clone()
         };
-        let effective_config = self.effective_config();
         let request = AgentLoopRunRequest {
             model: model_id(&effective_config, &options.metadata, self.default_model),
             instructions: self.instructions(options, &workspace_dir),
