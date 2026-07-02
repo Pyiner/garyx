@@ -686,7 +686,8 @@ extension GaryxMobileModel {
         modelReasoningEffort: String = "",
         workspace: String,
         avatarDataUrl: String,
-        systemPrompt: String
+        systemPrompt: String,
+        env: [String: String] = [:]
     ) async -> Bool {
         let agentId = agentId.trimmingCharacters(in: .whitespacesAndNewlines)
         let displayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -706,6 +707,7 @@ extension GaryxMobileModel {
                     providerType: provider,
                     model: model,
                     modelReasoningEffort: reasoningEffort,
+                    providerEnv: env.isEmpty ? nil : env,
                     defaultWorkspaceDir: workspace.isEmpty ? nil : workspace,
                     avatarDataUrl: avatarDataUrl.isEmpty ? nil : avatarDataUrl,
                     systemPrompt: prompt
@@ -723,6 +725,21 @@ extension GaryxMobileModel {
         }
     }
 
+    /// Fetch an agent's authoritative env for seeding the editor. When the
+    /// catalog was restored from a cache snapshot (which strips provider_env),
+    /// re-fetch the live agent; otherwise the in-memory agent is authoritative.
+    func authoritativeProviderEnv(for agent: GaryxAgentSummary) async -> [String: String] {
+        guard catalogSnapshotRestored else { return agent.providerEnv }
+        let runtimeGeneration = gatewayRuntimeGeneration
+        do {
+            let latestAgents = try await client().listAgents()
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return agent.providerEnv }
+            return latestAgents.first(where: { $0.id == agent.id })?.providerEnv ?? agent.providerEnv
+        } catch {
+            return agent.providerEnv
+        }
+    }
+
     func updateAgent(
         _ agent: GaryxAgentSummary,
         agentId: String,
@@ -733,7 +750,8 @@ extension GaryxMobileModel {
         workspace: String,
         avatarDataUrl: String,
         clearsAvatar: Bool = false,
-        systemPrompt: String
+        systemPrompt: String,
+        envIntent: GaryxAgentEnvIntent = .unchanged
     ) async -> GaryxAgentSummary? {
         let nextAgentId = agentId.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextDisplayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -767,6 +785,19 @@ extension GaryxMobileModel {
             } else {
                 requestAvatarDataUrl = nextAvatarDataUrl
             }
+            // Env is expressed as an explicit intent: `.unchanged` omits
+            // provider_env (gateway preserves the stored value), `.clear` sends
+            // an empty map, `.replace` sends the full desired map. This never
+            // re-sends a possibly-stale baseAgent snapshot for an untouched edit.
+            let providerEnvRequestValue: [String: String]?
+            switch envIntent {
+            case .unchanged:
+                providerEnvRequestValue = nil
+            case .clear:
+                providerEnvRequestValue = [:]
+            case .replace(let map):
+                providerEnvRequestValue = map
+            }
             let updated = try await client().updateAgent(
                 agentId: agent.id,
                 request: GaryxCustomAgentRequest(
@@ -776,7 +807,7 @@ extension GaryxMobileModel {
                     model: nextModelName,
                     modelReasoningEffort: nextReasoningEffort,
                     modelServiceTier: baseAgent.modelServiceTier,
-                    providerEnv: baseAgent.providerEnv.isEmpty ? nil : baseAgent.providerEnv,
+                    providerEnv: providerEnvRequestValue,
                     authSource: baseAgent.authSource.isEmpty ? nil : baseAgent.authSource,
                     baseUrl: baseAgent.baseUrl.isEmpty ? nil : baseAgent.baseUrl,
                     codexHome: baseAgent.codexHome.isEmpty ? nil : baseAgent.codexHome,
