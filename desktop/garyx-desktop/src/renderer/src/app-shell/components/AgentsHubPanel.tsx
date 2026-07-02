@@ -26,7 +26,13 @@ import type {
   UpdateTeamInput,
 } from '@shared/contracts';
 
-import { Trash } from 'lucide-react';
+import { Eye, EyeOff, Trash } from 'lucide-react';
+import {
+  apiKeyEnvName,
+  buildProviderEnvPayload,
+  envRowsFromEnvMap,
+  isNativeModelProvider,
+} from './agent-env-editor';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -87,6 +93,7 @@ type AgentDraft = {
   baseUrl: string;
   defaultWorkspaceDir: string;
   avatarDataUrl: string;
+  env: Array<{ key: string; value: string }>;
   systemPrompt: string;
 };
 
@@ -186,6 +193,7 @@ function emptyAgentDraft(): AgentDraft {
     baseUrl: '',
     defaultWorkspaceDir: '',
     avatarDataUrl: '',
+    env: [],
     systemPrompt: '',
   };
 }
@@ -235,25 +243,8 @@ function providerLabel(value: ProviderType): string {
   return 'Claude';
 }
 
-function isNativeModelProvider(value: ProviderType): boolean {
-  return value === 'gpt' || value === 'anthropic' || value === 'google' || value === 'claude_llm' || value === 'gemini_llm';
-}
-
 function defaultAuthSource(value: ProviderType): string {
   return value === 'gpt' ? 'codex' : 'api_key';
-}
-
-function apiKeyEnvName(value: ProviderType): string | null {
-  if (value === 'gpt') {
-    return 'OPENAI_API_KEY';
-  }
-  if (value === 'anthropic' || value === 'claude_llm') {
-    return 'ANTHROPIC_API_KEY';
-  }
-  if (value === 'google' || value === 'gemini_llm') {
-    return 'GEMINI_API_KEY';
-  }
-  return null;
 }
 
 function apiKeyFromAgent(agent: DesktopCustomAgent): string {
@@ -537,6 +528,7 @@ export function AgentsHubPanel({
   const [agentDialogMode, setAgentDialogMode] = useState<AgentDialogMode>(null);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [agentDraft, setAgentDraft] = useState<AgentDraft>(() => emptyAgentDraft());
+  const [revealedEnvIndexes, setRevealedEnvIndexes] = useState<Set<number>>(() => new Set());
   const [agentIdTouched, setAgentIdTouched] = useState(false);
   const [avatarGenerating, setAvatarGenerating] = useState(false);
   const [avatarStyleDialogOpen, setAvatarStyleDialogOpen] = useState(false);
@@ -889,6 +881,7 @@ export function AgentsHubPanel({
     setAgentDialogMode('create');
     setSelectedAgentId(null);
     setAgentDraft(emptyAgentDraft());
+    setRevealedEnvIndexes(new Set());
     setAgentIdTouched(false);
     setAvatarStyleTarget('agent');
     setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
@@ -910,8 +903,10 @@ export function AgentsHubPanel({
       baseUrl: agent.baseUrl || '',
       defaultWorkspaceDir: agent.defaultWorkspaceDir,
       avatarDataUrl: agent.avatarDataUrl,
+      env: envRowsFromEnvMap(agent.providerEnv),
       systemPrompt: agent.systemPrompt,
     });
+    setRevealedEnvIndexes(new Set());
     setAgentIdTouched(true);
     setAvatarStyleTarget('agent');
     setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
@@ -937,8 +932,10 @@ export function AgentsHubPanel({
       baseUrl: agent.baseUrl || '',
       defaultWorkspaceDir: agent.defaultWorkspaceDir,
       avatarDataUrl: agent.avatarDataUrl,
+      env: envRowsFromEnvMap(agent.providerEnv),
       systemPrompt: agent.systemPrompt,
     });
+    setRevealedEnvIndexes(new Set());
     setAgentIdTouched(true);
     setAvatarStyleTarget('agent');
     setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
@@ -1125,10 +1122,14 @@ export function AgentsHubPanel({
     setSaving(true);
     try {
       const nativeProvider = isNativeModelProvider(agentDraft.providerType);
-      const apiKeyEnv = apiKeyEnvName(agentDraft.providerType);
-      const providerEnv = nativeProvider && apiKeyEnv && agentDraft.apiKey.trim()
-        ? { [apiKeyEnv]: agentDraft.apiKey.trim() }
-        : null;
+      // The KV editor holds the agent's full env (seeded from providerEnv on
+      // open), so send the whole map. This preserves keys the API-key shortcut
+      // used to drop.
+      const providerEnv = buildProviderEnvPayload(
+        agentDraft.env,
+        agentDraft.providerType,
+        agentDraft.apiKey,
+      );
       const payload: CreateCustomAgentInput = {
         agentId: agentDraft.agentId.trim(),
         displayName: agentDraft.displayName.trim(),
@@ -1915,6 +1916,102 @@ export function AgentsHubPanel({
                   </div>
                 </>
               ) : null}
+
+              <div className="codex-form-field">
+                <Label className="codex-form-label">{t('Environment Variables')}</Label>
+                {agentDraft.env.map((row, index) => (
+                  <div
+                    key={index}
+                    style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '8px' }}
+                  >
+                    <Input
+                      autoCapitalize="off"
+                      autoComplete="off"
+                      onChange={(event) => {
+                        const nextKey = event.target.value;
+                        setAgentDraft((current) => ({
+                          ...current,
+                          env: current.env.map((entry, entryIndex) =>
+                            entryIndex === index ? { ...entry, key: nextKey } : entry,
+                          ),
+                        }));
+                      }}
+                      placeholder={t('KEY')}
+                      spellCheck={false}
+                      style={{ flex: '0 0 40%' }}
+                      value={row.key}
+                    />
+                    <Input
+                      autoCapitalize="off"
+                      autoComplete="off"
+                      onChange={(event) => {
+                        const nextValue = event.target.value;
+                        setAgentDraft((current) => ({
+                          ...current,
+                          env: current.env.map((entry, entryIndex) =>
+                            entryIndex === index ? { ...entry, value: nextValue } : entry,
+                          ),
+                        }));
+                      }}
+                      placeholder={t('value')}
+                      spellCheck={false}
+                      style={{ flex: 1 }}
+                      type={revealedEnvIndexes.has(index) ? 'text' : 'password'}
+                      value={row.value}
+                    />
+                    <Button
+                      aria-label={revealedEnvIndexes.has(index) ? t('Hide value') : t('Show value')}
+                      onClick={() => {
+                        setRevealedEnvIndexes((current) => {
+                          const next = new Set(current);
+                          if (next.has(index)) {
+                            next.delete(index);
+                          } else {
+                            next.add(index);
+                          }
+                          return next;
+                        });
+                      }}
+                      size="icon"
+                      type="button"
+                      variant="ghost"
+                    >
+                      {revealedEnvIndexes.has(index) ? <EyeOff size={14} /> : <Eye size={14} />}
+                    </Button>
+                    <Button
+                      aria-label={t('Remove variable')}
+                      onClick={() => {
+                        setAgentDraft((current) => ({
+                          ...current,
+                          env: current.env.filter((_, entryIndex) => entryIndex !== index),
+                        }));
+                        setRevealedEnvIndexes(new Set());
+                      }}
+                      size="icon"
+                      type="button"
+                      variant="ghost"
+                    >
+                      <Trash size={14} />
+                    </Button>
+                  </div>
+                ))}
+                <Button
+                  onClick={() => {
+                    setAgentDraft((current) => ({
+                      ...current,
+                      env: [...current.env, { key: '', value: '' }],
+                    }));
+                  }}
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  {t('Add variable')}
+                </Button>
+                <span className="codex-form-hint">
+                  {t('Environment variables are passed to this agent’s provider runs. They may appear in command output or logs—avoid secrets you can’t rotate.')}
+                </span>
+              </div>
 
               <div className="codex-form-field">
                 <Label className="codex-form-label" htmlFor="agent-dialog-default-workspace">
