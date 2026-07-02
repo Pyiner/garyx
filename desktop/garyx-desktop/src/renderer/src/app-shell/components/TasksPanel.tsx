@@ -918,7 +918,6 @@ export function TasksPanel({
       <div className="tasks-page-header">
         <div className="tasks-page-title-block">
           <div className="tasks-page-title-row">
-            <CheckCircle2 aria-hidden size={18} strokeWidth={1.8} />
             <h1 className="tasks-page-title">{t('Tasks')}</h1>
           </div>
           <p className="tasks-page-subtitle">{headerCount}</p>
