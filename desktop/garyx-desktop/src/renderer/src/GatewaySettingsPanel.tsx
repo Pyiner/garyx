@@ -1913,28 +1913,26 @@ export function GatewaySettingsPanel({
       );
     }
     if (usage.models.length > 0) {
+      // Keep the row height fixed: surface the tightest model quota and fold
+      // the full per-model breakdown into the hover title.
+      const tightest = usage.models.reduce((worst, model) => {
+        if (typeof model.remainingPercent !== 'number') return worst;
+        if (typeof worst.remainingPercent !== 'number') return model;
+        return model.remainingPercent < worst.remainingPercent ? model : worst;
+      }, usage.models[0]);
+      const breakdown = usage.models
+        .map((model) => `${model.name}: ${formatUsagePercent(model.remainingPercent)}`)
+        .join('\n');
       return (
-        <div className="provider-usage-models">
-          {usage.models.map((model) => {
-            const level = usageLevelClass(model.remainingPercent);
-            return (
-              <div className="provider-usage-model-row" key={model.id}>
-                <span className="provider-usage-model-name" title={model.name}>
-                  {model.name}
-                </span>
-                <span className={`provider-usage-value ${level}`}>
-                  {formatUsagePercent(model.remainingPercent)}
-                </span>
-                <span className="provider-usage-detail" title={model.description || undefined}>
-                  {model.description || usageResetText(
-                    model.resetsAt,
-                    model.resetAfterSeconds,
-                    t('model quota'),
-                  )}
-                </span>
-              </div>
-            );
-          })}
+        <div className="provider-usage-summary" title={breakdown}>
+          <span className={`provider-usage-value ${usageLevelClass(tightest.remainingPercent)}`}>
+            {formatUsagePercent(tightest.remainingPercent)}
+          </span>
+          <span className="provider-usage-detail">
+            {usage.models.length > 1
+              ? t('{name} · {count} models', { name: tightest.name, count: usage.models.length })
+              : tightest.name}
+          </span>
         </div>
       );
     }
@@ -2347,9 +2345,9 @@ export function GatewaySettingsPanel({
   const gatewayPanel = <>{connectionPanel}</>;
 
   const providerConfigTablePanel = (
-    <section className="provider-section">
-      <div className="provider-section-head">
-        <h2 className="provider-section-title">{t('Configured Providers')}</h2>
+    <section className="codex-section">
+      <div className="codex-section-header">
+        <span className="codex-section-title">{t('Configured Providers')}</span>
       </div>
       <div className="provider-config-table">
         <Table>
