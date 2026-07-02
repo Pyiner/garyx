@@ -163,9 +163,14 @@ final class GaryxMobileUsageWidgetTests: XCTestCase {
         XCTAssertEqual(GaryxUsageGaugeModel.formatDuration(12 * 60), "12m")
         XCTAssertEqual(GaryxUsageGaugeModel.formatDuration(30), "<1m")
         XCTAssertEqual(GaryxUsageGaugeModel.formatDuration(-100), "<1m")
+        // Two-segment precision per the shared §4 spec (`2d 4h`, `1h 12m`),
+        // matching the desktop formatUsageDuration.
+        XCTAssertEqual(GaryxUsageGaugeModel.formatDuration(2 * 86_400 + 4 * 3_600), "2d 4h")
+        XCTAssertEqual(GaryxUsageGaugeModel.formatDuration(3_600 + 12 * 60), "1h 12m")
+        XCTAssertEqual(GaryxUsageGaugeModel.formatDuration(2 * 86_400 + 59 * 60), "2d")
     }
 
-    func testResetSecondsPrefersResetsAtThenFallsBack() {
+    func testResetSecondsUsesEitherSourceAndPrefersConservativeMinimum() {
         let isoWindow = GaryxUsageWindow(
             usedPercent: 10,
             remainingPercent: 90,
@@ -176,8 +181,38 @@ final class GaryxMobileUsageWidgetTests: XCTestCase {
         let secondsWindow = GaryxUsageWindow(usedPercent: 10, remainingPercent: 90, resetAfterSeconds: 120)
         XCTAssertEqual(GaryxUsageGaugeModel.resetSeconds(for: secondsWindow, now: referenceNow), 120)
 
+        // When both sources are present and disagree, prefer the shorter
+        // conservative value (design §4), whichever side it comes from.
+        let secondsShorter = GaryxUsageWindow(
+            usedPercent: 10,
+            remainingPercent: 90,
+            resetsAt: iso8601(from: referenceNow.addingTimeInterval(7_200)),
+            resetAfterSeconds: 600
+        )
+        XCTAssertEqual(GaryxUsageGaugeModel.resetSeconds(for: secondsShorter, now: referenceNow), 600)
+
+        let isoShorter = GaryxUsageWindow(
+            usedPercent: 10,
+            remainingPercent: 90,
+            resetsAt: iso8601(from: referenceNow.addingTimeInterval(600)),
+            resetAfterSeconds: 7_200
+        )
+        XCTAssertEqual(GaryxUsageGaugeModel.resetSeconds(for: isoShorter, now: referenceNow), 600)
+
         let emptyWindow = GaryxUsageWindow(usedPercent: 10, remainingPercent: 90)
         XCTAssertNil(GaryxUsageGaugeModel.resetSeconds(for: emptyWindow, now: referenceNow))
+    }
+
+    func testUsageUpdatedText() {
+        XCTAssertEqual(
+            GaryxUsageGaugeModel.usageUpdatedText(
+                refreshedAt: iso8601(from: referenceNow.addingTimeInterval(-3 * 60)),
+                now: referenceNow
+            ),
+            "updated 3m ago"
+        )
+        XCTAssertNil(GaryxUsageGaugeModel.usageUpdatedText(refreshedAt: nil, now: referenceNow))
+        XCTAssertNil(GaryxUsageGaugeModel.usageUpdatedText(refreshedAt: "not a date", now: referenceNow))
     }
 
     func testFillFractionClampsOutOfRange() {
@@ -272,6 +307,112 @@ final class GaryxMobileUsageWidgetTests: XCTestCase {
         XCTAssertEqual(display.models[0].title, "Claude Opus 4.6 (Thinking)")
         XCTAssertEqual(display.models[0].remainingText, "99% left")
         XCTAssertEqual(display.models[0].detailText, "Quota resets in 1 hour.")
+        XCTAssertEqual(display.models[0].remainingPercent, 98.5, accuracy: 0.0001)
+        XCTAssertTrue(display.windows.isEmpty)
+    }
+
+    func testProviderUsageDisplayModelSurfacesPlanSessionAndStale() throws {
+        let provider = GaryxProviderUsage(
+            id: "claude_code",
+            name: "Claude Code",
+            available: true,
+            stale: true,
+            plan: " max ",
+            weekly: GaryxUsageWindow(usedPercent: 27, remainingPercent: 73, resetAfterSeconds: 2 * 86_400 + 4 * 3_600),
+            session: GaryxUsageWindow(usedPercent: 89, remainingPercent: 11, resetAfterSeconds: 3_600 + 12 * 60)
+        )
+
+        let display = try XCTUnwrap(
+            GaryxProviderUsageDisplayModel.make(
+                from: provider,
+                refreshedAt: iso8601(from: referenceNow.addingTimeInterval(-3 * 60)),
+                now: referenceNow
+            )
+        )
+        XCTAssertEqual(display.plan, "max")
+        XCTAssertTrue(display.stale)
+        XCTAssertEqual(display.updatedText, "updated 3m ago")
+        XCTAssertEqual(display.windows.map(\.label), ["Session", "Weekly"])
+
+        let session = display.windows[0]
+        XCTAssertEqual(session.remainingPercent, 11, accuracy: 0.0001)
+        XCTAssertEqual(session.remainingText, "11%")
+        XCTAssertEqual(session.detailText, "resets in 1h 12m")
+        XCTAssertEqual(session.level, .critical)
+
+        let weekly = display.windows[1]
+        XCTAssertEqual(weekly.remainingPercent, 73, accuracy: 0.0001)
+        XCTAssertEqual(weekly.remainingText, "73%")
+        XCTAssertEqual(weekly.detailText, "resets in 2d 4h")
+        XCTAssertEqual(weekly.level, .healthy)
+
+        // Summary keeps the weekly-first legacy semantics for existing callers,
+        // and the stale flag folds into the caption as before.
+        XCTAssertEqual(display.summaryText, "73% left")
+        XCTAssertEqual(display.detailText, "stale data")
+    }
+
+    func testProviderUsageDisplayModelSortsModelBucketsTightestFirst() throws {
+        let provider = GaryxProviderUsage(
+            id: "antigravity",
+            name: "Antigravity",
+            available: true,
+            models: [
+                GaryxModelUsage(
+                    id: "gemini-3-flash",
+                    name: "Gemini 3 Flash",
+                    remainingFraction: 0.84,
+                    remainingPercent: 84,
+                    usedPercent: 16
+                ),
+                GaryxModelUsage(
+                    id: "claude-opus-4-6-thinking",
+                    name: "Claude Opus 4.6 (Thinking)",
+                    remainingFraction: 0.12,
+                    remainingPercent: 12,
+                    usedPercent: 88
+                ),
+            ]
+        )
+
+        let display = try XCTUnwrap(GaryxProviderUsageDisplayModel.make(from: provider, now: referenceNow))
+        XCTAssertEqual(display.models.map(\.id), ["claude-opus-4-6-thinking", "gemini-3-flash"])
+        XCTAssertEqual(display.models[0].level, .critical)
+        XCTAssertEqual(display.models[1].level, .healthy)
+        XCTAssertEqual(display.summaryText, "2 model quotas")
+    }
+
+    func testProviderUsageDisplayModelSessionOnlyWindowStillRenders() throws {
+        let provider = GaryxProviderUsage(
+            id: "codex",
+            name: "Codex",
+            available: true,
+            session: GaryxUsageWindow(usedPercent: 40, remainingPercent: 60, resetAfterSeconds: 900)
+        )
+
+        let display = try XCTUnwrap(GaryxProviderUsageDisplayModel.make(from: provider, now: referenceNow))
+        XCTAssertTrue(display.available)
+        XCTAssertEqual(display.windows.map(\.label), ["Session"])
+        XCTAssertEqual(display.summaryText, "60% left")
+        XCTAssertEqual(display.detailText, "resets in 15m")
+    }
+
+    func testProviderUsageDisplayModelUnavailableCarriesPlanAndStale() throws {
+        let provider = GaryxProviderUsage(
+            id: "codex",
+            name: "Codex",
+            available: false,
+            stale: true,
+            plan: "pro",
+            error: "Codex usage request returned HTTP 500"
+        )
+
+        let display = try XCTUnwrap(GaryxProviderUsageDisplayModel.make(from: provider, now: referenceNow))
+        XCTAssertFalse(display.available)
+        XCTAssertEqual(display.summaryText, "Unavailable")
+        XCTAssertEqual(display.plan, "pro")
+        XCTAssertTrue(display.stale)
+        XCTAssertTrue(display.windows.isEmpty)
     }
 
     // MARK: - Store + snapshot
