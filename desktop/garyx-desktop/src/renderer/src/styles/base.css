@@ -241,7 +241,7 @@ code {
   height: 3px;
   margin-top: 20px;
   border-radius: 999px;
-  background: var(--color-token-row-selected);
+  background: rgba(26, 28, 31, 0.08);
 }
 
 .startup-progress::before {

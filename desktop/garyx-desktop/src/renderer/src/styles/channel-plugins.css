@@ -736,7 +736,7 @@ button.new-thread-dreams-scan:hover {
 [data-slot="select-content"].new-thread-workspace-menu [data-slot="select-separator"],
 [data-slot="select-content"].new-thread-mode-menu [data-slot="select-separator"] {
   margin: 4px 8px;
-  background: var(--color-token-row-selected);
+  background: rgba(26, 28, 31, 0.08);
 }
 
 /* ── Tasks: Workflow executor + runs ── */
