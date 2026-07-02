@@ -803,3 +803,28 @@ async fn run_streaming_keeps_started_run_model_when_defaults_reload_mid_run() {
          not pick up defaults reloaded mid-run"
     );
 }
+
+#[test]
+fn build_exec_command_overlays_agent_env_without_leaking() {
+    // Deterministic proof that the native shell tool (`exec_command`) injects
+    // the agent's runtime env onto the spawned Command, closing the gap where
+    // it previously inherited only the parent process environment.
+    let mut env = HashMap::new();
+    env.insert("TEST_AGENT_ENV_KEY".to_owned(), "test-value".to_owned());
+    let cmd = build_exec_command("echo hello", Path::new("/Users/test"), &env);
+    let std_cmd = cmd.as_std();
+
+    let has_env = std_cmd.get_envs().any(|(key, value)| {
+        key == std::ffi::OsStr::new("TEST_AGENT_ENV_KEY")
+            && value == Some(std::ffi::OsStr::new("test-value"))
+    });
+    assert!(has_env, "agent env must reach the exec_command shell subprocess");
+
+    // The env value must not leak into program/args (no-proactive-leak).
+    assert!(!std_cmd.get_program().to_string_lossy().contains("test-value"));
+    assert!(
+        std_cmd
+            .get_args()
+            .all(|arg| !arg.to_string_lossy().contains("test-value"))
+    );
+}

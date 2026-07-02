@@ -296,6 +296,114 @@ async fn spawn_agent_http_test_server(
     (format!("http://{addr}"), handle)
 }
 
+/// Agent test server that also answers GET with a canned agent carrying
+/// `existing_env`, so read-modify-write env merges can be exercised end to end.
+/// Only PUT requests are recorded into `requests`.
+async fn spawn_agent_http_test_server_with_env(
+    requests: StdArc<Mutex<Vec<RecordedRequest>>>,
+    existing_env: Value,
+) -> (String, JoinHandle<()>) {
+    let put_requests = requests.clone();
+    let get_env = existing_env;
+    let app = Router::new().route(
+        "/api/custom-agents/{agent_id}",
+        get(move |AxumPath(agent_id): AxumPath<String>| {
+            let env = get_env.clone();
+            async move {
+                (
+                    StatusCode::OK,
+                    Json(json!({
+                        "agent_id": agent_id,
+                        "display_name": "Existing Agent",
+                        "provider_type": "gpt",
+                        "model": "",
+                        "system_prompt": "",
+                        "provider_env": env,
+                        "built_in": false,
+                    })),
+                )
+            }
+        })
+        .put(
+            move |AxumPath(agent_id): AxumPath<String>, Json(payload): Json<Value>| {
+                let requests = put_requests.clone();
+                async move {
+                    requests
+                        .lock()
+                        .expect("request lock")
+                        .push(RecordedRequest {
+                            method: "PUT".to_owned(),
+                            path: format!("/api/custom-agents/{agent_id}"),
+                            body: payload.clone(),
+                        });
+                    (
+                        StatusCode::OK,
+                        Json(json!({
+                            "agent_id": agent_id,
+                            "display_name": payload["display_name"],
+                            "provider_type": payload["provider_type"],
+                            "model": payload["model"],
+                            "system_prompt": payload["system_prompt"],
+                            "built_in": false,
+                        })),
+                    )
+                }
+            },
+        ),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let addr = listener.local_addr().expect("listener addr");
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve test router");
+    });
+    (format!("http://{addr}"), handle)
+}
+
+/// Agent test server whose GET returns a fixed (failure) status, to prove that a
+/// failed existing-env read aborts the mutation instead of merging onto `{}`.
+/// PUT requests are still recorded so tests can assert none were sent.
+async fn spawn_agent_http_test_server_get_status(
+    requests: StdArc<Mutex<Vec<RecordedRequest>>>,
+    get_status: StatusCode,
+) -> (String, JoinHandle<()>) {
+    let put_requests = requests.clone();
+    let app = Router::new().route(
+        "/api/custom-agents/{agent_id}",
+        get(move |AxumPath(_agent_id): AxumPath<String>| async move {
+            (get_status, Json(json!({ "error": "boom" })))
+        })
+        .put(
+            move |AxumPath(agent_id): AxumPath<String>, Json(payload): Json<Value>| {
+                let requests = put_requests.clone();
+                async move {
+                    requests
+                        .lock()
+                        .expect("request lock")
+                        .push(RecordedRequest {
+                            method: "PUT".to_owned(),
+                            path: format!("/api/custom-agents/{agent_id}"),
+                            body: payload.clone(),
+                        });
+                    (
+                        StatusCode::OK,
+                        Json(json!({ "agent_id": agent_id, "built_in": false })),
+                    )
+                }
+            },
+        ),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let addr = listener.local_addr().expect("listener addr");
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve test router");
+    });
+    (format!("http://{addr}"), handle)
+}
+
 async fn spawn_settings_update_http_test_server(
     requests: StdArc<Mutex<Vec<RecordedRequest>>>,
 ) -> (String, JoinHandle<()>) {
@@ -947,6 +1055,238 @@ fn provider_model_config_key_maps_configurable_provider_types() {
     assert!(provider_model_config_key(&ProviderType::AgentTeam).is_err());
 }
 
+#[test]
+fn provider_set_patch_writes_native_api_key_env_shape() {
+    let patch = build_provider_set_patch(&ProviderSetOptions {
+        provider: "gpt".to_owned(),
+        model: Some("gpt-5.5".to_owned()),
+        reasoning: Some("high".to_owned()),
+        service_tier: Some("priority".to_owned()),
+        base_url: Some("https://example.invalid/v1".to_owned()),
+        api_key: Some("sk-openai-EXAMPLE".to_owned()),
+        auth_source: Some("api_key".to_owned()),
+        env: vec!["OPENAI_ORG=org-test".to_owned()],
+        clear_env: vec!["OLD_KEY".to_owned()],
+        json_output: true,
+        ..ProviderSetOptions::default()
+    })
+    .expect("provider set patch");
+
+    assert_eq!(patch.provider_key, "gpt");
+    assert_eq!(
+        patch.patch,
+        json!({
+            "agents": {
+                "gpt": {
+                    "provider_type": "gpt",
+                    "default_model": "gpt-5.5",
+                    "model_reasoning_effort": "high",
+                    "model_service_tier": "priority",
+                    "base_url": "https://example.invalid/v1",
+                    "auth_source": "api_key",
+                    "env": {
+                        "OLD_KEY": "",
+                        "OPENAI_ORG": "org-test",
+                        "OPENAI_API_KEY": "sk-openai-EXAMPLE"
+                    }
+                }
+            }
+        })
+    );
+}
+
+#[tokio::test]
+async fn cmd_provider_set_puts_settings_patch() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_settings_update_http_test_server(requests.clone()).await;
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_test_gateway_config(&dir, &base_url);
+
+    cmd_provider_set(
+        config_path.to_str().expect("config path"),
+        ProviderSetOptions {
+            provider: "anthropic".to_owned(),
+            model: Some("claude-sonnet-4-6".to_owned()),
+            clear_reasoning: true,
+            api_key: Some("sk-ant-EXAMPLE".to_owned()),
+            json_output: true,
+            ..ProviderSetOptions::default()
+        },
+    )
+    .await
+    .expect("provider set should succeed");
+
+    handle.abort();
+
+    let records = requests.lock().expect("request lock");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].method, "PUT");
+    assert_eq!(records[0].path, "/api/settings?merge=true");
+    assert_eq!(
+        records[0].body["agents"]["anthropic"]["provider_type"],
+        "anthropic"
+    );
+    assert_eq!(
+        records[0].body["agents"]["anthropic"]["default_model"],
+        "claude-sonnet-4-6"
+    );
+    assert_eq!(
+        records[0].body["agents"]["anthropic"]["model_reasoning_effort"],
+        ""
+    );
+    assert_eq!(
+        records[0].body["agents"]["anthropic"]["env"]["ANTHROPIC_API_KEY"],
+        "sk-ant-EXAMPLE"
+    );
+}
+
+#[test]
+fn usage_severity_and_reset_countdown_follow_provider_spec() {
+    let now = DateTime::parse_from_rfc3339("2030-01-01T00:00:00Z").expect("now");
+
+    assert_eq!(usage_severity(true, 50.0), UsageSeverity::Healthy);
+    assert_eq!(usage_severity(true, 20.0), UsageSeverity::Warning);
+    assert_eq!(usage_severity(true, 19.9), UsageSeverity::Critical);
+    assert_eq!(usage_severity(false, 99.0), UsageSeverity::Unavailable);
+
+    assert_eq!(
+        format_reset_countdown(Some(187_200), None, now).as_deref(),
+        Some("resets in 2d 4h")
+    );
+    assert_eq!(
+        format_reset_countdown(Some(4_320), None, now).as_deref(),
+        Some("resets in 1h 12m")
+    );
+    assert_eq!(
+        format_reset_countdown(Some(30), None, now).as_deref(),
+        Some("resets in <1m")
+    );
+    assert_eq!(
+        format_reset_countdown(None, Some("2030-01-01T03:00:00Z"), now).as_deref(),
+        Some("resets in 3h")
+    );
+}
+
+#[test]
+fn usage_table_formats_windows_and_antigravity_models() {
+    let payload = json!({
+        "refreshed_at": "2030-01-01T00:00:00Z",
+        "providers": [
+            {
+                "id": "claude_code",
+                "name": "Claude Code",
+                "available": true,
+                "plan": "max",
+                "session": {
+                    "used_percent": 2.0,
+                    "remaining_percent": 98.0,
+                    "reset_after_seconds": 7200
+                },
+                "weekly": {
+                    "used_percent": 27.0,
+                    "remaining_percent": 73.0,
+                    "reset_after_seconds": 432000
+                }
+            },
+            {
+                "id": "codex",
+                "name": "Codex",
+                "available": true,
+                "stale": true,
+                "plan": "pro",
+                "session": {
+                    "used_percent": 2.0,
+                    "remaining_percent": 98.0,
+                    "reset_after_seconds": 10800
+                },
+                "weekly": {
+                    "used_percent": 89.0,
+                    "remaining_percent": 11.0,
+                    "reset_after_seconds": 172800
+                }
+            },
+            {
+                "id": "antigravity",
+                "name": "Antigravity",
+                "available": true,
+                "models": [
+                    {
+                        "id": "claude-opus-test",
+                        "name": "claude-opus-test",
+                        "remaining_percent": 99.0,
+                        "reset_after_seconds": 3600
+                    },
+                    {
+                        "id": "gemini-flash-test",
+                        "name": "gemini-flash-test",
+                        "remaining_percent": 84.0,
+                        "reset_after_seconds": 18000
+                    }
+                ]
+            }
+        ]
+    });
+    let now = DateTime::parse_from_rfc3339("2030-01-01T00:03:00Z").expect("now");
+
+    let table =
+        format_usage_table_with_now(&payload, None, now).expect("usage table should render");
+
+    assert_eq!(
+        table,
+        concat!(
+            "PROVIDER        PLAN      SESSION                   WEEKLY                    STATUS\n",
+            "--------------------------------------------------------------------------------------\n",
+            "Claude Code     max       98% | resets in 2h        73% | resets in 5d        ok\n",
+            "Codex           pro       98% | resets in 3h        11% | resets in 2d        stale (updated 3m ago)\n",
+            "Antigravity     -         -                         -                         ok\n",
+            "  gemini-flash-test             84% | resets in 5h\n",
+            "  claude-opus-test              99% | resets in 1h\n",
+        )
+    );
+}
+
+#[test]
+fn provider_list_rows_include_all_model_providers() {
+    let settings = json!({
+        "agents": {
+            "gpt": {
+                "provider_type": "gpt",
+                "default_model": "gpt-5.5",
+                "auth_source": "api_key",
+                "env": {
+                    "OPENAI_API_KEY": "sk-openai-EXAMPLE"
+                }
+            }
+        }
+    });
+    let usage = json!({
+        "refreshed_at": "2030-01-01T00:00:00Z",
+        "providers": [
+            {
+                "id": "claude_code",
+                "name": "Claude Code",
+                "available": true,
+                "weekly": {
+                    "used_percent": 27.0,
+                    "remaining_percent": 73.0
+                }
+            }
+        ]
+    });
+
+    let rows = provider_list_rows(&settings, Some(&usage));
+
+    assert_eq!(rows.len(), 8);
+    assert_eq!(rows[0]["provider"], "Claude Code");
+    assert_eq!(rows[0]["usage"], "73% wk");
+    let gpt = rows
+        .iter()
+        .find(|row| row["type"] == "gpt")
+        .expect("gpt row");
+    assert_eq!(gpt["auth"], "api key");
+    assert_eq!(gpt["default_model"], "gpt-5.5");
+}
+
 #[tokio::test]
 async fn cmd_thread_create_posts_worktree_mode() {
     let requests = StdArc::new(Mutex::new(Vec::new()));
@@ -1331,6 +1671,9 @@ async fn cmd_agent_create_posts_model_payload() {
         Some("priority".to_owned()),
         None,
         None,
+        Vec::new(),
+        Vec::new(),
+        false,
         Some("/tmp/spec-review".to_owned()),
         "Review specs carefully.".to_owned(),
         false,
@@ -1369,6 +1712,9 @@ async fn cmd_agent_update_omits_model_fields_when_omitted() {
         None,
         None,
         None,
+        Vec::new(),
+        Vec::new(),
+        false,
         None,
         "Review specs carefully.".to_owned(),
         false,
@@ -1405,6 +1751,9 @@ async fn cmd_agent_update_sends_empty_model_when_clear_model_is_set() {
         None,
         None,
         None,
+        Vec::new(),
+        Vec::new(),
+        false,
         None,
         "Review specs carefully.".to_owned(),
         false,
@@ -1442,6 +1791,9 @@ async fn cmd_agent_upsert_falls_back_to_post_after_put_failure() {
         None,
         None,
         None,
+        Vec::new(),
+        Vec::new(),
+        false,
         None,
         "Review specs carefully.".to_owned(),
         false,
@@ -1477,6 +1829,9 @@ async fn cmd_agent_create_posts_native_provider_api_key_payload() {
         None,
         None,
         Some("test-openai-api-key".to_owned()),
+        Vec::new(),
+        Vec::new(),
+        false,
         None,
         "Use GPT.".to_owned(),
         false,
@@ -1493,6 +1848,290 @@ async fn cmd_agent_create_posts_native_provider_api_key_payload() {
     assert_eq!(
         records[0].body["provider_env"]["OPENAI_API_KEY"],
         "test-openai-api-key"
+    );
+}
+
+#[test]
+fn resolve_cli_provider_env_returns_none_when_untouched() {
+    let existing = Map::new();
+    let out = resolve_cli_provider_env(&existing, &[], &[], false, None).expect("ok");
+    assert!(out.is_none(), "no env flags must omit provider_env (preserve)");
+}
+
+#[test]
+fn resolve_cli_provider_env_merges_sets_onto_existing() {
+    let mut existing = Map::new();
+    existing.insert("OLD_KEY".to_owned(), Value::String("old".to_owned()));
+    let sets = vec!["NEW_KEY=new".to_owned(), "OLD_KEY=updated".to_owned()];
+    let out = resolve_cli_provider_env(&existing, &sets, &[], false, None)
+        .expect("ok")
+        .expect("some");
+    assert_eq!(out["OLD_KEY"], "updated");
+    assert_eq!(out["NEW_KEY"], "new");
+}
+
+#[test]
+fn resolve_cli_provider_env_unset_and_clear() {
+    let mut existing = Map::new();
+    existing.insert("A".to_owned(), Value::String("1".to_owned()));
+    existing.insert("B".to_owned(), Value::String("2".to_owned()));
+
+    let out = resolve_cli_provider_env(&existing, &[], &["A".to_owned()], false, None)
+        .expect("ok")
+        .expect("some");
+    assert!(out.get("A").is_none());
+    assert_eq!(out["B"], "2");
+
+    let cleared = resolve_cli_provider_env(&existing, &[], &[], true, None)
+        .expect("ok")
+        .expect("some");
+    assert_eq!(cleared, json!({}));
+
+    let cleared_set = resolve_cli_provider_env(&existing, &["C=3".to_owned()], &[], true, None)
+        .expect("ok")
+        .expect("some");
+    assert_eq!(cleared_set, json!({ "C": "3" }));
+}
+
+#[test]
+fn resolve_cli_provider_env_api_key_merges_without_dropping_keys() {
+    let mut existing = Map::new();
+    existing.insert("OTHER".to_owned(), Value::String("keep".to_owned()));
+    let out = resolve_cli_provider_env(
+        &existing,
+        &[],
+        &[],
+        false,
+        Some(("OPENAI_API_KEY", "test-openai-api-key")),
+    )
+    .expect("ok")
+    .expect("some");
+    assert_eq!(out["OTHER"], "keep");
+    assert_eq!(out["OPENAI_API_KEY"], "test-openai-api-key");
+}
+
+#[test]
+fn parse_env_pair_splits_on_first_equals_and_validates_key() {
+    assert_eq!(
+        parse_env_pair("KEY=a=b=c").expect("ok"),
+        ("KEY".to_owned(), "a=b=c".to_owned())
+    );
+    assert_eq!(
+        parse_env_pair("EMPTY=").expect("ok"),
+        ("EMPTY".to_owned(), String::new())
+    );
+    assert!(parse_env_pair("NO_EQUALS").is_err());
+    assert!(parse_env_pair("1BAD=x").is_err());
+    assert!(parse_env_pair("HAS SPACE=x").is_err());
+}
+
+#[test]
+fn mask_env_value_hides_non_empty_values() {
+    assert_eq!(mask_env_value(""), "");
+    assert_ne!(mask_env_value("secret"), "secret");
+    assert!(!mask_env_value("secret").is_empty());
+}
+
+#[tokio::test]
+async fn cmd_agent_create_sends_multiple_env_vars() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_agent_http_test_server(requests.clone(), StatusCode::OK).await;
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_test_gateway_config(&dir, &base_url);
+
+    cmd_agent_create(
+        config_path.to_str().expect("config path"),
+        "envy".to_owned(),
+        "Envy".to_owned(),
+        "claude_code".to_owned(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        vec!["A=1".to_owned(), "B=two".to_owned()],
+        Vec::new(),
+        false,
+        None,
+        "Prompt.".to_owned(),
+        false,
+    )
+    .await
+    .expect("agent create should succeed");
+
+    handle.abort();
+    let records = requests.lock().expect("request lock");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].method, "POST");
+    assert_eq!(records[0].body["provider_env"]["A"], "1");
+    assert_eq!(records[0].body["provider_env"]["B"], "two");
+}
+
+#[tokio::test]
+async fn cmd_agent_update_without_env_flags_omits_provider_env() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_agent_http_test_server(requests.clone(), StatusCode::OK).await;
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_test_gateway_config(&dir, &base_url);
+
+    cmd_agent_update(
+        config_path.to_str().expect("config path"),
+        "spec-review".to_owned(),
+        "Spec Review".to_owned(),
+        "claude_code".to_owned(),
+        None,
+        false,
+        None,
+        None,
+        None,
+        None,
+        Vec::new(),
+        Vec::new(),
+        false,
+        None,
+        "Prompt.".to_owned(),
+        false,
+    )
+    .await
+    .expect("agent update should succeed");
+
+    handle.abort();
+    let records = requests.lock().expect("request lock");
+    // Only the PUT — no GET fetch happens when no env flag is given.
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].method, "PUT");
+    assert!(
+        records[0].body.get("provider_env").is_none(),
+        "unchanged env must omit provider_env so the gateway preserves it"
+    );
+}
+
+#[tokio::test]
+async fn cmd_agent_update_merges_env_onto_existing_via_read_modify_write() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) =
+        spawn_agent_http_test_server_with_env(requests.clone(), json!({ "EXISTING_KEY": "keep-me" }))
+            .await;
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_test_gateway_config(&dir, &base_url);
+
+    cmd_agent_update(
+        config_path.to_str().expect("config path"),
+        "spec-review".to_owned(),
+        "Spec Review".to_owned(),
+        "claude_code".to_owned(),
+        None,
+        false,
+        None,
+        None,
+        None,
+        None,
+        vec!["NEW_KEY=new-value".to_owned()],
+        Vec::new(),
+        false,
+        None,
+        "Prompt.".to_owned(),
+        false,
+    )
+    .await
+    .expect("agent update should succeed");
+
+    handle.abort();
+    let records = requests.lock().expect("request lock");
+    let put = records
+        .iter()
+        .find(|record| record.method == "PUT")
+        .expect("put recorded");
+    assert_eq!(put.body["provider_env"]["EXISTING_KEY"], "keep-me");
+    assert_eq!(put.body["provider_env"]["NEW_KEY"], "new-value");
+}
+
+#[tokio::test]
+async fn cmd_agent_update_api_key_merges_without_dropping_existing_env() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_agent_http_test_server_with_env(
+        requests.clone(),
+        json!({ "CUSTOM_TOKEN": "keep-me" }),
+    )
+    .await;
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_test_gateway_config(&dir, &base_url);
+
+    cmd_agent_update(
+        config_path.to_str().expect("config path"),
+        "budget-gpt".to_owned(),
+        "Budget GPT".to_owned(),
+        "gpt".to_owned(),
+        None,
+        false,
+        None,
+        None,
+        None,
+        Some("test-openai-api-key".to_owned()),
+        Vec::new(),
+        Vec::new(),
+        false,
+        None,
+        "Prompt.".to_owned(),
+        false,
+    )
+    .await
+    .expect("agent update should succeed");
+
+    handle.abort();
+    let records = requests.lock().expect("request lock");
+    let put = records
+        .iter()
+        .find(|record| record.method == "PUT")
+        .expect("put recorded");
+    // The api-key shortcut merges into the existing map instead of replacing it.
+    assert_eq!(put.body["provider_env"]["CUSTOM_TOKEN"], "keep-me");
+    assert_eq!(put.body["provider_env"]["OPENAI_API_KEY"], "test-openai-api-key");
+    assert_eq!(put.body["auth_source"], "api_key");
+}
+
+#[tokio::test]
+async fn cmd_agent_update_fails_before_put_when_env_fetch_errors() {
+    // A failed existing-env read must abort the update, not merge env flags onto
+    // an empty map (which would drop the agent's stored env).
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_agent_http_test_server_get_status(
+        requests.clone(),
+        StatusCode::INTERNAL_SERVER_ERROR,
+    )
+    .await;
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_test_gateway_config(&dir, &base_url);
+
+    let result = cmd_agent_update(
+        config_path.to_str().expect("config path"),
+        "spec-review".to_owned(),
+        "Spec Review".to_owned(),
+        "claude_code".to_owned(),
+        None,
+        false,
+        None,
+        None,
+        None,
+        None,
+        vec!["NEW=1".to_owned()],
+        Vec::new(),
+        false,
+        None,
+        "Prompt.".to_owned(),
+        false,
+    )
+    .await;
+
+    handle.abort();
+    assert!(
+        result.is_err(),
+        "env-merge update must fail when the existing-env read fails"
+    );
+    let records = requests.lock().expect("request lock");
+    assert!(
+        records.iter().all(|record| record.method != "PUT"),
+        "must not PUT after a failed read (would risk dropping existing env)"
     );
 }
 
