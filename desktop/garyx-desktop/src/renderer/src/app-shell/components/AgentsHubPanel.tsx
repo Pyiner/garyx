@@ -1279,6 +1279,18 @@ export function AgentsHubPanel({
             })}
           </p>
         </div>
+        {!showingWorkflows ? (
+          <div className="mgmt-page-actions">
+            <button
+              className="mgmt-primary-button"
+              onClick={showingAgents ? openCreateAgentDialog : () => openCreateTeamDialog()}
+              type="button"
+            >
+              <IconPlus aria-hidden size={15} stroke={2} />
+              {showingAgents ? t('New Agent') : t('New Team')}
+            </button>
+          </div>
+        ) : null}
       </div>
       <div className="agents-hub-hero">
         <div className="agents-hub-tabs" role="tablist" aria-label={t("Agent registry sections")}>
@@ -1330,15 +1342,6 @@ export function AgentsHubPanel({
             />
           </div>
 
-          {!showingWorkflows ? (
-            <Button
-              onClick={showingAgents ? openCreateAgentDialog : () => openCreateTeamDialog()}
-              size="sm"
-            >
-              <IconPlus aria-hidden size={15} stroke={2} />
-              {showingAgents ? t('New Agent') : t('New Team')}
-            </Button>
-          ) : null}
         </div>
       </div>
 
