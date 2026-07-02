@@ -427,28 +427,62 @@ public struct GaryxUsageGaugeModel: Equatable, Sendable {
     }
 
     static func resetSeconds(for window: GaryxUsageWindow, now: Date) -> Int? {
-        if let resetsAt = window.resetsAt,
-           let date = GaryxUsageDateParsing.date(fromISO8601: resetsAt) {
-            return max(0, Int(date.timeIntervalSince(now)))
-        }
-        if let seconds = window.resetAfterSeconds {
-            return max(0, seconds)
-        }
-        return nil
+        resetSeconds(resetsAt: window.resetsAt, resetAfterSeconds: window.resetAfterSeconds, now: now)
     }
 
-    /// Compact human duration: `2d`, `5h`, `12m`, `<1m`.
+    /// Cross-platform reset rule (design §4/D9): when both `reset_after_seconds`
+    /// and `resets_at` are present and disagree, prefer the shorter conservative
+    /// value — the same rule as the desktop `usageResetSeconds` helper.
+    static func resetSeconds(resetsAt: String?, resetAfterSeconds: Int?, now: Date) -> Int? {
+        var candidates: [Int] = []
+        if let seconds = resetAfterSeconds {
+            candidates.append(max(0, seconds))
+        }
+        if let resetsAt,
+           let date = GaryxUsageDateParsing.date(fromISO8601: resetsAt) {
+            candidates.append(max(0, Int(date.timeIntervalSince(now))))
+        }
+        return candidates.min()
+    }
+
+    /// `resets in 2d 4h` caption shared by every usage surface; falls back to
+    /// the supplied text when no reset source is present.
+    static func resetText(
+        resetsAt: String?,
+        resetAfterSeconds: Int?,
+        fallback: String,
+        now: Date
+    ) -> String {
+        if let seconds = resetSeconds(resetsAt: resetsAt, resetAfterSeconds: resetAfterSeconds, now: now) {
+            return "resets in \(formatDuration(seconds))"
+        }
+        return fallback
+    }
+
+    /// `updated 3m ago` freshness label from the response `refreshed_at`, so a
+    /// stale reading never looks freshly green (design §4).
+    public static func usageUpdatedText(refreshedAt: String?, now: Date = Date()) -> String? {
+        guard let refreshedAt,
+              let date = GaryxUsageDateParsing.date(fromISO8601: refreshedAt) else {
+            return nil
+        }
+        let seconds = max(0, Int(now.timeIntervalSince(date)))
+        return "updated \(formatDuration(seconds)) ago"
+    }
+
+    /// Compact human duration matching the shared §4 spec and the desktop
+    /// `formatUsageDuration`: `2d 4h`, `1h 12m`, `12m`, `<1m`.
     static func formatDuration(_ seconds: Int) -> String {
         let total = max(0, seconds)
         let days = total / 86_400
+        let hours = (total % 86_400) / 3_600
+        let minutes = (total % 3_600) / 60
         if days >= 1 {
-            return "\(days)d"
+            return hours > 0 ? "\(days)d \(hours)h" : "\(days)d"
         }
-        let hours = total / 3_600
         if hours >= 1 {
-            return "\(hours)h"
+            return minutes > 0 ? "\(hours)h \(minutes)m" : "\(hours)h"
         }
-        let minutes = total / 60
         if minutes >= 1 {
             return "\(minutes)m"
         }
@@ -459,6 +493,8 @@ public struct GaryxUsageGaugeModel: Equatable, Sendable {
 public struct GaryxProviderModelUsageDisplayModel: Equatable, Identifiable, Sendable {
     public var id: String
     public var title: String
+    /// Remaining fill for the mini-bar, clamped 0-100.
+    public var remainingPercent: Double
     public var remainingText: String
     public var detailText: String
     public var level: GaryxUsageLevel
@@ -466,12 +502,40 @@ public struct GaryxProviderModelUsageDisplayModel: Equatable, Identifiable, Send
     public init(
         id: String,
         title: String,
+        remainingPercent: Double = 0,
         remainingText: String,
         detailText: String,
         level: GaryxUsageLevel
     ) {
         self.id = id
         self.title = title
+        self.remainingPercent = remainingPercent
+        self.remainingText = remainingText
+        self.detailText = detailText
+        self.level = level
+    }
+}
+
+/// One labelled remaining-quota meter (`Session` 5h / `Weekly` 7d) per the
+/// shared §4 visualization spec.
+public struct GaryxProviderUsageWindowDisplayModel: Equatable, Identifiable, Sendable {
+    public var id: String { label }
+    public var label: String
+    /// Remaining fill for the meter, clamped 0-100.
+    public var remainingPercent: Double
+    public var remainingText: String
+    public var detailText: String
+    public var level: GaryxUsageLevel
+
+    public init(
+        label: String,
+        remainingPercent: Double,
+        remainingText: String,
+        detailText: String,
+        level: GaryxUsageLevel
+    ) {
+        self.label = label
+        self.remainingPercent = remainingPercent
         self.remainingText = remainingText
         self.detailText = detailText
         self.level = level
@@ -483,6 +547,15 @@ public struct GaryxProviderUsageDisplayModel: Equatable, Sendable {
     public var summaryText: String
     public var detailText: String
     public var available: Bool
+    /// Subscription plan name (`Max`, `Pro`) shown as a pill by default (D4).
+    public var plan: String?
+    /// Stale readings dim their meters and surface `updatedText` (design §4).
+    public var stale: Bool
+    /// `updated 3m ago`, derived from the response `refreshed_at` when known.
+    public var updatedText: String?
+    /// Session/Weekly meters in display order (session first), Claude/Codex only.
+    public var windows: [GaryxProviderUsageWindowDisplayModel]
+    /// Per-model quota buckets (Antigravity), tightest remaining first.
     public var models: [GaryxProviderModelUsageDisplayModel]
 
     public init(
@@ -490,39 +563,65 @@ public struct GaryxProviderUsageDisplayModel: Equatable, Sendable {
         summaryText: String,
         detailText: String,
         available: Bool,
+        plan: String? = nil,
+        stale: Bool = false,
+        updatedText: String? = nil,
+        windows: [GaryxProviderUsageWindowDisplayModel] = [],
         models: [GaryxProviderModelUsageDisplayModel]
     ) {
         self.providerId = providerId
         self.summaryText = summaryText
         self.detailText = detailText
         self.available = available
+        self.plan = plan
+        self.stale = stale
+        self.updatedText = updatedText
+        self.windows = windows
         self.models = models
     }
 
     public static func make(
         from provider: GaryxProviderUsage?,
+        refreshedAt: String? = nil,
         now: Date = Date()
     ) -> GaryxProviderUsageDisplayModel? {
         guard let provider else { return nil }
+        let plan = provider.plan?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedPlan = (plan?.isEmpty == false) ? plan : nil
+        let updatedText = GaryxUsageGaugeModel.usageUpdatedText(refreshedAt: refreshedAt, now: now)
         if !provider.available {
             return GaryxProviderUsageDisplayModel(
                 providerId: provider.id,
                 summaryText: "Unavailable",
                 detailText: provider.error?.isEmpty == false ? "Check local credentials" : "No usage data",
                 available: false,
+                plan: normalizedPlan,
+                stale: provider.stale,
+                updatedText: updatedText,
                 models: []
             )
         }
 
-        let modelRows = provider.models.map { model in
-            let remaining = model.remainingPercent.clamped(to: 0...100)
-            return GaryxProviderModelUsageDisplayModel(
-                id: model.id,
-                title: model.name,
-                remainingText: "\(Int(remaining.rounded()))% left",
-                detailText: modelDetailText(for: model, stale: provider.stale, now: now),
-                level: GaryxUsageGaugeModel.level(forRemaining: remaining)
-            )
+        let modelRows = provider.models
+            .map { model -> GaryxProviderModelUsageDisplayModel in
+                let remaining = model.remainingPercent.clamped(to: 0...100)
+                return GaryxProviderModelUsageDisplayModel(
+                    id: model.id,
+                    title: model.name,
+                    remainingPercent: remaining,
+                    remainingText: "\(Int(remaining.rounded()))% left",
+                    detailText: modelDetailText(for: model, stale: provider.stale, now: now),
+                    level: GaryxUsageGaugeModel.level(forRemaining: remaining)
+                )
+            }
+            .sorted { $0.remainingPercent < $1.remainingPercent }
+
+        var windows: [GaryxProviderUsageWindowDisplayModel] = []
+        if let session = provider.session {
+            windows.append(windowDisplayModel(label: "Session", window: session, fallback: "session window", now: now))
+        }
+        if let weekly = provider.weekly {
+            windows.append(windowDisplayModel(label: "Weekly", window: weekly, fallback: "weekly window", now: now))
         }
 
         if let weekly = provider.weekly {
@@ -532,6 +631,25 @@ public struct GaryxProviderUsageDisplayModel: Equatable, Sendable {
                 summaryText: "\(Int(remaining.rounded()))% left",
                 detailText: GaryxUsageGaugeModel.resetDetailText(for: weekly, stale: provider.stale, now: now),
                 available: true,
+                plan: normalizedPlan,
+                stale: provider.stale,
+                updatedText: updatedText,
+                windows: windows,
+                models: modelRows
+            )
+        }
+
+        if !windows.isEmpty {
+            let tightest = windows.min { $0.remainingPercent < $1.remainingPercent }
+            return GaryxProviderUsageDisplayModel(
+                providerId: provider.id,
+                summaryText: tightest.map { "\(Int($0.remainingPercent.rounded()))% left" } ?? "No data",
+                detailText: tightest?.detailText ?? "Usage not reported",
+                available: true,
+                plan: normalizedPlan,
+                stale: provider.stale,
+                updatedText: updatedText,
+                windows: windows,
                 models: modelRows
             )
         }
@@ -545,6 +663,9 @@ public struct GaryxProviderUsageDisplayModel: Equatable, Sendable {
                 summaryText: modelCountText,
                 detailText: provider.stale ? "stale data" : "Per-model quota",
                 available: true,
+                plan: normalizedPlan,
+                stale: provider.stale,
+                updatedText: updatedText,
                 models: modelRows
             )
         }
@@ -554,7 +675,31 @@ public struct GaryxProviderUsageDisplayModel: Equatable, Sendable {
             summaryText: "No data",
             detailText: provider.error?.isEmpty == false ? "Check local credentials" : "Usage not reported",
             available: false,
+            plan: normalizedPlan,
+            stale: provider.stale,
+            updatedText: updatedText,
             models: []
+        )
+    }
+
+    private static func windowDisplayModel(
+        label: String,
+        window: GaryxUsageWindow,
+        fallback: String,
+        now: Date
+    ) -> GaryxProviderUsageWindowDisplayModel {
+        let remaining = window.remainingPercent.clamped(to: 0...100)
+        return GaryxProviderUsageWindowDisplayModel(
+            label: label,
+            remainingPercent: remaining,
+            remainingText: "\(Int(remaining.rounded()))%",
+            detailText: GaryxUsageGaugeModel.resetText(
+                resetsAt: window.resetsAt,
+                resetAfterSeconds: window.resetAfterSeconds,
+                fallback: fallback,
+                now: now
+            ),
+            level: GaryxUsageGaugeModel.level(forRemaining: remaining)
         )
     }
 
