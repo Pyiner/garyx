@@ -53,6 +53,17 @@ pub fn is_tool_related_message(role: &str, message: &Map<String, Value>) -> bool
         return true;
     }
 
+    // A user-role row is the user's own input. The ledger stores tool results
+    // under dedicated tool roles (verified against the full local ledger:
+    // zero user rows carry structural tool payloads), so hint sniffing on
+    // user rows has no true positives — it only misfiles real user messages
+    // whose structured content or metadata (e.g. an agent system prompt
+    // mentioning `mcp__` tools) happens to mention tool names. The explicit
+    // flags above still apply.
+    if role == "user" {
+        return false;
+    }
+
     contains_tool_hint(message.get("content"))
         || contains_tool_hint(message.get("metadata"))
         || contains_tool_hint(message.get("input"))
@@ -217,6 +228,45 @@ mod tests {
             "content": "why does mcp__garyx__status render as a tool_call?",
         }));
         assert!(!is_tool_related_message("user", &message));
+    }
+
+    #[test]
+    fn structured_user_prose_about_tools_is_not_tool_related() {
+        // TASK-1502 captured family: a real user prompt whose *structured*
+        // content nests prose mentioning tool names (attachments and
+        // multi-part sends produce structured content arrays). The nested
+        // string sits at depth > 0, so the substring sniff marked the row
+        // tool_related and downstream projections dropped or misfiled the
+        // user's own message.
+        let message = obj(json!({
+            "role": "user",
+            "content": [
+                { "type": "text", "text": "please call mcp__server__tool via tool_use" }
+            ],
+        }));
+        assert!(!is_tool_related_message("user", &message));
+    }
+
+    #[test]
+    fn user_prose_in_metadata_is_not_tool_related() {
+        // Same family: sniffing must not reach into user-row metadata either.
+        let message = obj(json!({
+            "role": "user",
+            "content": "short question",
+            "metadata": { "origin_id": "mobile-1", "draft": "mentions tool_use" },
+        }));
+        assert!(!is_tool_related_message("user", &message));
+    }
+
+    #[test]
+    fn explicit_flags_still_mark_user_rows_tool_related() {
+        // The explicit structural fields are not sniffing and keep working:
+        // a user-role row explicitly flagged as a tool-result carrier stays
+        // tool-related.
+        let flagged = obj(json!({ "role": "user", "tool_use_result": true }));
+        assert!(is_tool_related_message("user", &flagged));
+        let named = obj(json!({ "role": "user", "tool_name": "Bash" }));
+        assert!(is_tool_related_message("user", &named));
     }
 
     #[test]
