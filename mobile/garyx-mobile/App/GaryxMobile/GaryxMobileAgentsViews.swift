@@ -643,6 +643,7 @@ struct GaryxCreateAgentCard: View {
         !agentId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !providerType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !envDraft.hasInvalidKey
     }
 
     private func createAgent() async {
@@ -777,6 +778,7 @@ private struct GaryxAgentEditSheet: View {
         !agentId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !providerType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !envDraft.hasInvalidKey
     }
 
     private func fillDraft() {

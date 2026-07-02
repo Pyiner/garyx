@@ -89,4 +89,16 @@ final class GaryxAgentEnvDraftTests: XCTestCase {
         XCTAssertFalse(GaryxAgentEnvDraft.isValidKey("HAS SPACE"))
         XCTAssertFalse(GaryxAgentEnvDraft.isValidKey("HAS=EQ"))
     }
+
+    func testHasInvalidKeyGatesSave() {
+        var draft = GaryxAgentEnvDraft.empty
+        draft.addRow()
+        draft.updateKey(id: draft.rows[0].id, "VALID_KEY")
+        XCTAssertFalse(draft.hasInvalidKey)
+        draft.updateKey(id: draft.rows[0].id, "1invalid")
+        XCTAssertTrue(draft.hasInvalidKey)
+        // A blank key is dropped on serialize, so it is not flagged invalid.
+        draft.updateKey(id: draft.rows[0].id, "   ")
+        XCTAssertFalse(draft.hasInvalidKey)
+    }
 }

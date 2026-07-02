@@ -28,10 +28,12 @@ import type {
 
 import { Eye, EyeOff, Trash } from 'lucide-react';
 import {
-  apiKeyEnvName,
+  apiKeyValueFromRows,
   buildProviderEnvPayload,
   envRowsFromEnvMap,
+  envRowsHaveInvalidKey,
   isNativeModelProvider,
+  setApiKeyInRows,
 } from './agent-env-editor';
 import {
   DropdownMenu,
@@ -89,7 +91,6 @@ type AgentDraft = {
   modelReasoningEffort: string;
   modelServiceTier: string;
   authSource: string;
-  apiKey: string;
   baseUrl: string;
   defaultWorkspaceDir: string;
   avatarDataUrl: string;
@@ -189,7 +190,6 @@ function emptyAgentDraft(): AgentDraft {
     modelReasoningEffort: '',
     modelServiceTier: '',
     authSource: 'codex',
-    apiKey: '',
     baseUrl: '',
     defaultWorkspaceDir: '',
     avatarDataUrl: '',
@@ -245,11 +245,6 @@ function providerLabel(value: ProviderType): string {
 
 function defaultAuthSource(value: ProviderType): string {
   return value === 'gpt' ? 'codex' : 'api_key';
-}
-
-function apiKeyFromAgent(agent: DesktopCustomAgent): string {
-  const envName = apiKeyEnvName(agent.providerType as ProviderType);
-  return envName ? agent.providerEnv?.[envName] || '' : '';
 }
 
 function previewText(value: string | null | undefined, fallback: string): string {
@@ -529,6 +524,7 @@ export function AgentsHubPanel({
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [agentDraft, setAgentDraft] = useState<AgentDraft>(() => emptyAgentDraft());
   const [revealedEnvIndexes, setRevealedEnvIndexes] = useState<Set<number>>(() => new Set());
+  const [revealedViewEnvKeys, setRevealedViewEnvKeys] = useState<Set<string>>(() => new Set());
   const [agentIdTouched, setAgentIdTouched] = useState(false);
   const [avatarGenerating, setAvatarGenerating] = useState(false);
   const [avatarStyleDialogOpen, setAvatarStyleDialogOpen] = useState(false);
@@ -882,6 +878,7 @@ export function AgentsHubPanel({
     setSelectedAgentId(null);
     setAgentDraft(emptyAgentDraft());
     setRevealedEnvIndexes(new Set());
+    setRevealedViewEnvKeys(new Set());
     setAgentIdTouched(false);
     setAvatarStyleTarget('agent');
     setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
@@ -899,7 +896,6 @@ export function AgentsHubPanel({
       modelReasoningEffort: agent.modelReasoningEffort,
       modelServiceTier: agent.modelServiceTier,
       authSource: agent.authSource || defaultAuthSource(agent.providerType as ProviderType),
-      apiKey: apiKeyFromAgent(agent),
       baseUrl: agent.baseUrl || '',
       defaultWorkspaceDir: agent.defaultWorkspaceDir,
       avatarDataUrl: agent.avatarDataUrl,
@@ -907,6 +903,7 @@ export function AgentsHubPanel({
       systemPrompt: agent.systemPrompt,
     });
     setRevealedEnvIndexes(new Set());
+    setRevealedViewEnvKeys(new Set());
     setAgentIdTouched(true);
     setAvatarStyleTarget('agent');
     setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
@@ -928,7 +925,6 @@ export function AgentsHubPanel({
       modelReasoningEffort: agent.modelReasoningEffort,
       modelServiceTier: agent.modelServiceTier,
       authSource: agent.authSource || defaultAuthSource(agent.providerType as ProviderType),
-      apiKey: apiKeyFromAgent(agent),
       baseUrl: agent.baseUrl || '',
       defaultWorkspaceDir: agent.defaultWorkspaceDir,
       avatarDataUrl: agent.avatarDataUrl,
@@ -936,6 +932,7 @@ export function AgentsHubPanel({
       systemPrompt: agent.systemPrompt,
     });
     setRevealedEnvIndexes(new Set());
+    setRevealedViewEnvKeys(new Set());
     setAgentIdTouched(true);
     setAvatarStyleTarget('agent');
     setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
@@ -1122,14 +1119,10 @@ export function AgentsHubPanel({
     setSaving(true);
     try {
       const nativeProvider = isNativeModelProvider(agentDraft.providerType);
-      // The KV editor holds the agent's full env (seeded from providerEnv on
-      // open), so send the whole map. This preserves keys the API-key shortcut
-      // used to drop.
-      const providerEnv = buildProviderEnvPayload(
-        agentDraft.env,
-        agentDraft.providerType,
-        agentDraft.apiKey,
-      );
+      // The KV editor is the single source of env (the API-key field writes into
+      // it). Send the whole map, which preserves keys the API-key shortcut used
+      // to drop.
+      const providerEnv = buildProviderEnvPayload(agentDraft.env);
       const payload: CreateCustomAgentInput = {
         agentId: agentDraft.agentId.trim(),
         displayName: agentDraft.displayName.trim(),
@@ -1247,7 +1240,9 @@ export function AgentsHubPanel({
         ? t('Agent ID is required.')
         : !agentDraft.systemPrompt.trim()
           ? t('System prompt is required.')
-          : null;
+          : envRowsHaveInvalidKey(agentDraft.env)
+            ? t('Environment variable names must match [A-Za-z_][A-Za-z0-9_]*.')
+            : null;
 
   const teamValidationError =
     !teamDraft.displayName.trim()
@@ -1851,7 +1846,10 @@ export function AgentsHubPanel({
                           setAgentDraft((current) => ({
                             ...current,
                             authSource: value,
-                            apiKey: value === 'codex' ? '' : current.apiKey,
+                            env:
+                              value === 'codex'
+                                ? setApiKeyInRows(current.env, current.providerType, '')
+                                : current.env,
                           }));
                         }}
                         value={agentDraft.authSource || 'codex'}
@@ -1879,7 +1877,11 @@ export function AgentsHubPanel({
                         autoComplete="off"
                         id="agent-dialog-api-key"
                         onChange={(event) => {
-                          setAgentDraft((current) => ({ ...current, apiKey: event.target.value }));
+                          const nextApiKey = event.target.value;
+                          setAgentDraft((current) => ({
+                            ...current,
+                            env: setApiKeyInRows(current.env, current.providerType, nextApiKey),
+                          }));
                         }}
                         placeholder={
                           agentDraft.providerType === 'anthropic' || agentDraft.providerType === 'claude_llm'
@@ -1890,7 +1892,7 @@ export function AgentsHubPanel({
                         }
                         spellCheck={false}
                         type="password"
-                        value={agentDraft.apiKey}
+                        value={apiKeyValueFromRows(agentDraft.env, agentDraft.providerType)}
                       />
                       <span className="codex-form-hint">
                         {t('Stored on this custom provider config.')}
@@ -1986,6 +1988,7 @@ export function AgentsHubPanel({
                           env: current.env.filter((_, entryIndex) => entryIndex !== index),
                         }));
                         setRevealedEnvIndexes(new Set());
+    setRevealedViewEnvKeys(new Set());
                       }}
                       size="icon"
                       type="button"
@@ -2118,6 +2121,49 @@ export function AgentsHubPanel({
                     </div>
                   </div>
                 </div>
+
+                {selectedAgent && Object.keys(selectedAgent.providerEnv || {}).length > 0 ? (
+                  <div className="agents-hub-detail-block">
+                    <div className="agents-hub-detail-label">{t('Environment Variables')}</div>
+                    <div className="agents-hub-detail-body mono">
+                      {Object.keys(selectedAgent.providerEnv)
+                        .sort()
+                        .map((key) => {
+                          const revealed = revealedViewEnvKeys.has(key);
+                          const value = selectedAgent.providerEnv[key];
+                          return (
+                            <div
+                              key={key}
+                              style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+                            >
+                              <span style={{ flex: 1, wordBreak: 'break-all' }}>
+                                {key}={revealed ? value : value ? '••••••' : ''}
+                              </span>
+                              <Button
+                                aria-label={revealed ? t('Hide value') : t('Show value')}
+                                onClick={() => {
+                                  setRevealedViewEnvKeys((current) => {
+                                    const next = new Set(current);
+                                    if (next.has(key)) {
+                                      next.delete(key);
+                                    } else {
+                                      next.add(key);
+                                    }
+                                    return next;
+                                  });
+                                }}
+                                size="icon"
+                                type="button"
+                                variant="ghost"
+                              >
+                                {revealed ? <EyeOff size={14} /> : <Eye size={14} />}
+                              </Button>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </div>
+                ) : null}
 
                 <div className="agents-hub-detail-block">
                   <div className="agents-hub-detail-label">{t('System Prompt')}</div>

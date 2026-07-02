@@ -3786,23 +3786,41 @@ fn resolve_cli_provider_env(
     Ok(Some(Value::Object(map)))
 }
 
-/// Fetch an agent's current `provider_env` map for read-modify-write. Returns an
-/// empty map if the agent doesn't exist yet or on fetch error (so `upsert` can
-/// still create).
-async fn fetch_existing_provider_env(gateway: &GatewayEndpoint, agent_id: &str) -> Map<String, Value> {
-    match fetch_gateway_json(
-        gateway,
-        &format!("/api/custom-agents/{}", urlencoding::encode(agent_id.trim())),
-    )
-    .await
-    {
-        Ok(agent) => agent
+/// Fetch an agent's current `provider_env` map for read-modify-write.
+///
+/// Returns `Ok(Some(map))` when the agent exists, `Ok(None)` on a 404 (so
+/// `upsert` can create from empty), and `Err` on any other failure (transient,
+/// 5xx, malformed body). Distinguishing these prevents a failed read from
+/// silently merging env flags onto an empty map and dropping existing env.
+async fn fetch_existing_provider_env(
+    gateway: &GatewayEndpoint,
+    agent_id: &str,
+) -> Result<Option<Map<String, Value>>, Box<dyn std::error::Error>> {
+    let url = format!(
+        "{}/api/custom-agents/{}",
+        gateway.base_url,
+        urlencoding::encode(agent_id.trim())
+    );
+    let response = gateway_request(reqwest::Client::new().get(&url), gateway)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await?;
+    let status = response.status();
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    let body = response.text().await?;
+    if !status.is_success() {
+        return Err(format!("failed to read agent env before merge: {status} {body}").into());
+    }
+    let agent: Value = serde_json::from_str(&body)?;
+    Ok(Some(
+        agent
             .get("provider_env")
             .and_then(Value::as_object)
             .cloned()
             .unwrap_or_default(),
-        Err(_) => Map::new(),
-    }
+    ))
 }
 
 /// Whether the given env flags require fetching the agent's current env before
@@ -3948,7 +3966,9 @@ pub(crate) async fn cmd_agent_update(
     let gateway = gateway_endpoint(config_path)?;
     let api_key = resolve_api_key_env(&provider, provider_api_key.as_deref())?;
     let existing = if env_flags_need_existing(&env, &unset_env, env_clear, api_key.is_some()) {
-        fetch_existing_provider_env(&gateway, &agent_id).await
+        fetch_existing_provider_env(&gateway, &agent_id)
+            .await?
+            .unwrap_or_default()
     } else {
         Map::new()
     };
@@ -4006,7 +4026,9 @@ pub(crate) async fn cmd_agent_upsert(
     let gateway = gateway_endpoint(config_path)?;
     let api_key = resolve_api_key_env(&provider, provider_api_key.as_deref())?;
     let existing = if env_flags_need_existing(&env, &unset_env, env_clear, api_key.is_some()) {
-        fetch_existing_provider_env(&gateway, &agent_id).await
+        fetch_existing_provider_env(&gateway, &agent_id)
+            .await?
+            .unwrap_or_default()
     } else {
         Map::new()
     };

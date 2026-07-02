@@ -361,6 +361,49 @@ async fn spawn_agent_http_test_server_with_env(
     (format!("http://{addr}"), handle)
 }
 
+/// Agent test server whose GET returns a fixed (failure) status, to prove that a
+/// failed existing-env read aborts the mutation instead of merging onto `{}`.
+/// PUT requests are still recorded so tests can assert none were sent.
+async fn spawn_agent_http_test_server_get_status(
+    requests: StdArc<Mutex<Vec<RecordedRequest>>>,
+    get_status: StatusCode,
+) -> (String, JoinHandle<()>) {
+    let put_requests = requests.clone();
+    let app = Router::new().route(
+        "/api/custom-agents/{agent_id}",
+        get(move |AxumPath(_agent_id): AxumPath<String>| async move {
+            (get_status, Json(json!({ "error": "boom" })))
+        })
+        .put(
+            move |AxumPath(agent_id): AxumPath<String>, Json(payload): Json<Value>| {
+                let requests = put_requests.clone();
+                async move {
+                    requests
+                        .lock()
+                        .expect("request lock")
+                        .push(RecordedRequest {
+                            method: "PUT".to_owned(),
+                            path: format!("/api/custom-agents/{agent_id}"),
+                            body: payload.clone(),
+                        });
+                    (
+                        StatusCode::OK,
+                        Json(json!({ "agent_id": agent_id, "built_in": false })),
+                    )
+                }
+            },
+        ),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let addr = listener.local_addr().expect("listener addr");
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve test router");
+    });
+    (format!("http://{addr}"), handle)
+}
+
 async fn spawn_settings_update_http_test_server(
     requests: StdArc<Mutex<Vec<RecordedRequest>>>,
 ) -> (String, JoinHandle<()>) {
@@ -1813,6 +1856,51 @@ async fn cmd_agent_update_api_key_merges_without_dropping_existing_env() {
     assert_eq!(put.body["provider_env"]["CUSTOM_TOKEN"], "keep-me");
     assert_eq!(put.body["provider_env"]["OPENAI_API_KEY"], "test-openai-api-key");
     assert_eq!(put.body["auth_source"], "api_key");
+}
+
+#[tokio::test]
+async fn cmd_agent_update_fails_before_put_when_env_fetch_errors() {
+    // A failed existing-env read must abort the update, not merge env flags onto
+    // an empty map (which would drop the agent's stored env).
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_agent_http_test_server_get_status(
+        requests.clone(),
+        StatusCode::INTERNAL_SERVER_ERROR,
+    )
+    .await;
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_test_gateway_config(&dir, &base_url);
+
+    let result = cmd_agent_update(
+        config_path.to_str().expect("config path"),
+        "spec-review".to_owned(),
+        "Spec Review".to_owned(),
+        "claude_code".to_owned(),
+        None,
+        false,
+        None,
+        None,
+        None,
+        None,
+        vec!["NEW=1".to_owned()],
+        Vec::new(),
+        false,
+        None,
+        "Prompt.".to_owned(),
+        false,
+    )
+    .await;
+
+    handle.abort();
+    assert!(
+        result.is_err(),
+        "env-merge update must fail when the existing-env read fails"
+    );
+    let records = requests.lock().expect("request lock");
+    assert!(
+        records.iter().all(|record| record.method != "PUT"),
+        "must not PUT after a failed read (would risk dropping existing env)"
+    );
 }
 
 #[test]
