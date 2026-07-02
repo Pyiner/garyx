@@ -686,12 +686,12 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
     <>
       <div className="skills-panel-shell">
         <div className="codex-section">
-          <div className="codex-section-header skills-panel-header">
-            <div className="skills-panel-header-copy">
-              <span className="codex-section-title">{t('Skills')}</span>
-              <span className="codex-section-note">{t('{count} total', { count: skills.length })}</span>
+          <div className="mgmt-page-header skills-panel-header">
+            <div className="mgmt-page-title-block">
+              <h1 className="mgmt-page-title">{t('Skills')}</h1>
+              <p className="mgmt-page-subtitle">{t('{count} total', { count: skills.length })}</p>
             </div>
-            <div className="skills-panel-header-actions">
+            <div className="mgmt-page-actions">
               <button
                 className="codex-section-action"
                 disabled={loading || creating || Boolean(mutatingSkillId) || Boolean(editorBusy)}
@@ -703,7 +703,7 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                 {loading ? t('Refreshing...') : t('Refresh')}
               </button>
               <button
-                className="codex-section-action"
+                className="mgmt-primary-button"
                 disabled={creating || Boolean(mutatingSkillId) || Boolean(editorBusy)}
                 onClick={openCreateDialog}
                 type="button"

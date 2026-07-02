@@ -1270,6 +1270,16 @@ export function AgentsHubPanel({
 
   return (
     <div className="agents-hub">
+      <div className="mgmt-page-header agents-hub-page-header">
+        <div className="mgmt-page-title-block">
+          <h1 className="mgmt-page-title">{t('Agents')}</h1>
+          <p className="mgmt-page-subtitle">
+            {t('{count} total', {
+              count: showingAgents ? agents.length : showingTeams ? teams.length : workflows.length,
+            })}
+          </p>
+        </div>
+      </div>
       <div className="agents-hub-hero">
         <div className="agents-hub-tabs" role="tablist" aria-label={t("Agent registry sections")}>
           <button

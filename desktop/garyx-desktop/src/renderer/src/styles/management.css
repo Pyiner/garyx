@@ -1,0 +1,66 @@
+/* Shared management-page chrome: one header shape (big title + count
+   subtitle on the left, actions with a primary new-button on the right)
+   for the Agent / Skills / Tasks / Automations surfaces. */
+
+.mgmt-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.mgmt-page-title-block {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.mgmt-page-title {
+  margin: 0;
+  color: var(--color-token-text-primary);
+  font-size: var(--text-display-md);
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.mgmt-page-subtitle {
+  margin: 0;
+  color: var(--color-token-description-foreground);
+  font-size: var(--text-sm);
+}
+
+.mgmt-page-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.mgmt-primary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--color-background-button-primary);
+  color: var(--color-token-button-foreground);
+  font-size: var(--text-sm);
+  font-weight: 560;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.mgmt-primary-button:hover {
+  background: color-mix(in oklab, #000 82%, var(--color-accent-green));
+}
+
+.mgmt-primary-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
