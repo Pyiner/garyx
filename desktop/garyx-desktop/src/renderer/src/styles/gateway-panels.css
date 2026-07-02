@@ -1,0 +1,301 @@
+/* Settings -> Gateway saved gateway list, gateway switcher popover. */
+
+/* Settings -> Gateway: saved gateway list (management only — switching
+   lives in the sidebar identity bar). */
+.gateway-profiles-card {
+  padding: 4px 6px;
+}
+
+.gateway-profiles-empty {
+  margin: 0;
+  padding: 12px 10px;
+  color: #8f8f8a;
+  font-size: 12.5px;
+}
+
+.gateway-profile-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+  padding: 10px;
+}
+
+.gateway-profile-row + .gateway-profile-row {
+  border-top: 1px solid #f0f0ee;
+}
+
+.gateway-profile-row-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.gateway-profile-row-name {
+  overflow: hidden;
+  color: #2a2a28;
+  font-size: 13px;
+  font-weight: 550;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gateway-profile-row-url {
+  overflow: hidden;
+  color: #8f8f8a;
+  font-size: 11.5px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gateway-profile-current {
+  flex: none;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: #f4f4f2;
+  color: #6f6f6a;
+  font-size: 11px;
+  font-weight: 550;
+}
+
+.gateway-profiles-header {
+  justify-content: flex-end;
+}
+
+.gateway-profile-edit {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #a8a29e;
+  cursor: default;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.gateway-profile-edit:hover {
+  background: #f4f4f2;
+  color: #3a3a37;
+}
+
+.gateway-profile-delete {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #a8a29e;
+  cursor: default;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.gateway-profile-delete:hover {
+  background: #fdf3f3;
+  color: #9b3d3d;
+}
+
+.gateway-add-fields {
+  display: grid;
+  gap: 12px;
+}
+
+/* ============================================================
+   Top-right child task tree popover on thread detail
+   ============================================================ */
+.thread-subtask-pop {
+  position: absolute;
+  top: 12px;
+  right: 18px;
+  z-index: 30;
+  width: 330px;
+  max-height: min(62vh, 560px);
+  overflow-y: auto;
+  border: 1px solid var(--border, rgba(26, 28, 31, 0.1));
+  border-radius: 13px;
+  background: var(--bg-primary, #ffffff);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1), 0 2px 6px rgba(0, 0, 0, 0.05);
+  padding: 6px;
+}
+/* Reserve the right rail for the popover: padding-right narrows in-flow
+   message content while the absolute popover stays pinned to the border box.
+   The :has() selector avoids reserving space when no active child task
+   popover is rendered. */
+.thread-main:has(.thread-subtask-pop) {
+  padding-right: 360px;
+}
+/* The composer is absolute and does not consume padding-right, so reserve the
+   same right rail explicitly to keep it aligned with the message column. */
+.thread-main:has(.thread-subtask-pop) .composer-shell-wrap {
+  right: 360px;
+  width: min(var(--container-2xl), calc(100% - 360px));
+}
+.thread-subtask-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px 0 11px;
+  border-radius: 9px;
+  border: 1px solid var(--border, rgba(26, 28, 31, 0.1));
+  background: var(--bg-primary, #ffffff);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.03);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-secondary, rgba(26, 28, 31, 0.65));
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.thread-subtask-toggle:hover {
+  background: var(--bg-tertiary, #f4f4f2);
+  border-color: var(--border-heavy, #d9d9d9);
+}
+.thread-subtask-count {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 9999px;
+  background: var(--orange-bg, #fcf1eb);
+  color: var(--orange, #e25507);
+  font-variant-numeric: tabular-nums;
+}
+.thread-subtask-panel {
+  position: absolute;
+  top: 38px;
+  right: 0;
+  width: 330px;
+  max-height: min(62vh, 560px);
+  overflow-y: auto;
+  border: 1px solid var(--border, rgba(26, 28, 31, 0.1));
+  border-radius: 13px;
+  background: var(--bg-primary, #ffffff);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1), 0 2px 6px rgba(0, 0, 0, 0.05);
+  padding: 6px;
+}
+.thread-subtask-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px 8px;
+}
+.thread-subtask-head-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-desc, rgba(26, 28, 31, 0.5));
+}
+.thread-subtask-close {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--fg-disabled, #aaaaaa);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.thread-subtask-close:hover { background: var(--row-hover, rgba(26, 28, 31, 0.053)); }
+.thread-subtask-list { display: flex; flex-direction: column; gap: 1px; }
+.thread-subtask-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  padding: 8px;
+  position: relative;
+  transition: background 0.12s ease;
+}
+.thread-subtask-item:hover { background: var(--row-hover, rgba(26, 28, 31, 0.053)); }
+.thread-subtask-item.current {
+  background: var(--orange-bg, #fcf1eb);
+}
+.thread-subtask-item.current::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 3px;
+  border-radius: 9999px;
+  background: var(--orange, #e25507);
+}
+.thread-subtask-item.depth-1 { padding-left: 24px; }
+.thread-subtask-item.depth-2 { padding-left: 40px; }
+.thread-subtask-item.depth-3 { padding-left: 56px; }
+.thread-subtask-item.depth-4 { padding-left: 72px; }
+.thread-subtask-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 9999px; }
+.thread-subtask-item.tone-progress .thread-subtask-dot { background: var(--orange, #e25507); }
+.thread-subtask-item.tone-review .thread-subtask-dot { background: var(--purple, #7345b6); }
+.thread-subtask-item.tone-todo .thread-subtask-dot,
+.thread-subtask-item.tone-done .thread-subtask-dot { background: var(--fg-disabled, #aaaaaa); }
+.thread-subtask-main { flex: 1; min-width: 0; }
+.thread-subtask-row1 { display: flex; align-items: baseline; gap: 7px; }
+.thread-subtask-num {
+  font-family: var(--font-mono, "SF Mono", monospace);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-desc, rgba(26, 28, 31, 0.5));
+  flex: 0 0 auto;
+}
+.thread-subtask-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg, #1a1c1f);
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.thread-subtask-current {
+  flex: 0 0 auto;
+  border-radius: 9999px;
+  padding: 1px 6px;
+  background: var(--orange, #e25507);
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+}
+.thread-subtask-row2 {
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--fg-secondary, rgba(26, 28, 31, 0.65));
+  font-weight: 500;
+}
+.thread-subtask-row2 .agent-option-avatar { width: 15px; height: 15px; font-size: 8px; }
+.thread-subtask-status {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 9999px;
+  font-variant-numeric: tabular-nums;
+}
+.thread-subtask-status.tone-progress { background: var(--orange-bg, #fcf1eb); color: var(--orange, #e25507); }
+.thread-subtask-status.tone-review { background: var(--purple-bg, #f3eefb); color: var(--purple, #7345b6); }
+.thread-subtask-status.tone-todo,
+.thread-subtask-status.tone-done { background: var(--bg-tertiary, #f4f4f2); color: var(--fg-desc, rgba(26, 28, 31, 0.5)); }

@@ -1,0 +1,339 @@
+/* Capsules gallery, focused preview, in-chat capsule cards (leads with the twin .tasks-page shell rule). */
+
+.tasks-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 20px 20px 0;
+  overflow: hidden;
+  background: var(--color-token-bg-primary);
+}
+
+.capsules-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 20px 20px 0;
+  overflow: hidden;
+  background: var(--color-token-bg-primary);
+}
+
+.capsules-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.capsules-page-title-block {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.capsules-page-title-row,
+.capsules-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.capsules-page-title {
+  margin: 0;
+  color: var(--color-token-text-primary);
+  font-size: 22px;
+  font-weight: 640;
+  letter-spacing: 0;
+}
+
+.capsules-page-subtitle {
+  margin: 0;
+  color: var(--color-token-description-foreground);
+  font-size: var(--text-sm);
+}
+
+.capsules-refresh-button {
+  min-height: 26px;
+  padding: 0 9px;
+  border-radius: 7px;
+}
+
+/* Focused preview removes the page padding so the Capsule reads near-full. */
+.capsules-page-preview {
+  padding: 0;
+  gap: 0;
+}
+
+/* Gallery grid of live-preview cards. */
+.capsules-gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px;
+  align-content: start;
+  min-height: 0;
+  flex: 1 1 0;
+  overflow: auto;
+  scrollbar-width: none;
+  padding-bottom: 20px;
+}
+
+.capsules-gallery-grid::-webkit-scrollbar {
+  display: none;
+  width: 0;
+}
+
+.capsule-gallery-card {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-width: 320px;
+  padding: 0;
+  border: 0.5px solid color-mix(in oklab, var(--color-token-border) 86%, transparent);
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--color-token-bg-secondary) 78%, var(--color-token-bg-primary));
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  transition:
+    border-color var(--duration-fast) var(--ease-standard),
+    background var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard);
+}
+
+.capsule-gallery-card:hover {
+  border-color: color-mix(in oklab, var(--color-token-border) 100%, transparent);
+  background: color-mix(in oklab, var(--color-token-bg-primary) 88%, var(--color-token-border));
+  box-shadow: 0 1px 4px color-mix(in oklab, var(--color-token-text-primary) 8%, transparent);
+}
+
+/* Thumbnail: fixed aspect, a cached PNG cover-cropped from the top (no live
+   iframe). The shell backing is the capsule-dark neutral the snapshot composites
+   over, so a still-loading or short capsule reads as intentional backing. */
+.capsule-card-preview-shell {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  background: #0a0e16;
+  border-bottom: 0.5px solid color-mix(in oklab, var(--color-token-border) 72%, transparent);
+  pointer-events: none;
+}
+
+/* Chat capsule cards crop 16:9 (the gallery is 16:10). */
+.capsule-chat-card-preview-shell {
+  aspect-ratio: 16 / 9;
+}
+
+.capsule-card-thumb {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top;
+}
+
+.capsule-card-meta {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px 12px 12px;
+}
+
+.capsule-card-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-token-text-primary);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.capsule-card-subline {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-token-description-foreground);
+  font-size: var(--text-xs-plus);
+}
+
+/* The single Capsule renderer (card + preview share this opaque-origin frame). */
+.capsule-live-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+}
+
+.capsule-frame-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  padding: 14px;
+  color: var(--color-token-description-foreground);
+  font-size: var(--text-xs-plus);
+  text-align: center;
+  background: color-mix(in oklab, var(--color-token-bg-secondary) 62%, var(--color-token-bg-primary));
+}
+
+.capsule-frame-error-text {
+  max-width: 320px;
+}
+
+/* De-nested focused preview: thin translucent toolbar over a full-bleed frame. */
+.capsule-preview-page {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  background: #fff;
+}
+
+.capsule-preview-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 40px;
+  height: 40px;
+  padding: 0 8px 0 10px;
+  border-bottom: 0.5px solid color-mix(in oklab, var(--color-token-border) 72%, transparent);
+  background: color-mix(in oklab, var(--color-token-bg-primary) 70%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.capsule-preview-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-token-text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.capsule-preview-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.capsule-toolbar-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--color-token-text-secondary);
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.capsule-toolbar-button:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--color-token-text-primary) 8%, transparent);
+  color: var(--color-token-text-primary);
+}
+
+.capsule-toolbar-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.capsule-preview-body {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #fff;
+}
+
+.capsule-menu-destructive {
+  color: var(--color-destructive);
+}
+
+/* In-chat Capsule cards (rendered after a turn's final answer). */
+.capsule-chat-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.capsule-chat-card {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 360px;
+  padding: 0;
+  border: 0.5px solid color-mix(in oklab, var(--color-token-border) 86%, transparent);
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--color-token-bg-secondary) 78%, var(--color-token-bg-primary));
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  transition:
+    border-color var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard);
+}
+
+.capsule-chat-card:hover {
+  border-color: color-mix(in oklab, var(--color-token-border) 100%, transparent);
+  box-shadow: 0 1px 4px color-mix(in oklab, var(--color-token-text-primary) 8%, transparent);
+}
+
+.capsule-chat-card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 12px;
+}
+
+.capsule-chat-card-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-token-text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+@media (max-width: 720px) {
+  .capsules-gallery-grid {
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  }
+}

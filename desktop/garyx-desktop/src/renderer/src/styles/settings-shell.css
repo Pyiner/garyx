@@ -1,0 +1,398 @@
+/* Settings page chrome (Codex-style header simplifications). */
+
+.settings-page {
+  display: grid;
+  gap: 0;
+  width: 100%;
+  margin: 0;
+  padding-bottom: 24px;
+}
+
+.settings-content {
+  display: block;
+  min-width: 0;
+}
+
+.settings-content-column {
+  display: grid;
+  gap: 24px;
+  width: min(100%, 672px);
+  margin: 0 auto;
+}
+
+.settings-content-channels .settings-content-column {
+  width: min(100%, 1120px);
+}
+
+.settings-content-commands .settings-content-column {
+  width: min(100%, 1120px);
+}
+
+.settings-content-provider .settings-content-column {
+  width: min(100%, 1120px);
+}
+
+.settings-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 20px;
+  border-bottom: none;
+}
+
+.settings-page-header-main {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* Hide eyebrow above the settings page title — Codex uses just the title */
+.settings-page-header-main > .eyebrow {
+  display: none;
+}
+
+/* Hide description under page title — Codex only shows the title */
+.settings-page-header-main > .small-note {
+  display: none;
+}
+
+/* Hide verbose sync-status hint below description */
+.settings-page-header-main .settings-tab-hint {
+  display: none;
+}
+
+/* Hide the status pill in the header aside — Codex keeps headers clean */
+.settings-page-header-aside {
+  display: none;
+}
+
+.settings-page-sections {
+  display: grid;
+  gap: 24px;
+  min-width: 0;
+}
+
+.settings-tab-hint.error,
+.panel-header-note.error {
+  color: var(--color-token-error-foreground);
+}
+
+.settings-tab-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  line-height: 1.35;
+}
+
+/* Hide the status-fact dashboard — Codex doesn't show inline status chips */
+.settings-hero-facts {
+  display: none;
+}
+
+.settings-fact {
+  display: grid;
+  gap: 2px;
+  min-width: 88px;
+  padding: 7px 10px;
+  border: 0.5px solid var(--color-token-border);
+  border-radius: var(--radius-lg);
+  background: color-mix(
+    in oklab,
+    var(--color-token-bg-secondary) 90%,
+    white 10%
+  );
+  color: var(--color-token-text-primary);
+}
+
+.settings-fact strong {
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: -0.01em;
+}
+
+.settings-fact.tone-success {
+  border-color: color-mix(
+    in oklab,
+    var(--color-token-success-foreground) 15%,
+    transparent
+  );
+  background: var(--color-token-bg-success);
+  color: color-mix(
+    in oklab,
+    var(--color-token-success-foreground) 78%,
+    #0d0d0d 22%
+  );
+}
+
+.settings-fact.tone-danger {
+  border-color: color-mix(
+    in oklab,
+    var(--color-token-error-foreground) 15%,
+    transparent
+  );
+  background: var(--color-token-bg-error);
+  color: color-mix(
+    in oklab,
+    var(--color-token-error-foreground) 82%,
+    #0d0d0d 18%
+  );
+}
+
+.settings-fact-label {
+  color: var(--color-token-description-foreground);
+  font-size: var(--text-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.channel-settings-layout {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.channel-settings-sidebar {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--color-token-border);
+  border-radius: 20px;
+  background: var(--color-token-bg-secondary);
+}
+
+.channel-settings-sidebar-header {
+  display: grid;
+  gap: 6px;
+}
+
+.channel-settings-sidebar-header .small-note {
+  margin: 0;
+}
+
+.channel-settings-nav {
+  display: grid;
+  gap: 6px;
+}
+
+.channel-settings-nav-button {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 13px 14px;
+  border: 0;
+  border-radius: 16px;
+  background: transparent;
+  color: var(--color-token-text-secondary);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard);
+}
+
+.channel-settings-nav-button:hover {
+  background: rgba(13, 13, 13, 0.045);
+  color: var(--color-token-text-primary);
+}
+
+.channel-settings-nav-button.active {
+  background: var(--color-token-row-selected);
+  color: var(--color-token-text-primary);
+  box-shadow: 0 1px 2px rgba(13, 13, 13, 0.04);
+}
+
+.channel-settings-nav-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.channel-settings-nav-title {
+  font-size: var(--text-base);
+  font-weight: 620;
+  letter-spacing: -0.01em;
+}
+
+.channel-settings-nav-note {
+  color: var(--color-token-description-foreground);
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+
+.channel-settings-nav-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(13, 13, 13, 0.06);
+  color: var(--color-token-text-secondary);
+  font-size: var(--text-xs-plus);
+  font-weight: 700;
+}
+
+.channel-settings-pane {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.channel-settings-pane-header {
+  display: grid;
+  gap: 12px;
+}
+
+.channel-settings-pane-copy {
+  display: grid;
+  gap: 6px;
+}
+
+.channel-settings-pane-copy .small-note {
+  margin: 0;
+}
+
+.channel-settings-title {
+  font-size: var(--text-display-lg);
+}
+
+.channel-settings-pane-content {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.error-banner {
+  margin: 10px var(--padding-panel) 0;
+  padding: 10px 12px;
+  border: 1px solid
+    color-mix(in oklab, var(--color-token-error-foreground) 15%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--color-token-bg-error);
+  color: var(--color-token-error-foreground);
+  font-size: var(--text-sm);
+}
+
+.settings-error-banner {
+  width: min(100%, var(--container-2xl));
+  margin: 10px auto 0;
+}
+
+.workspace-select {
+  height: 32px;
+  min-width: 180px;
+  padding: 0 12px;
+  border: 1px solid var(--color-token-border);
+  border-radius: 999px;
+  background: var(--color-token-bg-primary);
+  color: var(--color-token-text-primary);
+}
+
+.messages {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  height: calc(100% - var(--composer-scroll-clip-height));
+  min-height: 0;
+  overflow: auto;
+  overflow-x: hidden;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  width: min(var(--container-2xl), 100%);
+  max-width: 100%;
+  box-sizing: border-box;
+  margin: 0 auto;
+  padding: 8px 2px
+    calc(var(--composer-scroll-clip-height) + var(--composer-message-clearance))
+    0;
+  scroll-padding-block-end: calc(
+    var(--composer-scroll-clip-height) + var(--composer-message-clearance)
+  );
+  overscroll-behavior: contain;
+  background: var(--color-token-bg-primary);
+}
+
+.workflow-thread-content {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workflow-thread-content > .workflow-runs-page {
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
+  width: 100%;
+}
+
+.message-history-page-loader {
+  display: flex;
+  justify-content: center;
+  min-height: 28px;
+  padding: 4px 0 2px;
+}
+
+.message-history-page-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid
+    color-mix(in srgb, var(--color-token-text-secondary) 22%, transparent);
+  border-top-color: color-mix(
+    in srgb,
+    var(--color-token-text-secondary) 68%,
+    transparent
+  );
+  border-radius: 999px;
+  animation: message-history-page-spin 0.8s linear infinite;
+}
+
+.bots-page {
+  display: grid;
+  gap: 16px;
+  width: min(880px, 100%);
+  margin: 0 auto;
+  padding-bottom: 12px;
+  overflow: auto;
+}
+
+.automation-page {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
+  gap: 24px;
+  width: min(1320px, 100%);
+  margin: 0 auto;
+  padding: 4px 4px 18px;
+  min-height: 0;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.automation-page::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 220px;
+  border-radius: 28px;
+  background:
+    radial-gradient(
+      circle at top left,
+      rgba(13, 13, 13, 0.08),
+      transparent 40%
+    ),
+    linear-gradient(180deg, rgba(13, 13, 13, 0.045), transparent 74%);
+  pointer-events: none;
+  z-index: -1;
+}
