@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::provider_trait::BridgeError;
+use crate::provider_trait::{BridgeError, ProviderModelDefaults};
 use garyx_models::config::{AgentProviderConfig, GaryxConfig};
 use garyx_models::provider::ProviderType;
 use garyx_models::resolve_agent_reference;
@@ -381,8 +381,14 @@ impl MultiProviderBridge {
     ) -> Result<String, BridgeError> {
         let key = compute_provider_key(agent_cfg, default_workspace);
 
-        // Check if already registered.
-        if self.get_provider(&key).await.is_some() {
+        // Already registered: hot-apply the (possibly reloaded) model
+        // defaults onto the live instance. The provider key intentionally
+        // excludes model defaults so thread affinity and SDK sessions stay
+        // stable; a config edit must therefore reconcile the existing
+        // instance instead of being silently dropped. Active runs are
+        // untouched — only default resolution for future runs changes.
+        if let Some(provider) = self.get_provider(&key).await {
+            provider.update_model_defaults(&ProviderModelDefaults::from(agent_cfg));
             return Ok(key);
         }
 
@@ -504,15 +510,14 @@ impl MultiProviderBridge {
             .cloned()
     }
 
-    /// Backfill run metadata with the thread's runtime configuration:
-    /// per-thread provider overrides first (model, reasoning effort, service
-    /// tier chosen at thread creation), then stored thread runtime snapshot
-    /// fields, then the bound agent's profile
+    /// Backfill run metadata with the thread's runtime configuration: the
+    /// thread's model cells first (single-cell semantics; legacy `*_override`
+    /// keys coalesce in front until migrated), then the bound agent's profile
     /// (model, effort, tier, system prompt, identity). Shared providers only
     /// see per-run metadata, so a dispatch that carries no such fields would
     /// otherwise run the provider's defaults. Existing metadata values always
-    /// win, giving the precedence: explicit request > thread override >
-    /// thread snapshot > agent profile default.
+    /// win, giving the precedence: explicit request > thread cell (legacy
+    /// override first) > agent profile default.
     pub(super) async fn backfill_bound_agent_runtime_metadata(
         &self,
         thread_id: &str,
@@ -525,8 +530,7 @@ impl MultiProviderBridge {
             None => None,
         };
         if let Some(record) = thread_record.as_ref() {
-            garyx_models::provider::merge_thread_provider_overrides(record, metadata);
-            garyx_models::provider::merge_thread_runtime_snapshot(record, metadata);
+            garyx_models::provider::merge_thread_model_cells(record, metadata);
         }
 
         let metadata_agent_id = metadata

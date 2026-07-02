@@ -23,7 +23,7 @@ use crate::gary_prompt::{
 };
 use crate::native_slash::build_native_skill_prompt;
 use crate::provider_trait::{
-    AgentLoopProvider, BridgeError, ProviderRuntimeSelection, StreamCallback,
+    AgentLoopProvider, BridgeError, ProviderModelDefaults, ProviderRuntimeSelection, StreamCallback,
 };
 
 // ---------------------------------------------------------------------------
@@ -884,6 +884,11 @@ fn build_user_message_input(options: &ProviderRunOptions, include_memory: bool) 
 /// retries, and abort.
 pub struct ClaudeCliProvider {
     config: ClaudeCodeConfig,
+    /// Hot-reloadable model defaults. Config reloads reconcile onto the live
+    /// provider instance (the provider key excludes model defaults to keep
+    /// thread affinity stable), so default-model resolution must read these
+    /// instead of the frozen `config` fields.
+    model_defaults: std::sync::RwLock<ProviderModelDefaults>,
     /// Maps Garyx thread IDs to Claude CLI session IDs.
     session_map: Mutex<HashMap<String, String>>,
     /// Tracks thread failure counts for auto-recovery.
@@ -912,8 +917,15 @@ enum PendingAckMarker {
 impl ClaudeCliProvider {
     /// Create a new provider with the given config.
     pub fn new(config: ClaudeCodeConfig) -> Self {
+        let model_defaults = std::sync::RwLock::new(ProviderModelDefaults {
+            model: String::new(),
+            default_model: config.default_model.clone(),
+            model_reasoning_effort: config.model_reasoning_effort.clone(),
+            model_service_tier: String::new(),
+        });
         Self {
             config,
+            model_defaults,
             session_map: Mutex::new(HashMap::new()),
             session_failure_counts: Mutex::new(HashMap::new()),
             active_runs: Mutex::new(HashMap::new()),
@@ -926,6 +938,21 @@ impl ClaudeCliProvider {
             test_recorded_session_attempts: Mutex::new(Vec::new()),
             ready: false,
         }
+    }
+
+    /// Clone the frozen config with the hot-reloadable model defaults
+    /// overlaid, so run-request building and runtime selection observe the
+    /// latest reloaded defaults.
+    fn effective_config(&self) -> ClaudeCodeConfig {
+        let defaults = self
+            .model_defaults
+            .read()
+            .expect("claude model defaults lock poisoned")
+            .clone();
+        let mut config = self.config.clone();
+        config.default_model = defaults.default_model;
+        config.model_reasoning_effort = defaults.model_reasoning_effort;
+        config
     }
 
     /// Build `ClaudeAgentOptions` from our config and run options.
@@ -990,11 +1017,12 @@ impl ClaudeCliProvider {
         // Workspace directory
         let cwd = resolve_claude_cwd(&self.config, options);
 
-        // Model: metadata override > config default
-        let model = resolve_requested_model(&self.config, &options.metadata);
+        // Model: metadata override > (hot-reloadable) config default
+        let effective_config = self.effective_config();
+        let model = resolve_requested_model(&effective_config, &options.metadata);
         // Thinking level: per-run metadata overrides the provider default and
         // is mapped to the Claude CLI `--effort` flag.
-        let requested_effort = resolve_requested_effort(&self.config, &options.metadata);
+        let requested_effort = resolve_requested_effort(&effective_config, &options.metadata);
 
         let runtime_system_prompt = options
             .metadata
@@ -1642,11 +1670,21 @@ impl AgentLoopProvider for ClaudeCliProvider {
     }
 
     fn resolve_runtime_selection(&self, options: &ProviderRunOptions) -> ProviderRuntimeSelection {
+        let effective_config = self.effective_config();
         ProviderRuntimeSelection {
-            model: resolve_requested_model(&self.config, &options.metadata),
-            model_reasoning_effort: resolve_requested_effort(&self.config, &options.metadata),
+            model: resolve_requested_model(&effective_config, &options.metadata),
+            model_reasoning_effort: resolve_requested_effort(&effective_config, &options.metadata),
             model_service_tier: None,
         }
+    }
+
+    fn update_model_defaults(&self, defaults: &ProviderModelDefaults) {
+        let mut model_defaults = self
+            .model_defaults
+            .write()
+            .expect("claude model defaults lock poisoned");
+        model_defaults.default_model = defaults.default_model.clone();
+        model_defaults.model_reasoning_effort = defaults.model_reasoning_effort.clone();
     }
 
     async fn initialize(&mut self) -> Result<(), BridgeError> {
@@ -1741,6 +1779,9 @@ impl AgentLoopProvider for ClaudeCliProvider {
             .insert(options.thread_id.clone(), options.message.clone());
 
         let run_id = resolve_run_id(&options.metadata);
+        // Capture the requested model before the run starts so a concurrent
+        // defaults reload cannot relabel this run's fallback actual_model.
+        let requested_model = resolve_requested_model(&self.effective_config(), &options.metadata);
 
         let start = Instant::now();
 
@@ -1850,9 +1891,7 @@ impl AgentLoopProvider for ClaudeCliProvider {
                 response: result.response_text,
                 session_messages: result.session_messages,
                 sdk_session_id: non_empty_session_id(Some(result.session_id.as_str())),
-                actual_model: result
-                    .actual_model
-                    .or_else(|| resolve_requested_model(&self.config, &options.metadata)),
+                actual_model: result.actual_model.or_else(|| requested_model.clone()),
                 thread_title: result.thread_title,
                 success: !result.is_error,
                 error: if result.is_error {

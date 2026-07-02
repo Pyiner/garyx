@@ -111,7 +111,7 @@ fn test_provider_type_slug_round_trip() {
 }
 
 #[test]
-fn merge_thread_runtime_snapshot_applies_stored_runtime_fields() {
+fn merge_thread_model_cells_applies_stored_cells() {
     let thread_data = serde_json::json!({
         "metadata": {
             "model": "provider-default-v1",
@@ -121,7 +121,7 @@ fn merge_thread_runtime_snapshot_applies_stored_runtime_fields() {
     });
     let mut run_metadata = std::collections::HashMap::new();
 
-    merge_thread_runtime_snapshot(&thread_data, &mut run_metadata);
+    merge_thread_model_cells(&thread_data, &mut run_metadata);
 
     assert_eq!(
         run_metadata.get("model"),
@@ -138,7 +138,7 @@ fn merge_thread_runtime_snapshot_applies_stored_runtime_fields() {
 }
 
 #[test]
-fn merge_thread_runtime_snapshot_keeps_request_metadata_priority() {
+fn merge_thread_model_cells_keeps_request_metadata_priority() {
     let thread_data = serde_json::json!({
         "metadata": {
             "model": "provider-default-v1",
@@ -150,7 +150,7 @@ fn merge_thread_runtime_snapshot_keeps_request_metadata_priority() {
         serde_json::Value::String("request-model".to_owned()),
     )]);
 
-    merge_thread_runtime_snapshot(&thread_data, &mut run_metadata);
+    merge_thread_model_cells(&thread_data, &mut run_metadata);
 
     assert_eq!(
         run_metadata.get("model"),
@@ -163,7 +163,7 @@ fn merge_thread_runtime_snapshot_keeps_request_metadata_priority() {
 }
 
 #[test]
-fn merge_thread_runtime_snapshot_ignores_blank_and_missing_values() {
+fn merge_thread_model_cells_ignores_blank_and_missing_values() {
     let thread_data = serde_json::json!({
         "metadata": {
             "model": "   ",
@@ -171,11 +171,31 @@ fn merge_thread_runtime_snapshot_ignores_blank_and_missing_values() {
     });
     let mut run_metadata = std::collections::HashMap::new();
 
-    merge_thread_runtime_snapshot(&thread_data, &mut run_metadata);
+    merge_thread_model_cells(&thread_data, &mut run_metadata);
     assert!(run_metadata.is_empty());
 
-    merge_thread_runtime_snapshot(&serde_json::json!({}), &mut run_metadata);
+    merge_thread_model_cells(&serde_json::json!({}), &mut run_metadata);
     assert!(run_metadata.is_empty());
+}
+
+#[test]
+fn merge_thread_model_cells_coalesces_legacy_override_in_front_of_cell() {
+    let thread_data = serde_json::json!({
+        "metadata": {
+            "model": "cell-model",
+            "model_override": "legacy-override-model",
+        }
+    });
+    let mut run_metadata = std::collections::HashMap::new();
+
+    merge_thread_model_cells(&thread_data, &mut run_metadata);
+
+    assert_eq!(
+        run_metadata.get("model"),
+        Some(&serde_json::Value::String(
+            "legacy-override-model".to_owned()
+        ))
+    );
 }
 
 #[test]

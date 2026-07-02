@@ -16,9 +16,10 @@ use garyx_models::config::ChannelsConfig;
 use garyx_models::config::TelegramAccount;
 use garyx_models::provider::{
     FORK_FROM_PROVIDER_TYPE_METADATA_KEY, FORK_FROM_SDK_SESSION_ID_METADATA_KEY,
-    FORK_FROM_THREAD_ID_METADATA_KEY, MODEL_OVERRIDE_METADATA_KEY,
-    MODEL_REASONING_EFFORT_OVERRIDE_METADATA_KEY, MODEL_SERVICE_TIER_OVERRIDE_METADATA_KEY,
-    ProviderType, SDK_SESSION_FORK_METADATA_KEY,
+    FORK_FROM_THREAD_ID_METADATA_KEY, MODEL_METADATA_KEY, MODEL_OVERRIDE_METADATA_KEY,
+    MODEL_REASONING_EFFORT_METADATA_KEY, MODEL_REASONING_EFFORT_OVERRIDE_METADATA_KEY,
+    MODEL_SERVICE_TIER_METADATA_KEY, MODEL_SERVICE_TIER_OVERRIDE_METADATA_KEY, ProviderType,
+    SDK_SESSION_FORK_METADATA_KEY,
 };
 use garyx_models::routing::{DELIVERY_TARGET_TYPE_CHAT_ID, DELIVERY_TARGET_TYPE_OPEN_ID};
 use garyx_router::{
@@ -953,7 +954,17 @@ pub struct UpdateThreadBody {
     pub model_service_tier: Option<String>,
 }
 
-fn apply_thread_metadata_override(data: &mut Value, key: &str, input: &Option<String>) -> bool {
+/// Write one thread runtime cell (single-cell semantics): `body` values
+/// rewrite the cell key that the run path and runtime summary read, an empty
+/// string empties the cell so provider/agent defaults apply again, and any
+/// legacy dual-track override key is migrated away (deleted) whenever the
+/// cell is touched.
+fn apply_thread_metadata_cell(
+    data: &mut Value,
+    cell_key: &str,
+    legacy_override_key: &str,
+    input: &Option<String>,
+) -> bool {
     let Some(input) = input.as_deref() else {
         return false;
     };
@@ -965,7 +976,11 @@ fn apply_thread_metadata_override(data: &mut Value, key: &str, input: &Option<St
         return obj
             .get_mut("metadata")
             .and_then(Value::as_object_mut)
-            .map(|metadata| metadata.remove(key).is_some())
+            .map(|metadata| {
+                let removed_cell = metadata.remove(cell_key).is_some();
+                let removed_legacy = metadata.remove(legacy_override_key).is_some();
+                removed_cell || removed_legacy
+            })
             .unwrap_or(false);
     }
 
@@ -975,24 +990,32 @@ fn apply_thread_metadata_override(data: &mut Value, key: &str, input: &Option<St
     let Some(metadata) = obj.get_mut("metadata").and_then(Value::as_object_mut) else {
         return false;
     };
+    let removed_legacy = metadata.remove(legacy_override_key).is_some();
     let next = Value::String(trimmed.to_owned());
-    if metadata.get(key) == Some(&next) {
+    if !removed_legacy && metadata.get(cell_key) == Some(&next) {
         return false;
     }
-    metadata.insert(key.to_owned(), next);
+    metadata.insert(cell_key.to_owned(), next);
     true
 }
 
-fn apply_thread_runtime_overrides(data: &mut Value, body: &UpdateThreadBody) -> bool {
+fn apply_thread_runtime_cells(data: &mut Value, body: &UpdateThreadBody) -> bool {
     let mut changed = false;
-    changed |= apply_thread_metadata_override(data, MODEL_OVERRIDE_METADATA_KEY, &body.model);
-    changed |= apply_thread_metadata_override(
+    changed |= apply_thread_metadata_cell(
         data,
+        MODEL_METADATA_KEY,
+        MODEL_OVERRIDE_METADATA_KEY,
+        &body.model,
+    );
+    changed |= apply_thread_metadata_cell(
+        data,
+        MODEL_REASONING_EFFORT_METADATA_KEY,
         MODEL_REASONING_EFFORT_OVERRIDE_METADATA_KEY,
         &body.model_reasoning_effort,
     );
-    changed |= apply_thread_metadata_override(
+    changed |= apply_thread_metadata_cell(
         data,
+        MODEL_SERVICE_TIER_METADATA_KEY,
         MODEL_SERVICE_TIER_OVERRIDE_METADATA_KEY,
         &body.model_service_tier,
     );
@@ -2370,19 +2393,22 @@ pub async fn create_thread(
     };
 
     let mut metadata = body.metadata.clone();
-    for (override_key, requested) in [
-        (MODEL_OVERRIDE_METADATA_KEY, body.model.as_deref()),
+    // Seed the thread's single runtime cells (metadata.model & co.), the keys
+    // the run path and runtime summary read. The legacy dual-track
+    // `*_override` keys are read-compat only and are never written anymore.
+    for (cell_key, requested) in [
+        (MODEL_METADATA_KEY, body.model.as_deref()),
         (
-            MODEL_REASONING_EFFORT_OVERRIDE_METADATA_KEY,
+            MODEL_REASONING_EFFORT_METADATA_KEY,
             body.model_reasoning_effort.as_deref(),
         ),
         (
-            MODEL_SERVICE_TIER_OVERRIDE_METADATA_KEY,
+            MODEL_SERVICE_TIER_METADATA_KEY,
             body.model_service_tier.as_deref(),
         ),
     ] {
         if let Some(value) = requested.map(str::trim).filter(|value| !value.is_empty()) {
-            metadata.insert(override_key.to_owned(), Value::String(value.to_owned()));
+            metadata.insert(cell_key.to_owned(), Value::String(value.to_owned()));
         }
     }
     if let Some((source_thread_id, _source_thread_data, provider_type, sdk_session_id)) =
@@ -2562,8 +2588,8 @@ pub async fn update_thread(
     .await
     {
         Ok(mut data) => {
-            let runtime_overrides_changed = apply_thread_runtime_overrides(&mut data, &body);
-            if runtime_overrides_changed {
+            let runtime_cells_changed = apply_thread_runtime_cells(&mut data, &body);
+            if runtime_cells_changed {
                 if let Some(obj) = data.as_object_mut() {
                     obj.insert(
                         "updated_at".to_owned(),

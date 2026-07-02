@@ -5,8 +5,7 @@ use axum::Json;
 use axum::http::StatusCode;
 use garyx_models::provider::{
     ATTACHMENTS_METADATA_KEY, ImagePayload, ProviderType, attachments_to_metadata_value,
-    merge_thread_provider_overrides, merge_thread_runtime_snapshot, stage_file_payloads_for_prompt,
-    stage_image_payloads_for_prompt,
+    merge_thread_model_cells, stage_file_payloads_for_prompt, stage_image_payloads_for_prompt,
 };
 use garyx_models::thread_logs::ThreadLogEvent;
 use garyx_router::{
@@ -131,8 +130,7 @@ pub(crate) async fn prepare_chat_request(
     }
     let thread_data = state.threads.thread_store.get(&thread_id).await;
     if let Some(thread_data) = thread_data.as_ref() {
-        merge_thread_provider_overrides(thread_data, &mut req.metadata);
-        merge_thread_runtime_snapshot(thread_data, &mut req.metadata);
+        merge_thread_model_cells(thread_data, &mut req.metadata);
     }
     let thread_provider_type = thread_data.as_ref().and_then(thread_bound_provider_type);
     let agent_reference = match thread_data

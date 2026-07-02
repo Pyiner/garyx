@@ -26,7 +26,7 @@ use crate::gary_prompt::{
 };
 use crate::native_slash::build_native_skill_prompt;
 use crate::provider_trait::{
-    AgentLoopProvider, BridgeError, ProviderRuntimeSelection, StreamCallback,
+    AgentLoopProvider, BridgeError, ProviderModelDefaults, ProviderRuntimeSelection, StreamCallback,
 };
 
 const ACP_PROTOCOL_VERSION: i64 = 1;
@@ -982,6 +982,11 @@ where
 
 pub struct GeminiCliProvider {
     config: GeminiCliConfig,
+    /// Hot-reloadable model defaults. Config reloads reconcile onto the live
+    /// provider instance (the provider key excludes model defaults to keep
+    /// thread affinity stable), so model resolution must read these instead
+    /// of the frozen `config` fields.
+    model_defaults: std::sync::RwLock<ProviderModelDefaults>,
     session_map: Mutex<HashMap<String, String>>,
     active_runs: Mutex<HashMap<String, Arc<Mutex<Child>>>>,
     run_session_map: Mutex<HashMap<String, String>>,
@@ -990,13 +995,38 @@ pub struct GeminiCliProvider {
 
 impl GeminiCliProvider {
     pub fn new(config: GeminiCliConfig) -> Self {
+        let model_defaults = std::sync::RwLock::new(ProviderModelDefaults {
+            model: config.model.clone(),
+            default_model: config.default_model.clone(),
+            model_reasoning_effort: String::new(),
+            model_service_tier: String::new(),
+        });
         Self {
             config,
+            model_defaults,
             session_map: Mutex::new(HashMap::new()),
             active_runs: Mutex::new(HashMap::new()),
             run_session_map: Mutex::new(HashMap::new()),
             ready: false,
         }
+    }
+
+    /// Clone the frozen config with the hot-reloadable model defaults
+    /// overlaid, so model resolution observes the latest reloaded defaults.
+    fn effective_config(&self) -> GeminiCliConfig {
+        let defaults = self
+            .model_defaults
+            .read()
+            .expect("gemini model defaults lock poisoned")
+            .clone();
+        let mut config = self.config.clone();
+        config.model = if defaults.model.is_empty() {
+            defaults.default_model.clone()
+        } else {
+            defaults.model.clone()
+        };
+        config.default_model = defaults.default_model;
+        config
     }
 
     async fn register_run(&self, run_id: &str, thread_id: &str, child: Arc<Mutex<Child>>) {
@@ -1042,6 +1072,10 @@ impl GeminiCliProvider {
         session_id: Option<&str>,
         on_chunk: &StreamCallback,
     ) -> Result<ProviderRunResult, BridgeError> {
+        // Snapshot the hot-reloadable defaults once at run start: a defaults
+        // reload arriving after the run is registered must not change the
+        // model this already-started run sends to the ACP session.
+        let effective_config = self.effective_config();
         let workspace_dir = resolve_workspace_dir(&self.config, options);
         let cwd = workspace_dir.as_ref().ok_or_else(|| {
             BridgeError::RunFailed("gemini workspace directory is unavailable".to_owned())
@@ -1214,7 +1248,7 @@ impl GeminiCliProvider {
             }
         }
 
-        if let Some(model_id) = model_id(&self.config, &options.metadata) {
+        if let Some(model_id) = model_id(&effective_config, &options.metadata) {
             send_json_request(
                 &mut stdin,
                 next_request_id,
@@ -1425,10 +1459,17 @@ impl AgentLoopProvider for GeminiCliProvider {
 
     fn resolve_runtime_selection(&self, options: &ProviderRunOptions) -> ProviderRuntimeSelection {
         ProviderRuntimeSelection {
-            model: model_id(&self.config, &options.metadata),
+            model: model_id(&self.effective_config(), &options.metadata),
             model_reasoning_effort: None,
             model_service_tier: None,
         }
+    }
+
+    fn update_model_defaults(&self, defaults: &ProviderModelDefaults) {
+        *self
+            .model_defaults
+            .write()
+            .expect("gemini model defaults lock poisoned") = defaults.clone();
     }
 
     async fn initialize(&mut self) -> Result<(), BridgeError> {

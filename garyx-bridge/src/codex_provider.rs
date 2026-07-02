@@ -31,7 +31,7 @@ use crate::gary_prompt::{
 };
 use crate::native_slash::build_native_skill_prompt;
 use crate::provider_trait::{
-    AgentLoopProvider, BridgeError, ProviderRuntimeSelection, StreamCallback,
+    AgentLoopProvider, BridgeError, ProviderModelDefaults, ProviderRuntimeSelection, StreamCallback,
 };
 
 const CODEX_CLIENT_IDLE_TTL: Duration = Duration::from_secs(180);
@@ -1056,6 +1056,11 @@ where
 /// Agent provider backed by `codex app-server` via `codex_sdk::CodexClient`.
 pub struct CodexAgentProvider {
     config: CodexAppServerConfig,
+    /// Hot-reloadable model defaults. Config reloads reconcile onto the live
+    /// provider instance (the provider key excludes model defaults to keep
+    /// thread affinity stable), so default-model resolution must read these
+    /// instead of the frozen `config` fields.
+    model_defaults: std::sync::RwLock<ProviderModelDefaults>,
     clients: CodexClientMap,
     /// Maps Garyx thread IDs to codex thread IDs.
     session_map: Mutex<HashMap<String, String>>,
@@ -1221,8 +1226,15 @@ fn schedule_idle_client_cleanup(
 impl CodexAgentProvider {
     /// Create a new Codex provider with the given config.
     pub fn new(config: CodexAppServerConfig) -> Self {
+        let model_defaults = std::sync::RwLock::new(ProviderModelDefaults {
+            model: config.model.clone(),
+            default_model: config.default_model.clone(),
+            model_reasoning_effort: config.model_reasoning_effort.clone(),
+            model_service_tier: config.model_service_tier.clone(),
+        });
         Self {
             config,
+            model_defaults,
             clients: Arc::new(Mutex::new(HashMap::new())),
             session_map: Mutex::new(HashMap::new()),
             active_runs: Mutex::new(HashMap::new()),
@@ -1234,6 +1246,27 @@ impl CodexAgentProvider {
         }
     }
 
+    /// Clone the frozen config with the hot-reloadable model defaults
+    /// overlaid, so client construction, thread/turn request building, and
+    /// runtime selection observe the latest reloaded defaults.
+    fn effective_config(&self) -> CodexAppServerConfig {
+        let defaults = self
+            .model_defaults
+            .read()
+            .expect("codex model defaults lock poisoned")
+            .clone();
+        let mut config = self.config.clone();
+        config.model = if defaults.model.is_empty() {
+            defaults.default_model.clone()
+        } else {
+            defaults.model.clone()
+        };
+        config.default_model = defaults.default_model;
+        config.model_reasoning_effort = defaults.model_reasoning_effort;
+        config.model_service_tier = defaults.model_service_tier;
+        config
+    }
+
     fn build_client_config(&self, env: HashMap<String, String>) -> CodexClientConfig {
         let codex_bin = if self.config.codex_bin.is_empty() {
             "codex".to_owned()
@@ -1241,10 +1274,11 @@ impl CodexAgentProvider {
             self.config.codex_bin.clone()
         };
 
-        let model = if !self.config.model.is_empty() {
-            Some(self.config.model.clone())
-        } else if !self.config.default_model.is_empty() {
-            Some(self.config.default_model.clone())
+        let effective_config = self.effective_config();
+        let model = if !effective_config.model.is_empty() {
+            Some(effective_config.model.clone())
+        } else if !effective_config.default_model.is_empty() {
+            Some(effective_config.default_model.clone())
         } else {
             None
         };
@@ -1638,7 +1672,8 @@ impl CodexAgentProvider {
             .remove(&options.thread_id);
 
         let start = Instant::now();
-        let actual_model = resolve_codex_actual_model(&self.config, &options.metadata);
+        let effective_config = self.effective_config();
+        let actual_model = resolve_codex_actual_model(&effective_config, &options.metadata);
         let mut response_parts: Vec<String> = Vec::new();
         let mut session_messages: Vec<ProviderMessage> = Vec::new();
         let mut notification_rx = client.subscribe_events();
@@ -1657,7 +1692,7 @@ impl CodexAgentProvider {
         };
         let include_memory = existing_thread_id.is_none() && !fork_session;
         let thread_params = build_thread_start_params(
-            &self.config,
+            &effective_config,
             options.workspace_dir.as_deref(),
             &options.thread_id,
             &run_id,
@@ -1681,7 +1716,7 @@ impl CodexAgentProvider {
         });
 
         // Start turn
-        let turn_options = build_turn_start_options(&self.config, &options.metadata);
+        let turn_options = build_turn_start_options(&effective_config, &options.metadata);
         let input_items = build_input_items(options, include_memory);
         let turn_id = client
             .start_turn_with_options(&thread_id, input_items, turn_options)
@@ -1984,14 +2019,25 @@ impl AgentLoopProvider for CodexAgentProvider {
     }
 
     fn resolve_runtime_selection(&self, options: &ProviderRunOptions) -> ProviderRuntimeSelection {
+        let effective_config = self.effective_config();
         ProviderRuntimeSelection {
-            model: resolve_codex_request_model(&self.config, &options.metadata),
+            model: resolve_codex_request_model(&effective_config, &options.metadata),
             model_reasoning_effort: resolve_codex_request_reasoning_effort(
-                &self.config,
+                &effective_config,
                 &options.metadata,
             ),
-            model_service_tier: resolve_codex_request_service_tier(&self.config, &options.metadata),
+            model_service_tier: resolve_codex_request_service_tier(
+                &effective_config,
+                &options.metadata,
+            ),
         }
+    }
+
+    fn update_model_defaults(&self, defaults: &ProviderModelDefaults) {
+        *self
+            .model_defaults
+            .write()
+            .expect("codex model defaults lock poisoned") = defaults.clone();
     }
 
     async fn initialize(&mut self) -> Result<(), BridgeError> {

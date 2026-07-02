@@ -4723,3 +4723,204 @@ async fn test_set_thread_workspace_binding_fallback_for_nonexistent() {
     let bindings = bridge.thread_workspace_bindings_snapshot().await;
     assert_eq!(bindings.get("thread-2").unwrap(), &bogus);
 }
+
+/// Bug A: editing `agents.claude.default_model` on disk and running
+/// `POST /api/settings/reload` reaches `reload_from_config`, but
+/// `get_or_create_provider` short-circuits on the stable provider key
+/// (`compute_provider_key` intentionally excludes `default_model` to keep
+/// thread affinity / SDK session ids stable) and silently drops the new
+/// config. The existing provider instance keeps serving the old
+/// `default_model` until the gateway restarts.
+///
+/// Target behavior: the provider key stays stable AND the already-registered
+/// provider instance hot-applies the new model defaults, so new runs (in new
+/// or existing threads) immediately use the reloaded provider default.
+#[tokio::test]
+async fn test_reload_from_config_hot_applies_new_provider_default_model() {
+    let bridge = MultiProviderBridge::new();
+    let mut config = GaryxConfig::default();
+    config.agents.insert(
+        "claude".to_owned(),
+        json!({
+            "provider_type": "claude_code",
+            "default_model": "claude-opus-4-8",
+            "model_reasoning_effort": "medium"
+        }),
+    );
+    bridge.reload_from_config(&config).await.unwrap();
+    let key_before = bridge
+        .default_provider_key()
+        .await
+        .expect("default provider key after first reload");
+
+    // Simulate the user editing the provider default in garyx.json and
+    // triggering a settings reload.
+    config.agents.insert(
+        "claude".to_owned(),
+        json!({
+            "provider_type": "claude_code",
+            "default_model": "claude-fable-5",
+            "model_reasoning_effort": "high"
+        }),
+    );
+    bridge.reload_from_config(&config).await.unwrap();
+    let key_after = bridge
+        .default_provider_key()
+        .await
+        .expect("default provider key after second reload");
+    assert_eq!(
+        key_before, key_after,
+        "provider key must stay stable across default-model edits (thread affinity)"
+    );
+
+    let provider = bridge
+        .get_provider(&key_after)
+        .await
+        .expect("default provider instance");
+    let options = ProviderRunOptions {
+        thread_id: "thread::reload-default-model".to_owned(),
+        message: "hello".to_owned(),
+        workspace_dir: None,
+        images: None,
+        metadata: HashMap::new(),
+    };
+    let selection = provider.resolve_runtime_selection(&options);
+    assert_eq!(
+        selection.model.as_deref(),
+        Some("claude-fable-5"),
+        "runs without a model request must use the reloaded provider default model"
+    );
+    assert_eq!(
+        selection.model_reasoning_effort.as_deref(),
+        Some("high"),
+        "runs without an effort request must use the reloaded provider default effort"
+    );
+}
+
+/// Single-cell contract (bridge side, guard): thread `metadata.model` (plus
+/// effort/tier) is THE model cell for the thread — "what this thread actually
+/// runs". `backfill_bound_agent_runtime_metadata` must keep injecting the
+/// cell into run metadata so a thread with a pinned cell stays on that model
+/// even after the provider default changes (thread pinning is intentional).
+#[tokio::test]
+async fn test_backfill_runtime_metadata_injects_thread_model_cell() {
+    let bridge = MultiProviderBridge::new();
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    bridge.set_thread_store(store.clone()).await;
+    let thread_id = "thread::model-cell";
+    store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "provider_type": "claude_code",
+                "metadata": {
+                    "model": "claude-opus-4-8",
+                    "model_reasoning_effort": "low",
+                    "model_service_tier": "flex",
+                },
+            }),
+        )
+        .await;
+
+    let mut metadata: HashMap<String, Value> = HashMap::new();
+    bridge
+        .backfill_bound_agent_runtime_metadata(thread_id, &mut metadata)
+        .await;
+
+    assert_eq!(
+        metadata.get("model"),
+        Some(&Value::String("claude-opus-4-8".to_owned())),
+        "the thread model cell must drive the run model"
+    );
+    assert_eq!(
+        metadata.get("model_reasoning_effort"),
+        Some(&Value::String("low".to_owned())),
+        "the thread effort cell must drive the run effort"
+    );
+    assert_eq!(
+        metadata.get("model_service_tier"),
+        Some(&Value::String("flex".to_owned())),
+        "the thread service-tier cell must drive the run service tier"
+    );
+}
+
+/// Single-cell contract (bridge side, guard): with the target priority
+/// `thread cell (metadata.model) > agent.model > provider default > catalog`,
+/// the thread's model cell must win over the bound agent's model.
+#[tokio::test]
+async fn test_backfill_runtime_metadata_prefers_model_cell_over_agent_model() {
+    let bridge = MultiProviderBridge::new();
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    bridge.set_thread_store(store.clone()).await;
+    bridge
+        .replace_agent_profiles(vec![custom_agent(
+            "test-agent",
+            "Test Agent",
+            ProviderType::ClaudeCode,
+            "agent-model-v2",
+            "Synthetic test agent.",
+        )])
+        .await;
+    let thread_id = "thread::cell-vs-agent-model";
+    store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "agent_id": "test-agent",
+                "provider_type": "claude_code",
+                "metadata": {
+                    "model": "thread-cell-model",
+                },
+            }),
+        )
+        .await;
+
+    let mut metadata: HashMap<String, Value> = HashMap::new();
+    bridge
+        .backfill_bound_agent_runtime_metadata(thread_id, &mut metadata)
+        .await;
+
+    assert_eq!(
+        metadata.get("model"),
+        Some(&Value::String("thread-cell-model".to_owned())),
+        "the thread model cell must win over the bound agent model"
+    );
+}
+
+/// Legacy compatibility (bridge side, guard): stored threads may still carry
+/// the old dual-track `metadata.model_override`. Until the write paths migrate
+/// it into the cell, reads must coalesce(override, cell) — the legacy override
+/// keeps the highest priority.
+#[tokio::test]
+async fn test_backfill_runtime_metadata_legacy_override_wins_over_cell() {
+    let bridge = MultiProviderBridge::new();
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    bridge.set_thread_store(store.clone()).await;
+    let thread_id = "thread::legacy-override-vs-cell";
+    store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "provider_type": "claude_code",
+                "metadata": {
+                    "model": "cell-model",
+                    "model_override": "legacy-override-model",
+                },
+            }),
+        )
+        .await;
+
+    let mut metadata: HashMap<String, Value> = HashMap::new();
+    bridge
+        .backfill_bound_agent_runtime_metadata(thread_id, &mut metadata)
+        .await;
+
+    assert_eq!(
+        metadata.get("model"),
+        Some(&Value::String("legacy-override-model".to_owned())),
+        "legacy model_override data must keep winning over the cell until migrated"
+    );
+}

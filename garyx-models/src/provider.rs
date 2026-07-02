@@ -146,12 +146,16 @@ pub const MODEL_SERVICE_TIER_OVERRIDE_METADATA_KEY: &str = "model_service_tier_o
 pub const MODEL_METADATA_KEY: &str = "model";
 pub const MODEL_REASONING_EFFORT_METADATA_KEY: &str = "model_reasoning_effort";
 pub const MODEL_SERVICE_TIER_METADATA_KEY: &str = "model_service_tier";
-/// Apply per-thread provider overrides (chosen at thread creation) from a
-/// thread record's metadata onto run metadata. Existing run metadata wins:
-/// request-level values stay, and agent-profile defaults applied afterwards
-/// with the same `or_insert` semantics only fill keys neither the request nor
-/// the thread override set.
-pub fn merge_thread_provider_overrides(
+/// Inject the thread's model cells into run metadata (single-cell
+/// semantics): `metadata.model`, `metadata.model_reasoning_effort`, and
+/// `metadata.model_service_tier` on the thread record are THE per-thread
+/// runtime cells — "what this thread actually runs". Legacy stored threads
+/// may still carry the old dual-track `*_override` keys; those coalesce in
+/// front of the cell until a write path migrates them away. Existing run
+/// metadata always wins, so explicit request-level values keep priority and
+/// agent-profile defaults applied afterwards with the same `or_insert`
+/// semantics only fill keys neither the request nor the thread set.
+pub fn merge_thread_model_cells(
     thread_data: &serde_json::Value,
     run_metadata: &mut std::collections::HashMap<String, serde_json::Value>,
 ) {
@@ -161,55 +165,25 @@ pub fn merge_thread_provider_overrides(
     else {
         return;
     };
-    for (override_key, run_key) in [
-        (MODEL_OVERRIDE_METADATA_KEY, MODEL_METADATA_KEY),
+    let nonempty = |key: &str| {
+        thread_metadata
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+    for (run_key, legacy_override_key) in [
+        (MODEL_METADATA_KEY, MODEL_OVERRIDE_METADATA_KEY),
         (
-            MODEL_REASONING_EFFORT_OVERRIDE_METADATA_KEY,
             MODEL_REASONING_EFFORT_METADATA_KEY,
+            MODEL_REASONING_EFFORT_OVERRIDE_METADATA_KEY,
         ),
         (
-            MODEL_SERVICE_TIER_OVERRIDE_METADATA_KEY,
             MODEL_SERVICE_TIER_METADATA_KEY,
+            MODEL_SERVICE_TIER_OVERRIDE_METADATA_KEY,
         ),
     ] {
-        let Some(value) = thread_metadata
-            .get(override_key)
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
-            continue;
-        };
-        run_metadata
-            .entry(run_key.to_owned())
-            .or_insert_with(|| serde_json::Value::String(value.to_owned()));
-    }
-}
-
-/// Apply a thread's persisted runtime snapshot onto run metadata. Existing run
-/// metadata wins, so explicit request values and thread overrides already
-/// merged by `merge_thread_provider_overrides` keep priority.
-pub fn merge_thread_runtime_snapshot(
-    thread_data: &serde_json::Value,
-    run_metadata: &mut std::collections::HashMap<String, serde_json::Value>,
-) {
-    let Some(thread_metadata) = thread_data
-        .get("metadata")
-        .and_then(serde_json::Value::as_object)
-    else {
-        return;
-    };
-    for run_key in [
-        MODEL_METADATA_KEY,
-        MODEL_REASONING_EFFORT_METADATA_KEY,
-        MODEL_SERVICE_TIER_METADATA_KEY,
-    ] {
-        let Some(value) = thread_metadata
-            .get(run_key)
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
+        let Some(value) = nonempty(legacy_override_key).or_else(|| nonempty(run_key)) else {
             continue;
         };
         run_metadata
