@@ -22,7 +22,7 @@
 .channel-plugin-catalog-title {
   font-size: 13px;
   font-weight: 600;
-  color: #191c1f;
+  color: var(--color-token-text-primary);
   margin: 0;
 }
 
@@ -71,7 +71,7 @@
   gap: 8px;
   padding: 10px 12px;
   background: var(--color-token-bg-primary);
-  border: 1px solid rgba(26, 28, 31, 0.08);
+  border: 1px solid var(--color-token-border);
   border-radius: 10px;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.018);
 }
@@ -114,7 +114,7 @@
   min-width: 0;
   font-size: 13px;
   font-weight: 600;
-  color: #191c1f;
+  color: var(--color-token-text-primary);
   letter-spacing: -0.005em;
   white-space: nowrap;
 }
@@ -148,7 +148,7 @@
 }
 
 .channel-plugin-catalog-row-meta [data-tone="success"] {
-  color: #2e7d32;
+  color: var(--color-accent-green-deep);
 }
 
 .channel-plugin-catalog-row-meta [data-tone="warn"] {
@@ -185,7 +185,7 @@
   border: none;
   border-radius: 11px;
   background: rgba(26, 28, 31, 0.045);
-  color: #191c1f;
+  color: var(--color-token-text-primary);
   font-size: 11.5px;
 }
 
@@ -649,7 +649,7 @@ button.new-thread-dreams-scan:hover {
   background: rgba(255, 255, 255, 0.9);
   color: var(--color-token-text-primary);
   box-shadow:
-    0 0 0 0.5px rgba(26, 28, 31, 0.08),
+    0 0 0 0.5px var(--color-token-border),
     0 8px 16px -4px rgba(0, 0, 0, 0.12);
   -webkit-backdrop-filter: blur(16px) saturate(140%);
   backdrop-filter: blur(16px) saturate(140%);

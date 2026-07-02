@@ -396,7 +396,7 @@
 .workflow-result-viewer-tabs button.is-active {
   background: var(--color-token-bg-primary);
   color: var(--color-token-text-primary);
-  box-shadow: 0 1px 3px rgba(26, 28, 31, 0.08);
+  box-shadow: 0 1px 3px var(--color-token-border);
 }
 
 .workflow-result-viewer-actions {
@@ -1040,11 +1040,11 @@
   max-height: calc(100% - 32px);
   margin-top: 16px;
   padding: 15px 15px 16px;
-  border: 0.5px solid rgba(26, 28, 31, 0.08);
+  border: 0.5px solid var(--color-token-border);
   border-radius: 14px;
   background: var(--color-token-bg-primary);
   box-shadow:
-    0 12px 36px rgba(26, 28, 31, 0.08),
+    0 12px 36px var(--color-token-border),
     0 2px 8px rgba(26, 28, 31, 0.05);
   overflow: auto;
 }

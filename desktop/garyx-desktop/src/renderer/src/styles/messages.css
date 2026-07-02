@@ -900,7 +900,7 @@ button.message-file-card {
   font-size: var(--text-xs-plus);
   line-height: 1.25;
   font-weight: var(--font-weight-semibold);
-  color: color-mix(in oklab, var(--color-token-text-secondary) 88%, #2e7d32);
+  color: color-mix(in oklab, var(--color-token-text-secondary) 88%, var(--color-accent-green-deep));
 }
 
 .restart-notice-kicker::before {
@@ -908,7 +908,7 @@ button.message-file-card {
   width: 7px;
   height: 7px;
   border-radius: 999px;
-  background: var(--color-token-accent, #2e7d32);
+  background: var(--color-accent-green-deep);
 }
 
 .restart-notice-body {
