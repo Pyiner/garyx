@@ -7770,15 +7770,24 @@ export function AppShell() {
     });
   }
 
+  /// Incremental forward fetch for the selected thread. `authoritative: true`
+  /// marks a full server refetch (no cache / reset / shrink / page-limit
+  /// overflow) whose transcript must replace local state verbatim;
+  /// `authoritative: false` marks an incremental aggregate that the caller
+  /// must forward-merge onto the live snapshot, because the committed stream
+  /// may have advanced it past this fetch's tail while pages were in flight.
   async function fetchSelectedThreadIncrementalTranscript(
     threadId: string,
     cached: ThreadTranscript | null,
     isCancelled: () => boolean,
-  ): Promise<ThreadTranscript> {
+  ): Promise<{ transcript: ThreadTranscript; authoritative: boolean }> {
     let current = cached;
     let cursor = transcriptCommittedAfterCursor(current);
     if (!current || cursor === null) {
-      return window.garyxDesktop.getThreadHistory(threadId);
+      return {
+        transcript: await window.garyxDesktop.getThreadHistory(threadId),
+        authoritative: true,
+      };
     }
 
     let pagesFetched = 0;
@@ -7795,7 +7804,7 @@ export function AppShell() {
         userQueryLimit: THREAD_HISTORY_USER_QUERY_LIMIT,
       });
       if (isCancelled()) {
-        return current;
+        return { transcript: current, authoritative: false };
       }
       pagesFetched = pageCount + 1;
       const action = decideTranscriptFetchPageAction({
@@ -7806,23 +7815,26 @@ export function AppShell() {
       });
       if (action.type === "reset" || action.type === "shrink_refetch") {
         await window.garyxDesktop.clearThreadTranscriptCache(threadId);
-        return window.garyxDesktop.getThreadHistory(threadId);
+        return {
+          transcript: await window.garyxDesktop.getThreadHistory(threadId),
+          authoritative: true,
+        };
       }
 
       current = mergeForwardTranscriptPage(current, page);
       latestHasMoreAfter = action.continuePaging;
       if (!action.continuePaging) {
-        return current;
+        return { transcript: current, authoritative: false };
       }
       const nextCursor =
         page.pageInfo?.nextAfterIndex ?? transcriptCommittedAfterCursor(current);
       if (nextCursor === null || nextCursor <= cursor) {
-        return current;
+        return { transcript: current, authoritative: false };
       }
       cursor = nextCursor;
     }
     if (isCancelled()) {
-      return current;
+      return { transcript: current, authoritative: false };
     }
     if (
       shouldRefetchAuthoritativeAfterForwardPageLimit({
@@ -7832,9 +7844,12 @@ export function AppShell() {
       })
     ) {
       await window.garyxDesktop.clearThreadTranscriptCache(threadId);
-      return window.garyxDesktop.getThreadHistory(threadId);
+      return {
+        transcript: await window.garyxDesktop.getThreadHistory(threadId),
+        authoritative: true,
+      };
     }
-    return current;
+    return { transcript: current, authoritative: false };
   }
 
   async function loadSelectedThreadTranscriptFromSingleSource(
@@ -7854,6 +7869,7 @@ export function AppShell() {
     let latestTranscript =
       transcriptSnapshotByThreadRef.current[threadId] || null;
     let streamReady = false;
+    let streamStarted = false;
     try {
       const cached = await window.garyxDesktop.loadThreadTranscriptCache(threadId);
       if (isCancelled()) {
@@ -7867,9 +7883,20 @@ export function AppShell() {
         if (cached.renderState) {
           applyThreadRenderState(threadId, cached.renderState);
         }
+        // Start the committed stream from the cached cursor right away: its
+        // replay plus first render frame is what shows turns committed while
+        // this client wasn't subscribed. Waiting for the incremental HTTP
+        // fetch below kept the restored (possibly stale) render snapshot on
+        // screen for the whole fetch, hiding those turns.
+        await startCommittedThreadStream(
+          threadId,
+          cached.transcript,
+          SELECTED_THREAD_STREAM_CONSUMER_ID,
+        );
+        streamStarted = true;
       }
 
-      latestTranscript = await fetchSelectedThreadIncrementalTranscript(
+      const fetched = await fetchSelectedThreadIncrementalTranscript(
         threadId,
         latestTranscript,
         isCancelled,
@@ -7878,6 +7905,15 @@ export function AppShell() {
         return;
       }
       requestSelectedThreadMessagesBottomSnap(threadId, true);
+      // The stream may have advanced the live snapshot past this fetch's tail
+      // while pages were in flight; forward-merge keeps that progress. An
+      // authoritative refetch (reset/shrink) intentionally replaces state.
+      latestTranscript = fetched.authoritative
+        ? fetched.transcript
+        : mergeForwardTranscriptPage(
+            transcriptSnapshotByThreadRef.current[threadId] ?? null,
+            fetched.transcript,
+          );
       applyRemoteTranscript(threadId, latestTranscript);
       if (transcriptHasAutomationResponse(latestTranscript.messages)) {
         setPendingAutomationRun(threadId, null);
@@ -7900,7 +7936,7 @@ export function AppShell() {
     } finally {
       if (!isCancelled()) {
         setHistoryLoading(false);
-        if (!streamReady || !latestTranscript) {
+        if (streamStarted || !streamReady || !latestTranscript) {
           return;
         }
         await startCommittedThreadStream(

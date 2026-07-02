@@ -23,6 +23,7 @@ const TOKENS = [
   'GARYX_DESKTOP_QUEUE_PASS_TWO_20260306',
 ];
 const WARMUP_TOKEN = 'GARYX_DESKTOP_QUEUE_WARMUP_20260318';
+const STALE_CACHE_TOKEN = 'GARYX_DESKTOP_STALE_CACHE_TURN_20260702';
 const EXTERNAL_LOADING_TOKEN = 'GARYX_DESKTOP_EXTERNAL_TELEGRAM_LOADING_20260509';
 const EXTERNAL_DONE_TOKEN = 'GARYX_DESKTOP_EXTERNAL_TELEGRAM_DONE_20260509';
 const EXTERNAL_QUEUE_TOKEN = 'GARYX_DESKTOP_EXTERNAL_MAC_QUEUE_20260509';
@@ -263,6 +264,11 @@ async function createMockGateway(workspaceDir) {
     },
     activeRuns: {},
     threadStreamClients: new Map(),
+    // When > 0, /api/threads/history responses are held back this long. Used
+    // by the stale-cache cold-open scenario to prove committed-stream replay
+    // renders without waiting for the incremental HTTP history fetch.
+    historyHoldbackMs: 0,
+    threadStreamConnectLog: [],
     commands: [
       {
         name: SLASH_COMMAND_NAME,
@@ -845,6 +851,11 @@ async function createMockGateway(workspaceDir) {
         0,
         Number(url.searchParams.get('after_seq') || req.headers['last-event-id'] || 0) || 0,
       );
+      state.threadStreamConnectLog.push({
+        sessionId,
+        afterSeq,
+        at: Date.now(),
+      });
       res.writeHead(200, {
         'content-type': 'text/event-stream',
         'cache-control': 'no-cache',
@@ -935,6 +946,9 @@ async function createMockGateway(workspaceDir) {
       req.method === 'GET' &&
       (pathname === '/api/threads/history' || pathname === '/api/sessions/history')
     ) {
+      if (state.historyHoldbackMs > 0) {
+        await sleep(state.historyHoldbackMs);
+      }
       const sessionId =
         url.searchParams.get('threadId') ||
         url.searchParams.get('thread_id') ||
@@ -942,7 +956,16 @@ async function createMockGateway(workspaceDir) {
         THREAD_ID;
       return writeJson(res, 200, {
         ok: Boolean(ensureSession(sessionId)),
-        messages: state.histories[sessionId] || [],
+        // Mirror the real gateway history projection shape: every row carries
+        // the full nested `message` object (api.rs message_value). The desktop
+        // client reads metadata (origin_id and friends) ONLY from that nested
+        // message, so top-level-only rows would fail origin-id normalization
+        // and flip committed user-row identity between the stream and the
+        // reconcile fetch — remounting the bubble.
+        messages: (state.histories[sessionId] || []).map((record) => ({
+          ...record,
+          message: historyRecordMessage(record),
+        })),
         pending_user_inputs: [],
         thread_runtime: {
           provider_type: 'codex',
@@ -1070,6 +1093,15 @@ async function createMockGateway(workspaceDir) {
     clearExternalRun: ({ sessionId = THREAD_ID } = {}) => clearExternalRun(sessionId),
     finishExternalRun: ({ sessionId = THREAD_ID, assistantText }) =>
       finishExternalRun(sessionId, assistantText),
+    setHistoryHoldbackMs: (ms) => {
+      state.historyHoldbackMs = Math.max(0, Number(ms) || 0);
+    },
+    threadStreamClientCount: (sessionId) =>
+      state.threadStreamClients.get(sessionId)?.size ?? 0,
+    threadStreamConnectsSince: (sessionId, sinceMs) =>
+      state.threadStreamConnectLog.filter(
+        (entry) => entry.sessionId === sessionId && entry.at >= sinceMs,
+      ).length,
     close: () =>
       new Promise((resolve, reject) => {
         server.close((error) => {
@@ -1316,20 +1348,27 @@ async function main() {
         .getByRole('button', { name: oneOfExact(SMOKE_TEXT.send) })
         .waitFor({ timeout: 20000 });
       await window.waitForTimeout(400);
-      const warmupRowStable = await window.evaluate((token) => {
+      const warmupRowDiagnostics = await window.evaluate((token) => {
         const marked = document.querySelectorAll('[data-smoke-warmup-node="1"]');
         const userRows = Array.from(
           document.querySelectorAll('.message-bubble.user'),
         ).filter((el) => (el.textContent || '').includes(token));
-        return (
-          marked.length === 1 &&
-          userRows.length === 1 &&
-          marked[0] === userRows[0]
-        );
+        return {
+          stable:
+            marked.length === 1 &&
+            userRows.length === 1 &&
+            marked[0] === userRows[0],
+          markedCount: marked.length,
+          userRowCount: userRows.length,
+          markedIsFirstUserRow: marked.length > 0 && marked[0] === userRows[0],
+          userRowSnippets: userRows.map((el) =>
+            `${el.className} :: marked=${el.getAttribute('data-smoke-warmup-node') || 'no'} :: ${(el.textContent || '').slice(0, 80)}`,
+          ),
+        };
       }, WARMUP_TOKEN);
       assert.ok(
-        warmupRowStable,
-        'committed user row must stay one stable DOM node through run completion (stable origin:{id} key, no remount/duplicate)',
+        warmupRowDiagnostics.stable,
+        `committed user row must stay one stable DOM node through run completion (stable origin:{id} key, no remount/duplicate); diagnostics=${JSON.stringify(warmupRowDiagnostics)}`,
       );
       stage = 'verify-new-thread-workspace-path';
       const createRequests = gateway.createdThreadRequests();
@@ -1496,6 +1535,77 @@ async function main() {
 
       await window.getByRole('button', { name: oneOfExact(SMOKE_TEXT.send) }).waitFor({ timeout: 15000 });
       await window.waitForTimeout(300);
+
+      // Cold-open with a stale cached render snapshot: turns committed while
+      // this client was away (external run on another surface) must render
+      // from the committed stream's replay immediately — not wait for the
+      // incremental HTTP history fetch. Regression guard: the selected-thread
+      // stream used to start only after that fetch resolved, so a held-back
+      // /history left the restored stale snapshot on screen the whole time.
+      stage = 'stale-cache-cold-open-streams-first';
+      const staleRouteHash = await window.evaluate(() => window.location.hash);
+      assert.ok(
+        staleRouteHash.startsWith('#/thread/'),
+        `expected a thread route before the stale-cache scenario, got ${staleRouteHash}`,
+      );
+      const staleThreadId = decodeURIComponent(
+        staleRouteHash.slice('#/thread/'.length).split('?')[0],
+      );
+      // Let the idle transcript persist to the on-disk cache before reloading.
+      await window.waitForTimeout(800);
+      // Hold back /history responses BEFORE the reload so the fresh renderer's
+      // incremental fetch hangs. On a cold open with a cached transcript the
+      // committed stream must be (re)subscribed immediately from the cached
+      // cursor — its replay and first render frame are what show turns
+      // committed while this client was away. The regression shape: the
+      // stream subscription waited for the incremental fetch, so a slow
+      // /history kept the restored stale snapshot on screen the whole time.
+      // (The main-process forwarder survives a renderer reload, so this
+      // asserts the renderer-driven subscription timing, not raw socket
+      // lifecycles: a fresh startThreadStream always reconnects the
+      // forwarder, which shows up as a new mock stream connection.)
+      gateway.setHistoryHoldbackMs(3500);
+      const staleReloadStartedAt = Date.now();
+      await window.reload({ waitUntil: 'domcontentloaded' });
+      await window.locator('.app-shell').waitFor({ timeout: 15000 });
+      await window.waitForFunction(
+        (expectedHash) => window.location.hash === expectedHash,
+        staleRouteHash,
+        { timeout: 10000 },
+      );
+      // The fresh renderer must issue its stream subscription while the
+      // held-back fetch is still pending (well under the 3.5s holdback),
+      // proving the subscription does not wait for /history.
+      const staleSubscribeDeadline = Date.now() + 2500;
+      let staleSubscribed = false;
+      while (Date.now() < staleSubscribeDeadline) {
+        if (
+          gateway.threadStreamConnectsSince(
+            staleThreadId,
+            staleReloadStartedAt,
+          ) > 0
+        ) {
+          staleSubscribed = true;
+          break;
+        }
+        await sleep(50);
+      }
+      assert.ok(
+        staleSubscribed,
+        'cold open with a cached transcript must subscribe the committed stream before the incremental history fetch resolves (stream-first cold open)',
+      );
+      gateway.setHistoryHoldbackMs(0);
+      // Once the held-back fetch resolves it must forward-merge with the
+      // stream-applied rows — no rollback, no duplicated committed user row.
+      await window.waitForTimeout(3800);
+      assert.equal(
+        await window
+          .locator('.message-bubble.user')
+          .filter({ hasText: WARMUP_TOKEN })
+          .count(),
+        1,
+        'committed user row must stay unique after the held-back fetch resolves (forward-merge, no rollback duplicates)',
+      );
 
       stage = 'settings-navigation';
       await window.getByRole('button', { name: oneOfExact(SMOKE_TEXT.settings) }).click();
