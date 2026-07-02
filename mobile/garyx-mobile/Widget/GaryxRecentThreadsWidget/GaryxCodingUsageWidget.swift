@@ -127,6 +127,11 @@ struct GaryxCodingUsageWidgetView: View {
         .containerBackground(for: .widget) {
             ContainerRelativeShape().fill(.thinMaterial)
         }
+        // Whole-widget deep link into the provider settings page (whose top
+        // is the Quota hero), for every family and the empty state alike
+        // (design §8/D7). No per-gauge Links, so a root widgetURL cannot
+        // steal competing taps.
+        .widgetURL(GaryxMobileProviderSettingsLink.make())
     }
 
     private var emptyState: some View {

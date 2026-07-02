@@ -101,7 +101,9 @@ struct GaryxUsageSpeedometer: View {
 
     private var accessibilityLabel: String {
         guard model.available else { return "\(model.title): usage unavailable" }
-        return "\(model.title): \(model.remainingText) of weekly quota left, \(model.detailText)"
+        // "quota", not "weekly quota": the hero's Antigravity gauge reads its
+        // tightest per-model bucket; the detail text carries the window.
+        return "\(model.title): \(model.remainingText) of quota left, \(model.detailText)"
     }
 }
 
