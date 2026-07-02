@@ -800,3 +800,92 @@ test("forward transcript merge dedups by history index and keeps fetched copy", 
   assert.equal(merged.pageInfo.hasMoreBefore, false);
   assert.equal(merged.pageInfo.hasMoreAfter, false);
 });
+
+test("forward transcript merge never regresses committed progress from a stale page", () => {
+  // Cold-open race: the live stream has already advanced the snapshot while a
+  // slower incremental HTTP fetch (started from the cached cursor) resolves
+  // with an older tail. Merging that stale page into the fresher base must not
+  // roll back the committed counters — a rollback re-filters the newer rows
+  // out of committedTranscriptMessages, regresses the resume cursor, and the
+  // rows silently vanish from the persisted cache.
+  const threadId = "thread::fixture-stale-forward-page";
+  const makeMessage = (index, role, text) => ({
+    id: `history:${index}`,
+    role,
+    kind: role === "user" ? "user_input" : "assistant_reply",
+    text,
+    content: text,
+  });
+  const base = {
+    threadId,
+    remoteFound: true,
+    messages: [
+      makeMessage(0, "user", "old question"),
+      makeMessage(1, "assistant", "old answer"),
+      makeMessage(2, "user", "new question"),
+      makeMessage(3, "assistant", "new answer"),
+    ],
+    pendingInputs: [],
+    pageInfo: {
+      totalMessages: 4,
+      committedMessages: 4,
+      returnedMessages: 4,
+      startIndex: 0,
+      endIndex: 4,
+      hasMoreBefore: false,
+      nextBeforeIndex: null,
+      hasMoreAfter: false,
+      nextAfterIndex: null,
+      reset: false,
+      limit: 50,
+      userQueryLimit: null,
+    },
+  };
+  const stalePage = {
+    threadId,
+    remoteFound: true,
+    messages: [
+      makeMessage(0, "user", "old question"),
+      makeMessage(1, "assistant", "old answer"),
+    ],
+    pendingInputs: [],
+    pageInfo: {
+      totalMessages: 2,
+      committedMessages: 2,
+      returnedMessages: 2,
+      startIndex: 0,
+      endIndex: 2,
+      hasMoreBefore: false,
+      nextBeforeIndex: null,
+      hasMoreAfter: false,
+      nextAfterIndex: null,
+      reset: false,
+      limit: 50,
+      userQueryLimit: null,
+    },
+  };
+
+  const merged = mergeForwardTranscriptPage(base, stalePage);
+
+  assert.equal(merged.messages.length, 4);
+  assert.equal(
+    merged.pageInfo.committedMessages,
+    4,
+    "committed counter must stay at the fresher base value",
+  );
+  assert.equal(
+    merged.pageInfo.totalMessages,
+    4,
+    "total counter must stay at the fresher base value",
+  );
+  assert.equal(
+    committedTranscriptMessages(merged).length,
+    4,
+    "newer committed rows must survive the stale merge",
+  );
+  assert.equal(
+    transcriptCommittedAfterCursor(merged),
+    3,
+    "resume cursor must not regress behind rows the stream already applied",
+  );
+});

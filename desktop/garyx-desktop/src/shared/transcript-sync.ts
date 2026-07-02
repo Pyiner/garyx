@@ -268,6 +268,19 @@ export function normalizeCommittedTranscriptMessages(
     .map(([, message]) => message);
 }
 
+function monotonicCount(
+  base: number | null | undefined,
+  page: number | null | undefined,
+): number | null {
+  if (typeof base !== "number") {
+    return typeof page === "number" ? page : null;
+  }
+  if (typeof page !== "number") {
+    return base;
+  }
+  return Math.max(base, page);
+}
+
 function mergeForwardPageInfo(
   base: ThreadTranscriptPageInfo | null | undefined,
   page: ThreadTranscriptPageInfo | null | undefined,
@@ -276,9 +289,17 @@ function mergeForwardPageInfo(
     return null;
   }
   return {
-    totalMessages: page?.totalMessages ?? base?.totalMessages ?? 0,
-    committedMessages:
-      page?.committedMessages ?? base?.committedMessages ?? null,
+    // Forward merges only ever add rows (messages are deduped by index and the
+    // base copy is kept), so the progress counters are monotonic: a page
+    // fetched from an older cursor must not roll back progress the stream has
+    // already applied — a rollback re-filters newer rows out of
+    // committedTranscriptMessages and regresses the resume cursor.
+    totalMessages:
+      monotonicCount(base?.totalMessages, page?.totalMessages) ?? 0,
+    committedMessages: monotonicCount(
+      base?.committedMessages,
+      page?.committedMessages,
+    ),
     returnedMessages: page?.returnedMessages ?? base?.returnedMessages ?? 0,
     returnedUserQueries:
       page?.returnedUserQueries ?? base?.returnedUserQueries ?? null,
