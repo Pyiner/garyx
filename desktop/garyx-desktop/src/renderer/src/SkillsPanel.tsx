@@ -6,6 +6,13 @@ import {
   IconX,
 } from '@tabler/icons-react';
 import { Settings, Trash } from 'lucide-react';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { MoreDotsIcon } from './app-shell/icons';
 
 import type {
   CreateSkillInput,
@@ -751,18 +758,30 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                     >
                       <Settings />
                     </button>
-                    <button
-                      aria-label={t('Delete')}
-                      className="codex-icon-button skills-icon-button skills-icon-button-danger"
-                      disabled={busy || creating || Boolean(editorBusy)}
-                      onClick={() => {
-                        void handleDeleteSkill(skill);
-                      }}
-                      title={t('Delete')}
-                      type="button"
-                    >
-                      <Trash aria-hidden />
-                    </button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          aria-label={t('More actions for {name}', { name: skill.name })}
+                          className="bot-table-action-button"
+                          disabled={busy || creating || Boolean(editorBusy)}
+                          type="button"
+                        >
+                          <MoreDotsIcon size={14} />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" sideOffset={4}>
+                        <DropdownMenuItem
+                          disabled={busy || creating || Boolean(editorBusy)}
+                          onSelect={() => {
+                            void handleDeleteSkill(skill);
+                          }}
+                          variant="destructive"
+                        >
+                          <Trash aria-hidden />
+                          {t('Delete')}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                     <button
                       aria-label={skill.enabled ? t('Disable skill') : t('Enable skill')}
                       aria-pressed={skill.enabled}
