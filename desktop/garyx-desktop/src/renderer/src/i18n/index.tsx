@@ -77,6 +77,7 @@ const zhCN: Record<string, string> = {
   'Switch gateway': '切换网关',
   'Add Gateway': '添加网关',
   'Saved Gateways': '已保存网关',
+  'Toggle Sidebar': '折叠/展开侧边栏',
   '{name} · {count} models': '{name} · {count} 个模型',
   'Edit Gateway': '编辑网关',
   'Saved gateways appear in the sidebar gateway switcher.': '已保存的网关会出现在侧边栏的网关切换器里。',

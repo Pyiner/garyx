@@ -1,14 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  IconChevronDown,
-  IconDeviceLaptop,
-  IconFolder,
-  IconGitBranch,
-  IconHistory,
-  IconPlus,
-  IconRefresh,
-  IconSparkles,
-} from "@tabler/icons-react";
+import { ChevronDown, Folder, GitBranch, History, Laptop, Plus, RefreshCw, Sparkles } from 'lucide-react';
 
 import type {
   DesktopDreamTopic,
@@ -253,11 +244,11 @@ export function NewThreadEmptyState({
               onClick={() => setWorkspacePickerOpen(true)}
               type="button"
             >
-              <IconFolder aria-hidden size={16} stroke={1.7} />
+              <Folder aria-hidden size={16} strokeWidth={1.7} />
               <span className="new-thread-menu-text">
                 {selectedWorkspace?.name ?? t("Select a workspace")}
               </span>
-              <IconChevronDown aria-hidden size={14} stroke={1.8} />
+              <ChevronDown aria-hidden size={14} strokeWidth={1.8} />
             </button>
           ) : (
             <Button
@@ -266,7 +257,7 @@ export function NewThreadEmptyState({
               disabled={workspaceMutation === "add"}
               onClick={onAddWorkspace}
             >
-              <IconPlus aria-hidden size={14} stroke={1.8} />
+              <Plus aria-hidden size={14} strokeWidth={1.8} />
               {workspaceMutation === "add"
                 ? t("Opening folder…")
                 : t("Choose a folder to begin")}
@@ -296,11 +287,11 @@ export function NewThreadEmptyState({
                 <SelectGroup>
                   <SelectLabel>{t("Workspace mode")}</SelectLabel>
                   <SelectItem value="local">
-                    <IconDeviceLaptop aria-hidden size={16} stroke={1.7} />
+                    <Laptop aria-hidden size={16} strokeWidth={1.7} />
                     <span className="new-thread-menu-text">{t("Local mode")}</span>
                   </SelectItem>
                   <SelectItem value="worktree">
-                    <IconGitBranch aria-hidden size={16} stroke={1.7} />
+                    <GitBranch aria-hidden size={16} strokeWidth={1.7} />
                     <span className="new-thread-menu-text">{t("Worktree")}</span>
                   </SelectItem>
                 </SelectGroup>
@@ -314,7 +305,7 @@ export function NewThreadEmptyState({
             className="new-thread-resume-link"
             onClick={() => setResumeOpen(true)}
           >
-            <IconHistory aria-hidden size={13} stroke={1.8} />
+            <History aria-hidden size={13} strokeWidth={1.8} />
             {t("Resume")}
           </Button>
         </div>
@@ -370,7 +361,7 @@ export function NewThreadEmptyState({
                 type="button"
                 variant="ghost"
               >
-                <IconRefresh aria-hidden size={13} stroke={1.8} />
+                <RefreshCw aria-hidden size={13} strokeWidth={1.8} />
               </Button>
             </div>
           </DialogHeader>
@@ -697,7 +688,7 @@ function NewThreadDreamsSummary({
             type="button"
             variant="ghost"
           >
-            <IconRefresh aria-hidden size={14} stroke={1.8} />
+            <RefreshCw aria-hidden size={14} strokeWidth={1.8} />
           </Button>
           <Button
             className="new-thread-dreams-scan"
@@ -709,7 +700,7 @@ function NewThreadDreamsSummary({
             type="button"
             variant="ghost"
           >
-            <IconSparkles aria-hidden size={14} stroke={1.8} />
+            <Sparkles aria-hidden size={14} strokeWidth={1.8} />
             {scanning ? t("Scanning") : t("Scan")}
           </Button>
         </div>

@@ -537,6 +537,15 @@
     grid-template-columns: 245px minmax(0, 1fr);
   }
 
+  /* Collapsed sidebar must reclaim its track at the narrow breakpoint too. */
+  .app-shell.sidebar-collapsed {
+    grid-template-columns: 0px minmax(0, 1fr);
+  }
+
+  .app-shell.sidebar-collapsed.with-bot-conversation-rail {
+    grid-template-columns: 0px var(--spacing-token-rail, 258px) minmax(0, 1fr);
+  }
+
   .conversation-body {
     padding-inline: 20px;
   }

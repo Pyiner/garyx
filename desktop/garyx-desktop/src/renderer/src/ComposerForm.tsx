@@ -14,29 +14,8 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 
-import {
-  IconArrowsMinimize,
-  IconBolt,
-  IconBrain,
-  IconCode,
-  IconCloud,
-  IconCommand,
-  IconCube,
-  IconFileText,
-  IconGitBranch,
-  IconInfoCircle,
-  IconMessageCircle,
-  IconPaperclip,
-  IconPlayerStopFilled,
-  IconPlugConnected,
-  IconPlus,
-  IconServer,
-  IconSettings,
-  IconTerminal2,
-  IconUserCircle,
-  IconX,
-  type Icon,
-} from '@tabler/icons-react';
+import { Box, Brain, CircleUser, Cloud as CloudIcon, Code, Command, FileText, GitBranch, Info, MessageCircle, Minimize2, Paperclip, Plug, Plus, Server, Settings as SettingsIcon, Square, Terminal, X, Zap } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 
 import type {
   BrowserAnnotationCommentRequest,
@@ -239,48 +218,48 @@ function slashCommandLabel(command: SlashCommand, t: Translate): string {
   return labels[key] || command.name;
 }
 
-function slashCommandIcon(command: SlashCommand): Icon {
+function slashCommandIcon(command: SlashCommand): LucideIcon {
   const key = command.name.toLowerCase();
   if (key.includes('mcp') || key.includes('server')) {
-    return IconServer;
+    return Server;
   }
   if (key.includes('status') || key.includes('info')) {
-    return IconInfoCircle;
+    return Info;
   }
   if (key.includes('branch') || key.includes('worktree')) {
-    return IconGitBranch;
+    return GitBranch;
   }
   if (key.includes('fast') || key.includes('quick')) {
-    return IconBolt;
+    return Zap;
   }
   if (key.includes('reason')) {
-    return IconBrain;
+    return Brain;
   }
   if (key.includes('model')) {
-    return IconCube;
+    return Box;
   }
   if (key.includes('compact') || key.includes('compress')) {
-    return IconArrowsMinimize;
+    return Minimize2;
   }
   if (key.includes('review') || key.includes('code')) {
-    return IconCode;
+    return Code;
   }
   if (key.includes('feedback')) {
-    return IconMessageCircle;
+    return MessageCircle;
   }
   if (key.includes('profile') || key.includes('persona')) {
-    return IconUserCircle;
+    return CircleUser;
   }
   if (key.includes('cloud') || key.includes('sync')) {
-    return IconCloud;
+    return CloudIcon;
   }
   if (key.includes('setting') || key.includes('config')) {
-    return IconSettings;
+    return SettingsIcon;
   }
   if (key.includes('terminal') || key.includes('shell')) {
-    return IconTerminal2;
+    return Terminal;
   }
-  return IconCommand;
+  return Command;
 }
 
 const PROVIDER_CHEVRON_GLYPH = (
@@ -310,7 +289,7 @@ const AGENT_PROVIDER_GLYPH = (
 
 const WORKFLOW_PROVIDER_GLYPH = (
   <span aria-hidden className="composer-provider-workflow-icon">
-    <IconGitBranch size={16} stroke={1.8} />
+    <GitBranch size={16} strokeWidth={1.8} />
   </span>
 );
 
@@ -480,7 +459,7 @@ function renderComposerModelControl({
         data-muted={!effectiveModelId && !effectiveReasoningEffortId ? "" : undefined}
         type="button"
       >
-        <IconCube aria-hidden size={15} stroke={1.75} />
+        <Box aria-hidden size={15} strokeWidth={1.75} />
         <span className="composer-provider-label">{triggerLabel}</span>
         {PROVIDER_CHEVRON_GLYPH}
       </DropdownMenuTrigger>
@@ -511,7 +490,7 @@ function renderComposerModelControl({
             <DropdownMenuSeparator />
             <DropdownMenuSub>
               <FloatingActionMenuSubTrigger>
-                <IconBrain aria-hidden size={15} stroke={1.75} />
+                <Brain aria-hidden size={15} strokeWidth={1.75} />
                 {t("Thinking level")}
               </FloatingActionMenuSubTrigger>
               <FloatingActionMenuSubContent>
@@ -548,7 +527,7 @@ function renderComposerModelControl({
             <DropdownMenuSeparator />
             <DropdownMenuSub>
               <FloatingActionMenuSubTrigger>
-                <IconBolt aria-hidden size={15} stroke={1.75} />
+                <Zap aria-hidden size={15} strokeWidth={1.75} />
                 {t("Speed")}
               </FloatingActionMenuSubTrigger>
               <FloatingActionMenuSubContent>
@@ -774,7 +753,7 @@ function renderComposerBotBindingSubmenu({
             fallbackLabel={selectedBot.title}
           />
         ) : (
-          <IconPlugConnected aria-hidden size={15} stroke={1.7} />
+          <Plug aria-hidden size={15} strokeWidth={1.7} />
         )}
         <span className="composer-menu-label">{selectedBot?.title || t('Bind bot')}</span>
       </FloatingActionMenuSubTrigger>
@@ -786,7 +765,7 @@ function renderComposerBotBindingSubmenu({
             onSelectBotBinding(null);
           }}
         >
-          <IconPlugConnected aria-hidden size={16} stroke={1.7} />
+          <Plug aria-hidden size={16} strokeWidth={1.7} />
           <span className="composer-menu-label">{t('No bot')}</span>
         </FloatingActionMenuItem>
         {visibleGroups.length ? (
@@ -1130,7 +1109,7 @@ export function ComposerForm({
                 type="button"
               >
                 <span className="composer-command-icon">
-                  <CommandIcon aria-hidden size={15} stroke={1.65} />
+                  <CommandIcon aria-hidden size={15} strokeWidth={1.65} />
                 </span>
                 <span className="composer-command-name">{label}</span>
                 <div className="composer-command-item-copy">
@@ -1191,7 +1170,7 @@ export function ComposerForm({
                 title={[label, meta].filter(Boolean).join('\n')}
               >
                 <span className="composer-file-chip-icon composer-browser-annotation-chip-icon">
-                  <IconMessageCircle aria-hidden size={14} stroke={1.8} />
+                  <MessageCircle aria-hidden size={14} strokeWidth={1.8} />
                 </span>
                 <span className="composer-browser-annotation-chip-copy">
                   <span className="composer-browser-annotation-chip-label">
@@ -1211,7 +1190,7 @@ export function ComposerForm({
                   }}
                   type="button"
                 >
-                  <IconX aria-hidden size={12} stroke={2.2} />
+                  <X aria-hidden size={12} strokeWidth={2.2} />
                   <span className="sr-only">{t("Remove browser comment")}</span>
                 </button>
               </div>
@@ -1236,7 +1215,7 @@ export function ComposerForm({
                 }}
                 type="button"
               >
-                <IconX aria-hidden size={12} stroke={2.2} />
+                <X aria-hidden size={12} strokeWidth={2.2} />
                 <span className="sr-only">{t("Remove image attachment")}</span>
               </button>
             </div>
@@ -1248,7 +1227,7 @@ export function ComposerForm({
               title={file.name}
             >
               <span className="composer-file-chip-icon">
-                <IconFileText aria-hidden size={14} stroke={1.8} />
+                <FileText aria-hidden size={14} strokeWidth={1.8} />
               </span>
               <span className="composer-file-chip-label">{file.name}</span>
               <button
@@ -1259,7 +1238,7 @@ export function ComposerForm({
                 }}
                 type="button"
               >
-                <IconX aria-hidden size={12} stroke={2.2} />
+                <X aria-hidden size={12} strokeWidth={2.2} />
                 <span className="sr-only">{t("Remove file attachment")}</span>
               </button>
             </div>
@@ -1297,7 +1276,7 @@ export function ComposerForm({
             disabled={composerLocked && botBindingDisabled}
             type="button"
           >
-            <IconPlus aria-hidden size={18} stroke={1.8} />
+            <Plus aria-hidden size={18} strokeWidth={1.8} />
           </DropdownMenuTrigger>
           <FloatingActionMenuContent
             align="start"
@@ -1310,7 +1289,7 @@ export function ComposerForm({
                 composerAttachmentInputRef.current?.click();
               }}
             >
-              <IconPaperclip aria-hidden size={16} stroke={1.75} />
+              <Paperclip aria-hidden size={16} strokeWidth={1.75} />
               <span className="composer-menu-label">
                 {t('Add photos and files')}
               </span>
@@ -1364,7 +1343,7 @@ export function ComposerForm({
               onClick={onInterrupt}
               type="button"
             >
-              <IconPlayerStopFilled aria-hidden size={14} />
+              <Square aria-hidden fill="currentColor" size={14} strokeWidth={0} />
               <span className="sr-only">{t("Interrupt")}</span>
             </button>
           ) : (

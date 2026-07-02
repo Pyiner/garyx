@@ -1,6 +1,6 @@
 import { memo, type ReactNode, useEffect, useState } from 'react';
 
-import { IconChevronDown } from '@tabler/icons-react';
+import { ChevronDown } from 'lucide-react';
 
 import { useI18n } from './i18n';
 import type { TurnRow } from './render-view-model';
@@ -115,11 +115,11 @@ function TurnSummaryComponent({
         type="button"
       >
         <span className="turn-summary-label">{summaryLabel}</span>
-        <IconChevronDown
+        <ChevronDown
           aria-hidden
           className="turn-summary-chevron"
           size={ICON_SIZE}
-          stroke={ICON_STROKE}
+          strokeWidth={ICON_STROKE}
         />
       </button>
       <div aria-hidden className="turn-summary-divider" />
