@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
 
-import { IconMessages } from '@tabler/icons-react';
+import { MessagesSquare } from 'lucide-react';
 
 function hashCode(str: string): number {
   let hash = 0;
@@ -92,5 +92,5 @@ export function ChannelLogo({
     );
   }
 
-  return <IconMessages aria-hidden className={className} size={14} stroke={1.7} />;
+  return <MessagesSquare aria-hidden className={className} size={14} strokeWidth={1.7} />;
 }

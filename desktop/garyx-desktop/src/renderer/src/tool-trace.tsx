@@ -1,20 +1,6 @@
 import { memo, type ComponentType, type ReactNode, useEffect, useMemo, useState } from 'react';
 
-import {
-  IconChevronDown,
-  IconTerminal2,
-  IconFileText,
-  IconPencil,
-  IconSearch,
-  IconFolder,
-  IconWorldWww,
-  IconSubtask,
-  IconListCheck,
-  IconLayoutList,
-  IconMessageQuestion,
-  IconTool,
-  IconBrain,
-} from '@tabler/icons-react';
+import { Brain, ChevronDown, FileText, Folder, Globe, LayoutList, ListChecks, ListTree, MessageCircleQuestion, Pencil, Search, Terminal, Wrench } from 'lucide-react';
 
 import {
   resolveMergedToolTrace,
@@ -37,27 +23,27 @@ type ToolTraceTreeNode = {
 const ICON_SIZE = 16;
 const ICON_STROKE = 1.6;
 
-const TOOL_ICON_MAP: Record<string, ComponentType<{ size?: number; stroke?: number }>> = {
-  '⌘': IconTerminal2,
-  '≡': IconFileText,
-  '✎': IconPencil,
-  '⌕': IconSearch,
-  '◌': IconFolder,
-  '↗': IconWorldWww,
-  '◇': IconSubtask,
-  '☑': IconListCheck,
-  '▤': IconLayoutList,
-  '?': IconMessageQuestion,
-  '⊚': IconTool,
-  '·': IconBrain,
+const TOOL_ICON_MAP: Record<string, ComponentType<{ size?: number; strokeWidth?: number }>> = {
+  '⌘': Terminal,
+  '≡': FileText,
+  '✎': Pencil,
+  '⌕': Search,
+  '◌': Folder,
+  '↗': Globe,
+  '◇': ListTree,
+  '☑': ListChecks,
+  '▤': LayoutList,
+  '?': MessageCircleQuestion,
+  '⊚': Wrench,
+  '·': Brain,
 };
 
 function ToolIcon({ icon }: { icon: string }) {
   const Component = TOOL_ICON_MAP[icon];
   if (Component) {
-    return <Component size={ICON_SIZE} stroke={ICON_STROKE} />;
+    return <Component size={ICON_SIZE} strokeWidth={ICON_STROKE} />;
   }
-  return <IconTool size={ICON_SIZE} stroke={ICON_STROKE} />;
+  return <Wrench size={ICON_SIZE} strokeWidth={ICON_STROKE} />;
 }
 
 function DiffStatsLabel({ added, removed }: { added: number; removed: number }) {
@@ -311,10 +297,10 @@ function ToolTraceGroupComponent({
         type="button"
       >
         <span className="tool-trace-group-icon">
-          <IconTerminal2 size={ICON_SIZE} stroke={ICON_STROKE} />
+          <Terminal size={ICON_SIZE} strokeWidth={ICON_STROKE} />
         </span>
         <span className="tool-trace-group-summary">{summary}</span>
-        <IconChevronDown aria-hidden className="tool-trace-group-chevron" size={15} stroke={1.7} />
+        <ChevronDown aria-hidden className="tool-trace-group-chevron" size={15} strokeWidth={1.7} />
       </button>
       <div
         aria-hidden={!expanded}

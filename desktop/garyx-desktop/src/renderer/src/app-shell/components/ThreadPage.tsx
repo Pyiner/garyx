@@ -8,8 +8,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { IconGitBranch } from "@tabler/icons-react";
-import { CircleAlert } from "lucide-react";
+import { CircleAlert, GitBranch } from 'lucide-react';
 
 import type {
   DesktopApiProviderType,
@@ -1178,12 +1177,12 @@ export function ThreadPage({
               >
                 {composerWorkspaceBranch?.trim() ? (
                   <span className="thread-composer-status-pill thread-composer-status-branch">
-                    <IconGitBranch aria-hidden size={14} stroke={1.65} />
+                    <GitBranch aria-hidden size={14} strokeWidth={1.65} />
                     <span>{composerWorkspaceBranch.trim()}</span>
                   </span>
                 ) : (
                   <span className="thread-composer-status-pill thread-composer-status-branch">
-                    <IconGitBranch aria-hidden size={14} stroke={1.65} />
+                    <GitBranch aria-hidden size={14} strokeWidth={1.65} />
                     <span>{t("Worktree")}</span>
                   </span>
                 )}

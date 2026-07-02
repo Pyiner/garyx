@@ -1,11 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type JSX } from 'react';
-import {
-  IconDeviceFloppy,
-  IconFilePlus,
-  IconFolderPlus,
-  IconX,
-} from '@tabler/icons-react';
-import { Plus, Settings, Trash } from 'lucide-react';
+import { FilePlus, FolderPlus, Plus, Save as SaveIcon, Settings, Trash, X } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -823,7 +817,7 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                 onClick={closeCreateDialog}
                 type="button"
               >
-                <IconX size={16} stroke={1.8} />
+                <X size={16} strokeWidth={1.8} />
               </button>
             </div>
 
@@ -980,7 +974,7 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                   }}
                   type="button"
                 >
-                  <IconFilePlus size={16} stroke={1.8} />
+                  <FilePlus size={16} strokeWidth={1.8} />
                   {t('New File')}
                 </button>
                 <button
@@ -991,7 +985,7 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                   }}
                   type="button"
                 >
-                  <IconFolderPlus size={16} stroke={1.8} />
+                  <FolderPlus size={16} strokeWidth={1.8} />
                   {t('New Folder')}
                 </button>
                 <button
@@ -1019,7 +1013,7 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                   }}
                   type="button"
                 >
-                  <IconDeviceFloppy size={16} stroke={1.8} />
+                  <SaveIcon size={16} strokeWidth={1.8} />
                   {editorBusy?.startsWith('save:') ? t('Saving...') : t('Save')}
                 </button>
                 <button
@@ -1029,7 +1023,7 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                   onClick={closeEditor}
                   type="button"
                 >
-                  <IconX size={16} stroke={1.8} />
+                  <X size={16} strokeWidth={1.8} />
                 </button>
               </div>
             </div>
