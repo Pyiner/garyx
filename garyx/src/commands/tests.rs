@@ -296,6 +296,71 @@ async fn spawn_agent_http_test_server(
     (format!("http://{addr}"), handle)
 }
 
+/// Agent test server that also answers GET with a canned agent carrying
+/// `existing_env`, so read-modify-write env merges can be exercised end to end.
+/// Only PUT requests are recorded into `requests`.
+async fn spawn_agent_http_test_server_with_env(
+    requests: StdArc<Mutex<Vec<RecordedRequest>>>,
+    existing_env: Value,
+) -> (String, JoinHandle<()>) {
+    let put_requests = requests.clone();
+    let get_env = existing_env;
+    let app = Router::new().route(
+        "/api/custom-agents/{agent_id}",
+        get(move |AxumPath(agent_id): AxumPath<String>| {
+            let env = get_env.clone();
+            async move {
+                (
+                    StatusCode::OK,
+                    Json(json!({
+                        "agent_id": agent_id,
+                        "display_name": "Existing Agent",
+                        "provider_type": "gpt",
+                        "model": "",
+                        "system_prompt": "",
+                        "provider_env": env,
+                        "built_in": false,
+                    })),
+                )
+            }
+        })
+        .put(
+            move |AxumPath(agent_id): AxumPath<String>, Json(payload): Json<Value>| {
+                let requests = put_requests.clone();
+                async move {
+                    requests
+                        .lock()
+                        .expect("request lock")
+                        .push(RecordedRequest {
+                            method: "PUT".to_owned(),
+                            path: format!("/api/custom-agents/{agent_id}"),
+                            body: payload.clone(),
+                        });
+                    (
+                        StatusCode::OK,
+                        Json(json!({
+                            "agent_id": agent_id,
+                            "display_name": payload["display_name"],
+                            "provider_type": payload["provider_type"],
+                            "model": payload["model"],
+                            "system_prompt": payload["system_prompt"],
+                            "built_in": false,
+                        })),
+                    )
+                }
+            },
+        ),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let addr = listener.local_addr().expect("listener addr");
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve test router");
+    });
+    (format!("http://{addr}"), handle)
+}
+
 async fn spawn_settings_update_http_test_server(
     requests: StdArc<Mutex<Vec<RecordedRequest>>>,
 ) -> (String, JoinHandle<()>) {
@@ -1331,6 +1396,9 @@ async fn cmd_agent_create_posts_model_payload() {
         Some("priority".to_owned()),
         None,
         None,
+        Vec::new(),
+        Vec::new(),
+        false,
         Some("/tmp/spec-review".to_owned()),
         "Review specs carefully.".to_owned(),
         false,
@@ -1369,6 +1437,9 @@ async fn cmd_agent_update_omits_model_fields_when_omitted() {
         None,
         None,
         None,
+        Vec::new(),
+        Vec::new(),
+        false,
         None,
         "Review specs carefully.".to_owned(),
         false,
@@ -1405,6 +1476,9 @@ async fn cmd_agent_update_sends_empty_model_when_clear_model_is_set() {
         None,
         None,
         None,
+        Vec::new(),
+        Vec::new(),
+        false,
         None,
         "Review specs carefully.".to_owned(),
         false,
@@ -1442,6 +1516,9 @@ async fn cmd_agent_upsert_falls_back_to_post_after_put_failure() {
         None,
         None,
         None,
+        Vec::new(),
+        Vec::new(),
+        false,
         None,
         "Review specs carefully.".to_owned(),
         false,
@@ -1477,6 +1554,9 @@ async fn cmd_agent_create_posts_native_provider_api_key_payload() {
         None,
         None,
         Some("test-openai-api-key".to_owned()),
+        Vec::new(),
+        Vec::new(),
+        false,
         None,
         "Use GPT.".to_owned(),
         false,
@@ -1494,6 +1574,245 @@ async fn cmd_agent_create_posts_native_provider_api_key_payload() {
         records[0].body["provider_env"]["OPENAI_API_KEY"],
         "test-openai-api-key"
     );
+}
+
+#[test]
+fn resolve_cli_provider_env_returns_none_when_untouched() {
+    let existing = Map::new();
+    let out = resolve_cli_provider_env(&existing, &[], &[], false, None).expect("ok");
+    assert!(out.is_none(), "no env flags must omit provider_env (preserve)");
+}
+
+#[test]
+fn resolve_cli_provider_env_merges_sets_onto_existing() {
+    let mut existing = Map::new();
+    existing.insert("OLD_KEY".to_owned(), Value::String("old".to_owned()));
+    let sets = vec!["NEW_KEY=new".to_owned(), "OLD_KEY=updated".to_owned()];
+    let out = resolve_cli_provider_env(&existing, &sets, &[], false, None)
+        .expect("ok")
+        .expect("some");
+    assert_eq!(out["OLD_KEY"], "updated");
+    assert_eq!(out["NEW_KEY"], "new");
+}
+
+#[test]
+fn resolve_cli_provider_env_unset_and_clear() {
+    let mut existing = Map::new();
+    existing.insert("A".to_owned(), Value::String("1".to_owned()));
+    existing.insert("B".to_owned(), Value::String("2".to_owned()));
+
+    let out = resolve_cli_provider_env(&existing, &[], &["A".to_owned()], false, None)
+        .expect("ok")
+        .expect("some");
+    assert!(out.get("A").is_none());
+    assert_eq!(out["B"], "2");
+
+    let cleared = resolve_cli_provider_env(&existing, &[], &[], true, None)
+        .expect("ok")
+        .expect("some");
+    assert_eq!(cleared, json!({}));
+
+    let cleared_set = resolve_cli_provider_env(&existing, &["C=3".to_owned()], &[], true, None)
+        .expect("ok")
+        .expect("some");
+    assert_eq!(cleared_set, json!({ "C": "3" }));
+}
+
+#[test]
+fn resolve_cli_provider_env_api_key_merges_without_dropping_keys() {
+    let mut existing = Map::new();
+    existing.insert("OTHER".to_owned(), Value::String("keep".to_owned()));
+    let out = resolve_cli_provider_env(
+        &existing,
+        &[],
+        &[],
+        false,
+        Some(("OPENAI_API_KEY", "test-openai-api-key")),
+    )
+    .expect("ok")
+    .expect("some");
+    assert_eq!(out["OTHER"], "keep");
+    assert_eq!(out["OPENAI_API_KEY"], "test-openai-api-key");
+}
+
+#[test]
+fn parse_env_pair_splits_on_first_equals_and_validates_key() {
+    assert_eq!(
+        parse_env_pair("KEY=a=b=c").expect("ok"),
+        ("KEY".to_owned(), "a=b=c".to_owned())
+    );
+    assert_eq!(
+        parse_env_pair("EMPTY=").expect("ok"),
+        ("EMPTY".to_owned(), String::new())
+    );
+    assert!(parse_env_pair("NO_EQUALS").is_err());
+    assert!(parse_env_pair("1BAD=x").is_err());
+    assert!(parse_env_pair("HAS SPACE=x").is_err());
+}
+
+#[test]
+fn mask_env_value_hides_non_empty_values() {
+    assert_eq!(mask_env_value(""), "");
+    assert_ne!(mask_env_value("secret"), "secret");
+    assert!(!mask_env_value("secret").is_empty());
+}
+
+#[tokio::test]
+async fn cmd_agent_create_sends_multiple_env_vars() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_agent_http_test_server(requests.clone(), StatusCode::OK).await;
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_test_gateway_config(&dir, &base_url);
+
+    cmd_agent_create(
+        config_path.to_str().expect("config path"),
+        "envy".to_owned(),
+        "Envy".to_owned(),
+        "claude_code".to_owned(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        vec!["A=1".to_owned(), "B=two".to_owned()],
+        Vec::new(),
+        false,
+        None,
+        "Prompt.".to_owned(),
+        false,
+    )
+    .await
+    .expect("agent create should succeed");
+
+    handle.abort();
+    let records = requests.lock().expect("request lock");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].method, "POST");
+    assert_eq!(records[0].body["provider_env"]["A"], "1");
+    assert_eq!(records[0].body["provider_env"]["B"], "two");
+}
+
+#[tokio::test]
+async fn cmd_agent_update_without_env_flags_omits_provider_env() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_agent_http_test_server(requests.clone(), StatusCode::OK).await;
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_test_gateway_config(&dir, &base_url);
+
+    cmd_agent_update(
+        config_path.to_str().expect("config path"),
+        "spec-review".to_owned(),
+        "Spec Review".to_owned(),
+        "claude_code".to_owned(),
+        None,
+        false,
+        None,
+        None,
+        None,
+        None,
+        Vec::new(),
+        Vec::new(),
+        false,
+        None,
+        "Prompt.".to_owned(),
+        false,
+    )
+    .await
+    .expect("agent update should succeed");
+
+    handle.abort();
+    let records = requests.lock().expect("request lock");
+    // Only the PUT — no GET fetch happens when no env flag is given.
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].method, "PUT");
+    assert!(
+        records[0].body.get("provider_env").is_none(),
+        "unchanged env must omit provider_env so the gateway preserves it"
+    );
+}
+
+#[tokio::test]
+async fn cmd_agent_update_merges_env_onto_existing_via_read_modify_write() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) =
+        spawn_agent_http_test_server_with_env(requests.clone(), json!({ "EXISTING_KEY": "keep-me" }))
+            .await;
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_test_gateway_config(&dir, &base_url);
+
+    cmd_agent_update(
+        config_path.to_str().expect("config path"),
+        "spec-review".to_owned(),
+        "Spec Review".to_owned(),
+        "claude_code".to_owned(),
+        None,
+        false,
+        None,
+        None,
+        None,
+        None,
+        vec!["NEW_KEY=new-value".to_owned()],
+        Vec::new(),
+        false,
+        None,
+        "Prompt.".to_owned(),
+        false,
+    )
+    .await
+    .expect("agent update should succeed");
+
+    handle.abort();
+    let records = requests.lock().expect("request lock");
+    let put = records
+        .iter()
+        .find(|record| record.method == "PUT")
+        .expect("put recorded");
+    assert_eq!(put.body["provider_env"]["EXISTING_KEY"], "keep-me");
+    assert_eq!(put.body["provider_env"]["NEW_KEY"], "new-value");
+}
+
+#[tokio::test]
+async fn cmd_agent_update_api_key_merges_without_dropping_existing_env() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_agent_http_test_server_with_env(
+        requests.clone(),
+        json!({ "CUSTOM_TOKEN": "keep-me" }),
+    )
+    .await;
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_test_gateway_config(&dir, &base_url);
+
+    cmd_agent_update(
+        config_path.to_str().expect("config path"),
+        "budget-gpt".to_owned(),
+        "Budget GPT".to_owned(),
+        "gpt".to_owned(),
+        None,
+        false,
+        None,
+        None,
+        None,
+        Some("test-openai-api-key".to_owned()),
+        Vec::new(),
+        Vec::new(),
+        false,
+        None,
+        "Prompt.".to_owned(),
+        false,
+    )
+    .await
+    .expect("agent update should succeed");
+
+    handle.abort();
+    let records = requests.lock().expect("request lock");
+    let put = records
+        .iter()
+        .find(|record| record.method == "PUT")
+        .expect("put recorded");
+    // The api-key shortcut merges into the existing map instead of replacing it.
+    assert_eq!(put.body["provider_env"]["CUSTOM_TOKEN"], "keep-me");
+    assert_eq!(put.body["provider_env"]["OPENAI_API_KEY"], "test-openai-api-key");
+    assert_eq!(put.body["auth_source"], "api_key");
 }
 
 #[test]

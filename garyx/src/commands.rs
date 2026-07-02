@@ -3709,6 +3709,114 @@ pub(crate) async fn cmd_agent_get(
     Ok(())
 }
 
+/// Map a native-model provider to the well-known env var that carries its API key.
+fn api_key_env_name(provider_type: Option<ProviderType>) -> Option<&'static str> {
+    match provider_type {
+        Some(ProviderType::Gpt) => Some("OPENAI_API_KEY"),
+        Some(ProviderType::ClaudeLlm) => Some("ANTHROPIC_API_KEY"),
+        Some(ProviderType::GeminiLlm) => Some("GEMINI_API_KEY"),
+        _ => None,
+    }
+}
+
+/// Resolve the `--provider-api-key` shortcut to `(env_name, value)`.
+///
+/// Returns `Ok(None)` when no non-empty key was given; errors when a key is
+/// supplied for a provider that has no well-known API-key env var.
+fn resolve_api_key_env(
+    provider: &str,
+    provider_api_key: Option<&str>,
+) -> Result<Option<(&'static str, String)>, Box<dyn std::error::Error>> {
+    let Some(key) = provider_api_key.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let env_name = api_key_env_name(ProviderType::from_slug(provider.trim())).ok_or(
+        "--provider-api-key is only supported for gpt, anthropic, or google providers",
+    )?;
+    Ok(Some((env_name, key.to_owned())))
+}
+
+/// Parse a `KEY=VALUE` CLI env pair, splitting on the first `=`. The value may
+/// contain `=` and may be empty; the key must be a valid env name.
+fn parse_env_pair(pair: &str) -> Result<(String, String), Box<dyn std::error::Error>> {
+    let (key, value) = pair
+        .split_once('=')
+        .ok_or_else(|| format!("--env must be KEY=VALUE, got: {pair}"))?;
+    let key = key.trim();
+    if !garyx_models::custom_agent::is_valid_env_key(key) {
+        return Err(format!("invalid env key '{key}': must match [A-Za-z_][A-Za-z0-9_]*").into());
+    }
+    Ok((key.to_owned(), value.to_owned()))
+}
+
+/// Compute the final `provider_env` value for an agent mutation from the CLI env
+/// flags, merged onto the existing env (client-side read-modify-write).
+///
+/// Returns `Ok(None)` when no env-affecting flag was given, so the caller omits
+/// `provider_env` and the gateway preserves the stored value. Returns
+/// `Ok(Some(map))` with the full desired map otherwise (`{}` clears all env).
+/// Merge order: start from `{}` when `env_clear` else the existing map, then
+/// remove `--unset-env` keys, then apply `--env` upserts, then the api-key key.
+fn resolve_cli_provider_env(
+    existing: &Map<String, Value>,
+    env_sets: &[String],
+    unset_env: &[String],
+    env_clear: bool,
+    api_key: Option<(&str, &str)>,
+) -> Result<Option<Value>, Box<dyn std::error::Error>> {
+    let touched = !env_sets.is_empty() || !unset_env.is_empty() || env_clear || api_key.is_some();
+    if !touched {
+        return Ok(None);
+    }
+    let mut map = if env_clear {
+        Map::new()
+    } else {
+        existing.clone()
+    };
+    for key in unset_env {
+        map.remove(key.trim());
+    }
+    for pair in env_sets {
+        let (key, value) = parse_env_pair(pair)?;
+        map.insert(key, Value::String(value));
+    }
+    if let Some((name, value)) = api_key {
+        map.insert(name.to_owned(), Value::String(value.to_owned()));
+    }
+    Ok(Some(Value::Object(map)))
+}
+
+/// Fetch an agent's current `provider_env` map for read-modify-write. Returns an
+/// empty map if the agent doesn't exist yet or on fetch error (so `upsert` can
+/// still create).
+async fn fetch_existing_provider_env(gateway: &GatewayEndpoint, agent_id: &str) -> Map<String, Value> {
+    match fetch_gateway_json(
+        gateway,
+        &format!("/api/custom-agents/{}", urlencoding::encode(agent_id.trim())),
+    )
+    .await
+    {
+        Ok(agent) => agent
+            .get("provider_env")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default(),
+        Err(_) => Map::new(),
+    }
+}
+
+/// Whether the given env flags require fetching the agent's current env before
+/// building the mutation (a merge onto existing keys). `--env-clear` starts from
+/// an empty map, so it never needs the existing env.
+fn env_flags_need_existing(
+    env_sets: &[String],
+    unset_env: &[String],
+    env_clear: bool,
+    api_key_present: bool,
+) -> bool {
+    !env_clear && (!env_sets.is_empty() || !unset_env.is_empty() || api_key_present)
+}
+
 fn build_agent_mutation_body(
     agent_id: String,
     display_name: String,
@@ -3718,7 +3826,8 @@ fn build_agent_mutation_body(
     model_reasoning_effort: Option<String>,
     model_service_tier: Option<String>,
     provider_auth_source: Option<String>,
-    provider_api_key: Option<String>,
+    api_key_present: bool,
+    provider_env: Option<Value>,
     default_workspace_dir: Option<String>,
     system_prompt: String,
 ) -> Result<Value, Box<dyn std::error::Error>> {
@@ -3751,26 +3860,17 @@ fn build_agent_mutation_body(
     if let Some(auth_source) = auth_source {
         body["auth_source"] = Value::String(auth_source.to_owned());
     }
-    if let Some(api_key) = provider_api_key
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+    // A native-model API key implies api_key auth for GPT unless an explicit
+    // auth source was given. The key value itself is folded into `provider_env`
+    // by the caller (read-modify-write merge), keeping one env source of truth.
+    if api_key_present
+        && matches!(provider_type, Some(ProviderType::Gpt))
+        && auth_source.is_none()
     {
-        let env_name = match provider_type.as_ref() {
-            Some(ProviderType::Gpt) => "OPENAI_API_KEY",
-            Some(ProviderType::ClaudeLlm) => "ANTHROPIC_API_KEY",
-            Some(ProviderType::GeminiLlm) => "GEMINI_API_KEY",
-            _ => {
-                return Err(
-                    "--provider-api-key is only supported for gpt, anthropic, or google providers"
-                        .into(),
-                );
-            }
-        };
-        body["provider_env"] = json!({ env_name: api_key });
-        if matches!(provider_type, Some(ProviderType::Gpt)) && auth_source.is_none() {
-            body["auth_source"] = Value::String("api_key".to_owned());
-        }
+        body["auth_source"] = Value::String("api_key".to_owned());
+    }
+    if let Some(provider_env) = provider_env {
+        body["provider_env"] = provider_env;
     }
     if let Some(default_workspace_dir) = default_workspace_dir {
         body["default_workspace_dir"] = Value::String(default_workspace_dir.trim().to_owned());
@@ -3788,11 +3888,23 @@ pub(crate) async fn cmd_agent_create(
     model_service_tier: Option<String>,
     provider_auth_source: Option<String>,
     provider_api_key: Option<String>,
+    env: Vec<String>,
+    unset_env: Vec<String>,
+    env_clear: bool,
     default_workspace_dir: Option<String>,
     system_prompt: String,
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let gateway = gateway_endpoint(config_path)?;
+    let api_key = resolve_api_key_env(&provider, provider_api_key.as_deref())?;
+    // New agents start from an empty env, so no existing-env fetch is needed.
+    let provider_env = resolve_cli_provider_env(
+        &Map::new(),
+        &env,
+        &unset_env,
+        env_clear,
+        api_key.as_ref().map(|(name, value)| (*name, value.as_str())),
+    )?;
     let body = build_agent_mutation_body(
         agent_id,
         display_name,
@@ -3802,7 +3914,8 @@ pub(crate) async fn cmd_agent_create(
         model_reasoning_effort,
         model_service_tier,
         provider_auth_source,
-        provider_api_key,
+        api_key.is_some(),
+        provider_env,
         default_workspace_dir,
         system_prompt,
     )?;
@@ -3825,11 +3938,27 @@ pub(crate) async fn cmd_agent_update(
     model_service_tier: Option<String>,
     provider_auth_source: Option<String>,
     provider_api_key: Option<String>,
+    env: Vec<String>,
+    unset_env: Vec<String>,
+    env_clear: bool,
     default_workspace_dir: Option<String>,
     system_prompt: String,
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let gateway = gateway_endpoint(config_path)?;
+    let api_key = resolve_api_key_env(&provider, provider_api_key.as_deref())?;
+    let existing = if env_flags_need_existing(&env, &unset_env, env_clear, api_key.is_some()) {
+        fetch_existing_provider_env(&gateway, &agent_id).await
+    } else {
+        Map::new()
+    };
+    let provider_env = resolve_cli_provider_env(
+        &existing,
+        &env,
+        &unset_env,
+        env_clear,
+        api_key.as_ref().map(|(name, value)| (*name, value.as_str())),
+    )?;
     let body = build_agent_mutation_body(
         agent_id.clone(),
         display_name,
@@ -3839,7 +3968,8 @@ pub(crate) async fn cmd_agent_update(
         model_reasoning_effort,
         model_service_tier,
         provider_auth_source,
-        provider_api_key,
+        api_key.is_some(),
+        provider_env,
         default_workspace_dir,
         system_prompt,
     )?;
@@ -3866,11 +3996,27 @@ pub(crate) async fn cmd_agent_upsert(
     model_service_tier: Option<String>,
     provider_auth_source: Option<String>,
     provider_api_key: Option<String>,
+    env: Vec<String>,
+    unset_env: Vec<String>,
+    env_clear: bool,
     default_workspace_dir: Option<String>,
     system_prompt: String,
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let gateway = gateway_endpoint(config_path)?;
+    let api_key = resolve_api_key_env(&provider, provider_api_key.as_deref())?;
+    let existing = if env_flags_need_existing(&env, &unset_env, env_clear, api_key.is_some()) {
+        fetch_existing_provider_env(&gateway, &agent_id).await
+    } else {
+        Map::new()
+    };
+    let provider_env = resolve_cli_provider_env(
+        &existing,
+        &env,
+        &unset_env,
+        env_clear,
+        api_key.as_ref().map(|(name, value)| (*name, value.as_str())),
+    )?;
     let body = build_agent_mutation_body(
         agent_id.clone(),
         display_name,
@@ -3880,7 +4026,8 @@ pub(crate) async fn cmd_agent_upsert(
         model_reasoning_effort,
         model_service_tier,
         provider_auth_source,
-        provider_api_key,
+        api_key.is_some(),
+        provider_env,
         default_workspace_dir,
         system_prompt,
     )?;
@@ -3949,10 +4096,31 @@ fn print_agent_summary(a: &Value) {
     {
         println!("Default workspace: {}", default_workspace_dir.trim());
     }
+    if let Some(env) = a["provider_env"].as_object()
+        && !env.is_empty()
+    {
+        println!("Environment:");
+        let mut keys: Vec<&String> = env.keys().collect();
+        keys.sort();
+        for key in keys {
+            let value = env[key].as_str().unwrap_or("");
+            println!("  {key}={}", mask_env_value(value));
+        }
+    }
     if let Some(prompt) = a["system_prompt"].as_str() {
         let preview: String = prompt.chars().take(120).collect();
         let ellipsis = if prompt.len() > 120 { "…" } else { "" };
         println!("Prompt: {preview}{ellipsis}");
+    }
+}
+
+/// Mask an env value for human-readable CLI output. Values are never printed in
+/// cleartext by the default view; use `--json` for raw values.
+fn mask_env_value(value: &str) -> String {
+    if value.is_empty() {
+        String::new()
+    } else {
+        "••••••".to_owned()
     }
 }
 

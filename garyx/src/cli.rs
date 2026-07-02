@@ -1093,6 +1093,15 @@ pub(crate) enum AgentAction {
         /// System prompt
         #[arg(long)]
         system_prompt: String,
+        /// Set an agent environment variable as KEY=VALUE (repeatable). Merged onto existing env.
+        #[arg(long = "env", value_name = "KEY=VALUE")]
+        env: Vec<String>,
+        /// Remove an agent environment variable by KEY (repeatable).
+        #[arg(long = "unset-env", value_name = "KEY")]
+        unset_env: Vec<String>,
+        /// Clear all agent environment variables before applying --env.
+        #[arg(long = "env-clear")]
+        env_clear: bool,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -1133,6 +1142,15 @@ pub(crate) enum AgentAction {
         /// System prompt
         #[arg(long)]
         system_prompt: String,
+        /// Set an agent environment variable as KEY=VALUE (repeatable). Merged onto existing env.
+        #[arg(long = "env", value_name = "KEY=VALUE")]
+        env: Vec<String>,
+        /// Remove an agent environment variable by KEY (repeatable).
+        #[arg(long = "unset-env", value_name = "KEY")]
+        unset_env: Vec<String>,
+        /// Clear all agent environment variables before applying --env.
+        #[arg(long = "env-clear")]
+        env_clear: bool,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -1173,6 +1191,15 @@ pub(crate) enum AgentAction {
         /// System prompt
         #[arg(long)]
         system_prompt: String,
+        /// Set an agent environment variable as KEY=VALUE (repeatable). Merged onto existing env.
+        #[arg(long = "env", value_name = "KEY=VALUE")]
+        env: Vec<String>,
+        /// Remove an agent environment variable by KEY (repeatable).
+        #[arg(long = "unset-env", value_name = "KEY")]
+        unset_env: Vec<String>,
+        /// Clear all agent environment variables before applying --env.
+        #[arg(long = "env-clear")]
+        env_clear: bool,
         /// Output as JSON
         #[arg(long)]
         json: bool,

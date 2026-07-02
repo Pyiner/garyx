@@ -105,6 +105,21 @@ fn builtin_provider_agent_id_detection_is_limited_to_builtin_profiles() {
 }
 
 #[test]
+fn is_valid_env_key_matches_posix_env_names() {
+    assert!(is_valid_env_key("OPENAI_API_KEY"));
+    assert!(is_valid_env_key("_PRIVATE"));
+    assert!(is_valid_env_key("PATH"));
+    assert!(is_valid_env_key("A1_B2"));
+
+    assert!(!is_valid_env_key("")); // empty
+    assert!(!is_valid_env_key("1LEADING_DIGIT"));
+    assert!(!is_valid_env_key("HAS SPACE"));
+    assert!(!is_valid_env_key("HAS=EQUALS"));
+    assert!(!is_valid_env_key("HAS-DASH"));
+    assert!(!is_valid_env_key("lower.dot"));
+}
+
+#[test]
 fn builtin_provider_profiles_do_not_include_gpt_agent() {
     let profiles = builtin_provider_agent_profiles();
     assert!(
