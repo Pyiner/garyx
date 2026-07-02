@@ -4723,3 +4723,175 @@ async fn test_set_thread_workspace_binding_fallback_for_nonexistent() {
     let bindings = bridge.thread_workspace_bindings_snapshot().await;
     assert_eq!(bindings.get("thread-2").unwrap(), &bogus);
 }
+
+/// Bug A: editing `agents.claude.default_model` on disk and running
+/// `POST /api/settings/reload` reaches `reload_from_config`, but
+/// `get_or_create_provider` short-circuits on the stable provider key
+/// (`compute_provider_key` intentionally excludes `default_model` to keep
+/// thread affinity / SDK session ids stable) and silently drops the new
+/// config. The existing provider instance keeps serving the old
+/// `default_model` until the gateway restarts.
+///
+/// Target behavior: the provider key stays stable AND the already-registered
+/// provider instance hot-applies the new model defaults, so new runs (in new
+/// or existing threads) immediately use the reloaded provider default.
+#[tokio::test]
+async fn test_reload_from_config_hot_applies_new_provider_default_model() {
+    let bridge = MultiProviderBridge::new();
+    let mut config = GaryxConfig::default();
+    config.agents.insert(
+        "claude".to_owned(),
+        json!({
+            "provider_type": "claude_code",
+            "default_model": "claude-opus-4-8",
+            "model_reasoning_effort": "medium"
+        }),
+    );
+    bridge.reload_from_config(&config).await.unwrap();
+    let key_before = bridge
+        .default_provider_key()
+        .await
+        .expect("default provider key after first reload");
+
+    // Simulate the user editing the provider default in garyx.json and
+    // triggering a settings reload.
+    config.agents.insert(
+        "claude".to_owned(),
+        json!({
+            "provider_type": "claude_code",
+            "default_model": "claude-fable-5",
+            "model_reasoning_effort": "high"
+        }),
+    );
+    bridge.reload_from_config(&config).await.unwrap();
+    let key_after = bridge
+        .default_provider_key()
+        .await
+        .expect("default provider key after second reload");
+    assert_eq!(
+        key_before, key_after,
+        "provider key must stay stable across default-model edits (thread affinity)"
+    );
+
+    let provider = bridge
+        .get_provider(&key_after)
+        .await
+        .expect("default provider instance");
+    let options = ProviderRunOptions {
+        thread_id: "thread::reload-default-model".to_owned(),
+        message: "hello".to_owned(),
+        workspace_dir: None,
+        images: None,
+        metadata: HashMap::new(),
+    };
+    let selection = provider.resolve_runtime_selection(&options);
+    assert_eq!(
+        selection.model.as_deref(),
+        Some("claude-fable-5"),
+        "runs without a model request must use the reloaded provider default model"
+    );
+    assert_eq!(
+        selection.model_reasoning_effort.as_deref(),
+        Some("high"),
+        "runs without an effort request must use the reloaded provider default effort"
+    );
+}
+
+/// Bug B (bridge side): `persist_thread_runtime_snapshot` writes the first
+/// run's effective model into thread `metadata.model`, and
+/// `backfill_bound_agent_runtime_metadata` re-injects that snapshot into run
+/// metadata via `merge_thread_runtime_snapshot`. Because the snapshot is
+/// written once and re-injected forever, existing threads without an explicit
+/// override can never pick up a changed provider default model.
+///
+/// Target behavior: the snapshot may stay in thread metadata as a historical
+/// audit record, but it must not be injected into run metadata. Run metadata
+/// stays empty here so the provider's (possibly hot-reloaded) default applies.
+#[tokio::test]
+async fn test_backfill_runtime_metadata_ignores_thread_model_snapshot() {
+    let bridge = MultiProviderBridge::new();
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    bridge.set_thread_store(store.clone()).await;
+    let thread_id = "thread::stale-runtime-snapshot";
+    store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "provider_type": "claude_code",
+                "metadata": {
+                    "model": "claude-opus-4-8",
+                    "model_reasoning_effort": "low",
+                    "model_service_tier": "flex",
+                },
+            }),
+        )
+        .await;
+
+    let mut metadata: HashMap<String, Value> = HashMap::new();
+    bridge
+        .backfill_bound_agent_runtime_metadata(thread_id, &mut metadata)
+        .await;
+
+    assert_eq!(
+        metadata.get("model"),
+        None,
+        "stale thread model snapshot must not suppress the provider default model"
+    );
+    assert_eq!(
+        metadata.get("model_reasoning_effort"),
+        None,
+        "stale thread effort snapshot must not suppress the provider default effort"
+    );
+    assert_eq!(
+        metadata.get("model_service_tier"),
+        None,
+        "stale thread service-tier snapshot must not suppress the provider default tier"
+    );
+}
+
+/// Bug B (bridge side, agent-bound thread): with the target priority
+/// `thread model_override > agent.model > provider default > catalog default`,
+/// the persisted first-run snapshot must not shadow the bound agent's model
+/// either. The thread override path (already healthy end to end) must keep
+/// the highest priority.
+#[tokio::test]
+async fn test_backfill_runtime_metadata_prefers_agent_model_over_thread_snapshot() {
+    let bridge = MultiProviderBridge::new();
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    bridge.set_thread_store(store.clone()).await;
+    bridge
+        .replace_agent_profiles(vec![custom_agent(
+            "test-agent",
+            "Test Agent",
+            ProviderType::ClaudeCode,
+            "agent-model-v2",
+            "Synthetic test agent.",
+        )])
+        .await;
+    let thread_id = "thread::agent-vs-runtime-snapshot";
+    store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "agent_id": "test-agent",
+                "provider_type": "claude_code",
+                "metadata": {
+                    "model": "provider-default-v1",
+                },
+            }),
+        )
+        .await;
+
+    let mut metadata: HashMap<String, Value> = HashMap::new();
+    bridge
+        .backfill_bound_agent_runtime_metadata(thread_id, &mut metadata)
+        .await;
+
+    assert_eq!(
+        metadata.get("model"),
+        Some(&Value::String("agent-model-v2".to_owned())),
+        "bound agent model must win over the persisted first-run snapshot"
+    );
+}

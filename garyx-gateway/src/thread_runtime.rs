@@ -197,3 +197,94 @@ pub(crate) async fn build_thread_runtime_summary(
         "active_run": Value::Null,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::server::AppStateBuilder;
+    use garyx_models::config::GaryxConfig;
+    use serde_json::json;
+
+    /// Bug B (gateway side): the runtime resolution chain reads the
+    /// first-run snapshot (`metadata.model` / effort / tier) ahead of the
+    /// provider default, so a thread that already ran once keeps reporting
+    /// (and running) the old model forever after the provider default
+    /// changes on disk.
+    ///
+    /// Target priority: thread `model_override` > agent model > provider
+    /// `default_model` > catalog default. The snapshot must not participate.
+    #[tokio::test]
+    async fn thread_runtime_summary_ignores_model_snapshot_in_favor_of_provider_default() {
+        let mut config = GaryxConfig::default();
+        config.agents.insert(
+            "claude".to_owned(),
+            json!({
+                "provider_type": "claude_code",
+                "default_model": "claude-fable-5",
+                "model_reasoning_effort": "high",
+                "model_service_tier": "priority"
+            }),
+        );
+        let state = AppStateBuilder::new(crate::test_support::with_gateway_auth(config)).build();
+
+        // Thread that already ran once: the first run pinned the then-current
+        // provider defaults into the metadata snapshot. No thread override.
+        let thread_value = json!({
+            "thread_id": "thread-runtime-snapshot",
+            "provider_type": "claude_code",
+            "metadata": {
+                "model": "claude-opus-4-8",
+                "model_reasoning_effort": "low",
+                "model_service_tier": "flex"
+            }
+        });
+
+        let summary = build_thread_runtime_summary(&state, Some(&thread_value)).await;
+
+        assert_eq!(
+            summary["model"],
+            json!("claude-fable-5"),
+            "runtime model must resolve to the current provider default, not the first-run snapshot"
+        );
+        assert_eq!(
+            summary["model_reasoning_effort"],
+            json!("high"),
+            "runtime effort must resolve to the current provider default, not the first-run snapshot"
+        );
+        assert_eq!(
+            summary["model_service_tier"],
+            json!("priority"),
+            "runtime service tier must resolve to the current provider default, not the first-run snapshot"
+        );
+    }
+
+    /// Thread-level overrides stay the highest-priority runtime source even
+    /// with a stale snapshot present (this already holds today and must keep
+    /// holding after the snapshot is dropped from the resolution chain).
+    #[tokio::test]
+    async fn thread_runtime_summary_keeps_thread_override_highest_priority() {
+        let mut config = GaryxConfig::default();
+        config.agents.insert(
+            "claude".to_owned(),
+            json!({
+                "provider_type": "claude_code",
+                "default_model": "claude-fable-5"
+            }),
+        );
+        let state = AppStateBuilder::new(crate::test_support::with_gateway_auth(config)).build();
+
+        let thread_value = json!({
+            "thread_id": "thread-runtime-override",
+            "provider_type": "claude_code",
+            "metadata": {
+                "model": "claude-opus-4-8",
+                "model_override": "claude-haiku-4-6"
+            }
+        });
+
+        let summary = build_thread_runtime_summary(&state, Some(&thread_value)).await;
+
+        assert_eq!(summary["model"], json!("claude-haiku-4-6"));
+        assert_eq!(summary["model_override"], json!("claude-haiku-4-6"));
+    }
+}
