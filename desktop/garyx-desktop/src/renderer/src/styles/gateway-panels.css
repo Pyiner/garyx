@@ -56,7 +56,7 @@
   flex: none;
   padding: 2px 9px;
   border-radius: 999px;
-  background: #f4f4f2;
+  background: var(--color-token-bg-tertiary);
   color: #6f6f6a;
   font-size: 11px;
   font-weight: 550;
@@ -84,7 +84,7 @@
 }
 
 .gateway-profile-edit:hover {
-  background: #f4f4f2;
+  background: var(--color-token-bg-tertiary);
   color: #3a3a37;
 }
 
@@ -128,7 +128,7 @@
   overflow-y: auto;
   border: 1px solid var(--border, rgba(26, 28, 31, 0.1));
   border-radius: 13px;
-  background: var(--bg-primary, #ffffff);
+  background: var(--bg-primary, var(--color-token-bg-primary));
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1), 0 2px 6px rgba(0, 0, 0, 0.05);
   padding: 6px;
 }
@@ -153,25 +153,25 @@
   padding: 0 10px 0 11px;
   border-radius: 9px;
   border: 1px solid var(--border, rgba(26, 28, 31, 0.1));
-  background: var(--bg-primary, #ffffff);
+  background: var(--bg-primary, var(--color-token-bg-primary));
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.03);
   font-size: 12px;
   font-weight: 600;
-  color: var(--fg-secondary, rgba(26, 28, 31, 0.65));
+  color: var(--fg-secondary, var(--color-token-text-secondary));
   cursor: pointer;
   transition: background 0.12s ease, border-color 0.12s ease;
 }
 .thread-subtask-toggle:hover {
-  background: var(--bg-tertiary, #f4f4f2);
-  border-color: var(--border-heavy, #d9d9d9);
+  background: var(--bg-tertiary, var(--color-token-bg-tertiary));
+  border-color: var(--border-heavy, var(--color-border-heavy));
 }
 .thread-subtask-count {
   font-size: 10px;
   font-weight: 700;
   padding: 1px 6px;
   border-radius: 9999px;
-  background: var(--orange-bg, #fcf1eb);
-  color: var(--orange, #e25507);
+  background: var(--orange-bg, var(--color-token-bg-warning));
+  color: var(--orange, var(--color-token-warning-foreground));
   font-variant-numeric: tabular-nums;
 }
 .thread-subtask-panel {
@@ -183,7 +183,7 @@
   overflow-y: auto;
   border: 1px solid var(--border, rgba(26, 28, 31, 0.1));
   border-radius: 13px;
-  background: var(--bg-primary, #ffffff);
+  background: var(--bg-primary, var(--color-token-bg-primary));
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1), 0 2px 6px rgba(0, 0, 0, 0.05);
   padding: 6px;
 }
@@ -208,11 +208,11 @@
   justify-content: center;
   border: none;
   background: transparent;
-  color: var(--fg-disabled, #aaaaaa);
+  color: var(--fg-disabled, var(--color-token-disabled-foreground));
   border-radius: 6px;
   cursor: pointer;
 }
-.thread-subtask-close:hover { background: var(--row-hover, rgba(26, 28, 31, 0.053)); }
+.thread-subtask-close:hover { background: var(--row-hover, var(--color-token-row-hover)); }
 .thread-subtask-list { display: flex; flex-direction: column; gap: 1px; }
 .thread-subtask-item {
   display: flex;
@@ -228,9 +228,9 @@
   position: relative;
   transition: background 0.12s ease;
 }
-.thread-subtask-item:hover { background: var(--row-hover, rgba(26, 28, 31, 0.053)); }
+.thread-subtask-item:hover { background: var(--row-hover, var(--color-token-row-hover)); }
 .thread-subtask-item.current {
-  background: var(--orange-bg, #fcf1eb);
+  background: var(--orange-bg, var(--color-token-bg-warning));
 }
 .thread-subtask-item.current::before {
   content: "";
@@ -240,14 +240,14 @@
   bottom: 7px;
   width: 3px;
   border-radius: 9999px;
-  background: var(--orange, #e25507);
+  background: var(--orange, var(--color-accent-orange));
 }
 .thread-subtask-item.depth-1 { padding-left: 24px; }
 .thread-subtask-item.depth-2 { padding-left: 40px; }
 .thread-subtask-item.depth-3 { padding-left: 56px; }
 .thread-subtask-item.depth-4 { padding-left: 72px; }
 .thread-subtask-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 9999px; }
-.thread-subtask-item.tone-progress .thread-subtask-dot { background: var(--orange, #e25507); }
+.thread-subtask-item.tone-progress .thread-subtask-dot { background: var(--orange, var(--color-accent-orange)); }
 .thread-subtask-item.tone-review .thread-subtask-dot { background: var(--purple, #7345b6); }
 .thread-subtask-item.tone-todo .thread-subtask-dot,
 .thread-subtask-item.tone-done .thread-subtask-dot { background: var(--fg-disabled, #aaaaaa); }
@@ -263,7 +263,7 @@
 .thread-subtask-title {
   font-size: 13px;
   font-weight: 500;
-  color: var(--fg, #1a1c1f);
+  color: var(--fg, var(--color-token-text-primary));
   line-height: 1.3;
   white-space: nowrap;
   overflow: hidden;
@@ -273,7 +273,7 @@
   flex: 0 0 auto;
   border-radius: 9999px;
   padding: 1px 6px;
-  background: var(--orange, #e25507);
+  background: var(--orange, var(--color-accent-orange));
   color: #ffffff;
   font-size: 10px;
   font-weight: 700;
@@ -284,7 +284,7 @@
   align-items: center;
   gap: 6px;
   font-size: 11px;
-  color: var(--fg-secondary, rgba(26, 28, 31, 0.65));
+  color: var(--fg-secondary, var(--color-token-text-secondary));
   font-weight: 500;
 }
 .thread-subtask-row2 .agent-option-avatar { width: 15px; height: 15px; font-size: 8px; }
@@ -295,7 +295,7 @@
   border-radius: 9999px;
   font-variant-numeric: tabular-nums;
 }
-.thread-subtask-status.tone-progress { background: var(--orange-bg, #fcf1eb); color: var(--orange, #e25507); }
+.thread-subtask-status.tone-progress { background: var(--orange-bg, var(--color-token-bg-warning)); color: var(--orange, var(--color-token-warning-foreground)); }
 .thread-subtask-status.tone-review { background: var(--purple-bg, #f3eefb); color: var(--purple, #7345b6); }
 .thread-subtask-status.tone-todo,
-.thread-subtask-status.tone-done { background: var(--bg-tertiary, #f4f4f2); color: var(--fg-desc, rgba(26, 28, 31, 0.5)); }
+.thread-subtask-status.tone-done { background: var(--bg-tertiary, var(--color-token-bg-tertiary)); color: var(--fg-desc, rgba(26, 28, 31, 0.5)); }

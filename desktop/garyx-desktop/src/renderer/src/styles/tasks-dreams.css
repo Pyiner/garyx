@@ -720,7 +720,7 @@
 .tasks-state-warning {
   border-color: color-mix(in oklab, var(--color-token-warning-foreground) 18%, transparent);
   background: var(--color-token-bg-warning);
-  color: color-mix(in oklab, var(--color-token-warning-foreground) 82%, #0d0d0d);
+  color: color-mix(in oklab, var(--color-token-warning-foreground) 82%, var(--foreground));
 }
 
 .tasks-status-chip {

@@ -22,7 +22,7 @@
 .channel-plugin-catalog-title {
   font-size: 13px;
   font-weight: 600;
-  color: #191c1f;
+  color: var(--color-token-text-primary);
   margin: 0;
 }
 
@@ -36,7 +36,7 @@
 }
 
 .channel-plugin-catalog-refresh:hover:enabled {
-  color: #00a240;
+  color: var(--color-token-success-foreground);
 }
 
 .channel-plugin-catalog-refresh:disabled {
@@ -70,8 +70,8 @@
   align-items: center;
   gap: 8px;
   padding: 10px 12px;
-  background: #ffffff;
-  border: 1px solid rgba(26, 28, 31, 0.08);
+  background: var(--color-token-bg-primary);
+  border: 1px solid var(--color-token-border);
   border-radius: 10px;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.018);
 }
@@ -92,7 +92,7 @@
   width: 28px;
   height: 28px;
   border-radius: 7px;
-  background: #f4f4f2;
+  background: var(--color-token-bg-tertiary);
   color: #4a4a4a;
   display: flex;
   align-items: center;
@@ -114,7 +114,7 @@
   min-width: 0;
   font-size: 13px;
   font-weight: 600;
-  color: #191c1f;
+  color: var(--color-token-text-primary);
   letter-spacing: -0.005em;
   white-space: nowrap;
 }
@@ -148,7 +148,7 @@
 }
 
 .channel-plugin-catalog-row-meta [data-tone="success"] {
-  color: #2e7d32;
+  color: var(--color-accent-green-deep);
 }
 
 .channel-plugin-catalog-row-meta [data-tone="warn"] {
@@ -185,7 +185,7 @@
   border: none;
   border-radius: 11px;
   background: rgba(26, 28, 31, 0.045);
-  color: #191c1f;
+  color: var(--color-token-text-primary);
   font-size: 11.5px;
 }
 
@@ -433,7 +433,7 @@ button.new-thread-mode-trigger:hover,
 button.new-thread-mode-trigger[data-state="open"],
 button.new-thread-resume-link:hover {
   color: rgba(26, 28, 31, 0.78);
-  background: rgba(26, 28, 31, 0.053);
+  background: var(--color-token-row-hover);
 }
 
 .new-thread-dreams {
@@ -534,7 +534,7 @@ button.new-thread-dreams-scan {
 button.new-thread-dreams-action:hover,
 button.new-thread-dreams-scan:hover {
   color: rgba(26, 28, 31, 0.78);
-  background: rgba(26, 28, 31, 0.053);
+  background: var(--color-token-row-hover);
 }
 
 .new-thread-dreams-error {
@@ -649,7 +649,7 @@ button.new-thread-dreams-scan:hover {
   background: rgba(255, 255, 255, 0.9);
   color: var(--color-token-text-primary);
   box-shadow:
-    0 0 0 0.5px rgba(26, 28, 31, 0.08),
+    0 0 0 0.5px var(--color-token-border),
     0 8px 16px -4px rgba(0, 0, 0, 0.12);
   -webkit-backdrop-filter: blur(16px) saturate(140%);
   backdrop-filter: blur(16px) saturate(140%);
@@ -729,7 +729,7 @@ button.new-thread-dreams-scan:hover {
 
 [data-slot="select-content"].new-thread-workspace-menu [data-slot="select-item"][data-highlighted],
 [data-slot="select-content"].new-thread-mode-menu [data-slot="select-item"][data-highlighted] {
-  background: rgba(26, 28, 31, 0.053);
+  background: var(--color-token-row-hover);
   color: var(--color-token-text-primary);
 }
 

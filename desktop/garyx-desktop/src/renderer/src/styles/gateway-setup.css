@@ -28,7 +28,7 @@
   padding: 0 14px;
   border: 1px solid rgba(15, 23, 42, 0.12);
   border-radius: 14px;
-  background: #fff;
+  background: var(--color-token-bg-primary);
   color: var(--color-token-text-primary);
   font: inherit;
 }
@@ -115,7 +115,7 @@
 .gateway-headers-editor-add {
   align-self: flex-start;
   border-color: #e7e7e5;
-  background: #fff;
+  background: var(--color-token-bg-primary);
   color: #111;
   box-shadow: none;
 }
@@ -182,7 +182,7 @@
 }
 
 .gateway-profile-history-trigger:hover {
-  background: #f4f4f2;
+  background: var(--color-token-bg-tertiary);
   color: #333331;
 }
 
@@ -218,7 +218,7 @@
   justify-content: center;
   border: 1px solid #e7e7e5;
   border-radius: 9px;
-  background: #fafaf9;
+  background: var(--color-token-bg-secondary);
   color: #555550;
 }
 
@@ -240,7 +240,7 @@
   padding: 9px 10px;
   border: 1px solid transparent;
   border-radius: 10px;
-  background: #fafaf9;
+  background: var(--color-token-bg-secondary);
   color: #2a2a28;
   font-size: 13px;
   line-height: 1.25;
@@ -293,7 +293,7 @@
 }
 
 .gateway-setup-button.secondary {
-  background: #fff;
+  background: var(--color-token-bg-primary);
   color: #111111;
 }
 

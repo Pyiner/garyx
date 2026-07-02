@@ -30,7 +30,7 @@
   gap: 6px;
   min-width: 0;
   padding: 6px 10px 6px 10px;
-  background: #fafaf9;
+  background: var(--color-token-bg-secondary);
   border-bottom: none;
 }
 
@@ -44,7 +44,7 @@
   padding: 0 10px;
   border: none;
   border-radius: 12px;
-  background: #f4f4f2;
+  background: var(--color-token-bg-tertiary);
   box-shadow: none;
   transition:
     background-color var(--duration-fast) var(--ease-standard),
@@ -52,7 +52,7 @@
 }
 
 .browser-address-form:focus-within {
-  background: #fff;
+  background: var(--color-token-bg-primary);
   box-shadow: 0 0 0 2px rgba(51, 156, 255, 0.25);
 }
 
@@ -141,7 +141,7 @@
 }
 
 .browser-tab.active {
-  background: #fafaf9;
+  background: var(--color-token-bg-secondary);
   color: var(--color-token-text-primary);
   border-radius: 8px 8px 0 0;
   z-index: 2;
@@ -159,12 +159,12 @@
 
 .browser-tab.active::before {
   left: -6px;
-  background: radial-gradient(circle at 0 0, transparent 6px, #fafaf9 6px);
+  background: radial-gradient(circle at 0 0, transparent 6px, var(--color-token-bg-secondary) 6px);
 }
 
 .browser-tab.active::after {
   right: -6px;
-  background: radial-gradient(circle at 100% 0, transparent 6px, #fafaf9 6px);
+  background: radial-gradient(circle at 100% 0, transparent 6px, var(--color-token-bg-secondary) 6px);
 }
 
 .browser-tab-title {
@@ -333,7 +333,7 @@
   gap: 4px;
   padding: 9px 10px 11px;
   border-radius: 10px;
-  background: color-mix(in srgb, var(--color-token-bg-secondary) 90%, #fff 10%);
+  background: color-mix(in srgb, var(--color-token-bg-secondary) 90%, var(--color-token-bg-primary) 10%);
 }
 
 .browser-connection-label {
@@ -464,7 +464,7 @@
 }
 
 .browser-page-side-panel .browser-stage-shell {
-  background: #fff;
+  background: var(--color-token-bg-primary);
 }
 
 @media (max-width: 1100px) {

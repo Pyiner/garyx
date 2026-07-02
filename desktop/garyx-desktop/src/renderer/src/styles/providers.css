@@ -4,7 +4,7 @@
   width: 100%;
   min-width: 0;
   overflow: hidden;
-  border: 1px solid rgba(26, 28, 31, 0.08);
+  border: 1px solid var(--color-token-border);
   border-radius: 10px;
   background: var(--color-token-bg-primary);
 }
@@ -496,7 +496,7 @@
   margin-bottom: 0;
   border: 1px solid #e7e7e5;
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--color-token-bg-primary);
   color: #1f2421;
   font: inherit;
   font-size: 12px;
@@ -511,7 +511,7 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #2e7d32;
+  background: var(--color-accent-green-deep);
 }
 
 .update-pill-downloading .update-pill-dot {
