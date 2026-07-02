@@ -1211,7 +1211,7 @@
 }
 
 .workspace-picker-row:hover:not(:disabled) {
-  background: #f4f4f2;
+  background: var(--color-token-bg-tertiary);
 }
 
 .workspace-picker-row:disabled {
@@ -1220,7 +1220,7 @@
 }
 
 .workspace-picker-row[data-active] {
-  background: #f4f4f2;
+  background: var(--color-token-bg-tertiary);
 }
 
 .workspace-picker-row svg {

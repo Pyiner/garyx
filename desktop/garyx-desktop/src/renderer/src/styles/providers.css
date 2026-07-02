@@ -496,7 +496,7 @@
   margin-bottom: 0;
   border: 1px solid #e7e7e5;
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--color-token-bg-primary);
   color: #1f2421;
   font: inherit;
   font-size: 12px;

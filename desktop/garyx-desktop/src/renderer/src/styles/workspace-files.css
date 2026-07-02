@@ -711,7 +711,7 @@
   padding: 16px;
   border: 1px solid #e7e7e5;
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--color-token-bg-primary);
 }
 
 .garyx-mobile-connect-copy {

@@ -655,7 +655,7 @@
   padding: 8px;
   border: 1px solid #ececea;
   border-radius: 16px;
-  background: #ffffff;
+  background: var(--color-token-bg-primary);
   box-shadow:
     0 24px 56px -16px rgba(28, 28, 26, 0.24),
     0 4px 14px rgba(28, 28, 26, 0.07);
@@ -762,7 +762,7 @@
   padding: 1px 5px;
   border: 1px solid #d6d6d2;
   border-radius: 6px;
-  background: #ffffff;
+  background: var(--color-token-bg-primary);
   color: #2a2a28;
   font: inherit;
   font-size: 12.5px;

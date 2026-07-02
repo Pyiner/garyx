@@ -810,7 +810,7 @@
   border: 1px solid
     color-mix(in srgb, var(--color-token-border-light) 90%, #b7c6de 10%);
   border-radius: 14px;
-  background: color-mix(in srgb, var(--color-token-bg-secondary) 92%, #fff 8%);
+  background: color-mix(in srgb, var(--color-token-bg-secondary) 92%, var(--color-token-bg-primary) 8%);
   text-align: left;
   cursor: pointer;
 }
@@ -887,7 +887,7 @@
   border-radius: 14px;
   border: 1px solid
     color-mix(in srgb, var(--color-token-border-light) 90%, #b7c6de 10%);
-  background: color-mix(in srgb, var(--color-token-bg-secondary) 92%, #fff 8%);
+  background: color-mix(in srgb, var(--color-token-bg-secondary) 92%, var(--color-token-bg-primary) 8%);
 }
 
 .web-settings-summary-card strong {
@@ -916,7 +916,7 @@
   border-radius: 12px;
   border: 1px solid
     color-mix(in srgb, var(--color-token-border-light) 90%, #b7c6de 10%);
-  background: color-mix(in srgb, var(--color-token-bg-secondary) 92%, #fff 8%);
+  background: color-mix(in srgb, var(--color-token-bg-secondary) 92%, var(--color-token-bg-primary) 8%);
   color: var(--color-token-text-primary);
 }
 
@@ -934,7 +934,7 @@
   border-radius: 14px;
   border: 1px solid
     color-mix(in srgb, var(--color-token-border-light) 90%, #b7c6de 10%);
-  background: color-mix(in srgb, var(--color-token-bg-secondary) 92%, #fff 8%);
+  background: color-mix(in srgb, var(--color-token-bg-secondary) 92%, var(--color-token-bg-primary) 8%);
   color: var(--color-token-text-primary);
   font:
     12px/1.55 "SF Mono",
@@ -957,7 +957,7 @@
   border-radius: 14px;
   border: 1px solid
     color-mix(in srgb, var(--color-token-border-light) 90%, #b7c6de 10%);
-  background: color-mix(in srgb, var(--color-token-bg-secondary) 92%, #fff 8%);
+  background: color-mix(in srgb, var(--color-token-bg-secondary) 92%, var(--color-token-bg-primary) 8%);
 }
 
 .web-settings-check {
@@ -974,7 +974,7 @@
   border-radius: 12px;
   border: 1px solid
     color-mix(in srgb, var(--color-token-border-light) 90%, #b7c6de 10%);
-  background: color-mix(in srgb, var(--color-token-bg-secondary) 92%, #fff 8%);
+  background: color-mix(in srgb, var(--color-token-bg-secondary) 92%, var(--color-token-bg-primary) 8%);
   color: var(--color-token-text-primary);
 }
 
@@ -990,7 +990,7 @@
   border-radius: 14px;
   border: 1px solid
     color-mix(in srgb, var(--color-token-border-light) 90%, #b7c6de 10%);
-  background: color-mix(in srgb, var(--color-token-bg-secondary) 92%, #fff 8%);
+  background: color-mix(in srgb, var(--color-token-bg-secondary) 92%, var(--color-token-bg-primary) 8%);
   color: var(--color-token-text-primary);
   font:
     12px/1.5 "SF Mono",
@@ -1012,7 +1012,7 @@
   border-radius: 14px;
   border: 1px solid
     color-mix(in srgb, var(--color-token-border-light) 90%, #b7c6de 10%);
-  background: color-mix(in srgb, var(--color-token-bg-secondary) 92%, #fff 8%);
+  background: color-mix(in srgb, var(--color-token-bg-secondary) 92%, var(--color-token-bg-primary) 8%);
 }
 
 .web-log-message {
@@ -1032,7 +1032,7 @@
   border-radius: 14px;
   border: 1px solid
     color-mix(in srgb, var(--color-token-border-light) 90%, #b7c6de 10%);
-  background: color-mix(in srgb, var(--color-token-bg-secondary) 92%, #fff 8%);
+  background: color-mix(in srgb, var(--color-token-bg-secondary) 92%, var(--color-token-bg-primary) 8%);
 }
 
 .web-cron-table {

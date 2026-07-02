@@ -36,7 +36,7 @@
 }
 
 .channel-plugin-catalog-refresh:hover:enabled {
-  color: #00a240;
+  color: var(--color-token-success-foreground);
 }
 
 .channel-plugin-catalog-refresh:disabled {
@@ -70,7 +70,7 @@
   align-items: center;
   gap: 8px;
   padding: 10px 12px;
-  background: #ffffff;
+  background: var(--color-token-bg-primary);
   border: 1px solid rgba(26, 28, 31, 0.08);
   border-radius: 10px;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.018);
@@ -92,7 +92,7 @@
   width: 28px;
   height: 28px;
   border-radius: 7px;
-  background: #f4f4f2;
+  background: var(--color-token-bg-tertiary);
   color: #4a4a4a;
   display: flex;
   align-items: center;
@@ -433,7 +433,7 @@ button.new-thread-mode-trigger:hover,
 button.new-thread-mode-trigger[data-state="open"],
 button.new-thread-resume-link:hover {
   color: rgba(26, 28, 31, 0.78);
-  background: rgba(26, 28, 31, 0.053);
+  background: var(--color-token-row-hover);
 }
 
 .new-thread-dreams {
@@ -534,7 +534,7 @@ button.new-thread-dreams-scan {
 button.new-thread-dreams-action:hover,
 button.new-thread-dreams-scan:hover {
   color: rgba(26, 28, 31, 0.78);
-  background: rgba(26, 28, 31, 0.053);
+  background: var(--color-token-row-hover);
 }
 
 .new-thread-dreams-error {
@@ -729,14 +729,14 @@ button.new-thread-dreams-scan:hover {
 
 [data-slot="select-content"].new-thread-workspace-menu [data-slot="select-item"][data-highlighted],
 [data-slot="select-content"].new-thread-mode-menu [data-slot="select-item"][data-highlighted] {
-  background: rgba(26, 28, 31, 0.053);
+  background: var(--color-token-row-hover);
   color: var(--color-token-text-primary);
 }
 
 [data-slot="select-content"].new-thread-workspace-menu [data-slot="select-separator"],
 [data-slot="select-content"].new-thread-mode-menu [data-slot="select-separator"] {
   margin: 4px 8px;
-  background: rgba(26, 28, 31, 0.08);
+  background: var(--color-token-row-selected);
 }
 
 /* ── Tasks: Workflow executor + runs ── */

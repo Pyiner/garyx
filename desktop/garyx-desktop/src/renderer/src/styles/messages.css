@@ -338,7 +338,7 @@
   contain: inline-size;
   border: 1px solid rgba(255, 255, 255, 0.96);
   border-radius: 12.5px;
-  background: rgba(26, 28, 31, 0.08);
+  background: var(--color-token-row-selected);
   box-shadow: none;
 }
 
@@ -643,7 +643,7 @@
   overflow: hidden;
   border-radius: var(--radius-xl);
   border: 0.5px solid var(--color-token-border-light);
-  background: color-mix(in srgb, var(--color-token-bg-secondary) 92%, #fff 8%);
+  background: color-mix(in srgb, var(--color-token-bg-secondary) 92%, var(--color-token-bg-primary) 8%);
 }
 
 button.message-image-frame {
@@ -971,7 +971,7 @@ button.message-file-card {
   padding: 10px 14px;
   border: 1px solid rgba(13, 13, 13, 0.07);
   border-radius: 16px;
-  background: color-mix(in srgb, var(--color-token-bg-secondary) 90%, #fff 10%);
+  background: color-mix(in srgb, var(--color-token-bg-secondary) 90%, var(--color-token-bg-primary) 10%);
   color: var(--color-token-text-secondary);
   box-shadow: 0 8px 20px rgba(15, 23, 42, 0.04);
 }

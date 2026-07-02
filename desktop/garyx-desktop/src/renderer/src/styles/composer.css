@@ -45,7 +45,7 @@
   border: 1px solid rgba(26, 28, 31, 0.06);
   border-bottom: 0;
   border-radius: 14px 14px 0 0;
-  background: #fff;
+  background: var(--color-token-bg-primary);
   box-shadow: none;
   display: flex;
   max-height: 440px;
@@ -819,7 +819,7 @@
     var(--color-token-foreground) 11%,
     transparent
   );
-  background: #f4f4f2;
+  background: var(--color-token-bg-tertiary);
   color: rgba(13, 13, 13, 0.78);
 }
 

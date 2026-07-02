@@ -1130,7 +1130,7 @@
   overflow: hidden;
   border: 1px solid rgba(26, 28, 31, 0.08);
   border-radius: 12px;
-  background: #ffffff;
+  background: var(--color-token-bg-primary);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.018);
 }
 
@@ -1154,7 +1154,7 @@
 
 .commands-table tbody tr {
   border-bottom: 1px solid rgba(26, 28, 31, 0.045);
-  background: #ffffff;
+  background: var(--color-token-bg-primary);
   transition: background 120ms ease;
 }
 
@@ -1310,7 +1310,7 @@
   padding: 0 10px;
   border: 1px solid rgba(26, 28, 31, 0.1);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--color-token-bg-primary);
   color: #55575a;
   font-size: 12px;
   font-weight: var(--font-weight-medium);
