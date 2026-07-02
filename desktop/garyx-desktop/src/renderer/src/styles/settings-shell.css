@@ -13,23 +13,13 @@
   min-width: 0;
 }
 
+/* One column width for every settings tab so the page header sits at a
+   fixed position instead of shifting with each tab's content width. */
 .settings-content-column {
   display: grid;
   gap: 24px;
-  width: min(100%, 672px);
+  width: min(100%, 1120px);
   margin: 0 auto;
-}
-
-.settings-content-channels .settings-content-column {
-  width: min(100%, 1120px);
-}
-
-.settings-content-commands .settings-content-column {
-  width: min(100%, 1120px);
-}
-
-.settings-content-provider .settings-content-column {
-  width: min(100%, 1120px);
 }
 
 .settings-page-header {
