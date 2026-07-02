@@ -48,12 +48,18 @@ test("api-key shortcut is derived from the row, never serialized over it", () =>
 
 test("setApiKeyInRows upserts and removes the well-known row", () => {
   // create
-  let rows = setApiKeyInRows([{ key: "OTHER", value: "keep" }], "gpt", "sk-1");
-  assert.deepEqual(buildProviderEnvPayload(rows), { OTHER: "keep", OPENAI_API_KEY: "sk-1" });
+  let rows = setApiKeyInRows([{ key: "OTHER", value: "keep" }], "gpt", "test-openai-api-key");
+  assert.deepEqual(buildProviderEnvPayload(rows), {
+    OTHER: "keep",
+    OPENAI_API_KEY: "test-openai-api-key",
+  });
   // update in place
-  rows = setApiKeyInRows(rows, "gpt", "sk-2");
-  assert.equal(apiKeyValueFromRows(rows, "gpt"), "sk-2");
-  assert.deepEqual(buildProviderEnvPayload(rows), { OTHER: "keep", OPENAI_API_KEY: "sk-2" });
+  rows = setApiKeyInRows(rows, "gpt", "test-openai-api-key-2");
+  assert.equal(apiKeyValueFromRows(rows, "gpt"), "test-openai-api-key-2");
+  assert.deepEqual(buildProviderEnvPayload(rows), {
+    OTHER: "keep",
+    OPENAI_API_KEY: "test-openai-api-key-2",
+  });
   // clearing removes the row (does not resurrect it)
   rows = setApiKeyInRows(rows, "gpt", "");
   assert.equal(apiKeyValueFromRows(rows, "gpt"), "");

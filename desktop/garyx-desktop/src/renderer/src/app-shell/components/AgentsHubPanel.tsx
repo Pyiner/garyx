@@ -1721,7 +1721,6 @@ export function AgentsHubPanel({
                           : '',
                         modelServiceTier: value === 'gpt' ? current.modelServiceTier : '',
                         authSource: isNativeModelProvider(value) ? defaultAuthSource(value) : '',
-                        apiKey: '',
                         baseUrl: '',
                       }));
                       void ensureProviderModels(value);
