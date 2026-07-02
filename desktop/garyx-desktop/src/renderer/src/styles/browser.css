@@ -542,6 +542,10 @@
     grid-template-columns: 0px minmax(0, 1fr);
   }
 
+  .app-shell.sidebar-collapsed.with-bot-conversation-rail {
+    grid-template-columns: 0px var(--spacing-token-rail, 258px) minmax(0, 1fr);
+  }
+
   .conversation-body {
     padding-inline: 20px;
   }
