@@ -38,6 +38,99 @@ final class GaryxMobileToolTraceBuilderTests: XCTestCase {
         XCTAssertFalse(messages.contains { $0.text.localizedCaseInsensitiveContains("contextCompaction") })
     }
 
+    /// Guardrail matrix for the TASK-1502 family: the ledger contract says a
+    /// `role == user` transcript row is always a real user input (tool results
+    /// ride dedicated tool roles), so no combination of polluted tool flags may
+    /// ever make the transcript-to-mobile projection drop a user body. A
+    /// dropped body starves `GaryxMobileRenderStateMapper` ref resolution and
+    /// renders the gray history skeleton instead of the user's message.
+    func testUserRowsAreNeverProjectedAwayAsToolTraces() {
+        let hostileUserRows: [(label: String, row: GaryxTranscriptMessage)] = [
+            (
+                "kind=user_input + tool_related (captured TASK-1502 shape)",
+                GaryxTranscriptMessage(
+                    index: 10,
+                    role: .user,
+                    kind: "user_input",
+                    text: "prose mentioning tool_use and mcp__ names",
+                    toolRelated: true
+                )
+            ),
+            (
+                "hostile kind=tool_trace on a user row",
+                GaryxTranscriptMessage(
+                    index: 11,
+                    role: .user,
+                    kind: "tool_trace",
+                    text: "user text under a hostile kind",
+                    toolRelated: true
+                )
+            ),
+            (
+                "kind containing result substring",
+                GaryxTranscriptMessage(
+                    index: 12,
+                    role: .user,
+                    kind: "user_result_note",
+                    text: "user text with a result-ish kind",
+                    toolRelated: true
+                )
+            ),
+            (
+                "tool_name polluted on a user row",
+                GaryxTranscriptMessage(
+                    index: 13,
+                    role: .user,
+                    kind: "user_input",
+                    text: "user text with tool_name set",
+                    toolRelated: true,
+                    toolName: "Bash"
+                )
+            ),
+            (
+                "tool_use_result flag polluted on a user row",
+                GaryxTranscriptMessage(
+                    index: 14,
+                    role: .user,
+                    kind: "user_input",
+                    text: "user text with tool_use_result flag",
+                    toolRelated: true,
+                    toolUseResult: true
+                )
+            ),
+            (
+                "structured content with nested tool hints",
+                GaryxTranscriptMessage(
+                    index: 15,
+                    role: .user,
+                    kind: "user_input",
+                    text: "structured user text",
+                    content: json(#"[{"type":"text","text":"please call mcp__server__tool via tool_use"}]"#),
+                    toolRelated: true
+                )
+            ),
+        ]
+
+        for (label, row) in hostileUserRows {
+            XCTAssertNil(
+                GaryxMobileTranscriptToolTraceClassifier.kind(for: row),
+                "\(label): user rows must never classify as tool traces"
+            )
+            let projected = GaryxMobileTranscriptMapper.mobileMessages(from: [row])
+            XCTAssertEqual(projected.count, 1, "\(label): user body must survive projection")
+            XCTAssertEqual(projected.first?.role, .user, label)
+            XCTAssertEqual(projected.first?.text, row.text, "\(label): user text must be preserved")
+            XCTAssertEqual(projected.first?.historyIndex, row.index, label)
+            if let message = projected.first {
+                XCTAssertNotEqual(
+                    GaryxMobileMessagePresentation.make(for: message),
+                    .historySkeleton,
+                    "\(label): projected user body must render as text, not skeleton"
+                )
+            }
+        }
+    }
+
     func testDerivedToolTitlesPreserveCamelCaseToolNames() throws {
         XCTAssertEqual(GaryxMobileToolTraceEntry.title(for: "TaskCreate"), "TaskCreate")
 

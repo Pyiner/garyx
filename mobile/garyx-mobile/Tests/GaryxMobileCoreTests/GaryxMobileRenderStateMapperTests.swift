@@ -656,6 +656,196 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
         XCTAssertEqual(payload.summaryText, "ls")
     }
 
+    /// Timeline invariant for the "message flashes away when thinking appears"
+    /// symptom family: drive the real frame processor with the first render
+    /// frame of a new run (committed user body + thinking tail) and assert the
+    /// just-sent user message stays visible, with a stable row identity, at
+    /// every intermediate step of the send lifecycle.
+    ///
+    /// Steps mirror the app orchestration in GaryxMobileModel+ThreadStream:
+    /// 0. optimistic local row appended (composer send)
+    /// 1. frame arrives: bodies must be emitted before the render snapshot
+    /// 2. bodies merged into the transcript cache, snapshot not yet swapped
+    /// 3. new snapshot applied (visible `messages` flush still throttled)
+    /// 4. throttled flush rebuilds visible messages via GaryxTranscriptMerge
+    func testSendToThinkingFrameKeepsJustSentUserMessageVisibleAtEveryStep() throws {
+        let earlierOrigin = "mobile-EARLIER0000000001"
+        let origin = "mobile-00000000-0000-0000-0000-00000000000A"
+        let sentText = "New question that mentions tool_use and mcp__ tools"
+        let localRowId = "user_turn:origin:\(origin)"
+
+        let priorTranscript = [
+            GaryxTranscriptMessage(
+                index: 0,
+                role: .user,
+                kind: "user_input",
+                text: "Earlier question",
+                metadata: json(#"{"origin_id":"\#(earlierOrigin)","client":"garyx-mobile"}"#)
+            ),
+            GaryxTranscriptMessage(
+                index: 1,
+                role: .assistant,
+                kind: "assistant_reply",
+                text: "Earlier answer"
+            ),
+        ]
+        let idleSnapshot = GaryxRenderSnapshot(
+            basedOnSeq: 2,
+            rows: [
+                .userTurn(GaryxRenderUserTurnRow(
+                    id: "user_turn:origin:\(earlierOrigin)",
+                    user: ref(seq: 1, role: "user", id: "origin:\(earlierOrigin)"),
+                    activity: [
+                        .assistantReply(GaryxRenderAssistantReplyRow(
+                            id: "reply:2",
+                            message: ref(seq: 2, role: "assistant")
+                        )),
+                    ]
+                )),
+            ]
+        )
+        let priorVisibleMessages = GaryxMobileTranscriptMapper.mobileMessages(from: priorTranscript)
+        let optimistic = GaryxMobileMessage(
+            id: "origin:\(origin)",
+            role: .user,
+            text: sentText,
+            timestamp: nil,
+            isStreaming: false,
+            clientIntentId: origin,
+            localState: .optimistic
+        )
+
+        func assertSentMessageVisibleExactlyOnce(
+            _ rows: [GaryxMobileTurnRow],
+            expectedRowId: String,
+            step: String
+        ) throws {
+            let matches = rows.filter { $0.userBlock?.message.text == sentText }
+            XCTAssertEqual(matches.count, 1, "\(step): sent user message must be visible exactly once")
+            let row = try XCTUnwrap(matches.first, step)
+            XCTAssertEqual(row.id, expectedRowId, "\(step): row identity must stay stable (no remove+insert churn)")
+            let user = try XCTUnwrap(row.userBlock?.message, step)
+            XCTAssertNotEqual(
+                GaryxMobileMessagePresentation.make(for: user),
+                .historySkeleton,
+                "\(step): sent user message must never degrade to the loading skeleton"
+            )
+        }
+
+        // Step 0 — optimistic send: local row appended after server rows.
+        let step0 = GaryxMobileRenderStateMapper.rows(
+            snapshot: idleSnapshot,
+            messages: priorVisibleMessages + [optimistic],
+            transcriptMessages: priorTranscript
+        )
+        XCTAssertEqual(step0.map(\.id), ["user_turn:origin:\(earlierOrigin)", localRowId])
+        try assertSentMessageVisibleExactlyOnce(step0, expectedRowId: localRowId, step: "step0")
+
+        // Step 1 — first frame of the run arrives (committed user body +
+        // thinking tail). The REST/stream projection may mark the user row
+        // tool_related (nested-content sniffing); that must not matter.
+        var processor = GatewayStreamFrameProcessor()
+        processor.resetConnection(afterSeq: 2, replayScope: .resume)
+        let framePayload = """
+        {
+          "type": "thread_render_frame",
+          "thread_id": "thread::timeline",
+          "events": [
+            {
+              "type": "committed_message",
+              "thread_id": "thread::timeline",
+              "seq": 3,
+              "message": {
+                "index": 2,
+                "role": "user",
+                "kind": "user_input",
+                "tool_related": true,
+                "likely_user_visible": true,
+                "text": "\(sentText)",
+                "content": "\(sentText)",
+                "metadata": { "origin_id": "\(origin)", "client": "garyx-mobile" }
+              }
+            }
+          ],
+          "render_state": {
+            "based_on_seq": 3,
+            "rows": [
+              {
+                "kind": "user_turn",
+                "id": "user_turn:origin:\(earlierOrigin)",
+                "user": { "id": "origin:\(earlierOrigin)", "seq": 1, "role": "user" },
+                "activity": [
+                  {
+                    "kind": "assistant_reply",
+                    "id": "reply:2",
+                    "message": { "id": "seq:2", "seq": 2, "role": "assistant" },
+                    "streaming": false
+                  }
+                ]
+              },
+              {
+                "kind": "user_turn",
+                "id": "user_turn:origin:\(origin)",
+                "user": { "id": "origin:\(origin)", "seq": 3, "role": "user" },
+                "activity": []
+              }
+            ],
+            "tailActivity": "thinking",
+            "progress_locus": "tail",
+            "visibleMessageIds": [],
+            "filtered_placeholders": []
+          }
+        }
+        """
+        let result = processor.processPayload(framePayload, threadId: "thread::timeline")
+        XCTAssertNil(result.reconnect)
+        XCTAssertEqual(result.actions.count, 2)
+        guard case let .applyCommittedMessages(committed) = try XCTUnwrap(result.actions.first) else {
+            return XCTFail("bodies must be applied before the render snapshot within one frame")
+        }
+        guard case let .applyRenderSnapshot(thinkingSnapshot) = try XCTUnwrap(result.actions.last) else {
+            return XCTFail("the frame must end by applying the render snapshot")
+        }
+        XCTAssertEqual(thinkingSnapshot.tailActivity, .thinking)
+        // The stream path rewrites committed identities to history:<seq-1>;
+        // ref resolution must then work through the history index.
+        XCTAssertEqual(committed.map(\.id), ["history:2"])
+        XCTAssertEqual(committed.map(\.index), [2])
+
+        // Step 2 — bodies merged into the transcript cache, snapshot not yet
+        // swapped: the optimistic local row still carries the message.
+        let transcriptAfterBodies = priorTranscript + committed
+        let step2 = GaryxMobileRenderStateMapper.rows(
+            snapshot: idleSnapshot,
+            messages: priorVisibleMessages + [optimistic],
+            transcriptMessages: transcriptAfterBodies
+        )
+        try assertSentMessageVisibleExactlyOnce(step2, expectedRowId: localRowId, step: "step2")
+
+        // Step 3 — thinking snapshot applied while the visible messages array
+        // has not flushed yet: the server row takes over the same identity.
+        let step3 = GaryxMobileRenderStateMapper.rows(
+            snapshot: thinkingSnapshot,
+            messages: priorVisibleMessages + [optimistic],
+            transcriptMessages: transcriptAfterBodies
+        )
+        XCTAssertEqual(step3.map(\.id), ["user_turn:origin:\(earlierOrigin)", localRowId])
+        try assertSentMessageVisibleExactlyOnce(step3, expectedRowId: localRowId, step: "step3")
+
+        // Step 4 — throttled flush rebuilds the visible projection through the
+        // real merge; the committed body now backs the same row.
+        let flushedMessages = GaryxTranscriptMerge.mergedMessages(
+            GaryxMobileTranscriptMapper.mobileMessages(from: transcriptAfterBodies),
+            withLocal: priorVisibleMessages + [optimistic]
+        )
+        let step4 = GaryxMobileRenderStateMapper.rows(
+            snapshot: thinkingSnapshot,
+            messages: flushedMessages,
+            transcriptMessages: transcriptAfterBodies
+        )
+        try assertSentMessageVisibleExactlyOnce(step4, expectedRowId: localRowId, step: "step4")
+    }
+
     private func mobileMessage(
         index: Int,
         role: GaryxMobileMessage.Role,
