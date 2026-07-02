@@ -5,8 +5,8 @@ use clap::{CommandFactory, Parser};
 use crate::cli::{
     AgentAction, AutomationAction, AutomationDataTriggerAction, AutomationTriggerAction, BotAction,
     BotEndpointAction, ChannelsAction, Cli, CommandAction, Commands, ConfigAction, DbAction,
-    DbRecordAction, DbTableAction, DreamAction, GatewayAction, LogsAction, TaskAction, TeamAction,
-    ThreadAction, ToolAction,
+    DbRecordAction, DbTableAction, DreamAction, GatewayAction, LogsAction, ProviderAction,
+    TaskAction, TeamAction, ThreadAction, ToolAction,
 };
 use crate::commands::{
     OnboardCommandOptions, SearchStreamState, apply_search_stream_event, canonical_channel_id,
@@ -681,6 +681,82 @@ fn parse_config_provider_model() {
             assert!(json);
         }
         _ => panic!("expected Config::ProviderModel"),
+    }
+}
+
+#[test]
+fn parse_provider_set() {
+    let cli = Cli::parse_from([
+        "garyx",
+        "provider",
+        "set",
+        "gpt",
+        "--model",
+        "gpt-5.5",
+        "--reasoning",
+        "high",
+        "--service-tier",
+        "priority",
+        "--base-url",
+        "https://example.invalid/v1",
+        "--api-key",
+        "sk-test-EXAMPLE",
+        "--auth-source",
+        "api_key",
+        "--env",
+        "OPENAI_ORG=org-test",
+        "--clear-env",
+        "OLD_KEY",
+        "--json",
+    ]);
+    match cli.command {
+        Some(Commands::Provider {
+            action:
+                ProviderAction::Set {
+                    provider,
+                    model,
+                    clear_model,
+                    reasoning,
+                    clear_reasoning,
+                    service_tier,
+                    base_url,
+                    api_key,
+                    auth_source,
+                    claude_cli_mode,
+                    claude_cli_path,
+                    env,
+                    clear_env,
+                    json,
+                },
+        }) => {
+            assert_eq!(provider, "gpt");
+            assert_eq!(model.as_deref(), Some("gpt-5.5"));
+            assert!(!clear_model);
+            assert_eq!(reasoning.as_deref(), Some("high"));
+            assert!(!clear_reasoning);
+            assert_eq!(service_tier.as_deref(), Some("priority"));
+            assert_eq!(base_url.as_deref(), Some("https://example.invalid/v1"));
+            assert_eq!(api_key.as_deref(), Some("sk-test-EXAMPLE"));
+            assert_eq!(auth_source.as_deref(), Some("api_key"));
+            assert_eq!(claude_cli_mode, None);
+            assert_eq!(claude_cli_path, None);
+            assert_eq!(env, vec!["OPENAI_ORG=org-test"]);
+            assert_eq!(clear_env, vec!["OLD_KEY"]);
+            assert!(json);
+        }
+        _ => panic!("expected Provider::Set"),
+    }
+}
+
+#[test]
+fn parse_usage_provider_json() {
+    let cli = Cli::parse_from(["garyx", "usage", "claude_code", "--json"]);
+    match cli.command {
+        Some(Commands::Usage { provider, json }) => {
+            assert_eq!(provider.as_deref(), Some("claude_code"));
+            assert!(json);
+        }
+        _ => panic!("expected Usage"),
     }
 }
 

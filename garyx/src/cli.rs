@@ -44,6 +44,20 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         action: ConfigAction,
     },
+    /// Provider defaults and quota usage
+    #[command(name = "provider", alias = "providers")]
+    Provider {
+        #[command(subcommand)]
+        action: ProviderAction,
+    },
+    /// Coding-assistant quota usage
+    Usage {
+        /// Optional provider filter: claude_code, codex, antigravity, gpt, anthropic, or google
+        provider: Option<String>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Command list and prompt shortcut management
     #[command(
         name = "commands",
@@ -368,6 +382,69 @@ pub(crate) enum ConfigAction {
     Show,
     /// Validate config file
     Validate,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ProviderAction {
+    /// List provider defaults and quota summaries
+    #[command(visible_alias = "ls")]
+    List {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show one provider default configuration
+    Show {
+        /// Provider type: claude_code, codex_app_server, traex, gemini_cli, antigravity, gpt, anthropic, or google
+        provider: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Edit one provider's default configuration
+    Set {
+        /// Provider type: claude_code, codex_app_server, traex, gemini_cli, antigravity, gpt, anthropic, or google
+        provider: String,
+        /// Default model id. Omit to leave unchanged.
+        #[arg(long, conflicts_with = "clear_model")]
+        model: Option<String>,
+        /// Clear the configured default model.
+        #[arg(long)]
+        clear_model: bool,
+        /// Default reasoning effort / thinking level. Omit to leave unchanged.
+        #[arg(long, conflicts_with = "clear_reasoning")]
+        reasoning: Option<String>,
+        /// Clear the configured default reasoning effort.
+        #[arg(long)]
+        clear_reasoning: bool,
+        /// Default service tier. Omit to leave unchanged.
+        #[arg(long)]
+        service_tier: Option<String>,
+        /// Native-provider API base URL. Omit to leave unchanged.
+        #[arg(long)]
+        base_url: Option<String>,
+        /// Native-provider API key. Stored in the provider env map.
+        #[arg(long)]
+        api_key: Option<String>,
+        /// Native-provider auth source. Omit to leave unchanged.
+        #[arg(long)]
+        auth_source: Option<String>,
+        /// Claude Code CLI mode. Only valid when provider is claude_code.
+        #[arg(long, value_parser = ["cctty", "native"])]
+        claude_cli_mode: Option<String>,
+        /// Explicit Claude Code CLI path. Only valid when provider is claude_code.
+        #[arg(long)]
+        claude_cli_path: Option<String>,
+        /// Provider env entry as KEY=VALUE. May be repeated.
+        #[arg(long = "env")]
+        env: Vec<String>,
+        /// Clear one provider env entry by writing an empty value. May be repeated.
+        #[arg(long = "clear-env")]
+        clear_env: Vec<String>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]

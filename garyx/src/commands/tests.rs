@@ -1055,6 +1055,238 @@ fn provider_model_config_key_maps_configurable_provider_types() {
     assert!(provider_model_config_key(&ProviderType::AgentTeam).is_err());
 }
 
+#[test]
+fn provider_set_patch_writes_native_api_key_env_shape() {
+    let patch = build_provider_set_patch(&ProviderSetOptions {
+        provider: "gpt".to_owned(),
+        model: Some("gpt-5.5".to_owned()),
+        reasoning: Some("high".to_owned()),
+        service_tier: Some("priority".to_owned()),
+        base_url: Some("https://example.invalid/v1".to_owned()),
+        api_key: Some("sk-openai-EXAMPLE".to_owned()),
+        auth_source: Some("api_key".to_owned()),
+        env: vec!["OPENAI_ORG=org-test".to_owned()],
+        clear_env: vec!["OLD_KEY".to_owned()],
+        json_output: true,
+        ..ProviderSetOptions::default()
+    })
+    .expect("provider set patch");
+
+    assert_eq!(patch.provider_key, "gpt");
+    assert_eq!(
+        patch.patch,
+        json!({
+            "agents": {
+                "gpt": {
+                    "provider_type": "gpt",
+                    "default_model": "gpt-5.5",
+                    "model_reasoning_effort": "high",
+                    "model_service_tier": "priority",
+                    "base_url": "https://example.invalid/v1",
+                    "auth_source": "api_key",
+                    "env": {
+                        "OLD_KEY": "",
+                        "OPENAI_ORG": "org-test",
+                        "OPENAI_API_KEY": "sk-openai-EXAMPLE"
+                    }
+                }
+            }
+        })
+    );
+}
+
+#[tokio::test]
+async fn cmd_provider_set_puts_settings_patch() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_settings_update_http_test_server(requests.clone()).await;
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_test_gateway_config(&dir, &base_url);
+
+    cmd_provider_set(
+        config_path.to_str().expect("config path"),
+        ProviderSetOptions {
+            provider: "anthropic".to_owned(),
+            model: Some("claude-sonnet-4-6".to_owned()),
+            clear_reasoning: true,
+            api_key: Some("sk-ant-EXAMPLE".to_owned()),
+            json_output: true,
+            ..ProviderSetOptions::default()
+        },
+    )
+    .await
+    .expect("provider set should succeed");
+
+    handle.abort();
+
+    let records = requests.lock().expect("request lock");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].method, "PUT");
+    assert_eq!(records[0].path, "/api/settings?merge=true");
+    assert_eq!(
+        records[0].body["agents"]["anthropic"]["provider_type"],
+        "anthropic"
+    );
+    assert_eq!(
+        records[0].body["agents"]["anthropic"]["default_model"],
+        "claude-sonnet-4-6"
+    );
+    assert_eq!(
+        records[0].body["agents"]["anthropic"]["model_reasoning_effort"],
+        ""
+    );
+    assert_eq!(
+        records[0].body["agents"]["anthropic"]["env"]["ANTHROPIC_API_KEY"],
+        "sk-ant-EXAMPLE"
+    );
+}
+
+#[test]
+fn usage_severity_and_reset_countdown_follow_provider_spec() {
+    let now = DateTime::parse_from_rfc3339("2030-01-01T00:00:00Z").expect("now");
+
+    assert_eq!(usage_severity(true, 50.0), UsageSeverity::Healthy);
+    assert_eq!(usage_severity(true, 20.0), UsageSeverity::Warning);
+    assert_eq!(usage_severity(true, 19.9), UsageSeverity::Critical);
+    assert_eq!(usage_severity(false, 99.0), UsageSeverity::Unavailable);
+
+    assert_eq!(
+        format_reset_countdown(Some(187_200), None, now).as_deref(),
+        Some("resets in 2d 4h")
+    );
+    assert_eq!(
+        format_reset_countdown(Some(4_320), None, now).as_deref(),
+        Some("resets in 1h 12m")
+    );
+    assert_eq!(
+        format_reset_countdown(Some(30), None, now).as_deref(),
+        Some("resets in <1m")
+    );
+    assert_eq!(
+        format_reset_countdown(None, Some("2030-01-01T03:00:00Z"), now).as_deref(),
+        Some("resets in 3h")
+    );
+}
+
+#[test]
+fn usage_table_formats_windows_and_antigravity_models() {
+    let payload = json!({
+        "refreshed_at": "2030-01-01T00:00:00Z",
+        "providers": [
+            {
+                "id": "claude_code",
+                "name": "Claude Code",
+                "available": true,
+                "plan": "max",
+                "session": {
+                    "used_percent": 2.0,
+                    "remaining_percent": 98.0,
+                    "reset_after_seconds": 7200
+                },
+                "weekly": {
+                    "used_percent": 27.0,
+                    "remaining_percent": 73.0,
+                    "reset_after_seconds": 432000
+                }
+            },
+            {
+                "id": "codex",
+                "name": "Codex",
+                "available": true,
+                "stale": true,
+                "plan": "pro",
+                "session": {
+                    "used_percent": 2.0,
+                    "remaining_percent": 98.0,
+                    "reset_after_seconds": 10800
+                },
+                "weekly": {
+                    "used_percent": 89.0,
+                    "remaining_percent": 11.0,
+                    "reset_after_seconds": 172800
+                }
+            },
+            {
+                "id": "antigravity",
+                "name": "Antigravity",
+                "available": true,
+                "models": [
+                    {
+                        "id": "claude-opus-test",
+                        "name": "claude-opus-test",
+                        "remaining_percent": 99.0,
+                        "reset_after_seconds": 3600
+                    },
+                    {
+                        "id": "gemini-flash-test",
+                        "name": "gemini-flash-test",
+                        "remaining_percent": 84.0,
+                        "reset_after_seconds": 18000
+                    }
+                ]
+            }
+        ]
+    });
+    let now = DateTime::parse_from_rfc3339("2030-01-01T00:03:00Z").expect("now");
+
+    let table =
+        format_usage_table_with_now(&payload, None, now).expect("usage table should render");
+
+    assert_eq!(
+        table,
+        concat!(
+            "PROVIDER        PLAN      SESSION                   WEEKLY                    STATUS\n",
+            "--------------------------------------------------------------------------------------\n",
+            "Claude Code     max       98% | resets in 2h        73% | resets in 5d        ok\n",
+            "Codex           pro       98% | resets in 3h        11% | resets in 2d        stale (updated 3m ago)\n",
+            "Antigravity     -         -                         -                         ok\n",
+            "  gemini-flash-test             84% | resets in 5h\n",
+            "  claude-opus-test              99% | resets in 1h\n",
+        )
+    );
+}
+
+#[test]
+fn provider_list_rows_include_all_model_providers() {
+    let settings = json!({
+        "agents": {
+            "gpt": {
+                "provider_type": "gpt",
+                "default_model": "gpt-5.5",
+                "auth_source": "api_key",
+                "env": {
+                    "OPENAI_API_KEY": "sk-openai-EXAMPLE"
+                }
+            }
+        }
+    });
+    let usage = json!({
+        "refreshed_at": "2030-01-01T00:00:00Z",
+        "providers": [
+            {
+                "id": "claude_code",
+                "name": "Claude Code",
+                "available": true,
+                "weekly": {
+                    "used_percent": 27.0,
+                    "remaining_percent": 73.0
+                }
+            }
+        ]
+    });
+
+    let rows = provider_list_rows(&settings, Some(&usage));
+
+    assert_eq!(rows.len(), 8);
+    assert_eq!(rows[0]["provider"], "Claude Code");
+    assert_eq!(rows[0]["usage"], "73% wk");
+    let gpt = rows
+        .iter()
+        .find(|row| row["type"] == "gpt")
+        .expect("gpt row");
+    assert_eq!(gpt["auth"], "api key");
+    assert_eq!(gpt["default_model"], "gpt-5.5");
+}
+
 #[tokio::test]
 async fn cmd_thread_create_posts_worktree_mode() {
     let requests = StdArc::new(Mutex::new(Vec::new()));
