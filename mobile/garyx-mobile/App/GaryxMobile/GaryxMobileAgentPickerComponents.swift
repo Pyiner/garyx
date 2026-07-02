@@ -434,21 +434,29 @@ struct GaryxAgentTargetPickerControl: View {
     /// model / thinking-level overrides instead of the compact popover.
     var showsThreadModelOverride = false
     var onConfigure: (() -> Void)?
-    @State private var showsPicker = false
+    /// Optional external control of the picker presentation so a host
+    /// `GaryxFormRow` can open the picker from a tap anywhere in the row (D10
+    /// dead-click fix). Defaults to internal state when unset.
+    var isPresented: Binding<Bool>?
+    @State private var internalShowsPicker = false
+
+    private var showsPicker: Binding<Bool> {
+        isPresented ?? $internalShowsPicker
+    }
 
     var body: some View {
         pickerButton
             .onChange(of: model.sidebarVisible) { _, visible in
                 if visible {
-                    showsPicker = false
+                    showsPicker.wrappedValue = false
                 }
             }
             .onChange(of: model.activePanel) { _, _ in
-                showsPicker = false
+                showsPicker.wrappedValue = false
             }
             .onChange(of: model.showsSettings) { _, visible in
                 if visible {
-                    showsPicker = false
+                    showsPicker.wrappedValue = false
                 }
             }
     }
@@ -457,7 +465,7 @@ struct GaryxAgentTargetPickerControl: View {
     private var pickerButton: some View {
         let button = Button {
             Task { await model.refreshAgentTargetsIfNeeded() }
-            showsPicker = true
+            showsPicker.wrappedValue = true
         } label: {
             GaryxAgentPickerLabel(
                 target: selectedTarget,
@@ -470,7 +478,7 @@ struct GaryxAgentTargetPickerControl: View {
 
         if showsThreadModelOverride {
             button
-                .sheet(isPresented: $showsPicker) {
+                .sheet(isPresented: showsPicker) {
                     GaryxNewThreadAgentSheet(
                         selectedAgentTargetId: $selectedAgentTargetId,
                         onConfigure: onConfigure
@@ -480,7 +488,7 @@ struct GaryxAgentTargetPickerControl: View {
         } else {
             button
                 .popover(
-                    isPresented: $showsPicker,
+                    isPresented: showsPicker,
                     attachmentAnchor: .rect(.bounds),
                     arrowEdge: .top
                 ) {

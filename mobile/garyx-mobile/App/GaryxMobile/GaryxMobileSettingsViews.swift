@@ -785,32 +785,30 @@ private struct GaryxProviderDefaultPickerRow: View {
     let iconName: String
 
     var body: some View {
-        GaryxFormRow(title: title) {
-            Menu {
-                Button("Provider default") {
-                    value = ""
-                }
-                if !options.isEmpty {
-                    Divider()
-                }
-                ForEach(options, id: \.id) { option in
-                    Button(optionTitle(option)) {
-                        value = option.id
-                    }
-                }
-            } label: {
-                HStack(spacing: 6) {
-                    Text(selectedLabel)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(GaryxFont.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.tertiary)
-                }
-                .foregroundStyle(.primary)
+        GaryxFormMenuRow(title: title) {
+            Button("Provider default") {
+                value = ""
             }
-            .disabled(options.isEmpty && normalizedValue.isEmpty)
+            if !options.isEmpty {
+                Divider()
+            }
+            ForEach(options, id: \.id) { option in
+                Button(optionTitle(option)) {
+                    value = option.id
+                }
+            }
+        } valueLabel: {
+            HStack(spacing: 6) {
+                Text(selectedLabel)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(GaryxFont.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .foregroundStyle(.primary)
         }
+        .disabled(options.isEmpty && normalizedValue.isEmpty)
     }
 
     private var normalizedValue: String {

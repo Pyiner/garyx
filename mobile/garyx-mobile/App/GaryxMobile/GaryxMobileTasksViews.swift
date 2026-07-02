@@ -357,6 +357,7 @@ struct GaryxCreateTaskCard: View {
     @State private var workspacePath = ""
     @State private var startImmediately = true
     @State private var notificationTargetId = "none"
+    @State private var showsAgentPicker = false
 
     var body: some View {
         GaryxFormSheet(
@@ -394,8 +395,11 @@ struct GaryxCreateTaskCard: View {
                         .foregroundStyle(.secondary)
                         .padding(16)
                 } else {
-                    GaryxFormRow(title: "Agent") {
-                        GaryxAgentTargetPickerControl(selectedAgentTargetId: selectedAgentTargetBinding)
+                    GaryxFormRow(title: "Agent", onTap: { showsAgentPicker = true }) {
+                        GaryxAgentTargetPickerControl(
+                            selectedAgentTargetId: selectedAgentTargetBinding,
+                            isPresented: $showsAgentPicker
+                        )
                     }
                 }
             }
@@ -411,36 +415,34 @@ struct GaryxCreateTaskCard: View {
             }
 
             GaryxFormGroupedSection(title: "Notification") {
-                GaryxFormRow(title: "Target") {
-                    Menu {
-                        Button {
-                            notificationTargetId = "none"
-                        } label: {
-                            GaryxMenuSelectionLabel(
-                                title: "Do not notify",
-                                selected: notificationTargetId == "none",
-                                fallbackSystemImage: "bell.slash"
-                            )
-                        }
-                        if !model.mobileBotGroups.isEmpty {
-                            Divider()
-                            ForEach(model.mobileBotGroups) { group in
-                                Button {
-                                    notificationTargetId = group.id
-                                } label: {
-                                    GaryxBotGroupMenuSelectionLabel(
-                                        group: group,
-                                        selected: notificationTargetId == group.id
-                                    )
-                                }
-                            }
-                        }
+                GaryxFormMenuRow(title: "Target") {
+                    Button {
+                        notificationTargetId = "none"
                     } label: {
-                        GaryxBotGroupMenuValueLabel(
-                            group: selectedNotificationGroup,
-                            value: notificationTargetLabel
+                        GaryxMenuSelectionLabel(
+                            title: "Do not notify",
+                            selected: notificationTargetId == "none",
+                            fallbackSystemImage: "bell.slash"
                         )
                     }
+                    if !model.mobileBotGroups.isEmpty {
+                        Divider()
+                        ForEach(model.mobileBotGroups) { group in
+                            Button {
+                                notificationTargetId = group.id
+                            } label: {
+                                GaryxBotGroupMenuSelectionLabel(
+                                    group: group,
+                                    selected: notificationTargetId == group.id
+                                )
+                            }
+                        }
+                    }
+                } valueLabel: {
+                    GaryxBotGroupMenuValueLabel(
+                        group: selectedNotificationGroup,
+                        value: notificationTargetLabel
+                    )
                 }
                 Divider().padding(.leading, 16)
                 GaryxFormRow(title: "Start immediately") {
