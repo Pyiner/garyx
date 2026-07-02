@@ -167,8 +167,6 @@
 }
 
 .tool-trace-group-header:focus-visible {
-  outline: 2px solid
-    color-mix(in srgb, var(--color-token-accent) 38%, transparent);
   outline-offset: 3px;
 }
 
@@ -506,7 +504,7 @@
 
 .tool-trace-status.is-progress {
   background: transparent;
-  color: var(--color-accent-foreground, #0f6cbd);
+  color: var(--color-accent-foreground);
 }
 
 .tool-trace-status.is-error {

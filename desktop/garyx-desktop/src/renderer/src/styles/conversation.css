@@ -284,7 +284,6 @@
 }
 
 .thread-bot-inline-trigger[data-slot="select-trigger"]:focus-visible {
-  outline: 2px solid color-mix(in oklab, var(--color-token-accent) 45%, transparent);
   outline-offset: 2px;
 }
 
