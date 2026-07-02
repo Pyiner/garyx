@@ -283,6 +283,144 @@ final class GaryxMobileUsageWidgetTests: XCTestCase {
         XCTAssertTrue(GaryxUsageGaugeModel.widgetModels(from: usage, now: referenceNow).isEmpty)
     }
 
+    func testHeroModelsKeepFixedProviderColumnsWithPlaceholders() {
+        let usage = GaryxCodingUsage(providers: [
+            GaryxProviderUsage(
+                id: "claude_code",
+                name: "Claude Code",
+                available: true,
+                weekly: GaryxUsageWindow(usedPercent: 27, remainingPercent: 73, resetAfterSeconds: 2 * 86_400)
+            ),
+        ])
+
+        let models = GaryxUsageGaugeModel.heroModels(from: usage, now: referenceNow)
+        XCTAssertEqual(models.map(\.providerId), ["claude_code", "codex", "antigravity"])
+        XCTAssertEqual(models[0].remainingText, "73%")
+        XCTAssertTrue(models[0].available)
+        // Missing providers hold their column as "No data" placeholders with
+        // presentation-resolved titles, so the hero layout stays stable.
+        XCTAssertEqual(models[1].title, "Codex")
+        XCTAssertEqual(models[2].title, "Antigravity")
+        for placeholder in models.dropFirst() {
+            XCTAssertFalse(placeholder.available)
+            XCTAssertEqual(placeholder.remainingText, "—")
+            XCTAssertEqual(placeholder.detailText, "No data")
+            XCTAssertEqual(placeholder.level, .unavailable)
+        }
+
+        let emptyModels = GaryxUsageGaugeModel.heroModels(from: nil, now: referenceNow)
+        XCTAssertEqual(emptyModels.map(\.providerId), ["claude_code", "codex", "antigravity"])
+        XCTAssertTrue(emptyModels.allSatisfy { !$0.available })
+    }
+
+    func testHeroModelAntigravityGaugesTightestModelBucket() {
+        let provider = GaryxProviderUsage(
+            id: "antigravity",
+            name: "Antigravity",
+            available: true,
+            models: [
+                GaryxModelUsage(
+                    id: "gemini-3-flash",
+                    name: "Gemini 3 Flash",
+                    remainingFraction: 0.84,
+                    remainingPercent: 84,
+                    usedPercent: 16
+                ),
+                GaryxModelUsage(
+                    id: "claude-opus-4-6-thinking",
+                    name: "Claude Opus 4.6 (Thinking)",
+                    remainingFraction: 0.15,
+                    remainingPercent: 15,
+                    usedPercent: 85,
+                    resetAfterSeconds: 3_600
+                ),
+            ]
+        )
+
+        let model = GaryxUsageGaugeModel.heroModel(from: provider, now: referenceNow)
+        XCTAssertTrue(model.available)
+        XCTAssertEqual(model.title, "Antigravity")
+        XCTAssertEqual(model.remainingText, "15%")
+        XCTAssertEqual(model.fillFraction, 0.15, accuracy: 0.0001)
+        XCTAssertEqual(model.level, .critical)
+        XCTAssertEqual(model.detailText, "resets in 1h")
+        XCTAssertFalse(model.stale)
+    }
+
+    func testHeroModelAntigravityStaleReadsStaleData() {
+        let provider = GaryxProviderUsage(
+            id: "antigravity",
+            name: "Antigravity",
+            available: true,
+            stale: true,
+            models: [
+                GaryxModelUsage(
+                    id: "gemini-3-flash",
+                    name: "Gemini 3 Flash",
+                    remainingFraction: 0.84,
+                    remainingPercent: 84,
+                    usedPercent: 16,
+                    resetAfterSeconds: 3_600
+                ),
+            ]
+        )
+
+        let model = GaryxUsageGaugeModel.heroModel(from: provider, now: referenceNow)
+        XCTAssertEqual(model.detailText, "stale data")
+        XCTAssertTrue(model.stale)
+    }
+
+    func testHeroModelPrefersWeeklyWindowOverModelBuckets() {
+        let provider = GaryxProviderUsage(
+            id: "claude_code",
+            name: "Claude Code",
+            available: true,
+            weekly: GaryxUsageWindow(usedPercent: 27, remainingPercent: 73, resetAfterSeconds: 2 * 86_400),
+            models: [
+                GaryxModelUsage(
+                    id: "claude-opus-4-6",
+                    name: "Claude Opus 4.6",
+                    remainingFraction: 0.05,
+                    remainingPercent: 5,
+                    usedPercent: 95
+                ),
+            ]
+        )
+
+        let model = GaryxUsageGaugeModel.heroModel(from: provider, now: referenceNow)
+        XCTAssertEqual(model.remainingText, "73%")
+        XCTAssertEqual(model.detailText, "resets in 2d")
+    }
+
+    func testHeroModelUnavailableAndBucketlessFallsBackToMake() {
+        let unavailable = GaryxProviderUsage(id: "codex", name: "Codex", available: false)
+        XCTAssertEqual(GaryxUsageGaugeModel.heroModel(from: unavailable, now: referenceNow).level, .unavailable)
+
+        let bucketless = GaryxProviderUsage(id: "antigravity", name: "Antigravity", available: true)
+        let model = GaryxUsageGaugeModel.heroModel(from: bucketless, now: referenceNow)
+        XCTAssertFalse(model.available)
+        XCTAssertEqual(model.detailText, "No data")
+    }
+
+    func testGaugeModelCarriesStaleFlag() {
+        let stale = GaryxProviderUsage(
+            id: "codex",
+            name: "Codex",
+            available: true,
+            stale: true,
+            weekly: GaryxUsageWindow(usedPercent: 89, remainingPercent: 11)
+        )
+        XCTAssertTrue(GaryxUsageGaugeModel.make(from: stale, now: referenceNow).stale)
+
+        let fresh = GaryxProviderUsage(
+            id: "codex",
+            name: "Codex",
+            available: true,
+            weekly: GaryxUsageWindow(usedPercent: 89, remainingPercent: 11)
+        )
+        XCTAssertFalse(GaryxUsageGaugeModel.make(from: fresh, now: referenceNow).stale)
+    }
+
     func testProviderUsageDisplayModelsAntigravityBuckets() throws {
         let provider = GaryxProviderUsage(
             id: "antigravity",

@@ -46,6 +46,16 @@ final class GaryxMobileRouteLinkTests: XCTestCase {
         XCTAssertEqual(GaryxMobileRouteLink.parse(hostURL), .thread("thread-2"))
     }
 
+    func testProviderSettingsWidgetLinkMatchesCanonicalRoute() throws {
+        // The usage widget's whole-widget deep link (design §8/D7) must stay
+        // byte-identical to the canonical provider settings route and land on
+        // .settings(.provider).
+        let widgetURL = try XCTUnwrap(GaryxMobileProviderSettingsLink.make())
+        XCTAssertEqual(widgetURL.absoluteString, "garyx://mobile/settings/provider")
+        XCTAssertEqual(widgetURL, GaryxMobileRouteLink.make(.settings(.provider)))
+        XCTAssertEqual(GaryxMobileRouteLink.parse(widgetURL), .settings(.provider))
+    }
+
     func testConnectLinksAreNotRouteLinks() throws {
         let url = try XCTUnwrap(URL(string: "garyx://mobile/connect?gatewayUrl=http%3A%2F%2F127.0.0.1%3A31337"))
         XCTAssertNil(GaryxMobileRouteLink.parse(url))
