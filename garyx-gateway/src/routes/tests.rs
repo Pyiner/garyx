@@ -2840,6 +2840,243 @@ async fn update_thread_persists_and_clears_model_overrides() {
     );
 }
 
+/// Bug B (single-cell write path): PATCH `/api/threads` with `body.model`
+/// must write the thread's single model cell (`metadata.model`, the key the
+/// run path and runtime summary read) instead of the legacy dual-track
+/// `metadata.model_override`. Effort and service tier are isomorphic.
+///
+/// Today the handler writes `model_override` and leaves the cell stale, so a
+/// thread whose cell was pinned at first run keeps a stale pin around.
+#[tokio::test]
+async fn update_thread_writes_model_cell_not_override() {
+    let (state, _logger, _dir) = test_state().await;
+    let thread_id = "thread::model-cell-update";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "Model cell update",
+                "metadata": {
+                    // Cell pinned by the first run under the old default.
+                    "model": "claude-opus-4-8",
+                    "model_reasoning_effort": "low",
+                    "model_service_tier": "flex",
+                },
+            }),
+        )
+        .await;
+
+    let router = build_router(state.clone());
+    let request = authed_request()
+        .method("PATCH")
+        .uri("/api/threads/thread%3A%3Amodel-cell-update")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "model": " claude-fable-5 ",
+                "modelReasoningEffort": " high ",
+                "modelServiceTier": " priority ",
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let stored = state
+        .threads
+        .thread_store
+        .get(thread_id)
+        .await
+        .expect("stored thread after update");
+    assert_eq!(
+        stored["metadata"]["model"], "claude-fable-5",
+        "PATCH body.model must rewrite the single model cell"
+    );
+    assert_eq!(
+        stored["metadata"]["model_reasoning_effort"], "high",
+        "PATCH body.modelReasoningEffort must rewrite the effort cell"
+    );
+    assert_eq!(
+        stored["metadata"]["model_service_tier"], "priority",
+        "PATCH body.modelServiceTier must rewrite the service-tier cell"
+    );
+    assert!(
+        stored["metadata"].get("model_override").is_none(),
+        "the legacy dual-track model_override key must not be written anymore"
+    );
+    assert!(
+        stored["metadata"]
+            .get("model_reasoning_effort_override")
+            .is_none(),
+        "the legacy dual-track effort override key must not be written anymore"
+    );
+    assert!(
+        stored["metadata"]
+            .get("model_service_tier_override")
+            .is_none(),
+        "the legacy dual-track service-tier override key must not be written anymore"
+    );
+}
+
+/// Bug B (legacy migration): when a stored thread still carries the old
+/// dual-track `model_override`, a PATCH that sets the model must migrate to
+/// the single cell: write `metadata.model` and delete the override key, so
+/// the stale override can no longer shadow the cell afterwards.
+#[tokio::test]
+async fn update_thread_migrates_legacy_override_into_model_cell() {
+    let (state, _logger, _dir) = test_state().await;
+    let thread_id = "thread::legacy-override-migrate";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "Legacy override migrate",
+                "metadata": {
+                    "model": "claude-opus-4-8",
+                    "model_override": "claude-haiku-4-6",
+                },
+            }),
+        )
+        .await;
+
+    let router = build_router(state.clone());
+    let request = authed_request()
+        .method("PATCH")
+        .uri("/api/threads/thread%3A%3Alegacy-override-migrate")
+        .header("content-type", "application/json")
+        .body(Body::from(json!({ "model": "claude-fable-5" }).to_string()))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let stored = state
+        .threads
+        .thread_store
+        .get(thread_id)
+        .await
+        .expect("stored thread after migrate");
+    assert_eq!(
+        stored["metadata"]["model"], "claude-fable-5",
+        "the model cell must hold the newly chosen model"
+    );
+    assert!(
+        stored["metadata"].get("model_override").is_none(),
+        "the legacy model_override key must be deleted when the cell is written"
+    );
+}
+
+/// Bug B (single-cell clear): PATCH with an empty string empties the cell
+/// (and removes any legacy override), so the thread follows the current
+/// provider/agent default again and the next run re-pins it.
+#[tokio::test]
+async fn update_thread_empty_model_clears_cell_and_legacy_override() {
+    let (state, _logger, _dir) = test_state().await;
+    let thread_id = "thread::model-cell-clear";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "Model cell clear",
+                "metadata": {
+                    "model": "claude-opus-4-8",
+                    "model_override": "claude-haiku-4-6",
+                },
+            }),
+        )
+        .await;
+
+    let router = build_router(state.clone());
+    let request = authed_request()
+        .method("PATCH")
+        .uri("/api/threads/thread%3A%3Amodel-cell-clear")
+        .header("content-type", "application/json")
+        .body(Body::from(json!({ "model": "" }).to_string()))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let stored = state
+        .threads
+        .thread_store
+        .get(thread_id)
+        .await
+        .expect("stored thread after clear");
+    assert!(
+        stored["metadata"].get("model").is_none(),
+        "clearing must empty the model cell so defaults apply again"
+    );
+    assert!(
+        stored["metadata"].get("model_override").is_none(),
+        "clearing must also drop the legacy model_override key"
+    );
+}
+
+/// Bug B (single-cell write path, creation): POST `/api/threads` with a model
+/// selection must seed the single model cell (`metadata.model`) instead of
+/// the legacy `metadata.model_override` dual track.
+#[tokio::test]
+async fn create_thread_writes_model_cell_not_override() {
+    let (state, _logger, _dir) = test_state().await;
+    let workspace = tempdir().unwrap();
+    let router = build_router(state.clone());
+    let request = authed_request()
+        .method("POST")
+        .uri("/api/threads")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "agentId": "claude",
+                "workspaceDir": workspace.path().to_string_lossy(),
+                "model": "claude-fable-5",
+                "modelReasoningEffort": "xhigh",
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    let thread_id = payload["thread_id"].as_str().expect("thread id");
+
+    let stored = state
+        .threads
+        .thread_store
+        .get(thread_id)
+        .await
+        .expect("stored thread");
+    assert_eq!(
+        stored["metadata"]["model"], "claude-fable-5",
+        "thread creation must seed the single model cell"
+    );
+    assert_eq!(
+        stored["metadata"]["model_reasoning_effort"], "xhigh",
+        "thread creation must seed the effort cell"
+    );
+    assert!(
+        stored["metadata"].get("model_override").is_none(),
+        "thread creation must not write the legacy model_override key"
+    );
+    assert!(
+        stored["metadata"]
+            .get("model_reasoning_effort_override")
+            .is_none(),
+        "thread creation must not write the legacy effort override key"
+    );
+}
+
 #[tokio::test]
 async fn thread_history_runtime_reports_effective_model_overrides() {
     let (state, _logger, _dir) = test_state().await;

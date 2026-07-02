@@ -4797,22 +4797,17 @@ async fn test_reload_from_config_hot_applies_new_provider_default_model() {
     );
 }
 
-/// Bug B (bridge side): `persist_thread_runtime_snapshot` writes the first
-/// run's effective model into thread `metadata.model`, and
-/// `backfill_bound_agent_runtime_metadata` re-injects that snapshot into run
-/// metadata via `merge_thread_runtime_snapshot`. Because the snapshot is
-/// written once and re-injected forever, existing threads without an explicit
-/// override can never pick up a changed provider default model.
-///
-/// Target behavior: the snapshot may stay in thread metadata as a historical
-/// audit record, but it must not be injected into run metadata. Run metadata
-/// stays empty here so the provider's (possibly hot-reloaded) default applies.
+/// Single-cell contract (bridge side, guard): thread `metadata.model` (plus
+/// effort/tier) is THE model cell for the thread — "what this thread actually
+/// runs". `backfill_bound_agent_runtime_metadata` must keep injecting the
+/// cell into run metadata so a thread with a pinned cell stays on that model
+/// even after the provider default changes (thread pinning is intentional).
 #[tokio::test]
-async fn test_backfill_runtime_metadata_ignores_thread_model_snapshot() {
+async fn test_backfill_runtime_metadata_injects_thread_model_cell() {
     let bridge = MultiProviderBridge::new();
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     bridge.set_thread_store(store.clone()).await;
-    let thread_id = "thread::stale-runtime-snapshot";
+    let thread_id = "thread::model-cell";
     store
         .set(
             thread_id,
@@ -4835,28 +4830,26 @@ async fn test_backfill_runtime_metadata_ignores_thread_model_snapshot() {
 
     assert_eq!(
         metadata.get("model"),
-        None,
-        "stale thread model snapshot must not suppress the provider default model"
+        Some(&Value::String("claude-opus-4-8".to_owned())),
+        "the thread model cell must drive the run model"
     );
     assert_eq!(
         metadata.get("model_reasoning_effort"),
-        None,
-        "stale thread effort snapshot must not suppress the provider default effort"
+        Some(&Value::String("low".to_owned())),
+        "the thread effort cell must drive the run effort"
     );
     assert_eq!(
         metadata.get("model_service_tier"),
-        None,
-        "stale thread service-tier snapshot must not suppress the provider default tier"
+        Some(&Value::String("flex".to_owned())),
+        "the thread service-tier cell must drive the run service tier"
     );
 }
 
-/// Bug B (bridge side, agent-bound thread): with the target priority
-/// `thread model_override > agent.model > provider default > catalog default`,
-/// the persisted first-run snapshot must not shadow the bound agent's model
-/// either. The thread override path (already healthy end to end) must keep
-/// the highest priority.
+/// Single-cell contract (bridge side, guard): with the target priority
+/// `thread cell (metadata.model) > agent.model > provider default > catalog`,
+/// the thread's model cell must win over the bound agent's model.
 #[tokio::test]
-async fn test_backfill_runtime_metadata_prefers_agent_model_over_thread_snapshot() {
+async fn test_backfill_runtime_metadata_prefers_model_cell_over_agent_model() {
     let bridge = MultiProviderBridge::new();
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     bridge.set_thread_store(store.clone()).await;
@@ -4869,7 +4862,7 @@ async fn test_backfill_runtime_metadata_prefers_agent_model_over_thread_snapshot
             "Synthetic test agent.",
         )])
         .await;
-    let thread_id = "thread::agent-vs-runtime-snapshot";
+    let thread_id = "thread::cell-vs-agent-model";
     store
         .set(
             thread_id,
@@ -4878,7 +4871,7 @@ async fn test_backfill_runtime_metadata_prefers_agent_model_over_thread_snapshot
                 "agent_id": "test-agent",
                 "provider_type": "claude_code",
                 "metadata": {
-                    "model": "provider-default-v1",
+                    "model": "thread-cell-model",
                 },
             }),
         )
@@ -4891,7 +4884,43 @@ async fn test_backfill_runtime_metadata_prefers_agent_model_over_thread_snapshot
 
     assert_eq!(
         metadata.get("model"),
-        Some(&Value::String("agent-model-v2".to_owned())),
-        "bound agent model must win over the persisted first-run snapshot"
+        Some(&Value::String("thread-cell-model".to_owned())),
+        "the thread model cell must win over the bound agent model"
+    );
+}
+
+/// Legacy compatibility (bridge side, guard): stored threads may still carry
+/// the old dual-track `metadata.model_override`. Until the write paths migrate
+/// it into the cell, reads must coalesce(override, cell) — the legacy override
+/// keeps the highest priority.
+#[tokio::test]
+async fn test_backfill_runtime_metadata_legacy_override_wins_over_cell() {
+    let bridge = MultiProviderBridge::new();
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    bridge.set_thread_store(store.clone()).await;
+    let thread_id = "thread::legacy-override-vs-cell";
+    store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "provider_type": "claude_code",
+                "metadata": {
+                    "model": "cell-model",
+                    "model_override": "legacy-override-model",
+                },
+            }),
+        )
+        .await;
+
+    let mut metadata: HashMap<String, Value> = HashMap::new();
+    bridge
+        .backfill_bound_agent_runtime_metadata(thread_id, &mut metadata)
+        .await;
+
+    assert_eq!(
+        metadata.get("model"),
+        Some(&Value::String("legacy-override-model".to_owned())),
+        "legacy model_override data must keep winning over the cell until migrated"
     );
 }

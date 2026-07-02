@@ -205,16 +205,16 @@ mod tests {
     use garyx_models::config::GaryxConfig;
     use serde_json::json;
 
-    /// Bug B (gateway side): the runtime resolution chain reads the
-    /// first-run snapshot (`metadata.model` / effort / tier) ahead of the
-    /// provider default, so a thread that already ran once keeps reporting
-    /// (and running) the old model forever after the provider default
-    /// changes on disk.
+    /// Single-cell contract (guard): thread `metadata.model` (plus effort /
+    /// tier) is THE model cell — "what this thread actually runs". A thread
+    /// whose cell was pinned at first run keeps that model even after the
+    /// provider default changes on disk; changing the global default is only
+    /// expected to affect new threads and threads with an empty cell.
     ///
-    /// Target priority: thread `model_override` > agent model > provider
-    /// `default_model` > catalog default. The snapshot must not participate.
+    /// Target priority: cell (`metadata.model`, legacy `model_override`
+    /// coalesced in front) > agent model > provider `default_model` > catalog.
     #[tokio::test]
-    async fn thread_runtime_summary_ignores_model_snapshot_in_favor_of_provider_default() {
+    async fn thread_runtime_summary_pins_thread_to_model_cell_over_provider_default() {
         let mut config = GaryxConfig::default();
         config.agents.insert(
             "claude".to_owned(),
@@ -228,9 +228,9 @@ mod tests {
         let state = AppStateBuilder::new(crate::test_support::with_gateway_auth(config)).build();
 
         // Thread that already ran once: the first run pinned the then-current
-        // provider defaults into the metadata snapshot. No thread override.
+        // effective defaults into the cell. No legacy override present.
         let thread_value = json!({
-            "thread_id": "thread-runtime-snapshot",
+            "thread_id": "thread-runtime-cell",
             "provider_type": "claude_code",
             "metadata": {
                 "model": "claude-opus-4-8",
@@ -243,26 +243,55 @@ mod tests {
 
         assert_eq!(
             summary["model"],
-            json!("claude-fable-5"),
-            "runtime model must resolve to the current provider default, not the first-run snapshot"
+            json!("claude-opus-4-8"),
+            "a filled model cell pins the thread; the provider default must not leak in"
         );
         assert_eq!(
             summary["model_reasoning_effort"],
-            json!("high"),
-            "runtime effort must resolve to the current provider default, not the first-run snapshot"
+            json!("low"),
+            "a filled effort cell pins the thread; the provider default must not leak in"
         );
         assert_eq!(
             summary["model_service_tier"],
-            json!("priority"),
-            "runtime service tier must resolve to the current provider default, not the first-run snapshot"
+            json!("flex"),
+            "a filled service-tier cell pins the thread; the provider default must not leak in"
         );
     }
 
-    /// Thread-level overrides stay the highest-priority runtime source even
-    /// with a stale snapshot present (this already holds today and must keep
-    /// holding after the snapshot is dropped from the resolution chain).
+    /// Single-cell contract (guard): with an empty cell the runtime resolves
+    /// straight to the current provider default, which is what makes the
+    /// hot-reload fix (Bug A) visible to new threads and cleared threads.
     #[tokio::test]
-    async fn thread_runtime_summary_keeps_thread_override_highest_priority() {
+    async fn thread_runtime_summary_resolves_provider_default_when_cell_is_empty() {
+        let mut config = GaryxConfig::default();
+        config.agents.insert(
+            "claude".to_owned(),
+            json!({
+                "provider_type": "claude_code",
+                "default_model": "claude-fable-5",
+                "model_reasoning_effort": "high"
+            }),
+        );
+        let state = AppStateBuilder::new(crate::test_support::with_gateway_auth(config)).build();
+
+        let thread_value = json!({
+            "thread_id": "thread-runtime-empty-cell",
+            "provider_type": "claude_code",
+            "metadata": {}
+        });
+
+        let summary = build_thread_runtime_summary(&state, Some(&thread_value)).await;
+
+        assert_eq!(summary["model"], json!("claude-fable-5"));
+        assert_eq!(summary["model_reasoning_effort"], json!("high"));
+    }
+
+    /// Legacy compatibility (guard): stored threads may still carry the old
+    /// dual-track `model_override`. Reads must coalesce(override, cell), so
+    /// the legacy override keeps the highest priority until the write paths
+    /// migrate it into the cell.
+    #[tokio::test]
+    async fn thread_runtime_summary_keeps_legacy_override_highest_priority() {
         let mut config = GaryxConfig::default();
         config.agents.insert(
             "claude".to_owned(),
