@@ -1297,7 +1297,7 @@ button.composer-provider-trigger[data-state="open"] > svg:last-child {
   min-height: 26px;
   padding: 0 10px;
   border-radius: var(--radius-full);
-  background: var(--color-token-row-selected);
+  background: rgba(26, 28, 31, 0.08);
   color: var(--color-token-text-secondary);
   font-size: 10.5px;
   font-weight: 600;

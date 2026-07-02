@@ -894,7 +894,7 @@
 }
 
 .endpoint-action-button.endpoint-action-button-strong {
-  background: var(--color-token-row-selected);
+  background: rgba(26, 28, 31, 0.08);
   color: var(--color-token-text-primary);
   border-color: var(--color-border-heavy);
 }

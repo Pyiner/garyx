@@ -145,7 +145,7 @@
   justify-self: start;
   padding: 6px 10px;
   border-radius: 999px;
-  background: var(--color-token-row-selected);
+  background: rgba(26, 28, 31, 0.08);
   color: var(--color-token-text-secondary);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: var(--text-sm);
