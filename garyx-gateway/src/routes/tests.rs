@@ -1819,7 +1819,7 @@ async fn create_thread_rejects_invalid_sdk_session_provider_hint() {
 }
 
 #[tokio::test]
-async fn create_thread_persists_model_and_reasoning_overrides() {
+async fn create_thread_persists_model_and_reasoning_cells() {
     let (state, _logger, _dir) = test_state().await;
     let workspace = tempdir().unwrap();
     let router = build_router(state.clone());
@@ -1851,11 +1851,10 @@ async fn create_thread_persists_model_and_reasoning_overrides() {
         .get(thread_id)
         .await
         .expect("stored thread");
-    assert_eq!(stored["metadata"]["model_override"], "claude-opus-4-7");
-    assert_eq!(
-        stored["metadata"]["model_reasoning_effort_override"],
-        "xhigh"
-    );
+    assert_eq!(stored["metadata"]["model"], "claude-opus-4-7");
+    assert_eq!(stored["metadata"]["model_reasoning_effort"], "xhigh");
+    assert!(stored["metadata"].get("model_service_tier").is_none());
+    assert!(stored["metadata"].get("model_override").is_none());
     assert!(
         stored["metadata"]
             .get("model_service_tier_override")
@@ -2770,7 +2769,7 @@ async fn dream_scan_route_preserves_historical_incremental_topics() {
 }
 
 #[tokio::test]
-async fn update_thread_persists_and_clears_model_overrides() {
+async fn update_thread_persists_and_clears_model_cells() {
     let (state, _logger, _dir) = test_state().await;
     let thread_id = "thread::model-update";
     state
@@ -2808,8 +2807,14 @@ async fn update_thread_persists_and_clears_model_overrides() {
         .get(thread_id)
         .await
         .expect("stored thread after update");
-    assert_eq!(stored["metadata"]["model_override"], "claude-opus-4-7");
-    assert_eq!(stored["metadata"]["model_reasoning_effort_override"], "max");
+    assert_eq!(stored["metadata"]["model"], "claude-opus-4-7");
+    assert_eq!(stored["metadata"]["model_reasoning_effort"], "max");
+    assert!(stored["metadata"].get("model_override").is_none());
+    assert!(
+        stored["metadata"]
+            .get("model_reasoning_effort_override")
+            .is_none()
+    );
 
     let request = authed_request()
         .method("PATCH")
@@ -2832,12 +2837,8 @@ async fn update_thread_persists_and_clears_model_overrides() {
         .get(thread_id)
         .await
         .expect("stored thread after clear");
-    assert!(stored["metadata"].get("model_override").is_none());
-    assert!(
-        stored["metadata"]
-            .get("model_reasoning_effort_override")
-            .is_none()
-    );
+    assert!(stored["metadata"].get("model").is_none());
+    assert!(stored["metadata"].get("model_reasoning_effort").is_none());
 }
 
 /// Bug B (single-cell write path): PATCH `/api/threads` with `body.model`

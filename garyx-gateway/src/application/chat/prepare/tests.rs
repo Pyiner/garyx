@@ -393,7 +393,7 @@ async fn prepare_chat_request_prefers_thread_snapshot_before_agent_runtime_metad
 }
 
 #[test]
-fn merge_thread_provider_overrides_applies_thread_override_keys() {
+fn merge_thread_model_cells_applies_legacy_override_keys() {
     let thread_data = json!({
         "metadata": {
             "model_override": "claude-opus-4-7",
@@ -402,7 +402,7 @@ fn merge_thread_provider_overrides_applies_thread_override_keys() {
         }
     });
     let mut run_metadata = HashMap::new();
-    merge_thread_provider_overrides(&thread_data, &mut run_metadata);
+    merge_thread_model_cells(&thread_data, &mut run_metadata);
     assert_eq!(
         run_metadata.get("model"),
         Some(&Value::String("claude-opus-4-7".to_owned()))
@@ -415,7 +415,7 @@ fn merge_thread_provider_overrides_applies_thread_override_keys() {
 }
 
 #[test]
-fn merge_thread_provider_overrides_keeps_request_metadata_priority() {
+fn merge_thread_model_cells_keeps_request_metadata_priority() {
     let thread_data = json!({
         "metadata": {
             "model_override": "claude-opus-4-7",
@@ -426,7 +426,7 @@ fn merge_thread_provider_overrides_keeps_request_metadata_priority() {
         "model".to_owned(),
         Value::String("request-model".to_owned()),
     )]);
-    merge_thread_provider_overrides(&thread_data, &mut run_metadata);
+    merge_thread_model_cells(&thread_data, &mut run_metadata);
     assert_eq!(
         run_metadata.get("model"),
         Some(&Value::String("request-model".to_owned()))
@@ -438,17 +438,17 @@ fn merge_thread_provider_overrides_keeps_request_metadata_priority() {
 }
 
 #[test]
-fn merge_thread_provider_overrides_ignores_blank_and_missing_values() {
+fn merge_thread_model_cells_ignores_blank_and_missing_values() {
     let thread_data = json!({
         "metadata": {
             "model_override": "   ",
         }
     });
     let mut run_metadata = HashMap::new();
-    merge_thread_provider_overrides(&thread_data, &mut run_metadata);
+    merge_thread_model_cells(&thread_data, &mut run_metadata);
     assert!(run_metadata.is_empty());
 
     let mut run_metadata = HashMap::new();
-    merge_thread_provider_overrides(&json!({}), &mut run_metadata);
+    merge_thread_model_cells(&json!({}), &mut run_metadata);
     assert!(run_metadata.is_empty());
 }

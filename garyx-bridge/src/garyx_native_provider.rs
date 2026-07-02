@@ -48,7 +48,7 @@ use crate::native_capabilities::{
     capability_instructions, capability_tool_schemas, is_capability_tool, run_capability_tool,
 };
 use crate::provider_trait::{
-    AgentLoopProvider, BridgeError, ProviderRuntimeSelection, StreamCallback,
+    AgentLoopProvider, BridgeError, ProviderModelDefaults, ProviderRuntimeSelection, StreamCallback,
 };
 
 pub(crate) const SESSION_MESSAGES_METADATA_KEY: &str = "garyx_session_messages";
@@ -571,6 +571,11 @@ fn merge_gemini_oauth_refresh(
 
 pub struct GaryxNativeProvider {
     config: GaryxNativeConfig,
+    /// Hot-reloadable model defaults. Config reloads reconcile onto the live
+    /// provider instance (the provider key excludes model defaults to keep
+    /// thread affinity stable), so model resolution must read these instead
+    /// of the frozen `config` fields.
+    model_defaults: std::sync::RwLock<ProviderModelDefaults>,
     provider_type: ProviderType,
     default_model: &'static str,
     ready: Mutex<bool>,
@@ -632,8 +637,15 @@ impl GaryxNativeProvider {
         config: GaryxNativeConfig,
         model_adapter: Arc<dyn LlmAdapter>,
     ) -> Self {
+        let model_defaults = std::sync::RwLock::new(ProviderModelDefaults {
+            model: config.model.clone(),
+            default_model: config.default_model.clone(),
+            model_reasoning_effort: config.model_reasoning_effort.clone(),
+            model_service_tier: config.model_service_tier.clone(),
+        });
         Self {
             config,
+            model_defaults,
             provider_type,
             default_model,
             ready: Mutex::new(false),
@@ -641,6 +653,26 @@ impl GaryxNativeProvider {
             active_runs: Mutex::new(HashMap::new()),
             model_adapter,
         }
+    }
+
+    /// Clone the frozen config with the hot-reloadable model defaults
+    /// overlaid, so model resolution observes the latest reloaded defaults.
+    fn effective_config(&self) -> GaryxNativeConfig {
+        let defaults = self
+            .model_defaults
+            .read()
+            .expect("native model defaults lock poisoned")
+            .clone();
+        let mut config = self.config.clone();
+        config.model = if defaults.model.is_empty() {
+            defaults.default_model.clone()
+        } else {
+            defaults.model.clone()
+        };
+        config.default_model = defaults.default_model;
+        config.model_reasoning_effort = defaults.model_reasoning_effort;
+        config.model_service_tier = defaults.model_service_tier;
+        config
     }
 
     async fn ensure_session(&self, options: &ProviderRunOptions) -> Arc<Mutex<AgentLoopSession>> {
@@ -952,9 +984,10 @@ impl AgentLoopProvider for GaryxNativeProvider {
     }
 
     fn resolve_runtime_selection(&self, options: &ProviderRunOptions) -> ProviderRuntimeSelection {
+        let effective_config = self.effective_config();
         ProviderRuntimeSelection {
             model: Some(model_id(
-                &self.config,
+                &effective_config,
                 &options.metadata,
                 self.default_model,
             )),
@@ -963,16 +996,23 @@ impl AgentLoopProvider for GaryxNativeProvider {
                     .metadata
                     .get("model_reasoning_effort")
                     .and_then(Value::as_str)
-                    .or(Some(self.config.model_reasoning_effort.as_str())),
+                    .or(Some(effective_config.model_reasoning_effort.as_str())),
             ),
             model_service_tier: normalize_non_empty(
                 options
                     .metadata
                     .get("model_service_tier")
                     .and_then(Value::as_str)
-                    .or(Some(self.config.model_service_tier.as_str())),
+                    .or(Some(effective_config.model_service_tier.as_str())),
             ),
         }
+    }
+
+    fn update_model_defaults(&self, defaults: &ProviderModelDefaults) {
+        *self
+            .model_defaults
+            .write()
+            .expect("native model defaults lock poisoned") = defaults.clone();
     }
 
     async fn initialize(&mut self) -> Result<(), BridgeError> {
@@ -1014,8 +1054,9 @@ impl AgentLoopProvider for GaryxNativeProvider {
             }
             state.sdk_session_id.clone()
         };
+        let effective_config = self.effective_config();
         let request = AgentLoopRunRequest {
-            model: model_id(&self.config, &options.metadata, self.default_model),
+            model: model_id(&effective_config, &options.metadata, self.default_model),
             instructions: self.instructions(options, &workspace_dir),
             tools: Self::tool_schemas(&workspace_dir, &options.metadata),
             options: LlmRequestOptions {
@@ -1024,14 +1065,14 @@ impl AgentLoopProvider for GaryxNativeProvider {
                         .metadata
                         .get("model_reasoning_effort")
                         .and_then(Value::as_str)
-                        .or(Some(self.config.model_reasoning_effort.as_str())),
+                        .or(Some(effective_config.model_reasoning_effort.as_str())),
                 ),
                 service_tier: normalize_non_empty(
                     options
                         .metadata
                         .get("model_service_tier")
                         .and_then(Value::as_str)
-                        .or(Some(self.config.model_service_tier.as_str())),
+                        .or(Some(effective_config.model_service_tier.as_str())),
                 ),
             },
             runtime: LlmRuntimeContext {

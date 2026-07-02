@@ -149,36 +149,39 @@ pub(crate) async fn build_thread_runtime_summary(
         .clone()
         .map(crate::provider_models::builtin_provider_catalog_default)
         .unwrap_or_default();
-    let model_override = thread_metadata_string(thread_value, MODEL_OVERRIDE_METADATA_KEY);
-    let reasoning_effort_override =
+    // Single-cell semantics: `metadata.model` (plus effort / tier) is the
+    // thread's one model cell — "what this thread actually runs". Legacy
+    // stored threads may still carry the old dual-track `*_override` keys;
+    // reads coalesce(legacy override, cell) until write paths migrate them.
+    let legacy_model_override = thread_metadata_string(thread_value, MODEL_OVERRIDE_METADATA_KEY);
+    let legacy_reasoning_effort_override =
         thread_metadata_string(thread_value, MODEL_REASONING_EFFORT_OVERRIDE_METADATA_KEY);
-    let service_tier_override =
+    let legacy_service_tier_override =
         thread_metadata_string(thread_value, MODEL_SERVICE_TIER_OVERRIDE_METADATA_KEY);
-    let snapshot_model = thread_metadata_string(thread_value, MODEL_METADATA_KEY);
-    let snapshot_reasoning_effort =
+    let cell_model = thread_metadata_string(thread_value, MODEL_METADATA_KEY);
+    let cell_reasoning_effort =
         thread_metadata_string(thread_value, MODEL_REASONING_EFFORT_METADATA_KEY);
-    let snapshot_service_tier =
-        thread_metadata_string(thread_value, MODEL_SERVICE_TIER_METADATA_KEY);
+    let cell_service_tier = thread_metadata_string(thread_value, MODEL_SERVICE_TIER_METADATA_KEY);
     let agent_model = trimmed_json_string(agent_metadata.get(MODEL_METADATA_KEY));
     let agent_reasoning_effort =
         trimmed_json_string(agent_metadata.get(MODEL_REASONING_EFFORT_METADATA_KEY));
     let agent_service_tier =
         trimmed_json_string(agent_metadata.get(MODEL_SERVICE_TIER_METADATA_KEY));
-    let model = model_override
+    let selected_model = legacy_model_override.or(cell_model);
+    let selected_reasoning_effort = legacy_reasoning_effort_override.or(cell_reasoning_effort);
+    let selected_service_tier = legacy_service_tier_override.or(cell_service_tier);
+    let model = selected_model
         .clone()
-        .or(snapshot_model)
         .or(agent_model)
         .or(provider_default_model)
         .or(provider_catalog_default.model);
-    let reasoning_effort = reasoning_effort_override
+    let reasoning_effort = selected_reasoning_effort
         .clone()
-        .or(snapshot_reasoning_effort)
         .or(agent_reasoning_effort)
         .or(provider_default_reasoning_effort)
         .or(provider_catalog_default.reasoning_effort);
-    let service_tier = service_tier_override
+    let service_tier = selected_service_tier
         .clone()
-        .or(snapshot_service_tier)
         .or(agent_service_tier)
         .or(provider_default_service_tier)
         .or(provider_catalog_default.service_tier);
@@ -190,9 +193,13 @@ pub(crate) async fn build_thread_runtime_summary(
         "model": model,
         "model_reasoning_effort": reasoning_effort,
         "model_service_tier": service_tier,
-        "model_override": model_override,
-        "model_reasoning_effort_override": reasoning_effort_override,
-        "model_service_tier_override": service_tier_override,
+        // Kept for client compatibility: desktop (`modelOverride` ->
+        // composer selected state) and mobile decode these fields. Under
+        // single-cell semantics they report the thread's own selection —
+        // coalesce(legacy override, cell) — not just the legacy override key.
+        "model_override": selected_model,
+        "model_reasoning_effort_override": selected_reasoning_effort,
+        "model_service_tier_override": selected_service_tier,
         "sdk_session_id": sdk_session_id,
         "active_run": Value::Null,
     })

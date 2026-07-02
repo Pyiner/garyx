@@ -72,6 +72,33 @@ fn runtime_metadata_string(metadata: &HashMap<String, Value>, key: &str) -> Opti
         .map(ToOwned::to_owned)
 }
 
+/// Model-default fields of an `AgentProviderConfig` that hot-apply onto a
+/// live provider instance during a config reload.
+///
+/// Provider keys intentionally exclude model defaults (see
+/// `compute_provider_key`) so thread affinity and persisted SDK session ids
+/// stay stable across default-model edits. Reconciling a reload therefore
+/// must not recreate the provider; instead these fields are pushed onto the
+/// existing instance via [`AgentLoopProvider::update_model_defaults`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProviderModelDefaults {
+    pub model: String,
+    pub default_model: String,
+    pub model_reasoning_effort: String,
+    pub model_service_tier: String,
+}
+
+impl From<&garyx_models::config::AgentProviderConfig> for ProviderModelDefaults {
+    fn from(agent_cfg: &garyx_models::config::AgentProviderConfig) -> Self {
+        Self {
+            model: agent_cfg.model.clone(),
+            default_model: agent_cfg.default_model.clone(),
+            model_reasoning_effort: agent_cfg.model_reasoning_effort.clone(),
+            model_service_tier: agent_cfg.model_service_tier.clone(),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // AgentLoopProvider trait
 // ---------------------------------------------------------------------------
@@ -107,6 +134,16 @@ pub trait AgentLoopProvider: Send + Sync {
     /// snapshotting observes the same values as the provider request builder.
     fn resolve_runtime_selection(&self, options: &ProviderRunOptions) -> ProviderRuntimeSelection {
         ProviderRuntimeSelection::from_metadata(&options.metadata)
+    }
+
+    /// Hot-apply reloaded model defaults onto this live provider instance.
+    ///
+    /// Called when a config reload reconciles onto an already-registered
+    /// provider key. Only model-default resolution for future runs may change;
+    /// active runs, sessions, and thread affinity are untouched. Providers
+    /// without config-level model defaults keep the no-op default.
+    fn update_model_defaults(&self, defaults: &ProviderModelDefaults) {
+        let _ = defaults;
     }
 
     /// Abort a running request. Returns `true` if the abort was acted upon.

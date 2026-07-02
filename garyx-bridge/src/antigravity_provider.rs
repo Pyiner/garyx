@@ -22,7 +22,7 @@ use crate::gary_prompt::{
 };
 use crate::native_slash::build_native_skill_prompt;
 use crate::provider_trait::{
-    AgentLoopProvider, BridgeError, ProviderRuntimeSelection, StreamCallback,
+    AgentLoopProvider, BridgeError, ProviderModelDefaults, ProviderRuntimeSelection, StreamCallback,
 };
 
 const DEFAULT_REQUEST_TIMEOUT_SECS: f64 = 300.0;
@@ -885,6 +885,11 @@ fn discover_from_conversations(
 
 pub struct AntigravityCliProvider {
     config: AntigravityCliConfig,
+    /// Hot-reloadable model defaults. Config reloads reconcile onto the live
+    /// provider instance (the provider key excludes model defaults to keep
+    /// thread affinity stable), so model resolution must read these instead
+    /// of the frozen `config` fields.
+    model_defaults: std::sync::RwLock<ProviderModelDefaults>,
     session_map: Mutex<HashMap<String, String>>,
     active_runs: Mutex<HashMap<String, Arc<Mutex<Child>>>>,
     run_session_map: Mutex<HashMap<String, String>>,
@@ -894,14 +899,39 @@ pub struct AntigravityCliProvider {
 
 impl AntigravityCliProvider {
     pub fn new(config: AntigravityCliConfig) -> Self {
+        let model_defaults = std::sync::RwLock::new(ProviderModelDefaults {
+            model: config.model.clone(),
+            default_model: config.default_model.clone(),
+            model_reasoning_effort: String::new(),
+            model_service_tier: String::new(),
+        });
         Self {
             config,
+            model_defaults,
             session_map: Mutex::new(HashMap::new()),
             active_runs: Mutex::new(HashMap::new()),
             run_session_map: Mutex::new(HashMap::new()),
             fresh_session_lock: Mutex::new(()),
             ready: false,
         }
+    }
+
+    /// Clone the frozen config with the hot-reloadable model defaults
+    /// overlaid, so model resolution observes the latest reloaded defaults.
+    fn effective_config(&self) -> AntigravityCliConfig {
+        let defaults = self
+            .model_defaults
+            .read()
+            .expect("antigravity model defaults lock poisoned")
+            .clone();
+        let mut config = self.config.clone();
+        config.model = if defaults.model.is_empty() {
+            defaults.default_model.clone()
+        } else {
+            defaults.model.clone()
+        };
+        config.default_model = defaults.default_model;
+        config
     }
 
     async fn register_run(&self, run_id: &str, thread_id: &str, child: Arc<Mutex<Child>>) {
@@ -990,7 +1020,7 @@ impl AntigravityCliProvider {
         })?;
         let conversations_dir = antigravity_base_dir(&brain_root).join("conversations");
         let timeout = request_timeout(&self.config);
-        let model = model_id(&self.config, &options.metadata);
+        let model = model_id(&self.effective_config(), &options.metadata);
         let prompt = build_prompt_text(options, Some(cwd.as_path()), session_id.is_none());
         let run_log = run_log_path();
         let baseline_step_index = session_id
@@ -1162,10 +1192,17 @@ impl AgentLoopProvider for AntigravityCliProvider {
 
     fn resolve_runtime_selection(&self, options: &ProviderRunOptions) -> ProviderRuntimeSelection {
         ProviderRuntimeSelection {
-            model: Some(model_id(&self.config, &options.metadata)),
+            model: Some(model_id(&self.effective_config(), &options.metadata)),
             model_reasoning_effort: None,
             model_service_tier: None,
         }
+    }
+
+    fn update_model_defaults(&self, defaults: &ProviderModelDefaults) {
+        *self
+            .model_defaults
+            .write()
+            .expect("antigravity model defaults lock poisoned") = defaults.clone();
     }
 
     async fn initialize(&mut self) -> Result<(), BridgeError> {
