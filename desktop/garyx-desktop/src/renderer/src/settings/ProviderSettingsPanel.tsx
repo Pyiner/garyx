@@ -9,6 +9,8 @@ import type {
   DesktopProviderModels,
   DesktopProviderUsage,
   DesktopSettings,
+  DesktopModelUsage,
+  DesktopUsageWindow,
 } from '@shared/contracts';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -39,8 +41,16 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
+import { ProviderAgentIcon } from '../app-shell/components/ProviderAgentIcon';
 import { useI18n, type Translate } from '../i18n';
-import { usageProviderIdForModelProviderKey } from '../provider-usage';
+import {
+  clampUsagePercent,
+  formatUsageAge,
+  formatUsagePercent,
+  usageLevelForRemainingPercent,
+  usageProviderIdForModelProviderKey,
+  usageResetText,
+} from '../provider-usage';
 import { classNames, noopAsync } from './shared';
 import { SettingsControlRow } from './shared-components';
 
@@ -92,6 +102,18 @@ type ModelProviderConfigDraft = {
   authSource: string;
   apiKey: string;
   baseUrl: string;
+};
+
+type ProviderAuthState = 'ready' | 'empty' | 'error';
+
+type ProviderRowDetails = {
+  status: string;
+  auth: string;
+  authState: ProviderAuthState;
+  authTooltip?: string;
+  model: string;
+  reasoning: string;
+  serviceTier: string;
 };
 
 const MODEL_PROVIDER_ROWS: FixedModelProviderRow[] = [
@@ -186,63 +208,6 @@ function providerTypeValue(provider: any): string {
 
 function fixedModelProviderRow(key: FixedModelProviderKey): FixedModelProviderRow {
   return MODEL_PROVIDER_ROWS.find((row) => row.key === key) || MODEL_PROVIDER_ROWS[0];
-}
-
-function usageLevelClass(remainingPercent: number): string {
-  if (remainingPercent >= 50) {
-    return 'healthy';
-  }
-  if (remainingPercent >= 20) {
-    return 'warning';
-  }
-  return 'critical';
-}
-
-function formatUsagePercent(value: number): string {
-  const safe = Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0;
-  return `${Math.round(safe)}%`;
-}
-
-function formatUsageDuration(seconds: number): string {
-  const total = Math.max(0, Math.floor(seconds));
-  const days = Math.floor(total / 86_400);
-  if (days >= 1) {
-    return `${days}d`;
-  }
-  const hours = Math.floor(total / 3_600);
-  if (hours >= 1) {
-    return `${hours}h`;
-  }
-  const minutes = Math.floor(total / 60);
-  if (minutes >= 1) {
-    return `${minutes}m`;
-  }
-  return '<1m';
-}
-
-function resetSecondsFromIso(value?: string | null): number | null {
-  if (!value) {
-    return null;
-  }
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) {
-    return null;
-  }
-  return Math.max(0, Math.floor((timestamp - Date.now()) / 1000));
-}
-
-function usageResetText(
-  resetsAt?: string | null,
-  resetAfterSeconds?: number | null,
-  fallback = 'weekly left',
-): string {
-  const seconds = Number.isFinite(resetAfterSeconds || NaN)
-    ? resetAfterSeconds || 0
-    : resetSecondsFromIso(resetsAt);
-  if (seconds && seconds > 0) {
-    return `resets in ${formatUsageDuration(seconds)}`;
-  }
-  return fallback;
 }
 
 function providerModelOptionsWithCurrent(
@@ -704,46 +669,83 @@ export function ProviderSettingsPanel({
       return applyProviderCatalogDefaults(current, providerConfigRow, activeProviderModels);
     });
   }, [providerConfigRow?.key, providerConfigRow?.group, activeProviderModels]);
-  function providerRowDetails(row: FixedModelProviderRow): {
-    status: string;
-    auth: string;
-    model: string;
-  } {
+  function providerRowDetails(row: FixedModelProviderRow): ProviderRowDetails {
     const runtimeConfig = providerAgentConfig(gatewayDraft, row.key);
     const configuredDefaultModel = String(runtimeConfig.default_model || '').trim();
+    const configuredReasoning = String(runtimeConfig.model_reasoning_effort || '').trim();
+    const configuredServiceTier = String(runtimeConfig.model_service_tier || '').trim();
+    const usage = row.usageProviderId ? codingUsageByProviderId[row.usageProviderId] : null;
+    const usageAuthError = usage && !usage.available && usage.error ? usage.error : '';
+    const finalize = (details: ProviderRowDetails): ProviderRowDetails => {
+      if (!usageAuthError) {
+        return details;
+      }
+      return {
+        ...details,
+        auth: t('Error'),
+        authState: 'error',
+        authTooltip: usageAuthError,
+      };
+    };
     if (row.key === 'claude_code') {
       const mode = normalizeClaudeCliMode(claudeAgentConfig(gatewayDraft).claude_cli_mode);
-      return {
+      return finalize({
         status: t('Default'),
         auth: claudeEnvLineCount
           ? `${claudeCliModeLabel(mode, t)} · ${t('{count} env vars', { count: claudeEnvLineCount })}`
           : claudeCliModeLabel(mode, t),
+        authState: 'ready',
         model: configuredDefaultModel || row.defaultModel,
-      };
+        reasoning: configuredReasoning,
+        serviceTier: configuredServiceTier,
+      });
     }
     if (row.key === 'codex_app_server') {
-      return {
+      const codexApiKeyMissing = localSettings.providerCodexAuthMode === 'api_key'
+        && !localSettings.providerCodexApiKey.trim();
+      return finalize({
         status: t('Default'),
-        auth: localSettings.providerCodexAuthMode === 'api_key' ? t('API Key') : t('CLI'),
+        auth: localSettings.providerCodexAuthMode === 'api_key'
+          ? codexApiKeyMissing ? t('Missing key') : t('API Key')
+          : t('CLI'),
+        authState: codexApiKeyMissing ? 'empty' : 'ready',
         model: configuredDefaultModel || row.defaultModel,
-      };
+        reasoning: configuredReasoning,
+        serviceTier: configuredServiceTier,
+      });
+    }
+    if (row.key === 'antigravity') {
+      return finalize({
+        status: t('Default'),
+        auth: t('CLI'),
+        authState: 'ready',
+        model: configuredDefaultModel || row.defaultModel,
+        reasoning: configuredReasoning,
+        serviceTier: configuredServiceTier,
+      });
     }
     if (row.key === 'traex') {
       // TRAE CLI authenticates via `traex login`; no desktop-managed auth.
-      return {
+      return finalize({
         status: t('Default'),
         auth: t('CLI'),
+        authState: 'ready',
         model: configuredDefaultModel || row.defaultModel,
-      };
+        reasoning: configuredReasoning,
+        serviceTier: configuredServiceTier,
+      });
     }
     if (row.key === 'gemini_cli') {
-      return {
+      return finalize({
         status: t('Default'),
         auth: geminiEnvLineCount
           ? t('{count} env vars', { count: geminiEnvLineCount })
           : t('CLI / env'),
+        authState: 'ready',
         model: configuredDefaultModel || row.defaultModel,
-      };
+        reasoning: configuredReasoning,
+        serviceTier: configuredServiceTier,
+      });
     }
 
     const agent = configuredProviderAgent(agents, row.key);
@@ -752,20 +754,133 @@ export function ProviderSettingsPanel({
       || defaultNativeAuthSource(row.providerType);
     const configuredApiKey = apiKeyFromProviderConfig(runtimeConfig, row.providerType)
       || apiKeyFromProviderAgent(agent);
-    return {
+    const usesGptToken = row.providerType === 'gpt' && authSource === 'codex';
+    const authState: ProviderAuthState = usesGptToken || configuredApiKey ? 'ready' : 'empty';
+    return finalize({
       status: providerConfigHasNativeSettings(runtimeConfig) || agent ? t('Configured') : t('Not configured'),
-      auth: row.providerType === 'gpt' && authSource === 'codex'
+      auth: usesGptToken
         ? t('GPT token')
         : configuredApiKey
           ? t('API Key')
-          : t('Env / API key'),
+          : t('Missing key'),
+      authState,
       model: configuredDefaultModel || agent?.model || row.defaultModel,
-    };
+      reasoning: configuredReasoning || agent?.modelReasoningEffort || '',
+      serviceTier: configuredServiceTier || agent?.modelServiceTier || '',
+    });
+  }
+
+  function providerGroupLabel(row: FixedModelProviderRow): string {
+    return row.group === 'native' ? t('Native agent loop') : t('Default CLI');
+  }
+
+  function providerModelLabel(value: string): string {
+    return value === '(provider default)' ? t('Provider default') : value;
+  }
+
+  function renderProviderDefaultChips(row: FixedModelProviderRow, details: ProviderRowDetails): ReactNode {
+    const chips = [
+      {
+        key: 'model',
+        label: providerModelLabel(details.model),
+        title: t('Model: {value}', { value: providerModelLabel(details.model) }),
+      },
+      {
+        key: 'reasoning',
+        label: details.reasoning || t('Reasoning default'),
+        title: t('Reasoning: {value}', { value: details.reasoning || t('Provider default') }),
+      },
+    ];
+    const tier = details.serviceTier || (row.providerType === 'gpt' ? t('Standard') : '');
+    if (tier) {
+      chips.push({
+        key: 'tier',
+        label: tier,
+        title: t('Tier: {value}', { value: tier }),
+      });
+    }
+    const tooltip = chips.map((chip) => chip.title).join('\n');
+    return (
+      <div className="provider-config-default-cell" title={tooltip}>
+        {chips.map((chip) => (
+          <span className="provider-config-default-chip" key={chip.key}>
+            {chip.label}
+          </span>
+        ))}
+      </div>
+    );
+  }
+
+  function usageUpdatedText(): string | null {
+    return formatUsageAge(codingUsage?.refreshedAt || null);
+  }
+
+  function usageWindowCaption(
+    window: DesktopUsageWindow,
+    fallback: string,
+  ): string {
+    return usageResetText(window.resetsAt, window.resetAfterSeconds, fallback);
+  }
+
+  function modelUsageCaption(model: DesktopModelUsage): string {
+    return model.description?.trim()
+      || usageResetText(model.resetsAt, model.resetAfterSeconds, t('reset time unknown'));
+  }
+
+  function sortedModelsByRemaining(usage: DesktopProviderUsage): DesktopModelUsage[] {
+    return [...usage.models].sort((left, right) =>
+      clampUsagePercent(left.remainingPercent) - clampUsagePercent(right.remainingPercent),
+    );
+  }
+
+  function renderUsagePills(usage: DesktopProviderUsage, compact = false): ReactNode {
+    const updated = usageUpdatedText();
+    if (!usage.plan && !usage.stale && (!updated || compact)) {
+      return null;
+    }
+    return (
+      <div className={classNames('provider-usage-pills', compact && 'compact')}>
+        {usage.plan ? <span className="provider-usage-pill">{usage.plan}</span> : null}
+        {usage.stale ? <span className="provider-usage-pill stale">{t('stale')}</span> : null}
+        {!compact && updated ? <span className="provider-usage-updated">{updated}</span> : null}
+      </div>
+    );
+  }
+
+  function renderUsageMeter(
+    label: string,
+    remainingPercent: number,
+    caption: string,
+    options?: {
+      compact?: boolean;
+      stale?: boolean;
+      title?: string;
+    },
+  ): ReactNode {
+    const percent = clampUsagePercent(remainingPercent);
+    const level = usageLevelForRemainingPercent(percent);
+    return (
+      <div
+        className={classNames('provider-usage-meter', options?.compact && 'compact')}
+        data-level={level}
+        data-stale={options?.stale ? 'true' : undefined}
+        title={options?.title}
+      >
+        <div className="provider-usage-meter-header">
+          <span className="provider-usage-meter-label">{label}</span>
+          <span className="provider-usage-meter-percent">{formatUsagePercent(percent)}</span>
+        </div>
+        <div className="provider-usage-meter-track" aria-hidden>
+          <span className="provider-usage-meter-fill" style={{ width: `${percent}%` }} />
+        </div>
+        {caption ? <div className="provider-usage-meter-caption">{caption}</div> : null}
+      </div>
+    );
   }
 
   function renderProviderUsageCell(row: FixedModelProviderRow): ReactNode {
     if (!row.usageProviderId) {
-      return <span className="provider-usage-muted">{t('Not tracked')}</span>;
+      return <span className="provider-usage-muted">{t('No quota data')}</span>;
     }
     const usage = codingUsageByProviderId[row.usageProviderId];
     if (!usage) {
@@ -786,45 +901,142 @@ export function ProviderSettingsPanel({
       );
     }
     if (usage.models.length > 0) {
-      // Keep the row height fixed: surface the tightest model quota and fold
-      // the full per-model breakdown into the hover title.
-      const tightest = usage.models.reduce((worst, model) => {
-        if (typeof model.remainingPercent !== 'number') return worst;
-        if (typeof worst.remainingPercent !== 'number') return model;
-        return model.remainingPercent < worst.remainingPercent ? model : worst;
-      }, usage.models[0]);
-      const breakdown = usage.models
-        .map((model) => `${model.name}: ${formatUsagePercent(model.remainingPercent)}`)
-        .join('\n');
+      const models = sortedModelsByRemaining(usage);
+      const tightest = models[0];
+      const reset = modelUsageCaption(tightest);
+      const caption = usage.models.length > 1
+        ? `${reset} · ${t('{count} models', { count: usage.models.length })}`
+        : reset;
       return (
-        <div className="provider-usage-summary" title={breakdown}>
-          <span className={`provider-usage-value ${usageLevelClass(tightest.remainingPercent)}`}>
-            {formatUsagePercent(tightest.remainingPercent)}
-          </span>
-          <span className="provider-usage-detail">
-            {usage.models.length > 1
-              ? t('{name} · {count} models', { name: tightest.name, count: usage.models.length })
-              : tightest.name}
-          </span>
+        <div className={classNames('provider-usage-stack', usage.stale && 'is-stale')}>
+          {renderUsagePills(usage, true)}
+          {renderUsageMeter(tightest.name, tightest.remainingPercent, caption, {
+            compact: true,
+            stale: usage.stale,
+            title: models
+              .map((model) => `${model.name}: ${formatUsagePercent(model.remainingPercent)} · ${modelUsageCaption(model)}`)
+              .join('\n'),
+          })}
         </div>
       );
     }
+    const windows: Array<{ key: string; label: string; value: DesktopUsageWindow; fallback: string }> = [];
+    if (usage.session) {
+      windows.push({
+        key: 'session',
+        label: t('Session'),
+        value: usage.session,
+        fallback: t('session window'),
+      });
+    }
     if (usage.weekly) {
-      const level = usageLevelClass(usage.weekly.remainingPercent);
+      windows.push({
+        key: 'weekly',
+        label: t('Weekly'),
+        value: usage.weekly,
+        fallback: t('weekly window'),
+      });
+    }
+    if (windows.length > 0) {
       return (
-        <div className="provider-usage-summary">
-          <span className={`provider-usage-value ${level}`}>
-            {formatUsagePercent(usage.weekly.remainingPercent)}
-          </span>
-          <span className="provider-usage-detail">
-            {usage.stale
-              ? t('stale data')
-              : usageResetText(usage.weekly.resetsAt, usage.weekly.resetAfterSeconds)}
-          </span>
+        <div className={classNames('provider-usage-stack', usage.stale && 'is-stale')}>
+          {renderUsagePills(usage, true)}
+          {windows.map((entry) => (
+            <div className="provider-usage-window-row" key={entry.key}>
+              {renderUsageMeter(
+                entry.label,
+                entry.value.remainingPercent,
+                usageWindowCaption(entry.value, entry.fallback),
+                { compact: true, stale: usage.stale },
+              )}
+            </div>
+          ))}
         </div>
       );
     }
     return <span className="provider-usage-muted">{t('No data')}</span>;
+  }
+
+  function renderProviderConfigUsageSection(row: FixedModelProviderRow): ReactNode {
+    if (!row.usageProviderId) {
+      return null;
+    }
+    const usage = codingUsageByProviderId[row.usageProviderId];
+    let content: ReactNode;
+    if (!usage) {
+      content = codingUsageLoading
+        ? <span className="provider-usage-muted">{t('Loading')}</span>
+        : (
+          <span className="provider-usage-muted" title={codingUsageError || undefined}>
+            {codingUsageError ? t('Unavailable') : t('No quota data')}
+          </span>
+        );
+    } else if (!usage.available) {
+      content = (
+        <span className="provider-usage-muted" title={usage.error || undefined}>
+          {t('Unavailable')}
+        </span>
+      );
+    } else if (usage.models.length > 0) {
+      content = (
+        <div className="provider-usage-models">
+          {sortedModelsByRemaining(usage).map((model) => (
+            <div className="provider-usage-model-row" key={model.id || model.name}>
+              {renderUsageMeter(model.name, model.remainingPercent, modelUsageCaption(model), {
+                stale: usage.stale,
+                title: model.description || undefined,
+              })}
+            </div>
+          ))}
+        </div>
+      );
+    } else {
+      const windows: Array<{ key: string; label: string; value: DesktopUsageWindow; fallback: string }> = [];
+      if (usage.session) {
+        windows.push({
+          key: 'session',
+          label: t('Session'),
+          value: usage.session,
+          fallback: t('session window'),
+        });
+      }
+      if (usage.weekly) {
+        windows.push({
+          key: 'weekly',
+          label: t('Weekly'),
+          value: usage.weekly,
+          fallback: t('weekly window'),
+        });
+      }
+      content = windows.length > 0 ? (
+        <div className="provider-usage-window-grid">
+          {windows.map((entry) => (
+            <div className="provider-usage-window-card" key={entry.key}>
+              {renderUsageMeter(
+                entry.label,
+                entry.value.remainingPercent,
+                usageWindowCaption(entry.value, entry.fallback),
+                { stale: usage.stale },
+              )}
+            </div>
+          ))}
+        </div>
+      ) : <span className="provider-usage-muted">{t('No quota data')}</span>;
+    }
+    return (
+      <section className={classNames('provider-config-usage-section', usage?.stale && 'is-stale')}>
+        <div className="provider-config-usage-header">
+          <div>
+            <span className="provider-config-usage-title">{t('Usage')}</span>
+            <span className="provider-config-usage-note">
+              {usage ? t('{name} quota windows', { name: usage.name || row.label }) : t('Quota windows')}
+            </span>
+          </div>
+          {usage ? renderUsagePills(usage) : null}
+        </div>
+        {content}
+      </section>
+    );
   }
 
   function openProviderConfigDialog(key: FixedModelProviderKey) {
@@ -976,6 +1188,14 @@ export function ProviderSettingsPanel({
         }
         return;
       }
+      if (providerConfigRow.key === 'antigravity') {
+        // Antigravity is a CLI provider like TRAE: persist model defaults only.
+        mutateGatewayProviderModelDefaults(providerConfigRow, providerConfigDraft);
+        if (await onSaveGatewaySettings({ refreshDesktopState: 'background' })) {
+          closeProviderConfigDialog();
+        }
+        return;
+      }
       if (providerConfigRow.group === 'native') {
         mutateGatewayProviderModelDefaults(providerConfigRow, providerConfigDraft);
         if (!(await onSaveGatewaySettings({ refreshDesktopState: 'background' }))) {
@@ -1026,9 +1246,8 @@ export function ProviderSettingsPanel({
           <TableHeader>
             <TableRow>
               <TableHead className="provider-config-col-provider">{t('Provider')}</TableHead>
-              <TableHead className="provider-config-col-kind">{t('Type')}</TableHead>
               <TableHead className="provider-config-col-auth">{t('Auth')}</TableHead>
-              <TableHead className="provider-config-col-model">{t('Model')}</TableHead>
+              <TableHead className="provider-config-col-default">{t('Default')}</TableHead>
               <TableHead className="provider-config-col-usage">{t('Usage')}</TableHead>
               <TableHead className="provider-config-col-status">{t('Status')}</TableHead>
               <TableHead className="provider-config-col-actions">{t('Actions')}</TableHead>
@@ -1037,28 +1256,42 @@ export function ProviderSettingsPanel({
           <TableBody>
             {MODEL_PROVIDER_ROWS.map((row) => {
               const details = providerRowDetails(row);
-              const modelLabel = details.model === '(provider default)'
-                ? t('(provider default)')
-                : details.model;
-              const rowReady = row.group === 'default' || Boolean(configuredProviderAgent(agents, row.key));
+              const runtimeConfig = providerAgentConfig(gatewayDraft, row.key);
+              const rowReady = row.group === 'default'
+                || providerConfigHasNativeSettings(runtimeConfig)
+                || Boolean(configuredProviderAgent(agents, row.key));
               return (
                 <TableRow key={row.key}>
                   <TableCell className="provider-config-col-provider">
-                    <div className="provider-config-name-cell">
-                      <span className="provider-config-name">{row.label}</span>
-                      {row.group === 'default' ? (
-                        <span className="provider-config-subtitle">{t('Built-in')}</span>
-                      ) : (
-                        <span className="provider-config-subtitle">{t('Native agent loop')}</span>
-                      )}
+                    <div className="provider-config-provider-cell">
+                      <span className="provider-config-icon" aria-hidden>
+                        <ProviderAgentIcon
+                          agentId={row.agentId}
+                          providerType={row.providerType}
+                          size={22}
+                        />
+                      </span>
+                      <div className="provider-config-name-cell">
+                        <span className="provider-config-name">{row.label}</span>
+                        <span className="provider-config-subtitle">
+                          <code>{row.providerType}</code>
+                          <span>{providerGroupLabel(row)}</span>
+                        </span>
+                      </div>
                     </div>
                   </TableCell>
-                  <TableCell className="provider-config-col-kind">
-                    <code>{row.providerType}</code>
+                  <TableCell className="provider-config-col-auth">
+                    <Badge
+                      className="provider-config-auth"
+                      data-state={details.authState}
+                      title={details.authTooltip || details.auth}
+                      variant="outline"
+                    >
+                      {details.auth}
+                    </Badge>
                   </TableCell>
-                  <TableCell className="provider-config-col-auth">{details.auth}</TableCell>
-                  <TableCell className="provider-config-col-model" title={modelLabel}>
-                    {modelLabel}
+                  <TableCell className="provider-config-col-default">
+                    {renderProviderDefaultChips(row, details)}
                   </TableCell>
                   <TableCell className="provider-config-col-usage">
                     {renderProviderUsageCell(row)}
@@ -1110,17 +1343,36 @@ export function ProviderSettingsPanel({
             <Badge variant="outline" className="commands-dialog-badge">
               {providerConfigRow?.group === 'native' ? t('Native Provider') : t('Default Provider')}
             </Badge>
-            <div className="commands-dialog-title-group">
-              <DialogTitle className="commands-dialog-title">
-                {providerConfigRow ? t('Configure {name}', { name: providerConfigRow.label }) : t('Configure Provider')}
-              </DialogTitle>
-              <DialogDescription className="commands-dialog-description">
-                {t('Provider rows are fixed. Configuration controls whether each provider is ready to use.')}
-              </DialogDescription>
+            <div className="provider-config-dialog-heading">
+              {providerConfigRow ? (
+                <span className="provider-config-icon large" aria-hidden>
+                  <ProviderAgentIcon
+                    agentId={providerConfigRow.agentId}
+                    providerType={providerConfigRow.providerType}
+                    size={28}
+                  />
+                </span>
+              ) : null}
+              <div className="commands-dialog-title-group">
+                <DialogTitle className="commands-dialog-title">
+                  {providerConfigRow ? t('Configure {name}', { name: providerConfigRow.label }) : t('Configure Provider')}
+                </DialogTitle>
+                <DialogDescription className="commands-dialog-description provider-config-dialog-description">
+                  {providerConfigRow ? (
+                    <span className="provider-config-header-meta">
+                      <code>{providerConfigRow.providerType}</code>
+                      <span>{providerGroupLabel(providerConfigRow)}</span>
+                    </span>
+                  ) : null}
+                  <span>{t('Provider rows are fixed. Configuration controls whether each provider is ready to use.')}</span>
+                </DialogDescription>
+              </div>
             </div>
           </DialogHeader>
 
           <div className="commands-dialog-body provider-config-dialog-body">
+            {providerConfigRow ? renderProviderConfigUsageSection(providerConfigRow) : null}
+
             {providerConfigRow?.key === 'claude_code' ? (
               <>
                 <div className="commands-field">
