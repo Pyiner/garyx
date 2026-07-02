@@ -187,23 +187,11 @@
   text-align: center;
 }
 
+/* The bots section uses the shared codex-section header; the framed card
+   look moves onto the table itself (same as .commands-table). */
 .bot-panel {
-  overflow: hidden;
   width: 100%;
   min-width: 0;
-  border: 1px solid var(--color-token-border);
-  border-radius: 12px;
-  background: var(--color-token-bg-primary);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.018);
-}
-
-.bot-panel-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 14px 18px 12px;
-  border-bottom: 1px solid rgba(26, 28, 31, 0.06);
 }
 
 .bot-panel-title-row {
@@ -211,14 +199,6 @@
   min-width: 0;
   align-items: baseline;
   gap: 9px;
-}
-
-.bot-panel-title {
-  margin: 0;
-  color: var(--color-token-text-primary);
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: -0.005em;
 }
 
 .bot-panel-count {
@@ -241,22 +221,11 @@
   white-space: nowrap;
 }
 
-.bot-panel-action {
-  height: 28px;
-  border-color: rgba(26, 28, 31, 0.1) !important;
-  border-radius: 8px !important;
-  background: var(--color-token-bg-primary) !important;
-  color: var(--color-token-text-primary) !important;
-  box-shadow: none !important;
-  font-size: 12px !important;
-  font-weight: 500 !important;
-}
-
-.bot-panel-action:hover {
-  background: #f7f7f6 !important;
-}
 
 .bot-panel-empty {
+  border: 1px solid var(--color-token-border);
+  border-radius: 12px;
+  background: var(--color-token-bg-primary);
   padding: 26px 18px 28px;
   color: #828385;
   font-size: 13px;
@@ -266,7 +235,11 @@
 .bot-table {
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-token-border);
+  border-radius: 12px;
   background: var(--color-token-bg-primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.018);
 }
 
 .bot-table-head,

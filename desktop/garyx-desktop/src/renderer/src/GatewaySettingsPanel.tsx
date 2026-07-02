@@ -2850,27 +2850,26 @@ export function GatewaySettingsPanel({
   const channelsPanel = (
     <>
       <ChannelPluginCatalogPanel />
-      <section className="bot-panel">
-        <div className="bot-panel-toolbar">
+      <section className="codex-section bot-panel">
+        <div className="codex-section-header">
           <div className="bot-panel-title-row">
-            <h3 className="bot-panel-title">{t('Bots')}</h3>
+            <span className="codex-section-title">{t('Bots')}</span>
             <span className="bot-panel-count">{configuredChannels.length}</span>
             <span className="bot-panel-source">{channelsSourceMessage}</span>
           </div>
-          <Button
-            className="bot-panel-action"
+          <button
+            className="codex-section-action"
             onClick={() => {
               void (async () => {
                 await onRefreshAgentTargets();
                 setIsAddingChannel(true);
               })();
             }}
-            size="sm"
             type="button"
-            variant="outline"
           >
+            <Plus aria-hidden size={14} />
             {t('Add bot')}
-          </Button>
+          </button>
         </div>
         {!configuredChannels.length ? (
           <div className="bot-panel-empty">{t('No bots configured. Click Add bot above to create one.')}</div>
