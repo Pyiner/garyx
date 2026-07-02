@@ -26,7 +26,7 @@ import type {
   UpdateTeamInput,
 } from '@shared/contracts';
 
-import { Database, Pencil, Trash, Users } from 'lucide-react';
+import { Trash } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -1393,35 +1393,44 @@ export function AgentsHubPanel({
                         >
                           {t('Chat')}
                         </Button>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <button
-                              aria-label={t('More actions for {name}', { name: agent.displayName || agent.agentId })}
-                              className="bot-table-action-button"
-                              onClick={stopEvent}
-                              type="button"
-                            >
-                              <MoreDotsIcon size={14} />
-                            </button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" sideOffset={4}>
-                            {!agent.builtIn ? (
-                              <DropdownMenuItem onSelect={() => { openEditAgentDialog(agent); }}>
-                                <Pencil aria-hidden />
-                                {t('Edit')}
-                              </DropdownMenuItem>
-                            ) : null}
-                            {!agent.builtIn ? (
-                              <DropdownMenuItem onSelect={() => { onOpenMemory?.(agent); }}>
-                                <Database aria-hidden />
-                                {t('Memory')}
-                              </DropdownMenuItem>
-                            ) : null}
-                            <DropdownMenuItem onSelect={() => { openCreateTeamDialog(agent.agentId); }}>
-                              <Users aria-hidden />
-                              {t('Create Team')}
-                            </DropdownMenuItem>
-                            {!agent.builtIn ? (
+                        {!agent.builtIn ? (
+                          <Button
+                            onClick={(e) => { stopEvent(e); openEditAgentDialog(agent); }}
+                            size="sm"
+                            variant="ghost"
+                          >
+                            {t('Edit')}
+                          </Button>
+                        ) : null}
+                        {!agent.builtIn ? (
+                          <Button
+                            onClick={(e) => { stopEvent(e); onOpenMemory?.(agent); }}
+                            size="sm"
+                            variant="ghost"
+                          >
+                            {t('Memory')}
+                          </Button>
+                        ) : null}
+                        <Button
+                          onClick={(e) => { stopEvent(e); openCreateTeamDialog(agent.agentId); }}
+                          size="sm"
+                          variant="ghost"
+                        >
+                          {t('Create Team')}
+                        </Button>
+                        {!agent.builtIn ? (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button
+                                aria-label={t('More actions for {name}', { name: agent.displayName || agent.agentId })}
+                                className="bot-table-action-button"
+                                onClick={stopEvent}
+                                type="button"
+                              >
+                                <MoreDotsIcon size={14} />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" sideOffset={4}>
                               <DropdownMenuItem
                                 disabled={saving}
                                 onSelect={() => { void handleDeleteAgent(agent); }}
@@ -1430,9 +1439,9 @@ export function AgentsHubPanel({
                                 <Trash aria-hidden />
                                 {t('Delete')}
                               </DropdownMenuItem>
-                            ) : null}
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        ) : null}
                       </div>
                     </TableCell>
                   </TableRow>
@@ -1485,6 +1494,13 @@ export function AgentsHubPanel({
                           >
                             {t('Chat')}
                           </Button>
+                          <Button
+                            onClick={(e) => { stopEvent(e); openEditTeamDialog(team); }}
+                            size="sm"
+                            variant="ghost"
+                          >
+                            {t('Edit')}
+                          </Button>
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
                               <button
@@ -1497,10 +1513,6 @@ export function AgentsHubPanel({
                               </button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end" sideOffset={4}>
-                              <DropdownMenuItem onSelect={() => { openEditTeamDialog(team); }}>
-                                <Pencil aria-hidden />
-                                {t('Edit')}
-                              </DropdownMenuItem>
                               <DropdownMenuItem
                                 disabled={saving}
                                 onSelect={() => { void handleDeleteTeam(team); }}
