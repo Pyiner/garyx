@@ -658,13 +658,17 @@ struct GaryxAutomationFormFields: View {
 struct GaryxAutomationAgentSelectorRow: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @Binding var agentTargetId: String
+    @State private var showsAgentPicker = false
 
     var body: some View {
         if model.agentTargets.isEmpty {
             GaryxFormReadOnlyRow(title: "Agent", value: model.agentTargetsPlaceholderText)
         } else {
-            GaryxFormRow(title: "Agent") {
-                GaryxAgentTargetPickerControl(selectedAgentTargetId: $agentTargetId)
+            GaryxFormRow(title: "Agent", onTap: { showsAgentPicker = true }) {
+                GaryxAgentTargetPickerControl(
+                    selectedAgentTargetId: $agentTargetId,
+                    isPresented: $showsAgentPicker
+                )
             }
         }
     }
@@ -672,20 +676,17 @@ struct GaryxAutomationAgentSelectorRow: View {
 
 struct GaryxAutomationScheduleEditor: View {
     @Binding var draft: GaryxAutomationScheduleDraft
+    @State private var showsOnceDatePicker = false
 
     var body: some View {
         VStack(spacing: 0) {
-            GaryxFormRow(title: "Repeat") {
-                Menu {
-                    ForEach(GaryxAutomationRepeatOption.allCases) { option in
-                        Button {
-                            draft.repeatOption = option
-                        } label: {
-                            Text(option.label)
-                        }
+            GaryxFormMenuRow(title: "Repeat", value: draft.repeatOption.label) {
+                ForEach(GaryxAutomationRepeatOption.allCases) { option in
+                    Button {
+                        draft.repeatOption = option
+                    } label: {
+                        Text(option.label)
                     }
-                } label: {
-                    GaryxFormMenuValueLabel(value: draft.repeatOption.label)
                 }
             }
 
@@ -698,48 +699,45 @@ struct GaryxAutomationScheduleEditor: View {
 
             if draft.repeatOption == .once {
                 Divider().padding(.leading, 16)
-                GaryxFormRow(title: "Date") {
+                GaryxFormRow(title: "Date", onTap: { showsOnceDatePicker = true }) {
+                    GaryxFormMenuValueLabel(value: draft.date.formatted(date: .abbreviated, time: .omitted))
+                }
+                .popover(isPresented: $showsOnceDatePicker) {
                     DatePicker(
                         "Date",
                         selection: $draft.date,
                         displayedComponents: [.date]
                     )
                     .labelsHidden()
-                    .datePickerStyle(.compact)
+                    .datePickerStyle(.graphical)
                     .tint(.secondary)
+                    .padding(12)
+                    .presentationCompactAdaptation(.popover)
                 }
             }
 
             if draft.repeatOption == .weekly {
                 Divider().padding(.leading, 16)
-                GaryxFormRow(title: "Day") {
-                    Menu {
-                        ForEach(GaryxAutomationWeekdayOption.allCases) { option in
-                            Button {
-                                draft.weekday = option.calendarWeekday
-                            } label: {
-                                Text(option.label)
-                            }
+                GaryxFormMenuRow(title: "Day", value: selectedWeekdayLabel) {
+                    ForEach(GaryxAutomationWeekdayOption.allCases) { option in
+                        Button {
+                            draft.weekday = option.calendarWeekday
+                        } label: {
+                            Text(option.label)
                         }
-                    } label: {
-                        GaryxFormMenuValueLabel(value: selectedWeekdayLabel)
                     }
                 }
             }
 
             if draft.repeatOption == .monthly {
                 Divider().padding(.leading, 16)
-                GaryxFormRow(title: "Date") {
-                    Menu {
-                        ForEach(1...31, id: \.self) { day in
-                            Button {
-                                draft.monthDay = day
-                            } label: {
-                                Text("\(day)")
-                            }
+                GaryxFormMenuRow(title: "Date", value: "\(draft.monthDay)") {
+                    ForEach(1...31, id: \.self) { day in
+                        Button {
+                            draft.monthDay = day
+                        } label: {
+                            Text("\(day)")
                         }
-                    } label: {
-                        GaryxFormMenuValueLabel(value: "\(draft.monthDay)")
                     }
                 }
             }

@@ -176,6 +176,7 @@ struct GaryxBotAccountForm: View {
     @State private var workspaceMode = "local"
     @State private var configValues: [String: GaryxJSONValue] = [:]
     @State private var errorText: String?
+    @State private var showsAgentPicker = false
 
     private var isEditing: Bool { account != nil }
 
@@ -292,8 +293,13 @@ struct GaryxBotAccountForm: View {
         availablePlugins.first { $0.id.caseInsensitiveCompare(channel) == .orderedSame }
     }
 
+    private var selectedChannelDisplayName: String {
+        guard let plugin = selectedPlugin else { return channel }
+        return plugin.displayName.isEmpty ? plugin.id : plugin.displayName
+    }
+
     private var channelPicker: some View {
-        GaryxFormRow(title: "Channel") {
+        GaryxFormMenuRow(title: "Channel", value: selectedChannelDisplayName) {
             Picker("Channel", selection: $channel) {
                 ForEach(availablePlugins) { plugin in
                     Text(plugin.displayName.isEmpty ? plugin.id : plugin.displayName)
@@ -301,20 +307,25 @@ struct GaryxBotAccountForm: View {
                 }
             }
             .labelsHidden()
-            .disabled(isEditing || availablePlugins.isEmpty)
-            .pickerStyle(.menu)
-            .tint(.secondary)
+            .pickerStyle(.inline)
         }
+        .disabled(isEditing || availablePlugins.isEmpty)
     }
 
     private var agentPicker: some View {
-        GaryxFormRow(title: "Agent") {
+        GaryxFormRow(
+            title: "Agent",
+            onTap: model.agentTargets.isEmpty ? nil : { showsAgentPicker = true }
+        ) {
             if model.agentTargets.isEmpty {
                 Text(model.agentTargetsPlaceholderText)
                     .font(GaryxFont.callout())
                     .foregroundStyle(.secondary)
             } else {
-                GaryxAgentTargetPickerControl(selectedAgentTargetId: $agentId)
+                GaryxAgentTargetPickerControl(
+                    selectedAgentTargetId: $agentId,
+                    isPresented: $showsAgentPicker
+                )
             }
         }
     }
@@ -485,7 +496,7 @@ private struct GaryxBotConfigFieldEditor: View {
                 .labelsHidden()
             }
         } else if !field.enumValues.isEmpty {
-            GaryxFormRow(title: field.label) {
+            GaryxFormMenuRow(title: field.label, value: garyxBotStringValue(value)) {
                 Picker(field.label, selection: Binding(
                     get: { garyxBotStringValue(value) },
                     set: { value = .string($0) }
@@ -495,8 +506,7 @@ private struct GaryxBotConfigFieldEditor: View {
                     }
                 }
                 .labelsHidden()
-                .pickerStyle(.menu)
-                .tint(.secondary)
+                .pickerStyle(.inline)
             }
         } else {
             textEntry

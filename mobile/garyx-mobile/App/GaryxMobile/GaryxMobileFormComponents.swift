@@ -147,6 +147,11 @@ struct GaryxFormRow<Content: View>: View {
     let required: Bool
     let valuePlacement: GaryxFormValuePlacement
     let verticalAlignment: VerticalAlignment
+    /// When set, the whole row becomes a tap target that runs `onTap` — used for
+    /// navigation / present rows so the dead title + spacer area is hittable
+    /// (D10). When `nil`, the layout is byte-for-byte unchanged, keeping the five
+    /// subclass wrappers (read-only / text / secure / text-area) regression-free.
+    let onTap: (() -> Void)?
     let content: Content
 
     init(
@@ -154,16 +159,31 @@ struct GaryxFormRow<Content: View>: View {
         required: Bool = false,
         valuePlacement: GaryxFormValuePlacement = .trailing,
         verticalAlignment: VerticalAlignment = .center,
+        onTap: (() -> Void)? = nil,
         @ViewBuilder content: () -> Content
     ) {
         self.title = title
         self.required = required
         self.valuePlacement = valuePlacement
         self.verticalAlignment = verticalAlignment
+        self.onTap = onTap
         self.content = content()
     }
 
     var body: some View {
+        if let onTap {
+            Button(action: onTap) {
+                rowLayout
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        } else {
+            rowLayout
+        }
+    }
+
+    @ViewBuilder
+    private var rowLayout: some View {
         switch valuePlacement {
         case .trailing:
             trailingRow
@@ -289,6 +309,10 @@ struct GaryxFormTextFieldRow: View {
     /// Long values like gateway URLs wrap onto extra lines instead of
     /// truncating, keeping the field name on the left.
     var wrapsValue = false
+    /// Tapping the label / spacer focuses the field so the row is not a dead
+    /// zone (D10). The field keeps its own tap handling for caret placement, so
+    /// text rows are focus-on-tap, never wrapped in a `Button`.
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         GaryxFormRow(title: title, valuePlacement: valuePlacement) {
@@ -304,6 +328,7 @@ struct GaryxFormTextFieldRow: View {
                     .autocorrectionDisabled(autocorrectionDisabled)
                     .keyboardType(keyboardType)
                     .lineLimit(1...3)
+                    .focused($isFocused)
             } else {
                 TextField(placeholder, text: $text)
                     .textContentType(textContentType)
@@ -311,7 +336,13 @@ struct GaryxFormTextFieldRow: View {
                     .autocorrectionDisabled(autocorrectionDisabled)
                     .keyboardType(keyboardType)
                     .lineLimit(1)
+                    .focused($isFocused)
             }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard !isReadOnly else { return }
+            isFocused = true
         }
     }
 
@@ -329,6 +360,9 @@ struct GaryxFormSecureFieldRow: View {
     var textContentType: UITextContentType?
     var autocapitalization: TextInputAutocapitalization?
     var autocorrectionDisabled = false
+    /// Tap-to-focus on the label / spacer (D10); the field keeps its own tap
+    /// handling, so secure rows are never wrapped in a `Button`.
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         GaryxFormRow(title: title, valuePlacement: valuePlacement) {
@@ -337,7 +371,10 @@ struct GaryxFormSecureFieldRow: View {
                 .textInputAutocapitalization(autocapitalization)
                 .autocorrectionDisabled(autocorrectionDisabled)
                 .lineLimit(1)
+                .focused($isFocused)
         }
+        .contentShape(Rectangle())
+        .onTapGesture { isFocused = true }
     }
 }
 
@@ -625,6 +662,64 @@ struct GaryxFormSelectionRow: View {
 
     private var isPlaceholder: Bool {
         value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
+/// A form row whose entire width is the label of a `Menu` (D10). A `Menu` cannot
+/// be nested inside an outer `Button`, so the correct full-row fix for menu rows
+/// is to make the whole row the menu label, replacing the dead-click
+/// `GaryxFormRow { Menu { … } }` anti-pattern. `menuContent` is the menu body
+/// (buttons or an inline `Picker`); `valueLabel` is the trailing value shown in
+/// the row.
+struct GaryxFormMenuRow<MenuContent: View, ValueLabel: View>: View {
+    let title: String
+    let required: Bool
+    let menuContent: MenuContent
+    let valueLabel: ValueLabel
+
+    init(
+        title: String,
+        required: Bool = false,
+        @ViewBuilder menuContent: () -> MenuContent,
+        @ViewBuilder valueLabel: () -> ValueLabel
+    ) {
+        self.title = title
+        self.required = required
+        self.menuContent = menuContent()
+        self.valueLabel = valueLabel()
+    }
+
+    var body: some View {
+        Menu {
+            menuContent
+        } label: {
+            HStack(spacing: 12) {
+                GaryxFormFieldTitle(title: title, required: required)
+                    .frame(minWidth: 116, maxWidth: 166, alignment: .leading)
+                    .layoutPriority(2)
+                Spacer(minLength: 8)
+                valueLabel
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .layoutPriority(0)
+            }
+            .padding(.horizontal, 16)
+            .frame(minHeight: 52)
+            .contentShape(Rectangle())
+        }
+    }
+}
+
+extension GaryxFormMenuRow where ValueLabel == GaryxFormMenuValueLabel {
+    /// Convenience for the common "single value + chevron" trailing label.
+    init(
+        title: String,
+        value: String,
+        required: Bool = false,
+        @ViewBuilder menuContent: () -> MenuContent
+    ) {
+        self.init(title: title, required: required, menuContent: menuContent) {
+            GaryxFormMenuValueLabel(value: value)
+        }
     }
 }
 
