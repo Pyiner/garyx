@@ -1406,6 +1406,12 @@ export function AgentsHubPanel({
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" sideOffset={4}>
                             {!agent.builtIn ? (
+                              <DropdownMenuItem onSelect={() => { openEditAgentDialog(agent); }}>
+                                <Pencil aria-hidden />
+                                {t('Edit')}
+                              </DropdownMenuItem>
+                            ) : null}
+                            {!agent.builtIn ? (
                               <DropdownMenuItem onSelect={() => { onOpenMemory?.(agent); }}>
                                 <Database aria-hidden />
                                 {t('Memory')}
@@ -1413,7 +1419,7 @@ export function AgentsHubPanel({
                             ) : null}
                             <DropdownMenuItem onSelect={() => { openCreateTeamDialog(agent.agentId); }}>
                               <Users aria-hidden />
-                              {t('Team')}
+                              {t('Create Team')}
                             </DropdownMenuItem>
                             {!agent.builtIn ? (
                               <DropdownMenuItem
