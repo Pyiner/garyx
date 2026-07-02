@@ -1,16 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  IconBolt,
-  IconCheck,
-  IconDatabase,
-  IconPlus,
-  IconRobot,
-  IconSearch,
-  IconSparkles,
-  IconUpload,
-  IconUsersGroup,
-  IconX,
-} from '@tabler/icons-react';
 
 import type {
   CreateCustomAgentInput,
@@ -26,7 +14,7 @@ import type {
   UpdateTeamInput,
 } from '@shared/contracts';
 
-import { Trash } from 'lucide-react';
+import { Bot, Check, Database, Plus, Search as SearchIcon, Sparkles, Trash, Upload as UploadIcon, Users, X, Zap } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -1286,7 +1274,7 @@ export function AgentsHubPanel({
               onClick={showingAgents ? openCreateAgentDialog : () => openCreateTeamDialog()}
               type="button"
             >
-              <IconPlus aria-hidden size={15} stroke={2} />
+              <Plus aria-hidden size={15} strokeWidth={2} />
               {showingAgents ? t('New Agent') : t('New Team')}
             </button>
           </div>
@@ -1331,7 +1319,7 @@ export function AgentsHubPanel({
 
         <div className="agents-hub-controls">
           <div className="agents-hub-search">
-            <IconSearch aria-hidden size={16} stroke={1.8} />
+            <SearchIcon aria-hidden size={16} strokeWidth={1.8} />
             <Input
               className="agents-hub-search-input"
               onChange={(event) => {
@@ -1657,7 +1645,7 @@ export function AgentsHubPanel({
                     type="button"
                     variant="outline"
                   >
-                    <IconUpload aria-hidden size={15} stroke={1.8} />
+                    <UploadIcon aria-hidden size={15} strokeWidth={1.8} />
                     {t('Upload avatar')}
                   </Button>
                   <Button
@@ -1669,7 +1657,7 @@ export function AgentsHubPanel({
                     type="button"
                     variant="outline"
                   >
-                    <IconSparkles aria-hidden size={15} stroke={1.8} />
+                    <Sparkles aria-hidden size={15} strokeWidth={1.8} />
                     {avatarGenerating ? t('Generating...') : t('Generate avatar')}
                   </Button>
                   {agentDraft.avatarDataUrl ? (
@@ -2064,7 +2052,7 @@ export function AgentsHubPanel({
                     type="button"
                     variant="outline"
                   >
-                    <IconDatabase aria-hidden size={15} stroke={1.8} />
+                    <Database aria-hidden size={15} strokeWidth={1.8} />
                     {t('Memory')}
                   </Button>
                 ) : null}
@@ -2204,7 +2192,7 @@ export function AgentsHubPanel({
                     type="button"
                     variant="outline"
                   >
-                    <IconUpload aria-hidden size={15} stroke={1.8} />
+                    <UploadIcon aria-hidden size={15} strokeWidth={1.8} />
                     {t('Upload avatar')}
                   </Button>
                   <Button
@@ -2216,7 +2204,7 @@ export function AgentsHubPanel({
                     type="button"
                     variant="outline"
                   >
-                    <IconSparkles aria-hidden size={15} stroke={1.8} />
+                    <Sparkles aria-hidden size={15} strokeWidth={1.8} />
                     {avatarGenerating ? t('Generating...') : t('Generate avatar')}
                   </Button>
                   {teamDraft.avatarDataUrl ? (
@@ -2290,8 +2278,8 @@ export function AgentsHubPanel({
                           </div>
                           <span className={`team-builder-toggle-btn ${selected ? 'checked' : ''}`}>
                             {selected
-                              ? <IconCheck aria-hidden size={14} stroke={2.5} />
-                              : <IconPlus aria-hidden size={14} stroke={2} />}
+                              ? <Check aria-hidden size={14} strokeWidth={2.5} />
+                              : <Plus aria-hidden size={14} strokeWidth={2} />}
                           </span>
                         </button>
                       );
@@ -2348,7 +2336,7 @@ export function AgentsHubPanel({
                               title={t('Remove')}
                               type="button"
                             >
-                              <IconX aria-hidden size={14} stroke={2} />
+                              <X aria-hidden size={14} strokeWidth={2} />
                             </button>
                           </div>
                         </div>

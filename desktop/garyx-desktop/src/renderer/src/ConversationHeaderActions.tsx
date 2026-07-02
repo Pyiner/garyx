@@ -1,4 +1,4 @@
-import { IconPlugConnected } from '@tabler/icons-react';
+import { Plug } from 'lucide-react';
 
 import {
   ConversationTeamMembers,
@@ -31,7 +31,7 @@ type ConversationHeaderActionsProps = {
 };
 
 function QueueIcon({ className }: { className?: string }) {
-  return <IconPlugConnected aria-hidden className={className || 'icon'} size={14} stroke={1.6} />;
+  return <Plug aria-hidden className={className || 'icon'} size={14} strokeWidth={1.6} />;
 }
 
 function DirectoryIcon() {

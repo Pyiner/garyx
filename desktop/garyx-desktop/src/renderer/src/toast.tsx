@@ -1,4 +1,4 @@
-import { IconAlertCircle, IconCheck, IconInfoCircle, IconX } from '@tabler/icons-react';
+import { Check, CircleAlert, Info, X } from 'lucide-react';
 import { useI18n } from './i18n';
 
 export type ToastTone = 'success' | 'error' | 'info';
@@ -17,11 +17,11 @@ type ToastViewportProps = {
 function ToastIcon({ tone }: { tone: ToastTone }) {
   switch (tone) {
     case 'success':
-      return <IconCheck size={16} stroke={2} />;
+      return <Check size={16} strokeWidth={2} />;
     case 'error':
-      return <IconAlertCircle size={16} stroke={2} />;
+      return <CircleAlert size={16} strokeWidth={2} />;
     default:
-      return <IconInfoCircle size={16} stroke={2} />;
+      return <Info size={16} strokeWidth={2} />;
   }
 }
 
@@ -53,7 +53,7 @@ export function ToastViewport({ onDismiss, toasts }: ToastViewportProps) {
             }}
             type="button"
           >
-            <IconX size={14} stroke={2} />
+            <X size={14} strokeWidth={2} />
           </button>
         </div>
       ))}

@@ -1,12 +1,5 @@
 import { useEffect, useId, useMemo, useState } from 'react';
-import { ArrowLeft, Check, ChevronDown, ChevronRight, Folder, FolderOpen } from 'lucide-react';
-import {
-  IconCheck,
-  IconCircleMinus,
-  IconFolder,
-  IconPlus,
-  IconSearch,
-} from '@tabler/icons-react';
+import { ArrowLeft, Check, Check as CheckIcon, ChevronDown, ChevronRight, CircleMinus, Folder, Folder as FolderIcon, FolderOpen, Plus, Search as SearchIcon } from 'lucide-react';
 
 import type { DesktopLocalDirectoryEntry, DesktopWorkspace } from '@shared/contracts';
 
@@ -356,7 +349,7 @@ export function WorkspaceSelectDialog({
           <DialogTitle>{title || t('Choose workspace')}</DialogTitle>
         </DialogHeader>
         <div className="workspace-picker-search">
-          <IconSearch aria-hidden size={15} stroke={1.7} />
+          <SearchIcon aria-hidden size={15} strokeWidth={1.7} />
           <Input
             autoFocus
             onChange={(event) => setQuery(event.target.value)}
@@ -375,14 +368,14 @@ export function WorkspaceSelectDialog({
               }}
               type="button"
             >
-              <IconCircleMinus aria-hidden size={16} stroke={1.7} />
+              <CircleMinus aria-hidden size={16} strokeWidth={1.7} />
               <span className="workspace-picker-name">{t('No workspace')}</span>
               {selectedKey ? null : (
-                <IconCheck
+                <CheckIcon
                   aria-hidden
                   className="workspace-picker-check"
                   size={15}
-                  stroke={2}
+                  strokeWidth={2}
                 />
               )}
             </button>
@@ -405,7 +398,7 @@ export function WorkspaceSelectDialog({
                 }}
                 type="button"
               >
-                <IconFolder aria-hidden size={16} stroke={1.7} />
+                <FolderIcon aria-hidden size={16} strokeWidth={1.7} />
                 <span className="workspace-picker-name">
                   {workspace.available && workspace.path
                     ? workspace.name
@@ -413,11 +406,11 @@ export function WorkspaceSelectDialog({
                 </span>
                 <span className="workspace-picker-path">{workspace.path}</span>
                 {isSelected ? (
-                  <IconCheck
+                  <CheckIcon
                     aria-hidden
                     className="workspace-picker-check"
                     size={15}
-                    stroke={2}
+                    strokeWidth={2}
                   />
                 ) : null}
               </button>
@@ -438,7 +431,7 @@ export function WorkspaceSelectDialog({
               }}
               type="button"
             >
-              <IconPlus aria-hidden size={15} stroke={1.8} />
+              <Plus aria-hidden size={15} strokeWidth={1.8} />
               <span className="workspace-picker-name">
                 {addWorkspaceBusy
                   ? t('Opening folder…')

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { IconUsersGroup } from '@tabler/icons-react';
+import { Users } from 'lucide-react';
 
 import { AgentAvatar } from './app-shell/components/AgentAvatar';
 import { useI18n, type Translate } from './i18n';
@@ -103,7 +103,7 @@ export function ConversationTeamMembers({
           <div className="conversation-team-members-panel-header">
             <div className="conversation-team-members-panel-title">
               <div className="conversation-team-members-panel-eyebrow">
-                <IconUsersGroup aria-hidden size={14} stroke={1.8} />
+                <Users aria-hidden size={14} strokeWidth={1.8} />
                 <span>{t('Team')}</span>
                 <span aria-hidden="true">•</span>
                 <span>{countLabel}</span>

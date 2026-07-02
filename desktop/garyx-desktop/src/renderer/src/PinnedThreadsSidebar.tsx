@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { IconPin } from '@tabler/icons-react';
-import { Archive } from 'lucide-react';
+import { Archive, Pin } from 'lucide-react';
 
 import type { DesktopThreadSummary } from '@shared/contracts';
 
@@ -113,7 +112,7 @@ export function PinnedThreadsSidebar({
                 title={t('Unpin thread')}
                 type="button"
               >
-                <IconPin aria-hidden className="pinned-thread-icon" size={15} stroke={1.55} />
+                <Pin aria-hidden className="pinned-thread-icon" size={15} strokeWidth={1.55} />
               </button>
               <button
                 aria-label={
