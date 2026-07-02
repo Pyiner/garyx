@@ -322,6 +322,10 @@ public struct GaryxUsageGaugeModel: Equatable, Sendable {
     /// SF Symbol resolved through the shared provider presentation helper.
     public var symbolName: String?
     public var fallbackInitials: String
+    /// Stale readings dim their gauge in the Quota hero (design §4); the
+    /// widget conveys freshness through its snapshot "updated … ago" label
+    /// instead and ignores this flag.
+    public var stale: Bool
 
     public init(
         providerId: String,
@@ -332,7 +336,8 @@ public struct GaryxUsageGaugeModel: Equatable, Sendable {
         level: GaryxUsageLevel,
         available: Bool,
         symbolName: String?,
-        fallbackInitials: String
+        fallbackInitials: String,
+        stale: Bool = false
     ) {
         self.providerId = providerId
         self.title = title
@@ -343,6 +348,7 @@ public struct GaryxUsageGaugeModel: Equatable, Sendable {
         self.available = available
         self.symbolName = symbolName
         self.fallbackInitials = fallbackInitials
+        self.stale = stale
     }
 
     public static func make(from provider: GaryxProviderUsage, now: Date = Date()) -> GaryxUsageGaugeModel {
@@ -358,7 +364,8 @@ public struct GaryxUsageGaugeModel: Equatable, Sendable {
                 level: .unavailable,
                 available: false,
                 symbolName: presentation.symbolName,
-                fallbackInitials: presentation.fallbackInitials
+                fallbackInitials: presentation.fallbackInitials,
+                stale: provider.stale
             )
         }
         let remaining = weekly.remainingPercent.clamped(to: 0...100)
@@ -372,7 +379,8 @@ public struct GaryxUsageGaugeModel: Equatable, Sendable {
             level: level(forRemaining: remaining),
             available: true,
             symbolName: presentation.symbolName,
-            fallbackInitials: presentation.fallbackInitials
+            fallbackInitials: presentation.fallbackInitials,
+            stale: provider.stale
         )
     }
 
@@ -403,6 +411,70 @@ public struct GaryxUsageGaugeModel: Equatable, Sendable {
         GaryxCodingUsageWidgetConstants.widgetProviderIds.compactMap { id in
             usage.provider(id: id).map { GaryxUsageGaugeModel.make(from: $0, now: now) }
         }
+    }
+
+    /// Gauge models for the provider-page Quota hero (design §6.4/D8): one
+    /// gauge per metered provider in fixed order, keeping a "No data"
+    /// placeholder for providers missing from the response so the hero holds
+    /// stable columns as the widget deep-link landing.
+    public static func heroModels(
+        from usage: GaryxCodingUsage?,
+        now: Date = Date()
+    ) -> [GaryxUsageGaugeModel] {
+        GaryxCodingUsageWidgetConstants.heroProviderIds.map { id in
+            guard let provider = usage?.provider(id: id) else {
+                return heroPlaceholder(providerId: id)
+            }
+            return heroModel(from: provider, now: now)
+        }
+    }
+
+    /// Like `make`, but a provider that reports only per-model quota buckets
+    /// (Antigravity) gauges its tightest bucket instead of reading "No data"
+    /// (design §4.2 compact aggregation); weekly-window providers are
+    /// unchanged.
+    public static func heroModel(from provider: GaryxProviderUsage, now: Date = Date()) -> GaryxUsageGaugeModel {
+        guard provider.available, provider.weekly == nil,
+              let tightest = provider.models.min(by: { $0.remainingPercent < $1.remainingPercent }) else {
+            return make(from: provider, now: now)
+        }
+        let presentation = GaryxProviderPresentation.make(providerType: provider.id)
+        let remaining = tightest.remainingPercent.clamped(to: 0...100)
+        let detail = provider.stale
+            ? "stale data"
+            : resetText(
+                resetsAt: tightest.resetsAt,
+                resetAfterSeconds: tightest.resetAfterSeconds,
+                fallback: "tightest model",
+                now: now
+            )
+        return GaryxUsageGaugeModel(
+            providerId: provider.id,
+            title: provider.name,
+            fillFraction: remaining / 100,
+            remainingText: "\(Int(remaining.rounded()))%",
+            detailText: detail,
+            level: level(forRemaining: remaining),
+            available: true,
+            symbolName: presentation.symbolName,
+            fallbackInitials: presentation.fallbackInitials,
+            stale: provider.stale
+        )
+    }
+
+    private static func heroPlaceholder(providerId: String) -> GaryxUsageGaugeModel {
+        let presentation = GaryxProviderPresentation.make(providerType: providerId)
+        return GaryxUsageGaugeModel(
+            providerId: providerId,
+            title: presentation.displayName,
+            fillFraction: 0,
+            remainingText: "—",
+            detailText: "No data",
+            level: .unavailable,
+            available: false,
+            symbolName: presentation.symbolName,
+            fallbackInitials: presentation.fallbackInitials
+        )
     }
 
     static func level(forRemaining remaining: Double) -> GaryxUsageLevel {
@@ -750,7 +822,26 @@ public enum GaryxCodingUsageWidgetConstants {
     /// Provider ids exposed by the gateway, in display order.
     public static let claudeCodeProviderId = "claude_code"
     public static let codexProviderId = "codex"
+    public static let antigravityProviderId = "antigravity"
+    /// The widget stays Claude + Codex only (design D7).
     public static let widgetProviderIds = [claudeCodeProviderId, codexProviderId]
+    /// The in-app Quota hero shows all three metered providers (design D8).
+    public static let heroProviderIds = [claudeCodeProviderId, codexProviderId, antigravityProviderId]
+}
+
+/// Deep link for the whole "Garyx Quota" widget (design §8/D7): opens the
+/// provider settings page, whose top is the Quota hero. The widget target
+/// compiles this file but not the full `GaryxMobileRouteLink` builder, so —
+/// like `GaryxMobileThreadLink` — this mirrors the canonical route URL; a Core
+/// test pins it to `GaryxMobileRouteLink.make(.settings(.provider))`.
+public enum GaryxMobileProviderSettingsLink {
+    public static func make() -> URL? {
+        var components = URLComponents()
+        components.scheme = "garyx"
+        components.host = "mobile"
+        components.path = "/settings/provider"
+        return components.url
+    }
 }
 
 extension Comparable {

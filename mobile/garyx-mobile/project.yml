@@ -37,6 +37,10 @@ targets:
     sources:
       - path: App/GaryxMobile
       - path: Sources/GaryxMobileCore
+      # Shared speedometer gauge (widget visual reused by the provider-page
+      # Quota hero); the file lives in the widget tree and is compiled into
+      # both targets.
+      - path: Widget/GaryxRecentThreadsWidget/GaryxUsageGaugeView.swift
     dependencies:
       - target: GaryxRecentThreadsWidget
         embed: true

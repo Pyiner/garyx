@@ -1,10 +1,12 @@
 import Foundation
 import SwiftUI
+import WidgetKit
 
-// Model-provider settings surfaces: the provider list (with the shared §4
-// usage visualization inline) and the provider detail sheet with sectioned
-// editing. Business rules (patch shape, env-key map, usage display models)
-// live in GaryxMobileCore; these views dumb-render Core models.
+// Model-provider settings surfaces: the provider list (topped by the Quota
+// hero, with the shared §4 usage visualization inline) and the provider
+// detail sheet with sectioned editing. Business rules (patch shape, env-key
+// map, usage display models) live in GaryxMobileCore; these views dumb-render
+// Core models.
 
 struct GaryxSettingsProviderContent: View {
     @EnvironmentObject private var model: GaryxMobileModel
@@ -12,6 +14,11 @@ struct GaryxSettingsProviderContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            GaryxSectionBlock(title: "Quota") {
+                GaryxCompactListGroup {
+                    GaryxProviderQuotaHero(usage: model.codingUsage)
+                }
+            }
             GaryxSectionBlock(title: "Model Providers") {
                 GaryxCompactListGroup {
                     let providers = GaryxModelProviderDefaults.providers
@@ -156,6 +163,61 @@ struct GaryxProviderModelsRow: View {
             return catalog == nil ? "Loading metadata" : "Provider metadata"
         }
         return parts.joined(separator: " · ")
+    }
+}
+
+// MARK: - Quota hero (design §6.4/D8)
+
+private extension GaryxCodingUsageMetrics {
+    /// Hero sizing: the widget's medium-family gauge visual, tightened so
+    /// three columns fit the provider page width.
+    static var providerQuotaHero: GaryxCodingUsageMetrics {
+        var metrics = GaryxCodingUsageMetrics(family: .systemMedium)
+        metrics.gaugeSpacing = 14
+        metrics.gaugeLineWidth = 9
+        metrics.gaugeValueSize = 22
+        metrics.gaugeIconSize = 11
+        metrics.gaugeLabelSpacing = 4
+        metrics.gaugeMaxWidth = 88
+        metrics.titleSize = 12
+        metrics.detailSize = 10
+        return metrics
+    }
+}
+
+/// The widget deep-link landing at the top of the provider list: a horizontal
+/// row of quota gauges for the three metered providers, rendering the shared
+/// widget speedometer from Core hero models. Stale gauges dim and surface the
+/// "updated Nm ago" freshness caption (design §4).
+private struct GaryxProviderQuotaHero: View {
+    let usage: GaryxCodingUsage?
+
+    private var gauges: [GaryxUsageGaugeModel] {
+        GaryxUsageGaugeModel.heroModels(from: usage)
+    }
+
+    private var staleUpdatedText: String? {
+        guard gauges.contains(where: \.stale) else { return nil }
+        return GaryxUsageGaugeModel.usageUpdatedText(refreshedAt: usage?.refreshedAt)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: GaryxCodingUsageMetrics.providerQuotaHero.gaugeSpacing) {
+                ForEach(gauges, id: \.providerId) { gauge in
+                    GaryxUsageSpeedometer(model: gauge, metrics: .providerQuotaHero)
+                        .opacity(gauge.stale ? 0.55 : 1)
+                }
+            }
+            if let staleUpdatedText {
+                Text(staleUpdatedText)
+                    .font(GaryxFont.caption())
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 10)
     }
 }
 
