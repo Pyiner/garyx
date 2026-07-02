@@ -41,6 +41,35 @@ fn test_build_command_streaming() {
 }
 
 #[test]
+fn test_build_command_overlays_configured_env() {
+    // Deterministic proof that agent-configured env reaches the spawned
+    // `claude` CLI Command, without starting a real process.
+    let mut env = HashMap::new();
+    env.insert("TEST_AGENT_ENV_KEY".to_string(), "test-value".to_string());
+    let opts = ClaudeAgentOptions {
+        env,
+        ..Default::default()
+    };
+    let transport = SubprocessTransport::new(opts, true);
+    let cmd = transport.build_command(None);
+    let std_cmd = cmd.as_std();
+
+    let has_env = std_cmd.get_envs().any(|(key, value)| {
+        key == std::ffi::OsStr::new("TEST_AGENT_ENV_KEY")
+            && value == Some(std::ffi::OsStr::new("test-value"))
+    });
+    assert!(has_env, "configured agent env var must reach the spawn Command");
+
+    // The env value must not leak into program/args (no-proactive-leak).
+    assert!(!std_cmd.get_program().to_string_lossy().contains("test-value"));
+    assert!(
+        std_cmd
+            .get_args()
+            .all(|arg| !arg.to_string_lossy().contains("test-value"))
+    );
+}
+
+#[test]
 fn test_build_command_inserts_cli_prefix_args_before_sdk_args() {
     let opts = ClaudeAgentOptions {
         cli_prefix_args: vec!["__cctty".into()],

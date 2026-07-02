@@ -131,6 +131,22 @@ fn resolve_runtime_env(
     env
 }
 
+/// Build the native `exec_command` shell subprocess (`zsh -lc <cmd>`), overlaying
+/// the agent's resolved runtime env on top of the inherited process environment.
+///
+/// Extracted so the env overlay can be asserted headlessly. The env is applied
+/// via `Command::envs` (never formatted into args and never logged), keeping
+/// agent-configured secrets out of process logs.
+fn build_exec_command(cmd: &str, workspace_dir: &Path, env: &HashMap<String, String>) -> Command {
+    let mut command = Command::new("zsh");
+    command
+        .arg("-lc")
+        .arg(cmd)
+        .current_dir(workspace_dir)
+        .envs(env);
+    command
+}
+
 fn resolve_workspace_dir(config: &GaryxNativeConfig, options: &ProviderRunOptions) -> PathBuf {
     options
         .workspace_dir
@@ -765,7 +781,7 @@ impl GaryxNativeProvider {
         metadata: &HashMap<String, Value>,
     ) -> (Value, bool) {
         let result = match call.name.as_str() {
-            "exec_command" => self.exec_command_tool(call, workspace_dir).await,
+            "exec_command" => self.exec_command_tool(call, workspace_dir, metadata).await,
             "read_file" => self.read_file_tool(call, workspace_dir).await,
             "write_file" => self.write_file_tool(call, workspace_dir).await,
             "list_dir" => self.list_dir_tool(call, workspace_dir).await,
@@ -785,6 +801,7 @@ impl GaryxNativeProvider {
         &self,
         call: &NativeToolCall,
         workspace_dir: &Path,
+        metadata: &HashMap<String, Value>,
     ) -> Result<Value, String> {
         let cmd = call
             .arguments
@@ -800,13 +817,14 @@ impl GaryxNativeProvider {
             .filter(|value| *value > 0.0)
             .unwrap_or(60.0)
             .min(900.0);
+        // Overlay the agent's resolved runtime env (config.env + task/desktop
+        // env) on top of the inherited process environment, matching the
+        // capability-tool path (`run_capability_tool`) so the agent's env
+        // reaches every place the native loop executes code.
+        let runtime_env = resolve_runtime_env(&self.config, metadata);
         let output = tokio::time::timeout(
             Duration::from_secs_f64(timeout),
-            Command::new("zsh")
-                .arg("-lc")
-                .arg(cmd)
-                .current_dir(workspace_dir)
-                .output(),
+            build_exec_command(cmd, workspace_dir, &runtime_env).output(),
         )
         .await
         .map_err(|_| format!("command timed out after {timeout:.0}s"))?

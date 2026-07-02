@@ -965,3 +965,37 @@ for line in sys.stdin:
         .expect("assistant message");
     assert_eq!(assistant.text.as_deref(), Some("好的，开始。"));
 }
+
+#[test]
+fn resolve_runtime_gemini_env_overlays_agent_config_env() {
+    // config.env is the agent's configured env; it must appear in the map that
+    // is fed verbatim to `command.envs(...)` on the very next line of the spawn.
+    let mut config = GeminiCliConfig::default();
+    config
+        .env
+        .insert("TEST_AGENT_ENV_KEY".to_owned(), "test-value".to_owned());
+    // Agent env must NOT be able to override GARYX identity vars (task_cli_env
+    // overlays config.env, so identity wins).
+    config
+        .env
+        .insert("GARYX_THREAD_ID".to_owned(), "agent-should-not-win".to_owned());
+    let metadata = HashMap::from([
+        ("agent_id".to_owned(), json!("gemini")),
+        (
+            "runtime_context".to_owned(),
+            json!({ "thread_id": "thread::gemini-task" }),
+        ),
+    ]);
+
+    let env = resolve_runtime_gemini_env(&config, &metadata);
+
+    assert_eq!(
+        env.get("TEST_AGENT_ENV_KEY").map(String::as_str),
+        Some("test-value")
+    );
+    assert_eq!(
+        env.get("GARYX_THREAD_ID").map(String::as_str),
+        Some("thread::gemini-task"),
+        "task identity env must overlay (win over) agent config env"
+    );
+}

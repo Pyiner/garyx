@@ -145,6 +145,25 @@ impl CodexTransport {
         *self.server_request_handler.lock().await = handler;
     }
 
+    /// Build the `codex app-server` spawn command, overlaying the configured
+    /// environment on top of the inherited process environment.
+    ///
+    /// Extracted from `start()` so the env overlay can be asserted in a headless
+    /// test without spawning. Never logs the env map (see `start()`), keeping
+    /// agent secrets out of process logs.
+    fn build_command(&self) -> Command {
+        let mut cmd = Command::new(&self.codex_bin);
+        cmd.args(["app-server", "--listen", "stdio://"]);
+        cmd.args(&self.extra_args);
+        if !self.env.is_empty() {
+            cmd.envs(&self.env);
+        }
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        cmd
+    }
+
     // -----------------------------------------------------------------------
     // Lifecycle
     // -----------------------------------------------------------------------
@@ -161,15 +180,7 @@ impl CodexTransport {
             return Err(CodexError::Fatal("already initialized".to_owned()));
         }
 
-        let mut cmd = Command::new(&self.codex_bin);
-        cmd.args(["app-server", "--listen", "stdio://"]);
-        cmd.args(&self.extra_args);
-        if !self.env.is_empty() {
-            cmd.envs(&self.env);
-        }
-        cmd.stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        let mut cmd = self.build_command();
 
         tracing::info!(codex_bin = %self.codex_bin, "spawning codex app-server");
 
