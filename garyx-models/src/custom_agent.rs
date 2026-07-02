@@ -243,5 +243,20 @@ pub fn is_builtin_provider_agent_id(agent_id: &str) -> bool {
     )
 }
 
+/// Whether a string is a valid POSIX-style environment variable name
+/// (`^[A-Za-z_][A-Za-z0-9_]*$`).
+///
+/// Shared with the CLI to validate `--env KEY=VALUE` keys before sending an
+/// agent env map to the gateway. Empty keys and keys containing `=`, spaces, or
+/// other punctuation are rejected.
+pub fn is_valid_env_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    match chars.next() {
+        Some(first) if first == '_' || first.is_ascii_alphabetic() => {}
+        _ => return false,
+    }
+    chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
+}
+
 #[cfg(test)]
 mod tests;

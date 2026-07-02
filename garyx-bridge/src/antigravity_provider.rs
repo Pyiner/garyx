@@ -1344,6 +1344,38 @@ mod tests {
     }
 
     #[test]
+    fn resolve_runtime_antigravity_env_overlays_agent_config_env() {
+        // config.env (agent-configured env) must appear in the map fed verbatim
+        // to `command.envs(...)`, and GARYX identity must overlay/win over it.
+        let mut config = AntigravityCliConfig::default();
+        config
+            .env
+            .insert("TEST_AGENT_ENV_KEY".to_owned(), "test-value".to_owned());
+        config
+            .env
+            .insert("GARYX_THREAD_ID".to_owned(), "agent-should-not-win".to_owned());
+        let metadata = HashMap::from([
+            ("agent_id".to_owned(), serde_json::json!("antigravity")),
+            (
+                "runtime_context".to_owned(),
+                serde_json::json!({ "thread_id": "thread::antigravity-task" }),
+            ),
+        ]);
+
+        let env = resolve_runtime_antigravity_env(&config, &metadata);
+
+        assert_eq!(
+            env.get("TEST_AGENT_ENV_KEY").map(String::as_str),
+            Some("test-value")
+        );
+        assert_eq!(
+            env.get("GARYX_THREAD_ID").map(String::as_str),
+            Some("thread::antigravity-task"),
+            "task identity env must overlay (win over) agent config env"
+        );
+    }
+
+    #[test]
     fn transcript_mapping_emits_delta_tool_use_and_tool_result() {
         let rows = parse_jsonl_rows(
             r#"{"type":"USER_INPUT","step_index":1,"content":"hello"}

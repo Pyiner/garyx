@@ -558,3 +558,37 @@ async fn test_roundtrip_with_cat_process() {
     reader_handle.abort();
     let _ = child.kill().await;
 }
+
+#[test]
+fn build_command_overlays_configured_env_on_spawn() {
+    // Deterministic proof that agent-configured env reaches the spawned
+    // `codex app-server` Command, without starting a real process.
+    let mut env = HashMap::new();
+    env.insert("TEST_AGENT_ENV_KEY".to_owned(), "test-value".to_owned());
+    let transport = CodexTransport::new("codex", &[]).with_env(env);
+
+    let cmd = transport.build_command();
+    let std_cmd = cmd.as_std();
+    let has_env = std_cmd.get_envs().any(|(key, value)| {
+        key == std::ffi::OsStr::new("TEST_AGENT_ENV_KEY")
+            && value == Some(std::ffi::OsStr::new("test-value"))
+    });
+    assert!(has_env, "configured env var must be present on the spawn Command");
+
+    // The env value must not leak into program/args (no-proactive-leak).
+    assert!(!std_cmd.get_program().to_string_lossy().contains("test-value"));
+    assert!(
+        std_cmd
+            .get_args()
+            .all(|arg| !arg.to_string_lossy().contains("test-value"))
+    );
+}
+
+#[test]
+fn build_command_without_env_leaves_command_env_untouched() {
+    // With no configured env, the Command carries no explicit overrides
+    // (it still inherits the parent process environment at spawn time).
+    let transport = CodexTransport::new("codex", &[]);
+    let cmd = transport.build_command();
+    assert_eq!(cmd.as_std().get_envs().count(), 0);
+}

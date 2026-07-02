@@ -114,6 +114,7 @@ struct GaryxAgentDetailCard: View {
                 workspace: .constant(displayAgent.defaultWorkspaceDir),
                 avatarDataUrl: .constant(displayAgent.avatarDataUrl),
                 systemPrompt: .constant(displayAgent.systemPrompt),
+                env: .constant(.empty),
                 builtIn: displayAgent.builtIn,
                 workspacePaths: model.userWorkspacePaths
             )
@@ -253,6 +254,7 @@ private struct GaryxAgentFormContent: View {
     @Binding var workspace: String
     @Binding var avatarDataUrl: String
     @Binding var systemPrompt: String
+    @Binding var env: GaryxAgentEnvDraft
     var builtIn = false
     let workspacePaths: [String]
     var onGenerate: ((String) async -> String?)?
@@ -367,12 +369,113 @@ private struct GaryxAgentFormContent: View {
                     )
                 }
             }
+
+            if mode.isEditable {
+                GaryxAgentEnvEditorSection(draft: $env)
+            }
         }
     }
 
     private var modelDisplayValue: String {
         let trimmed = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "Provider default" : modelName
+    }
+}
+
+private struct GaryxAgentEnvEditorSection: View {
+    @Binding var draft: GaryxAgentEnvDraft
+    @State private var revealedRowIds: Set<UUID> = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            GaryxFormGroupedSection(title: "Environment Variables") {
+                if draft.rows.isEmpty {
+                    Text("No environment variables")
+                        .font(GaryxFont.body())
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                } else {
+                    ForEach(Array(draft.rows.enumerated()), id: \.element.id) { index, row in
+                        if index > 0 {
+                            Divider().padding(.leading, 16)
+                        }
+                        envRow(row)
+                    }
+                }
+                Divider().padding(.leading, 16)
+                Button {
+                    draft.addRow()
+                } label: {
+                    Label("Add Variable", systemImage: "plus")
+                        .font(GaryxFont.body())
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                }
+                .buttonStyle(.plain)
+            }
+
+            Text("Environment variables are passed to this agent’s provider runs. They may appear in command output or logs—avoid secrets you can’t rotate.")
+                .font(GaryxFont.caption())
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 14)
+        }
+    }
+
+    private func envRow(_ row: GaryxAgentEnvRow) -> some View {
+        HStack(spacing: 10) {
+            TextField("KEY", text: keyBinding(row))
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled(true)
+                .font(GaryxFont.body())
+                .frame(maxWidth: 150, alignment: .leading)
+            Group {
+                if revealedRowIds.contains(row.id) {
+                    TextField("value", text: valueBinding(row))
+                } else {
+                    SecureField("value", text: valueBinding(row))
+                }
+            }
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled(true)
+            .font(GaryxFont.body())
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Button {
+                toggleReveal(row.id)
+            } label: {
+                Image(systemName: revealedRowIds.contains(row.id) ? "eye.slash" : "eye")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
+            Button(role: .destructive) {
+                revealedRowIds.remove(row.id)
+                draft.removeRow(id: row.id)
+            } label: {
+                Image(systemName: "trash")
+                    .foregroundStyle(GaryxTheme.danger)
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+
+    private func keyBinding(_ row: GaryxAgentEnvRow) -> Binding<String> {
+        Binding(get: { row.key }, set: { draft.updateKey(id: row.id, $0) })
+    }
+
+    private func valueBinding(_ row: GaryxAgentEnvRow) -> Binding<String> {
+        Binding(get: { row.value }, set: { draft.updateValue(id: row.id, $0) })
+    }
+
+    private func toggleReveal(_ id: UUID) {
+        if revealedRowIds.contains(id) {
+            revealedRowIds.remove(id)
+        } else {
+            revealedRowIds.insert(id)
+        }
     }
 }
 
@@ -503,6 +606,7 @@ struct GaryxCreateAgentCard: View {
     @State private var workspace = ""
     @State private var avatarDataUrl = ""
     @State private var systemPrompt = ""
+    @State private var envDraft = GaryxAgentEnvDraft.empty
 
     var body: some View {
         GaryxFormSheet(
@@ -520,6 +624,7 @@ struct GaryxCreateAgentCard: View {
                 workspace: $workspace,
                 avatarDataUrl: $avatarDataUrl,
                 systemPrompt: $systemPrompt,
+                env: $envDraft,
                 workspacePaths: model.userWorkspacePaths
             ) { stylePrompt in
                 await model.generateAvatar(
@@ -538,6 +643,7 @@ struct GaryxCreateAgentCard: View {
         !agentId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !providerType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !envDraft.hasInvalidKey
     }
 
     private func createAgent() async {
@@ -550,7 +656,8 @@ struct GaryxCreateAgentCard: View {
             modelReasoningEffort: modelReasoningEffort,
             workspace: workspace,
             avatarDataUrl: avatarDataUrl,
-            systemPrompt: systemPrompt
+            systemPrompt: systemPrompt,
+            env: envDraft.currentEnvMap()
         ) {
             dismiss()
         }
@@ -629,6 +736,7 @@ private struct GaryxAgentEditSheet: View {
     @State private var workspace = ""
     @State private var avatarDataUrl = ""
     @State private var systemPrompt = ""
+    @State private var envDraft = GaryxAgentEnvDraft.empty
 
     var body: some View {
         GaryxFormSheet(
@@ -646,6 +754,7 @@ private struct GaryxAgentEditSheet: View {
                 workspace: $workspace,
                 avatarDataUrl: $avatarDataUrl,
                 systemPrompt: $systemPrompt,
+                env: $envDraft,
                 builtIn: agent.builtIn,
                 workspacePaths: model.userWorkspacePaths
             ) { stylePrompt in
@@ -659,13 +768,17 @@ private struct GaryxAgentEditSheet: View {
                 model.lastError = message
             }
         }
-        .onAppear(perform: fillDraft)
+        .onAppear {
+            fillDraft()
+            Task { await seedAuthoritativeEnv() }
+        }
     }
 
     private var canSaveAgent: Bool {
         !agentId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !providerType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !envDraft.hasInvalidKey
     }
 
     private func fillDraft() {
@@ -677,6 +790,14 @@ private struct GaryxAgentEditSheet: View {
         workspace = agent.defaultWorkspaceDir
         avatarDataUrl = agent.avatarDataUrl
         systemPrompt = agent.systemPrompt
+        envDraft = .seeded(from: agent.providerEnv)
+    }
+
+    // Re-seed env from the authoritative agent (a restored cache snapshot strips
+    // provider_env). `reseedIfPristine` leaves in-progress user edits untouched.
+    private func seedAuthoritativeEnv() async {
+        let env = await model.authoritativeProviderEnv(for: agent)
+        envDraft.reseedIfPristine(from: env)
     }
 
     private func saveAgent() async {
@@ -690,7 +811,8 @@ private struct GaryxAgentEditSheet: View {
             modelReasoningEffort: modelReasoningEffort,
             workspace: workspace,
             avatarDataUrl: avatarDataUrl,
-            systemPrompt: systemPrompt
+            systemPrompt: systemPrompt,
+            envIntent: envDraft.resolvedIntent()
         ) else { return }
         dismiss()
         onSaved?(updated)

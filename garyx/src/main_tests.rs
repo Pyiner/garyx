@@ -1578,6 +1578,9 @@ fn parse_agent_create() {
                     model_service_tier,
                     provider_auth_source,
                     provider_api_key,
+                    env: _,
+                    unset_env: _,
+                    env_clear: _,
                     default_workspace_dir,
                     system_prompt,
                     json,
@@ -1710,6 +1713,9 @@ fn parse_agent_update_without_model() {
                     model_service_tier,
                     provider_auth_source,
                     provider_api_key,
+                    env: _,
+                    unset_env: _,
+                    env_clear: _,
                     default_workspace_dir,
                     system_prompt,
                     json,
@@ -1756,6 +1762,46 @@ fn parse_agent_update_clear_model() {
         }) => {
             assert_eq!(model, None);
             assert!(clear_model);
+        }
+        _ => panic!("expected Agent::Update"),
+    }
+}
+
+#[test]
+fn parse_agent_update_env_flags() {
+    let cli = Cli::parse_from([
+        "garyx",
+        "agent",
+        "update",
+        "--agent-id",
+        "spec-review",
+        "--display-name",
+        "Spec Review",
+        "--provider",
+        "claude_code",
+        "--env",
+        "FOO=bar",
+        "--env",
+        "BAZ=qux",
+        "--unset-env",
+        "OLD",
+        "--env-clear",
+        "--system-prompt",
+        "Prompt.",
+    ]);
+    match cli.command {
+        Some(Commands::Agent {
+            action:
+                AgentAction::Update {
+                    env,
+                    unset_env,
+                    env_clear,
+                    ..
+                },
+        }) => {
+            assert_eq!(env, vec!["FOO=bar".to_owned(), "BAZ=qux".to_owned()]);
+            assert_eq!(unset_env, vec!["OLD".to_owned()]);
+            assert!(env_clear);
         }
         _ => panic!("expected Agent::Update"),
     }
@@ -1821,6 +1867,9 @@ fn parse_agent_upsert() {
                     model_service_tier,
                     provider_auth_source,
                     provider_api_key,
+                    env: _,
+                    unset_env: _,
+                    env_clear: _,
                     default_workspace_dir,
                     system_prompt,
                     json,
