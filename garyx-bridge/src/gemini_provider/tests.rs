@@ -965,3 +965,126 @@ for line in sys.stdin:
         .expect("assistant message");
     assert_eq!(assistant.text.as_deref(), Some("好的，开始。"));
 }
+
+#[tokio::test]
+async fn run_streaming_keeps_started_run_model_when_defaults_reload_mid_run() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace_dir = temp.path().join("workspace");
+    fs::create_dir_all(&workspace_dir).expect("create workspace");
+    let started_path = temp.path().join("fake-started");
+    let release_path = temp.path().join("fake-release");
+    let model_path = temp.path().join("fake-set-model");
+    let script_path = temp.path().join("fake-gemini-mid-run-reload.py");
+    let script = format!(
+        r#"#!/usr/bin/env python3
+import json
+import os
+import sys
+import time
+
+if "--version" in sys.argv:
+    print("0.0-test")
+    sys.exit(0)
+
+STARTED = {started:?}
+RELEASE = {release:?}
+MODEL = {model:?}
+
+for line in sys.stdin:
+    req = json.loads(line)
+    rid = req["id"]
+    method = req["method"]
+    params = req.get("params", {{}})
+
+    if method == "initialize":
+        # Signal the test that this run is live, then hold the ACP handshake
+        # until the test has hot-reloaded the provider defaults.
+        open(STARTED, "w").write("1")
+        for _ in range(500):
+            if os.path.exists(RELEASE):
+                break
+            time.sleep(0.01)
+        print(json.dumps({{"jsonrpc": "2.0", "id": rid, "result": {{"protocolVersion": 1}}}}), flush=True)
+    elif method == "session/new":
+        print(json.dumps({{"jsonrpc": "2.0", "id": rid, "result": {{"sessionId": "mid-run-session"}}}}), flush=True)
+    elif method == "session/set_mode":
+        print(json.dumps({{"jsonrpc": "2.0", "id": rid, "result": {{}}}}), flush=True)
+    elif method == "session/set_model":
+        open(MODEL, "w").write(params.get("modelId", ""))
+        print(json.dumps({{"jsonrpc": "2.0", "id": rid, "result": {{}}}}), flush=True)
+    elif method == "session/prompt":
+        print(json.dumps({{
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {{
+                "sessionId": params.get("sessionId"),
+                "update": {{
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {{"text": "OK"}}
+                }}
+            }}
+        }}), flush=True)
+        print(json.dumps({{"jsonrpc": "2.0", "id": rid, "result": {{}}}}), flush=True)
+        break
+    else:
+        print(json.dumps({{"jsonrpc": "2.0", "id": rid, "error": {{"message": "unsupported"}}}}), flush=True)
+        break
+"#,
+        started = started_path.to_string_lossy(),
+        release = release_path.to_string_lossy(),
+        model = model_path.to_string_lossy(),
+    );
+    fs::write(&script_path, script).expect("write script");
+    let mut permissions = fs::metadata(&script_path).expect("metadata").permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&script_path, permissions).expect("chmod script");
+
+    let mut provider = GeminiCliProvider::new(GeminiCliConfig {
+        gemini_bin: script_path.to_string_lossy().to_string(),
+        workspace_dir: Some(workspace_dir.to_string_lossy().to_string()),
+        timeout_seconds: 15.0,
+        model: "gemini-old".to_owned(),
+        ..Default::default()
+    });
+    provider.ready = true;
+
+    let callback: Box<dyn Fn(StreamEvent) + Send + Sync> = Box::new(|_| {});
+    let run_options = ProviderRunOptions {
+        thread_id: "thread::gemini::mid-run-reload".to_owned(),
+        message: "hello".to_owned(),
+        workspace_dir: Some(workspace_dir.to_string_lossy().to_string()),
+        images: None,
+        metadata: HashMap::new(),
+    };
+    let run_future = provider.run_streaming(&run_options, callback);
+
+    let orchestrate = async {
+        // Wait until the fake CLI is live (the run is spawned and registered).
+        for _ in 0..500 {
+            if started_path.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(started_path.exists(), "fake gemini CLI never started");
+        // Hot-reload the provider defaults while the run is in flight.
+        provider.update_model_defaults(&ProviderModelDefaults {
+            model: "gemini-new".to_owned(),
+            default_model: "gemini-new".to_owned(),
+            model_reasoning_effort: String::new(),
+            model_service_tier: String::new(),
+        });
+        fs::write(&release_path, "1").expect("write release signal");
+    };
+
+    let (result, ()) = tokio::join!(run_future, orchestrate);
+    let result = result.expect("run should succeed");
+    assert!(result.success, "run failed: {:?}", result.error);
+
+    let sent_model = fs::read_to_string(&model_path).expect("fake CLI recorded set_model");
+    assert_eq!(
+        sent_model, "gemini-old",
+        "an already-started run must keep the model captured at run start, \
+         not pick up defaults reloaded mid-run"
+    );
+}

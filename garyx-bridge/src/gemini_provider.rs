@@ -1072,6 +1072,10 @@ impl GeminiCliProvider {
         session_id: Option<&str>,
         on_chunk: &StreamCallback,
     ) -> Result<ProviderRunResult, BridgeError> {
+        // Snapshot the hot-reloadable defaults once at run start: a defaults
+        // reload arriving after the run is registered must not change the
+        // model this already-started run sends to the ACP session.
+        let effective_config = self.effective_config();
         let workspace_dir = resolve_workspace_dir(&self.config, options);
         let cwd = workspace_dir.as_ref().ok_or_else(|| {
             BridgeError::RunFailed("gemini workspace directory is unavailable".to_owned())
@@ -1244,7 +1248,7 @@ impl GeminiCliProvider {
             }
         }
 
-        if let Some(model_id) = model_id(&self.effective_config(), &options.metadata) {
+        if let Some(model_id) = model_id(&effective_config, &options.metadata) {
             send_json_request(
                 &mut stdin,
                 next_request_id,

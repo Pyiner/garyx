@@ -1779,6 +1779,9 @@ impl AgentLoopProvider for ClaudeCliProvider {
             .insert(options.thread_id.clone(), options.message.clone());
 
         let run_id = resolve_run_id(&options.metadata);
+        // Capture the requested model before the run starts so a concurrent
+        // defaults reload cannot relabel this run's fallback actual_model.
+        let requested_model = resolve_requested_model(&self.effective_config(), &options.metadata);
 
         let start = Instant::now();
 
@@ -1888,9 +1891,7 @@ impl AgentLoopProvider for ClaudeCliProvider {
                 response: result.response_text,
                 session_messages: result.session_messages,
                 sdk_session_id: non_empty_session_id(Some(result.session_id.as_str())),
-                actual_model: result.actual_model.or_else(|| {
-                    resolve_requested_model(&self.effective_config(), &options.metadata)
-                }),
+                actual_model: result.actual_model.or_else(|| requested_model.clone()),
                 thread_title: result.thread_title,
                 success: !result.is_error,
                 error: if result.is_error {
