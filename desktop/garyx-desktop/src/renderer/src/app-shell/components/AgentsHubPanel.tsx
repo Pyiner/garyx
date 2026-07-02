@@ -26,6 +26,14 @@ import type {
   UpdateTeamInput,
 } from '@shared/contracts';
 
+import { Database, Pencil, Trash, Users } from 'lucide-react';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '../../components/ui/dropdown-menu';
+import { MoreDotsIcon } from '../icons';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Checkbox } from '../../components/ui/checkbox';
@@ -1385,34 +1393,40 @@ export function AgentsHubPanel({
                         >
                           {t('Chat')}
                         </Button>
-                        {!agent.builtIn ? (
-                          <Button
-                            onClick={(e) => { stopEvent(e); onOpenMemory?.(agent); }}
-                            size="sm"
-                            variant="ghost"
-                          >
-                            <IconDatabase aria-hidden size={15} stroke={1.8} />
-                            {t('Memory')}
-                          </Button>
-                        ) : null}
-                        <Button
-                          onClick={(e) => { stopEvent(e); openCreateTeamDialog(agent.agentId); }}
-                          size="sm"
-                          variant="ghost"
-                        >
-                          {t('Team')}
-                        </Button>
-                        {!agent.builtIn ? (
-                          <Button
-                            disabled={saving}
-                            onClick={(e) => { stopEvent(e); void handleDeleteAgent(agent); }}
-                            size="sm"
-                            variant="ghost"
-                            className="text-destructive"
-                          >
-                            {t('Delete')}
-                          </Button>
-                        ) : null}
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <button
+                              aria-label={t('More actions for {name}', { name: agent.displayName || agent.agentId })}
+                              className="bot-table-action-button"
+                              onClick={stopEvent}
+                              type="button"
+                            >
+                              <MoreDotsIcon size={14} />
+                            </button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" sideOffset={4}>
+                            {!agent.builtIn ? (
+                              <DropdownMenuItem onSelect={() => { onOpenMemory?.(agent); }}>
+                                <Database aria-hidden />
+                                {t('Memory')}
+                              </DropdownMenuItem>
+                            ) : null}
+                            <DropdownMenuItem onSelect={() => { openCreateTeamDialog(agent.agentId); }}>
+                              <Users aria-hidden />
+                              {t('Team')}
+                            </DropdownMenuItem>
+                            {!agent.builtIn ? (
+                              <DropdownMenuItem
+                                disabled={saving}
+                                onSelect={() => { void handleDeleteAgent(agent); }}
+                                variant="destructive"
+                              >
+                                <Trash aria-hidden />
+                                {t('Delete')}
+                              </DropdownMenuItem>
+                            ) : null}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -1465,22 +1479,32 @@ export function AgentsHubPanel({
                           >
                             {t('Chat')}
                           </Button>
-                          <Button
-                            onClick={(e) => { stopEvent(e); openEditTeamDialog(team); }}
-                            size="sm"
-                            variant="ghost"
-                          >
-                            {t('Edit')}
-                          </Button>
-                          <Button
-                            disabled={saving}
-                            onClick={(e) => { stopEvent(e); void handleDeleteTeam(team); }}
-                            size="sm"
-                            variant="ghost"
-                            className="text-destructive"
-                          >
-                            {t('Delete')}
-                          </Button>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button
+                                aria-label={t('More actions for {name}', { name: team.displayName || team.teamId })}
+                                className="bot-table-action-button"
+                                onClick={stopEvent}
+                                type="button"
+                              >
+                                <MoreDotsIcon size={14} />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" sideOffset={4}>
+                              <DropdownMenuItem onSelect={() => { openEditTeamDialog(team); }}>
+                                <Pencil aria-hidden />
+                                {t('Edit')}
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                disabled={saving}
+                                onSelect={() => { void handleDeleteTeam(team); }}
+                                variant="destructive"
+                              >
+                                <Trash aria-hidden />
+                                {t('Delete')}
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         </div>
                       </TableCell>
                     </TableRow>
