@@ -353,12 +353,12 @@
 .bot-endpoint-card.is-focused {
   border-color: color-mix(
     in srgb,
-    var(--color-accent-foreground, #0f6cbd) 40%,
+    var(--color-accent-foreground) 40%,
     transparent
   );
   background: color-mix(
     in srgb,
-    var(--color-accent-foreground, #0f6cbd) 6%,
+    var(--color-accent-foreground) 6%,
     var(--color-token-bg-primary)
   );
 }
@@ -614,12 +614,12 @@
 .bot-console-endpoint.is-focused {
   border-color: color-mix(
     in srgb,
-    var(--color-accent-foreground, #0f6cbd) 40%,
+    var(--color-accent-foreground) 40%,
     transparent
   );
   background: color-mix(
     in srgb,
-    var(--color-accent-foreground, #0f6cbd) 6%,
+    var(--color-accent-foreground) 6%,
     var(--color-token-bg-primary)
   );
 }

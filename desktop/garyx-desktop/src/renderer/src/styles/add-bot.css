@@ -1513,29 +1513,3 @@
   gap: 4px;
 }
 
-.provider-section {
-  padding: 22px 0;
-  border-top: 1px solid var(--color-token-border-light);
-}
-
-.provider-section:first-of-type {
-  border-top: none;
-  padding-top: 4px;
-}
-
-.provider-section-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 12px;
-}
-
-.provider-section-title {
-  margin: 0;
-  color: var(--color-token-text-primary);
-  font-family: var(--message-heading-font);
-  font-size: 17px;
-  font-weight: var(--font-weight-semibold);
-  letter-spacing: -0.005em;
-}

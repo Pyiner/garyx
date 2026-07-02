@@ -29,6 +29,7 @@
 @import "./styles/gateway-status.css";
 @import "./styles/task-forest.css";
 @import "./styles/gateway-panels.css";
+@import "./styles/management.css";
 
 @source "../../../node_modules/streamdown/dist/*.js";
 @source "../../../node_modules/@streamdown/code/dist/*.js";

@@ -1,5 +1,12 @@
 import React from 'react';
-import { Settings2, Trash } from 'lucide-react';
+import { Plus, Settings2, Trash } from 'lucide-react';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { MoreDotsIcon } from '../app-shell/icons';
 
 import type {
   DesktopAutomationSchedule,
@@ -128,9 +135,7 @@ function hasUnread(
 // ---------------------------------------------------------------------------
 
 const PlusIcon = (
-  <svg aria-hidden width="14" height="14" viewBox="0 0 20 20" fill="none">
-    <path d="M9.33496 16.5V10.665H3.5C3.13273 10.665 2.83496 10.3673 2.83496 10C2.83496 9.63273 3.13273 9.33496 3.5 9.33496H9.33496V3.5C9.33496 3.13273 9.63273 2.83496 10 2.83496C10.3673 2.83496 10.665 3.13273 10.665 3.5V9.33496H16.5C16.8673 9.33496 17.165 9.63273 17.165 10C17.165 10.3673 16.8673 10.665 16.5 10.665H10.665V16.5C10.665 16.8673 10.3673 17.165 10 17.165C9.63273 17.165 9.33496 16.8673 9.33496 16.5Z" fill="currentColor"/>
-  </svg>
+  <Plus aria-hidden size={14} />
 );
 
 // ---------------------------------------------------------------------------
@@ -171,12 +176,17 @@ export function AutomationListPage({
   const { t } = useI18n();
 
   return (
-    <div className="codex-section" style={{ padding: '20px 20px 0', height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
-      <div className="codex-section-header">
-        <span className="codex-section-title">{t('Automations')}</span>
-        <button className="codex-section-action" onClick={onCreateAutomation} type="button">
-          {PlusIcon} {t('New')}
-        </button>
+    <div className="codex-section" style={{ padding: '6px 20px 0', height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
+      <div className="mgmt-page-header">
+        <div className="mgmt-page-title-block">
+          <h1 className="mgmt-page-title">{t('Automations')}</h1>
+          <p className="mgmt-page-subtitle">{t('{count} total', { count: automations.length })}</p>
+        </div>
+        <div className="mgmt-page-actions">
+          <button className="mgmt-primary-button" onClick={onCreateAutomation} type="button">
+            {PlusIcon} {t('New')}
+          </button>
+        </div>
       </div>
 
       {!automations.length ? (
@@ -265,15 +275,27 @@ export function AutomationListPage({
                   >
                     {t('Thread')}
                   </button>
-                  <button
-                    className="codex-icon-button codex-icon-button-danger"
-                    disabled={isDeleting}
-                    onClick={() => onDelete(automation)}
-                    title={t('Delete')}
-                    type="button"
-                  >
-                    <Trash aria-hidden />
-                  </button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        aria-label={t('More actions for {name}', { name: automation.label })}
+                        className="bot-table-action-button"
+                        type="button"
+                      >
+                        <MoreDotsIcon size={14} />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" sideOffset={4}>
+                      <DropdownMenuItem
+                        disabled={isDeleting}
+                        onSelect={() => onDelete(automation)}
+                        variant="destructive"
+                      >
+                        <Trash aria-hidden />
+                        {t('Delete')}
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
               </div>
             );

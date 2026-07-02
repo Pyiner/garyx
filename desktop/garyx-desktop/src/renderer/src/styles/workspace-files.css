@@ -40,8 +40,6 @@
 }
 
 .workspace-file-node:focus-visible {
-  outline: 2px solid
-    color-mix(in oklab, var(--color-token-accent) 40%, white 60%);
   outline-offset: 0;
 }
 
@@ -371,7 +369,7 @@
 }
 
 .workspace-file-markdown a {
-  color: var(--color-accent-foreground, #0f6cbd);
+  color: var(--color-accent-foreground);
   text-decoration: none;
 }
 

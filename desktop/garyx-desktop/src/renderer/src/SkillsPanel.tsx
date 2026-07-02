@@ -5,7 +5,14 @@ import {
   IconFolderPlus,
   IconX,
 } from '@tabler/icons-react';
-import { Settings, Trash } from 'lucide-react';
+import { Plus, Settings, Trash } from 'lucide-react';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { MoreDotsIcon } from './app-shell/icons';
 
 import type {
   CreateSkillInput,
@@ -162,12 +169,6 @@ function skillPreviewMessage(document: DesktopSkillFileDocument | null): string 
 /* ------------------------------------------------------------------ */
 /* SVG icons                                                          */
 /* ------------------------------------------------------------------ */
-
-const PlusIcon = (
-  <svg aria-hidden width="14" height="14" viewBox="0 0 20 20" fill="none">
-    <path d="M9.33496 16.5V10.665H3.5C3.13273 10.665 2.83496 10.3673 2.83496 10C2.83496 9.63273 3.13273 9.33496 3.5 9.33496H9.33496V3.5C9.33496 3.13273 9.63273 2.83496 10 2.83496C10.3673 2.83496 10.665 3.13273 10.665 3.5V9.33496H16.5C16.8673 9.33496 17.165 9.63273 17.165 10C17.165 10.3673 16.8673 10.665 16.5 10.665H10.665V16.5C10.665 16.8673 10.3673 17.165 10 17.165C9.63273 17.165 9.33496 16.8673 9.33496 16.5Z" fill="currentColor"/>
-  </svg>
-);
 
 export function SkillsPanel({ onToast }: SkillsPanelProps) {
   const { t } = useI18n();
@@ -685,12 +686,12 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
     <>
       <div className="skills-panel-shell">
         <div className="codex-section">
-          <div className="codex-section-header skills-panel-header">
-            <div className="skills-panel-header-copy">
-              <span className="codex-section-title">{t('Skills')}</span>
-              <span className="codex-section-note">{t('{count} total', { count: skills.length })}</span>
+          <div className="mgmt-page-header skills-panel-header">
+            <div className="mgmt-page-title-block">
+              <h1 className="mgmt-page-title">{t('Skills')}</h1>
+              <p className="mgmt-page-subtitle">{t('{count} total', { count: skills.length })}</p>
             </div>
-            <div className="skills-panel-header-actions">
+            <div className="mgmt-page-actions">
               <button
                 className="codex-section-action"
                 disabled={loading || creating || Boolean(mutatingSkillId) || Boolean(editorBusy)}
@@ -702,12 +703,12 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                 {loading ? t('Refreshing...') : t('Refresh')}
               </button>
               <button
-                className="codex-section-action"
+                className="mgmt-primary-button"
                 disabled={creating || Boolean(mutatingSkillId) || Boolean(editorBusy)}
                 onClick={openCreateDialog}
                 type="button"
               >
-                {PlusIcon} {t('New Skill')}
+                <Plus aria-hidden size={14} /> {t('New Skill')}
               </button>
             </div>
           </div>
@@ -751,18 +752,30 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                     >
                       <Settings />
                     </button>
-                    <button
-                      aria-label={t('Delete')}
-                      className="codex-icon-button skills-icon-button skills-icon-button-danger"
-                      disabled={busy || creating || Boolean(editorBusy)}
-                      onClick={() => {
-                        void handleDeleteSkill(skill);
-                      }}
-                      title={t('Delete')}
-                      type="button"
-                    >
-                      <Trash aria-hidden />
-                    </button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          aria-label={t('More actions for {name}', { name: skill.name })}
+                          className="bot-table-action-button"
+                          disabled={busy || creating || Boolean(editorBusy)}
+                          type="button"
+                        >
+                          <MoreDotsIcon size={14} />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" sideOffset={4}>
+                        <DropdownMenuItem
+                          disabled={busy || creating || Boolean(editorBusy)}
+                          onSelect={() => {
+                            void handleDeleteSkill(skill);
+                          }}
+                          variant="destructive"
+                        >
+                          <Trash aria-hidden />
+                          {t('Delete')}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                     <button
                       aria-label={skill.enabled ? t('Disable skill') : t('Enable skill')}
                       aria-pressed={skill.enabled}

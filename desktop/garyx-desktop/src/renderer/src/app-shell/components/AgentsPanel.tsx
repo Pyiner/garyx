@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Plus } from 'lucide-react';
 
 import type {
   CreateCustomAgentInput,
@@ -179,9 +180,7 @@ function serviceTiersWithCurrent(
 }
 
 const plusIcon = (
-  <svg aria-hidden width="14" height="14" viewBox="0 0 20 20" fill="none">
-    <path d="M9.33496 16.5V10.665H3.5C3.13273 10.665 2.83496 10.3673 2.83496 10C2.83496 9.63273 3.13273 9.33496 3.5 9.33496H9.33496V3.5C9.33496 3.13273 9.63273 2.83496 10 2.83496C10.3673 2.83496 10.665 3.13273 10.665 3.5V9.33496H16.5C16.8673 9.33496 17.165 9.63273 17.165 10C17.165 10.3673 16.8673 10.665 16.5 10.665H10.665V16.5C10.665 16.8673 10.3673 17.165 10 17.165C9.63273 17.165 9.33496 16.8673 9.33496 16.5Z" fill="currentColor"/>
-  </svg>
+  <Plus aria-hidden size={14} />
 );
 
 export function AgentsPanel({ onToast }: AgentsPanelProps) {

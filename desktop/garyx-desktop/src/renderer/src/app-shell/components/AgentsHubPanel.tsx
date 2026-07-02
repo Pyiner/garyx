@@ -26,6 +26,14 @@ import type {
   UpdateTeamInput,
 } from '@shared/contracts';
 
+import { Trash } from 'lucide-react';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '../../components/ui/dropdown-menu';
+import { MoreDotsIcon } from '../icons';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Checkbox } from '../../components/ui/checkbox';
@@ -1262,6 +1270,28 @@ export function AgentsHubPanel({
 
   return (
     <div className="agents-hub">
+      <div className="mgmt-page-header agents-hub-page-header">
+        <div className="mgmt-page-title-block">
+          <h1 className="mgmt-page-title">{t('Agents')}</h1>
+          <p className="mgmt-page-subtitle">
+            {t('{count} total', {
+              count: showingAgents ? agents.length : showingTeams ? teams.length : workflows.length,
+            })}
+          </p>
+        </div>
+        {!showingWorkflows ? (
+          <div className="mgmt-page-actions">
+            <button
+              className="mgmt-primary-button"
+              onClick={showingAgents ? openCreateAgentDialog : () => openCreateTeamDialog()}
+              type="button"
+            >
+              <IconPlus aria-hidden size={15} stroke={2} />
+              {showingAgents ? t('New Agent') : t('New Team')}
+            </button>
+          </div>
+        ) : null}
+      </div>
       <div className="agents-hub-hero">
         <div className="agents-hub-tabs" role="tablist" aria-label={t("Agent registry sections")}>
           <button
@@ -1312,15 +1342,6 @@ export function AgentsHubPanel({
             />
           </div>
 
-          {!showingWorkflows ? (
-            <Button
-              onClick={showingAgents ? openCreateAgentDialog : () => openCreateTeamDialog()}
-              size="sm"
-            >
-              <IconPlus aria-hidden size={15} stroke={2} />
-              {showingAgents ? t('New Agent') : t('New Team')}
-            </Button>
-          ) : null}
         </div>
       </div>
 
@@ -1387,11 +1408,19 @@ export function AgentsHubPanel({
                         </Button>
                         {!agent.builtIn ? (
                           <Button
+                            onClick={(e) => { stopEvent(e); openEditAgentDialog(agent); }}
+                            size="sm"
+                            variant="ghost"
+                          >
+                            {t('Edit')}
+                          </Button>
+                        ) : null}
+                        {!agent.builtIn ? (
+                          <Button
                             onClick={(e) => { stopEvent(e); onOpenMemory?.(agent); }}
                             size="sm"
                             variant="ghost"
                           >
-                            <IconDatabase aria-hidden size={15} stroke={1.8} />
                             {t('Memory')}
                           </Button>
                         ) : null}
@@ -1400,18 +1429,31 @@ export function AgentsHubPanel({
                           size="sm"
                           variant="ghost"
                         >
-                          {t('Team')}
+                          {t('Create Team')}
                         </Button>
                         {!agent.builtIn ? (
-                          <Button
-                            disabled={saving}
-                            onClick={(e) => { stopEvent(e); void handleDeleteAgent(agent); }}
-                            size="sm"
-                            variant="ghost"
-                            className="text-destructive"
-                          >
-                            {t('Delete')}
-                          </Button>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button
+                                aria-label={t('More actions for {name}', { name: agent.displayName || agent.agentId })}
+                                className="bot-table-action-button"
+                                onClick={stopEvent}
+                                type="button"
+                              >
+                                <MoreDotsIcon size={14} />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" sideOffset={4}>
+                              <DropdownMenuItem
+                                disabled={saving}
+                                onSelect={() => { void handleDeleteAgent(agent); }}
+                                variant="destructive"
+                              >
+                                <Trash aria-hidden />
+                                {t('Delete')}
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         ) : null}
                       </div>
                     </TableCell>
@@ -1472,15 +1514,28 @@ export function AgentsHubPanel({
                           >
                             {t('Edit')}
                           </Button>
-                          <Button
-                            disabled={saving}
-                            onClick={(e) => { stopEvent(e); void handleDeleteTeam(team); }}
-                            size="sm"
-                            variant="ghost"
-                            className="text-destructive"
-                          >
-                            {t('Delete')}
-                          </Button>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button
+                                aria-label={t('More actions for {name}', { name: team.displayName || team.teamId })}
+                                className="bot-table-action-button"
+                                onClick={stopEvent}
+                                type="button"
+                              >
+                                <MoreDotsIcon size={14} />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" sideOffset={4}>
+                              <DropdownMenuItem
+                                disabled={saving}
+                                onSelect={() => { void handleDeleteTeam(team); }}
+                                variant="destructive"
+                              >
+                                <Trash aria-hidden />
+                                {t('Delete')}
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         </div>
                       </TableCell>
                     </TableRow>
