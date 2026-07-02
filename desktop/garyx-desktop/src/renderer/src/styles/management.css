@@ -64,3 +64,17 @@
   opacity: 0.45;
   cursor: not-allowed;
 }
+
+/* Management surfaces sit right under the 46px drag strip: collapse the
+   conversation-body padding so the page header aligns with the sidebar top
+   instead of floating below an empty band. */
+.conversation.automation-view .conversation-body,
+.conversation.agents-view .conversation-body,
+.conversation.skills-view .conversation-body {
+  padding-top: 0;
+}
+
+.agents-hub,
+.skills-panel-shell {
+  padding-top: 6px;
+}

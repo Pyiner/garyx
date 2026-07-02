@@ -176,7 +176,7 @@ export function AutomationListPage({
   const { t } = useI18n();
 
   return (
-    <div className="codex-section" style={{ padding: '20px 20px 0', height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
+    <div className="codex-section" style={{ padding: '6px 20px 0', height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
       <div className="mgmt-page-header">
         <div className="mgmt-page-title-block">
           <h1 className="mgmt-page-title">{t('Automations')}</h1>
