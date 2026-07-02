@@ -1299,12 +1299,14 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  justify-content: flex-end;
 }
 
 .command-row-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  white-space: nowrap;
   height: 28px;
   min-height: 28px;
   padding: 0 10px;
