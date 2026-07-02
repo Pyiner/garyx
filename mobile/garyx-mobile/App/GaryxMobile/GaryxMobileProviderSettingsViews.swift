@@ -269,7 +269,9 @@ private struct GaryxProviderUsageInlineBlock: View {
                         Text("Usage")
                             .font(GaryxFont.caption(weight: .semibold))
                             .foregroundStyle(.secondary)
-                        GaryxUsagePillsRow(display: usageDisplay)
+                        // Stale readings must show their freshness (§4): the
+                        // updated-ago caption joins the stale tag inline.
+                        GaryxUsagePillsRow(display: usageDisplay, showsUpdated: usageDisplay.stale)
                     }
                     meters(usageDisplay)
                 }
@@ -333,6 +335,7 @@ struct GaryxModelProviderDefaultsSheet: View {
     /// The authoritative key echoed at open; drives set/blank/keep on save.
     @State private var originalApiKey = ""
     @State private var isHydrated = false
+    @State private var hydrationFailed = false
     @State private var isSaving = false
 
     var body: some View {
@@ -342,6 +345,21 @@ struct GaryxModelProviderDefaultsSheet: View {
             onSave: saveDefaults
         ) {
             VStack(alignment: .leading, spacing: 22) {
+                if hydrationFailed {
+                    VStack(alignment: .leading, spacing: 10) {
+                        GaryxFormErrorText(text: "Couldn't load the current provider settings from the gateway, so editing is disabled to avoid overwriting newer values.")
+                        Button {
+                            Task { await hydrate() }
+                        } label: {
+                            Text("Retry")
+                                .font(GaryxFont.body(weight: .medium))
+                                .padding(.horizontal, 14)
+                        }
+                        .buttonStyle(.bordered)
+                        .padding(.horizontal, 14)
+                    }
+                }
+
                 GaryxFormGroupedSection(title: "Provider") {
                     GaryxFormReadOnlyRow(title: "Name", value: providerPresentation.displayName)
                     Divider().padding(.leading, 16)
@@ -393,13 +411,7 @@ struct GaryxModelProviderDefaultsSheet: View {
                 hostRuntimeSection
             }
         }
-        .task {
-            async let catalogLoad: Void = model.loadProviderModels(providerType: provider.providerType)
-            _ = await model.refreshAuthoritativeGatewaySettings()
-            _ = await catalogLoad
-            fillDraft()
-            isHydrated = true
-        }
+        .task { await hydrate() }
         .onChange(of: modelName) { _, _ in
             reasoningEffort = GaryxThreadModelOverridePresentation.sanitizedReasoningEffort(
                 providerModels: catalog,
@@ -416,16 +428,18 @@ struct GaryxModelProviderDefaultsSheet: View {
         if provider.isNative {
             VStack(alignment: .leading, spacing: 6) {
                 GaryxFormGroupedSection(title: "Authentication") {
-                    if provider.providerType == "gpt" {
-                        GaryxFormMenuRow(title: "Auth", value: authSourceLabel) {
+                    // Every native provider gets the auth-source row (D1). Only
+                    // GPT has a second source (the shared Codex OAuth token);
+                    // Anthropic/Google expose their single API-key source so the
+                    // saved auth_source is always visible, never written silently.
+                    GaryxFormMenuRow(title: "Auth", value: authSourceLabel) {
+                        if provider.providerType == "gpt" {
                             Button("Use GPT token") { selectAuthSource("codex") }
-                            Button("Use API key") { selectAuthSource("api_key") }
                         }
+                        Button("Use API key") { selectAuthSource("api_key") }
                     }
                     if showsApiKeyField {
-                        if provider.providerType == "gpt" {
-                            Divider().padding(.leading, 16)
-                        }
+                        Divider().padding(.leading, 16)
                         GaryxFormTextFieldRow(
                             title: "API key",
                             text: $apiKey,
@@ -435,9 +449,7 @@ struct GaryxModelProviderDefaultsSheet: View {
                             autocorrectionDisabled: true
                         )
                     }
-                    if provider.providerType == "gpt" || showsApiKeyField {
-                        Divider().padding(.leading, 16)
-                    }
+                    Divider().padding(.leading, 16)
                     GaryxFormTextFieldRow(
                         title: "Base URL",
                         text: $baseUrl,
@@ -548,6 +560,22 @@ struct GaryxModelProviderDefaultsSheet: View {
         let fallback = provider.fallbackDefaultModel.trimmingCharacters(in: .whitespacesAndNewlines)
         if !fallback.isEmpty { return "Provider default: \(fallback)" }
         return "Provider default"
+    }
+
+    /// Loads the authoritative settings document before echoing values (D1 /
+    /// §6.2). Hydration gates editing: on failure nothing is echoed and Save
+    /// stays disabled so a stale restored projection can never be written back.
+    private func hydrate() async {
+        async let catalogLoad: Void = model.loadProviderModels(providerType: provider.providerType)
+        let fetched = await model.refreshAuthoritativeGatewaySettings()
+        _ = await catalogLoad
+        if fetched {
+            fillDraft()
+            isHydrated = true
+            hydrationFailed = false
+        } else if !isHydrated {
+            hydrationFailed = true
+        }
     }
 
     private func selectAuthSource(_ source: String) {

@@ -472,4 +472,3 @@ struct GaryxSavedGatewayProfileRow: View {
         }
     }
 }
-
