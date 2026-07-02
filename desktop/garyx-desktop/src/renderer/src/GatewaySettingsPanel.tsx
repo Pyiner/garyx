@@ -2156,20 +2156,19 @@ export function GatewaySettingsPanel({
   // active gateway lives in the sidebar identity bar.
   const connectionPanel = (
     <div className="codex-section">
-      <div className="codex-section-header gateway-profiles-header">
-        <Button
-          className="rounded-xl border-[#e7e7e5] bg-white shadow-none hover:bg-[#f7f7f6]"
+      <div className="codex-section-header">
+        <span className="codex-section-title">{t('Saved Gateways')}</span>
+        <button
+          className="codex-section-action"
           onClick={() => {
             setGatewayDialogProfile(null);
             setGatewayDialogOpen(true);
           }}
-          size="sm"
           type="button"
-          variant="outline"
         >
-          <Plus aria-hidden size={14} strokeWidth={1.8} />
+          <Plus aria-hidden size={14} />
           {t('Add Gateway')}
-        </Button>
+        </button>
       </div>
       <div className="codex-list-card gateway-profiles-card">
         {savedGatewayProfiles.length === 0 ? (
@@ -2214,23 +2213,34 @@ export function GatewaySettingsPanel({
                   <Pencil aria-hidden size={13} strokeWidth={1.8} />
                 </button>
                 {!isCurrent ? (
-                  <button
-                    aria-label={t('Remove')}
-                    className="gateway-profile-delete"
-                    onClick={() => {
-                      if (
-                        window.confirm(
-                          t('Remove {label} from saved gateways?', { label: profile.label }),
-                        )
-                      ) {
-                        void onDeleteGatewayProfile(profile.id);
-                      }
-                    }}
-                    title={t('Remove')}
-                    type="button"
-                  >
-                    <Trash aria-hidden size={13} strokeWidth={1.8} />
-                  </button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        aria-label={t('More actions for {name}', { name: profile.label })}
+                        className="bot-table-action-button"
+                        type="button"
+                      >
+                        <MoreDotsIcon size={14} />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" sideOffset={4}>
+                      <DropdownMenuItem
+                        onSelect={() => {
+                          if (
+                            window.confirm(
+                              t('Remove {label} from saved gateways?', { label: profile.label }),
+                            )
+                          ) {
+                            void onDeleteGatewayProfile(profile.id);
+                          }
+                        }}
+                        variant="destructive"
+                      >
+                        <Trash aria-hidden />
+                        {t('Remove')}
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 ) : null}
               </div>
             );

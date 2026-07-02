@@ -76,6 +76,7 @@ const zhCN: Record<string, string> = {
   'Choose gateway': '选择网关',
   'Switch gateway': '切换网关',
   'Add Gateway': '添加网关',
+  'Saved Gateways': '已保存网关',
   'Edit Gateway': '编辑网关',
   'Saved gateways appear in the sidebar gateway switcher.': '已保存的网关会出现在侧边栏的网关切换器里。',
   'Switch the active gateway from the sidebar gateway bar.': '在侧边栏底部的网关栏切换当前网关。',
