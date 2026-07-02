@@ -12,6 +12,7 @@ import {
   type ReactNode,
 } from "react";
 import { startTransition } from "react";
+import { PanelLeft } from "lucide-react";
 
 import {
   DEFAULT_DESKTOP_SETTINGS,
@@ -1641,6 +1642,24 @@ export function AppShell() {
   );
   const [sideToolsResizing, setSideToolsResizing] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(245);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try {
+      return window.localStorage.getItem("garyx.sidebarCollapsed") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggleSidebarCollapsed = useCallback(() => {
+    setSidebarCollapsed((current) => {
+      const next = !current;
+      try {
+        window.localStorage.setItem("garyx.sidebarCollapsed", next ? "1" : "0");
+      } catch {
+        // Ignore storage failures; collapse state just won't persist.
+      }
+      return next;
+    });
+  }, []);
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [railWidth, setRailWidth] = useState(258);
   const [railResizing, setRailResizing] = useState(false);
@@ -3305,6 +3324,7 @@ export function AppShell() {
   ]);
   const appShellClassName = [
     "app-shell",
+    sidebarCollapsed ? "sidebar-collapsed" : null,
     activeBotConversationGroup ||
     activeWorkspaceThreadGroup ||
     (shouldShowConversationRail && recentThreadsRailOpen)
@@ -10132,11 +10152,21 @@ export function AppShell() {
       className={appShellClassName}
       style={
         {
-          "--spacing-token-sidebar": `${sidebarWidth}px`,
+          "--spacing-token-sidebar": sidebarCollapsed ? "0px" : `${sidebarWidth}px`,
         } as React.CSSProperties
       }
     >
       <ToastViewport onDismiss={dismissToast} toasts={toasts} />
+      <button
+        aria-label={t("Toggle Sidebar")}
+        aria-pressed={sidebarCollapsed}
+        className="sidebar-collapse-toggle"
+        onClick={toggleSidebarCollapsed}
+        title={t("Toggle Sidebar")}
+        type="button"
+      >
+        <PanelLeft aria-hidden size={15} strokeWidth={1.8} />
+      </button>
       <AppLeftRail
         gatewayIdentitySlot={
           <GatewayIdentityBar

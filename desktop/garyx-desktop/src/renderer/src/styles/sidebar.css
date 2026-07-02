@@ -621,3 +621,44 @@
 .workspace-row:hover .sidebar-section-chevron {
   opacity: 1;
 }
+
+/* Sidebar collapse: the toggle lives beside the traffic lights (same spot in
+   both states), above the titlebar drag overlay. */
+.sidebar-collapse-toggle {
+  position: absolute;
+  top: 12px;
+  left: 84px;
+  z-index: 120;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-token-description-foreground);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition:
+    color var(--duration-fast) var(--ease-standard),
+    background var(--duration-fast) var(--ease-standard);
+}
+
+.sidebar-collapse-toggle:hover {
+  background: color-mix(in oklab, var(--color-token-text-primary) 10%, transparent);
+  color: var(--color-token-text-primary);
+}
+
+/* Collapsed: the rail must stay in the grid flow (items are placed by
+   order — display:none would shift .conversation into the 0px column), so
+   hide it visually inside the zero-width track instead. */
+.app-shell.sidebar-collapsed .left-rail {
+  visibility: hidden;
+  pointer-events: none;
+  overflow: hidden;
+  min-width: 0;
+  padding-left: 0;
+  padding-right: 0;
+}
