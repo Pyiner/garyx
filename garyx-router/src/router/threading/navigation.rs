@@ -401,6 +401,27 @@ impl MessageRouter {
         }
     }
 
+    /// Incrementally remove every in-memory index entry pointing at one thread.
+    ///
+    /// Write-path replacement for the full `rebuild_thread_indexes` scan:
+    /// deleting or archiving a thread only needs that thread's own references
+    /// cleared. The full rebuild stays a startup-reconciliation repair and
+    /// must not run on request paths (it stats every known thread on disk).
+    pub fn purge_thread_from_indexes(&mut self, thread_id: &str) {
+        self.clear_thread_references(thread_id);
+        self.thread_nav
+            .endpoint_thread_map
+            .retain(|_, current| current != thread_id);
+    }
+
+    /// Incrementally drop one endpoint's binding and index entries by key.
+    ///
+    /// Write-path companion to [`Self::purge_thread_from_indexes`] for
+    /// endpoint detach flows, replacing the full-index rebuild there.
+    pub fn purge_endpoint_binding(&mut self, endpoint_key: &str) {
+        self.clear_binding_thread_context(endpoint_key);
+    }
+
     pub(crate) fn clear_binding_thread_context(&mut self, binding_context_key: &str) {
         self.thread_nav
             .binding_thread_map

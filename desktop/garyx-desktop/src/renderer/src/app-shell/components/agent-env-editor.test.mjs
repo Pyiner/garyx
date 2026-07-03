@@ -7,8 +7,10 @@ import {
   buildProviderEnvPayload,
   envRowsFromEnvMap,
   envRowsHaveInvalidKey,
+  formatEnvText,
   isNativeModelProvider,
   isValidEnvKey,
+  parseEnvText,
   setApiKeyInRows,
 } from "./agent-env-editor.ts";
 
@@ -90,4 +92,51 @@ test("apiKeyEnvName and isNativeModelProvider cover the native providers", () =>
   assert.equal(apiKeyEnvName("claude_code"), null);
   assert.equal(isNativeModelProvider("gpt"), true);
   assert.equal(isNativeModelProvider("claude_code"), false);
+});
+
+test('formatEnvText emits numeric values verbatim without quotes', () => {
+  const text = formatEnvText([
+    { key: 'CLAUDE_CODE_AUTO_COMPACT_WINDOW', value: '183500' },
+    { key: 'CLAUDE_CODE_ATTRIBUTION_HEADER', value: '0' },
+  ]);
+  assert.equal(
+    text,
+    'CLAUDE_CODE_AUTO_COMPACT_WINDOW=183500\nCLAUDE_CODE_ATTRIBUTION_HEADER=0'
+  );
+});
+
+test('parseEnvText keeps numeric values as-is and strips whole-value quotes', () => {
+  const rows = parseEnvText('A=183500\nB="183500"\nC=plat_tok"en\nD=  spaced  ');
+  assert.deepEqual(rows, [
+    { key: 'A', value: '183500' },
+    { key: 'B', value: '183500' },
+    { key: 'C', value: 'plat_tok"en' },
+    { key: 'D', value: '  spaced' },
+  ]);
+});
+
+test('parseEnvText skips blanks and comments, keeps eq-less lines for the save gate', () => {
+  const rows = parseEnvText('\n# comment\nGOOD=1\nBROKEN_LINE\n');
+  assert.deepEqual(rows, [
+    { key: 'GOOD', value: '1' },
+    { key: 'BROKEN_LINE', value: '' },
+  ]);
+});
+
+test('env text round-trips newline and quote-wrapped values losslessly', () => {
+  const rows = [
+    { key: 'MULTI', value: 'line1\nline2' },
+    { key: 'QUOTED', value: '"already quoted"' },
+    { key: 'EDGE_WS', value: '  padded  ' },
+    { key: 'PLAIN', value: 'https://super-relay.example/v1' },
+  ];
+  const roundTripped = parseEnvText(formatEnvText(rows));
+  assert.deepEqual(roundTripped, rows);
+});
+
+test('parseEnvText then formatEnvText is stable for hand-written text', () => {
+  const text = 'A=1\nB=two words\nC="183500"';
+  const once = formatEnvText(parseEnvText(text));
+  const twice = formatEnvText(parseEnvText(once));
+  assert.equal(twice, once);
 });

@@ -14,13 +14,15 @@ import type {
   UpdateTeamInput,
 } from '@shared/contracts';
 
-import { Bot, Check, Database, Eye, EyeOff, Plus, Search as SearchIcon, Sparkles, Trash, Upload as UploadIcon, Users, X, Zap } from 'lucide-react';
+import { Bot, Check, Database, Plus, Search as SearchIcon, Sparkles, Trash, Upload as UploadIcon, Users, X, Zap } from 'lucide-react';
 import {
   apiKeyValueFromRows,
   buildProviderEnvPayload,
   envRowsFromEnvMap,
   envRowsHaveInvalidKey,
+  formatEnvText,
   isNativeModelProvider,
+  parseEnvText,
   setApiKeyInRows,
 } from './agent-env-editor';
 import {
@@ -511,8 +513,8 @@ export function AgentsHubPanel({
   const [agentDialogMode, setAgentDialogMode] = useState<AgentDialogMode>(null);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [agentDraft, setAgentDraft] = useState<AgentDraft>(() => emptyAgentDraft());
-  const [revealedEnvIndexes, setRevealedEnvIndexes] = useState<Set<number>>(() => new Set());
-  const [revealedViewEnvKeys, setRevealedViewEnvKeys] = useState<Set<string>>(() => new Set());
+  const [envViewMode, setEnvViewMode] = useState<'form' | 'text'>('form');
+  const [envText, setEnvText] = useState('');
   const [agentIdTouched, setAgentIdTouched] = useState(false);
   const [avatarGenerating, setAvatarGenerating] = useState(false);
   const [avatarStyleDialogOpen, setAvatarStyleDialogOpen] = useState(false);
@@ -865,8 +867,8 @@ export function AgentsHubPanel({
     setAgentDialogMode('create');
     setSelectedAgentId(null);
     setAgentDraft(emptyAgentDraft());
-    setRevealedEnvIndexes(new Set());
-    setRevealedViewEnvKeys(new Set());
+    setEnvViewMode('form');
+    setEnvText('');
     setAgentIdTouched(false);
     setAvatarStyleTarget('agent');
     setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
@@ -890,8 +892,8 @@ export function AgentsHubPanel({
       env: envRowsFromEnvMap(agent.providerEnv),
       systemPrompt: agent.systemPrompt,
     });
-    setRevealedEnvIndexes(new Set());
-    setRevealedViewEnvKeys(new Set());
+    setEnvViewMode('form');
+    setEnvText('');
     setAgentIdTouched(true);
     setAvatarStyleTarget('agent');
     setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
@@ -919,8 +921,8 @@ export function AgentsHubPanel({
       env: envRowsFromEnvMap(agent.providerEnv),
       systemPrompt: agent.systemPrompt,
     });
-    setRevealedEnvIndexes(new Set());
-    setRevealedViewEnvKeys(new Set());
+    setEnvViewMode('form');
+    setEnvText('');
     setAgentIdTouched(true);
     setAvatarStyleTarget('agent');
     setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
@@ -1878,7 +1880,7 @@ export function AgentsHubPanel({
                               : 'OPENAI_API_KEY'
                         }
                         spellCheck={false}
-                        type="password"
+                        type="text"
                         value={apiKeyValueFromRows(agentDraft.env, agentDraft.providerType)}
                       />
                       <span className="codex-form-hint">
@@ -1907,97 +1909,133 @@ export function AgentsHubPanel({
               ) : null}
 
               <div className="codex-form-field">
-                <Label className="codex-form-label">{t('Environment Variables')}</Label>
-                {agentDraft.env.map((row, index) => (
-                  <div
-                    key={index}
-                    style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '8px' }}
-                  >
-                    <Input
-                      autoCapitalize="off"
-                      autoComplete="off"
-                      onChange={(event) => {
-                        const nextKey = event.target.value;
-                        setAgentDraft((current) => ({
-                          ...current,
-                          env: current.env.map((entry, entryIndex) =>
-                            entryIndex === index ? { ...entry, key: nextKey } : entry,
-                          ),
-                        }));
-                      }}
-                      placeholder={t('KEY')}
-                      spellCheck={false}
-                      style={{ flex: '0 0 40%' }}
-                      value={row.key}
-                    />
-                    <Input
-                      autoCapitalize="off"
-                      autoComplete="off"
-                      onChange={(event) => {
-                        const nextValue = event.target.value;
-                        setAgentDraft((current) => ({
-                          ...current,
-                          env: current.env.map((entry, entryIndex) =>
-                            entryIndex === index ? { ...entry, value: nextValue } : entry,
-                          ),
-                        }));
-                      }}
-                      placeholder={t('value')}
-                      spellCheck={false}
-                      style={{ flex: 1 }}
-                      type={revealedEnvIndexes.has(index) ? 'text' : 'password'}
-                      value={row.value}
-                    />
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '8px',
+                  }}
+                >
+                  <Label className="codex-form-label">{t('Environment Variables')}</Label>
+                  <div style={{ display: 'flex', gap: '4px' }}>
                     <Button
-                      aria-label={revealedEnvIndexes.has(index) ? t('Hide value') : t('Show value')}
                       onClick={() => {
-                        setRevealedEnvIndexes((current) => {
-                          const next = new Set(current);
-                          if (next.has(index)) {
-                            next.delete(index);
-                          } else {
-                            next.add(index);
-                          }
-                          return next;
-                        });
+                        setEnvViewMode('form');
                       }}
-                      size="icon"
+                      size="sm"
                       type="button"
-                      variant="ghost"
+                      variant={envViewMode === 'form' ? 'secondary' : 'ghost'}
                     >
-                      {revealedEnvIndexes.has(index) ? <EyeOff size={14} /> : <Eye size={14} />}
+                      {t('Form')}
                     </Button>
                     <Button
-                      aria-label={t('Remove variable')}
                       onClick={() => {
-                        setAgentDraft((current) => ({
-                          ...current,
-                          env: current.env.filter((_, entryIndex) => entryIndex !== index),
-                        }));
-                        setRevealedEnvIndexes(new Set());
-    setRevealedViewEnvKeys(new Set());
+                        setEnvText(formatEnvText(agentDraft.env));
+                        setEnvViewMode('text');
                       }}
-                      size="icon"
+                      size="sm"
                       type="button"
-                      variant="ghost"
+                      variant={envViewMode === 'text' ? 'secondary' : 'ghost'}
                     >
-                      <Trash size={14} />
+                      {t('Text')}
                     </Button>
                   </div>
-                ))}
-                <Button
-                  onClick={() => {
-                    setAgentDraft((current) => ({
-                      ...current,
-                      env: [...current.env, { key: '', value: '' }],
-                    }));
-                  }}
-                  size="sm"
-                  type="button"
-                  variant="outline"
-                >
-                  {t('Add variable')}
-                </Button>
+                </div>
+                {envViewMode === 'text' ? (
+                  <>
+                    <Textarea
+                      autoCapitalize="off"
+                      autoComplete="off"
+                      className="mono"
+                      onChange={(event) => {
+                        const nextText = event.target.value;
+                        setEnvText(nextText);
+                        const nextRows = parseEnvText(nextText);
+                        setAgentDraft((current) => ({ ...current, env: nextRows }));
+                      }}
+                      placeholder={'KEY=value'}
+                      rows={Math.min(12, Math.max(4, agentDraft.env.length + 1))}
+                      spellCheck={false}
+                      value={envText}
+                    />
+                    <span className="codex-form-hint">
+                      {t('One KEY=value per line. Values are passed verbatim—no quoting is added, numbers stay plain. Lines starting with # are ignored.')}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    {agentDraft.env.map((row, index) => (
+                      <div
+                        key={index}
+                        style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '8px' }}
+                      >
+                        <Input
+                          autoCapitalize="off"
+                          autoComplete="off"
+                          onChange={(event) => {
+                            const nextKey = event.target.value;
+                            setAgentDraft((current) => ({
+                              ...current,
+                              env: current.env.map((entry, entryIndex) =>
+                                entryIndex === index ? { ...entry, key: nextKey } : entry,
+                              ),
+                            }));
+                          }}
+                          placeholder={t('KEY')}
+                          spellCheck={false}
+                          style={{ flex: '0 0 40%' }}
+                          value={row.key}
+                        />
+                        <Input
+                          autoCapitalize="off"
+                          autoComplete="off"
+                          onChange={(event) => {
+                            const nextValue = event.target.value;
+                            setAgentDraft((current) => ({
+                              ...current,
+                              env: current.env.map((entry, entryIndex) =>
+                                entryIndex === index ? { ...entry, value: nextValue } : entry,
+                              ),
+                            }));
+                          }}
+                          placeholder={t('value')}
+                          spellCheck={false}
+                          style={{ flex: 1 }}
+                          type="text"
+                          value={row.value}
+                        />
+                        <Button
+                          aria-label={t('Remove variable')}
+                          onClick={() => {
+                            setAgentDraft((current) => ({
+                              ...current,
+                              env: current.env.filter((_, entryIndex) => entryIndex !== index),
+                            }));
+                          }}
+                          size="icon"
+                          type="button"
+                          variant="ghost"
+                        >
+                          <Trash size={14} />
+                        </Button>
+                      </div>
+                    ))}
+                    <Button
+                      onClick={() => {
+                        setAgentDraft((current) => ({
+                          ...current,
+                          env: [...current.env, { key: '', value: '' }],
+                        }));
+                      }}
+                      size="sm"
+                      type="button"
+                      variant="outline"
+                    >
+                      {t('Add variable')}
+                    </Button>
+                  </>
+                )}
                 <span className="codex-form-hint">
                   {t('Environment variables are passed to this agent’s provider runs. They may appear in command output or logs—avoid secrets you can’t rotate.')}
                 </span>
@@ -2115,39 +2153,11 @@ export function AgentsHubPanel({
                     <div className="agents-hub-detail-body mono">
                       {Object.keys(selectedAgent.providerEnv)
                         .sort()
-                        .map((key) => {
-                          const revealed = revealedViewEnvKeys.has(key);
-                          const value = selectedAgent.providerEnv[key];
-                          return (
-                            <div
-                              key={key}
-                              style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
-                            >
-                              <span style={{ flex: 1, wordBreak: 'break-all' }}>
-                                {key}={revealed ? value : value ? '••••••' : ''}
-                              </span>
-                              <Button
-                                aria-label={revealed ? t('Hide value') : t('Show value')}
-                                onClick={() => {
-                                  setRevealedViewEnvKeys((current) => {
-                                    const next = new Set(current);
-                                    if (next.has(key)) {
-                                      next.delete(key);
-                                    } else {
-                                      next.add(key);
-                                    }
-                                    return next;
-                                  });
-                                }}
-                                size="icon"
-                                type="button"
-                                variant="ghost"
-                              >
-                                {revealed ? <EyeOff size={14} /> : <Eye size={14} />}
-                              </Button>
-                            </div>
-                          );
-                        })}
+                        .map((key) => (
+                          <div key={key} style={{ wordBreak: 'break-all' }}>
+                            {key}={selectedAgent.providerEnv[key]}
+                          </div>
+                        ))}
                     </div>
                   </div>
                 ) : null}

@@ -268,6 +268,14 @@ impl AppState {
         let workflow_reconcile_cutoff = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
         tokio::spawn(async move {
             let started = Instant::now();
+            // Startup reconciliation owns the full thread-index rebuild (it
+            // stats every known thread on disk). Request paths only do
+            // incremental purges; this pass repairs any historically stale
+            // index entries once per gateway start.
+            let thread_index_stats = {
+                let mut router = state.threads.router.lock().await;
+                router.rebuild_thread_indexes().await
+            };
             let transcript_store = state.threads.history.transcript_store();
             let active_run_probe =
                 BridgeActiveRunProbe::new(Arc::downgrade(&state.integration.bridge));
@@ -314,6 +322,7 @@ impl AppState {
                 elapsed_ms = started.elapsed().as_millis() as u64,
                 thread_count = threads,
                 endpoint_count = endpoints,
+                thread_index_endpoint_bindings = thread_index_stats.endpoint_bindings,
                 recent_thread_backfill_count = recent_threads,
                 recent_thread_prune_count = pruned_recent_threads,
                 recent_thread_active_reconcile_count = reconciled_recent_threads,

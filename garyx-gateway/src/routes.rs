@@ -1088,9 +1088,15 @@ async fn ensure_existing_thread_id(state: &Arc<AppState>, key: &str) -> Option<S
     }
 }
 
-async fn rebuild_thread_indexes(state: &Arc<AppState>) {
+/// Incrementally clear router index entries for one deleted/archived thread.
+///
+/// Request paths must not run the full `rebuild_thread_indexes` scan: it
+/// stats every known thread on disk (O(N) IO, multi-second at a few thousand
+/// threads) and made thread create/delete/archive time out client-side. The
+/// full rebuild runs once from startup reconciliation instead.
+async fn purge_thread_from_indexes(state: &Arc<AppState>, thread_id: &str) {
     let mut router = state.threads.router.lock().await;
-    router.rebuild_thread_indexes().await;
+    router.purge_thread_from_indexes(thread_id);
 }
 
 fn remove_deleted_thread_projection_records(state: &Arc<AppState>, thread_id: &str) -> bool {
@@ -1135,7 +1141,7 @@ async fn hard_delete_thread_record(
 
     clear_deleted_thread_runtime_state(state, thread_id, provider_key.as_deref()).await;
     remove_deleted_thread_projection_records(state, thread_id);
-    rebuild_thread_indexes(state).await;
+    purge_thread_from_indexes(state, thread_id).await;
     state.invalidate_gateway_sync_caches().await;
     Ok(())
 }
@@ -1253,7 +1259,8 @@ pub(crate) async fn bind_channel_endpoint_key_to_thread(
 
     match bind_result {
         Ok(previous_thread_id) => {
-            rebuild_thread_indexes(state).await;
+            // bind_endpoint_runtime upserts the endpoint index entry itself;
+            // no full index rebuild is needed here.
             state.invalidate_gateway_sync_caches().await;
             Ok(ChannelEndpointBindResult {
                 thread_id,
@@ -1315,7 +1322,17 @@ pub(crate) async fn detach_channel_endpoint_key(
                     .await;
                 router.rebuild_routing_index(&endpoint.channel).await;
             }
-            rebuild_thread_indexes(state).await;
+            {
+                // Drop this endpoint's binding/index entries incrementally.
+                // Prefer the authoritative endpoint key when the cached
+                // endpoint row was found; fall back to the requested key.
+                let purge_key = detached_endpoint
+                    .as_ref()
+                    .map(|endpoint| endpoint.endpoint_key.clone())
+                    .unwrap_or_else(|| requested_endpoint_key.clone());
+                let mut router = state.threads.router.lock().await;
+                router.purge_endpoint_binding(&purge_key);
+            }
             state.invalidate_gateway_sync_caches().await;
             Ok(ChannelEndpointDetachResult {
                 previous_thread_id,
@@ -2547,7 +2564,9 @@ pub async fn create_thread(
                     Json(json!({ "error": error })),
                 );
             }
-            rebuild_thread_indexes(&state).await;
+            // A freshly created thread has no channel-endpoint bindings yet,
+            // so it cannot invalidate the router's endpoint/binding indexes;
+            // no index maintenance is needed on this path.
             state.invalidate_gateway_sync_caches().await;
             (StatusCode::CREATED, Json(thread_summary(&thread_id, &data)))
         }
@@ -2769,7 +2788,7 @@ pub async fn archive_thread(
         }
         let stale_projection = remove_deleted_thread_projection_records(&state, trimmed);
         clear_deleted_thread_runtime_state(&state, trimmed, None).await;
-        rebuild_thread_indexes(&state).await;
+        purge_thread_from_indexes(&state, trimmed).await;
         state.invalidate_gateway_sync_caches().await;
         return (
             StatusCode::OK,
@@ -2843,7 +2862,7 @@ pub async fn delete_thread(
             && remove_deleted_thread_projection_records(&state, trimmed)
         {
             clear_deleted_thread_runtime_state(&state, trimmed, None).await;
-            rebuild_thread_indexes(&state).await;
+            purge_thread_from_indexes(&state, trimmed).await;
             state.invalidate_gateway_sync_caches().await;
             return (
                 StatusCode::OK,

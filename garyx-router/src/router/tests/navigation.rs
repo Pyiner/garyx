@@ -829,3 +829,62 @@ fn test_clear_thread_references_prunes_deleted_history_entries() {
         Some(vec!["s2".to_owned(), "s3".to_owned()])
     );
 }
+
+#[test]
+fn test_purge_thread_from_indexes_clears_binding_and_endpoint_entries() {
+    let mut router = make_router();
+    let uk = "telegram:u1".to_owned();
+
+    router.switch_to_thread(&uk, "s1");
+    router
+        .thread_nav
+        .endpoint_thread_map
+        .insert("telegram:main:chat-1".to_owned(), "s1".to_owned());
+    router
+        .thread_nav
+        .endpoint_thread_map
+        .insert("telegram:main:chat-2".to_owned(), "s2".to_owned());
+
+    router.purge_thread_from_indexes("s1");
+
+    assert!(!router
+        .thread_nav
+        .binding_thread_map
+        .values()
+        .any(|thread| thread == "s1"));
+    assert_eq!(
+        router
+            .thread_nav
+            .endpoint_thread_map
+            .get("telegram:main:chat-2")
+            .map(String::as_str),
+        Some("s2"),
+        "unrelated endpoint entries must survive a purge"
+    );
+    assert!(
+        !router
+            .thread_nav
+            .endpoint_thread_map
+            .contains_key("telegram:main:chat-1"),
+        "purged thread's endpoint entry must be removed"
+    );
+}
+
+#[test]
+fn test_purge_endpoint_binding_drops_all_entries_for_key() {
+    let mut router = make_router();
+    let uk = "telegram:main:chat-1".to_owned();
+
+    router.switch_to_thread(&uk, "s1");
+    router
+        .thread_nav
+        .endpoint_thread_map
+        .insert(uk.clone(), "s1".to_owned());
+
+    router.purge_endpoint_binding(&uk);
+
+    assert!(!router.thread_nav.binding_thread_map.contains_key(&uk));
+    assert!(!router.thread_nav.binding_thread_history.contains_key(&uk));
+    assert!(!router.thread_nav.binding_thread_index.contains_key(&uk));
+    assert!(!router.thread_nav.endpoint_thread_map.contains_key(&uk));
+}

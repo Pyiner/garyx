@@ -1925,13 +1925,6 @@ fn parse_env_pair_splits_on_first_equals_and_validates_key() {
     assert!(parse_env_pair("HAS SPACE=x").is_err());
 }
 
-#[test]
-fn mask_env_value_hides_non_empty_values() {
-    assert_eq!(mask_env_value(""), "");
-    assert_ne!(mask_env_value("secret"), "secret");
-    assert!(!mask_env_value("secret").is_empty());
-}
-
 #[tokio::test]
 async fn cmd_agent_create_sends_multiple_env_vars() {
     let requests = StdArc::new(Mutex::new(Vec::new()));

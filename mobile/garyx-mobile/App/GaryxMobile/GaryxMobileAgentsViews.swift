@@ -384,44 +384,100 @@ private struct GaryxAgentFormContent: View {
 
 private struct GaryxAgentEnvEditorSection: View {
     @Binding var draft: GaryxAgentEnvDraft
-    @State private var revealedRowIds: Set<UUID> = []
+    @State private var viewMode: EnvViewMode = .form
+    @State private var envText: String = ""
+
+    private enum EnvViewMode: String, CaseIterable {
+        case form = "Form"
+        case text = "Text"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             GaryxFormGroupedSection(title: "Environment Variables") {
-                if draft.rows.isEmpty {
-                    Text("No environment variables")
-                        .font(GaryxFont.body())
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                } else {
-                    ForEach(Array(draft.rows.enumerated()), id: \.element.id) { index, row in
-                        if index > 0 {
-                            Divider().padding(.leading, 16)
-                        }
-                        envRow(row)
+                Picker("View", selection: viewModeBinding) {
+                    ForEach(EnvViewMode.allCases, id: \.self) { mode in
+                        Text(mode.rawValue).tag(mode)
                     }
                 }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
                 Divider().padding(.leading, 16)
-                Button {
-                    draft.addRow()
-                } label: {
-                    Label("Add Variable", systemImage: "plus")
-                        .font(GaryxFont.body())
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
+                if viewMode == .text {
+                    TextEditor(text: envTextBinding)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled(true)
+                        .font(.system(.footnote, design: .monospaced))
+                        .frame(minHeight: 120)
+                        .scrollContentBackground(.hidden)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                } else {
+                    if draft.rows.isEmpty {
+                        Text("No environment variables")
+                            .font(GaryxFont.body())
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 12)
+                    } else {
+                        ForEach(Array(draft.rows.enumerated()), id: \.element.id) { index, row in
+                            if index > 0 {
+                                Divider().padding(.leading, 16)
+                            }
+                            envRow(row)
+                        }
+                    }
+                    Divider().padding(.leading, 16)
+                    Button {
+                        draft.addRow()
+                    } label: {
+                        Label("Add Variable", systemImage: "plus")
+                            .font(GaryxFont.body())
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 12)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
 
-            Text("Environment variables are passed to this agent’s provider runs. They may appear in command output or logs—avoid secrets you can’t rotate.")
+            Text(envHint)
                 .font(GaryxFont.caption())
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 14)
         }
+    }
+
+    private var envHint: String {
+        if viewMode == .text {
+            return "One KEY=value per line. Values are passed verbatim—no quoting is added, numbers stay plain. Lines starting with # are ignored."
+        }
+        return "Environment variables are passed to this agent’s provider runs. They may appear in command output or logs—avoid secrets you can’t rotate."
+    }
+
+    private var viewModeBinding: Binding<EnvViewMode> {
+        Binding(
+            get: { viewMode },
+            set: { next in
+                if next == .text, viewMode != .text {
+                    envText = draft.envText()
+                }
+                viewMode = next
+            },
+        )
+    }
+
+    private var envTextBinding: Binding<String> {
+        Binding(
+            get: { envText },
+            set: { next in
+                envText = next
+                draft.applyEnvText(next)
+            },
+        )
     }
 
     private func envRow(_ row: GaryxAgentEnvRow) -> some View {
@@ -431,26 +487,12 @@ private struct GaryxAgentEnvEditorSection: View {
                 .autocorrectionDisabled(true)
                 .font(GaryxFont.body())
                 .frame(maxWidth: 150, alignment: .leading)
-            Group {
-                if revealedRowIds.contains(row.id) {
-                    TextField("value", text: valueBinding(row))
-                } else {
-                    SecureField("value", text: valueBinding(row))
-                }
-            }
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled(true)
-            .font(GaryxFont.body())
-            .frame(maxWidth: .infinity, alignment: .leading)
-            Button {
-                toggleReveal(row.id)
-            } label: {
-                Image(systemName: revealedRowIds.contains(row.id) ? "eye.slash" : "eye")
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.borderless)
+            TextField("value", text: valueBinding(row))
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled(true)
+                .font(GaryxFont.body())
+                .frame(maxWidth: .infinity, alignment: .leading)
             Button(role: .destructive) {
-                revealedRowIds.remove(row.id)
                 draft.removeRow(id: row.id)
             } label: {
                 Image(systemName: "trash")
@@ -468,14 +510,6 @@ private struct GaryxAgentEnvEditorSection: View {
 
     private func valueBinding(_ row: GaryxAgentEnvRow) -> Binding<String> {
         Binding(get: { row.value }, set: { draft.updateValue(id: row.id, $0) })
-    }
-
-    private func toggleReveal(_ id: UUID) {
-        if revealedRowIds.contains(id) {
-            revealedRowIds.remove(id)
-        } else {
-            revealedRowIds.insert(id)
-        }
     }
 }
 
