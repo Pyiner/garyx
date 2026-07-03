@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
-import type { ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
+import { RefreshCw } from 'lucide-react';
 
 import type {
   DesktopApiProviderType,
@@ -43,9 +44,10 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { ProviderAgentIcon } from '../app-shell/components/ProviderAgentIcon';
 import { useI18n, type Translate } from '../i18n';
+import { shouldRequestProviderModelCatalog } from '../provider-model-catalog';
 import {
   clampUsagePercent,
-  formatUsageAge,
+  formatUsageDuration,
   formatUsagePercent,
   usageLevelForRemainingPercent,
   usageProviderIdForModelProviderKey,
@@ -201,6 +203,12 @@ const REASONING_EFFORT_RANK: Record<string, number> = {
   xhigh: 5,
   max: 6,
 };
+
+const PROVIDER_MODEL_TYPES = Array.from(
+  new Set(MODEL_PROVIDER_ROWS.map((row) => row.providerType)),
+);
+
+const METERED_MODEL_PROVIDER_ROWS = MODEL_PROVIDER_ROWS.filter((row) => row.usageProviderId);
 
 function providerTypeValue(provider: any): string {
   return String(provider?.provider_type || 'claude_code');
@@ -569,6 +577,12 @@ export function ProviderSettingsPanel({
   const [providerModelsLoading, setProviderModelsLoading] = useState<
     Partial<Record<DesktopApiProviderType, boolean>>
   >({});
+  const providerModelRequestsRef = useRef<
+    Partial<Record<DesktopApiProviderType, Promise<void>>>
+  >({});
+  const providerModelAttemptedRef = useRef<
+    Partial<Record<DesktopApiProviderType, boolean>>
+  >({});
   const [codingUsage, setCodingUsage] = useState<DesktopCodingUsage | null>(null);
   const [codingUsageLoading, setCodingUsageLoading] = useState(false);
   const [codingUsageError, setCodingUsageError] = useState<string | null>(null);
@@ -607,21 +621,24 @@ export function ProviderSettingsPanel({
     }
     return map;
   }, [codingUsage]);
-  useEffect(() => {
-    if (!providerConfigRow) {
+
+  function ensureProviderModels(
+    providerType: DesktopApiProviderType,
+    options: { retry?: boolean } = {},
+  ) {
+    if (!shouldRequestProviderModelCatalog({
+      catalogs: providerModelsByType,
+      requests: providerModelRequestsRef.current,
+      attempted: providerModelAttemptedRef.current,
+    }, providerType, options)) {
       return;
     }
-    const providerType = providerConfigRow.providerType;
-    if (providerModelsByType[providerType] || providerModelsLoading[providerType]) {
-      return;
-    }
-    let cancelled = false;
+    providerModelAttemptedRef.current[providerType] = true;
     setProviderModelsLoading((current) => ({
       ...current,
       [providerType]: true,
     }));
-    void window.garyxDesktop.listProviderModels(providerType).then((models) => {
-      if (cancelled) return;
+    const request = window.garyxDesktop.listProviderModels(providerType).then((models) => {
       setProviderModelsByType((current) => ({
         ...current,
         [providerType]: models,
@@ -629,33 +646,48 @@ export function ProviderSettingsPanel({
     }).catch(() => {
       // The dialog keeps the raw model input fallback if catalog loading fails.
     }).finally(() => {
+      delete providerModelRequestsRef.current[providerType];
       setProviderModelsLoading((current) => ({
         ...current,
         [providerType]: false,
       }));
     });
-    return () => {
-      cancelled = true;
-    };
-  }, [providerConfigRow?.providerType, providerModelsByType, providerModelsLoading]);
+    providerModelRequestsRef.current[providerType] = request;
+  }
 
-  useEffect(() => {
-    let cancelled = false;
+  async function refreshCodingUsage() {
     setCodingUsageLoading(true);
     setCodingUsageError(null);
-    void window.garyxDesktop.getCodingUsage().then((usage) => {
-      if (cancelled) return;
+    try {
+      const usage = await window.garyxDesktop.getCodingUsage();
       setCodingUsage(usage);
-    }).catch((error) => {
-      if (cancelled) return;
+    } catch (error) {
       setCodingUsageError(error instanceof Error ? error.message : t('Failed to load usage.'));
-    }).finally(() => {
-      if (cancelled) return;
+    } finally {
       setCodingUsageLoading(false);
-    });
-    return () => {
-      cancelled = true;
-    };
+    }
+  }
+
+  useEffect(() => {
+    for (const providerType of PROVIDER_MODEL_TYPES) {
+      ensureProviderModels(providerType);
+    }
+    // Prefetch once when the provider panel mounts so Configure dropdowns are
+    // backed by the gateway catalog instead of the current-value fallback.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!providerConfigRow) {
+      return;
+    }
+    ensureProviderModels(providerConfigRow.providerType, { retry: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providerConfigRow?.providerType]);
+
+  useEffect(() => {
+    void refreshCodingUsage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [t]);
 
   useEffect(() => {
@@ -812,7 +844,12 @@ export function ProviderSettingsPanel({
   }
 
   function usageUpdatedText(): string | null {
-    return formatUsageAge(codingUsage?.refreshedAt || null);
+    const timestamp = Date.parse(codingUsage?.refreshedAt || '');
+    if (!Number.isFinite(timestamp)) {
+      return null;
+    }
+    const elapsedSeconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+    return t('updated {age} ago', { age: formatUsageDuration(elapsedSeconds) });
   }
 
   function usageWindowCaption(
@@ -878,83 +915,169 @@ export function ProviderSettingsPanel({
     );
   }
 
-  function renderProviderUsageCell(row: FixedModelProviderRow): ReactNode {
-    if (!row.usageProviderId) {
-      return <span className="provider-usage-muted">{t('No quota data')}</span>;
-    }
-    const usage = codingUsageByProviderId[row.usageProviderId];
+  function quotaGaugeStyle(remainingPercent: number): CSSProperties {
+    return {
+      '--provider-quota-percent': `${clampUsagePercent(remainingPercent)}%`,
+    } as CSSProperties;
+  }
+
+  function renderQuotaGauge(
+    label: string,
+    remainingPercent: number,
+    detail: string,
+    options?: {
+      available?: boolean;
+      stale?: boolean;
+      title?: string;
+    },
+  ): ReactNode {
+    const percent = clampUsagePercent(remainingPercent);
+    const level = usageLevelForRemainingPercent(percent, options?.available !== false);
+    return (
+      <div
+        className="provider-quota-gauge"
+        data-level={level}
+        data-stale={options?.stale ? 'true' : undefined}
+        title={options?.title}
+      >
+        <div
+          className="provider-quota-gauge-ring"
+          style={quotaGaugeStyle(percent)}
+          aria-hidden
+        >
+          <span className="provider-quota-gauge-value">{formatUsagePercent(percent)}</span>
+          <span className="provider-quota-gauge-label">{label}</span>
+        </div>
+        <span className="provider-quota-gauge-detail">{detail}</span>
+      </div>
+    );
+  }
+
+  function renderProviderQuotaCard(row: FixedModelProviderRow): ReactNode {
+    const usage = row.usageProviderId ? codingUsageByProviderId[row.usageProviderId] : null;
+    let body: ReactNode;
+    let footer: ReactNode = null;
+    const updated = usageUpdatedText();
     if (!usage) {
-      if (codingUsageLoading) {
-        return <span className="provider-usage-muted">{t('Loading')}</span>;
-      }
-      return (
-        <span className="provider-usage-muted" title={codingUsageError || undefined}>
-          {codingUsageError ? t('Unavailable') : t('No data')}
-        </span>
-      );
-    }
-    if (!usage.available) {
-      return (
-        <span className="provider-usage-muted" title={usage.error || undefined}>
-          {t('Unavailable')}
-        </span>
-      );
-    }
-    if (usage.models.length > 0) {
+      const label = codingUsageLoading ? t('Loading') : codingUsageError ? t('Unavailable') : t('No data');
+      body = renderQuotaGauge(label, 0, codingUsageError || t('Quota data pending'), {
+        available: false,
+      });
+    } else if (!usage.available) {
+      body = renderQuotaGauge(t('Unavailable'), 0, usage.error || t('No usage data'), {
+        available: false,
+        stale: usage.stale,
+      });
+    } else if (usage.models.length > 0) {
       const models = sortedModelsByRemaining(usage);
       const tightest = models[0];
-      const reset = modelUsageCaption(tightest);
-      const caption = usage.models.length > 1
-        ? `${reset} · ${t('{count} models', { count: usage.models.length })}`
-        : reset;
-      return (
-        <div className={classNames('provider-usage-stack', usage.stale && 'is-stale')}>
-          {renderUsagePills(usage, true)}
-          {renderUsageMeter(tightest.name, tightest.remainingPercent, caption, {
-            compact: true,
+      body = (
+        <>
+          {renderQuotaGauge(tightest.name, tightest.remainingPercent, modelUsageCaption(tightest), {
             stale: usage.stale,
             title: models
               .map((model) => `${model.name}: ${formatUsagePercent(model.remainingPercent)} · ${modelUsageCaption(model)}`)
               .join('\n'),
           })}
-        </div>
+          <div className="provider-quota-secondary">
+            <span>{t('{count} models', { count: models.length })}</span>
+            <span>{t('tightest bucket')}</span>
+          </div>
+        </>
       );
-    }
-    const windows: Array<{ key: string; label: string; value: DesktopUsageWindow; fallback: string }> = [];
-    if (usage.session) {
-      windows.push({
-        key: 'session',
-        label: t('Session'),
-        value: usage.session,
-        fallback: t('session window'),
-      });
-    }
-    if (usage.weekly) {
-      windows.push({
-        key: 'weekly',
-        label: t('Weekly'),
-        value: usage.weekly,
-        fallback: t('weekly window'),
-      });
-    }
-    if (windows.length > 0) {
-      return (
-        <div className={classNames('provider-usage-stack', usage.stale && 'is-stale')}>
-          {renderUsagePills(usage, true)}
-          {windows.map((entry) => (
-            <div className="provider-usage-window-row" key={entry.key}>
+    } else {
+      const primary = usage.weekly || usage.session || null;
+      const primaryLabel = usage.weekly ? t('Weekly') : t('Session');
+      const primaryFallback = usage.weekly ? t('weekly window') : t('session window');
+      body = primary ? (
+        <>
+          {renderQuotaGauge(
+            primaryLabel,
+            primary.remainingPercent,
+            usageWindowCaption(primary, primaryFallback),
+            { stale: usage.stale },
+          )}
+          {usage.session && usage.weekly ? (
+            <div className="provider-quota-secondary">
               {renderUsageMeter(
-                entry.label,
-                entry.value.remainingPercent,
-                usageWindowCaption(entry.value, entry.fallback),
+                t('Session'),
+                usage.session.remainingPercent,
+                usageWindowCaption(usage.session, t('session window')),
                 { compact: true, stale: usage.stale },
               )}
             </div>
-          ))}
+          ) : null}
+        </>
+      ) : renderQuotaGauge(t('No data'), 0, t('Usage not reported'), {
+        available: false,
+        stale: usage.stale,
+      });
+    }
+
+    if (usage) {
+      footer = (
+        <div className="provider-quota-card-meta">
+          {usage.plan ? <span className="provider-usage-pill">{usage.plan}</span> : null}
+          {usage.stale ? <span className="provider-usage-pill stale">{t('stale')}</span> : null}
+          {usage.stale && updated ? <span className="provider-usage-updated">{updated}</span> : null}
         </div>
       );
     }
-    return <span className="provider-usage-muted">{t('No data')}</span>;
+
+    return (
+      <article
+        className={classNames('provider-quota-card', usage?.stale && 'is-stale')}
+        key={row.key}
+      >
+        <div className="provider-quota-card-header">
+          <span className="provider-config-icon" aria-hidden>
+            <ProviderAgentIcon
+              agentId={row.agentId}
+              providerType={row.providerType}
+              size={22}
+            />
+          </span>
+          <div className="provider-config-name-cell">
+            <span className="provider-config-name">{row.label}</span>
+            <span className="provider-config-subtitle">
+              <code>{row.providerType}</code>
+            </span>
+          </div>
+        </div>
+        {body}
+        {footer}
+      </article>
+    );
+  }
+
+  function renderProviderQuotaHero(): ReactNode {
+    const updated = usageUpdatedText();
+    return (
+      <section className="provider-quota-hero">
+        <div className="provider-quota-hero-header">
+          <div className="provider-quota-hero-heading">
+            <span className="provider-quota-hero-title">{t('Quota')}</span>
+            <span className="provider-quota-hero-note">
+              {updated || t('Claude Code, Codex, and Antigravity quota windows')}
+            </span>
+          </div>
+          <Button
+            className="provider-quota-refresh"
+            disabled={codingUsageLoading}
+            onClick={() => { void refreshCodingUsage(); }}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            <RefreshCw aria-hidden className={classNames(codingUsageLoading && 'is-spinning')} />
+            {t('Refresh')}
+          </Button>
+        </div>
+        <div className="provider-quota-card-grid">
+          {METERED_MODEL_PROVIDER_ROWS.map((row) => renderProviderQuotaCard(row))}
+        </div>
+      </section>
+    );
   }
 
   function renderProviderConfigUsageSection(row: FixedModelProviderRow): ReactNode {
@@ -1042,6 +1165,7 @@ export function ProviderSettingsPanel({
   function openProviderConfigDialog(key: FixedModelProviderKey) {
     const row = fixedModelProviderRow(key);
     const draft = modelProviderDraftFromState(key, localSettings, agents, gatewayDraft);
+    ensureProviderModels(row.providerType, { retry: true });
     setProviderConfigDraft(applyProviderCatalogDefaults(draft, row, providerModelsByType[row.providerType]));
     setProviderConfigKey(key);
   }
@@ -1248,7 +1372,6 @@ export function ProviderSettingsPanel({
               <TableHead className="provider-config-col-provider">{t('Provider')}</TableHead>
               <TableHead className="provider-config-col-auth">{t('Auth')}</TableHead>
               <TableHead className="provider-config-col-default">{t('Default')}</TableHead>
-              <TableHead className="provider-config-col-usage">{t('Usage')}</TableHead>
               <TableHead className="provider-config-col-status">{t('Status')}</TableHead>
               <TableHead className="provider-config-col-actions">{t('Actions')}</TableHead>
             </TableRow>
@@ -1293,9 +1416,6 @@ export function ProviderSettingsPanel({
                   <TableCell className="provider-config-col-default">
                     {renderProviderDefaultChips(row, details)}
                   </TableCell>
-                  <TableCell className="provider-config-col-usage">
-                    {renderProviderUsageCell(row)}
-                  </TableCell>
                   <TableCell className="provider-config-col-status">
                     <Badge
                       className="provider-config-status"
@@ -1325,6 +1445,7 @@ export function ProviderSettingsPanel({
 
   return (
     <div className="settings-form provider-panel">
+      {renderProviderQuotaHero()}
       {providerConfigTablePanel}
       <Dialog
         open={Boolean(providerConfigKey)}

@@ -37,10 +37,11 @@ Ground rules honored here (CLAUDE.md):
 ## 0. TL;DR — what ships
 
 - **Mac** keeps its fixed 8-row table but rationalizes columns
-  (`Provider · Auth · Default · Usage · Status · Actions`), drops the redundant
+  (`Provider · Auth · Default · Status · Actions`), drops the redundant
   `Type` column to a subtitle, wires the `ProviderAgentIcon` glyph, turns Auth
   into a badge and Default into `model · reasoning · tier` chips, upgrades the
-  usage cell to the compact §4 viz, adds a Usage section to the Configure modal,
+  page top with an independent Quota hero for metered providers, keeps the
+  Configure modal's full Usage section,
   and **fixes the real bug where Antigravity default config never persists**.
 - **iOS** keeps the whole-row-tappable provider list and **gains plaintext
   editing** for the value-typed defaults it lacks — API key (plaintext, echoed),
@@ -422,9 +423,15 @@ iOS/widget, Rust formatting on CLI), reading only fields already on the wire.
 
 ### 4.2 Per-surface rendering
 
-- **Mac table cell (compact):** a two-bar stack (Session/Weekly) with
-  right-aligned `%` and a one-line `resets in …` caption; plan pill by the name;
-  stale → dim + tag. Antigravity: tightest-bucket bar + "· N models".
+- **Mac Quota hero (top of provider page):** product-owner rework after P3:
+  usage is no longer embedded in the provider table. The top of the page shows
+  three compact cards for the metered providers only (Claude Code, Codex,
+  Antigravity). Claude/Codex use a weekly primary gauge plus session secondary
+  meter; Antigravity uses its tightest model bucket plus "N models". Each card
+  carries plan, reset countdown, stale dimming/tag, and freshness text when
+  stale. A follow-up product-owner pass removed the outer Quota container card:
+  render a plain section heading row (`Quota`, freshness, refresh) followed
+  directly by the three provider cards on the page background.
 - **Mac Configure modal (full):** a top **Usage** section — both windows as
   labeled bars, all Antigravity buckets, plan, per-window reset countdowns,
   `updated Nm ago`. Replaces the current hover-only breakdown.
@@ -444,7 +451,7 @@ iOS/widget, Rust formatting on CLI), reading only fields already on the wire.
 
 Keep the table (it is the source of truth and works); rationalize it.
 
-- **Columns → `Provider · Auth · Default · Usage · Status · Actions`.** Drop the
+- **Columns → `Provider · Auth · Default · Status · Actions`.** Drop the
   standalone `Type` column; render `provider_type` as a monospaced subtitle under
   the provider name (and in the Configure header).
 - **Provider cell** gains the `ProviderAgentIcon` glyph + name + type subtitle.
@@ -452,8 +459,11 @@ Keep the table (it is the source of truth and works); rationalize it.
   the existing `providerRowDetails` logic, replacing the free-text column.
 - **Default cell** shows `model · reasoning · tier` chips (effective defaults),
   truncating with a tooltip.
-- **Usage cell** → the §4.2 compact dual-bar viz; the full breakdown moves into
-  the Configure modal's new Usage section (not a bare hover tooltip).
+- **Usage is not a table column.** Product-owner rework after P3 moved quota out
+  of rows to the page-top Quota hero (§4.2), restoring compact table height.
+  The Quota heading row is unframed, without a background or border, and the
+  three provider cards sit directly on the page background. The full breakdown
+  remains in the Configure modal's Usage section.
 - **Configure modal** keeps today's full field set, reordered to the §3 section
   order, adds the top **Usage** section for metered providers, and **fixes the
   Antigravity save path**: add an `antigravity` case in `handleSaveProviderConfig`
