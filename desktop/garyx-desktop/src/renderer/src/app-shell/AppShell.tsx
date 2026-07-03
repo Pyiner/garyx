@@ -10877,21 +10877,20 @@ export function AppShell() {
 
       {/* Electron composes window drag regions in document order (union for
           drag, difference for no-drag), and only at load time — runtime
-          style/DOM edits never re-report them. A bare div here is skipped by
-          the collector (no painted content), so the carve-out must be this
-          full twin of the toggle. It also receives the mouse clicks (it sits
-          above its sibling); the early sibling exists for keyboard focus
-          order and screen readers. */}
-      <button
+          style/DOM edits never re-report them. So the no-drag hole must be
+          re-punched by this last app-shell child. It cannot be an empty box
+          (the collector skips boxes with no painted content — hence the icon)
+          and must not be a button (mouse clicks land here because it stacks
+          on top, and a focusable twin would steal focus and get force-exposed
+          in the AX tree). The early sibling button owns keyboard focus order
+          and screen-reader semantics. */}
+      <div
         aria-hidden="true"
         className="sidebar-collapse-toggle sidebar-collapse-toggle-carveout"
         onClick={toggleSidebarCollapsed}
-        tabIndex={-1}
-        title={t("Toggle Sidebar")}
-        type="button"
       >
         <PanelLeft aria-hidden size={15} strokeWidth={1.8} />
-      </button>
+      </div>
 
       {memoryDialogTarget ? (
         <Suspense fallback={null}>

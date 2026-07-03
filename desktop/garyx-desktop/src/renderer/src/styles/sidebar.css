@@ -650,10 +650,11 @@
     background var(--duration-fast) var(--ease-standard);
 }
 
-/* The twin overlays the keyboard button one-to-one (shared base class), so
-   the only extra rule it needs is staying out of the keyboard/AX tree, which
-   the markup handles via tabindex/aria-hidden. Keep it visually identical —
-   both render, stacked, and must read as one control. */
+/* The carve-out twin overlays the keyboard button one-to-one via the shared
+   base class and needs no extra rules. It is a non-focusable presentation div
+   (a button twin would steal focus on click and get force-exposed in the AX
+   tree). Keep it visually identical — both render, stacked, and must read as
+   one control. */
 
 .sidebar-collapse-toggle:hover {
   background: color-mix(in oklab, var(--color-token-text-primary) 10%, transparent);
