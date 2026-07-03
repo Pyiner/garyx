@@ -1,10 +1,21 @@
 import type {
   DesktopTaskForestNode,
+  DesktopTaskForestPage,
   DesktopTaskForestTaskNode,
+  DesktopTaskForestThreadNode,
   DesktopTaskStatus,
 } from "@shared/contracts";
 
-export type TaskTreeRow = { task: DesktopTaskForestTaskNode; depth: number };
+const MAX_ROW_DEPTH = 4;
+
+export type TaskTreeRow =
+  | {
+      kind: "task";
+      task: DesktopTaskForestTaskNode;
+      depth: number;
+      isDeemphasized: boolean;
+    }
+  | { kind: "thread"; thread: DesktopTaskForestThreadNode; depth: number };
 
 export function isTaskNode(
   node: DesktopTaskForestNode,
@@ -26,11 +37,19 @@ export function taskTreeBadgeCount(nodes: DesktopTaskForestNode[]): number {
   return nodes.filter((node) => isTaskNode(node) && isActiveTaskStatus(node.status)).length;
 }
 
+/** Badge count: prefer the server-computed page count, recount locally when
+ *  an old gateway omits it. */
+export function resolveTaskTreeActiveCount(
+  page: Pick<DesktopTaskForestPage, "tasks" | "activeCount">,
+): number {
+  return page.activeCount ?? taskTreeBadgeCount(page.tasks);
+}
+
 export function isCurrentTaskTreeNode(
-  task: DesktopTaskForestTaskNode,
+  node: { threadId: string },
   threadId: string | null,
 ): boolean {
-  return !!threadId && task.threadId === threadId;
+  return !!threadId && node.threadId === threadId;
 }
 
 export function shouldShowThreadTaskTreePopover(input: {
@@ -75,11 +94,45 @@ export function taskStatusLabel(status: DesktopTaskStatus): string {
   }
 }
 
-/** Depth-order the tasks into a tree via parentNodeId; nodes whose parent
- *  isn't in the set become roots (depth 0). */
+function taskRow(node: DesktopTaskForestTaskNode, depth: number): TaskTreeRow {
+  return {
+    kind: "task",
+    task: node,
+    depth: Math.min(depth, MAX_ROW_DEPTH),
+    isDeemphasized: node.status === "done",
+  };
+}
+
+function threadRow(node: DesktopTaskForestThreadNode, depth: number): TaskTreeRow {
+  return { kind: "thread", thread: node, depth: Math.min(depth, MAX_ROW_DEPTH) };
+}
+
+function rowFromNode(node: DesktopTaskForestNode, depth: number): TaskTreeRow {
+  return node.kind === "thread" ? threadRow(node, depth) : taskRow(node, depth);
+}
+
+function hasServerLayout(nodes: DesktopTaskForestNode[]): boolean {
+  return nodes.every((node) => Number.isFinite(node.depth ?? NaN));
+}
+
+/** Rows for the popover, thread roots included as visible rows.
+ *
+ *  New gateways send DFS pre-order plus per-node `depth`; render the wire
+ *  order as-is. Old gateways omit `depth`, so fall back to a local tree
+ *  build via parentNodeId — nodes whose parent isn't in the set (orphans)
+ *  become roots. `depth` is the visual indent level: the thread root row and
+ *  top-level tasks both sit flush at 0 (the root row is distinguished by
+ *  styling, not indentation), so the fallback keeps thread children at their
+ *  parent thread's depth. */
 export function buildTaskRows(
   nodes: DesktopTaskForestNode[],
 ): TaskTreeRow[] {
+  if (nodes.length === 0) {
+    return [];
+  }
+  if (hasServerLayout(nodes)) {
+    return nodes.map((node) => rowFromNode(node, node.depth ?? 0));
+  }
   const ids = new Set(nodes.map((node) => node.nodeId));
   const originalIndex = new Map(nodes.map((node, index) => [node.nodeId, index]));
   const childrenByParent = new Map<string, DesktopTaskForestNode[]>();
@@ -114,12 +167,8 @@ export function buildTaskRows(
         continue;
       }
       visited.add(node.nodeId);
-      if (node.kind === "thread") {
-        walk(node.nodeId, depth);
-      } else {
-        rows.push({ task: node, depth });
-        walk(node.nodeId, Math.min(depth + 1, 4));
-      }
+      rows.push(rowFromNode(node, depth));
+      walk(node.nodeId, node.kind === "thread" ? depth : depth + 1);
     }
   };
   walk("", 0);

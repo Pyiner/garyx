@@ -245,6 +245,8 @@ export interface DesktopTaskForestTaskNode extends DesktopTaskSummary {
   activeRunId?: string | null;
   runState: string;
   lastActiveAt?: string | null;
+  // Server DFS depth in anchored mode; null from console modes / old gateways.
+  depth?: number | null;
 }
 
 export interface DesktopTaskForestThreadNode {
@@ -261,6 +263,7 @@ export interface DesktopTaskForestThreadNode {
   runState: string;
   updatedAt?: string | null;
   lastActiveAt?: string | null;
+  depth?: number | null;
 }
 
 export type DesktopTaskForestNode =
@@ -293,6 +296,8 @@ export interface DesktopTaskForestPage {
   projectionCurrent: boolean;
   rootThreadIds: string[];
   skippedPinnedThreadIds: string[];
+  // Server-computed active badge count in anchored mode; null elsewhere.
+  activeCount?: number | null;
 }
 
 export type DesktopTaskForestScope = 'pinned' | 'all';

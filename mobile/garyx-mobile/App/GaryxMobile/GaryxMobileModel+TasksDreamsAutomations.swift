@@ -63,6 +63,9 @@ extension GaryxMobileModel {
         } else {
             await refreshAllTasks()
         }
+        // Status/title/assign/stop mutations funnel through here; keep the
+        // conversation task-tree badge and sidebar snapshot in step.
+        noteTaskTreeLocalMutation()
     }
 
     func refreshAllTasks() async {
@@ -188,6 +191,7 @@ extension GaryxMobileModel {
             tasks.removeAll { $0.id == task.id }
             tasksPanelState.applyDeletion(taskId: task.id)
             persistCatalogCacheSnapshot()
+            noteTaskTreeLocalMutation()
         } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             lastError = displayMessage(for: error)
@@ -201,6 +205,7 @@ extension GaryxMobileModel {
             tasks.insert(task, at: 0)
         }
         persistCatalogCacheSnapshot()
+        noteTaskTreeLocalMutation()
     }
 
     func refreshDreams() async {

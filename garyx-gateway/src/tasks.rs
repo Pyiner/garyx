@@ -586,16 +586,21 @@ pub async fn list_task_forest(
         None => state.ops.garyx_db.list_task_forest(&filter, scope),
     };
     match forest_result {
-        Ok(page) => (
-            StatusCode::OK,
-            Json(json!({
+        Ok(page) => {
+            let mut body = json!({
                 "tasks": page.tasks,
                 "total": page.total,
                 "projection_current": projection_current,
                 "root_thread_ids": page.root_thread_ids,
                 "skipped_pinned_thread_ids": page.skipped_pinned_thread_ids,
-            })),
-        ),
+            });
+            // Anchored pages carry the server-computed active badge count;
+            // console pages omit it so clients keep their local recount.
+            if let Some(active_count) = page.active_count {
+                body["active_count"] = json!(active_count);
+            }
+            (StatusCode::OK, Json(body))
+        }
         Err(error) => task_projection_error_response(error),
     }
 }

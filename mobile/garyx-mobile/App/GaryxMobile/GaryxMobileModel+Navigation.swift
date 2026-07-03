@@ -408,6 +408,10 @@ extension GaryxMobileModel {
     }
 
     func performMainPanelLeadingEdgeAction() {
+        // While the task-tree sidebar is open, a leading-edge swipe must not
+        // back-navigate underneath the panel; the swipe only closes the
+        // sidebar via its scrim gesture.
+        guard !isTaskTreeSidebarOpen else { return }
         switch mainPanelLeadingEdgeAction {
         case .openSidebar:
             setSidebarVisible(true)

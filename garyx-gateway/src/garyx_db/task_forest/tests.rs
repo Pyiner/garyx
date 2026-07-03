@@ -494,10 +494,10 @@ fn pinned_task_forest_returns_pinned_roots_and_descendants() {
         .expect("db connection")
         .execute_batch(
             "INSERT INTO thread_pins (thread_id, pinned_at)
-                 VALUES
-                   ('thread::chat-a', '2026-01-01T00:00:01.000Z'),
-                   ('thread::chat', '2026-01-01T00:00:02.000Z'),
-                   ('thread::chat-b', '2026-01-01T00:00:03.000Z')",
+             VALUES
+               ('thread::chat-a', '2026-01-01T00:00:01.000Z'),
+               ('thread::chat', '2026-01-01T00:00:02.000Z'),
+               ('thread::chat-b', '2026-01-01T00:00:03.000Z')",
         )
         .expect("insert pins");
 
@@ -616,9 +616,9 @@ fn pinned_task_forest_filters_inactive_tasks_and_reparents_active_descendants() 
         .expect("db connection")
         .execute_batch(
             "INSERT INTO thread_pins (thread_id, pinned_at)
-                 VALUES
-                   ('thread::chat-active', '2026-01-01T00:00:01.000Z'),
-                   ('thread::chat-inactive', '2026-01-01T00:00:02.000Z')",
+             VALUES
+               ('thread::chat-active', '2026-01-01T00:00:01.000Z'),
+               ('thread::chat-inactive', '2026-01-01T00:00:02.000Z')",
         )
         .expect("insert pins");
 
@@ -796,7 +796,10 @@ fn anchored_task_forest_climbs_to_root_and_keeps_done_ancestors() {
 
     assert_eq!(page.root_thread_ids, vec!["thread::1254"]);
     assert_eq!(page.skipped_pinned_thread_ids, Vec::<String>::new());
-    assert_eq!(page.total, 4);
+    assert_eq!(page.total, 6);
+    assert_eq!(page.active_count, Some(3));
+    // Full retention in DFS pre-order: the done 1263 branch and its done
+    // leaf 1271 stay visible.
     assert_eq!(
         page.tasks
             .iter()
@@ -806,14 +809,23 @@ fn anchored_task_forest_climbs_to_root_and_keeps_done_ancestors() {
             "thread::1254",
             "thread::1261",
             "thread::1262",
-            "thread::1270"
+            "thread::1270",
+            "thread::1263",
+            "thread::1271"
         ]
+    );
+    assert_eq!(
+        page.tasks
+            .iter()
+            .map(|node| node.depth())
+            .collect::<Vec<_>>(),
+        vec![Some(0), Some(1), Some(1), Some(2), Some(1), Some(2)]
     );
     assert!(
         page.tasks
             .iter()
             .all(|node| matches!(node, TaskForestNode::Task { .. })),
-        "anchored tree must not synthesize thread roots"
+        "origin-less anchored trees must not synthesize thread roots"
     );
     let active_grandchild = page
         .tasks
@@ -829,7 +841,7 @@ fn anchored_task_forest_climbs_to_root_and_keeps_done_ancestors() {
 }
 
 #[test]
-fn anchored_task_forest_plan_b_keeps_current_dead_branch_path() {
+fn anchored_task_forest_is_anchor_independent_across_the_tree() {
     let db = GaryxDbService::memory().expect("db opens");
     for (thread_id, number, status, source) in [
         ("thread::1254", 1254, TaskStatus::InProgress, None),
@@ -875,46 +887,46 @@ fn anchored_task_forest_plan_b_keeps_current_dead_branch_path() {
         .expect("insert task");
     }
 
-    let page = db
-        .list_task_forest_anchored("thread::1271", &TaskListFilter::default())
-        .expect("anchored forest");
-
-    assert_eq!(page.total, 6);
-    assert_eq!(
-        page.tasks
+    let expected_thread_ids = vec![
+        "thread::1254",
+        "thread::1261",
+        "thread::1262",
+        "thread::1270",
+        "thread::1263",
+        "thread::1271",
+    ];
+    // Every anchor inside the tree sees the identical forest; only the
+    // client-side highlight differs.
+    for anchor in ["thread::1254", "thread::1270", "thread::1271"] {
+        let page = db
+            .list_task_forest_anchored(anchor, &TaskListFilter::default())
+            .expect("anchored forest");
+        assert_eq!(page.total, 6, "anchor {anchor}");
+        assert_eq!(page.active_count, Some(3), "anchor {anchor}");
+        assert_eq!(
+            page.root_thread_ids,
+            vec!["thread::1254"],
+            "anchor {anchor}"
+        );
+        assert_eq!(
+            page.tasks
+                .iter()
+                .map(|node| node.thread_id())
+                .collect::<Vec<_>>(),
+            expected_thread_ids,
+            "anchor {anchor}"
+        );
+        let current_dead_leaf = page
+            .tasks
             .iter()
-            .map(|node| node.thread_id())
-            .collect::<Vec<_>>(),
-        vec![
-            "thread::1254",
-            "thread::1261",
-            "thread::1262",
-            "thread::1263",
-            "thread::1270",
-            "thread::1271"
-        ]
-    );
-    let current_dead_leaf = page
-        .tasks
-        .iter()
-        .find(|node| node.thread_id() == "thread::1271")
-        .expect("current dead leaf");
-    assert_eq!(current_dead_leaf.parent_thread_id(), Some("thread::1263"));
-    assert_eq!(
-        page.tasks
-            .iter()
-            .filter(|node| matches!(
-                node,
-                TaskForestNode::Task { task, .. }
-                    if matches!(task.status, TaskStatus::InProgress | TaskStatus::InReview)
-            ))
-            .count(),
-        3
-    );
+            .find(|node| node.thread_id() == "thread::1271")
+            .expect("done dead leaf");
+        assert_eq!(current_dead_leaf.parent_thread_id(), Some("thread::1263"));
+    }
 }
 
 #[test]
-fn anchored_task_forest_hides_all_done_and_bare_threads() {
+fn anchored_task_forest_keeps_all_done_trees_and_hides_bare_threads() {
     let db = GaryxDbService::memory().expect("db opens");
     db.replace_task_projection(task_projection_draft(
         "thread::done-root",
@@ -935,11 +947,20 @@ fn anchored_task_forest_hides_all_done_and_bare_threads() {
     ))
     .expect("insert done child");
 
+    // All-done trees stay visible now; only the active badge drops to 0.
     let all_done = db
         .list_task_forest_anchored("thread::done-child", &TaskListFilter::default())
         .expect("all done anchored forest");
-    assert!(all_done.tasks.is_empty());
-    assert_eq!(all_done.total, 0);
+    assert_eq!(
+        all_done
+            .tasks
+            .iter()
+            .map(|node| node.thread_id())
+            .collect::<Vec<_>>(),
+        vec!["thread::done-root", "thread::done-child"]
+    );
+    assert_eq!(all_done.total, 2);
+    assert_eq!(all_done.active_count, Some(0));
     assert_eq!(all_done.root_thread_ids, vec!["thread::done-root"]);
 
     let bare = db
@@ -947,6 +968,7 @@ fn anchored_task_forest_hides_all_done_and_bare_threads() {
         .expect("bare anchored forest");
     assert!(bare.tasks.is_empty());
     assert!(bare.root_thread_ids.is_empty());
+    assert_eq!(bare.active_count, Some(0));
 }
 
 #[test]
@@ -1025,6 +1047,7 @@ fn anchored_task_forest_ignores_caller_filters_for_raw_tree() {
 
     assert_eq!(page.root_thread_ids, vec!["thread::filter-root"]);
     assert_eq!(page.total, 4);
+    assert_eq!(page.active_count, Some(3));
     assert_eq!(
         page.tasks
             .iter()
@@ -1036,6 +1059,13 @@ fn anchored_task_forest_ignores_caller_filters_for_raw_tree() {
             "thread::filter-child",
             "thread::filter-leaf",
         ]
+    );
+    assert_eq!(
+        page.tasks
+            .iter()
+            .map(|node| node.depth())
+            .collect::<Vec<_>>(),
+        vec![Some(0), Some(1), Some(1), Some(2)]
     );
     let leaf = page
         .tasks
@@ -1117,6 +1147,7 @@ fn anchored_task_forest_source_thread_anchor_returns_thread_root_and_subtree() {
     assert_eq!(page.root_thread_ids, vec!["thread::origin-chat"]);
     assert_eq!(page.skipped_pinned_thread_ids, Vec::<String>::new());
     assert_eq!(page.total, 3);
+    assert_eq!(page.active_count, Some(2));
     assert_eq!(
         page.tasks
             .iter()
@@ -1127,6 +1158,13 @@ fn anchored_task_forest_source_thread_anchor_returns_thread_root_and_subtree() {
             "thread::derived-root",
             "thread::derived-child",
         ]
+    );
+    assert_eq!(
+        page.tasks
+            .iter()
+            .map(|node| node.depth())
+            .collect::<Vec<_>>(),
+        vec![Some(0), Some(0), Some(1)]
     );
     match &page.tasks[0] {
         TaskForestNode::Thread { title, .. } => assert_eq!(title, "Origin chat"),
@@ -1165,16 +1203,39 @@ fn anchored_task_forest_source_thread_anchor_returns_thread_root_and_subtree() {
         "source-thread anchor must exclude tasks from other conversations"
     );
 
-    let task_anchor = db
-        .list_task_forest_anchored("thread::derived-root", &TaskListFilter::default())
-        .expect("task anchored forest");
-    assert!(
-        task_anchor
-            .tasks
-            .iter()
-            .all(|node| matches!(node, TaskForestNode::Task { .. })),
-        "task anchors must never receive a synthetic thread root"
-    );
+    // Task anchors resolve the same origin-rooted forest: hydrated thread
+    // root first, identical node set, whether anchored on the root task or
+    // a deep descendant.
+    let expected_node_ids = page
+        .tasks
+        .iter()
+        .map(|node| node.thread_id().to_owned())
+        .collect::<Vec<_>>();
+    for anchor in ["thread::derived-root", "thread::derived-child"] {
+        let task_anchor = db
+            .list_task_forest_anchored(anchor, &TaskListFilter::default())
+            .expect("task anchored forest");
+        assert_eq!(
+            task_anchor
+                .tasks
+                .iter()
+                .map(|node| node.thread_id().to_owned())
+                .collect::<Vec<_>>(),
+            expected_node_ids,
+            "anchor {anchor}"
+        );
+        assert_eq!(task_anchor.root_thread_ids, vec!["thread::origin-chat"]);
+        assert_eq!(task_anchor.active_count, Some(2));
+        match &task_anchor.tasks[0] {
+            TaskForestNode::Thread { title, depth, .. } => {
+                assert_eq!(title, "Origin chat");
+                assert_eq!(*depth, Some(0));
+            }
+            TaskForestNode::Task { .. } => {
+                panic!("task anchor with known origin must prepend the thread root")
+            }
+        }
+    }
 
     db.replace_task_projection(task_projection_draft(
         "thread::done-derived",
@@ -1194,12 +1255,25 @@ fn anchored_task_forest_source_thread_anchor_returns_thread_root_and_subtree() {
         1,
     ))
     .expect("insert done source-thread child");
+    // All-done derived trees remain visible behind their thread root.
     let done_page = db
         .list_task_forest_anchored("thread::done-chat", &TaskListFilter::default())
         .expect("done source-thread anchored forest");
-    assert_eq!(done_page.total, 0);
-    assert!(done_page.tasks.is_empty());
-    assert!(done_page.root_thread_ids.is_empty());
+    assert_eq!(done_page.total, 3);
+    assert_eq!(done_page.active_count, Some(0));
+    assert_eq!(done_page.root_thread_ids, vec!["thread::done-chat"]);
+    assert_eq!(
+        done_page
+            .tasks
+            .iter()
+            .map(|node| node.thread_id())
+            .collect::<Vec<_>>(),
+        vec![
+            "thread::done-chat",
+            "thread::done-derived",
+            "thread::done-derived-child"
+        ]
+    );
 }
 
 #[test]

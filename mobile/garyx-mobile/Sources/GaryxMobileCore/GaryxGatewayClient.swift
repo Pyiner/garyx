@@ -593,6 +593,15 @@ public final class GaryxGatewayClient {
         return try await get("/api/tasks", queryItems: queryItems)
     }
 
+    /// Anchored task forest for the conversation task-tree sidebar. The
+    /// gateway owns retention and layout; callers render the page as-is.
+    public func listTaskForest(anchorThreadId: String) async throws -> GaryxTaskForestPage {
+        try await get(
+            "/api/tasks/forest",
+            queryItems: [URLQueryItem(name: "anchor_thread_id", value: anchorThreadId)]
+        )
+    }
+
     public func createTask(_ request: GaryxTaskCreateRequest) async throws -> GaryxTaskSummary {
         try await post("/api/tasks", body: request)
     }

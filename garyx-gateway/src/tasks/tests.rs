@@ -416,6 +416,7 @@ async fn list_task_forest_route_supports_anchor_thread_id() {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(payload["total"], 2);
+    assert_eq!(payload["active_count"], 1);
     assert_eq!(
         payload["root_thread_ids"],
         serde_json::json!(["thread::route-root"])
@@ -431,7 +432,9 @@ async fn list_task_forest_route_supports_anchor_thread_id() {
     );
     assert_eq!(tasks[0]["kind"], "task");
     assert_eq!(tasks[0]["status"], "done");
+    assert_eq!(tasks[0]["depth"], 0);
     assert_eq!(tasks[1]["parent_node_id"], "task:thread::route-root");
+    assert_eq!(tasks[1]["depth"], 1);
 }
 
 #[tokio::test]
@@ -524,6 +527,7 @@ async fn list_task_forest_route_supports_conversation_anchor_thread_id() {
     );
     assert_eq!(tasks[0]["kind"], "thread");
     assert_eq!(tasks[0]["title"], "Route Origin Chat");
+    assert_eq!(tasks[0]["depth"], 0);
     assert_eq!(tasks[1]["kind"], "task");
     assert_eq!(
         tasks[1]["parent_node_id"],
@@ -531,6 +535,7 @@ async fn list_task_forest_route_supports_conversation_anchor_thread_id() {
     );
     assert_eq!(tasks[1]["parent_thread_id"], "thread::route-origin-chat");
     assert_eq!(tasks[1]["parent_task_number"], Value::Null);
+    assert_eq!(tasks[1]["depth"], 0);
     assert_eq!(tasks[2]["kind"], "task");
     assert_eq!(
         tasks[2]["parent_node_id"],
@@ -538,6 +543,132 @@ async fn list_task_forest_route_supports_conversation_anchor_thread_id() {
     );
     assert_eq!(tasks[2]["parent_thread_id"], "thread::route-derived-root");
     assert_eq!(tasks[2]["parent_task_number"], 30);
+    assert_eq!(tasks[2]["depth"], 1);
+    assert_eq!(payload["active_count"], 2);
+}
+
+/// Headless API smoke for the origin-rooted forest contract: the same
+/// tree (including a done leaf) is returned for the source-conversation
+/// anchor and for a deep child task anchor, thread root first.
+#[tokio::test]
+async fn list_task_forest_route_returns_identical_forest_for_conversation_and_task_anchors() {
+    let state = state_with_task_executors().await;
+    state
+        .ops
+        .garyx_db
+        .upsert_recent_thread(RecentThreadDraft {
+            thread_id: "thread::smoke-chat".to_owned(),
+            title: "Smoke Chat".to_owned(),
+            workspace_dir: None,
+            thread_type: "chat".to_owned(),
+            provider_type: Some("codex".to_owned()),
+            agent_id: Some("codex".to_owned()),
+            message_count: 3,
+            last_message_preview: "Smoke tree".to_owned(),
+            recent_run_id: None,
+            active_run_id: None,
+            run_state: "idle".to_owned(),
+            updated_at: Some("2026-01-01T00:00:01.000Z".to_owned()),
+            last_active_at: "2026-01-01T00:00:01.000Z".to_owned(),
+        })
+        .expect("insert smoke recent thread");
+    state
+        .ops
+        .garyx_db
+        .replace_task_projection(route_task_projection_draft(
+            "thread::smoke-root",
+            40,
+            TaskStatus::InProgress,
+            "2026-01-01T00:00:02.000Z",
+            Some(route_chat_source("thread::smoke-chat")),
+        ))
+        .expect("insert smoke root");
+    state
+        .ops
+        .garyx_db
+        .replace_task_projection(route_task_projection_draft(
+            "thread::smoke-done-leaf",
+            41,
+            TaskStatus::Done,
+            "2026-01-01T00:00:03.000Z",
+            Some(route_task_source("thread::smoke-root", "#TASK-40")),
+        ))
+        .expect("insert smoke done leaf");
+    state
+        .ops
+        .garyx_db
+        .replace_task_projection(route_task_projection_draft(
+            "thread::smoke-deep-child",
+            42,
+            TaskStatus::InReview,
+            "2026-01-01T00:00:04.000Z",
+            Some(route_task_source("thread::smoke-root", "#TASK-40")),
+        ))
+        .expect("insert smoke deep child");
+    state
+        .ops
+        .garyx_db
+        .record_projection_state(TASK_PROJECTION_NAME, CURRENT_TASK_PROJECTION_VERSION, 3)
+        .expect("mark projection current");
+
+    let mut payloads = Vec::new();
+    for anchor in ["thread::smoke-chat", "thread::smoke-deep-child"] {
+        let (status, Json(payload)) = list_task_forest(
+            State(state.clone()),
+            Query(TaskListQuery {
+                status: None,
+                assignee: None,
+                creator: None,
+                source_thread_id: None,
+                source_task_id: None,
+                source_bot_id: None,
+                anchor_thread_id: Some(anchor.to_owned()),
+                include_done: false,
+                scope: TaskForestScope::default(),
+                limit: None,
+                offset: None,
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "anchor {anchor}");
+        payloads.push(payload);
+    }
+
+    for (payload, anchor) in payloads
+        .iter()
+        .zip(["thread::smoke-chat", "thread::smoke-deep-child"])
+    {
+        let tasks = payload["tasks"].as_array().expect("tasks array");
+        assert_eq!(
+            tasks
+                .iter()
+                .map(|task| task["node_id"].as_str().unwrap_or_default())
+                .collect::<Vec<_>>(),
+            vec![
+                "thread-root:thread::smoke-chat",
+                "task:thread::smoke-root",
+                "task:thread::smoke-done-leaf",
+                "task:thread::smoke-deep-child",
+            ],
+            "anchor {anchor}"
+        );
+        assert_eq!(tasks[0]["kind"], "thread", "anchor {anchor}");
+        assert_eq!(tasks[0]["title"], "Smoke Chat", "anchor {anchor}");
+        assert_eq!(
+            tasks[2]["status"], "done",
+            "done leaf retained for {anchor}"
+        );
+        assert_eq!(payload["active_count"], 2, "anchor {anchor}");
+        assert_eq!(
+            payload["root_thread_ids"],
+            serde_json::json!(["thread::smoke-chat"]),
+            "anchor {anchor}"
+        );
+    }
+    assert_eq!(
+        payloads[0]["tasks"], payloads[1]["tasks"],
+        "conversation and deep task anchors must return the identical forest"
+    );
 }
 
 #[tokio::test]
@@ -779,12 +910,12 @@ async fn workflow_backed_task_creation_dispatches_workflow_entrypoint() {
     fs::write(
         workflow_package.join("garyx.workflow.json"),
         r#"{
-              "workflowId": "unit",
-              "version": 4,
-              "name": "Unit Workflow",
-              "input": {"placeholder": "Unit request"},
-              "defaults": {}
-            }"#,
+          "workflowId": "unit",
+          "version": 4,
+          "name": "Unit Workflow",
+          "input": {"placeholder": "Unit request"},
+          "defaults": {}
+        }"#,
     )
     .expect("workflow manifest");
     fs::write(workflow_package.join("workflow.ts"), "export {};\n").expect("workflow source");
