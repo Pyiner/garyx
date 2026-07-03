@@ -101,8 +101,6 @@ export function AgentsHubPanel({
   const [avatarStyleTarget, setAvatarStyleTarget] = useState<'agent' | 'team'>('agent');
   const [avatarStyleId, setAvatarStyleId] = useState<AvatarStyleId>(DEFAULT_AVATAR_STYLE_ID);
   const [customAvatarStyle, setCustomAvatarStyle] = useState('');
-  const avatarFileInputRef = useRef<HTMLInputElement | null>(null);
-  const teamAvatarFileInputRef = useRef<HTMLInputElement | null>(null);
   const workflowSourceRequestId = useRef(0);
   const [providerModelsByType, setProviderModelsByType] = useState<
     Partial<Record<ProviderType, DesktopProviderModels>>
