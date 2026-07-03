@@ -757,7 +757,9 @@ struct GaryxTaskMetaLine: View {
 }
 
 
-private extension GaryxTaskStatus {
+// Shared with the conversation task-tree sidebar, which renders the same
+// status pills.
+extension GaryxTaskStatus {
     var label: String {
         switch self {
         case .todo:

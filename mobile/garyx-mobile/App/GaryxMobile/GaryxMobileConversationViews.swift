@@ -289,6 +289,9 @@ struct GaryxConversationView: View {
         .garyxAdaptiveTopBar {
             GaryxConversationHeader()
         }
+        // Task-tree sidebar overlays the whole conversation surface, header
+        // included, so the scrim blocks every control behind the open panel.
+        .garyxTaskTreeSidebarSurface()
         .environment(\.garyxMessageBubbleActions, messageBubbleActions)
         // Capsule card tapped in the transcript: present the focused preview
         // above this conversation and dismiss back to it (never switch to the
@@ -700,6 +703,10 @@ struct GaryxConversationHeader: View {
                 }
 
                 Spacer(minLength: 0)
+
+                if model.selectedThread != nil {
+                    GaryxTaskTreeHeaderButton()
+                }
 
                 if let selectedThread = model.selectedThread {
                     Menu {

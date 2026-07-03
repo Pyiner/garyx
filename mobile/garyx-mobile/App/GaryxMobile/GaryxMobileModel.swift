@@ -232,6 +232,18 @@ final class GaryxMobileModel: ObservableObject {
     let capsuleThumbnailMemory = GaryxCapsuleThumbnailMemoryCache()
     @Published var tasks: [GaryxTaskSummary] = []
     @Published var tasksPanelState = GaryxMobileTasksPanelState()
+    /// Conversation task-tree sidebar: the trailing overlay panel on the chat
+    /// surface. `taskTreeForestPage` is the anchored forest snapshot for the
+    /// currently selected thread (kept per-thread in
+    /// `taskTreeSnapshotsByThread` so reopening renders instantly).
+    @Published var isTaskTreeSidebarOpen = false
+    @Published var taskTreeForestPage: GaryxTaskForestPage?
+    @Published var taskTreeLoadPhase: GaryxMobileLoadPhase = .idle
+    var taskTreeRequestGate = GaryxTaskTreeRequestGate()
+    var taskTreeSnapshotsByThread: [String: GaryxTaskForestPage] = [:]
+    /// Set when the selected thread's tree is known-empty: the 5s sidebar poll
+    /// pauses until the thread changes or a local task mutation occurs.
+    var taskTreePollSuspendedThreadId: String?
     @Published var workflowRunPanelState = GaryxWorkflowRunPanelState()
     @Published var selectedWorkflowRunThread: GaryxThreadSummary?
     @Published var automations: [GaryxAutomationSummary] = [] {
