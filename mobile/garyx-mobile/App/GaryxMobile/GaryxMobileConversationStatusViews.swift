@@ -1,6 +1,5 @@
 import Foundation
 import SwiftUI
-import UIKit
 
 /// Transcript loading placeholder: a chat-shaped skeleton (user pill on the
 /// trailing edge, assistant text lines on the leading edge) swept by the same

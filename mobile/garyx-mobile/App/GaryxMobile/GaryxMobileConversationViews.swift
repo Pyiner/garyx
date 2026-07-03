@@ -51,7 +51,7 @@ struct GaryxMessageBubbleActions {
     )
 }
 
-struct GaryxMessageBubbleActionsKey: EnvironmentKey {
+private struct GaryxMessageBubbleActionsKey: EnvironmentKey {
     static let defaultValue = GaryxMessageBubbleActions.empty
 }
 
