@@ -1,0 +1,305 @@
+import type {
+  DesktopSessionProviderHint,
+  DesktopThreadProviderType,
+} from "./provider.ts";
+import type {
+  MessageFileAttachment,
+  MessageImageAttachment,
+  RenderState,
+  TranscriptMessage,
+} from "./transcript.ts";
+import type { DesktopWorkspaceMode } from "./workspace.ts";
+
+/**
+ * Team block attached to a thread when its bound agent_id resolves to a Team.
+ * Mirrors the Rust response shape — field names stay in snake_case for wire
+ * fidelity because they flow straight through from the gateway JSON.
+ *
+ * Emitted by thread detail/history responses (GET /api/threads/:key nested
+ * under the thread object; GET /api/threads/history as a top-level sibling of
+ * `thread`/`messages`). The thread list stays lightweight and does not fetch
+ * this block. Absent/null when the thread isn't bound to a Team. The `teamId`
+ * + `teamName` hints remain for backward compatibility but the full block is
+ * the authoritative source for team branding once details are loaded.
+ */
+export interface ThreadTeamBlock {
+  team_id: string;
+  display_name: string;
+  leader_agent_id: string;
+  member_agent_ids: string[];
+  /**
+   * agent_id -> child thread_id. Empty object when no sub-agent has been
+   * dispatched yet. Always present when the `team` block itself is present.
+   */
+  child_thread_ids: Record<string, string>;
+}
+
+export interface DesktopThreadSummary {
+  id: string;
+  title: string;
+  threadType?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  lastMessagePreview: string;
+  workspacePath?: string | null;
+  messageCount?: number;
+  agentId?: string | null;
+  teamId?: string | null;
+  teamName?: string | null;
+  recentRunId?: string | null;
+  runState?: string | null;
+  worktree?: ThreadWorktreeInfo | null;
+  /**
+   * Full team block when this thread is bound to a Team. It is filled by
+   * thread detail/history responses; list-only snapshots may omit it.
+   */
+  team?: ThreadTeamBlock | null;
+}
+
+export interface ThreadWorktreeInfo {
+  mode?: string | null;
+  enabled?: boolean | null;
+  branch?: string | null;
+  sourceBranch?: string | null;
+  path?: string | null;
+  worktreeDir?: string | null;
+  sourceWorkspaceDir?: string | null;
+  sourceRepoRoot?: string | null;
+}
+
+export interface ThreadChannelBindingInfo {
+  channel: string;
+  accountId: string;
+  bindingKey: string;
+  chatId: string;
+  deliveryTargetType: string;
+  deliveryTargetId: string;
+  displayLabel: string;
+  lastInboundAt?: string | null;
+  lastDeliveryAt?: string | null;
+}
+
+export interface ThreadRuntimeInfo {
+  agentId?: string | null;
+  providerType?: DesktopThreadProviderType | null;
+  providerLabel?: string | null;
+  model?: string | null;
+  modelReasoningEffort?: string | null;
+  modelServiceTier?: string | null;
+  modelOverride?: string | null;
+  modelReasoningEffortOverride?: string | null;
+  modelServiceTierOverride?: string | null;
+  sdkSessionId?: string | null;
+  workspacePath?: string | null;
+  worktree?: ThreadWorktreeInfo | null;
+  activeRun?: ThreadActiveRunInfo | null;
+  channelBindings: ThreadChannelBindingInfo[];
+}
+
+export interface ThreadActiveRunInfo {
+  runId: string;
+  providerType?: DesktopThreadProviderType | null;
+  providerLabel?: string | null;
+  assistantResponse?: string | null;
+  updatedAt?: string | null;
+  pendingUserInputCount?: number;
+}
+
+// Offline cache bundle: committed transcript plus the last render snapshot, so a
+// cold/offline thread open can render folded history before the first live frame.
+export interface CachedThreadTranscript {
+  transcript: ThreadTranscript;
+  renderState: RenderState | null;
+}
+
+export type DesktopDeepLinkEvent =
+  | {
+      type: "open-thread";
+      url: string;
+      threadId: string;
+    }
+  | {
+      type: "new-thread";
+      url: string;
+      workspacePath?: string | null;
+      agentId?: string | null;
+    }
+  | {
+      type: "resume-session";
+      url: string;
+      sessionId: string;
+      providerHint?: DesktopSessionProviderHint | null;
+    }
+  | {
+      type: "open-capsule";
+      url: string;
+      capsuleId: string;
+    }
+  | {
+      type: "error";
+      url: string;
+      error: string;
+    };
+
+export type DesktopDeepLinkListener = (event: DesktopDeepLinkEvent) => void;
+
+export interface ThreadTranscript {
+  threadId: string;
+  remoteFound: boolean;
+  messages: TranscriptMessage[];
+  pendingInputs: PendingThreadInput[];
+  thread?: DesktopThreadSummary | null;
+  threadInfo?: ThreadRuntimeInfo | null;
+  pageInfo?: ThreadTranscriptPageInfo | null;
+  /**
+   * Team block when this thread is bound to an AgentTeam. `null` when the
+   * thread isn't a team thread. The gateway's `/api/threads/history`
+   * endpoint emits this as a sibling of `thread`/`messages`.
+   */
+  team?: ThreadTeamBlock | null;
+}
+
+export interface ThreadTranscriptPageInfo {
+  totalMessages: number;
+  committedMessages?: number | null;
+  returnedMessages: number;
+  returnedUserQueries?: number | null;
+  startIndex: number;
+  endIndex: number;
+  hasMoreBefore: boolean;
+  nextBeforeIndex?: number | null;
+  hasMoreAfter?: boolean;
+  nextAfterIndex?: number | null;
+  reset?: boolean;
+  limit: number;
+  userQueryLimit?: number | null;
+}
+
+export interface GetThreadHistoryInput {
+  threadId: string;
+  beforeIndex?: number | null;
+  afterIndex?: number | null;
+  limit?: number | null;
+  userQueryLimit?: number | null;
+}
+
+export interface StartThreadStreamInput {
+  threadId: string;
+  afterSeq?: number | null;
+  consumerId?: string | null;
+}
+
+export interface StopThreadStreamInput {
+  threadId?: string | null;
+  consumerId?: string | null;
+}
+
+export interface PendingThreadInput {
+  id: string;
+  runId?: string | null;
+  text: string;
+  content?: unknown;
+  timestamp?: string | null;
+  status: "awaiting_ack" | "orphaned";
+  active: boolean;
+}
+
+export interface ThreadLogChunk {
+  threadId: string;
+  path: string;
+  text: string;
+  cursor: number;
+  reset: boolean;
+}
+
+export interface CreateThreadInput {
+  title?: string;
+  workspacePath?: string | null;
+  workspaceMode?: DesktopWorkspaceMode;
+  /** Agent or team ID. Backend resolves whether it's a team leader or custom agent. */
+  agentId?: string | null;
+  /** Optional per-thread model override; wins over the agent's configured model. */
+  model?: string | null;
+  /** Optional per-thread reasoning/thinking level override. */
+  modelReasoningEffort?: string | null;
+  /** Optional per-thread service tier override. */
+  modelServiceTier?: string | null;
+  /** Optional Claude/Codex/Gemini provider session id to resume from. Garyx resolves the real local provider/workspace from it. */
+  sdkSessionId?: string | null;
+  /** Optional provider hint for sdkSessionId. Supported values are claude, codex, and gemini. */
+  sdkSessionProviderHint?: DesktopSessionProviderHint | null;
+  /** Optional Garyx thread id to fork from using the provider-native session fork. */
+  forkFromThreadId?: string | null;
+  /** Optional thread metadata forwarded to the gateway. */
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface RenameThreadInput {
+  threadId: string;
+  // Compatibility fallback for older callers. Prefer `threadId`.
+  sessionId?: string;
+  title: string;
+}
+
+export interface UpdateThreadRuntimeSettingsInput {
+  threadId: string;
+  model?: string | null;
+  modelReasoningEffort?: string | null;
+  modelServiceTier?: string | null;
+}
+
+export interface DeleteThreadInput {
+  threadId: string;
+  // Compatibility fallback for older callers. Prefer `threadId`.
+  sessionId?: string;
+}
+
+export interface ArchiveThreadInput {
+  threadId: string;
+  endpointKeys?: string[];
+}
+
+export interface SetThreadPinnedInput {
+  threadId: string;
+  pinned: boolean;
+}
+
+export interface SendMessageInput {
+  threadId: string;
+  // Compatibility fallback for older callers. Prefer `threadId`.
+  sessionId?: string;
+  // Stable frontend identity for queued/in-flight user intents.
+  clientIntentId?: string;
+  message: string;
+  images?: MessageImageAttachment[];
+  files?: MessageFileAttachment[];
+}
+
+export interface OpenChatStreamResult {
+  runId: string;
+  threadId: string;
+  // Compatibility mirror for older responses. Prefer `threadId`.
+  sessionId?: string;
+  response: string;
+  status: "accepted" | "completed" | "disconnected";
+  thread: DesktopThreadSummary;
+  // Compatibility mirror for older responses. Prefer `thread`.
+  session?: DesktopThreadSummary;
+}
+
+export interface SendStreamingInputResult {
+  status: string;
+  threadId: string;
+  // Compatibility mirror for older responses. Prefer `threadId`.
+  sessionId?: string;
+  clientIntentId?: string;
+  pendingInputId?: string;
+}
+
+export interface InterruptResult {
+  status: string;
+  threadId: string;
+  // Compatibility mirror for older responses. Prefer `threadId`.
+  sessionId?: string;
+  abortedRuns: string[];
+}
