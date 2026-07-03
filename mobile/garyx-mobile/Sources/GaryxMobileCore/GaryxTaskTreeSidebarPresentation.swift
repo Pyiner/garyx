@@ -23,8 +23,6 @@ public struct GaryxTaskTreeRow: Equatable, Identifiable, Sendable {
     /// Visual indent level, clamped at 4 like the Mac popover.
     public var indentLevel: Int
     public var isCurrent: Bool
-    /// Done rows render dimmed unless they are the current thread.
-    public var isDeemphasized: Bool
     public var isRunning: Bool
 }
 
@@ -101,7 +99,6 @@ public enum GaryxTaskTreeSidebarPresentation {
                 providerType: thread.providerType ?? "",
                 indentLevel: indent,
                 isCurrent: isCurrent,
-                isDeemphasized: false,
                 isRunning: isRunningState(thread.runState)
             )
         case .task(let node):
@@ -120,7 +117,6 @@ public enum GaryxTaskTreeSidebarPresentation {
                 providerType: "",
                 indentLevel: indent,
                 isCurrent: isCurrent,
-                isDeemphasized: task.status == .done && !isCurrent,
                 isRunning: isRunningState(node.runState)
             )
         }

@@ -247,20 +247,10 @@
 .thread-subtask-item.depth-2 { padding-left: 40px; }
 .thread-subtask-item.depth-3 { padding-left: 56px; }
 .thread-subtask-item.depth-4 { padding-left: 72px; }
-/* Done tasks stay in the tree, visually de-emphasized but still clickable;
-   the `current` highlight suppresses the dimming. */
-.thread-subtask-item.done .thread-subtask-title,
-.thread-subtask-item.done .thread-subtask-num,
-.thread-subtask-item.done .thread-subtask-row2 {
-  opacity: 0.55;
-}
 /* Source conversation root row. */
 .thread-subtask-thread-glyph {
   flex: 0 0 auto;
   align-self: center;
-  color: var(--fg-desc, rgba(26, 28, 31, 0.5));
-}
-.thread-subtask-thread .thread-subtask-agent {
   color: var(--fg-desc, rgba(26, 28, 31, 0.5));
 }
 .thread-subtask-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 9999px; }

@@ -482,18 +482,14 @@ private struct GaryxTaskTreeSidebarRowView: View {
                             Image(systemName: "message")
                                 .font(GaryxFont.system(size: 9, weight: .semibold))
                                 .foregroundStyle(.secondary)
-                            Text("Conversation")
-                                .font(GaryxFont.caption())
-                                .foregroundStyle(.secondary)
-                        } else {
-                            Text(agentLabel)
-                                .font(GaryxFont.caption())
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            if let status = row.status {
-                                GaryxStatusPill(text: status.label, tone: status.tone)
-                            }
+                        }
+                        Text(agentLabel)
+                            .font(GaryxFont.caption())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        if let status = row.status {
+                            GaryxStatusPill(text: status.label, tone: status.tone)
                         }
                     }
                 }
@@ -508,7 +504,6 @@ private struct GaryxTaskTreeSidebarRowView: View {
                         .fill(GaryxTheme.accent.opacity(0.10))
                 }
             }
-            .opacity(row.isDeemphasized ? 0.55 : 1)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -546,7 +541,7 @@ private struct GaryxTaskTreeSidebarRowView: View {
         }
         parts.append(row.title)
         if row.kind == .sourceThread {
-            parts.append("Conversation")
+            parts.append(agentLabel)
         }
         if let status = row.status {
             parts.append(status.label)

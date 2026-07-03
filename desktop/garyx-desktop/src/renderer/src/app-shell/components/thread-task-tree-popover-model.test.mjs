@@ -209,20 +209,6 @@ test("fallback layout treats orphan parents as roots", () => {
   assert.deepEqual(buildTaskRows([orphan]).map(rowShape), [["task", 5, 0]]);
 });
 
-test("done rows are flagged de-emphasized, active rows are not", () => {
-  const rows = buildTaskRows([
-    task({ number: 1, status: "done", depth: 0 }),
-    task({ number: 2, status: "in_progress", depth: 0 }),
-  ]);
-  assert.deepEqual(
-    rows.map((row) => [row.task.number, row.isDeemphasized]),
-    [
-      [1, true],
-      [2, false],
-    ],
-  );
-});
-
 test("current node matching applies to thread and task rows by thread id", () => {
   const current = task({ number: 2, threadId: "thread::current" });
   assert.equal(isCurrentTaskTreeNode(current, "thread::current"), true);

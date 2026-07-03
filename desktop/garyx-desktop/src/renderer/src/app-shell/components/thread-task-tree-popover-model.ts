@@ -9,12 +9,7 @@ import type {
 const MAX_ROW_DEPTH = 4;
 
 export type TaskTreeRow =
-  | {
-      kind: "task";
-      task: DesktopTaskForestTaskNode;
-      depth: number;
-      isDeemphasized: boolean;
-    }
+  | { kind: "task"; task: DesktopTaskForestTaskNode; depth: number }
   | { kind: "thread"; thread: DesktopTaskForestThreadNode; depth: number };
 
 export function isTaskNode(
@@ -95,12 +90,7 @@ export function taskStatusLabel(status: DesktopTaskStatus): string {
 }
 
 function taskRow(node: DesktopTaskForestTaskNode, depth: number): TaskTreeRow {
-  return {
-    kind: "task",
-    task: node,
-    depth: Math.min(depth, MAX_ROW_DEPTH),
-    isDeemphasized: node.status === "done",
-  };
+  return { kind: "task", task: node, depth: Math.min(depth, MAX_ROW_DEPTH) };
 }
 
 function threadRow(node: DesktopTaskForestThreadNode, depth: number): TaskTreeRow {

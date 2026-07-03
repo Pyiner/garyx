@@ -266,22 +266,12 @@ final class GaryxTaskTreeSidebarTests: XCTestCase {
         )
         let doneRow = doneCurrent.first { $0.id == "task:thread::done-leaf" }
         XCTAssertEqual(doneRow?.isCurrent, true)
-        XCTAssertEqual(doneRow?.isDeemphasized, false, "current overrides done dimming")
 
         let evicted = GaryxTaskTreeSidebarPresentation.rows(
             page: page,
             currentThreadId: "thread::not-in-tree"
         )
         XCTAssertTrue(evicted.allSatisfy { !$0.isCurrent })
-    }
-
-    func testExactlyDoneRowsAreDeemphasized() throws {
-        let page = try decodedFixturePage()
-        let rows = GaryxTaskTreeSidebarPresentation.rows(page: page, currentThreadId: nil)
-        XCTAssertEqual(
-            rows.filter(\.isDeemphasized).map(\.id),
-            ["task:thread::done-leaf"]
-        )
     }
 
     func testBadgeEqualsWireActiveCountAndLocalRecountFallback() throws {

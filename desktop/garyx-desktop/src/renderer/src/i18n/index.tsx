@@ -422,7 +422,6 @@ const zhCN: Record<string, string> = {
   '{count} roots': '{count} 个根节点',
   '{count} chats skipped': '已跳过 {count} 个聊天线程',
   'Task tree': '任务树',
-  'Conversation': '会话',
   'No tasks from this thread yet.': '当前线程还没有创建任务。',
   'Open a thread to see its tasks.': '打开线程后查看它创建的任务。',
   'No {status} tasks.': '没有{status}任务。',

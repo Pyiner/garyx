@@ -139,25 +139,21 @@ export function ThreadTaskTreePopover({
               providerType={avatar.providerType}
               size="sm"
             />
-            <span className="thread-subtask-agent">{t("Conversation")}</span>
+            <span className="thread-subtask-agent">{avatar.label}</span>
           </span>
         </span>
       </button>
     );
   };
 
-  const renderTaskRow = (
-    task: DesktopTaskForestTaskNode,
-    depth: number,
-    isDeemphasized: boolean,
-  ) => {
+  const renderTaskRow = (task: DesktopTaskForestTaskNode, depth: number) => {
     const tone = taskStatusTone(task.status);
     const current = isCurrentTaskTreeNode(task, threadId);
     const avatar = resolveTaskAvatarIdentity(task, threadAvatarCatalog);
     return (
       <button
         key={task.nodeId}
-        className={`thread-subtask-item depth-${depth} tone-${tone}${current ? " current" : ""}${isDeemphasized && !current ? " done" : ""}`}
+        className={`thread-subtask-item depth-${depth} tone-${tone}${current ? " current" : ""}`}
         onClick={() => onOpenThread(task.threadId)}
         type="button"
       >
@@ -208,7 +204,7 @@ export function ThreadTaskTreePopover({
         {rows.map((row) =>
           row.kind === "thread"
             ? renderThreadRow(row.thread, row.depth)
-            : renderTaskRow(row.task, row.depth, row.isDeemphasized),
+            : renderTaskRow(row.task, row.depth),
         )}
       </div>
     </div>
