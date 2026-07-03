@@ -76,10 +76,16 @@
   gap: 0;
 }
 
-/* Gallery grid of live-preview cards. */
+/* Gallery grid of live-preview cards. `grid-auto-rows: max-content` is
+   load-bearing: with plain `auto` rows, Chromium distributes the scroll
+   container's fixed height (flex: 1 1 0 + overflow: auto) evenly across the
+   implicit rows once the cards overflow it, instead of sizing rows to content
+   and scrolling. The squeezed rows then stretch-shrink each card's preview
+   shell, crushing the fixed 16:10 thumbnail (#TASK gallery-card squash). */
 .capsules-gallery-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-auto-rows: max-content;
   gap: 14px;
   align-content: start;
   min-height: 0;
@@ -129,6 +135,9 @@
   display: block;
   width: 100%;
   aspect-ratio: 16 / 10;
+  /* The aspect-derived height must never join the card's flex shrink math: if
+     an outer layout ever under-sizes the card again, overflow beats warping. */
+  flex-shrink: 0;
   overflow: hidden;
   background: #0a0e16;
   border-bottom: 0.5px solid color-mix(in oklab, var(--color-token-border) 72%, transparent);
