@@ -27,6 +27,13 @@
   -webkit-app-region: no-drag;
 }
 
+/* Collapsed sidebar (no conversation rail): the header hugs the window's left
+   edge, so the title must clear the traffic lights (x 18-70) and the sidebar
+   toggle (x 84-110) that float above it. */
+.app-shell.sidebar-collapsed:not(.with-bot-conversation-rail) .conversation-header {
+  padding-left: 122px;
+}
+
 .conversation-header-copy {
   display: flex;
   align-items: center;

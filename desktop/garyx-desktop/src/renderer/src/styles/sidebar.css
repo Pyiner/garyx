@@ -623,7 +623,9 @@
 }
 
 /* Sidebar collapse: the toggle lives beside the traffic lights (same spot in
-   both states), above the titlebar drag overlay. */
+   both states). Its no-drag only beats the titlebar drag overlays because the
+   button is the last app-shell child in document order — z-index does not
+   affect how Electron composes window drag regions. */
 .sidebar-collapse-toggle {
   position: absolute;
   top: 12px;

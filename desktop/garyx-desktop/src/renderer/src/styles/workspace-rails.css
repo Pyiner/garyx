@@ -41,6 +41,13 @@
   padding: 0 2px 0 14px;
 }
 
+/* Collapsed sidebar: the rail hugs the window's left edge, so its header must
+   clear the traffic lights and the floating sidebar toggle, like
+   `.conversation-header` does. */
+.app-shell.sidebar-collapsed .bot-conversation-rail .bot-conversation-header {
+  padding-left: 122px;
+}
+
 .bot-conversation-heading {
   display: inline-flex;
   align-items: center;

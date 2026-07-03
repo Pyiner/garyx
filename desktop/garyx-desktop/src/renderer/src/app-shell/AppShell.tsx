@@ -10157,16 +10157,6 @@ export function AppShell() {
       }
     >
       <ToastViewport onDismiss={dismissToast} toasts={toasts} />
-      <button
-        aria-label={t("Toggle Sidebar")}
-        aria-pressed={sidebarCollapsed}
-        className="sidebar-collapse-toggle"
-        onClick={toggleSidebarCollapsed}
-        title={t("Toggle Sidebar")}
-        type="button"
-      >
-        <PanelLeft aria-hidden size={15} strokeWidth={1.8} />
-      </button>
       <AppLeftRail
         gatewayIdentitySlot={
           <GatewayIdentityBar
@@ -10874,6 +10864,21 @@ export function AppShell() {
           />
         </Suspense>
       ) : null}
+
+      {/* Kept as the last app-shell child: Electron composes window drag
+          regions in document order (union for drag, difference for no-drag),
+          so this button's no-drag carve-out only survives if it is collected
+          after the left-rail / conversation-header drag zones. */}
+      <button
+        aria-label={t("Toggle Sidebar")}
+        aria-pressed={sidebarCollapsed}
+        className="sidebar-collapse-toggle"
+        onClick={toggleSidebarCollapsed}
+        title={t("Toggle Sidebar")}
+        type="button"
+      >
+        <PanelLeft aria-hidden size={15} strokeWidth={1.8} />
+      </button>
 
       {memoryDialogTarget ? (
         <Suspense fallback={null}>
