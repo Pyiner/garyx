@@ -93,6 +93,19 @@ public enum GaryxStreamSeqPlanner {
     }
 }
 
+/// Whether the selected-thread recovery poll should keep running: only while
+/// the recovered thread is still the open conversation and still remote-busy.
+public enum GaryxSelectedThreadRecoveryPolicy {
+    public static func shouldContinueRecovering(
+        threadId: String,
+        selectedThreadId: String?,
+        remoteBusyThreadIds: Set<String>
+    ) -> Bool {
+        selectedThreadId == threadId
+            && remoteBusyThreadIds.contains(threadId)
+    }
+}
+
 public enum GatewayThreadStreamReplayScope: String, Equatable, Sendable {
     case resume
     case initial

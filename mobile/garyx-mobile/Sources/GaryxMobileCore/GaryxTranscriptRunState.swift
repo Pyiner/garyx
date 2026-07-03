@@ -66,6 +66,53 @@ public struct GaryxTranscriptRunState: Equatable, Sendable {
     }
 }
 
+/// Projects the committed transcript run state onto a thread summary: strips
+/// the stale API `activeRun` payload, derives `activeRunId`/`runState`, and
+/// applies a committed title update.
+public enum GaryxThreadSummaryCommittedRunStateProjector {
+    public static func summary(
+        _ thread: GaryxThreadSummary,
+        committedState state: GaryxTranscriptRunState?
+    ) -> GaryxThreadSummary {
+        guard let state else {
+            var updated = thread
+            if var runtime = updated.threadRuntime {
+                runtime.activeRun = nil
+                updated.threadRuntime = runtime
+            }
+            updated.runState = GaryxThreadSummaryRunStateResolver.resolvedRunState(
+                apiRunState: updated.runState,
+                recentRunId: updated.recentRunId,
+                committedState: nil
+            )
+            return updated
+        }
+        return summary(thread, applying: state)
+    }
+
+    public static func summary(
+        _ thread: GaryxThreadSummary,
+        applying state: GaryxTranscriptRunState
+    ) -> GaryxThreadSummary {
+        var updated = thread
+        if var runtime = updated.threadRuntime {
+            runtime.activeRun = nil
+            updated.threadRuntime = runtime
+        }
+        updated.activeRunId = state.busy ? state.activeRunId : nil
+        updated.runState = GaryxThreadSummaryRunStateResolver.resolvedRunState(
+            apiRunState: updated.runState,
+            recentRunId: updated.recentRunId,
+            committedState: state
+        )
+        if let title = state.title?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !title.isEmpty {
+            updated.title = title
+        }
+        return updated
+    }
+}
+
 public enum GaryxTranscriptKindResolver {
     public static func kind(for message: GaryxTranscriptMessage) -> GaryxTranscriptMessageKind {
         let role = message.role.rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
