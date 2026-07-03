@@ -10157,6 +10157,16 @@ export function AppShell() {
       }
     >
       <ToastViewport onDismiss={dismissToast} toasts={toasts} />
+      <button
+        aria-label={t("Toggle Sidebar")}
+        aria-pressed={sidebarCollapsed}
+        className="sidebar-collapse-toggle"
+        onClick={toggleSidebarCollapsed}
+        title={t("Toggle Sidebar")}
+        type="button"
+      >
+        <PanelLeft aria-hidden size={15} strokeWidth={1.8} />
+      </button>
       <AppLeftRail
         gatewayIdentitySlot={
           <GatewayIdentityBar
@@ -10865,15 +10875,18 @@ export function AppShell() {
         </Suspense>
       ) : null}
 
-      {/* Kept as the last app-shell child: Electron composes window drag
-          regions in document order (union for drag, difference for no-drag),
-          so this button's no-drag carve-out only survives if it is collected
-          after the left-rail / conversation-header drag zones. */}
+      {/* Electron composes window drag regions in document order (union for
+          drag, difference for no-drag), and only at load time — runtime
+          style/DOM edits never re-report them. A bare div here is skipped by
+          the collector (no painted content), so the carve-out must be this
+          full twin of the toggle. It also receives the mouse clicks (it sits
+          above its sibling); the early sibling exists for keyboard focus
+          order and screen readers. */}
       <button
-        aria-label={t("Toggle Sidebar")}
-        aria-pressed={sidebarCollapsed}
-        className="sidebar-collapse-toggle"
+        aria-hidden="true"
+        className="sidebar-collapse-toggle sidebar-collapse-toggle-carveout"
         onClick={toggleSidebarCollapsed}
+        tabIndex={-1}
         title={t("Toggle Sidebar")}
         type="button"
       >

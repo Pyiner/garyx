@@ -623,9 +623,11 @@
 }
 
 /* Sidebar collapse: the toggle lives beside the traffic lights (same spot in
-   both states). Its no-drag only beats the titlebar drag overlays because the
-   button is the last app-shell child in document order — z-index does not
-   affect how Electron composes window drag regions. */
+   both states). Its own no-drag loses to the titlebar drag overlays that
+   follow it in document order (Electron composes window drag regions in that
+   order; z-index plays no part), so `.sidebar-collapse-toggle-carveout` — a
+   twin rendered as the last app-shell child — re-punches the hole and takes
+   the pointer clicks, while this early sibling keeps keyboard focus order. */
 .sidebar-collapse-toggle {
   position: absolute;
   top: 12px;
@@ -647,6 +649,11 @@
     color var(--duration-fast) var(--ease-standard),
     background var(--duration-fast) var(--ease-standard);
 }
+
+/* The twin overlays the keyboard button one-to-one (shared base class), so
+   the only extra rule it needs is staying out of the keyboard/AX tree, which
+   the markup handles via tabindex/aria-hidden. Keep it visually identical —
+   both render, stacked, and must read as one control. */
 
 .sidebar-collapse-toggle:hover {
   background: color-mix(in oklab, var(--color-token-text-primary) 10%, transparent);
