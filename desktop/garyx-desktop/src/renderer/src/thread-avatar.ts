@@ -93,7 +93,10 @@ function fallbackAvatarIdentity(label: string): ThreadAvatarIdentity {
 }
 
 export function resolveThreadAvatarIdentity(
-  thread: DesktopThreadSummary,
+  thread: Pick<
+    DesktopThreadSummary,
+    "title" | "agentId" | "teamId" | "teamName" | "team"
+  >,
   catalog: ThreadAvatarCatalog,
 ): ThreadAvatarIdentity {
   const explicitTeamId =

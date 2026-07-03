@@ -568,11 +568,14 @@ interface TaskForestNodePayload extends TaskSummaryPayload {
   messageCount?: number | null;
   last_message_preview?: string | null;
   lastMessagePreview?: string | null;
+  depth?: number | null;
 }
 
 interface TaskForestPayload {
   tasks?: TaskForestNodePayload[];
   total?: number;
+  active_count?: number | null;
+  activeCount?: number | null;
   projection_current?: boolean;
   projectionCurrent?: boolean;
   root_thread_ids?: unknown[];
@@ -2575,6 +2578,7 @@ function mapTaskForestNode(value: TaskForestNodePayload): DesktopTaskForestNode 
         asString(value.updated_at) || asString(value.updatedAt) || null,
       lastActiveAt:
         asString(value.last_active_at) || asString(value.lastActiveAt) || null,
+      depth: asFiniteNumber(value.depth) ?? null,
     };
   }
   const task = mapTaskSummary(value);
@@ -2598,6 +2602,7 @@ function mapTaskForestNode(value: TaskForestNodePayload): DesktopTaskForestNode 
     runState: asString(value.run_state) || asString(value.runState) || "idle",
     lastActiveAt:
       asString(value.last_active_at) || asString(value.lastActiveAt) || null,
+    depth: asFiniteNumber(value.depth) ?? null,
   };
 }
 
@@ -5556,6 +5561,10 @@ export async function listTaskForest(
   return {
     tasks,
     total: asFiniteNumber(payload.total) ?? tasks.length,
+    activeCount:
+      asFiniteNumber(payload.active_count) ??
+      asFiniteNumber(payload.activeCount) ??
+      null,
     projectionCurrent:
       payload.projection_current ?? payload.projectionCurrent ?? true,
     rootThreadIds: asStringList(payload.root_thread_ids ?? payload.rootThreadIds),

@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   buildTaskRows,
   isCurrentTaskTreeNode,
+  resolveTaskTreeActiveCount,
   shouldShowThreadTaskTreePopover,
   taskStatusLabel,
   taskStatusTone,
@@ -35,6 +36,7 @@ function task(overrides) {
     activeRunId: null,
     runState: "idle",
     lastActiveAt: null,
+    depth: null,
     ...overrides,
   };
 }
@@ -44,7 +46,7 @@ function threadRoot(overrides = {}) {
     kind: "thread",
     nodeId: "thread-root:thread::root",
     threadId: "thread::root",
-    title: "Pinned root",
+    title: "Source conversation",
     threadType: "chat",
     providerType: "codex",
     agentId: "codex",
@@ -54,11 +56,18 @@ function threadRoot(overrides = {}) {
     runState: "idle",
     updatedAt: null,
     lastActiveAt: null,
+    depth: null,
     ...overrides,
   };
 }
 
-test("keeps task nodes regardless of status for server-pruned tree", () => {
+function rowShape(row) {
+  return row.kind === "thread"
+    ? ["thread", row.thread.threadId, row.depth]
+    : ["task", row.task.number, row.depth];
+}
+
+test("keeps task nodes regardless of status for server-retained tree", () => {
   const root = threadRoot();
   const doneAncestor = task({ number: 1, status: "done" });
   const activeChild = task({
@@ -88,7 +97,54 @@ test("badge counts only active tasks", () => {
   );
 });
 
-test("rows build from mixed forest without rendering thread root row", () => {
+test("badge prefers server active_count and falls back to local recount", () => {
+  const nodes = [
+    threadRoot(),
+    task({ number: 1, status: "in_progress" }),
+    task({ number: 2, status: "done" }),
+  ];
+  assert.equal(
+    resolveTaskTreeActiveCount({ tasks: nodes, activeCount: 7 }),
+    7,
+  );
+  assert.equal(
+    resolveTaskTreeActiveCount({ tasks: nodes, activeCount: null }),
+    1,
+  );
+});
+
+test("server layout renders wire order with visible thread root row", () => {
+  const root = threadRoot({ depth: 0 });
+  const derivedRoot = task({
+    number: 1,
+    status: "in_progress",
+    parentNodeId: root.nodeId,
+    parentThreadId: root.threadId,
+    depth: 1,
+  });
+  const doneLeaf = task({
+    number: 2,
+    status: "done",
+    parentNodeId: derivedRoot.nodeId,
+    parentTaskNumber: 1,
+    parentThreadId: derivedRoot.threadId,
+    depth: 2,
+  });
+
+  const rows = buildTaskRows([root, derivedRoot, doneLeaf]);
+  assert.deepEqual(rows.map(rowShape), [
+    ["thread", "thread::root", 0],
+    ["task", 1, 1],
+    ["task", 2, 2],
+  ]);
+});
+
+test("server layout clamps indent depth at 4", () => {
+  const deep = task({ number: 9, depth: 7 });
+  assert.deepEqual(buildTaskRows([deep]).map(rowShape), [["task", 9, 4]]);
+});
+
+test("fallback layout builds the tree locally when depth is absent", () => {
   const root = threadRoot();
   const derivedRoot = task({
     number: 1,
@@ -105,21 +161,76 @@ test("rows build from mixed forest without rendering thread root row", () => {
   });
 
   assert.deepEqual(
-    buildTaskRows([root, derivedRoot, grandchild]).map(({ task, depth }) => [
-      task.number,
-      depth,
-    ]),
+    buildTaskRows([root, derivedRoot, grandchild]).map(rowShape),
     [
-      [1, 0],
-      [2, 1],
+      ["thread", "thread::root", 0],
+      ["task", 1, 1],
+      ["task", 2, 2],
     ],
   );
 });
 
-test("current node is local to selected thread", () => {
+test("fallback layout matches server layout for the same forest", () => {
+  const root = threadRoot({ depth: 0 });
+  const a = task({
+    number: 1,
+    parentNodeId: root.nodeId,
+    parentThreadId: root.threadId,
+    depth: 1,
+  });
+  const b = task({
+    number: 2,
+    parentNodeId: a.nodeId,
+    parentTaskNumber: 1,
+    parentThreadId: a.threadId,
+    depth: 2,
+  });
+  const c = task({
+    number: 3,
+    parentNodeId: root.nodeId,
+    parentThreadId: root.threadId,
+    depth: 1,
+  });
+
+  const serverRows = buildTaskRows([root, a, b, c]).map(rowShape);
+  const stripped = [root, a, b, c].map((node) => ({ ...node, depth: null }));
+  const fallbackRows = buildTaskRows(stripped).map(rowShape);
+  assert.deepEqual(fallbackRows, serverRows);
+});
+
+test("fallback layout treats orphan parents as roots", () => {
+  const orphan = task({
+    number: 5,
+    parentNodeId: "task:thread::missing",
+    parentTaskNumber: 4,
+    parentThreadId: "thread::missing",
+  });
+
+  assert.deepEqual(buildTaskRows([orphan]).map(rowShape), [["task", 5, 0]]);
+});
+
+test("done rows are flagged de-emphasized, active rows are not", () => {
+  const rows = buildTaskRows([
+    task({ number: 1, status: "done", depth: 0 }),
+    task({ number: 2, status: "in_progress", depth: 0 }),
+  ]);
+  assert.deepEqual(
+    rows.map((row) => [row.task.number, row.isDeemphasized]),
+    [
+      [1, true],
+      [2, false],
+    ],
+  );
+});
+
+test("current node matching applies to thread and task rows by thread id", () => {
   const current = task({ number: 2, threadId: "thread::current" });
   assert.equal(isCurrentTaskTreeNode(current, "thread::current"), true);
   assert.equal(isCurrentTaskTreeNode(current, "thread::other"), false);
+  assert.equal(
+    isCurrentTaskTreeNode(threadRoot({ threadId: "thread::current" }), "thread::current"),
+    true,
+  );
 });
 
 test("task tree popover yields to inspector panel", () => {
@@ -170,7 +281,7 @@ test("task tree popover yields to inspector panel", () => {
   );
 });
 
-test("rows preserve original parent edges for done ancestors", () => {
+test("fallback rows preserve original parent edges for done ancestors", () => {
   const doneAncestor = task({ number: 1, status: "done" });
   const activeChild = task({
     number: 2,
@@ -181,13 +292,10 @@ test("rows preserve original parent edges for done ancestors", () => {
   });
 
   assert.deepEqual(
-    buildTaskRows([doneAncestor, activeChild]).map(({ task, depth }) => [
-      task.number,
-      depth,
-    ]),
+    buildTaskRows([doneAncestor, activeChild]).map(rowShape),
     [
-      [1, 0],
-      [2, 1],
+      ["task", 1, 0],
+      ["task", 2, 1],
     ],
   );
 });
