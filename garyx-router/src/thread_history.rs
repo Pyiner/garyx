@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use garyx_models::{
-    RenderSnapshot, RenderWindow, TranscriptRunState, reduce_transcript_render_state,
+    RenderSnapshot, RenderWindow, TranscriptRunState,
     reduce_transcript_render_state_with_run_state, reduce_transcript_run_state,
 };
 use serde::{Deserialize, Serialize};

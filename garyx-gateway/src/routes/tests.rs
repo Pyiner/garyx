@@ -947,6 +947,48 @@ async fn thread_stream_replay_caught_up_clamps_overlarge_cursor_to_snapshot_seq(
 }
 
 #[tokio::test]
+async fn thread_stream_replay_treats_dangling_inactive_run_as_idle() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::render-orphan-run";
+    append_dangling_run_start(&state, thread_id, "run::orphan-render").await;
+    state
+        .threads
+        .history
+        .transcript_store()
+        .append_run_records(
+            thread_id,
+            Some("run::orphan-render"),
+            &[RunTranscriptRecordDraft::with_timestamp(
+                json!({"role": "user", "content": "orphaned question"}),
+                "2026-06-18T12:00:01Z",
+            )],
+        )
+        .await
+        .unwrap();
+
+    let replay =
+        build_thread_stream_replay(&state, thread_id, 0, ThreadStreamReplayOptions::resume(0))
+            .await;
+
+    assert_eq!(replay.max_seq, 2);
+    let event = replay.events[0].as_ref().unwrap();
+    let frame: Value = serde_json::from_str(&event.payload).unwrap();
+    let render_state = frame.get("render_state").unwrap();
+    assert_eq!(
+        render_state.get("tailActivity").and_then(Value::as_str),
+        Some("none")
+    );
+    assert_eq!(
+        render_state
+            .get("visibleMessageIds")
+            .and_then(Value::as_array)
+            .map(|items| { items.iter().filter_map(Value::as_str).collect::<Vec<_>>() })
+            .unwrap(),
+        vec!["seq:2"]
+    );
+}
+
+#[tokio::test]
 async fn thread_stream_live_event_carries_committed_payload_and_render_snapshot() {
     let state = AppStateBuilder::new(test_config()).build();
     let thread_id = "thread::render-live-frame";
