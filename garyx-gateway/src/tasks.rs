@@ -2145,7 +2145,7 @@ mod tests {
         );
         assert_eq!(tasks[1]["parent_thread_id"], "thread::route-origin-chat");
         assert_eq!(tasks[1]["parent_task_number"], Value::Null);
-        assert_eq!(tasks[1]["depth"], 1);
+        assert_eq!(tasks[1]["depth"], 0);
         assert_eq!(tasks[2]["kind"], "task");
         assert_eq!(
             tasks[2]["parent_node_id"],
@@ -2153,7 +2153,7 @@ mod tests {
         );
         assert_eq!(tasks[2]["parent_thread_id"], "thread::route-derived-root");
         assert_eq!(tasks[2]["parent_task_number"], 30);
-        assert_eq!(tasks[2]["depth"], 2);
+        assert_eq!(tasks[2]["depth"], 1);
         assert_eq!(payload["active_count"], 2);
     }
 

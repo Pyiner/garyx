@@ -33,8 +33,12 @@ pub(crate) struct AnchoredTaskTreeLayout {
 /// Lay out the anchored task tree: every raw node is retained (done tasks
 /// included), emitted in DFS pre-order with sibling order by task number.
 /// When `origin_thread_id` is present, top-level tasks are parented to the
-/// origin's `thread-root:` node and start at depth 1 (the thread root itself
-/// is depth 0); without an origin they stay parentless at depth 0.
+/// origin's `thread-root:` node.
+///
+/// `depth` is the *visual indent level*, not the tree distance: the thread
+/// root row and top-level tasks both sit flush at depth 0 (the root row is
+/// distinguished by styling, not indentation), and each nesting level below a
+/// task adds 1.
 pub(crate) fn layout_anchored_task_tree(
     raw: Vec<RawTaskNode>,
     origin_thread_id: Option<&str>,
@@ -78,7 +82,9 @@ pub(crate) fn layout_anchored_task_tree(
     }
     roots.sort_by(sibling_order);
 
-    let base_depth: u32 = if origin_thread_id.is_some() { 1 } else { 0 };
+    // Visual indent level: top-level tasks stay flush at 0 with or without a
+    // thread root above them (the root row differs by styling, not indent).
+    let base_depth: u32 = 0;
     let mut visited = vec![false; raw.len()];
     let mut order: Vec<(usize, u32, bool)> = Vec::with_capacity(raw.len());
 
@@ -372,7 +378,7 @@ mod tests {
         let out = layout_anchored_task_tree(mixed_branch_raw(), Some("thread::conversation"));
 
         assert_eq!(numbers(&out), vec![1254, 1261, 1262, 1270, 1263, 1271]);
-        assert_eq!(depths(&out), vec![1, 2, 2, 3, 2, 3]);
+        assert_eq!(depths(&out), vec![0, 1, 1, 2, 1, 2]);
     }
 
     #[test]
@@ -451,7 +457,7 @@ mod tests {
         );
 
         assert_eq!(numbers(&out), vec![1400, 1401]);
-        assert_eq!(depths(&out), vec![1, 2]);
+        assert_eq!(depths(&out), vec![0, 1]);
         assert_eq!(out.active_count, 0);
     }
 
@@ -480,7 +486,7 @@ mod tests {
         );
 
         assert_eq!(numbers(&out), vec![1400, 1401, 1402, 1500]);
-        assert_eq!(depths(&out), vec![1, 2, 2, 1]);
+        assert_eq!(depths(&out), vec![0, 1, 1, 0]);
         assert_eq!(out.active_count, 2);
     }
 
@@ -551,7 +557,7 @@ mod tests {
         );
 
         assert_eq!(numbers(&out), vec![1, 10, 11]);
-        assert_eq!(depths(&out), vec![1, 1, 2]);
+        assert_eq!(depths(&out), vec![0, 0, 1]);
         assert_eq!(
             parent_node_id(&out, 10).as_deref(),
             Some("thread-root:thread::conversation"),
@@ -582,7 +588,7 @@ mod tests {
         );
 
         assert_eq!(numbers(&out), vec![1400, 1401, 1402]);
-        assert_eq!(depths(&out), vec![1, 2, 3]);
+        assert_eq!(depths(&out), vec![0, 1, 2]);
         assert_eq!(
             parent_node_id(&out, 1400).as_deref(),
             Some("thread-root:thread::conversation")

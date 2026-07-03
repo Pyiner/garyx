@@ -2818,7 +2818,7 @@ mod tests {
                 .iter()
                 .map(|node| node.depth())
                 .collect::<Vec<_>>(),
-            vec![Some(0), Some(1), Some(2)]
+            vec![Some(0), Some(0), Some(1)]
         );
         match &page.tasks[0] {
             TaskForestNode::Thread { title, .. } => assert_eq!(title, "Origin chat"),

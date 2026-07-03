@@ -120,7 +120,7 @@ test("server layout renders wire order with visible thread root row", () => {
     status: "in_progress",
     parentNodeId: root.nodeId,
     parentThreadId: root.threadId,
-    depth: 1,
+    depth: 0,
   });
   const doneLeaf = task({
     number: 2,
@@ -128,14 +128,14 @@ test("server layout renders wire order with visible thread root row", () => {
     parentNodeId: derivedRoot.nodeId,
     parentTaskNumber: 1,
     parentThreadId: derivedRoot.threadId,
-    depth: 2,
+    depth: 1,
   });
 
   const rows = buildTaskRows([root, derivedRoot, doneLeaf]);
   assert.deepEqual(rows.map(rowShape), [
     ["thread", "thread::root", 0],
-    ["task", 1, 1],
-    ["task", 2, 2],
+    ["task", 1, 0],
+    ["task", 2, 1],
   ]);
 });
 
@@ -164,8 +164,8 @@ test("fallback layout builds the tree locally when depth is absent", () => {
     buildTaskRows([root, derivedRoot, grandchild]).map(rowShape),
     [
       ["thread", "thread::root", 0],
-      ["task", 1, 1],
-      ["task", 2, 2],
+      ["task", 1, 0],
+      ["task", 2, 1],
     ],
   );
 });
@@ -176,20 +176,20 @@ test("fallback layout matches server layout for the same forest", () => {
     number: 1,
     parentNodeId: root.nodeId,
     parentThreadId: root.threadId,
-    depth: 1,
+    depth: 0,
   });
   const b = task({
     number: 2,
     parentNodeId: a.nodeId,
     parentTaskNumber: 1,
     parentThreadId: a.threadId,
-    depth: 2,
+    depth: 1,
   });
   const c = task({
     number: 3,
     parentNodeId: root.nodeId,
     parentThreadId: root.threadId,
-    depth: 1,
+    depth: 0,
   });
 
   const serverRows = buildTaskRows([root, a, b, c]).map(rowShape);

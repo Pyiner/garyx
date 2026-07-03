@@ -561,3 +561,15 @@ wins.
    `xcodegen generate` with the regenerated `project.pbxproj` committed.
 7. The pinned/`scope=all` console forest contract is untouched, and no
    versioned endpoint is added.
+8. **Depth = visual indent level (Gary's follow-up ruling, overrides §2.5's
+   depth values).** The thread root row and top-level root tasks sit at the
+   same flush indent — both `depth 0` — so adding the root row does not shift
+   the whole tree one level right. Each nesting level below a task adds 1
+   (with an origin, a task node's `depth` is its tree depth minus 1; the
+   origin-less task-only tree already starts at 0, so both cases agree). The
+   logical structure is unchanged: the thread root is still the first row,
+   still the wire parent of root tasks (`parent_node_id =
+   thread-root:<origin>`), and still navigates back to the source. The root
+   row is distinguished by styling (conversation glyph + title + Conversation
+   caption), not indentation, and the client thin fallback computes the same
+   flush indent when rebuilding locally.

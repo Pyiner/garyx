@@ -120,7 +120,10 @@ function hasServerLayout(nodes: DesktopTaskForestNode[]): boolean {
  *  New gateways send DFS pre-order plus per-node `depth`; render the wire
  *  order as-is. Old gateways omit `depth`, so fall back to a local tree
  *  build via parentNodeId — nodes whose parent isn't in the set (orphans)
- *  become roots. */
+ *  become roots. `depth` is the visual indent level: the thread root row and
+ *  top-level tasks both sit flush at 0 (the root row is distinguished by
+ *  styling, not indentation), so the fallback keeps thread children at their
+ *  parent thread's depth. */
 export function buildTaskRows(
   nodes: DesktopTaskForestNode[],
 ): TaskTreeRow[] {
@@ -165,7 +168,7 @@ export function buildTaskRows(
       }
       visited.add(node.nodeId);
       rows.push(rowFromNode(node, depth));
-      walk(node.nodeId, depth + 1);
+      walk(node.nodeId, node.kind === "thread" ? depth : depth + 1);
     }
   };
   walk("", 0);
