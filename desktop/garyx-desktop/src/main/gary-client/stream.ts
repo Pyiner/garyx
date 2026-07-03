@@ -473,14 +473,6 @@ function buildProviderMetadata(
 
   const metadata: Record<string, unknown> = {};
   const claudeEnv = parseProviderEnvBlock(settings.providerClaudeEnv);
-  const oauthToken = asString(process.env.CLAUDE_CODE_OAUTH_TOKEN);
-  if (
-    oauthToken &&
-    !Object.prototype.hasOwnProperty.call(claudeEnv, "CLAUDE_CODE_OAUTH_TOKEN")
-  ) {
-    claudeEnv.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
-  }
-
   if (Object.keys(claudeEnv).length > 0) {
     metadata[CLAUDE_ENV_METADATA_KEY] = claudeEnv;
   }

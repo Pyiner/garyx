@@ -1,6 +1,7 @@
 use super::*;
 use crate::types::ClaudeAgentOptions;
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -12,6 +13,43 @@ fn test_subprocess_transport_creation() {
     let transport = SubprocessTransport::new(opts, true);
     assert!(!transport.is_ready());
     assert!(transport.streaming);
+}
+
+#[test]
+fn test_build_command_removes_inherited_claude_oauth_without_configured_env() {
+    let opts = ClaudeAgentOptions::default();
+    let transport = SubprocessTransport::new(opts, true);
+    let cmd = transport.build_command(None);
+
+    let removed = cmd
+        .as_std()
+        .get_envs()
+        .any(|(key, value)| key == OsStr::new("CLAUDE_CODE_OAUTH_TOKEN") && value.is_none());
+    assert!(
+        removed,
+        "Claude runs must not inherit a stale CLAUDE_CODE_OAUTH_TOKEN"
+    );
+}
+
+#[test]
+fn test_build_command_keeps_configured_claude_oauth_override() {
+    let opts = ClaudeAgentOptions {
+        env: HashMap::from([(
+            "CLAUDE_CODE_OAUTH_TOKEN".to_string(),
+            "current-token".to_string(),
+        )]),
+        ..Default::default()
+    };
+    let transport = SubprocessTransport::new(opts, true);
+    let cmd = transport.build_command(None);
+
+    let configured = cmd.as_std().get_envs().any(|(key, value)| {
+        key == OsStr::new("CLAUDE_CODE_OAUTH_TOKEN") && value == Some(OsStr::new("current-token"))
+    });
+    assert!(
+        configured,
+        "explicit current Claude Code token must reach the spawn Command"
+    );
 }
 
 #[test]
@@ -58,10 +96,18 @@ fn test_build_command_overlays_configured_env() {
         key == std::ffi::OsStr::new("TEST_AGENT_ENV_KEY")
             && value == Some(std::ffi::OsStr::new("test-value"))
     });
-    assert!(has_env, "configured agent env var must reach the spawn Command");
+    assert!(
+        has_env,
+        "configured agent env var must reach the spawn Command"
+    );
 
     // The env value must not leak into program/args (no-proactive-leak).
-    assert!(!std_cmd.get_program().to_string_lossy().contains("test-value"));
+    assert!(
+        !std_cmd
+            .get_program()
+            .to_string_lossy()
+            .contains("test-value")
+    );
     assert!(
         std_cmd
             .get_args()

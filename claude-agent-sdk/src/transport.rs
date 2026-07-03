@@ -15,6 +15,7 @@ use tokio::sync::Mutex;
 
 const DEFAULT_MAX_BUFFER_SIZE: usize = 1024 * 1024; // 1 MB
 const CLOSE_GRACE_TIMEOUT: Duration = Duration::from_secs(2);
+const CLAUDE_CODE_OAUTH_TOKEN_ENV: &str = "CLAUDE_CODE_OAUTH_TOKEN";
 
 /// Spawns the `claude` CLI as a child process and communicates via JSONL on
 /// stdin/stdout.
@@ -93,6 +94,9 @@ impl SubprocessTransport {
             cmd.current_dir(cwd);
         }
 
+        let has_claude_code_oauth_override =
+            self.options.env.contains_key(CLAUDE_CODE_OAUTH_TOKEN_ENV);
+
         // Merge env vars
         for (k, v) in &self.options.env {
             cmd.env(k, v);
@@ -101,6 +105,9 @@ impl SubprocessTransport {
         // Remove CLAUDECODE to prevent "cannot be launched inside another Claude
         // Code session" error when running as a subprocess of Claude Code.
         cmd.env_remove("CLAUDECODE");
+        if !has_claude_code_oauth_override {
+            cmd.env_remove(CLAUDE_CODE_OAUTH_TOKEN_ENV);
+        }
 
         if self.options.enable_file_checkpointing {
             cmd.env("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING", "true");

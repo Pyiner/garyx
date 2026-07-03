@@ -43,6 +43,15 @@ const GARYX_CLAUDE_CLI_MODE_ENV: &str = "GARYX_CLAUDE_CLI_MODE";
 const CLAUDE_CLI_MODE_CCTTY: &str = "cctty";
 const CLAUDE_CLI_MODE_NATIVE: &str = "native";
 const EMBEDDED_CCTTY_ARG: &str = "__cctty";
+const CLAUDE_CODE_OAUTH_TOKEN_ENV: &str = "CLAUDE_CODE_OAUTH_TOKEN";
+#[cfg(all(target_os = "macos", not(test)))]
+const CLAUDE_CODE_OAUTH_KEYCHAIN_SERVICE: &str = "CLAUDE_CODE_OAUTH_TOKEN";
+const CLAUDE_AUTH_ENV_KEYS: &[&str] = &[
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_OAUTH_TOKEN",
+    "ANTHROPIC_API_KEY",
+    "CLAUDE_API_KEY",
+];
 
 fn coerce_usage_i64(value: &Value) -> Option<i64> {
     value.as_i64().or_else(|| {
@@ -92,6 +101,72 @@ fn result_usage_tokens(usage: Option<&HashMap<String, Value>>) -> (i64, i64) {
     );
 
     (input_tokens.max(0), output_tokens.max(0))
+}
+
+fn non_empty_env_value(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn has_explicit_claude_auth_env(env: &HashMap<String, String>) -> bool {
+    CLAUDE_AUTH_ENV_KEYS.iter().any(|key| {
+        env.get(*key)
+            .map(String::as_str)
+            .and_then(|value| non_empty_env_value(Some(value)))
+            .is_some()
+    })
+}
+
+fn inject_current_claude_code_oauth_token(
+    env: &mut HashMap<String, String>,
+    token: Option<String>,
+) -> bool {
+    if has_explicit_claude_auth_env(env) {
+        env.remove(CLAUDE_CODE_OAUTH_TOKEN_ENV);
+        return false;
+    }
+    let Some(token) = token
+        .as_deref()
+        .and_then(|value| non_empty_env_value(Some(value)))
+    else {
+        env.remove(CLAUDE_CODE_OAUTH_TOKEN_ENV);
+        return false;
+    };
+    env.insert(CLAUDE_CODE_OAUTH_TOKEN_ENV.to_owned(), token);
+    true
+}
+
+fn inject_current_claude_code_login(env: &mut HashMap<String, String>) {
+    let token = read_current_claude_code_oauth_token();
+    inject_current_claude_code_oauth_token(env, token);
+}
+
+#[cfg(any(not(target_os = "macos"), test))]
+fn read_current_claude_code_oauth_token() -> Option<String> {
+    None
+}
+
+#[cfg(all(target_os = "macos", not(test)))]
+fn read_current_claude_code_oauth_token() -> Option<String> {
+    let user = std::env::var("USER")
+        .or_else(|_| std::env::var("LOGNAME"))
+        .ok()
+        .and_then(|value| non_empty_env_value(Some(&value)));
+    let mut command = std::process::Command::new("security");
+    command.arg("find-generic-password");
+    if let Some(user) = user.as_deref() {
+        command.args(["-a", user]);
+    }
+    let output = command
+        .args(["-s", CLAUDE_CODE_OAUTH_KEYCHAIN_SERVICE, "-w"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    non_empty_env_value(Some(String::from_utf8_lossy(&output.stdout).trim()))
 }
 
 fn claude_background_task_key(data: &Value) -> Option<String> {
@@ -1078,6 +1153,7 @@ impl ClaudeCliProvider {
         let mut env = self.config.env.clone();
         env.extend(task_cli_env(&options.metadata));
         env.extend(metadata_string_map(&options.metadata, "desktop_claude_env"));
+        inject_current_claude_code_login(&mut env);
         let cli_path = resolve_claude_sdk_cli_path(&self.config);
         let cli_prefix_args = resolve_claude_sdk_cli_prefix_args(&self.config);
 
