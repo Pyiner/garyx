@@ -366,18 +366,11 @@ fn test_fresh_session_retry_detection() {
 }
 
 #[test]
-fn test_inject_current_claude_code_oauth_when_no_auth_override() {
+fn test_remove_legacy_claude_code_oauth_preserves_non_auth_env() {
     let mut env = HashMap::from([("HTTPS_PROXY".to_owned(), "http://127.0.0.1:6152".to_owned())]);
 
-    assert!(inject_current_claude_code_oauth_token(
-        &mut env,
-        Some(" current-token ".to_owned())
-    ));
+    assert!(!remove_legacy_claude_code_oauth_env(&mut env));
 
-    assert_eq!(
-        env.get("CLAUDE_CODE_OAUTH_TOKEN").map(String::as_str),
-        Some("current-token")
-    );
     assert_eq!(
         env.get("HTTPS_PROXY").map(String::as_str),
         Some("http://127.0.0.1:6152")
@@ -385,37 +378,19 @@ fn test_inject_current_claude_code_oauth_when_no_auth_override() {
 }
 
 #[test]
-fn test_inject_current_claude_code_oauth_replaces_stale_token() {
+fn test_remove_legacy_claude_code_oauth_removes_stale_token() {
     let mut env = HashMap::from([(
         "CLAUDE_CODE_OAUTH_TOKEN".to_owned(),
         "stale-token".to_owned(),
     )]);
 
-    assert!(inject_current_claude_code_oauth_token(
-        &mut env,
-        Some("current-token".to_owned())
-    ));
-
-    assert_eq!(
-        env.get("CLAUDE_CODE_OAUTH_TOKEN").map(String::as_str),
-        Some("current-token")
-    );
-}
-
-#[test]
-fn test_inject_current_claude_code_oauth_removes_stale_token_without_current_token() {
-    let mut env = HashMap::from([(
-        "CLAUDE_CODE_OAUTH_TOKEN".to_owned(),
-        "stale-token".to_owned(),
-    )]);
-
-    assert!(!inject_current_claude_code_oauth_token(&mut env, None));
+    assert!(remove_legacy_claude_code_oauth_env(&mut env));
 
     assert!(!env.contains_key("CLAUDE_CODE_OAUTH_TOKEN"));
 }
 
 #[test]
-fn test_inject_current_claude_code_oauth_does_not_override_custom_auth() {
+fn test_remove_legacy_claude_code_oauth_preserves_explicit_auth() {
     let mut env = HashMap::from([
         ("ANTHROPIC_AUTH_TOKEN".to_owned(), "relay-token".to_owned()),
         (
@@ -428,10 +403,7 @@ fn test_inject_current_claude_code_oauth_does_not_override_custom_auth() {
         ),
     ]);
 
-    assert!(!inject_current_claude_code_oauth_token(
-        &mut env,
-        Some("current-token".to_owned())
-    ));
+    assert!(remove_legacy_claude_code_oauth_env(&mut env));
 
     assert!(!env.contains_key("CLAUDE_CODE_OAUTH_TOKEN"));
     assert_eq!(
@@ -893,6 +865,35 @@ fn test_build_sdk_options_metadata_env_override() {
         Some(&"api-key-456".to_string())
     );
     assert!(!sdk_opts.env.contains_key("NON_STRING"));
+}
+
+#[test]
+fn test_build_sdk_options_removes_configured_claude_code_oauth_token() {
+    let provider = ClaudeCliProvider::new(ClaudeCodeConfig {
+        env: HashMap::from([
+            (
+                "CLAUDE_CODE_OAUTH_TOKEN".to_owned(),
+                "stale-config-token".to_owned(),
+            ),
+            ("HTTPS_PROXY".to_owned(), "http://127.0.0.1:6152".to_owned()),
+        ]),
+        ..Default::default()
+    });
+
+    let opts = ProviderRunOptions {
+        thread_id: "test".to_owned(),
+        message: "hello".to_owned(),
+        workspace_dir: None,
+        images: None,
+        metadata: HashMap::new(),
+    };
+
+    let sdk_opts = provider.build_sdk_options(&opts, None, "run-1");
+    assert!(!sdk_opts.env.contains_key("CLAUDE_CODE_OAUTH_TOKEN"));
+    assert_eq!(
+        sdk_opts.env.get("HTTPS_PROXY").map(String::as_str),
+        Some("http://127.0.0.1:6152")
+    );
 }
 
 #[test]
