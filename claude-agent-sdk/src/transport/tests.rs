@@ -231,6 +231,69 @@ async fn test_close_terminates_process_before_waiting_for_reader_lock() {
     result.expect("close should succeed");
 }
 
+#[tokio::test]
+async fn test_read_message_skips_verbose_stdout_before_json_message() {
+    let fixture = CliFixture::new_raw(&[(
+        "bin/claude",
+        r#"#!/bin/sh
+while IFS= read -r line; do
+  case "$line" in
+    *control_request*)
+      printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"req_1","response":{}}}'
+      ;;
+    *user*)
+      printf '%s\n' '[log_test] sending request {'
+      printf '%s\n' '  body: {'
+      printf '%s\n' '    model: "claude-fable-5",'
+      printf '%s\n' '  },'
+      printf '%s\n' '}'
+      printf '%s\n' '{"type":"assistant","message":{"model":"claude-fable-5","content":[{"type":"text","text":"ok"}]}}'
+      ;;
+  esac
+done
+"#,
+    )]);
+    let opts = ClaudeAgentOptions {
+        cli_path: Some(fixture.root.join("bin/claude")),
+        ..ClaudeAgentOptions::default()
+    };
+    let transport = SubprocessTransport::new(opts, true);
+    transport.spawn(None).await.unwrap();
+
+    transport
+        .write(
+            concat!(
+                r#"{"type":"control_request","request_id":"req_1","request":{"subtype":"initialize","hooks":null}}"#,
+                "\n"
+            ),
+        )
+        .await
+        .unwrap();
+    let control = tokio::time::timeout(Duration::from_secs(5), transport.read_message())
+        .await
+        .expect("control response should not hang")
+        .expect("control response should parse")
+        .expect("control response should be present");
+    assert_eq!(control["type"], "control_response");
+
+    transport
+        .write(concat!(
+            r#"{"type":"user","message":{"role":"user","content":"hello"}}"#,
+            "\n"
+        ))
+        .await
+        .unwrap();
+    let assistant = tokio::time::timeout(Duration::from_secs(5), transport.read_message())
+        .await
+        .expect("verbose stdout should not block JSON parsing")
+        .expect("assistant message should parse")
+        .expect("assistant message should be present");
+    assert_eq!(assistant["type"], "assistant");
+    assert_eq!(assistant["message"]["model"], "claude-fable-5");
+
+    transport.close().await.unwrap();
+}
+
 struct CliFixture {
     root: PathBuf,
 }
