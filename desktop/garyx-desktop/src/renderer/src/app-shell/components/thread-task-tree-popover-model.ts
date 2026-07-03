@@ -93,6 +93,22 @@ function taskRow(node: DesktopTaskForestTaskNode, depth: number): TaskTreeRow {
   return { kind: "task", task: node, depth: Math.min(depth, MAX_ROW_DEPTH) };
 }
 
+/** Sibling sort rank: working tasks float to the top, finished ones sink.
+ *  Mirrors the gateway layout order for the old-gateway fallback. */
+function taskStatusSortRank(status: DesktopTaskStatus): number {
+  switch (status) {
+    case "in_progress":
+      return 0;
+    case "in_review":
+      return 1;
+    case "todo":
+      return 2;
+    case "done":
+    default:
+      return 3;
+  }
+}
+
 function threadRow(node: DesktopTaskForestThreadNode, depth: number): TaskTreeRow {
   return { kind: "thread", thread: node, depth: Math.min(depth, MAX_ROW_DEPTH) };
 }
@@ -138,6 +154,10 @@ export function buildTaskRows(
   for (const list of childrenByParent.values()) {
     list.sort((a, b) => {
       if (a.kind === "task" && b.kind === "task") {
+        const rank = taskStatusSortRank(a.status) - taskStatusSortRank(b.status);
+        if (rank !== 0) {
+          return rank;
+        }
         return a.number - b.number;
       }
       if (a.kind === "thread" && b.kind === "task") {

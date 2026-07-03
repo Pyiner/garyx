@@ -21,6 +21,16 @@ impl RawTaskNode {
     }
 }
 
+/// Sibling sort rank: working tasks float to the top, finished ones sink.
+fn status_sort_rank(status: TaskStatus) -> u8 {
+    match status {
+        TaskStatus::InProgress => 0,
+        TaskStatus::InReview => 1,
+        TaskStatus::Todo => 2,
+        TaskStatus::Done => 3,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct AnchoredTaskTreeLayout {
     /// Task nodes in DFS pre-order with `depth` set. The hydrated
@@ -31,9 +41,10 @@ pub(crate) struct AnchoredTaskTreeLayout {
 }
 
 /// Lay out the anchored task tree: every raw node is retained (done tasks
-/// included), emitted in DFS pre-order with sibling order by task number.
-/// When `origin_thread_id` is present, top-level tasks are parented to the
-/// origin's `thread-root:` node.
+/// included), emitted in DFS pre-order with siblings ordered by status
+/// (in_progress → in_review → todo → done), then by task number within the
+/// same status. When `origin_thread_id` is present, top-level tasks are
+/// parented to the origin's `thread-root:` node.
 ///
 /// `depth` is the *visual indent level*, not the tree distance: the thread
 /// root row and top-level tasks both sit flush at depth 0 (the root row is
@@ -75,7 +86,16 @@ pub(crate) fn layout_anchored_task_tree(
         }
     }
     let sibling_order = |a: &usize, b: &usize| {
-        (raw[*a].number, &raw[*a].thread_id).cmp(&(raw[*b].number, &raw[*b].thread_id))
+        (
+            status_sort_rank(raw[*a].status),
+            raw[*a].number,
+            &raw[*a].thread_id,
+        )
+            .cmp(&(
+                status_sort_rank(raw[*b].status),
+                raw[*b].number,
+                &raw[*b].thread_id,
+            ))
     };
     for list in &mut children {
         list.sort_by(sibling_order);
@@ -472,21 +492,23 @@ mod tests {
     }
 
     #[test]
-    fn scenario_09_sibling_order_is_stable_by_number() {
-        // Input arrives in updated_at-flavored order; siblings still emit by
-        // ascending task number so status flips cannot reorder the tree.
+    fn scenario_09_siblings_order_by_status_rank_then_number() {
+        // Working siblings float above done ones (in_progress → in_review →
+        // todo → done); within one status, ascending task number keeps the
+        // order stable regardless of input order.
         let out = layout_anchored_task_tree(
             vec![
                 node(1500, TaskStatus::InReview, None),
                 node(1400, TaskStatus::Done, None),
                 node(1402, TaskStatus::Done, Some(1400)),
                 node(1401, TaskStatus::InProgress, Some(1400)),
+                node(1300, TaskStatus::Todo, None),
             ],
             Some("thread::conversation"),
         );
 
-        assert_eq!(numbers(&out), vec![1400, 1401, 1402, 1500]);
-        assert_eq!(depths(&out), vec![0, 1, 1, 0]);
+        assert_eq!(numbers(&out), vec![1500, 1300, 1400, 1401, 1402]);
+        assert_eq!(depths(&out), vec![0, 0, 0, 1, 1]);
         assert_eq!(out.active_count, 2);
     }
 
@@ -546,7 +568,9 @@ mod tests {
     #[test]
     fn cycle_guard_emits_every_node_and_breaks_the_cycle_edge() {
         // 10 -> 11 -> 10 parent cycle plus a normal root: every node is still
-        // emitted exactly once and the cycle entry is re-rooted.
+        // emitted exactly once and the cycle entry is re-rooted. The fallback
+        // root follows sibling order, so the working task (11) wins the entry
+        // over the done one (10).
         let out = layout_anchored_task_tree(
             vec![
                 node(1, TaskStatus::InProgress, None),
@@ -556,14 +580,14 @@ mod tests {
             Some("thread::conversation"),
         );
 
-        assert_eq!(numbers(&out), vec![1, 10, 11]);
+        assert_eq!(numbers(&out), vec![1, 11, 10]);
         assert_eq!(depths(&out), vec![0, 0, 1]);
         assert_eq!(
-            parent_node_id(&out, 10).as_deref(),
+            parent_node_id(&out, 11).as_deref(),
             Some("thread-root:thread::conversation"),
             "cycle entry re-roots at the origin"
         );
-        assert_eq!(parent_node_id(&out, 11).as_deref(), Some("task:thread::10"));
+        assert_eq!(parent_node_id(&out, 10).as_deref(), Some("task:thread::11"));
         assert_eq!(out.active_count, 2);
     }
 

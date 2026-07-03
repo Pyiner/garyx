@@ -1055,9 +1055,9 @@ fn anchored_task_forest_ignores_caller_filters_for_raw_tree() {
             .collect::<Vec<_>>(),
         vec![
             "thread::filter-root",
-            "thread::filter-sibling",
             "thread::filter-child",
             "thread::filter-leaf",
+            "thread::filter-sibling",
         ]
     );
     assert_eq!(
@@ -1065,7 +1065,7 @@ fn anchored_task_forest_ignores_caller_filters_for_raw_tree() {
             .iter()
             .map(|node| node.depth())
             .collect::<Vec<_>>(),
-        vec![Some(0), Some(1), Some(1), Some(2)]
+        vec![Some(0), Some(1), Some(2), Some(1)]
     );
     let leaf = page
         .tasks

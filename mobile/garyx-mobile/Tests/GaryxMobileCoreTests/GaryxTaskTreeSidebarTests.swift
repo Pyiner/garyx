@@ -49,16 +49,15 @@ private let anchoredForestFixture = """
     },
     {
       "kind": "task",
-      "node_id": "task:thread::done-leaf",
+      "node_id": "task:thread::review-child",
       "parent_node_id": "task:thread::root-task",
-      "thread_id": "thread::done-leaf",
-      "task_id": "#TASK-41",
-      "number": 41,
-      "title": "Done leaf",
-      "status": "done",
+      "thread_id": "thread::review-child",
+      "task_id": "#TASK-42",
+      "number": 42,
+      "title": "Review child",
+      "status": "in_review",
       "creator": {"kind": "agent", "agent_id": "test-agent"},
-      "assignee": {"kind": "agent", "agent_id": "test-agent"},
-      "updated_at": "2026-01-01T00:00:03Z",
+      "updated_at": "2026-01-01T00:00:04Z",
       "updated_by": {"kind": "agent", "agent_id": "test-agent"},
       "runtime_agent_id": "test-agent",
       "reply_count": 0,
@@ -71,15 +70,16 @@ private let anchoredForestFixture = """
     },
     {
       "kind": "task",
-      "node_id": "task:thread::review-child",
+      "node_id": "task:thread::done-leaf",
       "parent_node_id": "task:thread::root-task",
-      "thread_id": "thread::review-child",
-      "task_id": "#TASK-42",
-      "number": 42,
-      "title": "Review child",
-      "status": "in_review",
+      "thread_id": "thread::done-leaf",
+      "task_id": "#TASK-41",
+      "number": 41,
+      "title": "Done leaf",
+      "status": "done",
       "creator": {"kind": "agent", "agent_id": "test-agent"},
-      "updated_at": "2026-01-01T00:00:04Z",
+      "assignee": {"kind": "agent", "agent_id": "test-agent"},
+      "updated_at": "2026-01-01T00:00:03Z",
       "updated_by": {"kind": "agent", "agent_id": "test-agent"},
       "runtime_agent_id": "test-agent",
       "reply_count": 0,
@@ -148,7 +148,7 @@ final class GaryxTaskTreeSidebarTests: XCTestCase {
         XCTAssertEqual(rootTask.parentNodeId, "thread-root:thread::origin")
         XCTAssertEqual(rootTask.runState, "running")
         XCTAssertEqual(rootTask.depth, 0)
-        XCTAssertEqual(page.nodes[2].taskNode?.task.status, .done)
+        XCTAssertEqual(page.nodes[3].taskNode?.task.status, .done)
     }
 
     func testMissingDepthAndActiveCountToleratedForOldGateways() throws {
@@ -192,15 +192,15 @@ final class GaryxTaskTreeSidebarTests: XCTestCase {
         XCTAssertEqual(rows.map(\.id), [
             "thread-root:thread::origin",
             "task:thread::root-task",
-            "task:thread::done-leaf",
             "task:thread::review-child",
+            "task:thread::done-leaf",
         ])
         XCTAssertEqual(rows.map(\.indentLevel), [0, 0, 1, 1])
         XCTAssertEqual(rows[0].kind, .sourceThread)
         XCTAssertNil(rows[0].taskDisplayId)
         XCTAssertEqual(rows[1].taskDisplayId, "#TASK-40")
         XCTAssertTrue(rows[1].isRunning)
-        XCTAssertTrue(rows[3].isCurrent)
+        XCTAssertTrue(rows[2].isCurrent)
     }
 
     func testIndentClampsAtFourForDeepServerLayouts() throws {
@@ -244,8 +244,8 @@ final class GaryxTaskTreeSidebarTests: XCTestCase {
         let rows = GaryxTaskTreeSidebarPresentation.rows(page: page, currentThreadId: nil)
         XCTAssertEqual(rows.map(\.id), [
             "task:thread::root-task",
-            "task:thread::done-leaf",
             "task:thread::review-child",
+            "task:thread::done-leaf",
         ])
         XCTAssertEqual(rows.map(\.indentLevel), [0, 1, 1])
     }

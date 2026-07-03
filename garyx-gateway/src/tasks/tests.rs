@@ -647,15 +647,15 @@ async fn list_task_forest_route_returns_identical_forest_for_conversation_and_ta
             vec![
                 "thread-root:thread::smoke-chat",
                 "task:thread::smoke-root",
-                "task:thread::smoke-done-leaf",
                 "task:thread::smoke-deep-child",
+                "task:thread::smoke-done-leaf",
             ],
             "anchor {anchor}"
         );
         assert_eq!(tasks[0]["kind"], "thread", "anchor {anchor}");
         assert_eq!(tasks[0]["title"], "Smoke Chat", "anchor {anchor}");
         assert_eq!(
-            tasks[2]["status"], "done",
+            tasks[3]["status"], "done",
             "done leaf retained for {anchor}"
         );
         assert_eq!(payload["active_count"], 2, "anchor {anchor}");

@@ -122,11 +122,23 @@ public enum GaryxTaskTreeSidebarPresentation {
         }
     }
 
+    /// Sibling sort rank: working tasks float to the top, finished ones sink.
+    private static func statusSortRank(_ status: GaryxTaskStatus) -> Int {
+        switch status {
+        case .inProgress: return 0
+        case .inReview: return 1
+        case .todo: return 2
+        case .done: return 3
+        }
+    }
+
     /// Old-gateway fallback: rebuild the tree locally from `parentNodeId`.
     /// Orphan parents (parent id absent from the page) become roots; thread
-    /// nodes sort before tasks and task siblings sort by number. Depth is the
-    /// visual indent level: the thread root row and its top-level tasks both
-    /// sit flush at 0 (the root row differs by styling, not indentation).
+    /// nodes sort before tasks and task siblings order by working-first
+    /// status rank (in_progress → in_review → todo → done), then by number,
+    /// mirroring the gateway layout. Depth is the visual indent level: the
+    /// thread root row and its top-level tasks both sit flush at 0 (the root
+    /// row differs by styling, not indentation).
     private static func fallbackRows(
         nodes: [GaryxTaskForestNode],
         currentThreadId: String?
@@ -158,6 +170,11 @@ public enum GaryxTaskTreeSidebarPresentation {
                 case (.task, .thread):
                     return false
                 case (.task(let left), .task(let right)):
+                    let leftRank = statusSortRank(left.task.status)
+                    let rightRank = statusSortRank(right.task.status)
+                    if leftRank != rightRank {
+                        return leftRank < rightRank
+                    }
                     if left.task.number != right.task.number {
                         return left.task.number < right.task.number
                     }
