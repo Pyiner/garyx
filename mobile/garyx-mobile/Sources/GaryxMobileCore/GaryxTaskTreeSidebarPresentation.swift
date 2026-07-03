@@ -71,6 +71,14 @@ public enum GaryxTaskTreeSidebarPresentation {
         !targetThreadId.isEmpty && targetThreadId != currentThreadId
     }
 
+    /// Cache identity of a fetched tree. The origin-rooted forest is
+    /// anchor-independent, so every thread of one tree shares one snapshot:
+    /// the origin thread id when the tree has one, else the task-only root
+    /// (`root_thread_ids` carries both), else the anchor as a last resort.
+    public static func treeCacheKey(page: GaryxTaskForestPage, anchorThreadId: String) -> String {
+        page.rootThreadIds.first ?? anchorThreadId
+    }
+
     /// Known-empty trees stop the 5s poll until the anchor changes or a local
     /// task mutation invalidates the snapshot; an unknown tree keeps polling.
     public static func shouldContinuePolling(page: GaryxTaskForestPage?) -> Bool {

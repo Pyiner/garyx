@@ -232,15 +232,22 @@ final class GaryxMobileModel: ObservableObject {
     let capsuleThumbnailMemory = GaryxCapsuleThumbnailMemoryCache()
     @Published var tasks: [GaryxTaskSummary] = []
     @Published var tasksPanelState = GaryxMobileTasksPanelState()
-    /// Conversation task-tree sidebar: the trailing overlay panel on the chat
+    /// Conversation task-tree sidebar: the trailing push-in panel on the chat
     /// surface. `taskTreeForestPage` is the anchored forest snapshot for the
-    /// currently selected thread (kept per-thread in
-    /// `taskTreeSnapshotsByThread` so reopening renders instantly).
+    /// currently selected thread. Because the origin-rooted forest is
+    /// anchor-independent, snapshots cache per *tree*
+    /// (`taskTreeSnapshotsByOrigin`, keyed by gateway scope + tree cache key)
+    /// with `taskTreeOriginKeyByAnchor` as the anchor→tree index; row-tap
+    /// navigation pre-seeds that index so in-tree thread switches render
+    /// instantly from cache while the live fetch revalidates in place.
     @Published var isTaskTreeSidebarOpen = false
     @Published var taskTreeForestPage: GaryxTaskForestPage?
     @Published var taskTreeLoadPhase: GaryxMobileLoadPhase = .idle
     var taskTreeRequestGate = GaryxTaskTreeRequestGate()
-    var taskTreeSnapshotsByThread: [String: GaryxTaskForestPage] = [:]
+    var taskTreeOriginKeyByAnchor: [String: String] = [:]
+    var taskTreeSnapshotsByOrigin: [String: GaryxTaskForestPage] = [:]
+    /// Insertion order of `taskTreeSnapshotsByOrigin` keys for FIFO eviction.
+    var taskTreeSnapshotOriginOrder: [String] = []
     /// Set when the selected thread's tree is known-empty: the 5s sidebar poll
     /// pauses until the thread changes or a local task mutation occurs.
     var taskTreePollSuspendedThreadId: String?

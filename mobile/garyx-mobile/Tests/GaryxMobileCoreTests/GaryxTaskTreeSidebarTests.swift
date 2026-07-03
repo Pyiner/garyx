@@ -274,6 +274,39 @@ final class GaryxTaskTreeSidebarTests: XCTestCase {
         XCTAssertTrue(evicted.allSatisfy { !$0.isCurrent })
     }
 
+    func testTreeCacheKeyPrefersOriginThenAnchor() throws {
+        let page = try decodedFixturePage()
+        // Origin-rooted tree: the key is the origin thread for every anchor,
+        // so all threads of one tree share one cached snapshot.
+        XCTAssertEqual(
+            GaryxTaskTreeSidebarPresentation.treeCacheKey(
+                page: page,
+                anchorThreadId: "thread::done-leaf"
+            ),
+            "thread::origin"
+        )
+
+        var taskOnly = page
+        taskOnly.rootThreadIds = ["thread::root-task"]
+        XCTAssertEqual(
+            GaryxTaskTreeSidebarPresentation.treeCacheKey(
+                page: taskOnly,
+                anchorThreadId: "thread::done-leaf"
+            ),
+            "thread::root-task"
+        )
+
+        var empty = page
+        empty.rootThreadIds = []
+        XCTAssertEqual(
+            GaryxTaskTreeSidebarPresentation.treeCacheKey(
+                page: empty,
+                anchorThreadId: "thread::anchor"
+            ),
+            "thread::anchor"
+        )
+    }
+
     func testBadgeEqualsWireActiveCountAndLocalRecountFallback() throws {
         let page = try decodedFixturePage()
         XCTAssertEqual(GaryxTaskTreeSidebarPresentation.activeBadgeCount(page: page), 2)

@@ -1,11 +1,13 @@
 import SwiftUI
 import UIKit
 
-// Conversation task-tree sidebar: a trailing overlay panel scoped to the open
-// conversation. The right-edge swipe mirrors the left navigation drawer's
-// proven gesture parameters (edge zone 24pt, min distance 18pt, axis decision
-// 14pt at 1.5x dominance, open 22%/35%, close 12%/28%, @GestureState cancel
-// self-heal) so the two edges feel symmetric.
+// Conversation task-tree sidebar: a trailing push-in panel scoped to the open
+// conversation — the panel slides in from the right edge and pushes the
+// conversation content left in lockstep (not an overlay). The right-edge
+// swipe mirrors the left navigation drawer's proven gesture parameters (edge
+// zone 24pt, min distance 18pt, axis decision 14pt at 1.5x dominance, open
+// 22%/35%, close 12%/28%, @GestureState cancel self-heal) so the two edges
+// feel symmetric.
 
 private enum GaryxTaskTreeDragAxis {
     case horizontal
@@ -82,11 +84,19 @@ struct GaryxTaskTreeSidebarSurface: ViewModifier {
             content
                 .frame(width: proxy.size.width, height: proxy.size.height)
                 .simultaneousGesture(openingGesture(panelWidth: panelWidth))
+                // Push, not overlay: the conversation slides left in lockstep
+                // with the incoming panel — the same `reveal` value drives
+                // both offsets, so drag and settle animations stay in sync.
+                // Reduce Motion keeps the crossfade presentation and skips
+                // the push.
+                .offset(x: reduceMotion ? 0 : -reveal)
                 .overlay {
                     if progress > 0 {
-                        // While revealed, the conversation underneath becomes
-                        // one big close target and its controls are blocked.
-                        Color.black.opacity(0.25 * progress)
+                        // While revealed, the visible conversation strip
+                        // becomes one big close target and its controls are
+                        // blocked. Lighter scrim than an overlay drawer: the
+                        // pushed-aside content stays readable.
+                        Color.black.opacity(0.18 * progress)
                             .ignoresSafeArea()
                             .contentShape(Rectangle())
                             .onTapGesture { closePanel() }

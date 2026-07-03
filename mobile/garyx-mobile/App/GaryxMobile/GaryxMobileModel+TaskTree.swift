@@ -35,9 +35,11 @@ extension GaryxMobileModel {
         GaryxTaskTreeSidebarPresentation.shouldContinuePolling(page: taskTreeForestPage)
     }
 
-    /// Re-anchor the sidebar to the selected thread: restore the cached
-    /// snapshot for instant rendering and close the panel when the
-    /// conversation is left entirely.
+    /// Re-anchor the sidebar to the selected thread: restore the cached tree
+    /// snapshot (anchor → tree index → per-tree cache) for instant rendering
+    /// and close the panel when the conversation is left entirely. The
+    /// restored snapshot is stale-while-revalidate: the caller always follows
+    /// up with `refreshSelectedThreadTaskForest()`.
     func syncTaskTreeSidebarAnchor() {
         let anchor = selectedThread?.id.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !anchor.isEmpty else {
@@ -46,7 +48,8 @@ extension GaryxMobileModel {
             isTaskTreeSidebarOpen = false
             return
         }
-        let cached = taskTreeSnapshotsByThread[anchor]
+        let cached = taskTreeOriginKeyByAnchor[taskTreeScopedCacheKey(anchor)]
+            .flatMap { taskTreeSnapshotsByOrigin[$0] }
         taskTreeForestPage = cached
         taskTreeLoadPhase = cached == nil ? .idle : .loaded
     }
@@ -74,7 +77,7 @@ extension GaryxMobileModel {
                 return
             }
             taskTreeForestPage = page
-            taskTreeSnapshotsByThread[anchor] = page
+            storeTaskTreeSnapshot(page, anchor: anchor)
             taskTreeLoadPhase = .loaded
             taskTreePollSuspendedThreadId =
                 GaryxTaskTreeSidebarPresentation.isSidebarAvailable(page: page) ? nil : anchor
@@ -116,9 +119,19 @@ extension GaryxMobileModel {
     }
 
     /// Row tap: the current thread's row only closes the panel; any other row
-    /// closes and routes through the shared `openThread` path.
+    /// closes and routes through the shared `openThread` path. The tapped row
+    /// belongs to the tree on screen, so the anchor→tree index is pre-seeded
+    /// and the target conversation renders this snapshot instantly.
     func handleTaskTreeRowTap(_ row: GaryxTaskTreeRow) async {
         let currentThreadId = selectedThread?.id
+        if let page = taskTreeForestPage {
+            let originKey = taskTreeScopedCacheKey(
+                GaryxTaskTreeSidebarPresentation.treeCacheKey(
+                    page: page,
+                    anchorThreadId: currentThreadId ?? row.threadId
+                ))
+            taskTreeOriginKeyByAnchor[taskTreeScopedCacheKey(row.threadId)] = originKey
+        }
         closeTaskTreeSidebar()
         guard GaryxTaskTreeSidebarPresentation.shouldNavigate(
             currentThreadId: currentThreadId,
@@ -130,13 +143,39 @@ extension GaryxMobileModel {
     }
 
     /// Local task mutations (create/status/title/assign/stop/delete) resume a
-    /// poll suspended on a known-empty tree and refresh the open conversation's
-    /// snapshot so the badge and sidebar catch the change immediately.
+    /// poll suspended on a known-empty tree, drop every cached tree snapshot
+    /// (any tree may have changed; the anchor→tree index stays, a wrong entry
+    /// only costs one refetch), and refresh the open conversation's snapshot
+    /// so the badge and sidebar catch the change immediately.
     func noteTaskTreeLocalMutation() {
         taskTreePollSuspendedThreadId = nil
+        taskTreeSnapshotsByOrigin.removeAll()
+        taskTreeSnapshotOriginOrder.removeAll()
         guard selectedThread != nil else { return }
         Task { [weak self] in
             await self?.refreshSelectedThreadTaskForest()
+        }
+    }
+
+    /// Snapshot keys compose the gateway scope so switching gateways can
+    /// never resurface another gateway's trees.
+    private func taskTreeScopedCacheKey(_ raw: String) -> String {
+        "\(activeGatewayScopeId)|\(raw)"
+    }
+
+    private static let taskTreeSnapshotCap = 16
+
+    private func storeTaskTreeSnapshot(_ page: GaryxTaskForestPage, anchor: String) {
+        let originKey = taskTreeScopedCacheKey(
+            GaryxTaskTreeSidebarPresentation.treeCacheKey(page: page, anchorThreadId: anchor))
+        taskTreeOriginKeyByAnchor[taskTreeScopedCacheKey(anchor)] = originKey
+        if taskTreeSnapshotsByOrigin[originKey] == nil {
+            taskTreeSnapshotOriginOrder.append(originKey)
+        }
+        taskTreeSnapshotsByOrigin[originKey] = page
+        while taskTreeSnapshotOriginOrder.count > Self.taskTreeSnapshotCap {
+            let evicted = taskTreeSnapshotOriginOrder.removeFirst()
+            taskTreeSnapshotsByOrigin.removeValue(forKey: evicted)
         }
     }
 

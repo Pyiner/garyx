@@ -38,9 +38,48 @@ type ThreadTaskTreePopoverProps = {
 type ForestSnapshot = {
   nodes: DesktopTaskForestNode[];
   activeCount: number | null;
+  /** Cache identity of the fetched tree (origin thread, else task root). */
+  treeKey: string | null;
 };
 
-const EMPTY_SNAPSHOT: ForestSnapshot = { nodes: [], activeCount: null };
+const EMPTY_SNAPSHOT: ForestSnapshot = {
+  nodes: [],
+  activeCount: null,
+  treeKey: null,
+};
+
+// The origin-rooted forest is anchor-independent: every thread of one tree
+// resolves to the same node set, so snapshots cache per tree and switching
+// between threads of one tree renders instantly from cache while the live
+// fetch revalidates in place (stale-while-revalidate). `treeKeyByAnchor`
+// learns anchor→tree from responses and is pre-seeded on row clicks so
+// in-tree navigation never starts from an empty popover.
+const treeKeyByAnchor = new Map<string, string>();
+const treeSnapshotByKey = new Map<string, ForestSnapshot>();
+const MAX_CACHED_TREES = 16;
+
+function cachedSnapshotFor(anchorThreadId: string): ForestSnapshot | null {
+  const key = treeKeyByAnchor.get(anchorThreadId);
+  return (key ? treeSnapshotByKey.get(key) : undefined) ?? null;
+}
+
+function storeTreeSnapshot(anchorThreadId: string, snapshot: ForestSnapshot) {
+  const key = snapshot.treeKey;
+  if (!key) {
+    return;
+  }
+  treeKeyByAnchor.set(anchorThreadId, key);
+  // Re-insert to keep Map iteration order as a recency list for eviction.
+  treeSnapshotByKey.delete(key);
+  treeSnapshotByKey.set(key, snapshot);
+  while (treeSnapshotByKey.size > MAX_CACHED_TREES) {
+    const oldest = treeSnapshotByKey.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    treeSnapshotByKey.delete(oldest);
+  }
+}
 
 export function ThreadTaskTreePopover({
   threadId,
@@ -75,18 +114,24 @@ export function ThreadTaskTreePopover({
       if (!mountedRef.current || currentThreadRef.current !== threadId) {
         return;
       }
-      setSnapshot({ nodes: page.tasks, activeCount: page.activeCount ?? null });
+      const next: ForestSnapshot = {
+        nodes: page.tasks,
+        activeCount: page.activeCount ?? null,
+        treeKey: page.rootThreadIds?.[0] || threadId,
+      };
+      storeTreeSnapshot(threadId, next);
+      setSnapshot(next);
     } catch {
       /* leave previous state on transient errors */
     }
   }, [threadId]);
 
-  // Reset + reload whenever the active thread changes so the list always
-  // reflects the conversation currently open in the detail pane.
+  // Thread switches restore the cached tree snapshot (no flicker, no refetch
+  // gap) and revalidate it with a live fetch; unknown trees start empty.
   useEffect(() => {
-    setSnapshot(EMPTY_SNAPSHOT);
+    setSnapshot(threadId ? (cachedSnapshotFor(threadId) ?? EMPTY_SNAPSHOT) : EMPTY_SNAPSHOT);
     void load();
-  }, [load]);
+  }, [threadId, load]);
 
   useEffect(() => {
     const interval = window.setInterval(() => void load(), REFRESH_MS);
@@ -108,6 +153,16 @@ export function ThreadTaskTreePopover({
     return null;
   }
 
+  // Pre-seed the anchor→tree index before navigating: the clicked row belongs
+  // to the tree already on screen, so the popover anchored at the target
+  // thread renders this snapshot instantly instead of refetching.
+  const openFromRow = (targetThreadId: string) => {
+    if (snapshot.treeKey) {
+      treeKeyByAnchor.set(targetThreadId, snapshot.treeKey);
+    }
+    onOpenThread(targetThreadId);
+  };
+
   const renderThreadRow = (thread: DesktopTaskForestThreadNode, depth: number) => {
     const current = isCurrentTaskTreeNode(thread, threadId);
     const avatar = resolveThreadAvatarIdentity(
@@ -118,7 +173,7 @@ export function ThreadTaskTreePopover({
       <button
         key={thread.nodeId}
         className={`thread-subtask-item thread-subtask-thread depth-${depth}${current ? " current" : ""}`}
-        onClick={() => onOpenThread(thread.threadId)}
+        onClick={() => openFromRow(thread.threadId)}
         type="button"
       >
         <span className="thread-subtask-main">
@@ -154,7 +209,7 @@ export function ThreadTaskTreePopover({
       <button
         key={task.nodeId}
         className={`thread-subtask-item depth-${depth} tone-${tone}${current ? " current" : ""}`}
-        onClick={() => onOpenThread(task.threadId)}
+        onClick={() => openFromRow(task.threadId)}
         type="button"
       >
         <span className="thread-subtask-main">
