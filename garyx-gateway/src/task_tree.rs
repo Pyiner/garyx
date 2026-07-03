@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 
 use garyx_models::TaskStatus;
 
@@ -21,12 +21,29 @@ impl RawTaskNode {
     }
 }
 
-pub(crate) fn prune_anchored_task_tree(
+#[derive(Debug, Clone)]
+pub(crate) struct AnchoredTaskTreeLayout {
+    /// Task nodes in DFS pre-order with `depth` set. The hydrated
+    /// `kind:"thread"` origin root is prepended by the DB layer.
+    pub(crate) nodes: Vec<TaskForestNode>,
+    /// Page-level active badge count (`in_progress` + `in_review`).
+    pub(crate) active_count: usize,
+}
+
+/// Lay out the anchored task tree: every raw node is retained (done tasks
+/// included), emitted in DFS pre-order with sibling order by task number.
+/// When `origin_thread_id` is present, top-level tasks are parented to the
+/// origin's `thread-root:` node and start at depth 1 (the thread root itself
+/// is depth 0); without an origin they stay parentless at depth 0.
+pub(crate) fn layout_anchored_task_tree(
     raw: Vec<RawTaskNode>,
-    anchor_thread_id: &str,
-) -> Vec<TaskForestNode> {
+    origin_thread_id: Option<&str>,
+) -> AnchoredTaskTreeLayout {
     if raw.is_empty() {
-        return Vec::new();
+        return AnchoredTaskTreeLayout {
+            nodes: Vec::new(),
+            active_count: 0,
+        };
     }
 
     let mut by_number = HashMap::new();
@@ -36,55 +53,96 @@ pub(crate) fn prune_anchored_task_tree(
         by_thread.entry(node.thread_id.clone()).or_insert(index);
     }
 
-    let anchor_is_task = by_thread.contains_key(anchor_thread_id);
-    let active_indices = raw
-        .iter()
-        .enumerate()
-        .filter_map(|(index, node)| node.is_active().then_some(index))
-        .collect::<Vec<_>>();
-    if active_indices.is_empty() {
-        return Vec::new();
-    }
-
     let parent_indices = raw
         .iter()
-        .map(|node| immediate_parent_index(node, &by_number, &by_thread))
+        .enumerate()
+        .map(|(index, node)| {
+            immediate_parent_index(node, &by_number, &by_thread)
+                .filter(|parent_index| *parent_index != index)
+        })
         .collect::<Vec<_>>();
 
-    let mut retained = BTreeSet::new();
-    for index in active_indices {
-        retain_path(index, &parent_indices, &mut retained);
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); raw.len()];
+    let mut roots = Vec::new();
+    for (index, parent_index) in parent_indices.iter().enumerate() {
+        match parent_index {
+            Some(parent_index) => children[*parent_index].push(index),
+            None => roots.push(index),
+        }
     }
-    if anchor_is_task {
-        let anchor_index = by_thread
-            .get(anchor_thread_id)
-            .copied()
-            .expect("anchor_is_task was derived from by_thread");
-        retain_path(anchor_index, &parent_indices, &mut retained);
+    let sibling_order = |a: &usize, b: &usize| {
+        (raw[*a].number, &raw[*a].thread_id).cmp(&(raw[*b].number, &raw[*b].thread_id))
+    };
+    for list in &mut children {
+        list.sort_by(sibling_order);
+    }
+    roots.sort_by(sibling_order);
+
+    let base_depth: u32 = if origin_thread_id.is_some() { 1 } else { 0 };
+    let mut visited = vec![false; raw.len()];
+    let mut order: Vec<(usize, u32, bool)> = Vec::with_capacity(raw.len());
+
+    let emit_subtree =
+        |root_index: usize, visited: &mut Vec<bool>, order: &mut Vec<(usize, u32, bool)>| {
+            // (index, depth, is_layout_root): iterative DFS with a visited guard so
+            // parent cycles in corrupt projections cannot loop or drop nodes.
+            let mut stack = vec![(root_index, base_depth, true)];
+            while let Some((index, depth, is_layout_root)) = stack.pop() {
+                if visited[index] {
+                    continue;
+                }
+                visited[index] = true;
+                order.push((index, depth, is_layout_root));
+                for child_index in children[index].iter().rev() {
+                    if !visited[*child_index] {
+                        stack.push((*child_index, depth.saturating_add(1), false));
+                    }
+                }
+            }
+        };
+
+    for root_index in roots {
+        emit_subtree(root_index, &mut visited, &mut order);
+    }
+    // Cycle members are unreachable from any root; surface each cycle as a
+    // fallback root (smallest task number first) with its parent edge broken
+    // so the emitted forest stays acyclic and retains every node.
+    while order.len() < raw.len() {
+        let fallback_root = (0..raw.len())
+            .filter(|index| !visited[*index])
+            .min_by(|a, b| sibling_order(a, b))
+            .expect("unvisited node exists while order is incomplete");
+        emit_subtree(fallback_root, &mut visited, &mut order);
     }
 
-    raw.iter()
-        .enumerate()
-        .filter_map(|(index, row)| {
-            if !retained.contains(&index) {
-                return None;
-            }
-            let mut node = row.node.clone();
-            let parent_task = parent_indices[index]
-                .filter(|parent_index| retained.contains(parent_index))
-                .map(|parent_index| &raw[parent_index]);
-            let parent = match parent_task {
-                Some(parent) => ResolvedParent::Task(parent),
-                None if !anchor_is_task => ResolvedParent::Thread {
-                    node_id: thread_root_node_id(anchor_thread_id),
-                    thread_id: anchor_thread_id.to_owned(),
-                },
-                None => ResolvedParent::None,
+    let active_count = raw.iter().filter(|node| node.is_active()).count();
+    let nodes = order
+        .into_iter()
+        .map(|(index, depth, is_layout_root)| {
+            let mut node = raw[index].node.clone();
+            let parent = if is_layout_root {
+                match origin_thread_id {
+                    Some(origin) => ResolvedParent::Thread {
+                        node_id: thread_root_node_id(origin),
+                        thread_id: origin.to_owned(),
+                    },
+                    None => ResolvedParent::None,
+                }
+            } else {
+                ResolvedParent::Task(
+                    &raw[parent_indices[index].expect("non-root layout node has a parent")],
+                )
             };
             set_original_parent(&mut node, parent);
-            Some(node)
+            set_task_depth(&mut node, depth);
+            node
         })
-        .collect()
+        .collect();
+
+    AnchoredTaskTreeLayout {
+        nodes,
+        active_count,
+    }
 }
 
 fn immediate_parent_index(
@@ -100,22 +158,6 @@ fn immediate_parent_index(
                 .as_ref()
                 .and_then(|thread_id| by_thread.get(thread_id).copied())
         })
-}
-
-fn retain_path(
-    start_index: usize,
-    parent_indices: &[Option<usize>],
-    retained: &mut BTreeSet<usize>,
-) {
-    let mut seen = BTreeSet::new();
-    let mut current = Some(start_index);
-    while let Some(index) = current {
-        if index >= parent_indices.len() || !seen.insert(index) {
-            break;
-        }
-        retained.insert(index);
-        current = parent_indices[index];
-    }
 }
 
 enum ResolvedParent<'a> {
@@ -151,6 +193,11 @@ fn set_original_parent(node: &mut TaskForestNode, parent: ResolvedParent<'_>) {
             *parent_thread_id = None;
         }
     }
+}
+
+fn set_task_depth(node: &mut TaskForestNode, value: u32) {
+    let (TaskForestNode::Task { depth, .. } | TaskForestNode::Thread { depth, .. }) = node;
+    *depth = Some(value);
 }
 
 pub(crate) fn task_node_id(thread_id: &str) -> String {
@@ -230,34 +277,35 @@ mod tests {
                 active_run_id: None,
                 run_state: "idle".to_owned(),
                 last_active_at: None,
+                depth: None,
             },
         }
     }
 
-    fn numbers(nodes: &[TaskForestNode]) -> Vec<u64> {
-        nodes
+    fn numbers(layout: &AnchoredTaskTreeLayout) -> Vec<u64> {
+        layout
+            .nodes
             .iter()
             .map(|node| match node {
                 TaskForestNode::Task { task, .. } => task.number,
-                TaskForestNode::Thread { .. } => panic!("anchored tree must be task-only"),
+                TaskForestNode::Thread { .. } => panic!("layout output must be task-only"),
             })
             .collect()
     }
 
-    fn active_count(nodes: &[TaskForestNode]) -> usize {
-        nodes
+    fn depths(layout: &AnchoredTaskTreeLayout) -> Vec<u32> {
+        layout
+            .nodes
             .iter()
-            .filter(|node| match node {
-                TaskForestNode::Task { task, .. } => {
-                    matches!(task.status, TaskStatus::InProgress | TaskStatus::InReview)
-                }
-                TaskForestNode::Thread { .. } => false,
+            .map(|node| match node {
+                TaskForestNode::Task { depth, .. } => depth.expect("layout sets depth"),
+                TaskForestNode::Thread { .. } => panic!("layout output must be task-only"),
             })
-            .count()
+            .collect()
     }
 
-    fn parent_node_id(nodes: &[TaskForestNode], number: u64) -> Option<String> {
-        nodes.iter().find_map(|node| match node {
+    fn parent_node_id(layout: &AnchoredTaskTreeLayout, number: u64) -> Option<String> {
+        layout.nodes.iter().find_map(|node| match node {
             TaskForestNode::Task {
                 task,
                 parent_node_id,
@@ -267,8 +315,8 @@ mod tests {
         })
     }
 
-    fn parent_thread_id(nodes: &[TaskForestNode], number: u64) -> Option<String> {
-        nodes.iter().find_map(|node| match node {
+    fn parent_thread_id(layout: &AnchoredTaskTreeLayout, number: u64) -> Option<String> {
+        layout.nodes.iter().find_map(|node| match node {
             TaskForestNode::Task {
                 task,
                 parent_thread_id,
@@ -278,8 +326,8 @@ mod tests {
         })
     }
 
-    fn parent_task_number(nodes: &[TaskForestNode], number: u64) -> Option<u64> {
-        nodes.iter().find_map(|node| match node {
+    fn parent_task_number(layout: &AnchoredTaskTreeLayout, number: u64) -> Option<u64> {
+        layout.nodes.iter().find_map(|node| match node {
             TaskForestNode::Task {
                 task,
                 parent_task_number,
@@ -287,87 +335,6 @@ mod tests {
             } if task.number == number => *parent_task_number,
             _ => None,
         })
-    }
-
-    #[test]
-    fn scenario_01_chain_current_root() {
-        let out = prune_anchored_task_tree(
-            vec![
-                node(1254, TaskStatus::InProgress, None),
-                node(1261, TaskStatus::InProgress, Some(1254)),
-            ],
-            "thread::1254",
-        );
-        assert_eq!(numbers(&out), vec![1254, 1261]);
-        assert_eq!(active_count(&out), 2);
-    }
-
-    #[test]
-    fn scenario_02_chain_current_child_is_stable() {
-        let out = prune_anchored_task_tree(
-            vec![
-                node(1254, TaskStatus::InProgress, None),
-                node(1261, TaskStatus::InProgress, Some(1254)),
-            ],
-            "thread::1261",
-        );
-        assert_eq!(numbers(&out), vec![1254, 1261]);
-        assert_eq!(active_count(&out), 2);
-    }
-
-    #[test]
-    fn scenario_03_done_ancestor_is_retained() {
-        let out = prune_anchored_task_tree(
-            vec![
-                node(1254, TaskStatus::Done, None),
-                node(1261, TaskStatus::InReview, Some(1254)),
-            ],
-            "thread::1261",
-        );
-        assert_eq!(numbers(&out), vec![1254, 1261]);
-        assert_eq!(active_count(&out), 1);
-    }
-
-    #[test]
-    fn scenario_04_done_leaf_is_pruned() {
-        let out = prune_anchored_task_tree(
-            vec![
-                node(1254, TaskStatus::InProgress, None),
-                node(1261, TaskStatus::InReview, Some(1254)),
-                node(1262, TaskStatus::Done, Some(1254)),
-            ],
-            "thread::1254",
-        );
-        assert_eq!(numbers(&out), vec![1254, 1261]);
-        assert_eq!(active_count(&out), 2);
-    }
-
-    #[test]
-    fn scenario_05_done_middle_is_structural() {
-        let out = prune_anchored_task_tree(
-            vec![
-                node(1254, TaskStatus::InProgress, None),
-                node(1300, TaskStatus::Done, Some(1254)),
-                node(1305, TaskStatus::InProgress, Some(1300)),
-            ],
-            "thread::1305",
-        );
-        assert_eq!(numbers(&out), vec![1254, 1300, 1305]);
-        assert_eq!(
-            parent_node_id(&out, 1305).as_deref(),
-            Some("task:thread::1300")
-        );
-        assert!(
-            out.iter().all(|node| match node {
-                TaskForestNode::Task { parent_node_id, .. } => !parent_node_id
-                    .as_deref()
-                    .unwrap_or_default()
-                    .starts_with("thread-root:"),
-                TaskForestNode::Thread { .. } => true,
-            }),
-            "task anchors must not point at synthetic thread roots"
-        );
-        assert_eq!(active_count(&out), 2);
     }
 
     fn mixed_branch_raw() -> Vec<RawTaskNode> {
@@ -382,58 +349,160 @@ mod tests {
     }
 
     #[test]
-    fn scenario_06_mixed_branch_prunes_dead_branch() {
-        let out = prune_anchored_task_tree(mixed_branch_raw(), "thread::1270");
-        assert_eq!(numbers(&out), vec![1254, 1261, 1262, 1270]);
-        assert_eq!(
-            parent_node_id(&out, 1270).as_deref(),
-            Some("task:thread::1262")
-        );
-        assert_eq!(active_count(&out), 3);
+    fn scenario_01_full_tree_is_retained_with_done_leaves_and_branches() {
+        let out = layout_anchored_task_tree(mixed_branch_raw(), Some("thread::conversation"));
+
+        // Done leaf 1271 and the fully-done 1263 branch stay in the tree.
+        assert_eq!(numbers(&out), vec![1254, 1261, 1262, 1270, 1263, 1271]);
+        assert_eq!(out.active_count, 3);
     }
 
     #[test]
-    fn scenario_07_plan_b_keeps_current_dead_branch_path() {
-        let out = prune_anchored_task_tree(mixed_branch_raw(), "thread::1271");
-        assert_eq!(numbers(&out), vec![1254, 1261, 1262, 1263, 1270, 1271]);
-        assert_eq!(
-            parent_node_id(&out, 1271).as_deref(),
-            Some("task:thread::1263")
-        );
-        assert_eq!(active_count(&out), 3);
+    fn scenario_02_layout_is_anchor_independent() {
+        // The same raw tree lays out identically no matter which node the
+        // caller anchored on; only client-side highlight moves.
+        let with_origin = layout_anchored_task_tree(mixed_branch_raw(), Some("thread::origin"));
+        let repeat = layout_anchored_task_tree(mixed_branch_raw(), Some("thread::origin"));
+        assert_eq!(numbers(&with_origin), numbers(&repeat));
+        assert_eq!(depths(&with_origin), depths(&repeat));
     }
 
     #[test]
-    fn scenario_08_all_done_is_empty() {
-        let out = prune_anchored_task_tree(
+    fn scenario_03_dfs_pre_order_and_depths_with_origin() {
+        let out = layout_anchored_task_tree(mixed_branch_raw(), Some("thread::conversation"));
+
+        assert_eq!(numbers(&out), vec![1254, 1261, 1262, 1270, 1263, 1271]);
+        assert_eq!(depths(&out), vec![1, 2, 2, 3, 2, 3]);
+    }
+
+    #[test]
+    fn scenario_04_dfs_pre_order_and_depths_without_origin() {
+        let out = layout_anchored_task_tree(mixed_branch_raw(), None);
+
+        assert_eq!(numbers(&out), vec![1254, 1261, 1262, 1270, 1263, 1271]);
+        assert_eq!(depths(&out), vec![0, 1, 1, 2, 1, 2]);
+    }
+
+    #[test]
+    fn scenario_05_origin_parents_root_tasks_to_thread_root() {
+        let out = layout_anchored_task_tree(
+            vec![
+                node(1400, TaskStatus::InProgress, None),
+                node(1401, TaskStatus::InProgress, Some(1400)),
+                node(1500, TaskStatus::Done, None),
+            ],
+            Some("thread::conversation"),
+        );
+
+        assert_eq!(numbers(&out), vec![1400, 1401, 1500]);
+        assert_eq!(
+            parent_node_id(&out, 1400).as_deref(),
+            Some("thread-root:thread::conversation")
+        );
+        assert_eq!(
+            parent_thread_id(&out, 1400).as_deref(),
+            Some("thread::conversation")
+        );
+        assert_eq!(parent_task_number(&out, 1400), None);
+        assert_eq!(
+            parent_node_id(&out, 1500).as_deref(),
+            Some("thread-root:thread::conversation")
+        );
+        assert_eq!(
+            parent_node_id(&out, 1401).as_deref(),
+            Some("task:thread::1400")
+        );
+        assert_eq!(parent_task_number(&out, 1401), Some(1400));
+    }
+
+    #[test]
+    fn scenario_06_no_origin_keeps_root_tasks_parentless() {
+        let out = layout_anchored_task_tree(
             vec![
                 node(1254, TaskStatus::Done, None),
-                node(1261, TaskStatus::Done, Some(1254)),
+                node(1261, TaskStatus::InProgress, Some(1254)),
             ],
-            "thread::1254",
+            None,
         );
-        assert!(out.is_empty());
+
+        assert_eq!(numbers(&out), vec![1254, 1261]);
+        assert_eq!(parent_node_id(&out, 1254), None);
+        assert_eq!(parent_thread_id(&out, 1254), None);
+        assert!(
+            out.nodes.iter().all(|node| match node {
+                TaskForestNode::Task { parent_node_id, .. } => !parent_node_id
+                    .as_deref()
+                    .unwrap_or_default()
+                    .starts_with("thread-root:"),
+                TaskForestNode::Thread { .. } => true,
+            }),
+            "origin-less trees must not point at synthetic thread roots"
+        );
     }
 
     #[test]
-    fn scenario_09_bare_anchor_is_empty() {
-        let out = prune_anchored_task_tree(Vec::new(), "thread::bare");
-        assert!(out.is_empty());
+    fn scenario_07_all_done_tree_is_retained() {
+        let out = layout_anchored_task_tree(
+            vec![
+                node(1400, TaskStatus::Done, None),
+                node(1401, TaskStatus::Done, Some(1400)),
+            ],
+            Some("thread::conversation"),
+        );
+
+        assert_eq!(numbers(&out), vec![1400, 1401]);
+        assert_eq!(depths(&out), vec![1, 2]);
+        assert_eq!(out.active_count, 0);
     }
 
     #[test]
-    fn scenario_10_active_root_only() {
-        let out = prune_anchored_task_tree(
-            vec![node(1280, TaskStatus::InProgress, None)],
-            "thread::1280",
+    fn scenario_08_empty_raw_is_empty() {
+        let out = layout_anchored_task_tree(Vec::new(), Some("thread::bare"));
+        assert!(out.nodes.is_empty());
+        assert_eq!(out.active_count, 0);
+
+        let no_origin = layout_anchored_task_tree(Vec::new(), None);
+        assert!(no_origin.nodes.is_empty());
+    }
+
+    #[test]
+    fn scenario_09_sibling_order_is_stable_by_number() {
+        // Input arrives in updated_at-flavored order; siblings still emit by
+        // ascending task number so status flips cannot reorder the tree.
+        let out = layout_anchored_task_tree(
+            vec![
+                node(1500, TaskStatus::InReview, None),
+                node(1400, TaskStatus::Done, None),
+                node(1402, TaskStatus::Done, Some(1400)),
+                node(1401, TaskStatus::InProgress, Some(1400)),
+            ],
+            Some("thread::conversation"),
         );
-        assert_eq!(numbers(&out), vec![1280]);
-        assert_eq!(active_count(&out), 1);
+
+        assert_eq!(numbers(&out), vec![1400, 1401, 1402, 1500]);
+        assert_eq!(depths(&out), vec![1, 2, 2, 1]);
+        assert_eq!(out.active_count, 2);
+    }
+
+    #[test]
+    fn scenario_10_active_count_counts_in_progress_and_in_review_only() {
+        let out = layout_anchored_task_tree(
+            vec![
+                node(1, TaskStatus::Todo, None),
+                node(2, TaskStatus::InProgress, Some(1)),
+                node(3, TaskStatus::InReview, Some(1)),
+                node(4, TaskStatus::Done, Some(1)),
+            ],
+            Some("thread::conversation"),
+        );
+
+        assert_eq!(out.active_count, 2);
+        assert_eq!(numbers(&out), vec![1, 2, 3, 4]);
     }
 
     #[test]
     fn parent_priority_matches_existing_task_forest_order() {
-        let out = prune_anchored_task_tree(
+        let out = layout_anchored_task_tree(
             vec![
                 node(1, TaskStatus::Done, None),
                 node(2, TaskStatus::Done, None),
@@ -460,7 +529,7 @@ mod tests {
                     Some("thread::3".to_owned()),
                 ),
             ],
-            "thread::4",
+            None,
         );
 
         assert_eq!(parent_node_id(&out, 4).as_deref(), Some("task:thread::1"));
@@ -469,36 +538,51 @@ mod tests {
     }
 
     #[test]
-    fn conversation_anchor_single_derived_root_points_to_thread_root() {
-        let out = prune_anchored_task_tree(
-            vec![node(1400, TaskStatus::InProgress, None)],
-            "thread::conversation",
+    fn cycle_guard_emits_every_node_and_breaks_the_cycle_edge() {
+        // 10 -> 11 -> 10 parent cycle plus a normal root: every node is still
+        // emitted exactly once and the cycle entry is re-rooted.
+        let out = layout_anchored_task_tree(
+            vec![
+                node(1, TaskStatus::InProgress, None),
+                node(10, TaskStatus::Done, Some(11)),
+                node(11, TaskStatus::InProgress, Some(10)),
+            ],
+            Some("thread::conversation"),
         );
 
-        assert_eq!(numbers(&out), vec![1400]);
+        assert_eq!(numbers(&out), vec![1, 10, 11]);
+        assert_eq!(depths(&out), vec![1, 1, 2]);
         assert_eq!(
-            parent_node_id(&out, 1400).as_deref(),
-            Some("thread-root:thread::conversation")
+            parent_node_id(&out, 10).as_deref(),
+            Some("thread-root:thread::conversation"),
+            "cycle entry re-roots at the origin"
         );
-        assert_eq!(
-            parent_thread_id(&out, 1400).as_deref(),
-            Some("thread::conversation")
-        );
-        assert_eq!(parent_task_number(&out, 1400), None);
+        assert_eq!(parent_node_id(&out, 11).as_deref(), Some("task:thread::10"));
+        assert_eq!(out.active_count, 2);
+    }
+
+    #[test]
+    fn self_parent_node_is_treated_as_root() {
+        let out = layout_anchored_task_tree(vec![node(7, TaskStatus::InProgress, Some(7))], None);
+
+        assert_eq!(numbers(&out), vec![7]);
+        assert_eq!(depths(&out), vec![0]);
+        assert_eq!(parent_node_id(&out, 7), None);
     }
 
     #[test]
     fn conversation_anchor_keeps_multi_level_task_parents() {
-        let out = prune_anchored_task_tree(
+        let out = layout_anchored_task_tree(
             vec![
                 node(1400, TaskStatus::InProgress, None),
                 node(1401, TaskStatus::InProgress, Some(1400)),
                 node(1402, TaskStatus::InReview, Some(1401)),
             ],
-            "thread::conversation",
+            Some("thread::conversation"),
         );
 
         assert_eq!(numbers(&out), vec![1400, 1401, 1402]);
+        assert_eq!(depths(&out), vec![1, 2, 3]);
         assert_eq!(
             parent_node_id(&out, 1400).as_deref(),
             Some("thread-root:thread::conversation")
@@ -510,66 +594,6 @@ mod tests {
         assert_eq!(
             parent_node_id(&out, 1402).as_deref(),
             Some("task:thread::1401")
-        );
-    }
-
-    #[test]
-    fn conversation_anchor_retains_done_ancestor_but_prunes_done_leaf() {
-        let done_ancestor = prune_anchored_task_tree(
-            vec![
-                node(1400, TaskStatus::Done, None),
-                node(1401, TaskStatus::InProgress, Some(1400)),
-            ],
-            "thread::conversation",
-        );
-        assert_eq!(numbers(&done_ancestor), vec![1400, 1401]);
-        assert_eq!(
-            parent_node_id(&done_ancestor, 1400).as_deref(),
-            Some("thread-root:thread::conversation")
-        );
-        assert_eq!(active_count(&done_ancestor), 1);
-
-        let done_leaf = prune_anchored_task_tree(
-            vec![
-                node(1400, TaskStatus::InProgress, None),
-                node(1401, TaskStatus::Done, Some(1400)),
-            ],
-            "thread::conversation",
-        );
-        assert_eq!(numbers(&done_leaf), vec![1400]);
-    }
-
-    #[test]
-    fn conversation_anchor_all_done_is_empty_without_thread_node() {
-        let out = prune_anchored_task_tree(
-            vec![
-                node(1400, TaskStatus::Done, None),
-                node(1401, TaskStatus::Done, Some(1400)),
-            ],
-            "thread::conversation",
-        );
-
-        assert!(out.is_empty());
-    }
-
-    #[test]
-    fn conversation_anchor_supports_multiple_derived_roots() {
-        let out = prune_anchored_task_tree(
-            vec![
-                node(1400, TaskStatus::InProgress, None),
-                node(1500, TaskStatus::InReview, None),
-            ],
-            "thread::conversation",
-        );
-
-        assert_eq!(numbers(&out), vec![1400, 1500]);
-        assert_eq!(
-            parent_node_id(&out, 1400).as_deref(),
-            Some("thread-root:thread::conversation")
-        );
-        assert_eq!(
-            parent_node_id(&out, 1500).as_deref(),
-            Some("thread-root:thread::conversation")
         );
     }
 }
