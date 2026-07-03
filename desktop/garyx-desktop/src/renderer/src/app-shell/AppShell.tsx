@@ -22,9 +22,7 @@ import {
   type DesktopAutomationActivityEntry,
   type DesktopAutomationActivityFeed,
   type DesktopMcpServer,
-  type DesktopMemoryDocument,
   type DesktopAutomationSchedule,
-  type DesktopAutomationSummary,
   type DesktopBotConsoleSummary,
   type DesktopCustomAgent,
   type DesktopTeam,
@@ -228,7 +226,12 @@ import {
   computeGatewayIndicator,
   keepRecentThreadLogLines,
 } from "./diagnostics-helpers";
+import { useGatewayConnectionController } from "./useGatewayConnectionController";
 import { useLayoutResizeController } from "./useLayoutResizeController";
+import {
+  resolveMemoryDialogTargetFromPath,
+  useMemoryDialogController,
+} from "./useMemoryDialogController";
 import { useMessagesScrollController } from "./useMessagesScrollController";
 import { useSettingsController } from "./useSettingsController";
 import { useSideChatController } from "./useSideChatController";
@@ -401,73 +404,6 @@ function messagesNearEarlierUserTurnBoundary(
   return userTurnsBeforeViewport <= USER_TURN_PREFETCH_THRESHOLD;
 }
 
-type MemoryDialogTarget =
-  | {
-      scope: "agent";
-      agentId: string;
-      title: string;
-    }
-  | {
-      scope: "automation";
-      automationId: string;
-      title: string;
-    };
-
-function memoryKey(value: string, fallback: string): string {
-  const trimmed = value.trim();
-  const base = trimmed || fallback;
-  let sanitized = "";
-  for (const ch of base) {
-    if (/^[a-z0-9]$/i.test(ch)) {
-      sanitized += ch.toLowerCase();
-    } else if (!sanitized.endsWith("-")) {
-      sanitized += "-";
-    }
-  }
-  const normalized = sanitized.replace(/^-+|-+$/g, "");
-  return normalized || fallback;
-}
-
-function normalizeLocalPathForMatch(value: string): string {
-  return value.replace(/\\/g, "/").replace(/\/+/g, "/");
-}
-
-function resolveMemoryDialogTargetFromPath(
-  absolutePath: string,
-  automations: DesktopAutomationSummary[],
-  agents: DesktopCustomAgent[],
-): MemoryDialogTarget | null {
-  const normalizedPath = normalizeLocalPathForMatch(absolutePath);
-
-  const matchedAgent = agents.find((agent) => {
-    return normalizedPath.endsWith(
-      `/.garyx/agents/${memoryKey(agent.agentId, "agent")}/memory.md`,
-    );
-  });
-  if (matchedAgent) {
-    return {
-      scope: "agent",
-      agentId: matchedAgent.agentId,
-      title: `${matchedAgent.displayName || matchedAgent.agentId} memory.md`,
-    };
-  }
-
-  const matchedAutomation = automations.find((automation) => {
-    return normalizedPath.endsWith(
-      `/.garyx/automations/${memoryKey(automation.id, "automation")}/memory.md`,
-    );
-  });
-  if (matchedAutomation) {
-    return {
-      scope: "automation",
-      automationId: matchedAutomation.id,
-      title: `${matchedAutomation.label} memory.md`,
-    };
-  }
-
-  return null;
-}
-
 function scrollMessagesToLatest(
   node: HTMLDivElement | null,
   behavior: ScrollBehavior = "auto",
@@ -593,21 +529,6 @@ function boundBotsForThread(endpoints: DesktopChannelEndpoint[]): BoundBot[] {
 
 function normalizeMessageText(value: string | undefined): string {
   return value?.trim() || "";
-}
-
-function normalizeGatewayUrlForMatch(value: string): string {
-  return value.trim().replace(/\/+$/, "").toLowerCase();
-}
-
-function isConnectionValidForSettings(
-  status: ConnectionStatus | null,
-  settings: DesktopSettings | null | undefined,
-): boolean {
-  const savedGatewayUrl = normalizeGatewayUrlForMatch(settings?.gatewayUrl || "");
-  if (!savedGatewayUrl || !status?.ok) {
-    return false;
-  }
-  return normalizeGatewayUrlForMatch(status.gatewayUrl) === savedGatewayUrl;
 }
 
 function transcriptMessageImageCount(message: TranscriptMessage): number {
@@ -1224,11 +1145,6 @@ const STARTUP_HYDRATION_RETRY_DELAYS_MS = [0, 300, 650, 1_100, 1_700];
 const DEEP_LINK_GATEWAY_RETRY_DELAYS_MS = [0, 300, 650, 1_100, 1_700, 2_500];
 const TRANSIENT_STATUS_MS = 3200;
 const ERROR_TOAST_MS = 4400;
-const GATEWAY_HEALTHY_POLL_MS = 12000;
-const SILENT_DESKTOP_STATE_REFRESH_MS = 60000;
-const RUN_STATE_LIST_REFRESH_DEBOUNCE_MS = 350;
-const GATEWAY_READY_STATE_REFRESH_THROTTLE_MS = 12000;
-const GATEWAY_RETRY_BACKOFF_MS = [2500, 4000, 6500, 10000, 15000];
 
 function threadRunStateIsRunning(thread: DesktopThreadSummary): boolean {
   return (thread.runState || "").trim().toLowerCase() === "running";
@@ -1445,12 +1361,6 @@ export function AppShell() {
   const [workflowDefinitionsLoading, setWorkflowDefinitionsLoading] =
     useState(false);
   const [connection, setConnection] = useState<ConnectionStatus | null>(null);
-  const [gatewayStatusHint, setGatewayStatusHint] = useState<string | null>(
-    "Connecting to gateway…",
-  );
-  const [gatewayFailureCount, setGatewayFailureCount] = useState(0);
-  const [gatewaySetupForced, setGatewaySetupForced] = useState(false);
-  const [gatewaySetupCanCancel, setGatewaySetupCanCancel] = useState(false);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(() =>
     initialRouteValue.kind === "thread" ? initialRouteValue.threadId : null,
   );
@@ -1673,12 +1583,7 @@ export function AppShell() {
   const toastTimeoutsRef = useRef<Record<number, number>>({});
   const composerDraftRef = useRef("");
   const composerPhaseSyncKeyRef = useRef("");
-  const gatewayRetryStepRef = useRef(0);
-  const gatewaySetupSavedConnectionRef = useRef<ConnectionStatus | null>(null);
   const botBindingRequestSequenceRef = useRef(0);
-  const previousConnectionOkRef = useRef<boolean | null>(null);
-  const desktopStateRefreshTimeoutRef = useRef<number | null>(null);
-  const lastGatewayReadyStateRefreshAtRef = useRef(0);
   const lastRemoteStateWarningKeyRef = useRef<string | null>(null);
   const pendingThreadBottomSnapRef = useRef<string | null>(null);
 
@@ -1688,35 +1593,20 @@ export function AppShell() {
     });
   }, []);
   const shouldFocusComposerRef = useRef(false);
-  const memoryDialogRequestIdRef = useRef(0);
-  const [memoryDialogTarget, setMemoryDialogTarget] =
-    useState<MemoryDialogTarget | null>(null);
-  // The browser tab content is an Electron `WebContentsView` — an
-  // OS-level layer that sits above every renderer-DOM modal regardless
-  // of CSS z-index. Pause it while the Memory dialog is open so the
-  // dialog isn't covered; bounds stay set, so unpausing re-mounts at
-  // the same rect without BrowserPage having to re-sync.
-  useEffect(() => {
-    const open = Boolean(memoryDialogTarget);
-    void window.garyxDesktop.setBrowserOverlayPaused(open);
-    return () => {
-      if (open) {
-        void window.garyxDesktop.setBrowserOverlayPaused(false);
-      }
-    };
-  }, [memoryDialogTarget]);
-  const [memoryDialogDocument, setMemoryDialogDocument] =
-    useState<DesktopMemoryDocument | null>(null);
-  const [memoryDialogDraft, setMemoryDialogDraft] = useState("");
-  const [memoryDialogSavedContent, setMemoryDialogSavedContent] = useState("");
-  const [memoryDialogLoading, setMemoryDialogLoading] = useState(false);
-  const [memoryDialogSaving, setMemoryDialogSaving] = useState(false);
-  const [memoryDialogError, setMemoryDialogError] = useState<string | null>(
-    null,
-  );
-  const [memoryDialogStatus, setMemoryDialogStatus] = useState<string | null>(
-    null,
-  );
+  const {
+    closeMemoryDialog,
+    memoryDialogDirty,
+    memoryDialogDocument,
+    memoryDialogDraft,
+    memoryDialogError,
+    memoryDialogLoading,
+    memoryDialogSaving,
+    memoryDialogStatus,
+    memoryDialogTarget,
+    openMemoryDialog,
+    saveMemoryDialog,
+    setMemoryDialogDraft,
+  } = useMemoryDialogController();
   const {
     automationDialog,
     automationMutation,
@@ -1844,134 +1734,44 @@ export function AppShell() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!error) {
-      return undefined;
-    }
-    const gatewaySetupMessage = gatewaySetupMessageForAuthError(error);
-    if (gatewaySetupMessage) {
-      setConnection({
-        ok: false,
-        bridgeReady: false,
-        gatewayUrl: connection?.gatewayUrl || settingsDraft.gatewayUrl,
-        error: gatewaySetupMessage,
-      });
-      setError(null);
-      return undefined;
-    }
-    if (isTransientGatewayErrorMessage(error)) {
-      recordGatewayStatusObservation(
-        {
-          ok: false,
-          bridgeReady: false,
-          gatewayUrl: connection?.gatewayUrl || settingsDraft.gatewayUrl,
-          error,
-        },
-        hasGatewayRecoveryActivity()
-          ? "Connection unstable. Waiting for gateway updates…"
-          : "Reconnecting to gateway…",
-      );
-      setError(null);
-      return undefined;
-    }
-    pushToast(error, "error");
-    setError(null);
-    return undefined;
-  }, [connection?.gatewayUrl, error, pushToast, settingsDraft.gatewayUrl]);
-
-  useEffect(() => {
-    if (!gatewaySettingsStatus) {
-      return undefined;
-    }
-    const gatewaySetupMessage =
-      gatewaySetupMessageForAuthError(gatewaySettingsStatus);
-    if (gatewaySetupMessage) {
-      setConnection({
-        ok: false,
-        bridgeReady: false,
-        gatewayUrl: connection?.gatewayUrl || settingsDraft.gatewayUrl,
-        error: gatewaySetupMessage,
-      });
-      setGatewaySettingsStatus(null);
-      return undefined;
-    }
-    pushToast(
-      t(gatewaySettingsStatus),
-      /(cannot|error|failed|failure|invalid|missing|unable)/i.test(gatewaySettingsStatus)
-        ? "error"
-        : "success",
-    );
-    setGatewaySettingsStatus(null);
-    return undefined;
-  }, [
-    connection?.gatewayUrl,
+  const {
+    gatewayFailureCount,
+    gatewaySetupCanCancel,
+    gatewaySetupForced,
+    gatewaySetupSavedConnectionRef,
+    gatewayStatusHint,
+    handleCancelGatewaySetup,
+    hasGatewayRecoveryActivity,
+    recordGatewayStatusObservation,
+    refreshDesktopState,
+    scheduleDesktopStateRefresh,
+    setGatewaySetupCanCancel,
+    setGatewaySetupForced,
+  } = useGatewayConnectionController({
+    connection,
+    desktopState,
+    error,
     gatewaySettingsStatus,
+    gatewaySetupMessageForAuthError,
+    liveStreamStateRef,
+    loading,
+    messageStateRef,
     pushToast,
-    settingsDraft.gatewayUrl,
+    scheduleHistoryRefresh,
+    selectedThreadId,
+    selectedThreadIdRef,
+    setConnection,
+    setDesktopAgents,
+    setDesktopState,
+    setDesktopTeams,
+    setDesktopWorkflows,
+    setError,
+    setGatewaySettingsStatus,
+    setLocalSettingsStatus,
+    setSettingsDraft,
+    settingsDraft,
     t,
-  ]);
-
-  async function handleOpenGatewaySetup() {
-    setLocalSettingsStatus(null);
-    const savedSettings = desktopState?.settings;
-    const savedConnection = isConnectionValidForSettings(connection, savedSettings)
-      ? connection
-      : null;
-    gatewaySetupSavedConnectionRef.current = savedConnection;
-    setGatewaySetupCanCancel(Boolean(savedConnection));
-    setGatewaySetupForced(true);
-
-    if (!savedSettings?.gatewayUrl.trim()) {
-      gatewaySetupSavedConnectionRef.current = null;
-      setGatewaySetupCanCancel(false);
-      return;
-    }
-
-    try {
-      const status = await window.garyxDesktop.checkConnection({
-        gatewayUrl: savedSettings.gatewayUrl,
-        gatewayAuthToken: savedSettings.gatewayAuthToken,
-        gatewayHeaders: savedSettings.gatewayHeaders,
-      });
-      setConnection(status);
-      if (isConnectionValidForSettings(status, savedSettings)) {
-        gatewaySetupSavedConnectionRef.current = status;
-        setGatewaySetupCanCancel(true);
-      } else {
-        gatewaySetupSavedConnectionRef.current = null;
-        setGatewaySetupCanCancel(false);
-      }
-    } catch {
-      gatewaySetupSavedConnectionRef.current = null;
-      setGatewaySetupCanCancel(false);
-    }
-  }
-
-  function handleCancelGatewaySetup() {
-    const savedSettings = desktopState?.settings;
-    const savedConnection = gatewaySetupSavedConnectionRef.current;
-    if (
-      !gatewaySetupCanCancel ||
-      !savedSettings ||
-      !isConnectionValidForSettings(savedConnection, savedSettings)
-    ) {
-      return;
-    }
-
-    setSettingsDraft((current) => ({
-      ...current,
-      gatewayUrl: savedSettings.gatewayUrl,
-      gatewayAuthToken: savedSettings.gatewayAuthToken,
-      gatewayHeaders: savedSettings.gatewayHeaders,
-    }));
-    setConnection(savedConnection);
-    setError(null);
-    setGatewaySettingsStatus(null);
-    setLocalSettingsStatus(null);
-    setGatewaySetupForced(false);
-    setGatewaySetupCanCancel(false);
-    gatewaySetupSavedConnectionRef.current = null;
-  }
+  });
 
   useEffect(() => {
     if (!automationStatus) {
@@ -1982,91 +1782,12 @@ export function AppShell() {
     return undefined;
   }, [automationStatus, pushToast]);
 
-  useEffect(() => {
-    recordGatewayStatusObservation(connection, connection?.error);
-  }, [connection]);
-
   function dispatchMessageState(action: MessageMachineAction) {
     messageStateRef.current = messageMachineReducer(
       messageStateRef.current,
       action,
     );
     reactDispatchMessageState(action);
-  }
-
-  function hasGatewayRecoveryActivity(): boolean {
-    const hasBusyStream = Object.values(liveStreamStateRef.current).some(
-      (stream) => {
-        return [
-          "connecting",
-          "streaming",
-          "reconciling",
-          "disconnected",
-        ].includes(stream.streamStatus);
-      },
-    );
-    if (hasBusyStream) {
-      return true;
-    }
-    return Object.values(messageStateRef.current.intentsById).some((intent) => {
-      return [
-        "dispatching",
-        "remote_accepted",
-        "awaiting_provider_ack",
-        "awaiting_response",
-        "awaiting_history",
-      ].includes(intent.state);
-    });
-  }
-
-  function recoveryThreadIds(): string[] {
-    const ids = new Set<string>();
-    for (const stream of Object.values(liveStreamStateRef.current)) {
-      if (
-        ["connecting", "reconciling", "disconnected"].includes(
-          stream.streamStatus,
-        )
-      ) {
-        ids.add(stream.threadId);
-      }
-    }
-    for (const intent of Object.values(messageStateRef.current.intentsById)) {
-      if (
-        intent.threadId &&
-        [
-          "remote_accepted",
-          "awaiting_provider_ack",
-          "awaiting_response",
-          "awaiting_history",
-        ].includes(intent.state)
-      ) {
-        ids.add(intent.threadId);
-      }
-    }
-    if (selectedThreadId) {
-      const runtime = selectThreadRuntime(
-        messageStateRef.current,
-        selectedThreadId,
-      );
-      if (runtime?.state === "reconciling_history") {
-        ids.add(selectedThreadId);
-      }
-    }
-    return [...ids];
-  }
-
-  function recordGatewayStatusObservation(
-    status: ConnectionStatus | null,
-    reason?: string | null,
-  ) {
-    if (status?.ok) {
-      setGatewayFailureCount(0);
-      setGatewayStatusHint(null);
-      return;
-    }
-
-    setGatewayFailureCount((current) => current + 1);
-    setGatewayStatusHint(reason || null);
   }
 
   function threadLogsNearBottom() {
@@ -3211,7 +2932,6 @@ export function AppShell() {
         : isBotsView
           ? `${desktopState?.endpoints.length || 0} connected endpoints`
           : null;
-  const memoryDialogDirty = memoryDialogDraft !== memoryDialogSavedContent;
   const remoteStateWarning = useMemo(
     () => summarizeRemoteStateErrors(desktopState?.remoteErrors),
     [desktopState?.remoteErrors],
@@ -3228,127 +2948,6 @@ export function AppShell() {
     lastRemoteStateWarningKeyRef.current = remoteStateWarning.key;
     pushToast(remoteStateWarning.message, "error");
   }, [pushToast, remoteStateWarning]);
-
-  function memoryDialogInput(target: MemoryDialogTarget) {
-    if (target.scope === "agent") {
-      return {
-        scope: "agent" as const,
-        agentId: target.agentId,
-      };
-    }
-    if (target.scope === "automation") {
-      return {
-        scope: "automation" as const,
-        automationId: target.automationId,
-      };
-    }
-    const exhaustive: never = target;
-    return exhaustive;
-  }
-
-  const confirmDiscardMemoryChanges = useCallback((): boolean => {
-    if (!memoryDialogDirty) {
-      return true;
-    }
-    return window.confirm("Discard unsaved memory changes?");
-  }, [memoryDialogDirty]);
-
-  const openMemoryDialog = useCallback(async (target: MemoryDialogTarget) => {
-    if (memoryDialogTarget && !confirmDiscardMemoryChanges()) {
-      return;
-    }
-
-    const requestId = memoryDialogRequestIdRef.current + 1;
-    memoryDialogRequestIdRef.current = requestId;
-    setMemoryDialogTarget(target);
-    setMemoryDialogDocument(null);
-    setMemoryDialogDraft("");
-    setMemoryDialogSavedContent("");
-    setMemoryDialogLoading(true);
-    setMemoryDialogSaving(false);
-    setMemoryDialogError(null);
-    setMemoryDialogStatus(null);
-
-    try {
-      const document = await window.garyxDesktop.readMemoryDocument(
-        memoryDialogInput(target),
-      );
-      if (memoryDialogRequestIdRef.current !== requestId) {
-        return;
-      }
-      setMemoryDialogDocument(document);
-      setMemoryDialogDraft(document.content);
-      setMemoryDialogSavedContent(document.content);
-    } catch (memoryError) {
-      if (memoryDialogRequestIdRef.current !== requestId) {
-        return;
-      }
-      setMemoryDialogError(
-        memoryError instanceof Error
-          ? memoryError.message
-          : "Failed to load memory.md.",
-      );
-    } finally {
-      if (memoryDialogRequestIdRef.current === requestId) {
-        setMemoryDialogLoading(false);
-      }
-    }
-  }, [confirmDiscardMemoryChanges, memoryDialogTarget]);
-
-  function closeMemoryDialog() {
-    if (!confirmDiscardMemoryChanges()) {
-      return;
-    }
-
-    memoryDialogRequestIdRef.current += 1;
-    setMemoryDialogTarget(null);
-    setMemoryDialogDocument(null);
-    setMemoryDialogDraft("");
-    setMemoryDialogSavedContent("");
-    setMemoryDialogLoading(false);
-    setMemoryDialogSaving(false);
-    setMemoryDialogError(null);
-    setMemoryDialogStatus(null);
-  }
-
-  async function saveMemoryDialog() {
-    if (!memoryDialogTarget) {
-      return;
-    }
-
-    const requestId = memoryDialogRequestIdRef.current + 1;
-    memoryDialogRequestIdRef.current = requestId;
-    setMemoryDialogSaving(true);
-    setMemoryDialogError(null);
-    setMemoryDialogStatus(null);
-
-    try {
-      const document = await window.garyxDesktop.saveMemoryDocument({
-        ...memoryDialogInput(memoryDialogTarget),
-        content: memoryDialogDraft,
-      });
-      if (memoryDialogRequestIdRef.current !== requestId) {
-        return;
-      }
-      setMemoryDialogDocument(document);
-      setMemoryDialogDraft(document.content);
-      setMemoryDialogSavedContent(document.content);
-      setMemoryDialogStatus("Saved memory.md.");
-    } catch (memoryError) {
-      if (memoryDialogRequestIdRef.current !== requestId) {
-        return;
-      }
-      setMemoryDialogError(
-        memoryError instanceof Error
-          ? memoryError.message
-          : "Failed to save memory.md.",
-      );
-    } finally {
-      if (memoryDialogRequestIdRef.current === requestId) {
-        setMemoryDialogSaving(false);
-      }
-    }
-  }
 
   const handleLocalFileLinkClick = useCallback((absolutePath: string) => {
     const memoryTarget = resolveMemoryDialogTargetFromPath(
@@ -3373,50 +2972,6 @@ export function AppShell() {
     if (!isLocalSettingsTab(settingsActiveTab)) {
       void refreshSettingsTabResources(settingsActiveTab);
     }
-  }
-
-  async function refreshDesktopState() {
-    const [nextState, nextAgents, nextTeams, nextWorkflows] = await Promise.all([
-      window.garyxDesktop.getState(),
-      window.garyxDesktop
-        .listCustomAgents()
-        .catch(() => [] as DesktopCustomAgent[]),
-      window.garyxDesktop.listTeams().catch(() => [] as DesktopTeam[]),
-      window.garyxDesktop
-        .listWorkflowDefinitions()
-        .catch(() => [] as DesktopWorkflowDefinition[]),
-    ]);
-    startTransition(() => {
-      setDesktopState(nextState);
-      setDesktopAgents(nextAgents);
-      setDesktopTeams(nextTeams);
-      setDesktopWorkflows(nextWorkflows);
-    });
-    return nextState;
-  }
-
-  function scheduleDesktopStateRefresh(delayMs = RUN_STATE_LIST_REFRESH_DEBOUNCE_MS) {
-    if (desktopStateRefreshTimeoutRef.current !== null) {
-      window.clearTimeout(desktopStateRefreshTimeoutRef.current);
-    }
-    desktopStateRefreshTimeoutRef.current = window.setTimeout(() => {
-      desktopStateRefreshTimeoutRef.current = null;
-      void refreshDesktopState().catch((refreshError) => {
-        console.debug("Desktop state refresh failed.", refreshError);
-      });
-    }, delayMs);
-  }
-
-  function scheduleGatewayReadyStateRefresh() {
-    const now = Date.now();
-    if (
-      now - lastGatewayReadyStateRefreshAtRef.current <
-      GATEWAY_READY_STATE_REFRESH_THROTTLE_MS
-    ) {
-      return;
-    }
-    lastGatewayReadyStateRefreshAtRef.current = now;
-    scheduleDesktopStateRefresh(0);
   }
 
   async function refreshAgentTargets() {
@@ -3943,15 +3498,6 @@ export function AppShell() {
   }, []);
 
   useEffect(() => {
-    return () => {
-      if (desktopStateRefreshTimeoutRef.current !== null) {
-        window.clearTimeout(desktopStateRefreshTimeoutRef.current);
-        desktopStateRefreshTimeoutRef.current = null;
-      }
-    };
-  }, []);
-
-  useEffect(() => {
     const handlePointerDown = (event: MouseEvent) => {
       const target = event.target;
       if (!(target instanceof Element)) {
@@ -4159,140 +3705,6 @@ export function AppShell() {
       cancelled = true;
     };
   }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    let timeoutId = 0;
-
-    const pollConnection = async () => {
-      let nextOk = false;
-      try {
-        const status = await window.garyxDesktop.checkConnection();
-        if (cancelled) {
-          return;
-        }
-        nextOk = Boolean(status.ok);
-        setConnection(status);
-      } catch {
-        if (cancelled) {
-          return;
-        }
-        nextOk = false;
-        setConnection({
-          ok: false,
-          bridgeReady: false,
-          gatewayUrl: settingsDraft.gatewayUrl,
-          error: "Unable to reach Garyx gateway",
-        });
-      } finally {
-        if (cancelled) {
-          return;
-        }
-        if (nextOk) {
-          gatewayRetryStepRef.current = 0;
-          scheduleGatewayReadyStateRefresh();
-        } else {
-          gatewayRetryStepRef.current = Math.min(
-            gatewayRetryStepRef.current + 1,
-            GATEWAY_RETRY_BACKOFF_MS.length - 1,
-          );
-        }
-        timeoutId = window.setTimeout(
-          pollConnection,
-          nextOk
-            ? GATEWAY_HEALTHY_POLL_MS
-            : GATEWAY_RETRY_BACKOFF_MS[gatewayRetryStepRef.current],
-        );
-      }
-    };
-
-    timeoutId = window.setTimeout(
-      pollConnection,
-      connection?.ok
-        ? GATEWAY_HEALTHY_POLL_MS
-        : GATEWAY_RETRY_BACKOFF_MS[gatewayRetryStepRef.current],
-    );
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timeoutId);
-    };
-  }, [connection?.ok, settingsDraft.gatewayUrl]);
-
-  useEffect(() => {
-    if (!connection?.ok || loading) {
-      return;
-    }
-
-    let cancelled = false;
-    let refreshing = false;
-
-    const refreshSilently = async () => {
-      if (cancelled || document.hidden || refreshing) {
-        return;
-      }
-
-      refreshing = true;
-      try {
-        await refreshDesktopState();
-      } catch (refreshError) {
-        console.debug("Silent desktop state refresh failed.", refreshError);
-      } finally {
-        refreshing = false;
-      }
-    };
-
-    const timer = window.setInterval(() => {
-      void refreshSilently();
-    }, SILENT_DESKTOP_STATE_REFRESH_MS);
-
-    const handleVisibilityChange = () => {
-      if (!document.hidden) {
-        void refreshSilently();
-        // Defensive: the persistent main-process stream may have silently died
-        // while hidden; re-fetch the open thread's canonical transcript so it
-        // converges to the server's latest state on return, instead of relying
-        // solely on the connection never stopping (#TASK-1449 symptom 2).
-        const openThreadId = selectedThreadIdRef.current;
-        if (openThreadId) {
-          scheduleHistoryRefresh(openThreadId, 1, 0, true);
-        }
-      }
-    };
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-    };
-  }, [connection?.ok, loading]);
-
-  useEffect(() => {
-    const previousOk = previousConnectionOkRef.current;
-    previousConnectionOkRef.current = connection?.ok ?? null;
-    if (!connection?.ok || previousOk !== false) {
-      return;
-    }
-
-    const threadsToRecover = recoveryThreadIds();
-    if (!threadsToRecover.length) {
-      void refreshDesktopState().catch(() => null);
-      return;
-    }
-
-    void (async () => {
-      try {
-        await refreshDesktopState();
-      } catch {
-        // Best-effort reconnect recovery; history refresh below can still reconcile transcript state.
-      }
-      for (const threadId of threadsToRecover) {
-        scheduleHistoryRefresh(threadId, 6, 350, true);
-      }
-    })();
-  }, [connection?.ok, selectedThreadId]);
 
   useEffect(() => {
     if (!desktopState) {
