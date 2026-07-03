@@ -941,22 +941,23 @@ async fn test_streaming_then_terminal_commit_does_not_duplicate_messages() {
         vec!["user", "assistant", "tool_use", "tool_result", "assistant"],
         "committed transcript should hold each run message exactly once"
     );
-    let seqs: Vec<u64> = committed.iter().map(|record| record.seq).collect();
-    assert_eq!(
-        seqs,
-        vec![1, 2, 3, 4, 5, 6],
-        "seqs are monotonic with no gaps"
+    // Streamed rows are stamped at creation, so the terminal rebuild sees the
+    // already-committed prefix as identical and reconciles with a plain
+    // suffix-append of the trailing assistant row: no same-seq overwrite and
+    // no range_rewrite audit marker in the steady-state streaming path.
+    assert!(
+        committed
+            .iter()
+            .all(|record| record.message.get("kind").and_then(Value::as_str) != Some("control")),
+        "steady-state terminal reconcile must not add control records"
     );
+    let seqs: Vec<u64> = committed.iter().map(|record| record.seq).collect();
+    assert_eq!(seqs, vec![1, 2, 3, 4, 5], "seqs are monotonic with no gaps");
     assert_eq!(committed[1].message["content"], "Working");
     assert_eq!(committed[4].message["content"], "Done");
-    assert_eq!(committed[5].message["control"]["kind"], "range_rewrite");
-    assert_eq!(
-        committed[5].message["control"]["reason"],
-        "same_seq_overwrite"
-    );
 
     let stored = store.get(thread_id).await.expect("session exists");
-    assert_eq!(stored["history"]["message_count"], 6);
+    assert_eq!(stored["history"]["message_count"], 5);
 }
 
 #[tokio::test]
