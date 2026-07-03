@@ -30,7 +30,6 @@ import {
   type GatewaySettingsSource,
   type ConfiguredBot,
   type ConnectionStatus,
-  type DesktopChatStreamEvent,
   type DesktopChannelEndpoint,
   type DesktopDeepLinkEvent,
   type DesktopProviderModels,
@@ -47,11 +46,9 @@ import {
   type DesktopWorkspaceMode,
   type MessageFileAttachment,
   type MessageImageAttachment,
-  type PendingThreadInput,
   type RenderState,
   type SlashCommand,
   type ThreadRuntimeInfo,
-  type ThreadTranscript,
   type TranscriptMessage,
   type UpdateMcpServerInput,
   type UpdateSlashCommandInput,
@@ -60,29 +57,13 @@ import {
 } from "@shared/contracts";
 import { desktopStateWithoutThread } from "@shared/desktop-state";
 import {
-  applyTranscriptRunStateRecord,
-  decideTranscriptFetchPageAction,
   extractToolUseId,
-  isControlTranscriptMessage,
-  isThreadStreamGapError,
   isToolRole,
-  mergeForwardTranscriptPage,
-  reduceTranscriptRunState,
-  shouldRefetchAuthoritativeAfterForwardPageLimit,
   shouldRestartSelectedThreadStreamAfterRefetch,
-  streamResumeCursor,
-  toolMessagesEquivalent,
-  transcriptCommittedAfterCursor,
-  transcriptControlKind,
-  transcriptForCommittedCache,
-  transcriptRewriteAction,
-  transcriptWithResolvedActiveRun,
-  type TranscriptRunState,
 } from "@shared/transcript-sync";
 
 import {
   buildIntent,
-  findPendingAckIntentIndex,
   initialMessageMachineState,
   isRuntimeBusy,
   messageMachineReducer,
@@ -92,7 +73,6 @@ import {
   shouldTrackProviderAckAfterStreamInputResponse,
   type MessageMachineAction,
   type MessageIntent,
-  type ThreadRuntimeState,
 } from "../message-machine";
 import type { SettingsTabId } from "../settings-tabs";
 import { GatewayProfileHistoryButton } from "../GatewayProfileHistoryButton";
@@ -124,9 +104,6 @@ import { ToolTraceGroup } from "../tool-trace";
 import {
   RichMessageContent,
   buildOptimisticTranscriptContent,
-  countTranscriptFiles,
-  countTranscriptImages,
-  extractTranscriptText,
 } from "../message-rich-content";
 import {
   deriveThreadComposerControlModel,
@@ -136,7 +113,6 @@ import {
   visibleRemotePendingInputsForThread,
   type PendingInputOriginRef,
 } from "./pending-inputs";
-import { extractImageGenerationImageContent } from "./image-generation-content";
 import {
   getRendererPerformanceSnapshot,
   measureUiAction,
@@ -166,8 +142,6 @@ import {
   selectedAutomation,
   selectedThread,
   selectedWorkspace,
-  teamBlocksEqual,
-  threadSummariesEquivalent,
   visibleWorkspaceList,
   workspaceForThread,
   workspaceSuggestionFromPath,
@@ -235,6 +209,18 @@ import {
 import { useMessagesScrollController } from "./useMessagesScrollController";
 import { useSettingsController } from "./useSettingsController";
 import { useSideChatController } from "./useSideChatController";
+import {
+  SELECTED_THREAD_STREAM_CONSUMER_ID,
+  messagesNearEarlierUserTurnBoundary,
+  normalizeMessageText,
+  reconcileAssistantEntriesForGatewayRecovery,
+  resolveIntentHistoryMatch,
+  transcriptHasAutomationResponse,
+  transcriptMessageMatchesIntent,
+  useTranscriptController,
+  userMessageIdForOrigin,
+  type ThreadHistoryPaginationState,
+} from "./useTranscriptController";
 import { useWorkspaceController } from "./useWorkspaceController";
 import {
   compactPathLabel,
@@ -267,13 +253,6 @@ import {
 
 const NEW_THREAD_DRAFT_THREAD_ID = "__garyx_new_thread_draft__";
 const MESSAGES_BOTTOM_THRESHOLD_PX = 48;
-const MESSAGES_TOP_PAGINATION_PREFETCH_MIN_PX = 640;
-const MESSAGES_TOP_PAGINATION_PREFETCH_VIEWPORTS = 1.5;
-const THREAD_HISTORY_PAGE_SIZE = 100;
-const THREAD_HISTORY_USER_QUERY_LIMIT = 10;
-const THREAD_HISTORY_FORWARD_PAGE_LIMIT = 50;
-const USER_TURN_PREFETCH_THRESHOLD = 3;
-const SELECTED_THREAD_STREAM_CONSUMER_ID = "selected-thread";
 
 type ThreadEntrySelectionSource =
   | "pinned"
@@ -283,12 +262,6 @@ type ThreadEntrySelectionSource =
   | "workspace-conversation"
   | "dreams"
   | "tasks";
-
-type ThreadHistoryPaginationState = {
-  hasMoreBefore: boolean;
-  nextBeforeIndex: number | null;
-  loadingBefore: boolean;
-};
 
 const GatewaySettingsPanel = lazy(() =>
   import("../GatewaySettingsPanel").then((module) => ({
@@ -373,37 +346,6 @@ function messagesNearBottom(node: HTMLDivElement | null): boolean {
   );
 }
 
-function messagesNearEarlierUserTurnBoundary(
-  node: HTMLDivElement | null,
-): boolean {
-  if (!node) {
-    return false;
-  }
-  const pixelPrefetchDistance = Math.max(
-    MESSAGES_TOP_PAGINATION_PREFETCH_MIN_PX,
-    node.clientHeight * MESSAGES_TOP_PAGINATION_PREFETCH_VIEWPORTS,
-  );
-  if (node.scrollTop <= pixelPrefetchDistance) {
-    return true;
-  }
-  const viewportTop = node.getBoundingClientRect().top;
-  const userTurnStarts = node.querySelectorAll<HTMLElement>(
-    "[data-user-turn-start='true']",
-  );
-  if (userTurnStarts.length === 0) {
-    return false;
-  }
-  let userTurnsBeforeViewport = 0;
-  for (const turnStart of userTurnStarts) {
-    if (turnStart.getBoundingClientRect().bottom <= viewportTop) {
-      userTurnsBeforeViewport += 1;
-      continue;
-    }
-    break;
-  }
-  return userTurnsBeforeViewport <= USER_TURN_PREFETCH_THRESHOLD;
-}
-
 function scrollMessagesToLatest(
   node: HTMLDivElement | null,
   behavior: ScrollBehavior = "auto",
@@ -427,50 +369,6 @@ function messageTailSignature(messages: UiTranscriptMessage[]): string {
     lastMessage.pending ? "1" : "0",
     lastMessage.localState || "",
   ].join(":");
-}
-
-function transcriptEntryHistoryIndex(
-  message: Pick<UiTranscriptMessage, "id" | "localState" | "seq">,
-): number | null {
-  if (message.localState !== "remote_final") {
-    return null;
-  }
-  if (typeof message.seq === "number" && Number.isFinite(message.seq)) {
-    return Math.max(0, message.seq - 1);
-  }
-  const suffix = message.id.split(":").pop();
-  if (!suffix || !/^\d+$/.test(suffix)) {
-    return null;
-  }
-  return Number(suffix);
-}
-
-function earliestRemoteHistoryIndex(messages: UiTranscriptMessage[]): number | null {
-  let earliest: number | null = null;
-  for (const message of messages) {
-    const historyIndex = transcriptEntryHistoryIndex(message);
-    if (historyIndex === null) {
-      continue;
-    }
-    if (earliest === null || historyIndex < earliest) {
-      earliest = historyIndex;
-    }
-  }
-  return earliest;
-}
-
-function transcriptHasAutomationResponse(
-  messages: TranscriptMessage[],
-): boolean {
-  return visibleTranscriptMessages(messages).some(
-    (message) => message.role === "assistant" || isToolRole(message.role),
-  );
-}
-
-function visibleTranscriptMessages(
-  messages: TranscriptMessage[],
-): TranscriptMessage[] {
-  return messages.filter((message) => !isControlTranscriptMessage(message));
 }
 
 function formatThreadTimestamp(value?: string | null): string {
@@ -525,117 +423,6 @@ function boundBotsForThread(endpoints: DesktopChannelEndpoint[]): BoundBot[] {
       left.channel.localeCompare(right.channel)
     );
   });
-}
-
-function normalizeMessageText(value: string | undefined): string {
-  return value?.trim() || "";
-}
-
-function transcriptMessageImageCount(message: TranscriptMessage): number {
-  return countTranscriptImages(message.content);
-}
-
-function transcriptMessageFileCount(message: TranscriptMessage): number {
-  return countTranscriptFiles(message.content);
-}
-
-function transcriptMessageComparableText(message: TranscriptMessage): string {
-  const structuredText = normalizeMessageText(
-    extractTranscriptText(message.content),
-  );
-  if (structuredText) {
-    return structuredText;
-  }
-  if (
-    transcriptMessageImageCount(message) > 0 ||
-    transcriptMessageFileCount(message) > 0
-  ) {
-    return "";
-  }
-  return normalizeMessageText(message.text);
-}
-
-function uiTranscriptMessageComparableText(
-  message: UiTranscriptMessage,
-): string {
-  const structuredText = normalizeMessageText(
-    extractTranscriptText(message.content),
-  );
-  if (structuredText) {
-    return structuredText;
-  }
-  if (
-    transcriptMessageImageCount(message) > 0 ||
-    transcriptMessageFileCount(message) > 0
-  ) {
-    return "";
-  }
-  return normalizeMessageText(message.text);
-}
-
-function isRecoverableAssistantEntry(
-  entry: UiTranscriptMessage,
-  intentId: string,
-  candidateEntryIds: Set<string>,
-): boolean {
-  if (entry.role !== "assistant" || entry.intentId !== intentId) {
-    return false;
-  }
-  return (
-    entry.pending ||
-    entry.localState === "optimistic" ||
-    entry.localState === "remote_partial" ||
-    candidateEntryIds.has(entry.id)
-  );
-}
-
-function reconcileAssistantEntriesForGatewayRecovery(
-  entries: UiTranscriptMessage[],
-  intentId: string,
-  candidateEntryIds: Iterable<string | null | undefined>,
-): { entries: UiTranscriptMessage[]; matched: boolean } {
-  const normalizedCandidateEntryIds = new Set(
-    [...candidateEntryIds]
-      .map((value) => value?.trim() || "")
-      .filter((value) => value.length > 0),
-  );
-  let matched = false;
-  const nextEntries: UiTranscriptMessage[] = [];
-
-  for (const entry of entries) {
-    if (
-      !isRecoverableAssistantEntry(entry, intentId, normalizedCandidateEntryIds)
-    ) {
-      nextEntries.push(entry);
-      continue;
-    }
-
-    matched = true;
-    const visibleText = uiTranscriptMessageComparableText(entry);
-    if (!visibleText) {
-      continue;
-    }
-
-    nextEntries.push({
-      ...entry,
-      pending: false,
-      error: false,
-      localState:
-        entry.localState === "optimistic" ? "remote_partial" : entry.localState,
-    });
-  }
-
-  return {
-    entries: nextEntries,
-    matched,
-  };
-}
-
-function transcriptMessageMatchesIntent(
-  message: TranscriptMessage,
-  intent: MessageIntent,
-): boolean {
-  return messageOriginId(message) === intent.intentId;
 }
 
 function pendingInputOriginRefsForThread(
@@ -884,249 +671,6 @@ type SeededTurn = {
   legacyPendingAssistantId: string | null;
 };
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
-
-function metadataString(
-  metadata: Record<string, unknown> | null | undefined,
-  key: string,
-): string {
-  const value = metadata?.[key];
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function userMessageIdForOrigin(originId: string): string {
-  return `origin:${originId}`;
-}
-
-function messageOriginId(
-  message: Pick<TranscriptMessage, "id" | "metadata" | "role">,
-): string {
-  if (message.role !== "user") {
-    return "";
-  }
-  if (message.id.startsWith("origin:")) {
-    return message.id.slice("origin:".length).trim();
-  }
-  return metadataString(message.metadata, "origin_id");
-}
-
-function normalizeTranscriptMessageId(
-  message: TranscriptMessage,
-): TranscriptMessage {
-  const originId = messageOriginId(message);
-  if (!originId) {
-    return message;
-  }
-  const id = userMessageIdForOrigin(originId);
-  return message.id === id ? message : { ...message, id };
-}
-
-const GENERATED_IMAGE_TOOL_USE_METADATA_KEY = "generated_image_tool_use_id";
-
-function jsonValuesEqual(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
-}
-
-function remoteTranscriptMessageCanReuseExisting(
-  existing: UiTranscriptMessage,
-  remote: TranscriptMessage,
-  options?: { ignoreTimestamp?: boolean },
-): boolean {
-  return (
-    existing.localState === "remote_final" &&
-    existing.role === remote.role &&
-    existing.text === remote.text &&
-    jsonValuesEqual(existing.content, remote.content) &&
-    (options?.ignoreTimestamp || existing.timestamp === remote.timestamp) &&
-    existing.toolUseId === remote.toolUseId &&
-    existing.toolName === remote.toolName &&
-    existing.isError === remote.isError &&
-    jsonValuesEqual(existing.metadata, remote.metadata) &&
-    existing.kind === remote.kind &&
-    existing.internal === remote.internal &&
-    existing.internalKind === remote.internalKind &&
-    existing.loopOrigin === remote.loopOrigin &&
-    existing.pending !== true &&
-    existing.error === remote.error
-  );
-}
-
-function materializeRemoteTranscript(
-  transcript: TranscriptMessage[],
-  existing: UiTranscriptMessage[],
-  options?: { ignoreTimestampForStableMessages?: boolean },
-): UiTranscriptMessage[] {
-  const usedExistingIndexes = new Set<number>();
-
-  const materializeMessage = (
-    message: TranscriptMessage,
-  ): UiTranscriptMessage => {
-    let matchedIndex = existing.findIndex((entry, index) => {
-      return !usedExistingIndexes.has(index) && entry.id === message.id;
-    });
-
-    const matchedEntry = matchedIndex >= 0 ? existing[matchedIndex] : null;
-    if (matchedIndex >= 0) {
-      usedExistingIndexes.add(matchedIndex);
-    }
-
-    if (
-      matchedEntry &&
-      remoteTranscriptMessageCanReuseExisting(matchedEntry, message, {
-        ignoreTimestamp: options?.ignoreTimestampForStableMessages,
-      })
-    ) {
-      // Keep the stable id for React, but carry the committed seq so render_state
-      // refs can resolve this body (the reused entry may be an optimistic one
-      // that never had a seq).
-      return matchedEntry.seq === message.seq
-        ? matchedEntry
-        : { ...matchedEntry, seq: message.seq ?? matchedEntry.seq };
-    }
-
-    return {
-      ...message,
-      id: matchedEntry?.id || message.id,
-      intentId: matchedEntry?.intentId,
-      remoteRunId: matchedEntry?.remoteRunId,
-      localState: "remote_final" as const,
-      pending: false,
-      error: message.error,
-    };
-  };
-
-  const materializeGeneratedImageMessage = (
-    sourceMessage: TranscriptMessage,
-    content: unknown[],
-  ): UiTranscriptMessage => {
-    const toolUseId = sourceMessage.toolUseId?.trim() || "";
-    const synthetic: TranscriptMessage = {
-      id: `generated-image:${sourceMessage.id}`,
-      role: "assistant",
-      text: "",
-      content,
-      timestamp: sourceMessage.timestamp,
-      metadata: {
-        source: "codex_app_server",
-        item_type: "imageGeneration",
-        [GENERATED_IMAGE_TOOL_USE_METADATA_KEY]: toolUseId,
-      },
-      kind: "assistant_reply",
-    };
-    let matchedIndex = existing.findIndex((entry, index) => {
-      return !usedExistingIndexes.has(index) && entry.id === synthetic.id;
-    });
-    if (matchedIndex < 0 && toolUseId) {
-      matchedIndex = existing.findIndex((entry, index) => {
-        const metadata = asRecord(entry.metadata);
-        return (
-          !usedExistingIndexes.has(index) &&
-          entry.role === "assistant" &&
-          metadata?.[GENERATED_IMAGE_TOOL_USE_METADATA_KEY] === toolUseId
-        );
-      });
-    }
-    if (matchedIndex < 0) {
-      const contentSignature = JSON.stringify(content);
-      matchedIndex = existing.findIndex((entry, index) => {
-        return (
-          !usedExistingIndexes.has(index) &&
-          entry.role === "assistant" &&
-          !entry.text.trim() &&
-          JSON.stringify(entry.content) === contentSignature
-        );
-      });
-    }
-
-    const matchedEntry = matchedIndex >= 0 ? existing[matchedIndex] : null;
-    if (matchedIndex >= 0) {
-      usedExistingIndexes.add(matchedIndex);
-    }
-
-    if (
-      matchedEntry &&
-      remoteTranscriptMessageCanReuseExisting(matchedEntry, synthetic, {
-        ignoreTimestamp: options?.ignoreTimestampForStableMessages,
-      })
-    ) {
-      return matchedEntry;
-    }
-
-    return {
-      ...synthetic,
-      id: matchedEntry?.id || synthetic.id,
-      intentId: matchedEntry?.intentId,
-      remoteRunId: matchedEntry?.remoteRunId,
-      localState: "remote_final" as const,
-      pending: false,
-      error: false,
-    };
-  };
-
-  const materializedRemote: UiTranscriptMessage[] = [];
-  for (const message of transcript) {
-    if (isControlTranscriptMessage(message)) {
-      continue;
-    }
-    if (isRunLoadingPlaceholderMessage(message)) {
-      continue;
-    }
-    const normalizedMessage = normalizeTranscriptMessageId(message);
-    materializedRemote.push(materializeMessage(normalizedMessage));
-    if (message.role === "tool_result") {
-      const imageContent = extractImageGenerationImageContent(message);
-      if (imageContent) {
-        materializedRemote.push(
-          materializeGeneratedImageMessage(message, imageContent),
-        );
-      }
-    }
-  }
-  return materializedRemote;
-}
-
-function resolveIntentHistoryMatch(
-  intent: MessageIntent,
-  messages: TranscriptMessage[],
-) {
-  const userIndex =
-    [...messages]
-      .map((message, index) => ({ message, index }))
-      .reverse()
-      .find(({ message }) => {
-        return transcriptMessageMatchesIntent(message, intent);
-      })?.index ?? -1;
-
-  if (userIndex < 0) {
-    return {
-      userVisible: false,
-      assistantVisible: false,
-    };
-  }
-
-  const followUpMessages = messages.slice(userIndex + 1);
-  const assistantMessages = followUpMessages.filter(
-    (message) => message.role === "assistant",
-  );
-  const expectedResponse = normalizeMessageText(intent.responseText);
-  const assistantVisible = expectedResponse
-    ? assistantMessages.some(
-        (message) => normalizeMessageText(message.text) === expectedResponse,
-      )
-    : assistantMessages.length > 0 ||
-      followUpMessages.some((message) => isToolRole(message.role));
-
-  return {
-    userVisible: true,
-    assistantVisible,
-  };
-}
-
 function isKnownThreadId(
   state: DesktopState | null,
   threadId: string | null,
@@ -1148,24 +692,6 @@ const ERROR_TOAST_MS = 4400;
 
 function threadRunStateIsRunning(thread: DesktopThreadSummary): boolean {
   return (thread.runState || "").trim().toLowerCase() === "running";
-}
-
-function chatStreamEventHasRunLifecycle(event: DesktopChatStreamEvent): boolean {
-  const events =
-    event.type === "thread_render_frame"
-      ? event.events
-      : event.type === "committed_message"
-        ? [event]
-        : [];
-  return events.some((committed) => {
-    const controlKind = transcriptControlKind(committed.message);
-    return (
-      controlKind === "run_start" ||
-      controlKind === "run_complete" ||
-      controlKind === "run_interrupted" ||
-      controlKind === "interrupt_confirmed"
-    );
-  });
 }
 
 function savedContentView(): ContentView {
@@ -1550,27 +1076,12 @@ export function AppShell() {
   const pendingBotIdRef = useRef<string | null>(null);
   const composerHasPayloadRef = useRef(false);
   const newThreadInitialDispatchLockRef = useRef(false);
-  const messagesByThreadRef = useRef<MessageMap>({});
-  const renderStateByThreadRef = useRef<Record<string, RenderState>>({});
-  const transcriptSnapshotByThreadRef = useRef<Record<string, ThreadTranscript>>(
-    {},
-  );
-  const transcriptRunStateByThreadRef = useRef<Record<string, TranscriptRunState>>(
-    {},
-  );
-  const historyPaginationByThreadRef = useRef<
-    Record<string, ThreadHistoryPaginationState>
-  >({});
   const messageStateRef = useRef(initialMessageMachineState);
   const liveStreamStateRef = useRef<Record<string, LiveStreamState>>({});
   const deferredQueueDrainByThreadRef = useRef<Record<string, boolean>>({});
   const queueDrainInFlightByThreadRef = useRef<Record<string, boolean>>({});
   const pendingAutomationRunsRef = useRef<Record<string, PendingAutomationRun>>(
     {},
-  );
-  const threadTitleOverridesRef = useRef<Record<string, string>>({});
-  const streamEventHandlerRef = useRef<(event: DesktopChatStreamEvent) => void>(
-    () => {},
   );
   const deepLinkEventHandlerRef = useRef<(event: DesktopDeepLinkEvent) => void>(
     () => {},
@@ -2249,6 +1760,59 @@ export function AppShell() {
     pendingThreadBottomSnapRef,
     scrollMessagesToLatest,
     selectedThreadIdRef,
+  });
+  useEffect(() => {
+    selectedThreadIdRef.current = selectedThreadId;
+    selectedThreadGenerationRef.current += 1;
+  }, [selectedThreadId]);
+  const {
+    applyCanonicalTranscript,
+    applyRemoteTranscript,
+    clearLiveStreamState,
+    forceReleaseThreadRuntime,
+    getLiveStreamState,
+    hasPendingHistoryIntents,
+    intentForId,
+    loadOlderThreadHistoryPage,
+    messagesByThreadRef,
+    setThreadRuntimeState,
+    startCommittedThreadStream,
+    threadTitleOverridesRef,
+    updateLiveStreamState,
+    updateMessagesByThread,
+  } = useTranscriptController({
+    activeHistoryPagination,
+    activeMessages,
+    activeThreadMessageKey,
+    connection,
+    desktopState,
+    dispatchMessageState,
+    editingThreadTitle,
+    historyLoading,
+    lastRenderedMessageThreadRef,
+    liveStreamStateRef,
+    messageStateRef,
+    messagesRef,
+    pendingMessagesPrependAnchorRef,
+    recordGatewayStatusObservation,
+    refetchAuthoritativeTranscriptAfterRewrite,
+    requestSelectedThreadMessagesBottomSnap,
+    scheduleDesktopStateRefresh,
+    scheduleHistoryRefresh,
+    selectedThreadId,
+    selectedThreadIdRef,
+    setDesktopState,
+    setError,
+    setHistoryLoading,
+    setHistoryPaginationByThread,
+    setLiveStreamStateByThread,
+    setMessagesByThread,
+    setPendingAutomationRun,
+    setPendingRemoteInputsByThread,
+    setRenderStateByThread,
+    setThreadInfoByThread,
+    setTitleDraft,
+    settingsDraft,
   });
   const activeThreadWorktree =
     activeThreadInfo?.worktree || activeThread?.worktree || null;
@@ -3450,15 +3014,6 @@ export function AppShell() {
   }, [messageState]);
 
   useEffect(() => {
-    streamEventHandlerRef.current = handleChatStreamEvent;
-  });
-
-  useEffect(() => {
-    selectedThreadIdRef.current = selectedThreadId;
-    selectedThreadGenerationRef.current += 1;
-  }, [selectedThreadId]);
-
-  useEffect(() => {
     newThreadDraftActiveRef.current = newThreadDraftActive;
   }, [newThreadDraftActive]);
 
@@ -3473,19 +3028,6 @@ export function AppShell() {
   useEffect(() => {
     pendingBotIdRef.current = pendingBotId;
   }, [pendingBotId]);
-
-  useEffect(() => {
-    const listener = (event: DesktopChatStreamEvent) => {
-      if (chatStreamEventHasRunLifecycle(event)) {
-        scheduleDesktopStateRefresh();
-      }
-      streamEventHandlerRef.current(event);
-    };
-    window.garyxDesktop.subscribeChatStream(listener);
-    return () => {
-      window.garyxDesktop.unsubscribeChatStream(listener);
-    };
-  }, []);
 
   useEffect(() => {
     const listener = (event: DesktopDeepLinkEvent) => {
@@ -3756,60 +3298,6 @@ export function AppShell() {
   }, [editingThreadTitle, activeThread?.title]);
 
   useEffect(() => {
-    if (!selectedThreadId || !desktopState) {
-      return;
-    }
-
-    let cancelled = false;
-    void loadSelectedThreadTranscriptFromSingleSource(
-      selectedThreadId,
-      () => cancelled,
-    );
-
-    return () => {
-      cancelled = true;
-      void window.garyxDesktop.stopThreadStream({
-        threadId: selectedThreadId,
-        consumerId: SELECTED_THREAD_STREAM_CONSUMER_ID,
-      });
-    };
-  }, [Boolean(desktopState), selectedThreadId]);
-
-  useEffect(() => {
-    if (
-      !activeThreadMessageKey ||
-      historyLoading ||
-      !activeHistoryPagination?.hasMoreBefore ||
-      activeHistoryPagination.loadingBefore
-    ) {
-      return;
-    }
-
-    const node = messagesRef.current;
-    if (!messagesNearEarlierUserTurnBoundary(node)) {
-      return;
-    }
-
-    const threadId = activeThreadMessageKey;
-    const timer = window.setTimeout(() => {
-      if (selectedThreadIdRef.current === threadId) {
-        void loadOlderThreadHistoryPage(threadId);
-      }
-    }, 0);
-
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [
-    activeThreadMessageKey,
-    activeMessages.length,
-    activeHistoryPagination?.hasMoreBefore,
-    activeHistoryPagination?.loadingBefore,
-    activeHistoryPagination?.nextBeforeIndex,
-    historyLoading,
-  ]);
-
-  useEffect(() => {
     threadLogsCursorRef.current = threadLogsCursor;
   }, [threadLogsCursor]);
 
@@ -4024,201 +3512,6 @@ export function AppShell() {
     return selectQueueIntentIds(messageStateRef.current, threadId);
   }
 
-  function intentForId(intentId: string): MessageIntent | null {
-    return messageStateRef.current.intentsById[intentId] || null;
-  }
-
-  function setThreadRuntimeState(
-    threadId: string,
-    runtimeState: ThreadRuntimeState,
-    options?: {
-      activeIntentId?: string;
-      remoteRunId?: string;
-      error?: string;
-    },
-  ) {
-    dispatchMessageState({
-      type: "thread/runtime",
-      threadId,
-      runtimeState,
-      activeIntentId: options?.activeIntentId,
-      remoteRunId: options?.remoteRunId,
-      error: options?.error,
-    });
-  }
-
-  function publishTranscriptRunState(
-    threadId: string,
-    state: TranscriptRunState,
-  ): TranscriptRunState {
-    transcriptRunStateByThreadRef.current = {
-      ...transcriptRunStateByThreadRef.current,
-      [threadId]: state,
-    };
-    if (state.title) {
-      applyThreadTitleUpdate(threadId, state.title);
-    }
-    const remoteRunId = state.activeRunId || undefined;
-    if (state.busy) {
-      const runtimeState: ThreadRuntimeState =
-        state.activity === "reconciling"
-          ? "reconciling_history"
-          : "running_remote";
-      updateLiveStreamState(threadId, (current) => ({
-        threadId,
-        runId: remoteRunId || current?.runId,
-        activeIntentId: current?.activeIntentId,
-        assistantEntryId: current?.assistantEntryId ?? null,
-        pendingAckIntentIds: current?.pendingAckIntentIds || [],
-        streamStatus:
-          state.activity === "reconciling" ? "reconciling" : "streaming",
-      }));
-      setThreadRuntimeState(threadId, runtimeState, {
-        activeIntentId: getLiveStreamState(threadId)?.activeIntentId,
-        remoteRunId,
-      });
-      return state;
-    }
-    if (state.terminalStatus) {
-      updateLiveStreamState(threadId, (current) =>
-        current
-          ? {
-              ...current,
-              runId: current.runId || remoteRunId,
-              assistantEntryId: null,
-              streamStatus:
-                state.terminalStatus === "interrupted"
-                  ? "interrupted"
-                  : "reconciling",
-            }
-          : null,
-      );
-      if (!hasPendingHistoryIntents(threadId)) {
-        dispatchMessageState({
-          type: "thread/clear",
-          threadId,
-        });
-        clearLiveStreamState(threadId);
-      }
-    }
-    return state;
-  }
-
-  function syncTranscriptRunState(
-    threadId: string,
-    transcript: ThreadTranscript,
-  ): TranscriptRunState {
-    return publishTranscriptRunState(
-      threadId,
-      reduceTranscriptRunState(transcript.messages),
-    );
-  }
-
-  function applyCommittedTranscriptRunState(
-    event: Extract<DesktopChatStreamEvent, { type: "committed_message" }>,
-  ): TranscriptRunState {
-    const current =
-      transcriptRunStateByThreadRef.current[event.threadId] ||
-      reduceTranscriptRunState(
-        transcriptSnapshotByThreadRef.current[event.threadId]?.messages || [],
-      );
-    return publishTranscriptRunState(
-      event.threadId,
-      applyTranscriptRunStateRecord(current, event.message, { seq: event.seq }),
-    );
-  }
-
-  function updateLiveStreamState(
-    threadId: string,
-    updater: (current: LiveStreamState | null) => LiveStreamState | null,
-  ): LiveStreamState | null {
-    const next = updater(liveStreamStateRef.current[threadId] || null);
-    const updated = { ...liveStreamStateRef.current };
-    if (next) {
-      updated[threadId] = next;
-    } else {
-      delete updated[threadId];
-    }
-    liveStreamStateRef.current = updated;
-    setLiveStreamStateByThread(updated);
-    return next;
-  }
-
-  function clearLiveStreamState(threadId: string) {
-    updateLiveStreamState(threadId, () => null);
-  }
-
-  function getLiveStreamState(threadId: string): LiveStreamState | null {
-    return liveStreamStateRef.current[threadId] || null;
-  }
-
-  function updateMessagesByThread(
-    updater: (current: MessageMap) => MessageMap,
-  ): MessageMap {
-    const next = updater(messagesByThreadRef.current);
-    messagesByThreadRef.current = next;
-    setMessagesByThread(next);
-    return next;
-  }
-
-  function updateRenderStateByThread(
-    updater: (
-      current: Record<string, RenderState>,
-    ) => Record<string, RenderState>,
-  ): void {
-    const next = updater(renderStateByThreadRef.current);
-    renderStateByThreadRef.current = next;
-    setRenderStateByThread(next);
-  }
-
-  function applyThreadRenderState(threadId: string, renderState: RenderState) {
-    const existing = renderStateByThreadRef.current[threadId];
-    // Monotonic guard: drop late frames from a reconnect race so the rendered
-    // snapshot never moves backward.
-    if (existing && renderState.based_on_seq < existing.based_on_seq) {
-      return;
-    }
-    updateRenderStateByThread((current) => ({
-      ...current,
-      [threadId]: renderState,
-    }));
-  }
-
-  function applyThreadTitleUpdate(threadId: string, title: string) {
-    const nextTitle = title.trim();
-    if (!threadId || !nextTitle) {
-      return;
-    }
-
-    threadTitleOverridesRef.current = {
-      ...threadTitleOverridesRef.current,
-      [threadId]: nextTitle,
-    };
-
-    setDesktopState((current) => {
-      if (!current) {
-        return current;
-      }
-      let changed = false;
-      const updateThread = (
-        thread: (typeof current.threads)[number],
-      ): (typeof current.threads)[number] => {
-        if (thread.id !== threadId || thread.title === nextTitle) {
-          return thread;
-        }
-        changed = true;
-        return { ...thread, title: nextTitle };
-      };
-      const threads = current.threads.map(updateThread);
-      const sessions = current.sessions.map(updateThread);
-      return changed ? { ...current, threads, sessions } : current;
-    });
-
-    if (selectedThreadIdRef.current === threadId && !editingThreadTitle) {
-      setTitleDraft(nextTitle);
-    }
-  }
-
   function appendSeededTurn(
     threadId: string,
     intent: MessageIntent,
@@ -4394,21 +3687,6 @@ export function AppShell() {
     });
   }
 
-  function setRemotePendingInputs(
-    threadId: string,
-    pendingInputs: PendingThreadInput[],
-  ) {
-    setPendingRemoteInputsByThread((current) => {
-      const next = { ...current };
-      if (pendingInputs.length > 0) {
-        next[threadId] = pendingInputs;
-      } else {
-        delete next[threadId];
-      }
-      return next;
-    });
-  }
-
   function setPendingAutomationRun(
     threadId: string,
     run: PendingAutomationRun | null,
@@ -4467,251 +3745,6 @@ export function AppShell() {
     }, delayMs);
   }
 
-  function rememberTranscriptSnapshot(
-    threadId: string,
-    transcript: ThreadTranscript,
-    persist = true,
-    syncRunState = true,
-  ) {
-    transcriptSnapshotByThreadRef.current = {
-      ...transcriptSnapshotByThreadRef.current,
-      [threadId]: transcript,
-    };
-    if (syncRunState) {
-      syncTranscriptRunState(threadId, transcript);
-    }
-    if (persist) {
-      const cacheTranscript = transcriptForCommittedCache(transcript);
-      if (cacheTranscript.messages.length > 0 || !transcript.threadInfo?.activeRun) {
-        // Persist the last render snapshot alongside committed messages so the
-        // next cold/offline open can render folded history before a live frame.
-        void window.garyxDesktop.saveThreadTranscriptCache(
-          cacheTranscript,
-          renderStateByThreadRef.current[threadId] ?? null,
-        );
-      }
-    }
-  }
-
-  function applyCanonicalTranscript(
-    threadId: string,
-    transcript: ThreadTranscript,
-    options?: { syncRunState?: boolean },
-  ) {
-    const resolvedTranscript = transcriptWithResolvedActiveRun(transcript);
-    rememberTranscriptSnapshot(
-      threadId,
-      resolvedTranscript,
-      true,
-      options?.syncRunState ?? true,
-    );
-    setThreadInfoByThread((current) => ({
-      ...current,
-      [threadId]: resolvedTranscript.threadInfo ?? null,
-    }));
-    const visibleMessages = visibleTranscriptMessages(resolvedTranscript.messages);
-    setRemotePendingInputs(threadId, resolvedTranscript.pendingInputs);
-    startTransition(() => {
-      updateMessagesByThread((current) => {
-        const existing = current[threadId] || [];
-        return {
-          ...current,
-          [threadId]: materializeRemoteTranscript(
-            visibleMessages,
-            existing,
-          ),
-        };
-      });
-    });
-    markIntentsFromHistory(threadId, visibleMessages);
-  }
-
-  function handleChatStreamEvent(event: DesktopChatStreamEvent) {
-    const threadId = event.threadId;
-    if (event.type === "thread_render_frame") {
-      // One atomic frame: apply the contiguous committed events through the
-      // existing transport/ack path, then replace the render snapshot.
-      for (const committed of event.events) {
-        applyCommittedThreadMessage(committed);
-      }
-      applyThreadRenderState(threadId, event.renderState);
-      return;
-    }
-    if (event.type !== "error") {
-      return;
-    }
-    const currentStream = getLiveStreamState(threadId);
-    const activeIntentId = currentStream?.activeIntentId;
-
-    if (isThreadStreamGapError(event)) {
-      if (activeIntentId) {
-        dispatchMessageState({
-          type: "intent/awaiting-history",
-          intentId: activeIntentId,
-        });
-      }
-      updateLiveStreamState(threadId, (current) =>
-        current
-          ? {
-              ...current,
-              runId: event.runId,
-              assistantEntryId: null,
-              streamStatus: "reconciling",
-            }
-          : null,
-      );
-      setThreadRuntimeState(threadId, "reconciling_history", {
-        activeIntentId: activeIntentId || undefined,
-        remoteRunId: event.runId,
-      });
-      void refetchAuthoritativeTranscriptAfterRewrite(threadId);
-      return;
-    }
-    const recoveryResult = activeIntentId
-      ? reconcileAssistantEntriesForGatewayRecovery(
-          messagesByThreadRef.current[threadId] || [],
-          activeIntentId,
-          [currentStream?.assistantEntryId],
-        )
-      : { entries: [] as UiTranscriptMessage[], matched: false };
-    const isTerminalRunError = event.terminal === true;
-    if (
-      !isTerminalRunError &&
-      (isTransientGatewayErrorMessage(event.error) || recoveryResult.matched)
-    ) {
-      const recoveryStatusLabel = "Waiting to sync with gateway…";
-      recordGatewayStatusObservation(
-        {
-          ok: false,
-          bridgeReady: false,
-          gatewayUrl: connection?.gatewayUrl || settingsDraft.gatewayUrl,
-          error: event.error,
-        },
-        recoveryStatusLabel,
-      );
-      let assistantEntryId: string | null | undefined = null;
-      updateLiveStreamState(threadId, (current) => {
-        assistantEntryId = current?.assistantEntryId ?? null;
-        return current
-          ? {
-              ...current,
-              runId: event.runId,
-              assistantEntryId: null,
-              streamStatus: "disconnected",
-            }
-          : null;
-      });
-      if (activeIntentId) {
-        dispatchMessageState({
-          type: "intent/awaiting-history",
-          intentId: activeIntentId,
-        });
-      }
-      setThreadRuntimeState(threadId, "reconciling_history", {
-        activeIntentId: activeIntentId || undefined,
-        remoteRunId: event.runId,
-      });
-      if (activeIntentId) {
-        updateMessagesByThread((current) => {
-          const nextEntries = reconcileAssistantEntriesForGatewayRecovery(
-            current[threadId] || [],
-            activeIntentId,
-            [assistantEntryId],
-          ).entries;
-          return {
-            ...current,
-            [threadId]: nextEntries,
-          };
-        });
-      }
-      scheduleHistoryRefresh(threadId, 5, 1200, true);
-      return;
-    }
-    updateLiveStreamState(threadId, (current) =>
-      current
-        ? {
-            ...current,
-            runId: event.runId,
-            assistantEntryId: null,
-            streamStatus: "failed",
-          }
-        : null,
-    );
-    if (activeIntentId) {
-      dispatchMessageState({
-        type: "intent/failed",
-        intentId: activeIntentId,
-        error: event.error,
-      });
-    }
-    setThreadRuntimeState(threadId, "failed", {
-      activeIntentId: activeIntentId || undefined,
-      remoteRunId: event.runId,
-      error: event.error,
-    });
-    setError(event.error);
-  }
-
-  function markIntentsFromHistory(
-    threadId: string,
-    transcript: TranscriptMessage[],
-  ) {
-    const visibleTranscript = visibleTranscriptMessages(transcript);
-    const intents = Object.values(messageStateRef.current.intentsById).filter(
-      (intent) => {
-        return (
-          intent.threadId === threadId &&
-          [
-            "dispatching",
-            "remote_accepted",
-            "awaiting_provider_ack",
-            "awaiting_response",
-            "awaiting_history",
-          ].includes(intent.state)
-        );
-      },
-    );
-
-    for (const intent of intents) {
-      const match = resolveIntentHistoryMatch(intent, visibleTranscript);
-      if (!match.userVisible) {
-        continue;
-      }
-      if (
-        match.assistantVisible ||
-        (!intent.responseText && intent.dispatchMode === "async_steer")
-      ) {
-        dispatchMessageState({
-          type: "intent/completed",
-          intentId: intent.intentId,
-        });
-      } else {
-        dispatchMessageState({
-          type: "intent/awaiting-history",
-          intentId: intent.intentId,
-          responseText: intent.responseText,
-        });
-      }
-    }
-
-    const runtime = selectThreadRuntime(messageStateRef.current, threadId);
-    if (runtime && !hasPendingHistoryIntents(threadId)) {
-      dispatchMessageState({
-        type: "thread/clear",
-        threadId,
-      });
-      const liveStream = getLiveStreamState(threadId);
-      if (
-        liveStream &&
-        ["reconciling", "disconnected", "failed"].includes(
-          liveStream.streamStatus,
-        )
-      ) {
-        clearLiveStreamState(threadId);
-      }
-    }
-  }
-
   function shiftQueuedIntent(threadId: string): MessageIntent | null {
     const [nextIntentId] = queueIntentIdsForThread(threadId);
     if (!nextIntentId) {
@@ -4757,387 +3790,6 @@ export function AppShell() {
       intentId: draggedIntentId,
       toIndex,
     });
-  }
-
-  function mergeRemoteTranscriptWithLocal(
-    transcript: TranscriptMessage[],
-    existing: UiTranscriptMessage[],
-    options?: {
-      activeRunLiveRows?: boolean;
-      preserveRemoteBeforeIndex?: number | null;
-      /**
-       * Whether the fetched transcript reports an active run. Streamed local
-       * tool bubbles outrank the canonical page only while the run is
-       * actually active; once the gateway reports the run finished, the page
-       * already contains every tool row, so an unmatched local bubble lost
-       * its terminal events (dropped stream, missed `done`) or its rows fell
-       * outside the fetched page. Keeping it would re-append it after the
-       * final assistant answer on every reconcile. Mirrors the iOS
-       * `GaryxTranscriptMerge` `threadRunActive` rule.
-       */
-      threadRunActive?: boolean;
-    },
-  ): UiTranscriptMessage[] {
-    const visibleTranscript = visibleTranscriptMessages(transcript);
-    if (visibleTranscript.length === 0) {
-      return existing.length > 0 ? existing : [];
-    }
-
-    const materializedRemote = materializeRemoteTranscript(
-      visibleTranscript,
-      existing,
-      {
-        ignoreTimestampForStableMessages: options?.activeRunLiveRows,
-      },
-    );
-    const materializedRemoteIds = new Set(
-      materializedRemote.map((entry) => entry.id),
-    );
-    const preservedRemoteBeforeEntries: UiTranscriptMessage[] = [];
-    const preservedLocalEntries = existing.filter((entry, index, entries) => {
-      if (entry.localState === "remote_final") {
-        const historyIndex = transcriptEntryHistoryIndex(entry);
-        if (
-          typeof options?.preserveRemoteBeforeIndex === "number" &&
-          historyIndex !== null &&
-          historyIndex < options.preserveRemoteBeforeIndex &&
-          !materializedRemoteIds.has(entry.id)
-        ) {
-          preservedRemoteBeforeEntries.push(entry);
-        }
-        return false;
-      }
-      if (
-        entries.findIndex((candidate) => candidate.id === entry.id) !== index
-      ) {
-        return false;
-      }
-      if (!entry.intentId) {
-        return (
-          entry.localState === "error" || entry.localState === "interrupted"
-        );
-      }
-
-      const intent = intentForId(entry.intentId);
-      if (!intent) {
-        return (
-          entry.localState === "error" || entry.localState === "interrupted"
-        );
-      }
-
-      if (entry.role === "user") {
-        return !(
-          materializedRemoteIds.has(entry.id) ||
-          materializedRemoteIds.has(userMessageIdForOrigin(intent.intentId))
-        );
-      }
-      const match = resolveIntentHistoryMatch(intent, visibleTranscript);
-      if (entry.role === "assistant") {
-        return !match.assistantVisible;
-      }
-      if (isToolRole(entry.role)) {
-        if (options?.threadRunActive === false) {
-          return false;
-        }
-        return !materializedRemote.some((candidate) =>
-          toolMessagesEquivalent(candidate, entry),
-        );
-      }
-      return false;
-    });
-
-    return [
-      ...preservedRemoteBeforeEntries,
-      ...materializedRemote,
-      ...preservedLocalEntries,
-    ];
-  }
-
-  function updateThreadHistoryPagination(
-    threadId: string,
-    updater: (
-      current: ThreadHistoryPaginationState | null,
-    ) => ThreadHistoryPaginationState | null,
-  ) {
-    const previous = historyPaginationByThreadRef.current[threadId] || null;
-    const nextValue = updater(previous);
-    const next = { ...historyPaginationByThreadRef.current };
-    if (nextValue) {
-      next[threadId] = nextValue;
-    } else {
-      delete next[threadId];
-    }
-    historyPaginationByThreadRef.current = next;
-    setHistoryPaginationByThread(next);
-  }
-
-  function paginationStateFromTranscript(
-    transcript: ThreadTranscript,
-    loadingBefore = false,
-  ): ThreadHistoryPaginationState {
-    return {
-      hasMoreBefore: Boolean(transcript.pageInfo?.hasMoreBefore),
-      nextBeforeIndex:
-        typeof transcript.pageInfo?.nextBeforeIndex === "number"
-          ? transcript.pageInfo.nextBeforeIndex
-          : null,
-      loadingBefore,
-    };
-  }
-
-  function threadSummaryFromTranscript(
-    threadId: string,
-    transcript: ThreadTranscript,
-  ): DesktopThreadSummary {
-    if (transcript.thread) {
-      return {
-        ...transcript.thread,
-        agentId: transcript.thread.agentId ?? transcript.threadInfo?.agentId ?? null,
-        workspacePath:
-          transcript.thread.workspacePath ?? transcript.threadInfo?.workspacePath ?? null,
-        worktree: transcript.thread.worktree ?? transcript.threadInfo?.worktree ?? null,
-        team: transcript.thread.team ?? transcript.team ?? null,
-      };
-    }
-
-    const timestamps = transcript.messages
-      .map((message) => message.timestamp || '')
-      .filter(Boolean);
-    const fallbackTimestamp =
-      timestamps[timestamps.length - 1] || new Date().toISOString();
-    const preview =
-      transcript.messages.find((message) => message.text.trim())?.text.trim() || '';
-
-    return {
-      id: threadId,
-      title: transcript.threadInfo?.agentId || threadId,
-      createdAt: timestamps[0] || fallbackTimestamp,
-      updatedAt: fallbackTimestamp,
-      lastMessagePreview: preview,
-      workspacePath: transcript.threadInfo?.workspacePath ?? null,
-      messageCount: transcript.pageInfo?.totalMessages ?? transcript.messages.length,
-      agentId: transcript.threadInfo?.agentId ?? null,
-      recentRunId: transcript.threadInfo?.activeRun?.runId ?? null,
-      worktree: transcript.threadInfo?.worktree ?? null,
-      team: transcript.team ?? null,
-    };
-  }
-
-  function cacheOpenableTranscriptThread(
-    threadId: string,
-    transcript: ThreadTranscript,
-  ) {
-    const summary = threadSummaryFromTranscript(threadId, transcript);
-    setDesktopState((current) => {
-      if (!current || current.threads.some((thread) => thread.id === threadId)) {
-        return current;
-      }
-      // Hidden threads (side chats, child threads) live only in `sessions`,
-      // so this cache write runs on every transcript application. Re-writing
-      // an equivalent summary must keep `desktopState` identity stable, or
-      // history-loading effects keyed on it re-fire and loop.
-      const existing = current.sessions.find(
-        (session) => session.id === threadId,
-      );
-      if (existing && threadSummariesEquivalent(existing, summary)) {
-        return current;
-      }
-      return {
-        ...current,
-        sessions: mergeThread(current.sessions, summary),
-      };
-    });
-  }
-
-  function applyRemoteTranscript(
-    threadId: string,
-    transcript: ThreadTranscript,
-    options?: {
-      persist?: boolean;
-      syncRunState?: boolean;
-    },
-  ) {
-    const resolvedTranscript = transcriptWithResolvedActiveRun(transcript);
-    rememberTranscriptSnapshot(
-      threadId,
-      resolvedTranscript,
-      options?.persist !== false,
-      options?.syncRunState ?? true,
-    );
-    cacheOpenableTranscriptThread(threadId, resolvedTranscript);
-    updateThreadHistoryPagination(threadId, (current) => {
-      const incoming = paginationStateFromTranscript(resolvedTranscript);
-      if (!current) {
-        return incoming;
-      }
-      if (!current.hasMoreBefore) {
-        const earliestLoadedIndex = earliestRemoteHistoryIndex(
-          messagesByThreadRef.current[threadId] || [],
-        );
-        if (earliestLoadedIndex === 0 || !incoming.hasMoreBefore) {
-          return { ...current, loadingBefore: false };
-        }
-        return incoming;
-      }
-      if (
-        current.nextBeforeIndex !== null &&
-        incoming.nextBeforeIndex !== null &&
-        current.nextBeforeIndex <= incoming.nextBeforeIndex
-      ) {
-        return { ...current, loadingBefore: false };
-      }
-      return incoming;
-    });
-    setThreadInfoByThread((current) => ({
-      ...current,
-      [threadId]: resolvedTranscript.threadInfo ?? null,
-    }));
-    const visibleMessages = visibleTranscriptMessages(resolvedTranscript.messages);
-    setRemotePendingInputs(threadId, resolvedTranscript.pendingInputs);
-    startTransition(() => {
-      updateMessagesByThread((current) => {
-        const existing = current[threadId] || [];
-        const merged = mergeRemoteTranscriptWithLocal(
-          visibleMessages,
-          existing,
-          {
-            activeRunLiveRows: Boolean(resolvedTranscript.threadInfo?.activeRun),
-            preserveRemoteBeforeIndex:
-              resolvedTranscript.pageInfo?.startIndex ?? null,
-            threadRunActive: Boolean(resolvedTranscript.threadInfo?.activeRun),
-          },
-        );
-        if (
-          merged.length === existing.length &&
-          merged.every((entry, index) => entry === existing[index])
-        ) {
-          return current;
-        }
-        return {
-          ...current,
-          [threadId]: merged,
-        };
-      });
-    });
-    // Propagate the transcript's `team` block into `desktopState.threads[i]`
-    // so team-bound threads render the team badge + sub-agent peek tabs as
-    // soon as the thread metadata endpoint has confirmed the binding. Without
-    // this merge, a list summary (which may have been fetched before the
-    // first turn) could shadow the richer detail payload, leaving the UI
-    // stuck on the plain agent label. Only write when the block is present
-    // and different from what's already cached — idempotent updates must
-    // not churn React identity and re-trigger dependent effects.
-    if (resolvedTranscript.team !== undefined) {
-      setDesktopState((current) => {
-        if (!current) {
-          return current;
-        }
-        const nextTeam = resolvedTranscript.team ?? null;
-        let changed = false;
-        const mapThreadTeam = (
-          thread: (typeof current.threads)[number],
-        ): (typeof current.threads)[number] => {
-          if (thread.id !== threadId) {
-            return thread;
-          }
-          const prev = thread.team ?? null;
-          if (teamBlocksEqual(prev, nextTeam)) {
-            return thread;
-          }
-          changed = true;
-          return { ...thread, team: nextTeam };
-        };
-        const nextThreads = current.threads.map(mapThreadTeam);
-        const nextSessions = current.sessions.map(mapThreadTeam);
-        if (!changed) {
-          return current;
-        }
-        return { ...current, threads: nextThreads, sessions: nextSessions };
-      });
-    }
-    markIntentsFromHistory(threadId, visibleMessages);
-  }
-
-  function applyOlderRemoteTranscriptPage(
-    threadId: string,
-    transcript: ThreadTranscript,
-  ) {
-    updateThreadHistoryPagination(threadId, () =>
-      paginationStateFromTranscript(transcript),
-    );
-    const visibleMessages = visibleTranscriptMessages(transcript.messages);
-    if (visibleMessages.length === 0) {
-      return;
-    }
-
-    updateMessagesByThread((current) => {
-      const existing = current[threadId] || [];
-      const existingIds = new Set(existing.map((entry) => entry.id));
-      const olderEntries = materializeRemoteTranscript(
-        visibleMessages,
-        [],
-      ).filter((entry) => !existingIds.has(entry.id));
-      if (olderEntries.length === 0) {
-        return current;
-      }
-      return {
-        ...current,
-        [threadId]: [...olderEntries, ...existing],
-      };
-    });
-  }
-
-  async function loadOlderThreadHistoryPage(threadId: string) {
-    const pagination = historyPaginationByThreadRef.current[threadId] || null;
-    if (
-      !pagination?.hasMoreBefore ||
-      pagination.loadingBefore ||
-      pagination.nextBeforeIndex === null
-    ) {
-      return;
-    }
-
-    updateThreadHistoryPagination(threadId, (current) => ({
-      hasMoreBefore: Boolean(current?.hasMoreBefore),
-      nextBeforeIndex: current?.nextBeforeIndex ?? null,
-      loadingBefore: true,
-    }));
-
-    try {
-      const transcript = await window.garyxDesktop.getThreadHistory({
-        threadId,
-        beforeIndex: pagination.nextBeforeIndex,
-        limit: THREAD_HISTORY_PAGE_SIZE,
-        userQueryLimit: THREAD_HISTORY_USER_QUERY_LIMIT,
-      });
-      const node = messagesRef.current;
-      if (
-        transcript.messages.length > 0 &&
-        node &&
-        selectedThreadIdRef.current === threadId
-      ) {
-        pendingMessagesPrependAnchorRef.current = {
-          threadId,
-          scrollHeight: node.scrollHeight,
-          scrollTop: node.scrollTop,
-        };
-      }
-      applyOlderRemoteTranscriptPage(threadId, transcript);
-    } catch (historyError) {
-      pendingMessagesPrependAnchorRef.current = null;
-      setError(
-        historyError instanceof Error
-          ? historyError.message
-          : "Failed to load earlier thread history",
-      );
-    } finally {
-      if (selectedThreadIdRef.current !== threadId) {
-        pendingMessagesPrependAnchorRef.current = null;
-      }
-      updateThreadHistoryPagination(threadId, (current) =>
-        current ? { ...current, loadingBefore: false } : current,
-      );
-    }
   }
 
   async function handleSelectWorkspace(
@@ -5852,214 +4504,6 @@ export function AppShell() {
     }
   }
 
-  function hasPendingHistoryIntents(threadId: string): boolean {
-    return Object.values(messageStateRef.current.intentsById).some((intent) => {
-      return (
-        intent.threadId === threadId &&
-        [
-          "remote_accepted",
-          "awaiting_provider_ack",
-          "awaiting_history",
-          "awaiting_response",
-          "dispatching",
-        ].includes(intent.state)
-      );
-    });
-  }
-
-  async function startCommittedThreadStream(
-    threadId: string,
-    transcript: ThreadTranscript,
-    consumerId: string,
-  ): Promise<void> {
-    await window.garyxDesktop.startThreadStream({
-      threadId,
-      consumerId,
-      afterSeq: streamResumeCursor({
-        afterCursor: transcriptCommittedAfterCursor(transcript),
-        fallbackMaxIndex: null,
-      }),
-    });
-  }
-
-  /// Incremental forward fetch for the selected thread. `authoritative: true`
-  /// marks a full server refetch (no cache / reset / shrink / page-limit
-  /// overflow) whose transcript must replace local state verbatim;
-  /// `authoritative: false` marks an incremental aggregate that the caller
-  /// must forward-merge onto the live snapshot, because the committed stream
-  /// may have advanced it past this fetch's tail while pages were in flight.
-  async function fetchSelectedThreadIncrementalTranscript(
-    threadId: string,
-    cached: ThreadTranscript | null,
-    isCancelled: () => boolean,
-  ): Promise<{ transcript: ThreadTranscript; authoritative: boolean }> {
-    let current = cached;
-    let cursor = transcriptCommittedAfterCursor(current);
-    if (!current || cursor === null) {
-      return {
-        transcript: await window.garyxDesktop.getThreadHistory(threadId),
-        authoritative: true,
-      };
-    }
-
-    let pagesFetched = 0;
-    let latestHasMoreAfter = false;
-    for (
-      let pageCount = 0;
-      pageCount < THREAD_HISTORY_FORWARD_PAGE_LIMIT;
-      pageCount += 1
-    ) {
-      const page = await window.garyxDesktop.getThreadHistory({
-        threadId,
-        afterIndex: cursor,
-        limit: THREAD_HISTORY_PAGE_SIZE,
-        userQueryLimit: THREAD_HISTORY_USER_QUERY_LIMIT,
-      });
-      if (isCancelled()) {
-        return { transcript: current, authoritative: false };
-      }
-      pagesFetched = pageCount + 1;
-      const action = decideTranscriptFetchPageAction({
-        cursor,
-        reset: page.pageInfo?.reset,
-        hasMoreAfter: page.pageInfo?.hasMoreAfter,
-        totalMessagesInThread: page.pageInfo?.totalMessages,
-      });
-      if (action.type === "reset" || action.type === "shrink_refetch") {
-        await window.garyxDesktop.clearThreadTranscriptCache(threadId);
-        return {
-          transcript: await window.garyxDesktop.getThreadHistory(threadId),
-          authoritative: true,
-        };
-      }
-
-      current = mergeForwardTranscriptPage(current, page);
-      latestHasMoreAfter = action.continuePaging;
-      if (!action.continuePaging) {
-        return { transcript: current, authoritative: false };
-      }
-      const nextCursor =
-        page.pageInfo?.nextAfterIndex ?? transcriptCommittedAfterCursor(current);
-      if (nextCursor === null || nextCursor <= cursor) {
-        return { transcript: current, authoritative: false };
-      }
-      cursor = nextCursor;
-    }
-    if (isCancelled()) {
-      return { transcript: current, authoritative: false };
-    }
-    if (
-      shouldRefetchAuthoritativeAfterForwardPageLimit({
-        pagesFetched,
-        maxPages: THREAD_HISTORY_FORWARD_PAGE_LIMIT,
-        hasMoreAfter: latestHasMoreAfter,
-      })
-    ) {
-      await window.garyxDesktop.clearThreadTranscriptCache(threadId);
-      return {
-        transcript: await window.garyxDesktop.getThreadHistory(threadId),
-        authoritative: true,
-      };
-    }
-    return { transcript: current, authoritative: false };
-  }
-
-  async function loadSelectedThreadTranscriptFromSingleSource(
-    threadId: string,
-    isCancelled: () => boolean,
-  ) {
-    const hasRenderedThread = lastRenderedMessageThreadRef.current === threadId;
-    const hasCachedMessages =
-      (messagesByThreadRef.current[threadId] || []).length > 0;
-    requestSelectedThreadMessagesBottomSnap(
-      threadId,
-      !hasRenderedThread || !hasCachedMessages,
-    );
-
-    setHistoryLoading(true);
-    setError(null);
-    let latestTranscript =
-      transcriptSnapshotByThreadRef.current[threadId] || null;
-    let streamReady = false;
-    let streamStarted = false;
-    try {
-      const cached = await window.garyxDesktop.loadThreadTranscriptCache(threadId);
-      if (isCancelled()) {
-        return;
-      }
-      if (cached) {
-        latestTranscript = cached.transcript;
-        applyRemoteTranscript(threadId, cached.transcript, { persist: false });
-        // Restore the offline render snapshot so folded history renders before
-        // the live stream's first frame arrives.
-        if (cached.renderState) {
-          applyThreadRenderState(threadId, cached.renderState);
-        }
-        // Start the committed stream from the cached cursor right away: its
-        // replay plus first render frame is what shows turns committed while
-        // this client wasn't subscribed. Waiting for the incremental HTTP
-        // fetch below kept the restored (possibly stale) render snapshot on
-        // screen for the whole fetch, hiding those turns.
-        await startCommittedThreadStream(
-          threadId,
-          cached.transcript,
-          SELECTED_THREAD_STREAM_CONSUMER_ID,
-        );
-        streamStarted = true;
-      }
-
-      const fetched = await fetchSelectedThreadIncrementalTranscript(
-        threadId,
-        latestTranscript,
-        isCancelled,
-      );
-      if (isCancelled()) {
-        return;
-      }
-      requestSelectedThreadMessagesBottomSnap(threadId, true);
-      // The stream may have advanced the live snapshot past this fetch's tail
-      // while pages were in flight; forward-merge keeps that progress. An
-      // authoritative refetch (reset/shrink) intentionally replaces state.
-      latestTranscript = fetched.authoritative
-        ? fetched.transcript
-        : mergeForwardTranscriptPage(
-            transcriptSnapshotByThreadRef.current[threadId] ?? null,
-            fetched.transcript,
-          );
-      applyRemoteTranscript(threadId, latestTranscript);
-      if (transcriptHasAutomationResponse(latestTranscript.messages)) {
-        setPendingAutomationRun(threadId, null);
-      }
-      streamReady = true;
-    } catch (historyError) {
-      if (!latestTranscript) {
-        setError(
-          historyError instanceof Error
-            ? historyError.message
-            : "Failed to load thread history",
-        );
-      } else {
-        setError(
-          historyError instanceof Error
-            ? `Failed to sync latest thread history: ${historyError.message}`
-            : "Failed to sync latest thread history",
-        );
-      }
-    } finally {
-      if (!isCancelled()) {
-        setHistoryLoading(false);
-        if (streamStarted || !streamReady || !latestTranscript) {
-          return;
-        }
-        await startCommittedThreadStream(
-          threadId,
-          latestTranscript,
-          SELECTED_THREAD_STREAM_CONSUMER_ID,
-        );
-      }
-    }
-  }
-
   async function refetchAuthoritativeTranscriptAfterRewrite(threadId: string) {
     const startSelectionGeneration = selectedThreadGenerationRef.current;
     try {
@@ -6095,124 +4539,6 @@ export function AppShell() {
     }
   }
 
-  function applyCommittedThreadMessage(
-    event: Extract<DesktopChatStreamEvent, { type: "committed_message" }>,
-  ) {
-    const threadId = event.threadId;
-    if (transcriptRewriteAction(event.message) === "refetch_authoritative") {
-      void refetchAuthoritativeTranscriptAfterRewrite(threadId);
-      return;
-    }
-    applyCommittedTranscriptRunState(event);
-    const base =
-      transcriptSnapshotByThreadRef.current[threadId] || {
-        threadId,
-        remoteFound: true,
-        messages: [],
-        pendingInputs: [],
-        pageInfo: null,
-      };
-    const merged = mergeForwardTranscriptPage(base, {
-      threadId,
-      remoteFound: true,
-      messages: [event.message],
-      pendingInputs: base.pendingInputs,
-      thread: base.thread ?? null,
-      threadInfo: base.threadInfo ?? null,
-      pageInfo: {
-        ...(base.pageInfo ?? {
-          totalMessages: event.seq,
-          returnedMessages: 0,
-          startIndex: 0,
-          endIndex: event.seq,
-          hasMoreBefore: false,
-          nextBeforeIndex: null,
-          limit: THREAD_HISTORY_PAGE_SIZE,
-          userQueryLimit: THREAD_HISTORY_USER_QUERY_LIMIT,
-        }),
-        committedMessages: Math.max(
-          event.seq,
-          base.pageInfo?.committedMessages ?? 0,
-        ),
-        hasMoreAfter: false,
-        nextAfterIndex: null,
-      },
-      team: base.team ?? null,
-    });
-    if (selectedThreadIdRef.current === threadId) {
-      requestSelectedThreadMessagesBottomSnap(threadId, true);
-    }
-    applyRemoteTranscript(threadId, merged, { syncRunState: false });
-    const controlKind = transcriptControlKind(event.message);
-    if (controlKind === "user_ack") {
-      const control =
-        event.message.content &&
-        typeof event.message.content === "object" &&
-        !Array.isArray(event.message.content)
-          ? (event.message.content as { control?: Record<string, unknown> })
-              .control
-          : null;
-      applyUserAck(
-        threadId,
-        event.runId,
-        typeof control?.pending_input_id === "string"
-          ? control.pending_input_id
-          : typeof control?.pendingInputId === "string"
-            ? control.pendingInputId
-            : undefined,
-      );
-    }
-  }
-
-  function applyUserAck(
-    threadId: string,
-    runId: string,
-    pendingInputId?: string,
-  ) {
-    let nextIntentId: string | undefined;
-    const acknowledgedPendingInputId = pendingInputId?.trim() || "";
-    updateLiveStreamState(threadId, (current) => {
-      const pendingAckIntentIds = [...(current?.pendingAckIntentIds || [])];
-      const matchedIndex = findPendingAckIntentIndex(
-        pendingAckIntentIds,
-        acknowledgedPendingInputId,
-        messageStateRef.current.intentsById,
-      );
-      if (matchedIndex >= 0) {
-        nextIntentId = pendingAckIntentIds[matchedIndex];
-        pendingAckIntentIds.splice(matchedIndex, 1);
-      } else {
-        nextIntentId = undefined;
-      }
-      const nextPendingAckIntentIds = nextIntentId
-        ? pendingAckIntentIds.filter((intentId) => intentId !== nextIntentId)
-        : pendingAckIntentIds;
-      return current
-        ? {
-            ...current,
-            runId,
-            activeIntentId: nextIntentId || current.activeIntentId,
-            assistantEntryId: null,
-            pendingAckIntentIds: nextPendingAckIntentIds,
-            streamStatus: "streaming",
-          }
-        : null;
-    });
-    if (nextIntentId) {
-      const acknowledgedIntent = intentForId(nextIntentId);
-      dispatchMessageState({
-        type: "intent/awaiting-history",
-        intentId: nextIntentId,
-        responseText: acknowledgedIntent?.responseText,
-      });
-      requestSelectedThreadMessagesBottomSnap(threadId, true);
-      setThreadRuntimeState(threadId, "running_remote", {
-        activeIntentId: nextIntentId,
-        remoteRunId: runId,
-      });
-    }
-  }
-
   function scheduleHistoryRefresh(
     threadId: string,
     attempts = 4,
@@ -6236,35 +4562,6 @@ export function AppShell() {
       },
       onExhausted: forceReleaseThreadRuntime,
     });
-  }
-
-  function forceReleaseThreadRuntime(threadId: string) {
-    const pendingStates = [
-      "dispatching",
-      "remote_accepted",
-      "awaiting_provider_ack",
-      "awaiting_response",
-      "awaiting_history",
-    ];
-    for (const intent of Object.values(messageStateRef.current.intentsById)) {
-      if (intent.threadId === threadId && pendingStates.includes(intent.state)) {
-        dispatchMessageState({
-          type: "intent/completed",
-          intentId: intent.intentId,
-        });
-      }
-    }
-    dispatchMessageState({
-      type: "thread/clear",
-      threadId,
-    });
-    const liveStream = getLiveStreamState(threadId);
-    if (
-      liveStream &&
-      ["reconciling", "disconnected", "failed"].includes(liveStream.streamStatus)
-    ) {
-      clearLiveStreamState(threadId);
-    }
   }
 
   async function sendIntentOnce(
