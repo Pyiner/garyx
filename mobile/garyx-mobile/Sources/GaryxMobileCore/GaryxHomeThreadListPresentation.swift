@@ -9,6 +9,111 @@ enum GaryxThreadSummaryRunStateResolver {
     ) -> String? {
         apiRunState
     }
+
+    /// Whether a thread summary's API run state marks the thread as running.
+    static func isRunning(_ thread: GaryxThreadSummary) -> Bool {
+        let runState = thread.runState?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return runState == "running"
+    }
+}
+
+/// Agent-or-team identity projected from a thread summary for list rows and
+/// widget snapshots.
+struct GaryxWidgetAgentIdentity: Equatable, Sendable {
+    var id: String?
+    var name: String?
+    var avatarDataUrl: String?
+    var providerType: String?
+    var isTeam: Bool
+    var builtIn: Bool
+}
+
+/// Single source of truth for resolving a thread's display identity: team
+/// first (catalog hit, then thread fallback), then agent (catalog hit, then
+/// thread fallback), then provider-only.
+enum GaryxWidgetAgentIdentityProjector {
+    static func identity(
+        for thread: GaryxThreadSummary,
+        agents: [GaryxAgentSummary],
+        teams: [GaryxTeamSummary]
+    ) -> GaryxWidgetAgentIdentity {
+        identity(
+            for: thread,
+            team: { teamId in teams.first { $0.id == teamId } },
+            agent: { agentId in agents.first { $0.id == agentId } }
+        )
+    }
+
+    static func identity(
+        for thread: GaryxThreadSummary,
+        agentsById: [String: GaryxAgentSummary],
+        teamsById: [String: GaryxTeamSummary]
+    ) -> GaryxWidgetAgentIdentity {
+        identity(
+            for: thread,
+            team: { teamsById[$0] },
+            agent: { agentsById[$0] }
+        )
+    }
+
+    private static func identity(
+        for thread: GaryxThreadSummary,
+        team teamById: (String) -> GaryxTeamSummary?,
+        agent agentById: (String) -> GaryxAgentSummary?
+    ) -> GaryxWidgetAgentIdentity {
+        let teamId = thread.teamId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !teamId.isEmpty {
+            if let team = teamById(teamId) {
+                return GaryxWidgetAgentIdentity(
+                    id: team.id,
+                    name: team.displayName,
+                    avatarDataUrl: team.avatarDataUrl.isEmpty ? nil : team.avatarDataUrl,
+                    providerType: nil,
+                    isTeam: true,
+                    builtIn: false
+                )
+            }
+            return GaryxWidgetAgentIdentity(
+                id: teamId,
+                name: thread.teamName,
+                avatarDataUrl: nil,
+                providerType: nil,
+                isTeam: true,
+                builtIn: false
+            )
+        }
+
+        let agentId = thread.agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !agentId.isEmpty {
+            if let agent = agentById(agentId) {
+                return GaryxWidgetAgentIdentity(
+                    id: agent.id,
+                    name: agent.displayName,
+                    avatarDataUrl: agent.avatarDataUrl.isEmpty ? nil : agent.avatarDataUrl,
+                    providerType: agent.providerType,
+                    isTeam: false,
+                    builtIn: agent.builtIn
+                )
+            }
+            return GaryxWidgetAgentIdentity(
+                id: agentId,
+                name: nil,
+                avatarDataUrl: nil,
+                providerType: thread.providerType,
+                isTeam: false,
+                builtIn: false
+            )
+        }
+
+        return GaryxWidgetAgentIdentity(
+            id: nil,
+            name: nil,
+            avatarDataUrl: nil,
+            providerType: thread.providerType,
+            isTeam: false,
+            builtIn: false
+        )
+    }
 }
 
 struct GaryxSidebarThreadRowAvatar: Equatable, Sendable {
@@ -108,8 +213,7 @@ struct GaryxSidebarThreadRowPresentation: Equatable, Sendable {
     }
 
     private static func isRunning(_ thread: GaryxThreadSummary) -> Bool {
-        let state = thread.runState?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return state == "running"
+        GaryxThreadSummaryRunStateResolver.isRunning(thread)
     }
 }
 
@@ -330,68 +434,12 @@ enum GaryxHomeThreadSectionsBuilder {
         for thread: GaryxThreadSummary,
         teamsById: [String: GaryxTeamSummary],
         agentsById: [String: GaryxAgentSummary]
-    ) -> AgentIdentity {
-        let teamId = thread.teamId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !teamId.isEmpty {
-            if let team = teamsById[teamId] {
-                return AgentIdentity(
-                    id: team.id,
-                    name: team.displayName,
-                    avatarDataUrl: team.avatarDataUrl.isEmpty ? nil : team.avatarDataUrl,
-                    providerType: nil,
-                    isTeam: true,
-                    builtIn: false
-                )
-            }
-            return AgentIdentity(
-                id: teamId,
-                name: thread.teamName,
-                avatarDataUrl: nil,
-                providerType: nil,
-                isTeam: true,
-                builtIn: false
-            )
-        }
-
-        let agentId = thread.agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !agentId.isEmpty {
-            if let agent = agentsById[agentId] {
-                return AgentIdentity(
-                    id: agent.id,
-                    name: agent.displayName,
-                    avatarDataUrl: agent.avatarDataUrl.isEmpty ? nil : agent.avatarDataUrl,
-                    providerType: agent.providerType,
-                    isTeam: false,
-                    builtIn: agent.builtIn
-                )
-            }
-            return AgentIdentity(
-                id: agentId,
-                name: nil,
-                avatarDataUrl: nil,
-                providerType: thread.providerType,
-                isTeam: false,
-                builtIn: false
-            )
-        }
-
-        return AgentIdentity(
-            id: nil,
-            name: nil,
-            avatarDataUrl: nil,
-            providerType: thread.providerType,
-            isTeam: false,
-            builtIn: false
+    ) -> GaryxWidgetAgentIdentity {
+        GaryxWidgetAgentIdentityProjector.identity(
+            for: thread,
+            agentsById: agentsById,
+            teamsById: teamsById
         )
-    }
-
-    private struct AgentIdentity {
-        var id: String?
-        var name: String?
-        var avatarDataUrl: String?
-        var providerType: String?
-        var isTeam: Bool
-        var builtIn: Bool
     }
 }
 
@@ -646,7 +694,7 @@ enum GaryxRecentThreadsWidgetSnapshotProjector {
     }
 
     private static func widgetAvatarDataUrl(
-        identity: AgentIdentity,
+        identity: GaryxWidgetAgentIdentity,
         gatewayScopeId: String,
         avatarFallback: [GaryxAvatarIdentity: String]
     ) -> String? {
@@ -661,7 +709,7 @@ enum GaryxRecentThreadsWidgetSnapshotProjector {
     }
 
     private static func widgetAvatarScope(
-        identity: AgentIdentity,
+        identity: GaryxWidgetAgentIdentity,
         gatewayScopeId: String,
         avatarFallback: [GaryxAvatarIdentity: String]
     ) -> String? {
@@ -673,7 +721,7 @@ enum GaryxRecentThreadsWidgetSnapshotProjector {
     }
 
     private static func widgetAvatarFingerprint(
-        identity: AgentIdentity,
+        identity: GaryxWidgetAgentIdentity,
         gatewayScopeId: String,
         avatarFallback: [GaryxAvatarIdentity: String]
     ) -> String? {
@@ -693,7 +741,7 @@ enum GaryxRecentThreadsWidgetSnapshotProjector {
         return GaryxAvatarIdentity(scope: scope, kind: .agent, id: agentId)
     }
 
-    private static func avatarIdentity(identity: AgentIdentity, scope: String) -> GaryxAvatarIdentity? {
+    private static func avatarIdentity(identity: GaryxWidgetAgentIdentity, scope: String) -> GaryxAvatarIdentity? {
         let scope = scope.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !scope.isEmpty,
               let id = identity.id?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -707,68 +755,12 @@ enum GaryxRecentThreadsWidgetSnapshotProjector {
         for thread: GaryxThreadSummary,
         agentsById: [String: GaryxAgentSummary],
         teamsById: [String: GaryxTeamSummary]
-    ) -> AgentIdentity {
-        let teamId = thread.teamId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !teamId.isEmpty {
-            if let team = teamsById[teamId] {
-                return AgentIdentity(
-                    id: team.id,
-                    name: team.displayName,
-                    avatarDataUrl: team.avatarDataUrl.isEmpty ? nil : team.avatarDataUrl,
-                    providerType: nil,
-                    isTeam: true,
-                    builtIn: false
-                )
-            }
-            return AgentIdentity(
-                id: teamId,
-                name: thread.teamName,
-                avatarDataUrl: nil,
-                providerType: nil,
-                isTeam: true,
-                builtIn: false
-            )
-        }
-
-        let agentId = thread.agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !agentId.isEmpty {
-            if let agent = agentsById[agentId] {
-                return AgentIdentity(
-                    id: agent.id,
-                    name: agent.displayName,
-                    avatarDataUrl: agent.avatarDataUrl.isEmpty ? nil : agent.avatarDataUrl,
-                    providerType: agent.providerType,
-                    isTeam: false,
-                    builtIn: agent.builtIn
-                )
-            }
-            return AgentIdentity(
-                id: agentId,
-                name: nil,
-                avatarDataUrl: nil,
-                providerType: thread.providerType,
-                isTeam: false,
-                builtIn: false
-            )
-        }
-
-        return AgentIdentity(
-            id: nil,
-            name: nil,
-            avatarDataUrl: nil,
-            providerType: thread.providerType,
-            isTeam: false,
-            builtIn: false
+    ) -> GaryxWidgetAgentIdentity {
+        GaryxWidgetAgentIdentityProjector.identity(
+            for: thread,
+            agentsById: agentsById,
+            teamsById: teamsById
         )
-    }
-
-    private struct AgentIdentity {
-        var id: String?
-        var name: String?
-        var avatarDataUrl: String?
-        var providerType: String?
-        var isTeam: Bool
-        var builtIn: Bool
     }
 }
 
@@ -786,6 +778,28 @@ final class GaryxRecentThreadsWidgetPersistencePlanner {
         }
         lastWrittenThreads = threads
         return .write(threads)
+    }
+}
+
+/// Whether a recent-thread row that just left the running state should have
+/// its committed history hydrated in the background: the thread is not the
+/// open conversation, is no longer running, and was observed running (or
+/// remote-busy) on the previous refresh.
+enum GaryxCompletedThreadHydrationPolicy {
+    static func shouldHydrate(
+        previousThread: GaryxThreadSummary?,
+        previousRemoteBusyThreadIds: Set<String>,
+        refreshedThread: GaryxThreadSummary,
+        selectedThreadId: String?
+    ) -> Bool {
+        let threadId = refreshedThread.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !threadId.isEmpty,
+              selectedThreadId != threadId,
+              !GaryxThreadSummaryRunStateResolver.isRunning(refreshedThread) else {
+            return false
+        }
+        return previousThread.map(GaryxThreadSummaryRunStateResolver.isRunning) == true
+            || previousRemoteBusyThreadIds.contains(threadId)
     }
 }
 
@@ -808,6 +822,32 @@ final class GaryxBackgroundCommittedRunReconcilePlanner {
 
     init(minimumRefreshInterval: TimeInterval) {
         self.minimumRefreshInterval = minimumRefreshInterval
+    }
+
+    /// Threads the background reconcile loop should watch: locally tracked
+    /// runs, committed-busy threads, and summary-running threads without a
+    /// committed state — excluding the open conversation.
+    static func candidateThreadIds(
+        locallyTrackedThreadIds: Set<String>,
+        runStateByThread: [String: GaryxTranscriptRunState],
+        threads: [GaryxThreadSummary],
+        selectedThreadId: String?
+    ) -> [String] {
+        let selectedId = selectedThreadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        var ids = locallyTrackedThreadIds
+        ids.formUnion(runStateByThread.compactMap { threadId, state in
+            state.busy ? threadId : nil
+        })
+        ids.formUnion(threads.compactMap { thread in
+            if let committedState = runStateByThread[thread.id] {
+                return committedState.busy ? thread.id : nil
+            }
+            return GaryxThreadSummaryRunStateResolver.isRunning(thread) ? thread.id : nil
+        })
+        return ids
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && $0 != selectedId }
+            .sorted()
     }
 
     func nextDecision(

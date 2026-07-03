@@ -319,6 +319,19 @@ public struct GaryxThreadTranscript: Decodable, Equatable, Sendable {
     }
 }
 
+public extension GaryxThreadTranscript {
+    /// Decodes a transcript from a stream snapshot envelope of the form
+    /// `{ "payload": { ...transcript... } }`; nil when the envelope carries no
+    /// object payload.
+    static func fromSnapshotPayload(_ payload: [String: GaryxJSONValue]) throws -> GaryxThreadTranscript? {
+        guard case let .object(snapshot)? = payload["payload"] else {
+            return nil
+        }
+        let data = try JSONEncoder().encode(GaryxJSONValue.object(snapshot))
+        return try JSONDecoder().decode(GaryxThreadTranscript.self, from: data)
+    }
+}
+
 
 public struct GaryxThreadTranscriptPageInfo: Decodable, Equatable, Sendable {
     public var returnedMessages: Int

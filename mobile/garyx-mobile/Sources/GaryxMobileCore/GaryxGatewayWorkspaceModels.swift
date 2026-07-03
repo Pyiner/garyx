@@ -99,6 +99,28 @@ public struct GaryxWorkspaceGitStatus: Decodable, Equatable, Sendable {
     }
 }
 
+/// Resolves the workspace mode for a new thread: `worktree` only when the
+/// user chose a workspace, prefers worktree mode, and that workspace's git
+/// status allows worktrees; otherwise `local`.
+public enum GaryxNewThreadWorkspaceModePolicy {
+    public static func workspaceMode(
+        workspace: String,
+        preferredMode: String?,
+        gitStatuses: [String: GaryxWorkspaceGitStatus]
+    ) -> String {
+        let trimmedWorkspace = workspace.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedWorkspace.isEmpty else { return "local" }
+        guard normalizedWorkspaceMode(preferredMode) == "worktree" else { return "local" }
+        guard gitStatuses[trimmedWorkspace]?.canUseWorktree == true else { return "local" }
+        return "worktree"
+    }
+
+    public static func normalizedWorkspaceMode(_ value: String?) -> String {
+        let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        return normalized == "worktree" ? "worktree" : "local"
+    }
+}
+
 public struct GaryxWorkspaceDirectoryEntry: Decodable, Identifiable, Equatable, Sendable {
     public var id: String { path }
     public var name: String
