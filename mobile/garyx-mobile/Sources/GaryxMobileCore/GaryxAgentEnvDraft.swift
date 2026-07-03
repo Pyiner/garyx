@@ -122,4 +122,115 @@ public struct GaryxAgentEnvDraft: Equatable {
             return !key.isEmpty && !GaryxAgentEnvDraft.isValidKey(key)
         }
     }
+
+    // MARK: - Text view (dotenv-style) round trip
+
+    /// Render rows as dotenv-style text, one `KEY=VALUE` per line.
+    ///
+    /// Values are emitted verbatim — never quoted — so what the user sees is
+    /// byte-for-byte what the provider subprocess receives. Two exceptions
+    /// ride a double-quoted escape carrier so `parseEnvText` round-trips them
+    /// exactly: values containing a newline (cannot survive a line-oriented
+    /// format) and values that themselves start and end with a double quote
+    /// (would otherwise be mistaken for the carrier and stripped on parse).
+    /// Mirrors the desktop `agent-env-editor.ts` semantics.
+    public static func formatEnvText(_ rows: [GaryxAgentEnvRow]) -> String {
+        rows.filter { !$0.key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .map { row in
+                let key = row.key.trimmingCharacters(in: .whitespacesAndNewlines)
+                let value = row.value
+                let looksQuoted = value.count >= 2 && value.hasPrefix("\"") && value.hasSuffix("\"")
+                let hasEdgeWhitespace =
+                    !value.isEmpty
+                    && value != value.trimmingCharacters(in: .whitespaces)
+                if value.contains("\n") || value.contains("\r") || looksQuoted || hasEdgeWhitespace {
+                    var escaped = ""
+                    for character in value {
+                        switch character {
+                        case "\\": escaped += "\\\\"
+                        case "\"": escaped += "\\\""
+                        case "\r": escaped += "\\r"
+                        case "\n": escaped += "\\n"
+                        default: escaped.append(character)
+                        }
+                    }
+                    return "\(key)=\"\(escaped)\""
+                }
+                return "\(key)=\(value)"
+            }
+            .joined(separator: "\n")
+    }
+
+    /// Parse dotenv-style text into rows. Inverse of `formatEnvText`.
+    ///
+    /// - Blank lines and `#` comment lines are skipped.
+    /// - Lines are whitespace-trimmed; values that genuinely need edge
+    ///   whitespace survive via the quoted carrier `formatEnvText` emits.
+    /// - Each line splits on the first `=`; the value keeps everything after
+    ///   it verbatim (numbers stay unquoted, inner/partial quotes preserved).
+    /// - Only a value fully wrapped in double quotes is treated as the escape
+    ///   carrier: quotes stripped, `\n`/`\r`/`\"`/`\\` unescaped. Matches
+    ///   dotenv intuition for users who habitually quote values.
+    /// - A line with no `=` becomes a row with an empty value so the
+    ///   invalid-key save gate surfaces it instead of silently dropping input.
+    public static func parseEnvText(_ text: String) -> [GaryxAgentEnvRow] {
+        var rows: [GaryxAgentEnvRow] = []
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        for rawLine in lines {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty || line.hasPrefix("#") { continue }
+            guard let eq = line.firstIndex(of: "=") else {
+                rows.append(GaryxAgentEnvRow(key: line, value: ""))
+                continue
+            }
+            let key = String(line[line.startIndex..<eq]).trimmingCharacters(in: .whitespaces)
+            var value = String(line[line.index(after: eq)...])
+            if value.count >= 2, value.hasPrefix("\""), value.hasSuffix("\"") {
+                let inner = String(value.dropFirst().dropLast())
+                var unescaped = ""
+                var valid = true
+                var pendingEscape = false
+                for character in inner {
+                    if pendingEscape {
+                        switch character {
+                        case "n": unescaped += "\n"
+                        case "r": unescaped += "\r"
+                        case "\"": unescaped += "\""
+                        case "\\": unescaped += "\\"
+                        default:
+                            unescaped.append("\\")
+                            unescaped.append(character)
+                        }
+                        pendingEscape = false
+                        continue
+                    }
+                    if character == "\\" {
+                        pendingEscape = true
+                        continue
+                    }
+                    if character == "\"" {
+                        valid = false
+                        break
+                    }
+                    unescaped.append(character)
+                }
+                if pendingEscape { unescaped.append("\\") }
+                if valid { value = unescaped }
+            }
+            rows.append(GaryxAgentEnvRow(key: key, value: value))
+        }
+        return rows
+    }
+
+    /// Replace the draft's rows from edited dotenv-style text and mark the
+    /// draft dirty. Backs the text view of the env editor.
+    public mutating func applyEnvText(_ text: String) {
+        rows = GaryxAgentEnvDraft.parseEnvText(text)
+        isDirty = true
+    }
+
+    /// The draft rendered as dotenv-style text (text-view seed).
+    public func envText() -> String {
+        GaryxAgentEnvDraft.formatEnvText(rows)
+    }
 }

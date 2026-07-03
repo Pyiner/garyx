@@ -105,3 +105,117 @@ export function buildProviderEnvPayload(env: EnvRow[]): Record<string, string> {
   }
   return map;
 }
+
+/**
+ * Render env rows as dotenv-style text, one `KEY=VALUE` per line.
+ *
+ * Values are emitted verbatim — never quoted — so what the user sees is
+ * byte-for-byte what the provider subprocess receives. Two exceptions must
+ * ride the quoted-escape carrier so `parseEnvText` round-trips them exactly:
+ * a value containing a newline (cannot survive a line-oriented format), and
+ * a value that itself starts and ends with a double quote (would otherwise
+ * be mistaken for the carrier and stripped on parse).
+ */
+export function formatEnvText(env: EnvRow[]): string {
+  return env
+    .filter((row) => row.key.trim().length > 0)
+    .map((row) => {
+      const key = row.key.trim();
+      const looksQuoted =
+        row.value.length >= 2 && row.value.startsWith('"') && row.value.endsWith('"');
+      // Leading/trailing whitespace would be eaten by parse's line trim, so
+      // such values must also ride the quoted carrier to round-trip.
+      const hasEdgeWhitespace = row.value !== row.value.trim();
+      if (
+        row.value.includes('\n') ||
+        row.value.includes('\r') ||
+        looksQuoted ||
+        (row.value.length > 0 && hasEdgeWhitespace)
+      ) {
+        const escaped = row.value
+          .replace(/\\/g, '\\\\')
+          .replace(/"/g, '\\"')
+          .replace(/\r/g, '\\r')
+          .replace(/\n/g, '\\n');
+        return `${key}="${escaped}"`;
+      }
+      return `${key}=${row.value}`;
+    })
+    .join('\n');
+}
+
+/**
+ * Parse dotenv-style text into env rows. Inverse of {@link formatEnvText}.
+ *
+ * - Blank lines and `#` comment lines are skipped.
+ * - Lines are whitespace-trimmed (stray edge whitespace is invisible and a
+ *   footgun); a value that genuinely needs edge whitespace survives via the
+ *   quoted carrier, which `formatEnvText` emits for such values.
+ * - Each line splits on the first `=`; the value keeps everything after it
+ *   verbatim (numbers stay unquoted, inner/partial quotes are preserved).
+ * - Only a value fully wrapped in double quotes is treated as the escape
+ *   carrier: the quotes are stripped and `\n`/`\r`/`\"`/`\\` unescaped. This
+ *   matches dotenv intuition for users who habitually quote values, and
+ *   `formatEnvText` re-quotes such values so the round trip stays lossless.
+ * - A line with no `=` becomes a row with an empty value so the invalid-key
+ *   save gate can surface it instead of silently dropping user input.
+ */
+export function parseEnvText(text: string): EnvRow[] {
+  const rows: EnvRow[] = [];
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) {
+      continue;
+    }
+    const eq = line.indexOf('=');
+    if (eq < 0) {
+      rows.push({ key: line, value: '' });
+      continue;
+    }
+    const key = line.slice(0, eq).trim();
+    let value = line.slice(eq + 1);
+    if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+      const inner = value.slice(1, -1);
+      // Only treat it as our escape carrier when the quotes wrap the whole
+      // value and the inner text does not contain a bare unescaped quote.
+      let unescaped = '';
+      let valid = true;
+      for (let i = 0; i < inner.length; i += 1) {
+        const ch = inner[i];
+        if (ch === '"') {
+          valid = false;
+          break;
+        }
+        if (ch === '\\' && i + 1 < inner.length) {
+          const next = inner[i + 1];
+          if (next === 'n') {
+            unescaped += '\n';
+            i += 1;
+            continue;
+          }
+          if (next === 'r') {
+            unescaped += '\r';
+            i += 1;
+            continue;
+          }
+          if (next === '"') {
+            unescaped += '"';
+            i += 1;
+            continue;
+          }
+          if (next === '\\') {
+            unescaped += '\\';
+            i += 1;
+            continue;
+          }
+        }
+        unescaped += ch;
+      }
+      if (valid) {
+        value = unescaped;
+      }
+    }
+    rows.push({ key, value });
+  }
+  return rows;
+}

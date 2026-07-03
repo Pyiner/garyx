@@ -101,4 +101,49 @@ final class GaryxAgentEnvDraftTests: XCTestCase {
         draft.updateKey(id: draft.rows[0].id, "   ")
         XCTAssertFalse(draft.hasInvalidKey)
     }
+
+    func testFormatEnvTextEmitsNumericValuesVerbatimWithoutQuotes() {
+        let rows = [
+            GaryxAgentEnvRow(key: "CLAUDE_CODE_AUTO_COMPACT_WINDOW", value: "183500"),
+            GaryxAgentEnvRow(key: "CLAUDE_CODE_ATTRIBUTION_HEADER", value: "0"),
+        ]
+        XCTAssertEqual(
+            GaryxAgentEnvDraft.formatEnvText(rows),
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW=183500\nCLAUDE_CODE_ATTRIBUTION_HEADER=0"
+        )
+    }
+
+    func testParseEnvTextKeepsNumbersAndStripsWholeValueQuotes() {
+        let rows = GaryxAgentEnvDraft.parseEnvText("A=183500\nB=\"183500\"\nC=plat_tok\"en\nD=  spaced  ")
+        XCTAssertEqual(rows.map(\.key), ["A", "B", "C", "D"])
+        XCTAssertEqual(rows.map(\.value), ["183500", "183500", "plat_tok\"en", "  spaced"])
+    }
+
+    func testParseEnvTextSkipsBlanksAndCommentsKeepsEqLessLines() {
+        let rows = GaryxAgentEnvDraft.parseEnvText("\n# comment\nGOOD=1\nBROKEN_LINE\n")
+        XCTAssertEqual(rows.map(\.key), ["GOOD", "BROKEN_LINE"])
+        XCTAssertEqual(rows.map(\.value), ["1", ""])
+    }
+
+    func testEnvTextRoundTripsNewlineQuoteAndEdgeWhitespaceValues() {
+        let rows = [
+            GaryxAgentEnvRow(key: "MULTI", value: "line1\nline2"),
+            GaryxAgentEnvRow(key: "QUOTED", value: "\"already quoted\""),
+            GaryxAgentEnvRow(key: "EDGE_WS", value: "  padded  "),
+            GaryxAgentEnvRow(key: "PLAIN", value: "https://super-relay.example/v1"),
+        ]
+        let roundTripped = GaryxAgentEnvDraft.parseEnvText(GaryxAgentEnvDraft.formatEnvText(rows))
+        XCTAssertEqual(roundTripped.map(\.key), rows.map(\.key))
+        XCTAssertEqual(roundTripped.map(\.value), rows.map(\.value))
+    }
+
+    func testApplyEnvTextReplacesRowsAndMarksDirty() {
+        var draft = GaryxAgentEnvDraft.seeded(from: ["OLD": "1"])
+        XCTAssertEqual(draft.resolvedIntent(), .unchanged)
+        draft.applyEnvText("NEW=2")
+        XCTAssertEqual(draft.currentEnvMap(), ["NEW": "2"])
+        XCTAssertEqual(draft.resolvedIntent(), .replace(["NEW": "2"]))
+        draft.applyEnvText("")
+        XCTAssertEqual(draft.resolvedIntent(), .clear)
+    }
 }

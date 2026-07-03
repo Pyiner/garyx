@@ -5038,23 +5038,16 @@ fn print_agent_summary(a: &Value) {
         keys.sort();
         for key in keys {
             let value = env[key].as_str().unwrap_or("");
-            println!("  {key}={}", mask_env_value(value));
+            // Values print verbatim: agent env is the user's own local config,
+            // and masked output hides exactly what someone inspecting an agent
+            // needs to verify (e.g. whether a numeric value picked up quotes).
+            println!("  {key}={value}");
         }
     }
     if let Some(prompt) = a["system_prompt"].as_str() {
         let preview: String = prompt.chars().take(120).collect();
         let ellipsis = if prompt.len() > 120 { "…" } else { "" };
         println!("Prompt: {preview}{ellipsis}");
-    }
-}
-
-/// Mask an env value for human-readable CLI output. Values are never printed in
-/// cleartext by the default view; use `--json` for raw values.
-fn mask_env_value(value: &str) -> String {
-    if value.is_empty() {
-        String::new()
-    } else {
-        "••••••".to_owned()
     }
 }
 
