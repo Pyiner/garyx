@@ -44,13 +44,6 @@ const CLAUDE_CLI_MODE_CCTTY: &str = "cctty";
 const CLAUDE_CLI_MODE_NATIVE: &str = "native";
 const EMBEDDED_CCTTY_ARG: &str = "__cctty";
 const CLAUDE_CODE_OAUTH_TOKEN_ENV: &str = "CLAUDE_CODE_OAUTH_TOKEN";
-#[cfg(all(target_os = "macos", not(test)))]
-const CLAUDE_CODE_OAUTH_KEYCHAIN_SERVICE: &str = "CLAUDE_CODE_OAUTH_TOKEN";
-const CLAUDE_AUTH_ENV_KEYS: &[&str] = &[
-    "ANTHROPIC_API_KEY",
-    "ANTHROPIC_AUTH_TOKEN",
-    "CLAUDE_OAUTH_TOKEN",
-];
 
 fn coerce_usage_i64(value: &Value) -> Option<i64> {
     value.as_i64().or_else(|| {
@@ -139,48 +132,6 @@ fn load_user_terminal_env() -> HashMap<String, String> {
         .collect()
 }
 
-fn non_empty_env_value(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-fn has_explicit_claude_auth_env(env: &HashMap<String, String>) -> bool {
-    CLAUDE_AUTH_ENV_KEYS.iter().any(|key| {
-        env.get(*key)
-            .map(String::as_str)
-            .and_then(|value| non_empty_env_value(Some(value)))
-            .is_some()
-    })
-}
-
-#[cfg(any(not(target_os = "macos"), test))]
-fn read_current_claude_code_oauth_token() -> Option<String> {
-    None
-}
-
-#[cfg(all(target_os = "macos", not(test)))]
-fn read_current_claude_code_oauth_token() -> Option<String> {
-    let user = std::env::var("USER")
-        .or_else(|_| std::env::var("LOGNAME"))
-        .ok()
-        .and_then(|value| non_empty_env_value(Some(&value)));
-    let mut command = std::process::Command::new("security");
-    command.arg("find-generic-password");
-    if let Some(user) = user.as_deref() {
-        command.args(["-a", user]);
-    }
-    let output = command
-        .args(["-s", CLAUDE_CODE_OAUTH_KEYCHAIN_SERVICE, "-w"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    non_empty_env_value(Some(String::from_utf8_lossy(&output.stdout).trim()))
-}
-
 fn extend_runtime_env_without_claude_code_oauth(
     env: &mut HashMap<String, String>,
     values: HashMap<String, String>,
@@ -196,7 +147,6 @@ fn build_claude_runtime_env(
     config_env: &HashMap<String, String>,
     metadata: &HashMap<String, Value>,
     mut terminal_env: HashMap<String, String>,
-    keychain_oauth_token: Option<String>,
 ) -> HashMap<String, String> {
     let terminal_oauth_token = terminal_env.get(CLAUDE_CODE_OAUTH_TOKEN_ENV).cloned();
     extend_runtime_env_without_claude_code_oauth(&mut terminal_env, config_env.clone());
@@ -205,17 +155,7 @@ fn build_claude_runtime_env(
         &mut terminal_env,
         metadata_string_map(metadata, "desktop_claude_env"),
     );
-    if let Some(token) = terminal_oauth_token
-        .as_deref()
-        .and_then(|value| non_empty_env_value(Some(value)))
-    {
-        terminal_env.insert(CLAUDE_CODE_OAUTH_TOKEN_ENV.to_owned(), token);
-    } else if has_explicit_claude_auth_env(&terminal_env) {
-        terminal_env.remove(CLAUDE_CODE_OAUTH_TOKEN_ENV);
-    } else if let Some(token) = keychain_oauth_token
-        .as_deref()
-        .and_then(|value| non_empty_env_value(Some(value)))
-    {
+    if let Some(token) = terminal_oauth_token {
         terminal_env.insert(CLAUDE_CODE_OAUTH_TOKEN_ENV.to_owned(), token);
     } else {
         terminal_env.remove(CLAUDE_CODE_OAUTH_TOKEN_ENV);
@@ -1208,7 +1148,6 @@ impl ClaudeCliProvider {
             &self.config.env,
             &options.metadata,
             load_user_terminal_env(),
-            read_current_claude_code_oauth_token(),
         );
         let cli_path = resolve_claude_sdk_cli_path(&self.config);
         let cli_prefix_args = resolve_claude_sdk_cli_prefix_args(&self.config);
