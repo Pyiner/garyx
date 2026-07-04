@@ -12,12 +12,8 @@ import type {
 import { getDesktopApi } from "../platform/desktop-api";
 import type { SettingsTabId } from "../settings-tabs";
 import type { ToastTone } from "../toast";
-import {
-  currentDesktopRoute,
-  parseDesktopRoute,
-  replaceDesktopRoute,
-  type DesktopRoute,
-} from "./desktop-route";
+import { currentDesktopRoute, type DesktopRoute } from "./desktop-route";
+import type { DesktopRouteStore } from "./desktop-route-store";
 import type { ContentView } from "./types";
 
 export function isKnownThreadId(
@@ -47,6 +43,7 @@ type UseDeepLinkRouteControllerArgs = {
   clearComposerDraft: () => void;
   contentView: ContentView;
   desktopState: DesktopState | null;
+  desktopRouteStore: DesktopRouteStore;
   ensureThreadOpenable: (threadId: string) => Promise<boolean>;
   handleResumeProviderSession: (
     sessionId: string,
@@ -92,6 +89,7 @@ export function useDeepLinkRouteController({
   clearComposerDraft,
   contentView,
   desktopState,
+  desktopRouteStore,
   ensureThreadOpenable,
   handleResumeProviderSession,
   handleSelectAutomation,
@@ -280,23 +278,33 @@ export function useDeepLinkRouteController({
     selectedWorkflowTaskId,
   ]);
 
+  // Batch 4b: the route store is the only hash surface. External edits
+  // (manual hash, back/forward) commit in the store first and reach
+  // applyDesktopRoute here. While an external route application is in
+  // flight, the state-sync effect below is suppressed: its deps change
+  // mid-application (e.g. contentView flips) while selectedThreadId still
+  // holds the previous thread, and navigating then would counter-write
+  // the externally entered hash — the legacy quirk this batch removes.
+  // After the application settles, a successful route has converged the
+  // state (navigate becomes a no-op) and a failed one changed no synced
+  // dep (only the error surface), so the entered hash stays addressable.
+  const externalRouteApplicationRef = useRef(false);
   useEffect(() => {
-    const handleRouteChange = () => {
-      void applyDesktopRoute(parseDesktopRoute());
-    };
-    window.addEventListener("hashchange", handleRouteChange);
-    window.addEventListener("popstate", handleRouteChange);
-    return () => {
-      window.removeEventListener("hashchange", handleRouteChange);
-      window.removeEventListener("popstate", handleRouteChange);
-    };
-  }, [applyDesktopRoute]);
+    return desktopRouteStore.subscribeExternal(() => {
+      externalRouteApplicationRef.current = true;
+      void applyDesktopRoute(desktopRouteStore.getSnapshot().route).finally(
+        () => {
+          externalRouteApplicationRef.current = false;
+        },
+      );
+    });
+  }, [applyDesktopRoute, desktopRouteStore]);
 
   useEffect(() => {
-    if (loading) {
+    if (loading || externalRouteApplicationRef.current) {
       return;
     }
-    replaceDesktopRoute(
+    desktopRouteStore.navigate(
       currentDesktopRoute({
         contentView,
         newThreadDraftActive,
@@ -309,9 +317,11 @@ export function useDeepLinkRouteController({
         settingsActiveTab,
         capsulePreviewId,
       }),
+      { replace: true },
     );
   }, [
     contentView,
+    desktopRouteStore,
     loading,
     newThreadDraftActive,
     pendingAgentId,

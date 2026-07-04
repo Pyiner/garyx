@@ -68,6 +68,7 @@ export class DesktopRouteStore {
   private version = 0;
   private snapshot: DesktopRouteSnapshot | null = null;
   private listeners = new Set<() => void>();
+  private externalListeners = new Set<() => void>();
   private unsubscribeHost: Unsubscribe;
 
   constructor(host: RouteHost) {
@@ -82,6 +83,20 @@ export class DesktopRouteStore {
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);
+    };
+  }
+
+  /**
+   * Notified only for route commits that originate OUTSIDE navigate():
+   * manual hash edits, back/forward, garyx:// handlers writing the hash.
+   * This is the legacy `hashchange`/`popstate` listener semantics —
+   * navigate() commits (including their echoes) never fire it, so route
+   * effects wired here cannot feed back on state-driven hash syncs.
+   */
+  subscribeExternal(listener: () => void): Unsubscribe {
+    this.externalListeners.add(listener);
+    return () => {
+      this.externalListeners.delete(listener);
     };
   }
 
@@ -144,6 +159,9 @@ export class DesktopRouteStore {
       return;
     }
     this.commit(parsed);
+    for (const listener of [...this.externalListeners]) {
+      listener();
+    }
   }
 
   private commit(route: DesktopRoute): void {

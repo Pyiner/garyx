@@ -245,9 +245,12 @@ import { isRunLoadingPlaceholderMessage } from "./loading-labels";
 import garyxIconUrl from "../assets/garyx-icon.png";
 import {
   contentViewForDesktopRoute,
-  parseDesktopRoute,
   type DesktopRoute,
 } from "./desktop-route";
+import {
+  DesktopRouteStore,
+  createBrowserRouteHost,
+} from "./desktop-route-store";
 
 const MESSAGES_BOTTOM_THRESHOLD_PX = 48;
 
@@ -464,29 +467,10 @@ function threadRunStateIsRunning(thread: DesktopThreadSummary): boolean {
   return (thread.runState || "").trim().toLowerCase() === "running";
 }
 
-function savedContentView(): ContentView {
-  const saved = sessionStorage.getItem("gary-content-view");
-  const valid: ContentView[] = [
-    "thread",
-    "browser",
-    "bots",
-    "automation",
-    "capsules",
-    "agents",
-    "teams",
-    "skills",
-    "tasks",
-    "workflow",
-    "dreams",
-    "settings",
-  ];
-  return saved && valid.includes(saved as ContentView)
-    ? (saved as ContentView)
-    : "thread";
-}
-
 function initialContentView(route: DesktopRoute): ContentView {
-  return contentViewForDesktopRoute(route) || savedContentView();
+  // Batch 4b (intentional change #3): the hash is the only persisted
+  // route; the sessionStorage contentView fallback is gone.
+  return contentViewForDesktopRoute(route) || "thread";
 }
 
 function hasRemoteDesktopContent(state: DesktopState | null): boolean {
@@ -602,9 +586,16 @@ function inferProviderTypeForThread(
 }
 
 export function AppShell() {
+  // Batch 4b: the DesktopRouteStore owns the URL hash. It seeds from the
+  // initial location, navigate() is the only hash writer (the legacy
+  // state-to-hash replace effect routes through it), and external
+  // hash/popstate edits reach applyDesktopRoute through subscribeExternal.
+  const [desktopRouteStore] = useState(
+    () => new DesktopRouteStore(createBrowserRouteHost()),
+  );
   const initialRouteRef = useRef<DesktopRoute | null>(null);
   if (!initialRouteRef.current) {
-    initialRouteRef.current = parseDesktopRoute();
+    initialRouteRef.current = desktopRouteStore.getSnapshot().route;
   }
   const initialRouteValue = initialRouteRef.current;
   // Endgame architecture (docs/design/appshell-endgame-architecture.md):
@@ -790,13 +781,10 @@ export function AppShell() {
       setThreadEntrySelectionSource(null);
     }
   }, [contentView, selectedThreadId]);
-  const setContentView: typeof setContentViewRaw = (action) => {
-    setContentViewRaw((prev) => {
-      const next = typeof action === "function" ? action(prev) : action;
-      sessionStorage.setItem("gary-content-view", next);
-      return next;
-    });
-  };
+  // Batch 4b (intentional change #3): contentView sessionStorage
+  // persistence is removed — the hash, which Electron restores per
+  // window, is the only persisted route.
+  const setContentView = setContentViewRaw;
   const [addBotDialogOpen, setAddBotDialogOpen] = useState(false);
   const [addBotInitialValues, setAddBotInitialValues] = useState<{
     channel?: "telegram" | "feishu" | "weixin";
@@ -2636,6 +2624,7 @@ export function AppShell() {
     clearComposerDraft,
     contentView,
     desktopState,
+    desktopRouteStore,
     ensureThreadOpenable,
     handleResumeProviderSession,
     handleSelectAutomation,
@@ -2819,8 +2808,11 @@ export function AppShell() {
           if (isKnownThreadId(hydratedState, startupRoute.threadId)) {
             setSelectedThreadId(startupRoute.threadId);
           } else {
+            // Batch 4b (intentional change #2): an unknown #/thread/<id>
+            // renders the error state and stays addressable — no silent
+            // fallback selection that would rewrite the entered hash.
             setError(`Thread not found: ${startupRoute.threadId}`);
-            setSelectedThreadId(hydratedState.threads[0]?.id || null);
+            setSelectedThreadId(startupRoute.threadId);
           }
         } else if (startupRoute.kind === "new-thread") {
           setContentView("thread");
@@ -2867,7 +2859,13 @@ export function AppShell() {
       return;
     }
 
-    if (isKnownThreadId(desktopState, selectedThreadId)) {
+    // Batch 4b (intentional changes #1/#2): only converge when NOTHING is
+    // selected (the thread-home default). A selected-but-unknown thread —
+    // an externally entered #/thread/<id> or a side-chat/hidden thread —
+    // stays selected and addressable instead of being silently rewritten
+    // to threads[0] (the legacy quirk where a manual hash edit bounced
+    // back to the previously selected thread).
+    if (selectedThreadId) {
       return;
     }
 

@@ -281,14 +281,6 @@ export function currentDesktopRoute(input: {
   return { kind: 'view', view: input.contentView };
 }
 
-export function replaceDesktopRoute(route: DesktopRoute): void {
-  const nextHash = buildDesktopRouteHash(route);
-  if (globalThis.window?.location.hash === nextHash) {
-    return;
-  }
-  globalThis.window?.history.replaceState(null, '', nextHash);
-}
-
 /**
  * Normalize a route to its hash round-trip form (batch 4a):
  * `parseDesktopRoute(buildDesktopRouteHash(route))` without the string
