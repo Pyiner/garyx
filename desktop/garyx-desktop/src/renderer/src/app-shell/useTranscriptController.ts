@@ -452,6 +452,14 @@ export function useTranscriptController({
           );
         }
       }
+      // Deleted keys (e.g. the new-thread draft promoted to a real thread)
+      // bridge as an empty array so the mirror does not keep stale rows
+      // for a thread the legacy map no longer tracks (3b review follow-up).
+      for (const threadId of Object.keys(previous)) {
+        if (!(threadId in next)) {
+          mirrorDualWrite(() => mirror.syncThreadUiMessages(threadId, []));
+        }
+      }
     }
     return next;
   }

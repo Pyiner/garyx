@@ -476,6 +476,13 @@ test("syncThreadUiMessages bridges local rows and applyRemote preserves them via
     !deduped.some((entry) => entry.id === optimisticUser.id),
     "echoed optimistic row is replaced by the remote copy in the mirror",
   );
+
+  // Deleted-key bridge (3b review follow-up): a legacy map that drops a
+  // thread key syncs an empty array so the mirror holds no stale rows.
+  const before = notified;
+  mirror.syncThreadUiMessages(threadId, []);
+  assert.deepEqual(mirror.getThreadSnapshot(threadId).messages, []);
+  assert.equal(notified, before + 1, "empty bridge still commits once");
 });
 
 // ---- Batch 2a-2: dual-run equivalence for the authoritative-apply path ----
