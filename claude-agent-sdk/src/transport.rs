@@ -214,14 +214,6 @@ impl SubprocessTransport {
                 continue;
             }
 
-            if json_buffer.is_empty() && !trimmed.starts_with('{') {
-                tracing::debug!(
-                    line = %trimmed,
-                    "skipping non-JSON claude stdout line"
-                );
-                continue;
-            }
-
             json_buffer.push_str(trimmed);
 
             if json_buffer.len() > self.max_buffer_size {
