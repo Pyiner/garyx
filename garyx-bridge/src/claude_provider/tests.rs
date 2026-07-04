@@ -366,81 +366,6 @@ fn test_fresh_session_retry_detection() {
 }
 
 #[test]
-fn test_inject_current_claude_code_oauth_when_no_auth_override() {
-    let mut env = HashMap::from([("HTTPS_PROXY".to_owned(), "http://127.0.0.1:6152".to_owned())]);
-
-    assert!(inject_current_claude_code_oauth_token(
-        &mut env,
-        Some(" current-token ".to_owned())
-    ));
-
-    assert_eq!(
-        env.get("CLAUDE_CODE_OAUTH_TOKEN").map(String::as_str),
-        Some("current-token")
-    );
-    assert_eq!(
-        env.get("HTTPS_PROXY").map(String::as_str),
-        Some("http://127.0.0.1:6152")
-    );
-}
-
-#[test]
-fn test_inject_current_claude_code_oauth_replaces_stale_token() {
-    let mut env = HashMap::from([(
-        "CLAUDE_CODE_OAUTH_TOKEN".to_owned(),
-        "stale-token".to_owned(),
-    )]);
-
-    assert!(inject_current_claude_code_oauth_token(
-        &mut env,
-        Some("current-token".to_owned())
-    ));
-
-    assert_eq!(
-        env.get("CLAUDE_CODE_OAUTH_TOKEN").map(String::as_str),
-        Some("current-token")
-    );
-}
-
-#[test]
-fn test_inject_current_claude_code_oauth_removes_stale_token_without_current_token() {
-    let mut env = HashMap::from([(
-        "CLAUDE_CODE_OAUTH_TOKEN".to_owned(),
-        "stale-token".to_owned(),
-    )]);
-
-    assert!(!inject_current_claude_code_oauth_token(&mut env, None));
-
-    assert!(!env.contains_key("CLAUDE_CODE_OAUTH_TOKEN"));
-}
-
-#[test]
-fn test_inject_current_claude_code_oauth_does_not_override_custom_auth() {
-    let mut env = HashMap::from([
-        ("ANTHROPIC_AUTH_TOKEN".to_owned(), "relay-token".to_owned()),
-        (
-            "CLAUDE_CODE_OAUTH_TOKEN".to_owned(),
-            "stale-token".to_owned(),
-        ),
-        (
-            "ANTHROPIC_BASE_URL".to_owned(),
-            "https://relay.example".to_owned(),
-        ),
-    ]);
-
-    assert!(!inject_current_claude_code_oauth_token(
-        &mut env,
-        Some("current-token".to_owned())
-    ));
-
-    assert!(!env.contains_key("CLAUDE_CODE_OAUTH_TOKEN"));
-    assert_eq!(
-        env.get("ANTHROPIC_AUTH_TOKEN").map(String::as_str),
-        Some("relay-token")
-    );
-}
-
-#[test]
 fn test_build_sdk_options_defaults() {
     let provider = make_provider();
     let opts = ProviderRunOptions {
@@ -887,7 +812,10 @@ fn test_build_sdk_options_metadata_env_override() {
     };
 
     let sdk_opts = provider.build_sdk_options(&opts, None, "run-1");
-    assert!(!sdk_opts.env.contains_key("CLAUDE_CODE_OAUTH_TOKEN"));
+    assert_eq!(
+        sdk_opts.env.get("CLAUDE_CODE_OAUTH_TOKEN"),
+        Some(&"token-123".to_string())
+    );
     assert_eq!(
         sdk_opts.env.get("ANTHROPIC_API_KEY"),
         Some(&"api-key-456".to_string())
@@ -901,6 +829,10 @@ fn test_build_sdk_options_merges_config_env_and_metadata_env() {
         env: HashMap::from([
             ("HTTPS_PROXY".to_owned(), "http://127.0.0.1:6152".to_owned()),
             ("NO_PROXY".to_owned(), "127.0.0.1,localhost".to_owned()),
+            (
+                "CLAUDE_CODE_OAUTH_TOKEN".to_owned(),
+                "from-config".to_owned(),
+            ),
         ]),
         ..Default::default()
     });
@@ -909,7 +841,7 @@ fn test_build_sdk_options_merges_config_env_and_metadata_env() {
     metadata.insert(
         "desktop_claude_env".to_string(),
         serde_json::json!({
-            "ANTHROPIC_AUTH_TOKEN": "from-desktop-auth",
+            "CLAUDE_CODE_OAUTH_TOKEN": "from-desktop",
             "ALL_PROXY": "socks5://127.0.0.1:6153"
         }),
     );
@@ -935,10 +867,12 @@ fn test_build_sdk_options_merges_config_env_and_metadata_env() {
         Some("socks5://127.0.0.1:6153")
     );
     assert_eq!(
-        sdk_opts.env.get("ANTHROPIC_AUTH_TOKEN").map(String::as_str),
-        Some("from-desktop-auth")
+        sdk_opts
+            .env
+            .get("CLAUDE_CODE_OAUTH_TOKEN")
+            .map(String::as_str),
+        Some("from-desktop")
     );
-    assert!(!sdk_opts.env.contains_key("CLAUDE_CODE_OAUTH_TOKEN"));
 }
 
 #[test]
