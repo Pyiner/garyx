@@ -7,7 +7,6 @@ import {
   useSensor,
   useSensors,
   type DragEndEvent,
-  type DragStartEvent,
 } from '@dnd-kit/core';
 import { restrictToVerticalAxis } from '@dnd-kit/modifiers';
 import {
@@ -23,26 +22,17 @@ import { useMemo, type CSSProperties } from 'react';
 import { useI18n, type Translate } from './i18n';
 import type { MessageIntent } from './message-machine';
 
-type QueueDropTarget = {
-  intentId: string;
-  position: 'before' | 'after';
-};
-
 type ComposerQueueProps = {
   activeQueue: MessageIntent[];
   canSteerQueuedPrompt: boolean;
-  draggedQueueIntentId: string | null;
   isActiveSendingThread: boolean;
-  queueDropTarget: QueueDropTarget | null;
   onCancelIntent: (threadId: string, intentId: string) => void;
-  onQueueDropTargetChange: (target: QueueDropTarget | null) => void;
   onReorderQueuedIntent: (
     threadId: string,
     draggedIntentId: string,
     targetIntentId: string,
     position: 'before' | 'after',
   ) => void;
-  onSetDraggedQueueIntentId: (intentId: string | null) => void;
   onSteerQueuedPrompt: (item: MessageIntent) => void;
 };
 
@@ -228,9 +218,7 @@ export function ComposerQueue({
   canSteerQueuedPrompt,
   isActiveSendingThread,
   onCancelIntent,
-  onQueueDropTargetChange,
   onReorderQueuedIntent,
-  onSetDraggedQueueIntentId,
   onSteerQueuedPrompt,
 }: ComposerQueueProps) {
   const { t } = useI18n();
@@ -255,20 +243,6 @@ export function ComposerQueue({
     }),
   );
 
-  function clearDragState() {
-    onSetDraggedQueueIntentId(null);
-    onQueueDropTargetChange(null);
-  }
-
-  function handleDragStart(event: DragStartEvent) {
-    onSetDraggedQueueIntentId(String(event.active.id));
-    onQueueDropTargetChange(null);
-  }
-
-  function handleDragCancel() {
-    clearDragState();
-  }
-
   function handleDragEnd(event: DragEndEvent) {
     const activeIntentId = String(event.active.id);
     const overIntentId = event.over ? String(event.over.id) : null;
@@ -285,7 +259,6 @@ export function ComposerQueue({
         );
       }
     }
-    clearDragState();
   }
 
   if (!activeQueue.length) {
@@ -297,9 +270,7 @@ export function ComposerQueue({
       <DndContext
         collisionDetection={closestCenter}
         modifiers={queueDragModifiers}
-        onDragCancel={handleDragCancel}
         onDragEnd={handleDragEnd}
-        onDragStart={handleDragStart}
         sensors={sensors}
       >
         <SortableContext items={queueIntentIds} strategy={verticalListSortingStrategy}>

@@ -69,7 +69,6 @@ function ThreadStage({ step }: { step: StoryStep }) {
       slashCommandsLoaded
       slashCommandsLoading={false}
       composerTextareaRef={composerTextareaRef}
-      draggedQueueIntentId={null}
       historyLoading={state.historyLoading}
       historyLoadingEarlier={state.historyLoadingEarlier}
       ignoreComposerSubmitUntilRef={ignoreComposerSubmitUntilRef}
@@ -94,7 +93,6 @@ function ThreadStage({ step }: { step: StoryStep }) {
       onMarkIgnoreComposerSubmitWindow={noop}
       onMessagesScroll={noop}
       onMessagesUserScrollIntent={noop}
-      onQueueDropTargetChange={noop}
       onRemoveComposerFile={noop}
       onRemoveComposerImage={noop}
       onRemoveComposerBrowserAnnotation={noop}
@@ -107,13 +105,11 @@ function ThreadStage({ step }: { step: StoryStep }) {
       onSelectBotBinding={noop}
       onOpenThreadById={noop}
       onSelectWorkspace={noop}
-      onSetDraggedQueueIntentId={noop}
       onSteerQueuedPrompt={noop}
       onThreadLogsUnreadChange={noop}
       onThreadLogsResizeKeyDown={noop}
       onThreadLogsResizeStart={noop}
       preferredWorkspaceForNewThread={null}
-      queueDropTarget={null}
       selectableNewThreadWorkspaces={[]}
       selectedThreadId="storybook-thread"
       showAutomationRunInitialPlaceholder={false}

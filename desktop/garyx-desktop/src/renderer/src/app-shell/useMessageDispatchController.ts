@@ -337,13 +337,6 @@ export function useMessageDispatchController({
   const [composerAttachmentUploadCount, setComposerAttachmentUploadCount] =
     useState(0);
   const composerAttachmentUploadPending = composerAttachmentUploadCount > 0;
-  const [draggedQueueIntentId, setDraggedQueueIntentId] = useState<
-    string | null
-  >(null);
-  const [queueDropTarget, setQueueDropTarget] = useState<{
-    intentId: string;
-    position: "before" | "after";
-  } | null>(null);
   const composerAttachmentInputRef = useRef<HTMLInputElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const composerHasPayloadRef = useRef(false);
@@ -1066,7 +1059,6 @@ export function useMessageDispatchController({
     composerLocked,
     composerResetKey,
     composerTextareaRef,
-    draggedQueueIntentId,
     handleAddBrowserAnnotationComment,
     handleComposerSubmit,
     handleInterrupt,
@@ -1075,7 +1067,6 @@ export function useMessageDispatchController({
     ignoreComposerSubmitUntilRef,
     isComposingRef,
     markIgnoreComposerSubmitWindow,
-    queueDropTarget,
     queueIntentIdsForThread,
     removeComposerBrowserAnnotation,
     removeComposerFile,
@@ -1083,8 +1074,6 @@ export function useMessageDispatchController({
     reorderQueuedIntent,
     requestComposerFocus,
     setComposerTextPresent,
-    setDraggedQueueIntentId,
-    setQueueDropTarget,
     syncComposerPhase,
   };
 }

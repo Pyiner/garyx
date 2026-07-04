@@ -2247,7 +2247,6 @@ export function AppShell() {
     composerLocked,
     composerResetKey,
     composerTextareaRef,
-    draggedQueueIntentId,
     handleAddBrowserAnnotationComment,
     handleComposerSubmit,
     handleInterrupt,
@@ -2256,15 +2255,12 @@ export function AppShell() {
     ignoreComposerSubmitUntilRef,
     isComposingRef,
     markIgnoreComposerSubmitWindow,
-    queueDropTarget,
     removeComposerBrowserAnnotation,
     removeComposerFile,
     removeComposerImage,
     reorderQueuedIntent,
     requestComposerFocus,
     setComposerTextPresent,
-    setDraggedQueueIntentId,
-    setQueueDropTarget,
     syncComposerPhase,
   } = useMessageDispatchController({
     activeQueue,
@@ -3771,7 +3767,6 @@ export function AppShell() {
       slashCommandsLoaded={commandsLoaded}
       slashCommandsLoading={commandsLoading}
       composerTextareaRef={sideComposerTextareaRef}
-      draggedQueueIntentId={draggedQueueIntentId}
       historyLoading={sideChatHistoryLoading}
       historyLoadingEarlier={Boolean(sideChatHistoryPagination?.loadingBefore)}
       ignoreComposerSubmitUntilRef={sideIgnoreComposerSubmitUntilRef}
@@ -3842,7 +3837,6 @@ export function AppShell() {
         }
       }}
       onMessagesUserScrollIntent={() => {}}
-      onQueueDropTargetChange={setQueueDropTarget}
       onRemoveComposerFile={(fileId) => {
         removeSideComposerFile(sideChatSourceThreadId, fileId);
       }}
@@ -3873,7 +3867,6 @@ export function AppShell() {
         setCapsulePreviewId(card.capsule_id);
       }}
       onSelectWorkspace={() => {}}
-      onSetDraggedQueueIntentId={setDraggedQueueIntentId}
       onSteerQueuedPrompt={(item) => {
         void steerQueuedIntent(item, { canSteer: sideChatCanSteerQueuedPrompt });
       }}
@@ -3881,7 +3874,6 @@ export function AppShell() {
       onThreadLogsResizeKeyDown={() => {}}
       onThreadLogsResizeStart={() => {}}
       preferredWorkspaceForNewThread={preferredWorkspaceForNewThread}
-      queueDropTarget={queueDropTarget}
       selectableNewThreadWorkspaces={selectableNewThreadWorkspaces}
       selectedThreadId={sideChatThreadId}
       showAutomationRunInitialPlaceholder={false}
@@ -4050,7 +4042,6 @@ export function AppShell() {
         slashCommandsLoaded={commandsLoaded}
         slashCommandsLoading={commandsLoading}
         composerTextareaRef={composerTextareaRef}
-        draggedQueueIntentId={draggedQueueIntentId}
         historyLoading={historyLoading}
         historyLoadingEarlier={Boolean(activeHistoryPagination?.loadingBefore)}
         ignoreComposerSubmitUntilRef={ignoreComposerSubmitUntilRef}
@@ -4124,7 +4115,6 @@ export function AppShell() {
           }
         }}
         onMessagesUserScrollIntent={cancelMessagesForceScrollBudget}
-        onQueueDropTargetChange={setQueueDropTarget}
         onRemoveComposerFile={removeComposerFile}
         onRemoveComposerImage={removeComposerImage}
         onRemoveComposerBrowserAnnotation={removeComposerBrowserAnnotation}
@@ -4207,7 +4197,6 @@ export function AppShell() {
           setPendingWorkspaceMode("local");
           void handleSelectWorkspace(workspacePath, null);
         }}
-        onSetDraggedQueueIntentId={setDraggedQueueIntentId}
         onSteerQueuedPrompt={(item) => {
           void handleSteerQueuedPrompt(item);
         }}
@@ -4215,7 +4204,6 @@ export function AppShell() {
         onThreadLogsResizeKeyDown={embedded ? () => {} : handleThreadLogsResizeKeyDown}
         onThreadLogsResizeStart={embedded ? () => {} : handleThreadLogsResizeStart}
         preferredWorkspaceForNewThread={preferredWorkspaceForNewThread}
-        queueDropTarget={queueDropTarget}
         selectableNewThreadWorkspaces={selectableNewThreadWorkspaces}
         selectedThreadId={selectedThreadId}
         showAutomationRunInitialPlaceholder={showAutomationRunInitialPlaceholder}

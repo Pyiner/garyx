@@ -247,11 +247,6 @@ function renderUserMessageBubbleParts({
   ];
 }
 
-type QueueDropTarget = {
-  intentId: string;
-  position: "before" | "after";
-} | null;
-
 type ThreadPageProps = {
   surfaceVariant?: "default" | "side-chat";
   activeMessages: UiTranscriptMessage[];
@@ -288,7 +283,6 @@ type ThreadPageProps = {
   slashCommands: SlashCommand[];
   slashCommandsLoaded: boolean;
   slashCommandsLoading: boolean;
-  draggedQueueIntentId: string | null;
   historyLoading: boolean;
   historyLoadingEarlier: boolean;
   inspectorOpen: boolean;
@@ -311,7 +305,6 @@ type ThreadPageProps = {
   threadSelectedServiceTier?: string | null;
   newThreadWorkspaceEntry: DesktopWorkspace | null;
   newThreadWorkspaceMode: DesktopWorkspaceMode;
-  queueDropTarget: QueueDropTarget;
   selectableNewThreadWorkspaces: DesktopWorkspace[];
   selectedThreadId: string | null;
   showAutomationRunInitialPlaceholder: boolean;
@@ -348,7 +341,6 @@ type ThreadPageProps = {
   onMessagesScroll: () => void;
   onMessagesUserScrollIntent: () => void;
   onMarkIgnoreComposerSubmitWindow: () => void;
-  onQueueDropTargetChange: (target: QueueDropTarget) => void;
   onRemoveComposerFile: (fileId: string) => void;
   onRemoveComposerImage: (imageId: string) => void;
   onRemoveComposerBrowserAnnotation: (annotationId: string) => void;
@@ -371,7 +363,6 @@ type ThreadPageProps = {
   onRetryFailedMessage?: (message: UiTranscriptMessage) => void;
   onSelectBotBinding: (botId: string | null) => void;
   onSelectWorkspace: (workspacePath: string) => void;
-  onSetDraggedQueueIntentId: (intentId: string | null) => void;
   onThreadLogsUnreadChange: (hasUnread: boolean) => void;
   onThreadLogsResizeKeyDown: (
     event: React.KeyboardEvent<HTMLDivElement>,
@@ -420,7 +411,6 @@ export function ThreadPage({
   slashCommandsLoaded,
   slashCommandsLoading,
   composerTextareaRef,
-  draggedQueueIntentId,
   historyLoading,
   historyLoadingEarlier,
   ignoreComposerSubmitUntilRef,
@@ -457,7 +447,6 @@ export function ThreadPage({
   onMessagesScroll,
   onMessagesUserScrollIntent,
   onMarkIgnoreComposerSubmitWindow,
-  onQueueDropTargetChange,
   onRemoveComposerFile,
   onRemoveComposerImage,
   onRemoveComposerBrowserAnnotation,
@@ -475,7 +464,6 @@ export function ThreadPage({
   onRetryFailedMessage,
   onSelectBotBinding,
   onSelectWorkspace,
-  onSetDraggedQueueIntentId,
   onSteerQueuedPrompt,
   onOpenThreadById,
   onOpenCapsule,
@@ -483,7 +471,6 @@ export function ThreadPage({
   onThreadLogsResizeKeyDown,
   onThreadLogsResizeStart,
   preferredWorkspaceForNewThread,
-  queueDropTarget,
   selectableNewThreadWorkspaces,
   selectedThreadId,
   showAutomationRunInitialPlaceholder,
@@ -1016,14 +1003,10 @@ export function ThreadPage({
             <ComposerQueue
               activeQueue={activeQueue}
               canSteerQueuedPrompt={canSteerQueuedPrompt}
-              draggedQueueIntentId={draggedQueueIntentId}
               isActiveSendingThread={isActiveSendingThread}
               onCancelIntent={onCancelIntent}
-              onQueueDropTargetChange={onQueueDropTargetChange}
               onReorderQueuedIntent={onReorderQueuedIntent}
-              onSetDraggedQueueIntentId={onSetDraggedQueueIntentId}
               onSteerQueuedPrompt={onSteerQueuedPrompt}
-              queueDropTarget={queueDropTarget}
             />
 
             <ComposerForm
