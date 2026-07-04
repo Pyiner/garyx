@@ -1258,3 +1258,122 @@ test("clearing a missing live-stream key keeps the legacy rebuild-and-notify cad
   );
   assert.equal(mirror.getThreadSnapshot(threadId).liveStream, null);
 });
+
+test("transcript-maps snapshot: stable reference, legacy key-existence shapes, live-stream isolation (3d)", () => {
+  const mirror = new GatewayMirror();
+  const threadId = "thread::maps-a";
+
+  const empty1 = mirror.getTranscriptMapsSnapshot();
+  const empty2 = mirror.getTranscriptMapsSnapshot();
+  assert.equal(empty1, empty2, "unchanged snapshot must be same ref");
+  assert.deepEqual(empty1.messagesByThread, {});
+  assert.deepEqual(empty1.threadInfoByThread, {});
+
+  let notified = 0;
+  mirror.subscribeTranscriptMaps(() => {
+    notified += 1;
+  });
+
+  // A live-stream-only update must NOT invalidate or notify the maps.
+  mirror.updateThreadLiveStream(threadId, () => ({
+    threadId,
+    pendingAckIntentIds: [],
+    streamStatus: "connecting",
+  }));
+  assert.equal(notified, 0, "live-stream update leaves transcript maps alone");
+  assert.equal(mirror.getTranscriptMapsSnapshot(), empty1);
+  assert.ok(
+    !(threadId in mirror.getTranscriptMapsSnapshot().threadInfoByThread),
+    "no transcript loaded yet: key absent (legacy hasOwnProperty gate)",
+  );
+
+  // A transcript apply invalidates, notifies, and creates the keys with
+  // the legacy shapes.
+  const transcript = {
+    threadId,
+    messages: [
+      {
+        id: `${threadId}:0`,
+        role: "user",
+        text: "hello",
+        timestamp: "2026-07-04T10:00:00Z",
+      },
+    ],
+    pendingInputs: [],
+    threadInfo: { activeRun: null, workspacePath: "/Users/test/repo" },
+  };
+  mirror.applyAuthoritativeTranscript(threadId, transcript);
+  assert.equal(notified, 1, "transcript apply notifies the maps domain");
+  const after = mirror.getTranscriptMapsSnapshot();
+  assert.notEqual(after, empty1, "apply rebuilds the maps snapshot");
+  assert.equal(after.messagesByThread[threadId].length, 1);
+  assert.ok(
+    threadId in after.threadInfoByThread,
+    "threadInfo key exists once loaded",
+  );
+  assert.ok(
+    !(threadId in after.pendingRemoteInputsByThread),
+    "empty pending inputs keep the key absent (legacy delete)",
+  );
+  assert.equal(after, mirror.getTranscriptMapsSnapshot(), "cached ref");
+
+  // The clear cadence still leaves the maps snapshot untouched.
+  mirror.clearThreadLiveStream(threadId);
+  assert.equal(notified, 1);
+  assert.equal(mirror.getTranscriptMapsSnapshot(), after);
+});
+
+test("setThreadHistoryLoadingBefore bridges the legacy fetch lifecycle into mirror pagination (3d)", () => {
+  const mirror = new GatewayMirror();
+  const threadId = "thread::maps-loading";
+
+  // No pagination yet: silently no-op (no key, no notify).
+  let notified = 0;
+  mirror.subscribeTranscriptMaps(() => {
+    notified += 1;
+  });
+  mirror.setThreadHistoryLoadingBefore(threadId, true);
+  assert.equal(notified, 0);
+
+  const transcript = {
+    threadId,
+    messages: [
+      {
+        id: `${threadId}:0`,
+        role: "user",
+        text: "old",
+        timestamp: "2026-07-04T10:00:00Z",
+      },
+    ],
+    pendingInputs: [],
+    pageInfo: { startIndex: 25, hasMoreBefore: true },
+  };
+  mirror.applyRemoteTranscript(threadId, transcript);
+  const base = mirror.getTranscriptMapsSnapshot();
+  const pagination = base.historyPaginationByThread[threadId];
+  assert.ok(pagination, "pagination lands from the transcript");
+  assert.equal(pagination.loadingBefore, false);
+
+  const notifiedBefore = notified;
+  mirror.setThreadHistoryLoadingBefore(threadId, true);
+  assert.equal(
+    mirror.getTranscriptMapsSnapshot().historyPaginationByThread[threadId]
+      .loadingBefore,
+    true,
+  );
+  assert.ok(notified > notifiedBefore, "flag change notifies");
+
+  // Same-value writes are no-ops (no extra notify, same snapshot ref).
+  const snapAfterTrue = mirror.getTranscriptMapsSnapshot();
+  const notifiedAfterTrue = notified;
+  mirror.setThreadHistoryLoadingBefore(threadId, true);
+  assert.equal(notified, notifiedAfterTrue);
+  assert.equal(mirror.getTranscriptMapsSnapshot(), snapAfterTrue);
+
+  mirror.setThreadHistoryLoadingBefore(threadId, false);
+  assert.equal(
+    mirror.getTranscriptMapsSnapshot().historyPaginationByThread[threadId]
+      .loadingBefore,
+    false,
+  );
+});

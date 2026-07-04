@@ -1022,6 +1022,12 @@ export function useTranscriptController({
       nextBeforeIndex: current?.nextBeforeIndex ?? null,
       loadingBefore: true,
     }));
+    // Batch 3d: the read side renders the mirror's pagination, so the
+    // legacy fetch's loadingBefore lifecycle must reach it too (the guard
+    // above still reads the legacy ref — single in-flight fetch holds).
+    mirrorDualWrite(() =>
+      mirror.setThreadHistoryLoadingBefore(threadId, true),
+    );
 
     try {
       const transcript = await window.garyxDesktop.getThreadHistory({
@@ -1056,6 +1062,9 @@ export function useTranscriptController({
       }
       updateThreadHistoryPagination(threadId, (current) =>
         current ? { ...current, loadingBefore: false } : current,
+      );
+      mirrorDualWrite(() =>
+        mirror.setThreadHistoryLoadingBefore(threadId, false),
       );
     }
   }
@@ -1407,13 +1416,19 @@ export function useTranscriptController({
     forceReleaseThreadRuntime,
     getLiveStreamState,
     hasPendingHistoryIntents,
+    // Batch 3d: legacy-side per-thread refs exposed for the dev parity
+    // probe only (the render path reads the mirror; these are the last
+    // legacy-computed copies until batch 6 deletes the dual-write).
+    historyPaginationByThreadRef,
     intentForId,
     loadOlderThreadHistoryPage,
     messagesByThreadRef,
+    renderStateByThreadRef,
     replaceLiveStreamThreadId,
     setThreadRuntimeState,
     startCommittedThreadStream,
     threadTitleOverridesRef,
+    transcriptSnapshotByThreadRef,
     updateLiveStreamState,
     updateMessagesByThread,
   };

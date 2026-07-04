@@ -4,12 +4,18 @@
 // changes, so provider updates cost zero re-renders); volatile data enters
 // React exclusively through useSyncExternalStore subscriptions.
 
-import { createContext, useContext, useSyncExternalStore } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useSyncExternalStore,
+} from "react";
 
 import type {
   CatalogSnapshot,
   GatewayMirror,
   GatewayRootSnapshot,
+  ThreadMirrorSnapshot,
 } from "./mirror.ts";
 
 export const GatewayMirrorContext = createContext<GatewayMirror | null>(null);
@@ -38,4 +44,30 @@ export function useCatalog(): CatalogSnapshot {
     () => mirror.getCatalogSnapshot(),
     () => mirror.getCatalogSnapshot(),
   );
+}
+
+/**
+ * Read a single thread's mirror snapshot via useSyncExternalStore.
+ * Returns null when threadId is null or the thread has no entry yet.
+ */
+export function useThreadMirror(
+  threadId: string | null,
+): ThreadMirrorSnapshot | null {
+  const mirror = useGatewayMirror();
+  const subscribe = useCallback(
+    (onChange: () => void) => {
+      if (!threadId) {
+        return () => {};
+      }
+      return mirror.subscribeThread(threadId, onChange);
+    },
+    [mirror, threadId],
+  );
+  const getSnapshot = useCallback(() => {
+    if (!threadId) {
+      return null;
+    }
+    return mirror.getThreadSnapshot(threadId);
+  }, [mirror, threadId]);
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

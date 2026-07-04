@@ -133,7 +133,44 @@ export interface ThreadMirrorSnapshot {
    * stream-lifecycle orchestration read and write it through the mirror.
    */
   readonly liveStream: LiveStreamState | null;
+  /**
+   * True once at least one authoritative/remote transcript apply has
+   * landed for this thread (batch 3d). Read-side consumers use it to
+   * reproduce the legacy "threadInfo key exists" loaded gate — a thread
+   * can have live-stream or committed-event entries before its first
+   * transcript fetch resolves.
+   */
+  readonly transcriptLoaded: boolean;
   readonly frontier: ThreadFrontierSnapshot;
+}
+
+/**
+ * Aggregate per-thread transcript maps in the exact legacy AppShell state
+ * shapes (batch 3d read-side cutover). Key-existence semantics reproduce
+ * the legacy write paths:
+ * - messagesByThread: key present when the thread has any UI messages
+ *   (legacy read sites use `map[id] || []`; the 3b delete-key bridge
+ *   syncs an empty array, which drops the key here).
+ * - renderStateByThread / historyPaginationByThread: key present when
+ *   non-null (legacy reads are `map[id] || null`).
+ * - threadInfoByThread: key present once a transcript apply landed —
+ *   the value may be null; key existence itself is the legacy
+ *   "threadInfo loaded" gate (hasOwnProperty consumer in AppShell).
+ * - pendingRemoteInputsByThread: key present when non-empty (the legacy
+ *   setRemotePendingInputs deleted the key for empty arrays).
+ */
+export interface TranscriptMapsSnapshot {
+  readonly messagesByThread: Record<string, readonly UiTranscriptMessage[]>;
+  readonly renderStateByThread: Record<string, RenderState>;
+  readonly threadInfoByThread: Record<string, ThreadRuntimeInfo | null>;
+  readonly historyPaginationByThread: Record<
+    string,
+    ThreadHistoryPaginationState
+  >;
+  readonly pendingRemoteInputsByThread: Record<
+    string,
+    readonly PendingThreadInput[]
+  >;
 }
 
 interface ThreadEntry {
@@ -180,6 +217,13 @@ export class GatewayMirror {
   // subscribers see exactly the legacy notification cadence.
   private liveStreamMap: Record<string, LiveStreamState> = {};
   private liveStreamListeners = new Set<() => void>();
+
+  // Transcript-maps domain (batch 3d): the aggregate read-side view over
+  // every thread entry, in the legacy AppShell state shapes. Rebuilt
+  // lazily on first read after any thread commit; reference-stable
+  // otherwise (uSES hard rule).
+  private transcriptMapsSnapshot: TranscriptMapsSnapshot | null = null;
+  private transcriptMapsListeners = new Set<() => void>();
 
   constructor(services?: GatewayMirrorServices) {
     this.services = services ?? null;
@@ -337,6 +381,64 @@ export class GatewayMirror {
     };
   }
 
+  subscribeTranscriptMaps(listener: () => void): Unsubscribe {
+    this.transcriptMapsListeners.add(listener);
+    return () => {
+      this.transcriptMapsListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Aggregate transcript maps in the legacy AppShell state shapes (batch
+   * 3d). Cached by reference; rebuilt lazily after any thread commit.
+   * Key-existence semantics per TranscriptMapsSnapshot's contract.
+   */
+  getTranscriptMapsSnapshot(): TranscriptMapsSnapshot {
+    if (!this.transcriptMapsSnapshot) {
+      const messagesByThread: Record<string, readonly UiTranscriptMessage[]> =
+        {};
+      const renderStateByThread: Record<string, RenderState> = {};
+      const threadInfoByThread: Record<string, ThreadRuntimeInfo | null> = {};
+      const historyPaginationByThread: Record<
+        string,
+        ThreadHistoryPaginationState
+      > = {};
+      const pendingRemoteInputsByThread: Record<
+        string,
+        readonly PendingThreadInput[]
+      > = {};
+      for (const [threadId, entry] of this.threads) {
+        const messages = entry.cache.getUiMessages();
+        if (messages.length > 0) {
+          messagesByThread[threadId] = messages;
+        }
+        const renderState = entry.cache.getRenderState();
+        if (renderState) {
+          renderStateByThread[threadId] = renderState;
+        }
+        if (entry.cache.isTranscriptLoaded()) {
+          threadInfoByThread[threadId] = entry.cache.getThreadInfo();
+        }
+        const pagination = entry.cache.getHistoryPagination();
+        if (pagination) {
+          historyPaginationByThread[threadId] = pagination;
+        }
+        const pendingInputs = entry.cache.getPendingRemoteInputs();
+        if (pendingInputs.length > 0) {
+          pendingRemoteInputsByThread[threadId] = pendingInputs;
+        }
+      }
+      this.transcriptMapsSnapshot = {
+        messagesByThread,
+        renderStateByThread,
+        threadInfoByThread,
+        historyPaginationByThread,
+        pendingRemoteInputsByThread,
+      };
+    }
+    return this.transcriptMapsSnapshot;
+  }
+
   /**
    * Aggregate live-stream map, cached by reference: the getter never
    * allocates; the map identity changes exactly once per applied update
@@ -372,7 +474,7 @@ export class GatewayMirror {
       delete updated[threadId];
     }
     this.liveStreamMap = updated;
-    this.commitThread(entry);
+    this.commitThread(entry, false);
     this.notifyLiveStreams();
     return next;
   }
@@ -404,8 +506,8 @@ export class GatewayMirror {
     delete updated[fromThreadId];
     updated[toThreadId] = toEntry.liveStream;
     this.liveStreamMap = updated;
-    this.commitThread(fromEntry);
-    this.commitThread(toEntry);
+    this.commitThread(fromEntry, false);
+    this.commitThread(toEntry, false);
     this.notifyLiveStreams();
   }
 
@@ -436,6 +538,7 @@ export class GatewayMirror {
         renderState: entry.cache.getRenderState(),
         historyPagination: entry.cache.getHistoryPagination(),
         liveStream: entry.liveStream,
+        transcriptLoaded: entry.cache.isTranscriptLoaded(),
         frontier: entry.frontier.snapshot(),
       };
     }
@@ -499,6 +602,23 @@ export class GatewayMirror {
   applyOlderHistoryPage(threadId: string, transcript: ThreadTranscript): void {
     const entry = this.threadEntry(threadId);
     entry.cache.applyOlderPage(transcript);
+    this.commitThread(entry);
+  }
+
+  /**
+   * Bridge the legacy older-page fetch's loadingBefore lifecycle into the
+   * mirror (batch 3d). The legacy hook still owns the fetch until batch 6;
+   * loadingBefore is the one pagination field it mutates that the mirror
+   * cannot derive from applied transcripts. No-op when the thread has no
+   * pagination yet or the flag already matches.
+   */
+  setThreadHistoryLoadingBefore(threadId: string, loadingBefore: boolean): void {
+    const entry = this.threadEntry(threadId);
+    const current = entry.cache.getHistoryPagination();
+    if (!current || current.loadingBefore === loadingBefore) {
+      return;
+    }
+    entry.cache.setHistoryPagination({ ...current, loadingBefore });
     this.commitThread(entry);
   }
 
@@ -620,12 +740,27 @@ export class GatewayMirror {
     this.commitThread(entry);
   }
 
-  /** One atomic thread commit: version bump, snapshot invalidation, notify. */
-  private commitThread(entry: ThreadEntry): void {
+  /**
+   * One atomic thread commit: version bump, snapshot invalidation, notify.
+   * `touchesTranscript: false` (the live-stream-only paths) skips the
+   * aggregate transcript-maps invalidation so those map identities stay
+   * stable across pure transport-state updates — matching the legacy
+   * separation between liveStreamStateByThread and the 5 transcript
+   * states.
+   */
+  private commitThread(entry: ThreadEntry, touchesTranscript = true): void {
     entry.version += 1;
     entry.snapshot = null;
+    if (touchesTranscript) {
+      this.transcriptMapsSnapshot = null;
+    }
     for (const listener of [...entry.listeners]) {
       listener();
+    }
+    if (touchesTranscript) {
+      for (const listener of [...this.transcriptMapsListeners]) {
+        listener();
+      }
     }
   }
 

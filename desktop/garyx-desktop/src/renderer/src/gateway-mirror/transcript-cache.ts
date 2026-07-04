@@ -55,6 +55,10 @@ export class ThreadTranscriptCache {
   private pendingRemoteInputs: readonly PendingThreadInput[] = [];
   private snapshotTranscript: ThreadTranscript | null = null;
   private historyPagination: ThreadHistoryPaginationState | null = null;
+  // Batch 3d: mirrors the legacy "threadInfoByThread key exists" gate —
+  // true once any authoritative/remote transcript apply has landed
+  // (exactly the writes that created the legacy key).
+  private transcriptLoaded = false;
 
   /**
    * Apply an authoritative (canonical) transcript: the pure core of the
@@ -67,6 +71,7 @@ export class ThreadTranscriptCache {
   applyAuthoritative(transcript: ThreadTranscript): void {
     const resolved = transcriptWithResolvedActiveRun(transcript);
     this.snapshotTranscript = resolved;
+    this.transcriptLoaded = true;
     this.threadInfo = resolved.threadInfo ?? null;
     this.pendingRemoteInputs = resolved.pendingInputs ?? [];
     const visible = visibleTranscriptMessages(resolved.messages);
@@ -93,6 +98,10 @@ export class ThreadTranscriptCache {
 
   getHistoryPagination(): ThreadHistoryPaginationState | null {
     return this.historyPagination;
+  }
+
+  isTranscriptLoaded(): boolean {
+    return this.transcriptLoaded;
   }
 
   /**
@@ -123,6 +132,7 @@ export class ThreadTranscriptCache {
   applyRemote(transcript: ThreadTranscript, options: RemoteApplyOptions): void {
     const resolved = transcriptWithResolvedActiveRun(transcript);
     this.snapshotTranscript = resolved;
+    this.transcriptLoaded = true;
     // Pagination merges against the message cache BEFORE this apply's merge,
     // matching the legacy read order of messagesByThreadRef.
     const existing = [...this.uiMessages];

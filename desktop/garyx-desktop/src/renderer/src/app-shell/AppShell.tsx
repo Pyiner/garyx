@@ -711,16 +711,45 @@ export function AppShell() {
       : null,
   );
   const [workflowThreadStarting, setWorkflowThreadStarting] = useState(false);
-  const [messagesByThread, setMessagesByThread] = useState<MessageMap>({});
-  // Server-derived render snapshot per thread (block 4). The presentation layer
-  // maps `renderState.rows` straight to React; bodies are resolved from
-  // `messagesByThread`. Replaced atomically per render frame.
-  const [renderStateByThread, setRenderStateByThread] = useState<
-    Record<string, RenderState>
-  >({});
-  const [threadInfoByThread, setThreadInfoByThread] = useState<
-    Record<string, ThreadRuntimeInfo | null>
-  >({});
+  // Batch 3d: read-side cutover — the 5 per-thread transcript maps are
+  // read from the mirror's aggregate transcript-maps domain through
+  // useSyncExternalStore (the 3a/3c-1 pattern: AppShell subscribes on its
+  // local mirror instance, not through context — AppShell renders the
+  // Provider, so useContext here would see the parent's null). The mirror
+  // owns the authoritative data (batches 2a-2, 2b-1, 3b); the legacy
+  // useState caches are gone. Key-existence semantics are reproduced by
+  // the mirror per TranscriptMapsSnapshot's contract.
+  const transcriptMaps = useSyncExternalStore(
+    useCallback(
+      (onChange) => gatewayMirror.subscribeTranscriptMaps(onChange),
+      [gatewayMirror],
+    ),
+    () => gatewayMirror.getTranscriptMapsSnapshot(),
+  );
+  const messagesByThread = transcriptMaps.messagesByThread as MessageMap;
+  const renderStateByThread = transcriptMaps.renderStateByThread;
+  const threadInfoByThread = transcriptMaps.threadInfoByThread;
+  const historyPaginationByThread = transcriptMaps.historyPaginationByThread;
+  const pendingRemoteInputsByThread =
+    transcriptMaps.pendingRemoteInputsByThread as PendingThreadInputMap;
+  // The transcript controller keeps its legacy write chain (refs + these
+  // setters) as the parity-probe reference until batch 6; the setters are
+  // no-ops because re-renders now come from the mirror subscription above.
+  const noopSetMessagesByThread: React.Dispatch<
+    React.SetStateAction<MessageMap>
+  > = useCallback(() => {}, []);
+  const noopSetRenderStateByThread: React.Dispatch<
+    React.SetStateAction<Record<string, RenderState>>
+  > = useCallback(() => {}, []);
+  const noopSetThreadInfoByThread: React.Dispatch<
+    React.SetStateAction<Record<string, ThreadRuntimeInfo | null>>
+  > = useCallback(() => {}, []);
+  const noopSetHistoryPaginationByThread: React.Dispatch<
+    React.SetStateAction<Record<string, ThreadHistoryPaginationState>>
+  > = useCallback(() => {}, []);
+  const noopSetPendingRemoteInputsByThread: React.Dispatch<
+    React.SetStateAction<PendingThreadInputMap>
+  > = useCallback(() => {}, []);
   // Batch 3a: the mirror's dispatch-machine module owns machine-state
   // storage; React reads it through useSyncExternalStore (same bail-out
   // semantics as the previous useReducer — an identical reference neither
@@ -736,9 +765,6 @@ export function AppShell() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [historyPaginationByThread, setHistoryPaginationByThread] = useState<
-    Record<string, ThreadHistoryPaginationState>
-  >({});
   const [savingTitle, setSavingTitle] = useState(false);
   const [editingThreadTitle, setEditingThreadTitle] = useState(false);
   const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
@@ -803,8 +829,6 @@ export function AppShell() {
     ),
     () => gatewayMirror.getLiveStreamMap(),
   );
-  const [pendingRemoteInputsByThread, setPendingRemoteInputsByThread] =
-    useState<PendingThreadInputMap>({});
   const [pendingAutomationRunsByThread, setPendingAutomationRunsByThread] =
     useState<Record<string, PendingAutomationRun>>({});
   const threadTitleInputRef = useRef<HTMLInputElement | null>(null);
@@ -1501,13 +1525,16 @@ export function AppShell() {
     forceReleaseThreadRuntime,
     getLiveStreamState,
     hasPendingHistoryIntents,
+    historyPaginationByThreadRef,
     intentForId,
     loadOlderThreadHistoryPage,
     messagesByThreadRef,
+    renderStateByThreadRef,
     replaceLiveStreamThreadId,
     setThreadRuntimeState,
     startCommittedThreadStream,
     threadTitleOverridesRef,
+    transcriptSnapshotByThreadRef,
     updateLiveStreamState,
     updateMessagesByThread,
   } = useTranscriptController({
@@ -1535,36 +1562,24 @@ export function AppShell() {
     setDesktopState,
     setError,
     setHistoryLoading,
-    setHistoryPaginationByThread,
-    setMessagesByThread,
+    setHistoryPaginationByThread: noopSetHistoryPaginationByThread,
+    setMessagesByThread: noopSetMessagesByThread,
     setPendingAutomationRun,
-    setPendingRemoteInputsByThread,
-    setRenderStateByThread,
-    setThreadInfoByThread,
+    setPendingRemoteInputsByThread: noopSetPendingRemoteInputsByThread,
+    setRenderStateByThread: noopSetRenderStateByThread,
+    setThreadInfoByThread: noopSetThreadInfoByThread,
     setTitleDraft,
     settingsDraft,
   });
   // Batch 2b dev-only parity probe (removed with the dual-write scaffolding
   // in batch 6): `__garyxMirrorParity(threadId)` in the DevTools console
-  // compares the mirror's thread snapshot against the legacy React state.
-  // Since batch 3b bridges local optimistic/recovery writes into the
-  // mirror, messages compare as FULL sequences; `loadingBefore` is a
-  // legacy-transient flag (the mirror does not run the legacy older-page
-  // fetch) and is excluded from the pagination comparison.
-  const mirrorParityStateRef = useRef({
-    messagesByThread,
-    renderStateByThread,
-    historyPaginationByThread,
-    threadInfoByThread,
-    pendingRemoteInputsByThread,
-  });
-  mirrorParityStateRef.current = {
-    messagesByThread,
-    renderStateByThread,
-    historyPaginationByThread,
-    threadInfoByThread,
-    pendingRemoteInputsByThread,
-  };
+  // compares the mirror's thread snapshot against the legacy compute
+  // chain. Since batch 3d the render path reads the mirror, so the legacy
+  // side comes from the transcript controller's internal refs (the last
+  // legacy-computed copies): messages/renderState/pagination refs plus the
+  // remembered resolved transcript for threadInfo/pendingInputs.
+  // `loadingBefore` is excluded (both sides now track it, but the legacy
+  // write and the mirror bridge are not atomic).
   useEffect(() => {
     if (!import.meta.env.DEV) {
       return undefined;
@@ -1575,11 +1590,12 @@ export function AppShell() {
     };
     probeWindow.__garyxGatewayMirror = gatewayMirror;
     probeWindow.__garyxMirrorParity = (threadId: string) => {
-      const legacy = mirrorParityStateRef.current;
       const snapshot = gatewayMirror.getThreadSnapshot(threadId);
       const json = (value: unknown) => JSON.stringify(value ?? null);
       const legacyMessages: readonly UiTranscriptMessage[] =
-        legacy.messagesByThread[threadId] || [];
+        messagesByThreadRef.current[threadId] || [];
+      const legacySnapshot =
+        transcriptSnapshotByThreadRef.current[threadId] || null;
       const mirrorMessages = snapshot.messages;
       const stripLoading = (
         state: ThreadHistoryPaginationState | null | undefined,
@@ -1587,16 +1603,17 @@ export function AppShell() {
       const equal = {
         messages: json(legacyMessages) === json(mirrorMessages),
         renderState:
-          json(legacy.renderStateByThread[threadId] ?? null) ===
+          json(renderStateByThreadRef.current[threadId] ?? null) ===
           json(snapshot.renderState),
         pagination:
-          json(stripLoading(legacy.historyPaginationByThread[threadId])) ===
-          json(stripLoading(snapshot.historyPagination)),
+          json(
+            stripLoading(historyPaginationByThreadRef.current[threadId]),
+          ) === json(stripLoading(snapshot.historyPagination)),
         threadInfo:
-          json(legacy.threadInfoByThread[threadId] ?? null) ===
+          json(legacySnapshot?.threadInfo ?? null) ===
           json(snapshot.threadInfo),
         pendingInputs:
-          json(legacy.pendingRemoteInputsByThread[threadId] ?? []) ===
+          json(legacySnapshot?.pendingInputs ?? []) ===
           json(snapshot.pendingRemoteInputs),
       };
       return {
