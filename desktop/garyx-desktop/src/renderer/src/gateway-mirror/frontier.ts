@@ -20,6 +20,11 @@ export class ThreadFrontier {
   private committedSeq = 0;
   private renderBasedOnSeq = 0;
   private renderFloor = 0;
+  // A caught-up frame for an empty ledger legitimately carries
+  // based_on_seq=0 (the server clamps to the committed tail), so "have we
+  // ever accepted a render snapshot" needs its own flag instead of using
+  // renderBasedOnSeq=0 as a sentinel.
+  private hasRenderSnapshot = false;
   private cached: ThreadFrontierSnapshot | null = null;
 
   /** Advance the committed cursor. Returns true when it moved forward. */
@@ -43,10 +48,11 @@ export class ThreadFrontier {
     if (!Number.isFinite(basedOnSeq) || basedOnSeq < this.renderBasedOnSeq) {
       return { accepted: false, changed: false };
     }
-    if (basedOnSeq === this.renderBasedOnSeq) {
+    if (basedOnSeq === this.renderBasedOnSeq && this.hasRenderSnapshot) {
       return { accepted: true, changed: false };
     }
     this.renderBasedOnSeq = basedOnSeq;
+    this.hasRenderSnapshot = true;
     this.cached = null;
     return { accepted: true, changed: true };
   }

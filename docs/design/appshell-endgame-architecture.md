@@ -100,6 +100,15 @@ Internally the mirror is one store with three pinned module boundaries —
 stays a facade over separable, individually-testable modules rather than
 drifting into a god object.
 
+**Cache lifecycle contract** (implemented by batch 5, honored from batch 2):
+per-thread entries are unbounded during a session by default, matching
+today's `messagesByThread` behavior, but the mirror must expose
+`releaseThread(threadId)` (drop caches for threads with no live subscribers,
+no active stream consumer, and not selected) and `dispose()` (tear down all
+timers, listeners, and stream consumers — used by tests and window teardown).
+Lazily-created entries from transient `getThreadSnapshot` lookups hold only
+empty caches; `releaseThread` may drop them freely.
+
 ### DesktopRouteStore
 
 Sibling pure-TS store. Owns the current `DesktopRoute`, parses

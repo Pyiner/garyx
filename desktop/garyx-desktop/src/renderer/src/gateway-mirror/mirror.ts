@@ -15,7 +15,12 @@
 
 import type {
   CommittedMessageEvent,
+  ConnectionStatus,
   DesktopChatStreamEvent,
+  DesktopCustomAgent,
+  DesktopState,
+  DesktopTeam,
+  DesktopWorkflowDefinition,
   RenderState,
 } from "@shared/contracts";
 import { ThreadFrontier } from "./frontier.ts";
@@ -23,6 +28,30 @@ import type { ThreadFrontierSnapshot } from "./frontier.ts";
 import { ThreadTranscriptCache } from "./transcript-cache.ts";
 
 export type Unsubscribe = () => void;
+
+/**
+ * The IPC surface the mirror needs, injected so the class stays pure
+ * TypeScript and testable without a preload bridge.
+ */
+export interface GatewayMirrorServices {
+  getState(): Promise<DesktopState>;
+  listCustomAgents(): Promise<DesktopCustomAgent[]>;
+  listTeams(): Promise<DesktopTeam[]>;
+  listWorkflowDefinitions(): Promise<DesktopWorkflowDefinition[]>;
+}
+
+export interface GatewayRootSnapshot {
+  readonly version: number;
+  readonly connection: ConnectionStatus | null;
+  readonly desktopState: DesktopState | null;
+}
+
+export interface CatalogSnapshot {
+  readonly version: number;
+  readonly agents: readonly DesktopCustomAgent[];
+  readonly teams: readonly DesktopTeam[];
+  readonly workflows: readonly DesktopWorkflowDefinition[];
+}
 
 export interface ThreadMirrorSnapshot {
   readonly version: number;
@@ -47,6 +76,115 @@ interface ThreadEntry {
 
 export class GatewayMirror {
   private threads = new Map<string, ThreadEntry>();
+  private services: GatewayMirrorServices | null;
+
+  // Root domain: connection + desktop state.
+  private connection: ConnectionStatus | null = null;
+  private desktopState: DesktopState | null = null;
+  private rootVersion = 0;
+  private rootSnapshot: GatewayRootSnapshot | null = null;
+  private rootListeners = new Set<() => void>();
+
+  // Catalog domain: agents / teams / workflow definitions.
+  private agents: readonly DesktopCustomAgent[] = [];
+  private teams: readonly DesktopTeam[] = [];
+  private workflows: readonly DesktopWorkflowDefinition[] = [];
+  private catalogVersion = 0;
+  private catalogSnapshot: CatalogSnapshot | null = null;
+  private catalogListeners = new Set<() => void>();
+
+  constructor(services?: GatewayMirrorServices) {
+    this.services = services ?? null;
+  }
+
+  subscribeRoot(listener: () => void): Unsubscribe {
+    this.rootListeners.add(listener);
+    return () => {
+      this.rootListeners.delete(listener);
+    };
+  }
+
+  subscribeCatalog(listener: () => void): Unsubscribe {
+    this.catalogListeners.add(listener);
+    return () => {
+      this.catalogListeners.delete(listener);
+    };
+  }
+
+  getRootSnapshot(): GatewayRootSnapshot {
+    if (!this.rootSnapshot) {
+      this.rootSnapshot = {
+        version: this.rootVersion,
+        connection: this.connection,
+        desktopState: this.desktopState,
+      };
+    }
+    return this.rootSnapshot;
+  }
+
+  getCatalogSnapshot(): CatalogSnapshot {
+    if (!this.catalogSnapshot) {
+      this.catalogSnapshot = {
+        version: this.catalogVersion,
+        agents: this.agents,
+        teams: this.teams,
+        workflows: this.workflows,
+      };
+    }
+    return this.catalogSnapshot;
+  }
+
+  /** Record a connection status observation (poll/setup/error paths). */
+  observeConnection(status: ConnectionStatus | null): void {
+    if (status === this.connection) {
+      return;
+    }
+    this.connection = status;
+    this.bumpRoot();
+  }
+
+  /**
+   * Fetch the desktop root state plus the agent/team/workflow catalogs in
+   * one round (the legacy refreshDesktopState behavior: catalog fetches are
+   * individually best-effort). Updates root/catalog snapshots atomically
+   * per domain and returns the fresh DesktopState for callers that need it.
+   */
+  async refreshDesktopState(): Promise<DesktopState> {
+    if (!this.services) {
+      throw new Error("GatewayMirror constructed without services");
+    }
+    const [nextState, nextAgents, nextTeams, nextWorkflows] = await Promise.all([
+      this.services.getState(),
+      this.services.listCustomAgents().catch(() => [] as DesktopCustomAgent[]),
+      this.services.listTeams().catch(() => [] as DesktopTeam[]),
+      this.services
+        .listWorkflowDefinitions()
+        .catch(() => [] as DesktopWorkflowDefinition[]),
+    ]);
+    this.desktopState = nextState;
+    this.bumpRoot();
+    this.agents = nextAgents;
+    this.teams = nextTeams;
+    this.workflows = nextWorkflows;
+    this.bumpCatalog();
+    return nextState;
+  }
+
+  private bumpRoot(): void {
+    this.rootVersion += 1;
+    this.rootSnapshot = null;
+    for (const listener of [...this.rootListeners]) {
+      listener();
+    }
+  }
+
+  private bumpCatalog(): void {
+    this.catalogVersion += 1;
+    this.catalogSnapshot = null;
+    for (const listener of [...this.catalogListeners]) {
+      listener();
+    }
+  }
 
   subscribeThread(threadId: string, listener: () => void): Unsubscribe {
     const entry = this.threadEntry(threadId);

@@ -195,3 +195,132 @@ test("all fixture reducer cases ingest cleanly through the frame envelope", () =
     assert.equal(snapshot, mirror.getThreadSnapshot(threadId));
   }
 });
+
+test("empty-ledger caught-up frame at based_on_seq=0 stores the snapshot", () => {
+  const mirror = new GatewayMirror();
+  const threadId = "thread::contract-empty-ledger";
+  const emptyRender = {
+    based_on_seq: 0,
+    rows: [],
+    tailActivity: "none",
+    activeToolGroupId: null,
+    progress_locus: "none",
+    visibleMessageIds: [],
+    filtered_placeholders: [],
+  };
+
+  let notified = 0;
+  mirror.subscribeThread(threadId, () => (notified += 1));
+  mirror.ingest({
+    type: "thread_render_frame",
+    threadId,
+    events: [],
+    renderState: emptyRender,
+  });
+
+  const snapshot = mirror.getThreadSnapshot(threadId);
+  assert.ok(snapshot.renderState, "based_on_seq=0 snapshot must be stored");
+  assert.equal(snapshot.renderState.based_on_seq, 0);
+  assert.equal(snapshot.frontier.committedSeq, 0);
+  assert.equal(notified, 1);
+
+  // Re-delivery of the same empty snapshot stays idempotent.
+  mirror.ingest({
+    type: "thread_render_frame",
+    threadId,
+    events: [],
+    renderState: emptyRender,
+  });
+  assert.equal(notified, 1, "same-cursor re-delivery must not notify");
+});
+
+test("a frame with new committed events but a stale render applies the events only", () => {
+  const mirror = new GatewayMirror();
+  const threadId = "thread::contract-mixed";
+  const reducerCase = caseWithRecords();
+  const frame = frameFromCase(reducerCase, threadId);
+  mirror.ingest(frame);
+  const applied = mirror.getThreadSnapshot(threadId);
+  const appliedRenderSeq = applied.renderState.based_on_seq;
+  const topSeq = applied.frontier.committedSeq;
+
+  // A frame carrying one genuinely new committed event but a stale render
+  // snapshot: events must apply and advance the committed cursor; the stale
+  // render must be rejected without regressing the stored snapshot.
+  mirror.ingest({
+    type: "thread_render_frame",
+    threadId,
+    events: [
+      {
+        type: "committed_message",
+        runId: "",
+        threadId,
+        seq: topSeq + 1,
+        message: { id: `late-${topSeq + 1}`, role: "assistant", content: "x" },
+      },
+    ],
+    renderState: { ...frame.renderState, based_on_seq: appliedRenderSeq - 1 },
+  });
+
+  const after = mirror.getThreadSnapshot(threadId);
+  assert.equal(after.frontier.committedSeq, topSeq + 1, "events must apply");
+  assert.equal(
+    after.renderState.based_on_seq,
+    appliedRenderSeq,
+    "stale render must not regress the stored snapshot",
+  );
+
+  // Non-finite based_on_seq is rejected outright.
+  const beforeRef = mirror.getThreadSnapshot(threadId);
+  mirror.ingest({
+    type: "thread_render_frame",
+    threadId,
+    events: [],
+    renderState: { ...frame.renderState, based_on_seq: Number.NaN },
+  });
+  assert.equal(mirror.getThreadSnapshot(threadId), beforeRef);
+});
+
+test("root and catalog snapshots are stable and refresh atomically per domain", async () => {
+  const desktopState = { threads: [], endpoints: [], configuredBots: [], automations: [] };
+  const services = {
+    getState: async () => desktopState,
+    listCustomAgents: async () => [{ id: "agent-a" }],
+    listTeams: async () => {
+      throw new Error("teams endpoint down");
+    },
+    listWorkflowDefinitions: async () => [{ id: "wf-1" }],
+  };
+  const mirror = new GatewayMirror(services);
+
+  const root1 = mirror.getRootSnapshot();
+  assert.equal(mirror.getRootSnapshot(), root1, "empty root snapshot stable");
+  const catalog1 = mirror.getCatalogSnapshot();
+  assert.equal(mirror.getCatalogSnapshot(), catalog1);
+
+  let rootNotified = 0;
+  let catalogNotified = 0;
+  mirror.subscribeRoot(() => (rootNotified += 1));
+  mirror.subscribeCatalog(() => (catalogNotified += 1));
+
+  const returned = await mirror.refreshDesktopState();
+  assert.equal(returned, desktopState);
+
+  const root2 = mirror.getRootSnapshot();
+  assert.notEqual(root2, root1);
+  assert.equal(root2.desktopState, desktopState);
+  assert.equal(mirror.getRootSnapshot(), root2, "refreshed root stable");
+
+  const catalog2 = mirror.getCatalogSnapshot();
+  assert.equal(catalog2.agents.length, 1);
+  assert.equal(catalog2.teams.length, 0, "failed catalog fetch degrades to []");
+  assert.equal(catalog2.workflows.length, 1);
+  assert.ok(rootNotified >= 1);
+  assert.ok(catalogNotified >= 1);
+
+  // observeConnection touches root only.
+  const catalogBefore = mirror.getCatalogSnapshot();
+  mirror.observeConnection({ ok: true, bridgeReady: true, gatewayUrl: "http://localhost:1" });
+  assert.notEqual(mirror.getRootSnapshot(), root2);
+  assert.equal(mirror.getCatalogSnapshot(), catalogBefore, "catalog unaffected");
+});
