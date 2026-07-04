@@ -34,6 +34,11 @@ import type {
 } from "../message-machine.ts";
 import type { LiveStreamState, UiTranscriptMessage } from "../app-shell/types";
 import { DispatchMachine } from "./dispatch-machine.ts";
+import { DispatchOrchestrator } from "./dispatch-orchestrator.ts";
+import type {
+  DispatchOrchestratorDeps,
+  SeededTurn,
+} from "./dispatch-orchestrator.ts";
 import { ThreadFrontier } from "./frontier.ts";
 import type { ThreadFrontierSnapshot } from "./frontier.ts";
 import { ThreadTranscriptCache } from "./transcript-cache.ts";
@@ -162,6 +167,12 @@ export class GatewayMirror {
   // Dispatch-machine domain (batch 3a): message-machine state storage.
   private machine = new DispatchMachine();
 
+  // Dispatch-orchestration domain (batch 3c-2): send/steer/interrupt and
+  // the queued-batch drain. Deps are attached by the UI layer on every
+  // React commit (setDispatchDeps) until the remaining seams dissolve in
+  // batches 5/6.
+  private dispatchOrchestrator = new DispatchOrchestrator();
+
   // Live-stream domain (batch 3c-1): per-thread transport state storage.
   // The aggregate map mirrors the legacy `liveStreamStateByThread` React
   // state: one Record identity, rebuilt as a whole on every update (the
@@ -281,6 +292,42 @@ export class GatewayMirror {
    */
   dispatchMachineAction(action: MessageMachineAction): MessageMachineState {
     return this.machine.dispatch(action);
+  }
+
+  /** Attach (or refresh) the dispatch-orchestration deps. */
+  setDispatchDeps(deps: DispatchOrchestratorDeps): void {
+    this.dispatchOrchestrator.setDeps(deps);
+  }
+
+  appendSeededTurn(
+    threadId: string,
+    intent: MessageIntent,
+    options?: { seedUserBubble?: boolean },
+  ): SeededTurn {
+    return this.dispatchOrchestrator.appendSeededTurn(threadId, intent, options);
+  }
+
+  sendIntentOnce(
+    threadId: string,
+    intentId: string,
+    options?: { seedUserBubble?: boolean; seededTurn?: SeededTurn },
+  ): Promise<boolean> {
+    return this.dispatchOrchestrator.sendIntentOnce(threadId, intentId, options);
+  }
+
+  runQueuedBatch(threadId: string, initialIntentId?: string): Promise<void> {
+    return this.dispatchOrchestrator.runQueuedBatch(threadId, initialIntentId);
+  }
+
+  steerQueuedIntent(
+    latestIntent: MessageIntent,
+    options?: { canSteer?: boolean },
+  ): Promise<void> {
+    return this.dispatchOrchestrator.steerQueuedIntent(latestIntent, options);
+  }
+
+  interruptThread(threadId: string | null | undefined): Promise<void> {
+    return this.dispatchOrchestrator.interruptThread(threadId);
   }
 
   subscribeLiveStreams(listener: () => void): Unsubscribe {

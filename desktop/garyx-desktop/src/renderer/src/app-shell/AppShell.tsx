@@ -66,7 +66,6 @@ import {
   selectGlobalActiveThreadId,
   selectQueueIntentIds,
   selectThreadRuntime,
-  shouldTrackProviderAckAfterStreamInputResponse,
   type MessageMachineAction,
   type MessageIntent,
 } from "../message-machine";
@@ -215,6 +214,7 @@ import {
 } from "./useMessageDispatchController";
 import { useMessagesScrollController } from "./useMessagesScrollController";
 import { GatewayMirror } from "../gateway-mirror/mirror";
+import type { DispatchOrchestratorDeps } from "../gateway-mirror/dispatch-orchestrator";
 import { GatewayMirrorContext } from "../gateway-mirror/react";
 import { useSettingsController } from "./useSettingsController";
 import { useSideChatController } from "./useSideChatController";
@@ -2295,9 +2295,68 @@ export function AppShell() {
     transcriptMessageMatchesIntent,
     updateMessagesByThread,
   });
+  // Batch 3c-2: the dispatch orchestration (send/steer/interrupt/queue
+  // drain) lives in the mirror; its deps are refreshed on every commit
+  // (the streamEventHandlerRef pattern) so orchestration entry points
+  // destructure this render's values — the legacy closure capture.
+  const dispatchOrchestratorDeps: DispatchOrchestratorDeps = {
+    applyCanonicalTranscript,
+    canSteerQueuedPrompt,
+    checkConnection: () => window.garyxDesktop.checkConnection(),
+    clearLiveStreamState,
+    connection,
+    desktopAgents,
+    desktopState,
+    dispatchMessageState,
+    getLiveStreamState,
+    getThreadHistory: (threadId) =>
+      window.garyxDesktop.getThreadHistory(threadId),
+    hasPendingHistoryIntents,
+    inferProviderTypeForThread,
+    intentForId,
+    interruptThread: (threadId) =>
+      window.garyxDesktop.interruptThread(threadId),
+    messageStateRef,
+    messagesByThreadRef,
+    openChatStream: (input) => window.garyxDesktop.openChatStream(input),
+    recordGatewayStatusObservation,
+    requestMessagesBottomSnap,
+    scheduleHistoryRefresh,
+    sendStreamingInput: (input) =>
+      window.garyxDesktop.sendStreamingInput(input),
+    setConnection,
+    setDesktopState,
+    setError,
+    setThreadRuntimeState,
+    settingsDraft,
+    sideChatThreadIdsRef,
+    threadInfoByThread,
+    threadTitleOverridesRef,
+    updateLiveStreamState,
+    updateMessagesByThread,
+  };
+  useEffect(() => {
+    gatewayMirror.setDispatchDeps(dispatchOrchestratorDeps);
+  });
+  function appendSeededTurn(
+    threadId: string,
+    intent: MessageIntent,
+    options?: { seedUserBubble?: boolean },
+  ): SeededTurn {
+    return gatewayMirror.appendSeededTurn(threadId, intent, options);
+  }
+  function sendIntentOnce(
+    threadId: string,
+    intentId: string,
+    options?: { seedUserBubble?: boolean; seededTurn?: SeededTurn },
+  ): Promise<boolean> {
+    return gatewayMirror.sendIntentOnce(threadId, intentId, options);
+  }
+  function interruptThread(threadId: string | null | undefined): Promise<void> {
+    return gatewayMirror.interruptThread(threadId);
+  }
   const {
     appendComposerAttachments,
-    appendSeededTurn,
     clearComposerDraft,
     composer,
     composerAttachmentInputRef,
@@ -2317,65 +2376,50 @@ export function AppShell() {
     handleRetryFailedMessage,
     handleSteerQueuedPrompt,
     ignoreComposerSubmitUntilRef,
-    interruptThread,
     isComposingRef,
     markIgnoreComposerSubmitWindow,
     queueDropTarget,
-    queueIntentIdsForThread,
     removeComposerBrowserAnnotation,
     removeComposerFile,
     removeComposerImage,
     reorderQueuedIntent,
     requestComposerFocus,
-    sendIntentOnce,
     setComposerTextPresent,
     setDraggedQueueIntentId,
     setQueueDropTarget,
-    shiftQueuedIntent,
     syncComposerPhase,
   } = useMessageDispatchController({
     activeQueue,
     activeThreadId,
-    applyCanonicalTranscript,
+    appendSeededTurn,
     canSteerQueuedPrompt,
     clearLiveStreamState,
-    connection,
     contentView,
     deferredQueueDrainByThreadRef,
-    desktopAgents,
-    desktopState,
     dispatchMessageState,
     ensureSelectedThreadId,
     ensureThreadBotRouting,
-    getLiveStreamState,
     handleStartWorkflowThreadFromComposer,
-    inferProviderTypeForThread,
     intentForId,
+    interruptThread,
     isActiveSendingThread,
     isDraftSendingThread,
     messageStateRef,
-    messagesByThreadRef,
     newThreadInitialDispatchLockRef,
     pendingWorkflowId,
     pendingWorkspacePath,
     preferredWorkspaceForNewThread,
     queueDrainInFlightByThreadRef,
-    recordGatewayStatusObservation,
     replaceLiveStreamThreadId,
     requestMessagesBottomSnap,
     runQueuedBatch,
-    scheduleHistoryRefresh,
     selectedThreadId,
-    setConnection,
-    setDesktopState,
+    sendIntentOnce,
     setError,
     setThreadRuntimeState,
     settingsDraft,
-    sideChatThreadIdsRef,
     steerQueuedIntent,
     t,
-    threadInfoByThread,
-    threadTitleOverridesRef,
     updateLiveStreamState,
     updateMessagesByThread,
     workflowThreadStarting,
@@ -3847,221 +3891,22 @@ export function AppShell() {
     });
   }
 
-  async function runQueuedBatch(threadId: string, initialIntentId?: string) {
-    const firstIntentId = initialIntentId || "";
-    if (!firstIntentId && queueIntentIdsForThread(threadId).length === 0) {
-      return;
-    }
-
-    setError(null);
-
-    try {
-      let nextIntentId = firstIntentId;
-      let dispatchedFromQueue = false;
-      let seededTurn: SeededTurn | undefined;
-
-      while (nextIntentId || queueIntentIdsForThread(threadId).length > 0) {
-        seededTurn = undefined;
-        if (!nextIntentId) {
-          const currentQueuedIntent = shiftQueuedIntent(threadId);
-          nextIntentId = currentQueuedIntent?.intentId || "";
-          dispatchedFromQueue = true;
-          if (!currentQueuedIntent || !nextIntentId) {
-            break;
-          }
-          seededTurn = appendSeededTurn(threadId, currentQueuedIntent);
-          dispatchMessageState({
-            type: "intent/request-dispatch",
-            threadId,
-            intentId: nextIntentId,
-            mode: "sync_send",
-            source: "queue_send",
-            removeFromQueue: true,
-          });
-        } else {
-          dispatchedFromQueue = false;
-        }
-
-        const didSucceed = await sendIntentOnce(threadId, nextIntentId, {
-          seededTurn,
-        });
-        if (!didSucceed) {
-          if (dispatchedFromQueue) {
-            dispatchMessageState({
-              type: "intent/requeue-front",
-              threadId,
-              intentId: nextIntentId,
-              source: "queue_send",
-              error: intentForId(nextIntentId)?.error,
-            });
-          }
-          break;
-        }
-        const runtime = selectThreadRuntime(messageStateRef.current, threadId);
-        if (runtime && isRuntimeBusy(runtime.state)) {
-          break;
-        }
-        nextIntentId = "";
-      }
-    } finally {
-      if (!hasPendingHistoryIntents(threadId)) {
-        dispatchMessageState({
-          type: "thread/clear",
-          threadId,
-        });
-      }
-      const status = await window.garyxDesktop.checkConnection();
-      setConnection(status);
-    }
+  // Batch 3c-2: the queued-batch drain and steer orchestration live in the
+  // mirror's dispatch orchestrator (gateway-mirror/dispatch-orchestrator.ts,
+  // verbatim moves of the former T13 TDZ stay-behinds). These delegates keep
+  // the controller arg wiring unchanged.
+  function runQueuedBatch(
+    threadId: string,
+    initialIntentId?: string,
+  ): Promise<void> {
+    return gatewayMirror.runQueuedBatch(threadId, initialIntentId);
   }
 
-  async function steerQueuedIntent(
+  function steerQueuedIntent(
     latestIntent: MessageIntent,
     options?: { canSteer?: boolean },
-  ) {
-    const threadId = latestIntent.threadId;
-    if (!(options?.canSteer ?? canSteerQueuedPrompt)) {
-      return;
-    }
-    if (latestIntent.state !== "queued_local") {
-      return;
-    }
-
-    dispatchMessageState({
-      type: "intent/request-dispatch",
-      threadId: threadId,
-      intentId: latestIntent.intentId,
-      mode: "async_steer",
-      source: "queue_steer",
-      removeFromQueue: false,
-    });
-    dispatchMessageState({
-      type: "intent/dispatch-started",
-      intentId: latestIntent.intentId,
-    });
-
-    setError(null);
-    requestMessagesBottomSnap(threadId, true);
-    const optimisticRunId =
-      getLiveStreamState(threadId)?.runId ||
-      selectThreadRuntime(messageStateRef.current, threadId)?.remoteRunId ||
-      `stream:${threadId}`;
-    updateLiveStreamState(threadId, (current) => {
-      const pendingAckIntentIds = current?.pendingAckIntentIds || [];
-      return {
-        threadId,
-        runId: current?.runId || optimisticRunId,
-        activeIntentId: current?.activeIntentId,
-        assistantEntryId: current?.assistantEntryId ?? null,
-        pendingAckIntentIds: pendingAckIntentIds.includes(latestIntent.intentId)
-          ? pendingAckIntentIds
-          : [...pendingAckIntentIds, latestIntent.intentId],
-        streamStatus: current?.streamStatus || "connecting",
-      };
-    });
-
-    try {
-      const result = await window.garyxDesktop.sendStreamingInput({
-        threadId,
-        clientIntentId: latestIntent.intentId,
-        message: latestIntent.text,
-        images: latestIntent.images,
-        files: latestIntent.files,
-      });
-      const resultThreadId = result.threadId || result.sessionId || threadId;
-      if (result.status === "queued") {
-        const activeRunId =
-          getLiveStreamState(resultThreadId)?.runId ||
-          selectThreadRuntime(messageStateRef.current, resultThreadId)
-            ?.remoteRunId ||
-          `stream:${resultThreadId}`;
-        const intentBeforeAccept = intentForId(latestIntent.intentId);
-        const shouldTrackProviderAck =
-          shouldTrackProviderAckAfterStreamInputResponse(intentBeforeAccept);
-        dispatchMessageState({
-          type: "intent/remote-accepted",
-          intentId: latestIntent.intentId,
-          runId: activeRunId,
-          threadId: resultThreadId,
-          pendingInputId: result.pendingInputId,
-          removeFromQueue: true,
-          awaitProviderAck: true,
-        });
-        updateLiveStreamState(resultThreadId, (current) => ({
-          threadId: resultThreadId,
-          runId: current?.runId || activeRunId,
-          activeIntentId: current?.activeIntentId,
-          assistantEntryId: current?.assistantEntryId ?? null,
-          pendingAckIntentIds: (
-            current?.pendingAckIntentIds || []
-          ).includes(latestIntent.intentId)
-            ? current?.pendingAckIntentIds || []
-            : shouldTrackProviderAck
-              ? [...(current?.pendingAckIntentIds || []), latestIntent.intentId]
-              : current?.pendingAckIntentIds || [],
-          streamStatus: current?.streamStatus || "connecting",
-        }));
-        return;
-      }
-
-      updateLiveStreamState(threadId, (current) =>
-        current
-          ? {
-              ...current,
-              pendingAckIntentIds: current.pendingAckIntentIds.filter(
-                (entry) => entry !== latestIntent.intentId,
-              ),
-            }
-          : current,
-      );
-      dispatchMessageState({
-        type: "intent/request-dispatch",
-        threadId: threadId,
-        intentId: latestIntent.intentId,
-        mode: "sync_send",
-        source: "queue_steer",
-        removeFromQueue: true,
-      });
-      dispatchMessageState({
-        type: "intent/dispatch-started",
-        intentId: latestIntent.intentId,
-      });
-      const didSucceed = await sendIntentOnce(threadId, latestIntent.intentId, {
-        seedUserBubble: true,
-      });
-      if (!didSucceed) {
-        dispatchMessageState({
-          type: "intent/requeue-front",
-          threadId: threadId,
-          intentId: latestIntent.intentId,
-          source: "queue_steer",
-          error: intentForId(latestIntent.intentId)?.error,
-        });
-      }
-    } catch (steerError) {
-      updateLiveStreamState(threadId, (current) =>
-        current
-          ? {
-              ...current,
-              pendingAckIntentIds: current.pendingAckIntentIds.filter(
-                (entry) => entry !== latestIntent.intentId,
-              ),
-            }
-          : current,
-      );
-      const message =
-        steerError instanceof Error
-          ? steerError.message
-          : "Failed to steer follow-up";
-      setError(message);
-      dispatchMessageState({
-        type: "intent/requeue-front",
-        threadId: threadId,
-        intentId: latestIntent.intentId,
-        source: "queue_steer",
-        error: message,
-      });
-    }
+  ): Promise<void> {
+    return gatewayMirror.steerQueuedIntent(latestIntent, options);
   }
 
   async function handleStartWorkflowThreadFromComposer(input: {

@@ -394,48 +394,10 @@ function MessageImageAttachmentFrame({
   );
 }
 
-export function buildOptimisticTranscriptContent(
-  text: string,
-  images: MessageImageAttachment[],
-  files: MessageFileAttachment[] = [],
-): unknown {
-  if (!images.length && !files.length) {
-    return text;
-  }
-
-  const blocks: Array<Record<string, unknown>> = [];
-  if (text.trim()) {
-    blocks.push({
-      type: "text",
-      text,
-    });
-  }
-  for (const image of images) {
-    const block: Record<string, unknown> = {
-      type: "image",
-      name: image.name,
-      path: image.path,
-      media_type: image.mediaType,
-    };
-    if (image.data?.trim()) {
-      block.source = {
-        type: "base64",
-        media_type: image.mediaType,
-        data: image.data,
-      };
-    }
-    blocks.push(block);
-  }
-  for (const file of files) {
-    blocks.push({
-      type: "file",
-      name: file.name,
-      path: file.path,
-      media_type: file.mediaType,
-    });
-  }
-  return blocks;
-}
+// Moved to message-rich-content-core.ts (endgame batch 3c-2) so the
+// React-free dispatch orchestrator can build optimistic bubbles; the
+// re-export keeps existing .tsx consumers working.
+export { buildOptimisticTranscriptContent } from "./message-rich-content-core";
 
 
 

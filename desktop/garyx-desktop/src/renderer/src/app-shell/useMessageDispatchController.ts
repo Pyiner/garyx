@@ -2,16 +2,10 @@ import { useEffect, useRef, useState } from "react";
 
 import type {
   BrowserAnnotationCommentRequest,
-  ConnectionStatus,
-  DesktopApiProviderType,
-  DesktopCustomAgent,
   DesktopSettings,
-  DesktopState,
   DesktopWorkspace,
   MessageFileAttachment,
   MessageImageAttachment,
-  ThreadRuntimeInfo,
-  ThreadTranscript,
 } from "@shared/contracts";
 
 import { createTranslator, type Translate } from "../i18n";
@@ -25,9 +19,6 @@ import {
   type MessageMachineState,
   type ThreadRuntimeState,
 } from "../message-machine";
-import { buildOptimisticTranscriptContent } from "../message-rich-content";
-import { mergeThread } from "../thread-model";
-import { isTransientGatewayErrorMessage } from "./gateway-errors";
 import type {
   ContentView,
   LiveStreamState,
@@ -35,12 +26,6 @@ import type {
   TranscriptEntryState,
   UiTranscriptMessage,
 } from "./types";
-import {
-  normalizeMessageText,
-  reconcileAssistantEntriesForGatewayRecovery,
-  resolveIntentHistoryMatch,
-  userMessageIdForOrigin,
-} from "./useTranscriptController";
 
 export const NEW_THREAD_DRAFT_THREAD_ID = "__garyx_new_thread_draft__";
 
@@ -220,100 +205,42 @@ export function browserAnnotationScreenshotImages(
   });
 }
 
-function seededUserBubble(intent: MessageIntent): UiTranscriptMessage {
-  return {
-    id: userMessageIdForOrigin(intent.intentId),
-    role: "user",
-    text: intent.text,
-    content: buildOptimisticTranscriptContent(
-      intent.text,
-      intent.images,
-      intent.files,
-    ),
-    timestamp: new Date().toISOString(),
-    intentId: intent.intentId,
-    localState: "optimistic",
-  };
-}
-
-export type SeededTurn = {
-  assistantEntryId: string | null;
-  legacyPendingAssistantId: string | null;
-};
-
-function presentProviderReadyError(
-  message: string,
-  providerType?: DesktopApiProviderType | null,
-): string {
-  const normalized = message.trim().toLowerCase();
-  if (!normalized.includes("provider not ready")) {
-    return message;
-  }
-  if (providerType === "codex_app_server") {
-    return "Codex is not ready on this Mac. Check that the codex CLI is installed, logged in, and available on the Garyx gateway PATH.";
-  }
-  if (providerType === "antigravity") {
-    return "Antigravity is not ready on this Mac. Check that the agy CLI is installed, logged in, and available on the Garyx gateway PATH.";
-  }
-  if (providerType === "traex") {
-    return "Traex is not ready on this Mac. Check that the traex CLI is installed, logged in, and available on the Garyx gateway PATH.";
-  }
-  if (providerType === "gemini_cli") {
-    return "Gemini CLI is not ready on this Mac. Check that the gemini CLI is installed and available on the Garyx gateway PATH.";
-  }
-  if (providerType === "gpt") {
-    return "GPT provider is not ready on this Mac. Check the gateway status and Codex/OpenAI auth configuration.";
-  }
-  if (providerType === "anthropic" || providerType === "claude_llm") {
-    return "Claude model provider is not ready on this Mac. Check the gateway status and Anthropic auth configuration.";
-  }
-  if (providerType === "google" || providerType === "gemini_llm") {
-    return "Gemini model provider is not ready on this Mac. Check the gateway status and Gemini auth configuration.";
-  }
-  if (providerType === "claude_code") {
-    return "Claude Code is not ready on this Mac. Check the local Claude CLI auth and environment settings.";
-  }
-  return "The selected provider is not ready on this Mac. Open Status and verify the provider shows Ready.";
-}
+// Batch 3c-2: the dispatch orchestration (seeded turns, send, steer,
+// interrupt, queue drain) lives in gateway-mirror/dispatch-orchestrator.ts;
+// this controller keeps the composer surface and receives the mirror-backed
+// orchestration entry points through its args. The SeededTurn type is
+// re-exported for existing importers.
+import type { SeededTurn } from "../gateway-mirror/dispatch-orchestrator";
+export type { SeededTurn } from "../gateway-mirror/dispatch-orchestrator";
 
 type UseMessageDispatchControllerArgs = {
   activeQueue: MessageIntent[];
   activeThreadId: string | null;
-  applyCanonicalTranscript: (
+  appendSeededTurn: (
     threadId: string,
-    transcript: ThreadTranscript,
-    options?: { syncRunState?: boolean },
-  ) => void;
+    intent: MessageIntent,
+    options?: { seedUserBubble?: boolean },
+  ) => SeededTurn;
   canSteerQueuedPrompt: boolean;
   clearLiveStreamState: (threadId: string) => void;
-  connection: ConnectionStatus | null;
   contentView: ContentView;
   deferredQueueDrainByThreadRef: React.MutableRefObject<
     Record<string, boolean>
   >;
-  desktopAgents: DesktopCustomAgent[];
-  desktopState: DesktopState | null;
   dispatchMessageState: (action: MessageMachineAction) => void;
   ensureSelectedThreadId: () => Promise<string | null>;
   ensureThreadBotRouting: (threadId: string) => Promise<boolean>;
-  getLiveStreamState: (threadId: string) => LiveStreamState | null;
   handleStartWorkflowThreadFromComposer: (input: {
     prompt: string;
     promptFiles: MessageFileAttachment[];
     promptImages: MessageImageAttachment[];
     workflowId: string;
   }) => Promise<void>;
-  inferProviderTypeForThread: (
-    threadId: string,
-    threadInfoByThread: Record<string, ThreadRuntimeInfo | null>,
-    desktopState: DesktopState | null,
-    desktopAgents: DesktopCustomAgent[],
-  ) => DesktopApiProviderType | null;
   intentForId: (intentId: string) => MessageIntent | null;
+  interruptThread: (threadId: string | null | undefined) => Promise<void>;
   isActiveSendingThread: boolean;
   isDraftSendingThread: boolean;
   messageStateRef: React.MutableRefObject<MessageMachineState>;
-  messagesByThreadRef: React.MutableRefObject<MessageMap>;
   newThreadInitialDispatchLockRef: React.MutableRefObject<boolean>;
   pendingWorkflowId: string | null;
   pendingWorkspacePath: string | null;
@@ -321,25 +248,18 @@ type UseMessageDispatchControllerArgs = {
   queueDrainInFlightByThreadRef: React.MutableRefObject<
     Record<string, boolean>
   >;
-  recordGatewayStatusObservation: (
-    status: ConnectionStatus | null,
-    reason?: string | null,
-  ) => void;
   replaceLiveStreamThreadId: (fromThreadId: string, toThreadId: string) => void;
   requestMessagesBottomSnap: (
     threadId: string | null | undefined,
     forceStick?: boolean,
   ) => void;
   runQueuedBatch: (threadId: string, initialIntentId?: string) => Promise<void>;
-  scheduleHistoryRefresh: (
-    threadId: string,
-    attempts?: number,
-    delayMs?: number,
-    canonical?: boolean,
-  ) => void;
   selectedThreadId: string | null;
-  setConnection: React.Dispatch<React.SetStateAction<ConnectionStatus | null>>;
-  setDesktopState: React.Dispatch<React.SetStateAction<DesktopState | null>>;
+  sendIntentOnce: (
+    threadId: string,
+    intentId: string,
+    options?: { seedUserBubble?: boolean; seededTurn?: SeededTurn },
+  ) => Promise<boolean>;
   setError: React.Dispatch<React.SetStateAction<string | null>>;
   setThreadRuntimeState: (
     threadId: string,
@@ -351,14 +271,11 @@ type UseMessageDispatchControllerArgs = {
     },
   ) => void;
   settingsDraft: DesktopSettings;
-  sideChatThreadIdsRef: React.MutableRefObject<Set<string>>;
   steerQueuedIntent: (
     latestIntent: MessageIntent,
     options?: { canSteer?: boolean },
   ) => Promise<void>;
   t: Translate;
-  threadInfoByThread: Record<string, ThreadRuntimeInfo | null>;
-  threadTitleOverridesRef: React.MutableRefObject<Record<string, string>>;
   updateLiveStreamState: (
     threadId: string,
     updater: (current: LiveStreamState | null) => LiveStreamState | null,
@@ -372,46 +289,35 @@ type UseMessageDispatchControllerArgs = {
 export function useMessageDispatchController({
   activeQueue,
   activeThreadId,
-  applyCanonicalTranscript,
+  appendSeededTurn,
   canSteerQueuedPrompt,
   clearLiveStreamState,
-  connection,
   contentView,
   deferredQueueDrainByThreadRef,
-  desktopAgents,
-  desktopState,
   dispatchMessageState,
   ensureSelectedThreadId,
   ensureThreadBotRouting,
-  getLiveStreamState,
   handleStartWorkflowThreadFromComposer,
-  inferProviderTypeForThread,
   intentForId,
+  interruptThread,
   isActiveSendingThread,
   isDraftSendingThread,
   messageStateRef,
-  messagesByThreadRef,
   newThreadInitialDispatchLockRef,
   pendingWorkflowId,
   pendingWorkspacePath,
   preferredWorkspaceForNewThread,
   queueDrainInFlightByThreadRef,
-  recordGatewayStatusObservation,
   replaceLiveStreamThreadId,
   requestMessagesBottomSnap,
   runQueuedBatch,
-  scheduleHistoryRefresh,
   selectedThreadId,
-  setConnection,
-  setDesktopState,
+  sendIntentOnce,
   setError,
   setThreadRuntimeState,
   settingsDraft,
-  sideChatThreadIdsRef,
   steerQueuedIntent,
   t,
-  threadInfoByThread,
-  threadTitleOverridesRef,
   updateLiveStreamState,
   updateMessagesByThread,
   workflowThreadStarting,
@@ -641,45 +547,6 @@ export function useMessageDispatchController({
     return selectQueueIntentIds(messageStateRef.current, threadId);
   }
 
-  function appendSeededTurn(
-    threadId: string,
-    intent: MessageIntent,
-    options?: {
-      seedUserBubble?: boolean;
-    },
-  ): SeededTurn {
-    const seedUserBubble = options?.seedUserBubble ?? true;
-    const userMessage = seededUserBubble(intent);
-    const legacyPendingAssistant =
-      (messagesByThreadRef.current[threadId] || []).find(
-        (entry) =>
-          entry.role === "assistant" &&
-          entry.pending &&
-          entry.intentId === intent.intentId,
-      ) || null;
-
-    if (seedUserBubble) {
-      updateMessagesByThread((current) => {
-        const existing = current[threadId] || [];
-        const hasUserMessage = existing.some((entry) => {
-          return entry.role === "user" && entry.intentId === intent.intentId;
-        });
-        if (hasUserMessage) {
-          return current;
-        }
-        return {
-          ...current,
-          [threadId]: [...existing, userMessage],
-        };
-      });
-    }
-
-    return {
-      assistantEntryId: legacyPendingAssistant?.id || null,
-      legacyPendingAssistantId: legacyPendingAssistant?.id || null,
-    };
-  }
-
   function promoteNewThreadDraftState(threadId: string) {
     dispatchMessageState({
       type: "thread/replace-id",
@@ -805,23 +672,6 @@ export function useMessageDispatchController({
     });
   }
 
-  function shiftQueuedIntent(threadId: string): MessageIntent | null {
-    const [nextIntentId] = queueIntentIdsForThread(threadId);
-    if (!nextIntentId) {
-      return null;
-    }
-    const intent = intentForId(nextIntentId);
-    if (!intent) {
-      dispatchMessageState({
-        type: "intent/cancelled",
-        threadId,
-        intentId: nextIntentId,
-      });
-      return null;
-    }
-    return intent;
-  }
-
   function reorderQueuedIntent(
     threadId: string,
     draggedIntentId: string,
@@ -865,362 +715,6 @@ export function useMessageDispatchController({
     );
     setError(null);
     requestComposerFocus();
-  }
-
-  async function sendIntentOnce(
-    threadId: string,
-    intentId: string,
-    options?: {
-      seedUserBubble?: boolean;
-      seededTurn?: SeededTurn;
-    },
-  ): Promise<boolean> {
-    const intent = intentForId(intentId);
-    if (!intent) {
-      return false;
-    }
-
-    const { assistantEntryId, legacyPendingAssistantId } =
-      options?.seededTurn || appendSeededTurn(threadId, intent, options);
-
-    dispatchMessageState({
-      type: "intent/dispatch-started",
-      intentId: intent.intentId,
-    });
-    dispatchMessageState({
-      type: "intent/awaiting-response",
-      intentId: intent.intentId,
-    });
-    setThreadRuntimeState(threadId, "dispatching_sync", {
-      activeIntentId: intent.intentId,
-    });
-    updateLiveStreamState(threadId, () => ({
-      threadId,
-      activeIntentId: intent.intentId,
-      assistantEntryId,
-      pendingAckIntentIds: [],
-      streamStatus: "connecting",
-    }));
-
-    setError(null);
-    requestMessagesBottomSnap(threadId, true);
-
-    try {
-      const result = await window.garyxDesktop.openChatStream({
-        threadId,
-        clientIntentId: intent.intentId,
-        message: intent.text,
-        images: intent.images,
-        files: intent.files,
-      });
-      const resultThreadId = result.threadId || result.sessionId || threadId;
-      if (result.status === "accepted") {
-        updateLiveStreamState(resultThreadId, (current) =>
-          current
-            ? {
-                ...current,
-                runId: result.runId,
-                streamStatus: current.streamStatus,
-              }
-            : {
-                threadId: resultThreadId,
-                runId: result.runId,
-                activeIntentId: intent.intentId,
-                assistantEntryId,
-                pendingAckIntentIds: [],
-                streamStatus: "connecting",
-              },
-        );
-        const latestIntent = intentForId(intent.intentId);
-        if (
-          latestIntent &&
-          ![
-            "remote_accepted",
-            "awaiting_provider_ack",
-            "awaiting_history",
-            "completed",
-          ].includes(latestIntent.state)
-        ) {
-          dispatchMessageState({
-            type: "intent/remote-accepted",
-            intentId: intent.intentId,
-            runId: result.runId,
-            threadId: resultThreadId,
-            removeFromQueue: false,
-          });
-        }
-        setDesktopState((current) => {
-          if (!current) {
-            return current;
-          }
-          const titleOverride = threadTitleOverridesRef.current[resultThreadId];
-          const resultThread = titleOverride
-            ? { ...result.thread, title: titleOverride }
-            : result.thread;
-          return {
-            ...current,
-            threads: mergeThread(current.threads, resultThread),
-            sessions: mergeThread(current.threads, resultThread),
-          };
-        });
-        scheduleHistoryRefresh(resultThreadId, 2, 1200, false);
-        return true;
-      }
-      const liveState = getLiveStreamState(resultThreadId);
-      if (!liveState?.runId && result.runId) {
-        updateLiveStreamState(resultThreadId, (current) =>
-          current
-            ? {
-                ...current,
-                runId: result.runId,
-                streamStatus:
-                  result.status === "completed"
-                    ? "reconciling"
-                    : "disconnected",
-              }
-            : null,
-        );
-      }
-      if (result.status === "disconnected") {
-        recordGatewayStatusObservation(
-          {
-            ok: false,
-            bridgeReady: false,
-            gatewayUrl: connection?.gatewayUrl || settingsDraft.gatewayUrl,
-            error: "stream disconnected",
-          },
-          "Waiting to sync with gateway…",
-        );
-      }
-      const latestIntent = intentForId(intent.intentId);
-      if (
-        latestIntent &&
-        ![
-          "remote_accepted",
-          "awaiting_provider_ack",
-          "awaiting_history",
-          "completed",
-        ].includes(latestIntent.state)
-      ) {
-        dispatchMessageState({
-          type: "intent/remote-accepted",
-          intentId: intent.intentId,
-          runId: result.runId,
-          threadId: resultThreadId,
-          responseText: result.response,
-          removeFromQueue: false,
-        });
-      }
-      dispatchMessageState({
-        type: "intent/awaiting-history",
-        intentId: intent.intentId,
-        responseText: result.response,
-      });
-      setThreadRuntimeState(threadId, "reconciling_history", {
-        activeIntentId: intent.intentId,
-        remoteRunId: result.runId,
-      });
-
-      setDesktopState((current) => {
-        if (!current) {
-          return current;
-        }
-        const titleOverride = threadTitleOverridesRef.current[resultThreadId];
-        const resultThread = titleOverride
-          ? { ...result.thread, title: titleOverride }
-          : result.thread;
-        if (sideChatThreadIdsRef.current.has(resultThread.id)) {
-          return {
-            ...current,
-            threads: current.threads.filter(
-              (thread) => thread.id !== resultThread.id,
-            ),
-            sessions: current.sessions.filter(
-              (session) => session.id !== resultThread.id,
-            ),
-          };
-        }
-        return {
-          ...current,
-          threads: mergeThread(current.threads, resultThread),
-          sessions: mergeThread(current.threads, resultThread),
-        };
-      });
-
-      const transcript =
-        await window.garyxDesktop.getThreadHistory(resultThreadId);
-      const intentSnapshot = intentForId(intent.intentId) || {
-        ...intent,
-        responseText: result.response,
-      };
-      const match = resolveIntentHistoryMatch(
-        intentSnapshot,
-        transcript.messages,
-      );
-
-      if (
-        transcript.messages.length > 0 &&
-        match.userVisible &&
-        (match.assistantVisible ||
-          normalizeMessageText(result.response).length === 0)
-      ) {
-        applyCanonicalTranscript(resultThreadId, transcript);
-      } else {
-        if (
-          legacyPendingAssistantId &&
-          !result.response &&
-          result.status === "completed"
-        ) {
-          updateMessagesByThread((current) => ({
-            ...current,
-            [resultThreadId]: (current[resultThreadId] || []).filter(
-              (entry) => {
-                return !(
-                  entry.id === legacyPendingAssistantId &&
-                  entry.pending
-                );
-              },
-            ),
-          }));
-        }
-        scheduleHistoryRefresh(resultThreadId, 4, 1200, true);
-      }
-
-      clearLiveStreamState(resultThreadId);
-
-      return true;
-    } catch (sendError) {
-      const rawMessage =
-        sendError instanceof Error
-          ? sendError.message
-          : "Garyx request failed before completion";
-      const threadProviderType = inferProviderTypeForThread(
-        threadId,
-        threadInfoByThread,
-        desktopState,
-        desktopAgents,
-      );
-      const message = presentProviderReadyError(
-        rawMessage,
-        threadProviderType,
-      );
-      const interrupted = rawMessage === "request interrupted";
-      const errorState: TranscriptEntryState = interrupted
-        ? "interrupted"
-        : "error";
-      const liveState = getLiveStreamState(threadId);
-      const failedIntentId = liveState?.activeIntentId || intent.intentId;
-      const recoveryResult = reconcileAssistantEntriesForGatewayRecovery(
-        messagesByThreadRef.current[threadId] || [],
-        failedIntentId,
-        [legacyPendingAssistantId, liveState?.assistantEntryId],
-      );
-      const likelyTransportDrop =
-        !interrupted &&
-        (isTransientGatewayErrorMessage(message) || recoveryResult.matched);
-
-      if (likelyTransportDrop) {
-        recordGatewayStatusObservation(
-          {
-            ok: false,
-            bridgeReady: false,
-            gatewayUrl: connection?.gatewayUrl || settingsDraft.gatewayUrl,
-            error: rawMessage,
-          },
-          "Waiting to sync with gateway…",
-        );
-        clearLiveStreamState(threadId);
-        dispatchMessageState({
-          type: "intent/awaiting-history",
-          intentId: failedIntentId,
-          responseText: intent.responseText,
-        });
-        setThreadRuntimeState(threadId, "reconciling_history", {
-          activeIntentId: failedIntentId,
-          remoteRunId: liveState?.runId,
-        });
-        updateMessagesByThread((current) => ({
-          ...current,
-          [threadId]: reconcileAssistantEntriesForGatewayRecovery(
-            current[threadId] || [],
-            failedIntentId,
-            [legacyPendingAssistantId, liveState?.assistantEntryId],
-          ).entries,
-        }));
-        scheduleHistoryRefresh(threadId, 5, 1200, true);
-        return true;
-      }
-
-      clearLiveStreamState(threadId);
-      setError(message);
-      dispatchMessageState({
-        type: interrupted ? "intent/interrupted" : "intent/failed",
-        intentId: failedIntentId,
-        ...(interrupted ? { error: message } : { error: message }),
-      });
-      setThreadRuntimeState(threadId, interrupted ? "interrupting" : "failed", {
-        activeIntentId: failedIntentId,
-        error: message,
-      });
-      updateMessagesByThread((current) => ({
-        ...current,
-        [threadId]: (() => {
-          const existing = current[threadId] || [];
-          let assistantUpdated = false;
-          const next = existing.map((entry) => {
-            if (
-              entry.role === "user" &&
-              entry.intentId === failedIntentId &&
-              entry.localState !== "remote_final"
-            ) {
-              return {
-                ...entry,
-                error: true,
-                localState: errorState,
-              };
-            }
-            const isTargetAssistant =
-              entry.role === "assistant" &&
-              entry.intentId === failedIntentId &&
-              (entry.pending ||
-                entry.id === legacyPendingAssistantId ||
-                entry.id === liveState?.assistantEntryId);
-            if (!isTargetAssistant) {
-              return entry;
-            }
-            assistantUpdated = true;
-            return {
-              ...entry,
-              pending: false,
-              error: true,
-              localState: errorState,
-              text: interrupted
-                ? entry.text ||
-                  "Run interrupted before Garyx produced a final answer."
-                : entry.text || message,
-            };
-          });
-          if (assistantUpdated) {
-            return next;
-          }
-          return [
-            ...next,
-            {
-              id: `assistant:error:${failedIntentId}:${crypto.randomUUID()}`,
-              role: "assistant",
-              text: interrupted
-                ? "Run interrupted before Garyx produced a final answer."
-                : message,
-              timestamp: new Date().toISOString(),
-              intentId: failedIntentId,
-              localState: errorState,
-              error: true,
-            },
-          ];
-        })(),
-      }));
-      return false;
-    }
   }
 
   useEffect(() => {
@@ -1524,105 +1018,6 @@ export function useMessageDispatchController({
     }
   }
 
-  function markInterruptedAssistantEntries(
-    threadId: string,
-    intentIds: string[],
-    activeAssistantEntryId?: string | null,
-  ) {
-    if (!intentIds.length) {
-      return;
-    }
-    const interruptedIntentIds = new Set(intentIds);
-    updateMessagesByThread((current) => ({
-      ...current,
-      [threadId]: (current[threadId] || []).map((entry) => {
-        if (
-          entry.role === "user" &&
-          entry.intentId &&
-          interruptedIntentIds.has(entry.intentId) &&
-          entry.localState !== "remote_final"
-        ) {
-          return {
-            ...entry,
-            error: true,
-            localState: "interrupted",
-          };
-        }
-        if (entry.role !== "assistant") {
-          return entry;
-        }
-        if (!entry.intentId || !interruptedIntentIds.has(entry.intentId)) {
-          return entry;
-        }
-        const isPendingEntry =
-          entry.pending ||
-          entry.localState === "optimistic" ||
-          entry.id === activeAssistantEntryId;
-        if (!isPendingEntry) {
-          return entry;
-        }
-        return {
-          ...entry,
-          pending: false,
-          error: true,
-          localState: "interrupted",
-          text:
-            entry.text ||
-            "Run interrupted before Garyx produced a final answer.",
-        };
-      }),
-    }));
-  }
-
-  async function interruptThread(threadId: string | null | undefined) {
-    if (!threadId) {
-      return;
-    }
-
-    const runtime = selectThreadRuntime(messageStateRef.current, threadId);
-    const hasLocalBusyRuntime = Boolean(
-      runtime && isRuntimeBusy(runtime.state),
-    );
-    if (runtime && hasLocalBusyRuntime) {
-      const liveState = getLiveStreamState(threadId);
-      const interruptedIntentIds = [
-        runtime.activeIntentId,
-        ...(liveState?.pendingAckIntentIds || []),
-      ].filter((intentId, index, intents): intentId is string => {
-        return Boolean(intentId) && intents.indexOf(intentId) === index;
-      });
-
-      setThreadRuntimeState(threadId, "interrupting", {
-        activeIntentId: runtime.activeIntentId,
-        remoteRunId: runtime.remoteRunId,
-      });
-      for (const intentId of interruptedIntentIds) {
-        dispatchMessageState({
-          type: "intent/interrupted",
-          intentId,
-          error: "request interrupted",
-        });
-      }
-      markInterruptedAssistantEntries(
-        threadId,
-        interruptedIntentIds,
-        liveState?.assistantEntryId ?? null,
-      );
-    }
-
-    await window.garyxDesktop.interruptThread(threadId);
-    if (hasLocalBusyRuntime) {
-      clearLiveStreamState(threadId);
-      dispatchMessageState({
-        type: "thread/clear",
-        threadId: threadId,
-      });
-    }
-    scheduleHistoryRefresh(threadId, 2, 500);
-    const status = await window.garyxDesktop.checkConnection();
-    setConnection(status);
-  }
-
   async function handleInterrupt() {
     await interruptThread(activeThreadId || selectedThreadId);
   }
@@ -1659,7 +1054,6 @@ export function useMessageDispatchController({
 
   return {
     appendComposerAttachments,
-    appendSeededTurn,
     clearComposerDraft,
     composer,
     composerAttachmentInputRef,
@@ -1679,7 +1073,6 @@ export function useMessageDispatchController({
     handleRetryFailedMessage,
     handleSteerQueuedPrompt,
     ignoreComposerSubmitUntilRef,
-    interruptThread,
     isComposingRef,
     markIgnoreComposerSubmitWindow,
     queueDropTarget,
@@ -1689,11 +1082,9 @@ export function useMessageDispatchController({
     removeComposerImage,
     reorderQueuedIntent,
     requestComposerFocus,
-    sendIntentOnce,
     setComposerTextPresent,
     setDraggedQueueIntentId,
     setQueueDropTarget,
-    shiftQueuedIntent,
     syncComposerPhase,
   };
 }

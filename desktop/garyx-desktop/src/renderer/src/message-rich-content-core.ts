@@ -1,7 +1,12 @@
 // Pure transcript-content parsing helpers, extracted from
-// message-rich-content.tsx (endgame batch 2a-2) so React-free modules
-// (gateway-mirror) can import them without loading a JSX module.
+// message-rich-content.tsx (endgame batches 2a-2 and 3c-2) so React-free
+// modules (gateway-mirror) can import them without loading a JSX module.
 // Verbatim relocation; the .tsx re-exports the shared surface.
+
+import type {
+  MessageFileAttachment,
+  MessageImageAttachment,
+} from "@shared/contracts";
 
 export type TranscriptSegment =
   | {
@@ -264,4 +269,47 @@ export function buildMessageImageDataUrl(
   const normalizedType = mediaType?.trim() || "image/jpeg";
   const normalizedData = data?.trim() || "";
   return `data:${normalizedType};base64,${normalizedData}`;
+}
+
+export function buildOptimisticTranscriptContent(
+  text: string,
+  images: MessageImageAttachment[],
+  files: MessageFileAttachment[] = [],
+): unknown {
+  if (!images.length && !files.length) {
+    return text;
+  }
+
+  const blocks: Array<Record<string, unknown>> = [];
+  if (text.trim()) {
+    blocks.push({
+      type: "text",
+      text,
+    });
+  }
+  for (const image of images) {
+    const block: Record<string, unknown> = {
+      type: "image",
+      name: image.name,
+      path: image.path,
+      media_type: image.mediaType,
+    };
+    if (image.data?.trim()) {
+      block.source = {
+        type: "base64",
+        media_type: image.mediaType,
+        data: image.data,
+      };
+    }
+    blocks.push(block);
+  }
+  for (const file of files) {
+    blocks.push({
+      type: "file",
+      name: file.name,
+      path: file.path,
+      media_type: file.mediaType,
+    });
+  }
+  return blocks;
 }
