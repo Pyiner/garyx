@@ -25,6 +25,7 @@ mod internal_inbound;
 mod managed_mcp_metadata;
 pub mod mcp;
 pub mod mcp_config;
+mod provider_auth;
 mod provider_models;
 mod provider_session_locator;
 mod quota_resend;

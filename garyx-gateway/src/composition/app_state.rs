@@ -28,6 +28,7 @@ use crate::event_stream_hub::EventStreamHub;
 use crate::garyx_db::GaryxDbService;
 use crate::health::HealthChecker;
 use crate::mcp_metrics::McpToolMetrics;
+use crate::provider_auth::ClaudeAuthSessionStore;
 use crate::recent_thread_projection::{
     BridgeActiveRunProbe, backfill_recent_thread_projection_if_incomplete,
     prune_excluded_recent_thread_projection, reconcile_active_recent_thread_projection,
@@ -75,6 +76,7 @@ pub struct OpsState {
     pub app_db: Arc<AppDbService>,
     pub garyx_db: Arc<GaryxDbService>,
     pub workflow_scheduler: Arc<WorkflowScheduler>,
+    pub provider_auth_sessions: Arc<ClaudeAuthSessionStore>,
     pub channel_endpoint_snapshot: Mutex<Option<ChannelEndpointSnapshotCache>>,
     pub thread_list_snapshot: Mutex<Option<ThreadListSnapshotCache>>,
 }
@@ -467,6 +469,7 @@ impl AppState {
                 app_db: self.ops.app_db.clone(),
                 garyx_db: self.ops.garyx_db.clone(),
                 workflow_scheduler: self.ops.workflow_scheduler.clone(),
+                provider_auth_sessions: self.ops.provider_auth_sessions.clone(),
                 channel_endpoint_snapshot: Mutex::new(None),
                 thread_list_snapshot: Mutex::new(None),
             },

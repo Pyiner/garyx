@@ -7,8 +7,8 @@ use tower_http::limit::RequestBodyLimitLayer;
 use crate::server::AppState;
 use crate::{
     api, app_db, automation, capsules, chat, coding_usage, commands, dashboard, dreams,
-    gateway_auth, mcp, mcp_config, routes, tasks, tool_image, workflows, workspace_files,
-    workspaces,
+    gateway_auth, mcp, mcp_config, provider_auth, routes, tasks, tool_image, workflows,
+    workspace_files, workspaces,
 };
 
 pub fn build_router(state: Arc<AppState>) -> Router {
@@ -468,6 +468,18 @@ fn operations_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/channels/plugins/{plugin_id}/validate_account",
             axum::routing::post(api::channel_account_validate),
+        )
+        .route(
+            "/api/providers/claude_code/auth/start",
+            axum::routing::post(provider_auth::start_claude_code_auth),
+        )
+        .route(
+            "/api/providers/claude_code/auth/{login_id}",
+            axum::routing::get(provider_auth::get_claude_code_auth),
+        )
+        .route(
+            "/api/providers/claude_code/auth/{login_id}/submit",
+            axum::routing::post(provider_auth::submit_claude_code_auth),
         )
         .route("/api/restart", axum::routing::post(api::restart))
         .route("/api/send", axum::routing::post(api::send_message))
