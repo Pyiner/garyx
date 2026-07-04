@@ -78,7 +78,10 @@ import { WorkspacePathPickerDialog } from "../components/WorkspacePathPicker";
 // Side-effect import: wires cross-store capsule cache invalidation (a `/serve`
 // 404 in either the HTML or thumbnail store tombstones the other for that id).
 import "./capsule-cache";
-import { AddBotDialog } from "./components/AddBotDialog";
+import {
+  AddBotDialogRoot,
+  type AddBotDialogHandle,
+} from "./components/AddBotDialogRoot";
 import { DreamsPanel } from "./components/DreamsPanel";
 import {
   ThreadSideToolsPanel,
@@ -775,14 +778,10 @@ export function AppShell() {
   // persistence is removed — the hash, which Electron restores per
   // window, is the only persisted route.
   const setContentView = setContentViewRaw;
-  const [addBotDialogOpen, setAddBotDialogOpen] = useState(false);
-  const [addBotInitialValues, setAddBotInitialValues] = useState<{
-    channel?: "telegram" | "feishu" | "weixin";
-    accountId?: string;
-    name?: string;
-    token?: string;
-    baseUrl?: string;
-  } | null>(null);
+  // Batch 5b: the add-bot dialog is a colocated feature root; the shell
+  // keeps a handle (the legacy addBotInitialValues state was
+  // write-only-null dead state and is dropped).
+  const addBotDialogRef = useRef<AddBotDialogHandle | null>(null);
   const [workspaceMutation, setWorkspaceMutation] = useState<
     "add" | "assign" | "relink" | "remove" | null
   >(null);
@@ -2380,7 +2379,7 @@ export function AppShell() {
   }
 
   async function openAddBotDialog() {
-    setAddBotDialogOpen(true);
+    addBotDialogRef.current?.open();
     void refreshAgentTargets();
   }
 
@@ -4825,21 +4824,16 @@ export function AppShell() {
           title={t("Recent")}
         />
       ) : null}
-      <AddBotDialog
-        onClose={() => {
-          setAddBotDialogOpen(false);
-          setAddBotInitialValues(null);
-        }}
-        onCreateChannel={handleAddChannelAccount}
-        onPollWeixinAuth={handlePollWeixinChannelAuth}
-        onStartWeixinAuth={handleStartWeixinChannelAuth}
-        onStartFeishuAuth={handleStartFeishuChannelAuth}
-        onPollFeishuAuth={handlePollFeishuChannelAuth}
-        open={addBotDialogOpen}
-        initialValues={addBotInitialValues}
+      <AddBotDialogRoot
         agentTargets={addBotAgentTargets}
-        workspaces={workspacePickerWorkspaces}
         onAddWorkspace={addWorkspacePathFromPicker}
+        onCreateChannel={handleAddChannelAccount}
+        onPollFeishuAuth={handlePollFeishuChannelAuth}
+        onPollWeixinAuth={handlePollWeixinChannelAuth}
+        onStartFeishuAuth={handleStartFeishuChannelAuth}
+        onStartWeixinAuth={handleStartWeixinChannelAuth}
+        ref={addBotDialogRef}
+        workspaces={workspacePickerWorkspaces}
       />
       <WorkspacePathPickerDialog
         open={Boolean(addWorkspaceDialog)}
