@@ -94,9 +94,6 @@ impl SubprocessTransport {
             cmd.current_dir(cwd);
         }
 
-        let has_claude_code_oauth_override =
-            self.options.env.contains_key(CLAUDE_CODE_OAUTH_TOKEN_ENV);
-
         // Merge env vars
         for (k, v) in &self.options.env {
             cmd.env(k, v);
@@ -105,9 +102,7 @@ impl SubprocessTransport {
         // Remove CLAUDECODE to prevent "cannot be launched inside another Claude
         // Code session" error when running as a subprocess of Claude Code.
         cmd.env_remove("CLAUDECODE");
-        if !has_claude_code_oauth_override {
-            cmd.env_remove(CLAUDE_CODE_OAUTH_TOKEN_ENV);
-        }
+        cmd.env_remove(CLAUDE_CODE_OAUTH_TOKEN_ENV);
 
         if self.options.enable_file_checkpointing {
             cmd.env("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING", "true");
