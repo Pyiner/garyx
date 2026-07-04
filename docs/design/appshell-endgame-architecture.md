@@ -320,7 +320,10 @@ and are called out for review sign-off.
 
 - ComposerSurface: composer draft/resetKey/textPresent/images/files/
   browserAnnotations/attachmentUploadCount + textarea/input refs + submit locks.
-- ComposerQueue: draggedQueueIntentId, queueDropTarget.
+- ComposerQueue: no state to colocate — the drag pair
+  (draggedQueueIntentId, queueDropTarget) turned out to be write-only
+  residue from the pre-dnd-kit HTML5 drag implementation and was deleted
+  in batch 5b-5.
 - SideChatPanel: sideComposerBySource, side attachment counts,
   sideChatThreadBySource/CreatingBySource/ErrorBySource, historyLoading, side refs.
 - AppLayoutFrame/ThreadLayout: sidebar/rail/side-tools/thread-logs widths and
