@@ -105,24 +105,6 @@ export class ThreadTranscriptCache {
   }
 
   /**
-   * Reset the transcript-domain state (batch 4b missing-thread cleanup):
-   * a selected thread turned out not to exist on the gateway, so every
-   * applied stale value — messages, render snapshot, thread info, pending
-   * inputs, pagination, the remembered snapshot, and the loaded gate —
-   * drops back to the never-loaded shape. Committed records and frontier
-   * state stay (a missing thread streamed nothing).
-   */
-  clearTranscript(): void {
-    this.uiMessages = [];
-    this.renderState = null;
-    this.threadInfo = null;
-    this.pendingRemoteInputs = [];
-    this.historyPagination = null;
-    this.snapshotTranscript = null;
-    this.transcriptLoaded = false;
-  }
-
-  /**
    * Replace the UI message array wholesale. Batch-3b bridge for local
    * (optimistic/recovery) writes that still run through the legacy
    * updateMessagesByThread path — the legacy result is synced here so the

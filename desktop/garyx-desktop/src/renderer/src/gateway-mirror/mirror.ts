@@ -606,13 +606,16 @@ export class GatewayMirror {
   }
 
   /**
-   * Drop a thread's transcript-domain state (batch 4b missing-thread
-   * cleanup): the selected thread turned out not to exist, so applied
-   * stale-cache values roll back to the never-loaded shape in one commit.
+   * Drop a thread's transcript state (batch 4b missing-thread cleanup):
+   * the selected thread turned out not to exist, so applied stale-cache
+   * values — including any committed records/frontier progress from the
+   * briefly-live stream — roll back to the never-loaded shape in one
+   * commit. Live-stream transport state stays (owned by dispatch).
    */
   clearThreadTranscript(threadId: string): void {
     const entry = this.threadEntry(threadId);
-    entry.cache.clearTranscript();
+    entry.cache = new ThreadTranscriptCache();
+    entry.frontier = new ThreadFrontier();
     this.commitThread(entry);
   }
 

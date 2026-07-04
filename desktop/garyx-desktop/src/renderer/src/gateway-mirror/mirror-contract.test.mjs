@@ -1396,9 +1396,25 @@ test("clearThreadTranscript rolls the thread back to the never-loaded shape (4b 
     pageInfo: { startIndex: 5, hasMoreBefore: true },
   };
   mirror.applyRemoteTranscript(threadId, transcript);
+  // A frame from the briefly-live stream: records/frontier progress must
+  // also roll back (the thread does not exist; nothing is resumable).
+  mirror.ingest({
+    type: "committed_message",
+    runId: "run-stale",
+    threadId,
+    seq: 7,
+    message: {
+      id: `${threadId}:1`,
+      role: "assistant",
+      text: "stale streamed row",
+      timestamp: "2026-07-04T10:00:01Z",
+    },
+  });
   const loaded = mirror.getThreadSnapshot(threadId);
   assert.equal(loaded.transcriptLoaded, true);
   assert.ok(loaded.messages.length > 0);
+  assert.equal(loaded.records.length, 1);
+  assert.equal(loaded.frontier.committedSeq, 7);
   const mapsBefore = mirror.getTranscriptMapsSnapshot();
   assert.ok(threadId in mapsBefore.threadInfoByThread);
 
@@ -1416,6 +1432,8 @@ test("clearThreadTranscript rolls the thread back to the never-loaded shape (4b 
   assert.deepEqual(snapshot.pendingRemoteInputs, []);
   assert.equal(snapshot.renderState, null);
   assert.equal(snapshot.historyPagination, null);
+  assert.deepEqual(snapshot.records, [], "committed records roll back");
+  assert.equal(snapshot.frontier.committedSeq, 0, "frontier rolls back");
   const maps = mirror.getTranscriptMapsSnapshot();
   assert.ok(!(threadId in maps.threadInfoByThread), "loaded gate drops");
   assert.ok(!(threadId in maps.messagesByThread));
