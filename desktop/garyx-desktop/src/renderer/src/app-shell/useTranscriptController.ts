@@ -102,7 +102,6 @@ type UseTranscriptControllerArgs = {
   connection: ConnectionStatus | null;
   desktopState: DesktopState | null;
   dispatchMessageState: (action: MessageMachineAction) => void;
-  editingThreadTitle: boolean;
   historyLoading: boolean;
   lastRenderedMessageThreadRef: React.MutableRefObject<string | null>;
   liveStreamStateRef: React.MutableRefObject<Record<string, LiveStreamState>>;
@@ -154,7 +153,11 @@ type UseTranscriptControllerArgs = {
   setThreadInfoByThread: React.Dispatch<
     React.SetStateAction<Record<string, ThreadRuntimeInfo | null>>
   >;
-  setTitleDraft: React.Dispatch<React.SetStateAction<string>>;
+  /**
+   * Batch 5b: remote title sync into the colocated title root — the root
+   * applies its own not-editing guard.
+   */
+  syncThreadTitleDraft: (nextTitle: string) => void;
   settingsDraft: DesktopSettings;
 };
 
@@ -165,7 +168,6 @@ export function useTranscriptController({
   connection,
   desktopState,
   dispatchMessageState,
-  editingThreadTitle,
   historyLoading,
   lastRenderedMessageThreadRef,
   liveStreamStateRef,
@@ -189,7 +191,7 @@ export function useTranscriptController({
   setPendingRemoteInputsByThread,
   setRenderStateByThread,
   setThreadInfoByThread,
-  setTitleDraft,
+  syncThreadTitleDraft,
   settingsDraft,
 }: UseTranscriptControllerArgs) {
   const messagesByThreadRef = useRef<MessageMap>({});
@@ -517,8 +519,8 @@ export function useTranscriptController({
       return changed ? { ...current, threads, sessions } : current;
     });
 
-    if (selectedThreadIdRef.current === threadId && !editingThreadTitle) {
-      setTitleDraft(nextTitle);
+    if (selectedThreadIdRef.current === threadId) {
+      syncThreadTitleDraft(nextTitle);
     }
   }
 

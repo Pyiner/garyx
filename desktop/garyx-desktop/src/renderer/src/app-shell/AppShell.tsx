@@ -15,7 +15,6 @@ import { startTransition } from "react";
 import { PanelLeft } from "lucide-react";
 
 import {
-  DEFAULT_SESSION_TITLE,
   type CreateAutomationInput,
   type DesktopApiProviderType,
   type DesktopAutomationActivityEntry,
@@ -92,7 +91,10 @@ import { ThreadConversationSidebar } from "../ThreadConversationSidebar";
 import { buildComposerWorkflowOptions } from "../ComposerForm";
 import { ComposerQueue } from "../ComposerQueue";
 import { ConversationHeaderActions } from "../ConversationHeaderActions";
-import { ConversationHeaderTitle } from "../ConversationHeaderTitle";
+import {
+  ConversationTitleRoot,
+  type ConversationTitleHandle,
+} from "./components/ConversationTitleRoot";
 import { NewThreadEmptyState } from "../NewThreadEmptyState";
 import { ToastViewportHost, useToastActions } from "../toast-provider";
 import { ToolTraceGroup } from "../tool-trace";
@@ -144,7 +146,6 @@ import {
   detachEndpointFromThread,
   ensureWorkspaceForNewThread,
   ensureThread,
-  saveThreadTitle,
   scheduleThreadHistoryRefresh,
   selectWorkspaceForThread,
   startNewThreadDraft,
@@ -744,12 +745,12 @@ export function AppShell() {
     ),
     () => gatewayMirror.getMachineState(),
   );
-  const [titleDraft, setTitleDraft] = useState(DEFAULT_SESSION_TITLE);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [savingTitle, setSavingTitle] = useState(false);
-  const [editingThreadTitle, setEditingThreadTitle] = useState(false);
+  // Batch 5b: title edit state lives in ConversationTitleRoot; the shell
+  // keeps a handle for the transcript controller's remote title sync.
+  const conversationTitleRef = useRef<ConversationTitleHandle | null>(null);
   const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
   const [bindingMutation, setBindingMutation] = useState<string | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
@@ -807,7 +808,6 @@ export function AppShell() {
   );
   const [pendingAutomationRunsByThread, setPendingAutomationRunsByThread] =
     useState<Record<string, PendingAutomationRun>>({});
-  const threadTitleInputRef = useRef<HTMLInputElement | null>(null);
   const selectedThreadIdRef = useRef<string | null>(null);
   const selectedThreadGenerationRef = useRef(0);
   const selectThreadRequestSequenceRef = useRef(0);
@@ -1440,7 +1440,6 @@ export function AppShell() {
     connection,
     desktopState,
     dispatchMessageState,
-    editingThreadTitle,
     historyLoading,
     lastRenderedMessageThreadRef,
     liveStreamStateRef,
@@ -1464,8 +1463,10 @@ export function AppShell() {
     setPendingRemoteInputsByThread: noopSetPendingRemoteInputsByThread,
     setRenderStateByThread: noopSetRenderStateByThread,
     setThreadInfoByThread: noopSetThreadInfoByThread,
-    setTitleDraft,
     settingsDraft,
+    syncThreadTitleDraft: (nextTitle: string) => {
+      conversationTitleRef.current?.syncTitle(nextTitle);
+    },
   });
   // Batch 2b dev-only parity probe (removed with the dual-write scaffolding
   // in batch 6): `__garyxMirrorParity(threadId)` in the DevTools console
@@ -2786,28 +2787,12 @@ export function AppShell() {
   }, [newThreadDraftActive, selectedThreadId]);
 
   useEffect(() => {
-    setEditingThreadTitle(false);
-  }, [contentView, selectedThreadId]);
-
-  useEffect(() => {
     // Capsule tabs are scoped to the current thread; drop them when the thread
     // or content view changes so a different thread's capsules never linger in
     // the dock (#TASK-1470).
     setOpenCapsuleTabs([]);
     setPendingActiveCapsuleId(null);
   }, [contentView, selectedThreadId]);
-
-  useEffect(() => {
-    if (!canEditThreadTitle && editingThreadTitle) {
-      setEditingThreadTitle(false);
-    }
-  }, [canEditThreadTitle, editingThreadTitle]);
-
-  useEffect(() => {
-    if (!editingThreadTitle) {
-      setTitleDraft(activeThread?.title || DEFAULT_SESSION_TITLE);
-    }
-  }, [editingThreadTitle, activeThread?.title]);
 
   useEffect(() => {
     if (!inspectorOpen && !threadLogsOpen) {
@@ -2829,18 +2814,6 @@ export function AppShell() {
       window.removeEventListener("keydown", handleKeydown);
     };
   }, [inspectorOpen, threadLogsOpen]);
-
-  useEffect(() => {
-    if (!editingThreadTitle) {
-      return;
-    }
-    const node = threadTitleInputRef.current;
-    if (!node) {
-      return;
-    }
-    node.focus();
-    node.select();
-  }, [editingThreadTitle]);
 
   useEffect(() => {
     if (contentView !== "thread") {
@@ -3398,35 +3371,6 @@ export function AppShell() {
   async function handleRequestRemoveWorkspace(workspace: DesktopWorkspace) {
     setWorkspaceMenuOpenPath(null);
     await handleRemoveWorkspace(workspace.path || "");
-  }
-
-  function beginThreadTitleEdit() {
-    if (!canEditThreadTitle || !activeThread) {
-      return;
-    }
-    setTitleDraft(activeThread.title || DEFAULT_SESSION_TITLE);
-    setEditingThreadTitle(true);
-  }
-
-  async function handleSaveTitle(options?: { closeEditor?: boolean }) {
-    await saveThreadTitle({
-      api: getDesktopApi(),
-      activeThread: activeThread,
-      activeAutomationThread: Boolean(activeAutomationThread),
-      titleDraft,
-      closeEditor: options?.closeEditor,
-      defaultTitle: DEFAULT_SESSION_TITLE,
-      setError,
-      setSavingTitle,
-      setDesktopState,
-      setTitleDraft,
-      setEditingThreadTitle,
-    });
-  }
-
-  function cancelThreadTitleEdit() {
-    setEditingThreadTitle(false);
-    setTitleDraft(activeThread?.title || DEFAULT_SESSION_TITLE);
   }
 
   function isArchiveAlreadyApplied(error: unknown): boolean {
@@ -4930,39 +4874,33 @@ export function AppShell() {
             <div aria-hidden="true" className="settings-window-toolbar" />
           ) : (
             <header className="conversation-header">
-              <ConversationHeaderTitle
+              <ConversationTitleRoot
+                activeAutomationThread={Boolean(activeAutomationThread)}
+                activeThread={activeThread}
                 activeThreadBot={activeThreadBot}
-                activeThreadTitle={activeThread?.title || null}
                 activeWorkspaceName={activeWorkspace?.name || null}
-                canEditThreadTitle={canEditThreadTitle}
-                contextText={conversationContextText}
-                editingThreadTitle={editingThreadTitle}
-                isAutomationView={isAutomationView}
-                isBotsView={isBotsView}
-                isSkillsView={isSkillsView}
-                isThreadPinned={selectedThreadPinned}
                 archiveThreadDisabled={Boolean(
                   !selectedThreadId ||
                     activeAutomationThread ||
                     isRuntimeBusy(activeRuntime?.state),
                 )}
-                onBeginEdit={beginThreadTitleEdit}
+                canEditThreadTitle={canEditThreadTitle}
+                contextText={conversationContextText}
+                isAutomationView={isAutomationView}
+                isBotsView={isBotsView}
+                isSkillsView={isSkillsView}
+                isThreadPinned={selectedThreadPinned}
                 onArchiveThread={() => {
                   void handleDeleteThread();
-                }}
-                onCancelEdit={cancelThreadTitleEdit}
-                onSaveTitle={() => {
-                  void handleSaveTitle({ closeEditor: true });
                 }}
                 onTogglePinnedThread={() => {
                   if (selectedThreadId) {
                     togglePinnedThread(selectedThreadId);
                   }
                 }}
-                onTitleDraftChange={setTitleDraft}
-                savingTitle={savingTitle}
-                titleDraft={titleDraft}
-                titleInputRef={threadTitleInputRef}
+                ref={conversationTitleRef}
+                setDesktopState={setDesktopState}
+                setError={setError}
               />
               <ConversationHeaderActions
                 gatewayStatusLabel={gatewayIndicator?.label || null}
