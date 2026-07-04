@@ -345,3 +345,97 @@ test("observeConnection dedupes shallow-equal statuses from fresh poll objects",
   assert.equal(rootNotified, 2);
   assert.notEqual(mirror.getRootSnapshot(), root1);
 });
+
+// ---- Batch 2a-2: dual-run equivalence for the authoritative-apply path ----
+
+import { transcriptWithResolvedActiveRun } from "../../../shared/transcript-sync.ts";
+import {
+  materializeRemoteTranscript,
+  visibleTranscriptMessages,
+} from "./transcript-materialize.ts";
+
+// Synthetic TranscriptMessage pool (wire/IPC shape per contracts): the
+// render-state fixture records carry ledger-shaped bodies without ids, so
+// the authoritative-apply dual-run uses purpose-built messages instead.
+function syntheticMessages(count) {
+  const pool = [];
+  for (let i = 1; i <= count; i += 1) {
+    const role = i % 3 === 0 ? "assistant" : i % 3 === 1 ? "user" : "assistant";
+    pool.push({
+      id: `msg-${i}`,
+      seq: i,
+      role,
+      text: `synthetic message ${i}`,
+      timestamp: `2026-06-19T12:0${i % 10}:00Z`,
+    });
+  }
+  return pool;
+}
+
+function transcriptFromCases(threadId, take) {
+  const slice = syntheticMessages(take);
+  assert.equal(slice.length, take);
+  return {
+    threadId,
+    messages: slice,
+    pendingInputs: [],
+    threadInfo: null,
+  };
+}
+
+// Legacy pure path: exactly what applyCanonicalTranscript does to the
+// message cache, minus React/message-machine/IPC side effects.
+function legacyCanonicalMessages(transcript, existing) {
+  const resolved = transcriptWithResolvedActiveRun(transcript);
+  const visible = visibleTranscriptMessages(resolved.messages);
+  return materializeRemoteTranscript(visible, [...existing]);
+}
+
+test("dual-run: mirror authoritative apply matches the legacy pure path", () => {
+  const threadId = "thread::dual-run-canonical";
+  const first = transcriptFromCases(threadId, 4);
+  const second = transcriptFromCases(threadId, 6);
+
+  // Legacy chain: two successive canonical applies over a shared cache.
+  const legacyAfterFirst = legacyCanonicalMessages(first, []);
+  const legacyAfterSecond = legacyCanonicalMessages(second, legacyAfterFirst);
+
+  // Mirror chain: same inputs through applyAuthoritativeTranscript.
+  const mirror = new GatewayMirror();
+  let notified = 0;
+  mirror.subscribeThread(threadId, () => (notified += 1));
+
+  mirror.applyAuthoritativeTranscript(threadId, first);
+  const snapshotFirst = mirror.getThreadSnapshot(threadId);
+  assert.deepEqual(snapshotFirst.messages, legacyAfterFirst);
+  assert.equal(notified, 1);
+
+  mirror.applyAuthoritativeTranscript(threadId, second);
+  const snapshotSecond = mirror.getThreadSnapshot(threadId);
+  assert.deepEqual(snapshotSecond.messages, legacyAfterSecond);
+  assert.equal(notified, 2);
+  assert.notEqual(snapshotSecond, snapshotFirst, "apply must rebuild snapshot");
+  assert.equal(snapshotSecond, mirror.getThreadSnapshot(threadId));
+});
+
+test("dual-run: threadInfo and pending inputs mirror the resolved transcript", () => {
+  const threadId = "thread::dual-run-info";
+  const base = transcriptFromCases(threadId, 3);
+  const pending = [{ id: "pending-1", content: "queued text" }];
+  const transcript = {
+    ...base,
+    pendingInputs: pending,
+    threadInfo: { activeRun: null, workspacePath: "/Users/test/repo" },
+  };
+
+  const resolved = transcriptWithResolvedActiveRun(transcript);
+  const mirror = new GatewayMirror();
+  mirror.applyAuthoritativeTranscript(threadId, transcript);
+  const snapshot = mirror.getThreadSnapshot(threadId);
+
+  assert.deepEqual(snapshot.threadInfo, resolved.threadInfo ?? null);
+  assert.deepEqual(snapshot.pendingRemoteInputs, resolved.pendingInputs ?? []);
+  // The authoritative path must not touch frontiers or verbatim records.
+  assert.equal(snapshot.frontier.committedSeq, 0);
+  assert.equal(snapshot.records.length, 0);
+});

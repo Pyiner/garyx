@@ -11,24 +11,24 @@ import {
   isControlTranscriptMessage,
   isToolRole,
   transcriptControlKind,
-} from "@shared/transcript-sync";
+} from "../../../shared/transcript-sync.ts";
 import {
   type MessageIntent,
-} from "../message-machine";
+} from "../message-machine.ts";
 import {
   countTranscriptFiles,
   countTranscriptImages,
   extractTranscriptText,
-} from "../message-rich-content";
+} from "../message-rich-content-core.ts";
 import {
   extractImageGenerationImageContent,
-} from "../app-shell/image-generation-content";
+} from "../app-shell/image-generation-content.ts";
 import {
   isRunLoadingPlaceholderMessage,
-} from "../app-shell/loading-labels";
+} from "../app-shell/loading-labels.ts";
 import type {
   UiTranscriptMessage,
-} from "../app-shell/types";
+} from "../app-shell/types.ts";
 
 const MESSAGES_TOP_PAGINATION_PREFETCH_MIN_PX = 640;
 const MESSAGES_TOP_PAGINATION_PREFETCH_VIEWPORTS = 1.5;

@@ -21,8 +21,13 @@ import type {
   DesktopState,
   DesktopTeam,
   DesktopWorkflowDefinition,
+  PendingThreadInput,
   RenderState,
+  ThreadRuntimeInfo,
+  ThreadTranscript,
 } from "@shared/contracts";
+
+import type { UiTranscriptMessage } from "../app-shell/types";
 import { ThreadFrontier } from "./frontier.ts";
 import type { ThreadFrontierSnapshot } from "./frontier.ts";
 import { ThreadTranscriptCache } from "./transcript-cache.ts";
@@ -75,11 +80,14 @@ export interface ThreadMirrorSnapshot {
   readonly version: number;
   readonly threadId: string;
   /**
-   * Committed events verbatim, seq-ordered. Batch 2 replaces this surface
-   * with mapped UI transcript messages; contract tests depend only on
-   * version/reference/monotonicity semantics, which stay stable.
+   * Committed events verbatim, seq-ordered. Contract tests depend only on
+   * version/reference/monotonicity semantics.
    */
   readonly records: readonly CommittedMessageEvent[];
+  /** Mapped UI transcript messages (authoritative-apply path, batch 2a-2). */
+  readonly messages: readonly UiTranscriptMessage[];
+  readonly threadInfo: ThreadRuntimeInfo | null;
+  readonly pendingRemoteInputs: readonly PendingThreadInput[];
   readonly renderState: RenderState | null;
   readonly frontier: ThreadFrontierSnapshot;
 }
@@ -222,11 +230,33 @@ export class GatewayMirror {
         version: entry.version,
         threadId,
         records: entry.cache.sortedRecords(),
+        messages: entry.cache.getUiMessages(),
+        threadInfo: entry.cache.getThreadInfo(),
+        pendingRemoteInputs: entry.cache.getPendingRemoteInputs(),
         renderState: entry.cache.getRenderState(),
         frontier: entry.frontier.snapshot(),
       };
     }
     return entry.snapshot;
+  }
+
+  /**
+   * Apply an authoritative (canonical) transcript for a thread as one
+   * synchronous commit: the mirror-side counterpart of the hook's
+   * applyCanonicalTranscript cache path. Message-machine sync and cache
+   * persistence remain with their legacy owners until batches 3/2b.
+   */
+  applyAuthoritativeTranscript(
+    threadId: string,
+    transcript: ThreadTranscript,
+  ): void {
+    const entry = this.threadEntry(threadId);
+    entry.cache.applyAuthoritative(transcript);
+    entry.version += 1;
+    entry.snapshot = null;
+    for (const listener of [...entry.listeners]) {
+      listener();
+    }
   }
 
   /**

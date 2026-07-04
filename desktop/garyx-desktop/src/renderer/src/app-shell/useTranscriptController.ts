@@ -83,7 +83,6 @@ export {
   userMessageIdForOrigin,
 } from "../gateway-mirror/transcript-materialize";
 import {
-  asRecord,
   chatStreamEventHasRunLifecycle,
   messagesNearEarlierUserTurnBoundary,
   transcriptHasAutomationResponse,
@@ -91,18 +90,8 @@ import {
   resolveIntentHistoryMatch,
   userMessageIdForOrigin,
   earliestRemoteHistoryIndex,
-  isRecoverableAssistantEntry,
-  jsonValuesEqual,
   materializeRemoteTranscript,
-  messageOriginId,
-  metadataString,
-  normalizeTranscriptMessageId,
-  remoteTranscriptMessageCanReuseExisting,
   transcriptEntryHistoryIndex,
-  transcriptMessageComparableText,
-  transcriptMessageFileCount,
-  transcriptMessageImageCount,
-  uiTranscriptMessageComparableText,
   visibleTranscriptMessages,
 } from "../gateway-mirror/transcript-materialize";
 
