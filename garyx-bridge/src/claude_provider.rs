@@ -95,8 +95,72 @@ fn result_usage_tokens(usage: Option<&HashMap<String, Value>>) -> (i64, i64) {
     (input_tokens.max(0), output_tokens.max(0))
 }
 
-fn remove_legacy_claude_code_oauth_env(env: &mut HashMap<String, String>) -> bool {
-    env.remove(CLAUDE_CODE_OAUTH_TOKEN_ENV).is_some()
+#[cfg(not(test))]
+fn valid_env_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    matches!(chars.next(), Some(first) if first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
+#[cfg(test)]
+fn load_user_terminal_env() -> HashMap<String, String> {
+    HashMap::new()
+}
+
+#[cfg(not(test))]
+fn load_user_terminal_env() -> HashMap<String, String> {
+    let shell = std::env::var("SHELL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "/bin/zsh".to_owned());
+    let output = std::process::Command::new(shell)
+        .args(["-ilc", "env"])
+        .env("GARYX_SHELL_ENV_PROBE", "1")
+        .output();
+    let Ok(output) = output else {
+        return HashMap::new();
+    };
+    if !output.status.success() {
+        return HashMap::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            valid_env_key(key).then(|| (key.to_owned(), value.to_owned()))
+        })
+        .collect()
+}
+
+fn extend_runtime_env_without_claude_code_oauth(
+    env: &mut HashMap<String, String>,
+    values: HashMap<String, String>,
+) {
+    for (key, value) in values {
+        if key != CLAUDE_CODE_OAUTH_TOKEN_ENV {
+            env.insert(key, value);
+        }
+    }
+}
+
+fn build_claude_runtime_env(
+    config_env: &HashMap<String, String>,
+    metadata: &HashMap<String, Value>,
+    mut terminal_env: HashMap<String, String>,
+) -> HashMap<String, String> {
+    let terminal_oauth_token = terminal_env.get(CLAUDE_CODE_OAUTH_TOKEN_ENV).cloned();
+    extend_runtime_env_without_claude_code_oauth(&mut terminal_env, config_env.clone());
+    extend_runtime_env_without_claude_code_oauth(&mut terminal_env, task_cli_env(metadata));
+    extend_runtime_env_without_claude_code_oauth(
+        &mut terminal_env,
+        metadata_string_map(metadata, "desktop_claude_env"),
+    );
+    if let Some(token) = terminal_oauth_token {
+        terminal_env.insert(CLAUDE_CODE_OAUTH_TOKEN_ENV.to_owned(), token);
+    } else {
+        terminal_env.remove(CLAUDE_CODE_OAUTH_TOKEN_ENV);
+    }
+    terminal_env
 }
 
 fn claude_background_task_key(data: &Value) -> Option<String> {
@@ -1080,10 +1144,11 @@ impl ClaudeCliProvider {
                 );
                 (None, HashMap::new(), Some(merged_instructions), None)
             };
-        let mut env = self.config.env.clone();
-        env.extend(task_cli_env(&options.metadata));
-        env.extend(metadata_string_map(&options.metadata, "desktop_claude_env"));
-        remove_legacy_claude_code_oauth_env(&mut env);
+        let env = build_claude_runtime_env(
+            &self.config.env,
+            &options.metadata,
+            load_user_terminal_env(),
+        );
         let cli_path = resolve_claude_sdk_cli_path(&self.config);
         let cli_prefix_args = resolve_claude_sdk_cli_prefix_args(&self.config);
 

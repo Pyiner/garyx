@@ -366,10 +366,12 @@ fn test_fresh_session_retry_detection() {
 }
 
 #[test]
-fn test_remove_legacy_claude_code_oauth_preserves_non_auth_env() {
-    let mut env = HashMap::from([("HTTPS_PROXY".to_owned(), "http://127.0.0.1:6152".to_owned())]);
-
-    assert!(!remove_legacy_claude_code_oauth_env(&mut env));
+fn test_build_claude_runtime_env_preserves_terminal_env() {
+    let env = build_claude_runtime_env(
+        &HashMap::new(),
+        &HashMap::new(),
+        HashMap::from([("HTTPS_PROXY".to_owned(), "http://127.0.0.1:6152".to_owned())]),
+    );
 
     assert_eq!(
         env.get("HTTPS_PROXY").map(String::as_str),
@@ -378,32 +380,64 @@ fn test_remove_legacy_claude_code_oauth_preserves_non_auth_env() {
 }
 
 #[test]
-fn test_remove_legacy_claude_code_oauth_removes_stale_token() {
-    let mut env = HashMap::from([(
-        "CLAUDE_CODE_OAUTH_TOKEN".to_owned(),
-        "stale-token".to_owned(),
-    )]);
+fn test_build_claude_runtime_env_keeps_current_terminal_oauth_token() {
+    let mut metadata = HashMap::new();
+    metadata.insert(
+        "desktop_claude_env".to_owned(),
+        serde_json::json!({
+            "CLAUDE_CODE_OAUTH_TOKEN": "stale-desktop-token",
+            "ALL_PROXY": "socks5://127.0.0.1:6153"
+        }),
+    );
 
-    assert!(remove_legacy_claude_code_oauth_env(&mut env));
+    let env = build_claude_runtime_env(
+        &HashMap::from([
+            (
+                "CLAUDE_CODE_OAUTH_TOKEN".to_owned(),
+                "stale-config-token".to_owned(),
+            ),
+            ("HTTPS_PROXY".to_owned(), "http://127.0.0.1:6152".to_owned()),
+        ]),
+        &metadata,
+        HashMap::from([(
+            "CLAUDE_CODE_OAUTH_TOKEN".to_owned(),
+            "current-terminal-token".to_owned(),
+        )]),
+    );
 
-    assert!(!env.contains_key("CLAUDE_CODE_OAUTH_TOKEN"));
+    assert_eq!(
+        env.get("CLAUDE_CODE_OAUTH_TOKEN").map(String::as_str),
+        Some("current-terminal-token")
+    );
+    assert_eq!(
+        env.get("HTTPS_PROXY").map(String::as_str),
+        Some("http://127.0.0.1:6152")
+    );
+    assert_eq!(
+        env.get("ALL_PROXY").map(String::as_str),
+        Some("socks5://127.0.0.1:6153")
+    );
 }
 
 #[test]
-fn test_remove_legacy_claude_code_oauth_preserves_explicit_auth() {
-    let mut env = HashMap::from([
-        ("ANTHROPIC_AUTH_TOKEN".to_owned(), "relay-token".to_owned()),
-        (
-            "CLAUDE_CODE_OAUTH_TOKEN".to_owned(),
-            "stale-token".to_owned(),
-        ),
-        (
-            "ANTHROPIC_BASE_URL".to_owned(),
-            "https://relay.example".to_owned(),
-        ),
-    ]);
+fn test_build_claude_runtime_env_drops_non_terminal_oauth_token() {
+    let mut metadata = HashMap::new();
+    metadata.insert(
+        "desktop_claude_env".to_owned(),
+        serde_json::json!({
+            "CLAUDE_CODE_OAUTH_TOKEN": "stale-desktop-token",
+            "ANTHROPIC_AUTH_TOKEN": "relay-token"
+        }),
+    );
 
-    assert!(remove_legacy_claude_code_oauth_env(&mut env));
+    let env = build_claude_runtime_env(
+        &HashMap::from([(
+            "CLAUDE_CODE_OAUTH_TOKEN".to_owned(),
+            "stale-config-token".to_owned(),
+        )]),
+        &metadata,
+        HashMap::new(),
+    );
 
     assert!(!env.contains_key("CLAUDE_CODE_OAUTH_TOKEN"));
     assert_eq!(
