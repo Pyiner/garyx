@@ -58,7 +58,7 @@ import { TurnSummary } from "../../turn-summary";
 import { ToolTraceGroup } from "../../tool-trace";
 import { AgentAvatar } from "./AgentAvatar";
 import { CapsuleChatCardList } from "./CapsuleChatCard";
-import { ThreadLogPanel } from "./ThreadLogPanel";
+import { ThreadLogDock } from "./ThreadLogDock";
 import { ThreadTaskTreePopover } from "./ThreadTaskTreePopover";
 import { shouldShowThreadTaskTreePopover } from "./thread-task-tree-popover-model";
 import { useI18n } from "../../i18n";
@@ -265,8 +265,6 @@ type ThreadPageProps = {
   activeToolGroupId: string | null;
   activeQueue: MessageIntent[];
   renderState: RenderState | null;
-  activeThreadLogsHasUnread: boolean;
-  activeThreadLogsPath: string;
   activeThreadSummary: DesktopThreadSummary | null;
   activeThreadTitle: string | null;
   activeThreadRunId: string | null;
@@ -298,7 +296,6 @@ type ThreadPageProps = {
   isActiveSendingThread: boolean;
   canSteerQueuedPrompt: boolean;
   messagesRef: RefObject<HTMLDivElement | null>;
-  threadLogLines: ThreadLogLine[];
   newThreadSelectedAgentId: string;
   newThreadSelectedWorkflowId?: string | null;
   newThreadProviderModels?: DesktopProviderModels | null;
@@ -325,12 +322,9 @@ type ThreadPageProps = {
   rateLimit?: RenderRateLimit | null;
   threadLayoutRef: RefObject<HTMLDivElement | null>;
   threadLayoutStyle?: CSSProperties;
-  threadLogsError: string | null;
-  threadLogsLoading: boolean;
   threadLogsMaxWidth: number;
   threadLogsOpen: boolean;
   threadLogsPanelWidth: number;
-  threadLogsRef: RefObject<HTMLDivElement | null>;
   threadLogsResizing: boolean;
   threadAvatarCatalog: ThreadAvatarCatalog;
   teamAgentDisplayNamesById: Record<string, string>;
@@ -351,7 +345,6 @@ type ThreadPageProps = {
   onComposerSubmit: (options?: {
     useAlternateFollowUpBehavior?: boolean;
   }) => void;
-  onJumpToLatestThreadLogs: () => void;
   onLocalWorkspaceFileLinkClick: (path: string) => void;
   onMessagesScroll: () => void;
   onMessagesUserScrollIntent: () => void;
@@ -380,7 +373,7 @@ type ThreadPageProps = {
   onSelectBotBinding: (botId: string | null) => void;
   onSelectWorkspace: (workspacePath: string) => void;
   onSetDraggedQueueIntentId: (intentId: string | null) => void;
-  onThreadLogsContentScroll: () => void;
+  onThreadLogsUnreadChange: (hasUnread: boolean) => void;
   onThreadLogsResizeKeyDown: (
     event: React.KeyboardEvent<HTMLDivElement>,
   ) => void;
@@ -403,8 +396,6 @@ export function ThreadPage({
   activeToolGroupId,
   activeQueue,
   renderState,
-  activeThreadLogsHasUnread,
-  activeThreadLogsPath,
   activeThreadSummary,
   activeThreadTitle,
   activeThreadRunId,
@@ -439,7 +430,6 @@ export function ThreadPage({
   canSteerQueuedPrompt,
   isComposingRef,
   messagesRef,
-  threadLogLines,
   newThreadSelectedAgentId,
   newThreadSelectedWorkflowId,
   newThreadProviderModels,
@@ -464,7 +454,6 @@ export function ThreadPage({
   onComposerCompositionStart,
   onComposerInterrupt,
   onComposerSubmit,
-  onJumpToLatestThreadLogs,
   onLocalWorkspaceFileLinkClick,
   onMessagesScroll,
   onMessagesUserScrollIntent,
@@ -491,7 +480,7 @@ export function ThreadPage({
   onSteerQueuedPrompt,
   onOpenThreadById,
   onOpenCapsule,
-  onThreadLogsContentScroll,
+  onThreadLogsUnreadChange,
   onThreadLogsResizeKeyDown,
   onThreadLogsResizeStart,
   preferredWorkspaceForNewThread,
@@ -505,12 +494,9 @@ export function ThreadPage({
   rateLimit,
   threadLayoutRef,
   threadLayoutStyle,
-  threadLogsError,
-  threadLogsLoading,
   threadLogsMaxWidth,
   threadLogsOpen,
   threadLogsPanelWidth,
-  threadLogsRef,
   threadLogsResizing,
   threadAvatarCatalog,
   teamAgentDisplayNamesById,
@@ -1224,17 +1210,10 @@ export function ThreadPage({
             role="separator"
             tabIndex={0}
           />
-          <ThreadLogPanel
-            activeThreadLogsHasUnread={activeThreadLogsHasUnread}
-            activeThreadLogsPath={activeThreadLogsPath}
+          <ThreadLogDock
             activeThreadTitle={activeThreadTitle}
-            threadLogLines={threadLogLines}
-            onContentScroll={onThreadLogsContentScroll}
-            onJumpToLatest={onJumpToLatestThreadLogs}
-            selectedThreadId={selectedThreadId}
-            threadLogsError={threadLogsError}
-            threadLogsLoading={threadLogsLoading}
-            threadLogsRef={threadLogsRef}
+            onUnreadChange={onThreadLogsUnreadChange}
+            threadId={selectedThreadId}
           />
         </>
       ) : null}

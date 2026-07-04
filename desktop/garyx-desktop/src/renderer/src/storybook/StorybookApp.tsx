@@ -20,7 +20,6 @@ function ThreadStage({ step }: { step: StoryStep }) {
   const threadLayoutRef = useRef<HTMLDivElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const composerAttachmentInputRef = useRef<HTMLInputElement | null>(null);
-  const threadLogsRef = useRef<HTMLDivElement | null>(null);
   const ignoreComposerSubmitUntilRef = useRef(0);
   const isComposingRef = useRef(false);
 
@@ -45,8 +44,6 @@ function ThreadStage({ step }: { step: StoryStep }) {
       // storybook has no gateway, so it visualizes the conversation-state
       // machine, optimistic bubbles, and activity chrome rather than history.
       renderState={null}
-      activeThreadLogsHasUnread={false}
-      activeThreadLogsPath=""
       activeThreadSummary={null}
       activeThreadTitle="Conversation State Storybook"
       activeThreadRunId={state.activeRunId}
@@ -81,7 +78,6 @@ function ThreadStage({ step }: { step: StoryStep }) {
       canSteerQueuedPrompt={activity.canSteerQueuedPrompt}
       isComposingRef={isComposingRef}
       messagesRef={messagesRef}
-      threadLogLines={[]}
       newThreadSelectedAgentId="claude"
       newThreadSelectedWorkflowId={null}
       newThreadWorkspaceEntry={null}
@@ -94,7 +90,6 @@ function ThreadStage({ step }: { step: StoryStep }) {
       onComposerCompositionStart={noop}
       onComposerInterrupt={noop}
       onComposerSubmit={noop}
-      onJumpToLatestThreadLogs={noop}
       onLocalWorkspaceFileLinkClick={noop}
       onMarkIgnoreComposerSubmitWindow={noop}
       onMessagesScroll={noop}
@@ -114,7 +109,7 @@ function ThreadStage({ step }: { step: StoryStep }) {
       onSelectWorkspace={noop}
       onSetDraggedQueueIntentId={noop}
       onSteerQueuedPrompt={noop}
-      onThreadLogsContentScroll={noop}
+      onThreadLogsUnreadChange={noop}
       onThreadLogsResizeKeyDown={noop}
       onThreadLogsResizeStart={noop}
       preferredWorkspaceForNewThread={null}
@@ -126,12 +121,9 @@ function ThreadStage({ step }: { step: StoryStep }) {
       showHistoryLoadingPlaceholder={state.showHistoryLoadingPlaceholder}
       showTailThinking={activity.showPendingAckLoading}
       threadLayoutRef={threadLayoutRef}
-      threadLogsError={null}
-      threadLogsLoading={false}
       threadLogsMaxWidth={0}
       threadLogsOpen={false}
       threadLogsPanelWidth={0}
-      threadLogsRef={threadLogsRef}
       threadLogsResizing={false}
       threadAvatarCatalog={EMPTY_THREAD_AVATAR_CATALOG}
       teamAgentDisplayNamesById={{}}

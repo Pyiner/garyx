@@ -171,7 +171,6 @@ import type {
   MessageMap,
   PendingAutomationRun,
   PendingThreadInputMap,
-  ThreadLogLine,
   UiTranscriptMessage,
   WorkspaceDirectoryState,
 } from "./types";
@@ -182,11 +181,9 @@ import {
   SIDE_TOOLS_PANEL_MAX_WIDTH,
   SIDE_TOOLS_PANEL_MIN_WIDTH,
   THREAD_LOG_PANEL_MAX_WIDTH,
-  buildThreadLogLines,
   clampSideToolsPanelWidth,
   clampThreadLogsPanelWidth,
   computeGatewayIndicator,
-  keepRecentThreadLogLines,
 } from "./diagnostics-helpers";
 import {
   isKnownThreadId,
@@ -758,11 +755,8 @@ export function AppShell() {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [workspaceFileFilter, setWorkspaceFileFilter] = useState("");
   const [threadLogsOpen, setThreadLogsOpen] = useState(false);
-  const [threadLogsText, setThreadLogsText] = useState("");
-  const [threadLogsPath, setThreadLogsPath] = useState("");
-  const [threadLogsCursor, setThreadLogsCursor] = useState(0);
-  const [threadLogsLoading, setThreadLogsLoading] = useState(false);
-  const [threadLogsError, setThreadLogsError] = useState<string | null>(null);
+  // Batch 5b: log content/polling live in ThreadLogDock; the shell keeps
+  // only the open flag and the unread mirror for the header badge.
   const [threadLogsHasUnread, setThreadLogsHasUnread] = useState(false);
   const [botConversationGroupId, setBotConversationGroupId] = useState<string | null>(null);
   const [workspaceConversationPath, setWorkspaceConversationPath] =
@@ -814,7 +808,6 @@ export function AppShell() {
   const [pendingAutomationRunsByThread, setPendingAutomationRunsByThread] =
     useState<Record<string, PendingAutomationRun>>({});
   const threadTitleInputRef = useRef<HTMLInputElement | null>(null);
-  const threadLogsRef = useRef<HTMLDivElement | null>(null);
   const selectedThreadIdRef = useRef<string | null>(null);
   const selectedThreadGenerationRef = useRef(0);
   const selectThreadRequestSequenceRef = useRef(0);
@@ -830,7 +823,6 @@ export function AppShell() {
   const pendingAutomationRunsRef = useRef<Record<string, PendingAutomationRun>>(
     {},
   );
-  const threadLogsCursorRef = useRef(0);
   const botBindingRequestSequenceRef = useRef(0);
   const lastRemoteStateWarningKeyRef = useRef<string | null>(null);
   const pendingThreadBottomSnapRef = useRef<string | null>(null);
@@ -981,25 +973,6 @@ export function AppShell() {
     // synchronous shadow for event-path readers until the machine's
     // orchestration migrates in batch 3c; the mirror is the only writer.
     messageStateRef.current = gatewayMirror.dispatchMachineAction(action);
-  }
-
-  function threadLogsNearBottom() {
-    const node = threadLogsRef.current;
-    if (!node) {
-      return true;
-    }
-    return node.scrollHeight - node.scrollTop - node.clientHeight < 48;
-  }
-
-  function scrollThreadLogsToLatest(behavior: ScrollBehavior = "auto") {
-    const node = threadLogsRef.current;
-    if (!node) {
-      return;
-    }
-    node.scrollTo({
-      top: node.scrollHeight,
-      behavior,
-    });
   }
 
   function handleSideToolsResizeStart(
@@ -1359,12 +1332,6 @@ export function AppShell() {
     recovering: hasGatewayRecoveryActivity(),
     reason: gatewayStatusHint || connection?.error || null,
   });
-  const threadLogLines = useMemo(
-    () => buildThreadLogLines(threadLogsText),
-    [threadLogsText],
-  );
-  const activeThreadLogsPath = threadLogsPath || "Waiting for log file";
-  const activeThreadLogsHasUnread = threadLogsHasUnread;
   const selectedWorkspaceEntry = selectedWorkspace(
     desktopState,
     desktopState?.selectedWorkspacePath || null,
@@ -2843,10 +2810,6 @@ export function AppShell() {
   }, [editingThreadTitle, activeThread?.title]);
 
   useEffect(() => {
-    threadLogsCursorRef.current = threadLogsCursor;
-  }, [threadLogsCursor]);
-
-  useEffect(() => {
     if (!inspectorOpen && !threadLogsOpen) {
       return;
     }
@@ -2931,104 +2894,6 @@ export function AppShell() {
     if (threadLogsOpen && !selectedThreadId) {
       setThreadLogsOpen(false);
     }
-  }, [selectedThreadId, threadLogsOpen]);
-
-  useEffect(() => {
-    if (!threadLogsOpen || contentView !== "thread" || !selectedThreadId) {
-      return;
-    }
-
-    let cancelled = false;
-    let polling = false;
-
-    setThreadLogsLoading(true);
-    setThreadLogsError(null);
-    setThreadLogsHasUnread(false);
-    setThreadLogsText("");
-    setThreadLogsPath("");
-    setThreadLogsCursor(0);
-    threadLogsCursorRef.current = 0;
-
-    const loadLogs = async (cursor?: number) => {
-      if (cancelled || polling) {
-        return;
-      }
-      polling = true;
-      const wasNearBottom = threadLogsNearBottom();
-      try {
-        const chunk = await window.garyxDesktop.getThreadLogs(
-          selectedThreadId,
-          cursor,
-        );
-        if (cancelled) {
-          return;
-        }
-        setThreadLogsPath(chunk.path);
-        setThreadLogsCursor(chunk.cursor);
-        threadLogsCursorRef.current = chunk.cursor;
-        setThreadLogsError(null);
-        setThreadLogsLoading(false);
-        if (chunk.reset) {
-          setThreadLogsText(keepRecentThreadLogLines(chunk.text));
-          setThreadLogsHasUnread(false);
-          window.requestAnimationFrame(() => {
-            scrollThreadLogsToLatest("auto");
-          });
-          return;
-        }
-        if (!chunk.text) {
-          return;
-        }
-        setThreadLogsText((current) =>
-          keepRecentThreadLogLines(current + chunk.text),
-        );
-        if (wasNearBottom) {
-          setThreadLogsHasUnread(false);
-          window.requestAnimationFrame(() => {
-            scrollThreadLogsToLatest("auto");
-          });
-        } else {
-          setThreadLogsHasUnread(true);
-        }
-      } catch (loadError) {
-        if (!cancelled) {
-          setThreadLogsLoading(false);
-          setThreadLogsError(
-            loadError instanceof Error
-              ? loadError.message
-              : "Failed to load thread logs",
-          );
-        }
-      } finally {
-        polling = false;
-      }
-    };
-
-    void loadLogs();
-    const timer = window.setInterval(() => {
-      if (document.hidden) {
-        return;
-      }
-      void loadLogs(threadLogsCursorRef.current);
-    }, 1000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [contentView, selectedThreadId, threadLogsOpen]);
-
-  useEffect(() => {
-    if (
-      !threadLogsOpen ||
-      !selectedThreadId
-    ) {
-      return;
-    }
-    setThreadLogsHasUnread(false);
-    window.requestAnimationFrame(() => {
-      scrollThreadLogsToLatest("auto");
-    });
   }, [selectedThreadId, threadLogsOpen]);
 
   function setPendingAutomationRun(
@@ -4084,8 +3949,6 @@ export function AppShell() {
       activeToolGroupId={sideChatActiveToolGroupId}
       activeQueue={sideChatQueue}
       renderState={sideChatRenderState}
-      activeThreadLogsHasUnread={false}
-      activeThreadLogsPath=""
       activeThreadSummary={sideChatThreadSummary}
       activeThreadTitle={sideChatThreadSummary?.title || null}
       activeThreadRunId={
@@ -4122,7 +3985,6 @@ export function AppShell() {
       canSteerQueuedPrompt={sideChatCanSteerQueuedPrompt}
       isComposingRef={sideIsComposingRef}
       messagesRef={sideChatMessagesRef}
-      threadLogLines={[]}
       newThreadSelectedAgentId={sideChatThreadSummary?.agentId || pendingAgentId}
       newThreadSelectedWorkflowId={null}
       newThreadWorkspaceEntry={newThreadWorkspaceEntry}
@@ -4170,7 +4032,6 @@ export function AppShell() {
         void interruptThread(sideChatThreadIdRef.current);
       }}
       onComposerSubmit={handleSideComposerSubmit}
-      onJumpToLatestThreadLogs={() => {}}
       onLocalWorkspaceFileLinkClick={handleLocalFileLinkClick}
       onMarkIgnoreComposerSubmitWindow={() => {
         sideIgnoreComposerSubmitUntilRef.current = performance.now() + 80;
@@ -4221,7 +4082,7 @@ export function AppShell() {
       onSteerQueuedPrompt={(item) => {
         void steerQueuedIntent(item, { canSteer: sideChatCanSteerQueuedPrompt });
       }}
-      onThreadLogsContentScroll={() => {}}
+      onThreadLogsUnreadChange={() => {}}
       onThreadLogsResizeKeyDown={() => {}}
       onThreadLogsResizeStart={() => {}}
       preferredWorkspaceForNewThread={preferredWorkspaceForNewThread}
@@ -4236,12 +4097,9 @@ export function AppShell() {
       showHistoryLoadingPlaceholder={false}
       showTailThinking={sideChatShowTailThinking}
       threadLayoutRef={sideChatThreadLayoutRef}
-      threadLogsError={null}
-      threadLogsLoading={false}
       threadLogsMaxWidth={0}
       threadLogsOpen={false}
       threadLogsPanelWidth={0}
-      threadLogsRef={threadLogsRef}
       threadLogsResizing={false}
       threadAvatarCatalog={threadAvatarCatalog}
       teamAgentDisplayNamesById={teamAgentDisplayNamesById}
@@ -4356,8 +4214,6 @@ export function AppShell() {
         activeToolGroupId={activeToolGroupId}
         activeQueue={activeQueue}
         renderState={activeRenderState}
-        activeThreadLogsHasUnread={embedded ? false : activeThreadLogsHasUnread}
-        activeThreadLogsPath={activeThreadLogsPath}
         activeThreadSummary={activeThread || null}
         activeThreadTitle={activeThread?.title || null}
         activeThreadRunId={activeThreadRunId}
@@ -4392,7 +4248,6 @@ export function AppShell() {
         canSteerQueuedPrompt={canSteerQueuedPrompt}
         isComposingRef={isComposingRef}
         messagesRef={messagesRef}
-        threadLogLines={threadLogLines}
         newThreadSelectedAgentId={pendingAgentId}
         newThreadSelectedWorkflowId={pendingWorkflowId}
         newThreadProviderModels={pendingProviderModels}
@@ -4448,10 +4303,6 @@ export function AppShell() {
           void handleInterrupt();
         }}
         onComposerSubmit={handleComposerSubmit}
-        onJumpToLatestThreadLogs={() => {
-          setThreadLogsHasUnread(false);
-          scrollThreadLogsToLatest("smooth");
-        }}
         onLocalWorkspaceFileLinkClick={handleLocalFileLinkClick}
         onMarkIgnoreComposerSubmitWindow={markIgnoreComposerSubmitWindow}
         onMessagesScroll={() => {
@@ -4549,11 +4400,7 @@ export function AppShell() {
         onSteerQueuedPrompt={(item) => {
           void handleSteerQueuedPrompt(item);
         }}
-        onThreadLogsContentScroll={() => {
-          if (threadLogsNearBottom()) {
-            setThreadLogsHasUnread(false);
-          }
-        }}
+        onThreadLogsUnreadChange={setThreadLogsHasUnread}
         onThreadLogsResizeKeyDown={embedded ? () => {} : handleThreadLogsResizeKeyDown}
         onThreadLogsResizeStart={embedded ? () => {} : handleThreadLogsResizeStart}
         preferredWorkspaceForNewThread={preferredWorkspaceForNewThread}
@@ -4573,8 +4420,6 @@ export function AppShell() {
               } as CSSProperties)
             : undefined
         }
-        threadLogsError={embedded ? null : threadLogsError}
-        threadLogsLoading={embedded ? false : threadLogsLoading}
         threadLogsMaxWidth={
           embedded
             ? 0
@@ -4585,7 +4430,6 @@ export function AppShell() {
         }
         threadLogsOpen={embedded ? false : threadLogsOpen}
         threadLogsPanelWidth={embedded ? 0 : threadLogsPanelWidth}
-        threadLogsRef={threadLogsRef}
         threadLogsResizing={embedded ? false : threadLogsResizing}
         threadAvatarCatalog={threadAvatarCatalog}
         teamAgentDisplayNamesById={teamAgentDisplayNamesById}
