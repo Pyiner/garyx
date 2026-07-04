@@ -4757,6 +4757,7 @@ export function AppShell() {
 
   if (loading) {
     return (
+      <GatewayMirrorContext.Provider value={gatewayMirror}>
       <I18nProvider languagePreference={settingsDraft.languagePreference}>
         <div className="startup-shell" role="status" aria-live="polite">
           <div className="startup-panel">
@@ -4775,6 +4776,7 @@ export function AppShell() {
           </div>
         </div>
       </I18nProvider>
+      </GatewayMirrorContext.Provider>
     );
   }
 
@@ -4796,6 +4798,7 @@ export function AppShell() {
     const canCancelGatewaySetup = gatewaySetupForced && gatewaySetupCanCancel;
 
     return (
+      <GatewayMirrorContext.Provider value={gatewayMirror}>
       <I18nProvider languagePreference={settingsDraft.languagePreference}>
         <div className="loading-shell">
           <div className="loading-panel gateway-setup-panel">
@@ -4920,6 +4923,7 @@ export function AppShell() {
           </div>
         </div>
       </I18nProvider>
+      </GatewayMirrorContext.Provider>
     );
   }
 

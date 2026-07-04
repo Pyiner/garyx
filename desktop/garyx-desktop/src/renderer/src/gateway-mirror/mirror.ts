@@ -29,6 +29,24 @@ import { ThreadTranscriptCache } from "./transcript-cache.ts";
 
 export type Unsubscribe = () => void;
 
+function connectionEquals(
+  a: ConnectionStatus | null,
+  b: ConnectionStatus | null,
+): boolean {
+  if (a === b) {
+    return true;
+  }
+  if (!a || !b) {
+    return false;
+  }
+  return (
+    a.ok === b.ok &&
+    a.bridgeReady === b.bridgeReady &&
+    a.gatewayUrl === b.gatewayUrl &&
+    (a.error ?? null) === (b.error ?? null)
+  );
+}
+
 /**
  * The IPC surface the mirror needs, injected so the class stays pure
  * TypeScript and testable without a preload bridge.
@@ -136,7 +154,10 @@ export class GatewayMirror {
 
   /** Record a connection status observation (poll/setup/error paths). */
   observeConnection(status: ConnectionStatus | null): void {
-    if (status === this.connection) {
+    // Shallow value comparison: the healthy poll delivers a fresh object
+    // with identical content every cycle; bumping root for those would
+    // re-render every root subscriber for nothing.
+    if (connectionEquals(status, this.connection)) {
       return;
     }
     this.connection = status;

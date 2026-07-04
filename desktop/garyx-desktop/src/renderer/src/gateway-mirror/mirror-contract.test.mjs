@@ -324,3 +324,24 @@ test("root and catalog snapshots are stable and refresh atomically per domain", 
   assert.notEqual(mirror.getRootSnapshot(), root2);
   assert.equal(mirror.getCatalogSnapshot(), catalogBefore, "catalog unaffected");
 });
+
+test("observeConnection dedupes shallow-equal statuses from fresh poll objects", () => {
+  const mirror = new GatewayMirror();
+  let rootNotified = 0;
+  mirror.subscribeRoot(() => (rootNotified += 1));
+
+  const status = { ok: true, bridgeReady: true, gatewayUrl: "http://localhost:1" };
+  mirror.observeConnection(status);
+  assert.equal(rootNotified, 1, "first observation bumps root");
+  const root1 = mirror.getRootSnapshot();
+
+  // Healthy poll: a fresh object with identical content must not bump.
+  mirror.observeConnection({ ...status });
+  assert.equal(rootNotified, 1, "shallow-equal fresh object must not bump");
+  assert.equal(mirror.getRootSnapshot(), root1, "snapshot reference stable");
+
+  // A real change bumps again.
+  mirror.observeConnection({ ...status, ok: false, error: "down" });
+  assert.equal(rootNotified, 2);
+  assert.notEqual(mirror.getRootSnapshot(), root1);
+});

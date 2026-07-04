@@ -6,8 +6,11 @@
 
 import { createContext, useContext, useSyncExternalStore } from "react";
 
-import { GatewayMirror } from "./mirror.ts";
-import type { CatalogSnapshot, GatewayRootSnapshot } from "./mirror.ts";
+import type {
+  CatalogSnapshot,
+  GatewayMirror,
+  GatewayRootSnapshot,
+} from "./mirror.ts";
 
 export const GatewayMirrorContext = createContext<GatewayMirror | null>(null);
 
