@@ -27,8 +27,13 @@ import type {
   ThreadTranscript,
 } from "@shared/contracts";
 
-import type { MessageIntent } from "../message-machine.ts";
+import type {
+  MessageIntent,
+  MessageMachineAction,
+  MessageMachineState,
+} from "../message-machine.ts";
 import type { UiTranscriptMessage } from "../app-shell/types";
+import { DispatchMachine } from "./dispatch-machine.ts";
 import { ThreadFrontier } from "./frontier.ts";
 import type { ThreadFrontierSnapshot } from "./frontier.ts";
 import { ThreadTranscriptCache } from "./transcript-cache.ts";
@@ -148,6 +153,9 @@ export class GatewayMirror {
   private catalogSnapshot: CatalogSnapshot | null = null;
   private catalogListeners = new Set<() => void>();
 
+  // Dispatch-machine domain (batch 3a): message-machine state storage.
+  private machine = new DispatchMachine();
+
   constructor(services?: GatewayMirrorServices) {
     this.services = services ?? null;
   }
@@ -242,6 +250,23 @@ export class GatewayMirror {
     for (const listener of [...this.catalogListeners]) {
       listener();
     }
+  }
+
+  subscribeMachine(listener: () => void): Unsubscribe {
+    return this.machine.subscribe(listener);
+  }
+
+  getMachineState(): MessageMachineState {
+    return this.machine.getState();
+  }
+
+  /**
+   * Apply one message-machine action (batch 3a: the mirror owns machine
+   * state storage; the reducer stays in message-machine.ts). Returns the
+   * committed post-dispatch state for callers that need it synchronously.
+   */
+  dispatchMachineAction(action: MessageMachineAction): MessageMachineState {
+    return this.machine.dispatch(action);
   }
 
   subscribeThread(threadId: string, listener: () => void): Unsubscribe {

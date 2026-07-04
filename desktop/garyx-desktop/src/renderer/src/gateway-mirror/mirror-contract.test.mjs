@@ -346,6 +346,58 @@ test("observeConnection dedupes shallow-equal statuses from fresh poll objects",
   assert.notEqual(mirror.getRootSnapshot(), root1);
 });
 
+// ---- Batch 3a: dispatch-machine storage domain ----
+
+test("machine dispatch commits through the shared reducer with useReducer bail-out semantics", () => {
+  const mirror = new GatewayMirror();
+  let machineNotified = 0;
+  let threadNotified = 0;
+  mirror.subscribeMachine(() => (machineNotified += 1));
+  mirror.subscribeThread("thread::machine-isolation", () => (threadNotified += 1));
+
+  const initial = mirror.getMachineState();
+  assert.equal(mirror.getMachineState(), initial, "state reference stable");
+
+  const intent = {
+    intentId: "intent-machine-1",
+    threadId: "thread::machine-isolation",
+    state: "queued_local",
+    dispatchMode: "sync_send",
+    responseText: "",
+  };
+  const afterCreate = mirror.dispatchMachineAction({
+    type: "intent/created",
+    intent,
+    enqueue: true,
+  });
+  assert.notEqual(afterCreate, initial, "real action commits a new state");
+  assert.equal(mirror.getMachineState(), afterCreate, "dispatch returns the committed state");
+  assert.equal(afterCreate.intentsById[intent.intentId].intentId, intent.intentId);
+  assert.equal(machineNotified, 1, "machine subscribers notified once");
+  assert.equal(threadNotified, 0, "machine dispatch must not notify thread subscribers");
+
+  // Reducer bail-out (unknown intent id): same reference, no notify —
+  // matching React useReducer's Object.is bail-out the AppShell relied on.
+  const afterNoop = mirror.dispatchMachineAction({
+    type: "intent/request-dispatch",
+    intentId: "intent-does-not-exist",
+  });
+  assert.equal(afterNoop, afterCreate, "no-op action returns the same reference");
+  assert.equal(machineNotified, 1, "no-op action must not notify");
+
+  // Transcript commits must not notify machine subscribers.
+  mirror.applyRemoteTranscript("thread::machine-isolation", {
+    threadId: "thread::machine-isolation",
+    remoteFound: true,
+    messages: [wireMessage(1, "user", "hello")],
+    pendingInputs: [],
+    threadInfo: null,
+    pageInfo: fullPageInfo({ totalMessages: 1, committedMessages: 1, returnedMessages: 1, endIndex: 1 }),
+  });
+  assert.equal(machineNotified, 1, "transcript commit must not notify machine");
+  assert.equal(threadNotified, 1, "transcript commit notifies the thread");
+});
+
 // ---- Batch 2a-2: dual-run equivalence for the authoritative-apply path ----
 
 import { transcriptWithResolvedActiveRun } from "../../../shared/transcript-sync.ts";

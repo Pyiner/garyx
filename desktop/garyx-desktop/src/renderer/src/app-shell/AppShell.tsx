@@ -5,9 +5,9 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
-  useReducer,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
   type ReactNode,
 } from "react";
@@ -63,7 +63,6 @@ import {
 import {
   initialMessageMachineState,
   isRuntimeBusy,
-  messageMachineReducer,
   selectGlobalActiveThreadId,
   selectQueueIntentIds,
   selectThreadRuntime,
@@ -742,9 +741,16 @@ export function AppShell() {
   const [threadInfoByThread, setThreadInfoByThread] = useState<
     Record<string, ThreadRuntimeInfo | null>
   >({});
-  const [messageState, reactDispatchMessageState] = useReducer(
-    messageMachineReducer,
-    initialMessageMachineState,
+  // Batch 3a: the mirror's dispatch-machine module owns machine-state
+  // storage; React reads it through useSyncExternalStore (same bail-out
+  // semantics as the previous useReducer — an identical reference neither
+  // commits nor re-renders).
+  const messageState = useSyncExternalStore(
+    useCallback(
+      (onChange) => gatewayMirror.subscribeMachine(onChange),
+      [gatewayMirror],
+    ),
+    () => gatewayMirror.getMachineState(),
   );
   const [titleDraft, setTitleDraft] = useState(DEFAULT_SESSION_TITLE);
   const [error, setError] = useState<string | null>(null);
@@ -1042,11 +1048,12 @@ export function AppShell() {
   }, [automationStatus, pushToast]);
 
   function dispatchMessageState(action: MessageMachineAction) {
-    messageStateRef.current = messageMachineReducer(
-      messageStateRef.current,
-      action,
-    );
-    reactDispatchMessageState(action);
+    // Batch 3a: one reducer application per action, committed in the
+    // mirror (the previous shape ran the reducer twice — once for the ref
+    // shadow, once inside React's useReducer). The ref stays as a
+    // synchronous shadow for event-path readers until the machine's
+    // orchestration migrates in batch 3c; the mirror is the only writer.
+    messageStateRef.current = gatewayMirror.dispatchMachineAction(action);
   }
 
   function threadLogsNearBottom() {
