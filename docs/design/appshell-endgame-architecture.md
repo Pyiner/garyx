@@ -93,6 +93,13 @@ Does not own: URL/route state (sibling `DesktopRouteStore`); text drafts,
 attachment pickers, drag targets, scroll anchors, panel widths, dialog state;
 any transcript structure derivation.
 
+Internally the mirror is one store with three pinned module boundaries —
+`transcript-cache` (committed bodies + render snapshots + pagination),
+`dispatch-machine` (message machine, queue, send/steer/interrupt), and
+`frontier` (per-thread/per-consumer cursors + stream lifecycle) — so the class
+stays a facade over separable, individually-testable modules rather than
+drifting into a god object.
+
 ### DesktopRouteStore
 
 Sibling pure-TS store. Owns the current `DesktopRoute`, parses
@@ -247,7 +254,7 @@ All 11 current controllers (8 from T13 plus 3 earlier ones):
 | useTranscriptController (1917) | **Dissolved into mirror.** Stream ingestion, history convergence, render snapshot apply, pending inputs, thread info, pagination → `GatewayMirror`. Pure cache helpers → `gateway-mirror/transcript-cache.ts`. React keeps `useThreadMirror` + render-view mapping. |
 | useMessageDispatchController (1714) | **Split.** Message machine, send/steer/interrupt, queue drain, runtime convergence → mirror. Composer draft/attachments/drag state → `ComposerSurface`/`ComposerQueue` (colocated). |
 | useGatewayConnectionController (526) | **Dissolved into mirror** (polling, status observation, refresh, recovery scheduling). Gateway-setup form state stays local to its panel. |
-| useDeepLinkRouteController (379) | **Replaced** by `DesktopRouteStore` + a small `RouteEffectBridge` that translates route changes into mirror actions. No writable `contentView`. |
+| useDeepLinkRouteController (379) | **Replaced** by `DesktopRouteStore` + a small `RouteEffectBridge`. The bridge owns two inputs: (a) route-store changes (hash/popstate), and (b) the `garyx://` deep-link IPC channel (`subscribeDeepLinks`) — an external command stream that is neither hash state nor pure mirror state. Bridge translations: `open-thread`/`resume-session` → `mirror.openThread` (+ the existing gateway-readiness retry ladder from `waitForGatewayReadyForDeepLink`, which moves into the bridge) then `routeStore.navigate`; `new-thread`/`open-capsule` → `navigate` with route params. No writable `contentView`. |
 | useSideChatController (1058) | Side-thread mapping + side composer state colocate into `SideChatPanel`; it subscribes `useThreadMirror(sideThreadId)` and calls mirror actions. The two reverse couplings T13 documented (sendIntentOnce reads sideChatThreadIdsRef; rewrite refetch reads the consumer id) become plain mirror state, dissolving both. |
 | useLayoutResizeController (477) | Keep hook shape, colocate under `AppLayoutFrame`/`ThreadLayout`. Not a mirror concern. |
 | useMessagesScrollController (277) | Keep hook shape, colocate under `ThreadTranscriptViewport`. |
@@ -287,8 +294,13 @@ End state:
 
 1. External/manual hash edits take real effect instead of being converged back
    to the selected thread.
-2. Unknown thread hashes render an addressable error state instead of silently
-   falling back to `threads[0]`.
+2. Unknown `#/thread/<id>`: today `selectExistingThreadInPlace` sets
+   `Thread not found: <id>` (`AppShell.tsx:2459`) **and the state-to-hash
+   effect then rewrites the URL back to the currently selected thread**. New
+   behavior keeps the error state but leaves the entered hash in place as an
+   addressable error route (no rewrite). Note: the `threads[0]` default
+   selection lives in the `thread-home` (`#/`) branch and is intentional
+   default behavior — it is **not** changed by this design.
 3. `contentView` sessionStorage persistence is removed; the hash (which
    Electron already restores per window) is the only persisted route.
 
@@ -343,10 +355,10 @@ high-churn). Additive modules + temporary adapters, legacy deletion last.
 
 | Batch | Scope | Validation | Rollback |
 | --- | --- | --- | --- |
-| 0. Contract harness | No-React mirror test fixtures. Reuse existing captured material: `test-fixtures/render-layer/render-state-cases.json` and the electron-smoke mock-gateway frames as recorded `thread_render_frame` sources. Lock getSnapshot reference stability, per-thread notify isolation, monotonic render apply, frontier separation. | New mirror tests + existing render-view-model/thread-activity/desktop-route suites. | Delete additive tests. |
+| 0. Contract harness | No-React mirror test fixtures. Frame sources: (a) electron-smoke mock-gateway frames are real `thread_render_frame` wire envelopes and can be replayed as-is; (b) `test-fixtures/render-layer/render-state-cases.json` is a **reducer case set** (`records` ledger → expected `RenderState`), not wire frames — reusing it for mirror ingestion requires wrapping each case into a synthesized frame envelope (events + render_state); that wrapping cost belongs to this batch. Lock getSnapshot reference stability, per-thread notify isolation, monotonic render apply, frontier separation. | New mirror tests + existing render-view-model/thread-activity/desktop-route suites. | Delete additive tests. |
 | 1. Mirror shell + root/catalog domains | `GatewayMirror` class, root+catalog snapshots, contexts, AppShell adapter feeding legacy props. desktopState/connection/agents/teams/workflows/providerModels refresh moves in. | `npm run test:unit`, `npm run build:ui`. | Revert adapter wiring. |
 | 2. Thread transcript domain | Transcript caches, stream ingestion, render snapshots, pending inputs, thread info, pagination → mirror. `useThreadMirror` feeds the same view-model inputs. | **Dual-run comparison**: same recorded event sequences into legacy helpers and mirror, assert identical messagesByThread/renderState/pending/pagination. Plus unit suite + build:ui. | Adapter flag returns ThreadPage to legacy controller. |
-| 3. Dispatch + queue domain | Message machine, send/steer/interrupt, queue drain, runtime convergence → mirror. Composer draft stays put for now. | Message-machine + pending-inputs + thread-activity suites; dual-run send/steer event-sequence comparison; CDP script: send, queued follow-up, steer, interrupt. | Adapter routes composer actions back to legacy hook. |
+| 3. Dispatch + queue domain | Message machine, send/steer/interrupt, queue drain, runtime convergence → mirror. Composer draft stays put for now. | Message-machine + pending-inputs + thread-activity suites; dual-run comparison strictly on **recorded ack/event sequences** — replay the same recorded gateway responses into legacy and mirror state machines and compare transitions; never live-double-send (dispatch has real gateway side effects). CDP script: send, queued follow-up, steer, interrupt. | Adapter routes composer actions back to legacy hook. |
 | 4. Route store | `DesktopRouteStore`; contentView becomes selector; `applyDesktopRoute` → route effects; fallback hash rewrite removed (intentional changes above). | desktop-route + main deep-link suites; CDP route script incl. unknown-thread hash. | Route store read-only; re-enable legacy state-to-hash effect. |
 | 5. Local colocation | Composer/queue-drag/side-chat/scroll/layout/dialogs/toasts/logs into feature roots; AppShell becomes providers + route outlet + layout (~≤800 lines). | Unit suite, build:ui; renderer render-count probe confirming thread frames no longer re-render unrelated panels. | Revert one feature root at a time. |
 | 6. Legacy deletion | Delete dissolved T13 hooks and adapter shims. | Full: test:unit, build:ui, test:smoke. | Restore adapter from prior commit. |
@@ -380,6 +392,9 @@ demonstrably becomes a maintenance burden.
   intentional, listed for sign-off.
 - High-churn AppShell during migration. Mitigated by additive batches and
   adapters; each batch merges within a day-scale window like T13 batches did.
+  Operationally: rebase onto latest main before starting each batch, and
+  re-scan for remaining adapter references before batch 6 deletes the legacy
+  paths.
 - Dual-run harness is temporary scaffolding; deleted in batch 6 to avoid
   bit-rot.
 
