@@ -288,3 +288,39 @@ export function replaceDesktopRoute(route: DesktopRoute): void {
   }
   globalThis.window?.history.replaceState(null, '', nextHash);
 }
+
+/**
+ * Structural route equality (batch 4a). Optional string fields normalize
+ * `undefined` to `null` so parse-produced and state-derived routes compare
+ * equal when they address the same location.
+ */
+export function desktopRoutesEqual(a: DesktopRoute, b: DesktopRoute): boolean {
+  if (a.kind !== b.kind) {
+    return false;
+  }
+  const nz = (value: string | null | undefined) => value ?? null;
+  switch (a.kind) {
+    case 'thread-home':
+      return true;
+    case 'thread':
+      return a.threadId === (b as typeof a).threadId;
+    case 'new-thread': {
+      const other = b as typeof a;
+      return (
+        nz(a.workspacePath) === nz(other.workspacePath) &&
+        nz(a.agentId) === nz(other.agentId) &&
+        nz(a.workflowId) === nz(other.workflowId)
+      );
+    }
+    case 'workflow-task':
+      return a.taskId === (b as typeof a).taskId;
+    case 'automation':
+      return nz(a.automationId) === nz((b as typeof a).automationId);
+    case 'settings':
+      return nz(a.tabId) === nz((b as typeof a).tabId);
+    case 'capsule':
+      return a.capsuleId === (b as typeof a).capsuleId;
+    case 'view':
+      return a.view === (b as typeof a).view;
+  }
+}
