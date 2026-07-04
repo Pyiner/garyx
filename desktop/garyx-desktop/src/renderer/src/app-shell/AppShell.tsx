@@ -821,9 +821,17 @@ export function AppShell() {
     null,
   );
   const [toasts, setToasts] = useState<ToastItem[]>([]);
-  const [liveStreamStateByThread, setLiveStreamStateByThread] = useState<
-    Record<string, LiveStreamState>
-  >({});
+  // Batch 3c-1: the mirror's live-stream domain owns transport-state
+  // storage; React reads the aggregate map through useSyncExternalStore.
+  // `liveStreamStateRef` (below) stays as the synchronous shadow for
+  // event-path readers, fed by the transcript-controller proxies.
+  const liveStreamStateByThread = useSyncExternalStore(
+    useCallback(
+      (onChange) => gatewayMirror.subscribeLiveStreams(onChange),
+      [gatewayMirror],
+    ),
+    () => gatewayMirror.getLiveStreamMap(),
+  );
   const [pendingRemoteInputsByThread, setPendingRemoteInputsByThread] =
     useState<PendingThreadInputMap>({});
   const [pendingAutomationRunsByThread, setPendingAutomationRunsByThread] =
@@ -1530,6 +1538,7 @@ export function AppShell() {
     intentForId,
     loadOlderThreadHistoryPage,
     messagesByThreadRef,
+    replaceLiveStreamThreadId,
     setThreadRuntimeState,
     startCommittedThreadStream,
     threadTitleOverridesRef,
@@ -1561,7 +1570,6 @@ export function AppShell() {
     setError,
     setHistoryLoading,
     setHistoryPaginationByThread,
-    setLiveStreamStateByThread,
     setMessagesByThread,
     setPendingAutomationRun,
     setPendingRemoteInputsByThread,
@@ -2345,7 +2353,6 @@ export function AppShell() {
     intentForId,
     isActiveSendingThread,
     isDraftSendingThread,
-    liveStreamStateRef,
     messageStateRef,
     messagesByThreadRef,
     newThreadInitialDispatchLockRef,
@@ -2354,6 +2361,7 @@ export function AppShell() {
     preferredWorkspaceForNewThread,
     queueDrainInFlightByThreadRef,
     recordGatewayStatusObservation,
+    replaceLiveStreamThreadId,
     requestMessagesBottomSnap,
     runQueuedBatch,
     scheduleHistoryRefresh,
@@ -2361,7 +2369,6 @@ export function AppShell() {
     setConnection,
     setDesktopState,
     setError,
-    setLiveStreamStateByThread,
     setThreadRuntimeState,
     settingsDraft,
     sideChatThreadIdsRef,

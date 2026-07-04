@@ -1100,3 +1100,134 @@ test("dual-run: threadInfo and pending inputs mirror the resolved transcript", (
   assert.equal(snapshot.frontier.committedSeq, 0);
   assert.equal(snapshot.records.length, 0);
 });
+
+test("live-stream updates commit the thread snapshot and rebuild the aggregate map per update (3c-1)", () => {
+  const mirror = new GatewayMirror();
+  const threadId = "thread::live-stream-a";
+
+  const initialMap = mirror.getLiveStreamMap();
+  assert.equal(mirror.getLiveStreamMap(), initialMap, "getter must not allocate");
+  assert.equal(mirror.getThreadLiveStream(threadId), null);
+  assert.equal(
+    mirror.getThreadSnapshot(threadId).liveStream,
+    null,
+    "empty thread snapshot exposes a null liveStream",
+  );
+
+  let liveStreamNotifications = 0;
+  mirror.subscribeLiveStreams(() => {
+    liveStreamNotifications += 1;
+  });
+
+  const beforeSnapshot = mirror.getThreadSnapshot(threadId);
+  const created = mirror.updateThreadLiveStream(threadId, (current) => {
+    assert.equal(current, null, "first updater sees null");
+    return {
+      threadId,
+      activeIntentId: "intent-1",
+      assistantEntryId: null,
+      pendingAckIntentIds: [],
+      streamStatus: "connecting",
+    };
+  });
+  assert.equal(created?.streamStatus, "connecting");
+  assert.equal(liveStreamNotifications, 1);
+  const mapAfterCreate = mirror.getLiveStreamMap();
+  assert.notEqual(mapAfterCreate, initialMap, "update rebuilds the map");
+  assert.equal(mapAfterCreate[threadId], created);
+  const afterSnapshot = mirror.getThreadSnapshot(threadId);
+  assert.notEqual(afterSnapshot, beforeSnapshot, "thread snapshot commits");
+  assert.equal(afterSnapshot.liveStream, created);
+  assert.equal(afterSnapshot.version, beforeSnapshot.version + 1);
+
+  // Legacy setState cadence: even a no-change update rebuilds the map and
+  // notifies (the legacy updater always allocated a fresh Record).
+  const unchanged = mirror.updateThreadLiveStream(threadId, (current) => current);
+  assert.equal(unchanged, created);
+  assert.equal(liveStreamNotifications, 2);
+  assert.notEqual(mirror.getLiveStreamMap(), mapAfterCreate);
+
+  const cleared = mirror.updateThreadLiveStream(threadId, () => null);
+  assert.equal(cleared, null);
+  assert.equal(mirror.getThreadLiveStream(threadId), null);
+  assert.ok(!(threadId in mirror.getLiveStreamMap()), "null result deletes the entry");
+  assert.equal(mirror.getThreadSnapshot(threadId).liveStream, null);
+});
+
+test("live-stream updates notify only the touched thread's subscribers plus the aggregate domain", () => {
+  const mirror = new GatewayMirror();
+  const threadA = "thread::live-stream-iso-a";
+  const threadB = "thread::live-stream-iso-b";
+
+  let notifiedA = 0;
+  let notifiedB = 0;
+  let aggregate = 0;
+  mirror.subscribeThread(threadA, () => {
+    notifiedA += 1;
+  });
+  mirror.subscribeThread(threadB, () => {
+    notifiedB += 1;
+  });
+  mirror.subscribeLiveStreams(() => {
+    aggregate += 1;
+  });
+
+  mirror.updateThreadLiveStream(threadA, () => ({
+    threadId: threadA,
+    pendingAckIntentIds: [],
+    streamStatus: "streaming",
+  }));
+
+  assert.equal(notifiedA, 1, "touched thread notifies");
+  assert.equal(notifiedB, 0, "other threads stay silent");
+  assert.equal(aggregate, 1, "aggregate domain notifies once");
+});
+
+test("replaceLiveStreamThreadId moves the draft entry in one aggregate notification (3c-1)", () => {
+  const mirror = new GatewayMirror();
+  const draftId = "__garyx_new_thread_draft__";
+  const realId = "thread::promoted";
+
+  let aggregate = 0;
+  mirror.subscribeLiveStreams(() => {
+    aggregate += 1;
+  });
+
+  // No-op when the source has no entry (legacy guard).
+  const mapBefore = mirror.getLiveStreamMap();
+  mirror.replaceLiveStreamThreadId(draftId, realId);
+  assert.equal(aggregate, 0);
+  assert.equal(mirror.getLiveStreamMap(), mapBefore, "no-op keeps the map identity");
+
+  mirror.updateThreadLiveStream(draftId, () => ({
+    threadId: draftId,
+    activeIntentId: "intent-9",
+    assistantEntryId: null,
+    pendingAckIntentIds: [],
+    streamStatus: "connecting",
+  }));
+  assert.equal(aggregate, 1);
+
+  const draftSnapshotBefore = mirror.getThreadSnapshot(draftId);
+  const realSnapshotBefore = mirror.getThreadSnapshot(realId);
+  mirror.replaceLiveStreamThreadId(draftId, realId);
+
+  assert.equal(aggregate, 2, "rename notifies the aggregate domain once");
+  const map = mirror.getLiveStreamMap();
+  assert.ok(!(draftId in map), "draft key is removed");
+  assert.equal(map[realId].threadId, realId, "threadId field is rewritten");
+  assert.equal(map[realId].activeIntentId, "intent-9");
+  assert.equal(mirror.getThreadLiveStream(draftId), null);
+  assert.equal(mirror.getThreadLiveStream(realId), map[realId]);
+  assert.notEqual(
+    mirror.getThreadSnapshot(draftId),
+    draftSnapshotBefore,
+    "source thread snapshot commits",
+  );
+  assert.notEqual(
+    mirror.getThreadSnapshot(realId),
+    realSnapshotBefore,
+    "target thread snapshot commits",
+  );
+  assert.equal(mirror.getThreadSnapshot(realId).liveStream, map[realId]);
+});

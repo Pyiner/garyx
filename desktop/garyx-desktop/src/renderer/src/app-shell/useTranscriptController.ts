@@ -138,9 +138,6 @@ type UseTranscriptControllerArgs = {
   setHistoryPaginationByThread: React.Dispatch<
     React.SetStateAction<Record<string, ThreadHistoryPaginationState>>
   >;
-  setLiveStreamStateByThread: React.Dispatch<
-    React.SetStateAction<Record<string, LiveStreamState>>
-  >;
   setMessagesByThread: React.Dispatch<React.SetStateAction<MessageMap>>;
   setPendingAutomationRun: (
     threadId: string,
@@ -185,7 +182,6 @@ export function useTranscriptController({
   setError,
   setHistoryLoading,
   setHistoryPaginationByThread,
-  setLiveStreamStateByThread,
   setMessagesByThread,
   setPendingAutomationRun,
   setPendingRemoteInputsByThread,
@@ -404,20 +400,22 @@ export function useTranscriptController({
     );
   }
 
+  // Batch 3c-1: the mirror owns live-stream storage. These proxies keep
+  // `liveStreamStateRef` as the synchronous shadow for event-path readers
+  // (the mirror's notify never runs render code synchronously, so the ref
+  // assignment right after the mirror call is not observable in between).
   function updateLiveStreamState(
     threadId: string,
     updater: (current: LiveStreamState | null) => LiveStreamState | null,
   ): LiveStreamState | null {
-    const next = updater(liveStreamStateRef.current[threadId] || null);
-    const updated = { ...liveStreamStateRef.current };
-    if (next) {
-      updated[threadId] = next;
-    } else {
-      delete updated[threadId];
-    }
-    liveStreamStateRef.current = updated;
-    setLiveStreamStateByThread(updated);
+    const next = mirror.updateThreadLiveStream(threadId, updater);
+    liveStreamStateRef.current = mirror.getLiveStreamMap();
     return next;
+  }
+
+  function replaceLiveStreamThreadId(fromThreadId: string, toThreadId: string) {
+    mirror.replaceLiveStreamThreadId(fromThreadId, toThreadId);
+    liveStreamStateRef.current = mirror.getLiveStreamMap();
   }
 
   function clearLiveStreamState(threadId: string) {
@@ -1412,6 +1410,7 @@ export function useTranscriptController({
     intentForId,
     loadOlderThreadHistoryPage,
     messagesByThreadRef,
+    replaceLiveStreamThreadId,
     setThreadRuntimeState,
     startCommittedThreadStream,
     threadTitleOverridesRef,

@@ -312,7 +312,6 @@ type UseMessageDispatchControllerArgs = {
   intentForId: (intentId: string) => MessageIntent | null;
   isActiveSendingThread: boolean;
   isDraftSendingThread: boolean;
-  liveStreamStateRef: React.MutableRefObject<Record<string, LiveStreamState>>;
   messageStateRef: React.MutableRefObject<MessageMachineState>;
   messagesByThreadRef: React.MutableRefObject<MessageMap>;
   newThreadInitialDispatchLockRef: React.MutableRefObject<boolean>;
@@ -326,6 +325,7 @@ type UseMessageDispatchControllerArgs = {
     status: ConnectionStatus | null,
     reason?: string | null,
   ) => void;
+  replaceLiveStreamThreadId: (fromThreadId: string, toThreadId: string) => void;
   requestMessagesBottomSnap: (
     threadId: string | null | undefined,
     forceStick?: boolean,
@@ -341,9 +341,6 @@ type UseMessageDispatchControllerArgs = {
   setConnection: React.Dispatch<React.SetStateAction<ConnectionStatus | null>>;
   setDesktopState: React.Dispatch<React.SetStateAction<DesktopState | null>>;
   setError: React.Dispatch<React.SetStateAction<string | null>>;
-  setLiveStreamStateByThread: React.Dispatch<
-    React.SetStateAction<Record<string, LiveStreamState>>
-  >;
   setThreadRuntimeState: (
     threadId: string,
     runtimeState: ThreadRuntimeState,
@@ -392,7 +389,6 @@ export function useMessageDispatchController({
   intentForId,
   isActiveSendingThread,
   isDraftSendingThread,
-  liveStreamStateRef,
   messageStateRef,
   messagesByThreadRef,
   newThreadInitialDispatchLockRef,
@@ -401,6 +397,7 @@ export function useMessageDispatchController({
   preferredWorkspaceForNewThread,
   queueDrainInFlightByThreadRef,
   recordGatewayStatusObservation,
+  replaceLiveStreamThreadId,
   requestMessagesBottomSnap,
   runQueuedBatch,
   scheduleHistoryRefresh,
@@ -408,7 +405,6 @@ export function useMessageDispatchController({
   setConnection,
   setDesktopState,
   setError,
-  setLiveStreamStateByThread,
   setThreadRuntimeState,
   settingsDraft,
   sideChatThreadIdsRef,
@@ -734,18 +730,7 @@ export function useMessageDispatchController({
       return next;
     });
 
-    const draftLiveStream =
-      liveStreamStateRef.current[NEW_THREAD_DRAFT_THREAD_ID];
-    if (draftLiveStream) {
-      const updated = { ...liveStreamStateRef.current };
-      delete updated[NEW_THREAD_DRAFT_THREAD_ID];
-      updated[threadId] = {
-        ...draftLiveStream,
-        threadId,
-      };
-      liveStreamStateRef.current = updated;
-      setLiveStreamStateByThread(updated);
-    }
+    replaceLiveStreamThreadId(NEW_THREAD_DRAFT_THREAD_ID, threadId);
 
     requestMessagesBottomSnap(threadId, true);
   }

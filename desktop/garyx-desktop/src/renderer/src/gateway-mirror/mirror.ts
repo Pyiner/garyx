@@ -32,7 +32,7 @@ import type {
   MessageMachineAction,
   MessageMachineState,
 } from "../message-machine.ts";
-import type { UiTranscriptMessage } from "../app-shell/types";
+import type { LiveStreamState, UiTranscriptMessage } from "../app-shell/types";
 import { DispatchMachine } from "./dispatch-machine.ts";
 import { ThreadFrontier } from "./frontier.ts";
 import type { ThreadFrontierSnapshot } from "./frontier.ts";
@@ -123,12 +123,18 @@ export interface ThreadMirrorSnapshot {
   readonly pendingRemoteInputs: readonly PendingThreadInput[];
   readonly renderState: RenderState | null;
   readonly historyPagination: ThreadHistoryPaginationState | null;
+  /**
+   * Per-thread live-stream transport state (batch 3c-1). Dispatch and
+   * stream-lifecycle orchestration read and write it through the mirror.
+   */
+  readonly liveStream: LiveStreamState | null;
   readonly frontier: ThreadFrontierSnapshot;
 }
 
 interface ThreadEntry {
   cache: ThreadTranscriptCache;
   frontier: ThreadFrontier;
+  liveStream: LiveStreamState | null;
   listeners: Set<() => void>;
   version: number;
   snapshot: ThreadMirrorSnapshot | null;
@@ -155,6 +161,14 @@ export class GatewayMirror {
 
   // Dispatch-machine domain (batch 3a): message-machine state storage.
   private machine = new DispatchMachine();
+
+  // Live-stream domain (batch 3c-1): per-thread transport state storage.
+  // The aggregate map mirrors the legacy `liveStreamStateByThread` React
+  // state: one Record identity, rebuilt as a whole on every update (the
+  // legacy updater always allocated a fresh Record and re-rendered), so
+  // subscribers see exactly the legacy notification cadence.
+  private liveStreamMap: Record<string, LiveStreamState> = {};
+  private liveStreamListeners = new Set<() => void>();
 
   constructor(services?: GatewayMirrorServices) {
     this.services = services ?? null;
@@ -269,6 +283,91 @@ export class GatewayMirror {
     return this.machine.dispatch(action);
   }
 
+  subscribeLiveStreams(listener: () => void): Unsubscribe {
+    this.liveStreamListeners.add(listener);
+    return () => {
+      this.liveStreamListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Aggregate live-stream map, cached by reference: the getter never
+   * allocates; the map identity changes exactly once per applied update
+   * (legacy setState cadence).
+   */
+  getLiveStreamMap(): Record<string, LiveStreamState> {
+    return this.liveStreamMap;
+  }
+
+  getThreadLiveStream(threadId: string): LiveStreamState | null {
+    return this.threads.get(threadId)?.liveStream ?? null;
+  }
+
+  /**
+   * Update one thread's live-stream state (batch 3c-1: the mirror owns
+   * live-stream storage; orchestration migrates in 3c-2). Verbatim legacy
+   * semantics: the updater receives the current entry (or null), a null
+   * result deletes the entry, and the aggregate map is rebuilt and
+   * re-notified on every call — even a no-change one — matching the
+   * legacy React setState behavior. Returns the next entry.
+   */
+  updateThreadLiveStream(
+    threadId: string,
+    updater: (current: LiveStreamState | null) => LiveStreamState | null,
+  ): LiveStreamState | null {
+    const entry = this.threadEntry(threadId);
+    const next = updater(entry.liveStream);
+    entry.liveStream = next;
+    const updated = { ...this.liveStreamMap };
+    if (next) {
+      updated[threadId] = next;
+    } else {
+      delete updated[threadId];
+    }
+    this.liveStreamMap = updated;
+    this.commitThread(entry);
+    this.notifyLiveStreams();
+    return next;
+  }
+
+  clearThreadLiveStream(threadId: string): void {
+    this.updateThreadLiveStream(threadId, () => null);
+  }
+
+  /**
+   * Move a live-stream entry between thread ids in one commit — the
+   * new-thread draft promotion path. Verbatim legacy semantics: no-op when
+   * the source has no entry; otherwise the entry lands under the target id
+   * with its `threadId` field rewritten, and the aggregate map changes
+   * identity once.
+   */
+  replaceLiveStreamThreadId(fromThreadId: string, toThreadId: string): void {
+    const fromEntry = this.threadEntry(fromThreadId);
+    const draft = fromEntry.liveStream;
+    if (!draft) {
+      return;
+    }
+    const toEntry = this.threadEntry(toThreadId);
+    fromEntry.liveStream = null;
+    toEntry.liveStream = {
+      ...draft,
+      threadId: toThreadId,
+    };
+    const updated = { ...this.liveStreamMap };
+    delete updated[fromThreadId];
+    updated[toThreadId] = toEntry.liveStream;
+    this.liveStreamMap = updated;
+    this.commitThread(fromEntry);
+    this.commitThread(toEntry);
+    this.notifyLiveStreams();
+  }
+
+  private notifyLiveStreams(): void {
+    for (const listener of [...this.liveStreamListeners]) {
+      listener();
+    }
+  }
+
   subscribeThread(threadId: string, listener: () => void): Unsubscribe {
     const entry = this.threadEntry(threadId);
     entry.listeners.add(listener);
@@ -289,6 +388,7 @@ export class GatewayMirror {
         pendingRemoteInputs: entry.cache.getPendingRemoteInputs(),
         renderState: entry.cache.getRenderState(),
         historyPagination: entry.cache.getHistoryPagination(),
+        liveStream: entry.liveStream,
         frontier: entry.frontier.snapshot(),
       };
     }
@@ -491,6 +591,7 @@ export class GatewayMirror {
       entry = {
         cache: new ThreadTranscriptCache(),
         frontier: new ThreadFrontier(),
+        liveStream: null,
         listeners: new Set(),
         version: 0,
         snapshot: null,
