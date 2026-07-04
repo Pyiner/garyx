@@ -94,7 +94,7 @@ import { ComposerQueue } from "../ComposerQueue";
 import { ConversationHeaderActions } from "../ConversationHeaderActions";
 import { ConversationHeaderTitle } from "../ConversationHeaderTitle";
 import { NewThreadEmptyState } from "../NewThreadEmptyState";
-import { ToastViewport, type ToastItem, type ToastTone } from "../toast";
+import { ToastViewportHost, useToastActions } from "../toast-provider";
 import { ToolTraceGroup } from "../tool-trace";
 import {
   RichMessageContent,
@@ -195,10 +195,11 @@ import {
 } from "./useDeepLinkRouteController";
 import { useGatewayConnectionController } from "./useGatewayConnectionController";
 import { useLayoutResizeController } from "./useLayoutResizeController";
+import { resolveMemoryDialogTargetFromPath } from "./useMemoryDialogController";
 import {
-  resolveMemoryDialogTargetFromPath,
-  useMemoryDialogController,
-} from "./useMemoryDialogController";
+  MemoryDialogRoot,
+  type MemoryDialogHandle,
+} from "./components/MemoryDialogRoot";
 import {
   NEW_THREAD_DRAFT_THREAD_ID,
   browserAnnotationScreenshotImages,
@@ -292,11 +293,6 @@ const AutomationDialog = lazy(() =>
 const AutomationListPage = lazy(() =>
   import("../components/AutomationListPage").then((module) => ({
     default: module.AutomationListPage,
-  })),
-);
-const MemoryDialog = lazy(() =>
-  import("../components/MemoryDialog").then((module) => ({
-    default: module.MemoryDialog,
   })),
 );
 const AgentsHubPanel = lazy(() =>
@@ -461,8 +457,6 @@ function displayTranscriptMessageText(message: UiTranscriptMessage): string {
 }
 
 const STARTUP_HYDRATION_RETRY_DELAYS_MS = [0, 300, 650, 1_100, 1_700];
-const TRANSIENT_STATUS_MS = 3200;
-const ERROR_TOAST_MS = 4400;
 
 function threadRunStateIsRunning(thread: DesktopThreadSummary): boolean {
   return (thread.runState || "").trim().toLowerCase() === "running";
@@ -806,7 +800,6 @@ export function AppShell() {
   const [workspaceMenuOpenPath, setWorkspaceMenuOpenPath] = useState<string | null>(
     null,
   );
-  const [toasts, setToasts] = useState<ToastItem[]>([]);
   // Batch 3c-1: the mirror's live-stream domain owns transport-state
   // storage; React reads the aggregate map through useSyncExternalStore.
   // `liveStreamStateRef` (below) stays as the synchronous shadow for
@@ -838,26 +831,13 @@ export function AppShell() {
     {},
   );
   const threadLogsCursorRef = useRef(0);
-  const toastSequenceRef = useRef(1);
-  const toastTimeoutsRef = useRef<Record<number, number>>({});
   const botBindingRequestSequenceRef = useRef(0);
   const lastRemoteStateWarningKeyRef = useRef<string | null>(null);
   const pendingThreadBottomSnapRef = useRef<string | null>(null);
 
-  const {
-    closeMemoryDialog,
-    memoryDialogDirty,
-    memoryDialogDocument,
-    memoryDialogDraft,
-    memoryDialogError,
-    memoryDialogLoading,
-    memoryDialogSaving,
-    memoryDialogStatus,
-    memoryDialogTarget,
-    openMemoryDialog,
-    saveMemoryDialog,
-    setMemoryDialogDraft,
-  } = useMemoryDialogController();
+  // Batch 5a: the memory dialog is a colocated feature root; the shell
+  // only holds an imperative handle to open it.
+  const memoryDialogRef = useRef<MemoryDialogHandle | null>(null);
   const {
     automationDialog,
     automationMutation,
@@ -941,49 +921,9 @@ export function AppShell() {
   const locale = useResolvedLocale(settingsDraft.languagePreference);
   const t = useMemo(() => createTranslator(locale), [locale]);
 
-  const dismissToast = useCallback((id: number) => {
-    const timeoutId = toastTimeoutsRef.current[id];
-    if (timeoutId) {
-      window.clearTimeout(timeoutId);
-      delete toastTimeoutsRef.current[id];
-    }
-    setToasts((current) => current.filter((toast) => toast.id !== id));
-  }, []);
-
-  const pushToast = useCallback(
-    (
-      message: string,
-      tone: ToastTone = "info",
-      durationMs = tone === "error" ? ERROR_TOAST_MS : TRANSIENT_STATUS_MS,
-    ) => {
-      const normalizedMessage = message.trim();
-      if (!normalizedMessage) {
-        return;
-      }
-
-      const id = toastSequenceRef.current;
-      toastSequenceRef.current += 1;
-      setToasts((current) => [
-        ...current.slice(-2),
-        { id, message: normalizedMessage, tone },
-      ]);
-      const timeoutId = window.setTimeout(() => {
-        delete toastTimeoutsRef.current[id];
-        setToasts((current) => current.filter((toast) => toast.id !== id));
-      }, durationMs);
-      toastTimeoutsRef.current[id] = timeoutId;
-    },
-    [],
-  );
-
-  useEffect(() => {
-    return () => {
-      Object.values(toastTimeoutsRef.current).forEach((timeoutId) => {
-        window.clearTimeout(timeoutId);
-      });
-      toastTimeoutsRef.current = {};
-    };
-  }, []);
+  // Batch 5a: toast ownership lives in ToastProvider (App.tsx); the
+  // stable actions context makes pushToast identity-constant here.
+  const { pushToast } = useToastActions();
 
   const {
     gatewayFailureCount,
@@ -2441,7 +2381,7 @@ export function AppShell() {
       desktopAgents,
     );
     if (memoryTarget) {
-      void openMemoryDialog(memoryTarget);
+      memoryDialogRef.current?.open(memoryTarget);
       return;
     }
     handleLocalWorkspaceFileLinkClick(absolutePath);
@@ -2449,7 +2389,6 @@ export function AppShell() {
     automations,
     desktopAgents,
     handleLocalWorkspaceFileLinkClick,
-    openMemoryDialog,
   ]);
 
   function openSettingsView() {
@@ -4852,7 +4791,7 @@ export function AppShell() {
         } as React.CSSProperties
       }
     >
-      <ToastViewport onDismiss={dismissToast} toasts={toasts} />
+      <ToastViewportHost />
       <button
         aria-label={t("Toggle Sidebar")}
         aria-pressed={sidebarCollapsed}
@@ -5334,7 +5273,7 @@ export function AppShell() {
                   openAutomationDialog("edit", a);
                 }}
                 onOpenMemory={(a) => {
-                  void openMemoryDialog({
+                  memoryDialogRef.current?.open({
                     scope: "automation",
                     automationId: a.id,
                     title: `${a.label} memory.md`,
@@ -5356,7 +5295,7 @@ export function AppShell() {
                 workspaces={workspacePickerWorkspaces}
                 onAddWorkspace={addWorkspacePathFromPicker}
                 onOpenMemory={(agent) => {
-                  void openMemoryDialog({
+                  memoryDialogRef.current?.open({
                     scope: "agent",
                     agentId: agent.agentId,
                     title: `${agent.displayName || agent.agentId} memory.md`,
@@ -5371,7 +5310,7 @@ export function AppShell() {
                 workspaces={workspacePickerWorkspaces}
                 onAddWorkspace={addWorkspacePathFromPicker}
                 onOpenMemory={(agent) => {
-                  void openMemoryDialog({
+                  memoryDialogRef.current?.open({
                     scope: "agent",
                     agentId: agent.agentId,
                     title: `${agent.displayName || agent.agentId} memory.md`,
@@ -5543,29 +5482,7 @@ export function AppShell() {
         <PanelLeft aria-hidden size={15} strokeWidth={1.8} />
       </div>
 
-      {memoryDialogTarget ? (
-        <Suspense fallback={null}>
-          <MemoryDialog
-            dirty={memoryDialogDirty}
-            draftContent={memoryDialogDraft}
-            error={memoryDialogError}
-            exists={memoryDialogDocument?.exists ?? false}
-            loading={memoryDialogLoading}
-            modifiedAt={memoryDialogDocument?.modifiedAt ?? null}
-            onClose={closeMemoryDialog}
-            onDraftChange={setMemoryDialogDraft}
-            onSave={() => {
-              void saveMemoryDialog();
-            }}
-            open={Boolean(memoryDialogTarget)}
-            path={memoryDialogDocument?.path || null}
-            saving={memoryDialogSaving}
-            scope={memoryDialogTarget?.scope || "agent"}
-            status={memoryDialogStatus}
-            title={memoryDialogTarget?.title || "memory.md"}
-          />
-        </Suspense>
-      ) : null}
+      <MemoryDialogRoot ref={memoryDialogRef} />
     </div>
     </I18nProvider>
     </GatewayMirrorContext.Provider>
