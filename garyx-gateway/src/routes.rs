@@ -10,6 +10,7 @@ use axum::{
 use chrono::Utc;
 use futures_util::StreamExt;
 use garyx_channels::plugin::{PluginAccountUi, PluginConversationEndpoint, PluginMainEndpoint};
+use garyx_models::RenderSnapshot;
 use garyx_models::config::ChannelsConfig;
 #[cfg(test)]
 use garyx_models::config::TelegramAccount;
@@ -21,7 +22,6 @@ use garyx_models::provider::{
     SDK_SESSION_FORK_METADATA_KEY,
 };
 use garyx_models::routing::{DELIVERY_TARGET_TYPE_CHAT_ID, DELIVERY_TARGET_TYPE_OPEN_ID};
-use garyx_models::{RenderSnapshot, TranscriptRunActivity, TranscriptRunState};
 use garyx_router::{
     ChannelBinding, KnownChannelEndpoint, THREAD_TRANSCRIPT_REPLAY_CAP, ThreadEnsureOptions,
     ThreadTranscriptRecord, WorkspaceMode, bindings_from_value, detach_endpoint_from_thread,
@@ -2229,35 +2229,14 @@ async fn thread_render_snapshot_at_seq(
     render_floor: u64,
 ) -> Result<RenderSnapshot, io::Error> {
     let store = state.threads.history.transcript_store();
-    let run_state = store
-        .run_state_at_seq(thread_id, seq)
-        .await
-        .map_err(|error| io::Error::other(format!("failed to derive run state: {error}")))?;
-    let run_state = gateway_render_run_state(state, run_state).await;
     let result = if render_floor > 0 {
         store
-            .render_snapshot_in_window_with_run_state(thread_id, render_floor, seq, &run_state)
+            .render_snapshot_in_window(thread_id, render_floor, seq)
             .await
     } else {
-        store
-            .render_snapshot_at_seq_with_run_state(thread_id, seq, &run_state)
-            .await
+        store.render_snapshot_at_seq(thread_id, seq).await
     };
     result.map_err(|error| io::Error::other(format!("failed to derive render snapshot: {error}")))
-}
-
-async fn gateway_render_run_state(
-    state: &Arc<AppState>,
-    mut run_state: TranscriptRunState,
-) -> TranscriptRunState {
-    if let Some(run_id) = run_state.active_run_id.as_deref()
-        && !state.integration.bridge.is_run_active(run_id).await
-    {
-        run_state.busy = false;
-        run_state.active_run_id = None;
-        run_state.activity = TranscriptRunActivity::Idle;
-    }
-    run_state
 }
 
 fn thread_stream_frame_payload(

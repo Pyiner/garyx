@@ -1098,27 +1098,7 @@ impl ThreadTranscriptStore {
             .filter(|record| record.seq <= based_on_seq)
             .filter_map(|record| serde_json::to_value(record).ok())
             .collect::<Vec<_>>();
-        let run_state = reduce_transcript_run_state(&values);
-        Ok(reduce_transcript_render_state_with_run_state(
-            &values, &run_state,
-        ))
-    }
-
-    pub async fn render_snapshot_at_seq_with_run_state(
-        &self,
-        thread_id: &str,
-        based_on_seq: u64,
-        run_state: &TranscriptRunState,
-    ) -> Result<RenderSnapshot, ThreadHistoryError> {
-        let records = self.read_records(thread_id).await?;
-        let values = records
-            .iter()
-            .filter(|record| record.seq <= based_on_seq)
-            .filter_map(|record| serde_json::to_value(record).ok())
-            .collect::<Vec<_>>();
-        Ok(reduce_transcript_render_state_with_run_state(
-            &values, run_state,
-        ))
+        Ok(reduce_transcript_render_state(&values))
     }
 
     pub async fn render_snapshot_in_window(
@@ -1132,45 +1112,19 @@ impl ThreadTranscriptStore {
             .iter()
             .filter(|record| record.seq <= based_on_seq)
             .collect::<Vec<_>>();
+        let actual_based_on_seq = prefix.iter().map(|record| record.seq).max().unwrap_or(0);
         let full_values = prefix
             .iter()
             .filter_map(|record| serde_json::to_value(record).ok())
             .collect::<Vec<_>>();
         let run_state = reduce_transcript_run_state(&full_values);
-        Ok(Self::render_snapshot_in_window_from_prefix(
-            &prefix, floor_seq, &run_state,
-        ))
-    }
-
-    pub async fn render_snapshot_in_window_with_run_state(
-        &self,
-        thread_id: &str,
-        floor_seq: u64,
-        based_on_seq: u64,
-        run_state: &TranscriptRunState,
-    ) -> Result<RenderSnapshot, ThreadHistoryError> {
-        let records = self.read_records(thread_id).await?;
-        let prefix = records
-            .iter()
-            .filter(|record| record.seq <= based_on_seq)
-            .collect::<Vec<_>>();
-        Ok(Self::render_snapshot_in_window_from_prefix(
-            &prefix, floor_seq, run_state,
-        ))
-    }
-
-    fn render_snapshot_in_window_from_prefix(
-        prefix: &[&ThreadTranscriptRecord],
-        floor_seq: u64,
-        run_state: &TranscriptRunState,
-    ) -> RenderSnapshot {
-        let actual_based_on_seq = prefix.iter().map(|record| record.seq).max().unwrap_or(0);
         let window_values = prefix
             .iter()
             .filter(|record| record.seq >= floor_seq)
             .filter_map(|record| serde_json::to_value(record).ok())
             .collect::<Vec<_>>();
-        let mut snapshot = reduce_transcript_render_state_with_run_state(&window_values, run_state);
+        let mut snapshot =
+            reduce_transcript_render_state_with_run_state(&window_values, &run_state);
         if snapshot.based_on_seq == 0 {
             snapshot.based_on_seq = actual_based_on_seq;
         }
@@ -1178,21 +1132,7 @@ impl ThreadTranscriptStore {
             floor_seq,
             has_more_above: prefix.iter().any(|record| record.seq < floor_seq),
         });
-        snapshot
-    }
-
-    pub async fn run_state_at_seq(
-        &self,
-        thread_id: &str,
-        based_on_seq: u64,
-    ) -> Result<TranscriptRunState, ThreadHistoryError> {
-        let records = self.read_records(thread_id).await?;
-        let values = records
-            .iter()
-            .filter(|record| record.seq <= based_on_seq)
-            .filter_map(|record| serde_json::to_value(record).ok())
-            .collect::<Vec<_>>();
-        Ok(reduce_transcript_run_state(&values))
+        Ok(snapshot)
     }
 
     /// Committed records with `seq > after_seq`, ascending, up to `limit`. Drives
