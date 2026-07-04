@@ -648,8 +648,14 @@ export function AppShell() {
         // initialized by the time they are read.
         intentForId: (intentId) =>
           messageStateRef.current.intentsById[intentId] || null,
-        requestAuthoritativeRefetch: (threadId) => {
-          void refetchAuthoritativeTranscriptAfterRewrite(threadId);
+        requestAuthoritativeRefetch: () => {
+          // Batch 2b dual-run: the legacy stream handler is still the sole
+          // rewrite-refetch trigger (applyCommittedThreadMessage), and its
+          // result flows back into the mirror through the
+          // applyRemoteTranscript dual-write. Triggering here as well would
+          // double-run the refetch (two concurrent history fetches + stream
+          // restarts). Ownership flips to the mirror when the legacy path
+          // is deleted (batch 6).
         },
       }),
   );
@@ -1535,6 +1541,7 @@ export function AppShell() {
     liveStreamStateRef,
     messageStateRef,
     messagesRef,
+    mirror: gatewayMirror,
     pendingMessagesPrependAnchorRef,
     recordGatewayStatusObservation,
     refetchAuthoritativeTranscriptAfterRewrite,
@@ -1556,6 +1563,80 @@ export function AppShell() {
     setTitleDraft,
     settingsDraft,
   });
+  // Batch 2b dev-only parity probe (removed with the dual-write scaffolding
+  // in batch 6): `__garyxMirrorParity(threadId)` in the DevTools console
+  // compares the mirror's thread snapshot against the legacy React state.
+  // Optimistic/error local rows are legacy-only until batch 3, so both
+  // sides compare their `remote_final` subsequences; `loadingBefore` is a
+  // legacy-transient flag (the mirror does not run the legacy older-page
+  // fetch) and is excluded from the pagination comparison.
+  const mirrorParityStateRef = useRef({
+    messagesByThread,
+    renderStateByThread,
+    historyPaginationByThread,
+    threadInfoByThread,
+    pendingRemoteInputsByThread,
+  });
+  mirrorParityStateRef.current = {
+    messagesByThread,
+    renderStateByThread,
+    historyPaginationByThread,
+    threadInfoByThread,
+    pendingRemoteInputsByThread,
+  };
+  useEffect(() => {
+    if (!import.meta.env.DEV) {
+      return undefined;
+    }
+    const probeWindow = window as typeof window & {
+      __garyxGatewayMirror?: GatewayMirror;
+      __garyxMirrorParity?: (threadId: string) => unknown;
+    };
+    probeWindow.__garyxGatewayMirror = gatewayMirror;
+    probeWindow.__garyxMirrorParity = (threadId: string) => {
+      const legacy = mirrorParityStateRef.current;
+      const snapshot = gatewayMirror.getThreadSnapshot(threadId);
+      const remoteFinal = (entries: readonly UiTranscriptMessage[] | undefined) =>
+        (entries || []).filter((entry) => entry.localState === "remote_final");
+      const json = (value: unknown) => JSON.stringify(value ?? null);
+      const legacyMessages = remoteFinal(legacy.messagesByThread[threadId]);
+      const mirrorMessages = remoteFinal(snapshot.messages);
+      const stripLoading = (
+        state: ThreadHistoryPaginationState | null | undefined,
+      ) => (state ? { ...state, loadingBefore: false } : null);
+      const equal = {
+        messages: json(legacyMessages) === json(mirrorMessages),
+        renderState:
+          json(legacy.renderStateByThread[threadId] ?? null) ===
+          json(snapshot.renderState),
+        pagination:
+          json(stripLoading(legacy.historyPaginationByThread[threadId])) ===
+          json(stripLoading(snapshot.historyPagination)),
+        threadInfo:
+          json(legacy.threadInfoByThread[threadId] ?? null) ===
+          json(snapshot.threadInfo),
+        pendingInputs:
+          json(legacy.pendingRemoteInputsByThread[threadId] ?? []) ===
+          json(snapshot.pendingRemoteInputs),
+      };
+      return {
+        threadId,
+        parity: Object.values(equal).every(Boolean),
+        equal,
+        counts: {
+          legacyMessages: legacyMessages.length,
+          mirrorMessages: mirrorMessages.length,
+          legacyLocalRows:
+            (legacy.messagesByThread[threadId] || []).length -
+            legacyMessages.length,
+        },
+      };
+    };
+    return () => {
+      delete probeWindow.__garyxGatewayMirror;
+      delete probeWindow.__garyxMirrorParity;
+    };
+  }, [gatewayMirror]);
   const activeThreadWorktree =
     activeThreadInfo?.worktree || activeThread?.worktree || null;
   const composerWorkspaceMode: DesktopWorkspaceMode | null =

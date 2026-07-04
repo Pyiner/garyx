@@ -91,6 +91,7 @@ import {
   THREAD_HISTORY_USER_QUERY_LIMIT,
   type ThreadHistoryPaginationState,
 } from "../gateway-mirror/transcript-materialize";
+import type { GatewayMirror } from "../gateway-mirror/mirror";
 
 type UseTranscriptControllerArgs = {
   activeHistoryPagination: ThreadHistoryPaginationState | null;
@@ -105,6 +106,7 @@ type UseTranscriptControllerArgs = {
   liveStreamStateRef: React.MutableRefObject<Record<string, LiveStreamState>>;
   messageStateRef: React.MutableRefObject<MessageMachineState>;
   messagesRef: React.MutableRefObject<HTMLDivElement | null>;
+  mirror: GatewayMirror;
   pendingMessagesPrependAnchorRef: React.MutableRefObject<{
     threadId: string;
     scrollHeight: number;
@@ -170,6 +172,7 @@ export function useTranscriptController({
   liveStreamStateRef,
   messageStateRef,
   messagesRef,
+  mirror,
   pendingMessagesPrependAnchorRef,
   recordGatewayStatusObservation,
   refetchAuthoritativeTranscriptAfterRewrite,
@@ -211,8 +214,27 @@ export function useTranscriptController({
     streamEventHandlerRef.current = handleChatStreamEvent;
   });
 
+  /**
+   * Batch 2b dual-write scaffolding (deleted with the legacy path in batch
+   * 6): every transcript input is fed to the GatewayMirror alongside the
+   * legacy React state so the two stay converged while the legacy path
+   * still renders. Mirror convergence must never break the legacy render
+   * path — divergence is surfaced by the dev parity probe, not by throwing.
+   */
+  function mirrorDualWrite(operation: () => void) {
+    try {
+      operation();
+    } catch (mirrorError) {
+      console.error("[gateway-mirror] dual-write failed", mirrorError);
+    }
+  }
+
   useEffect(() => {
     const listener = (event: DesktopChatStreamEvent) => {
+      // Batch 2b dual-feed: the mirror is a first-class consumer of the
+      // chat stream (frames commit atomically inside ingest). The legacy
+      // handler keeps owning machine/live-stream/error side effects.
+      mirrorDualWrite(() => mirror.ingest(event));
       if (chatStreamEventHasRunLifecycle(event)) {
         scheduleDesktopStateRefresh();
       }
@@ -519,6 +541,9 @@ export function useTranscriptController({
     transcript: ThreadTranscript,
     options?: { syncRunState?: boolean },
   ) {
+    mirrorDualWrite(() =>
+      mirror.applyAuthoritativeTranscript(threadId, transcript),
+    );
     const resolvedTranscript = transcriptWithResolvedActiveRun(transcript);
     rememberTranscriptSnapshot(
       threadId,
@@ -821,8 +846,17 @@ export function useTranscriptController({
     options?: {
       persist?: boolean;
       syncRunState?: boolean;
+      /**
+       * Batch 2b: set by the committed-stream path, whose events already
+       * reached the mirror through ingest — dual-writing the folded
+       * transcript again would apply the same data twice per event.
+       */
+      skipMirrorDualWrite?: boolean;
     },
   ) {
+    if (!options?.skipMirrorDualWrite) {
+      mirrorDualWrite(() => mirror.applyRemoteTranscript(threadId, transcript));
+    }
     const resolvedTranscript = transcriptWithResolvedActiveRun(transcript);
     rememberTranscriptSnapshot(
       threadId,
@@ -913,6 +947,7 @@ export function useTranscriptController({
     threadId: string,
     transcript: ThreadTranscript,
   ) {
+    mirrorDualWrite(() => mirror.applyOlderHistoryPage(threadId, transcript));
     updateThreadHistoryPagination(threadId, () =>
       paginationStateFromTranscript(transcript),
     );
@@ -1133,6 +1168,19 @@ export function useTranscriptController({
         // the live stream's first frame arrives.
         if (cached.renderState) {
           applyThreadRenderState(threadId, cached.renderState);
+          // Batch 2b dual-write: the mirror's render snapshot only advances
+          // through ingested frames, so replay the cached snapshot as a
+          // synthesized snapshot-only frame (same wire semantics; the
+          // monotonic guard applies on both sides).
+          const cachedRenderState = cached.renderState;
+          mirrorDualWrite(() =>
+            mirror.ingest({
+              type: "thread_render_frame",
+              threadId,
+              events: [],
+              renderState: cachedRenderState,
+            }),
+          );
         }
         // Start the committed stream from the cached cursor right away: its
         // replay plus first render frame is what shows turns committed while
@@ -1215,7 +1263,10 @@ export function useTranscriptController({
     if (selectedThreadIdRef.current === threadId) {
       requestSelectedThreadMessagesBottomSnap(threadId, true);
     }
-    applyRemoteTranscript(threadId, merged, { syncRunState: false });
+    applyRemoteTranscript(threadId, merged, {
+      syncRunState: false,
+      skipMirrorDualWrite: true,
+    });
     const controlKind = transcriptControlKind(event.message);
     if (controlKind === "user_ack") {
       const control =

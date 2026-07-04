@@ -299,6 +299,19 @@ export class GatewayMirror {
   }
 
   /**
+   * Apply an already-fetched older history page as one commit. Batch-2b
+   * dual-write entry: while the legacy hook still owns the older-page
+   * fetch, it feeds the fetched page here so the mirror stays converged.
+   * Once the mirror owns the fetch (loadOlderThreadHistoryPage below),
+   * this remains the shared apply step.
+   */
+  applyOlderHistoryPage(threadId: string, transcript: ThreadTranscript): void {
+    const entry = this.threadEntry(threadId);
+    entry.cache.applyOlderPage(transcript);
+    this.commitThread(entry);
+  }
+
+  /**
    * Load one older history page for a thread: the mirror-side counterpart
    * of the hook's loadOlderThreadHistoryPage. Guards on the thread's
    * pagination state, marks loadingBefore for the duration of the fetch,

@@ -735,6 +735,66 @@ test("dual-run: loadOlderThreadHistoryPage matches the legacy older-page apply",
   assert.ok(olderEntries.length > 0, "older page must actually prepend rows");
 });
 
+test("applyOlderHistoryPage (dual-write entry) matches the fetch-owning path", async () => {
+  const threadId = "thread::older-dual-write";
+  const olderPage = {
+    threadId,
+    remoteFound: true,
+    messages: [wireMessage(1, "user", "old question"), wireMessage(2, "assistant", "old answer")],
+    pendingInputs: [],
+    threadInfo: null,
+    pageInfo: fullPageInfo({
+      totalMessages: 4,
+      committedMessages: 4,
+      startIndex: 1,
+      endIndex: 2,
+      hasMoreBefore: false,
+      nextBeforeIndex: null,
+    }),
+  };
+  const fullTranscript = {
+    threadId,
+    remoteFound: true,
+    messages: [wireMessage(3, "user", "recent"), wireMessage(4, "assistant", "reply")],
+    pendingInputs: [],
+    threadInfo: null,
+    pageInfo: fullPageInfo({
+      totalMessages: 4,
+      committedMessages: 4,
+      startIndex: 3,
+      endIndex: 4,
+      hasMoreBefore: true,
+      nextBeforeIndex: 2,
+    }),
+  };
+
+  // Path A (batch-2b dual-write): the legacy hook fetched the page itself
+  // and feeds only the apply step.
+  const dualWriteMirror = new GatewayMirror();
+  dualWriteMirror.applyRemoteTranscript(threadId, fullTranscript);
+  dualWriteMirror.applyOlderHistoryPage(threadId, olderPage);
+  const dualWriteSnapshot = dualWriteMirror.getThreadSnapshot(threadId);
+
+  // Path B (mirror-owned): loadOlderThreadHistoryPage fetches through the
+  // injected services and applies the same page.
+  const fetchMirror = new GatewayMirror({
+    getState: async () => ({}),
+    listCustomAgents: async () => [],
+    listTeams: async () => [],
+    listWorkflowDefinitions: async () => [],
+    getThreadHistory: async () => olderPage,
+  });
+  fetchMirror.applyRemoteTranscript(threadId, fullTranscript);
+  await fetchMirror.loadOlderThreadHistoryPage(threadId);
+  const fetchSnapshot = fetchMirror.getThreadSnapshot(threadId);
+
+  assert.deepEqual(dualWriteSnapshot.messages, fetchSnapshot.messages);
+  assert.deepEqual(
+    dualWriteSnapshot.historyPagination,
+    fetchSnapshot.historyPagination,
+  );
+});
+
 test("loadOlderThreadHistoryPage guards: no pagination, in-flight, and fetch errors", async () => {
   const threadId = "thread::older-guards";
   let resolveFetch;
