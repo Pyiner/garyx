@@ -14,13 +14,31 @@ import type {
   ThreadRuntimeInfo,
   ThreadTranscript,
 } from "@shared/contracts";
-import { transcriptWithResolvedActiveRun } from "../../../shared/transcript-sync.ts";
+import {
+  transcriptRewriteAction,
+  transcriptWithResolvedActiveRun,
+} from "../../../shared/transcript-sync.ts";
 
+import type { MessageIntent } from "../message-machine.ts";
 import type { UiTranscriptMessage } from "../app-shell/types";
 import {
+  committedMessageForwardPage,
   materializeRemoteTranscript,
+  mergeRemotePaginationState,
+  mergeRemoteTranscriptWithLocal,
+  paginationStateFromTranscript,
   visibleTranscriptMessages,
+  type ThreadHistoryPaginationState,
 } from "./transcript-materialize.ts";
+
+/**
+ * Message-machine intent lookup, injected because the machine stays with
+ * its legacy owner until batch 3. A mirror without live local intents
+ * passes a null lookup and the merge behaves like the remote-only path.
+ */
+export interface RemoteApplyOptions {
+  intentForId: (intentId: string) => MessageIntent | null;
+}
 
 export class ThreadTranscriptCache {
   private recordsBySeq = new Map<number, CommittedMessageEvent>();
@@ -36,6 +54,7 @@ export class ThreadTranscriptCache {
   private threadInfo: ThreadRuntimeInfo | null = null;
   private pendingRemoteInputs: readonly PendingThreadInput[] = [];
   private snapshotTranscript: ThreadTranscript | null = null;
+  private historyPagination: ThreadHistoryPaginationState | null = null;
 
   /**
    * Apply an authoritative (canonical) transcript: the pure core of the
@@ -72,14 +91,106 @@ export class ThreadTranscriptCache {
     return this.snapshotTranscript;
   }
 
+  getHistoryPagination(): ThreadHistoryPaginationState | null {
+    return this.historyPagination;
+  }
+
+  setHistoryPagination(state: ThreadHistoryPaginationState | null): void {
+    this.historyPagination = state;
+  }
+
+  /**
+   * Apply a remote transcript (full fetch, forward aggregate, or committed
+   * forward-merge): the pure core of the hook's applyRemoteTranscript.
+   * Covers snapshot memory, pagination merge, thread info, pending inputs,
+   * and the local/remote message merge. Not covered here (stays with legacy
+   * owners): message-machine run-state sync, IPC cache persistence,
+   * desktopState session/team propagation, and intent history marking.
+   */
+  applyRemote(transcript: ThreadTranscript, options: RemoteApplyOptions): void {
+    const resolved = transcriptWithResolvedActiveRun(transcript);
+    this.snapshotTranscript = resolved;
+    // Pagination merges against the message cache BEFORE this apply's merge,
+    // matching the legacy read order of messagesByThreadRef.
+    const existing = [...this.uiMessages];
+    this.historyPagination = mergeRemotePaginationState(
+      this.historyPagination,
+      paginationStateFromTranscript(resolved),
+      existing,
+    );
+    this.threadInfo = resolved.threadInfo ?? null;
+    this.pendingRemoteInputs = resolved.pendingInputs ?? [];
+    const visibleMessages = visibleTranscriptMessages(resolved.messages);
+    const merged = mergeRemoteTranscriptWithLocal(visibleMessages, existing, {
+      activeRunLiveRows: Boolean(resolved.threadInfo?.activeRun),
+      preserveRemoteBeforeIndex: resolved.pageInfo?.startIndex ?? null,
+      threadRunActive: Boolean(resolved.threadInfo?.activeRun),
+      intentForId: options.intentForId,
+    });
+    // Identity-preserving check from the legacy updater: an equivalent merge
+    // keeps the previous array reference so snapshots stay stable.
+    if (
+      merged.length === existing.length &&
+      merged.every((entry, index) => entry === existing[index])
+    ) {
+      return;
+    }
+    this.uiMessages = merged;
+  }
+
+  /**
+   * Fold one committed stream record into the transcript state: the pure
+   * core of the hook's applyCommittedThreadMessage. Returns
+   * "refetch_authoritative" when the record is a rewrite/reset control the
+   * caller must resolve with an authoritative refetch (no state is touched),
+   * "applied" otherwise.
+   */
+  applyCommittedMessage(
+    event: CommittedMessageEvent,
+    options: RemoteApplyOptions,
+  ): "refetch_authoritative" | "applied" {
+    if (transcriptRewriteAction(event.message) === "refetch_authoritative") {
+      return "refetch_authoritative";
+    }
+    this.applyRemote(
+      committedMessageForwardPage(this.snapshotTranscript, event),
+      options,
+    );
+    return "applied";
+  }
+
+  /**
+   * Prepend an older history page: the pure core of the hook's
+   * applyOlderRemoteTranscriptPage. Replaces pagination from the page and
+   * prepends materialized entries not already present.
+   */
+  applyOlderPage(transcript: ThreadTranscript): void {
+    this.historyPagination = paginationStateFromTranscript(transcript);
+    const visibleMessages = visibleTranscriptMessages(transcript.messages);
+    if (visibleMessages.length === 0) {
+      return;
+    }
+    const existing = this.uiMessages;
+    const existingIds = new Set(existing.map((entry) => entry.id));
+    const olderEntries = materializeRemoteTranscript(visibleMessages, []).filter(
+      (entry) => !existingIds.has(entry.id),
+    );
+    if (olderEntries.length === 0) {
+      return;
+    }
+    this.uiMessages = [...olderEntries, ...existing];
+  }
+
   /**
    * Apply committed events idempotently. An event whose seq is already
    * cached is ignored (the committed ledger is append-only; a re-delivered
-   * seq carries the same record). Returns the highest newly applied seq, or
-   * null when nothing changed.
+   * seq carries the same record). Returns the newly applied events in input
+   * order (empty when nothing changed).
    */
-  applyCommittedEvents(events: readonly CommittedMessageEvent[]): number | null {
-    let highestApplied: number | null = null;
+  applyCommittedEvents(
+    events: readonly CommittedMessageEvent[],
+  ): CommittedMessageEvent[] {
+    const applied: CommittedMessageEvent[] = [];
     for (const event of events) {
       if (!Number.isFinite(event.seq) || event.seq <= 0) {
         continue;
@@ -88,14 +199,12 @@ export class ThreadTranscriptCache {
         continue;
       }
       this.recordsBySeq.set(event.seq, event);
-      if (highestApplied === null || event.seq > highestApplied) {
-        highestApplied = event.seq;
-      }
+      applied.push(event);
     }
-    if (highestApplied !== null) {
+    if (applied.length > 0) {
       this.sortedCache = null;
     }
-    return highestApplied;
+    return applied;
   }
 
   /** Store an accepted render snapshot (monotonicity is the caller's job). */

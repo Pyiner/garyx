@@ -17,12 +17,10 @@ import {
   decideTranscriptFetchPageAction,
   isControlTranscriptMessage,
   isThreadStreamGapError,
-  isToolRole,
   mergeForwardTranscriptPage,
   reduceTranscriptRunState,
   shouldRefetchAuthoritativeAfterForwardPageLimit,
   streamResumeCursor,
-  toolMessagesEquivalent,
   transcriptCommittedAfterCursor,
   transcriptControlKind,
   transcriptForCommittedCache,
@@ -60,19 +58,12 @@ import type {
   UiTranscriptMessage,
 } from "./types";
 
-const THREAD_HISTORY_PAGE_SIZE = 100;
-const THREAD_HISTORY_USER_QUERY_LIMIT = 10;
 const THREAD_HISTORY_FORWARD_PAGE_LIMIT = 50;
 export const SELECTED_THREAD_STREAM_CONSUMER_ID = "selected-thread";
 
-export type ThreadHistoryPaginationState = {
-  hasMoreBefore: boolean;
-  nextBeforeIndex: number | null;
-  loadingBefore: boolean;
-};
-
-// Batch 2a-1: the pure materialization helpers live in gateway-mirror;
-// re-export the public ones and import the internals the hook still uses.
+// Batch 2a-1/2a-2: the pure materialization + remote-apply helpers live in
+// gateway-mirror; re-export the public ones and import the internals the
+// hook still uses.
 export {
   messagesNearEarlierUserTurnBoundary,
   normalizeMessageText,
@@ -81,18 +72,24 @@ export {
   transcriptHasAutomationResponse,
   transcriptMessageMatchesIntent,
   userMessageIdForOrigin,
+  type ThreadHistoryPaginationState,
 } from "../gateway-mirror/transcript-materialize";
 import {
   chatStreamEventHasRunLifecycle,
+  committedMessageForwardPage,
   messagesNearEarlierUserTurnBoundary,
+  mergeRemotePaginationState,
+  mergeRemoteTranscriptWithLocal,
+  paginationStateFromTranscript,
   transcriptHasAutomationResponse,
   reconcileAssistantEntriesForGatewayRecovery,
   resolveIntentHistoryMatch,
   userMessageIdForOrigin,
-  earliestRemoteHistoryIndex,
   materializeRemoteTranscript,
-  transcriptEntryHistoryIndex,
   visibleTranscriptMessages,
+  THREAD_HISTORY_PAGE_SIZE,
+  THREAD_HISTORY_USER_QUERY_LIMIT,
+  type ThreadHistoryPaginationState,
 } from "../gateway-mirror/transcript-materialize";
 
 type UseTranscriptControllerArgs = {
@@ -736,100 +733,6 @@ export function useTranscriptController({
     }
   }
 
-  function mergeRemoteTranscriptWithLocal(
-    transcript: TranscriptMessage[],
-    existing: UiTranscriptMessage[],
-    options?: {
-      activeRunLiveRows?: boolean;
-      preserveRemoteBeforeIndex?: number | null;
-      /**
-       * Whether the fetched transcript reports an active run. Streamed local
-       * tool bubbles outrank the canonical page only while the run is
-       * actually active; once the gateway reports the run finished, the page
-       * already contains every tool row, so an unmatched local bubble lost
-       * its terminal events (dropped stream, missed `done`) or its rows fell
-       * outside the fetched page. Keeping it would re-append it after the
-       * final assistant answer on every reconcile. Mirrors the iOS
-       * `GaryxTranscriptMerge` `threadRunActive` rule.
-       */
-      threadRunActive?: boolean;
-    },
-  ): UiTranscriptMessage[] {
-    const visibleTranscript = visibleTranscriptMessages(transcript);
-    if (visibleTranscript.length === 0) {
-      return existing.length > 0 ? existing : [];
-    }
-
-    const materializedRemote = materializeRemoteTranscript(
-      visibleTranscript,
-      existing,
-      {
-        ignoreTimestampForStableMessages: options?.activeRunLiveRows,
-      },
-    );
-    const materializedRemoteIds = new Set(
-      materializedRemote.map((entry) => entry.id),
-    );
-    const preservedRemoteBeforeEntries: UiTranscriptMessage[] = [];
-    const preservedLocalEntries = existing.filter((entry, index, entries) => {
-      if (entry.localState === "remote_final") {
-        const historyIndex = transcriptEntryHistoryIndex(entry);
-        if (
-          typeof options?.preserveRemoteBeforeIndex === "number" &&
-          historyIndex !== null &&
-          historyIndex < options.preserveRemoteBeforeIndex &&
-          !materializedRemoteIds.has(entry.id)
-        ) {
-          preservedRemoteBeforeEntries.push(entry);
-        }
-        return false;
-      }
-      if (
-        entries.findIndex((candidate) => candidate.id === entry.id) !== index
-      ) {
-        return false;
-      }
-      if (!entry.intentId) {
-        return (
-          entry.localState === "error" || entry.localState === "interrupted"
-        );
-      }
-
-      const intent = intentForId(entry.intentId);
-      if (!intent) {
-        return (
-          entry.localState === "error" || entry.localState === "interrupted"
-        );
-      }
-
-      if (entry.role === "user") {
-        return !(
-          materializedRemoteIds.has(entry.id) ||
-          materializedRemoteIds.has(userMessageIdForOrigin(intent.intentId))
-        );
-      }
-      const match = resolveIntentHistoryMatch(intent, visibleTranscript);
-      if (entry.role === "assistant") {
-        return !match.assistantVisible;
-      }
-      if (isToolRole(entry.role)) {
-        if (options?.threadRunActive === false) {
-          return false;
-        }
-        return !materializedRemote.some((candidate) =>
-          toolMessagesEquivalent(candidate, entry),
-        );
-      }
-      return false;
-    });
-
-    return [
-      ...preservedRemoteBeforeEntries,
-      ...materializedRemote,
-      ...preservedLocalEntries,
-    ];
-  }
-
   function updateThreadHistoryPagination(
     threadId: string,
     updater: (
@@ -846,20 +749,6 @@ export function useTranscriptController({
     }
     historyPaginationByThreadRef.current = next;
     setHistoryPaginationByThread(next);
-  }
-
-  function paginationStateFromTranscript(
-    transcript: ThreadTranscript,
-    loadingBefore = false,
-  ): ThreadHistoryPaginationState {
-    return {
-      hasMoreBefore: Boolean(transcript.pageInfo?.hasMoreBefore),
-      nextBeforeIndex:
-        typeof transcript.pageInfo?.nextBeforeIndex === "number"
-          ? transcript.pageInfo.nextBeforeIndex
-          : null,
-      loadingBefore,
-    };
   }
 
   function threadSummaryFromTranscript(
@@ -942,29 +831,13 @@ export function useTranscriptController({
       options?.syncRunState ?? true,
     );
     cacheOpenableTranscriptThread(threadId, resolvedTranscript);
-    updateThreadHistoryPagination(threadId, (current) => {
-      const incoming = paginationStateFromTranscript(resolvedTranscript);
-      if (!current) {
-        return incoming;
-      }
-      if (!current.hasMoreBefore) {
-        const earliestLoadedIndex = earliestRemoteHistoryIndex(
-          messagesByThreadRef.current[threadId] || [],
-        );
-        if (earliestLoadedIndex === 0 || !incoming.hasMoreBefore) {
-          return { ...current, loadingBefore: false };
-        }
-        return incoming;
-      }
-      if (
-        current.nextBeforeIndex !== null &&
-        incoming.nextBeforeIndex !== null &&
-        current.nextBeforeIndex <= incoming.nextBeforeIndex
-      ) {
-        return { ...current, loadingBefore: false };
-      }
-      return incoming;
-    });
+    updateThreadHistoryPagination(threadId, (current) =>
+      mergeRemotePaginationState(
+        current,
+        paginationStateFromTranscript(resolvedTranscript),
+        messagesByThreadRef.current[threadId] || [],
+      ),
+    );
     setThreadInfoByThread((current) => ({
       ...current,
       [threadId]: resolvedTranscript.threadInfo ?? null,
@@ -982,6 +855,7 @@ export function useTranscriptController({
             preserveRemoteBeforeIndex:
               resolvedTranscript.pageInfo?.startIndex ?? null,
             threadRunActive: Boolean(resolvedTranscript.threadInfo?.activeRun),
+            intentForId,
           },
         );
         if (
@@ -1334,41 +1208,10 @@ export function useTranscriptController({
       return;
     }
     applyCommittedTranscriptRunState(event);
-    const base =
-      transcriptSnapshotByThreadRef.current[threadId] || {
-        threadId,
-        remoteFound: true,
-        messages: [],
-        pendingInputs: [],
-        pageInfo: null,
-      };
-    const merged = mergeForwardTranscriptPage(base, {
-      threadId,
-      remoteFound: true,
-      messages: [event.message],
-      pendingInputs: base.pendingInputs,
-      thread: base.thread ?? null,
-      threadInfo: base.threadInfo ?? null,
-      pageInfo: {
-        ...(base.pageInfo ?? {
-          totalMessages: event.seq,
-          returnedMessages: 0,
-          startIndex: 0,
-          endIndex: event.seq,
-          hasMoreBefore: false,
-          nextBeforeIndex: null,
-          limit: THREAD_HISTORY_PAGE_SIZE,
-          userQueryLimit: THREAD_HISTORY_USER_QUERY_LIMIT,
-        }),
-        committedMessages: Math.max(
-          event.seq,
-          base.pageInfo?.committedMessages ?? 0,
-        ),
-        hasMoreAfter: false,
-        nextAfterIndex: null,
-      },
-      team: base.team ?? null,
-    });
+    const merged = committedMessageForwardPage(
+      transcriptSnapshotByThreadRef.current[threadId] || null,
+      event,
+    );
     if (selectedThreadIdRef.current === threadId) {
       requestSelectedThreadMessagesBottomSnap(threadId, true);
     }

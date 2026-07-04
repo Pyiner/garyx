@@ -640,6 +640,17 @@ export function AppShell() {
         listTeams: () => window.garyxDesktop.listTeams(),
         listWorkflowDefinitions: () =>
           window.garyxDesktop.listWorkflowDefinitions(),
+        getThreadHistory: (input) => window.garyxDesktop.getThreadHistory(input),
+        // Temporary batch-2/3 seams: the message machine and the
+        // authoritative-refetch flow stay with their legacy owners; the
+        // mirror reaches them through these injected lookups. The closures
+        // run post-mount, so the later declarations they capture are
+        // initialized by the time they are read.
+        intentForId: (intentId) =>
+          messageStateRef.current.intentsById[intentId] || null,
+        requestAuthoritativeRefetch: (threadId) => {
+          void refetchAuthoritativeTranscriptAfterRewrite(threadId);
+        },
       }),
   );
   const [desktopState, setDesktopState] = useState<DesktopState | null>(null);

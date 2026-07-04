@@ -5,11 +5,14 @@
 
 import type {
   DesktopChatStreamEvent,
+  ThreadTranscript,
   TranscriptMessage,
 } from "@shared/contracts";
 import {
   isControlTranscriptMessage,
   isToolRole,
+  mergeForwardTranscriptPage,
+  toolMessagesEquivalent,
   transcriptControlKind,
 } from "../../../shared/transcript-sync.ts";
 import {
@@ -479,5 +482,205 @@ export function chatStreamEventHasRunLifecycle(event: DesktopChatStreamEvent): b
       controlKind === "interrupt_confirmed"
     );
   });
+}
+
+// ---- Batch 2a-2 part 2: remote-transcript apply helpers, moved verbatim ----
+// from useTranscriptController. The only signature change: intentForId is an
+// injected option instead of a hook closure, so the mirror (which does not
+// own the message machine until batch 3) can pass its own lookup.
+
+export const THREAD_HISTORY_PAGE_SIZE = 100;
+export const THREAD_HISTORY_USER_QUERY_LIMIT = 10;
+
+export type ThreadHistoryPaginationState = {
+  hasMoreBefore: boolean;
+  nextBeforeIndex: number | null;
+  loadingBefore: boolean;
+};
+
+export function paginationStateFromTranscript(
+  transcript: ThreadTranscript,
+  loadingBefore = false,
+): ThreadHistoryPaginationState {
+  return {
+    hasMoreBefore: Boolean(transcript.pageInfo?.hasMoreBefore),
+    nextBeforeIndex:
+      typeof transcript.pageInfo?.nextBeforeIndex === "number"
+        ? transcript.pageInfo.nextBeforeIndex
+        : null,
+    loadingBefore,
+  };
+}
+
+/**
+ * Merge an incoming (full/forward-fetch) pagination state onto the current
+ * one. Verbatim from applyRemoteTranscript's updateThreadHistoryPagination
+ * updater; `existingMessages` is the thread's message cache BEFORE this
+ * apply's merge (legacy read messagesByThreadRef at the same point).
+ */
+export function mergeRemotePaginationState(
+  current: ThreadHistoryPaginationState | null,
+  incoming: ThreadHistoryPaginationState,
+  existingMessages: UiTranscriptMessage[],
+): ThreadHistoryPaginationState {
+  if (!current) {
+    return incoming;
+  }
+  if (!current.hasMoreBefore) {
+    const earliestLoadedIndex = earliestRemoteHistoryIndex(existingMessages);
+    if (earliestLoadedIndex === 0 || !incoming.hasMoreBefore) {
+      return { ...current, loadingBefore: false };
+    }
+    return incoming;
+  }
+  if (
+    current.nextBeforeIndex !== null &&
+    incoming.nextBeforeIndex !== null &&
+    current.nextBeforeIndex <= incoming.nextBeforeIndex
+  ) {
+    return { ...current, loadingBefore: false };
+  }
+  return incoming;
+}
+
+/**
+ * Fold one committed stream record forward onto the cached transcript
+ * snapshot. Verbatim from applyCommittedThreadMessage's merge step.
+ */
+export function committedMessageForwardPage(
+  base: ThreadTranscript | null,
+  event: Extract<DesktopChatStreamEvent, { type: "committed_message" }>,
+): ThreadTranscript {
+  const threadId = event.threadId;
+  const resolvedBase = base || {
+    threadId,
+    remoteFound: true,
+    messages: [],
+    pendingInputs: [],
+    pageInfo: null,
+  };
+  return mergeForwardTranscriptPage(resolvedBase, {
+    threadId,
+    remoteFound: true,
+    messages: [event.message],
+    pendingInputs: resolvedBase.pendingInputs,
+    thread: resolvedBase.thread ?? null,
+    threadInfo: resolvedBase.threadInfo ?? null,
+    pageInfo: {
+      ...(resolvedBase.pageInfo ?? {
+        totalMessages: event.seq,
+        returnedMessages: 0,
+        startIndex: 0,
+        endIndex: event.seq,
+        hasMoreBefore: false,
+        nextBeforeIndex: null,
+        limit: THREAD_HISTORY_PAGE_SIZE,
+        userQueryLimit: THREAD_HISTORY_USER_QUERY_LIMIT,
+      }),
+      committedMessages: Math.max(
+        event.seq,
+        resolvedBase.pageInfo?.committedMessages ?? 0,
+      ),
+      hasMoreAfter: false,
+      nextAfterIndex: null,
+    },
+    team: resolvedBase.team ?? null,
+  });
+}
+
+export function mergeRemoteTranscriptWithLocal(
+  transcript: TranscriptMessage[],
+  existing: UiTranscriptMessage[],
+  options: {
+    activeRunLiveRows?: boolean;
+    preserveRemoteBeforeIndex?: number | null;
+    /**
+     * Whether the fetched transcript reports an active run. Streamed local
+     * tool bubbles outrank the canonical page only while the run is
+     * actually active; once the gateway reports the run finished, the page
+     * already contains every tool row, so an unmatched local bubble lost
+     * its terminal events (dropped stream, missed `done`) or its rows fell
+     * outside the fetched page. Keeping it would re-append it after the
+     * final assistant answer on every reconcile. Mirrors the iOS
+     * `GaryxTranscriptMerge` `threadRunActive` rule.
+     */
+    threadRunActive?: boolean;
+    intentForId: (intentId: string) => MessageIntent | null;
+  },
+): UiTranscriptMessage[] {
+  const intentForId = options.intentForId;
+  const visibleTranscript = visibleTranscriptMessages(transcript);
+  if (visibleTranscript.length === 0) {
+    return existing.length > 0 ? existing : [];
+  }
+
+  const materializedRemote = materializeRemoteTranscript(
+    visibleTranscript,
+    existing,
+    {
+      ignoreTimestampForStableMessages: options?.activeRunLiveRows,
+    },
+  );
+  const materializedRemoteIds = new Set(
+    materializedRemote.map((entry) => entry.id),
+  );
+  const preservedRemoteBeforeEntries: UiTranscriptMessage[] = [];
+  const preservedLocalEntries = existing.filter((entry, index, entries) => {
+    if (entry.localState === "remote_final") {
+      const historyIndex = transcriptEntryHistoryIndex(entry);
+      if (
+        typeof options?.preserveRemoteBeforeIndex === "number" &&
+        historyIndex !== null &&
+        historyIndex < options.preserveRemoteBeforeIndex &&
+        !materializedRemoteIds.has(entry.id)
+      ) {
+        preservedRemoteBeforeEntries.push(entry);
+      }
+      return false;
+    }
+    if (
+      entries.findIndex((candidate) => candidate.id === entry.id) !== index
+    ) {
+      return false;
+    }
+    if (!entry.intentId) {
+      return (
+        entry.localState === "error" || entry.localState === "interrupted"
+      );
+    }
+
+    const intent = intentForId(entry.intentId);
+    if (!intent) {
+      return (
+        entry.localState === "error" || entry.localState === "interrupted"
+      );
+    }
+
+    if (entry.role === "user") {
+      return !(
+        materializedRemoteIds.has(entry.id) ||
+        materializedRemoteIds.has(userMessageIdForOrigin(intent.intentId))
+      );
+    }
+    const match = resolveIntentHistoryMatch(intent, visibleTranscript);
+    if (entry.role === "assistant") {
+      return !match.assistantVisible;
+    }
+    if (isToolRole(entry.role)) {
+      if (options?.threadRunActive === false) {
+        return false;
+      }
+      return !materializedRemote.some((candidate) =>
+        toolMessagesEquivalent(candidate, entry),
+      );
+    }
+    return false;
+  });
+
+  return [
+    ...preservedRemoteBeforeEntries,
+    ...materializedRemote,
+    ...preservedLocalEntries,
+  ];
 }
 

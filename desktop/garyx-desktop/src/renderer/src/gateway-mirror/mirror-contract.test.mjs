@@ -428,6 +428,458 @@ test("dual-run: mirror authoritative apply matches the legacy pure path", () => 
   assert.equal(snapshotSecond, mirror.getThreadSnapshot(threadId));
 });
 
+// ---- Batch 2a-2 part 2: dual-run for the committed-stream mapping, the ----
+// ---- remote apply, and the older-history page load ----
+
+import { transcriptRewriteAction } from "../../../shared/transcript-sync.ts";
+import {
+  committedMessageForwardPage,
+  mergeRemotePaginationState,
+  mergeRemoteTranscriptWithLocal,
+  paginationStateFromTranscript,
+  userMessageIdForOrigin,
+  THREAD_HISTORY_PAGE_SIZE,
+  THREAD_HISTORY_USER_QUERY_LIMIT,
+} from "./transcript-materialize.ts";
+
+// Wire-shaped transcript message whose id carries the history index the
+// shared forward merge keys on (`transcriptMessageIndex` reads the `:N`
+// suffix).
+function wireMessage(index, role, text) {
+  return {
+    id: `seq:${index}`,
+    role,
+    text,
+    timestamp: `2026-06-19T12:2${index % 10}:00Z`,
+  };
+}
+
+function committedEvent(threadId, seq, message) {
+  return { type: "committed_message", runId: "run-1", threadId, seq, message };
+}
+
+function fullPageInfo(overrides = {}) {
+  return {
+    totalMessages: 2,
+    committedMessages: 2,
+    returnedMessages: 2,
+    startIndex: 1,
+    endIndex: 2,
+    hasMoreBefore: false,
+    nextBeforeIndex: null,
+    hasMoreAfter: false,
+    nextAfterIndex: null,
+    limit: 100,
+    userQueryLimit: 10,
+    ...overrides,
+  };
+}
+
+// Legacy pure composition: exactly the state transformation the hook's
+// applyRemoteTranscript performs on its transcript-domain slices, minus
+// React/machine/IPC side effects. Kept as an independent fold in the test
+// so the mirror's composition (order + inputs) is compared against the
+// hook's, not against itself.
+function legacyRemoteApply(state, transcript, intentForId = () => null) {
+  const resolved = transcriptWithResolvedActiveRun(transcript);
+  const pagination = mergeRemotePaginationState(
+    state.pagination,
+    paginationStateFromTranscript(resolved),
+    [...state.messages],
+  );
+  const visible = visibleTranscriptMessages(resolved.messages);
+  const merged = mergeRemoteTranscriptWithLocal(visible, [...state.messages], {
+    activeRunLiveRows: Boolean(resolved.threadInfo?.activeRun),
+    preserveRemoteBeforeIndex: resolved.pageInfo?.startIndex ?? null,
+    threadRunActive: Boolean(resolved.threadInfo?.activeRun),
+    intentForId,
+  });
+  return {
+    snapshot: resolved,
+    pagination,
+    threadInfo: resolved.threadInfo ?? null,
+    pendingInputs: resolved.pendingInputs ?? [],
+    messages: merged,
+  };
+}
+
+// Legacy pure composition of applyCommittedThreadMessage's transcript-domain
+// path: rewrite check, forward-page fold, then the remote apply.
+function legacyCommittedApply(state, event, intentForId = () => null) {
+  if (transcriptRewriteAction(event.message) === "refetch_authoritative") {
+    return { ...state, refetchRequested: true };
+  }
+  return legacyRemoteApply(
+    state,
+    committedMessageForwardPage(state.snapshot, event),
+    intentForId,
+  );
+}
+
+const emptyLegacyState = {
+  snapshot: null,
+  pagination: null,
+  threadInfo: null,
+  pendingInputs: [],
+  messages: [],
+};
+
+function assertThreadMatchesLegacy(mirror, threadId, legacy) {
+  const snapshot = mirror.getThreadSnapshot(threadId);
+  assert.deepEqual(snapshot.messages, legacy.messages);
+  assert.deepEqual(snapshot.threadInfo, legacy.threadInfo);
+  assert.deepEqual(snapshot.pendingRemoteInputs, legacy.pendingInputs);
+  assert.deepEqual(snapshot.historyPagination, legacy.pagination);
+}
+
+test("dual-run: remote apply plus committed-stream frames match the legacy pure path", () => {
+  const threadId = "thread::dual-run-committed";
+  const fullTranscript = {
+    threadId,
+    remoteFound: true,
+    messages: [wireMessage(1, "user", "hello"), wireMessage(2, "assistant", "hi")],
+    pendingInputs: [],
+    threadInfo: null,
+    pageInfo: fullPageInfo(),
+  };
+
+  // Legacy chain: full fetch apply, then two committed stream records.
+  let legacy = legacyRemoteApply(emptyLegacyState, fullTranscript);
+  const committed3 = committedEvent(
+    threadId,
+    3,
+    wireMessage(3, "user", "follow-up"),
+  );
+  const committed4 = committedEvent(
+    threadId,
+    4,
+    wireMessage(4, "assistant", "answer"),
+  );
+
+  // Mirror chain: same inputs through the public methods.
+  const mirror = new GatewayMirror();
+  mirror.applyRemoteTranscript(threadId, fullTranscript);
+  assertThreadMatchesLegacy(mirror, threadId, legacy);
+
+  legacy = legacyCommittedApply(legacy, committed3);
+  mirror.ingest({
+    type: "thread_render_frame",
+    threadId,
+    events: [committed3],
+    renderState: {
+      based_on_seq: 3,
+      rows: [],
+      tailActivity: "none",
+      activeToolGroupId: null,
+      progress_locus: "none",
+      visibleMessageIds: [],
+      filtered_placeholders: [],
+    },
+  });
+  assertThreadMatchesLegacy(mirror, threadId, legacy);
+
+  legacy = legacyCommittedApply(legacy, committed4);
+  mirror.ingest(committed4);
+  assertThreadMatchesLegacy(mirror, threadId, legacy);
+
+  // The verbatim record ledger and frontier advanced alongside the mapping.
+  const snapshot = mirror.getThreadSnapshot(threadId);
+  assert.equal(snapshot.records.length, 2);
+  assert.equal(snapshot.frontier.committedSeq, 4);
+});
+
+test("dual-run: a committed rewrite control skips mapping and requests a refetch", () => {
+  const threadId = "thread::dual-run-rewrite";
+  const refetched = [];
+  const mirror = new GatewayMirror({
+    getState: async () => ({}),
+    listCustomAgents: async () => [],
+    listTeams: async () => [],
+    listWorkflowDefinitions: async () => [],
+    getThreadHistory: async () => {
+      throw new Error("unused");
+    },
+    requestAuthoritativeRefetch: (id) => refetched.push(id),
+  });
+
+  const fullTranscript = {
+    threadId,
+    remoteFound: true,
+    messages: [wireMessage(1, "user", "hello")],
+    pendingInputs: [],
+    threadInfo: null,
+    pageInfo: fullPageInfo({ totalMessages: 1, committedMessages: 1, returnedMessages: 1, endIndex: 1 }),
+  };
+  let legacy = legacyRemoteApply(emptyLegacyState, fullTranscript);
+  mirror.applyRemoteTranscript(threadId, fullTranscript);
+
+  const rewrite = committedEvent(threadId, 2, {
+    id: "seq:2",
+    role: "system",
+    kind: "control",
+    text: "",
+    content: { control: { kind: "range_rewrite" } },
+  });
+  assert.equal(transcriptRewriteAction(rewrite.message), "refetch_authoritative");
+
+  legacy = legacyCommittedApply(legacy, rewrite);
+  assert.equal(legacy.refetchRequested, true);
+  mirror.ingest(rewrite);
+
+  assertThreadMatchesLegacy(mirror, threadId, legacy);
+  assert.deepEqual(refetched, [threadId], "refetch requested once");
+  // The verbatim ledger still records the control event.
+  const snapshot = mirror.getThreadSnapshot(threadId);
+  assert.equal(snapshot.records.length, 1);
+  assert.equal(snapshot.frontier.committedSeq, 2);
+
+  // Redelivery of the same seq is idempotent: no second refetch request.
+  mirror.ingest(rewrite);
+  assert.deepEqual(refetched, [threadId]);
+});
+
+test("dual-run: loadOlderThreadHistoryPage matches the legacy older-page apply", async () => {
+  const threadId = "thread::dual-run-older";
+  const olderPage = {
+    threadId,
+    remoteFound: true,
+    messages: [wireMessage(1, "user", "old question"), wireMessage(2, "assistant", "old answer")],
+    pendingInputs: [],
+    threadInfo: null,
+    pageInfo: fullPageInfo({
+      totalMessages: 4,
+      committedMessages: 4,
+      startIndex: 1,
+      endIndex: 2,
+      hasMoreBefore: false,
+      nextBeforeIndex: null,
+    }),
+  };
+  const historyCalls = [];
+  const mirror = new GatewayMirror({
+    getState: async () => ({}),
+    listCustomAgents: async () => [],
+    listTeams: async () => [],
+    listWorkflowDefinitions: async () => [],
+    getThreadHistory: async (input) => {
+      historyCalls.push(input);
+      return olderPage;
+    },
+  });
+
+  const fullTranscript = {
+    threadId,
+    remoteFound: true,
+    messages: [wireMessage(3, "user", "recent"), wireMessage(4, "assistant", "reply")],
+    pendingInputs: [],
+    threadInfo: null,
+    pageInfo: fullPageInfo({
+      totalMessages: 4,
+      committedMessages: 4,
+      startIndex: 3,
+      endIndex: 4,
+      hasMoreBefore: true,
+      nextBeforeIndex: 2,
+    }),
+  };
+  let legacy = legacyRemoteApply(emptyLegacyState, fullTranscript);
+  mirror.applyRemoteTranscript(threadId, fullTranscript);
+  assertThreadMatchesLegacy(mirror, threadId, legacy);
+  assert.equal(legacy.pagination.hasMoreBefore, true);
+
+  // Loading flag lifecycle: observable while the fetch is in flight.
+  let sawLoading = false;
+  let fetchedDuring = null;
+  mirror.subscribeThread(threadId, () => {
+    if (mirror.getThreadSnapshot(threadId).historyPagination?.loadingBefore) {
+      sawLoading = true;
+    }
+  });
+
+  await mirror.loadOlderThreadHistoryPage(threadId, {
+    onPageFetched: () => {
+      // The UI scroll-anchor seam runs between fetch and apply: the message
+      // cache must not have been prepended yet.
+      fetchedDuring = mirror.getThreadSnapshot(threadId).messages.length;
+    },
+  });
+
+  assert.deepEqual(historyCalls, [
+    {
+      threadId,
+      beforeIndex: 2,
+      limit: THREAD_HISTORY_PAGE_SIZE,
+      userQueryLimit: THREAD_HISTORY_USER_QUERY_LIMIT,
+    },
+  ]);
+  assert.equal(sawLoading, true, "loadingBefore visible during fetch");
+  assert.equal(fetchedDuring, legacy.messages.length, "apply happens after the anchor seam");
+
+  // Legacy older-page apply: pagination replaced from the page, materialized
+  // older entries prepended (verbatim applyOlderRemoteTranscriptPage).
+  const legacyPagination = paginationStateFromTranscript(olderPage);
+  const visibleOlder = visibleTranscriptMessages(olderPage.messages);
+  const existingIds = new Set(legacy.messages.map((entry) => entry.id));
+  const olderEntries = materializeRemoteTranscript(visibleOlder, []).filter(
+    (entry) => !existingIds.has(entry.id),
+  );
+  legacy = {
+    ...legacy,
+    pagination: { ...legacyPagination, loadingBefore: false },
+    messages: [...olderEntries, ...legacy.messages],
+  };
+
+  const snapshot = mirror.getThreadSnapshot(threadId);
+  assert.deepEqual(snapshot.messages, legacy.messages);
+  assert.deepEqual(snapshot.historyPagination, legacy.pagination);
+  assert.ok(olderEntries.length > 0, "older page must actually prepend rows");
+});
+
+test("loadOlderThreadHistoryPage guards: no pagination, in-flight, and fetch errors", async () => {
+  const threadId = "thread::older-guards";
+  let resolveFetch;
+  let calls = 0;
+  const mirror = new GatewayMirror({
+    getState: async () => ({}),
+    listCustomAgents: async () => [],
+    listTeams: async () => [],
+    listWorkflowDefinitions: async () => [],
+    getThreadHistory: () => {
+      calls += 1;
+      return new Promise((resolve) => {
+        resolveFetch = resolve;
+      });
+    },
+  });
+
+  // No pagination state at all: fetch must not run.
+  await mirror.loadOlderThreadHistoryPage(threadId);
+  assert.equal(calls, 0);
+
+  const fullTranscript = {
+    threadId,
+    remoteFound: true,
+    messages: [wireMessage(5, "user", "latest")],
+    pendingInputs: [],
+    threadInfo: null,
+    pageInfo: fullPageInfo({
+      totalMessages: 5,
+      committedMessages: 5,
+      startIndex: 5,
+      endIndex: 5,
+      hasMoreBefore: true,
+      nextBeforeIndex: 4,
+    }),
+  };
+  mirror.applyRemoteTranscript(threadId, fullTranscript);
+
+  // In-flight guard: a second call while loadingBefore is set is a no-op.
+  const firstLoad = mirror.loadOlderThreadHistoryPage(threadId);
+  await mirror.loadOlderThreadHistoryPage(threadId);
+  assert.equal(calls, 1, "concurrent older-page loads must not double-fetch");
+  resolveFetch({
+    threadId,
+    remoteFound: true,
+    messages: [],
+    pendingInputs: [],
+    threadInfo: null,
+    pageInfo: fullPageInfo({
+      totalMessages: 5,
+      committedMessages: 5,
+      startIndex: 1,
+      endIndex: 4,
+      hasMoreBefore: false,
+      nextBeforeIndex: null,
+    }),
+  });
+  await firstLoad;
+  assert.equal(
+    mirror.getThreadSnapshot(threadId).historyPagination.loadingBefore,
+    false,
+  );
+  assert.equal(
+    mirror.getThreadSnapshot(threadId).historyPagination.hasMoreBefore,
+    false,
+    "empty page still replaces pagination (legacy behavior)",
+  );
+
+  // Fetch error: loadingBefore resets and the error propagates.
+  const errorMirror = new GatewayMirror({
+    getState: async () => ({}),
+    listCustomAgents: async () => [],
+    listTeams: async () => [],
+    listWorkflowDefinitions: async () => [],
+    getThreadHistory: async () => {
+      throw new Error("history endpoint down");
+    },
+  });
+  errorMirror.applyRemoteTranscript(threadId, fullTranscript);
+  await assert.rejects(
+    () => errorMirror.loadOlderThreadHistoryPage(threadId),
+    /history endpoint down/,
+  );
+  assert.equal(
+    errorMirror.getThreadSnapshot(threadId).historyPagination.loadingBefore,
+    false,
+    "fetch error must clear the loading flag",
+  );
+});
+
+test("mergeRemoteTranscriptWithLocal preserves local intent entries via the injected lookup", () => {
+  const intent = {
+    intentId: "intent-1",
+    threadId: "thread::merge-intents",
+    state: "awaiting_response",
+    dispatchMode: "sync_send",
+    responseText: "",
+  };
+  const intents = { [intent.intentId]: intent };
+  const intentForId = (id) => intents[id] || null;
+
+  const localUser = {
+    id: "local-user-1",
+    role: "user",
+    text: "optimistic send",
+    localState: "pending",
+    intentId: intent.intentId,
+  };
+  const remoteOnly = [wireMessage(1, "user", "earlier"), wireMessage(2, "assistant", "earlier reply")];
+
+  // Remote does not echo the local user message yet: it must be preserved.
+  const preserved = mergeRemoteTranscriptWithLocal(remoteOnly, [localUser], {
+    intentForId,
+  });
+  assert.ok(
+    preserved.some((entry) => entry.id === localUser.id),
+    "unechoed optimistic user entry must survive the merge",
+  );
+
+  // Remote now carries the origin-id echo: the local copy must drop.
+  const echoed = [
+    ...remoteOnly,
+    {
+      id: userMessageIdForOrigin(intent.intentId),
+      role: "user",
+      text: "optimistic send",
+      timestamp: "2026-06-19T12:23:00Z",
+    },
+  ];
+  const deduped = mergeRemoteTranscriptWithLocal(echoed, [localUser], {
+    intentForId,
+  });
+  assert.ok(
+    !deduped.some((entry) => entry.id === localUser.id),
+    "echoed optimistic user entry must be replaced by the remote copy",
+  );
+
+  // Null lookup (mirror without a live machine): local entry with an intent
+  // id degrades to the no-intent rule and drops unless error/interrupted.
+  const nullLookup = mergeRemoteTranscriptWithLocal(remoteOnly, [localUser], {
+    intentForId: () => null,
+  });
+  assert.ok(!nullLookup.some((entry) => entry.id === localUser.id));
+});
+
 test("dual-run: threadInfo and pending inputs mirror the resolved transcript", () => {
   const threadId = "thread::dual-run-info";
   const base = transcriptFromCases(threadId, 3);

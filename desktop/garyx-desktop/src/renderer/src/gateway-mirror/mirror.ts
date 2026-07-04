@@ -27,10 +27,16 @@ import type {
   ThreadTranscript,
 } from "@shared/contracts";
 
+import type { MessageIntent } from "../message-machine.ts";
 import type { UiTranscriptMessage } from "../app-shell/types";
 import { ThreadFrontier } from "./frontier.ts";
 import type { ThreadFrontierSnapshot } from "./frontier.ts";
 import { ThreadTranscriptCache } from "./transcript-cache.ts";
+import {
+  THREAD_HISTORY_PAGE_SIZE,
+  THREAD_HISTORY_USER_QUERY_LIMIT,
+} from "./transcript-materialize.ts";
+import type { ThreadHistoryPaginationState } from "./transcript-materialize.ts";
 
 export type Unsubscribe = () => void;
 
@@ -61,6 +67,25 @@ export interface GatewayMirrorServices {
   listCustomAgents(): Promise<DesktopCustomAgent[]>;
   listTeams(): Promise<DesktopTeam[]>;
   listWorkflowDefinitions(): Promise<DesktopWorkflowDefinition[]>;
+  getThreadHistory(input: {
+    threadId: string;
+    beforeIndex: number;
+    limit: number;
+    userQueryLimit: number;
+  }): Promise<ThreadTranscript>;
+  /**
+   * Message-machine intent lookup. Temporary seam: the machine stays with
+   * its legacy owner until batch 3, so the wiring layer passes a lookup
+   * into the machine's live state. Omitted (tests, machine-less mirrors)
+   * means the transcript merge runs remote-only.
+   */
+  intentForId?(intentId: string): MessageIntent | null;
+  /**
+   * Called when a committed rewrite/reset control demands an authoritative
+   * transcript refetch. The refetch itself (cache clear + full history
+   * fetch + stream restart) stays with the legacy owner until batch 2b.
+   */
+  requestAuthoritativeRefetch?(threadId: string): void;
 }
 
 export interface GatewayRootSnapshot {
@@ -84,11 +109,15 @@ export interface ThreadMirrorSnapshot {
    * version/reference/monotonicity semantics.
    */
   readonly records: readonly CommittedMessageEvent[];
-  /** Mapped UI transcript messages (authoritative-apply path, batch 2a-2). */
+  /**
+   * Mapped UI transcript messages (authoritative apply, remote apply, and
+   * committed stream mapping — batch 2a-2).
+   */
   readonly messages: readonly UiTranscriptMessage[];
   readonly threadInfo: ThreadRuntimeInfo | null;
   readonly pendingRemoteInputs: readonly PendingThreadInput[];
   readonly renderState: RenderState | null;
+  readonly historyPagination: ThreadHistoryPaginationState | null;
   readonly frontier: ThreadFrontierSnapshot;
 }
 
@@ -234,6 +263,7 @@ export class GatewayMirror {
         threadInfo: entry.cache.getThreadInfo(),
         pendingRemoteInputs: entry.cache.getPendingRemoteInputs(),
         renderState: entry.cache.getRenderState(),
+        historyPagination: entry.cache.getHistoryPagination(),
         frontier: entry.frontier.snapshot(),
       };
     }
@@ -252,10 +282,70 @@ export class GatewayMirror {
   ): void {
     const entry = this.threadEntry(threadId);
     entry.cache.applyAuthoritative(transcript);
-    entry.version += 1;
-    entry.snapshot = null;
-    for (const listener of [...entry.listeners]) {
-      listener();
+    this.commitThread(entry);
+  }
+
+  /**
+   * Apply a remote transcript (full fetch or forward aggregate) as one
+   * synchronous commit: the mirror-side counterpart of the hook's
+   * applyRemoteTranscript cache path. Run-state sync, IPC persistence,
+   * desktopState propagation, and intent marking stay with their legacy
+   * owners (batches 3/2b).
+   */
+  applyRemoteTranscript(threadId: string, transcript: ThreadTranscript): void {
+    const entry = this.threadEntry(threadId);
+    entry.cache.applyRemote(transcript, { intentForId: this.intentLookup });
+    this.commitThread(entry);
+  }
+
+  /**
+   * Load one older history page for a thread: the mirror-side counterpart
+   * of the hook's loadOlderThreadHistoryPage. Guards on the thread's
+   * pagination state, marks loadingBefore for the duration of the fetch,
+   * and prepends the fetched page. `onPageFetched` runs between the fetch
+   * and the apply so the UI layer can capture its scroll-anchor state
+   * (scroll anchoring is UI-owned by design). Fetch errors clear the
+   * loading flag and propagate to the caller.
+   */
+  async loadOlderThreadHistoryPage(
+    threadId: string,
+    options?: { onPageFetched?: (transcript: ThreadTranscript) => void },
+  ): Promise<void> {
+    if (!this.services) {
+      throw new Error("GatewayMirror constructed without services");
+    }
+    const entry = this.threadEntry(threadId);
+    const pagination = entry.cache.getHistoryPagination();
+    if (
+      !pagination?.hasMoreBefore ||
+      pagination.loadingBefore ||
+      pagination.nextBeforeIndex === null
+    ) {
+      return;
+    }
+
+    entry.cache.setHistoryPagination({
+      hasMoreBefore: pagination.hasMoreBefore,
+      nextBeforeIndex: pagination.nextBeforeIndex,
+      loadingBefore: true,
+    });
+    this.commitThread(entry);
+
+    try {
+      const transcript = await this.services.getThreadHistory({
+        threadId,
+        beforeIndex: pagination.nextBeforeIndex,
+        limit: THREAD_HISTORY_PAGE_SIZE,
+        userQueryLimit: THREAD_HISTORY_USER_QUERY_LIMIT,
+      });
+      options?.onPageFetched?.(transcript);
+      entry.cache.applyOlderPage(transcript);
+    } finally {
+      const current = entry.cache.getHistoryPagination();
+      entry.cache.setHistoryPagination(
+        current ? { ...current, loadingBefore: false } : current,
+      );
+      this.commitThread(entry);
     }
   }
 
@@ -285,9 +375,27 @@ export class GatewayMirror {
     const entry = this.threadEntry(threadId);
     let changed = false;
 
-    const highestApplied = entry.cache.applyCommittedEvents(events);
-    if (highestApplied !== null) {
+    const appliedEvents = entry.cache.applyCommittedEvents(events);
+    if (appliedEvents.length > 0) {
+      let highestApplied = 0;
+      for (const event of appliedEvents) {
+        if (event.seq > highestApplied) {
+          highestApplied = event.seq;
+        }
+      }
       entry.frontier.advanceCommitted(highestApplied);
+      // Committed → UI-message mapping, mirroring the hook's per-event
+      // applyCommittedThreadMessage loop. Only newly applied events map
+      // (seq-idempotent redelivery stays a no-op). Rewrite/reset controls
+      // skip the mapping and request an authoritative refetch instead.
+      for (const event of appliedEvents) {
+        const outcome = entry.cache.applyCommittedMessage(event, {
+          intentForId: this.intentLookup,
+        });
+        if (outcome === "refetch_authoritative") {
+          this.services?.requestAuthoritativeRefetch?.(threadId);
+        }
+      }
       changed = true;
     }
 
@@ -305,12 +413,20 @@ export class GatewayMirror {
     if (!changed) {
       return;
     }
+    this.commitThread(entry);
+  }
+
+  /** One atomic thread commit: version bump, snapshot invalidation, notify. */
+  private commitThread(entry: ThreadEntry): void {
     entry.version += 1;
     entry.snapshot = null;
     for (const listener of [...entry.listeners]) {
       listener();
     }
   }
+
+  private intentLookup = (intentId: string): MessageIntent | null =>
+    this.services?.intentForId?.(intentId) ?? null;
 
   private threadEntry(threadId: string): ThreadEntry {
     let entry = this.threads.get(threadId);
