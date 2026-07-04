@@ -9,6 +9,7 @@ import type {
   DesktopWorkflowDefinition,
 } from "@shared/contracts";
 
+import type { GatewayMirror } from "../gateway-mirror/mirror";
 import type { Translate } from "../i18n";
 import {
   selectThreadRuntime,
@@ -50,6 +51,7 @@ type UseGatewayConnectionControllerArgs = {
   liveStreamStateRef: React.MutableRefObject<Record<string, LiveStreamState>>;
   loading: boolean;
   messageStateRef: React.MutableRefObject<MessageMachineState>;
+  mirror: GatewayMirror;
   pushToast: (message: string, tone?: ToastTone, durationMs?: number) => void;
   scheduleHistoryRefresh: (
     threadId: string,
@@ -85,6 +87,7 @@ export function useGatewayConnectionController({
   liveStreamStateRef,
   loading,
   messageStateRef,
+  mirror,
   pushToast,
   scheduleHistoryRefresh,
   selectedThreadId,
@@ -244,7 +247,11 @@ export function useGatewayConnectionController({
 
   useEffect(() => {
     recordGatewayStatusObservation(connection, connection?.error);
-  }, [connection]);
+    // Single sync point into the mirror's root domain: every connection
+    // change (poll, setup, settings save, error coercion) lands here, so
+    // the mirror observes the same sequence the React state does.
+    mirror.observeConnection(connection);
+  }, [connection, mirror]);
 
   function hasGatewayRecoveryActivity(): boolean {
     const hasBusyStream = Object.values(liveStreamStateRef.current).some(
@@ -322,21 +329,16 @@ export function useGatewayConnectionController({
   }
 
   async function refreshDesktopState() {
-    const [nextState, nextAgents, nextTeams, nextWorkflows] = await Promise.all([
-      window.garyxDesktop.getState(),
-      window.garyxDesktop
-        .listCustomAgents()
-        .catch(() => [] as DesktopCustomAgent[]),
-      window.garyxDesktop.listTeams().catch(() => [] as DesktopTeam[]),
-      window.garyxDesktop
-        .listWorkflowDefinitions()
-        .catch(() => [] as DesktopWorkflowDefinition[]),
-    ]);
+    // The mirror owns the IPC round (endgame batch 1b); the legacy React
+    // state is synchronized from the mirror's snapshots until consumers
+    // migrate to useGatewayRoot/useCatalog subscriptions.
+    const nextState = await mirror.refreshDesktopState();
+    const catalog = mirror.getCatalogSnapshot();
     startTransition(() => {
       setDesktopState(nextState);
-      setDesktopAgents(nextAgents);
-      setDesktopTeams(nextTeams);
-      setDesktopWorkflows(nextWorkflows);
+      setDesktopAgents([...catalog.agents]);
+      setDesktopTeams([...catalog.teams]);
+      setDesktopWorkflows([...catalog.workflows]);
     });
     return nextState;
   }

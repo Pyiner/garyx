@@ -215,6 +215,8 @@ import {
   type SeededTurn,
 } from "./useMessageDispatchController";
 import { useMessagesScrollController } from "./useMessagesScrollController";
+import { GatewayMirror } from "../gateway-mirror/mirror";
+import { GatewayMirrorContext } from "../gateway-mirror/react";
 import { useSettingsController } from "./useSettingsController";
 import { useSideChatController } from "./useSideChatController";
 import {
@@ -626,6 +628,20 @@ export function AppShell() {
     initialRouteRef.current = parseDesktopRoute();
   }
   const initialRouteValue = initialRouteRef.current;
+  // Endgame architecture (docs/design/appshell-endgame-architecture.md):
+  // the mirror instance is created once and provided via context. During
+  // the migration it runs alongside the legacy React state; batches move
+  // ownership over domain by domain.
+  const [gatewayMirror] = useState(
+    () =>
+      new GatewayMirror({
+        getState: () => window.garyxDesktop.getState(),
+        listCustomAgents: () => window.garyxDesktop.listCustomAgents(),
+        listTeams: () => window.garyxDesktop.listTeams(),
+        listWorkflowDefinitions: () =>
+          window.garyxDesktop.listWorkflowDefinitions(),
+      }),
+  );
   const [desktopState, setDesktopState] = useState<DesktopState | null>(null);
   const [desktopAgents, setDesktopAgents] = useState<DesktopCustomAgent[]>([]);
   const [desktopTeams, setDesktopTeams] = useState<DesktopTeam[]>([]);
@@ -981,6 +997,7 @@ export function AppShell() {
     liveStreamStateRef,
     loading,
     messageStateRef,
+    mirror: gatewayMirror,
     pushToast,
     scheduleHistoryRefresh,
     selectedThreadId,
@@ -4907,6 +4924,7 @@ export function AppShell() {
   }
 
   return (
+    <GatewayMirrorContext.Provider value={gatewayMirror}>
     <I18nProvider languagePreference={settingsDraft.languagePreference}>
     <div
       className={appShellClassName}
@@ -5677,5 +5695,6 @@ export function AppShell() {
       ) : null}
     </div>
     </I18nProvider>
+    </GatewayMirrorContext.Provider>
   );
 }
