@@ -95,6 +95,19 @@ export class ThreadTranscriptCache {
     return this.historyPagination;
   }
 
+  /**
+   * Replace the UI message array wholesale. Batch-3b bridge for local
+   * (optimistic/recovery) writes that still run through the legacy
+   * updateMessagesByThread path — the legacy result is synced here so the
+   * mirror's message cache stays converged, including non-remote rows.
+   * Remote applies must NOT use this: they go through applyRemote /
+   * applyAuthoritative / applyOlderPage so the mirror keeps computing its
+   * own result (that independence is what the parity probe verifies).
+   */
+  setUiMessages(messages: readonly UiTranscriptMessage[]): void {
+    this.uiMessages = messages;
+  }
+
   setHistoryPagination(state: ThreadHistoryPaginationState | null): void {
     this.historyPagination = state;
   }

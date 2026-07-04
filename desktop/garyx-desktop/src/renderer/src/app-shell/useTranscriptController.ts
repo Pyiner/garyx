@@ -430,10 +430,29 @@ export function useTranscriptController({
 
   function updateMessagesByThread(
     updater: (current: MessageMap) => MessageMap,
+    options?: {
+      /**
+       * Batch 3b: set by the remote-apply paths, whose message merges the
+       * mirror computes independently (applyRemote/applyAuthoritative/
+       * applyOlderPage). Local optimistic/recovery writes leave this unset
+       * so the legacy result bridges into the mirror's message cache.
+       */
+      skipMirrorSync?: boolean;
+    },
   ): MessageMap {
-    const next = updater(messagesByThreadRef.current);
+    const previous = messagesByThreadRef.current;
+    const next = updater(previous);
     messagesByThreadRef.current = next;
     setMessagesByThread(next);
+    if (!options?.skipMirrorSync && next !== previous) {
+      for (const threadId of Object.keys(next)) {
+        if (next[threadId] !== previous[threadId]) {
+          mirrorDualWrite(() =>
+            mirror.syncThreadUiMessages(threadId, next[threadId]),
+          );
+        }
+      }
+    }
     return next;
   }
 
@@ -558,16 +577,19 @@ export function useTranscriptController({
     const visibleMessages = visibleTranscriptMessages(resolvedTranscript.messages);
     setRemotePendingInputs(threadId, resolvedTranscript.pendingInputs);
     startTransition(() => {
-      updateMessagesByThread((current) => {
-        const existing = current[threadId] || [];
-        return {
-          ...current,
-          [threadId]: materializeRemoteTranscript(
-            visibleMessages,
-            existing,
-          ),
-        };
-      });
+      updateMessagesByThread(
+        (current) => {
+          const existing = current[threadId] || [];
+          return {
+            ...current,
+            [threadId]: materializeRemoteTranscript(
+              visibleMessages,
+              existing,
+            ),
+          };
+        },
+        { skipMirrorSync: true },
+      );
     });
     markIntentsFromHistory(threadId, visibleMessages);
   }
@@ -879,30 +901,33 @@ export function useTranscriptController({
     const visibleMessages = visibleTranscriptMessages(resolvedTranscript.messages);
     setRemotePendingInputs(threadId, resolvedTranscript.pendingInputs);
     startTransition(() => {
-      updateMessagesByThread((current) => {
-        const existing = current[threadId] || [];
-        const merged = mergeRemoteTranscriptWithLocal(
-          visibleMessages,
-          existing,
-          {
-            activeRunLiveRows: Boolean(resolvedTranscript.threadInfo?.activeRun),
-            preserveRemoteBeforeIndex:
-              resolvedTranscript.pageInfo?.startIndex ?? null,
-            threadRunActive: Boolean(resolvedTranscript.threadInfo?.activeRun),
-            intentForId,
-          },
-        );
-        if (
-          merged.length === existing.length &&
-          merged.every((entry, index) => entry === existing[index])
-        ) {
-          return current;
-        }
-        return {
-          ...current,
-          [threadId]: merged,
-        };
-      });
+      updateMessagesByThread(
+        (current) => {
+          const existing = current[threadId] || [];
+          const merged = mergeRemoteTranscriptWithLocal(
+            visibleMessages,
+            existing,
+            {
+              activeRunLiveRows: Boolean(resolvedTranscript.threadInfo?.activeRun),
+              preserveRemoteBeforeIndex:
+                resolvedTranscript.pageInfo?.startIndex ?? null,
+              threadRunActive: Boolean(resolvedTranscript.threadInfo?.activeRun),
+              intentForId,
+            },
+          );
+          if (
+            merged.length === existing.length &&
+            merged.every((entry, index) => entry === existing[index])
+          ) {
+            return current;
+          }
+          return {
+            ...current,
+            [threadId]: merged,
+          };
+        },
+        { skipMirrorSync: true },
+      );
     });
     // Propagate the transcript's `team` block into `desktopState.threads[i]`
     // so team-bound threads render the team badge + sub-agent peek tabs as
@@ -956,21 +981,24 @@ export function useTranscriptController({
       return;
     }
 
-    updateMessagesByThread((current) => {
-      const existing = current[threadId] || [];
-      const existingIds = new Set(existing.map((entry) => entry.id));
-      const olderEntries = materializeRemoteTranscript(
-        visibleMessages,
-        [],
-      ).filter((entry) => !existingIds.has(entry.id));
-      if (olderEntries.length === 0) {
-        return current;
-      }
-      return {
-        ...current,
-        [threadId]: [...olderEntries, ...existing],
-      };
-    });
+    updateMessagesByThread(
+      (current) => {
+        const existing = current[threadId] || [];
+        const existingIds = new Set(existing.map((entry) => entry.id));
+        const olderEntries = materializeRemoteTranscript(
+          visibleMessages,
+          [],
+        ).filter((entry) => !existingIds.has(entry.id));
+        if (olderEntries.length === 0) {
+          return current;
+        }
+        return {
+          ...current,
+          [threadId]: [...olderEntries, ...existing],
+        };
+      },
+      { skipMirrorSync: true },
+    );
   }
 
   async function loadOlderThreadHistoryPage(threadId: string) {

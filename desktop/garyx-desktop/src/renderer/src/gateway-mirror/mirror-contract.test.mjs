@@ -398,6 +398,86 @@ test("machine dispatch commits through the shared reducer with useReducer bail-o
   assert.equal(threadNotified, 1, "transcript commit notifies the thread");
 });
 
+// ---- Batch 3b: local-write bridge into the mirror message cache ----
+
+test("syncThreadUiMessages bridges local rows and applyRemote preserves them via the intent lookup", () => {
+  const threadId = "thread::local-bridge";
+  const intent = {
+    intentId: "intent-bridge-1",
+    threadId,
+    state: "awaiting_response",
+    dispatchMode: "sync_send",
+    responseText: "",
+  };
+  const intents = { [intent.intentId]: intent };
+  const mirror = new GatewayMirror({
+    getState: async () => ({}),
+    listCustomAgents: async () => [],
+    listTeams: async () => [],
+    listWorkflowDefinitions: async () => [],
+    getThreadHistory: async () => {
+      throw new Error("unused");
+    },
+    intentForId: (id) => intents[id] || null,
+  });
+
+  let notified = 0;
+  mirror.subscribeThread(threadId, () => (notified += 1));
+
+  // Bridge a locally-written array (optimistic user row appended by the
+  // legacy dispatch path).
+  const optimisticUser = {
+    id: "local-user-bridge",
+    role: "user",
+    text: "optimistic send",
+    localState: "pending",
+    intentId: intent.intentId,
+  };
+  mirror.syncThreadUiMessages(threadId, [optimisticUser]);
+  assert.equal(notified, 1, "bridge write commits and notifies once");
+  assert.deepEqual(mirror.getThreadSnapshot(threadId).messages, [optimisticUser]);
+
+  // A remote apply WITHOUT the echo must preserve the bridged local row
+  // through the mirror's own merge (intentForId services seam).
+  mirror.applyRemoteTranscript(threadId, {
+    threadId,
+    remoteFound: true,
+    messages: [wireMessage(1, "user", "earlier"), wireMessage(2, "assistant", "earlier reply")],
+    pendingInputs: [],
+    threadInfo: null,
+    pageInfo: fullPageInfo(),
+  });
+  const preserved = mirror.getThreadSnapshot(threadId).messages;
+  assert.ok(
+    preserved.some((entry) => entry.id === optimisticUser.id),
+    "unechoed optimistic row survives the mirror-side remote merge",
+  );
+
+  // A remote apply WITH the origin-id echo drops the local copy.
+  mirror.applyRemoteTranscript(threadId, {
+    threadId,
+    remoteFound: true,
+    messages: [
+      wireMessage(1, "user", "earlier"),
+      wireMessage(2, "assistant", "earlier reply"),
+      {
+        id: userMessageIdForOrigin(intent.intentId),
+        role: "user",
+        text: "optimistic send",
+        timestamp: "2026-06-19T12:24:00Z",
+      },
+    ],
+    pendingInputs: [],
+    threadInfo: null,
+    pageInfo: fullPageInfo({ totalMessages: 3, committedMessages: 3, returnedMessages: 3, endIndex: 3 }),
+  });
+  const deduped = mirror.getThreadSnapshot(threadId).messages;
+  assert.ok(
+    !deduped.some((entry) => entry.id === optimisticUser.id),
+    "echoed optimistic row is replaced by the remote copy in the mirror",
+  );
+});
+
 // ---- Batch 2a-2: dual-run equivalence for the authoritative-apply path ----
 
 import { transcriptWithResolvedActiveRun } from "../../../shared/transcript-sync.ts";

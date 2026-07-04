@@ -324,6 +324,25 @@ export class GatewayMirror {
   }
 
   /**
+   * Sync a locally-mutated UI message array into the mirror as one
+   * commit. Batch-3b bridge (deleted with the legacy path in batch 6):
+   * optimistic and recovery writes still run through the legacy
+   * updateMessagesByThread updater; the legacy result is mirrored here so
+   * mirror messages stay converged including non-remote rows. Remote
+   * applies must not use this — they keep the mirror computing its own
+   * result through applyRemoteTranscript/applyAuthoritativeTranscript/
+   * applyOlderHistoryPage.
+   */
+  syncThreadUiMessages(
+    threadId: string,
+    messages: readonly UiTranscriptMessage[],
+  ): void {
+    const entry = this.threadEntry(threadId);
+    entry.cache.setUiMessages(messages);
+    this.commitThread(entry);
+  }
+
+  /**
    * Apply an already-fetched older history page as one commit. Batch-2b
    * dual-write entry: while the legacy hook still owns the older-page
    * fetch, it feeds the fetched page here so the mirror stays converged.
