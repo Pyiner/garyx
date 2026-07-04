@@ -10,7 +10,6 @@
 import { useCallback, useEffect, useState } from "react";
 
 import type { ChannelPluginCatalogEntry } from "@shared/contracts";
-import { measureUiAction } from "../perf-metrics";
 
 export interface ChannelPluginCatalogState {
   /** `null` until the first successful fetch; the empty array is a
@@ -59,7 +58,7 @@ async function loadChannelPluginCatalog(force = false): Promise<void> {
   cachedLoading = true;
   emitCatalogChange();
 
-  catalogRequest = measureUiAction("channel_plugin_catalog.fetch", async () => {
+  catalogRequest = (async () => {
     try {
       const api = window.garyxDesktop;
       if (!api?.fetchChannelPlugins) {
@@ -76,7 +75,7 @@ async function loadChannelPluginCatalog(force = false): Promise<void> {
       catalogRequest = null;
       emitCatalogChange();
     }
-  });
+  })();
 
   return catalogRequest;
 }

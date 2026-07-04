@@ -20,7 +20,6 @@ import {
   cloneJson,
   ensureGatewayConfig,
 } from '../gateway-settings';
-import { measureUiAction } from '../perf-metrics';
 import { isGatewayConfigSettingsTab, isLocalSettingsTab } from './icons';
 
 function desktopSettingsEqual(
@@ -576,14 +575,10 @@ export function useSettingsController({
   async function refreshDesktopStateAfterGatewaySave(
     saveGeneration: number,
   ): Promise<void> {
-    const [status, nextState] = await measureUiAction(
-      "bot.modify.refresh_desktop_state",
-      () =>
-        Promise.all([
-          window.garyxDesktop.checkConnection(),
-          window.garyxDesktop.getState(),
-        ]),
-    );
+    const [status, nextState] = await Promise.all([
+      window.garyxDesktop.checkConnection(),
+      window.garyxDesktop.getState(),
+    ]);
     if (saveGeneration !== gatewaySaveGenerationRef.current) {
       return;
     }
@@ -614,9 +609,7 @@ export function useSettingsController({
     nextConfig.gateway.public_url = settingsDraft.gatewayUrl || '';
 
     try {
-      const result = await measureUiAction("bot.modify.save_gateway_settings", () =>
-        window.garyxDesktop.saveGatewaySettings(nextConfig),
-      );
+      const result = await window.garyxDesktop.saveGatewaySettings(nextConfig);
       replaceGatewaySettings(result.settings);
       if (!silent) {
         setGatewaySettingsStatus('Saved');
@@ -683,9 +676,7 @@ export function useSettingsController({
     setGatewaySettingsSaving(true);
 
     try {
-      const result = await measureUiAction("bot.modify.save_gateway_settings_patch", () =>
-        window.garyxDesktop.saveGatewaySettings(patch, { merge: true }),
-      );
+      const result = await window.garyxDesktop.saveGatewaySettings(patch, { merge: true });
       if (gatewaySettingsDirtyRef.current) {
         setGatewaySettingsSource(result.settings.source);
       } else {

@@ -82,9 +82,7 @@ import { MoreDotsIcon } from './app-shell/icons';
 import { ChannelPluginCatalogPanel } from './channel-plugins/ChannelPluginCatalogPanel';
 import { useChannelPluginCatalog } from './channel-plugins/useChannelPluginCatalog';
 import { EditBotDialog, type EditBotDialogContext, type EditBotPatch } from './app-shell/components/EditBotDialog';
-import { RendererPerformancePanel } from './app-shell/components/RendererPerformancePanel';
 import { languagePreferenceLabel, type Translate, useI18n } from './i18n';
-import type { RendererPerformanceSnapshot } from './perf-metrics';
 import { usageProviderIdForModelProviderKey } from './provider-usage';
 import { SETTINGS_TABS, type SettingsTabId } from './settings-tabs';
 import { CommandsSettingsPanel } from './settings/CommandsSettingsPanel';
@@ -117,7 +115,6 @@ type GatewaySettingsPanelProps = {
   gatewaySaving?: boolean;
   gatewaySettingsSource?: GatewaySettingsSource;
   gatewayStatusMessage?: string | null;
-  performanceSnapshot: RendererPerformanceSnapshot;
   savingLocalSettings?: boolean;
   agents?: DesktopCustomAgent[];
   teams?: DesktopTeam[];
@@ -761,7 +758,6 @@ export function GatewaySettingsPanel({
   gatewaySaving = false,
   gatewaySettingsSource = 'gateway_api',
   gatewayStatusMessage = null,
-  performanceSnapshot,
   savingLocalSettings = false,
   agents = [],
   teams = [],
@@ -1291,17 +1287,6 @@ export function GatewaySettingsPanel({
     </>
   );
 
-  const performancePanel = (
-    <div className="codex-section">
-      <div className="codex-section-header">
-        <span className="codex-section-title">{t('Renderer Diagnostics')}</span>
-      </div>
-      <SettingsSurface className="settings-performance-surface">
-        <RendererPerformancePanel snapshot={performanceSnapshot} />
-      </SettingsSurface>
-    </div>
-  );
-
   let tabContent: ReactNode;
   switch (normalizedActiveTab) {
     case 'gateway':
@@ -1343,9 +1328,6 @@ export function GatewaySettingsPanel({
       break;
     case 'labs':
       tabContent = labsPanel;
-      break;
-    case 'performance':
-      tabContent = performancePanel;
       break;
     case 'commands':
       tabContent = (

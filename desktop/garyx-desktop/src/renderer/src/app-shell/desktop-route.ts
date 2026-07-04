@@ -32,7 +32,6 @@ const SETTINGS_TAB_IDS = new Set<string>([
   'labs',
   'gateway',
   'provider',
-  'performance',
   'channels',
   'commands',
   'mcp',

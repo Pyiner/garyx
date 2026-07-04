@@ -271,8 +271,6 @@ export function SettingsTabIcon({ tabId }: { tabId: SettingsTabId }) {
       return <SettingsRailIcon glyph={Router} />;
     case 'provider':
       return <SettingsRailIcon glyph={Cpu} />;
-    case 'performance':
-      return <SettingsRailIcon glyph={Activity} />;
     case 'channels':
       return <SettingsRailIcon glyph={Bot} />;
     case 'commands':
@@ -285,7 +283,7 @@ export function SettingsTabIcon({ tabId }: { tabId: SettingsTabId }) {
 }
 
 export function isLocalSettingsTab(tabId: SettingsTabId): boolean {
-  return tabId === 'provider' || tabId === 'performance';
+  return tabId === 'provider';
 }
 
 export function isGatewayConfigSettingsTab(tabId: SettingsTabId): boolean {

@@ -644,16 +644,6 @@
   border-top: 0.5px solid var(--color-token-border);
 }
 
-.settings-performance-surface .settings-surface-list {
-  padding: 12px;
-  border-radius: 12px;
-  background: color-mix(in oklab, var(--color-token-bg-secondary) 54%, white 46%);
-}
-
-.settings-performance-surface .thread-log-performance-grid {
-  grid-template-columns: repeat(auto-fit, minmax(156px, 1fr));
-}
-
 .settings-control-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);

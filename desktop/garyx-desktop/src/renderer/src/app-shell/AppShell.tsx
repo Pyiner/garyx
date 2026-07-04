@@ -108,11 +108,6 @@ import {
   type PendingInputOriginRef,
 } from "./pending-inputs";
 import {
-  getRendererPerformanceSnapshot,
-  measureUiAction,
-  subscribeRendererPerformance,
-} from "../perf-metrics";
-import {
   activateBotDraftThread,
   openThreadFromEndpoint,
 } from "../bot-console-controller";
@@ -322,21 +317,6 @@ const WorkflowRunsPanel = lazy(() =>
 );
 const EMPTY_UI_TRANSCRIPT_MESSAGES: UiTranscriptMessage[] = [];
 
-function waitForUiActionPaint(): Promise<void> {
-  if (
-    typeof window === "undefined" ||
-    typeof window.requestAnimationFrame !== "function"
-  ) {
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => {
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        resolve();
-      });
-    });
-  });
-}
 
 function messagesNearBottom(node: HTMLDivElement | null): boolean {
   if (!node) {
@@ -772,9 +752,6 @@ export function AppShell() {
   const [threadLogsLoading, setThreadLogsLoading] = useState(false);
   const [threadLogsError, setThreadLogsError] = useState<string | null>(null);
   const [threadLogsHasUnread, setThreadLogsHasUnread] = useState(false);
-  const [performanceSnapshot, setPerformanceSnapshot] = useState(
-    () => getRendererPerformanceSnapshot(),
-  );
   const [botConversationGroupId, setBotConversationGroupId] = useState<string | null>(null);
   const [workspaceConversationPath, setWorkspaceConversationPath] =
     useState<string | null>(null);
@@ -794,12 +771,6 @@ export function AppShell() {
       return next;
     });
   };
-  function trackUiAction(label: string, task: () => void | Promise<void>) {
-    void measureUiAction(label, async () => {
-      await task();
-      await waitForUiActionPaint();
-    });
-  }
   const [addBotDialogOpen, setAddBotDialogOpen] = useState(false);
   const [addBotInitialValues, setAddBotInitialValues] = useState<{
     channel?: "telegram" | "feishu" | "weixin";
@@ -860,11 +831,6 @@ export function AppShell() {
   const lastRemoteStateWarningKeyRef = useRef<string | null>(null);
   const pendingThreadBottomSnapRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    return subscribeRendererPerformance((snapshot) => {
-      setPerformanceSnapshot(snapshot);
-    });
-  }, []);
   const {
     closeMemoryDialog,
     memoryDialogDirty,
@@ -2502,9 +2468,7 @@ export function AppShell() {
 
   async function openAddBotDialog() {
     setAddBotDialogOpen(true);
-    void measureUiAction("bot.add_dialog.refresh_agent_targets", () =>
-      refreshAgentTargets(),
-    );
+    void refreshAgentTargets();
   }
 
   async function handleAddChannelAccount(input: {
@@ -2524,15 +2488,11 @@ export function AppShell() {
     /** Opaque plugin config for subprocess plugins. */
     config?: Record<string, unknown> | null;
   }) {
-    await measureUiAction("bot.add_channel_account", async () => {
-      const nextState = await window.garyxDesktop.addChannelAccount(input);
-      startTransition(() => {
-        setDesktopState(nextState);
-      });
+    const nextState = await window.garyxDesktop.addChannelAccount(input);
+    startTransition(() => {
+      setDesktopState(nextState);
     });
-    await measureUiAction("bot.add_channel_account.reload_settings", () =>
-      loadGatewaySettings({ clearStatus: true }),
-    );
+    await loadGatewaySettings({ clearStatus: true });
     pushToast(t("Bot added."), "success");
   }
 
@@ -3277,65 +3237,21 @@ export function AppShell() {
   ): Promise<void> {
     const requestSequence = botBindingRequestSequenceRef.current + 1;
     botBindingRequestSequenceRef.current = requestSequence;
-    await measureUiAction("bot.bind_thread", async () => {
-      const currentEndpoints = (desktopState?.endpoints || []).filter(
-        (endpoint) => endpoint.threadId === threadId,
-      );
-      let nextDesktopState: DesktopState | null = null;
+    const currentEndpoints = (desktopState?.endpoints || []).filter(
+      (endpoint) => endpoint.threadId === threadId,
+    );
+    let nextDesktopState: DesktopState | null = null;
 
-      if (!botId) {
-        nextDesktopState = await window.garyxDesktop.setBotBinding({
-          threadId,
-          botId: null,
-        });
-        for (const endpoint of currentEndpoints) {
-          nextDesktopState = await window.garyxDesktop.detachChannelEndpoint({
-            endpointKey: endpoint.endpointKey,
-          });
-        }
-        if (nextDesktopState) {
-          const finalState = nextDesktopState;
-          if (botBindingRequestSequenceRef.current !== requestSequence) {
-            return;
-          }
-          startTransition(() => {
-            setDesktopState(finalState);
-          });
-        }
-        return;
-      }
-
-      const targetGroup = botGroups.find((group) => group.id === botId);
-      const targetEndpoint =
-        targetGroup?.defaultOpenEndpoint || targetGroup?.mainEndpoint || null;
+    if (!botId) {
       nextDesktopState = await window.garyxDesktop.setBotBinding({
         threadId,
-        botId,
+        botId: null,
       });
-
       for (const endpoint of currentEndpoints) {
-        if (endpoint.endpointKey === targetEndpoint?.endpointKey) {
-          continue;
-        }
-        if (botGroupIdForEndpoint(endpoint) === botId) {
-          continue;
-        }
         nextDesktopState = await window.garyxDesktop.detachChannelEndpoint({
           endpointKey: endpoint.endpointKey,
         });
       }
-
-      if (
-        targetEndpoint?.endpointKey &&
-        targetGroup?.mainThreadId !== threadId &&
-        targetEndpoint.threadId !== threadId
-      ) {
-        nextDesktopState = await window.garyxDesktop.bindChannelEndpoint({
-          endpointKey: targetEndpoint.endpointKey,
-          threadId,
-        });
-      }
-
       if (nextDesktopState) {
         const finalState = nextDesktopState;
         if (botBindingRequestSequenceRef.current !== requestSequence) {
@@ -3345,7 +3261,49 @@ export function AppShell() {
           setDesktopState(finalState);
         });
       }
+      return;
+    }
+
+    const targetGroup = botGroups.find((group) => group.id === botId);
+    const targetEndpoint =
+      targetGroup?.defaultOpenEndpoint || targetGroup?.mainEndpoint || null;
+    nextDesktopState = await window.garyxDesktop.setBotBinding({
+      threadId,
+      botId,
     });
+
+    for (const endpoint of currentEndpoints) {
+      if (endpoint.endpointKey === targetEndpoint?.endpointKey) {
+        continue;
+      }
+      if (botGroupIdForEndpoint(endpoint) === botId) {
+        continue;
+      }
+      nextDesktopState = await window.garyxDesktop.detachChannelEndpoint({
+        endpointKey: endpoint.endpointKey,
+      });
+    }
+
+    if (
+      targetEndpoint?.endpointKey &&
+      targetGroup?.mainThreadId !== threadId &&
+      targetEndpoint.threadId !== threadId
+    ) {
+      nextDesktopState = await window.garyxDesktop.bindChannelEndpoint({
+        endpointKey: targetEndpoint.endpointKey,
+        threadId,
+      });
+    }
+
+    if (nextDesktopState) {
+      const finalState = nextDesktopState;
+      if (botBindingRequestSequenceRef.current !== requestSequence) {
+        return;
+      }
+      startTransition(() => {
+        setDesktopState(finalState);
+      });
+    }
   }
 
   async function ensureThreadBotRouting(threadId: string): Promise<boolean> {
@@ -4385,18 +4343,13 @@ export function AppShell() {
         // dock visible independently of inspectorOpen, clear them too so the
         // button works in a capsule-only dock and in Files+capsule docks
         // (#TASK-1470).
-        trackUiAction("thread.close_inspector", () => {
-          setInspectorOpen(false);
-          setOpenCapsuleTabs([]);
-          setPendingActiveCapsuleId(null);
-        });
+        setInspectorOpen(false);
+        setOpenCapsuleTabs([]);
+        setPendingActiveCapsuleId(null);
       }}
-      onOpenTaskThread={(task) =>
-        measureUiAction("side_tasks.open_thread_in_side_panel", async () => {
-          await openTaskThreadInSidePanel(task.threadId);
-          await waitForUiActionPaint();
-        })
-      }
+      onOpenTaskThread={(task) => {
+        void openTaskThreadInSidePanel(task.threadId);
+      }}
       onOpenSideChat={() => {
         void ensureSideChatThread();
       }}
@@ -4620,23 +4573,21 @@ export function AppShell() {
           // Open/activate this capsule as a tab in the right dock (#TASK-1470).
           // Dedup by id; refresh title/revision if it is already open. Does not
           // touch inspectorOpen — the capsule path drives the dock on its own.
-          trackUiAction("thread.open_capsule_tab", () => {
-            const capsuleId = card.capsule_id;
-            const title = card.title?.trim() || "";
-            setOpenCapsuleTabs((tabs) =>
-              tabs.some((tab) => tab.capsuleId === capsuleId)
-                ? tabs.map((tab) =>
-                    tab.capsuleId === capsuleId
-                      ? { ...tab, revision: card.revision, title: title || tab.title }
-                      : tab,
-                  )
-                : [
-                    ...tabs,
-                    { capsuleId, revision: card.revision, title },
-                  ],
-            );
-            setPendingActiveCapsuleId(capsuleId);
-          });
+          const capsuleId = card.capsule_id;
+          const title = card.title?.trim() || "";
+          setOpenCapsuleTabs((tabs) =>
+            tabs.some((tab) => tab.capsuleId === capsuleId)
+              ? tabs.map((tab) =>
+                  tab.capsuleId === capsuleId
+                    ? { ...tab, revision: card.revision, title: title || tab.title }
+                    : tab,
+                )
+              : [
+                  ...tabs,
+                  { capsuleId, revision: card.revision, title },
+                ],
+          );
+          setPendingActiveCapsuleId(capsuleId);
         }}
         onSelectWorkspace={(workspacePath) => {
           setPendingWorkspaceMode("local");
@@ -4907,7 +4858,7 @@ export function AppShell() {
             indicatorTone={gatewayIndicator?.tone || null}
             profiles={gatewayProfiles}
             onOpenSettings={() => {
-              trackUiAction("nav.open_settings", openSettingsView);
+              void openSettingsView();
             }}
             onSwitch={async (profile) => {
               return handleSaveLocalSettingsDraft(
@@ -4942,47 +4893,41 @@ export function AppShell() {
         isDreamsView={isDreamsView}
         recentRailOpen={shouldShowConversationRail && recentThreadsRailOpen}
         onBackToThreads={() => {
-          trackUiAction("nav.back_to_threads", () => {
-            setContentView("thread");
-          });
+          setContentView("thread");
         }}
         onCreateThreadForWorkspace={(workspacePath) => {
-          trackUiAction("nav.new_thread.workspace", () => {
-            handleCreateThreadForWorkspace(workspacePath);
-          });
+          handleCreateThreadForWorkspace(workspacePath);
         }}
         onNewThread={() => {
-          trackUiAction("nav.new_thread", handleNewThread);
+          void handleNewThread();
         }}
         onOpenRecent={() => {
-          trackUiAction("nav.open_recent", () => {
-            setBotConversationGroupId(null);
-            setWorkspaceConversationPath(null);
-            if (!shouldShowConversationRail) {
-              setContentView("thread");
-              setRecentThreadsRailOpen(true);
-              return;
-            }
-            setRecentThreadsRailOpen((current) => !current);
-          });
+          setBotConversationGroupId(null);
+          setWorkspaceConversationPath(null);
+          if (!shouldShowConversationRail) {
+            setContentView("thread");
+            setRecentThreadsRailOpen(true);
+            return;
+          }
+          setRecentThreadsRailOpen((current) => !current);
         }}
         onOpenBot={(group) => {
-          trackUiAction("nav.open_bot", async () => {
+          void (async () => {
             setRecentThreadsRailOpen(false);
             setBotConversationGroupId((current) =>
               current === group.id ? current : null,
             );
             setWorkspaceConversationPath(null);
             await handleBotClick(group);
-          });
+          })();
         }}
         onOpenPinnedThread={(threadId) => {
-          trackUiAction("nav.open_pinned_thread", async () => {
+          void (async () => {
             setRecentThreadsRailOpen(false);
             setBotConversationGroupId(null);
             setWorkspaceConversationPath(null);
             await openExistingThread(threadId, "pinned");
-          });
+          })();
         }}
         onUnpinThread={(threadId) => {
           togglePinnedThread(threadId);
@@ -5013,48 +4958,34 @@ export function AppShell() {
           void handleAddWorkspace();
         }}
         onOpenSettings={() => {
-          trackUiAction("nav.open_settings", openSettingsView);
+          void openSettingsView();
         }}
         onSidebarResizeStart={handleSidebarResizeStart}
         sidebarResizing={sidebarResizing}
         onOpenAgents={() => {
-          trackUiAction("nav.open_agents", () => {
-            setContentView("agents");
-          });
+          setContentView("agents");
         }}
         onOpenSkills={() => {
-          trackUiAction("nav.open_skills", () => {
-            setContentView("skills");
-          });
+          setContentView("skills");
         }}
         onOpenCapsules={() => {
-          trackUiAction("nav.open_capsules", () => {
-            setContentView("capsules");
-            setCapsulePreviewId(null);
-          });
+          setContentView("capsules");
+          setCapsulePreviewId(null);
         }}
         onOpenTasks={() => {
-          trackUiAction("nav.open_tasks", () => {
-            setContentView("tasks");
-          });
+          setContentView("tasks");
         }}
         onOpenDreams={() => {
-          trackUiAction("nav.open_dreams", () => {
-            setContentView("dreams");
-          });
+          setContentView("dreams");
         }}
         onRequestRemoveWorkspace={(workspace) => {
           void handleRequestRemoveWorkspace(workspace);
         }}
         onSelectAutomation={(automationId) => {
-          trackUiAction("nav.select_automation", async () => {
-            await handleSelectAutomation(automationId);
-          });
+          void handleSelectAutomation(automationId);
         }}
         onSelectSettingsTab={(tabId) => {
-          trackUiAction("nav.select_settings_tab", async () => {
-            await handleSelectSettingsTab(tabId);
-          });
+          void handleSelectSettingsTab(tabId);
         }}
         pinnedThreadRows={pinnedThreadRows}
         selectedAutomationId={selectedAutomationId}
@@ -5248,35 +5179,25 @@ export function AppShell() {
                 threadLogsHasUnread={threadLogsHasUnread}
                 threadLogsOpen={threadLogsOpen}
                 onCreateAutomation={() => {
-                  trackUiAction("automation.open_create_dialog", () => {
-                    openAutomationDialog("create");
-                  });
+                  openAutomationDialog("create");
                 }}
                 onOpenThread={(threadId) => {
-                  trackUiAction("thread.open_from_header", async () => {
-                    await openExistingThread(threadId);
-                  });
+                  void openExistingThread(threadId);
                 }}
                 onOpenThreads={() => {
-                  trackUiAction("nav.back_to_threads", () => {
-                    setContentView("thread");
-                  });
+                  setContentView("thread");
                 }}
                 onToggleInspector={() => {
-                  trackUiAction("thread.toggle_inspector", () => {
-                    setThreadLogsOpen(false);
-                    setInspectorOpen((current) => !current);
-                  });
+                  setThreadLogsOpen(false);
+                  setInspectorOpen((current) => !current);
                 }}
                 onToggleThreadLogs={() => {
-                  trackUiAction("thread.toggle_logs", () => {
-                    // Logs and the side-tools dock are mutually exclusive right
-                    // panels; opening logs closes the dock, capsule tabs included.
-                    setOpenCapsuleTabs([]);
-                    setPendingActiveCapsuleId(null);
-                    setInspectorOpen(false);
-                    setThreadLogsOpen((current) => !current);
-                  });
+                  // Logs and the side-tools dock are mutually exclusive right
+                  // panels; opening logs closes the dock, capsule tabs included.
+                  setOpenCapsuleTabs([]);
+                  setPendingActiveCapsuleId(null);
+                  setInspectorOpen(false);
+                  setThreadLogsOpen((current) => !current);
                 }}
               />
             </header>
@@ -5314,7 +5235,6 @@ export function AppShell() {
                     gatewayProfiles={gatewayProfiles}
                     localSettingsDirty={localSettingsDirty}
                     localSettings={settingsDraft}
-                    performanceSnapshot={performanceSnapshot}
                     onAddGatewayProfile={async (input) => {
                       const nextState = await window.garyxDesktop.addGatewayProfile(input);
                       setDesktopState(nextState);
@@ -5398,9 +5318,7 @@ export function AppShell() {
                   void handleToggleAutomationEnabled(a, enabled);
                 }}
                 onEdit={(a) => {
-                  trackUiAction("automation.open_edit_dialog", () => {
-                    openAutomationDialog("edit", a);
-                  });
+                  openAutomationDialog("edit", a);
                 }}
                 onOpenMemory={(a) => {
                   void openMemoryDialog({
@@ -5416,9 +5334,7 @@ export function AppShell() {
                   void handleDeleteAutomation(a);
                 }}
                 onCreateAutomation={() => {
-                  trackUiAction("automation.open_create_dialog", () => {
-                    openAutomationDialog("create");
-                  });
+                  openAutomationDialog("create");
                 }}
               />
             ) : isAgentsView ? (
@@ -5467,9 +5383,7 @@ export function AppShell() {
                   setCapsulePreviewId(null);
                 }}
                 onOpenThread={(threadId) => {
-                  trackUiAction("capsules.open_thread", async () => {
-                    await openExistingThread(threadId);
-                  });
+                  void openExistingThread(threadId);
                 }}
               />
             ) : isTasksView ? (
@@ -5478,14 +5392,10 @@ export function AppShell() {
                 botGroups={botGroups}
                 onAddWorkspace={addWorkspacePathFromPicker}
                 onOpenThread={(threadId) => {
-                  trackUiAction("tasks.open_thread", async () => {
-                    await openExistingThread(threadId);
-                  });
+                  void openExistingThread(threadId);
                 }}
                 onOpenWorkflowTask={(task) => {
-                  trackUiAction("tasks.open_workflow_task", () => {
-                    openWorkflowTask(task);
-                  });
+                  openWorkflowTask(task);
                 }}
                 onToast={pushToast}
                 workspaces={workspacePickerWorkspaces}
@@ -5495,14 +5405,10 @@ export function AppShell() {
               selectedWorkflowRunId ? (
                 <WorkflowRunsPanel
                   onOpenTasks={() => {
-                    trackUiAction("workflow.back_to_tasks", () => {
-                      setContentView("tasks");
-                    });
+                    setContentView("tasks");
                   }}
                   onOpenThread={(threadId) => {
-                    trackUiAction("workflow.open_thread", async () => {
-                      await openExistingThread(threadId);
-                    });
+                    void openExistingThread(threadId);
                   }}
                   onToast={pushToast}
                   t={t}
