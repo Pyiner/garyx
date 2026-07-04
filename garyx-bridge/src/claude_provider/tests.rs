@@ -371,6 +371,7 @@ fn test_build_claude_runtime_env_preserves_terminal_env() {
         &HashMap::new(),
         &HashMap::new(),
         HashMap::from([("HTTPS_PROXY".to_owned(), "http://127.0.0.1:6152".to_owned())]),
+        None,
     );
 
     assert_eq!(
@@ -380,7 +381,7 @@ fn test_build_claude_runtime_env_preserves_terminal_env() {
 }
 
 #[test]
-fn test_build_claude_runtime_env_drops_terminal_oauth_token() {
+fn test_build_claude_runtime_env_keeps_current_terminal_oauth_token() {
     let mut metadata = HashMap::new();
     metadata.insert(
         "desktop_claude_env".to_owned(),
@@ -403,9 +404,13 @@ fn test_build_claude_runtime_env_drops_terminal_oauth_token() {
             "CLAUDE_CODE_OAUTH_TOKEN".to_owned(),
             "current-terminal-token".to_owned(),
         )]),
+        Some("keychain-token".to_owned()),
     );
 
-    assert!(!env.contains_key("CLAUDE_CODE_OAUTH_TOKEN"));
+    assert_eq!(
+        env.get("CLAUDE_CODE_OAUTH_TOKEN").map(String::as_str),
+        Some("current-terminal-token")
+    );
     assert_eq!(
         env.get("HTTPS_PROXY").map(String::as_str),
         Some("http://127.0.0.1:6152")
@@ -434,12 +439,50 @@ fn test_build_claude_runtime_env_drops_non_terminal_oauth_token() {
         )]),
         &metadata,
         HashMap::new(),
+        None,
     );
 
     assert!(!env.contains_key("CLAUDE_CODE_OAUTH_TOKEN"));
     assert_eq!(
         env.get("ANTHROPIC_AUTH_TOKEN").map(String::as_str),
         Some("relay-token")
+    );
+}
+
+#[test]
+fn test_build_claude_runtime_env_uses_keychain_oauth_token_when_no_explicit_auth() {
+    let env = build_claude_runtime_env(
+        &HashMap::from([(
+            "CLAUDE_CODE_OAUTH_TOKEN".to_owned(),
+            "stale-config-token".to_owned(),
+        )]),
+        &HashMap::new(),
+        HashMap::new(),
+        Some(" current-keychain-token ".to_owned()),
+    );
+
+    assert_eq!(
+        env.get("CLAUDE_CODE_OAUTH_TOKEN").map(String::as_str),
+        Some("current-keychain-token")
+    );
+}
+
+#[test]
+fn test_build_claude_runtime_env_prefers_explicit_auth_over_keychain_oauth_token() {
+    let env = build_claude_runtime_env(
+        &HashMap::new(),
+        &HashMap::new(),
+        HashMap::from([(
+            "ANTHROPIC_API_KEY".to_owned(),
+            "explicit-api-key".to_owned(),
+        )]),
+        Some("keychain-token".to_owned()),
+    );
+
+    assert!(!env.contains_key("CLAUDE_CODE_OAUTH_TOKEN"));
+    assert_eq!(
+        env.get("ANTHROPIC_API_KEY").map(String::as_str),
+        Some("explicit-api-key")
     );
 }
 

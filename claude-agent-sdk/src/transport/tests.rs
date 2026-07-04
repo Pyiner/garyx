@@ -32,7 +32,7 @@ fn test_build_command_removes_inherited_claude_oauth_without_configured_env() {
 }
 
 #[test]
-fn test_build_command_removes_configured_claude_oauth() {
+fn test_build_command_keeps_configured_claude_oauth_override() {
     let opts = ClaudeAgentOptions {
         env: HashMap::from([(
             "CLAUDE_CODE_OAUTH_TOKEN".to_string(),
@@ -43,13 +43,12 @@ fn test_build_command_removes_configured_claude_oauth() {
     let transport = SubprocessTransport::new(opts, true);
     let cmd = transport.build_command(None);
 
-    let removed = cmd
-        .as_std()
-        .get_envs()
-        .any(|(key, value)| key == OsStr::new("CLAUDE_CODE_OAUTH_TOKEN") && value.is_none());
+    let configured = cmd.as_std().get_envs().any(|(key, value)| {
+        key == OsStr::new("CLAUDE_CODE_OAUTH_TOKEN") && value == Some(OsStr::new("current-token"))
+    });
     assert!(
-        removed,
-        "Claude runs must never receive CLAUDE_CODE_OAUTH_TOKEN from configured env"
+        configured,
+        "explicit current Claude Code token must reach the spawn Command"
     );
 }
 
