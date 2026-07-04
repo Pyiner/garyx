@@ -111,9 +111,10 @@ Detailed UI rules: @docs/agents/mobile-ui.md and @docs/agents/desktop-ui.md.
   over an installed `garyx`.
 - Garyx Claude Code runs should use the current Claude Code login exactly like
   the user's terminal. Reload the user's terminal environment for each Claude
-  Code run; `CLAUDE_CODE_OAUTH_TOKEN` may only come from that fresh terminal
-  environment, not from stale gateway startup env, agent config, or desktop
-  metadata.
+  Code run. Prefer `CLAUDE_CODE_OAUTH_TOKEN` from that fresh terminal
+  environment; when no explicit Claude auth env is present, a run may read the
+  current macOS Claude Code token from Keychain. Never take Claude auth tokens
+  from stale gateway startup env, agent config, or desktop metadata.
 - iOS TestFlight releases are independent from macOS/gateway release flow. Do
   not trigger TestFlight unless the user explicitly asks in the current turn.
 - Do not wire iOS uploads into version-tag release jobs unless the user
