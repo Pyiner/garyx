@@ -65,6 +65,7 @@ export const SELECTED_THREAD_STREAM_CONSUMER_ID = "selected-thread";
 // gateway-mirror; re-export the public ones and import the internals the
 // hook still uses.
 export {
+  isMissingThreadTranscript,
   messagesNearEarlierUserTurnBoundary,
   normalizeMessageText,
   reconcileAssistantEntriesForGatewayRecovery,
@@ -85,6 +86,7 @@ import {
   reconcileAssistantEntriesForGatewayRecovery,
   resolveIntentHistoryMatch,
   userMessageIdForOrigin,
+  isMissingThreadTranscript,
   materializeRemoteTranscript,
   visibleTranscriptMessages,
   THREAD_HISTORY_PAGE_SIZE,
@@ -1195,7 +1197,7 @@ export function useTranscriptController({
 
     setHistoryLoading(true);
     setError(null);
-    let latestTranscript =
+    let latestTranscript: ThreadTranscript | null =
       transcriptSnapshotByThreadRef.current[threadId] || null;
     let streamReady = false;
     let streamStarted = false;
@@ -1250,14 +1252,55 @@ export function useTranscriptController({
       // #/thread/<id> that stays addressable) must not be applied or
       // streamed — the gateway history responds remoteFound:false with an
       // empty transcript, and the stream endpoint would 404-retry forever.
-      // Same missing-thread predicate as ensureThreadOpenable.
+      // The predicate is shared with ensureThreadOpenable. It gates on the
+      // AUTHORITATIVE fetch result, so a stale persisted cache for a
+      // deleted thread lands here too: the cached fast path above already
+      // applied it and started the stream, so roll both back — stop the
+      // stream, drop the persisted cache, and clear the applied state from
+      // the legacy chain and the mirror.
       if (
-        !latestTranscript &&
-        !fetched.transcript.remoteFound &&
-        fetched.transcript.messages.length === 0 &&
-        fetched.transcript.pendingInputs.length === 0 &&
-        !fetched.transcript.threadInfo
+        fetched.authoritative &&
+        isMissingThreadTranscript(fetched.transcript)
       ) {
+        if (streamStarted) {
+          await window.garyxDesktop.stopThreadStream({
+            threadId,
+            consumerId: SELECTED_THREAD_STREAM_CONSUMER_ID,
+          });
+          streamStarted = false;
+        }
+        if (latestTranscript) {
+          void window.garyxDesktop.clearThreadTranscriptCache(threadId);
+          delete transcriptSnapshotByThreadRef.current[threadId];
+          updateMessagesByThread((current) => {
+            if (!(threadId in current)) {
+              return current;
+            }
+            const next = { ...current };
+            delete next[threadId];
+            return next;
+          });
+          updateRenderStateByThread((current) => {
+            if (!(threadId in current)) {
+              return current;
+            }
+            const next = { ...current };
+            delete next[threadId];
+            return next;
+          });
+          updateThreadHistoryPagination(threadId, () => null);
+          setThreadInfoByThread((current) => {
+            if (!(threadId in current)) {
+              return current;
+            }
+            const next = { ...current };
+            delete next[threadId];
+            return next;
+          });
+          setRemotePendingInputs(threadId, []);
+          mirrorDualWrite(() => mirror.clearThreadTranscript(threadId));
+          latestTranscript = null;
+        }
         setError(`Thread not found: ${threadId}`);
         return;
       }

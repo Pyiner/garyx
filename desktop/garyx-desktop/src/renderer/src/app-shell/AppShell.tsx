@@ -215,6 +215,7 @@ import { useSettingsController } from "./useSettingsController";
 import { useSideChatController } from "./useSideChatController";
 import {
   SELECTED_THREAD_STREAM_CONSUMER_ID,
+  isMissingThreadTranscript,
   messagesNearEarlierUserTurnBoundary,
   normalizeMessageText,
   transcriptHasAutomationResponse,
@@ -2550,12 +2551,7 @@ export function AppShell() {
     }
 
     const transcript = await window.garyxDesktop.getThreadHistory(threadId);
-    if (
-      !transcript.remoteFound &&
-      transcript.messages.length === 0 &&
-      transcript.pendingInputs.length === 0 &&
-      !transcript.threadInfo
-    ) {
+    if (isMissingThreadTranscript(transcript)) {
       return false;
     }
 
@@ -2809,9 +2805,11 @@ export function AppShell() {
             setSelectedThreadId(startupRoute.threadId);
           } else {
             // Batch 4b (intentional change #2): an unknown #/thread/<id>
-            // renders the error state and stays addressable — no silent
-            // fallback selection that would rewrite the entered hash.
-            setError(`Thread not found: ${startupRoute.threadId}`);
+            // stays selected and addressable — no silent fallback selection
+            // that would rewrite the entered hash. The selected-thread
+            // loader is the single error surface (its missing-thread gate
+            // raises "Thread not found"); setting the error here too would
+            // double the toast.
             setSelectedThreadId(startupRoute.threadId);
           }
         } else if (startupRoute.kind === "new-thread") {

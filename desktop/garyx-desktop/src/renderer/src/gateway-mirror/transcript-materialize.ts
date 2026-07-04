@@ -492,6 +492,23 @@ export function chatStreamEventHasRunLifecycle(event: DesktopChatStreamEvent): b
 export const THREAD_HISTORY_PAGE_SIZE = 100;
 export const THREAD_HISTORY_USER_QUERY_LIMIT = 10;
 
+/**
+ * True when a history response describes a thread the gateway does not
+ * know: remoteFound is false and the payload carries no content at all.
+ * Shared by ensureThreadOpenable and the selected-thread loader's
+ * missing-thread gate (batch 4b) so the predicate cannot drift.
+ */
+export function isMissingThreadTranscript(
+  transcript: ThreadTranscript,
+): boolean {
+  return (
+    !transcript.remoteFound &&
+    transcript.messages.length === 0 &&
+    transcript.pendingInputs.length === 0 &&
+    !transcript.threadInfo
+  );
+}
+
 export type ThreadHistoryPaginationState = {
   hasMoreBefore: boolean;
   nextBeforeIndex: number | null;

@@ -1377,3 +1377,48 @@ test("setThreadHistoryLoadingBefore bridges the legacy fetch lifecycle into mirr
     false,
   );
 });
+
+test("clearThreadTranscript rolls the thread back to the never-loaded shape (4b missing-thread cleanup)", () => {
+  const mirror = new GatewayMirror();
+  const threadId = "thread::stale-missing";
+  const transcript = {
+    threadId,
+    messages: [
+      {
+        id: `${threadId}:0`,
+        role: "user",
+        text: "stale cached row",
+        timestamp: "2026-07-04T10:00:00Z",
+      },
+    ],
+    pendingInputs: [{ id: "pending-1", content: "queued" }],
+    threadInfo: { activeRun: null, workspacePath: "/Users/test/repo" },
+    pageInfo: { startIndex: 5, hasMoreBefore: true },
+  };
+  mirror.applyRemoteTranscript(threadId, transcript);
+  const loaded = mirror.getThreadSnapshot(threadId);
+  assert.equal(loaded.transcriptLoaded, true);
+  assert.ok(loaded.messages.length > 0);
+  const mapsBefore = mirror.getTranscriptMapsSnapshot();
+  assert.ok(threadId in mapsBefore.threadInfoByThread);
+
+  let notified = 0;
+  mirror.subscribeThread(threadId, () => {
+    notified += 1;
+  });
+  mirror.clearThreadTranscript(threadId);
+
+  assert.equal(notified, 1, "clear commits once");
+  const snapshot = mirror.getThreadSnapshot(threadId);
+  assert.equal(snapshot.transcriptLoaded, false);
+  assert.deepEqual(snapshot.messages, []);
+  assert.equal(snapshot.threadInfo, null);
+  assert.deepEqual(snapshot.pendingRemoteInputs, []);
+  assert.equal(snapshot.renderState, null);
+  assert.equal(snapshot.historyPagination, null);
+  const maps = mirror.getTranscriptMapsSnapshot();
+  assert.ok(!(threadId in maps.threadInfoByThread), "loaded gate drops");
+  assert.ok(!(threadId in maps.messagesByThread));
+  assert.ok(!(threadId in maps.pendingRemoteInputsByThread));
+  assert.ok(!(threadId in maps.historyPaginationByThread));
+});

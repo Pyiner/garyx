@@ -606,6 +606,17 @@ export class GatewayMirror {
   }
 
   /**
+   * Drop a thread's transcript-domain state (batch 4b missing-thread
+   * cleanup): the selected thread turned out not to exist, so applied
+   * stale-cache values roll back to the never-loaded shape in one commit.
+   */
+  clearThreadTranscript(threadId: string): void {
+    const entry = this.threadEntry(threadId);
+    entry.cache.clearTranscript();
+    this.commitThread(entry);
+  }
+
+  /**
    * Bridge the legacy older-page fetch's loadingBefore lifecycle into the
    * mirror (batch 3d). The legacy hook still owns the fetch until batch 6;
    * loadingBefore is the one pagination field it mutates that the mirror
