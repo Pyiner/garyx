@@ -4608,10 +4608,22 @@ export function AppShell() {
     );
   }
 
-  if (loading) {
-    return (
-      <GatewayMirrorContext.Provider value={gatewayMirror}>
+  // Batch 5a review fix: every return branch renders through this chrome
+  // so the colocated MemoryDialogRoot (and its unsaved-draft state) never
+  // unmounts when the shell flips into the loading/gateway-setup branches
+  // mid-session — the legacy controller lived at the hook layer and
+  // survived those flips; the root must too.
+  const appShellChrome = (content: ReactNode) => (
+    <GatewayMirrorContext.Provider value={gatewayMirror}>
       <I18nProvider languagePreference={settingsDraft.languagePreference}>
+        {content}
+        <MemoryDialogRoot ref={memoryDialogRef} />
+      </I18nProvider>
+    </GatewayMirrorContext.Provider>
+  );
+
+  if (loading) {
+    return appShellChrome(
         <div className="startup-shell" role="status" aria-live="polite">
           <div className="startup-panel">
             <img
@@ -4627,9 +4639,7 @@ export function AppShell() {
             </div>
             <div className="startup-progress" aria-hidden="true" />
           </div>
-        </div>
-      </I18nProvider>
-      </GatewayMirrorContext.Provider>
+        </div>,
     );
   }
 
@@ -4650,9 +4660,7 @@ export function AppShell() {
         : t("Set the gateway address and token, then save. Saving verifies the gateway before continuing.");
     const canCancelGatewaySetup = gatewaySetupForced && gatewaySetupCanCancel;
 
-    return (
-      <GatewayMirrorContext.Provider value={gatewayMirror}>
-      <I18nProvider languagePreference={settingsDraft.languagePreference}>
+    return appShellChrome(
         <div className="loading-shell">
           <div className="loading-panel gateway-setup-panel">
             <span className="eyebrow">{t('Gateway Setup')}</span>
@@ -4774,15 +4782,11 @@ export function AppShell() {
               </button>
             </div>
           </div>
-        </div>
-      </I18nProvider>
-      </GatewayMirrorContext.Provider>
+        </div>,
     );
   }
 
-  return (
-    <GatewayMirrorContext.Provider value={gatewayMirror}>
-    <I18nProvider languagePreference={settingsDraft.languagePreference}>
+  return appShellChrome(
     <div
       className={appShellClassName}
       style={
@@ -5482,9 +5486,6 @@ export function AppShell() {
         <PanelLeft aria-hidden size={15} strokeWidth={1.8} />
       </div>
 
-      <MemoryDialogRoot ref={memoryDialogRef} />
-    </div>
-    </I18nProvider>
-    </GatewayMirrorContext.Provider>
+    </div>,
   );
 }
