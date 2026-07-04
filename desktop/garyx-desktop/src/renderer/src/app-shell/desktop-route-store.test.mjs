@@ -236,3 +236,55 @@ test("default-agent and workflow new-thread navigations dedupe their own echo (c
   assert.equal(host.log.length, logBefore);
   store.dispose();
 });
+
+test("subscribeExternal fires only for commits that originate outside navigate (4b)", () => {
+  const host = fakeHost("#/thread");
+  const store = new DesktopRouteStore(host);
+  let external = 0;
+  let all = 0;
+  store.subscribe(() => {
+    all += 1;
+  });
+  const unsubscribeExternal = store.subscribeExternal(() => {
+    external += 1;
+  });
+
+  // navigate (push) commits and echoes — external listeners stay silent.
+  store.navigate({ kind: "view", view: "tasks" });
+  assert.equal(all, 1);
+  assert.equal(external, 0, "navigate push does not fire external");
+
+  // navigate (replace) — still silent.
+  store.navigate({ kind: "view", view: "agents" }, { replace: true });
+  assert.equal(all, 2);
+  assert.equal(external, 0, "navigate replace does not fire external");
+
+  // A manual hash edit fires external exactly once.
+  host.externalEdit("#/thread/thread%3A%3Aabc");
+  assert.equal(all, 3);
+  assert.equal(external, 1, "external edit fires once");
+
+  // An external edit that parses to the current route stays silent.
+  host.externalEdit("#/threads/thread%3A%3Aabc");
+  assert.equal(external, 1);
+
+  // Unsubscribed listeners stop firing; the store still commits.
+  unsubscribeExternal();
+  host.externalEdit("#/agents");
+  assert.equal(all, 4);
+  assert.equal(external, 1);
+
+  store.dispose();
+});
+
+test("dispose clears external listeners too (4b)", () => {
+  const host = fakeHost("#/thread");
+  const store = new DesktopRouteStore(host);
+  let external = 0;
+  store.subscribeExternal(() => {
+    external += 1;
+  });
+  store.dispose();
+  host.externalEdit("#/agents");
+  assert.equal(external, 0);
+});

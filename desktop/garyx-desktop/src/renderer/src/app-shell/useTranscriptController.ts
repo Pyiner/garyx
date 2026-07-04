@@ -1246,6 +1246,21 @@ export function useTranscriptController({
       if (isCancelled()) {
         return;
       }
+      // Batch 4b: a selected-but-missing thread (externally entered
+      // #/thread/<id> that stays addressable) must not be applied or
+      // streamed — the gateway history responds remoteFound:false with an
+      // empty transcript, and the stream endpoint would 404-retry forever.
+      // Same missing-thread predicate as ensureThreadOpenable.
+      if (
+        !latestTranscript &&
+        !fetched.transcript.remoteFound &&
+        fetched.transcript.messages.length === 0 &&
+        fetched.transcript.pendingInputs.length === 0 &&
+        !fetched.transcript.threadInfo
+      ) {
+        setError(`Thread not found: ${threadId}`);
+        return;
+      }
       requestSelectedThreadMessagesBottomSnap(threadId, true);
       // The stream may have advanced the live snapshot past this fetch's tail
       // while pages were in flight; forward-merge keeps that progress. An

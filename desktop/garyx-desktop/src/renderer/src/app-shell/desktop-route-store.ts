@@ -141,6 +141,7 @@ export class DesktopRouteStore {
   dispose(): void {
     this.unsubscribeHost();
     this.listeners.clear();
+    this.externalListeners.clear();
   }
 
   private currentHostHash(): string {
