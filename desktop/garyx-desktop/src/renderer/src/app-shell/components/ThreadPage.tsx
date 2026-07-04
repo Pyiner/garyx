@@ -64,7 +64,6 @@ import { shouldShowThreadTaskTreePopover } from "./thread-task-tree-popover-mode
 import { useI18n } from "../../i18n";
 import type {
   PendingAutomationRun,
-  ThreadLogLine,
   UiTranscriptMessage,
 } from "../types";
 import { RUN_LOADING_LABEL } from "../loading-labels";
