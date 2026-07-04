@@ -358,7 +358,17 @@ import {
 // render-state fixture records carry ledger-shaped bodies without ids, so
 // the authoritative-apply dual-run uses purpose-built messages instead.
 function syntheticMessages(count) {
-  const pool = [];
+  const pool = [
+    // A control record: visibleTranscriptMessages must filter it, so the
+    // dual-run also guards the filter step, not just the wiring.
+    {
+      id: "msg-control",
+      role: "system",
+      text: "",
+      kind: "control",
+      internal: true,
+    },
+  ];
   for (let i = 1; i <= count; i += 1) {
     const role = i % 3 === 0 ? "assistant" : i % 3 === 1 ? "user" : "assistant";
     pool.push({
@@ -374,7 +384,7 @@ function syntheticMessages(count) {
 
 function transcriptFromCases(threadId, take) {
   const slice = syntheticMessages(take);
-  assert.equal(slice.length, take);
+  assert.equal(slice.length, take + 1);
   return {
     threadId,
     messages: slice,
