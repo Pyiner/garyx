@@ -1231,3 +1231,30 @@ test("replaceLiveStreamThreadId moves the draft entry in one aggregate notificat
   );
   assert.equal(mirror.getThreadSnapshot(realId).liveStream, map[realId]);
 });
+
+test("clearing a missing live-stream key keeps the legacy rebuild-and-notify cadence (3c-1)", () => {
+  const mirror = new GatewayMirror();
+  const threadId = "thread::live-stream-missing";
+
+  let aggregate = 0;
+  mirror.subscribeLiveStreams(() => {
+    aggregate += 1;
+  });
+  const mapBefore = mirror.getLiveStreamMap();
+  const snapshotBefore = mirror.getThreadSnapshot(threadId);
+
+  // Legacy updateLiveStreamState on an absent key still rebuilt the Record
+  // (delete is a no-op) and re-rendered via setState; the mirror keeps that
+  // cadence: map identity changes, aggregate notifies, thread commits.
+  mirror.clearThreadLiveStream(threadId);
+
+  assert.equal(aggregate, 1, "missing-key clear still notifies");
+  assert.notEqual(mirror.getLiveStreamMap(), mapBefore, "map identity rebuilds");
+  assert.deepEqual(mirror.getLiveStreamMap(), {});
+  assert.notEqual(
+    mirror.getThreadSnapshot(threadId),
+    snapshotBefore,
+    "thread snapshot commits",
+  );
+  assert.equal(mirror.getThreadSnapshot(threadId).liveStream, null);
+});
