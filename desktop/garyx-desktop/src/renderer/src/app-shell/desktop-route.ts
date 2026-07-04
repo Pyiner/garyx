@@ -290,37 +290,75 @@ export function replaceDesktopRoute(route: DesktopRoute): void {
 }
 
 /**
- * Structural route equality (batch 4a). Optional string fields normalize
- * `undefined` to `null` so parse-produced and state-derived routes compare
- * equal when they address the same location.
+ * Normalize a route to its hash round-trip form (batch 4a):
+ * `parseDesktopRoute(buildDesktopRouteHash(route))` without the string
+ * detour. buildDesktopRouteHash drops empty/default params — notably the
+ * `new-thread` agent param when it is the 'claude' default or a workflow
+ * is set — so a state-derived route and its parsed echo only compare
+ * equal in canonical form. The route store commits canonical routes and
+ * desktopRoutesEqual canonicalizes both sides.
+ */
+export function canonicalDesktopRoute(route: DesktopRoute): DesktopRoute {
+  const trimmed = (value: string | null | undefined) => value?.trim() || null;
+  switch (route.kind) {
+    case 'thread':
+      return { kind: 'thread', threadId: route.threadId.trim() };
+    case 'new-thread': {
+      const workspacePath = trimmed(route.workspacePath);
+      const workflowId = trimmed(route.workflowId);
+      const rawAgentId = trimmed(route.agentId);
+      const agentId =
+        workflowId || !rawAgentId || rawAgentId === 'claude'
+          ? null
+          : rawAgentId;
+      return { kind: 'new-thread', workspacePath, agentId, workflowId };
+    }
+    case 'workflow-task':
+      return { kind: 'workflow-task', taskId: route.taskId.trim() };
+    case 'automation':
+      return { kind: 'automation', automationId: trimmed(route.automationId) };
+    case 'settings':
+      return { kind: 'settings', tabId: route.tabId ?? null };
+    case 'capsule':
+      return { kind: 'capsule', capsuleId: route.capsuleId.trim() };
+    case 'thread-home':
+    case 'view':
+      return route;
+  }
+}
+
+/**
+ * Route equality in canonical (hash round-trip) form (batch 4a): two
+ * routes are equal exactly when they address the same hash.
  */
 export function desktopRoutesEqual(a: DesktopRoute, b: DesktopRoute): boolean {
-  if (a.kind !== b.kind) {
+  const ca = canonicalDesktopRoute(a);
+  const cb = canonicalDesktopRoute(b);
+  if (ca.kind !== cb.kind) {
     return false;
   }
-  const nz = (value: string | null | undefined) => value ?? null;
-  switch (a.kind) {
+  switch (ca.kind) {
     case 'thread-home':
       return true;
     case 'thread':
-      return a.threadId === (b as typeof a).threadId;
+      return ca.threadId === (cb as typeof ca).threadId;
     case 'new-thread': {
-      const other = b as typeof a;
+      const other = cb as typeof ca;
       return (
-        nz(a.workspacePath) === nz(other.workspacePath) &&
-        nz(a.agentId) === nz(other.agentId) &&
-        nz(a.workflowId) === nz(other.workflowId)
+        ca.workspacePath === other.workspacePath &&
+        ca.agentId === other.agentId &&
+        ca.workflowId === other.workflowId
       );
     }
     case 'workflow-task':
-      return a.taskId === (b as typeof a).taskId;
+      return ca.taskId === (cb as typeof ca).taskId;
     case 'automation':
-      return nz(a.automationId) === nz((b as typeof a).automationId);
+      return ca.automationId === (cb as typeof ca).automationId;
     case 'settings':
-      return nz(a.tabId) === nz((b as typeof a).tabId);
+      return ca.tabId === (cb as typeof ca).tabId;
     case 'capsule':
-      return a.capsuleId === (b as typeof a).capsuleId;
+      return ca.capsuleId === (cb as typeof ca).capsuleId;
     case 'view':
-      return a.view === (b as typeof a).view;
+      return ca.view === (cb as typeof ca).view;
   }
 }

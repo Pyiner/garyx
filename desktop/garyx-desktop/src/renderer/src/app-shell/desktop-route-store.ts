@@ -14,6 +14,7 @@
 
 import {
   buildDesktopRouteHash,
+  canonicalDesktopRoute,
   desktopRoutesEqual,
   parseDesktopRoute,
   type DesktopRoute,
@@ -110,10 +111,11 @@ export class DesktopRouteStore {
       }
       return;
     }
-    // Commit before writing the hash so the write's own hashchange echo
-    // (synchronous or asynchronous) parses back to the committed route and
-    // is deduped by onExternalChange.
-    this.commit(route);
+    // Commit the CANONICAL route before writing the hash: the write's own
+    // hashchange echo parses to exactly the canonical form (hash builds
+    // drop default/empty params, e.g. the new-thread 'claude' agent), so
+    // onExternalChange's equality dedupe holds for every navigable route.
+    this.commit(canonicalDesktopRoute(route));
     if (options?.replace) {
       this.host.replaceHash(nextHash);
     } else {

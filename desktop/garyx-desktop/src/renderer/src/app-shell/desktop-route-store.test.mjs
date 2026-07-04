@@ -184,3 +184,55 @@ test("desktopRoutesEqual normalizes optional null/undefined fields", () => {
     !desktopRoutesEqual({ kind: "thread-home" }, { kind: "view", view: "tasks" }),
   );
 });
+
+test("default-agent and workflow new-thread navigations dedupe their own echo (canonical commit)", () => {
+  const host = fakeHost("#/thread");
+  const store = new DesktopRouteStore(host);
+  let notified = 0;
+  store.subscribe(() => {
+    notified += 1;
+  });
+
+  // The 'claude' default agent is dropped from the hash; the echo parses
+  // back with agentId: null and must still compare equal.
+  store.navigate({
+    kind: "new-thread",
+    workspacePath: "/Users/test/repo",
+    agentId: "claude",
+    workflowId: null,
+  });
+  assert.equal(notified, 1, "default-agent navigate commits exactly once");
+  assert.deepEqual(store.getSnapshot().route, {
+    kind: "new-thread",
+    workspacePath: "/Users/test/repo",
+    agentId: null,
+    workflowId: null,
+  });
+
+  // A workflow route drops the agent param entirely.
+  store.navigate({
+    kind: "new-thread",
+    workspacePath: "/Users/test/repo",
+    agentId: "codex",
+    workflowId: "development-loop",
+  });
+  assert.equal(notified, 2, "workflow navigate commits exactly once");
+  assert.deepEqual(store.getSnapshot().route, {
+    kind: "new-thread",
+    workspacePath: "/Users/test/repo",
+    agentId: null,
+    workflowId: "development-loop",
+  });
+
+  // Re-navigating with the non-canonical spelling is a full no-op.
+  const logBefore = host.log.length;
+  store.navigate({
+    kind: "new-thread",
+    workspacePath: "/Users/test/repo",
+    agentId: "gemini",
+    workflowId: "development-loop",
+  });
+  assert.equal(notified, 2);
+  assert.equal(host.log.length, logBefore);
+  store.dispose();
+});
