@@ -82,6 +82,7 @@ import {
   AddBotDialogRoot,
   type AddBotDialogHandle,
 } from "./components/AddBotDialogRoot";
+import { WorkspaceFileTree } from "./components/WorkspaceFileTree";
 import { DreamsPanel } from "./components/DreamsPanel";
 import {
   ThreadSideToolsPanel,
@@ -161,7 +162,6 @@ import {
   RecentIcon,
   SettingsIcon,
   SkillsIcon,
-  WorkspaceFileIcon,
   isLocalSettingsTab,
 } from "./icons";
 import type {
@@ -757,7 +757,6 @@ export function AppShell() {
   const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
   const [bindingMutation, setBindingMutation] = useState<string | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [workspaceFileFilter, setWorkspaceFileFilter] = useState("");
   const [threadLogsOpen, setThreadLogsOpen] = useState(false);
   // Batch 5b: log content/polling live in ThreadLogDock; the shell keeps
   // only the open flag and the unread mirror for the header badge.
@@ -2824,11 +2823,9 @@ export function AppShell() {
   useEffect(() => {
     if (!activeWorkspacePath) {
       setInspectorOpen(false);
-      setWorkspaceFileFilter("");
       return;
     }
 
-    setWorkspaceFileFilter("");
     setExpandedWorkspaceDirectories((current) => ({
       ...current,
       [workspaceDirectoryKey(activeWorkspacePath, "")]: true,
@@ -3700,151 +3697,6 @@ export function AppShell() {
     }
   }
 
-  const workspaceFileFilterQuery = workspaceFileFilter.trim().toLowerCase();
-
-  function workspaceEntryMatchesFilter(
-    workspacePath: string,
-    entry: DesktopWorkspaceFileEntry,
-  ): boolean {
-    if (!workspaceFileFilterQuery) {
-      return true;
-    }
-    const haystack = `${entry.name}\n${entry.path}`.toLowerCase();
-    if (haystack.includes(workspaceFileFilterQuery)) {
-      return true;
-    }
-    if (entry.entryType !== "directory") {
-      return false;
-    }
-    const childKey = workspaceDirectoryKey(workspacePath, entry.path);
-    const childEntries = workspaceDirectories[childKey]?.entries || [];
-    return childEntries.some((child) =>
-      workspaceEntryMatchesFilter(workspacePath, child),
-    );
-  }
-
-  function renderWorkspaceFileNodes(
-    workspacePath: string,
-    directoryPath = "",
-    depth = 0,
-  ): ReactNode {
-    const key = workspaceDirectoryKey(workspacePath, directoryPath);
-    const state = workspaceDirectories[key];
-    const entries = state?.entries || [];
-
-    if (state?.loading && !entries.length) {
-      return (
-        <div
-          className="workspace-file-empty"
-          style={{ paddingLeft: `${depth * 14}px` }}
-        >
-          Loading…
-        </div>
-      );
-    }
-
-    if (state?.error && !entries.length) {
-      return (
-        <div
-          className="workspace-file-empty workspace-file-error"
-          style={{ paddingLeft: `${depth * 14}px` }}
-        >
-          {state.error}
-        </div>
-      );
-    }
-
-    if (!entries.length) {
-      return null;
-    }
-
-    const nodes: ReactNode[] = [];
-
-    nodes.push(
-      ...entries.map((entry) => {
-        if (!workspaceEntryMatchesFilter(workspacePath, entry)) {
-          return null;
-        }
-        const childKey = workspaceDirectoryKey(workspacePath, entry.path);
-        const isExpanded = expandedWorkspaceDirectories[childKey] === true;
-        const shouldShowChildren =
-          entry.entryType === "directory" &&
-          (isExpanded || Boolean(workspaceFileFilterQuery));
-        const isSelected =
-          selectedWorkspaceFile?.workspacePath === workspacePath &&
-          selectedWorkspaceFile?.path === entry.path;
-
-        return (
-          <div
-            className="workspace-file-node-shell"
-            key={`${workspacePath}:${entry.path}`}
-          >
-            <button
-              className={`workspace-file-node ${isSelected ? "active" : ""}`}
-              onClick={() => {
-                void handleWorkspaceFileEntryActivate(entry);
-              }}
-              style={{ paddingLeft: `${10 + depth * 16}px` }}
-              title={entry.path || entry.name}
-              type="button"
-            >
-              <WorkspaceFileIcon entry={entry} open={isExpanded} />
-              <span className="workspace-file-node-copy">
-                <span className="workspace-file-node-name">{entry.name}</span>
-              </span>
-            </button>
-            {shouldShowChildren ? (
-              <div className="workspace-file-children">
-                {renderWorkspaceFileNodes(workspacePath, entry.path, depth + 1)}
-              </div>
-            ) : null}
-          </div>
-        );
-      }),
-    );
-
-    return nodes;
-  }
-
-  const workspaceDirectoryPanel = activeWorkspacePath ? (
-    <>
-      <input
-        className="workspace-upload-input"
-        multiple
-        onChange={(event) => {
-          const files = Array.from(event.target.files || []);
-          if (!files.length) {
-            return;
-          }
-          void uploadWorkspaceFilesToActiveWorkspace(files);
-          event.target.value = "";
-        }}
-        ref={workspaceUploadInputRef}
-        tabIndex={-1}
-        type="file"
-      />
-      <div
-        className="workspace-directory-tree"
-        onDragOver={(event) => {
-          if (event.dataTransfer.types.includes("Files")) {
-            event.preventDefault();
-            event.dataTransfer.dropEffect = "copy";
-          }
-        }}
-        onDrop={(event) => {
-          const files = Array.from(event.dataTransfer.files || []);
-          if (!files.length) {
-            return;
-          }
-          event.preventDefault();
-          event.stopPropagation();
-          void uploadWorkspaceFilesToActiveWorkspace(files);
-        }}
-      >
-        {renderWorkspaceFileNodes(activeWorkspacePath)}
-      </div>
-    </>
-  ) : null;
   const selectedSideToolWorkspaceFile: SideToolWorkspaceFile | null =
     selectedWorkspaceFile &&
     selectedWorkspaceFileEntry?.entryType === "file" &&
@@ -4063,6 +3915,20 @@ export function AppShell() {
   // capsule tabs opened from the transcript even when no workspace is attached
   // (#TASK-1470). Built-in workspace tools stay gated by `hasWorkspace` inside.
   const sideToolsPanel = contentView === "thread" ? (
+    <WorkspaceFileTree
+      activeWorkspacePath={activeWorkspacePath}
+      expandedWorkspaceDirectories={expandedWorkspaceDirectories}
+      onActivateEntry={(entry) => {
+        void handleWorkspaceFileEntryActivate(entry);
+      }}
+      onUploadFiles={(files) => {
+        void uploadWorkspaceFilesToActiveWorkspace(files);
+      }}
+      selectedWorkspaceFile={selectedWorkspaceFile}
+      workspaceDirectories={workspaceDirectories}
+      workspaceUploadInputRef={workspaceUploadInputRef}
+    >
+      {(workspaceDirectoryPanel, workspaceFilter) => (
     <ThreadSideToolsPanel
       activeWorkspaceName={activeWorkspace?.name || null}
       activeWorkspacePath={activeWorkspacePath}
@@ -4071,7 +3937,7 @@ export function AppShell() {
       sideChatPanel={sideChatPanel}
       workspaceBranch={composerWorkspaceBranch}
       workspaceDirectoryPanel={workspaceDirectoryPanel}
-      workspaceFileFilter={workspaceFileFilter}
+      workspaceFileFilter={workspaceFilter.value}
       workspaceFilePreview={workspaceFilePreview}
       workspaceFilePreviewError={workspaceFilePreviewError}
       workspaceFilePreviewLoading={workspaceFilePreviewLoading}
@@ -4106,8 +3972,10 @@ export function AppShell() {
       onOpenSideChat={() => {
         void ensureSideChatThread();
       }}
-      onWorkspaceFileFilterChange={setWorkspaceFileFilter}
+      onWorkspaceFileFilterChange={workspaceFilter.onChange}
     />
+      )}
+    </WorkspaceFileTree>
   ) : null;
 
   // The dock shows when the inspector is open (workspace tools) or any capsule
