@@ -109,10 +109,6 @@ Detailed UI rules: @docs/agents/mobile-ui.md and @docs/agents/desktop-ui.md.
   `scripts/install-local-cli.sh` when that binary also needs to be copied into
   every local CLI path currently in use. Do not manually copy a raw Cargo build
   over an installed `garyx`.
-- Garyx Claude Code runs should use the current Claude Code login exactly like
-  the user's terminal. Do not inject `CLAUDE_CODE_OAUTH_TOKEN` into Claude Code
-  subprocesses; strip stale inherited values and let the CLI read its own
-  credentials.
 - iOS TestFlight releases are independent from macOS/gateway release flow. Do
   not trigger TestFlight unless the user explicitly asks in the current turn.
 - Do not wire iOS uploads into version-tag release jobs unless the user
