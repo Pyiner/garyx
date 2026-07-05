@@ -230,7 +230,7 @@ fn proof_server_config(script_path: &Path) -> McpServerConfig {
 
 fn with_claude_home(metadata: &mut HashMap<String, Value>, temp_home: &Path) {
     metadata.insert(
-        "desktop_claude_env".to_owned(),
+        "provider_env".to_owned(),
         json!({"HOME": temp_home.to_string_lossy().to_string()}),
     );
 }

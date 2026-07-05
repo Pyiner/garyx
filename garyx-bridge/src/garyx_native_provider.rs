@@ -121,13 +121,7 @@ fn resolve_runtime_env(
 ) -> HashMap<String, String> {
     let mut env = config.env.clone();
     env.extend(task_cli_env(metadata));
-    env.extend(metadata_string_map(metadata, "desktop_codex_env"));
-    env.extend(metadata_string_map(metadata, "desktop_gpt_env"));
-    env.extend(metadata_string_map(metadata, "desktop_claude_env"));
-    env.extend(metadata_string_map(metadata, "desktop_anthropic_env"));
-    env.extend(metadata_string_map(metadata, "desktop_gemini_env"));
-    env.extend(metadata_string_map(metadata, "desktop_google_env"));
-    env.extend(metadata_string_map(metadata, "desktop_garyx_native_env"));
+    env.extend(metadata_string_map(metadata, "provider_env"));
     env
 }
 

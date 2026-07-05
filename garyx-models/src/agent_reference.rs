@@ -176,6 +176,55 @@ pub fn agent_runtime_metadata(reference: &AgentReference) -> HashMap<String, Val
     metadata
 }
 
+pub fn agent_provider_env_metadata(reference: &AgentReference) -> HashMap<String, Value> {
+    let AgentReference::Standalone { profile, .. } = reference else {
+        return HashMap::new();
+    };
+    if profile.provider_env.is_empty() {
+        return HashMap::new();
+    }
+    let env = profile
+        .provider_env
+        .iter()
+        .map(|(key, value)| (key.clone(), Value::String(value.clone())))
+        .collect();
+    HashMap::from([("provider_env".to_owned(), Value::Object(env))])
+}
+
+pub fn agent_runtime_snapshot_metadata(reference: &AgentReference) -> HashMap<String, Value> {
+    let mut metadata = agent_runtime_metadata(reference);
+    metadata.extend(agent_provider_env_metadata(reference));
+    metadata
+}
+
+const THREAD_AGENT_RUNTIME_SNAPSHOT_KEYS: &[&str] = &[
+    "agent_id",
+    "agent_display_name",
+    "agent_team_id",
+    "requested_provider_type",
+    "model",
+    "model_reasoning_effort",
+    "model_service_tier",
+    "system_prompt",
+    "provider_env",
+];
+
+pub fn merge_thread_agent_runtime_snapshot(
+    thread_data: &Value,
+    run_metadata: &mut HashMap<String, Value>,
+) {
+    let Some(thread_metadata) = thread_data.get("metadata").and_then(Value::as_object) else {
+        return;
+    };
+    for key in THREAD_AGENT_RUNTIME_SNAPSHOT_KEYS {
+        if let Some(value) = thread_metadata.get(*key) {
+            run_metadata
+                .entry((*key).to_owned())
+                .or_insert_with(|| value.clone());
+        }
+    }
+}
+
 /// Verify that team_ids do not collide with agent_ids in the unified namespace.
 ///
 /// Must be invoked at boot (see `garyx-gateway::composition::app_bootstrap`).

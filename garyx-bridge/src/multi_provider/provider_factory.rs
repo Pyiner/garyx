@@ -5,7 +5,7 @@ use std::sync::Arc;
 use garyx_models::config::AgentProviderConfig;
 use garyx_models::provider::{
     AntigravityCliConfig, ClaudeCodeConfig, CodexAppServerConfig, GaryxNativeConfig,
-    GeminiCliConfig, ProviderType, default_antigravity_model,
+    GeminiCliConfig, ProviderType, default_antigravity_model, default_claude_cli_mode,
 };
 
 use crate::antigravity_provider::AntigravityCliProvider;
@@ -184,6 +184,32 @@ fn garyx_native_default_model(provider_type: &ProviderType) -> &'static str {
     }
 }
 
+pub(super) fn agent_provider_requires_dedicated_key(agent_cfg: &AgentProviderConfig) -> bool {
+    let Some(provider_type) = ProviderType::from_slug(&agent_cfg.provider_type) else {
+        return false;
+    };
+    if matches!(provider_type, ProviderType::AgentTeam) {
+        return false;
+    }
+    if matches!(
+        provider_type,
+        ProviderType::Gpt | ProviderType::ClaudeLlm | ProviderType::GeminiLlm
+    ) {
+        return true;
+    }
+
+    let claude_cli_mode = agent_cfg.claude_cli_mode.trim();
+    let custom_claude_cli_mode =
+        !claude_cli_mode.is_empty() && claude_cli_mode != default_claude_cli_mode();
+
+    custom_claude_cli_mode
+        || !agent_cfg.claude_cli_path.trim().is_empty()
+        || agent_cfg.experimental_api
+        || !agent_cfg.gemini_bin.trim().is_empty()
+        || !agent_cfg.antigravity_bin.trim().is_empty()
+        || !agent_cfg.antigravity_brain_root.trim().is_empty()
+}
+
 /// Compute a stable provider key for the configured local provider type.
 ///
 /// Garyx threads bind to a single provider type for their lifetime. Keep the
@@ -195,12 +221,7 @@ pub(super) fn compute_provider_key(
 ) -> String {
     let provider_type = ProviderType::from_slug(&agent_cfg.provider_type);
     let provider_id = agent_cfg.provider_id.trim();
-    if !provider_id.is_empty()
-        && matches!(
-            provider_type,
-            Some(ProviderType::Gpt | ProviderType::ClaudeLlm | ProviderType::GeminiLlm)
-        )
-    {
+    if !provider_id.is_empty() && agent_provider_requires_dedicated_key(agent_cfg) {
         return format!("agent:{provider_id}");
     }
     if provider_type == Some(ProviderType::ClaudeCode) {
@@ -296,11 +317,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn build_claude_config_carries_default_model_and_reasoning_effort() {
+    fn build_claude_config_carries_default_model_reasoning_and_env() {
         let agent_cfg = AgentProviderConfig {
             provider_type: ProviderType::ClaudeCode.as_slug().to_owned(),
             default_model: "claude-opus-4-8".to_owned(),
             model_reasoning_effort: "max".to_owned(),
+            env: std::collections::HashMap::from([(
+                "ANTHROPIC_BASE_URL".to_owned(),
+                "http://127.0.0.1:15721".to_owned(),
+            )]),
             ..Default::default()
         };
 
@@ -308,6 +333,37 @@ mod tests {
 
         assert_eq!(config.default_model, "claude-opus-4-8");
         assert_eq!(config.model_reasoning_effort, "max");
+        assert_eq!(
+            config.env.get("ANTHROPIC_BASE_URL").map(String::as_str),
+            Some("http://127.0.0.1:15721")
+        );
+    }
+
+    #[test]
+    fn compute_provider_key_ignores_env_only_custom_claude_agent_id() {
+        let agent_cfg = AgentProviderConfig {
+            provider_id: "super-junior".to_owned(),
+            provider_type: ProviderType::ClaudeCode.as_slug().to_owned(),
+            env: std::collections::HashMap::from([(
+                "ANTHROPIC_BASE_URL".to_owned(),
+                "http://127.0.0.1:15721".to_owned(),
+            )]),
+            ..Default::default()
+        };
+
+        assert_eq!(compute_provider_key(&agent_cfg, &None), "claude_code");
+    }
+
+    #[test]
+    fn compute_provider_key_ignores_model_only_custom_claude_agent_id() {
+        let agent_cfg = AgentProviderConfig {
+            provider_id: "model-only-claude".to_owned(),
+            provider_type: ProviderType::ClaudeCode.as_slug().to_owned(),
+            default_model: "claude-opus-4-8".to_owned(),
+            ..Default::default()
+        };
+
+        assert_eq!(compute_provider_key(&agent_cfg, &None), "claude_code");
     }
 
     #[test]

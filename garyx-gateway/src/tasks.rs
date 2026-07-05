@@ -24,6 +24,7 @@ use uuid::Uuid;
 
 use crate::agent_identity::{
     default_workspace_dir_from_agent_reference, resolve_agent_reference_from_stores,
+    snapshot_agent_runtime_metadata_to_thread_record,
 };
 use crate::garyx_db::{GaryxDbError, TaskForestScope};
 use crate::internal_inbound::{InternalDispatchOptions, dispatch_internal_message_to_thread};
@@ -1302,20 +1303,26 @@ pub(crate) async fn ensure_created_task_thread_provider_from_bound_agent(
     )
     .await
     .map_err(TaskServiceError::UnknownAgent)?;
-    let Some(obj) = updated.as_object_mut() else {
-        return Err(TaskServiceError::Store(format!(
-            "thread payload is not an object: {thread_id}"
-        )));
-    };
-    obj.insert(
-        "agent_id".to_owned(),
-        Value::String(reference.bound_agent_id().to_owned()),
-    );
-    obj.insert("provider_type".to_owned(), json!(reference.provider_type()));
-    obj.insert(
-        "updated_at".to_owned(),
-        Value::String(Utc::now().to_rfc3339()),
-    );
+    {
+        let Some(obj) = updated.as_object_mut() else {
+            return Err(TaskServiceError::Store(format!(
+                "thread payload is not an object: {thread_id}"
+            )));
+        };
+        obj.insert(
+            "agent_id".to_owned(),
+            Value::String(reference.bound_agent_id().to_owned()),
+        );
+        obj.insert("provider_type".to_owned(), json!(reference.provider_type()));
+    }
+    snapshot_agent_runtime_metadata_to_thread_record(&mut updated, &reference)
+        .map_err(TaskServiceError::Store)?;
+    if let Some(obj) = updated.as_object_mut() {
+        obj.insert(
+            "updated_at".to_owned(),
+            Value::String(Utc::now().to_rfc3339()),
+        );
+    }
     state.threads.thread_store.set(thread_id, updated).await;
     Ok(())
 }

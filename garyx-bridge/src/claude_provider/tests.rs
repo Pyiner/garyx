@@ -796,7 +796,7 @@ fn test_build_sdk_options_metadata_env_override() {
 
     let mut metadata = HashMap::new();
     metadata.insert(
-        "desktop_claude_env".to_string(),
+        "provider_env".to_string(),
         serde_json::json!({
             "CLAUDE_CODE_OAUTH_TOKEN": "token-123",
             "ANTHROPIC_API_KEY": "api-key-456",
@@ -839,9 +839,9 @@ fn test_build_sdk_options_merges_config_env_and_metadata_env() {
 
     let mut metadata = HashMap::new();
     metadata.insert(
-        "desktop_claude_env".to_string(),
+        "provider_env".to_string(),
         serde_json::json!({
-            "CLAUDE_CODE_OAUTH_TOKEN": "from-desktop",
+            "CLAUDE_CODE_OAUTH_TOKEN": "from-provider",
             "ALL_PROXY": "socks5://127.0.0.1:6153"
         }),
     );
@@ -871,7 +871,7 @@ fn test_build_sdk_options_merges_config_env_and_metadata_env() {
             .env
             .get("CLAUDE_CODE_OAUTH_TOKEN")
             .map(String::as_str),
-        Some("from-desktop")
+        Some("from-provider")
     );
 }
 

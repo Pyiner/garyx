@@ -26,7 +26,8 @@ pub mod wiki;
 // Re-export commonly used types at the crate root.
 pub use agent::RunState;
 pub use agent_reference::{
-    AgentReference, agent_runtime_metadata, resolve_agent_reference,
+    AgentReference, agent_runtime_metadata, agent_runtime_snapshot_metadata,
+    merge_thread_agent_runtime_snapshot, resolve_agent_reference,
     validate_agent_team_registry_uniqueness,
 };
 pub use agent_team::AgentTeamProfile;

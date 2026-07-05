@@ -13,11 +13,15 @@ fn test_matches_turn_exact() {
 
 #[test]
 fn codex_error_usage_limit_detects_string_and_object_forms() {
-    assert!(codex_error_is_usage_limit(Some(&json!("usageLimitExceeded"))));
+    assert!(codex_error_is_usage_limit(Some(&json!(
+        "usageLimitExceeded"
+    ))));
     assert!(codex_error_is_usage_limit(Some(
         &json!({ "usageLimitExceeded": {} })
     )));
-    assert!(!codex_error_is_usage_limit(Some(&json!("serverOverloaded"))));
+    assert!(!codex_error_is_usage_limit(Some(&json!(
+        "serverOverloaded"
+    ))));
     assert!(!codex_error_is_usage_limit(None));
 }
 
@@ -43,7 +47,10 @@ fn build_codex_rate_limit_uses_snapshot_reset_for_primary_window() {
         rate_limit.reset_at.as_deref(),
         Some("2030-01-01T06:00:00+00:00")
     );
-    assert_eq!(rate_limit.reached_type.as_deref(), Some("rate_limit_reached"));
+    assert_eq!(
+        rate_limit.reached_type.as_deref(),
+        Some("rate_limit_reached")
+    );
 }
 
 #[test]
@@ -104,9 +111,15 @@ fn extract_rate_limit_snapshot_accepts_wrapped_and_flattened_shapes() {
     );
 
     let flattened = json!({ "primary": { "usedPercent": 50 }, "secondary": { "usedPercent": 10 } });
-    assert_eq!(extract_rate_limit_snapshot(&flattened), Some(flattened.clone()));
+    assert_eq!(
+        extract_rate_limit_snapshot(&flattened),
+        Some(flattened.clone())
+    );
 
-    assert_eq!(extract_rate_limit_snapshot(&json!({ "unrelated": 1 })), None);
+    assert_eq!(
+        extract_rate_limit_snapshot(&json!({ "unrelated": 1 })),
+        None
+    );
 }
 
 #[test]
@@ -278,7 +291,7 @@ fn test_extract_usage_string_values() {
 }
 
 #[test]
-fn test_resolve_runtime_codex_env_merges_desktop_auth_env() {
+fn test_resolve_runtime_codex_env_merges_provider_env() {
     let config = CodexAppServerConfig {
         env: HashMap::from([
             ("OPENAI_API_KEY".to_owned(), "from-config".to_owned()),
@@ -290,9 +303,9 @@ fn test_resolve_runtime_codex_env_merges_desktop_auth_env() {
         ..Default::default()
     };
     let metadata = HashMap::from([(
-        "desktop_codex_env".to_owned(),
+        "provider_env".to_owned(),
         json!({
-            "OPENAI_API_KEY": "from-desktop",
+            "OPENAI_API_KEY": "from-provider",
             "OPENAI_ORG_ID": "org_123",
         }),
     )]);
@@ -300,7 +313,7 @@ fn test_resolve_runtime_codex_env_merges_desktop_auth_env() {
     let env = resolve_runtime_codex_env(&config, &metadata);
     assert_eq!(
         env.get("OPENAI_API_KEY").map(String::as_str),
-        Some("from-desktop")
+        Some("from-provider")
     );
     assert_eq!(
         env.get("OPENAI_BASE_URL").map(String::as_str),
@@ -313,17 +326,14 @@ fn test_resolve_runtime_codex_env_merges_desktop_auth_env() {
 }
 
 #[test]
-fn test_resolve_runtime_codex_env_skips_desktop_codex_env_for_traex() {
-    // Traex shares the Codex provider impl but authenticates via `traex login`;
-    // it must not inherit Codex's desktop auth env (e.g. an empty OPENAI_API_KEY
-    // override would otherwise leak in).
+fn test_resolve_runtime_codex_env_applies_provider_env_for_traex() {
     let config = CodexAppServerConfig {
         provider_type: ProviderType::Traex,
         env: HashMap::from([("TRAE_FROM_CONFIG".to_owned(), "keep".to_owned())]),
         ..Default::default()
     };
     let metadata = HashMap::from([(
-        "desktop_codex_env".to_owned(),
+        "provider_env".to_owned(),
         json!({
             "OPENAI_API_KEY": "",
             "OPENAI_ORG_ID": "org_123",
@@ -335,21 +345,21 @@ fn test_resolve_runtime_codex_env_skips_desktop_codex_env_for_traex() {
         env.get("TRAE_FROM_CONFIG").map(String::as_str),
         Some("keep")
     );
-    assert!(
-        !env.contains_key("OPENAI_API_KEY"),
-        "traex must not inherit desktop_codex_env"
+    assert_eq!(env.get("OPENAI_API_KEY").map(String::as_str), Some(""));
+    assert_eq!(
+        env.get("OPENAI_ORG_ID").map(String::as_str),
+        Some("org_123")
     );
-    assert!(!env.contains_key("OPENAI_ORG_ID"));
 }
 
 #[test]
-fn test_resolve_runtime_codex_env_keeps_blank_desktop_api_key_override() {
+fn test_resolve_runtime_codex_env_keeps_blank_provider_api_key_override() {
     let config = CodexAppServerConfig {
         env: HashMap::from([("OPENAI_API_KEY".to_owned(), "from-config".to_owned())]),
         ..Default::default()
     };
     let metadata = HashMap::from([(
-        "desktop_codex_env".to_owned(),
+        "provider_env".to_owned(),
         json!({
             "OPENAI_API_KEY": "",
         }),

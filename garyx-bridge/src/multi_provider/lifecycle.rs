@@ -3,10 +3,14 @@ use std::collections::{HashMap, HashSet};
 use crate::provider_trait::{BridgeError, ProviderModelDefaults};
 use garyx_models::config::{AgentProviderConfig, GaryxConfig};
 use garyx_models::provider::ProviderType;
-use garyx_models::resolve_agent_reference;
+use garyx_models::{
+    agent_runtime_snapshot_metadata, merge_thread_agent_runtime_snapshot, resolve_agent_reference,
+};
 
 use super::MultiProviderBridge;
-use super::provider_factory::{compute_provider_key, create_provider};
+use super::provider_factory::{
+    agent_provider_requires_dedicated_key, compute_provider_key, create_provider,
+};
 use super::state::{BridgeRunIndex, BridgeTopologyState};
 
 pub(super) fn default_provider_config(provider_type: ProviderType) -> AgentProviderConfig {
@@ -195,8 +199,8 @@ impl MultiProviderBridge {
         self.replace_default_provider_configs(default_provider_configs)
             .await;
 
-        let configured_model_provider_keys = self
-            .register_configured_model_providers(&default_workspace)
+        let configured_agent_provider_keys = self
+            .register_configured_agent_providers(&default_workspace)
             .await;
 
         let mut desired_routes: HashMap<(String, String), String> = HashMap::new();
@@ -251,7 +255,7 @@ impl MultiProviderBridge {
         if let Some(ref key) = antigravity_default_key {
             desired_provider_keys.insert(key.clone());
         }
-        desired_provider_keys.extend(configured_model_provider_keys);
+        desired_provider_keys.extend(configured_agent_provider_keys);
         // Preserve the AgentTeam meta-provider across reloads: it is not owned
         // by a channel account route, so the
         // "desired set from config" reconciliation above would otherwise drop
@@ -525,12 +529,14 @@ impl MultiProviderBridge {
     ) {
         use serde_json::Value;
 
-        let thread_record = match self.inner.thread_store.read().await.clone() {
+        let thread_store = self.inner.thread_store.read().await.clone();
+        let mut thread_record = match thread_store.as_ref() {
             Some(store) => store.get(thread_id).await,
             None => None,
         };
         if let Some(record) = thread_record.as_ref() {
             garyx_models::provider::merge_thread_model_cells(record, metadata);
+            merge_thread_agent_runtime_snapshot(record, metadata);
         }
 
         let metadata_agent_id = metadata
@@ -573,8 +579,42 @@ impl MultiProviderBridge {
         else {
             return;
         };
-        for (key, value) in garyx_models::agent_runtime_metadata(&reference) {
-            metadata.entry(key).or_insert(value);
+        let snapshot = agent_runtime_snapshot_metadata(&reference);
+        for (key, value) in &snapshot {
+            metadata.entry(key.clone()).or_insert_with(|| value.clone());
+        }
+        if let (Some(store), Some(record)) = (thread_store, thread_record.as_mut()) {
+            let changed = {
+                let Some(obj) = record.as_object_mut() else {
+                    return;
+                };
+                let metadata_value = obj
+                    .entry("metadata".to_owned())
+                    .or_insert_with(|| Value::Object(serde_json::Map::new()));
+                if !metadata_value.is_object() {
+                    *metadata_value = Value::Object(serde_json::Map::new());
+                }
+                let Some(thread_metadata) = metadata_value.as_object_mut() else {
+                    return;
+                };
+                let mut changed = false;
+                for (key, value) in snapshot {
+                    if !thread_metadata.contains_key(&key) {
+                        thread_metadata.insert(key, value);
+                        changed = true;
+                    }
+                }
+                changed
+            };
+            if changed {
+                if let Some(obj) = record.as_object_mut() {
+                    obj.insert(
+                        "updated_at".to_owned(),
+                        Value::String(chrono::Utc::now().to_rfc3339()),
+                    );
+                }
+                store.set(thread_id, record.clone()).await;
+            }
         }
     }
 
@@ -588,10 +628,9 @@ impl MultiProviderBridge {
         let Some(provider_type) = ProviderType::from_slug(&agent_cfg.provider_type) else {
             return Ok(None);
         };
-        if !matches!(
-            provider_type,
-            ProviderType::Gpt | ProviderType::ClaudeLlm | ProviderType::GeminiLlm
-        ) {
+        if matches!(provider_type, ProviderType::AgentTeam)
+            || !agent_provider_requires_dedicated_key(&agent_cfg)
+        {
             return Ok(None);
         }
         let default_workspace = None;
@@ -600,7 +639,7 @@ impl MultiProviderBridge {
             .map(Some)
     }
 
-    async fn register_configured_model_providers(
+    async fn register_configured_agent_providers(
         &self,
         default_workspace: &Option<String>,
     ) -> HashSet<String> {
@@ -617,13 +656,10 @@ impl MultiProviderBridge {
             if profile.built_in {
                 continue;
             }
-            if !matches!(
-                &profile.provider_type,
-                ProviderType::Gpt | ProviderType::ClaudeLlm | ProviderType::GeminiLlm
-            ) {
+            let agent_cfg = profile.to_provider_config();
+            if !agent_provider_requires_dedicated_key(&agent_cfg) {
                 continue;
             }
-            let agent_cfg = profile.to_provider_config();
             match self
                 .get_or_create_provider(&agent_cfg, default_workspace)
                 .await
@@ -632,7 +668,7 @@ impl MultiProviderBridge {
                     tracing::info!(
                         agent_id = %profile.agent_id,
                         provider_key = %key,
-                        "registered configured model provider"
+                        "registered configured agent provider"
                     );
                     keys.insert(key);
                 }
@@ -640,7 +676,7 @@ impl MultiProviderBridge {
                     tracing::warn!(
                         agent_id = %profile.agent_id,
                         error = %error,
-                        "failed to register configured model provider"
+                        "failed to register configured agent provider"
                     );
                 }
             }

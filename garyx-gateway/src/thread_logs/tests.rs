@@ -87,14 +87,14 @@ async fn record_event_redacts_sensitive_fields() {
                         "safe": "value",
                     }),
                 )
-                .with_field("desktop_claude_env", serde_json::json!({"A": "B"})),
+                .with_field("provider_env", serde_json::json!({"A": "B"})),
         )
         .await;
 
     let chunk = logger.read_chunk("thread::one", None).await.unwrap();
     assert!(chunk.text.contains("safe"));
     assert!(!chunk.text.contains("secret"));
-    assert!(!chunk.text.contains("desktop_claude_env"));
+    assert!(!chunk.text.contains("provider_env"));
 }
 
 #[tokio::test]

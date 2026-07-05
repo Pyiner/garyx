@@ -353,7 +353,7 @@ fn with_home_metadata(
     temp_home: &Path,
 ) -> HashMap<String, Value> {
     metadata.insert(
-        "desktop_claude_env".to_owned(),
+        "provider_env".to_owned(),
         json!({"HOME": temp_home.to_string_lossy().to_string()}),
     );
     metadata

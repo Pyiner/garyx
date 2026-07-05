@@ -1077,7 +1077,7 @@ impl ClaudeCliProvider {
             };
         let mut env = self.config.env.clone();
         env.extend(task_cli_env(&options.metadata));
-        env.extend(metadata_string_map(&options.metadata, "desktop_claude_env"));
+        env.extend(metadata_string_map(&options.metadata, "provider_env"));
         let cli_path = resolve_claude_sdk_cli_path(&self.config);
         let cli_prefix_args = resolve_claude_sdk_cli_prefix_args(&self.config);
 

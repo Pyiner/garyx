@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use garyx_bridge::MultiProviderBridge;
-use garyx_models::{AgentReference, resolve_agent_reference};
+use garyx_models::{AgentReference, agent_runtime_snapshot_metadata, resolve_agent_reference};
 use garyx_router::{
     ThreadCreator, ThreadEnsureOptions, ThreadStore, create_thread_record, workspace_dir_from_value,
 };
@@ -50,6 +50,37 @@ pub(crate) fn default_workspace_dir_from_agent_reference(
 }
 
 pub(crate) use garyx_models::agent_runtime_metadata;
+
+pub(crate) fn merge_agent_runtime_snapshot_metadata(
+    metadata: &mut std::collections::HashMap<String, Value>,
+    reference: &AgentReference,
+) {
+    for (key, value) in agent_runtime_snapshot_metadata(reference) {
+        metadata.entry(key).or_insert(value);
+    }
+}
+
+pub(crate) fn snapshot_agent_runtime_metadata_to_thread_record(
+    record: &mut Value,
+    reference: &AgentReference,
+) -> Result<(), String> {
+    let obj = record
+        .as_object_mut()
+        .ok_or_else(|| "thread record is not an object".to_owned())?;
+    let metadata_value = obj
+        .entry("metadata".to_owned())
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    if !metadata_value.is_object() {
+        *metadata_value = Value::Object(serde_json::Map::new());
+    }
+    let metadata = metadata_value
+        .as_object_mut()
+        .ok_or_else(|| "thread metadata is not an object".to_owned())?;
+    for (key, value) in agent_runtime_snapshot_metadata(reference) {
+        metadata.entry(key).or_insert(value);
+    }
+    Ok(())
+}
 
 fn message_actor_label(object: &serde_json::Map<String, Value>) -> Option<String> {
     let metadata = object.get("metadata").and_then(Value::as_object);
@@ -150,9 +181,7 @@ pub(crate) async fn create_thread_for_agent_reference(
     let mut canonical_options = options;
     canonical_options.agent_id = Some(resolved.bound_agent_id().to_owned());
     canonical_options.provider_type = Some(resolved.provider_type());
-    for (key, value) in agent_runtime_metadata(&resolved) {
-        canonical_options.metadata.entry(key).or_insert(value);
-    }
+    merge_agent_runtime_snapshot_metadata(&mut canonical_options.metadata, &resolved);
     if canonical_options
         .workspace_dir
         .as_deref()
@@ -239,7 +268,10 @@ mod tests {
                 model: Some("gpt-5".to_owned()),
                 model_reasoning_effort: Some("high".to_owned()),
                 model_service_tier: Some("priority".to_owned()),
-                provider_env: None,
+                provider_env: Some(std::collections::HashMap::from([(
+                    "OPENAI_BASE_URL".to_owned(),
+                    "http://127.0.0.1:15721/v1".to_owned(),
+                )])),
                 auth_source: None,
                 base_url: None,
                 codex_home: None,
@@ -330,6 +362,10 @@ mod tests {
         assert_eq!(metadata["model_reasoning_effort"], "high");
         assert_eq!(metadata["model_service_tier"], "priority");
         assert_eq!(metadata["system_prompt"], "Review carefully.");
+        assert_eq!(
+            metadata["provider_env"]["OPENAI_BASE_URL"],
+            "http://127.0.0.1:15721/v1"
+        );
     }
 
     #[test]

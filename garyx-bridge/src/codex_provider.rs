@@ -499,13 +499,7 @@ fn resolve_runtime_codex_env(
 ) -> HashMap<String, String> {
     let mut env = config.env.clone();
     env.extend(task_cli_env(metadata));
-    // `desktop_codex_env` carries Codex-specific desktop settings (e.g. the
-    // Codex OPENAI_API_KEY auth toggle). Traex shares this provider impl but
-    // authenticates via `traex login` against `~/.trae`, so it must not inherit
-    // Codex's env — otherwise an empty/overriding OPENAI_API_KEY could leak in.
-    if config.provider_type == ProviderType::CodexAppServer {
-        env.extend(metadata_string_map(metadata, "desktop_codex_env"));
-    }
+    env.extend(metadata_string_map(metadata, "provider_env"));
     env
 }
 

@@ -17,11 +17,7 @@ import {
 } from "../../shared/transcript-sync.ts";
 import { applyGatewayAuthHeader, applyGatewayCustomHeaders, asBoolean, asFiniteNumber, asString, buildUrl, gatewayFetch, isLocalGatewayUrl, parseRecord, requestJson, tryParseJson } from "./http.ts";
 
-const CLAUDE_ENV_METADATA_KEY = "desktop_claude_env";
-
-const CODEX_ENV_METADATA_KEY = "desktop_codex_env";
-
-const GEMINI_ENV_METADATA_KEY = "desktop_gemini_env";
+const PROVIDER_ENV_METADATA_KEY = "provider_env";
 
 const CODEX_API_KEY_ENV = "OPENAI_API_KEY";
 
@@ -472,30 +468,24 @@ function buildProviderMetadata(
   }
 
   const metadata: Record<string, unknown> = {};
-  const claudeEnv = parseProviderEnvBlock(settings.providerClaudeEnv);
+  const providerEnv = parseProviderEnvBlock(settings.providerClaudeEnv);
   const oauthToken = asString(process.env.CLAUDE_CODE_OAUTH_TOKEN);
   if (
     oauthToken &&
-    !Object.prototype.hasOwnProperty.call(claudeEnv, "CLAUDE_CODE_OAUTH_TOKEN")
+    !Object.prototype.hasOwnProperty.call(providerEnv, "CLAUDE_CODE_OAUTH_TOKEN")
   ) {
-    claudeEnv.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
+    providerEnv.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
   }
 
-  if (Object.keys(claudeEnv).length > 0) {
-    metadata[CLAUDE_ENV_METADATA_KEY] = claudeEnv;
-  }
+  Object.assign(providerEnv, parseProviderEnvBlock(settings.providerGeminiEnv));
+  providerEnv[CODEX_API_KEY_ENV] =
+    settings.providerCodexAuthMode === "api_key"
+      ? settings.providerCodexApiKey.trim()
+      : "";
 
-  const geminiEnv = parseProviderEnvBlock(settings.providerGeminiEnv);
-  if (Object.keys(geminiEnv).length > 0) {
-    metadata[GEMINI_ENV_METADATA_KEY] = geminiEnv;
+  if (Object.keys(providerEnv).length > 0) {
+    metadata[PROVIDER_ENV_METADATA_KEY] = providerEnv;
   }
-
-  metadata[CODEX_ENV_METADATA_KEY] = {
-    [CODEX_API_KEY_ENV]:
-      settings.providerCodexAuthMode === "api_key"
-        ? settings.providerCodexApiKey.trim()
-        : "",
-  };
 
   return Object.keys(metadata).length > 0 ? metadata : undefined;
 }

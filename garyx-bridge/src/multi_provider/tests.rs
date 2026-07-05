@@ -1409,6 +1409,98 @@ async fn test_configured_native_model_agent_gets_dedicated_provider_key() {
 }
 
 #[tokio::test]
+async fn test_thread_bound_claude_code_agent_snapshots_env_on_shared_provider() {
+    let bridge = MultiProviderBridge::new();
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let history = make_history(store.clone());
+    let thread_id = "thread::super-junior-env-snapshot";
+    store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "agent_id": "super-junior",
+                "provider_type": "claude_code",
+                "metadata": {}
+            }),
+        )
+        .await;
+    bridge.set_thread_store(store.clone()).await;
+    bridge.set_thread_history(history);
+
+    let mut agent = custom_agent(
+        "super-junior",
+        "Super Junior",
+        ProviderType::ClaudeCode,
+        "claude-opus-4-8",
+        "Use Claude Code through the configured proxy.",
+    );
+    agent.provider_env = HashMap::from([(
+        "ANTHROPIC_BASE_URL".to_owned(),
+        "http://127.0.0.1:15721".to_owned(),
+    )]);
+    bridge.replace_agent_profiles(vec![agent]).await;
+
+    let default_provider = Arc::new(MockProvider::new(ProviderType::ClaudeCode));
+    bridge
+        .register_provider("claude_code", default_provider.clone())
+        .await;
+    bridge.set_default_provider_key("claude_code").await;
+
+    bridge
+        .start_agent_run(
+            run_request(
+                thread_id,
+                "route through the shared Claude provider",
+                "run-super-junior-env-snapshot",
+                "api",
+                "main",
+            ),
+            None,
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while bridge.is_run_active("run-super-junior-env-snapshot").await {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("run should finish");
+
+    let snapshots = default_provider.metadata_snapshots();
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(
+        snapshots[0].get("agent_id").and_then(Value::as_str),
+        Some("super-junior")
+    );
+    assert_eq!(
+        snapshots[0]
+            .get("provider_env")
+            .and_then(Value::as_object)
+            .and_then(|env| env.get("ANTHROPIC_BASE_URL"))
+            .and_then(Value::as_str),
+        Some("http://127.0.0.1:15721")
+    );
+    assert_eq!(
+        bridge.thread_affinity_for(thread_id).await.as_deref(),
+        Some("claude_code")
+    );
+
+    let stored = store.get(thread_id).await.expect("stored thread");
+    assert_eq!(
+        stored
+            .get("metadata")
+            .and_then(Value::as_object)
+            .and_then(|metadata| metadata.get("provider_env"))
+            .and_then(Value::as_object)
+            .and_then(|env| env.get("ANTHROPIC_BASE_URL"))
+            .and_then(Value::as_str),
+        Some("http://127.0.0.1:15721")
+    );
+}
+
+#[tokio::test]
 async fn test_resolve_provider_none_when_empty() {
     let bridge = MultiProviderBridge::new();
     let resolved = bridge

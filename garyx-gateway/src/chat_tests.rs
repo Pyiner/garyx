@@ -763,7 +763,7 @@ fn test_chat_request_custom_fields() {
             }
         ],
         "providerMetadata": {
-            "desktop_claude_env": {
+            "provider_env": {
                 "CLAUDE_CODE_OAUTH_TOKEN": "token-123"
             }
         }
@@ -779,7 +779,7 @@ fn test_chat_request_custom_fields() {
     assert_eq!(req.images[0].media_type, "image/png");
     assert_eq!(req.images[0].data, "abc123==");
     assert_eq!(
-        req.provider_metadata["desktop_claude_env"]["CLAUDE_CODE_OAUTH_TOKEN"],
+        req.provider_metadata["provider_env"]["CLAUDE_CODE_OAUTH_TOKEN"],
         "token-123"
     );
 }

@@ -297,7 +297,7 @@ fn is_sensitive_key(key: &str) -> bool {
         || key.contains("secret")
         || key.contains("password")
         || key.contains("api_key")
-        || key.contains("desktop_claude_env")
+        || key.contains("provider_env")
 }
 
 fn should_skip_value(key: &str) -> bool {
