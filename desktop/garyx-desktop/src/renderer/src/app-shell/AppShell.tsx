@@ -221,6 +221,7 @@ import {
   type TranscriptScrollIntent,
 } from "./components/thread-transcript-scroll";
 import { useSideChatController } from "./useSideChatController";
+import { SideChatSessions } from "./side-chat-sessions";
 import { SELECTED_THREAD_STREAM_CONSUMER_ID } from "../gateway-mirror/transcript-lifecycle";
 import {
   isMissingThreadTranscript,
@@ -588,6 +589,9 @@ export function AppShell() {
           messageStateRef.current.intentsById[intentId] || null,
       }),
   );
+  // 5b-7a: shell-owned side-chat session store (bindings/drafts/transients
+  // outlive the inspector dock; its shadow refs feed the orchestration deps).
+  const [sideChatSessions] = useState(() => new SideChatSessions());
   const [desktopState, setDesktopState] = useState<DesktopState | null>(null);
   const [desktopAgents, setDesktopAgents] = useState<DesktopCustomAgent[]>([]);
   const [desktopTeams, setDesktopTeams] = useState<DesktopTeam[]>([]);
@@ -2162,6 +2166,7 @@ export function AppShell() {
     sideIsComposingRef,
     updateSideComposerDraft,
   } = useSideChatController({
+    sessions: sideChatSessions,
     activeThread,
     applyRemoteTranscript,
     botGroups,

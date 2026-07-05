@@ -1,4 +1,10 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+} from "react";
 
 import type {
   BrowserAnnotationCommentRequest,
@@ -36,6 +42,11 @@ import {
 } from "../thread-model";
 import { isRunLoadingPlaceholderMessage } from "./loading-labels";
 import {
+  emptySideComposerDraft,
+  type SideChatSessions,
+  type SideComposerDraft,
+} from "./side-chat-sessions";
+import {
   visibleRemotePendingInputsForThread,
   type PendingInputOriginRef,
 } from "./pending-inputs";
@@ -52,58 +63,11 @@ import type {
   UiTranscriptMessage,
 } from "./types";
 
-type SideComposerDraft = {
-  text: string;
-  textPresent: boolean;
-  images: MessageImageAttachment[];
-  files: MessageFileAttachment[];
-  browserAnnotations: BrowserAnnotationCommentRequest[];
-  resetKey: number;
-};
-
-function emptySideComposerDraft(): SideComposerDraft {
-  return {
-    text: "",
-    textPresent: false,
-    images: [],
-    files: [],
-    browserAnnotations: [],
-    resetKey: 0,
-  };
-}
-
-function sideChatThreadStorageKey(sourceThreadId: string): string {
-  return `garyx.side-tools.side-chat-thread.${sourceThreadId}`;
-}
-
-function readPersistedSideChatThreadId(sourceThreadId: string): string | null {
-  if (typeof window === "undefined") {
-    return null;
-  }
-  try {
-    return window.sessionStorage.getItem(sideChatThreadStorageKey(sourceThreadId)) || null;
-  } catch {
-    return null;
-  }
-}
-
-function persistSideChatThreadId(sourceThreadId: string, sideThreadId: string) {
-  if (typeof window === "undefined") {
-    return;
-  }
-  try {
-    window.sessionStorage.setItem(
-      sideChatThreadStorageKey(sourceThreadId),
-      sideThreadId,
-    );
-  } catch {
-    // Side chat can still run from in-memory state if sessionStorage is blocked.
-  }
-}
-
 const EMPTY_UI_TRANSCRIPT_MESSAGES: UiTranscriptMessage[] = [];
 
 type UseSideChatControllerArgs = {
+  /** Shell-owned session store (5b-7a): bindings/drafts/transients. */
+  sessions: SideChatSessions;
   activeThread: DesktopThreadSummary | null;
   applyRemoteTranscript: (
     threadId: string,
@@ -208,6 +172,7 @@ type UseSideChatControllerArgs = {
 };
 
 export function useSideChatController({
+  sessions,
   activeThread,
   applyRemoteTranscript,
   botGroups,
@@ -251,31 +216,26 @@ export function useSideChatController({
   transcriptMessageMatchesIntent,
   updateMessagesByThread,
 }: UseSideChatControllerArgs) {
-  const [sideComposerBySource, setSideComposerBySource] = useState<
-    Record<string, SideComposerDraft>
-  >({});
-  const [sideComposerAttachmentUploadCount, setSideComposerAttachmentUploadCount] =
-    useState(0);
-  const sideComposerAttachmentUploadPending = sideComposerAttachmentUploadCount > 0;
-  const [sideChatThreadBySource, setSideChatThreadBySource] = useState<
-    Record<string, string>
-  >({});
-  const [sideChatCreatingBySource, setSideChatCreatingBySource] = useState<
-    Record<string, boolean>
-  >({});
-  const [sideChatErrorBySource, setSideChatErrorBySource] = useState<
-    Record<string, string>
-  >({});
-  const [sideChatHistoryLoading, setSideChatHistoryLoading] = useState(false);
+  // 5b-7a: session state lives in the shell-owned store; this hook is a
+  // subscriber. The store's shadow refs feed the orchestrator/lifecycle
+  // deps unchanged.
+  const sessionsSnapshot = useSyncExternalStore(
+    sessions.subscribe,
+    sessions.getSnapshot,
+  );
+  const sideComposerBySource = sessionsSnapshot.composerBySource;
+  const sideComposerAttachmentUploadPending =
+    sessionsSnapshot.attachmentUploadCount > 0;
+  const sideChatThreadBySource = sessionsSnapshot.threadBySource;
+  const sideChatCreatingBySource = sessionsSnapshot.creatingBySource;
+  const sideChatErrorBySource = sessionsSnapshot.errorBySource;
+  const sideChatHistoryLoading = sessionsSnapshot.historyLoading;
   const sideComposerAttachmentInputRef = useRef<HTMLInputElement | null>(null);
   const sideComposerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const sideChatMessagesRef = useRef<HTMLDivElement | null>(null);
   const sideChatThreadLayoutRef = useRef<HTMLDivElement | null>(null);
-  const sideChatThreadIdRef = useRef<string | null>(null);
-  const sideChatThreadIdsRef = useRef<Set<string>>(new Set());
-  const sideChatCreationBySourceRef = useRef<
-    Record<string, Promise<string | null>>
-  >({});
+  const sideChatThreadIdRef = sessions.sideChatThreadIdRef;
+  const sideChatThreadIdsRef = sessions.sideChatThreadIdsRef;
   const sideIsComposingRef = useRef(false);
   const sideIgnoreComposerSubmitUntilRef = useRef(0);
 
@@ -294,36 +254,20 @@ export function useSideChatController({
     : emptySideComposerDraft();
 
   useEffect(() => {
-    if (!sideChatSourceThreadId) {
-      return;
+    // sessionStorage read-through for a source with no in-memory binding.
+    if (sideChatSourceThreadId) {
+      sessions.restorePersisted(sideChatSourceThreadId);
     }
-    const persistedThreadId = readPersistedSideChatThreadId(sideChatSourceThreadId);
-    if (!persistedThreadId) {
-      return;
-    }
-    setSideChatThreadBySource((current) =>
-      current[sideChatSourceThreadId]
-        ? current
-        : {
-            ...current,
-            [sideChatSourceThreadId]: persistedThreadId,
-          },
-    );
   }, [sideChatSourceThreadId]);
 
   useEffect(() => {
-    sideChatThreadIdRef.current = sideChatThreadId;
-  }, [sideChatThreadId]);
-
-  useEffect(() => {
-    sideChatThreadIdsRef.current = new Set(Object.values(sideChatThreadBySource));
-  }, [sideChatThreadBySource]);
+    // The active-source flip re-derives the sideChatThreadIdRef shadow
+    // inside the store (replacing the legacy per-render sync effects).
+    sessions.setActiveSource(sideChatSourceThreadId);
+  }, [sideChatSourceThreadId]);
 
   function rememberSideChatThreadId(threadId: string) {
-    sideChatThreadIdsRef.current = new Set([
-      ...sideChatThreadIdsRef.current,
-      threadId,
-    ]);
+    sessions.rememberSideThreadId(threadId);
   }
 
   const sideChatThreadSummary = sideChatThreadId
@@ -501,13 +445,7 @@ export function useSideChatController({
     sourceThreadId: string,
     updater: (current: SideComposerDraft) => SideComposerDraft,
   ) {
-    setSideComposerBySource((current) => {
-      const previous = current[sourceThreadId] || emptySideComposerDraft();
-      return {
-        ...current,
-        [sourceThreadId]: updater(previous),
-      };
-    });
+    sessions.updateDraft(sourceThreadId, updater);
   }
 
   function resetSideComposerAttachmentPicker() {
@@ -578,7 +516,7 @@ export function useSideChatController({
       return;
     }
 
-    setSideComposerAttachmentUploadCount((count) => count + 1);
+    sessions.beginAttachmentUpload();
     try {
       const prepared = await prepareAttachmentUploads(files);
       if (!prepared.length) {
@@ -638,7 +576,7 @@ export function useSideChatController({
           : "Failed to load attachment",
       );
     } finally {
-      setSideComposerAttachmentUploadCount((count) => count - 1);
+      sessions.endAttachmentUpload();
       resetSideComposerAttachmentPicker();
     }
   }
@@ -676,7 +614,7 @@ export function useSideChatController({
         setPendingAutomationRun(threadId, null);
       },
       hasAutomationResponse: transcriptHasAutomationResponse,
-      setHistoryLoading: setSideChatHistoryLoading,
+      setHistoryLoading: (loading) => sessions.setHistoryLoading(loading),
       setError,
     }).then(() => {
       if (cancelled || !latestTranscript) {
@@ -740,60 +678,29 @@ export function useSideChatController({
     }
 
     const existingThreadId =
-      sideChatThreadBySource[sourceThreadId] ||
-      readPersistedSideChatThreadId(sourceThreadId);
+      sessions.threadFor(sourceThreadId) ||
+      sessions.restorePersisted(sourceThreadId);
     if (existingThreadId) {
       try {
         if (await ensureThreadOpenable(existingThreadId)) {
           rememberSideChatThreadId(existingThreadId);
-          setSideChatThreadBySource((current) =>
-            current[sourceThreadId] === existingThreadId
-              ? current
-              : {
-                  ...current,
-                  [sourceThreadId]: existingThreadId,
-                },
-          );
-          setSideChatErrorBySource((current) => {
-            if (!(sourceThreadId in current)) {
-              return current;
-            }
-            const next = { ...current };
-            delete next[sourceThreadId];
-            return next;
-          });
+          sessions.rememberThread(sourceThreadId, existingThreadId);
+          sessions.setError(sourceThreadId, null);
           return existingThreadId;
         }
       } catch {
-        setSideChatThreadBySource((current) => {
-          if (current[sourceThreadId] !== existingThreadId) {
-            return current;
-          }
-          const next = { ...current };
-          delete next[sourceThreadId];
-          return next;
-        });
+        sessions.forgetThread(sourceThreadId, existingThreadId);
       }
     }
 
-    const inFlight = sideChatCreationBySourceRef.current[sourceThreadId];
+    const inFlight = sessions.creationPromiseFor(sourceThreadId);
     if (inFlight) {
       return inFlight;
     }
 
     const creation = (async () => {
-      setSideChatCreatingBySource((current) => ({
-        ...current,
-        [sourceThreadId]: true,
-      }));
-      setSideChatErrorBySource((current) => {
-        if (!(sourceThreadId in current)) {
-          return current;
-        }
-        const next = { ...current };
-        delete next[sourceThreadId];
-        return next;
-      });
+      sessions.setCreating(sourceThreadId, true);
+      sessions.setError(sourceThreadId, null);
 
       try {
         const sourceThread =
@@ -815,37 +722,23 @@ export function useSideChatController({
           [created.thread.id]: current[created.thread.id] || [],
         }));
         rememberSideChatThreadId(created.thread.id);
-        setSideChatThreadBySource((current) => ({
-          ...current,
-          [sourceThreadId]: created.thread.id,
-        }));
-        persistSideChatThreadId(sourceThreadId, created.thread.id);
+        sessions.rememberThread(sourceThreadId, created.thread.id);
         return created.thread.id;
       } catch (createError) {
         const message =
           createError instanceof Error
             ? createError.message
             : "Failed to start side chat.";
-        setSideChatErrorBySource((current) => ({
-          ...current,
-          [sourceThreadId]: message,
-        }));
+        sessions.setError(sourceThreadId, message);
         setError(message);
         return null;
       } finally {
-        setSideChatCreatingBySource((current) => {
-          if (!current[sourceThreadId]) {
-            return current;
-          }
-          const next = { ...current };
-          delete next[sourceThreadId];
-          return next;
-        });
-        delete sideChatCreationBySourceRef.current[sourceThreadId];
+        sessions.setCreating(sourceThreadId, false);
+        sessions.setCreationPromise(sourceThreadId, null);
       }
     })();
 
-    sideChatCreationBySourceRef.current[sourceThreadId] = creation;
+    sessions.setCreationPromise(sourceThreadId, creation);
     return creation;
   }
 
@@ -856,53 +749,25 @@ export function useSideChatController({
       return;
     }
 
-    setSideChatCreatingBySource((current) => ({
-      ...current,
-      [sourceThreadId]: true,
-    }));
-    setSideChatErrorBySource((current) => {
-      if (!(sourceThreadId in current)) {
-        return current;
-      }
-      const next = { ...current };
-      delete next[sourceThreadId];
-      return next;
-    });
+    sessions.setCreating(sourceThreadId, true);
+    sessions.setError(sourceThreadId, null);
 
     try {
       if (!(await ensureThreadOpenable(targetThreadId))) {
         throw new Error(`Thread not found: ${targetThreadId}`);
       }
       rememberSideChatThreadId(targetThreadId);
-      setSideChatThreadBySource((current) =>
-        current[sourceThreadId] === targetThreadId
-          ? current
-          : {
-              ...current,
-              [sourceThreadId]: targetThreadId,
-            },
-      );
-      persistSideChatThreadId(sourceThreadId, targetThreadId);
+      sessions.rememberThread(sourceThreadId, targetThreadId);
     } catch (openError) {
       const message =
         openError instanceof Error
           ? openError.message
           : `Failed to open thread: ${targetThreadId}`;
-      setSideChatErrorBySource((current) => ({
-        ...current,
-        [sourceThreadId]: message,
-      }));
+      sessions.setError(sourceThreadId, message);
       setError(message);
       throw openError;
     } finally {
-      setSideChatCreatingBySource((current) => {
-        if (!current[sourceThreadId]) {
-          return current;
-        }
-        const next = { ...current };
-        delete next[sourceThreadId];
-        return next;
-      });
+      sessions.setCreating(sourceThreadId, false);
     }
   }
 
