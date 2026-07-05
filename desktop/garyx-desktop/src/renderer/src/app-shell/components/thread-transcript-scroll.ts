@@ -8,9 +8,9 @@
 // from the automation view, and the dispatch/lifecycle orchestration
 // requests snaps regardless of the active view.
 
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useContext, useEffect, useLayoutEffect, useRef } from "react";
 
-import { useGatewayMirror } from "../../gateway-mirror/react";
+import { GatewayMirrorContext } from "../../gateway-mirror/react";
 import { messagesNearEarlierUserTurnBoundary } from "../../gateway-mirror/transcript-materialize";
 import type { ThreadHistoryPaginationState } from "../../gateway-mirror/transcript-materialize";
 import type { UiTranscriptMessage } from "../types";
@@ -101,7 +101,10 @@ export function useThreadTranscriptScroll({
   messagesRef,
   scrollIntent,
 }: UseThreadTranscriptScrollArgs): ThreadTranscriptScrollHandlers | null {
-  const mirror = useGatewayMirror();
+  // Nullable on purpose: Storybook mounts ThreadPage without the gateway
+  // provider (and without a scrollIntent). Every mirror consumer below is
+  // on a scrollIntent-gated path, so a bare mount is a complete no-op.
+  const mirror = useContext(GatewayMirrorContext);
   // Scheduler-internal state (frame/timeout bookkeeping and the force
   // budget). Viewport-local: a fresh mount starts with clean scheduling.
   const messagesStickScrollFrameRef = useRef<number | null>(null);
@@ -111,10 +114,18 @@ export function useThreadTranscriptScroll({
 
   useEffect(() => {
     return () => {
+      // Invalidate any queued runAttempt (generation guard) and cancel
+      // both scheduling channels: a post-unmount force-scroll timeout
+      // would otherwise still write the shared scroll-intent refs.
+      messagesStickScrollGenerationRef.current += 1;
       if (messagesStickScrollFrameRef.current !== null) {
         window.cancelAnimationFrame(messagesStickScrollFrameRef.current);
         messagesStickScrollFrameRef.current = null;
       }
+      for (const timeout of messagesStickScrollTimeoutsRef.current) {
+        window.clearTimeout(timeout);
+      }
+      messagesStickScrollTimeoutsRef.current = [];
     };
   }, []);
 
@@ -262,7 +273,7 @@ export function useThreadTranscriptScroll({
 
     const threadId = activeThreadMessageKey;
     const timer = window.setTimeout(() => {
-      if (scrollIntent.selectedThreadIdRef.current === threadId) {
+      if (mirror && scrollIntent.selectedThreadIdRef.current === threadId) {
         void mirror.loadOlderThreadHistoryPage(threadId);
       }
     }, 0);
@@ -366,7 +377,12 @@ export function useThreadTranscriptScroll({
     scrollIntent.shouldStickMessagesToBottomRef.current =
       messagesNearBottom(node);
     const selectedThreadId = scrollIntent.selectedThreadIdRef.current;
-    if (selectedThreadId && node && messagesNearEarlierUserTurnBoundary(node)) {
+    if (
+      mirror &&
+      selectedThreadId &&
+      node &&
+      messagesNearEarlierUserTurnBoundary(node)
+    ) {
       void mirror.loadOlderThreadHistoryPage(selectedThreadId);
     }
   }
