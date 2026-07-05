@@ -44,6 +44,21 @@ fn read_env_oauth_token() -> Option<String> {
 }
 
 async fn read_oauth_credentials() -> Result<Value, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let keychain = read_oauth_keychain().await;
+        if keychain.is_ok() {
+            return keychain;
+        }
+        return select_oauth_credentials(read_oauth_credentials_file().await, keychain);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        read_oauth_credentials_file().await
+    }
+}
+
+async fn read_oauth_credentials_file() -> Result<Value, String> {
     if let Some(home) = garyx_models::local_paths::home_dir() {
         let path = home.join(".claude").join(".credentials.json");
         if let Ok(contents) = tokio::fs::read_to_string(&path).await {
@@ -55,13 +70,54 @@ async fn read_oauth_credentials() -> Result<Value, String> {
         }
     }
 
+    Err("Claude credentials not found (~/.claude/.credentials.json missing)".to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn select_oauth_credentials(
+    file: Result<Value, String>,
+    keychain: Result<Value, String>,
+) -> Result<Value, String> {
+    keychain.or(file)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn select_oauth_credentials(
+    file: Result<Value, String>,
+    _keychain: Result<Value, String>,
+) -> Result<Value, String> {
+    file
+}
+
+#[cfg(target_os = "macos")]
+async fn read_oauth_keychain() -> Result<Value, String> {
+    let output = tokio::process::Command::new("security")
+        .args([
+            "find-generic-password",
+            "-s",
+            "Claude Code-credentials",
+            "-w",
+        ])
+        .output()
+        .await
+        .map_err(|error| format!("Claude keychain lookup failed to launch: {error}"))?;
+    if !output.status.success() {
+        return Err("Claude credentials not found in keychain".to_string());
+    }
+    let raw = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str(raw.trim())
+        .map_err(|error| format!("Claude keychain entry was not JSON: {error}"))
+}
+
+#[cfg(test)]
+fn token_source_label() -> &'static str {
     #[cfg(target_os = "macos")]
     {
-        read_oauth_keychain().await
+        "keychain"
     }
     #[cfg(not(target_os = "macos"))]
     {
-        Err("Claude credentials not found (~/.claude/.credentials.json missing)".to_string())
+        "file"
     }
 }
 
@@ -84,26 +140,6 @@ fn oauth_subscription_from_credentials(credentials: &Value) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
-}
-
-#[cfg(target_os = "macos")]
-async fn read_oauth_keychain() -> Result<Value, String> {
-    let output = tokio::process::Command::new("security")
-        .args([
-            "find-generic-password",
-            "-s",
-            "Claude Code-credentials",
-            "-w",
-        ])
-        .output()
-        .await
-        .map_err(|error| format!("Claude keychain lookup failed to launch: {error}"))?;
-    if !output.status.success() {
-        return Err("Claude credentials not found in keychain".to_string());
-    }
-    let raw = String::from_utf8_lossy(&output.stdout);
-    serde_json::from_str(raw.trim())
-        .map_err(|error| format!("Claude keychain entry was not JSON: {error}"))
 }
 
 #[cfg(test)]
@@ -185,7 +221,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn stored_credentials_reader_ignores_env_oauth_token() {
+    async fn credentials_file_reader_ignores_env_oauth_token() {
         let _lock = env_lock().lock().expect("env lock");
         let temp = tempdir().expect("temp dir");
         let claude_dir = temp.path().join(".claude");
@@ -215,9 +251,43 @@ mod tests {
         EnvRestore::remove("ANTHROPIC_AUTH_TOKEN");
         EnvRestore::remove("CLAUDE_OAUTH_TOKEN");
 
-        let (token, subscription) = read_stored_oauth_token_and_subscription().await.unwrap();
+        let credentials = read_oauth_credentials_file().await.unwrap();
+        let token = oauth_token_from_credentials(&credentials).unwrap();
+        let subscription = oauth_subscription_from_credentials(&credentials);
 
         assert_eq!(token, "file-token");
         assert_eq!(subscription.as_deref(), Some("max"));
+    }
+
+    #[test]
+    fn stored_credentials_source_priority_matches_platform() {
+        let file = json!({
+            "claudeAiOauth": {
+                "accessToken": "file-token",
+                "subscriptionType": "file-plan"
+            }
+        });
+        let keychain = json!({
+            "claudeAiOauth": {
+                "accessToken": "keychain-token",
+                "subscriptionType": "keychain-plan"
+            }
+        });
+
+        let selected = select_oauth_credentials(Ok(file), Ok(keychain)).unwrap();
+        let token = oauth_token_from_credentials(&selected).unwrap();
+        let subscription = oauth_subscription_from_credentials(&selected);
+
+        match token_source_label() {
+            "keychain" => {
+                assert_eq!(token, "keychain-token");
+                assert_eq!(subscription.as_deref(), Some("keychain-plan"));
+            }
+            "file" => {
+                assert_eq!(token, "file-token");
+                assert_eq!(subscription.as_deref(), Some("file-plan"));
+            }
+            other => panic!("unexpected token source label: {other}"),
+        }
     }
 }

@@ -40,7 +40,10 @@ use crate::event_stream_hub::EventStreamHub;
 use crate::garyx_db::GaryxDbService;
 use crate::health::HealthChecker;
 use crate::mcp_metrics::McpToolMetrics;
-use crate::recent_thread_projection::{ActiveRunProbe, BridgeActiveRunProbe, RecentThreadProjectingStore};
+use crate::provider_auth::ClaudeAuthSessionStore;
+use crate::recent_thread_projection::{
+    ActiveRunProbe, BridgeActiveRunProbe, RecentThreadProjectingStore,
+};
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
 use crate::task_projection::register_gateway_task_projection_reader;
@@ -488,6 +491,7 @@ impl AppStateBuilder {
                 app_db: self.app_db,
                 garyx_db: self.garyx_db,
                 workflow_scheduler: Arc::new(WorkflowScheduler::default()),
+                provider_auth_sessions: Arc::new(ClaudeAuthSessionStore::default()),
                 channel_endpoint_snapshot: Mutex::new(None),
                 thread_list_snapshot: Mutex::new(None),
             },
