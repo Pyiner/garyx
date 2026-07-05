@@ -18,7 +18,13 @@
 // ALSO dispatched while this panel is not mounted (dock header auto-open,
 // Tasks tab) — the panel builds the same ops context for its submit path.
 
-import { useCallback, useMemo, useRef, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+} from "react";
 
 import type {
   BrowserAnnotationCommentRequest,
@@ -72,7 +78,10 @@ import {
   ensureSideChatThread,
   type SideChatOpsContext,
 } from "../side-chat-ops";
-import { messageTailSignature } from "./thread-transcript-scroll";
+import {
+  messageTailSignature,
+  scrollMessagesToLatest,
+} from "./thread-transcript-scroll";
 import { messagesNearEarlierUserTurnBoundary } from "../../gateway-mirror/transcript-materialize";
 import type {
   BoundBot,
@@ -426,6 +435,18 @@ export function SideChatPanel({
     sideChatRenderState?.tailActivity === "thinking" ||
       sideChatShowPendingAckLoading,
   );
+
+  const sideChatMessageTailSignature = messageTailSignature(sideChatMessages);
+  useLayoutEffect(() => {
+    if (!sideChatThreadId || sideChatHistoryLoading) {
+      return;
+    }
+    scrollMessagesToLatest(sideChatMessagesRef.current);
+  }, [
+    sideChatHistoryLoading,
+    sideChatThreadId,
+    sideChatMessageTailSignature,
+  ]);
 
   function updateSideComposerDraft(
     sourceThreadId: string,

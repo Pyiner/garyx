@@ -4093,9 +4093,9 @@ export function AppShell() {
         setOpenCapsuleTabs([]);
         setPendingActiveCapsuleId(null);
       }}
-      onOpenTaskThread={(task) => {
-        void handleOpenTaskThreadInSidePanel(task.threadId);
-      }}
+      onOpenTaskThread={(task) =>
+        handleOpenTaskThreadInSidePanel(task.threadId)
+      }
       onOpenSideChat={() => {
         void ensureSideChatThreadOp(sideChatOpsContext());
       }}
