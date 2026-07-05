@@ -2924,7 +2924,15 @@ export function AppShell() {
       onAddWorkspace: handleAddWorkspaceForNewThread,
       setWorkspaceMutation,
       setDesktopState,
-      setSelectedThreadId,
+      // Draft promotion selects the created thread synchronously; sync its
+      // route in the same step (6c-2c) so the hash follows once the fold
+      // dies. sync origin — the route effect never re-opens it.
+      setSelectedThreadId: (threadId) => {
+        setSelectedThreadId(threadId);
+        if (threadId) {
+          desktopRouteStore.syncRoute({ kind: "thread", threadId });
+        }
+      },
       initializeThreadMessages: (threadId) => {
         updateMessagesByThread((current) => ({
           ...current,
@@ -3147,6 +3155,19 @@ export function AppShell() {
   }
 
   /**
+   * Selection-fallback route sync (6c-2c): deletion/removal fallbacks in
+   * the thread view converge the route the way the fold used to — a
+   * surviving selection syncs its thread route, an emptied one rests at
+   * thread-home. Callers gate on the thread view (the fold only followed
+   * the selection there). sync origin — never re-applied.
+   */
+  function syncSelectedThreadRoute(threadId: string | null) {
+    desktopRouteStore.syncRoute(
+      threadId ? { kind: "thread", threadId } : { kind: "thread-home" },
+    );
+  }
+
+  /**
    * Draft-route sync for in-draft mutations (6c-2c): agent/workflow/
    * workspace picks change the folded new-thread route, so sync it
    * directly (overrides carry the just-picked values; the rest folds from
@@ -3349,7 +3370,11 @@ export function AppShell() {
           (thread) => thread.id === selectedThreadId,
         );
         if (!selectedThreadStillExists) {
-          setSelectedThreadId(nextState.threads[0]?.id || null);
+          const fallbackId = nextState.threads[0]?.id || null;
+          setSelectedThreadId(fallbackId);
+          if (contentView === "thread") {
+            syncSelectedThreadRoute(fallbackId);
+          }
         }
       }
     } catch (removeError) {
@@ -3447,6 +3472,9 @@ export function AppShell() {
     if (deletingSelected) {
       setSelectedThreadId(fallbackThread?.id || null);
       setThreadEntrySelectionSource(null);
+      if (contentView === "thread") {
+        syncSelectedThreadRoute(fallbackThread?.id || null);
+      }
     }
     dispatchMessageState({
       type: "thread/delete",

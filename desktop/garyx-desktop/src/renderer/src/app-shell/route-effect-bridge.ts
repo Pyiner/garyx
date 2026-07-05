@@ -196,7 +196,10 @@ export function useRouteEffectBridge({
   }
 
   const applyDesktopRoute = useCallback(
-    async (route: DesktopRoute): Promise<void> => {
+    async (
+      route: DesktopRoute,
+      origin: "navigate" | "external" = "navigate",
+    ): Promise<void> => {
       switch (route.kind) {
         case "thread":
           await openExistingThread(route.threadId);
@@ -248,23 +251,37 @@ export function useRouteEffectBridge({
           // The gallery/preview split is the route itself (6c-2c);
           // nothing to apply.
           return;
-        case "thread-home":
+        case "thread-home": {
           setNewThreadDraftActive(false);
           setPendingWorkspacePath(null);
           setPendingWorkspaceMode("local");
-          setSelectedThreadId((current) =>
-            isKnownThreadId(desktopState, current)
-              ? current
-              : desktopState?.threads[0]?.id || null,
-          );
+          // The application runs synchronously on the pre-commit render, so
+          // the closure values are current (the functional updater guarded a
+          // startup race that no longer exists on this path).
+          const nextSelected = isKnownThreadId(desktopState, selectedThreadId)
+            ? selectedThreadId
+            : desktopState?.threads[0]?.id || null;
+          setSelectedThreadId(nextSelected);
+          // thread-home redirect (design contract): an INTERNAL thread-home
+          // navigation rests on the resolved selection's thread route. An
+          // external #/thread entry keeps its hash (4b no-counter-write).
+          if (origin === "navigate" && nextSelected) {
+            desktopRouteStore.syncRoute({
+              kind: "thread",
+              threadId: nextSelected,
+            });
+          }
           return;
+        }
       }
     },
     [
       desktopState,
+      desktopRouteStore,
       handleSelectAutomation,
       handleSelectSettingsTab,
       openExistingThread,
+      selectedThreadId,
     ],
   );
 
@@ -348,8 +365,18 @@ export function useRouteEffectBridge({
       if (event.origin === "sync") {
         return;
       }
+      // Narrowed copy: TS does not carry the narrowing into the closure.
+      const origin = event.origin;
       pendingRouteApplicationsRef.current += 1;
-      void applyDesktopRoute(event.route).finally(() => {
+      // Apply on a microtask, NOT synchronously inside commit(): navigate()
+      // writes its hash AFTER committing, so a synchronous application's
+      // own route sync (e.g. the thread-home redirect) would be overwritten
+      // by navigate's trailing replaceHash, leaving route and hash
+      // diverged. One microtask later navigate has fully returned; the
+      // application still reads the pre-commit render's closures.
+      void Promise.resolve()
+        .then(() => applyDesktopRoute(event.route, origin))
+        .finally(() => {
         pendingRouteApplicationsRef.current -= 1;
         if (
           event.origin === "navigate" &&
