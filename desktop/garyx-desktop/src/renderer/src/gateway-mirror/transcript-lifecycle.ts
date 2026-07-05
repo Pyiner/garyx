@@ -59,6 +59,7 @@ import type {
   RenderState,
 } from "@shared/contracts";
 import {
+  isKnownThreadId,
   mergeThread,
   teamBlocksEqual,
   threadSummariesEquivalent,
@@ -148,12 +149,6 @@ export interface TranscriptLifecycleDeps {
     forceStick?: boolean,
   ) => void;
   selectedThreadIdRef: { readonly current: string | null };
-  /**
-   * The synchronous live-stream shadow for event-path readers (the 3c-1
-   * proxy semantics): every live-stream write refreshes it right after
-   * the mirror commit.
-   */
-  liveStreamStateRef: { current: Record<string, LiveStreamState> };
   // Slice 2c: the fetch/stream lifecycle's remaining React seams.
   setError: (error: string | null) => void;
   setHistoryLoading: (loading: boolean) => void;
@@ -175,6 +170,12 @@ export interface TranscriptLifecycleDeps {
   /** Per-commit snapshots (stream recovery's gatewayUrl fallback). */
   connection: ConnectionStatus | null;
   settingsDraft: DesktopSettings;
+  desktopState: DesktopState | null;
+  /**
+   * The AppShell refresh wrapper (mirror IPC round + legacy React-state
+   * synchronization) — ensureThreadOpenable's known-thread re-check.
+   */
+  refreshDesktopState: () => Promise<DesktopState>;
   /** Selection/scroll shadows the lifecycle reads (UI-owned by design). */
   selectedThreadGenerationRef: { readonly current: number };
   lastRenderedMessageThreadRef: { readonly current: string | null };
@@ -271,16 +272,14 @@ export class TranscriptLifecycle {
     );
   }
 
-  // Live-stream writes keep the 3c-1 proxy semantics: mirror commit, then
-  // refresh the synchronous shadow.
+  // 6b-2d: the mirror's live-stream map is read directly (the AppShell
+  // shadow ref became a getter over getLiveStreamMap, so there is nothing
+  // left to feed).
   private updateLiveStreamState(
     threadId: string,
     updater: (current: LiveStreamState | null) => LiveStreamState | null,
   ): LiveStreamState | null {
-    const deps = this.requireDeps();
-    const next = this.port.updateThreadLiveStream(threadId, updater);
-    deps.liveStreamStateRef.current = this.port.getLiveStreamMap();
-    return next;
+    return this.port.updateThreadLiveStream(threadId, updater);
   }
 
   private clearLiveStreamState(threadId: string): void {
@@ -288,7 +287,7 @@ export class TranscriptLifecycle {
   }
 
   private getLiveStreamState(threadId: string): LiveStreamState | null {
-    return this.requireDeps().liveStreamStateRef.current[threadId] || null;
+    return this.port.getLiveStreamMap()[threadId] || null;
   }
 
   private applyThreadTitleUpdate(threadId: string, title: string): void {
@@ -1109,6 +1108,32 @@ export class TranscriptLifecycle {
         pendingMessagesPrependAnchorRef.current = null;
       }
     }
+  }
+
+  /**
+   * Openability gate for an existing thread id (moved verbatim from
+   * AppShell, 6b-2d): known in the current desktop state, or known after
+   * one refresh, or fetchable as a non-missing transcript (which is then
+   * accepted so the thread renders immediately once selected).
+   */
+  async ensureThreadOpenable(threadId: string): Promise<boolean> {
+    const { desktopState, refreshDesktopState } = this.requireDeps();
+    if (isKnownThreadId(desktopState, threadId)) {
+      return true;
+    }
+
+    const refreshedState = await refreshDesktopState();
+    if (isKnownThreadId(refreshedState, threadId)) {
+      return true;
+    }
+
+    const transcript = await this.port.getThreadHistoryFull(threadId);
+    if (isMissingThreadTranscript(transcript)) {
+      return false;
+    }
+
+    this.acceptRemoteTranscript(threadId, transcript);
+    return true;
   }
 
   /**

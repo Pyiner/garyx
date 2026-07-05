@@ -493,3 +493,22 @@ export function buildWorkspaceThreadRows(input: {
     };
   });
 }
+
+/**
+ * True when the desktop state already knows this thread id (threads,
+ * hidden sessions, or an automation's bound thread). Pure helper shared
+ * by the route bridge and the mirror's transcript lifecycle.
+ */
+export function isKnownThreadId(
+  state: DesktopState | null,
+  threadId: string | null,
+): boolean {
+  if (!state || !threadId) {
+    return false;
+  }
+  return (
+    state.threads.some((thread) => thread.id === threadId) ||
+    state.sessions.some((thread) => thread.id === threadId) ||
+    state.automations.some((automation) => automation.threadId === threadId)
+  );
+}

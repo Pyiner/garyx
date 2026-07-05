@@ -225,7 +225,9 @@ export class GatewayMirror {
   // the queued-batch drain. Deps are attached by the UI layer on every
   // React commit (setDispatchDeps) until the remaining seams dissolve in
   // batches 5/6.
-  private dispatchOrchestrator = new DispatchOrchestrator();
+  // The orchestrator reaches machine/live-stream/message/accept entries
+  // directly (6b-2d); the mirror is its structural MirrorPort.
+  private dispatchOrchestrator = new DispatchOrchestrator(this);
 
   // Transcript-lifecycle domain (batch 6b-2): the transport orchestration
   // that used to live in useTranscriptController — machine bookkeeping and
@@ -572,6 +574,10 @@ export class GatewayMirror {
    */
   loadOlderThreadHistoryPage(threadId: string): Promise<void> {
     return this.transcriptLifecycle.loadOlderThreadHistoryPage(threadId);
+  }
+
+  ensureThreadOpenable(threadId: string): Promise<boolean> {
+    return this.transcriptLifecycle.ensureThreadOpenable(threadId);
   }
 
   subscribeLiveStreams(listener: () => void): Unsubscribe {

@@ -198,7 +198,7 @@ function makeLegacyBindings(h) {
     updateLiveStreamState(threadId, () => null);
   }
   function getLiveStreamState(threadId) {
-    return h.liveStreamStateRef.current[threadId] || null;
+    return h.port.getLiveStreamMap()[threadId] || null;
   }
   function hasPendingHistoryIntents(threadId) {
     return Object.values(h.port.getMachineState().intentsById).some(
@@ -1063,8 +1063,8 @@ test("dual-run: lifecycle matches the legacy run-state/machine orchestration (6b
   assert.deepEqual(nextH.getDesktopState(), legacyH.getDesktopState());
   assert.deepEqual(nextH.titleDraftSyncs, legacyH.titleDraftSyncs);
   assert.deepEqual(
-    nextH.liveStreamStateRef.current,
-    legacyH.liveStreamStateRef.current,
+    nextH.port.getLiveStreamMap(),
+    legacyH.port.getLiveStreamMap(),
   );
 });
 
@@ -1208,8 +1208,8 @@ test("dual-run: lifecycle matches the legacy apply chain (6b-2b)", async () => {
   assert.deepEqual(nextH.getDesktopState(), legacyH.getDesktopState());
   assert.deepEqual(nextH.titleDraftSyncs, legacyH.titleDraftSyncs);
   assert.deepEqual(
-    nextH.liveStreamStateRef.current,
-    legacyH.liveStreamStateRef.current,
+    nextH.port.getLiveStreamMap(),
+    legacyH.port.getLiveStreamMap(),
   );
   assert.ok(
     nextH.persistTrace.length > 0,
@@ -1301,8 +1301,8 @@ test("dual-run: lifecycle matches the legacy fetch/stream lifecycle (6b-2c)", as
   );
   assert.deepEqual(nextH.getDesktopState(), legacyH.getDesktopState());
   assert.deepEqual(
-    nextH.liveStreamStateRef.current,
-    legacyH.liveStreamStateRef.current,
+    nextH.port.getLiveStreamMap(),
+    legacyH.port.getLiveStreamMap(),
   );
   // The sequence must actually exercise the load + stream + failure chain.
   assert.deepEqual(

@@ -28,6 +28,7 @@ import {
   type GatewaySettingsSource,
   type ConfiguredBot,
   type ConnectionStatus,
+  type DesktopChatStreamEvent,
   type DesktopChannelEndpoint,
   type DesktopProviderModels,
   type DesktopSettings,
@@ -45,6 +46,7 @@ import {
   type MessageImageAttachment,
   type SlashCommand,
   type ThreadRuntimeInfo,
+  type ThreadTranscript,
   type TranscriptMessage,
   type UpdateMcpServerInput,
   type UpdateSlashCommandInput,
@@ -66,6 +68,7 @@ import {
   type MessageMachineAction,
   type MessageMachineState,
   type MessageIntent,
+  type ThreadRuntimeState,
 } from "../message-machine";
 import type { SettingsTabId } from "../settings-tabs";
 import { GatewayProfileHistoryButton } from "../GatewayProfileHistoryButton";
@@ -214,15 +217,14 @@ import type { DispatchOrchestratorDeps } from "../gateway-mirror/dispatch-orches
 import { GatewayMirrorContext } from "../gateway-mirror/react";
 import { useSettingsController } from "./useSettingsController";
 import { useSideChatController } from "./useSideChatController";
+import { SELECTED_THREAD_STREAM_CONSUMER_ID } from "../gateway-mirror/transcript-lifecycle";
 import {
-  SELECTED_THREAD_STREAM_CONSUMER_ID,
   isMissingThreadTranscript,
   messagesNearEarlierUserTurnBoundary,
   normalizeMessageText,
   transcriptHasAutomationResponse,
   transcriptMessageMatchesIntent,
-  useTranscriptController,
-} from "./useTranscriptController";
+} from "../gateway-mirror/transcript-materialize";
 import { useWorkspaceController } from "./useWorkspaceController";
 import {
   compactPathLabel,
@@ -823,7 +825,14 @@ export function AppShell() {
       return gatewayMirror.getMachineState();
     },
   }));
-  const liveStreamStateRef = useRef<Record<string, LiveStreamState>>({});
+  // 6b-2d: a stable getter over the mirror's live-stream map (the 1633
+  // messageStateRef pattern) — lifecycle/orchestrator writes land in the
+  // mirror, so a fed shadow would go stale between commits.
+  const [liveStreamStateRef] = useState(() => ({
+    get current(): Record<string, LiveStreamState> {
+      return gatewayMirror.getLiveStreamMap();
+    },
+  }));
   const deferredQueueDrainByThreadRef = useRef<Record<string, boolean>>({});
   const queueDrainInFlightByThreadRef = useRef<Record<string, boolean>>({});
   const pendingAutomationRunsRef = useRef<Record<string, PendingAutomationRun>>(
@@ -1424,36 +1433,142 @@ export function AppShell() {
     selectedThreadIdRef.current = selectedThreadId;
     selectedThreadGenerationRef.current += 1;
   }, [selectedThreadId]);
-  const {
-    applyCanonicalTranscript,
-    applyRemoteTranscript,
-    clearLiveStreamState,
-    forceReleaseThreadRuntime,
-    getLiveStreamState,
-    hasPendingHistoryIntents,
-    intentForId,
-    loadOlderThreadHistoryPage,
-    messagesByThreadRef,
-    replaceLiveStreamThreadId,
-    setThreadRuntimeState,
-    startCommittedThreadStream,
-    threadTitleOverridesRef,
-    updateLiveStreamState,
-    updateMessagesByThread,
-  } = useTranscriptController({
-    activeHistoryPagination,
-    activeMessages,
+  // Batch 6b-2d: useTranscriptController dissolved into the mirror. What
+  // remains here is wiring — mirror-backed readers, thin delegates the
+  // side-chat/dispatch controllers still take as args (until their own
+  // colocation cuts), and the three transport React effects.
+  const [messagesByThreadRef] = useState(() => ({
+    get current(): MessageMap {
+      return gatewayMirror.getTranscriptMapsSnapshot()
+        .messagesByThread as MessageMap;
+    },
+  }));
+  function intentForId(intentId: string): MessageIntent | null {
+    return messageStateRef.current.intentsById[intentId] || null;
+  }
+  function setThreadRuntimeState(
+    threadId: string,
+    runtimeState: ThreadRuntimeState,
+    options?: { activeIntentId?: string; remoteRunId?: string; error?: string },
+  ) {
+    gatewayMirror.setThreadRuntimeState(threadId, runtimeState, options);
+  }
+  function hasPendingHistoryIntents(threadId: string): boolean {
+    return gatewayMirror.hasPendingHistoryIntents(threadId);
+  }
+  function updateLiveStreamState(
+    threadId: string,
+    updater: (current: LiveStreamState | null) => LiveStreamState | null,
+  ): LiveStreamState | null {
+    return gatewayMirror.updateThreadLiveStream(threadId, updater);
+  }
+  function replaceLiveStreamThreadId(fromThreadId: string, toThreadId: string) {
+    gatewayMirror.replaceLiveStreamThreadId(fromThreadId, toThreadId);
+  }
+  function clearLiveStreamState(threadId: string) {
+    updateLiveStreamState(threadId, () => null);
+  }
+  function getLiveStreamState(threadId: string): LiveStreamState | null {
+    return liveStreamStateRef.current[threadId] || null;
+  }
+  function updateMessagesByThread(
+    updater: (current: MessageMap) => MessageMap,
+  ): MessageMap {
+    return gatewayMirror.updateMessagesByThread(updater);
+  }
+  function applyCanonicalTranscript(
+    threadId: string,
+    transcript: ThreadTranscript,
+    options?: { syncRunState?: boolean },
+  ) {
+    gatewayMirror.acceptAuthoritativeTranscript(threadId, transcript, options);
+  }
+  function applyRemoteTranscript(
+    threadId: string,
+    transcript: ThreadTranscript,
+    options?: {
+      persist?: boolean;
+      syncRunState?: boolean;
+      mirrorAlreadyApplied?: boolean;
+    },
+  ) {
+    gatewayMirror.acceptRemoteTranscript(threadId, transcript, options);
+  }
+  async function loadOlderThreadHistoryPage(threadId: string) {
+    await gatewayMirror.loadOlderThreadHistoryPage(threadId);
+  }
+  function forceReleaseThreadRuntime(threadId: string) {
+    gatewayMirror.forceReleaseThreadRuntime(threadId);
+  }
+  async function startCommittedThreadStream(
+    threadId: string,
+    transcript: ThreadTranscript,
+    consumerId: string,
+  ): Promise<void> {
+    await gatewayMirror.startCommittedThreadStream(
+      threadId,
+      transcript,
+      consumerId,
+    );
+  }
+
+  useEffect(() => {
+    const listener = (event: DesktopChatStreamEvent) => {
+      // The lifecycle owns the whole pass — mirror ingest first (one
+      // atomic commit), then the machine/run-state/error side effects.
+      gatewayMirror.notifyStreamEvent(event);
+    };
+    window.garyxDesktop.subscribeChatStream(listener);
+    return () => {
+      window.garyxDesktop.unsubscribeChatStream(listener);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedThreadId || !desktopState) {
+      return;
+    }
+
+    void gatewayMirror.loadSelectedThreadTranscript(selectedThreadId);
+
+    return () => {
+      gatewayMirror.cancelSelectedThreadLoad(selectedThreadId);
+    };
+  }, [Boolean(desktopState), selectedThreadId]);
+
+  useEffect(() => {
+    if (
+      !activeThreadMessageKey ||
+      historyLoading ||
+      !activeHistoryPagination?.hasMoreBefore ||
+      activeHistoryPagination.loadingBefore
+    ) {
+      return;
+    }
+
+    const node = messagesRef.current;
+    if (!messagesNearEarlierUserTurnBoundary(node)) {
+      return;
+    }
+
+    const threadId = activeThreadMessageKey;
+    const timer = window.setTimeout(() => {
+      if (selectedThreadIdRef.current === threadId) {
+        void loadOlderThreadHistoryPage(threadId);
+      }
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [
     activeThreadMessageKey,
-    desktopState,
+    activeMessages.length,
+    activeHistoryPagination?.hasMoreBefore,
+    activeHistoryPagination?.loadingBefore,
+    activeHistoryPagination?.nextBeforeIndex,
     historyLoading,
-    liveStreamStateRef,
-    messageStateRef,
-    messagesRef,
-    mirror: gatewayMirror,
-    requestSelectedThreadMessagesBottomSnap,
-    selectedThreadId,
-    selectedThreadIdRef,
-  });
+  ]);
   // Dev-only mirror handle for CDP walkthroughs (the batch-2b parity probe
   // was deleted with the legacy dual-write in batch 6a).
   useEffect(() => {
@@ -2117,24 +2232,16 @@ export function AppShell() {
   // (the streamEventHandlerRef pattern) so orchestration entry points
   // destructure this render's values — the legacy closure capture.
   const dispatchOrchestratorDeps: DispatchOrchestratorDeps = {
-    applyCanonicalTranscript,
     canSteerQueuedPrompt,
     checkConnection: () => window.garyxDesktop.checkConnection(),
-    clearLiveStreamState,
     connection,
     desktopAgents,
     desktopState,
-    dispatchMessageState,
-    getLiveStreamState,
     getThreadHistory: (threadId) =>
       window.garyxDesktop.getThreadHistory(threadId),
-    hasPendingHistoryIntents,
     inferProviderTypeForThread,
-    intentForId,
     interruptThread: (threadId) =>
       window.garyxDesktop.interruptThread(threadId),
-    messageStateRef,
-    messagesByThreadRef,
     openChatStream: (input) => window.garyxDesktop.openChatStream(input),
     recordGatewayStatusObservation,
     requestMessagesBottomSnap,
@@ -2144,13 +2251,9 @@ export function AppShell() {
     setConnection,
     setDesktopState,
     setError,
-    setThreadRuntimeState,
     settingsDraft,
     sideChatThreadIdsRef,
     threadInfoByThread,
-    threadTitleOverridesRef,
-    updateLiveStreamState,
-    updateMessagesByThread,
   };
   useEffect(() => {
     gatewayMirror.setDispatchDeps(dispatchOrchestratorDeps);
@@ -2167,7 +2270,6 @@ export function AppShell() {
       },
       requestSelectedThreadMessagesBottomSnap,
       selectedThreadIdRef,
-      liveStreamStateRef,
       setError,
       setHistoryLoading,
       setPendingAutomationRun,
@@ -2176,6 +2278,8 @@ export function AppShell() {
       scheduleHistoryRefresh,
       connection,
       settingsDraft,
+      desktopState,
+      refreshDesktopState,
       selectedThreadGenerationRef,
       lastRenderedMessageThreadRef,
       messagesRef,
@@ -2412,23 +2516,11 @@ export function AppShell() {
     return result;
   }
 
+  // Batch 6b-2d: the openability gate lives in the mirror's transcript
+  // lifecycle (with loadSelectedThreadTranscript it fulfills the parent
+  // design's mirror.openThread contract; route semantics stay here).
   async function ensureThreadOpenable(threadId: string): Promise<boolean> {
-    if (isKnownThreadId(desktopState, threadId)) {
-      return true;
-    }
-
-    const refreshedState = await refreshDesktopState();
-    if (isKnownThreadId(refreshedState, threadId)) {
-      return true;
-    }
-
-    const transcript = await window.garyxDesktop.getThreadHistory(threadId);
-    if (isMissingThreadTranscript(transcript)) {
-      return false;
-    }
-
-    applyRemoteTranscript(threadId, transcript);
-    return true;
+    return gatewayMirror.ensureThreadOpenable(threadId);
   }
 
   async function openExistingThread(

@@ -24,19 +24,8 @@ import type { DesktopRoute } from "./desktop-route";
 import type { DesktopRouteStore } from "./desktop-route-store";
 import type { ContentView } from "./types";
 
-export function isKnownThreadId(
-  state: DesktopState | null,
-  threadId: string | null,
-): boolean {
-  if (!state || !threadId) {
-    return false;
-  }
-  return (
-    state.threads.some((thread) => thread.id === threadId) ||
-    state.sessions.some((thread) => thread.id === threadId) ||
-    state.automations.some((automation) => automation.threadId === threadId)
-  );
-}
+import { isKnownThreadId } from "../thread-model";
+export { isKnownThreadId };
 
 const DEEP_LINK_GATEWAY_RETRY_DELAYS_MS = [0, 300, 650, 1_100, 1_700, 2_500];
 

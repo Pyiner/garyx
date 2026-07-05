@@ -82,13 +82,17 @@ export type SeededTurn = {
  * closures. Function members are stable-composition (they read refs or
  * call setState); value members are per-commit snapshots.
  */
-export interface DispatchOrchestratorDeps {
-  // Message machine (mirror-owned storage since 3a; dispatch goes through
-  // the AppShell proxy so the legacy messageStateRef shadow stays warm).
-  dispatchMessageState: (action: MessageMachineAction) => void;
-  intentForId: (intentId: string) => MessageIntent | null;
-  messageStateRef: { current: MessageMachineState };
-  setThreadRuntimeState: (
+/**
+ * The mirror-internal surface the dispatch orchestration reaches directly
+ * (batch 6b-2d: the machine, live-stream, message, and transcript-accept
+ * entries that used to arrive as React-fed deps). The GatewayMirror
+ * implements it structurally; keeping it narrow keeps the module
+ * node-testable against stubs.
+ */
+export interface DispatchOrchestratorMirrorPort {
+  dispatchMachineAction(action: MessageMachineAction): MessageMachineState;
+  getMachineState(): MessageMachineState;
+  setThreadRuntimeState(
     threadId: string,
     runtimeState: ThreadRuntimeState,
     options?: {
@@ -96,30 +100,26 @@ export interface DispatchOrchestratorDeps {
       remoteRunId?: string;
       error?: string;
     },
-  ) => void;
-  hasPendingHistoryIntents: (threadId: string) => boolean;
-
-  // Live stream (mirror-owned storage since 3c-1, via the ref-feeding
-  // transcript-controller proxies).
-  updateLiveStreamState: (
+  ): void;
+  hasPendingHistoryIntents(threadId: string): boolean;
+  updateThreadLiveStream(
     threadId: string,
     updater: (current: LiveStreamState | null) => LiveStreamState | null,
-  ) => LiveStreamState | null;
-  clearLiveStreamState: (threadId: string) => void;
-  getLiveStreamState: (threadId: string) => LiveStreamState | null;
-
-  // Messages (legacy compute-owner until 3d; batch 3b bridges the result
-  // into the mirror).
-  updateMessagesByThread: (
+  ): LiveStreamState | null;
+  getLiveStreamMap(): Record<string, LiveStreamState>;
+  updateMessagesByThread(
     updater: (current: MessageMap) => MessageMap,
-  ) => MessageMap;
-  messagesByThreadRef: { current: MessageMap };
-
-  // Transcript conveyance.
-  applyCanonicalTranscript: (
+  ): MessageMap;
+  getTranscriptMapsSnapshot(): { messagesByThread: Record<string, readonly UiTranscriptMessage[]> };
+  acceptAuthoritativeTranscript(
     threadId: string,
     transcript: ThreadTranscript,
-  ) => void;
+  ): void;
+  getThreadTitleOverrides(): Record<string, string>;
+}
+
+export interface DispatchOrchestratorDeps {
+  // Transcript conveyance.
   scheduleHistoryRefresh: (
     threadId: string,
     attempts?: number,
@@ -141,7 +141,6 @@ export interface DispatchOrchestratorDeps {
     threadId: string | null | undefined,
     forceStick?: boolean,
   ) => void;
-  threadTitleOverridesRef: { current: Record<string, string> };
   sideChatThreadIdsRef: { current: Set<string> };
 
   // Per-commit value snapshots.
@@ -220,10 +219,33 @@ export function presentProviderReadyError(
 }
 
 export class DispatchOrchestrator {
+  private port: DispatchOrchestratorMirrorPort;
   private deps: DispatchOrchestratorDeps | null = null;
+
+  constructor(port: DispatchOrchestratorMirrorPort) {
+    this.port = port;
+  }
 
   setDeps(deps: DispatchOrchestratorDeps): void {
     this.deps = deps;
+  }
+
+  // Batch 6b-2d verbatim shims: the legacy deps-fed helpers, now reading
+  // the mirror directly (the AppShell proxies carried these exact bodies).
+  private dispatchMessageState(action: MessageMachineAction): void {
+    this.port.dispatchMachineAction(action);
+  }
+
+  private intentForId(intentId: string): MessageIntent | null {
+    return this.port.getMachineState().intentsById[intentId] || null;
+  }
+
+  private getLiveStreamState(threadId: string): LiveStreamState | null {
+    return this.port.getLiveStreamMap()[threadId] || null;
+  }
+
+  private clearLiveStreamState(threadId: string): void {
+    this.port.updateThreadLiveStream(threadId, () => null);
   }
 
   private requireDeps(): DispatchOrchestratorDeps {
@@ -236,8 +258,7 @@ export class DispatchOrchestrator {
   }
 
   queueIntentIdsForThread(threadId: string): string[] {
-    const { messageStateRef } = this.requireDeps();
-    return selectQueueIntentIds(messageStateRef.current, threadId);
+    return selectQueueIntentIds(this.port.getMachineState(), threadId);
   }
 
   appendSeededTurn(
@@ -247,11 +268,10 @@ export class DispatchOrchestrator {
       seedUserBubble?: boolean;
     },
   ): SeededTurn {
-    const { messagesByThreadRef, updateMessagesByThread } = this.requireDeps();
     const seedUserBubble = options?.seedUserBubble ?? true;
     const userMessage = seededUserBubble(intent);
     const legacyPendingAssistant =
-      (messagesByThreadRef.current[threadId] || []).find(
+      ((this.port.getTranscriptMapsSnapshot().messagesByThread as MessageMap)[threadId] || []).find(
         (entry) =>
           entry.role === "assistant" &&
           entry.pending &&
@@ -259,7 +279,7 @@ export class DispatchOrchestrator {
       ) || null;
 
     if (seedUserBubble) {
-      updateMessagesByThread((current) => {
+      this.port.updateMessagesByThread((current) => {
         const existing = current[threadId] || [];
         const hasUserMessage = existing.some((entry) => {
           return entry.role === "user" && entry.intentId === intent.intentId;
@@ -281,14 +301,13 @@ export class DispatchOrchestrator {
   }
 
   shiftQueuedIntent(threadId: string): MessageIntent | null {
-    const { dispatchMessageState, intentForId } = this.requireDeps();
     const [nextIntentId] = this.queueIntentIdsForThread(threadId);
     if (!nextIntentId) {
       return null;
     }
-    const intent = intentForId(nextIntentId);
+    const intent = this.intentForId(nextIntentId);
     if (!intent) {
-      dispatchMessageState({
+      this.dispatchMessageState({
         type: "intent/cancelled",
         threadId,
         intentId: nextIntentId,
@@ -308,30 +327,20 @@ export class DispatchOrchestrator {
   ): Promise<boolean> {
     const deps = this.requireDeps();
     const {
-      applyCanonicalTranscript,
-      clearLiveStreamState,
       connection,
       desktopAgents,
       desktopState,
-      dispatchMessageState,
-      getLiveStreamState,
       inferProviderTypeForThread,
-      intentForId,
-      messagesByThreadRef,
       recordGatewayStatusObservation,
       requestMessagesBottomSnap,
       scheduleHistoryRefresh,
       setDesktopState,
       setError,
-      setThreadRuntimeState,
       settingsDraft,
       sideChatThreadIdsRef,
       threadInfoByThread,
-      threadTitleOverridesRef,
-      updateLiveStreamState,
-      updateMessagesByThread,
     } = deps;
-    const intent = intentForId(intentId);
+    const intent = this.intentForId(intentId);
     if (!intent) {
       return false;
     }
@@ -339,18 +348,18 @@ export class DispatchOrchestrator {
     const { assistantEntryId, legacyPendingAssistantId } =
       options?.seededTurn || this.appendSeededTurn(threadId, intent, options);
 
-    dispatchMessageState({
+    this.dispatchMessageState({
       type: "intent/dispatch-started",
       intentId: intent.intentId,
     });
-    dispatchMessageState({
+    this.dispatchMessageState({
       type: "intent/awaiting-response",
       intentId: intent.intentId,
     });
-    setThreadRuntimeState(threadId, "dispatching_sync", {
+    this.port.setThreadRuntimeState(threadId, "dispatching_sync", {
       activeIntentId: intent.intentId,
     });
-    updateLiveStreamState(threadId, () => ({
+    this.port.updateThreadLiveStream(threadId, () => ({
       threadId,
       activeIntentId: intent.intentId,
       assistantEntryId,
@@ -371,7 +380,7 @@ export class DispatchOrchestrator {
       });
       const resultThreadId = result.threadId || result.sessionId || threadId;
       if (result.status === "accepted") {
-        updateLiveStreamState(resultThreadId, (current) =>
+        this.port.updateThreadLiveStream(resultThreadId, (current) =>
           current
             ? {
                 ...current,
@@ -387,7 +396,7 @@ export class DispatchOrchestrator {
                 streamStatus: "connecting",
               },
         );
-        const latestIntent = intentForId(intent.intentId);
+        const latestIntent = this.intentForId(intent.intentId);
         if (
           latestIntent &&
           ![
@@ -397,7 +406,7 @@ export class DispatchOrchestrator {
             "completed",
           ].includes(latestIntent.state)
         ) {
-          dispatchMessageState({
+          this.dispatchMessageState({
             type: "intent/remote-accepted",
             intentId: intent.intentId,
             runId: result.runId,
@@ -409,7 +418,7 @@ export class DispatchOrchestrator {
           if (!current) {
             return current;
           }
-          const titleOverride = threadTitleOverridesRef.current[resultThreadId];
+          const titleOverride = this.port.getThreadTitleOverrides()[resultThreadId];
           const resultThread = titleOverride
             ? { ...result.thread, title: titleOverride }
             : result.thread;
@@ -422,9 +431,9 @@ export class DispatchOrchestrator {
         scheduleHistoryRefresh(resultThreadId, 2, 1200, false);
         return true;
       }
-      const liveState = getLiveStreamState(resultThreadId);
+      const liveState = this.getLiveStreamState(resultThreadId);
       if (!liveState?.runId && result.runId) {
-        updateLiveStreamState(resultThreadId, (current) =>
+        this.port.updateThreadLiveStream(resultThreadId, (current) =>
           current
             ? {
                 ...current,
@@ -448,7 +457,7 @@ export class DispatchOrchestrator {
           "Waiting to sync with gateway…",
         );
       }
-      const latestIntent = intentForId(intent.intentId);
+      const latestIntent = this.intentForId(intent.intentId);
       if (
         latestIntent &&
         ![
@@ -458,7 +467,7 @@ export class DispatchOrchestrator {
           "completed",
         ].includes(latestIntent.state)
       ) {
-        dispatchMessageState({
+        this.dispatchMessageState({
           type: "intent/remote-accepted",
           intentId: intent.intentId,
           runId: result.runId,
@@ -467,12 +476,12 @@ export class DispatchOrchestrator {
           removeFromQueue: false,
         });
       }
-      dispatchMessageState({
+      this.dispatchMessageState({
         type: "intent/awaiting-history",
         intentId: intent.intentId,
         responseText: result.response,
       });
-      setThreadRuntimeState(threadId, "reconciling_history", {
+      this.port.setThreadRuntimeState(threadId, "reconciling_history", {
         activeIntentId: intent.intentId,
         remoteRunId: result.runId,
       });
@@ -481,7 +490,7 @@ export class DispatchOrchestrator {
         if (!current) {
           return current;
         }
-        const titleOverride = threadTitleOverridesRef.current[resultThreadId];
+        const titleOverride = this.port.getThreadTitleOverrides()[resultThreadId];
         const resultThread = titleOverride
           ? { ...result.thread, title: titleOverride }
           : result.thread;
@@ -505,7 +514,7 @@ export class DispatchOrchestrator {
 
       const transcript =
         await deps.getThreadHistory(resultThreadId);
-      const intentSnapshot = intentForId(intent.intentId) || {
+      const intentSnapshot = this.intentForId(intent.intentId) || {
         ...intent,
         responseText: result.response,
       };
@@ -520,14 +529,14 @@ export class DispatchOrchestrator {
         (match.assistantVisible ||
           normalizeMessageText(result.response).length === 0)
       ) {
-        applyCanonicalTranscript(resultThreadId, transcript);
+        this.port.acceptAuthoritativeTranscript(resultThreadId, transcript);
       } else {
         if (
           legacyPendingAssistantId &&
           !result.response &&
           result.status === "completed"
         ) {
-          updateMessagesByThread((current) => ({
+          this.port.updateMessagesByThread((current) => ({
             ...current,
             [resultThreadId]: (current[resultThreadId] || []).filter(
               (entry) => {
@@ -542,7 +551,7 @@ export class DispatchOrchestrator {
         scheduleHistoryRefresh(resultThreadId, 4, 1200, true);
       }
 
-      clearLiveStreamState(resultThreadId);
+      this.clearLiveStreamState(resultThreadId);
 
       return true;
     } catch (sendError) {
@@ -564,10 +573,10 @@ export class DispatchOrchestrator {
       const errorState: TranscriptEntryState = interrupted
         ? "interrupted"
         : "error";
-      const liveState = getLiveStreamState(threadId);
+      const liveState = this.getLiveStreamState(threadId);
       const failedIntentId = liveState?.activeIntentId || intent.intentId;
       const recoveryResult = reconcileAssistantEntriesForGatewayRecovery(
-        messagesByThreadRef.current[threadId] || [],
+        (this.port.getTranscriptMapsSnapshot().messagesByThread as MessageMap)[threadId] || [],
         failedIntentId,
         [legacyPendingAssistantId, liveState?.assistantEntryId],
       );
@@ -585,17 +594,17 @@ export class DispatchOrchestrator {
           },
           "Waiting to sync with gateway…",
         );
-        clearLiveStreamState(threadId);
-        dispatchMessageState({
+        this.clearLiveStreamState(threadId);
+        this.dispatchMessageState({
           type: "intent/awaiting-history",
           intentId: failedIntentId,
           responseText: intent.responseText,
         });
-        setThreadRuntimeState(threadId, "reconciling_history", {
+        this.port.setThreadRuntimeState(threadId, "reconciling_history", {
           activeIntentId: failedIntentId,
           remoteRunId: liveState?.runId,
         });
-        updateMessagesByThread((current) => ({
+        this.port.updateMessagesByThread((current) => ({
           ...current,
           [threadId]: reconcileAssistantEntriesForGatewayRecovery(
             current[threadId] || [],
@@ -607,18 +616,18 @@ export class DispatchOrchestrator {
         return true;
       }
 
-      clearLiveStreamState(threadId);
+      this.clearLiveStreamState(threadId);
       setError(message);
-      dispatchMessageState({
+      this.dispatchMessageState({
         type: interrupted ? "intent/interrupted" : "intent/failed",
         intentId: failedIntentId,
         ...(interrupted ? { error: message } : { error: message }),
       });
-      setThreadRuntimeState(threadId, interrupted ? "interrupting" : "failed", {
+      this.port.setThreadRuntimeState(threadId, interrupted ? "interrupting" : "failed", {
         activeIntentId: failedIntentId,
         error: message,
       });
-      updateMessagesByThread((current) => ({
+      this.port.updateMessagesByThread((current) => ({
         ...current,
         [threadId]: (() => {
           const existing = current[threadId] || [];
@@ -682,10 +691,6 @@ export class DispatchOrchestrator {
   async runQueuedBatch(threadId: string, initialIntentId?: string): Promise<void> {
     const deps = this.requireDeps();
     const {
-      dispatchMessageState,
-      hasPendingHistoryIntents,
-      intentForId,
-      messageStateRef,
       setConnection,
       setError,
     } = deps;
@@ -711,7 +716,7 @@ export class DispatchOrchestrator {
             break;
           }
           seededTurn = this.appendSeededTurn(threadId, currentQueuedIntent);
-          dispatchMessageState({
+          this.dispatchMessageState({
             type: "intent/request-dispatch",
             threadId,
             intentId: nextIntentId,
@@ -728,25 +733,25 @@ export class DispatchOrchestrator {
         });
         if (!didSucceed) {
           if (dispatchedFromQueue) {
-            dispatchMessageState({
+            this.dispatchMessageState({
               type: "intent/requeue-front",
               threadId,
               intentId: nextIntentId,
               source: "queue_send",
-              error: intentForId(nextIntentId)?.error,
+              error: this.intentForId(nextIntentId)?.error,
             });
           }
           break;
         }
-        const runtime = selectThreadRuntime(messageStateRef.current, threadId);
+        const runtime = selectThreadRuntime(this.port.getMachineState(), threadId);
         if (runtime && isRuntimeBusy(runtime.state)) {
           break;
         }
         nextIntentId = "";
       }
     } finally {
-      if (!hasPendingHistoryIntents(threadId)) {
-        dispatchMessageState({
+      if (!this.port.hasPendingHistoryIntents(threadId)) {
+        this.dispatchMessageState({
           type: "thread/clear",
           threadId,
         });
@@ -763,13 +768,8 @@ export class DispatchOrchestrator {
     const deps = this.requireDeps();
     const {
       canSteerQueuedPrompt,
-      dispatchMessageState,
-      getLiveStreamState,
-      intentForId,
-      messageStateRef,
       requestMessagesBottomSnap,
       setError,
-      updateLiveStreamState,
     } = deps;
     const threadId = latestIntent.threadId;
     if (!(options?.canSteer ?? canSteerQueuedPrompt)) {
@@ -779,7 +779,7 @@ export class DispatchOrchestrator {
       return;
     }
 
-    dispatchMessageState({
+    this.dispatchMessageState({
       type: "intent/request-dispatch",
       threadId: threadId,
       intentId: latestIntent.intentId,
@@ -787,7 +787,7 @@ export class DispatchOrchestrator {
       source: "queue_steer",
       removeFromQueue: false,
     });
-    dispatchMessageState({
+    this.dispatchMessageState({
       type: "intent/dispatch-started",
       intentId: latestIntent.intentId,
     });
@@ -795,10 +795,10 @@ export class DispatchOrchestrator {
     setError(null);
     requestMessagesBottomSnap(threadId, true);
     const optimisticRunId =
-      getLiveStreamState(threadId)?.runId ||
-      selectThreadRuntime(messageStateRef.current, threadId)?.remoteRunId ||
+      this.getLiveStreamState(threadId)?.runId ||
+      selectThreadRuntime(this.port.getMachineState(), threadId)?.remoteRunId ||
       `stream:${threadId}`;
-    updateLiveStreamState(threadId, (current) => {
+    this.port.updateThreadLiveStream(threadId, (current) => {
       const pendingAckIntentIds = current?.pendingAckIntentIds || [];
       return {
         threadId,
@@ -823,14 +823,14 @@ export class DispatchOrchestrator {
       const resultThreadId = result.threadId || result.sessionId || threadId;
       if (result.status === "queued") {
         const activeRunId =
-          getLiveStreamState(resultThreadId)?.runId ||
-          selectThreadRuntime(messageStateRef.current, resultThreadId)
+          this.getLiveStreamState(resultThreadId)?.runId ||
+          selectThreadRuntime(this.port.getMachineState(), resultThreadId)
             ?.remoteRunId ||
           `stream:${resultThreadId}`;
-        const intentBeforeAccept = intentForId(latestIntent.intentId);
+        const intentBeforeAccept = this.intentForId(latestIntent.intentId);
         const shouldTrackProviderAck =
           shouldTrackProviderAckAfterStreamInputResponse(intentBeforeAccept);
-        dispatchMessageState({
+        this.dispatchMessageState({
           type: "intent/remote-accepted",
           intentId: latestIntent.intentId,
           runId: activeRunId,
@@ -839,7 +839,7 @@ export class DispatchOrchestrator {
           removeFromQueue: true,
           awaitProviderAck: true,
         });
-        updateLiveStreamState(resultThreadId, (current) => ({
+        this.port.updateThreadLiveStream(resultThreadId, (current) => ({
           threadId: resultThreadId,
           runId: current?.runId || activeRunId,
           activeIntentId: current?.activeIntentId,
@@ -856,7 +856,7 @@ export class DispatchOrchestrator {
         return;
       }
 
-      updateLiveStreamState(threadId, (current) =>
+      this.port.updateThreadLiveStream(threadId, (current) =>
         current
           ? {
               ...current,
@@ -866,7 +866,7 @@ export class DispatchOrchestrator {
             }
           : current,
       );
-      dispatchMessageState({
+      this.dispatchMessageState({
         type: "intent/request-dispatch",
         threadId: threadId,
         intentId: latestIntent.intentId,
@@ -874,7 +874,7 @@ export class DispatchOrchestrator {
         source: "queue_steer",
         removeFromQueue: true,
       });
-      dispatchMessageState({
+      this.dispatchMessageState({
         type: "intent/dispatch-started",
         intentId: latestIntent.intentId,
       });
@@ -882,16 +882,16 @@ export class DispatchOrchestrator {
         seedUserBubble: true,
       });
       if (!didSucceed) {
-        dispatchMessageState({
+        this.dispatchMessageState({
           type: "intent/requeue-front",
           threadId: threadId,
           intentId: latestIntent.intentId,
           source: "queue_steer",
-          error: intentForId(latestIntent.intentId)?.error,
+          error: this.intentForId(latestIntent.intentId)?.error,
         });
       }
     } catch (steerError) {
-      updateLiveStreamState(threadId, (current) =>
+      this.port.updateThreadLiveStream(threadId, (current) =>
         current
           ? {
               ...current,
@@ -906,7 +906,7 @@ export class DispatchOrchestrator {
           ? steerError.message
           : "Failed to steer follow-up";
       setError(message);
-      dispatchMessageState({
+      this.dispatchMessageState({
         type: "intent/requeue-front",
         threadId: threadId,
         intentId: latestIntent.intentId,
@@ -921,12 +921,11 @@ export class DispatchOrchestrator {
     intentIds: string[],
     activeAssistantEntryId?: string | null,
   ): void {
-    const { updateMessagesByThread } = this.requireDeps();
     if (!intentIds.length) {
       return;
     }
     const interruptedIntentIds = new Set(intentIds);
-    updateMessagesByThread((current) => ({
+    this.port.updateMessagesByThread((current) => ({
       ...current,
       [threadId]: (current[threadId] || []).map((entry) => {
         if (
@@ -970,24 +969,19 @@ export class DispatchOrchestrator {
   async interruptThread(threadId: string | null | undefined): Promise<void> {
     const deps = this.requireDeps();
     const {
-      clearLiveStreamState,
-      dispatchMessageState,
-      getLiveStreamState,
-      messageStateRef,
       scheduleHistoryRefresh,
       setConnection,
-      setThreadRuntimeState,
     } = deps;
     if (!threadId) {
       return;
     }
 
-    const runtime = selectThreadRuntime(messageStateRef.current, threadId);
+    const runtime = selectThreadRuntime(this.port.getMachineState(), threadId);
     const hasLocalBusyRuntime = Boolean(
       runtime && isRuntimeBusy(runtime.state),
     );
     if (runtime && hasLocalBusyRuntime) {
-      const liveState = getLiveStreamState(threadId);
+      const liveState = this.getLiveStreamState(threadId);
       const interruptedIntentIds = [
         runtime.activeIntentId,
         ...(liveState?.pendingAckIntentIds || []),
@@ -995,12 +989,12 @@ export class DispatchOrchestrator {
         return Boolean(intentId) && intents.indexOf(intentId) === index;
       });
 
-      setThreadRuntimeState(threadId, "interrupting", {
+      this.port.setThreadRuntimeState(threadId, "interrupting", {
         activeIntentId: runtime.activeIntentId,
         remoteRunId: runtime.remoteRunId,
       });
       for (const intentId of interruptedIntentIds) {
-        dispatchMessageState({
+        this.dispatchMessageState({
           type: "intent/interrupted",
           intentId,
           error: "request interrupted",
@@ -1015,8 +1009,8 @@ export class DispatchOrchestrator {
 
     await deps.interruptThread(threadId);
     if (hasLocalBusyRuntime) {
-      clearLiveStreamState(threadId);
-      dispatchMessageState({
+      this.clearLiveStreamState(threadId);
+      this.dispatchMessageState({
         type: "thread/clear",
         threadId: threadId,
       });

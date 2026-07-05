@@ -158,13 +158,18 @@ function makeSide(name, script, options = {}) {
     dispatchMachineAction(action);
   };
 
-  const deps = {
-    dispatchMessageState,
-    intentForId: (intentId) =>
-      messageStateRef.current.intentsById[intentId] || null,
-    messageStateRef,
-    setThreadRuntimeState: (threadId, runtimeState, opts) => {
-      dispatchMessageState({
+  // 6b-2d: the machine/live-stream/message/accept surface moved off the
+  // deps and onto the MirrorPort; both sides get a RECORDING port so the
+  // dual-run trace comparison stays step-by-step symmetric.
+  const port = {
+    dispatchMachineAction(action) {
+      record("action", { action });
+      dispatchMachineAction(action);
+      return messageStateRef.current;
+    },
+    getMachineState: () => messageStateRef.current,
+    setThreadRuntimeState(threadId, runtimeState, opts) {
+      port.dispatchMachineAction({
         type: "thread/runtime",
         threadId,
         runtimeState,
@@ -186,7 +191,7 @@ function makeSide(name, script, options = {}) {
           ].includes(intent.state)
         );
       }),
-    updateLiveStreamState: (threadId, updater) => {
+    updateThreadLiveStream(threadId, updater) {
       const next = liveStream.update(threadId, updater);
       record("liveStream", {
         threadId,
@@ -196,38 +201,40 @@ function makeSide(name, script, options = {}) {
       });
       return next;
     },
-    clearLiveStreamState: (threadId) => {
-      liveStream.clear(threadId);
-      record("liveStream", { threadId, status: null, runId: null, pendingAck: null });
-    },
-    getLiveStreamState: (threadId) => liveStream.get(threadId),
-    updateMessagesByThread: (updater) => {
+    getLiveStreamMap: () => liveStream.ref.current,
+    updateMessagesByThread(updater) {
       const next = updater(messagesByThreadRef.current);
       messagesByThreadRef.current = next;
       record("messages", { map: next });
       return next;
     },
-    messagesByThreadRef,
-    applyCanonicalTranscript: (threadId, transcript) => {
+    getTranscriptMapsSnapshot: () => ({
+      messagesByThread: messagesByThreadRef.current,
+    }),
+    acceptAuthoritativeTranscript(threadId, transcript) {
       record("applyCanonicalTranscript", {
         threadId,
         messageCount: transcript.messages.length,
       });
-      // Mimic the production reconciliation the transcript controller runs
-      // synchronously inside applyCanonicalTranscript: echoed intents
+      // Mimic the production reconciliation the transcript lifecycle runs
+      // synchronously inside acceptAuthoritativeTranscript: echoed intents
       // complete and the settled thread runtime clears (markIntentsFromHistory
       // + thread/clear). Without this, the drain's busy check would stop
       // after the first queued send.
       for (const message of transcript.messages) {
         if (typeof message.id === "string" && message.id.startsWith("origin:")) {
-          dispatchMessageState({
+          port.dispatchMachineAction({
             type: "intent/completed",
             intentId: message.id.slice("origin:".length),
           });
         }
       }
-      dispatchMessageState({ type: "thread/clear", threadId });
+      port.dispatchMachineAction({ type: "thread/clear", threadId });
     },
+    getThreadTitleOverrides: () => options.titleOverrides || {},
+  };
+
+  const deps = {
     scheduleHistoryRefresh: (threadId, attempts, delayMs, canonical) => {
       record("scheduleHistoryRefresh", { threadId, attempts, delayMs, canonical });
     },
@@ -253,7 +260,6 @@ function makeSide(name, script, options = {}) {
     requestMessagesBottomSnap: (threadId, forceStick) => {
       record("bottomSnap", { threadId, forceStick });
     },
-    threadTitleOverridesRef: { current: options.titleOverrides || {} },
     sideChatThreadIdsRef: { current: options.sideChatThreadIds || new Set() },
     connection: connectionStatus(),
     settingsDraft: { gatewayUrl: GATEWAY_URL, followUpBehavior: "queue" },
@@ -302,35 +308,22 @@ function makeSide(name, script, options = {}) {
     },
   };
 
-  let run;
-  if (name === "mirror") {
-    mirror.setDispatchDeps(deps);
-    run = {
-      appendSeededTurn: (threadId, intent, opts) =>
-        mirror.appendSeededTurn(threadId, intent, opts),
-      sendIntentOnce: (threadId, intentId, opts) =>
-        mirror.sendIntentOnce(threadId, intentId, opts),
-      runQueuedBatch: (threadId, initialIntentId) =>
-        mirror.runQueuedBatch(threadId, initialIntentId),
-      steerQueuedIntent: (intent, opts) =>
-        mirror.steerQueuedIntent(intent, opts),
-      interruptThread: (threadId) => mirror.interruptThread(threadId),
-    };
-  } else {
-    const orchestrator = new DispatchOrchestrator();
-    orchestrator.setDeps(deps);
-    run = {
-      appendSeededTurn: (threadId, intent, opts) =>
-        orchestrator.appendSeededTurn(threadId, intent, opts),
-      sendIntentOnce: (threadId, intentId, opts) =>
-        orchestrator.sendIntentOnce(threadId, intentId, opts),
-      runQueuedBatch: (threadId, initialIntentId) =>
-        orchestrator.runQueuedBatch(threadId, initialIntentId),
-      steerQueuedIntent: (intent, opts) =>
-        orchestrator.steerQueuedIntent(intent, opts),
-      interruptThread: (threadId) => orchestrator.interruptThread(threadId),
-    };
-  }
+  // Both sides drive a standalone orchestrator over their recording port
+  // (the "mirror" side's port forwards into a real GatewayMirror's machine
+  // and live-stream storage; the legacy side replays the reducer shapes).
+  const orchestrator = new DispatchOrchestrator(port);
+  orchestrator.setDeps(deps);
+  const run = {
+    appendSeededTurn: (threadId, intent, opts) =>
+      orchestrator.appendSeededTurn(threadId, intent, opts),
+    sendIntentOnce: (threadId, intentId, opts) =>
+      orchestrator.sendIntentOnce(threadId, intentId, opts),
+    runQueuedBatch: (threadId, initialIntentId) =>
+      orchestrator.runQueuedBatch(threadId, initialIntentId),
+    steerQueuedIntent: (intent, opts) =>
+      orchestrator.steerQueuedIntent(intent, opts),
+    interruptThread: (threadId) => orchestrator.interruptThread(threadId),
+  };
 
   return {
     deps,
@@ -848,11 +841,14 @@ test("dual-run: interrupting an idle thread still reaches the gateway", async ()
   assert.ok(!actionTypes.includes("thread/clear"));
 });
 
-test("orchestrator methods throw before deps are attached", async () => {
-  const orchestrator = new DispatchOrchestrator();
-  assert.throws(() => orchestrator.queueIntentIdsForThread(THREAD_ID), {
-    message: /dispatch deps/,
+test("orchestrator deps-dependent methods throw before deps are attached", async () => {
+  // 6b-2d: machine reads go through the constructor-injected port, so
+  // queue selection works deps-less; IPC-touching entries still gate on
+  // the React-fed deps.
+  const orchestrator = new DispatchOrchestrator({
+    getMachineState: () => initialMessageMachineState,
   });
+  assert.deepEqual(orchestrator.queueIntentIdsForThread(THREAD_ID), []);
   await assert.rejects(
     () => orchestrator.interruptThread(THREAD_ID),
     { message: /dispatch deps/ },
