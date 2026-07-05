@@ -14,9 +14,14 @@ MirrorPort, and 5b-6 established the lifetime-split colocation pattern
 four layers:
 
 1. **Session state (per source thread):** `sideChatThreadBySource`
-   (source → side-thread id; ALSO persisted to localStorage via
-   `persistSideChatThreadId` / restored by a per-source effect),
+   (source → side-thread id; ALSO persisted to `window.sessionStorage`
+   via `persistSideChatThreadId` / restored by a per-source effect —
+   sessionStorage on purpose: bindings survive dock toggles and view
+   switches within one app session but reset on relaunch; the store must
+   keep EXACTLY this scope),
    `sideComposerBySource` (drafts; NOT persisted),
+   `sideComposerAttachmentUploadCount` (a single in-flight upload
+   counter — it locks the composer and blocks submit while uploads run),
    `sideChatCreatingBySource`, `sideChatErrorBySource`,
    `sideChatCreationBySourceRef` (in-flight create de-dupe),
    `sideChatHistoryLoading`.
@@ -40,12 +45,16 @@ from the controller's return surface.
 
 ## Constraints (why this is not a straight move)
 
-- **C1 — sessions outlive the dock.** Closing the inspector unmounts the
-  panel. The side-thread MAPPING survives via localStorage, but composer
-  drafts, creating/error transients, and the in-flight creation promise
-  are React state: moving them into a dock-mounted component loses a
-  half-typed draft on dock toggle. (The 5b-6 lesson: split by lifetime,
-  not by file.)
+- **C1 — sessions outlive the dock.** Closing the inspector (or leaving
+  the chat tool tab) unmounts the panel — confirmed in review
+  #TASK-1658: the side ThreadPage unmounts with the dock/tab while the
+  controller stays mounted in AppShell. The side-thread MAPPING survives
+  via sessionStorage, but composer drafts, the attachment-upload
+  counter (composer lock), creating/error transients, and the in-flight
+  creation promise are React state: moving them into a dock-mounted
+  component loses a half-typed draft — or a mid-upload composer lock and
+  its eventual result — on dock toggle. (The 5b-6 lesson: split by
+  lifetime, not by file.)
 - **C2 — two orchestration seams read side-chat identity.** The
   dispatch-orchestrator deps (`sideChatThreadIdsRef`) and the
   transcript-lifecycle deps (`sideChatThreadIdRef`,
@@ -75,14 +84,16 @@ class SideChatSessions {
   // state
   threadBySource / composerBySource / creatingBySource / errorBySource
   creationPromiseBySource
+  attachmentUploadCount                   // composer lock while uploads run
   // derived shadows (kept in sync on every write)
   sideChatThreadIdRef: { current }        // follows the ACTIVE source
   sideChatThreadIdsRef: { current: Set }  // all bound side threads
   // api
   subscribe(listener) / getSnapshot()     // uSES-compatible, cached ref
-  threadFor(source) / rememberThread(source, id)   // + localStorage write
-  restorePersisted(source)                // localStorage read-through
+  threadFor(source) / rememberThread(source, id)   // + sessionStorage write
+  restorePersisted(source)                // sessionStorage read-through
   draftFor(source) / updateDraft(source, updater) / clearDraft(source)
+  beginAttachmentUpload() / endAttachmentUpload()  // counter +/-
   setCreating(source, bool) / setError(source, msg)
   setActiveSource(source)                 // feeds sideChatThreadIdRef
   streamConsumerId(threadId)              // pure
@@ -126,12 +137,20 @@ Owns layers 3 + 4:
   the ~40 prop pass-through in AppShell to one `<SideChatPanel ...>`
   with a dozen shell-truth props.
 
-`openTaskThreadInSidePanel` is called from OUTSIDE the panel (task rows,
-notifications) — it moves to an imperative handle on the panel
-(`sideChatPanelRef.current?.openTaskThread(id)`, the 5a
-MemoryDialogRoot pattern) with an AppShell fallback: when the dock is
-closed, the caller first opens the dock, then invokes the handle after
-mount (the handle-ref-callback pattern; document the one-frame defer).
+`openTaskThreadInSidePanel` is called from OUTSIDE the panel (task rows
+in the Tasks tool tab — where the chat panel is NOT mounted, review
+#TASK-1658). A panel handle is therefore unsound: the ref is null at
+the real call point, and opening the chat tab first is racy because
+`openTool("chat")` fires `onOpenSideChat()` which can create/bind the
+DEFAULT side chat before the target task thread is applied. Instead the
+operation becomes a **shell/store command**: it writes the binding into
+`SideChatSessions` (`rememberThread(source, taskThreadId)` + clears
+creating/error), then opens the dock and the chat tool tab. The panel,
+on mount, renders whatever the store says — no handle, no defer, and
+the `openTool("chat")` auto-open sees the binding already present so it
+does not create a default side chat. The command lives next to the
+store in AppShell (it also needs `ensureThreadOpenable` + the stream
+start, both mirror facades).
 
 If the transcript-load effect must also run while the dock is CLOSED
 (today it does — the controller is always mounted, so a bound side
@@ -158,12 +177,23 @@ byte-equal behavior first, revisit later.
 ## Invariants
 
 1. Dock toggle preserves: bound side thread, half-typed draft,
-   creating/error transients, an in-flight creation.
+   creating/error transients, an in-flight creation, and an in-flight
+   attachment upload (composer stays locked and the uploaded result
+   lands in the surviving draft).
 2. Orchestrator/lifecycle deps shapes unchanged; side-thread refetch
    re-arm works with the dock closed.
 3. No domain is read through both props and panel-local uSES (C3).
 4. Behavior byte-equal; any lifecycle narrowing (stream-while-visible)
    is out of scope unless separately signed off.
+
+## Review-confirmed premises (#TASK-1658)
+
+- The side ThreadPage instance unmounts with the dock/tab; the
+  controller stays mounted in AppShell (C1 is real).
+- The side transcript-load effect is keyed to `sideChatThreadId`, not
+  `inspectorOpen` — the always-on premise holds, so keeping that effect
+  in the shell preserves behavior.
+- The C2 dep shapes are store-swappable as described.
 
 ## Validation
 
