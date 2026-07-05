@@ -745,11 +745,13 @@ export function useSettingsController({
     const nextTabIsLocal = isLocalSettingsTab(normalizedNextTab);
 
     if (normalizedNextTab === settingsActiveTab) {
-      if (!nextTabIsLocal) {
-        if (isGatewayConfigSettingsTab(normalizedNextTab)) {
-          await flushGatewayAutoSave();
-        }
-        await refreshSettingsTabResources(normalizedNextTab);
+      // Same-tab application = entering settings onto the last active tab
+      // (an equal-route rail click never commits, so it never lands here).
+      // The declarative loading effect refreshes on view entry; this
+      // branch keeps only the gateway flush (review #TASK-1627
+      // non-blocker: the refresh here double-fetched with the effect).
+      if (!nextTabIsLocal && isGatewayConfigSettingsTab(normalizedNextTab)) {
+        await flushGatewayAutoSave();
       }
       return true;
     }
