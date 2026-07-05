@@ -69,17 +69,19 @@ Boot keeps the exact end-state semantics; only the critical path changes.
 - `fetchThreads(settings, options?)` gains `{ limit }` (default 1000,
   unchanged for existing callers).
 - `getDesktopState()` gains a fast variant used ONLY for the renderer's
-  initial hydration: `getDesktopStateFast({ selectedThreadId })`
-  (IPC `garyx:get-state-fast`):
+  initial hydration: `getDesktopStateFast()` (IPC `garyx:get-state-fast`):
   - threads slice fetched with `limit=200`;
-  - afterwards, ids the boot UI must resolve that are missing from the
-    page are repaired by id via the existing single-thread GET
-    (`/api/threads/{key}`): the persisted `selectedThreadId` (route
-    restore) and any `pinnedThreadIds` not in the page (pins are few);
-    fetched summaries are appended to the `threads` array before
-    `withSortedEntities`. Failures fall back silently (same as a thread
-    deleted while the app was closed: route restore falls back to
-    `threads[0]`, the pin row stays hidden until the full set lands).
+  - afterwards, `pinnedThreadIds` missing from the page (pins are few)
+    are repaired by id via the single-thread GET (`/api/threads/{key}`)
+    and appended to `threads` before `withSortedEntities`. Failures fall
+    back silently (same as a thread deleted while the app was closed:
+    the pin row stays hidden until the full set lands).
+  - the selected thread needs NO by-id repair: an external
+    `#/thread/<id>` route keeps an unknown id selected by design (batch
+    4b policy — the selected-thread loader is the single error surface)
+    and the transcript loader fetches by id regardless of the summary
+    page; a thread-home boot selects `threads[0]`, which is always in
+    the page.
   - all other slices unchanged (they are already <2ms).
 - Renderer hydration (`useGatewayConnectionController` startup path)
   becomes: `getDesktopStateFast(...)` → `setDesktopState` (state-hydrated
