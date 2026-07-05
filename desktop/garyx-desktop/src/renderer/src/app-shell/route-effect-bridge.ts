@@ -6,7 +6,7 @@
 // also owns the state-to-hash sync effect until the route store becomes
 // the only route state.
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type {
   ConnectionStatus,
@@ -64,6 +64,12 @@ type RouteEffectBridgeArgs = {
   openExistingThread: (threadId: string) => Promise<boolean>;
   pendingAgentId: string;
   pendingWorkflowId: string | null;
+  /**
+   * Task-summary hand-off from callers that already hold the object
+   * (openWorkflowTask): the workflow-task application seeds from it
+   * instead of clearing and re-fetching by id (6c-2a).
+   */
+  pendingWorkflowTaskHintRef: React.MutableRefObject<DesktopTaskSummary | null>;
   pendingWorkspacePath: string | null;
   pushToast: (message: string, tone?: ToastTone, durationMs?: number) => void;
   requestComposerFocus: () => void;
@@ -114,6 +120,7 @@ export function useRouteEffectBridge({
   openExistingThread,
   pendingAgentId,
   pendingWorkflowId,
+  pendingWorkflowTaskHintRef,
   pendingWorkspacePath,
   pushToast,
   requestComposerFocus,
@@ -213,13 +220,28 @@ export function useRouteEffectBridge({
             await handleSelectSettingsTab(route.tabId);
           }
           return;
-        case "workflow-task":
+        case "workflow-task": {
           setError(null);
-          setSelectedWorkflowTask(null);
-          setSelectedWorkflowTaskId(route.taskId);
-          setSelectedWorkflowRunId(null);
+          // A caller that already holds the task summary seeds it through
+          // the mailbox (openWorkflowTask); route-only entries (external
+          // hash, deep link) clear and let the fetch effect load it.
+          const taskHint = pendingWorkflowTaskHintRef.current;
+          pendingWorkflowTaskHintRef.current = null;
+          if (
+            taskHint &&
+            (taskHint.taskId || `#TASK-${taskHint.number}`) === route.taskId
+          ) {
+            setSelectedWorkflowTask(taskHint);
+            setSelectedWorkflowTaskId(route.taskId);
+            setSelectedWorkflowRunId(taskHint.threadId || null);
+          } else {
+            setSelectedWorkflowTask(null);
+            setSelectedWorkflowTaskId(route.taskId);
+            setSelectedWorkflowRunId(null);
+          }
           setContentView("workflow");
           return;
+        }
         case "capsule":
           setContentView("capsules");
           setCapsulePreviewId(route.capsuleId);
@@ -303,33 +325,47 @@ export function useRouteEffectBridge({
     selectedWorkflowTaskId,
   ]);
 
-  // Batch 4b: the route store is the only hash surface. External edits
-  // (manual hash, back/forward) commit in the store first and reach
-  // applyDesktopRoute here. While an external route application is in
-  // flight, the state-sync effect below is suppressed: its deps change
-  // mid-application (e.g. contentView flips) while selectedThreadId still
-  // holds the previous thread, and navigating then would counter-write
-  // the externally entered hash — the legacy quirk this batch removes.
-  // After the application settles, a successful route has converged the
-  // state (navigate becomes a no-op) and a failed one changed no synced
-  // dep (only the error surface), so the entered hash stays addressable.
-  const externalRouteApplicationRef = useRef(false);
+  // Batch 6c-2a: the route application transaction. Every navigate and
+  // external commit is applied through applyDesktopRoute (sync commits are
+  // the state-to-hash pass itself — the state already reflects them, so
+  // re-applying would re-run entry side effects against live state). While
+  // any application is pending the state-to-hash effect below is
+  // suppressed: the fold over mid-application state folds back a different
+  // route (thread A→B folds #/thread/A mid-flight). Settle convergence is
+  // version-keyed: only the application whose commit version is still
+  // current requests the one convergence pass, and only for internal
+  // commits — a failed external application must not counter-write the
+  // entered hash (4b). A superseded application only decrements.
+  const pendingRouteApplicationsRef = useRef(0);
+  const [routeConvergenceTick, setRouteConvergenceTick] = useState(0);
   useEffect(() => {
-    return desktopRouteStore.subscribeExternal(() => {
-      externalRouteApplicationRef.current = true;
-      void applyDesktopRoute(desktopRouteStore.getSnapshot().route).finally(
-        () => {
-          externalRouteApplicationRef.current = false;
-        },
-      );
+    return desktopRouteStore.subscribeCommits((event) => {
+      if (event.origin === "sync") {
+        return;
+      }
+      pendingRouteApplicationsRef.current += 1;
+      void applyDesktopRoute(event.route).finally(() => {
+        pendingRouteApplicationsRef.current -= 1;
+        if (
+          event.origin === "navigate" &&
+          pendingRouteApplicationsRef.current === 0 &&
+          event.version === desktopRouteStore.getSnapshot().version
+        ) {
+          // Request one state-to-hash pass against the settled state; the
+          // effect below reads fresh values after React commits them. On
+          // success the fold equals the committed route (no-op); on
+          // failure it converges the hash to where the state ended.
+          setRouteConvergenceTick((tick) => tick + 1);
+        }
+      });
     });
   }, [applyDesktopRoute, desktopRouteStore]);
 
   useEffect(() => {
-    if (loading || externalRouteApplicationRef.current) {
+    if (loading || pendingRouteApplicationsRef.current > 0) {
       return;
     }
-    desktopRouteStore.navigate(
+    desktopRouteStore.syncRoute(
       currentDesktopRoute({
         contentView,
         newThreadDraftActive,
@@ -342,7 +378,6 @@ export function useRouteEffectBridge({
         settingsActiveTab,
         capsulePreviewId,
       }),
-      { replace: true },
     );
   }, [
     contentView,
@@ -352,6 +387,7 @@ export function useRouteEffectBridge({
     pendingAgentId,
     pendingWorkflowId,
     pendingWorkspacePath,
+    routeConvergenceTick,
     selectedAutomationId,
     selectedWorkflowTaskId,
     selectedThreadId,
@@ -383,14 +419,16 @@ export function useRouteEffectBridge({
               // (batch 6c-1) instead of failing the lookup immediately.
               await waitForGatewayReadyForDeepLink();
               // A user navigation during the readiness/open await supersedes
-              // the deep link: the late navigate must not overwrite the
-              // route the user moved to, so only write the hash when the
-              // open actually selected.
+              // the deep link: the late write must not overwrite the route
+              // the user moved to, so only write the hash when the open
+              // actually selected. syncRoute (not navigate): the open above
+              // IS the application — a navigate commit would make the route
+              // effect apply the thread route a second time.
               if (await openThreadFromDeepLink(event.threadId)) {
-                desktopRouteStore.navigate(
-                  { kind: "thread", threadId: event.threadId },
-                  { replace: true },
-                );
+                desktopRouteStore.syncRoute({
+                  kind: "thread",
+                  threadId: event.threadId,
+                });
               }
               return;
             }
@@ -401,7 +439,7 @@ export function useRouteEffectBridge({
                 agentId: event.agentId || null,
               };
               await applyDesktopRoute(route);
-              desktopRouteStore.navigate(route, { replace: true });
+              desktopRouteStore.syncRoute(route);
               return;
             }
             case "resume-session":
@@ -417,7 +455,7 @@ export function useRouteEffectBridge({
                 capsuleId: event.capsuleId,
               };
               await applyDesktopRoute(route);
-              desktopRouteStore.navigate(route, { replace: true });
+              desktopRouteStore.syncRoute(route);
               return;
             }
           }

@@ -100,15 +100,28 @@ subscriber cannot classify reliably. 2a therefore adds one store API:
 subscribeCommits(listener: (event: {
   route: DesktopRoute;      // canonical, as committed
   version: number;          // store version of this commit
-  origin: 'navigate' | 'external';
+  origin: 'navigate' | 'external' | 'sync';
 }) => void): Unsubscribe
 ```
 
 `commit()` emits it synchronously with the origin the caller passed
 (`navigate` for the internal writer, `external` for hashchange/popstate
-application). The bridge's route effect moves onto `subscribeCommits`;
-`subscribeExternal` is absorbed by it (delete after the move). The plain
-`subscribe()` stays as the uSES notification face.
+application, `sync` for `syncRoute` below). The bridge's route effect
+moves onto `subscribeCommits`; `subscribeExternal` is absorbed by it
+(delete after the move). The plain `subscribe()` stays as the uSES
+notification face.
+
+**`sync` commits are never applied** (implementation finding, round 4):
+the state-to-hash pass commits a route the state *already reflects* — a
+fold-driven commit (e.g. picking an agent in the draft changes
+`pendingAgentId`, folding a new `new-thread` route). Re-applying it would
+re-run entry side effects against live state (the new-thread branch's
+`clearComposerDraft` would wipe the draft being typed). The state-to-hash
+pass therefore uses `syncRoute(route)` — identical to
+`navigate({replace:true})` except the commit carries origin `sync`, which
+the route effect ignores. This also settles the convergence commit: the
+post-failure fold-and-replace is a `sync` commit, so it cannot re-trigger
+an application (no second `openExistingThread`, no loop).
 
 **Route application transaction.** Equal-route no-ops alone do NOT break
 the feedback loop while the state-to-hash effect still exists: an
@@ -169,10 +182,18 @@ Compound async transitions translate as "do the work, then navigate the
 result": thread creation navigates `{kind:'thread', threadId: created.id}`
 after the create resolves; `openExistingThread` keeps its imperative body
 (the route effect calls it for thread routes; direct callers are rewired to
-navigate). The five `setContentView: () => ...` helper seams become
-`navigate`-closing seams unchanged in shape. `handleSelectAutomation`
-gains the version guard (it is unguarded today — a pre-existing race this
-step must not widen).
+navigate). `handleSelectAutomation` gains the version guard (it is
+unguarded today — a pre-existing race this step must not widen).
+
+**2a scope note (implementation round):** the five `setContentView: () =>
+...` seams feed thread-controller compound helpers that keep setting
+companion state right after the seam fires — closing a navigate over the
+seam would race the route application against the helper's remaining
+writes. Those seams and the startup seeding branch therefore stay direct
+writers through 2a/2b (an explicitly listed transitional state) and are
+dissolved by the 2c selectedThreadId/new-thread flips, whose migration
+table already owns them. Deep links keep their 6c-1 shape (the handler IS
+the application) and write the hash via `syncRoute`.
 
 Per-kind convergence table (application intermediate/failure states vs the
 settled fold — each must terminate in one settled hash equal to today's):

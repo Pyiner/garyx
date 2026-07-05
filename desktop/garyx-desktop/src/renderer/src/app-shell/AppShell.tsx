@@ -830,6 +830,10 @@ export function AppShell() {
     desktopState,
     desktopAgents,
     desktopTeams,
+    getRouteVersion: () => desktopRouteStore.getSnapshot().version,
+    navigateRoute: (route) => {
+      desktopRouteStore.navigate(route, { replace: true });
+    },
     pendingThreadBottomSnapRef,
     selectedThreadId,
     setContentView,
@@ -1783,9 +1787,9 @@ export function AppShell() {
 
   useLayoutEffect(() => {
     if (contentView === "dreams" && !showDreamsFeature) {
-      setContentView("thread");
+      desktopRouteStore.navigate({ kind: "thread-home" }, { replace: true });
     }
-  }, [contentView, setContentView, showDreamsFeature]);
+  }, [contentView, desktopRouteStore, showDreamsFeature]);
 
   const botRootSelectedThreadId =
     visibleThreadEntrySelectionSource === "bot-root" ? visibleSelectedThreadId : null;
@@ -2277,10 +2281,13 @@ export function AppShell() {
   ]);
 
   function openSettingsView() {
-    setContentView("settings");
-    if (!isLocalSettingsTab(settingsActiveTab)) {
-      void refreshSettingsTabResources(settingsActiveTab);
-    }
+    // The settings application branch runs handleSelectSettingsTab, whose
+    // same-tab path refreshes non-local tab resources (superset of the
+    // old inline refresh, adding the gateway auto-save flush).
+    desktopRouteStore.navigate(
+      { kind: "settings", tabId: settingsActiveTab },
+      { replace: true },
+    );
   }
 
   async function refreshAgentTargets() {
@@ -2430,13 +2437,19 @@ export function AppShell() {
     return true;
   }
 
+  // Callers already holding the full task summary pass it through this
+  // mailbox so the workflow-task route application seeds it instead of
+  // clearing and re-fetching by id (6c-2a).
+  const pendingWorkflowTaskHintRef = useRef<DesktopTaskSummary | null>(null);
+
   function openWorkflowTask(task: DesktopTaskSummary) {
     const taskId = task.taskId || `#TASK-${task.number}`;
     setError(null);
-    setSelectedWorkflowTask(task);
-    setSelectedWorkflowTaskId(taskId);
-    setSelectedWorkflowRunId(task.threadId || null);
-    setContentView("workflow");
+    pendingWorkflowTaskHintRef.current = task;
+    desktopRouteStore.navigate(
+      { kind: "workflow-task", taskId },
+      { replace: true },
+    );
   }
 
   useRouteEffectBridge({
@@ -2454,6 +2467,7 @@ export function AppShell() {
     openExistingThread,
     pendingAgentId,
     pendingWorkflowId,
+    pendingWorkflowTaskHintRef,
     pendingWorkspacePath,
     pushToast,
     requestComposerFocus,
@@ -2915,9 +2929,11 @@ export function AppShell() {
         sdkSessionProviderHint: providerHint || undefined,
       });
       setDesktopState(created.state);
-      setContentView("thread");
-      setNewThreadDraftActive(false);
-      setSelectedThreadId(created.thread.id);
+      // Selection + view flip is the thread-route application (6c-2a).
+      desktopRouteStore.navigate(
+        { kind: "thread", threadId: created.thread.id },
+        { replace: true },
+      );
       updateMessagesByThread((current) => ({
         ...current,
         [created.thread.id]: current[created.thread.id] || [],
@@ -3074,18 +3090,20 @@ export function AppShell() {
       activeThreadNewThreadWorkspace,
       selectedNewThreadWorkspaceEntry,
     );
+    // The new-thread application branch owns the draft entry (view flip,
+    // pendings, composer clear + focus); syncComposerPhase stays here — it
+    // is call-site-only companion state the external-hash path never ran.
+    desktopRouteStore.navigate(
+      {
+        kind: "new-thread",
+        workspacePath: nextWorkspace?.path || null,
+        agentId,
+        workflowId: null,
+      },
+      { replace: true },
+    );
     setError(null);
-    setContentView("thread");
-    setNewThreadDraftActive(true);
-    setSelectedThreadId(null);
-    setPendingWorkspacePath(nextWorkspace?.path || null);
-    setPendingWorkspaceMode("local");
-    setPendingBotId(null);
-    setPendingAgentId(agentId);
-    setPendingWorkflowId(null);
-    clearComposerDraft();
     syncComposerPhase("");
-    requestComposerFocus();
   }
 
   async function handleBotClick(group: DesktopBotConsoleSummary) {
@@ -3590,20 +3608,22 @@ export function AppShell() {
           sessions: mergeThread(baseState.sessions, started.thread),
         };
       });
-      setSelectedThreadId(started.thread.id);
-      setThreadEntrySelectionSource(null);
       updateMessagesByThread((current) => ({
         ...current,
         [started.thread.id]: current[started.thread.id] || [],
       }));
-      setNewThreadDraftActive(false);
       setPendingWorkspacePath(null);
       setPendingWorkspaceMode("local");
       setPendingBotId(null);
       setPendingWorkflowId(null);
       setPendingAgentId("claude");
       clearComposerDraft();
-      setContentView("thread");
+      // Selection + draft exit + view flip is the thread-route application
+      // (6c-2a; it also resets the entry-selection source).
+      desktopRouteStore.navigate(
+        { kind: "thread", threadId: started.thread.id },
+        { replace: true },
+      );
       scheduleHistoryRefresh(started.thread.id, 4, 500);
     } catch (workflowError) {
       setError(
@@ -3787,8 +3807,10 @@ export function AppShell() {
         void openExistingThread(threadId);
       }}
       onOpenCapsule={(card) => {
-        setContentView("capsules");
-        setCapsulePreviewId(card.capsule_id);
+        desktopRouteStore.navigate(
+          { kind: "capsule", capsuleId: card.capsule_id },
+          { replace: true },
+        );
       }}
       onSelectWorkspace={() => {}}
       onSteerQueuedPrompt={(item) => {
@@ -4416,7 +4438,7 @@ export function AppShell() {
         isDreamsView={isDreamsView}
         recentRailOpen={shouldShowConversationRail && recentThreadsRailOpen}
         onBackToThreads={() => {
-          setContentView("thread");
+          desktopRouteStore.navigate({ kind: "thread-home" }, { replace: true });
         }}
         onCreateThreadForWorkspace={(workspacePath) => {
           handleCreateThreadForWorkspace(workspacePath);
@@ -4428,7 +4450,7 @@ export function AppShell() {
           setBotConversationGroupId(null);
           setWorkspaceConversationPath(null);
           if (!shouldShowConversationRail) {
-            setContentView("thread");
+            desktopRouteStore.navigate({ kind: "thread-home" }, { replace: true });
             setRecentThreadsRailOpen(true);
             return;
           }
@@ -4486,20 +4508,19 @@ export function AppShell() {
         onSidebarResizeStart={handleSidebarResizeStart}
         sidebarResizing={sidebarResizing}
         onOpenAgents={() => {
-          setContentView("agents");
+          desktopRouteStore.navigate({ kind: "view", view: "agents" }, { replace: true });
         }}
         onOpenSkills={() => {
-          setContentView("skills");
+          desktopRouteStore.navigate({ kind: "view", view: "skills" }, { replace: true });
         }}
         onOpenCapsules={() => {
-          setContentView("capsules");
-          setCapsulePreviewId(null);
+          desktopRouteStore.navigate({ kind: "view", view: "capsules" }, { replace: true });
         }}
         onOpenTasks={() => {
-          setContentView("tasks");
+          desktopRouteStore.navigate({ kind: "view", view: "tasks" }, { replace: true });
         }}
         onOpenDreams={() => {
-          setContentView("dreams");
+          desktopRouteStore.navigate({ kind: "view", view: "dreams" }, { replace: true });
         }}
         onRequestRemoveWorkspace={(workspace) => {
           void handleRequestRemoveWorkspace(workspace);
@@ -4697,7 +4718,7 @@ export function AppShell() {
                   void openExistingThread(threadId);
                 }}
                 onOpenThreads={() => {
-                  setContentView("thread");
+                  desktopRouteStore.navigate({ kind: "thread-home" }, { replace: true });
                 }}
                 onToggleInspector={() => {
                   setThreadLogsOpen(false);
@@ -4917,7 +4938,7 @@ export function AppShell() {
               selectedWorkflowRunId ? (
                 <WorkflowRunsPanel
                   onOpenTasks={() => {
-                    setContentView("tasks");
+                    desktopRouteStore.navigate({ kind: "view", view: "tasks" }, { replace: true });
                   }}
                   onOpenThread={(threadId) => {
                     void openExistingThread(threadId);

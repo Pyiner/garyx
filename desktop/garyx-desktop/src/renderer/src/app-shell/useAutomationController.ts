@@ -11,6 +11,7 @@ import type {
 
 import { selectedAutomation } from '../thread-model';
 import { buildAgentAndTeamOptions } from './agent-options';
+import type { DesktopRoute } from './desktop-route';
 import type {
   AutomationDraft,
   AutomationDialogState,
@@ -61,6 +62,14 @@ type UseAutomationControllerArgs = {
   desktopState: DesktopState | null;
   desktopAgents: DesktopCustomAgent[];
   desktopTeams: DesktopTeam[];
+  /**
+   * Route-store version probe for the async guard (6c-2a): selections
+   * capture it before awaiting the IPC and drop the landing when a newer
+   * route committed meanwhile.
+   */
+  getRouteVersion: () => number;
+  /** Route-store navigation seam (replace semantics, 6c-2a). */
+  navigateRoute: (route: DesktopRoute) => void;
   pendingThreadBottomSnapRef: React.MutableRefObject<string | null>;
   selectedThreadId: string | null;
   setContentView: React.Dispatch<React.SetStateAction<ContentView>>;
@@ -77,6 +86,8 @@ export function useAutomationController({
   desktopState,
   desktopAgents,
   desktopTeams,
+  getRouteVersion,
+  navigateRoute,
   pendingThreadBottomSnapRef,
   selectedThreadId,
   setContentView,
@@ -129,8 +140,14 @@ export function useAutomationController({
   async function handleSelectAutomation(automationId: string | null) {
     setError(null);
     setContentView('automation');
+    // Async guard (6c-2a): a slow select must not clobber the state a
+    // newer navigation installed while this one awaited the IPC.
+    const routeVersion = getRouteVersion();
     try {
       const nextState = await window.garyxDesktop.selectAutomation({ automationId });
+      if (getRouteVersion() !== routeVersion) {
+        return;
+      }
       setDesktopState(nextState);
     } catch (selectionError) {
       setError(
@@ -244,7 +261,10 @@ export function useAutomationController({
           });
       setDesktopState(result.state);
       setAutomationDialog(null);
-      setContentView('automation');
+      // Equal-route dedupe makes this free when saving from the
+      // automation view; from elsewhere it enters the view via the
+      // automation application (6c-2a).
+      navigateRoute({ kind: 'automation', automationId: selectedAutomationId });
     } catch (automationError) {
       setError(
         automationError instanceof Error
@@ -367,9 +387,9 @@ export function useAutomationController({
         setPendingAutomationRun(latestThreadId, pendingRun);
         reconcilePendingAutomationRun(latestThreadId, pendingRun);
         pendingThreadBottomSnapRef.current = latestThreadId;
-        setNewThreadDraftActive(false);
-        setSelectedThreadId(latestThreadId);
-        setContentView('thread');
+        // Selection + draft exit + view flip is the thread-route
+        // application (6c-2a).
+        navigateRoute({ kind: 'thread', threadId: latestThreadId });
       }
       setAutomationStatus(`Ran ${automation.label} just now.`);
       window.setTimeout(() => {
@@ -397,9 +417,7 @@ export function useAutomationController({
     }
 
     setError(null);
-    setNewThreadDraftActive(false);
-    setSelectedThreadId(latestThreadId);
-    setContentView('thread');
+    navigateRoute({ kind: 'thread', threadId: latestThreadId });
   }
 
   useEffect(() => {
