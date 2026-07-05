@@ -10,12 +10,10 @@ import type {
   TranscriptMessage,
 } from "@shared/contracts";
 import {
-  applyTranscriptRunStateRecord,
   decideTranscriptFetchPageAction,
   isControlTranscriptMessage,
   isThreadStreamGapError,
   mergeForwardTranscriptPage,
-  reduceTranscriptRunState,
   shouldRefetchAuthoritativeAfterForwardPageLimit,
   streamResumeCursor,
   transcriptCommittedAfterCursor,
@@ -27,8 +25,6 @@ import {
 } from "@shared/transcript-sync";
 
 import {
-  findPendingAckIntentIndex,
-  selectThreadRuntime,
   type MessageIntent,
   type MessageMachineAction,
   type MessageMachineState,
@@ -76,7 +72,6 @@ import {
   messagesNearEarlierUserTurnBoundary,
   transcriptHasAutomationResponse,
   reconcileAssistantEntriesForGatewayRecovery,
-  resolveIntentHistoryMatch,
   isMissingThreadTranscript,
   visibleTranscriptMessages,
   THREAD_HISTORY_PAGE_SIZE,
@@ -174,16 +169,32 @@ export function useTranscriptController({
       return mirror.getTranscriptMapsSnapshot().messagesByThread as MessageMap;
     },
   }));
-  const transcriptRunStateByThreadRef = useRef<Record<string, TranscriptRunState>>(
-    {},
-  );
-  const threadTitleOverridesRef = useRef<Record<string, string>>({});
+  // Batch 6b-2a: run-state and title overrides live in the mirror's
+  // transcript lifecycle; this stable reader keeps the `{ current }`
+  // shape for the dispatch-orchestrator deps (the 6a reader pattern).
+  const [threadTitleOverridesRef] = useState(() => ({
+    get current(): Record<string, string> {
+      return mirror.getThreadTitleOverrides();
+    },
+  }));
   const streamEventHandlerRef = useRef<(event: DesktopChatStreamEvent) => void>(
     () => {},
   );
 
   useEffect(() => {
     streamEventHandlerRef.current = handleChatStreamEvent;
+  });
+
+  // Batch 6b-2a: the transcript lifecycle's React seams, refreshed every
+  // commit (the streamEventHandlerRef pattern).
+  useEffect(() => {
+    mirror.setTranscriptLifecycleDeps({
+      setDesktopState,
+      syncThreadTitleDraft,
+      requestSelectedThreadMessagesBottomSnap,
+      selectedThreadIdRef,
+      liveStreamStateRef,
+    });
   });
 
   useEffect(() => {
@@ -270,100 +281,23 @@ export function useTranscriptController({
       error?: string;
     },
   ) {
-    dispatchMessageState({
-      type: "thread/runtime",
-      threadId,
-      runtimeState,
-      activeIntentId: options?.activeIntentId,
-      remoteRunId: options?.remoteRunId,
-      error: options?.error,
-    });
+    mirror.setThreadRuntimeState(threadId, runtimeState, options);
   }
 
-  function publishTranscriptRunState(
-    threadId: string,
-    state: TranscriptRunState,
-  ): TranscriptRunState {
-    transcriptRunStateByThreadRef.current = {
-      ...transcriptRunStateByThreadRef.current,
-      [threadId]: state,
-    };
-    if (state.title) {
-      applyThreadTitleUpdate(threadId, state.title);
-    }
-    const remoteRunId = state.activeRunId || undefined;
-    if (state.busy) {
-      const runtimeState: ThreadRuntimeState =
-        state.activity === "reconciling"
-          ? "reconciling_history"
-          : "running_remote";
-      updateLiveStreamState(threadId, (current) => ({
-        threadId,
-        runId: remoteRunId || current?.runId,
-        activeIntentId: current?.activeIntentId,
-        assistantEntryId: current?.assistantEntryId ?? null,
-        pendingAckIntentIds: current?.pendingAckIntentIds || [],
-        streamStatus:
-          state.activity === "reconciling" ? "reconciling" : "streaming",
-      }));
-      setThreadRuntimeState(threadId, runtimeState, {
-        activeIntentId: getLiveStreamState(threadId)?.activeIntentId,
-        remoteRunId,
-      });
-      return state;
-    }
-    if (state.terminalStatus) {
-      updateLiveStreamState(threadId, (current) =>
-        current
-          ? {
-              ...current,
-              runId: current.runId || remoteRunId,
-              assistantEntryId: null,
-              streamStatus:
-                state.terminalStatus === "interrupted"
-                  ? "interrupted"
-                  : "reconciling",
-            }
-          : null,
-      );
-      if (!hasPendingHistoryIntents(threadId)) {
-        dispatchMessageState({
-          type: "thread/clear",
-          threadId,
-        });
-        clearLiveStreamState(threadId);
-      }
-    }
-    return state;
-  }
-
+  // Batch 6b-2a: the run-state chain (publish/sync/committed-apply, title
+  // propagation) lives in the mirror's transcript lifecycle; these are
+  // thin delegates keeping the hook wiring unchanged until 2b/2c.
   function syncTranscriptRunState(
     threadId: string,
     transcript: ThreadTranscript,
   ): TranscriptRunState {
-    return publishTranscriptRunState(
-      threadId,
-      reduceTranscriptRunState(transcript.messages),
-    );
+    return mirror.syncTranscriptRunState(threadId, transcript);
   }
 
   function applyCommittedTranscriptRunState(
     event: Extract<DesktopChatStreamEvent, { type: "committed_message" }>,
   ): TranscriptRunState {
-    // The reduce fallback is initialization-only: the committed stream always
-    // starts after the first transcript apply (which seeds the run-state ref
-    // through syncTranscriptRunState), so in practice `current` comes from
-    // the ref. The mirror snapshot read (batch 6b-1) keeps a sane base if
-    // that ever changes.
-    const current =
-      transcriptRunStateByThreadRef.current[event.threadId] ||
-      reduceTranscriptRunState(
-        mirror.getThreadSnapshotTranscript(event.threadId)?.messages || [],
-      );
-    return publishTranscriptRunState(
-      event.threadId,
-      applyTranscriptRunStateRecord(current, event.message, { seq: event.seq }),
-    );
+    return mirror.applyCommittedTranscriptRunState(event);
   }
 
   // Batch 3c-1: the mirror owns live-stream storage. These proxies keep
@@ -419,41 +353,6 @@ export function useTranscriptController({
       }
     }
     return next;
-  }
-
-  function applyThreadTitleUpdate(threadId: string, title: string) {
-    const nextTitle = title.trim();
-    if (!threadId || !nextTitle) {
-      return;
-    }
-
-    threadTitleOverridesRef.current = {
-      ...threadTitleOverridesRef.current,
-      [threadId]: nextTitle,
-    };
-
-    setDesktopState((current) => {
-      if (!current) {
-        return current;
-      }
-      let changed = false;
-      const updateThread = (
-        thread: (typeof current.threads)[number],
-      ): (typeof current.threads)[number] => {
-        if (thread.id !== threadId || thread.title === nextTitle) {
-          return thread;
-        }
-        changed = true;
-        return { ...thread, title: nextTitle };
-      };
-      const threads = current.threads.map(updateThread);
-      const sessions = current.sessions.map(updateThread);
-      return changed ? { ...current, threads, sessions } : current;
-    });
-
-    if (selectedThreadIdRef.current === threadId) {
-      syncThreadTitleDraft(nextTitle);
-    }
   }
 
   // The snapshot itself lives in the mirror's transcript cache (batch
@@ -635,60 +534,7 @@ export function useTranscriptController({
     threadId: string,
     transcript: TranscriptMessage[],
   ) {
-    const visibleTranscript = visibleTranscriptMessages(transcript);
-    const intents = Object.values(messageStateRef.current.intentsById).filter(
-      (intent) => {
-        return (
-          intent.threadId === threadId &&
-          [
-            "dispatching",
-            "remote_accepted",
-            "awaiting_provider_ack",
-            "awaiting_response",
-            "awaiting_history",
-          ].includes(intent.state)
-        );
-      },
-    );
-
-    for (const intent of intents) {
-      const match = resolveIntentHistoryMatch(intent, visibleTranscript);
-      if (!match.userVisible) {
-        continue;
-      }
-      if (
-        match.assistantVisible ||
-        (!intent.responseText && intent.dispatchMode === "async_steer")
-      ) {
-        dispatchMessageState({
-          type: "intent/completed",
-          intentId: intent.intentId,
-        });
-      } else {
-        dispatchMessageState({
-          type: "intent/awaiting-history",
-          intentId: intent.intentId,
-          responseText: intent.responseText,
-        });
-      }
-    }
-
-    const runtime = selectThreadRuntime(messageStateRef.current, threadId);
-    if (runtime && !hasPendingHistoryIntents(threadId)) {
-      dispatchMessageState({
-        type: "thread/clear",
-        threadId,
-      });
-      const liveStream = getLiveStreamState(threadId);
-      if (
-        liveStream &&
-        ["reconciling", "disconnected", "failed"].includes(
-          liveStream.streamStatus,
-        )
-      ) {
-        clearLiveStreamState(threadId);
-      }
-    }
+    mirror.markIntentsFromHistory(threadId, transcript);
   }
 
   function threadSummaryFromTranscript(
@@ -862,18 +708,7 @@ export function useTranscriptController({
   }
 
   function hasPendingHistoryIntents(threadId: string): boolean {
-    return Object.values(messageStateRef.current.intentsById).some((intent) => {
-      return (
-        intent.threadId === threadId &&
-        [
-          "remote_accepted",
-          "awaiting_provider_ack",
-          "awaiting_history",
-          "awaiting_response",
-          "dispatching",
-        ].includes(intent.state)
-      );
-    });
+    return mirror.hasPendingHistoryIntents(threadId);
   }
 
   async function startCommittedThreadStream(
@@ -1156,77 +991,11 @@ export function useTranscriptController({
     runId: string,
     pendingInputId?: string,
   ) {
-    let nextIntentId: string | undefined;
-    const acknowledgedPendingInputId = pendingInputId?.trim() || "";
-    updateLiveStreamState(threadId, (current) => {
-      const pendingAckIntentIds = [...(current?.pendingAckIntentIds || [])];
-      const matchedIndex = findPendingAckIntentIndex(
-        pendingAckIntentIds,
-        acknowledgedPendingInputId,
-        messageStateRef.current.intentsById,
-      );
-      if (matchedIndex >= 0) {
-        nextIntentId = pendingAckIntentIds[matchedIndex];
-        pendingAckIntentIds.splice(matchedIndex, 1);
-      } else {
-        nextIntentId = undefined;
-      }
-      const nextPendingAckIntentIds = nextIntentId
-        ? pendingAckIntentIds.filter((intentId) => intentId !== nextIntentId)
-        : pendingAckIntentIds;
-      return current
-        ? {
-            ...current,
-            runId,
-            activeIntentId: nextIntentId || current.activeIntentId,
-            assistantEntryId: null,
-            pendingAckIntentIds: nextPendingAckIntentIds,
-            streamStatus: "streaming",
-          }
-        : null;
-    });
-    if (nextIntentId) {
-      const acknowledgedIntent = intentForId(nextIntentId);
-      dispatchMessageState({
-        type: "intent/awaiting-history",
-        intentId: nextIntentId,
-        responseText: acknowledgedIntent?.responseText,
-      });
-      requestSelectedThreadMessagesBottomSnap(threadId, true);
-      setThreadRuntimeState(threadId, "running_remote", {
-        activeIntentId: nextIntentId,
-        remoteRunId: runId,
-      });
-    }
+    mirror.applyUserAck(threadId, runId, pendingInputId);
   }
 
   function forceReleaseThreadRuntime(threadId: string) {
-    const pendingStates = [
-      "dispatching",
-      "remote_accepted",
-      "awaiting_provider_ack",
-      "awaiting_response",
-      "awaiting_history",
-    ];
-    for (const intent of Object.values(messageStateRef.current.intentsById)) {
-      if (intent.threadId === threadId && pendingStates.includes(intent.state)) {
-        dispatchMessageState({
-          type: "intent/completed",
-          intentId: intent.intentId,
-        });
-      }
-    }
-    dispatchMessageState({
-      type: "thread/clear",
-      threadId,
-    });
-    const liveStream = getLiveStreamState(threadId);
-    if (
-      liveStream &&
-      ["reconciling", "disconnected", "failed"].includes(liveStream.streamStatus)
-    ) {
-      clearLiveStreamState(threadId);
-    }
+    mirror.forceReleaseThreadRuntime(threadId);
   }
 
   return {

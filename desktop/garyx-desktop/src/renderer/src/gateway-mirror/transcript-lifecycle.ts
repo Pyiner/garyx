@@ -1,0 +1,433 @@
+// TranscriptLifecycle: the transcript transport orchestration that used to
+// live in useTranscriptController (endgame architecture batch 6b-2,
+// docs/design/appshell-transcript-dissolve.md). Slice 2a moves the machine
+// bookkeeping and the run-state chain; the apply chain and the fetch/stream
+// lifecycle follow in 2b/2c.
+//
+// Pattern: dispatch-orchestrator's — a class whose React seams arrive
+// through setDeps (refreshed every React commit); each entry point
+// destructures the deps it needs once (the legacy closure capture).
+// Mirror-internal state (machine, live streams, transport snapshot) is
+// reached through the narrow MirrorPort the GatewayMirror implements —
+// this module never touches React or the route store.
+
+import type { DesktopState, ThreadTranscript } from "@shared/contracts";
+import {
+  applyTranscriptRunStateRecord,
+  reduceTranscriptRunState,
+  type TranscriptRunState,
+} from "../../../shared/transcript-sync.ts";
+
+import {
+  findPendingAckIntentIndex,
+  selectThreadRuntime,
+  type MessageIntent,
+  type MessageMachineAction,
+  type MessageMachineState,
+  type ThreadRuntimeState,
+} from "../message-machine.ts";
+import type { LiveStreamState } from "../app-shell/types";
+import type { CommittedMessageEvent } from "@shared/contracts";
+import {
+  resolveIntentHistoryMatch,
+  visibleTranscriptMessages,
+} from "./transcript-materialize.ts";
+import type { TranscriptMessage } from "@shared/contracts";
+
+/**
+ * The mirror-internal surface the lifecycle orchestrates over. The
+ * GatewayMirror implements it; keeping it narrow documents exactly which
+ * mirror domains the lifecycle touches (machine, live streams, transport
+ * snapshot) and keeps the module node-testable against stubs.
+ */
+export interface TranscriptLifecycleMirrorPort {
+  dispatchMachineAction(action: MessageMachineAction): MessageMachineState;
+  getMachineState(): MessageMachineState;
+  updateThreadLiveStream(
+    threadId: string,
+    updater: (current: LiveStreamState | null) => LiveStreamState | null,
+  ): LiveStreamState | null;
+  getLiveStreamMap(): Record<string, LiveStreamState>;
+  getThreadSnapshotTranscript(threadId: string): ThreadTranscript | null;
+}
+
+/**
+ * The React seams slice 2a needs (the full contract grows with 2b/2c per
+ * the design). Refreshed every React commit by the wiring layer.
+ */
+export interface TranscriptLifecycleDeps {
+  setDesktopState: (
+    updater: (current: DesktopState | null) => DesktopState | null,
+  ) => void;
+  /** Colocated title root handle (not-editing guard lives in the root). */
+  syncThreadTitleDraft: (nextTitle: string) => void;
+  requestSelectedThreadMessagesBottomSnap: (
+    threadId: string | null | undefined,
+    forceStick?: boolean,
+  ) => void;
+  selectedThreadIdRef: { readonly current: string | null };
+  /**
+   * The synchronous live-stream shadow for event-path readers (the 3c-1
+   * proxy semantics): every live-stream write refreshes it right after
+   * the mirror commit.
+   */
+  liveStreamStateRef: { current: Record<string, LiveStreamState> };
+}
+
+export class TranscriptLifecycle {
+  private port: TranscriptLifecycleMirrorPort;
+  private deps: TranscriptLifecycleDeps | null = null;
+  // Module-internal orchestration state (plain maps, not React refs).
+  private runStateByThread = new Map<string, TranscriptRunState>();
+  private titleOverridesByThread: Record<string, string> = {};
+
+  constructor(port: TranscriptLifecycleMirrorPort) {
+    this.port = port;
+  }
+
+  setDeps(deps: TranscriptLifecycleDeps): void {
+    this.deps = deps;
+  }
+
+  private requireDeps(): TranscriptLifecycleDeps {
+    if (!this.deps) {
+      throw new Error("TranscriptLifecycle deps not attached");
+    }
+    return this.deps;
+  }
+
+  /**
+   * Remote-title overrides the dispatch orchestrator consults to avoid
+   * clobbering server titles (read facade per the design; the map itself
+   * is module-internal).
+   */
+  getThreadTitleOverrides(): Record<string, string> {
+    return this.titleOverridesByThread;
+  }
+
+  intentForId(intentId: string): MessageIntent | null {
+    return this.port.getMachineState().intentsById[intentId] || null;
+  }
+
+  setThreadRuntimeState(
+    threadId: string,
+    runtimeState: ThreadRuntimeState,
+    options?: {
+      activeIntentId?: string;
+      remoteRunId?: string;
+      error?: string;
+    },
+  ): void {
+    this.port.dispatchMachineAction({
+      type: "thread/runtime",
+      threadId,
+      runtimeState,
+      activeIntentId: options?.activeIntentId,
+      remoteRunId: options?.remoteRunId,
+      error: options?.error,
+    });
+  }
+
+  hasPendingHistoryIntents(threadId: string): boolean {
+    return Object.values(this.port.getMachineState().intentsById).some(
+      (intent) => {
+        return (
+          intent.threadId === threadId &&
+          [
+            "remote_accepted",
+            "awaiting_provider_ack",
+            "awaiting_history",
+            "awaiting_response",
+            "dispatching",
+          ].includes(intent.state)
+        );
+      },
+    );
+  }
+
+  // Live-stream writes keep the 3c-1 proxy semantics: mirror commit, then
+  // refresh the synchronous shadow.
+  private updateLiveStreamState(
+    threadId: string,
+    updater: (current: LiveStreamState | null) => LiveStreamState | null,
+  ): LiveStreamState | null {
+    const deps = this.requireDeps();
+    const next = this.port.updateThreadLiveStream(threadId, updater);
+    deps.liveStreamStateRef.current = this.port.getLiveStreamMap();
+    return next;
+  }
+
+  private clearLiveStreamState(threadId: string): void {
+    this.updateLiveStreamState(threadId, () => null);
+  }
+
+  private getLiveStreamState(threadId: string): LiveStreamState | null {
+    return this.requireDeps().liveStreamStateRef.current[threadId] || null;
+  }
+
+  private applyThreadTitleUpdate(threadId: string, title: string): void {
+    const { setDesktopState, syncThreadTitleDraft, selectedThreadIdRef } =
+      this.requireDeps();
+    const nextTitle = title.trim();
+    if (!threadId || !nextTitle) {
+      return;
+    }
+
+    this.titleOverridesByThread = {
+      ...this.titleOverridesByThread,
+      [threadId]: nextTitle,
+    };
+
+    setDesktopState((current) => {
+      if (!current) {
+        return current;
+      }
+      let changed = false;
+      const updateThread = (
+        thread: (typeof current.threads)[number],
+      ): (typeof current.threads)[number] => {
+        if (thread.id !== threadId || thread.title === nextTitle) {
+          return thread;
+        }
+        changed = true;
+        return { ...thread, title: nextTitle };
+      };
+      const threads = current.threads.map(updateThread);
+      const sessions = current.sessions.map(updateThread);
+      return changed ? { ...current, threads, sessions } : current;
+    });
+
+    if (selectedThreadIdRef.current === threadId) {
+      syncThreadTitleDraft(nextTitle);
+    }
+  }
+
+  private publishTranscriptRunState(
+    threadId: string,
+    state: TranscriptRunState,
+  ): TranscriptRunState {
+    this.runStateByThread.set(threadId, state);
+    if (state.title) {
+      this.applyThreadTitleUpdate(threadId, state.title);
+    }
+    const remoteRunId = state.activeRunId || undefined;
+    if (state.busy) {
+      const runtimeState: ThreadRuntimeState =
+        state.activity === "reconciling"
+          ? "reconciling_history"
+          : "running_remote";
+      this.updateLiveStreamState(threadId, (current) => ({
+        threadId,
+        runId: remoteRunId || current?.runId,
+        activeIntentId: current?.activeIntentId,
+        assistantEntryId: current?.assistantEntryId ?? null,
+        pendingAckIntentIds: current?.pendingAckIntentIds || [],
+        streamStatus:
+          state.activity === "reconciling" ? "reconciling" : "streaming",
+      }));
+      this.setThreadRuntimeState(threadId, runtimeState, {
+        activeIntentId: this.getLiveStreamState(threadId)?.activeIntentId,
+        remoteRunId,
+      });
+      return state;
+    }
+    if (state.terminalStatus) {
+      this.updateLiveStreamState(threadId, (current) =>
+        current
+          ? {
+              ...current,
+              runId: current.runId || remoteRunId,
+              assistantEntryId: null,
+              streamStatus:
+                state.terminalStatus === "interrupted"
+                  ? "interrupted"
+                  : "reconciling",
+            }
+          : null,
+      );
+      if (!this.hasPendingHistoryIntents(threadId)) {
+        this.port.dispatchMachineAction({
+          type: "thread/clear",
+          threadId,
+        });
+        this.clearLiveStreamState(threadId);
+      }
+    }
+    return state;
+  }
+
+  syncTranscriptRunState(
+    threadId: string,
+    transcript: ThreadTranscript,
+  ): TranscriptRunState {
+    return this.publishTranscriptRunState(
+      threadId,
+      reduceTranscriptRunState(transcript.messages),
+    );
+  }
+
+  applyCommittedTranscriptRunState(event: {
+    threadId: string;
+    seq: number;
+    message: CommittedMessageEvent["message"];
+  }): TranscriptRunState {
+    // The reduce fallback is initialization-only: the committed stream
+    // always starts after the first transcript apply (which seeds the
+    // run-state map through syncTranscriptRunState). The mirror snapshot
+    // read keeps a sane base if that ever changes.
+    const current =
+      this.runStateByThread.get(event.threadId) ||
+      reduceTranscriptRunState(
+        this.port.getThreadSnapshotTranscript(event.threadId)?.messages || [],
+      );
+    return this.publishTranscriptRunState(
+      event.threadId,
+      applyTranscriptRunStateRecord(current, event.message, {
+        seq: event.seq,
+      }),
+    );
+  }
+
+  markIntentsFromHistory(
+    threadId: string,
+    transcript: TranscriptMessage[],
+  ): void {
+    const visibleTranscript = visibleTranscriptMessages(transcript);
+    const intents = Object.values(
+      this.port.getMachineState().intentsById,
+    ).filter((intent) => {
+      return (
+        intent.threadId === threadId &&
+        [
+          "dispatching",
+          "remote_accepted",
+          "awaiting_provider_ack",
+          "awaiting_response",
+          "awaiting_history",
+        ].includes(intent.state)
+      );
+    });
+
+    for (const intent of intents) {
+      const match = resolveIntentHistoryMatch(intent, visibleTranscript);
+      if (!match.userVisible) {
+        continue;
+      }
+      if (
+        match.assistantVisible ||
+        (!intent.responseText && intent.dispatchMode === "async_steer")
+      ) {
+        this.port.dispatchMachineAction({
+          type: "intent/completed",
+          intentId: intent.intentId,
+        });
+      } else {
+        this.port.dispatchMachineAction({
+          type: "intent/awaiting-history",
+          intentId: intent.intentId,
+          responseText: intent.responseText,
+        });
+      }
+    }
+
+    const runtime = selectThreadRuntime(this.port.getMachineState(), threadId);
+    if (runtime && !this.hasPendingHistoryIntents(threadId)) {
+      this.port.dispatchMachineAction({
+        type: "thread/clear",
+        threadId,
+      });
+      const liveStream = this.getLiveStreamState(threadId);
+      if (
+        liveStream &&
+        ["reconciling", "disconnected", "failed"].includes(
+          liveStream.streamStatus,
+        )
+      ) {
+        this.clearLiveStreamState(threadId);
+      }
+    }
+  }
+
+  applyUserAck(
+    threadId: string,
+    runId: string,
+    pendingInputId?: string,
+  ): void {
+    const { requestSelectedThreadMessagesBottomSnap } = this.requireDeps();
+    let nextIntentId: string | undefined;
+    const acknowledgedPendingInputId = pendingInputId?.trim() || "";
+    this.updateLiveStreamState(threadId, (current) => {
+      const pendingAckIntentIds = [...(current?.pendingAckIntentIds || [])];
+      const matchedIndex = findPendingAckIntentIndex(
+        pendingAckIntentIds,
+        acknowledgedPendingInputId,
+        this.port.getMachineState().intentsById,
+      );
+      if (matchedIndex >= 0) {
+        nextIntentId = pendingAckIntentIds[matchedIndex];
+        pendingAckIntentIds.splice(matchedIndex, 1);
+      } else {
+        nextIntentId = undefined;
+      }
+      const nextPendingAckIntentIds = nextIntentId
+        ? pendingAckIntentIds.filter((intentId) => intentId !== nextIntentId)
+        : pendingAckIntentIds;
+      return current
+        ? {
+            ...current,
+            runId,
+            activeIntentId: nextIntentId || current.activeIntentId,
+            assistantEntryId: null,
+            pendingAckIntentIds: nextPendingAckIntentIds,
+            streamStatus: "streaming",
+          }
+        : null;
+    });
+    if (nextIntentId) {
+      const acknowledgedIntent = this.intentForId(nextIntentId);
+      this.port.dispatchMachineAction({
+        type: "intent/awaiting-history",
+        intentId: nextIntentId,
+        responseText: acknowledgedIntent?.responseText,
+      });
+      requestSelectedThreadMessagesBottomSnap(threadId, true);
+      this.setThreadRuntimeState(threadId, "running_remote", {
+        activeIntentId: nextIntentId,
+        remoteRunId: runId,
+      });
+    }
+  }
+
+  forceReleaseThreadRuntime(threadId: string): void {
+    const pendingStates = [
+      "dispatching",
+      "remote_accepted",
+      "awaiting_provider_ack",
+      "awaiting_response",
+      "awaiting_history",
+    ];
+    for (const intent of Object.values(
+      this.port.getMachineState().intentsById,
+    )) {
+      if (intent.threadId === threadId && pendingStates.includes(intent.state)) {
+        this.port.dispatchMachineAction({
+          type: "intent/completed",
+          intentId: intent.intentId,
+        });
+      }
+    }
+    this.port.dispatchMachineAction({
+      type: "thread/clear",
+      threadId,
+    });
+    const liveStream = this.getLiveStreamState(threadId);
+    if (
+      liveStream &&
+      ["reconciling", "disconnected", "failed"].includes(
+        liveStream.streamStatus,
+      )
+    ) {
+      this.clearLiveStreamState(threadId);
+    }
+  }
+}

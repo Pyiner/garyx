@@ -42,6 +42,10 @@ import type {
 import { ThreadFrontier } from "./frontier.ts";
 import type { ThreadFrontierSnapshot } from "./frontier.ts";
 import { ThreadTranscriptCache } from "./transcript-cache.ts";
+import { TranscriptLifecycle } from "./transcript-lifecycle.ts";
+import type {
+  TranscriptLifecycleDeps,
+} from "./transcript-lifecycle.ts";
 import {
   THREAD_HISTORY_PAGE_SIZE,
   THREAD_HISTORY_USER_QUERY_LIMIT,
@@ -210,6 +214,12 @@ export class GatewayMirror {
   // batches 5/6.
   private dispatchOrchestrator = new DispatchOrchestrator();
 
+  // Transcript-lifecycle domain (batch 6b-2): the transport orchestration
+  // that used to live in useTranscriptController — machine bookkeeping and
+  // the run-state chain in slice 2a; apply chain and fetch/stream follow.
+  // The mirror itself is the module's MirrorPort (structural match).
+  private transcriptLifecycle = new TranscriptLifecycle(this);
+
   // Live-stream domain (batch 3c-1): per-thread transport state storage.
   // The aggregate map mirrors the legacy `liveStreamStateByThread` React
   // state: one Record identity, rebuilt as a whole on every update (the
@@ -372,6 +382,55 @@ export class GatewayMirror {
 
   interruptThread(threadId: string | null | undefined): Promise<void> {
     return this.dispatchOrchestrator.interruptThread(threadId);
+  }
+
+  /** Attach (or refresh) the transcript-lifecycle React seams (6b-2a). */
+  setTranscriptLifecycleDeps(deps: TranscriptLifecycleDeps): void {
+    this.transcriptLifecycle.setDeps(deps);
+  }
+
+  syncTranscriptRunState(threadId: string, transcript: ThreadTranscript) {
+    return this.transcriptLifecycle.syncTranscriptRunState(
+      threadId,
+      transcript,
+    );
+  }
+
+  applyCommittedTranscriptRunState(event: {
+    threadId: string;
+    seq: number;
+    message: CommittedMessageEvent["message"];
+  }) {
+    return this.transcriptLifecycle.applyCommittedTranscriptRunState(event);
+  }
+
+  markIntentsFromHistory(
+    threadId: string,
+    transcript: Parameters<TranscriptLifecycle["markIntentsFromHistory"]>[1],
+  ): void {
+    this.transcriptLifecycle.markIntentsFromHistory(threadId, transcript);
+  }
+
+  applyUserAck(threadId: string, runId: string, pendingInputId?: string): void {
+    this.transcriptLifecycle.applyUserAck(threadId, runId, pendingInputId);
+  }
+
+  forceReleaseThreadRuntime(threadId: string): void {
+    this.transcriptLifecycle.forceReleaseThreadRuntime(threadId);
+  }
+
+  hasPendingHistoryIntents(threadId: string): boolean {
+    return this.transcriptLifecycle.hasPendingHistoryIntents(threadId);
+  }
+
+  setThreadRuntimeState(
+    ...args: Parameters<TranscriptLifecycle["setThreadRuntimeState"]>
+  ): void {
+    this.transcriptLifecycle.setThreadRuntimeState(...args);
+  }
+
+  getThreadTitleOverrides(): Record<string, string> {
+    return this.transcriptLifecycle.getThreadTitleOverrides();
   }
 
   subscribeLiveStreams(listener: () => void): Unsubscribe {
