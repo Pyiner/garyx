@@ -176,7 +176,9 @@ export function parseDesktopRoute(href?: string): DesktopRoute {
   return { kind: 'thread-home' };
 }
 
-export function contentViewForDesktopRoute(route: DesktopRoute): ContentView | null {
+// The switch is exhaustive: every route kind maps to a view (the 6c-2b
+// contentView selector relies on this being total).
+export function contentViewForDesktopRoute(route: DesktopRoute): ContentView {
   switch (route.kind) {
     case 'thread-home':
     case 'thread':

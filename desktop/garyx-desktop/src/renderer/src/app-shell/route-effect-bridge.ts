@@ -98,7 +98,6 @@ type RouteEffectBridgeArgs = {
   selectedWorkflowTaskId: string | null;
   setCapsulePreviewId: React.Dispatch<React.SetStateAction<string | null>>;
   setConnection: React.Dispatch<React.SetStateAction<ConnectionStatus | null>>;
-  setContentView: React.Dispatch<React.SetStateAction<ContentView>>;
   setError: React.Dispatch<React.SetStateAction<string | null>>;
   setNewThreadDraftActive: React.Dispatch<React.SetStateAction<boolean>>;
   setPendingAgentId: React.Dispatch<React.SetStateAction<string>>;
@@ -144,7 +143,6 @@ export function useRouteEffectBridge({
   selectedWorkflowTaskId,
   setCapsulePreviewId,
   setConnection,
-  setContentView,
   setError,
   setNewThreadDraftActive,
   setPendingAgentId,
@@ -221,12 +219,9 @@ export function useRouteEffectBridge({
         case "automation":
           if (route.automationId) {
             await handleSelectAutomation(route.automationId);
-          } else {
-            setContentView("automation");
           }
           return;
         case "settings":
-          setContentView("settings");
           if (route.tabId) {
             await handleSelectSettingsTab(route.tabId);
           }
@@ -250,15 +245,12 @@ export function useRouteEffectBridge({
             setSelectedWorkflowTaskId(route.taskId);
             setSelectedWorkflowRunId(null);
           }
-          setContentView("workflow");
           return;
         }
         case "capsule":
-          setContentView("capsules");
           setCapsulePreviewId(route.capsuleId);
           return;
         case "view":
-          setContentView(route.view);
           // Entering the Capsules gallery from the rail/route clears any open
           // preview so #/capsules shows the gallery, not a stale preview.
           if (route.view === "capsules") {
@@ -266,7 +258,6 @@ export function useRouteEffectBridge({
           }
           return;
         case "thread-home":
-          setContentView("thread");
           setNewThreadDraftActive(false);
           setPendingWorkspacePath(null);
           setPendingWorkspaceMode("local");
@@ -283,7 +274,6 @@ export function useRouteEffectBridge({
       handleSelectAutomation,
       handleSelectSettingsTab,
       openExistingThread,
-      setContentView,
     ],
   );
 

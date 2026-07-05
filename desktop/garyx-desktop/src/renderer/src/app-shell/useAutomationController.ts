@@ -72,7 +72,6 @@ type UseAutomationControllerArgs = {
   navigateRoute: (route: DesktopRoute) => void;
   pendingThreadBottomSnapRef: React.MutableRefObject<string | null>;
   selectedThreadId: string | null;
-  setContentView: React.Dispatch<React.SetStateAction<ContentView>>;
   setDesktopState: React.Dispatch<React.SetStateAction<DesktopState | null>>;
   setError: React.Dispatch<React.SetStateAction<string | null>>;
   setNewThreadDraftActive: React.Dispatch<React.SetStateAction<boolean>>;
@@ -90,7 +89,6 @@ export function useAutomationController({
   navigateRoute,
   pendingThreadBottomSnapRef,
   selectedThreadId,
-  setContentView,
   setDesktopState,
   setError,
   setNewThreadDraftActive,
@@ -139,7 +137,9 @@ export function useAutomationController({
 
   async function handleSelectAutomation(automationId: string | null) {
     setError(null);
-    setContentView('automation');
+    // The view flips through the committed automation route (6c-2b): the
+    // rail select and external hashes navigate before this application
+    // runs, so the contentView selector is already 'automation'.
     // Async guard (6c-2a): a slow select must not clobber the state a
     // newer navigation installed while this one awaited the IPC.
     const routeVersion = getRouteVersion();

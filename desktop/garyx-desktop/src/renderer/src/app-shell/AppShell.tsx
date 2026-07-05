@@ -461,12 +461,6 @@ function threadRunStateIsRunning(thread: DesktopThreadSummary): boolean {
   return (thread.runState || "").trim().toLowerCase() === "running";
 }
 
-function initialContentView(route: DesktopRoute): ContentView {
-  // Batch 4b (intentional change #3): the hash is the only persisted
-  // route; the sessionStorage contentView fallback is gone.
-  return contentViewForDesktopRoute(route) || "thread";
-}
-
 function hasRemoteDesktopContent(state: DesktopState | null): boolean {
   if (!state) {
     return false;
@@ -745,18 +739,25 @@ export function AppShell() {
   const [workspaceConversationPath, setWorkspaceConversationPath] =
     useState<string | null>(null);
   const [recentThreadsRailOpen, setRecentThreadsRailOpen] = useState(false);
-  const [contentView, setContentViewRaw] = useState<ContentView>(() =>
-    initialContentView(initialRouteValue),
+  // Batch 6c-2b: contentView is a SELECTOR over the committed route — the
+  // route store is the only view state (AppShell subscribes on its local
+  // store instance, not through context: AppShell renders the Provider).
+  // Writers are gone; view changes navigate, and the open-thread /
+  // draft-entry commands sync the route so direct callers flip the view
+  // through the same commit.
+  const routeSnapshot = useSyncExternalStore(
+    useCallback(
+      (onChange) => desktopRouteStore.subscribe(onChange),
+      [desktopRouteStore],
+    ),
+    () => desktopRouteStore.getSnapshot(),
   );
+  const contentView = contentViewForDesktopRoute(routeSnapshot.route);
   useEffect(() => {
     if (contentView !== "thread" || !selectedThreadId) {
       setThreadEntrySelectionSource(null);
     }
   }, [contentView, selectedThreadId]);
-  // Batch 4b (intentional change #3): contentView sessionStorage
-  // persistence is removed — the hash, which Electron restores per
-  // window, is the only persisted route.
-  const setContentView = setContentViewRaw;
   // Batch 5b: the add-bot dialog is a colocated feature root; the shell
   // keeps a handle (the legacy addBotInitialValues state was
   // write-only-null dead state and is dropped).
@@ -836,7 +837,6 @@ export function AppShell() {
     },
     pendingThreadBottomSnapRef,
     selectedThreadId,
-    setContentView,
     setDesktopState,
     setError,
     setNewThreadDraftActive,
@@ -2395,7 +2395,6 @@ export function AppShell() {
     entrySource: ThreadEntrySelectionSource | null = null,
   ): Promise<boolean> {
     setError(null);
-    setContentView("thread");
     setNewThreadDraftActive(false);
 
     return selectExistingThreadInPlace(threadId, entrySource);
@@ -2434,6 +2433,12 @@ export function AppShell() {
     }
     setSelectedThreadId(threadId);
     setThreadEntrySelectionSource(entrySource);
+    // Opening a thread is a command like the draft entry (6c-2b): direct
+    // callers (rows, panels, bot flows) land here without a route commit,
+    // so sync the route now — the contentView selector flips through this
+    // same commit. Equal-route no-op when the navigate application called
+    // us; origin 'sync' means the route effect never re-applies.
+    desktopRouteStore.syncRoute({ kind: "thread", threadId });
     return true;
   }
 
@@ -2490,7 +2495,6 @@ export function AppShell() {
     selectThreadRequestSequenceRef,
     setCapsulePreviewId,
     setConnection,
-    setContentView,
     setError,
     setNewThreadDraftActive,
     setPendingAgentId,
@@ -2664,7 +2668,6 @@ export function AppShell() {
             setSelectedThreadId(startupRoute.threadId);
           }
         } else if (startupRoute.kind === "new-thread") {
-          setContentView("thread");
           setNewThreadDraftActive(true);
           setSelectedThreadId(null);
           setPendingWorkspacePath(startupRoute.workspacePath || null);
@@ -3103,7 +3106,6 @@ export function AppShell() {
     botId?: string | null;
   }) {
     setError(null);
-    setContentView("thread");
     setNewThreadDraftActive(true);
     setSelectedThreadId(null);
     setPendingWorkspacePath(input.workspacePath || null);
@@ -3117,6 +3119,16 @@ export function AppShell() {
     }
     clearComposerDraft();
     requestComposerFocus();
+    // The contentView selector flips through this commit (6c-2b). Kept
+    // values fold from the current synchronous closure — this command is
+    // sync, so the closure IS the latest value.
+    desktopRouteStore.syncRoute({
+      kind: "new-thread",
+      workspacePath: input.workspacePath || null,
+      agentId: input.agentId !== undefined ? input.agentId : pendingAgentId,
+      workflowId:
+        input.workflowId !== undefined ? input.workflowId : pendingWorkflowId,
+    });
   }
 
   function handleStartDraftForAgent(agentId: string) {
