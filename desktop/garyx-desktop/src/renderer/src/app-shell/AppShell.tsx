@@ -2461,6 +2461,7 @@ export function AppShell() {
     selectedThreadId,
     selectedWorkflowRunId,
     selectedWorkflowTaskId,
+    selectThreadRequestSequenceRef,
     setCapsulePreviewId,
     setConnection,
     setContentView,

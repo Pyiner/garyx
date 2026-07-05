@@ -70,6 +70,13 @@ type RouteEffectBridgeArgs = {
   selectedAutomationId: string | null;
   selectedThreadId: string | null;
   selectedWorkflowRunId: string | null;
+  /**
+   * The shell's thread-selection request sequence (the stale guard inside
+   * selectExistingThreadInPlace). The deep-link open reads it to tell
+   * whether its open actually selected or was superseded by a concurrent
+   * user navigation.
+   */
+  selectThreadRequestSequenceRef: React.MutableRefObject<number>;
   selectedWorkflowTaskId: string | null;
   setCapsulePreviewId: React.Dispatch<React.SetStateAction<string | null>>;
   setConnection: React.Dispatch<React.SetStateAction<ConnectionStatus | null>>;
@@ -113,6 +120,7 @@ export function useRouteEffectBridge({
   selectedAutomationId,
   selectedThreadId,
   selectedWorkflowRunId,
+  selectThreadRequestSequenceRef,
   selectedWorkflowTaskId,
   setCapsulePreviewId,
   setConnection,
@@ -157,11 +165,20 @@ export function useRouteEffectBridge({
     throw new Error(lastError);
   }
 
-  async function openThreadFromDeepLink(threadId: string): Promise<void> {
+  /**
+   * Returns true when the open actually selected the thread; false when a
+   * concurrent user navigation superseded it (the request-sequence guard
+   * inside selectExistingThreadInPlace resolves a stale open without
+   * selecting — this reads the same sequence, so the caller can skip the
+   * late route write).
+   */
+  async function openThreadFromDeepLink(threadId: string): Promise<boolean> {
     if (!(await ensureThreadOpenable(threadId))) {
       throw new Error(`Thread not found for garyx:// link: ${threadId}`);
     }
+    const requestSequence = selectThreadRequestSequenceRef.current + 1;
     await openExistingThread(threadId);
+    return selectThreadRequestSequenceRef.current === requestSequence;
   }
 
   const applyDesktopRoute = useCallback(
@@ -365,11 +382,16 @@ export function useRouteEffectBridge({
               // readiness ladder covers open-thread like resume-session
               // (batch 6c-1) instead of failing the lookup immediately.
               await waitForGatewayReadyForDeepLink();
-              await openThreadFromDeepLink(event.threadId);
-              desktopRouteStore.navigate(
-                { kind: "thread", threadId: event.threadId },
-                { replace: true },
-              );
+              // A user navigation during the readiness/open await supersedes
+              // the deep link: the late navigate must not overwrite the
+              // route the user moved to, so only write the hash when the
+              // open actually selected.
+              if (await openThreadFromDeepLink(event.threadId)) {
+                desktopRouteStore.navigate(
+                  { kind: "thread", threadId: event.threadId },
+                  { replace: true },
+                );
+              }
               return;
             }
             case "new-thread": {
