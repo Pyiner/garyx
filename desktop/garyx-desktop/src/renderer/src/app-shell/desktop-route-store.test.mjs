@@ -288,3 +288,65 @@ test("dispose clears external listeners too (4b)", () => {
   host.externalEdit("#/agents");
   assert.equal(external, 0);
 });
+
+test("subscribeCommits delivers every commit synchronously with origin and settled snapshot (6c-2a)", () => {
+  const host = fakeHost("#/agents");
+  const store = new DesktopRouteStore(host);
+  const order = [];
+  const commits = [];
+  store.subscribe(() => {
+    order.push("plain");
+  });
+  store.subscribeCommits((event) => {
+    order.push("commit");
+    commits.push(event);
+    // The snapshot is committed before delivery: event matches it exactly.
+    const snap = store.getSnapshot();
+    assert.equal(event.version, snap.version);
+    assert.ok(desktopRoutesEqual(event.route, snap.route));
+  });
+  store.subscribeExternal(() => {
+    order.push("external");
+  });
+
+  // Internal navigation: origin 'navigate', canonical route committed.
+  store.navigate(
+    { kind: "new-thread", workspacePath: null, agentId: "claude", workflowId: null },
+    { replace: true },
+  );
+  assert.deepEqual(order, ["plain", "commit"], "navigate: plain then commit, no external");
+  assert.equal(commits[0].origin, "navigate");
+  assert.equal(
+    commits[0].route.agentId,
+    null,
+    "the committed route is canonical (default agent dropped)",
+  );
+
+  // Equal-route navigate is a no-op: no commit event.
+  order.length = 0;
+  store.navigate(
+    { kind: "new-thread", workspacePath: null, agentId: null, workflowId: null },
+    { replace: true },
+  );
+  assert.deepEqual(order, [], "equal route: no notifications at all");
+
+  // Alias normalization (equal route, different hash text): replace only,
+  // still no commit event.
+  host.externalEdit("#/new");
+  assert.deepEqual(order, [], "echo/alias parse-equal: no commit event");
+
+  // External edit to a different route: plain -> commit -> external.
+  store.navigate({ kind: "view", view: "agents" }, { replace: true });
+  order.length = 0;
+  commits.length = 0;
+  host.externalEdit("#/settings/provider");
+  assert.deepEqual(order, ["plain", "commit", "external"]);
+  assert.equal(commits[0].origin, "external");
+  assert.deepEqual(commits[0].route, { kind: "settings", tabId: "provider" });
+
+  // dispose clears commit listeners.
+  store.dispose();
+  order.length = 0;
+  host.externalEdit("#/agents");
+  assert.deepEqual(order, [], "disposed store notifies nobody");
+});

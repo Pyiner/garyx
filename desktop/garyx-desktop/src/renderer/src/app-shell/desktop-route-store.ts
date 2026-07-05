@@ -62,12 +62,27 @@ export interface DesktopRouteSnapshot {
   readonly route: DesktopRoute;
 }
 
+/**
+ * One route commit, delivered synchronously from inside commit() (batch
+ * 6c-2a). `origin` distinguishes the internal writer (`navigate`) from
+ * external hash/popstate application (`external`) so the route effect can
+ * apply the internal/external convergence split — external failures keep
+ * the 4b no-counter-write behavior. `version` and `route` match
+ * getSnapshot() at delivery time (the snapshot is committed first).
+ */
+export interface RouteCommitEvent {
+  readonly route: DesktopRoute;
+  readonly version: number;
+  readonly origin: "navigate" | "external";
+}
+
 export class DesktopRouteStore {
   private host: RouteHost;
   private route: DesktopRoute;
   private version = 0;
   private snapshot: DesktopRouteSnapshot | null = null;
   private listeners = new Set<() => void>();
+  private commitListeners = new Set<(event: RouteCommitEvent) => void>();
   private externalListeners = new Set<() => void>();
   private unsubscribeHost: Unsubscribe;
 
@@ -97,6 +112,21 @@ export class DesktopRouteStore {
     this.externalListeners.add(listener);
     return () => {
       this.externalListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Notified synchronously for EVERY route commit — internal navigations
+   * and external hash/popstate applications alike — with the committed
+   * canonical route, its store version, and the commit origin (batch
+   * 6c-2a). Delivery order per commit: plain subscribe() listeners (the
+   * uSES faces) first, then commit listeners, then — for external commits
+   * only — the subscribeExternal listeners.
+   */
+  subscribeCommits(listener: (event: RouteCommitEvent) => void): Unsubscribe {
+    this.commitListeners.add(listener);
+    return () => {
+      this.commitListeners.delete(listener);
     };
   }
 
@@ -130,7 +160,7 @@ export class DesktopRouteStore {
     // hashchange echo parses to exactly the canonical form (hash builds
     // drop default/empty params, e.g. the new-thread 'claude' agent), so
     // onExternalChange's equality dedupe holds for every navigable route.
-    this.commit(canonicalDesktopRoute(route));
+    this.commit(canonicalDesktopRoute(route), "navigate");
     if (options?.replace) {
       this.host.replaceHash(nextHash);
     } else {
@@ -141,6 +171,7 @@ export class DesktopRouteStore {
   dispose(): void {
     this.unsubscribeHost();
     this.listeners.clear();
+    this.commitListeners.clear();
     this.externalListeners.clear();
   }
 
@@ -159,18 +190,26 @@ export class DesktopRouteStore {
     if (desktopRoutesEqual(parsed, this.route)) {
       return;
     }
-    this.commit(parsed);
+    this.commit(parsed, "external");
     for (const listener of [...this.externalListeners]) {
       listener();
     }
   }
 
-  private commit(route: DesktopRoute): void {
+  private commit(route: DesktopRoute, origin: "navigate" | "external"): void {
     this.route = route;
     this.version += 1;
     this.snapshot = null;
     for (const listener of [...this.listeners]) {
       listener();
+    }
+    const event: RouteCommitEvent = {
+      route: this.route,
+      version: this.version,
+      origin,
+    };
+    for (const listener of [...this.commitListeners]) {
+      listener(event);
     }
   }
 }
