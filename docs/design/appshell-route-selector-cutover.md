@@ -232,7 +232,15 @@ branch is data side effects only.
 Flip the remaining routed ids one per commit (`capsulePreviewId` →
 `settingsActiveTab` → `selectedAutomationId` → `selectedWorkflowTaskId` →
 new-thread pendings → `selectedThreadId` last, carrying the thread-home
-redirect). Each flip deletes the corresponding input from
+redirect).
+
+**selectedAutomationId correction (implementation round):** it turned out
+to be a server projection (`desktopState.selectedAutomationId`, normalized
+by the gateway store), not local state — so it does not become a selector.
+The server stays the selection's source of truth; the automation route is
+its command entry, and `handleSelectAutomation` syncs the route to the
+server-confirmed id on success (sync origin, no re-application). Its fold
+input simply dies with the fold. Each flip deletes the corresponding input from
 `currentDesktopRoute`; after the last one, `currentDesktopRoute` and the
 state-to-hash effect are deleted — the route store no longer has anything
 to converge from. `isKnownThreadId` fallback selection (startup unknown

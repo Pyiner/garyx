@@ -850,6 +850,9 @@ export function AppShell() {
     navigateRoute: (route) => {
       desktopRouteStore.navigate(route, { replace: true });
     },
+    syncAutomationRoute: (automationId) => {
+      desktopRouteStore.syncRoute({ kind: "automation", automationId });
+    },
     pendingThreadBottomSnapRef,
     selectedThreadId,
     setDesktopState,

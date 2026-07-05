@@ -70,6 +70,13 @@ type UseAutomationControllerArgs = {
   getRouteVersion: () => number;
   /** Route-store navigation seam (replace semantics, 6c-2a). */
   navigateRoute: (route: DesktopRoute) => void;
+  /**
+   * State-to-hash sync for the SERVER-confirmed automation selection
+   * (6c-2c): selectAutomation's response carries the normalized selection
+   * (a missing id falls back server-side), and the hash must follow it
+   * without re-triggering the application (sync origin).
+   */
+  syncAutomationRoute: (automationId: string | null) => void;
   pendingThreadBottomSnapRef: React.MutableRefObject<string | null>;
   selectedThreadId: string | null;
   setDesktopState: React.Dispatch<React.SetStateAction<DesktopState | null>>;
@@ -87,6 +94,7 @@ export function useAutomationController({
   desktopTeams,
   getRouteVersion,
   navigateRoute,
+  syncAutomationRoute,
   pendingThreadBottomSnapRef,
   selectedThreadId,
   setDesktopState,
@@ -149,6 +157,9 @@ export function useAutomationController({
         return;
       }
       setDesktopState(nextState);
+      // Server-owned selection: follow the confirmed (possibly
+      // normalized) id so the hash converges even after the fold dies.
+      syncAutomationRoute(nextState.selectedAutomationId ?? null);
     } catch (selectionError) {
       setError(
         selectionError instanceof Error
