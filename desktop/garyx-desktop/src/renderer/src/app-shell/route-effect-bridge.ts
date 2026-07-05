@@ -1,3 +1,11 @@
+// RouteEffectBridge (endgame architecture batch 6c-1): the one place that
+// owns the two external route inputs — (a) route-store commits from
+// hash/popstate edits, applied through applyDesktopRoute, and (b) the
+// garyx:// deep-link IPC channel, translated into route applications plus
+// route-store navigations behind the gateway-readiness retry ladder. It
+// also owns the state-to-hash sync effect until the route store becomes
+// the only route state.
+
 import { useCallback, useEffect, useRef } from "react";
 
 import type {
@@ -38,7 +46,7 @@ export function waitForMs(ms: number): Promise<void> {
   });
 }
 
-type UseDeepLinkRouteControllerArgs = {
+type RouteEffectBridgeArgs = {
   capsulePreviewId: string | null;
   clearComposerDraft: () => void;
   contentView: ContentView;
@@ -84,7 +92,7 @@ type UseDeepLinkRouteControllerArgs = {
   settingsActiveTab: SettingsTabId;
 };
 
-export function useDeepLinkRouteController({
+export function useRouteEffectBridge({
   capsulePreviewId,
   clearComposerDraft,
   contentView,
@@ -121,7 +129,7 @@ export function useDeepLinkRouteController({
   setSelectedWorkflowTask,
   setSelectedWorkflowTaskId,
   settingsActiveTab,
-}: UseDeepLinkRouteControllerArgs): void {
+}: RouteEffectBridgeArgs): void {
   const deepLinkEventHandlerRef = useRef<(event: DesktopDeepLinkEvent) => void>(
     () => {},
   );
@@ -352,16 +360,28 @@ export function useDeepLinkRouteController({
             case "error":
               pushToast(event.error, "error");
               return;
-            case "open-thread":
+            case "open-thread": {
+              // Cold-start deep links race the managed gateway boot; the
+              // readiness ladder covers open-thread like resume-session
+              // (batch 6c-1) instead of failing the lookup immediately.
+              await waitForGatewayReadyForDeepLink();
               await openThreadFromDeepLink(event.threadId);
+              desktopRouteStore.navigate(
+                { kind: "thread", threadId: event.threadId },
+                { replace: true },
+              );
               return;
-            case "new-thread":
-              await applyDesktopRoute({
+            }
+            case "new-thread": {
+              const route: DesktopRoute = {
                 kind: "new-thread",
                 workspacePath: event.workspacePath || null,
                 agentId: event.agentId || null,
-              });
+              };
+              await applyDesktopRoute(route);
+              desktopRouteStore.navigate(route, { replace: true });
               return;
+            }
             case "resume-session":
               await waitForGatewayReadyForDeepLink();
               await handleResumeProviderSession(
@@ -369,12 +389,15 @@ export function useDeepLinkRouteController({
                 event.providerHint,
               );
               return;
-            case "open-capsule":
-              await applyDesktopRoute({
+            case "open-capsule": {
+              const route: DesktopRoute = {
                 kind: "capsule",
                 capsuleId: event.capsuleId,
-              });
+              };
+              await applyDesktopRoute(route);
+              desktopRouteStore.navigate(route, { replace: true });
               return;
+            }
           }
         } catch (deepLinkError) {
           const message =
@@ -385,5 +408,11 @@ export function useDeepLinkRouteController({
         }
       })();
     };
-  }, [applyDesktopRoute, handleResumeProviderSession, openThreadFromDeepLink, pushToast]);
+  }, [
+    applyDesktopRoute,
+    desktopRouteStore,
+    handleResumeProviderSession,
+    openThreadFromDeepLink,
+    pushToast,
+  ]);
 }

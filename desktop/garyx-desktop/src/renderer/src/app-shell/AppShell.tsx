@@ -190,9 +190,9 @@ import {
 } from "./diagnostics-helpers";
 import {
   isKnownThreadId,
-  useDeepLinkRouteController,
+  useRouteEffectBridge,
   waitForMs,
-} from "./useDeepLinkRouteController";
+} from "./route-effect-bridge";
 import { useGatewayConnectionController } from "./useGatewayConnectionController";
 import { useLayoutResizeController } from "./useLayoutResizeController";
 import { resolveMemoryDialogTargetFromPath } from "./useMemoryDialogController";
@@ -2439,7 +2439,7 @@ export function AppShell() {
     setContentView("workflow");
   }
 
-  useDeepLinkRouteController({
+  useRouteEffectBridge({
     capsulePreviewId,
     clearComposerDraft,
     contentView,
