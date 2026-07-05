@@ -314,6 +314,7 @@ final class GaryxMobileModel: ObservableObject {
     @Published var isSavingBotSettings = false
     @Published var providerModelsByType: [String: GaryxProviderModels] = [:]
     @Published var codingUsage: GaryxCodingUsage?
+    @Published var claudeCodeAuthSession: GaryxClaudeCodeAuthSession?
     @Published var selectedSkillEditor: GaryxSkillEditorState?
     @Published var selectedSkillDocument: GaryxSkillFileDocument?
     @Published var selectedTaskDetail: GaryxTaskSummary?
@@ -417,6 +418,8 @@ final class GaryxMobileModel: ObservableObject {
     var threadRuntimeMutationIds: [String: UUID] = [:]
     var workflowRunPollTask: Task<Void, Never>?
     var workflowRunPollGeneration: UUID?
+    var claudeCodeAuthPollTask: Task<Void, Never>?
+    var claudeCodeAuthPollGeneration: UUID?
     #if DEBUG
     var debugSnapshotActive = false
     #endif
