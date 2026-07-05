@@ -1,0 +1,157 @@
+// Side-chat operations shared by the shell and the panel (endgame batch
+// 5b-7b, docs/design/appshell-sidechat-colocation.md). Both entry points
+// live OUTSIDE the panel's lifetime: `ensureSideChatThread` is invoked by
+// the dock header's chat auto-open (panel not yet mounted) and by the
+// panel's composer submit; `openTaskThreadInSidePanel` is invoked from
+// the Tasks tool tab (panel not mounted). They are plain async commands
+// over the session store + mirror facades — implementation note recorded
+// against the design doc's "moves verbatim into the panel" wording, which
+// the call topology contradicts for ensureSideChatThread.
+
+import type {
+  DesktopState,
+  DesktopThreadSummary,
+} from "@shared/contracts";
+
+import type { GatewayMirror } from "../gateway-mirror/mirror";
+import type { MessageMap } from "./types";
+import type { SideChatSessions } from "./side-chat-sessions";
+
+export interface SideChatOpsContext {
+  sessions: SideChatSessions;
+  mirror: GatewayMirror;
+  /** Render-time shell truth, captured by the caller at dispatch. */
+  sourceThreadId: string | null;
+  activeThread: DesktopThreadSummary | null;
+  threadSummaryById: Map<string, DesktopThreadSummary>;
+  pendingAgentId: string | null;
+  setDesktopState: React.Dispatch<React.SetStateAction<DesktopState | null>>;
+  setError: (error: string | null) => void;
+}
+
+/**
+ * Resolve (or create) the side thread bound to the active source thread.
+ * Verbatim orchestration from the dissolved controller: adopt an existing
+ * binding when the thread is still openable, otherwise create a hidden
+ * fork with in-flight de-dupe through the session store.
+ */
+export async function ensureSideChatThread(
+  ctx: SideChatOpsContext,
+): Promise<string | null> {
+  const {
+    sessions,
+    mirror,
+    activeThread,
+    threadSummaryById,
+    pendingAgentId,
+    setDesktopState,
+    setError,
+  } = ctx;
+  const sourceThreadId = ctx.sourceThreadId;
+  if (!sourceThreadId) {
+    return null;
+  }
+
+  const existingThreadId =
+    sessions.threadFor(sourceThreadId) ||
+    sessions.restorePersisted(sourceThreadId);
+  if (existingThreadId) {
+    try {
+      if (await mirror.ensureThreadOpenable(existingThreadId)) {
+        sessions.rememberSideThreadId(existingThreadId);
+        sessions.rememberThread(sourceThreadId, existingThreadId);
+        sessions.setError(sourceThreadId, null);
+        return existingThreadId;
+      }
+    } catch {
+      sessions.forgetThread(sourceThreadId, existingThreadId);
+    }
+  }
+
+  const inFlight = sessions.creationPromiseFor(sourceThreadId);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const creation = (async () => {
+    sessions.setCreating(sourceThreadId, true);
+    sessions.setError(sourceThreadId, null);
+
+    try {
+      const sourceThread =
+        threadSummaryById.get(sourceThreadId) || activeThread || null;
+      const created = await window.garyxDesktop.createThread({
+        title: "Side chat",
+        agentId: sourceThread?.agentId || pendingAgentId || "claude",
+        forkFromThreadId: sourceThreadId,
+        metadata: {
+          source: "side_chat",
+          hidden: true,
+          exclude_from_recent: true,
+          side_chat_parent_thread_id: sourceThreadId,
+        },
+      });
+      setDesktopState(created.state);
+      mirror.updateMessagesByThread((current: MessageMap) => ({
+        ...current,
+        [created.thread.id]: current[created.thread.id] || [],
+      }));
+      sessions.rememberSideThreadId(created.thread.id);
+      sessions.rememberThread(sourceThreadId, created.thread.id);
+      return created.thread.id;
+    } catch (createError) {
+      const message =
+        createError instanceof Error
+          ? createError.message
+          : "Failed to start side chat.";
+      sessions.setError(sourceThreadId, message);
+      setError(message);
+      return null;
+    } finally {
+      sessions.setCreating(sourceThreadId, false);
+      sessions.setCreationPromise(sourceThreadId, null);
+    }
+  })();
+
+  sessions.setCreationPromise(sourceThreadId, creation);
+  return creation;
+}
+
+/**
+ * Bind an existing (task) thread as the active source's side chat. The
+ * shell command wraps this with dock-open + the chat-tab mailbox; the
+ * binding is written FIRST so the chat tab's auto-open sees it and does
+ * not create a default side chat (design ruling, review #TASK-1658).
+ */
+export async function openTaskThreadInSidePanel(
+  ctx: SideChatOpsContext,
+  threadId: string,
+): Promise<void> {
+  const { sessions, mirror, setError } = ctx;
+  const sourceThreadId = ctx.sourceThreadId;
+  const targetThreadId = threadId.trim();
+  if (!sourceThreadId || !targetThreadId) {
+    return;
+  }
+
+  sessions.setCreating(sourceThreadId, true);
+  sessions.setError(sourceThreadId, null);
+
+  try {
+    if (!(await mirror.ensureThreadOpenable(targetThreadId))) {
+      throw new Error(`Thread not found: ${targetThreadId}`);
+    }
+    sessions.rememberSideThreadId(targetThreadId);
+    sessions.rememberThread(sourceThreadId, targetThreadId);
+  } catch (openError) {
+    const message =
+      openError instanceof Error
+        ? openError.message
+        : `Failed to open thread: ${targetThreadId}`;
+    sessions.setError(sourceThreadId, message);
+    setError(message);
+    throw openError;
+  } finally {
+    sessions.setCreating(sourceThreadId, false);
+  }
+}

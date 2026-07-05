@@ -220,8 +220,14 @@ import {
   scrollMessagesToLatest,
   type TranscriptScrollIntent,
 } from "./components/thread-transcript-scroll";
-import { useSideChatController } from "./useSideChatController";
 import { SideChatSessions } from "./side-chat-sessions";
+import {
+  ensureSideChatThread as ensureSideChatThreadOp,
+  openTaskThreadInSidePanel as openTaskThreadInSidePanelOp,
+  type SideChatOpsContext,
+} from "./side-chat-ops";
+import { SideChatPanel } from "./components/SideChatPanel";
+import { loadThreadHistory } from "../thread-controller";
 import { SELECTED_THREAD_STREAM_CONSUMER_ID } from "../gateway-mirror/transcript-lifecycle";
 import {
   isMissingThreadTranscript,
@@ -2119,97 +2125,225 @@ export function AppShell() {
     !activeMessages.length &&
     !showAutomationRunInitialPlaceholder,
   );
-  const {
-    appendSideComposerAttachments,
-    ensureSideChatThread,
-    handleSideComposerSubmit,
-    openTaskThreadInSidePanel,
-    removeSideComposerBrowserAnnotation,
-    removeSideComposerFile,
-    removeSideComposerImage,
-    sideChatActiveToolGroupId,
-    sideChatAgentLabel,
-    sideChatCanSteerQueuedPrompt,
-    sideChatComposerEditingLocked,
-    sideChatComposerHasPayload,
-    sideChatComposerLocked,
-    sideChatComposerPlaceholder,
-    sideChatComposerProviderType,
-    sideChatComposerWorkspaceBranch,
-    sideChatComposerWorkspaceMode,
-    sideChatCreating,
-    sideChatError,
-    sideChatHistoryLoading,
-    sideChatHistoryPagination,
-    sideChatIsSendingThread,
-    sideChatLiveStream,
-    sideChatMessages,
-    sideChatMessagesRef,
-    sideChatQueue,
-    sideChatRenderState,
-    sideChatShowTailThinking,
-    sideChatSourceThreadId,
-    sideChatStreamConsumerId,
-    sideChatThreadBot,
-    sideChatThreadBotId,
-    sideChatThreadId,
-    sideChatThreadIdRef,
-    sideChatThreadIdsRef,
-    sideChatThreadLayoutRef,
-    sideChatThreadSummary,
-    sideChatVisiblePendingAckIntents,
-    sideChatVisibleRemotePendingInputs,
-    sideComposerAttachmentInputRef,
-    sideComposerDraft,
-    sideComposerTextareaRef,
-    sideIgnoreComposerSubmitUntilRef,
-    sideIsComposingRef,
-    updateSideComposerDraft,
-  } = useSideChatController({
-    sessions: sideChatSessions,
-    activeThread,
-    applyRemoteTranscript,
-    botGroups,
-    boundBotsForThread,
-    browserAnnotationScreenshotImages,
-    composePromptWithBrowserAnnotations,
-    composerProviderType,
-    deferredQueueDrainByThreadRef,
-    desktopAgentMap,
-    desktopAgents,
-    desktopState,
-    dispatchMessageState,
-    ensureThreadOpenable,
-    getLiveStreamState,
-    historyPaginationByThread,
-    inferProviderTypeForThread,
-    liveStreamStateByThread,
+  // Batch 5b-7b: the side-chat panel colocates derivations/behavior/JSX
+  // (components/SideChatPanel.tsx). The shell keeps what must outlive the
+  // dock: the session store (7a), the sessionStorage restore + active-
+  // source effects, the always-on transcript-load effect, the deferred
+  // queue-drain effect, and the two out-of-panel commands (chat auto-open
+  // and the Tasks-tab open, per the design's command ruling).
+  const sideChatSessionsSnapshot = useSyncExternalStore(
+    sideChatSessions.subscribe,
+    sideChatSessions.getSnapshot,
+  );
+  const sideChatSourceThreadId = activeThread?.id?.trim() || null;
+  const sideChatThreadId = sideChatSourceThreadId
+    ? sideChatSessionsSnapshot.threadBySource[sideChatSourceThreadId] || null
+    : null;
+  const sideChatMessagesRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    // sessionStorage read-through for a source with no in-memory binding.
+    if (sideChatSourceThreadId) {
+      sideChatSessions.restorePersisted(sideChatSourceThreadId);
+    }
+  }, [sideChatSourceThreadId]);
+
+  useEffect(() => {
+    // The active-source flip re-derives the sideChatThreadIdRef shadow
+    // inside the store.
+    sideChatSessions.setActiveSource(sideChatSourceThreadId);
+  }, [sideChatSourceThreadId]);
+
+  // Load the side thread transcript once per side thread (after state
+  // hydration). Depending on `desktopState` identity here is unsafe: applying
+  // a transcript can rewrite `desktopState.sessions`, which would re-fire
+  // this effect in a fetch loop. Steady-state sync comes from the per-thread
+  // committed stream started after the initial committed cursor is known.
+  // Always-on by design: a bound side thread keeps its committed stream
+  // alive even while the dock is hidden (review-confirmed premise).
+  const desktopStateHydrated = Boolean(desktopState);
+  useEffect(() => {
+    if (!sideChatThreadId || !desktopStateHydrated) {
+      return;
+    }
+
+    let cancelled = false;
+    let latestTranscript: ThreadTranscript | null = null;
+    const consumerId = sideChatSessions.streamConsumerId(sideChatThreadId);
+    void loadThreadHistory({
+      api: getDesktopApi(),
+      threadId: sideChatThreadId,
+      onBeforeLoad: (threadId) => {
+        if (!(messagesByThreadRef.current[threadId] || []).length) {
+          scrollMessagesToLatest(sideChatMessagesRef.current);
+        }
+      },
+      onTranscript: (threadId, transcript) => {
+        if (cancelled) {
+          return;
+        }
+        latestTranscript = transcript;
+        applyRemoteTranscript(threadId, transcript);
+      },
+      onAutomationResponseDetected: (threadId) => {
+        setPendingAutomationRun(threadId, null);
+      },
+      hasAutomationResponse: transcriptHasAutomationResponse,
+      setHistoryLoading: (loading) => sideChatSessions.setHistoryLoading(loading),
+      setError,
+    }).then(() => {
+      if (cancelled || !latestTranscript) {
+        return;
+      }
+      void startCommittedThreadStream(
+        sideChatThreadId,
+        latestTranscript,
+        consumerId,
+      );
+    });
+
+    return () => {
+      cancelled = true;
+      void window.garyxDesktop.stopThreadStream({
+        threadId: sideChatThreadId,
+        consumerId,
+      });
+    };
+  }, [desktopStateHydrated, sideChatThreadId]);
+
+  // Deferred queue drain for the side thread (always-on: legacy drained
+  // with the dock hidden because the controller stayed mounted). The
+  // busy inputs are rebuilt here verbatim from the same mirror-backed
+  // sources the panel derives from, so both read one truth.
+  const shellSideChatMessages = sideChatThreadId
+    ? messagesByThread[sideChatThreadId] || EMPTY_UI_TRANSCRIPT_MESSAGES
+    : EMPTY_UI_TRANSCRIPT_MESSAGES;
+  const shellSideChatRenderState = sideChatThreadId
+    ? renderStateByThread[sideChatThreadId] || null
+    : null;
+  const shellSideChatQueueLength = sideChatThreadId
+    ? selectQueueIntentIds(messageState, sideChatThreadId).length
+    : 0;
+  const shellSideChatRuntime = selectThreadRuntime(
     messageState,
-    messageStateRef,
-    messageTailSignature,
-    messagesByThread,
-    messagesByThreadRef,
-    pendingAgentId,
-    pendingInputOriginRefsForThread,
-    pendingRemoteInputsByThread,
-    prepareAttachmentUploads,
-    queueDrainInFlightByThreadRef,
-    renderStateByThread,
-    runQueuedBatch,
-    scrollMessagesToLatest,
-    setDesktopState,
-    setError,
-    setPendingAutomationRun,
-    settingsDraft,
-    startCommittedThreadStream,
-    steerQueuedIntent,
-    t,
-    threadInfoByThread,
-    threadSummaryById,
-    transcriptHasAutomationResponse,
-    transcriptMessageMatchesIntent,
-    updateMessagesByThread,
+    sideChatThreadId,
+  );
+  const shellSideChatLiveStream = sideChatThreadId
+    ? liveStreamStateByThread[sideChatThreadId] || null
+    : null;
+  const shellSideChatPendingAckIntents = (
+    shellSideChatLiveStream?.pendingAckIntentIds || []
+  )
+    .map((intentId) => messageState.intentsById[intentId])
+    .filter((intent): intent is MessageIntent => Boolean(intent));
+  const shellSideChatVisiblePendingAckIntents =
+    shellSideChatPendingAckIntents.filter((intent) => {
+      return !shellSideChatMessages.some((message) => {
+        return (
+          message.role === "user" &&
+          (message.intentId === intent.intentId ||
+            transcriptMessageMatchesIntent(message, intent))
+        );
+      });
+    });
+  const shellSideChatRemotePendingInputs = sideChatThreadId
+    ? pendingRemoteInputsByThread[sideChatThreadId] || []
+    : [];
+  const shellSideChatVisibleRemotePendingInputs =
+    visibleRemotePendingInputsForThread({
+      activeMessages: shellSideChatMessages,
+      visiblePendingAckIntentCount:
+        shellSideChatVisiblePendingAckIntents.length,
+      remotePendingInputs: shellSideChatRemotePendingInputs,
+      pendingInputOriginRefs: pendingInputOriginRefsForThread(
+        messageState.intentsById,
+        sideChatThreadId,
+      ),
+    });
+  const shellSideChatPendingHistoryIntent = sideChatThreadId
+    ? Object.values(messageState.intentsById).some((intent) => {
+        return (
+          intent.threadId === sideChatThreadId &&
+          [
+            "dispatching",
+            "remote_accepted",
+            "awaiting_provider_ack",
+            "awaiting_response",
+            "awaiting_history",
+          ].includes(intent.state)
+        );
+      })
+    : false;
+  const shellSideChatRuntimeBusy = Boolean(
+    shellSideChatRuntime && isRuntimeBusy(shellSideChatRuntime.state),
+  );
+  const shellSideChatActivity = deriveThreadActivityModel({
+    messages: shellSideChatMessages,
+    runtimeBusy: shellSideChatRuntimeBusy,
+    pendingAckIntentCount: shellSideChatPendingAckIntents.length,
+    remoteAwaitingAckInputCount:
+      shellSideChatVisibleRemotePendingInputs.length,
+    pendingHistoryIntent: shellSideChatPendingHistoryIntent,
+    renderTailActivity: shellSideChatRenderState?.tailActivity ?? null,
+    renderActiveToolGroupId:
+      shellSideChatRenderState?.activeToolGroupId ?? null,
   });
+  const { isActiveSendingThread: shellSideChatIsSendingThread } =
+    deriveThreadComposerControlModel({
+      hasThread: Boolean(sideChatThreadId),
+      runtimeBusy: shellSideChatRuntimeBusy,
+      showPendingAckLoading: shellSideChatActivity.showPendingAckLoading,
+      renderTailActivity: shellSideChatRenderState?.tailActivity ?? null,
+      renderActiveToolGroupId:
+        shellSideChatRenderState?.activeToolGroupId ?? null,
+    });
+  useEffect(() => {
+    if (!sideChatThreadId) {
+      return;
+    }
+    if (shellSideChatQueueLength === 0) {
+      delete deferredQueueDrainByThreadRef.current[sideChatThreadId];
+      delete queueDrainInFlightByThreadRef.current[sideChatThreadId];
+      return;
+    }
+    if (
+      shellSideChatIsSendingThread ||
+      !deferredQueueDrainByThreadRef.current[sideChatThreadId] ||
+      queueDrainInFlightByThreadRef.current[sideChatThreadId]
+    ) {
+      return;
+    }
+
+    deferredQueueDrainByThreadRef.current[sideChatThreadId] = false;
+    queueDrainInFlightByThreadRef.current[sideChatThreadId] = true;
+    void runQueuedBatch(sideChatThreadId).finally(() => {
+      delete queueDrainInFlightByThreadRef.current[sideChatThreadId];
+    });
+  }, [shellSideChatIsSendingThread, shellSideChatQueueLength, sideChatThreadId]);
+
+  // Out-of-panel side-chat commands (design ruling, #TASK-1658): both run
+  // while the panel is not mounted.
+  function sideChatOpsContext(): SideChatOpsContext {
+    return {
+      sessions: sideChatSessions,
+      mirror: gatewayMirror,
+      sourceThreadId: sideChatSourceThreadId,
+      activeThread,
+      threadSummaryById,
+      pendingAgentId,
+      setDesktopState,
+      setError,
+    };
+  }
+  async function handleOpenTaskThreadInSidePanel(threadId: string) {
+    // The design's pendingOpenToolRequest mailbox turned out unnecessary:
+    // SideToolsPanel.openTaskThreadInSideChat awaits this command and then
+    // runs its own openTool("chat") — the binding is committed BEFORE the
+    // chat tab's auto-open, so the default-side-chat race cannot happen,
+    // and the Tasks tab only exists with the dock already open.
+    await openTaskThreadInSidePanelOp(sideChatOpsContext(), threadId);
+  }
+
   // Batch 3c-2: the dispatch orchestration (send/steer/interrupt/queue
   // drain) lives in the mirror; its deps are refreshed on every commit
   // (the streamEventHandlerRef pattern) so orchestration entry points
@@ -2235,7 +2369,7 @@ export function AppShell() {
     setDesktopState,
     setError,
     settingsDraft,
-    sideChatThreadIdsRef,
+    sideChatThreadIdsRef: sideChatSessions.sideChatThreadIdsRef,
     threadInfoByThread,
   };
   useEffect(() => {
@@ -2267,8 +2401,9 @@ export function AppShell() {
       lastRenderedMessageThreadRef,
       messagesRef,
       pendingMessagesPrependAnchorRef,
-      sideChatThreadIdRef,
-      sideChatStreamConsumerId,
+      sideChatThreadIdRef: sideChatSessions.sideChatThreadIdRef,
+      sideChatStreamConsumerId: (threadId: string) =>
+        sideChatSessions.streamConsumerId(threadId),
     });
   });
   function appendSeededTurn(
@@ -3845,141 +3980,48 @@ export function AppShell() {
     });
   }
 
-  const sideChatPanel = !sideChatSourceThreadId ? (
-    <div className="side-tool-empty">
-      {t("Open a thread before starting side chat.")}
-    </div>
-  ) : sideChatThreadId ? (
-    <ThreadPage
-      surfaceVariant="side-chat"
-      agentLabel={sideChatAgentLabel}
+  const sideChatPanel = (
+    <SideChatPanel
+      sessions={sideChatSessions}
+      activeThread={activeThread}
       composerAgentOptions={composerAgentOptions}
       composerWorkflowOptions={composerWorkflowOptions}
       composerWorkflowOptionsLoading={workflowDefinitionsLoading}
-      activeMessages={sideChatMessages}
-      activePendingAckIntents={sideChatVisiblePendingAckIntents}
-      activePendingAutomationRun={null}
-      activeToolGroupId={sideChatActiveToolGroupId}
-      activeQueue={sideChatQueue}
-      renderState={sideChatRenderState}
-      activeThreadSummary={sideChatThreadSummary}
-      activeThreadTitle={sideChatThreadSummary?.title || null}
-      activeThreadRunId={
-        sideChatLiveStream?.runId || sideChatThreadSummary?.recentRunId || null
-      }
       availableWorkspaceCount={availableWorkspaceCount}
-      composer={sideComposerDraft.text}
-      composerAttachmentInputRef={sideComposerAttachmentInputRef}
-      composerBrowserAnnotations={sideComposerDraft.browserAnnotations}
-      composerFiles={sideComposerDraft.files}
-      composerHasPayload={sideChatComposerHasPayload}
-      composerImages={sideComposerDraft.images}
-      composerEditingLocked={sideChatComposerEditingLocked}
-      composerLocked={sideChatComposerLocked}
-      composerPlaceholder={sideChatComposerPlaceholder}
-      composerProviderType={sideChatComposerProviderType}
-      composerResetKey={sideComposerDraft.resetKey}
-      composerWorkspaceBranch={sideChatComposerWorkspaceBranch}
-      composerWorkspaceMode={sideChatComposerWorkspaceMode}
-      activeThreadBot={sideChatThreadBot}
-      activeThreadBotId={sideChatThreadBotId}
-      botBindingDisabled={bindingMutation === "bot-binding"}
+      newThreadWorkspaceEntry={newThreadWorkspaceEntry}
+      newThreadWorkspaceMode={pendingWorkspaceMode}
+      preferredWorkspaceForNewThread={preferredWorkspaceForNewThread}
+      selectableNewThreadWorkspaces={selectableNewThreadWorkspaces}
+      threadAvatarCatalog={threadAvatarCatalog}
+      teamAgentDisplayNamesById={teamAgentDisplayNamesById}
       botGroups={botGroups}
+      botBindingDisabled={bindingMutation === "bot-binding"}
+      workspaceMutation={workspaceMutation}
       slashCommands={commands}
       slashCommandsLoaded={commandsLoaded}
       slashCommandsLoading={commandsLoading}
-      composerTextareaRef={sideComposerTextareaRef}
-      historyLoading={sideChatHistoryLoading}
-      historyLoadingEarlier={Boolean(sideChatHistoryPagination?.loadingBefore)}
-      ignoreComposerSubmitUntilRef={sideIgnoreComposerSubmitUntilRef}
-      inspectorOpen={false}
-      isActiveSendingThread={sideChatIsSendingThread}
-      canSteerQueuedPrompt={sideChatCanSteerQueuedPrompt}
-      isComposingRef={sideIsComposingRef}
-      messagesRef={sideChatMessagesRef}
-      newThreadSelectedAgentId={sideChatThreadSummary?.agentId || pendingAgentId}
-      newThreadSelectedWorkflowId={null}
-      newThreadWorkspaceEntry={newThreadWorkspaceEntry}
-      newThreadWorkspaceMode={pendingWorkspaceMode}
+      loadSlashCommands={loadSlashCommands}
+      composerProviderType={composerProviderType}
+      pendingAgentId={pendingAgentId}
+      settingsDraft={settingsDraft}
+      desktopAgents={desktopAgents}
+      desktopAgentMap={desktopAgentMap}
+      threadSummaryById={threadSummaryById}
+      boundBotsForThread={boundBotsForThread}
+      inferProviderTypeForThread={inferProviderTypeForThread}
+      pendingInputOriginRefsForThread={pendingInputOriginRefsForThread}
+      prepareAttachmentUploads={prepareAttachmentUploads}
+      setDesktopState={setDesktopState}
+      setError={setError}
+      sideChatMessagesRef={sideChatMessagesRef}
+      deferredQueueDrainByThreadRef={deferredQueueDrainByThreadRef}
       onAddWorkspace={() => {
         void handleAddWorkspace();
       }}
-      onAppendComposerAttachments={(files) => {
-        void appendSideComposerAttachments(sideChatSourceThreadId, files);
-      }}
-      onCancelIntent={(threadId, intentId) => {
-        dispatchMessageState({
-          type: "intent/cancelled",
-          threadId,
-          intentId,
-        });
-      }}
-      onComposerChange={(value) => {
-        updateSideComposerDraft(sideChatSourceThreadId, (current) => ({
-          ...current,
-          text: value,
-          textPresent: value.trim().length > 0,
-        }));
-        if (
-          /^\/[a-z0-9_]*$/i.test(value) &&
-          !commandsLoaded &&
-          !commandsLoading
-        ) {
-          void loadSlashCommands();
-        }
-      }}
-      onComposerCompositionEnd={(value) => {
-        sideIsComposingRef.current = false;
-        updateSideComposerDraft(sideChatSourceThreadId, (current) => ({
-          ...current,
-          text: value,
-          textPresent: value.trim().length > 0,
-        }));
-        sideIgnoreComposerSubmitUntilRef.current = performance.now() + 80;
-      }}
-      onComposerCompositionStart={() => {
-        sideIsComposingRef.current = true;
-      }}
-      onComposerInterrupt={() => {
-        void interruptThread(sideChatThreadIdRef.current);
-      }}
-      onComposerSubmit={handleSideComposerSubmit}
       onLocalWorkspaceFileLinkClick={handleLocalFileLinkClick}
-      onMarkIgnoreComposerSubmitWindow={() => {
-        sideIgnoreComposerSubmitUntilRef.current = performance.now() + 80;
-      }}
-      onMessagesScroll={() => {
-        const node = sideChatMessagesRef.current;
-        if (
-          sideChatThreadId &&
-          node &&
-          messagesNearEarlierUserTurnBoundary(node)
-        ) {
-          void loadOlderThreadHistoryPage(sideChatThreadId);
-        }
-      }}
-      onMessagesUserScrollIntent={() => {}}
-      onRemoveComposerFile={(fileId) => {
-        removeSideComposerFile(sideChatSourceThreadId, fileId);
-      }}
-      onRemoveComposerImage={(imageId) => {
-        removeSideComposerImage(sideChatSourceThreadId, imageId);
-      }}
-      onRemoveComposerBrowserAnnotation={(annotationId) => {
-        removeSideComposerBrowserAnnotation(sideChatSourceThreadId, annotationId);
-      }}
-      onReorderQueuedIntent={reorderQueuedIntent}
-      onSelectNewThreadAgent={() => {}}
-      onSelectNewThreadWorkflow={() => {}}
-      onSelectNewThreadWorkspaceMode={() => {}}
       onResumeProviderSession={handleResumeProviderSession}
       onRetryFailedMessage={(message) => {
         void handleRetryFailedMessage(message);
-      }}
-      onSelectBotBinding={(botId) => {
-        if (sideChatThreadId) {
-          void syncThreadBotBinding(sideChatThreadId, botId);
-        }
       }}
       onOpenThreadById={(threadId) => {
         void openExistingThread(threadId);
@@ -3990,41 +4032,10 @@ export function AppShell() {
           { replace: true },
         );
       }}
-      onSelectWorkspace={() => {}}
-      onSteerQueuedPrompt={(item) => {
-        void steerQueuedIntent(item, { canSteer: sideChatCanSteerQueuedPrompt });
-      }}
-      onThreadLogsUnreadChange={() => {}}
-      onThreadLogsResizeKeyDown={() => {}}
-      onThreadLogsResizeStart={() => {}}
-      preferredWorkspaceForNewThread={preferredWorkspaceForNewThread}
-      selectableNewThreadWorkspaces={selectableNewThreadWorkspaces}
-      selectedThreadId={sideChatThreadId}
-      showAutomationRunInitialPlaceholder={false}
-      showDreams={false}
-      // Side chats fork the provider session without importing visible
-      // history, so there is never parent history to wait for — the panel
-      // opens as an empty thread instead of a loading placeholder.
-      showHistoryLoadingPlaceholder={false}
-      showTailThinking={sideChatShowTailThinking}
-      threadLayoutRef={sideChatThreadLayoutRef}
-      threadLogsMaxWidth={0}
-      threadLogsOpen={false}
-      threadLogsPanelWidth={0}
-      threadLogsResizing={false}
-      threadAvatarCatalog={threadAvatarCatalog}
-      teamAgentDisplayNamesById={teamAgentDisplayNamesById}
-      visibleRemoteAwaitingAckInputs={sideChatVisibleRemotePendingInputs}
-      visibleRemotePendingInputs={sideChatVisibleRemotePendingInputs}
-      workflowRunContent={null}
-      workspaceMutation={workspaceMutation}
+      onReorderQueuedIntent={reorderQueuedIntent}
+      syncThreadBotBinding={syncThreadBotBinding}
+      t={t}
     />
-  ) : (
-    <div className="side-tool-empty">
-      {sideChatCreating
-        ? t("Starting…")
-        : sideChatError || t("Start a focused side thread.")}
-    </div>
   );
 
   // The dock is built for any thread (not only workspace threads) so it can host
@@ -4083,10 +4094,10 @@ export function AppShell() {
         setPendingActiveCapsuleId(null);
       }}
       onOpenTaskThread={(task) => {
-        void openTaskThreadInSidePanel(task.threadId);
+        void handleOpenTaskThreadInSidePanel(task.threadId);
       }}
       onOpenSideChat={() => {
-        void ensureSideChatThread();
+        void ensureSideChatThreadOp(sideChatOpsContext());
       }}
       onWorkspaceFileFilterChange={workspaceFilter.onChange}
     />

@@ -1,129 +1,131 @@
-import {
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useSyncExternalStore,
-} from "react";
+// SideChatPanel: the colocated side-chat feature component (endgame batch
+// 5b-7b, docs/design/appshell-sidechat-colocation.md). Owns the render
+// derivations, the composer behavior, and the side ThreadPage instance
+// that used to be assembled inside AppShell from useSideChatController's
+// 45-member return surface.
+//
+// Sources of truth (C3 — each domain single-sourced):
+// - session store (bindings/drafts/transients): its own uSES subscription
+// - mirror domains (transcript maps, machine, live streams): panel-local
+//   uSES subscriptions over the SAME GatewayMirror the shell uses
+// - root state (desktopState): useGatewayRoot
+// - shell-truth chrome (active thread, bot groups, workspace pickers,
+//   avatar catalog, slash commands, i18n, IPC-backed handlers): props
+//
+// The session lifetime stays in the shell store (5b-7a); this panel can
+// unmount freely with the dock. ensureSideChatThread and
+// openTaskThreadInSidePanel live in side-chat-ops.ts because both are
+// ALSO dispatched while this panel is not mounted (dock header auto-open,
+// Tasks tab) — the panel builds the same ops context for its submit path.
+
+import { useCallback, useMemo, useRef, useSyncExternalStore } from "react";
 
 import type {
   BrowserAnnotationCommentRequest,
   DesktopApiProviderType,
-  DesktopBotConsoleSummary,
   DesktopChannelEndpoint,
   DesktopCustomAgent,
+  DesktopProviderModels,
   DesktopSettings,
   DesktopState,
   DesktopThreadSummary,
   DesktopWorkspaceMode,
   MessageFileAttachment,
   MessageImageAttachment,
-  RenderState,
+  SlashCommand,
   ThreadRuntimeInfo,
-  ThreadTranscript,
-  TranscriptMessage,
 } from "@shared/contracts";
 
-import type { Translate } from "../i18n";
+import type { Translate } from "../../i18n";
 import {
   buildIntent,
   isRuntimeBusy,
   selectQueueIntentIds,
   selectThreadRuntime,
   type MessageIntent,
-  type MessageMachineAction,
-  type MessageMachineState,
-} from "../message-machine";
-import { getDesktopApi } from "../platform/desktop-api";
-import { loadThreadHistory } from "../thread-controller";
+} from "../../message-machine";
 import {
   automationForLatestThread,
   deriveThreadTeamView,
-} from "../thread-model";
-import { isRunLoadingPlaceholderMessage } from "./loading-labels";
+} from "../../thread-model";
+import { useGatewayMirror, useGatewayRoot } from "../../gateway-mirror/react";
+import { transcriptMessageMatchesIntent } from "../../gateway-mirror/transcript-materialize";
+import { isRunLoadingPlaceholderMessage } from "../loading-labels";
+import {
+  visibleRemotePendingInputsForThread,
+  type PendingInputOriginRef,
+} from "../pending-inputs";
+import {
+  deriveThreadComposerControlModel,
+  deriveThreadActivityModel,
+} from "../thread-activity";
+import {
+  browserAnnotationScreenshotImages,
+  composePromptWithBrowserAnnotations,
+} from "../useMessageDispatchController";
 import {
   emptySideComposerDraft,
   type SideChatSessions,
   type SideComposerDraft,
-} from "./side-chat-sessions";
+} from "../side-chat-sessions";
 import {
-  visibleRemotePendingInputsForThread,
-  type PendingInputOriginRef,
-} from "./pending-inputs";
-import {
-  deriveThreadComposerControlModel,
-  deriveThreadActivityModel,
-} from "./thread-activity";
+  ensureSideChatThread,
+  type SideChatOpsContext,
+} from "../side-chat-ops";
+import { messageTailSignature } from "./thread-transcript-scroll";
+import { messagesNearEarlierUserTurnBoundary } from "../../gateway-mirror/transcript-materialize";
 import type {
   BoundBot,
   LiveStreamState,
-  MessageMap,
-  PendingAutomationRun,
-  PendingThreadInputMap,
   UiTranscriptMessage,
-} from "./types";
+} from "../types";
+import { ThreadPage } from "./ThreadPage";
+import type { ComponentProps } from "react";
 
 const EMPTY_UI_TRANSCRIPT_MESSAGES: UiTranscriptMessage[] = [];
 
-type UseSideChatControllerArgs = {
-  /** Shell-owned session store (5b-7a): bindings/drafts/transients. */
+type ThreadPageProps = ComponentProps<typeof ThreadPage>;
+
+export interface SideChatPanelProps {
   sessions: SideChatSessions;
   activeThread: DesktopThreadSummary | null;
-  applyRemoteTranscript: (
-    threadId: string,
-    transcript: ThreadTranscript,
-    options?: {
-      persist?: boolean;
-      syncRunState?: boolean;
-    },
-  ) => void;
-  botGroups: DesktopBotConsoleSummary[];
-  boundBotsForThread: (endpoints: DesktopChannelEndpoint[]) => BoundBot[];
-  browserAnnotationScreenshotImages: (
-    requests: BrowserAnnotationCommentRequest[],
-  ) => MessageImageAttachment[];
-  composePromptWithBrowserAnnotations: (
-    prompt: string,
-    requests: BrowserAnnotationCommentRequest[],
-    t: Translate,
-  ) => string;
+  /** Shell-truth chrome shared with the main ThreadPage instance. */
+  composerAgentOptions: ThreadPageProps["composerAgentOptions"];
+  composerWorkflowOptions: ThreadPageProps["composerWorkflowOptions"];
+  composerWorkflowOptionsLoading: boolean;
+  availableWorkspaceCount: number;
+  newThreadWorkspaceEntry: ThreadPageProps["newThreadWorkspaceEntry"];
+  newThreadWorkspaceMode: DesktopWorkspaceMode;
+  preferredWorkspaceForNewThread: ThreadPageProps["preferredWorkspaceForNewThread"];
+  selectableNewThreadWorkspaces: ThreadPageProps["selectableNewThreadWorkspaces"];
+  threadAvatarCatalog: ThreadPageProps["threadAvatarCatalog"];
+  teamAgentDisplayNamesById: ThreadPageProps["teamAgentDisplayNamesById"];
+  newThreadProviderModels?: DesktopProviderModels | null;
+  botGroups: ThreadPageProps["botGroups"];
+  botBindingDisabled: boolean;
+  workspaceMutation: ThreadPageProps["workspaceMutation"];
+  slashCommands: SlashCommand[];
+  slashCommandsLoaded: boolean;
+  slashCommandsLoading: boolean;
+  loadSlashCommands: () => Promise<void> | void;
   composerProviderType: DesktopApiProviderType;
-  deferredQueueDrainByThreadRef: React.MutableRefObject<
-    Record<string, boolean>
-  >;
-  desktopAgentMap: Map<string, DesktopCustomAgent>;
+  pendingAgentId: string;
+  settingsDraft: DesktopSettings;
   desktopAgents: DesktopCustomAgent[];
-  desktopState: DesktopState | null;
-  dispatchMessageState: (action: MessageMachineAction) => void;
-  ensureThreadOpenable: (threadId: string) => Promise<boolean>;
-  getLiveStreamState: (threadId: string) => LiveStreamState | null;
-  historyPaginationByThread: Record<
-    string,
-    {
-      hasMoreBefore: boolean;
-      nextBeforeIndex: number | null;
-      loadingBefore: boolean;
-    }
-  >;
+  desktopAgentMap: Map<string, DesktopCustomAgent>;
+  threadSummaryById: Map<string, DesktopThreadSummary>;
+  /** Shell helper fns (module-level in AppShell, stable identities). */
+  boundBotsForThread: (endpoints: DesktopChannelEndpoint[]) => BoundBot[];
   inferProviderTypeForThread: (
     threadId: string,
     threadInfoByThread: Record<string, ThreadRuntimeInfo | null>,
     desktopState: DesktopState | null,
     desktopAgents: DesktopCustomAgent[],
   ) => DesktopApiProviderType | null;
-  liveStreamStateByThread: Record<string, LiveStreamState>;
-  messageState: MessageMachineState;
-  messageStateRef: React.MutableRefObject<MessageMachineState>;
-  messageTailSignature: (messages: UiTranscriptMessage[]) => string;
-  messagesByThread: MessageMap;
-  // Mirror-backed reader (batch 6a): read-only `{ current }` shape.
-  messagesByThreadRef: { readonly current: MessageMap };
-  pendingAgentId: string;
   pendingInputOriginRefsForThread: (
     intentsById: Record<string, MessageIntent>,
     threadId: string | null,
   ) => PendingInputOriginRef[];
-  pendingRemoteInputsByThread: PendingThreadInputMap;
   prepareAttachmentUploads: (files: File[]) => Promise<
     Array<{
       id: string;
@@ -133,96 +135,109 @@ type UseSideChatControllerArgs = {
       dataBase64: string;
     }>
   >;
-  queueDrainInFlightByThreadRef: React.MutableRefObject<
+  setDesktopState: React.Dispatch<React.SetStateAction<DesktopState | null>>;
+  setError: (error: string | null) => void;
+  /** Shell-owned refs shared with the always-on shell effects. */
+  sideChatMessagesRef: React.MutableRefObject<HTMLDivElement | null>;
+  deferredQueueDrainByThreadRef: React.MutableRefObject<
     Record<string, boolean>
   >;
-  renderStateByThread: Record<string, RenderState>;
-  runQueuedBatch: (threadId: string, initialIntentId?: string) => Promise<void>;
-  scrollMessagesToLatest: (
-    node: HTMLDivElement | null,
-    behavior?: ScrollBehavior,
-  ) => void;
-  setDesktopState: React.Dispatch<React.SetStateAction<DesktopState | null>>;
-  setError: React.Dispatch<React.SetStateAction<string | null>>;
-  setPendingAutomationRun: (
-    threadId: string,
-    run: PendingAutomationRun | null,
-  ) => void;
-  settingsDraft: DesktopSettings;
-  startCommittedThreadStream: (
-    threadId: string,
-    transcript: ThreadTranscript,
-    consumerId: string,
-  ) => Promise<void>;
-  steerQueuedIntent: (
-    latestIntent: MessageIntent,
-    options?: { canSteer?: boolean },
-  ) => Promise<void>;
+  /** Shell handlers reused verbatim from the main instance. */
+  onAddWorkspace: () => void;
+  onLocalWorkspaceFileLinkClick: (path: string) => void;
+  onResumeProviderSession: ThreadPageProps["onResumeProviderSession"];
+  onRetryFailedMessage: (message: UiTranscriptMessage) => void;
+  onOpenThreadById: (threadId: string) => void;
+  onOpenCapsule: ThreadPageProps["onOpenCapsule"];
+  onReorderQueuedIntent: ThreadPageProps["onReorderQueuedIntent"];
+  syncThreadBotBinding: (threadId: string, botId: string | null) => Promise<void>;
   t: Translate;
-  threadInfoByThread: Record<string, ThreadRuntimeInfo | null>;
-  threadSummaryById: Map<string, DesktopThreadSummary>;
-  transcriptHasAutomationResponse: (messages: TranscriptMessage[]) => boolean;
-  transcriptMessageMatchesIntent: (
-    message: TranscriptMessage,
-    intent: MessageIntent,
-  ) => boolean;
-  updateMessagesByThread: (
-    updater: (current: MessageMap) => MessageMap,
-  ) => MessageMap;
-};
+}
 
-export function useSideChatController({
+export function SideChatPanel({
   sessions,
   activeThread,
-  applyRemoteTranscript,
+  composerAgentOptions,
+  composerWorkflowOptions,
+  composerWorkflowOptionsLoading,
+  availableWorkspaceCount,
+  newThreadWorkspaceEntry,
+  newThreadWorkspaceMode,
+  preferredWorkspaceForNewThread,
+  selectableNewThreadWorkspaces,
+  threadAvatarCatalog,
+  teamAgentDisplayNamesById,
   botGroups,
-  boundBotsForThread,
-  browserAnnotationScreenshotImages,
-  composePromptWithBrowserAnnotations,
+  botBindingDisabled,
+  workspaceMutation,
+  slashCommands,
+  slashCommandsLoaded,
+  slashCommandsLoading,
+  loadSlashCommands,
   composerProviderType,
-  deferredQueueDrainByThreadRef,
-  desktopAgentMap,
-  desktopAgents,
-  desktopState,
-  dispatchMessageState,
-  ensureThreadOpenable,
-  getLiveStreamState,
-  historyPaginationByThread,
-  inferProviderTypeForThread,
-  liveStreamStateByThread,
-  messageState,
-  messageStateRef,
-  messageTailSignature,
-  messagesByThread,
-  messagesByThreadRef,
   pendingAgentId,
+  settingsDraft,
+  desktopAgents,
+  desktopAgentMap,
+  threadSummaryById,
+  boundBotsForThread,
+  inferProviderTypeForThread,
   pendingInputOriginRefsForThread,
-  pendingRemoteInputsByThread,
   prepareAttachmentUploads,
-  queueDrainInFlightByThreadRef,
-  renderStateByThread,
-  runQueuedBatch,
-  scrollMessagesToLatest,
   setDesktopState,
   setError,
-  setPendingAutomationRun,
-  settingsDraft,
-  startCommittedThreadStream,
-  steerQueuedIntent,
+  sideChatMessagesRef,
+  deferredQueueDrainByThreadRef,
+  onAddWorkspace,
+  onLocalWorkspaceFileLinkClick,
+  onResumeProviderSession,
+  onRetryFailedMessage,
+  onOpenThreadById,
+  onOpenCapsule,
+  onReorderQueuedIntent,
+  syncThreadBotBinding,
   t,
-  threadInfoByThread,
-  threadSummaryById,
-  transcriptHasAutomationResponse,
-  transcriptMessageMatchesIntent,
-  updateMessagesByThread,
-}: UseSideChatControllerArgs) {
-  // 5b-7a: session state lives in the shell-owned store; this hook is a
-  // subscriber. The store's shadow refs feed the orchestrator/lifecycle
-  // deps unchanged.
+}: SideChatPanelProps) {
+  const mirror = useGatewayMirror();
+  const root = useGatewayRoot();
+  const desktopState = root.desktopState;
   const sessionsSnapshot = useSyncExternalStore(
     sessions.subscribe,
     sessions.getSnapshot,
   );
+  const transcriptMaps = useSyncExternalStore(
+    useCallback(
+      (onChange: () => void) => mirror.subscribeTranscriptMaps(onChange),
+      [mirror],
+    ),
+    () => mirror.getTranscriptMapsSnapshot(),
+  );
+  const messageState = useSyncExternalStore(
+    useCallback(
+      (onChange: () => void) => mirror.subscribeMachine(onChange),
+      [mirror],
+    ),
+    () => mirror.getMachineState(),
+  );
+  const liveStreamStateByThread = useSyncExternalStore(
+    useCallback(
+      (onChange: () => void) => mirror.subscribeLiveStreams(onChange),
+      [mirror],
+    ),
+    () => mirror.getLiveStreamMap(),
+  );
+  const messagesByThread = transcriptMaps.messagesByThread;
+  const renderStateByThread = transcriptMaps.renderStateByThread;
+  const threadInfoByThread = transcriptMaps.threadInfoByThread;
+  const historyPaginationByThread = transcriptMaps.historyPaginationByThread;
+  const pendingRemoteInputsByThread = transcriptMaps.pendingRemoteInputsByThread;
+
+  const sideComposerAttachmentInputRef = useRef<HTMLInputElement | null>(null);
+  const sideComposerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const sideChatThreadLayoutRef = useRef<HTMLDivElement | null>(null);
+  const sideIsComposingRef = useRef(false);
+  const sideIgnoreComposerSubmitUntilRef = useRef(0);
+
   const sideComposerBySource = sessionsSnapshot.composerBySource;
   const sideComposerAttachmentUploadPending =
     sessionsSnapshot.attachmentUploadCount > 0;
@@ -230,14 +245,6 @@ export function useSideChatController({
   const sideChatCreatingBySource = sessionsSnapshot.creatingBySource;
   const sideChatErrorBySource = sessionsSnapshot.errorBySource;
   const sideChatHistoryLoading = sessionsSnapshot.historyLoading;
-  const sideComposerAttachmentInputRef = useRef<HTMLInputElement | null>(null);
-  const sideComposerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const sideChatMessagesRef = useRef<HTMLDivElement | null>(null);
-  const sideChatThreadLayoutRef = useRef<HTMLDivElement | null>(null);
-  const sideChatThreadIdRef = sessions.sideChatThreadIdRef;
-  const sideChatThreadIdsRef = sessions.sideChatThreadIdsRef;
-  const sideIsComposingRef = useRef(false);
-  const sideIgnoreComposerSubmitUntilRef = useRef(0);
 
   const sideChatSourceThreadId = activeThread?.id?.trim() || null;
   const sideChatThreadId = sideChatSourceThreadId
@@ -250,25 +257,8 @@ export function useSideChatController({
     ? sideChatErrorBySource[sideChatSourceThreadId] || null
     : null;
   const sideComposerDraft = sideChatSourceThreadId
-    ? sideComposerDraftForSource(sideChatSourceThreadId)
+    ? sideComposerBySource[sideChatSourceThreadId] || emptySideComposerDraft()
     : emptySideComposerDraft();
-
-  useEffect(() => {
-    // sessionStorage read-through for a source with no in-memory binding.
-    if (sideChatSourceThreadId) {
-      sessions.restorePersisted(sideChatSourceThreadId);
-    }
-  }, [sideChatSourceThreadId]);
-
-  useEffect(() => {
-    // The active-source flip re-derives the sideChatThreadIdRef shadow
-    // inside the store (replacing the legacy per-render sync effects).
-    sessions.setActiveSource(sideChatSourceThreadId);
-  }, [sideChatSourceThreadId]);
-
-  function rememberSideChatThreadId(threadId: string) {
-    sessions.rememberSideThreadId(threadId);
-  }
 
   const sideChatThreadSummary = sideChatThreadId
     ? threadSummaryById.get(sideChatThreadId) || null
@@ -293,7 +283,8 @@ export function useSideChatController({
         ) || "claude_code"
       : composerProviderType;
   const sideChatRawMessages = sideChatThreadId
-    ? messagesByThread[sideChatThreadId] || EMPTY_UI_TRANSCRIPT_MESSAGES
+    ? (messagesByThread[sideChatThreadId] as UiTranscriptMessage[]) ||
+      EMPTY_UI_TRANSCRIPT_MESSAGES
     : EMPTY_UI_TRANSCRIPT_MESSAGES;
   const sideChatMessages = useMemo(
     () =>
@@ -302,7 +293,6 @@ export function useSideChatController({
       ),
     [sideChatRawMessages],
   );
-  const sideChatMessageTailSignature = messageTailSignature(sideChatMessages);
   const sideChatThreadInfo = sideChatThreadId
     ? threadInfoByThread[sideChatThreadId] || null
     : null;
@@ -321,7 +311,7 @@ export function useSideChatController({
         .filter((intent): intent is MessageIntent => Boolean(intent))
     : [];
   const sideChatRuntime = selectThreadRuntime(messageState, sideChatThreadId);
-  const sideChatLiveStream = sideChatThreadId
+  const sideChatLiveStream: LiveStreamState | null = sideChatThreadId
     ? liveStreamStateByThread[sideChatThreadId] || null
     : null;
   const sideChatPendingAckIntents = (
@@ -437,10 +427,6 @@ export function useSideChatController({
       sideChatShowPendingAckLoading,
   );
 
-  function sideComposerDraftForSource(sourceThreadId: string): SideComposerDraft {
-    return sideComposerBySource[sourceThreadId] || emptySideComposerDraft();
-  }
-
   function updateSideComposerDraft(
     sourceThreadId: string,
     updater: (current: SideComposerDraft) => SideComposerDraft,
@@ -491,21 +477,6 @@ export function useSideChatController({
         (annotation) => annotation.id !== annotationId,
       ),
     }));
-  }
-
-  function appendSideComposerFile(
-    sourceThreadId: string,
-    file: MessageFileAttachment,
-  ) {
-    updateSideComposerDraft(sourceThreadId, (current) => {
-      if (current.files.some((entry) => entry.path === file.path)) {
-        return current;
-      }
-      return {
-        ...current,
-        files: [...current.files, file],
-      };
-    });
   }
 
   async function appendSideComposerAttachments(
@@ -581,194 +552,17 @@ export function useSideChatController({
     }
   }
 
-  // Load the side thread transcript once per side thread (after state
-  // hydration). Depending on `desktopState` identity here is unsafe: applying
-  // a transcript can rewrite `desktopState.sessions`, which would re-fire
-  // this effect in a fetch loop. Steady-state sync comes from the per-thread
-  // committed stream started after the initial committed cursor is known.
-  const desktopStateHydrated = Boolean(desktopState);
-  useEffect(() => {
-    if (!sideChatThreadId || !desktopStateHydrated) {
-      return;
-    }
-
-    let cancelled = false;
-    let latestTranscript: ThreadTranscript | null = null;
-    const consumerId = sideChatStreamConsumerId(sideChatThreadId);
-    void loadThreadHistory({
-      api: getDesktopApi(),
-      threadId: sideChatThreadId,
-      onBeforeLoad: (threadId) => {
-        if (!(messagesByThreadRef.current[threadId] || []).length) {
-          scrollMessagesToLatest(sideChatMessagesRef.current);
-        }
-      },
-      onTranscript: (threadId, transcript) => {
-        if (cancelled) {
-          return;
-        }
-        latestTranscript = transcript;
-        applyRemoteTranscript(threadId, transcript);
-      },
-      onAutomationResponseDetected: (threadId) => {
-        setPendingAutomationRun(threadId, null);
-      },
-      hasAutomationResponse: transcriptHasAutomationResponse,
-      setHistoryLoading: (loading) => sessions.setHistoryLoading(loading),
+  function opsContext(): SideChatOpsContext {
+    return {
+      sessions,
+      mirror,
+      sourceThreadId: sideChatSourceThreadId,
+      activeThread,
+      threadSummaryById,
+      pendingAgentId,
+      setDesktopState,
       setError,
-    }).then(() => {
-      if (cancelled || !latestTranscript) {
-        return;
-      }
-      void startCommittedThreadStream(
-        sideChatThreadId,
-        latestTranscript,
-        consumerId,
-      );
-    });
-
-    return () => {
-      cancelled = true;
-      void window.garyxDesktop.stopThreadStream({
-        threadId: sideChatThreadId,
-        consumerId,
-      });
     };
-  }, [desktopStateHydrated, sideChatThreadId]);
-
-  useEffect(() => {
-    if (!sideChatThreadId) {
-      return;
-    }
-    if (sideChatQueue.length === 0) {
-      delete deferredQueueDrainByThreadRef.current[sideChatThreadId];
-      delete queueDrainInFlightByThreadRef.current[sideChatThreadId];
-      return;
-    }
-    if (
-      sideChatIsSendingThread ||
-      !deferredQueueDrainByThreadRef.current[sideChatThreadId] ||
-      queueDrainInFlightByThreadRef.current[sideChatThreadId]
-    ) {
-      return;
-    }
-
-    deferredQueueDrainByThreadRef.current[sideChatThreadId] = false;
-    queueDrainInFlightByThreadRef.current[sideChatThreadId] = true;
-    void runQueuedBatch(sideChatThreadId).finally(() => {
-      delete queueDrainInFlightByThreadRef.current[sideChatThreadId];
-    });
-  }, [sideChatIsSendingThread, sideChatQueue.length, sideChatThreadId]);
-
-  useLayoutEffect(() => {
-    if (!sideChatThreadId || sideChatHistoryLoading) {
-      return;
-    }
-    scrollMessagesToLatest(sideChatMessagesRef.current);
-  }, [
-    sideChatHistoryLoading,
-    sideChatThreadId,
-    sideChatMessageTailSignature,
-  ]);
-
-  async function ensureSideChatThread(): Promise<string | null> {
-    const sourceThreadId = sideChatSourceThreadId;
-    if (!sourceThreadId) {
-      return null;
-    }
-
-    const existingThreadId =
-      sessions.threadFor(sourceThreadId) ||
-      sessions.restorePersisted(sourceThreadId);
-    if (existingThreadId) {
-      try {
-        if (await ensureThreadOpenable(existingThreadId)) {
-          rememberSideChatThreadId(existingThreadId);
-          sessions.rememberThread(sourceThreadId, existingThreadId);
-          sessions.setError(sourceThreadId, null);
-          return existingThreadId;
-        }
-      } catch {
-        sessions.forgetThread(sourceThreadId, existingThreadId);
-      }
-    }
-
-    const inFlight = sessions.creationPromiseFor(sourceThreadId);
-    if (inFlight) {
-      return inFlight;
-    }
-
-    const creation = (async () => {
-      sessions.setCreating(sourceThreadId, true);
-      sessions.setError(sourceThreadId, null);
-
-      try {
-        const sourceThread =
-          threadSummaryById.get(sourceThreadId) || activeThread || null;
-        const created = await window.garyxDesktop.createThread({
-          title: "Side chat",
-          agentId: sourceThread?.agentId || pendingAgentId || "claude",
-          forkFromThreadId: sourceThreadId,
-          metadata: {
-            source: "side_chat",
-            hidden: true,
-            exclude_from_recent: true,
-            side_chat_parent_thread_id: sourceThreadId,
-          },
-        });
-        setDesktopState(created.state);
-        updateMessagesByThread((current) => ({
-          ...current,
-          [created.thread.id]: current[created.thread.id] || [],
-        }));
-        rememberSideChatThreadId(created.thread.id);
-        sessions.rememberThread(sourceThreadId, created.thread.id);
-        return created.thread.id;
-      } catch (createError) {
-        const message =
-          createError instanceof Error
-            ? createError.message
-            : "Failed to start side chat.";
-        sessions.setError(sourceThreadId, message);
-        setError(message);
-        return null;
-      } finally {
-        sessions.setCreating(sourceThreadId, false);
-        sessions.setCreationPromise(sourceThreadId, null);
-      }
-    })();
-
-    sessions.setCreationPromise(sourceThreadId, creation);
-    return creation;
-  }
-
-  async function openTaskThreadInSidePanel(threadId: string): Promise<void> {
-    const sourceThreadId = sideChatSourceThreadId;
-    const targetThreadId = threadId.trim();
-    if (!sourceThreadId || !targetThreadId) {
-      return;
-    }
-
-    sessions.setCreating(sourceThreadId, true);
-    sessions.setError(sourceThreadId, null);
-
-    try {
-      if (!(await ensureThreadOpenable(targetThreadId))) {
-        throw new Error(`Thread not found: ${targetThreadId}`);
-      }
-      rememberSideChatThreadId(targetThreadId);
-      sessions.rememberThread(sourceThreadId, targetThreadId);
-    } catch (openError) {
-      const message =
-        openError instanceof Error
-          ? openError.message
-          : `Failed to open thread: ${targetThreadId}`;
-      sessions.setError(sourceThreadId, message);
-      setError(message);
-      throw openError;
-    } finally {
-      sessions.setCreating(sourceThreadId, false);
-    }
   }
 
   async function handleSideComposerSubmit(options?: {
@@ -784,7 +578,7 @@ export function useSideChatController({
       return;
     }
 
-    const draft = sideComposerDraftForSource(sourceThreadId);
+    const draft = sessions.draftFor(sourceThreadId);
     const prompt = composePromptWithBrowserAnnotations(
       draft.text,
       draft.browserAnnotations,
@@ -804,13 +598,14 @@ export function useSideChatController({
       return;
     }
 
-    const threadId = await ensureSideChatThread();
+    const threadId = await ensureSideChatThread(opsContext());
     if (!threadId) {
       return;
     }
 
-    const runtime = selectThreadRuntime(messageStateRef.current, threadId);
-    const liveStream = getLiveStreamState(threadId);
+    const machineNow = mirror.getMachineState();
+    const runtime = selectThreadRuntime(machineNow, threadId);
+    const liveStream = mirror.getLiveStreamMap()[threadId] || null;
     const streamBusy = Boolean(
       liveStream &&
         ["connecting", "streaming", "reconciling"].includes(
@@ -831,7 +626,7 @@ export function useSideChatController({
         source: "composer_queue",
         state: "queued_local",
       });
-      dispatchMessageState({
+      mirror.dispatchMachineAction({
         type: "intent/created",
         intent,
         enqueue: true,
@@ -846,7 +641,9 @@ export function useSideChatController({
           : "steer"
         : settingsDraft.followUpBehavior;
       if (followUpBehavior === "steer" && sideChatCanSteerQueuedPrompt) {
-        await steerQueuedIntent(intent, { canSteer: sideChatCanSteerQueuedPrompt });
+        await mirror.steerQueuedIntent(intent, {
+          canSteer: sideChatCanSteerQueuedPrompt,
+        });
       }
       return;
     }
@@ -860,65 +657,199 @@ export function useSideChatController({
       state: "dispatch_requested",
       dispatchMode: "sync_send",
     });
-    dispatchMessageState({
+    mirror.dispatchMachineAction({
       type: "intent/created",
       intent,
       enqueue: false,
     });
     clearSideComposerDraft(sourceThreadId);
     setError(null);
-    void runQueuedBatch(threadId, intent.intentId);
+    void mirror.runQueuedBatch(threadId, intent.intentId);
   }
 
-  function sideChatStreamConsumerId(threadId: string): string {
-    return `side-chat:${threadId}`;
+  if (!sideChatSourceThreadId) {
+    return (
+      <div className="side-tool-empty">
+        {t("Open a thread before starting side chat.")}
+      </div>
+    );
   }
-
-  return {
-    appendSideComposerAttachments,
-    ensureSideChatThread,
-    handleSideComposerSubmit,
-    openTaskThreadInSidePanel,
-    removeSideComposerBrowserAnnotation,
-    removeSideComposerFile,
-    removeSideComposerImage,
-    sideChatActiveToolGroupId,
-    sideChatAgentLabel,
-    sideChatCanSteerQueuedPrompt,
-    sideChatComposerEditingLocked,
-    sideChatComposerHasPayload,
-    sideChatComposerLocked,
-    sideChatComposerPlaceholder,
-    sideChatComposerProviderType,
-    sideChatComposerWorkspaceBranch,
-    sideChatComposerWorkspaceMode,
-    sideChatCreating,
-    sideChatError,
-    sideChatHistoryLoading,
-    sideChatHistoryPagination,
-    sideChatIsSendingThread,
-    sideChatLiveStream,
-    sideChatMessages,
-    sideChatMessagesRef,
-    sideChatQueue,
-    sideChatRenderState,
-    sideChatShowTailThinking,
-    sideChatSourceThreadId,
-    sideChatStreamConsumerId,
-    sideChatThreadBot,
-    sideChatThreadBotId,
-    sideChatThreadId,
-    sideChatThreadIdRef,
-    sideChatThreadIdsRef,
-    sideChatThreadLayoutRef,
-    sideChatThreadSummary,
-    sideChatVisiblePendingAckIntents,
-    sideChatVisibleRemotePendingInputs,
-    sideComposerAttachmentInputRef,
-    sideComposerDraft,
-    sideComposerTextareaRef,
-    sideIgnoreComposerSubmitUntilRef,
-    sideIsComposingRef,
-    updateSideComposerDraft,
-  };
+  if (!sideChatThreadId) {
+    return (
+      <div className="side-tool-empty">
+        {sideChatCreating
+          ? t("Starting…")
+          : sideChatError || t("Start a focused side thread.")}
+      </div>
+    );
+  }
+  return (
+    <ThreadPage
+      surfaceVariant="side-chat"
+      agentLabel={sideChatAgentLabel}
+      composerAgentOptions={composerAgentOptions}
+      composerWorkflowOptions={composerWorkflowOptions}
+      composerWorkflowOptionsLoading={composerWorkflowOptionsLoading}
+      activeMessages={sideChatMessages}
+      activePendingAckIntents={sideChatVisiblePendingAckIntents}
+      activePendingAutomationRun={null}
+      activeToolGroupId={sideChatActiveToolGroupId}
+      activeQueue={sideChatQueue}
+      renderState={sideChatRenderState}
+      activeThreadSummary={sideChatThreadSummary}
+      activeThreadTitle={sideChatThreadSummary?.title || null}
+      activeThreadRunId={
+        sideChatLiveStream?.runId || sideChatThreadSummary?.recentRunId || null
+      }
+      availableWorkspaceCount={availableWorkspaceCount}
+      composer={sideComposerDraft.text}
+      composerAttachmentInputRef={sideComposerAttachmentInputRef}
+      composerBrowserAnnotations={sideComposerDraft.browserAnnotations}
+      composerFiles={sideComposerDraft.files}
+      composerHasPayload={sideChatComposerHasPayload}
+      composerImages={sideComposerDraft.images}
+      composerEditingLocked={sideChatComposerEditingLocked}
+      composerLocked={sideChatComposerLocked}
+      composerPlaceholder={sideChatComposerPlaceholder}
+      composerProviderType={sideChatComposerProviderType}
+      composerResetKey={sideComposerDraft.resetKey}
+      composerWorkspaceBranch={sideChatComposerWorkspaceBranch}
+      composerWorkspaceMode={sideChatComposerWorkspaceMode}
+      activeThreadBot={sideChatThreadBot}
+      activeThreadBotId={sideChatThreadBotId}
+      botBindingDisabled={botBindingDisabled}
+      botGroups={botGroups}
+      slashCommands={slashCommands}
+      slashCommandsLoaded={slashCommandsLoaded}
+      slashCommandsLoading={slashCommandsLoading}
+      composerTextareaRef={sideComposerTextareaRef}
+      historyLoading={sideChatHistoryLoading}
+      historyLoadingEarlier={Boolean(sideChatHistoryPagination?.loadingBefore)}
+      ignoreComposerSubmitUntilRef={sideIgnoreComposerSubmitUntilRef}
+      inspectorOpen={false}
+      isActiveSendingThread={sideChatIsSendingThread}
+      canSteerQueuedPrompt={sideChatCanSteerQueuedPrompt}
+      isComposingRef={sideIsComposingRef}
+      messagesRef={sideChatMessagesRef}
+      newThreadSelectedAgentId={sideChatThreadSummary?.agentId || pendingAgentId}
+      newThreadSelectedWorkflowId={null}
+      newThreadWorkspaceEntry={newThreadWorkspaceEntry}
+      newThreadWorkspaceMode={newThreadWorkspaceMode}
+      onAddWorkspace={onAddWorkspace}
+      onAppendComposerAttachments={(files) => {
+        void appendSideComposerAttachments(sideChatSourceThreadId, files);
+      }}
+      onCancelIntent={(threadId, intentId) => {
+        mirror.dispatchMachineAction({
+          type: "intent/cancelled",
+          threadId,
+          intentId,
+        });
+      }}
+      onComposerChange={(value) => {
+        updateSideComposerDraft(sideChatSourceThreadId, (current) => ({
+          ...current,
+          text: value,
+          textPresent: value.trim().length > 0,
+        }));
+        if (
+          /^\/[a-z0-9_]*$/i.test(value) &&
+          !slashCommandsLoaded &&
+          !slashCommandsLoading
+        ) {
+          void loadSlashCommands();
+        }
+      }}
+      onComposerCompositionEnd={(value) => {
+        sideIsComposingRef.current = false;
+        updateSideComposerDraft(sideChatSourceThreadId, (current) => ({
+          ...current,
+          text: value,
+          textPresent: value.trim().length > 0,
+        }));
+        sideIgnoreComposerSubmitUntilRef.current = performance.now() + 80;
+      }}
+      onComposerCompositionStart={() => {
+        sideIsComposingRef.current = true;
+      }}
+      onComposerInterrupt={() => {
+        const current = sessions.sideChatThreadIdRef.current;
+        if (current) {
+          void mirror.interruptThread(current);
+        }
+      }}
+      onComposerSubmit={handleSideComposerSubmit}
+      onLocalWorkspaceFileLinkClick={onLocalWorkspaceFileLinkClick}
+      onMarkIgnoreComposerSubmitWindow={() => {
+        sideIgnoreComposerSubmitUntilRef.current = performance.now() + 80;
+      }}
+      onMessagesScroll={() => {
+        const node = sideChatMessagesRef.current;
+        if (
+          sideChatThreadId &&
+          node &&
+          messagesNearEarlierUserTurnBoundary(node)
+        ) {
+          void mirror.loadOlderThreadHistoryPage(sideChatThreadId);
+        }
+      }}
+      onMessagesUserScrollIntent={() => {}}
+      onRemoveComposerFile={(fileId) => {
+        removeSideComposerFile(sideChatSourceThreadId, fileId);
+      }}
+      onRemoveComposerImage={(imageId) => {
+        removeSideComposerImage(sideChatSourceThreadId, imageId);
+      }}
+      onRemoveComposerBrowserAnnotation={(annotationId) => {
+        removeSideComposerBrowserAnnotation(sideChatSourceThreadId, annotationId);
+      }}
+      onReorderQueuedIntent={onReorderQueuedIntent}
+      onSelectNewThreadAgent={() => {}}
+      onSelectNewThreadWorkflow={() => {}}
+      onSelectNewThreadWorkspaceMode={() => {}}
+      onResumeProviderSession={onResumeProviderSession}
+      onRetryFailedMessage={(message) => {
+        onRetryFailedMessage(message);
+      }}
+      onSelectBotBinding={(botId) => {
+        if (sideChatThreadId) {
+          void syncThreadBotBinding(sideChatThreadId, botId);
+        }
+      }}
+      onOpenThreadById={(threadId) => {
+        onOpenThreadById(threadId);
+      }}
+      onOpenCapsule={onOpenCapsule}
+      onSelectWorkspace={() => {}}
+      onSteerQueuedPrompt={(item) => {
+        void mirror.steerQueuedIntent(item, {
+          canSteer: sideChatCanSteerQueuedPrompt,
+        });
+      }}
+      onThreadLogsUnreadChange={() => {}}
+      onThreadLogsResizeKeyDown={() => {}}
+      onThreadLogsResizeStart={() => {}}
+      preferredWorkspaceForNewThread={preferredWorkspaceForNewThread}
+      selectableNewThreadWorkspaces={selectableNewThreadWorkspaces}
+      selectedThreadId={sideChatThreadId}
+      showAutomationRunInitialPlaceholder={false}
+      showDreams={false}
+      // Side chats fork the provider session without importing visible
+      // history, so there is never parent history to wait for — the panel
+      // opens as an empty thread instead of a loading placeholder.
+      showHistoryLoadingPlaceholder={false}
+      showTailThinking={sideChatShowTailThinking}
+      threadLayoutRef={sideChatThreadLayoutRef}
+      threadLogsMaxWidth={0}
+      threadLogsOpen={false}
+      threadLogsPanelWidth={0}
+      threadLogsResizing={false}
+      threadAvatarCatalog={threadAvatarCatalog}
+      teamAgentDisplayNamesById={teamAgentDisplayNamesById}
+      visibleRemoteAwaitingAckInputs={sideChatVisibleRemotePendingInputs}
+      visibleRemotePendingInputs={sideChatVisibleRemotePendingInputs}
+      workflowRunContent={null}
+      workspaceMutation={workspaceMutation}
+    />
+  );
 }
