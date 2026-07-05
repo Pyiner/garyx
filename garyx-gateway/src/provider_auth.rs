@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -7,28 +7,25 @@ use axum::Json;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use garyx_models::config::{AgentProviderConfig, GaryxConfig};
+use cctty::CcttyError;
+use cctty::auth::{
+    AuthLoginEvent, AuthLoginInput, AuthLoginOptions, AuthLoginSession, AuthStatusOptions,
+    auth_status_json,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{ChildStdin, Command};
 use tokio::sync::{Mutex, oneshot};
-use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::server::AppState;
 
 const AUTH_START_TIMEOUT: Duration = Duration::from_secs(30);
-const CCTTY_BINARY_NAME: &str = "cctty";
-const EMBEDDED_CCTTY_ARG: &str = "__cctty";
-const GARYX_CCTTY_PATH_ENV: &str = "GARYX_CCTTY_PATH";
-const GARYX_CLAUDE_CLI_PATH_ENV: &str = "GARYX_CLAUDE_CLI_PATH";
-const GARYX_CLAUDE_CLI_MODE_ENV: &str = "GARYX_CLAUDE_CLI_MODE";
 
 #[derive(Default)]
 pub struct ClaudeAuthSessionStore {
     sessions: Mutex<HashMap<String, Arc<ClaudeAuthSession>>>,
-    command_override: Mutex<Option<AuthCommandSpec>>,
+    #[cfg(test)]
+    claude_path_override: Mutex<Option<PathBuf>>,
 }
 
 impl ClaudeAuthSessionStore {
@@ -43,27 +40,30 @@ impl ClaudeAuthSessionStore {
         self.sessions.lock().await.get(login_id).cloned()
     }
 
-    async fn command_override(&self) -> Option<AuthCommandSpec> {
-        self.command_override.lock().await.clone()
+    #[cfg(test)]
+    async fn claude_path_override(&self) -> Option<PathBuf> {
+        self.claude_path_override.lock().await.clone()
+    }
+
+    #[cfg(not(test))]
+    async fn claude_path_override(&self) -> Option<PathBuf> {
+        None
     }
 
     #[cfg(test)]
-    pub async fn set_command_override_for_test(&self, command: PathBuf) {
-        *self.command_override.lock().await = Some(AuthCommandSpec {
-            program: command,
-            prefix_args: Vec::new(),
-        });
+    pub async fn set_claude_path_override_for_test(&self, command: PathBuf) {
+        *self.claude_path_override.lock().await = Some(command);
     }
 }
 
 struct ClaudeAuthSession {
     login_id: String,
     state: Mutex<ClaudeAuthSessionState>,
-    stdin: Mutex<Option<ChildStdin>>,
+    input: Mutex<Option<AuthLoginInput>>,
 }
 
 impl ClaudeAuthSession {
-    fn new(login_id: String, stdin: ChildStdin) -> Self {
+    fn new(login_id: String, input: AuthLoginInput) -> Self {
         Self {
             login_id,
             state: Mutex::new(ClaudeAuthSessionState {
@@ -73,7 +73,7 @@ impl ClaudeAuthSession {
                 error: None,
                 exit_code: None,
             }),
-            stdin: Mutex::new(Some(stdin)),
+            input: Mutex::new(Some(input)),
         }
     }
 
@@ -91,24 +91,18 @@ impl ClaudeAuthSession {
     }
 
     async fn submit_code(&self, code: &str) -> Result<ClaudeAuthLoginResponse, ApiError> {
-        let mut stdin_guard = self.stdin.lock().await;
-        let Some(stdin) = stdin_guard.as_mut() else {
+        let input = self.input.lock().await.clone();
+        let Some(input) = input else {
             return Err(ApiError::new(
                 StatusCode::CONFLICT,
                 "claude_auth_session_closed",
                 "Claude Code auth session is no longer accepting input.",
             ));
         };
-        stdin.write_all(code.as_bytes()).await.map_err(|error| {
-            ApiError::io(StatusCode::BAD_GATEWAY, "write_auth_code_failed", error)
-        })?;
-        stdin.write_all(b"\n").await.map_err(|error| {
-            ApiError::io(StatusCode::BAD_GATEWAY, "write_auth_code_failed", error)
-        })?;
-        stdin.flush().await.map_err(|error| {
-            ApiError::io(StatusCode::BAD_GATEWAY, "flush_auth_code_failed", error)
-        })?;
-        drop(stdin_guard);
+        input
+            .submit_code(code.to_owned())
+            .await
+            .map_err(map_submit_code_error)?;
 
         self.update(|state| {
             if !state.status.is_terminal() {
@@ -120,15 +114,11 @@ impl ClaudeAuthSession {
         Ok(self.snapshot().await)
     }
 
-    async fn close_stdin(&self) {
-        self.stdin.lock().await.take();
+    async fn close_input(&self) {
+        if let Some(input) = self.input.lock().await.take() {
+            input.close();
+        }
     }
-}
-
-#[derive(Debug, Clone)]
-struct AuthCommandSpec {
-    program: PathBuf,
-    prefix_args: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -211,39 +201,28 @@ pub async fn start_claude_code_auth(
     State(state): State<Arc<AppState>>,
     Json(request): Json<StartClaudeAuthRequest>,
 ) -> Result<(StatusCode, Json<ClaudeAuthLoginResponse>), ApiError> {
-    let command_spec = resolve_auth_command(&state).await?;
     let login_id = Uuid::new_v4().to_string();
     let login_args = build_login_args(&request);
-    let mut command = Command::new(&command_spec.program);
-    command.args(&command_spec.prefix_args).args(&login_args);
-    command
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true);
-
-    let mut child = command.spawn().map_err(|error| {
-        ApiError::io(StatusCode::BAD_GATEWAY, "spawn_claude_auth_failed", error)
-    })?;
-    let stdout = child.stdout.take().ok_or_else(|| {
+    let claude_path = state
+        .ops
+        .provider_auth_sessions
+        .claude_path_override()
+        .await;
+    let mut auth_session = AuthLoginSession::start(AuthLoginOptions {
+        passthrough_args: login_args,
+        claude_path: claude_path.clone(),
+        ..AuthLoginOptions::default()
+    })
+    .map_err(|error| {
         ApiError::new(
             StatusCode::BAD_GATEWAY,
-            "claude_auth_stdout_unavailable",
-            "Claude Code auth subprocess did not expose stdout.",
+            "spawn_claude_auth_failed",
+            error.to_string(),
         )
     })?;
-    let stdin = child.stdin.take().ok_or_else(|| {
-        ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            "claude_auth_stdin_unavailable",
-            "Claude Code auth subprocess did not expose stdin.",
-        )
-    })?;
-    if let Some(stderr) = child.stderr.take() {
-        tokio::spawn(drain_stderr(login_id.clone(), stderr));
-    }
-
-    let session = Arc::new(ClaudeAuthSession::new(login_id.clone(), stdin));
+    let input = auth_session.input();
+    let events = auth_session.take_events();
+    let session = Arc::new(ClaudeAuthSession::new(login_id.clone(), input));
     state
         .ops
         .provider_auth_sessions
@@ -252,9 +231,9 @@ pub async fn start_claude_code_auth(
     let (started_tx, started_rx) = oneshot::channel();
     tokio::spawn(read_auth_events(
         session.clone(),
-        command_spec,
-        stdout,
-        child,
+        events,
+        auth_session,
+        claude_path,
         started_tx,
     ));
 
@@ -323,50 +302,20 @@ pub async fn get_claude_code_auth(
 
 async fn read_auth_events(
     session: Arc<ClaudeAuthSession>,
-    command_spec: AuthCommandSpec,
-    stdout: tokio::process::ChildStdout,
-    mut child: tokio::process::Child,
+    mut events: tokio::sync::mpsc::Receiver<AuthLoginEvent>,
+    auth_session: AuthLoginSession,
+    claude_path: Option<PathBuf>,
     started_tx: oneshot::Sender<Result<ClaudeAuthLoginResponse, ApiError>>,
 ) {
     let mut started_tx = Some(started_tx);
-    let mut lines = BufReader::new(stdout).lines();
-    loop {
-        match lines.next_line().await {
-            Ok(Some(line)) => {
-                let Ok(event) = serde_json::from_str::<Value>(&line) else {
-                    debug!(line = %line, "ignored non-json Claude auth output");
-                    continue;
-                };
-                handle_auth_event(&session, &command_spec, &event, &mut started_tx).await;
-            }
-            Ok(None) => break,
-            Err(error) => {
-                session
-                    .update(|state| {
-                        if !state.status.is_terminal() {
-                            state.status = ClaudeAuthLoginStatus::Failed;
-                            state.error =
-                                Some(format!("Failed reading Claude Code auth output: {error}"));
-                        }
-                    })
-                    .await;
-                send_start_error_once(
-                    &mut started_tx,
-                    ApiError::io(
-                        StatusCode::BAD_GATEWAY,
-                        "read_claude_auth_events_failed",
-                        error,
-                    ),
-                );
-                break;
-            }
-        }
+    while let Some(event) = events.recv().await {
+        handle_auth_event(&session, claude_path.clone(), event, &mut started_tx).await;
     }
 
-    session.close_stdin().await;
-    match child.wait().await {
-        Ok(status) => {
-            let code = status.code();
+    session.close_input().await;
+    match auth_session.wait().await {
+        Ok(code) => {
+            let code = Some(code);
             let mut should_fetch_status = false;
             session
                 .update(|state| {
@@ -391,7 +340,7 @@ async fn read_auth_events(
                 })
                 .await;
             if should_fetch_status {
-                let auth_status = fetch_auth_status(&command_spec).await;
+                let auth_status = fetch_auth_status(claude_path).await;
                 session
                     .update(|state| match auth_status {
                         Ok(value) => {
@@ -434,22 +383,13 @@ async fn read_auth_events(
 
 async fn handle_auth_event(
     session: &Arc<ClaudeAuthSession>,
-    command_spec: &AuthCommandSpec,
-    event: &Value,
+    claude_path: Option<PathBuf>,
+    event: AuthLoginEvent,
     started_tx: &mut Option<oneshot::Sender<Result<ClaudeAuthLoginResponse, ApiError>>>,
 ) {
-    let event_type = event
-        .get("type")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    match event_type {
-        "authorization_url" => {
-            let url = event
-                .get("url")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .trim()
-                .to_owned();
+    match event {
+        AuthLoginEvent::AuthorizationUrl { url } => {
+            let url = url.trim().to_owned();
             if url.is_empty() {
                 session
                     .update(|state| {
@@ -477,7 +417,7 @@ async fn handle_auth_event(
                 .await;
             send_start_response_once(started_tx, session.snapshot().await);
         }
-        "input_requested" => {
+        AuthLoginEvent::InputRequested { .. } => {
             session
                 .update(|state| {
                     if !state.status.is_terminal() {
@@ -486,8 +426,8 @@ async fn handle_auth_event(
                 })
                 .await;
         }
-        "success" => {
-            let auth_status = fetch_auth_status(command_spec).await;
+        AuthLoginEvent::Success { .. } => {
+            let auth_status = fetch_auth_status(claude_path).await;
             session
                 .update(|state| {
                     state.status = ClaudeAuthLoginStatus::Succeeded;
@@ -503,13 +443,7 @@ async fn handle_auth_event(
                 })
                 .await;
         }
-        "error" => {
-            let message = event
-                .get("message")
-                .and_then(Value::as_str)
-                .or_else(|| event.get("error").and_then(Value::as_str))
-                .unwrap_or("Claude Code auth failed.")
-                .to_owned();
+        AuthLoginEvent::Error { message } => {
             session
                 .update(|state| {
                     state.status = ClaudeAuthLoginStatus::Failed;
@@ -521,11 +455,8 @@ async fn handle_auth_event(
                 ApiError::new(StatusCode::BAD_GATEWAY, "claude_auth_failed", message),
             );
         }
-        "exit" => {
-            let code = event
-                .get("exit_code")
-                .and_then(Value::as_i64)
-                .and_then(|value| i32::try_from(value).ok());
+        AuthLoginEvent::Exit { exit_code } => {
+            let code = Some(exit_code);
             session
                 .update(|state| {
                     state.exit_code = code;
@@ -540,44 +471,36 @@ async fn handle_auth_event(
                 })
                 .await;
         }
-        _ => {}
+        AuthLoginEvent::Started { .. } => {}
     }
 }
 
-async fn fetch_auth_status(command_spec: &AuthCommandSpec) -> Result<Value, String> {
-    let output = Command::new(&command_spec.program)
-        .args(&command_spec.prefix_args)
-        .args(["auth", "status", "--json"])
-        .output()
-        .await
-        .map_err(|error| format!("Failed to run Claude Code auth status: {error}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-        let detail = if stderr.is_empty() { stdout } else { stderr };
-        return Err(if detail.is_empty() {
-            format!("Claude Code auth status exited with {}.", output.status)
-        } else {
-            detail
-        });
-    }
-    serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("Claude Code auth status returned invalid JSON: {error}"))
+async fn fetch_auth_status(claude_path: Option<PathBuf>) -> Result<Value, String> {
+    auth_status_json(AuthStatusOptions {
+        claude_path,
+        ..AuthStatusOptions::default()
+    })
+    .await
+    .map_err(|error| format!("Failed to run Claude Code auth status: {error}"))
 }
 
-async fn drain_stderr(login_id: String, stderr: tokio::process::ChildStderr) {
-    let mut lines = BufReader::new(stderr).lines();
-    while let Ok(Some(line)) = lines.next_line().await {
-        debug!(login_id = %login_id, line = %line, "Claude auth stderr");
+fn map_submit_code_error(error: CcttyError) -> ApiError {
+    if matches!(&error, CcttyError::Tty(message) if message.contains("session is closed")) {
+        return ApiError::new(
+            StatusCode::CONFLICT,
+            "claude_auth_session_closed",
+            "Claude Code auth session is no longer accepting input.",
+        );
     }
+    ApiError::new(
+        StatusCode::BAD_GATEWAY,
+        "write_auth_code_failed",
+        error.to_string(),
+    )
 }
 
 fn build_login_args(request: &StartClaudeAuthRequest) -> Vec<String> {
-    let mut args = vec![
-        "auth".to_owned(),
-        "login".to_owned(),
-        "--json-events".to_owned(),
-    ];
+    let mut args = vec!["auth".to_owned(), "login".to_owned()];
     match request.mode {
         ClaudeAuthLoginMode::Claudeai => args.push("--claudeai".to_owned()),
         ClaudeAuthLoginMode::Console => args.push("--console".to_owned()),
@@ -595,129 +518,6 @@ fn build_login_args(request: &StartClaudeAuthRequest) -> Vec<String> {
         args.push(email.to_owned());
     }
     args
-}
-
-async fn resolve_auth_command(state: &Arc<AppState>) -> Result<AuthCommandSpec, ApiError> {
-    if let Some(spec) = state.ops.provider_auth_sessions.command_override().await {
-        return Ok(spec);
-    }
-    let config = state.config_snapshot();
-    let Some(spec) = resolve_auth_command_from_config(&config) else {
-        return Err(ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            "claude_auth_command_unavailable",
-            "Claude Code auth command was not found. Configure GARYX_CCTTY_PATH or install cctty next to garyx or on PATH.",
-        ));
-    };
-    Ok(spec)
-}
-
-fn resolve_auth_command_from_config(config: &GaryxConfig) -> Option<AuthCommandSpec> {
-    let agent_cfg = config
-        .agents
-        .get("claude")
-        .and_then(|value| serde_json::from_value::<AgentProviderConfig>(value.clone()).ok());
-    let agent_cfg = agent_cfg.as_ref();
-    if let Some(path) = explicit_cctty_path(agent_cfg) {
-        return Some(AuthCommandSpec {
-            program: path,
-            prefix_args: Vec::new(),
-        });
-    }
-    bundled_cctty_path()
-        .or_else(|| executable_on_path(CCTTY_BINARY_NAME))
-        .map(|program| AuthCommandSpec {
-            program,
-            prefix_args: Vec::new(),
-        })
-        .or_else(|| {
-            std::env::current_exe().ok().map(|program| AuthCommandSpec {
-                program,
-                prefix_args: vec![EMBEDDED_CCTTY_ARG.to_owned()],
-            })
-        })
-}
-
-fn explicit_cctty_path(agent_cfg: Option<&AgentProviderConfig>) -> Option<PathBuf> {
-    explicit_env_path(agent_cfg, GARYX_CCTTY_PATH_ENV)
-        .or_else(|| std::env::var_os(GARYX_CCTTY_PATH_ENV).and_then(nonempty_os_path))
-        .or_else(|| {
-            (claude_cli_mode(agent_cfg) != "native")
-                .then(|| {
-                    agent_cfg
-                        .and_then(|cfg| {
-                            let path = cfg.claude_cli_path.trim();
-                            (!path.is_empty()).then(|| PathBuf::from(path))
-                        })
-                        .or_else(|| explicit_env_path(agent_cfg, GARYX_CLAUDE_CLI_PATH_ENV))
-                        .or_else(|| {
-                            std::env::var_os(GARYX_CLAUDE_CLI_PATH_ENV).and_then(nonempty_os_path)
-                        })
-                })
-                .flatten()
-        })
-}
-
-fn explicit_env_path(agent_cfg: Option<&AgentProviderConfig>, key: &str) -> Option<PathBuf> {
-    agent_cfg.and_then(|cfg| {
-        cfg.env
-            .get(key)
-            .map(String::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-    })
-}
-
-fn nonempty_os_path(value: std::ffi::OsString) -> Option<PathBuf> {
-    let path = PathBuf::from(value);
-    (!path.as_os_str().is_empty()).then_some(path)
-}
-
-fn claude_cli_mode(agent_cfg: Option<&AgentProviderConfig>) -> String {
-    let raw = agent_cfg
-        .and_then(|cfg| cfg.env.get(GARYX_CLAUDE_CLI_MODE_ENV).cloned())
-        .or_else(|| std::env::var(GARYX_CLAUDE_CLI_MODE_ENV).ok())
-        .or_else(|| agent_cfg.map(|cfg| cfg.claude_cli_mode.clone()))
-        .unwrap_or_else(garyx_models::provider::default_claude_cli_mode);
-    let raw = raw.trim();
-    if raw.is_empty() {
-        garyx_models::provider::default_claude_cli_mode()
-    } else {
-        raw.to_ascii_lowercase()
-    }
-}
-
-fn bundled_cctty_path() -> Option<PathBuf> {
-    let current_exe = std::env::current_exe().ok()?;
-    let dir = current_exe.parent()?;
-    let candidate = dir.join(CCTTY_BINARY_NAME);
-    executable_file_exists(&candidate).then_some(candidate)
-}
-
-fn executable_on_path(name: &str) -> Option<PathBuf> {
-    let path_env = std::env::var_os("PATH")?;
-    std::env::split_paths(&path_env)
-        .map(|dir| dir.join(name))
-        .find(|candidate| executable_file_exists(candidate))
-}
-
-fn executable_file_exists(path: &Path) -> bool {
-    let Ok(metadata) = std::fs::metadata(path) else {
-        return false;
-    };
-    if !metadata.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        metadata.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
 }
 
 fn send_start_response_once(
@@ -761,11 +561,6 @@ impl ApiError {
             message: message.into(),
         }
     }
-
-    fn io(status: StatusCode, code: &'static str, error: std::io::Error) -> Self {
-        warn!(code, error = %error, "Claude Code auth API IO error");
-        Self::new(status, code, error.to_string())
-    }
 }
 
 impl IntoResponse for ApiError {
@@ -788,23 +583,24 @@ mod tests {
     use super::*;
     use axum::body::{Body, to_bytes};
     use axum::http::StatusCode;
-    use garyx_models::config::GaryxConfig;
+    use garyx_models::config::{AgentProviderConfig, GaryxConfig};
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
     use tempfile::tempdir;
     use tower::ServiceExt;
 
     #[tokio::test]
     async fn claude_auth_api_starts_submits_and_reports_status() {
         let dir = tempdir().unwrap();
-        let fake_cctty = write_fake_cctty(dir.path());
+        let fake_claude = write_fake_claude(dir.path());
         let config = crate::test_support::with_gateway_auth(GaryxConfig::default());
         let state = crate::server::AppStateBuilder::new(config).build();
         state
             .ops
             .provider_auth_sessions
-            .set_command_override_for_test(fake_cctty)
+            .set_claude_path_override_for_test(fake_claude)
             .await;
         let router = crate::route_graph::build_router(state);
 
@@ -922,32 +718,11 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
-    #[test]
-    fn auth_command_does_not_fall_back_to_native_claude() {
-        let mut config = GaryxConfig::default();
-        config.agents.insert(
-            "claude".to_owned(),
-            serde_json::to_value(AgentProviderConfig {
-                provider_id: "claude".to_owned(),
-                provider_type: garyx_models::provider::ProviderType::ClaudeCode
-                    .as_slug()
-                    .to_owned(),
-                claude_cli_mode: "native".to_owned(),
-                claude_cli_path: String::new(),
-                ..AgentProviderConfig::default()
-            })
-            .unwrap(),
-        );
-
-        let command = resolve_auth_command_from_config(&config).unwrap();
-        assert_ne!(
-            command.program.file_name().and_then(|value| value.to_str()),
-            Some("claude")
-        );
-    }
-
-    #[test]
-    fn auth_command_accepts_cctty_path_override_in_native_mode() {
+    #[tokio::test]
+    async fn claude_auth_ignores_cctty_config_and_native_mode() {
+        let dir = tempdir().unwrap();
+        let fake_claude = write_fake_claude(dir.path());
+        let failing_cctty = write_failing_executable(dir.path().join("old-cctty"));
         let mut config = GaryxConfig::default();
         let mut provider = AgentProviderConfig {
             provider_id: "claude".to_owned(),
@@ -959,20 +734,48 @@ mod tests {
             ..AgentProviderConfig::default()
         };
         provider.env.insert(
-            GARYX_CCTTY_PATH_ENV.to_owned(),
-            "/opt/test/cctty".to_owned(),
+            "GARYX_CCTTY_PATH".to_owned(),
+            failing_cctty.to_string_lossy().to_string(),
         );
         config
             .agents
             .insert("claude".to_owned(), serde_json::to_value(provider).unwrap());
+        let config = crate::test_support::with_gateway_auth(config);
+        let state = crate::server::AppStateBuilder::new(config).build();
+        state
+            .ops
+            .provider_auth_sessions
+            .set_claude_path_override_for_test(fake_claude)
+            .await;
+        let router = crate::route_graph::build_router(state);
 
-        let command = resolve_auth_command_from_config(&config).unwrap();
-        assert_eq!(command.program, PathBuf::from("/opt/test/cctty"));
-        assert!(command.prefix_args.is_empty());
+        let start_response = router
+            .oneshot(
+                crate::test_support::authed_request()
+                    .method("POST")
+                    .uri("/api/providers/claude_code/auth/start")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"mode":"claudeai"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(start_response.status(), StatusCode::CREATED);
+        let start: ClaudeAuthLoginResponse = serde_json::from_slice(
+            &to_bytes(start_response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(start.status, ClaudeAuthLoginStatus::WaitingForCode);
+        assert_eq!(
+            start.url.as_deref(),
+            Some("https://claude.ai/oauth/authorize?state=test")
+        );
     }
 
-    fn write_fake_cctty(dir: &Path) -> PathBuf {
-        let path = dir.join("fake-cctty.py");
+    fn write_fake_claude(dir: &Path) -> PathBuf {
+        let path = dir.join("claude");
         fs::write(
             &path,
             r#"#!/usr/bin/env python3
@@ -988,17 +791,16 @@ if args == ["auth", "status", "--json"]:
     }), flush=True)
     sys.exit(0)
 
-if args[:3] == ["auth", "login", "--json-events"]:
-    print(json.dumps({"type": "started"}), flush=True)
-    print(json.dumps({"type": "authorization_url", "url": "https://claude.ai/oauth/authorize?state=test"}), flush=True)
-    print(json.dumps({"type": "input_requested", "input": "authorization_code"}), flush=True)
+if args[:2] == ["auth", "login"]:
+    print("Opening browser to sign in...", flush=True)
+    print("If the browser did not open, visit: https://claude.ai/oauth/authorize?state=test", flush=True)
+    sys.stdout.write("Paste code here if prompted > ")
+    sys.stdout.flush()
     code = sys.stdin.readline().strip()
     if code == "TEST-CODE":
-        print(json.dumps({"type": "success", "message": "Login successful."}), flush=True)
-        print(json.dumps({"type": "exit", "exit_code": 0}), flush=True)
+        print("Login successful.", flush=True)
         sys.exit(0)
-    print(json.dumps({"type": "error", "message": "bad code"}), flush=True)
-    print(json.dumps({"type": "exit", "exit_code": 1}), flush=True)
+    print("Login failed.", flush=True)
     sys.exit(1)
 
 print("unexpected args: " + repr(args), file=sys.stderr)
@@ -1006,12 +808,26 @@ sys.exit(2)
 "#,
         )
         .unwrap();
+        make_executable(&path);
+        path
+    }
+
+    fn write_failing_executable(path: PathBuf) -> PathBuf {
+        fs::write(
+            &path,
+            "#!/bin/sh\necho old cctty should not be launched >&2\nexit 99\n",
+        )
+        .unwrap();
+        make_executable(&path);
+        path
+    }
+
+    fn make_executable(path: &Path) {
         #[cfg(unix)]
         {
             let mut perms = fs::metadata(&path).unwrap().permissions();
             perms.set_mode(0o755);
             fs::set_permissions(&path, perms).unwrap();
         }
-        path
     }
 }

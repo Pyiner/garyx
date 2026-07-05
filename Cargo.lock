@@ -295,8 +295,8 @@ dependencies = [
 
 [[package]]
 name = "cctty"
-version = "0.2.6"
-source = "git+https://github.com/Pyiner/cctty.git?rev=08ee461de279d8d105a023d3af5125a241a01b51#08ee461de279d8d105a023d3af5125a241a01b51"
+version = "0.2.7"
+source = "git+https://github.com/Pyiner/cctty.git?rev=221537fe35e1b9ae8d0cdc2494f992cbad8ae13d#221537fe35e1b9ae8d0cdc2494f992cbad8ae13d"
 dependencies = [
  "libc",
  "serde",
@@ -664,7 +664,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -972,6 +972,7 @@ dependencies = [
  "async-trait",
  "axum",
  "base64",
+ "cctty",
  "chrono",
  "chrono-tz",
  "claude-agent-sdk",
@@ -1945,7 +1946,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2310,7 +2311,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2719,10 +2720,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "82a72c767771b47409d2345987fda8628641887d5466101319899796367354a0"
 dependencies = [
  "fastrand",
- "getrandom 0.4.1",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
