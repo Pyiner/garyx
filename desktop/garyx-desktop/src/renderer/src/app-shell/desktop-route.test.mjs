@@ -4,7 +4,6 @@ import assert from 'node:assert/strict';
 import {
   buildDesktopRouteHash,
   contentViewForDesktopRoute,
-  currentDesktopRoute,
   parseDesktopRoute,
 } from './desktop-route.ts';
 
@@ -140,31 +139,3 @@ test('parses and builds capsule preview routes', () => {
   });
 });
 
-test('currentDesktopRoute round-trips the capsule preview id (cold-start guard)', () => {
-  // With a preview id selected, the capsules view must serialize back to the
-  // capsule route — otherwise a cold-started #/capsules/<id> would be rewritten
-  // to #/capsules and lose the id.
-  assert.deepEqual(
-    currentDesktopRoute({
-      ...baseRouteInput,
-      contentView: 'capsules',
-      capsulePreviewId: '01900000-0000-7000-8000-000000000001',
-    }),
-    { kind: 'capsule', capsuleId: '01900000-0000-7000-8000-000000000001' },
-  );
-  // Gallery (no preview id) serializes to the plain view route.
-  assert.deepEqual(
-    currentDesktopRoute({ ...baseRouteInput, contentView: 'capsules', capsulePreviewId: null }),
-    { kind: 'view', view: 'capsules' },
-  );
-  // A capsule preview id outside the capsules view is ignored.
-  assert.deepEqual(
-    currentDesktopRoute({
-      ...baseRouteInput,
-      contentView: 'thread',
-      selectedThreadId: 'thread::abc',
-      capsulePreviewId: '01900000-0000-7000-8000-000000000001',
-    }),
-    { kind: 'thread', threadId: 'thread::abc' },
-  );
-});

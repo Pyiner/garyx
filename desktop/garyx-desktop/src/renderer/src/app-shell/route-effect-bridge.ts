@@ -1,12 +1,12 @@
-// RouteEffectBridge (endgame architecture batch 6c-1): the one place that
-// owns the two external route inputs — (a) route-store commits from
-// hash/popstate edits, applied through applyDesktopRoute, and (b) the
-// garyx:// deep-link IPC channel, translated into route applications plus
-// route-store navigations behind the gateway-readiness retry ladder. It
-// also owns the state-to-hash sync effect until the route store becomes
-// the only route state.
+// RouteEffectBridge (endgame architecture batches 6c-1..6c-2): the one
+// place that owns the two external route inputs — (a) route-store commits
+// (navigate and hash/popstate), applied through applyDesktopRoute on a
+// microtask, and (b) the garyx:// deep-link IPC channel, translated into
+// route applications behind the gateway-readiness retry ladder. The
+// state-to-hash fold is gone (6c-2c): view state is route selectors, and
+// every selection/draft transition carries its own route sync.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 import type {
   ConnectionStatus,
@@ -20,7 +20,7 @@ import type {
 import { getDesktopApi } from "../platform/desktop-api";
 import type { SettingsTabId } from "../settings-tabs";
 import type { ToastTone } from "../toast";
-import { currentDesktopRoute, type DesktopRoute } from "./desktop-route";
+import type { DesktopRoute } from "./desktop-route";
 import type { DesktopRouteStore } from "./desktop-route-store";
 import type { ContentView } from "./types";
 
@@ -47,7 +47,6 @@ export function waitForMs(ms: number): Promise<void> {
 }
 
 type RouteEffectBridgeArgs = {
-  capsulePreviewId: string | null;
   clearComposerDraft: () => void;
   contentView: ContentView;
   desktopState: DesktopState | null;
@@ -60,10 +59,7 @@ type RouteEffectBridgeArgs = {
   handleSelectAutomation: (automationId: string | null) => Promise<void>;
   handleSelectSettingsTab: (nextTab: SettingsTabId) => Promise<boolean>;
   loading: boolean;
-  newThreadDraftActive: boolean;
   openExistingThread: (threadId: string) => Promise<boolean>;
-  pendingAgentId: string;
-  pendingWorkflowId: string | null;
   /**
    * The shared draft-entry command (review #TASK-1621): draft entry must
    * run its side effects even when the route equals the current one, so
@@ -82,10 +78,8 @@ type RouteEffectBridgeArgs = {
    * instead of clearing and re-fetching by id (6c-2a).
    */
   pendingWorkflowTaskHintRef: React.MutableRefObject<DesktopTaskSummary | null>;
-  pendingWorkspacePath: string | null;
   pushToast: (message: string, tone?: ToastTone, durationMs?: number) => void;
   requestComposerFocus: () => void;
-  selectedAutomationId: string | null;
   selectedThreadId: string | null;
   selectedWorkflowRunId: string | null;
   /**
@@ -111,11 +105,9 @@ type RouteEffectBridgeArgs = {
   setSelectedWorkflowTask: React.Dispatch<
     React.SetStateAction<DesktopTaskSummary | null>
   >;
-  settingsActiveTab: SettingsTabId;
 };
 
 export function useRouteEffectBridge({
-  capsulePreviewId,
   clearComposerDraft,
   contentView,
   desktopState,
@@ -125,16 +117,11 @@ export function useRouteEffectBridge({
   handleSelectAutomation,
   handleSelectSettingsTab,
   loading,
-  newThreadDraftActive,
   openExistingThread,
   enterNewThreadDraft,
-  pendingAgentId,
-  pendingWorkflowId,
   pendingWorkflowTaskHintRef,
-  pendingWorkspacePath,
   pushToast,
   requestComposerFocus,
-  selectedAutomationId,
   selectedThreadId,
   selectedWorkflowRunId,
   selectThreadRequestSequenceRef,
@@ -150,7 +137,6 @@ export function useRouteEffectBridge({
   setSelectedThreadId,
   setSelectedWorkflowRunId,
   setSelectedWorkflowTask,
-  settingsActiveTab,
 }: RouteEffectBridgeArgs): void {
   const deepLinkEventHandlerRef = useRef<(event: DesktopDeepLinkEvent) => void>(
     () => {},
@@ -350,92 +336,26 @@ export function useRouteEffectBridge({
   // current requests the one convergence pass, and only for internal
   // commits — a failed external application must not counter-write the
   // entered hash (4b). A superseded application only decrements.
-  const pendingRouteApplicationsRef = useRef(0);
-  // Convergence debt: when the application owning the CURRENT route
-  // settles while an older application is still in flight, the tick must
-  // not be lost (the old application's late settle has a stale version and
-  // may never qualify). The settling current-route application records its
-  // version as owed; whoever brings the pending counter to zero pays it —
-  // but only if that version is still current, so an external commit that
-  // arrived meanwhile invalidates the debt (4b no-counter-write).
-  const convergenceOwedVersionRef = useRef<number | null>(null);
-  const [routeConvergenceTick, setRouteConvergenceTick] = useState(0);
   useEffect(() => {
     return desktopRouteStore.subscribeCommits((event) => {
       if (event.origin === "sync") {
+        // A sync commit means the state already reflects the route (the
+        // command/selector paths wrote both); applying it would re-run
+        // entry side effects against live state.
         return;
       }
       // Narrowed copy: TS does not carry the narrowing into the closure.
       const origin = event.origin;
-      pendingRouteApplicationsRef.current += 1;
       // Apply on a microtask, NOT synchronously inside commit(): navigate()
       // writes its hash AFTER committing, so a synchronous application's
       // own route sync (e.g. the thread-home redirect) would be overwritten
-      // by navigate's trailing replaceHash, leaving route and hash
-      // diverged. One microtask later navigate has fully returned; the
-      // application still reads the pre-commit render's closures.
-      void Promise.resolve()
-        .then(() => applyDesktopRoute(event.route, origin))
-        .finally(() => {
-        pendingRouteApplicationsRef.current -= 1;
-        if (
-          event.origin === "navigate" &&
-          event.version === desktopRouteStore.getSnapshot().version
-        ) {
-          convergenceOwedVersionRef.current = event.version;
-        }
-        if (
-          pendingRouteApplicationsRef.current === 0 &&
-          convergenceOwedVersionRef.current !== null
-        ) {
-          const owedVersion = convergenceOwedVersionRef.current;
-          convergenceOwedVersionRef.current = null;
-          if (owedVersion === desktopRouteStore.getSnapshot().version) {
-            // Request one state-to-hash pass against the settled state;
-            // the effect below reads fresh values after React commits
-            // them. On success the fold equals the committed route
-            // (no-op); on failure it converges the hash to where the
-            // state ended.
-            setRouteConvergenceTick((tick) => tick + 1);
-          }
-        }
-      });
+      // by navigate's trailing replaceHash. One microtask later navigate
+      // has fully returned; the application still reads the pre-commit
+      // render's closures. Late async landings inside the applications are
+      // guarded by the store-version checks (6c-2a).
+      void Promise.resolve().then(() => applyDesktopRoute(event.route, origin));
     });
   }, [applyDesktopRoute, desktopRouteStore]);
-
-  useEffect(() => {
-    if (loading || pendingRouteApplicationsRef.current > 0) {
-      return;
-    }
-    desktopRouteStore.syncRoute(
-      currentDesktopRoute({
-        contentView,
-        newThreadDraftActive,
-        pendingAgentId,
-        pendingWorkflowId,
-        pendingWorkspacePath,
-        selectedAutomationId,
-        selectedWorkflowTaskId,
-        selectedThreadId,
-        settingsActiveTab,
-        capsulePreviewId,
-      }),
-    );
-  }, [
-    contentView,
-    desktopRouteStore,
-    loading,
-    newThreadDraftActive,
-    pendingAgentId,
-    pendingWorkflowId,
-    pendingWorkspacePath,
-    routeConvergenceTick,
-    selectedAutomationId,
-    selectedWorkflowTaskId,
-    selectedThreadId,
-    settingsActiveTab,
-    capsulePreviewId,
-  ]);
 
   useEffect(() => {
     const listener = (event: DesktopDeepLinkEvent) => {

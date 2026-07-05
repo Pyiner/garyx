@@ -2480,7 +2480,6 @@ export function AppShell() {
   }
 
   useRouteEffectBridge({
-    capsulePreviewId,
     clearComposerDraft,
     contentView,
     desktopState,
@@ -2490,7 +2489,6 @@ export function AppShell() {
     handleSelectAutomation,
     handleSelectSettingsTab,
     loading,
-    newThreadDraftActive,
     // The thread-route application consumes the entry-source mailbox so
     // navigations from bot roots / endpoints / recents tag the selection.
     openExistingThread: (threadId: string) => {
@@ -2499,13 +2497,9 @@ export function AppShell() {
       return openExistingThread(threadId, entrySource);
     },
     enterNewThreadDraft,
-    pendingAgentId,
-    pendingWorkflowId,
     pendingWorkflowTaskHintRef,
-    pendingWorkspacePath,
     pushToast,
     requestComposerFocus,
-    selectedAutomationId,
     selectedThreadId,
     selectedWorkflowRunId,
     selectedWorkflowTaskId,
@@ -2521,7 +2515,6 @@ export function AppShell() {
     setSelectedThreadId,
     setSelectedWorkflowRunId,
     setSelectedWorkflowTask,
-    settingsActiveTab,
   });
 
   useEffect(() => {

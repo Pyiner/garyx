@@ -278,6 +278,20 @@ visibility in the same tick.
 navigates `{kind:'settings', tabId}` (replace) — hash and UI stay 1:1
 after the first click, and plain `#/settings` stays addressable.
 
+### Fold death (landed)
+
+`currentDesktopRoute` and the state-to-hash effect are deleted; with them
+go the application-transaction scaffolding (pending counter, convergence
+debt/tick) whose only purpose was suppressing and re-running the fold.
+What remains of the transitional machinery is intentional end-state:
+`sync` origin (commands and selectors write route+hash together),
+the store-version async guards, and the microtask application (an
+implementation finding: a synchronous application inside commit() would
+have its own route sync overwritten by navigate's trailing hash write).
+Declared behavior change: an internal thread navigation that fails no
+longer converges the hash back — like external entries, the failed route
+stays addressable with the error surfaced (4b semantics unified).
+
 ## Invariants (each verified per step)
 
 1. External hash edits and back/forward behave exactly as 4b shipped

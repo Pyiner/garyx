@@ -91,7 +91,6 @@ export class DesktopRouteStore {
   private snapshot: DesktopRouteSnapshot | null = null;
   private listeners = new Set<() => void>();
   private commitListeners = new Set<(event: RouteCommitEvent) => void>();
-  private externalListeners = new Set<() => void>();
   private unsubscribeHost: Unsubscribe;
 
   constructor(host: RouteHost) {
@@ -110,26 +109,11 @@ export class DesktopRouteStore {
   }
 
   /**
-   * Notified only for route commits that originate OUTSIDE navigate():
-   * manual hash edits, back/forward, garyx:// handlers writing the hash.
-   * This is the legacy `hashchange`/`popstate` listener semantics —
-   * navigate() commits (including their echoes) never fire it, so route
-   * effects wired here cannot feed back on state-driven hash syncs.
-   */
-  subscribeExternal(listener: () => void): Unsubscribe {
-    this.externalListeners.add(listener);
-    return () => {
-      this.externalListeners.delete(listener);
-    };
-  }
-
-  /**
    * Notified synchronously for EVERY route commit — internal navigations
    * and external hash/popstate applications alike — with the committed
    * canonical route, its store version, and the commit origin (batch
    * 6c-2a). Delivery order per commit: plain subscribe() listeners (the
-   * uSES faces) first, then commit listeners, then — for external commits
-   * only — the subscribeExternal listeners.
+   * uSES faces) first, then commit listeners.
    */
   subscribeCommits(listener: (event: RouteCommitEvent) => void): Unsubscribe {
     this.commitListeners.add(listener);
@@ -198,7 +182,6 @@ export class DesktopRouteStore {
     this.unsubscribeHost();
     this.listeners.clear();
     this.commitListeners.clear();
-    this.externalListeners.clear();
   }
 
   private currentHostHash(): string {
@@ -217,9 +200,6 @@ export class DesktopRouteStore {
       return;
     }
     this.commit(parsed, "external");
-    for (const listener of [...this.externalListeners]) {
-      listener();
-    }
   }
 
   private commit(
