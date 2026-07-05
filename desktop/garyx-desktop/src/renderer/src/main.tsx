@@ -1,3 +1,5 @@
+performance.mark('garyx:renderer-entry');
+
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 

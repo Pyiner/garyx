@@ -2372,6 +2372,23 @@ export function AppShell() {
     sideChatThreadIdsRef: sideChatSessions.sideChatThreadIdsRef,
     threadInfoByThread,
   };
+  // Boot instrumentation (perf round 2026-07): cheap performance.marks so
+  // packaged boots decompose without an attached profiler. Read them via
+  // performance.getEntriesByType('mark').
+  useEffect(() => {
+    performance.mark("garyx:shell-mounted");
+  }, []);
+  const bootHydratedMarkedRef = useRef(false);
+  useEffect(() => {
+    if (bootHydratedMarkedRef.current || !desktopState) {
+      return;
+    }
+    bootHydratedMarkedRef.current = true;
+    performance.mark("garyx:state-hydrated");
+    requestAnimationFrame(() => {
+      performance.mark("garyx:first-interactive-frame");
+    });
+  }, [desktopState]);
   useEffect(() => {
     gatewayMirror.setDispatchDeps(dispatchOrchestratorDeps);
   });
