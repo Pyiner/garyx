@@ -73,7 +73,6 @@ export {
 } from "../gateway-mirror/transcript-materialize";
 import {
   chatStreamEventHasRunLifecycle,
-  committedMessageForwardPage,
   messagesNearEarlierUserTurnBoundary,
   transcriptHasAutomationResponse,
   reconcileAssistantEntriesForGatewayRecovery,
@@ -175,9 +174,6 @@ export function useTranscriptController({
       return mirror.getTranscriptMapsSnapshot().messagesByThread as MessageMap;
     },
   }));
-  const transcriptSnapshotByThreadRef = useRef<Record<string, ThreadTranscript>>(
-    {},
-  );
   const transcriptRunStateByThreadRef = useRef<Record<string, TranscriptRunState>>(
     {},
   );
@@ -354,10 +350,15 @@ export function useTranscriptController({
   function applyCommittedTranscriptRunState(
     event: Extract<DesktopChatStreamEvent, { type: "committed_message" }>,
   ): TranscriptRunState {
+    // The reduce fallback is initialization-only: the committed stream always
+    // starts after the first transcript apply (which seeds the run-state ref
+    // through syncTranscriptRunState), so in practice `current` comes from
+    // the ref. The mirror snapshot read (batch 6b-1) keeps a sane base if
+    // that ever changes.
     const current =
       transcriptRunStateByThreadRef.current[event.threadId] ||
       reduceTranscriptRunState(
-        transcriptSnapshotByThreadRef.current[event.threadId]?.messages || [],
+        mirror.getThreadSnapshotTranscript(event.threadId)?.messages || [],
       );
     return publishTranscriptRunState(
       event.threadId,
@@ -455,16 +456,15 @@ export function useTranscriptController({
     }
   }
 
+  // The snapshot itself lives in the mirror's transcript cache (batch
+  // 6b-1, getThreadSnapshotTranscript); this keeps the run-state sync and
+  // the disk-cache persistence that ride along with every apply.
   function rememberTranscriptSnapshot(
     threadId: string,
     transcript: ThreadTranscript,
     persist = true,
     syncRunState = true,
   ) {
-    transcriptSnapshotByThreadRef.current = {
-      ...transcriptSnapshotByThreadRef.current,
-      [threadId]: transcript,
-    };
     if (syncRunState) {
       syncTranscriptRunState(threadId, transcript);
     }
@@ -988,7 +988,7 @@ export function useTranscriptController({
     setHistoryLoading(true);
     setError(null);
     let latestTranscript: ThreadTranscript | null =
-      transcriptSnapshotByThreadRef.current[threadId] || null;
+      mirror.getThreadSnapshotTranscript(threadId);
     let streamReady = false;
     let streamStarted = false;
     try {
@@ -1057,7 +1057,6 @@ export function useTranscriptController({
         }
         if (latestTranscript) {
           void window.garyxDesktop.clearThreadTranscriptCache(threadId);
-          delete transcriptSnapshotByThreadRef.current[threadId];
           mirror.clearThreadTranscript(threadId);
           latestTranscript = null;
         }
@@ -1071,7 +1070,7 @@ export function useTranscriptController({
       latestTranscript = fetched.authoritative
         ? fetched.transcript
         : mergeForwardTranscriptPage(
-            transcriptSnapshotByThreadRef.current[threadId] ?? null,
+            mirror.getThreadSnapshotTranscript(threadId),
             fetched.transcript,
           );
       applyRemoteTranscript(threadId, latestTranscript);
@@ -1117,10 +1116,13 @@ export function useTranscriptController({
       return;
     }
     applyCommittedTranscriptRunState(event);
-    const merged = committedMessageForwardPage(
-      transcriptSnapshotByThreadRef.current[threadId] || null,
-      event,
-    );
+    // The mirror's ingest (stream-listener top) already folded this event
+    // into its snapshot transcript — that fold is the legacy
+    // committedMessageForwardPage result (batch 6b-1 single snapshot).
+    const merged = mirror.getThreadSnapshotTranscript(threadId);
+    if (!merged) {
+      return;
+    }
     if (selectedThreadIdRef.current === threadId) {
       requestSelectedThreadMessagesBottomSnap(threadId, true);
     }

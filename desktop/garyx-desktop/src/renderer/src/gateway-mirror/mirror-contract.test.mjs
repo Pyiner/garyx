@@ -1440,3 +1440,82 @@ test("clearThreadTranscript rolls the thread back to the never-loaded shape (4b 
   assert.ok(!(threadId in maps.pendingRemoteInputsByThread));
   assert.ok(!(threadId in maps.historyPaginationByThread));
 });
+
+test("getThreadSnapshotTranscript tracks applies, committed folds, and clears (6b-1 transport snapshot)", () => {
+  const mirror = new GatewayMirror();
+  const threadId = "thread::transport-snapshot";
+  assert.equal(
+    mirror.getThreadSnapshotTranscript(threadId),
+    null,
+    "no entry before any apply — and the read must not create one",
+  );
+
+  const transcript = {
+    threadId,
+    messages: [
+      {
+        id: `${threadId}:0`,
+        role: "user",
+        text: "first row",
+        timestamp: "2026-07-05T10:00:00Z",
+      },
+      {
+        id: `${threadId}:1`,
+        role: "control",
+        kind: "control",
+        text: "",
+        timestamp: "2026-07-05T10:00:01Z",
+        content: { control: { kind: "run_start", run_id: "run-1" } },
+      },
+      {
+        id: `${threadId}:2`,
+        role: "control",
+        kind: "control",
+        text: "",
+        timestamp: "2026-07-05T10:00:02Z",
+        content: { control: { kind: "run_complete", run_id: "run-1" } },
+      },
+    ],
+    pendingInputs: [],
+    threadInfo: {
+      activeRun: { runId: "run-1" },
+      workspacePath: "/Users/test/repo",
+    },
+    pageInfo: { startIndex: 0, hasMoreBefore: false },
+  };
+  mirror.applyRemoteTranscript(threadId, transcript);
+  const applied = mirror.getThreadSnapshotTranscript(threadId);
+  assert.ok(applied, "remote apply remembers the snapshot");
+  assert.equal(applied.messages.length, 3);
+  assert.equal(
+    applied.threadInfo.activeRun,
+    null,
+    "the remembered snapshot is the RESOLVED transcript (terminated run cleared)",
+  );
+
+  mirror.ingest({
+    type: "committed_message",
+    runId: "run-2",
+    threadId,
+    seq: 4,
+    message: {
+      id: `${threadId}:3`,
+      role: "assistant",
+      text: "committed row",
+      timestamp: "2026-07-05T10:00:03Z",
+    },
+  });
+  const folded = mirror.getThreadSnapshotTranscript(threadId);
+  assert.equal(
+    folded.messages.length,
+    4,
+    "committed ingest folds into the transport snapshot",
+  );
+
+  mirror.clearThreadTranscript(threadId);
+  assert.equal(
+    mirror.getThreadSnapshotTranscript(threadId),
+    null,
+    "clear resets the transport snapshot",
+  );
+});

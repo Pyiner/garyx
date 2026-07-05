@@ -546,6 +546,17 @@ export class GatewayMirror {
   }
 
   /**
+   * The committed transport snapshot for a thread (batch 6b-1): the
+   * resolved ThreadTranscript remembered by the latest authoritative/
+   * remote/committed apply. The transcript controller's fetch/stream
+   * lifecycle reads it for resume cursors and forward merges; the
+   * controller no longer keeps its own copy.
+   */
+  getThreadSnapshotTranscript(threadId: string): ThreadTranscript | null {
+    return this.threads.get(threadId)?.cache.getSnapshotTranscript() ?? null;
+  }
+
+  /**
    * Apply an authoritative (canonical) transcript for a thread as one
    * synchronous commit: the mirror-side counterpart of the hook's
    * applyCanonicalTranscript cache path. Message-machine sync and cache
