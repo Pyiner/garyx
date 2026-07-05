@@ -12,12 +12,24 @@ import { test } from "node:test";
 import { GatewayMirror } from "./mirror.ts";
 import {
   applyTranscriptRunStateRecord,
+  isThreadStreamGapError,
+  mergeForwardTranscriptPage,
   reduceTranscriptRunState,
+  shouldRestartSelectedThreadStreamAfterRefetch,
+  streamResumeCursor,
+  transcriptCommittedAfterCursor,
   transcriptControlKind,
   transcriptForCommittedCache,
   transcriptRewriteAction,
   transcriptWithResolvedActiveRun,
 } from "../../../shared/transcript-sync.ts";
+import { isTransientGatewayErrorMessage } from "../app-shell/gateway-errors.ts";
+import {
+  chatStreamEventHasRunLifecycle,
+  isMissingThreadTranscript,
+  reconcileAssistantEntriesForGatewayRecovery,
+  transcriptHasAutomationResponse,
+} from "./transcript-materialize.ts";
 import { findPendingAckIntentIndex, selectThreadRuntime } from "../message-machine.ts";
 import {
   mergeThread,
@@ -32,6 +44,9 @@ function makeHarness() {
   const liveTrace = [];
   const titleDraftSyncs = [];
   const persistTrace = [];
+  const ipcTrace = [];
+  const cachedTranscriptByThread = {};
+  const remoteTranscriptByThread = {};
   let desktopState = {
     threads: [{ id: "thread::t1", title: "old title" }],
     sessions: [],
@@ -61,9 +76,51 @@ function makeHarness() {
     persistTranscriptCache(transcript, renderState) {
       persistTrace.push({ transcript, renderState });
     },
+    // Slice 2c surface: recorded IPC stubs (fetch/stream/cache).
+    ingest: (event) => mirror.ingest(event),
+    clearThreadTranscript: (threadId) => mirror.clearThreadTranscript(threadId),
+    fetchOlderThreadHistoryPage: (threadId, options) =>
+      mirror.fetchOlderThreadHistoryPage(threadId, options),
+    startThreadStream(input) {
+      ipcTrace.push(["startThreadStream", input]);
+      return Promise.resolve();
+    },
+    stopThreadStream(input) {
+      ipcTrace.push(["stopThreadStream", input]);
+      return Promise.resolve();
+    },
+    loadThreadTranscriptCache(threadId) {
+      ipcTrace.push(["loadThreadTranscriptCache", threadId]);
+      return Promise.resolve(cachedTranscriptByThread[threadId] ?? null);
+    },
+    clearThreadTranscriptCache(threadId) {
+      ipcTrace.push(["clearThreadTranscriptCache", threadId]);
+      return Promise.resolve();
+    },
+    getThreadHistoryFull(threadId) {
+      ipcTrace.push(["getThreadHistoryFull", threadId]);
+      return Promise.resolve(
+        remoteTranscriptByThread[threadId] ?? {
+          threadId,
+          messages: [],
+          pendingInputs: [],
+          threadInfo: null,
+        },
+      );
+    },
+    getThreadHistoryPage(input) {
+      ipcTrace.push(["getThreadHistoryPage", input]);
+      return Promise.resolve({
+        threadId: input.threadId,
+        messages: [],
+        pendingInputs: [],
+        threadInfo: null,
+        pageInfo: { hasMoreAfter: false },
+      });
+    },
   };
   const liveStreamStateRef = { current: {} };
-  const refetches = [];
+  const seamTrace = [];
   const deps = {
     setDesktopState: (updater) => {
       desktopState = updater(desktopState);
@@ -72,9 +129,30 @@ function makeHarness() {
     requestSelectedThreadMessagesBottomSnap: () => {},
     selectedThreadIdRef: { current: "thread::t1" },
     liveStreamStateRef,
-    refetchAuthoritativeTranscriptAfterRewrite: async (threadId) => {
-      refetches.push(threadId);
-    },
+    setError: (error) => seamTrace.push(["setError", error]),
+    setHistoryLoading: (loading) => seamTrace.push(["setHistoryLoading", loading]),
+    setPendingAutomationRun: (threadId, run) =>
+      seamTrace.push(["setPendingAutomationRun", threadId, run]),
+    recordGatewayStatusObservation: (status, reason) =>
+      seamTrace.push(["recordGatewayStatusObservation", status, reason]),
+    scheduleDesktopStateRefresh: () =>
+      seamTrace.push(["scheduleDesktopStateRefresh"]),
+    scheduleHistoryRefresh: (threadId, attempts, delayMs, canonical) =>
+      seamTrace.push([
+        "scheduleHistoryRefresh",
+        threadId,
+        attempts,
+        delayMs,
+        canonical,
+      ]),
+    connection: { ok: true, bridgeReady: true, gatewayUrl: "http://gw.test" },
+    settingsDraft: { gatewayUrl: "http://draft.test" },
+    selectedThreadGenerationRef: { current: 1 },
+    lastRenderedMessageThreadRef: { current: null },
+    messagesRef: { current: null },
+    pendingMessagesPrependAnchorRef: { current: null },
+    sideChatThreadIdRef: { current: null },
+    sideChatStreamConsumerId: (threadId) => `side-chat:${threadId}`,
   };
   return {
     mirror,
@@ -84,7 +162,10 @@ function makeHarness() {
     liveTrace,
     titleDraftSyncs,
     persistTrace,
-    refetches,
+    ipcTrace,
+    seamTrace,
+    cachedTranscriptByThread,
+    remoteTranscriptByThread,
     getDesktopState: () => desktopState,
     liveStreamStateRef,
   };
@@ -475,7 +556,7 @@ function makeLegacyBindings(h) {
   function applyCommittedThreadMessage(event) {
     const threadId = event.threadId;
     if (transcriptRewriteAction(event.message) === "refetch_authoritative") {
-      void h.deps.refetchAuthoritativeTranscriptAfterRewrite(threadId);
+      void refetchAuthoritativeTranscriptAfterRewrite(threadId);
       return;
     }
     applyCommittedTranscriptRunState(event);
@@ -510,6 +591,318 @@ function makeLegacyBindings(h) {
     }
   }
 
+  // ---- 2c fetch/stream lifecycle (verbatim pre-slice hook + AppShell) ----
+  function startCommittedThreadStream(threadId, transcript, consumerId) {
+    return h.port.startThreadStream({
+      threadId,
+      consumerId,
+      afterSeq: streamResumeCursor({
+        afterCursor: transcriptCommittedAfterCursor(transcript),
+        fallbackMaxIndex: null,
+      }),
+    });
+  }
+  async function refetchAuthoritativeTranscriptAfterRewrite(threadId) {
+    const startSelectionGeneration = h.deps.selectedThreadGenerationRef.current;
+    try {
+      await h.port.clearThreadTranscriptCache(threadId);
+      const transcript = await h.port.getThreadHistoryFull(threadId);
+      if (h.deps.selectedThreadIdRef.current === threadId) {
+        h.deps.requestSelectedThreadMessagesBottomSnap(threadId, true);
+      }
+      applyRemoteTranscript(threadId, transcript);
+      const shouldRestartSelectedStream =
+        shouldRestartSelectedThreadStreamAfterRefetch({
+          threadId,
+          selectedThreadId: h.deps.selectedThreadIdRef.current,
+          startSelectionGeneration,
+          currentSelectionGeneration: h.deps.selectedThreadGenerationRef.current,
+        });
+      if (shouldRestartSelectedStream) {
+        await startCommittedThreadStream(threadId, transcript, "selected-thread");
+      }
+      if (h.deps.sideChatThreadIdRef.current === threadId) {
+        await startCommittedThreadStream(
+          threadId,
+          transcript,
+          h.deps.sideChatStreamConsumerId(threadId),
+        );
+      }
+    } catch {
+      h.deps.scheduleHistoryRefresh(threadId, 3, 500, true);
+    }
+  }
+  async function fetchSelectedThreadIncrementalTranscript(
+    threadId,
+    cached,
+    isCancelled,
+  ) {
+    let current = cached;
+    let cursor = transcriptCommittedAfterCursor(current);
+    if (!current || cursor === null) {
+      return {
+        transcript: await h.port.getThreadHistoryFull(threadId),
+        authoritative: true,
+      };
+    }
+    // (paging branch elided: the replay fixtures always start cache-less or
+    // with a cursor-less cache, so the legacy loop is unreachable here.)
+    return { transcript: current, authoritative: false };
+  }
+  async function loadSelectedThreadTranscriptFromSingleSource(
+    threadId,
+    isCancelled,
+  ) {
+    const hasRenderedThread =
+      h.deps.lastRenderedMessageThreadRef.current === threadId;
+    const hasCachedMessages =
+      (h.port.getTranscriptMapsSnapshot().messagesByThread[threadId] || [])
+        .length > 0;
+    h.deps.requestSelectedThreadMessagesBottomSnap(
+      threadId,
+      !hasRenderedThread || !hasCachedMessages,
+    );
+    h.deps.setHistoryLoading(true);
+    h.deps.setError(null);
+    let latestTranscript = h.port.getThreadSnapshotTranscript(threadId);
+    let streamReady = false;
+    let streamStarted = false;
+    try {
+      const cached = await h.port.loadThreadTranscriptCache(threadId);
+      if (isCancelled()) {
+        return;
+      }
+      if (cached) {
+        latestTranscript = cached.transcript;
+        applyRemoteTranscript(threadId, cached.transcript, { persist: false });
+        if (cached.renderState) {
+          h.port.ingest({
+            type: "thread_render_frame",
+            threadId,
+            events: [],
+            renderState: cached.renderState,
+          });
+        }
+        await startCommittedThreadStream(
+          threadId,
+          cached.transcript,
+          "selected-thread",
+        );
+        streamStarted = true;
+      }
+      const fetched = await fetchSelectedThreadIncrementalTranscript(
+        threadId,
+        latestTranscript,
+        isCancelled,
+      );
+      if (isCancelled()) {
+        return;
+      }
+      if (
+        fetched.authoritative &&
+        isMissingThreadTranscript(fetched.transcript)
+      ) {
+        if (streamStarted) {
+          await h.port.stopThreadStream({
+            threadId,
+            consumerId: "selected-thread",
+          });
+          streamStarted = false;
+        }
+        if (latestTranscript) {
+          void h.port.clearThreadTranscriptCache(threadId);
+          h.port.clearThreadTranscript(threadId);
+          latestTranscript = null;
+        }
+        h.deps.setError(`Thread not found: ${threadId}`);
+        return;
+      }
+      h.deps.requestSelectedThreadMessagesBottomSnap(threadId, true);
+      latestTranscript = fetched.authoritative
+        ? fetched.transcript
+        : mergeForwardTranscriptPage(
+            h.port.getThreadSnapshotTranscript(threadId),
+            fetched.transcript,
+          );
+      applyRemoteTranscript(threadId, latestTranscript);
+      if (transcriptHasAutomationResponse(latestTranscript.messages)) {
+        h.deps.setPendingAutomationRun(threadId, null);
+      }
+      streamReady = true;
+    } catch (historyError) {
+      if (!latestTranscript) {
+        h.deps.setError(
+          historyError instanceof Error
+            ? historyError.message
+            : "Failed to load thread history",
+        );
+      } else {
+        h.deps.setError(
+          historyError instanceof Error
+            ? `Failed to sync latest thread history: ${historyError.message}`
+            : "Failed to sync latest thread history",
+        );
+      }
+    } finally {
+      if (!isCancelled()) {
+        h.deps.setHistoryLoading(false);
+        if (!(streamStarted || !streamReady || !latestTranscript)) {
+          await startCommittedThreadStream(
+            threadId,
+            latestTranscript,
+            "selected-thread",
+          );
+        }
+      }
+    }
+  }
+  function handleChatStreamEvent(event) {
+    const threadId = event.threadId;
+    if (event.type === "thread_render_frame") {
+      for (const committed of event.events) {
+        applyCommittedThreadMessage(committed);
+      }
+      return;
+    }
+    if (event.type !== "error") {
+      return;
+    }
+    const currentStream = getLiveStreamState(threadId);
+    const activeIntentId = currentStream?.activeIntentId;
+    if (isThreadStreamGapError(event)) {
+      if (activeIntentId) {
+        h.port.dispatchMachineAction({
+          type: "intent/awaiting-history",
+          intentId: activeIntentId,
+        });
+      }
+      updateLiveStreamState(threadId, (current) =>
+        current
+          ? {
+              ...current,
+              runId: event.runId,
+              assistantEntryId: null,
+              streamStatus: "reconciling",
+            }
+          : null,
+      );
+      setThreadRuntimeState(threadId, "reconciling_history", {
+        activeIntentId: activeIntentId || undefined,
+        remoteRunId: event.runId,
+      });
+      void refetchAuthoritativeTranscriptAfterRewrite(threadId);
+      return;
+    }
+    const recoveryResult = activeIntentId
+      ? reconcileAssistantEntriesForGatewayRecovery(
+          h.port.getTranscriptMapsSnapshot().messagesByThread[threadId] || [],
+          activeIntentId,
+          [currentStream?.assistantEntryId],
+        )
+      : { entries: [], matched: false };
+    const isTerminalRunError = event.terminal === true;
+    if (
+      !isTerminalRunError &&
+      (isTransientGatewayErrorMessage(event.error) || recoveryResult.matched)
+    ) {
+      const recoveryStatusLabel = "Waiting to sync with gateway…";
+      h.deps.recordGatewayStatusObservation(
+        {
+          ok: false,
+          bridgeReady: false,
+          gatewayUrl:
+            h.deps.connection?.gatewayUrl || h.deps.settingsDraft.gatewayUrl,
+          error: event.error,
+        },
+        recoveryStatusLabel,
+      );
+      let assistantEntryId = null;
+      updateLiveStreamState(threadId, (current) => {
+        assistantEntryId = current?.assistantEntryId ?? null;
+        return current
+          ? {
+              ...current,
+              runId: event.runId,
+              assistantEntryId: null,
+              streamStatus: "disconnected",
+            }
+          : null;
+      });
+      if (activeIntentId) {
+        h.port.dispatchMachineAction({
+          type: "intent/awaiting-history",
+          intentId: activeIntentId,
+        });
+      }
+      setThreadRuntimeState(threadId, "reconciling_history", {
+        activeIntentId: activeIntentId || undefined,
+        remoteRunId: event.runId,
+      });
+      if (activeIntentId) {
+        updateMessagesByThread((current) => {
+          const nextEntries = reconcileAssistantEntriesForGatewayRecovery(
+            current[threadId] || [],
+            activeIntentId,
+            [assistantEntryId],
+          ).entries;
+          return {
+            ...current,
+            [threadId]: nextEntries,
+          };
+        });
+      }
+      h.deps.scheduleHistoryRefresh(threadId, 5, 1200, true);
+      return;
+    }
+    updateLiveStreamState(threadId, (current) =>
+      current
+        ? {
+            ...current,
+            runId: event.runId,
+            assistantEntryId: null,
+            streamStatus: "failed",
+          }
+        : null,
+    );
+    if (activeIntentId) {
+      h.port.dispatchMachineAction({
+        type: "intent/failed",
+        intentId: activeIntentId,
+        error: event.error,
+      });
+    }
+    setThreadRuntimeState(threadId, "failed", {
+      activeIntentId: activeIntentId || undefined,
+      remoteRunId: event.runId,
+      error: event.error,
+    });
+    h.deps.setError(event.error);
+  }
+  function updateMessagesByThread(updater) {
+    const previous = h.port.getTranscriptMapsSnapshot().messagesByThread;
+    const next = updater(previous);
+    if (next !== previous) {
+      for (const threadId of Object.keys(next)) {
+        if (next[threadId] !== previous[threadId]) {
+          h.port.syncThreadUiMessages(threadId, next[threadId]);
+        }
+      }
+      for (const threadId of Object.keys(previous)) {
+        if (!(threadId in next)) {
+          h.port.syncThreadUiMessages(threadId, []);
+        }
+      }
+    }
+    return next;
+  }
+  function notifyStreamEvent(event) {
+    h.port.ingest(event);
+    if (chatStreamEventHasRunLifecycle(event)) {
+      h.deps.scheduleDesktopStateRefresh();
+    }
+    handleChatStreamEvent(event);
+  }
+
   return {
     syncTranscriptRunState,
     applyCommittedTranscriptRunState,
@@ -519,6 +912,11 @@ function makeLegacyBindings(h) {
     applyCanonicalTranscript,
     applyRemoteTranscript,
     applyCommittedThreadMessage,
+    startCommittedThreadStream,
+    refetchAuthoritativeTranscriptAfterRewrite,
+    loadSelectedThreadTranscript: (threadId) =>
+      loadSelectedThreadTranscriptFromSingleSource(threadId, () => false),
+    notifyStreamEvent,
   };
 }
 
@@ -539,6 +937,13 @@ function makeLifecycleBindings(h) {
       lifecycle.acceptAuthoritativeTranscript(t, tr, o),
     applyRemoteTranscript: (t, tr, o) => lifecycle.acceptRemoteTranscript(t, tr, o),
     applyCommittedThreadMessage: (e) => lifecycle.applyCommittedThreadMessage(e),
+    startCommittedThreadStream: (t, tr, c) =>
+      lifecycle.startCommittedThreadStream(t, tr, c),
+    refetchAuthoritativeTranscriptAfterRewrite: (t) =>
+      lifecycle.refetchAuthoritativeTranscriptAfterRewrite(t),
+    loadSelectedThreadTranscript: (t) => lifecycle.loadSelectedThreadTranscript(t),
+    notifyStreamEvent: (e) => lifecycle.notifyStreamEvent(e),
+    cancelSelectedThreadLoad: (t) => lifecycle.cancelSelectedThreadLoad(t),
   };
 }
 
@@ -697,6 +1102,16 @@ function rewriteControlMessage(index) {
 }
 
 function replayApplyChainSequence(bindings, h) {
+  // The rewrite step (4) runs the real single-owner refetch; give its
+  // authoritative fetch a deterministic transcript (timestamps included)
+  // so no code path falls back to wall-clock summaries.
+  h.remoteTranscriptByThread[THREAD] = {
+    threadId: THREAD,
+    messages: [userMessage(0, "hello"), assistantMessage(1, "hi there")],
+    pendingInputs: [],
+    threadInfo: { agentId: "agent-1" },
+    team: { teamId: "team-1", name: "Test Team" },
+  };
   // 1. Authoritative apply: persist + run-state + intent marking.
   bindings.applyCanonicalTranscript(THREAD, {
     threadId: THREAD,
@@ -751,16 +1166,24 @@ function replayApplyChainSequence(bindings, h) {
   });
 }
 
+async function flushAsync() {
+  for (let i = 0; i < 8; i += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
 test("dual-run: lifecycle matches the legacy apply chain (6b-2b)", async () => {
   lifecycleModule = await import("./transcript-lifecycle.ts");
 
   const legacyH = makeHarness();
   const legacy = makeLegacyBindings(legacyH);
   replayApplyChainSequence(legacy, legacyH);
+  await flushAsync();
 
   const nextH = makeHarness();
   const next = makeLifecycleBindings(nextH);
   replayApplyChainSequence(next, nextH);
+  await flushAsync();
 
   assert.deepEqual(
     nextH.machineTrace,
@@ -777,7 +1200,11 @@ test("dual-run: lifecycle matches the legacy apply chain (6b-2b)", async () => {
     legacyH.persistTrace,
     "persist ride-along traces must match",
   );
-  assert.deepEqual(nextH.refetches, legacyH.refetches);
+  assert.deepEqual(
+    nextH.ipcTrace,
+    legacyH.ipcTrace,
+    "fetch/stream IPC traces must match",
+  );
   assert.deepEqual(nextH.getDesktopState(), legacyH.getDesktopState());
   assert.deepEqual(nextH.titleDraftSyncs, legacyH.titleDraftSyncs);
   assert.deepEqual(
@@ -788,12 +1215,157 @@ test("dual-run: lifecycle matches the legacy apply chain (6b-2b)", async () => {
     nextH.persistTrace.length > 0,
     "the sequence must exercise the persist ride-along",
   );
-  assert.equal(nextH.refetches.length, 1, "the rewrite must hit the refetch seam");
+  assert.ok(
+    nextH.ipcTrace.some(([name]) => name === "getThreadHistoryFull"),
+    "the rewrite must run the single-owner refetch",
+  );
   const sessions = nextH.getDesktopState().sessions;
   assert.equal(
     sessions.find((s) => s.id === THREAD)?.team?.teamId,
     "team-1",
     "the team block must propagate into the session cache",
+  );
+});
+
+async function replayLifecycleSequence(bindings, h) {
+  // 1. Cold selected-thread load: no disk cache, authoritative full fetch,
+  //    then the committed stream starts from the fetched cursor.
+  h.remoteTranscriptByThread[THREAD] = {
+    threadId: THREAD,
+    messages: [userMessage(0, "hello"), assistantMessage(1, "hi there")],
+    pendingInputs: [],
+    threadInfo: { agentId: "agent-1" },
+  };
+  await bindings.loadSelectedThreadTranscript(THREAD);
+  // 2. Committed frame through the stream-listener entry.
+  bindings.notifyStreamEvent({
+    type: "thread_render_frame",
+    threadId: THREAD,
+    events: [
+      {
+        type: "committed_message",
+        threadId: THREAD,
+        runId: "run-5",
+        seq: 21,
+        message: assistantMessage(2, "streamed reply"),
+      },
+    ],
+    renderState: null,
+  });
+  // 3. Terminal stream error (failed branch: machine + live-stream + error).
+  h.port.updateThreadLiveStream(THREAD, () => ({
+    threadId: THREAD,
+    runId: "run-5",
+    activeIntentId: undefined,
+    assistantEntryId: null,
+    pendingAckIntentIds: [],
+    streamStatus: "streaming",
+  }));
+  h.liveStreamStateRef.current = h.port.getLiveStreamMap();
+  bindings.notifyStreamEvent({
+    type: "error",
+    threadId: THREAD,
+    runId: "run-5",
+    error: "provider exploded",
+    terminal: true,
+  });
+  await flushAsync();
+}
+
+test("dual-run: lifecycle matches the legacy fetch/stream lifecycle (6b-2c)", async () => {
+  lifecycleModule = await import("./transcript-lifecycle.ts");
+
+  const legacyH = makeHarness();
+  const legacy = makeLegacyBindings(legacyH);
+  await replayLifecycleSequence(legacy, legacyH);
+
+  const nextH = makeHarness();
+  const next = makeLifecycleBindings(nextH);
+  await replayLifecycleSequence(next, nextH);
+
+  assert.deepEqual(nextH.ipcTrace, legacyH.ipcTrace, "IPC traces must match");
+  assert.deepEqual(
+    nextH.seamTrace,
+    legacyH.seamTrace,
+    "React-seam traces must match",
+  );
+  assert.deepEqual(
+    nextH.machineTrace,
+    legacyH.machineTrace,
+    "machine action traces must match",
+  );
+  assert.deepEqual(
+    nextH.liveTrace,
+    legacyH.liveTrace,
+    "live-stream transition traces must match",
+  );
+  assert.deepEqual(nextH.getDesktopState(), legacyH.getDesktopState());
+  assert.deepEqual(
+    nextH.liveStreamStateRef.current,
+    legacyH.liveStreamStateRef.current,
+  );
+  // The sequence must actually exercise the load + stream + failure chain.
+  assert.deepEqual(
+    nextH.ipcTrace.map(([name]) => name).slice(0, 3),
+    ["loadThreadTranscriptCache", "getThreadHistoryFull", "startThreadStream"],
+  );
+  assert.ok(
+    nextH.seamTrace.some(
+      ([name, value]) => name === "setError" && value === "provider exploded",
+    ),
+    "the terminal error must surface through setError",
+  );
+});
+
+test("2c: cancelSelectedThreadLoad invalidates a superseded load and stops the stream", async () => {
+  lifecycleModule = await import("./transcript-lifecycle.ts");
+  const h = makeHarness();
+  const bindings = makeLifecycleBindings(h);
+  h.remoteTranscriptByThread[THREAD] = {
+    threadId: THREAD,
+    messages: [userMessage(0, "hello")],
+    pendingInputs: [],
+    threadInfo: { agentId: "agent-1" },
+  };
+  const load = bindings.loadSelectedThreadTranscript(THREAD);
+  // Cancel synchronously: the fetch settles afterwards and must not land.
+  bindings.cancelSelectedThreadLoad(THREAD);
+  await load;
+  await flushAsync();
+  assert.ok(
+    h.ipcTrace.some(([name]) => name === "stopThreadStream"),
+    "cancel must stop the selected-thread stream consumer",
+  );
+  assert.ok(
+    !h.ipcTrace.some(([name]) => name === "startThreadStream"),
+    "a cancelled load must not start the committed stream",
+  );
+  assert.ok(
+    !h.seamTrace.some(
+      ([name, value]) => name === "setHistoryLoading" && value === false,
+    ),
+    "a cancelled load must not write post-await loading state",
+  );
+});
+
+test("2c: concurrent rewrite refetch triggers coalesce into one fetch", async () => {
+  lifecycleModule = await import("./transcript-lifecycle.ts");
+  const h = makeHarness();
+  const bindings = makeLifecycleBindings(h);
+  h.remoteTranscriptByThread[THREAD] = {
+    threadId: THREAD,
+    messages: [userMessage(0, "hello")],
+    pendingInputs: [],
+    threadInfo: { agentId: "agent-1" },
+  };
+  const first = bindings.refetchAuthoritativeTranscriptAfterRewrite(THREAD);
+  const second = bindings.refetchAuthoritativeTranscriptAfterRewrite(THREAD);
+  await Promise.all([first, second]);
+  await flushAsync();
+  assert.equal(
+    h.ipcTrace.filter(([name]) => name === "getThreadHistoryFull").length,
+    1,
+    "concurrent triggers must coalesce into one authoritative fetch",
   );
 });
 

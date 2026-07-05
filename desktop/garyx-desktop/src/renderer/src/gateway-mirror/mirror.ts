@@ -14,6 +14,7 @@
 // version changes. Allocating per call would make subscribers loop.
 
 import type {
+  CachedThreadTranscript,
   CommittedMessageEvent,
   ConnectionStatus,
   DesktopChatStreamEvent,
@@ -21,8 +22,11 @@ import type {
   DesktopState,
   DesktopTeam,
   DesktopWorkflowDefinition,
+  GetThreadHistoryInput,
   PendingThreadInput,
   RenderState,
+  StartThreadStreamInput,
+  StopThreadStreamInput,
   ThreadRuntimeInfo,
   ThreadTranscript,
 } from "@shared/contracts";
@@ -81,12 +85,8 @@ export interface GatewayMirrorServices {
   listCustomAgents(): Promise<DesktopCustomAgent[]>;
   listTeams(): Promise<DesktopTeam[]>;
   listWorkflowDefinitions(): Promise<DesktopWorkflowDefinition[]>;
-  getThreadHistory(input: {
-    threadId: string;
-    beforeIndex: number;
-    limit: number;
-    userQueryLimit: number;
-  }): Promise<ThreadTranscript>;
+  /** Paged history fetch (older pages and the forward incremental fetch). */
+  getThreadHistory(input: GetThreadHistoryInput): Promise<ThreadTranscript>;
   /**
    * Message-machine intent lookup. Temporary seam: the machine stays with
    * its legacy owner until batch 3, so the wiring layer passes a lookup
@@ -94,12 +94,6 @@ export interface GatewayMirrorServices {
    * means the transcript merge runs remote-only.
    */
   intentForId?(intentId: string): MessageIntent | null;
-  /**
-   * Called when a committed rewrite/reset control demands an authoritative
-   * transcript refetch. The refetch itself (cache clear + full history
-   * fetch + stream restart) stays with the legacy owner until batch 2b.
-   */
-  requestAuthoritativeRefetch?(threadId: string): void;
   /**
    * Persist a thread transcript (plus its last render snapshot) into the
    * on-disk cache (slice 6b-2b: the apply chain's persist ride-along).
@@ -109,6 +103,16 @@ export interface GatewayMirrorServices {
     transcript: ThreadTranscript,
     renderState?: RenderState | null,
   ): Promise<void>;
+  // Slice 6b-2c: the fetch/stream lifecycle's IPC. Optional as a group so
+  // node tests can construct history-only mirrors; the port accessors
+  // throw when a lifecycle path runs without them.
+  getThreadHistoryFull?(threadId: string): Promise<ThreadTranscript>;
+  startThreadStream?(input: StartThreadStreamInput): Promise<void>;
+  stopThreadStream?(input: StopThreadStreamInput): Promise<void>;
+  loadThreadTranscriptCache?(
+    threadId: string,
+  ): Promise<CachedThreadTranscript | null>;
+  clearThreadTranscriptCache?(threadId: string): Promise<void>;
 }
 
 export interface GatewayRootSnapshot {
@@ -490,6 +494,86 @@ export class GatewayMirror {
     void this.services?.saveThreadTranscriptCache?.(transcript, renderState);
   }
 
+  // Slice 6b-2c MirrorPort accessors: the lifecycle's transport IPC,
+  // resolved from the injected services (throw-if-missing, matching
+  // fetchOlderThreadHistoryPage).
+  private requireLifecycleService<K extends keyof GatewayMirrorServices>(
+    name: K,
+  ): NonNullable<GatewayMirrorServices[K]> {
+    const service = this.services?.[name];
+    if (!service) {
+      throw new Error(`GatewayMirror constructed without services (${name})`);
+    }
+    return service as NonNullable<GatewayMirrorServices[K]>;
+  }
+
+  startThreadStream(input: StartThreadStreamInput): Promise<void> {
+    return this.requireLifecycleService("startThreadStream")(input);
+  }
+
+  stopThreadStream(input: StopThreadStreamInput): Promise<void> {
+    return this.requireLifecycleService("stopThreadStream")(input);
+  }
+
+  loadThreadTranscriptCache(
+    threadId: string,
+  ): Promise<CachedThreadTranscript | null> {
+    return this.requireLifecycleService("loadThreadTranscriptCache")(threadId);
+  }
+
+  clearThreadTranscriptCache(threadId: string): Promise<void> {
+    return this.requireLifecycleService("clearThreadTranscriptCache")(threadId);
+  }
+
+  getThreadHistoryFull(threadId: string): Promise<ThreadTranscript> {
+    return this.requireLifecycleService("getThreadHistoryFull")(threadId);
+  }
+
+  getThreadHistoryPage(input: GetThreadHistoryInput): Promise<ThreadTranscript> {
+    return this.requireLifecycleService("getThreadHistory")(input);
+  }
+
+  /**
+   * Slice 2c high-level entries: the fetch/stream lifecycle.
+   */
+  notifyStreamEvent(event: DesktopChatStreamEvent): void {
+    this.transcriptLifecycle.notifyStreamEvent(event);
+  }
+
+  loadSelectedThreadTranscript(threadId: string): Promise<void> {
+    return this.transcriptLifecycle.loadSelectedThreadTranscript(threadId);
+  }
+
+  cancelSelectedThreadLoad(threadId: string): void {
+    this.transcriptLifecycle.cancelSelectedThreadLoad(threadId);
+  }
+
+  startCommittedThreadStream(
+    threadId: string,
+    transcript: ThreadTranscript,
+    consumerId: string,
+  ): Promise<void> {
+    return this.transcriptLifecycle.startCommittedThreadStream(
+      threadId,
+      transcript,
+      consumerId,
+    );
+  }
+
+  refetchAuthoritativeTranscriptAfterRewrite(threadId: string): Promise<void> {
+    return this.transcriptLifecycle.refetchAuthoritativeTranscriptAfterRewrite(
+      threadId,
+    );
+  }
+
+  /**
+   * Older-page load with the UI scroll-anchor + error chrome (lifecycle);
+   * the pure guard/fetch/apply stays fetchOlderThreadHistoryPage above.
+   */
+  loadOlderThreadHistoryPage(threadId: string): Promise<void> {
+    return this.transcriptLifecycle.loadOlderThreadHistoryPage(threadId);
+  }
+
   subscribeLiveStreams(listener: () => void): Unsubscribe {
     this.liveStreamListeners.add(listener);
     return () => {
@@ -772,7 +856,7 @@ export class GatewayMirror {
    * (scroll anchoring is UI-owned by design). Fetch errors clear the
    * loading flag and propagate to the caller.
    */
-  async loadOlderThreadHistoryPage(
+  async fetchOlderThreadHistoryPage(
     threadId: string,
     options?: { onPageFetched?: (transcript: ThreadTranscript) => void },
   ): Promise<void> {
@@ -858,7 +942,13 @@ export class GatewayMirror {
           intentForId: this.intentLookup,
         });
         if (outcome === "refetch_authoritative") {
-          this.services?.requestAuthoritativeRefetch?.(threadId);
+          // Slice 6b-2c: the lifecycle is the single de-duplicated refetch
+          // owner. The committed side-effect step triggers it too for the
+          // same event; the per-thread in-flight de-dupe coalesces both
+          // into one fetch + stream restart.
+          void this.transcriptLifecycle.refetchAuthoritativeTranscriptAfterRewrite(
+            threadId,
+          );
         }
       }
       changed = true;

@@ -55,7 +55,6 @@ import { desktopStateWithoutThread } from "@shared/desktop-state";
 import {
   extractToolUseId,
   isToolRole,
-  shouldRestartSelectedThreadStreamAfterRefetch,
 } from "@shared/transcript-sync";
 
 import {
@@ -600,24 +599,23 @@ export function AppShell() {
         listWorkflowDefinitions: () =>
           window.garyxDesktop.listWorkflowDefinitions(),
         getThreadHistory: (input) => window.garyxDesktop.getThreadHistory(input),
+        getThreadHistoryFull: (threadId) =>
+          window.garyxDesktop.getThreadHistory(threadId),
         saveThreadTranscriptCache: (transcript, renderState) =>
           window.garyxDesktop.saveThreadTranscriptCache(transcript, renderState),
-        // Temporary batch-2/3 seams: the message machine and the
-        // authoritative-refetch flow stay with their legacy owners; the
-        // mirror reaches them through these injected lookups. The closures
-        // run post-mount, so the later declarations they capture are
-        // initialized by the time they are read.
+        loadThreadTranscriptCache: (threadId) =>
+          window.garyxDesktop.loadThreadTranscriptCache(threadId),
+        clearThreadTranscriptCache: (threadId) =>
+          window.garyxDesktop.clearThreadTranscriptCache(threadId),
+        startThreadStream: (input) =>
+          window.garyxDesktop.startThreadStream(input),
+        stopThreadStream: (input) => window.garyxDesktop.stopThreadStream(input),
+        // Temporary batch-3 seam: the message machine's intent lookup, read
+        // through the machine-state getter. The closure runs post-mount, so
+        // the later declaration it captures is initialized by the time it
+        // is read.
         intentForId: (intentId) =>
           messageStateRef.current.intentsById[intentId] || null,
-        requestAuthoritativeRefetch: () => {
-          // Batch 2b dual-run: the legacy stream handler is still the sole
-          // rewrite-refetch trigger (applyCommittedThreadMessage), and its
-          // result flows back into the mirror through the
-          // applyRemoteTranscript dual-write. Triggering here as well would
-          // double-run the refetch (two concurrent history fetches + stream
-          // restarts). Ownership flips to the mirror when the legacy path
-          // is deleted (batch 6).
-        },
       }),
   );
   const [desktopState, setDesktopState] = useState<DesktopState | null>(null);
@@ -1446,31 +1444,15 @@ export function AppShell() {
     activeHistoryPagination,
     activeMessages,
     activeThreadMessageKey,
-    connection,
     desktopState,
-    dispatchMessageState,
     historyLoading,
-    lastRenderedMessageThreadRef,
     liveStreamStateRef,
     messageStateRef,
     messagesRef,
     mirror: gatewayMirror,
-    pendingMessagesPrependAnchorRef,
-    recordGatewayStatusObservation,
-    refetchAuthoritativeTranscriptAfterRewrite,
     requestSelectedThreadMessagesBottomSnap,
-    scheduleDesktopStateRefresh,
-    scheduleHistoryRefresh,
     selectedThreadId,
     selectedThreadIdRef,
-    setDesktopState,
-    setError,
-    setHistoryLoading,
-    setPendingAutomationRun,
-    settingsDraft,
-    syncThreadTitleDraft: (nextTitle: string) => {
-      conversationTitleRef.current?.syncTitle(nextTitle);
-    },
   });
   // Dev-only mirror handle for CDP walkthroughs (the batch-2b parity probe
   // was deleted with the legacy dual-write in batch 6a).
@@ -2172,6 +2154,35 @@ export function AppShell() {
   };
   useEffect(() => {
     gatewayMirror.setDispatchDeps(dispatchOrchestratorDeps);
+  });
+  // Batch 6b-2c: the transcript lifecycle's React seams, refreshed every
+  // commit (the setDispatchDeps pattern). Fed here rather than inside
+  // useTranscriptController because the side-chat stream identity comes
+  // from the later useSideChatController call.
+  useEffect(() => {
+    gatewayMirror.setTranscriptLifecycleDeps({
+      setDesktopState,
+      syncThreadTitleDraft: (nextTitle: string) => {
+        conversationTitleRef.current?.syncTitle(nextTitle);
+      },
+      requestSelectedThreadMessagesBottomSnap,
+      selectedThreadIdRef,
+      liveStreamStateRef,
+      setError,
+      setHistoryLoading,
+      setPendingAutomationRun,
+      recordGatewayStatusObservation,
+      scheduleDesktopStateRefresh,
+      scheduleHistoryRefresh,
+      connection,
+      settingsDraft,
+      selectedThreadGenerationRef,
+      lastRenderedMessageThreadRef,
+      messagesRef,
+      pendingMessagesPrependAnchorRef,
+      sideChatThreadIdRef,
+      sideChatStreamConsumerId,
+    });
   });
   function appendSeededTurn(
     threadId: string,
@@ -3608,41 +3619,6 @@ export function AppShell() {
           ? runtimeSettingsError.message
           : "Failed to update thread model settings",
       );
-    }
-  }
-
-  async function refetchAuthoritativeTranscriptAfterRewrite(threadId: string) {
-    const startSelectionGeneration = selectedThreadGenerationRef.current;
-    try {
-      await window.garyxDesktop.clearThreadTranscriptCache(threadId);
-      const transcript = await window.garyxDesktop.getThreadHistory(threadId);
-      if (selectedThreadIdRef.current === threadId) {
-        requestSelectedThreadMessagesBottomSnap(threadId, true);
-      }
-      applyRemoteTranscript(threadId, transcript);
-      const shouldRestartSelectedStream =
-        shouldRestartSelectedThreadStreamAfterRefetch({
-          threadId,
-          selectedThreadId: selectedThreadIdRef.current,
-          startSelectionGeneration,
-          currentSelectionGeneration: selectedThreadGenerationRef.current,
-        });
-      if (shouldRestartSelectedStream) {
-        await startCommittedThreadStream(
-          threadId,
-          transcript,
-          SELECTED_THREAD_STREAM_CONSUMER_ID,
-        );
-      }
-      if (sideChatThreadIdRef.current === threadId) {
-        await startCommittedThreadStream(
-          threadId,
-          transcript,
-          sideChatStreamConsumerId(threadId),
-        );
-      }
-    } catch {
-      scheduleHistoryRefresh(threadId, 3, 500, true);
     }
   }
 

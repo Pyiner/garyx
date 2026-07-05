@@ -727,7 +727,7 @@ test("dual-run: remote apply plus committed-stream frames match the legacy pure 
   assert.equal(snapshot.frontier.committedSeq, 4);
 });
 
-test("dual-run: a committed rewrite control skips mapping and requests a refetch", () => {
+test("dual-run: a committed rewrite control skips mapping and triggers the lifecycle refetch", async () => {
   const threadId = "thread::dual-run-rewrite";
   const refetched = [];
   const mirror = new GatewayMirror({
@@ -738,7 +738,43 @@ test("dual-run: a committed rewrite control skips mapping and requests a refetch
     getThreadHistory: async () => {
       throw new Error("unused");
     },
-    requestAuthoritativeRefetch: (id) => refetched.push(id),
+    // Slice 6b-2c: ingest routes a rewrite into the lifecycle's
+    // single-owner refetch (cache clear + authoritative fetch).
+    clearThreadTranscriptCache: async () => {},
+    getThreadHistoryFull: async (id) => {
+      refetched.push(id);
+      return {
+        threadId: id,
+        remoteFound: true,
+        messages: [wireMessage(1, "user", "hello")],
+        pendingInputs: [],
+        threadInfo: null,
+        pageInfo: fullPageInfo({ totalMessages: 1, committedMessages: 1, returnedMessages: 1, endIndex: 1 }),
+      };
+    },
+    startThreadStream: async () => {},
+    stopThreadStream: async () => {},
+  });
+  mirror.setTranscriptLifecycleDeps({
+    setDesktopState: () => {},
+    syncThreadTitleDraft: () => {},
+    requestSelectedThreadMessagesBottomSnap: () => {},
+    selectedThreadIdRef: { current: null },
+    liveStreamStateRef: { current: {} },
+    setError: () => {},
+    setHistoryLoading: () => {},
+    setPendingAutomationRun: () => {},
+    recordGatewayStatusObservation: () => {},
+    scheduleDesktopStateRefresh: () => {},
+    scheduleHistoryRefresh: () => {},
+    connection: null,
+    settingsDraft: { gatewayUrl: "" },
+    selectedThreadGenerationRef: { current: 0 },
+    lastRenderedMessageThreadRef: { current: null },
+    messagesRef: { current: null },
+    pendingMessagesPrependAnchorRef: { current: null },
+    sideChatThreadIdRef: { current: null },
+    sideChatStreamConsumerId: (id) => `side-chat:${id}`,
   });
 
   const fullTranscript = {
@@ -764,20 +800,25 @@ test("dual-run: a committed rewrite control skips mapping and requests a refetch
   legacy = legacyCommittedApply(legacy, rewrite);
   assert.equal(legacy.refetchRequested, true);
   mirror.ingest(rewrite);
-
+  // Synchronous window: the rewrite skipped the mapping; the async refetch
+  // has not landed yet.
   assertThreadMatchesLegacy(mirror, threadId, legacy);
-  assert.deepEqual(refetched, [threadId], "refetch requested once");
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(refetched, [threadId], "refetch fetched once");
   // The verbatim ledger still records the control event.
   const snapshot = mirror.getThreadSnapshot(threadId);
   assert.equal(snapshot.records.length, 1);
   assert.equal(snapshot.frontier.committedSeq, 2);
 
-  // Redelivery of the same seq is idempotent: no second refetch request.
+  // Redelivery of the same seq is idempotent: no second refetch.
   mirror.ingest(rewrite);
+  await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(refetched, [threadId]);
 });
 
-test("dual-run: loadOlderThreadHistoryPage matches the legacy older-page apply", async () => {
+test("dual-run: fetchOlderThreadHistoryPage matches the legacy older-page apply", async () => {
   const threadId = "thread::dual-run-older";
   const olderPage = {
     threadId,
@@ -835,7 +876,7 @@ test("dual-run: loadOlderThreadHistoryPage matches the legacy older-page apply",
     }
   });
 
-  await mirror.loadOlderThreadHistoryPage(threadId, {
+  await mirror.fetchOlderThreadHistoryPage(threadId, {
     onPageFetched: () => {
       // The UI scroll-anchor seam runs between fetch and apply: the message
       // cache must not have been prepended yet.
@@ -914,7 +955,7 @@ test("applyOlderHistoryPage (dual-write entry) matches the fetch-owning path", a
   dualWriteMirror.applyOlderHistoryPage(threadId, olderPage);
   const dualWriteSnapshot = dualWriteMirror.getThreadSnapshot(threadId);
 
-  // Path B (mirror-owned): loadOlderThreadHistoryPage fetches through the
+  // Path B (mirror-owned): fetchOlderThreadHistoryPage fetches through the
   // injected services and applies the same page.
   const fetchMirror = new GatewayMirror({
     getState: async () => ({}),
@@ -924,7 +965,7 @@ test("applyOlderHistoryPage (dual-write entry) matches the fetch-owning path", a
     getThreadHistory: async () => olderPage,
   });
   fetchMirror.applyRemoteTranscript(threadId, fullTranscript);
-  await fetchMirror.loadOlderThreadHistoryPage(threadId);
+  await fetchMirror.fetchOlderThreadHistoryPage(threadId);
   const fetchSnapshot = fetchMirror.getThreadSnapshot(threadId);
 
   assert.deepEqual(dualWriteSnapshot.messages, fetchSnapshot.messages);
@@ -934,7 +975,7 @@ test("applyOlderHistoryPage (dual-write entry) matches the fetch-owning path", a
   );
 });
 
-test("loadOlderThreadHistoryPage guards: no pagination, in-flight, and fetch errors", async () => {
+test("fetchOlderThreadHistoryPage guards: no pagination, in-flight, and fetch errors", async () => {
   const threadId = "thread::older-guards";
   let resolveFetch;
   let calls = 0;
@@ -952,7 +993,7 @@ test("loadOlderThreadHistoryPage guards: no pagination, in-flight, and fetch err
   });
 
   // No pagination state at all: fetch must not run.
-  await mirror.loadOlderThreadHistoryPage(threadId);
+  await mirror.fetchOlderThreadHistoryPage(threadId);
   assert.equal(calls, 0);
 
   const fullTranscript = {
@@ -973,8 +1014,8 @@ test("loadOlderThreadHistoryPage guards: no pagination, in-flight, and fetch err
   mirror.applyRemoteTranscript(threadId, fullTranscript);
 
   // In-flight guard: a second call while loadingBefore is set is a no-op.
-  const firstLoad = mirror.loadOlderThreadHistoryPage(threadId);
-  await mirror.loadOlderThreadHistoryPage(threadId);
+  const firstLoad = mirror.fetchOlderThreadHistoryPage(threadId);
+  await mirror.fetchOlderThreadHistoryPage(threadId);
   assert.equal(calls, 1, "concurrent older-page loads must not double-fetch");
   resolveFetch({
     threadId,
@@ -1014,7 +1055,7 @@ test("loadOlderThreadHistoryPage guards: no pagination, in-flight, and fetch err
   });
   errorMirror.applyRemoteTranscript(threadId, fullTranscript);
   await assert.rejects(
-    () => errorMirror.loadOlderThreadHistoryPage(threadId),
+    () => errorMirror.fetchOlderThreadHistoryPage(threadId),
     /history endpoint down/,
   );
   assert.equal(
