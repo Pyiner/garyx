@@ -29,6 +29,11 @@ import type {
 } from "@shared/contracts";
 
 import type { MessageIntent } from "../../message-machine";
+import type { ThreadHistoryPaginationState } from "../../gateway-mirror/transcript-materialize";
+import {
+  useThreadTranscriptScroll,
+  type TranscriptScrollIntent,
+} from "./thread-transcript-scroll";
 import {
   ComposerForm,
   type ComposerAgentOption,
@@ -338,8 +343,17 @@ type ThreadPageProps = {
     useAlternateFollowUpBehavior?: boolean;
   }) => void;
   onLocalWorkspaceFileLinkClick: (path: string) => void;
-  onMessagesScroll: () => void;
-  onMessagesUserScrollIntent: () => void;
+  /**
+   * Side-chat instance only: lightweight scroll handlers. The main
+   * instance passes `scrollIntent` instead and the colocated hook owns
+   * the container handlers.
+   */
+  onMessagesScroll?: () => void;
+  onMessagesUserScrollIntent?: () => void;
+  /** Main transcript instance: the shell-owned scroll intent bundle. */
+  scrollIntent?: TranscriptScrollIntent | null;
+  activeHistoryPagination?: ThreadHistoryPaginationState | null;
+  activeThreadMessageKey?: string | null;
   onMarkIgnoreComposerSubmitWindow: () => void;
   onRemoveComposerFile: (fileId: string) => void;
   onRemoveComposerImage: (imageId: string) => void;
@@ -446,6 +460,9 @@ export function ThreadPage({
   onLocalWorkspaceFileLinkClick,
   onMessagesScroll,
   onMessagesUserScrollIntent,
+  scrollIntent = null,
+  activeHistoryPagination = null,
+  activeThreadMessageKey = null,
   onMarkIgnoreComposerSubmitWindow,
   onRemoveComposerFile,
   onRemoveComposerImage,
@@ -492,6 +509,21 @@ export function ThreadPage({
   workspaceMutation,
 }: ThreadPageProps) {
   const { t } = useI18n();
+  // Colocated transcript scroll (endgame batch 5b): stick-to-bottom,
+  // prepend anchoring, and scroll-triggered older-page loads. Null for
+  // the side-chat instance, which passes lightweight handlers instead.
+  const transcriptScroll = useThreadTranscriptScroll({
+    activeHistoryPagination,
+    activeMessages,
+    activeThreadMessageKey,
+    historyLoading,
+    messagesRef,
+    scrollIntent,
+  });
+  const handleMessagesScroll =
+    transcriptScroll?.onMessagesScroll ?? onMessagesScroll;
+  const handleMessagesUserScrollIntent =
+    transcriptScroll?.onMessagesUserScrollIntent ?? onMessagesUserScrollIntent;
   const composerShellWrapRef = useRef<HTMLDivElement | null>(null);
   const threadMainRef = useRef<HTMLDivElement | null>(null);
   const isSideChatSurface = surfaceVariant === "side-chat";
@@ -637,10 +669,10 @@ export function ThreadPage({
         {!hasWorkflowRunContent ? (
           <div
             className="messages"
-            onPointerDown={onMessagesUserScrollIntent}
-            onScroll={onMessagesScroll}
-            onTouchStart={onMessagesUserScrollIntent}
-            onWheel={onMessagesUserScrollIntent}
+            onPointerDown={handleMessagesUserScrollIntent}
+            onScroll={handleMessagesScroll}
+            onTouchStart={handleMessagesUserScrollIntent}
+            onWheel={handleMessagesUserScrollIntent}
             ref={messagesRef}
           >
           {historyLoadingEarlier ? (

@@ -211,11 +211,15 @@ import {
   useMessageDispatchController,
   type SeededTurn,
 } from "./useMessageDispatchController";
-import { useMessagesScrollController } from "./useMessagesScrollController";
 import { GatewayMirror } from "../gateway-mirror/mirror";
 import type { DispatchOrchestratorDeps } from "../gateway-mirror/dispatch-orchestrator";
 import { GatewayMirrorContext } from "../gateway-mirror/react";
 import { useSettingsController } from "./useSettingsController";
+import {
+  messageTailSignature,
+  scrollMessagesToLatest,
+  type TranscriptScrollIntent,
+} from "./components/thread-transcript-scroll";
 import { useSideChatController } from "./useSideChatController";
 import { SELECTED_THREAD_STREAM_CONSUMER_ID } from "../gateway-mirror/transcript-lifecycle";
 import {
@@ -255,7 +259,6 @@ import {
   createBrowserRouteHost,
 } from "./desktop-route-store";
 
-const MESSAGES_BOTTOM_THRESHOLD_PX = 48;
 
 type ThreadEntrySelectionSource =
   | "pinned"
@@ -318,41 +321,6 @@ const WorkflowRunsPanel = lazy(() =>
 );
 const EMPTY_UI_TRANSCRIPT_MESSAGES: UiTranscriptMessage[] = [];
 
-
-function messagesNearBottom(node: HTMLDivElement | null): boolean {
-  if (!node) {
-    return true;
-  }
-  return (
-    node.scrollHeight - node.scrollTop - node.clientHeight <
-    MESSAGES_BOTTOM_THRESHOLD_PX
-  );
-}
-
-function scrollMessagesToLatest(
-  node: HTMLDivElement | null,
-  behavior: ScrollBehavior = "auto",
-) {
-  node?.scrollTo({
-    top: node.scrollHeight,
-    behavior,
-  });
-}
-
-function messageTailSignature(messages: UiTranscriptMessage[]): string {
-  const lastMessage = messages[messages.length - 1];
-  if (!lastMessage) {
-    return "0";
-  }
-  return [
-    messages.length,
-    lastMessage.id,
-    lastMessage.role,
-    lastMessage.text.length,
-    lastMessage.pending ? "1" : "0",
-    lastMessage.localState || "",
-  ].join(":");
-}
 
 function formatThreadTimestamp(value?: string | null): string {
   if (!value) {
@@ -1412,23 +1380,66 @@ export function AppShell() {
     setSettingsDraft,
     threadLogsOpen,
   });
-  const {
-    cancelMessagesForceScrollBudget,
-    lastRenderedMessageThreadRef,
-    messagesRef,
-    pendingMessagesPrependAnchorRef,
-    requestMessagesBottomSnap,
-    requestSelectedThreadMessagesBottomSnap,
-    shouldStickMessagesToBottomRef,
-  } = useMessagesScrollController({
-    activeMessages,
-    activeThreadMessageKey,
-    historyLoading,
-    messageTailSignature,
+  // Batch 5b scroll colocation: the DOM-bound effects/scheduler live in
+  // ThreadPage's useThreadTranscriptScroll; the shell keeps the scroll
+  // INTENT bundle (it must survive viewport unmounts — automations pre-arm
+  // snaps from other views, and the dispatch/lifecycle orchestration
+  // requests snaps regardless of the active view) plus the snap API those
+  // writers call.
+  const messagesRef = useRef<HTMLDivElement | null>(null);
+  const pendingMessagesPrependAnchorRef = useRef<{
+    threadId: string;
+    scrollHeight: number;
+    scrollTop: number;
+  } | null>(null);
+  const forceMessagesBottomSnapRef = useRef(false);
+  const shouldStickMessagesToBottomRef = useRef(true);
+  const lastRenderedMessageThreadRef = useRef<string | null>(null);
+  const lastRenderedMessageCountRef = useRef(0);
+  const lastRenderedMessageTailSignatureRef = useRef("0");
+  const [transcriptScrollIntent] = useState<TranscriptScrollIntent>(() => ({
     pendingThreadBottomSnapRef,
-    scrollMessagesToLatest,
+    forceMessagesBottomSnapRef,
+    shouldStickMessagesToBottomRef,
+    pendingMessagesPrependAnchorRef,
+    lastRenderedMessageThreadRef,
+    lastRenderedMessageCountRef,
+    lastRenderedMessageTailSignatureRef,
     selectedThreadIdRef,
-  });
+  }));
+
+  function requestMessagesBottomSnap(
+    threadId: string | null | undefined,
+    forceStick = false,
+  ) {
+    if (!threadId) {
+      return;
+    }
+    pendingThreadBottomSnapRef.current = threadId;
+    if (forceStick) {
+      shouldStickMessagesToBottomRef.current = true;
+      forceMessagesBottomSnapRef.current = true;
+    }
+  }
+
+  function requestSelectedThreadMessagesBottomSnap(
+    threadId: string | null | undefined,
+    forceStick = false,
+  ) {
+    if (!threadId || threadId !== selectedThreadIdRef.current) {
+      return;
+    }
+    requestMessagesBottomSnap(threadId, forceStick);
+  }
+
+  useEffect(() => {
+    if (activeThreadMessageKey == null) {
+      pendingThreadBottomSnapRef.current = null;
+      forceMessagesBottomSnapRef.current = false;
+      return;
+    }
+    requestMessagesBottomSnap(activeThreadMessageKey, true);
+  }, [activeThreadMessageKey]);
   useEffect(() => {
     selectedThreadIdRef.current = selectedThreadId;
     selectedThreadGenerationRef.current += 1;
@@ -1536,39 +1547,6 @@ export function AppShell() {
     };
   }, [Boolean(desktopState), selectedThreadId]);
 
-  useEffect(() => {
-    if (
-      !activeThreadMessageKey ||
-      historyLoading ||
-      !activeHistoryPagination?.hasMoreBefore ||
-      activeHistoryPagination.loadingBefore
-    ) {
-      return;
-    }
-
-    const node = messagesRef.current;
-    if (!messagesNearEarlierUserTurnBoundary(node)) {
-      return;
-    }
-
-    const threadId = activeThreadMessageKey;
-    const timer = window.setTimeout(() => {
-      if (selectedThreadIdRef.current === threadId) {
-        void loadOlderThreadHistoryPage(threadId);
-      }
-    }, 0);
-
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [
-    activeThreadMessageKey,
-    activeMessages.length,
-    activeHistoryPagination?.hasMoreBefore,
-    activeHistoryPagination?.loadingBefore,
-    activeHistoryPagination?.nextBeforeIndex,
-    historyLoading,
-  ]);
   // Dev-only mirror handle for CDP walkthroughs (the batch-2b parity probe
   // was deleted with the legacy dual-write in batch 6a).
   useEffect(() => {
@@ -4248,14 +4226,9 @@ export function AppShell() {
         onComposerSubmit={handleComposerSubmit}
         onLocalWorkspaceFileLinkClick={handleLocalFileLinkClick}
         onMarkIgnoreComposerSubmitWindow={markIgnoreComposerSubmitWindow}
-        onMessagesScroll={() => {
-          const node = messagesRef.current;
-          shouldStickMessagesToBottomRef.current = messagesNearBottom(node);
-          if (selectedThreadId && node && messagesNearEarlierUserTurnBoundary(node)) {
-            void loadOlderThreadHistoryPage(selectedThreadId);
-          }
-        }}
-        onMessagesUserScrollIntent={cancelMessagesForceScrollBudget}
+        scrollIntent={transcriptScrollIntent}
+        activeHistoryPagination={activeHistoryPagination}
+        activeThreadMessageKey={activeThreadMessageKey}
         onRemoveComposerFile={removeComposerFile}
         onRemoveComposerImage={removeComposerImage}
         onRemoveComposerBrowserAnnotation={removeComposerBrowserAnnotation}

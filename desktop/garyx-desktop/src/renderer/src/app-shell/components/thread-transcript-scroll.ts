@@ -1,44 +1,113 @@
+// Thread-transcript scroll colocation (endgame batch 5b): the DOM-bound
+// scroll effects, the stick-to-bottom scheduler, and the container
+// handlers move verbatim from useMessagesScrollController/AppShell into
+// this ThreadPage-owned hook. The scroll INTENT state (pending bottom
+// snaps, stick/force flags, prepend anchor, last-rendered bookkeeping)
+// stays in the AppShell shell inside a TranscriptScrollIntent bundle —
+// it must survive viewport unmounts: automations pre-arm a bottom snap
+// from the automation view, and the dispatch/lifecycle orchestration
+// requests snaps regardless of the active view.
+
 import { useEffect, useLayoutEffect, useRef } from "react";
 
-import type { UiTranscriptMessage } from "./types";
+import { useGatewayMirror } from "../../gateway-mirror/react";
+import { messagesNearEarlierUserTurnBoundary } from "../../gateway-mirror/transcript-materialize";
+import type { ThreadHistoryPaginationState } from "../../gateway-mirror/transcript-materialize";
+import type { UiTranscriptMessage } from "../types";
 
-type UseMessagesScrollControllerArgs = {
+const MESSAGES_BOTTOM_THRESHOLD_PX = 48;
+
+export function messagesNearBottom(node: HTMLDivElement | null): boolean {
+  if (!node) {
+    return true;
+  }
+  return (
+    node.scrollHeight - node.scrollTop - node.clientHeight <
+    MESSAGES_BOTTOM_THRESHOLD_PX
+  );
+}
+
+export function scrollMessagesToLatest(
+  node: HTMLDivElement | null,
+  behavior: ScrollBehavior = "auto",
+) {
+  node?.scrollTo({
+    top: node.scrollHeight,
+    behavior,
+  });
+}
+
+export function messageTailSignature(messages: UiTranscriptMessage[]): string {
+  const lastMessage = messages[messages.length - 1];
+  if (!lastMessage) {
+    return "0";
+  }
+  return [
+    messages.length,
+    lastMessage.id,
+    lastMessage.role,
+    lastMessage.text.length,
+    lastMessage.pending ? "1" : "0",
+    lastMessage.localState || "",
+  ].join(":");
+}
+
+/**
+ * The shell-owned scroll intent bundle. Plain refs so writers (the
+ * dispatch/lifecycle orchestration, automations, the shell's snap API)
+ * work from any view; the viewport hook consumes them while mounted.
+ */
+export interface TranscriptScrollIntent {
+  pendingThreadBottomSnapRef: { current: string | null };
+  forceMessagesBottomSnapRef: { current: boolean };
+  shouldStickMessagesToBottomRef: { current: boolean };
+  pendingMessagesPrependAnchorRef: {
+    current: {
+      threadId: string;
+      scrollHeight: number;
+      scrollTop: number;
+    } | null;
+  };
+  lastRenderedMessageThreadRef: { current: string | null };
+  lastRenderedMessageCountRef: { current: number };
+  lastRenderedMessageTailSignatureRef: { current: string };
+  selectedThreadIdRef: { readonly current: string | null };
+}
+
+export type ThreadTranscriptScrollHandlers = {
+  onMessagesScroll: () => void;
+  onMessagesUserScrollIntent: () => void;
+};
+
+type UseThreadTranscriptScrollArgs = {
+  activeHistoryPagination: ThreadHistoryPaginationState | null;
   activeMessages: UiTranscriptMessage[];
   activeThreadMessageKey: string | null;
   historyLoading: boolean;
-  messageTailSignature: (messages: UiTranscriptMessage[]) => string;
-  pendingThreadBottomSnapRef: React.MutableRefObject<string | null>;
-  scrollMessagesToLatest: (
-    node: HTMLDivElement | null,
-    behavior?: ScrollBehavior,
-  ) => void;
-  selectedThreadIdRef: React.MutableRefObject<string | null>;
+  messagesRef: React.RefObject<HTMLDivElement | null>;
+  /**
+   * Absent for the side-chat ThreadPage instance, which keeps its own
+   * lightweight scroll handlers (no stick/snap machinery): every effect
+   * gates to a no-op and the hook returns null handlers.
+   */
+  scrollIntent: TranscriptScrollIntent | null;
 };
 
-export function useMessagesScrollController({
+export function useThreadTranscriptScroll({
+  activeHistoryPagination,
   activeMessages,
   activeThreadMessageKey,
   historyLoading,
-  messageTailSignature,
-  pendingThreadBottomSnapRef,
-  scrollMessagesToLatest,
-  selectedThreadIdRef,
-}: UseMessagesScrollControllerArgs) {
-  const messagesRef = useRef<HTMLDivElement | null>(null);
-  const pendingMessagesPrependAnchorRef = useRef<{
-    threadId: string;
-    scrollHeight: number;
-    scrollTop: number;
-  } | null>(null);
-  const forceMessagesBottomSnapRef = useRef(false);
-  const shouldStickMessagesToBottomRef = useRef(true);
+  messagesRef,
+  scrollIntent,
+}: UseThreadTranscriptScrollArgs): ThreadTranscriptScrollHandlers | null {
+  const mirror = useGatewayMirror();
+  // Scheduler-internal state (frame/timeout bookkeeping and the force
+  // budget). Viewport-local: a fresh mount starts with clean scheduling.
   const messagesStickScrollFrameRef = useRef<number | null>(null);
   const messagesStickScrollTimeoutsRef = useRef<number[]>([]);
   const messagesStickScrollGenerationRef = useRef(0);
   const messagesForceScrollBudgetRef = useRef(false);
-  const lastRenderedMessageThreadRef = useRef<string | null>(null);
-  const lastRenderedMessageCountRef = useRef(0);
-  const lastRenderedMessageTailSignatureRef = useRef("0");
 
   useEffect(() => {
     return () => {
@@ -50,6 +119,18 @@ export function useMessagesScrollController({
   }, []);
 
   useLayoutEffect(() => {
+    if (!scrollIntent) {
+      return;
+    }
+    const {
+      forceMessagesBottomSnapRef,
+      lastRenderedMessageCountRef,
+      lastRenderedMessageTailSignatureRef,
+      lastRenderedMessageThreadRef,
+      pendingMessagesPrependAnchorRef,
+      pendingThreadBottomSnapRef,
+      shouldStickMessagesToBottomRef,
+    } = scrollIntent;
     const currentThreadId = activeThreadMessageKey;
     const currentCount = activeMessages.length;
     const currentTailSignature = messageTailSignature(activeMessages);
@@ -113,12 +194,12 @@ export function useMessagesScrollController({
 
   useEffect(() => {
     const node = messagesRef.current;
-    if (!node || !activeThreadMessageKey) {
+    if (!scrollIntent || !node || !activeThreadMessageKey) {
       return;
     }
 
     const scrollIfSticky = () => {
-      if (shouldStickMessagesToBottomRef.current) {
+      if (scrollIntent.shouldStickMessagesToBottomRef.current) {
         scheduleMessagesScrollToLatest("auto");
       }
     };
@@ -161,38 +242,42 @@ export function useMessagesScrollController({
     };
   }, [activeThreadMessageKey]);
 
+  // Scroll-triggered older-page auto-load (moved with the handlers: the
+  // near-boundary probe and the fetch trigger are one feature).
   useEffect(() => {
-    if (activeThreadMessageKey == null) {
-      pendingThreadBottomSnapRef.current = null;
-      forceMessagesBottomSnapRef.current = false;
+    if (
+      !scrollIntent ||
+      !activeThreadMessageKey ||
+      historyLoading ||
+      !activeHistoryPagination?.hasMoreBefore ||
+      activeHistoryPagination.loadingBefore
+    ) {
       return;
     }
-    requestMessagesBottomSnap(activeThreadMessageKey, true);
-  }, [activeThreadMessageKey]);
 
-  function requestMessagesBottomSnap(
-    threadId: string | null | undefined,
-    forceStick = false,
-  ) {
-    if (!threadId) {
+    const node = messagesRef.current;
+    if (!messagesNearEarlierUserTurnBoundary(node)) {
       return;
     }
-    pendingThreadBottomSnapRef.current = threadId;
-    if (forceStick) {
-      shouldStickMessagesToBottomRef.current = true;
-      forceMessagesBottomSnapRef.current = true;
-    }
-  }
 
-  function requestSelectedThreadMessagesBottomSnap(
-    threadId: string | null | undefined,
-    forceStick = false,
-  ) {
-    if (!threadId || threadId !== selectedThreadIdRef.current) {
-      return;
-    }
-    requestMessagesBottomSnap(threadId, forceStick);
-  }
+    const threadId = activeThreadMessageKey;
+    const timer = window.setTimeout(() => {
+      if (scrollIntent.selectedThreadIdRef.current === threadId) {
+        void mirror.loadOlderThreadHistoryPage(threadId);
+      }
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [
+    activeThreadMessageKey,
+    activeMessages.length,
+    activeHistoryPagination?.hasMoreBefore,
+    activeHistoryPagination?.loadingBefore,
+    activeHistoryPagination?.nextBeforeIndex,
+    historyLoading,
+  ]);
 
   function cancelMessagesScrollCallbacks() {
     if (messagesStickScrollFrameRef.current !== null) {
@@ -206,10 +291,13 @@ export function useMessagesScrollController({
   }
 
   function cancelMessagesForceScrollBudget() {
+    if (!scrollIntent) {
+      return;
+    }
     messagesStickScrollGenerationRef.current += 1;
     cancelMessagesScrollCallbacks();
     messagesForceScrollBudgetRef.current = false;
-    forceMessagesBottomSnapRef.current = false;
+    scrollIntent.forceMessagesBottomSnapRef.current = false;
   }
 
   function scheduleMessagesScrollToLatest(
@@ -218,6 +306,11 @@ export function useMessagesScrollController({
       force?: boolean;
     },
   ) {
+    if (!scrollIntent) {
+      return;
+    }
+    const { forceMessagesBottomSnapRef, shouldStickMessagesToBottomRef } =
+      scrollIntent;
     const forceBudget = Boolean(
       options?.force ||
         forceMessagesBottomSnapRef.current ||
@@ -265,13 +358,24 @@ export function useMessagesScrollController({
     }
   }
 
+  function handleMessagesScroll() {
+    if (!scrollIntent) {
+      return;
+    }
+    const node = messagesRef.current;
+    scrollIntent.shouldStickMessagesToBottomRef.current =
+      messagesNearBottom(node);
+    const selectedThreadId = scrollIntent.selectedThreadIdRef.current;
+    if (selectedThreadId && node && messagesNearEarlierUserTurnBoundary(node)) {
+      void mirror.loadOlderThreadHistoryPage(selectedThreadId);
+    }
+  }
+
+  if (!scrollIntent) {
+    return null;
+  }
   return {
-    cancelMessagesForceScrollBudget,
-    lastRenderedMessageThreadRef,
-    messagesRef,
-    pendingMessagesPrependAnchorRef,
-    requestMessagesBottomSnap,
-    requestSelectedThreadMessagesBottomSnap,
-    shouldStickMessagesToBottomRef,
+    onMessagesScroll: handleMessagesScroll,
+    onMessagesUserScrollIntent: cancelMessagesForceScrollBudget,
   };
 }
