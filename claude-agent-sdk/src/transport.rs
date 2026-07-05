@@ -53,19 +53,11 @@ pub(crate) fn accept_stream_line(
         return StreamLineOutcome::Pending;
     }
 
-    // A line that parses on its own is always a complete protocol message.
-    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
-        if json_buffer.is_empty() {
+    if json_buffer.is_empty() {
+        // A line that parses on its own is a complete protocol message.
+        if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
             return StreamLineOutcome::Message(value);
         }
-        // The accumulator held something that never completed — a corrupt
-        // prefix (noise that started with '{', or a truncated document).
-        // Prefer the complete message and drop the prefix.
-        let dropped = std::mem::take(json_buffer);
-        return StreamLineOutcome::DroppedCorruptPrefix { dropped, value };
-    }
-
-    if json_buffer.is_empty() {
         // Only lines that could plausibly START a protocol document may
         // open an accumulation. stream-json messages are always objects,
         // and '['-prefixed lines are the classic leaked-log shape
@@ -73,16 +65,44 @@ pub(crate) fn accept_stream_line(
         if !trimmed.starts_with('{') {
             return StreamLineOutcome::SkippedNoise;
         }
+        json_buffer.push_str(trimmed);
+        return finish_accumulated(json_buffer, max_buffer_size);
     }
 
+    // An accumulation is open: the accumulated document takes priority, so
+    // a legitimate multi-line split whose continuation happens to be valid
+    // JSON on its own (e.g. the middle line `"result"` of a pretty-printed
+    // object — review #TASK-1663) is never misread as a standalone message.
+    let prefix_len = json_buffer.len();
     json_buffer.push_str(trimmed);
+    match finish_accumulated(json_buffer, max_buffer_size) {
+        StreamLineOutcome::Pending => {
+            // The accumulation still doesn't parse. If this line ALONE is a
+            // complete protocol OBJECT, the prefix was corrupt (a
+            // '{'-prefixed noise line that can never complete): drop it and
+            // self-heal instead of wedging until the buffer limit.
+            if trimmed.starts_with('{')
+                && let Ok(value) = serde_json::from_str::<Value>(trimmed)
+            {
+                let mut dropped = std::mem::take(json_buffer);
+                dropped.truncate(prefix_len);
+                return StreamLineOutcome::DroppedCorruptPrefix { dropped, value };
+            }
+            StreamLineOutcome::Pending
+        }
+        outcome => outcome,
+    }
+}
 
+fn finish_accumulated(
+    json_buffer: &mut String,
+    max_buffer_size: usize,
+) -> StreamLineOutcome {
     if json_buffer.len() > max_buffer_size {
         let len = json_buffer.len();
         json_buffer.clear();
         return StreamLineOutcome::BufferOverflow { len };
     }
-
     match serde_json::from_str::<Value>(json_buffer.as_str()) {
         Ok(value) => {
             json_buffer.clear();
@@ -593,6 +613,29 @@ mod stream_line_tests {
                     value.get("type").and_then(Value::as_str),
                     Some("assistant")
                 );
+            }
+            other => panic!("expected accumulated message, got {other:?}"),
+        }
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn pretty_split_with_json_valid_continuation_lines_accumulates() {
+        // #TASK-1663 review regression: a legitimate multi-line document
+        // whose continuation line is valid JSON on its own (`"result"`)
+        // must keep accumulating, not be misread as a standalone message.
+        let mut buffer = String::new();
+        assert!(matches!(
+            feed(&mut buffer, "{\"type\":\n"),
+            StreamLineOutcome::Pending
+        ));
+        assert!(matches!(
+            feed(&mut buffer, "\"result\"\n"),
+            StreamLineOutcome::Pending
+        ));
+        match feed(&mut buffer, "}\n") {
+            StreamLineOutcome::Message(value) => {
+                assert_eq!(value.get("type").and_then(Value::as_str), Some("result"));
             }
             other => panic!("expected accumulated message, got {other:?}"),
         }
