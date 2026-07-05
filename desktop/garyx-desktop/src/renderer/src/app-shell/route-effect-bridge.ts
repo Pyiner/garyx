@@ -96,7 +96,6 @@ type RouteEffectBridgeArgs = {
    */
   selectThreadRequestSequenceRef: React.MutableRefObject<number>;
   selectedWorkflowTaskId: string | null;
-  setCapsulePreviewId: React.Dispatch<React.SetStateAction<string | null>>;
   setConnection: React.Dispatch<React.SetStateAction<ConnectionStatus | null>>;
   setError: React.Dispatch<React.SetStateAction<string | null>>;
   setNewThreadDraftActive: React.Dispatch<React.SetStateAction<boolean>>;
@@ -141,7 +140,6 @@ export function useRouteEffectBridge({
   selectedWorkflowRunId,
   selectThreadRequestSequenceRef,
   selectedWorkflowTaskId,
-  setCapsulePreviewId,
   setConnection,
   setError,
   setNewThreadDraftActive,
@@ -248,14 +246,11 @@ export function useRouteEffectBridge({
           return;
         }
         case "capsule":
-          setCapsulePreviewId(route.capsuleId);
+          // The preview id is a route selector (6c-2c); nothing to apply.
           return;
         case "view":
-          // Entering the Capsules gallery from the rail/route clears any open
-          // preview so #/capsules shows the gallery, not a stale preview.
-          if (route.view === "capsules") {
-            setCapsulePreviewId(null);
-          }
+          // The gallery/preview split is the route itself (6c-2c);
+          // nothing to apply.
           return;
         case "thread-home":
           setNewThreadDraftActive(false);

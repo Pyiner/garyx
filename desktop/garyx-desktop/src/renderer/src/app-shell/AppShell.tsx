@@ -631,11 +631,8 @@ export function AppShell() {
   );
   // Capsule preview selection lives here (single source of truth) so the route,
   // deep links, and gallery clicks all flow through one path.
-  // Seed it from the initial route so a cold-started #/capsules/<id> lands on
-  // the preview instead of being rewritten to #/capsules by the replace effect.
-  const [capsulePreviewId, setCapsulePreviewId] = useState<string | null>(() =>
-    initialRouteValue.kind === "capsule" ? initialRouteValue.capsuleId : null,
-  );
+  // Batch 6c-2c: the capsule preview id is a selector over the committed
+  // route (declared below the route snapshot).
   // Capsules opened as tabs in the right side-tools dock (#TASK-1470). AppShell
   // owns the list so the dock can show without a workspace; the panel renders
   // these and owns active-tab selection. `pendingActiveCapsuleId` is a one-shot
@@ -753,6 +750,11 @@ export function AppShell() {
     () => desktopRouteStore.getSnapshot(),
   );
   const contentView = contentViewForDesktopRoute(routeSnapshot.route);
+  // 6c-2c id selectors: routed ids read the committed route directly.
+  const capsulePreviewId =
+    routeSnapshot.route.kind === "capsule"
+      ? routeSnapshot.route.capsuleId
+      : null;
   useEffect(() => {
     if (contentView !== "thread" || !selectedThreadId) {
       setThreadEntrySelectionSource(null);
@@ -2493,7 +2495,6 @@ export function AppShell() {
     selectedWorkflowRunId,
     selectedWorkflowTaskId,
     selectThreadRequestSequenceRef,
-    setCapsulePreviewId,
     setConnection,
     setError,
     setNewThreadDraftActive,
@@ -4946,10 +4947,16 @@ export function AppShell() {
                   isCapsulesView ? capsulePreviewId : null
                 }
                 onOpenCapsulePreview={(capsuleId) => {
-                  setCapsulePreviewId(capsuleId);
+                  desktopRouteStore.navigate(
+                    { kind: "capsule", capsuleId },
+                    { replace: true },
+                  );
                 }}
                 onCloseCapsulePreview={() => {
-                  setCapsulePreviewId(null);
+                  desktopRouteStore.navigate(
+                    { kind: "view", view: "capsules" },
+                    { replace: true },
+                  );
                 }}
                 onOpenThread={(threadId) => {
                   void openExistingThread(threadId);
