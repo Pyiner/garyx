@@ -126,13 +126,14 @@ Owns layers 3 + 4:
   shell-truth inputs that remain — `activeThread`, bot bindings,
   `pendingAgentId`, i18n `t` — stay props).
 - Behavior moves verbatim: `ensureSideChatThread`,
-  `handleSideComposerSubmit`, attachments, `openTaskThreadInSidePanel`,
-  the side transcript-load effect. Mirror-backed operations call the
-  mirror directly (`acceptRemoteTranscript`, `ensureThreadOpenable`,
+  `handleSideComposerSubmit`, attachments. Mirror-backed operations call
+  the mirror directly (`acceptRemoteTranscript`, `ensureThreadOpenable`,
   `startCommittedThreadStream`, `runQueuedBatch`, `steerQueuedIntent`,
   `dispatchMachineAction` — all facades exist post-6b-2/2d).
   `prepareAttachmentUploads` and `setError`/`setPendingAutomationRun`
-  stay injected props (shell/IPC-owned).
+  stay injected props (shell/IPC-owned). `openTaskThreadInSidePanel`
+  and the side transcript-load effect do NOT move — both stay in the
+  shell (the command and the always-on effect below).
 - Renders `<ThreadPage surfaceVariant="side-chat">` itself, collapsing
   the ~40 prop pass-through in AppShell to one `<SideChatPanel ...>`
   with a dozen shell-truth props.
@@ -151,6 +152,19 @@ the `openTool("chat")` auto-open sees the binding already present so it
 does not create a default side chat. The command lives next to the
 store in AppShell (it also needs `ensureThreadOpenable` + the stream
 start, both mirror facades).
+
+Tab control path: `openTools`/`activeTabKey` are ThreadSideToolsPanel-
+PRIVATE state today, so the shell command cannot flip the tab directly.
+The panel grows one narrow prop, `pendingOpenToolRequest:
+{ tool: ThreadSideToolId; requestId: number } | null`, consumed by a
+panel effect that runs the EXISTING `openTool(tool)` path and acks by
+requestId (the pendingWorkflowTaskHint mailbox pattern; requestId makes
+repeat opens of the same tool re-fire). The command therefore does:
+store write → set dock open → publish `{ tool: "chat", requestId: n }`.
+Because the store binding is written first, the auto-open inside
+`openTool("chat")` finds it and does not create a default side chat.
+No new tab-state owner: the panel keeps its single source of truth
+(#TASK-1470).
 
 If the transcript-load effect must also run while the dock is CLOSED
 (today it does — the controller is always mounted, so a bound side
@@ -171,8 +185,9 @@ byte-equal behavior first, revisit later.
    half-typed draft; queue routing still skips side threads.
 2. **5b-7b — SideChatPanel.** Move derivations + behavior + the side
    ThreadPage instance into the panel; controller deletes;
-   `openTaskThreadInSidePanel` becomes a handle; the always-on
-   transcript effect stays in the shell (explicitly scoped).
+   `openTaskThreadInSidePanel` becomes the shell/store command with the
+   `pendingOpenToolRequest` tab mailbox (NOT a panel handle); the
+   always-on transcript effect stays in the shell (explicitly scoped).
 
 ## Invariants
 
