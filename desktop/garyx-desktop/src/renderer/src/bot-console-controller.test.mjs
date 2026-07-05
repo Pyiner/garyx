@@ -109,7 +109,7 @@ test('falls back to a bound bot draft when a remembered bot thread cannot open',
     setError: (value) => {
       values.error = value;
     },
-    navigateBotDraft: (workspacePath, botId) => {
+    enterBotDraft: (workspacePath, botId) => {
       values.draftNavigations.push({ workspacePath, botId });
       // Simulate the new-thread route application the bridge runs for the
       // committed route (draft entry + mailbox bot binding).
@@ -182,7 +182,7 @@ test('keeps the bot draft when gateway reconciliation returns the same stale thr
     setError: (value) => {
       values.error = value;
     },
-    navigateBotDraft: (workspacePath, botId) => {
+    enterBotDraft: (workspacePath, botId) => {
       values.draftNavigations.push({ workspacePath, botId });
       values.newThreadDraftActive = true;
       values.selectedThreadId = null;

@@ -185,6 +185,19 @@ after the create resolves; `openExistingThread` keeps its imperative body
 navigate). `handleSelectAutomation` gains the version guard (it is
 unguarded today — a pre-existing race this step must not widen).
 
+**Draft entry is a command (review #TASK-1621, round 5):** entering the
+new-thread draft must run its side effects (composer clear, pending
+resets, bot rebinding) even when the target route equals the current one
+— navigate's equal-route dedupe would swallow them. Draft openers
+therefore call a single shared `enterNewThreadDraft` command directly
+(the bridge's new-thread application delegates to it for route-only
+entries), and the hash syncs from the state fold as before. `navigate`
+remains the entry for addressable targets (thread/view/automation/
+settings/capsule/workflow-task), where equal-route no-op is the correct
+semantics. Bot drafts pass the binding as a command argument (the
+mailbox died with this); agent/workflow picks are kept by omission so
+async fallbacks cannot write stale closure values back.
+
 **2a scope note (implementation round):** the five `setContentView: () =>
 ...` seams feed thread-controller compound helpers that keep setting
 companion state right after the seam fires — closing a navigate over the

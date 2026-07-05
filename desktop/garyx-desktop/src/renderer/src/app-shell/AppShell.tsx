@@ -2441,9 +2441,6 @@ export function AppShell() {
   // mailbox so the workflow-task route application seeds it instead of
   // clearing and re-fetching by id (6c-2a).
   const pendingWorkflowTaskHintRef = useRef<DesktopTaskSummary | null>(null);
-  // Bot drafts: the new-thread route has no bot dimension in the hash;
-  // openers hand the binding through this mailbox (seams cut).
-  const pendingBotHintRef = useRef<string | null>(null);
   // Thread openers with a selection source (bot-root, endpoint, recent…)
   // hand it through this mailbox; the bridge's openExistingThread wrapper
   // consumes it so the thread-route application tags the selection.
@@ -2479,8 +2476,8 @@ export function AppShell() {
       pendingThreadEntrySourceHintRef.current = null;
       return openExistingThread(threadId, entrySource);
     },
+    enterNewThreadDraft,
     pendingAgentId,
-    pendingBotHintRef,
     pendingWorkflowId,
     pendingWorkflowTaskHintRef,
     pendingWorkspacePath,
@@ -2880,11 +2877,13 @@ export function AppShell() {
       api: getDesktopApi(),
       workspacePath,
       threadId,
-      pendingAgentId,
-      pendingWorkflowId,
       setError,
       navigateRoute: (route) => {
         desktopRouteStore.navigate(route, { replace: true });
+      },
+      enterDraft: (nextWorkspacePath) => {
+        // Keep the user's agent/workflow picks (undefined = keep).
+        enterNewThreadDraft({ workspacePath: nextWorkspacePath });
       },
       setDesktopState,
     });
@@ -3081,14 +3080,43 @@ export function AppShell() {
       activeThreadNewThreadWorkspace: activeThreadNewThreadWorkspace,
       selectedNewThreadWorkspaceEntry,
       setError,
-      navigateNewThreadDraft: (workspacePath) => {
-        desktopRouteStore.navigate(
-          { kind: "new-thread", workspacePath, agentId: null, workflowId: null },
-          { replace: true },
-        );
+      enterDraft: (workspacePath) => {
+        enterNewThreadDraft({ workspacePath, agentId: null, workflowId: null });
       },
       syncComposerPhase,
     });
+  }
+
+  /**
+   * Draft entry is a COMMAND: re-entering the same draft route must still
+   * reset pendings, clear the composer, and (re)bind the bot, so openers
+   * call this directly — an equal new-thread route through navigate would
+   * no-op and swallow those side effects (review #TASK-1621). The hash
+   * syncs from the state fold; external #/new entries reach this through
+   * the bridge's new-thread application. `agentId`/`workflowId` undefined
+   * keep the user's current pick (bot drafts, workspace drafts).
+   */
+  function enterNewThreadDraft(input: {
+    workspacePath: string | null;
+    agentId?: string | null;
+    workflowId?: string | null;
+    botId?: string | null;
+  }) {
+    setError(null);
+    setContentView("thread");
+    setNewThreadDraftActive(true);
+    setSelectedThreadId(null);
+    setPendingWorkspacePath(input.workspacePath || null);
+    setPendingWorkspaceMode("local");
+    setPendingBotId(input.botId ?? null);
+    if (input.agentId !== undefined) {
+      setPendingAgentId(input.agentId || "claude");
+    }
+    if (input.workflowId !== undefined) {
+      setPendingWorkflowId(input.workflowId);
+    }
+    clearComposerDraft();
+    requestComposerFocus();
   }
 
   function handleStartDraftForAgent(agentId: string) {
@@ -3098,19 +3126,11 @@ export function AppShell() {
       activeThreadNewThreadWorkspace,
       selectedNewThreadWorkspaceEntry,
     );
-    // The new-thread application branch owns the draft entry (view flip,
-    // pendings, composer clear + focus); syncComposerPhase stays here — it
-    // is call-site-only companion state the external-hash path never ran.
-    desktopRouteStore.navigate(
-      {
-        kind: "new-thread",
-        workspacePath: nextWorkspace?.path || null,
-        agentId,
-        workflowId: null,
-      },
-      { replace: true },
-    );
-    setError(null);
+    enterNewThreadDraft({
+      workspacePath: nextWorkspace?.path || null,
+      agentId,
+      workflowId: null,
+    });
     syncComposerPhase("");
   }
 
@@ -3145,19 +3165,11 @@ export function AppShell() {
         pendingWorkspacePathRef.current === initialWorkspacePath &&
         !composerHasPayloadRef.current,
       setError,
-      navigateBotDraft: (workspacePath, botId) => {
-        pendingBotHintRef.current = botId;
-        desktopRouteStore.navigate(
-          {
-            kind: "new-thread",
-            workspacePath,
-            // Keep the user's current agent pick, matching the legacy
-            // draft entry which left pendingAgentId untouched.
-            agentId: pendingAgentId,
-            workflowId: null,
-          },
-          { replace: true },
-        );
+      enterBotDraft: (workspacePath, botId) => {
+        // agentId/workflowId stay undefined: the legacy bot draft left the
+        // user's picks untouched, and an async fallback must not write a
+        // stale closure value back (review #TASK-1621).
+        enterNewThreadDraft({ workspacePath, botId });
       },
       setPendingWorkspacePath,
       syncComposerPhase,
@@ -3172,16 +3184,12 @@ export function AppShell() {
       selectedNewThreadWorkspaceEntry,
       workspacePath,
       setError,
-      navigateNewThreadDraft: (nextWorkspacePath) => {
-        desktopRouteStore.navigate(
-          {
-            kind: "new-thread",
-            workspacePath: nextWorkspacePath,
-            agentId: null,
-            workflowId: null,
-          },
-          { replace: true },
-        );
+      enterDraft: (nextWorkspacePath) => {
+        enterNewThreadDraft({
+          workspacePath: nextWorkspacePath,
+          agentId: null,
+          workflowId: null,
+        });
       },
       syncComposerPhase,
     });

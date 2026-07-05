@@ -106,15 +106,13 @@ function resolveMainThreadId(group: DesktopBotConsoleSummary): {
 export function openNewBotDraft(
   input: Pick<
     ActivateBotDraftThreadInput,
-    'setError' | 'navigateBotDraft' | 'syncComposerPhase'
+    'setError' | 'enterBotDraft' | 'syncComposerPhase'
   >,
   group: DesktopBotConsoleSummary,
   workspacePath: string | null,
 ): void {
   input.setError(null);
-  // The new-thread route application owns the draft entry; the bot
-  // binding rides the caller's mailbox (6c-2 seams cut).
-  input.navigateBotDraft(workspacePath, group.id);
+  input.enterBotDraft(workspacePath, group.id);
   input.syncComposerPhase('');
 }
 
@@ -205,11 +203,12 @@ type ActivateBotDraftThreadInput = {
   ) => boolean;
   setError: (value: string | null) => void;
   /**
-   * Navigate the new-thread draft route with the bot binding riding the
-   * caller's mailbox (6c-2 seams cut); the route application owns the
-   * draft entry.
+   * The draft-entry COMMAND with the bot binding (review #TASK-1621):
+   * runs the full entry even when the draft route equals the current one,
+   * and keeps the user's agent/workflow picks (async fallbacks must not
+   * write stale closure values back). The hash syncs from the state fold.
    */
-  navigateBotDraft: (workspacePath: string | null, botId: string) => void;
+  enterBotDraft: (workspacePath: string | null, botId: string) => void;
   /** Background workspace correction for an already-open draft. */
   setPendingWorkspacePath: (value: string | null) => void;
   syncComposerPhase: (value: string) => void;

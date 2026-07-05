@@ -19,17 +19,12 @@ type DesktopStateSetter = (
 /**
  * The route shapes workspace selection can navigate (6c-2 seams cut).
  * Structurally a subset of the app-shell DesktopRoute; declared locally so
- * this controller stays free of app-shell imports.
+ * this controller stays free of app-shell imports. Draft entry is NOT a
+ * route here — it is a command (see selectWorkspaceForThread.enterDraft).
  */
 type WorkspaceThreadRoute =
   | { kind: "thread-home" }
-  | { kind: "thread"; threadId: string }
-  | {
-      kind: "new-thread";
-      workspacePath: string | null;
-      agentId: string | null;
-      workflowId: string | null;
-    };
+  | { kind: "thread"; threadId: string };
 
 const WORKSPACE_SELECTION_PERSIST_DELAY_MS = 80;
 
@@ -49,12 +44,13 @@ export function startNewThreadDraft(input: {
   workspacePath?: string | null;
   setError: (value: string | null) => void;
   /**
-   * Navigate the new-thread draft route (replace). The route application
-   * owns the draft entry: view flip, selection clear, pendings (including
-   * the 'claude' agent reset this helper used to write), composer clear
-   * and focus (6c-2 seams cut).
+   * The shared draft-entry COMMAND (review #TASK-1621): runs the full
+   * entry (view flip, selection clear, pendings including the 'claude'
+   * agent reset this helper used to write, composer clear + focus) even
+   * when the draft route equals the current one; the hash syncs from the
+   * state fold.
    */
-  navigateNewThreadDraft: (workspacePath: string | null) => void;
+  enterDraft: (workspacePath: string | null) => void;
   syncComposerPhase: (value: string) => void;
 }) {
   const nextWorkspace = input.workspacePath
@@ -68,7 +64,7 @@ export function startNewThreadDraft(input: {
         input.selectedNewThreadWorkspaceEntry,
       );
   input.setError(null);
-  input.navigateNewThreadDraft(nextWorkspace?.path || null);
+  input.enterDraft(nextWorkspace?.path || null);
   input.syncComposerPhase("");
 }
 
@@ -76,16 +72,18 @@ export async function selectWorkspaceForThread(input: {
   api: GaryxDesktopApi;
   workspacePath: string;
   threadId?: string | null;
-  /** Current pending agent — a draft opened here keeps the user's pick. */
-  pendingAgentId?: string | null;
-  pendingWorkflowId?: string | null;
   setError: (value: string | null) => void;
   /**
    * Route-store navigation (replace, 6c-2 seams cut). threadId undefined
    * keeps the current selection (thread-home application), a thread id
-   * selects it, null opens the draft on this workspace.
+   * selects it.
    */
   navigateRoute: (route: WorkspaceThreadRoute) => void;
+  /**
+   * Draft-entry command for threadId null (review #TASK-1621): keeps the
+   * user's current agent/workflow picks, matching the legacy behavior.
+   */
+  enterDraft: (workspacePath: string) => void;
   setDesktopState: DesktopStateSetter;
 }): Promise<void> {
   input.setError(null);
@@ -94,12 +92,7 @@ export async function selectWorkspaceForThread(input: {
   } else if (input.threadId) {
     input.navigateRoute({ kind: "thread", threadId: input.threadId });
   } else {
-    input.navigateRoute({
-      kind: "new-thread",
-      workspacePath: input.workspacePath,
-      agentId: input.pendingAgentId ?? null,
-      workflowId: input.pendingWorkflowId ?? null,
-    });
+    input.enterDraft(input.workspacePath);
   }
 
   let previousWorkspacePath: string | null = null;

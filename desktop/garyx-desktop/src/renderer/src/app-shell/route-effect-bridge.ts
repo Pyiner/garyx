@@ -65,11 +65,17 @@ type RouteEffectBridgeArgs = {
   pendingAgentId: string;
   pendingWorkflowId: string | null;
   /**
-   * Bot-binding hand-off for bot drafts (openNewBotDraft): the new-thread
-   * route has no bot dimension in the hash, so the opener passes the bot
-   * id through this mailbox and the application binds it (seams cut).
+   * The shared draft-entry command (review #TASK-1621): draft entry must
+   * run its side effects even when the route equals the current one, so
+   * openers call it directly and this application delegates to it for
+   * route-only entries (external hash, deep link).
    */
-  pendingBotHintRef: React.MutableRefObject<string | null>;
+  enterNewThreadDraft: (input: {
+    workspacePath: string | null;
+    agentId?: string | null;
+    workflowId?: string | null;
+    botId?: string | null;
+  }) => void;
   /**
    * Task-summary hand-off from callers that already hold the object
    * (openWorkflowTask): the workflow-task application seeds from it
@@ -124,8 +130,8 @@ export function useRouteEffectBridge({
   loading,
   newThreadDraftActive,
   openExistingThread,
+  enterNewThreadDraft,
   pendingAgentId,
-  pendingBotHintRef,
   pendingWorkflowId,
   pendingWorkflowTaskHintRef,
   pendingWorkspacePath,
@@ -201,25 +207,17 @@ export function useRouteEffectBridge({
         case "thread":
           await openExistingThread(route.threadId);
           return;
-        case "new-thread": {
-          setError(null);
-          setContentView("thread");
-          setNewThreadDraftActive(true);
-          setSelectedThreadId(null);
-          setPendingWorkspacePath(route.workspacePath || null);
-          setPendingWorkspaceMode("local");
-          // Bot drafts are new-thread routes with a bot binding that is
-          // not addressable in the hash; the opener hands it through the
-          // mailbox (route-only entries clear it).
-          const botHint = pendingBotHintRef.current;
-          pendingBotHintRef.current = null;
-          setPendingBotId(botHint ?? null);
-          setPendingAgentId(route.agentId || "claude");
-          setPendingWorkflowId(route.workflowId || null);
-          clearComposerDraft();
-          requestComposerFocus();
+        case "new-thread":
+          // Route-only entries (external hash, deep link) run the shared
+          // draft-entry command with the route's params (no bot binding —
+          // bots are not addressable in the hash).
+          enterNewThreadDraft({
+            workspacePath: route.workspacePath || null,
+            agentId: route.agentId || null,
+            workflowId: route.workflowId || null,
+            botId: null,
+          });
           return;
-        }
         case "automation":
           if (route.automationId) {
             await handleSelectAutomation(route.automationId);
