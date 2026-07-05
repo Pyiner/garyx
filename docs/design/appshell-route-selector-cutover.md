@@ -90,22 +90,54 @@ side effects (automation select IPC, settings tab resources, workflow-task
 fetch), and the thread-open path. Internal callers stop pre-setting state;
 they navigate and let the effect apply.
 
+**Commit event contract.** The route effect must know each commit's
+origin (an external failure must keep the 4b no-counter-write behavior; an
+internal failure converges). Today `subscribe()` carries nothing and
+`subscribeExternal()` fires after the plain listeners, so a full-commit
+subscriber cannot classify reliably. 2a therefore adds one store API:
+
+```
+subscribeCommits(listener: (event: {
+  route: DesktopRoute;      // canonical, as committed
+  version: number;          // store version of this commit
+  origin: 'navigate' | 'external';
+}) => void): Unsubscribe
+```
+
+`commit()` emits it synchronously with the origin the caller passed
+(`navigate` for the internal writer, `external` for hashchange/popstate
+application). The bridge's route effect moves onto `subscribeCommits`;
+`subscribeExternal` is absorbed by it (delete after the move). The plain
+`subscribe()` stays as the uSES notification face.
+
 **Route application transaction.** Equal-route no-ops alone do NOT break
 the feedback loop while the state-to-hash effect still exists: an
 application is multi-step (`setContentView` lands before the async
 `ensureThreadOpenable` resolves the selection), and the fold over that
 intermediate state folds back a *different* route (thread A→B folds
 `#/thread/A` mid-flight; a failed automation select folds `#/automation`).
-The 4b suppression generalizes: `externalRouteApplicationRef` becomes
-`routeApplicationInFlightRef`, set for the whole application of **any**
-commit (internal navigations included), and the state-to-hash effect is
-suppressed while it is set. When the application settles, the effect runs
-once against the settled state: on success the fold equals the committed
-route (no-op); on failure it converges the hash to where the state
-actually ended (one replace, not an oscillation) — byte-identical to
-today's terminal hash for the same failure, because today's call sites
-pre-set the same partial state and fold from it. Late async state lands
-behind the version guard below, so a superseded application never writes.
+The 4b suppression generalizes — but NOT as a bare boolean, which an
+overlapping application's earlier `finally` would clear while a later one
+is still in flight (automation A awaiting, user switches to settings B,
+A's finally un-suppresses while B still awaits its tab). The transaction
+is version-keyed with a pending counter:
+
+- Each application runs with its commit `version` as its token and
+  increments a pending counter on entry, decrements on settle.
+- The state-to-hash effect is suppressed while the counter is non-zero.
+- Settle convergence (the one fold-and-replace pass) runs only when the
+  settling application's token still equals
+  `routeStore.getSnapshot().version` — a superseded application decrements
+  the counter but never triggers convergence, and never lands late state
+  (the same version guard, applied to finalization as well as to state
+  writes).
+- Convergence itself distinguishes origin: for an `external` commit whose
+  application failed, it does not fold back (4b no-counter-write — the
+  entered hash stays addressable); for a `navigate` commit it converges
+  the hash to where the state actually ended (one replace, not an
+  oscillation) — byte-identical to today's terminal hash for the same
+  failure, because today's call sites pre-set the same partial state and
+  fold from it.
 
 **Async guard (uniform criterion).** Every route application and every
 controller side effect that writes route-folded state captures
@@ -125,8 +157,10 @@ the same shape against the thread-selection sequence and stays.
 Every A/B call site becomes `desktopRouteStore.navigate(route, {replace:
 true})` — replace everywhere, preserving today's zero-history-entry
 behavior byte-for-byte (see non-goals). The bridge subscribes to **all**
-commits and runs `applyDesktopRoute` inside the route application
-transaction (suppressing state-to-hash for the application's duration);
+commits via the new `subscribeCommits` event (origin-carrying — this step
+adds it and deletes `subscribeExternal`) and runs `applyDesktopRoute`
+inside the version-keyed route application transaction (suppressing
+state-to-hash while any application is pending);
 the state-to-hash effect stays as the post-application convergence
 backstop for the ten states it still watches. `contentView` remains
 useState but its only writer is `applyDesktopRoute`.
@@ -177,10 +211,10 @@ mechanical only once every writer is a navigation):
 | --- | --- | --- |
 | `selectExistingThreadInPlace` (AppShell:2428) | the selection write | becomes the route-effect landing itself (selector reads the committed thread route) |
 | startup seeding (2630/2638/2643/2649) | manual per-branch set | absorbed by the store's initial-route commit + thread-home application |
-| draft entry clears (3080; bridge new-thread 194) | `setSelectedThreadId(null)` | implied by committing the new-thread route (selector yields null) |
+| draft entry clears (3080; bridge new-thread 194; thread-controller 59 via its draft-open seam) | `setSelectedThreadId(null)` | implied by committing the new-thread route (selector yields null) |
 | thread-home default (bridge 240) | conditional default set | the thread-home redirect (`navigate({kind:'thread', threadId}, replace)`) |
 | created / started threads (2920, 3593; thread-controller 95/414 via seams 3127/3406) | direct set after create | `navigate({kind:'thread', threadId: created}, replace)` after the create resolves |
-| delete / archive / workspace-remove fallbacks (2697/2703/3251/3347; thread-controller 59/225; automation 302) | set fallback `threads[0] || null` | `navigate(fallback ? {kind:'thread', threadId: fallback} : {kind:'thread-home'}, replace)` |
+| delete / archive / workspace-remove fallbacks (2697/2703/3251/3347; thread-controller 225; automation 302) | set fallback `threads[0] || null` | `navigate(fallback ? {kind:'thread', threadId: fallback} : {kind:'thread-home'}, replace)` |
 | automation run → thread (automation 371/401) | set + `setContentView('thread')` | `navigate({kind:'thread', threadId: latest}, replace)` |
 
 **Synchronous readability (draft promotion).** `ensureThread` today sets
@@ -206,7 +240,8 @@ after the first click, and plain `#/settings` stays addressable.
 
 1. External hash edits and back/forward behave exactly as 4b shipped
    (commit-first, no counter-write, unknown thread stays addressable).
-2. `#/` redirects to the default thread; empty state lands on the draft.
+2. `#/` redirects to the default thread when threads exist; with no
+   threads it rests at thread-home (`#/thread`, selection null).
 3. Equal-route navigation is a strict no-op (no loops between the route
    effect and navigate).
 4. Deep-link semantics from 6c-1 (readiness ladder, supersede guard).
