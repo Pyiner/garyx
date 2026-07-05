@@ -277,4 +277,3 @@ export function SideTerminalTool({ cwd }: { cwd?: string | null }) {
     </div>
   );
 }
-
