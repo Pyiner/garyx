@@ -337,6 +337,14 @@ export function useRouteEffectBridge({
   // commits — a failed external application must not counter-write the
   // entered hash (4b). A superseded application only decrements.
   const pendingRouteApplicationsRef = useRef(0);
+  // Convergence debt: when the application owning the CURRENT route
+  // settles while an older application is still in flight, the tick must
+  // not be lost (the old application's late settle has a stale version and
+  // may never qualify). The settling current-route application records its
+  // version as owed; whoever brings the pending counter to zero pays it —
+  // but only if that version is still current, so an external commit that
+  // arrived meanwhile invalidates the debt (4b no-counter-write).
+  const convergenceOwedVersionRef = useRef<number | null>(null);
   const [routeConvergenceTick, setRouteConvergenceTick] = useState(0);
   useEffect(() => {
     return desktopRouteStore.subscribeCommits((event) => {
@@ -348,14 +356,24 @@ export function useRouteEffectBridge({
         pendingRouteApplicationsRef.current -= 1;
         if (
           event.origin === "navigate" &&
-          pendingRouteApplicationsRef.current === 0 &&
           event.version === desktopRouteStore.getSnapshot().version
         ) {
-          // Request one state-to-hash pass against the settled state; the
-          // effect below reads fresh values after React commits them. On
-          // success the fold equals the committed route (no-op); on
-          // failure it converges the hash to where the state ended.
-          setRouteConvergenceTick((tick) => tick + 1);
+          convergenceOwedVersionRef.current = event.version;
+        }
+        if (
+          pendingRouteApplicationsRef.current === 0 &&
+          convergenceOwedVersionRef.current !== null
+        ) {
+          const owedVersion = convergenceOwedVersionRef.current;
+          convergenceOwedVersionRef.current = null;
+          if (owedVersion === desktopRouteStore.getSnapshot().version) {
+            // Request one state-to-hash pass against the settled state;
+            // the effect below reads fresh values after React commits
+            // them. On success the fold equals the committed route
+            // (no-op); on failure it converges the hash to where the
+            // state ended.
+            setRouteConvergenceTick((tick) => tick + 1);
+          }
         }
       });
     });

@@ -4526,10 +4526,16 @@ export function AppShell() {
           void handleRequestRemoveWorkspace(workspace);
         }}
         onSelectAutomation={(automationId) => {
-          void handleSelectAutomation(automationId);
+          desktopRouteStore.navigate(
+            { kind: "automation", automationId },
+            { replace: true },
+          );
         }}
         onSelectSettingsTab={(tabId) => {
-          void handleSelectSettingsTab(tabId);
+          desktopRouteStore.navigate(
+            { kind: "settings", tabId },
+            { replace: true },
+          );
         }}
         pinnedThreadRows={pinnedThreadRows}
         selectedAutomationId={selectedAutomationId}
