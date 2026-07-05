@@ -100,6 +100,15 @@ export interface GatewayMirrorServices {
    * fetch + stream restart) stays with the legacy owner until batch 2b.
    */
   requestAuthoritativeRefetch?(threadId: string): void;
+  /**
+   * Persist a thread transcript (plus its last render snapshot) into the
+   * on-disk cache (slice 6b-2b: the apply chain's persist ride-along).
+   * Optional: omitted in node tests.
+   */
+  saveThreadTranscriptCache?(
+    transcript: ThreadTranscript,
+    renderState?: RenderState | null,
+  ): Promise<void>;
 }
 
 export interface GatewayRootSnapshot {
@@ -431,6 +440,54 @@ export class GatewayMirror {
 
   getThreadTitleOverrides(): Record<string, string> {
     return this.transcriptLifecycle.getThreadTitleOverrides();
+  }
+
+  /**
+   * Slice 2b high-level entries: the accept* facades run the apply-chain
+   * ride-alongs and call the pure cache-only commits internally. The pure
+   * applyAuthoritativeTranscript / applyRemoteTranscript keep their
+   * cache-only contract.
+   */
+  acceptAuthoritativeTranscript(
+    threadId: string,
+    transcript: ThreadTranscript,
+    options?: { syncRunState?: boolean },
+  ): void {
+    this.transcriptLifecycle.acceptAuthoritativeTranscript(
+      threadId,
+      transcript,
+      options,
+    );
+  }
+
+  acceptRemoteTranscript(
+    ...args: Parameters<TranscriptLifecycle["acceptRemoteTranscript"]>
+  ): void {
+    this.transcriptLifecycle.acceptRemoteTranscript(...args);
+  }
+
+  applyCommittedThreadMessage(
+    event: Parameters<TranscriptLifecycle["applyCommittedThreadMessage"]>[0],
+  ): void {
+    this.transcriptLifecycle.applyCommittedThreadMessage(event);
+  }
+
+  updateMessagesByThread(
+    updater: Parameters<TranscriptLifecycle["updateMessagesByThread"]>[0],
+  ): ReturnType<TranscriptLifecycle["updateMessagesByThread"]> {
+    return this.transcriptLifecycle.updateMessagesByThread(updater);
+  }
+
+  /**
+   * Transcript-cache persistence IPC (the lifecycle's persist ride-along
+   * reaches it through the MirrorPort). Optional service: omitted in
+   * node tests, where persists are recorded by the stub port instead.
+   */
+  persistTranscriptCache(
+    transcript: ThreadTranscript,
+    renderState: RenderState | null,
+  ): void {
+    void this.services?.saveThreadTranscriptCache?.(transcript, renderState);
   }
 
   subscribeLiveStreams(listener: () => void): Unsubscribe {

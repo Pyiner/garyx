@@ -65,6 +65,7 @@ import {
   selectQueueIntentIds,
   selectThreadRuntime,
   type MessageMachineAction,
+  type MessageMachineState,
   type MessageIntent,
 } from "../message-machine";
 import type { SettingsTabId } from "../settings-tabs";
@@ -599,6 +600,8 @@ export function AppShell() {
         listWorkflowDefinitions: () =>
           window.garyxDesktop.listWorkflowDefinitions(),
         getThreadHistory: (input) => window.garyxDesktop.getThreadHistory(input),
+        saveThreadTranscriptCache: (transcript, renderState) =>
+          window.garyxDesktop.saveThreadTranscriptCache(transcript, renderState),
         // Temporary batch-2/3 seams: the message machine and the
         // authoritative-refetch flow stay with their legacy owners; the
         // mirror reaches them through these injected lookups. The closures
@@ -811,7 +814,17 @@ export function AppShell() {
   const pendingWorkspaceModeRef = useRef<DesktopWorkspaceMode>("local");
   const pendingBotIdRef = useRef<string | null>(null);
   const newThreadInitialDispatchLockRef = useRef(false);
-  const messageStateRef = useRef(initialMessageMachineState);
+  // #TASK-1633: a stable getter over the mirror's machine state. The
+  // transcript lifecycle (batch 6b-2a) dispatches machine actions inside
+  // the mirror, bypassing the old warming proxy — a plain ref shadow
+  // would go stale between a lifecycle dispatch and the next React
+  // commit. The getter always reads the mirror's live state (the 6a
+  // reader pattern), so every event-path reader stays warm.
+  const [messageStateRef] = useState(() => ({
+    get current(): MessageMachineState {
+      return gatewayMirror.getMachineState();
+    },
+  }));
   const liveStreamStateRef = useRef<Record<string, LiveStreamState>>({});
   const deferredQueueDrainByThreadRef = useRef<Record<string, boolean>>({});
   const queueDrainInFlightByThreadRef = useRef<Record<string, boolean>>({});
@@ -968,11 +981,10 @@ export function AppShell() {
 
   function dispatchMessageState(action: MessageMachineAction) {
     // Batch 3a: one reducer application per action, committed in the
-    // mirror (the previous shape ran the reducer twice — once for the ref
-    // shadow, once inside React's useReducer). The ref stays as a
-    // synchronous shadow for event-path readers until the machine's
-    // orchestration migrates in batch 3c; the mirror is the only writer.
-    messageStateRef.current = gatewayMirror.dispatchMachineAction(action);
+    // mirror; the mirror is the only writer. Event-path readers reach the
+    // committed state through the messageStateRef getter (#TASK-1633) —
+    // no shadow write needed.
+    gatewayMirror.dispatchMachineAction(action);
   }
 
   function handleSideToolsResizeStart(
@@ -2517,10 +2529,6 @@ export function AppShell() {
     setSelectedWorkflowRunId,
     setSelectedWorkflowTask,
   });
-
-  useEffect(() => {
-    messageStateRef.current = messageState;
-  }, [messageState]);
 
   useEffect(() => {
     newThreadDraftActiveRef.current = newThreadDraftActive;

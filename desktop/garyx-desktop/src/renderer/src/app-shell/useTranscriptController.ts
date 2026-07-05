@@ -5,7 +5,6 @@ import type {
   DesktopChatStreamEvent,
   DesktopSettings,
   DesktopState,
-  DesktopThreadSummary,
   ThreadTranscript,
   TranscriptMessage,
 } from "@shared/contracts";
@@ -17,10 +16,6 @@ import {
   shouldRefetchAuthoritativeAfterForwardPageLimit,
   streamResumeCursor,
   transcriptCommittedAfterCursor,
-  transcriptControlKind,
-  transcriptForCommittedCache,
-  transcriptRewriteAction,
-  transcriptWithResolvedActiveRun,
   type TranscriptRunState,
 } from "@shared/transcript-sync";
 
@@ -35,11 +30,6 @@ import {
   countTranscriptImages,
   extractTranscriptText,
 } from "../message-rich-content";
-import {
-  mergeThread,
-  teamBlocksEqual,
-  threadSummariesEquivalent,
-} from "../thread-model";
 import { isTransientGatewayErrorMessage } from "./gateway-errors";
 import { extractImageGenerationImageContent } from "./image-generation-content";
 import { isRunLoadingPlaceholderMessage } from "./loading-labels";
@@ -73,7 +63,6 @@ import {
   transcriptHasAutomationResponse,
   reconcileAssistantEntriesForGatewayRecovery,
   isMissingThreadTranscript,
-  visibleTranscriptMessages,
   THREAD_HISTORY_PAGE_SIZE,
   THREAD_HISTORY_USER_QUERY_LIMIT,
   type ThreadHistoryPaginationState,
@@ -194,6 +183,7 @@ export function useTranscriptController({
       requestSelectedThreadMessagesBottomSnap,
       selectedThreadIdRef,
       liveStreamStateRef,
+      refetchAuthoritativeTranscriptAfterRewrite,
     });
   });
 
@@ -333,52 +323,14 @@ export function useTranscriptController({
    * read side. Remote applies never come through here — the mirror
    * computes those itself (applyRemote/applyAuthoritative/applyOlderPage).
    */
+  // Batch 6b-2b: the apply chain (persist, session cache, title/team
+  // propagation, intent marking) lives in the mirror's transcript
+  // lifecycle behind the accept* high-level entries; these are thin
+  // delegates keeping the hook wiring unchanged until 2c/2d.
   function updateMessagesByThread(
     updater: (current: MessageMap) => MessageMap,
   ): MessageMap {
-    const previous = messagesByThreadRef.current;
-    const next = updater(previous);
-    if (next !== previous) {
-      for (const threadId of Object.keys(next)) {
-        if (next[threadId] !== previous[threadId]) {
-          mirror.syncThreadUiMessages(threadId, next[threadId]);
-        }
-      }
-      // Deleted keys (e.g. the new-thread draft promoted to a real thread)
-      // sync as an empty array so the mirror drops the stale rows too.
-      for (const threadId of Object.keys(previous)) {
-        if (!(threadId in next)) {
-          mirror.syncThreadUiMessages(threadId, []);
-        }
-      }
-    }
-    return next;
-  }
-
-  // The snapshot itself lives in the mirror's transcript cache (batch
-  // 6b-1, getThreadSnapshotTranscript); this keeps the run-state sync and
-  // the disk-cache persistence that ride along with every apply.
-  function rememberTranscriptSnapshot(
-    threadId: string,
-    transcript: ThreadTranscript,
-    persist = true,
-    syncRunState = true,
-  ) {
-    if (syncRunState) {
-      syncTranscriptRunState(threadId, transcript);
-    }
-    if (persist) {
-      const cacheTranscript = transcriptForCommittedCache(transcript);
-      if (cacheTranscript.messages.length > 0 || !transcript.threadInfo?.activeRun) {
-        // Persist the last render snapshot alongside committed messages so the
-        // next cold/offline open can render folded history before a live frame.
-        void window.garyxDesktop.saveThreadTranscriptCache(
-          cacheTranscript,
-          mirror.getTranscriptMapsSnapshot().renderStateByThread[threadId] ??
-            null,
-        );
-      }
-    }
+    return mirror.updateMessagesByThread(updater);
   }
 
   function applyCanonicalTranscript(
@@ -386,22 +338,7 @@ export function useTranscriptController({
     transcript: ThreadTranscript,
     options?: { syncRunState?: boolean },
   ) {
-    // The mirror computes messages/renderState/pagination/threadInfo/
-    // pendingInputs from the transcript itself (batch 6a single store);
-    // this hook keeps the transport snapshot, run-state sync, cache
-    // persistence, and intent marking.
-    mirror.applyAuthoritativeTranscript(threadId, transcript);
-    const resolvedTranscript = transcriptWithResolvedActiveRun(transcript);
-    rememberTranscriptSnapshot(
-      threadId,
-      resolvedTranscript,
-      true,
-      options?.syncRunState ?? true,
-    );
-    markIntentsFromHistory(
-      threadId,
-      visibleTranscriptMessages(resolvedTranscript.messages),
-    );
+    mirror.acceptAuthoritativeTranscript(threadId, transcript, options);
   }
 
   function handleChatStreamEvent(event: DesktopChatStreamEvent) {
@@ -537,70 +474,6 @@ export function useTranscriptController({
     mirror.markIntentsFromHistory(threadId, transcript);
   }
 
-  function threadSummaryFromTranscript(
-    threadId: string,
-    transcript: ThreadTranscript,
-  ): DesktopThreadSummary {
-    if (transcript.thread) {
-      return {
-        ...transcript.thread,
-        agentId: transcript.thread.agentId ?? transcript.threadInfo?.agentId ?? null,
-        workspacePath:
-          transcript.thread.workspacePath ?? transcript.threadInfo?.workspacePath ?? null,
-        worktree: transcript.thread.worktree ?? transcript.threadInfo?.worktree ?? null,
-        team: transcript.thread.team ?? transcript.team ?? null,
-      };
-    }
-
-    const timestamps = transcript.messages
-      .map((message) => message.timestamp || '')
-      .filter(Boolean);
-    const fallbackTimestamp =
-      timestamps[timestamps.length - 1] || new Date().toISOString();
-    const preview =
-      transcript.messages.find((message) => message.text.trim())?.text.trim() || '';
-
-    return {
-      id: threadId,
-      title: transcript.threadInfo?.agentId || threadId,
-      createdAt: timestamps[0] || fallbackTimestamp,
-      updatedAt: fallbackTimestamp,
-      lastMessagePreview: preview,
-      workspacePath: transcript.threadInfo?.workspacePath ?? null,
-      messageCount: transcript.pageInfo?.totalMessages ?? transcript.messages.length,
-      agentId: transcript.threadInfo?.agentId ?? null,
-      recentRunId: transcript.threadInfo?.activeRun?.runId ?? null,
-      worktree: transcript.threadInfo?.worktree ?? null,
-      team: transcript.team ?? null,
-    };
-  }
-
-  function cacheOpenableTranscriptThread(
-    threadId: string,
-    transcript: ThreadTranscript,
-  ) {
-    const summary = threadSummaryFromTranscript(threadId, transcript);
-    setDesktopState((current) => {
-      if (!current || current.threads.some((thread) => thread.id === threadId)) {
-        return current;
-      }
-      // Hidden threads (side chats, child threads) live only in `sessions`,
-      // so this cache write runs on every transcript application. Re-writing
-      // an equivalent summary must keep `desktopState` identity stable, or
-      // history-loading effects keyed on it re-fire and loop.
-      const existing = current.sessions.find(
-        (session) => session.id === threadId,
-      );
-      if (existing && threadSummariesEquivalent(existing, summary)) {
-        return current;
-      }
-      return {
-        ...current,
-        sessions: mergeThread(current.sessions, summary),
-      };
-    });
-  }
-
   function applyRemoteTranscript(
     threadId: string,
     transcript: ThreadTranscript,
@@ -615,61 +488,7 @@ export function useTranscriptController({
       mirrorAlreadyApplied?: boolean;
     },
   ) {
-    // The mirror computes messages/renderState/pagination/threadInfo/
-    // pendingInputs itself (batch 6a single store); this hook keeps the
-    // transport snapshot, run-state sync, cache persistence, desktopState
-    // propagation, and intent marking.
-    if (!options?.mirrorAlreadyApplied) {
-      mirror.applyRemoteTranscript(threadId, transcript);
-    }
-    const resolvedTranscript = transcriptWithResolvedActiveRun(transcript);
-    rememberTranscriptSnapshot(
-      threadId,
-      resolvedTranscript,
-      options?.persist !== false,
-      options?.syncRunState ?? true,
-    );
-    cacheOpenableTranscriptThread(threadId, resolvedTranscript);
-    // Propagate the transcript's `team` block into `desktopState.threads[i]`
-    // so team-bound threads render the team badge + sub-agent peek tabs as
-    // soon as the thread metadata endpoint has confirmed the binding. Without
-    // this merge, a list summary (which may have been fetched before the
-    // first turn) could shadow the richer detail payload, leaving the UI
-    // stuck on the plain agent label. Only write when the block is present
-    // and different from what's already cached — idempotent updates must
-    // not churn React identity and re-trigger dependent effects.
-    if (resolvedTranscript.team !== undefined) {
-      setDesktopState((current) => {
-        if (!current) {
-          return current;
-        }
-        const nextTeam = resolvedTranscript.team ?? null;
-        let changed = false;
-        const mapThreadTeam = (
-          thread: (typeof current.threads)[number],
-        ): (typeof current.threads)[number] => {
-          if (thread.id !== threadId) {
-            return thread;
-          }
-          const prev = thread.team ?? null;
-          if (teamBlocksEqual(prev, nextTeam)) {
-            return thread;
-          }
-          changed = true;
-          return { ...thread, team: nextTeam };
-        };
-        const nextThreads = current.threads.map(mapThreadTeam);
-        const nextSessions = current.sessions.map(mapThreadTeam);
-        if (!changed) {
-          return current;
-        }
-        return { ...current, threads: nextThreads, sessions: nextSessions };
-      });
-    }
-    markIntentsFromHistory(
-      threadId,
-      visibleTranscriptMessages(resolvedTranscript.messages),
-    );
+    mirror.acceptRemoteTranscript(threadId, transcript, options);
   }
 
   async function loadOlderThreadHistoryPage(threadId: string) {
@@ -945,45 +764,7 @@ export function useTranscriptController({
   function applyCommittedThreadMessage(
     event: Extract<DesktopChatStreamEvent, { type: "committed_message" }>,
   ) {
-    const threadId = event.threadId;
-    if (transcriptRewriteAction(event.message) === "refetch_authoritative") {
-      void refetchAuthoritativeTranscriptAfterRewrite(threadId);
-      return;
-    }
-    applyCommittedTranscriptRunState(event);
-    // The mirror's ingest (stream-listener top) already folded this event
-    // into its snapshot transcript — that fold is the legacy
-    // committedMessageForwardPage result (batch 6b-1 single snapshot).
-    const merged = mirror.getThreadSnapshotTranscript(threadId);
-    if (!merged) {
-      return;
-    }
-    if (selectedThreadIdRef.current === threadId) {
-      requestSelectedThreadMessagesBottomSnap(threadId, true);
-    }
-    applyRemoteTranscript(threadId, merged, {
-      syncRunState: false,
-      mirrorAlreadyApplied: true,
-    });
-    const controlKind = transcriptControlKind(event.message);
-    if (controlKind === "user_ack") {
-      const control =
-        event.message.content &&
-        typeof event.message.content === "object" &&
-        !Array.isArray(event.message.content)
-          ? (event.message.content as { control?: Record<string, unknown> })
-              .control
-          : null;
-      applyUserAck(
-        threadId,
-        event.runId,
-        typeof control?.pending_input_id === "string"
-          ? control.pending_input_id
-          : typeof control?.pendingInputId === "string"
-            ? control.pendingInputId
-            : undefined,
-      );
-    }
+    mirror.applyCommittedThreadMessage(event);
   }
 
   function applyUserAck(
