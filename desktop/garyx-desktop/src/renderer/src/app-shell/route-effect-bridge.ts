@@ -65,6 +65,12 @@ type RouteEffectBridgeArgs = {
   pendingAgentId: string;
   pendingWorkflowId: string | null;
   /**
+   * Bot-binding hand-off for bot drafts (openNewBotDraft): the new-thread
+   * route has no bot dimension in the hash, so the opener passes the bot
+   * id through this mailbox and the application binds it (seams cut).
+   */
+  pendingBotHintRef: React.MutableRefObject<string | null>;
+  /**
    * Task-summary hand-off from callers that already hold the object
    * (openWorkflowTask): the workflow-task application seeds from it
    * instead of clearing and re-fetching by id (6c-2a).
@@ -119,6 +125,7 @@ export function useRouteEffectBridge({
   newThreadDraftActive,
   openExistingThread,
   pendingAgentId,
+  pendingBotHintRef,
   pendingWorkflowId,
   pendingWorkflowTaskHintRef,
   pendingWorkspacePath,
@@ -194,19 +201,25 @@ export function useRouteEffectBridge({
         case "thread":
           await openExistingThread(route.threadId);
           return;
-        case "new-thread":
+        case "new-thread": {
           setError(null);
           setContentView("thread");
           setNewThreadDraftActive(true);
           setSelectedThreadId(null);
           setPendingWorkspacePath(route.workspacePath || null);
           setPendingWorkspaceMode("local");
-          setPendingBotId(null);
+          // Bot drafts are new-thread routes with a bot binding that is
+          // not addressable in the hash; the opener hands it through the
+          // mailbox (route-only entries clear it).
+          const botHint = pendingBotHintRef.current;
+          pendingBotHintRef.current = null;
+          setPendingBotId(botHint ?? null);
           setPendingAgentId(route.agentId || "claude");
           setPendingWorkflowId(route.workflowId || null);
           clearComposerDraft();
           requestComposerFocus();
           return;
+        }
         case "automation":
           if (route.automationId) {
             await handleSelectAutomation(route.automationId);

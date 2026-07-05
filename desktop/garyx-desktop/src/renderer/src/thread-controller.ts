@@ -16,6 +16,21 @@ type DesktopStateSetter = (
     | ((current: DesktopState | null) => DesktopState | null),
 ) => void;
 
+/**
+ * The route shapes workspace selection can navigate (6c-2 seams cut).
+ * Structurally a subset of the app-shell DesktopRoute; declared locally so
+ * this controller stays free of app-shell imports.
+ */
+type WorkspaceThreadRoute =
+  | { kind: "thread-home" }
+  | { kind: "thread"; threadId: string }
+  | {
+      kind: "new-thread";
+      workspacePath: string | null;
+      agentId: string | null;
+      workflowId: string | null;
+    };
+
 const WORKSPACE_SELECTION_PERSIST_DELAY_MS = 80;
 
 let workspaceSelectionPersistGeneration = 0;
@@ -33,15 +48,14 @@ export function startNewThreadDraft(input: {
   selectedNewThreadWorkspaceEntry?: DesktopWorkspace | null;
   workspacePath?: string | null;
   setError: (value: string | null) => void;
-  setContentView: (view: "thread") => void;
-  setNewThreadDraftActive: (value: boolean) => void;
-  setSelectedThreadId: (value: string | null) => void;
-  setPendingWorkspacePath: (value: string | null) => void;
-  setPendingBotId: (value: string | null) => void;
-  setPendingAgentId: (value: string) => void;
-  clearComposerDraft: () => void;
+  /**
+   * Navigate the new-thread draft route (replace). The route application
+   * owns the draft entry: view flip, selection clear, pendings (including
+   * the 'claude' agent reset this helper used to write), composer clear
+   * and focus (6c-2 seams cut).
+   */
+  navigateNewThreadDraft: (workspacePath: string | null) => void;
   syncComposerPhase: (value: string) => void;
-  requestComposerFocus: () => void;
 }) {
   const nextWorkspace = input.workspacePath
     ? (input.selectableNewThreadWorkspaces.find(
@@ -54,31 +68,39 @@ export function startNewThreadDraft(input: {
         input.selectedNewThreadWorkspaceEntry,
       );
   input.setError(null);
-  input.setContentView("thread");
-  input.setNewThreadDraftActive(true);
-  input.setSelectedThreadId(null);
-  input.setPendingWorkspacePath(nextWorkspace?.path || null);
-  input.setPendingBotId(null);
-  input.setPendingAgentId("claude");
-  input.clearComposerDraft();
+  input.navigateNewThreadDraft(nextWorkspace?.path || null);
   input.syncComposerPhase("");
-  input.requestComposerFocus();
 }
 
 export async function selectWorkspaceForThread(input: {
   api: GaryxDesktopApi;
   workspacePath: string;
   threadId?: string | null;
+  /** Current pending agent — a draft opened here keeps the user's pick. */
+  pendingAgentId?: string | null;
+  pendingWorkflowId?: string | null;
   setError: (value: string | null) => void;
-  setContentView: (view: "thread") => void;
+  /**
+   * Route-store navigation (replace, 6c-2 seams cut). threadId undefined
+   * keeps the current selection (thread-home application), a thread id
+   * selects it, null opens the draft on this workspace.
+   */
+  navigateRoute: (route: WorkspaceThreadRoute) => void;
   setDesktopState: DesktopStateSetter;
-  setSelectedThreadId: (value: string | null) => void;
-  setNewThreadDraftActive: (value: boolean) => void;
-  setPendingWorkspacePath: (value: string | null) => void;
-  requestComposerFocus: () => void;
 }): Promise<void> {
   input.setError(null);
-  input.setContentView("thread");
+  if (input.threadId === undefined) {
+    input.navigateRoute({ kind: "thread-home" });
+  } else if (input.threadId) {
+    input.navigateRoute({ kind: "thread", threadId: input.threadId });
+  } else {
+    input.navigateRoute({
+      kind: "new-thread",
+      workspacePath: input.workspacePath,
+      agentId: input.pendingAgentId ?? null,
+      workflowId: input.pendingWorkflowId ?? null,
+    });
+  }
 
   let previousWorkspacePath: string | null = null;
   input.setDesktopState((current) => {
@@ -91,14 +113,6 @@ export async function selectWorkspaceForThread(input: {
       selectedWorkspacePath: input.workspacePath,
     };
   });
-  if (input.threadId !== undefined) {
-    input.setSelectedThreadId(input.threadId);
-    input.setNewThreadDraftActive(!input.threadId);
-    input.setPendingWorkspacePath(input.threadId ? null : input.workspacePath);
-    if (!input.threadId) {
-      input.requestComposerFocus();
-    }
-  }
 
   const persistGeneration = ++workspaceSelectionPersistGeneration;
   try {

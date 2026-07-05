@@ -106,28 +106,16 @@ function resolveMainThreadId(group: DesktopBotConsoleSummary): {
 export function openNewBotDraft(
   input: Pick<
     ActivateBotDraftThreadInput,
-    | 'setError'
-    | 'setContentView'
-    | 'setNewThreadDraftActive'
-    | 'setSelectedThreadId'
-    | 'setPendingWorkspacePath'
-    | 'setPendingBotId'
-    | 'clearComposerDraft'
-    | 'syncComposerPhase'
-    | 'requestComposerFocus'
+    'setError' | 'navigateBotDraft' | 'syncComposerPhase'
   >,
   group: DesktopBotConsoleSummary,
   workspacePath: string | null,
 ): void {
   input.setError(null);
-  input.setContentView('thread');
-  input.setNewThreadDraftActive(true);
-  input.setSelectedThreadId(null);
-  input.setPendingWorkspacePath(workspacePath);
-  input.setPendingBotId(group.id);
-  input.clearComposerDraft();
+  // The new-thread route application owns the draft entry; the bot
+  // binding rides the caller's mailbox (6c-2 seams cut).
+  input.navigateBotDraft(workspacePath, group.id);
   input.syncComposerPhase('');
-  input.requestComposerFocus();
 }
 
 async function reconcileBotDraftWorkspace(
@@ -216,14 +204,15 @@ type ActivateBotDraftThreadInput = {
     initialWorkspacePath: string | null,
   ) => boolean;
   setError: (value: string | null) => void;
-  setContentView: (view: 'thread') => void;
-  setNewThreadDraftActive: (value: boolean) => void;
-  setSelectedThreadId: (value: string | null) => void;
+  /**
+   * Navigate the new-thread draft route with the bot binding riding the
+   * caller's mailbox (6c-2 seams cut); the route application owns the
+   * draft entry.
+   */
+  navigateBotDraft: (workspacePath: string | null, botId: string) => void;
+  /** Background workspace correction for an already-open draft. */
   setPendingWorkspacePath: (value: string | null) => void;
-  setPendingBotId: (value: string | null) => void;
-  clearComposerDraft: () => void;
   syncComposerPhase: (value: string) => void;
-  requestComposerFocus: () => void;
 };
 
 export async function activateBotDraftThread(
@@ -280,9 +269,8 @@ export async function activateBotDraftThread(
 export function openThreadFromEndpoint(input: {
   endpoint: DesktopChannelEndpoint;
   setError: (value: string | null) => void;
-  setContentView: (view: 'thread') => void;
-  setNewThreadDraftActive: (value: boolean) => void;
-  setSelectedThreadId: (value: string | null) => void;
+  /** Navigate the thread route; the application selects (6c-2 seams cut). */
+  navigateThread: (threadId: string) => void;
 }): void {
   if (!input.endpoint.threadId) {
     input.setError(
@@ -292,7 +280,5 @@ export function openThreadFromEndpoint(input: {
   }
 
   input.setError(null);
-  input.setContentView('thread');
-  input.setNewThreadDraftActive(false);
-  input.setSelectedThreadId(input.endpoint.threadId);
+  input.navigateThread(input.endpoint.threadId);
 }

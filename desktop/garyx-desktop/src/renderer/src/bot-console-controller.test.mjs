@@ -81,14 +81,12 @@ test('falls back to a bound bot draft when a remembered bot thread cannot open',
   const calls = [];
   const values = {
     error: 'previous error',
-    contentView: null,
+    draftNavigations: [],
     newThreadDraftActive: false,
     selectedThreadId: 'thread::previous',
     pendingWorkspacePath: null,
     pendingBotId: null,
-    composerCleared: false,
     composerPhase: 'busy',
-    focusRequested: false,
   };
 
   await activateBotDraftThread({
@@ -111,42 +109,33 @@ test('falls back to a bound bot draft when a remembered bot thread cannot open',
     setError: (value) => {
       values.error = value;
     },
-    setContentView: (view) => {
-      values.contentView = view;
-    },
-    setNewThreadDraftActive: (value) => {
-      values.newThreadDraftActive = value;
-    },
-    setSelectedThreadId: (value) => {
-      values.selectedThreadId = value;
+    navigateBotDraft: (workspacePath, botId) => {
+      values.draftNavigations.push({ workspacePath, botId });
+      // Simulate the new-thread route application the bridge runs for the
+      // committed route (draft entry + mailbox bot binding).
+      values.newThreadDraftActive = true;
+      values.selectedThreadId = null;
+      values.pendingWorkspacePath = workspacePath;
+      values.pendingBotId = botId;
     },
     setPendingWorkspacePath: (value) => {
       values.pendingWorkspacePath = value;
     },
-    setPendingBotId: (value) => {
-      values.pendingBotId = value;
-    },
-    clearComposerDraft: () => {
-      values.composerCleared = true;
-    },
     syncComposerPhase: (value) => {
       values.composerPhase = value;
-    },
-    requestComposerFocus: () => {
-      values.focusRequested = true;
     },
   });
 
   assert.deepEqual(calls, ['thread::stale']);
   assert.equal(values.error, null);
-  assert.equal(values.contentView, 'thread');
+  assert.deepEqual(values.draftNavigations, [
+    { workspacePath: '/workspace/test-project', botId: 'weixin::test-bot' },
+  ]);
   assert.equal(values.newThreadDraftActive, true);
   assert.equal(values.selectedThreadId, null);
   assert.equal(values.pendingWorkspacePath, '/workspace/test-project');
   assert.equal(values.pendingBotId, 'weixin::test-bot');
-  assert.equal(values.composerCleared, true);
   assert.equal(values.composerPhase, '');
-  assert.equal(values.focusRequested, true);
 });
 
 test('keeps the bot draft when gateway reconciliation returns the same stale thread', async () => {
@@ -155,14 +144,12 @@ test('keeps the bot draft when gateway reconciliation returns the same stale thr
   const calls = [];
   const values = {
     error: null,
-    contentView: null,
+    draftNavigations: [],
     newThreadDraftActive: false,
     selectedThreadId: 'thread::previous',
     pendingWorkspacePath: null,
     pendingBotId: null,
-    composerCleared: 0,
     composerPhase: 'busy',
-    focusRequested: 0,
   };
 
   await activateBotDraftThread({
@@ -195,41 +182,31 @@ test('keeps the bot draft when gateway reconciliation returns the same stale thr
     setError: (value) => {
       values.error = value;
     },
-    setContentView: (view) => {
-      values.contentView = view;
-    },
-    setNewThreadDraftActive: (value) => {
-      values.newThreadDraftActive = value;
-    },
-    setSelectedThreadId: (value) => {
-      values.selectedThreadId = value;
+    navigateBotDraft: (workspacePath, botId) => {
+      values.draftNavigations.push({ workspacePath, botId });
+      values.newThreadDraftActive = true;
+      values.selectedThreadId = null;
+      values.pendingWorkspacePath = workspacePath;
+      values.pendingBotId = botId;
     },
     setPendingWorkspacePath: (value) => {
       values.pendingWorkspacePath = value;
     },
-    setPendingBotId: (value) => {
-      values.pendingBotId = value;
-    },
-    clearComposerDraft: () => {
-      values.composerCleared += 1;
-    },
     syncComposerPhase: (value) => {
       values.composerPhase = value;
-    },
-    requestComposerFocus: () => {
-      values.focusRequested += 1;
     },
   });
   await new Promise((resolve) => setTimeout(resolve, 0));
 
   assert.deepEqual(calls, ['thread::stale', 'thread::stale']);
   assert.equal(values.error, null);
-  assert.equal(values.contentView, 'thread');
+  assert.deepEqual(values.draftNavigations, [
+    { workspacePath: '/workspace/test-project', botId: 'weixin::test-bot' },
+    { workspacePath: '/workspace/test-project', botId: 'weixin::test-bot' },
+  ]);
   assert.equal(values.newThreadDraftActive, true);
   assert.equal(values.selectedThreadId, null);
   assert.equal(values.pendingWorkspacePath, '/workspace/test-project');
   assert.equal(values.pendingBotId, 'weixin::test-bot');
-  assert.equal(values.composerCleared, 2);
   assert.equal(values.composerPhase, '');
-  assert.equal(values.focusRequested, 2);
 });

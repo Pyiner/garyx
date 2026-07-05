@@ -2441,6 +2441,14 @@ export function AppShell() {
   // mailbox so the workflow-task route application seeds it instead of
   // clearing and re-fetching by id (6c-2a).
   const pendingWorkflowTaskHintRef = useRef<DesktopTaskSummary | null>(null);
+  // Bot drafts: the new-thread route has no bot dimension in the hash;
+  // openers hand the binding through this mailbox (seams cut).
+  const pendingBotHintRef = useRef<string | null>(null);
+  // Thread openers with a selection source (bot-root, endpoint, recent…)
+  // hand it through this mailbox; the bridge's openExistingThread wrapper
+  // consumes it so the thread-route application tags the selection.
+  const pendingThreadEntrySourceHintRef =
+    useRef<ThreadEntrySelectionSource | null>(null);
 
   function openWorkflowTask(task: DesktopTaskSummary) {
     const taskId = task.taskId || `#TASK-${task.number}`;
@@ -2464,8 +2472,15 @@ export function AppShell() {
     handleSelectSettingsTab,
     loading,
     newThreadDraftActive,
-    openExistingThread,
+    // The thread-route application consumes the entry-source mailbox so
+    // navigations from bot roots / endpoints / recents tag the selection.
+    openExistingThread: (threadId: string) => {
+      const entrySource = pendingThreadEntrySourceHintRef.current;
+      pendingThreadEntrySourceHintRef.current = null;
+      return openExistingThread(threadId, entrySource);
+    },
     pendingAgentId,
+    pendingBotHintRef,
     pendingWorkflowId,
     pendingWorkflowTaskHintRef,
     pendingWorkspacePath,
@@ -2865,15 +2880,13 @@ export function AppShell() {
       api: getDesktopApi(),
       workspacePath,
       threadId,
+      pendingAgentId,
+      pendingWorkflowId,
       setError,
-      setContentView: () => {
-        setContentView("thread");
+      navigateRoute: (route) => {
+        desktopRouteStore.navigate(route, { replace: true });
       },
       setDesktopState,
-      setSelectedThreadId,
-      setNewThreadDraftActive,
-      setPendingWorkspacePath,
-      requestComposerFocus,
     });
   }
 
@@ -3068,19 +3081,14 @@ export function AppShell() {
       activeThreadNewThreadWorkspace: activeThreadNewThreadWorkspace,
       selectedNewThreadWorkspaceEntry,
       setError,
-      setContentView: () => {
-        setContentView("thread");
+      navigateNewThreadDraft: (workspacePath) => {
+        desktopRouteStore.navigate(
+          { kind: "new-thread", workspacePath, agentId: null, workflowId: null },
+          { replace: true },
+        );
       },
-      setNewThreadDraftActive,
-      setSelectedThreadId,
-      setPendingWorkspacePath,
-      setPendingBotId,
-      setPendingAgentId,
-      clearComposerDraft,
       syncComposerPhase,
-      requestComposerFocus,
     });
-    setPendingWorkflowId(null);
   }
 
   function handleStartDraftForAgent(agentId: string) {
@@ -3137,19 +3145,22 @@ export function AppShell() {
         pendingWorkspacePathRef.current === initialWorkspacePath &&
         !composerHasPayloadRef.current,
       setError,
-      setContentView: () => {
-        setContentView("thread");
-      },
-      setNewThreadDraftActive,
-      setSelectedThreadId: (value) => {
-        setSelectedThreadId(value);
-        setThreadEntrySelectionSource(value ? "bot-root" : null);
+      navigateBotDraft: (workspacePath, botId) => {
+        pendingBotHintRef.current = botId;
+        desktopRouteStore.navigate(
+          {
+            kind: "new-thread",
+            workspacePath,
+            // Keep the user's current agent pick, matching the legacy
+            // draft entry which left pendingAgentId untouched.
+            agentId: pendingAgentId,
+            workflowId: null,
+          },
+          { replace: true },
+        );
       },
       setPendingWorkspacePath,
-      setPendingBotId,
-      clearComposerDraft,
       syncComposerPhase,
-      requestComposerFocus,
     });
   }
 
@@ -3161,19 +3172,19 @@ export function AppShell() {
       selectedNewThreadWorkspaceEntry,
       workspacePath,
       setError,
-      setContentView: () => {
-        setContentView("thread");
+      navigateNewThreadDraft: (nextWorkspacePath) => {
+        desktopRouteStore.navigate(
+          {
+            kind: "new-thread",
+            workspacePath: nextWorkspacePath,
+            agentId: null,
+            workflowId: null,
+          },
+          { replace: true },
+        );
       },
-      setNewThreadDraftActive,
-      setSelectedThreadId,
-      setPendingWorkspacePath,
-      setPendingBotId,
-      setPendingAgentId,
-      clearComposerDraft,
       syncComposerPhase,
-      requestComposerFocus,
     });
-    setPendingWorkflowId(null);
   }
 
   async function handleAddWorkspace() {
@@ -3416,13 +3427,12 @@ export function AppShell() {
     openThreadFromEndpoint({
       endpoint,
       setError,
-      setContentView: () => {
-        setContentView("thread");
-      },
-      setNewThreadDraftActive,
-      setSelectedThreadId: (value) => {
-        setSelectedThreadId(value);
-        setThreadEntrySelectionSource(value ? entrySource : null);
+      navigateThread: (threadId) => {
+        pendingThreadEntrySourceHintRef.current = entrySource;
+        desktopRouteStore.navigate(
+          { kind: "thread", threadId },
+          { replace: true },
+        );
       },
     });
     return false;
