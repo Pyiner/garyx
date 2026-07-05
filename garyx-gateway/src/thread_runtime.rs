@@ -7,7 +7,9 @@ use garyx_models::provider::{
     MODEL_REASONING_EFFORT_OVERRIDE_METADATA_KEY, MODEL_SERVICE_TIER_METADATA_KEY,
     MODEL_SERVICE_TIER_OVERRIDE_METADATA_KEY, ProviderType,
 };
-use garyx_models::{agent_runtime_metadata, resolve_agent_reference};
+use garyx_models::{
+    AgentTeamProfile, CustomAgentProfile, agent_runtime_metadata, resolve_agent_reference,
+};
 use serde_json::{Value, json};
 
 use crate::server::AppState;
@@ -89,20 +91,44 @@ fn configured_provider_default_config(
     None
 }
 
-async fn current_agent_runtime_metadata(
-    state: &Arc<AppState>,
-    agent_id: &str,
-) -> HashMap<String, Value> {
-    let agents = state.ops.custom_agents.list_agents().await;
-    let teams = state.ops.agent_teams.list_teams().await;
-    resolve_agent_reference(agent_id, &agents, &teams)
-        .map(|reference| agent_runtime_metadata(&reference))
-        .unwrap_or_default()
+/// Agent/team catalog snapshot for one request. List routes resolve it once
+/// and build every row's runtime summary against it instead of cloning the
+/// full catalogs per thread.
+pub(crate) struct AgentCatalogSnapshot {
+    agents: Vec<CustomAgentProfile>,
+    teams: Vec<AgentTeamProfile>,
+}
+
+impl AgentCatalogSnapshot {
+    pub(crate) async fn load(state: &Arc<AppState>) -> Self {
+        Self {
+            agents: state.ops.custom_agents.list_agents().await,
+            teams: state.ops.agent_teams.list_teams().await,
+        }
+    }
+
+    fn agent_runtime_metadata(&self, agent_id: &str) -> HashMap<String, Value> {
+        resolve_agent_reference(agent_id, &self.agents, &self.teams)
+            .map(|reference| agent_runtime_metadata(&reference))
+            .unwrap_or_default()
+    }
 }
 
 pub(crate) async fn build_thread_runtime_summary(
     state: &Arc<AppState>,
     thread_value: Option<&Value>,
+) -> Value {
+    if thread_value.is_none() {
+        return Value::Null;
+    }
+    let catalog = AgentCatalogSnapshot::load(state).await;
+    build_thread_runtime_summary_with_catalog(state, thread_value, &catalog)
+}
+
+pub(crate) fn build_thread_runtime_summary_with_catalog(
+    state: &Arc<AppState>,
+    thread_value: Option<&Value>,
+    catalog: &AgentCatalogSnapshot,
 ) -> Value {
     let Some(thread_value) = thread_value else {
         return Value::Null;
@@ -116,7 +142,7 @@ pub(crate) async fn build_thread_runtime_summary(
     });
     let agent_id = trimmed_json_string(thread_value.get("agent_id"));
     let agent_metadata = match agent_id.as_deref() {
-        Some(agent_id) => current_agent_runtime_metadata(state, agent_id).await,
+        Some(agent_id) => catalog.agent_runtime_metadata(agent_id),
         None => HashMap::new(),
     };
     let provider_type = provider_type.or_else(|| {

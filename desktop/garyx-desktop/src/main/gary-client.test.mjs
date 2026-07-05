@@ -706,3 +706,60 @@ test("gatewayFetch falls back to globalThis.fetch when no transport is injected"
     globalThis.fetch = originalFetch;
   }
 });
+
+test("fetchThreads keeps the full limit by default and honors a fast page limit", async () => {
+  const originalFetch = globalThis.fetch;
+  setGatewayFetch(null);
+  const urls = [];
+  globalThis.fetch = async (url) => {
+    urls.push(String(url));
+    return new Response(
+      JSON.stringify({ threads: [{ thread_id: "thread::a", thread_label: "A" }] }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+  try {
+    const settings = { gatewayUrl: "http://127.0.0.1:31337", gatewayAuthToken: "" };
+    const { fetchThreads } = await import("./gary-client.ts");
+    const full = await fetchThreads(settings);
+    const fast = await fetchThreads(settings, { limit: 200 });
+    assert.equal(urls[0], "http://127.0.0.1:31337/api/threads?limit=1000");
+    assert.equal(urls[1], "http://127.0.0.1:31337/api/threads?limit=200");
+    assert.equal(full.length, 1);
+    assert.equal(fast[0].id, "thread::a");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("fetchThreadSummary maps a metadata payload and resolves null on miss", async () => {
+  const originalFetch = globalThis.fetch;
+  setGatewayFetch(null);
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("thread%3A%3Agone")) {
+      return new Response(JSON.stringify({ error: "thread not found" }), {
+        status: 404,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(
+      JSON.stringify({
+        thread_id: "thread::pinned-old",
+        label: "Pinned old thread",
+        workspace_dir: "/Users/test/project",
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+  try {
+    const settings = { gatewayUrl: "http://127.0.0.1:31337", gatewayAuthToken: "" };
+    const { fetchThreadSummary } = await import("./gary-client.ts");
+    const found = await fetchThreadSummary(settings, "thread::pinned-old");
+    assert.equal(found.id, "thread::pinned-old");
+    assert.equal(found.title, "Pinned old thread");
+    const missing = await fetchThreadSummary(settings, "thread::gone");
+    assert.equal(missing, null);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

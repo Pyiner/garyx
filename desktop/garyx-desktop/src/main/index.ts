@@ -215,6 +215,7 @@ import {
   deleteDesktopAutomation,
   deleteDesktopThread,
   getDesktopState,
+  getDesktopStateFast,
   getLocalDesktopSettings,
   markDesktopAutomationSeen,
   runDesktopAutomationNow,
@@ -687,6 +688,10 @@ function registerIpcHandlers(): void {
   writeBootstrapTrace("registerIpcHandlers:start");
   ipcMain.handle("garyx:get-state", async () => {
     return getDesktopState();
+  });
+
+  ipcMain.handle("garyx:get-state-fast", async () => {
+    return getDesktopStateFast();
   });
 
   ipcMain.handle(

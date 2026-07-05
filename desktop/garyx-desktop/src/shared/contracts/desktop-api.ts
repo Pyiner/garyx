@@ -189,6 +189,12 @@ import type {
 
 export interface GaryxDesktopApi {
   getState: () => Promise<DesktopState>;
+  /**
+   * Boot-only fast hydration: the threads slice is a recent page (plus
+   * by-id repair for pinned ids outside it). Callers must follow up with
+   * a full getState() to restore full-set semantics.
+   */
+  getStateFast: () => Promise<DesktopState>;
   saveSettings: (settings: DesktopSettings) => Promise<DesktopState>;
   rememberGatewayProfile: () => Promise<DesktopState>;
   addGatewayProfile: (input: {

@@ -832,10 +832,12 @@ export async function fetchThreadLogs(
 
 export async function fetchThreads(
   settings: DesktopSettings,
+  options?: { limit?: number },
 ): Promise<DesktopThreadSummary[]> {
+  const limit = options?.limit ?? 1000;
   const payload = await requestJson<ThreadsPayload>(
     settings,
-    "/api/threads?limit=1000",
+    `/api/threads?limit=${limit}`,
     {
       signal: AbortSignal.timeout(REMOTE_STATE_FETCH_TIMEOUT_MS),
     },
@@ -847,6 +849,29 @@ export async function fetchThreads(
       ? payload.sessions
       : [];
   return threads.map(mapThreadSummary);
+}
+
+/**
+ * Single-thread summary fetch used to repair ids that must resolve in a
+ * fast (truncated) state page, e.g. pinned threads older than the page.
+ * Resolves null when the thread does not exist or the request fails.
+ */
+export async function fetchThreadSummary(
+  settings: DesktopSettings,
+  threadId: string,
+): Promise<DesktopThreadSummary | null> {
+  try {
+    const payload = await requestJson<ThreadMetadataPayload>(
+      settings,
+      `/api/threads/${encodeURIComponent(threadId)}`,
+      {
+        signal: AbortSignal.timeout(8000),
+      },
+    );
+    return mapThreadSummary(payload);
+  } catch {
+    return null;
+  }
 }
 
 function mapThreadPinIds(payload: ThreadPinsPayload): string[] {

@@ -48,7 +48,9 @@ use crate::recent_thread_projection::{
 use crate::server::AppState;
 use crate::skills::SkillStoreError;
 use crate::thread_meta_projection::backfill_thread_meta_projection_if_incomplete;
-use crate::thread_runtime::build_thread_runtime_summary;
+use crate::thread_runtime::{
+    AgentCatalogSnapshot, build_thread_runtime_summary, build_thread_runtime_summary_with_catalog,
+};
 use crate::thread_type::thread_summary_type_from_record;
 use crate::workspace_mode::{
     ensure_implicit_thread_workspace_for_config, worktree_base_dir_for_config,
@@ -1483,9 +1485,11 @@ async fn recent_threads_payload(
     total: usize,
 ) -> Value {
     let mut threads = Vec::with_capacity(records.len());
+    let catalog = AgentCatalogSnapshot::load(state).await;
     for record in records {
         let mut thread = serde_json::to_value(record).unwrap_or(Value::Null);
-        attach_thread_runtime_summary(state, &record.thread_id, &mut thread).await;
+        attach_thread_runtime_summary_with_catalog(state, &record.thread_id, &mut thread, &catalog)
+            .await;
         threads.push(thread);
     }
     json!({
@@ -1593,16 +1597,17 @@ async fn thread_metadata_response(state: &Arc<AppState>, thread_id: &str, data: 
     value
 }
 
-async fn attach_thread_runtime_summary(
+async fn attach_thread_runtime_summary_with_catalog(
     state: &Arc<AppState>,
     thread_id: &str,
     summary: &mut Value,
+    catalog: &AgentCatalogSnapshot,
 ) {
     let thread_value = state.threads.thread_store.get(thread_id).await;
     if let Some(obj) = summary.as_object_mut() {
         obj.insert(
             "thread_runtime".to_owned(),
-            build_thread_runtime_summary(state, thread_value.as_ref()).await,
+            build_thread_runtime_summary_with_catalog(state, thread_value.as_ref(), catalog),
         );
     }
 }
@@ -1636,10 +1641,17 @@ pub async fn list_threads(
         params.prefix.as_deref(),
     ) {
         Ok(records) => {
+            let catalog = AgentCatalogSnapshot::load(&state).await;
             let mut page = Vec::with_capacity(records.len());
             for record in &records {
                 let mut summary = thread_summary_from_meta(record);
-                attach_thread_runtime_summary(&state, &record.thread_id, &mut summary).await;
+                attach_thread_runtime_summary_with_catalog(
+                    &state,
+                    &record.thread_id,
+                    &mut summary,
+                    &catalog,
+                )
+                .await;
                 page.push(summary);
             }
             page

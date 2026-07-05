@@ -40,6 +40,7 @@ import {
   fetchChannelEndpoints,
   fetchConfiguredBots,
   fetchThreadPins,
+  fetchThreadSummary,
   fetchThreads,
   fetchWorkspaces,
   mapChannelEndpoint,
@@ -774,10 +775,23 @@ function remoteWorkspacesWithAvailability(
   return workspaces.map((workspace) => resolveWorkspaceAvailability(workspace));
 }
 
-async function mergeRemoteDesktopState(localState: DesktopState): Promise<DesktopState> {
+interface MergeRemoteStateOptions {
+  /**
+   * Fast-hydration page size for the threads slice. When set, pinned ids
+   * missing from the page are repaired by single-thread fetches so the
+   * pinned rail resolves before the follow-up full state lands.
+   */
+  threadLimit?: number;
+}
+
+async function mergeRemoteDesktopState(
+  localState: DesktopState,
+  options?: MergeRemoteStateOptions,
+): Promise<DesktopState> {
   const [threadsResult, pinsResult, endpointsResult, workspacesResult, configuredBotsResult, botConsolesResult, automationsResult] =
     await Promise.all([
-      fetchRemoteSlice('threads', 'threads', localState.threads, () => fetchThreads(localState.settings)),
+      fetchRemoteSlice('threads', 'threads', localState.threads, () =>
+        fetchThreads(localState.settings, options?.threadLimit ? { limit: options.threadLimit } : undefined)),
       fetchRemoteSlice('thread_pins', 'thread pins', localState.pinnedThreadIds, () => fetchThreadPins(localState.settings)),
       fetchRemoteSlice('endpoints', 'endpoints', localState.endpoints, () => fetchChannelEndpoints(localState.settings)),
       fetchRemoteSlice('workspaces', 'workspaces', [], () => fetchWorkspaces(localState.settings)),
@@ -818,10 +832,30 @@ async function mergeRemoteDesktopState(localState: DesktopState): Promise<Deskto
 
   const workspaces = remoteWorkspacesWithAvailability(remoteWorkspaces);
 
-  const threads = remoteThreads.map((thread) => ({
+  let threads = remoteThreads.map((thread) => ({
     ...thread,
     workspacePath: thread.workspacePath?.trim() || null,
   }));
+  if (options?.threadLimit && threadsResult.ok && pinsResult.ok) {
+    const pageIds = new Set(threads.map((thread) => thread.id));
+    const missingPinnedIds = normalizePinnedThreadIds(remotePinnedThreadIds).filter(
+      (threadId) => !pageIds.has(threadId),
+    );
+    if (missingPinnedIds.length > 0) {
+      const repaired = await Promise.all(
+        missingPinnedIds.map((threadId) => fetchThreadSummary(localState.settings, threadId)),
+      );
+      threads = [
+        ...threads,
+        ...repaired
+          .filter((thread): thread is DesktopThreadSummary => Boolean(thread))
+          .map((thread) => ({
+            ...thread,
+            workspacePath: thread.workspacePath?.trim() || null,
+          })),
+      ];
+    }
+  }
   const threadIds = new Set(threads.map((thread) => thread.id));
   const pinnedThreadIds = normalizePinnedThreadIds(remotePinnedThreadIds).filter((threadId) => {
     return threadIds.has(threadId);
@@ -983,6 +1017,23 @@ export async function getDesktopState(): Promise<DesktopState> {
   }
   const localState = await getLocalDesktopState();
   return rememberHydratedDesktopState(await mergeRemoteDesktopState(localState));
+}
+
+const FAST_STATE_THREAD_LIMIT = 200;
+
+/**
+ * Boot-only fast hydration: the threads slice is fetched as a recent page
+ * (plus by-id repair for pinned threads outside it) so the first paint does
+ * not wait for the full thread set. The result is intentionally NOT
+ * remembered as the hydrated mutation base — UI mutations that land before
+ * the follow-up full `getDesktopState()` fall back to a fresh full merge,
+ * so `requireThread` never sees the truncated page.
+ */
+export async function getDesktopStateFast(): Promise<DesktopState> {
+  const localState = await getLocalDesktopState();
+  return mergeRemoteDesktopState(localState, {
+    threadLimit: FAST_STATE_THREAD_LIMIT,
+  });
 }
 
 export async function getLocalDesktopSettings(): Promise<DesktopSettings> {

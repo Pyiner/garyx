@@ -2855,9 +2855,11 @@ export function AppShell() {
             return;
           }
 
+          // Fast hydration: the threads slice is a recent page (pinned ids
+          // repaired by id). The full set follows below, off the paint path.
           const [nextState, nextStatus, nextAgents, nextTeams, nextWorkflows] =
             await Promise.all([
-              window.garyxDesktop.getState(),
+              window.garyxDesktop.getStateFast(),
               window.garyxDesktop.checkConnection(),
               window.garyxDesktop
                 .listCustomAgents()
@@ -2939,6 +2941,22 @@ export function AppShell() {
               : hydratedState.threads[0]?.id || null,
           );
         }
+        // Follow-up full state: restores full-set semantics (workspace
+        // groups, worktree exclusions, bot gates) shortly after first
+        // paint. Failures are non-fatal — any later refreshDesktopState
+        // delivers the full set too.
+        void window.garyxDesktop
+          .getState()
+          .then((fullState) => {
+            if (!cancelled) {
+              startTransition(() => {
+                setDesktopState(fullState);
+              });
+            }
+          })
+          .catch((fullStateError) => {
+            console.debug("Full desktop state follow-up failed.", fullStateError);
+          });
         await loadGatewaySettings();
       } catch (bootstrapError) {
         if (!cancelled) {

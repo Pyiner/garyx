@@ -46,6 +46,7 @@ const updateStatusListeners = new Map<
 
 const api: GaryxDesktopApi = {
   getState: () => ipcRenderer.invoke("garyx:get-state"),
+  getStateFast: () => ipcRenderer.invoke("garyx:get-state-fast"),
   saveSettings: (settings) =>
     ipcRenderer.invoke("garyx:save-settings", settings),
   rememberGatewayProfile: () =>
