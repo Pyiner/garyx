@@ -43,13 +43,6 @@ function desktopSettingsEqual(
   );
 }
 
-function normalizeSettingsTab(value?: SettingsTabId | null): SettingsTabId {
-  if (value === 'connection') {
-    return 'gateway';
-  }
-  return value && SETTINGS_TABS.some((tab) => tab.id === value) ? value : 'labs';
-}
-
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
@@ -109,7 +102,8 @@ function restoreRecordPatch(
 
 type UseSettingsControllerArgs = {
   desktopState: DesktopState | null;
-  initialSettingsTab?: SettingsTabId | null;
+  /** Route-selected tab value (6c-2c selector, owned by AppShell). */
+  settingsActiveTab: SettingsTabId;
   setDesktopState: React.Dispatch<React.SetStateAction<DesktopState | null>>;
   setConnection: React.Dispatch<React.SetStateAction<ConnectionStatus | null>>;
   setError: React.Dispatch<React.SetStateAction<string | null>>;
@@ -122,7 +116,7 @@ export type GatewaySettingsSaveOptions = {
 
 export function useSettingsController({
   desktopState,
-  initialSettingsTab,
+  settingsActiveTab,
   setDesktopState,
   setConnection,
   setError,
@@ -147,9 +141,6 @@ export function useSettingsController({
   const [mcpServersSaving, setMcpServersSaving] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
   const [localSettingsStatus, setLocalSettingsStatus] = useState<string | null>(null);
-  const [settingsActiveTab, setSettingsActiveTab] = useState<SettingsTabId>(() =>
-    normalizeSettingsTab(initialSettingsTab),
-  );
 
   const gatewaySettingsDraftRef = useRef<any>(ensureGatewayConfig({}));
   const gatewaySettingsDirtyRef = useRef(false);
@@ -750,7 +741,10 @@ export function useSettingsController({
       await flushGatewayAutoSave();
     }
 
-    setSettingsActiveTab(normalizedNextTab);
+    // The tab itself flips through the committed settings route (6c-2c);
+    // this application only runs the side effects. `settingsActiveTab`
+    // (args, pre-commit render closure) is the OLD tab here, which is
+    // exactly what the flush/same-tab checks above need.
     if (!nextTabIsLocal) {
       await refreshSettingsTabResources(normalizedNextTab);
     } else {
@@ -758,12 +752,6 @@ export function useSettingsController({
     }
     return true;
   }
-
-  useEffect(() => {
-    if (settingsActiveTab === 'connection') {
-      setSettingsActiveTab('gateway');
-    }
-  }, [settingsActiveTab]);
 
   return {
     commands,
@@ -804,7 +792,6 @@ export function useSettingsController({
     setLocalSettingsStatus,
     setSettingsDraft,
     setGatewaySettingsStatus,
-    settingsActiveTab,
     settingsDraft,
   };
 }

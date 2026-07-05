@@ -755,6 +755,19 @@ export function AppShell() {
     routeSnapshot.route.kind === "capsule"
       ? routeSnapshot.route.capsuleId
       : null;
+  // Settings tab: route-selected with last-active stickiness — plain
+  // #/settings shows the previously active tab (design contract:
+  // route.tabId ?? last ?? 'labs'); selecting a tab navigates.
+  const lastSettingsTabRef = useRef<SettingsTabId | null>(null);
+  const settingsActiveTab: SettingsTabId =
+    routeSnapshot.route.kind === "settings"
+      ? (routeSnapshot.route.tabId ?? lastSettingsTabRef.current ?? "labs")
+      : (lastSettingsTabRef.current ?? "labs");
+  useEffect(() => {
+    if (routeSnapshot.route.kind === "settings") {
+      lastSettingsTabRef.current = settingsActiveTab;
+    }
+  }, [routeSnapshot, settingsActiveTab]);
   useEffect(() => {
     if (contentView !== "thread" || !selectedThreadId) {
       setThreadEntrySelectionSource(null);
@@ -884,15 +897,13 @@ export function AppShell() {
     setGatewaySettingsStatus,
     setLocalSettingsStatus,
     setSettingsDraft,
-    settingsActiveTab,
     settingsDraft,
   } = useSettingsController({
     desktopState,
-    initialSettingsTab:
-      initialRouteValue.kind === "settings" ? initialRouteValue.tabId : null,
     setConnection,
     setDesktopState,
     setError,
+    settingsActiveTab,
   });
   const locale = useResolvedLocale(settingsDraft.languagePreference);
   const t = useMemo(() => createTranslator(locale), [locale]);
