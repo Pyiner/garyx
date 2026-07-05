@@ -16,6 +16,83 @@ use tokio::sync::Mutex;
 const DEFAULT_MAX_BUFFER_SIZE: usize = 1024 * 1024; // 1 MB
 const CLOSE_GRACE_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Outcome of feeding one stdout line into the stream-json accumulator.
+#[derive(Debug)]
+pub(crate) enum StreamLineOutcome {
+    /// A complete protocol message parsed.
+    Message(Value),
+    /// The line joined a plausible multi-line JSON accumulation.
+    Pending,
+    /// A non-protocol line (e.g. debug logging leaked onto stdout by the
+    /// CLI when ANTHROPIC_LOG=debug) was skipped without touching the
+    /// accumulator, so it cannot poison subsequent protocol lines.
+    SkippedNoise,
+    /// The accumulator held a corrupt prefix, but this line alone is a
+    /// complete protocol message: the prefix is dropped and the stream
+    /// self-heals instead of wedging until the buffer limit.
+    DroppedCorruptPrefix { dropped: String, value: Value },
+    /// The accumulator exceeded the configured limit.
+    BufferOverflow { len: usize },
+}
+
+/// Feed one raw stdout line into the NDJSON accumulator.
+///
+/// stream-json is one JSON document per line; the accumulator only exists
+/// as a defensive net for a document split across lines. A line that is
+/// neither valid JSON nor a plausible JSON prefix must never enter the
+/// accumulator (#TASK-1605: a leaked debug-log line used to poison the
+/// buffer, every following protocol line was appended to the corrupt
+/// prefix, and the run wedged until the idle timeout).
+pub(crate) fn accept_stream_line(
+    json_buffer: &mut String,
+    line: &str,
+    max_buffer_size: usize,
+) -> StreamLineOutcome {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return StreamLineOutcome::Pending;
+    }
+
+    // A line that parses on its own is always a complete protocol message.
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        if json_buffer.is_empty() {
+            return StreamLineOutcome::Message(value);
+        }
+        // The accumulator held something that never completed — a corrupt
+        // prefix (noise that started with '{', or a truncated document).
+        // Prefer the complete message and drop the prefix.
+        let dropped = std::mem::take(json_buffer);
+        return StreamLineOutcome::DroppedCorruptPrefix { dropped, value };
+    }
+
+    if json_buffer.is_empty() {
+        // Only lines that could plausibly START a protocol document may
+        // open an accumulation. stream-json messages are always objects,
+        // and '['-prefixed lines are the classic leaked-log shape
+        // ("[DEBUG] ..."), so only '{' opens one; anything else is noise.
+        if !trimmed.starts_with('{') {
+            return StreamLineOutcome::SkippedNoise;
+        }
+    }
+
+    json_buffer.push_str(trimmed);
+
+    if json_buffer.len() > max_buffer_size {
+        let len = json_buffer.len();
+        json_buffer.clear();
+        return StreamLineOutcome::BufferOverflow { len };
+    }
+
+    match serde_json::from_str::<Value>(json_buffer.as_str()) {
+        Ok(value) => {
+            json_buffer.clear();
+            StreamLineOutcome::Message(value)
+        }
+        Err(_) => StreamLineOutcome::Pending,
+    }
+}
+
+
 /// Spawns the `claude` CLI as a child process and communicates via JSONL on
 /// stdin/stdout.
 ///
@@ -202,26 +279,30 @@ impl SubprocessTransport {
                 return Ok(None);
             }
 
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-
-            json_buffer.push_str(trimmed);
-
-            if json_buffer.len() > self.max_buffer_size {
-                let len = json_buffer.len();
-                json_buffer.clear();
-                return Err(ClaudeSDKError::JsonDecode {
-                    line: format!("Buffer size {len} exceeds limit {}", self.max_buffer_size),
-                    source: serde_json::from_str::<Value>("").unwrap_err(),
-                });
-            }
-
-            // Speculatively try to parse
-            match serde_json::from_str::<Value>(&json_buffer) {
-                Ok(v) => return Ok(Some(v)),
-                Err(_) => continue,
+            match accept_stream_line(&mut json_buffer, &line, self.max_buffer_size) {
+                StreamLineOutcome::Message(value) => return Ok(Some(value)),
+                StreamLineOutcome::Pending => continue,
+                StreamLineOutcome::SkippedNoise => {
+                    tracing::warn!(
+                        line = %line.trim(),
+                        "skipping non-protocol line on claude stream-json stdout"
+                    );
+                    continue;
+                }
+                StreamLineOutcome::DroppedCorruptPrefix { dropped, value } => {
+                    tracing::warn!(
+                        dropped = %dropped,
+                        "dropping corrupt partial-JSON prefix polluted by non-protocol \
+                         stdout; resuming with the next complete protocol line"
+                    );
+                    return Ok(Some(value));
+                }
+                StreamLineOutcome::BufferOverflow { len } => {
+                    return Err(ClaudeSDKError::JsonDecode {
+                        line: format!("Buffer size {len} exceeds limit {}", self.max_buffer_size),
+                        source: serde_json::from_str::<Value>("").unwrap_err(),
+                    });
+                }
             }
         }
     }
@@ -458,3 +539,96 @@ fn dirs_home(options: &ClaudeAgentOptions) -> String {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod stream_line_tests {
+    use super::{accept_stream_line, StreamLineOutcome};
+    use serde_json::Value;
+
+    fn feed(buffer: &mut String, line: &str) -> StreamLineOutcome {
+        accept_stream_line(buffer, line, 1024 * 1024)
+    }
+
+    #[test]
+    fn parses_single_line_protocol_messages() {
+        let mut buffer = String::new();
+        match feed(&mut buffer, "{\"type\":\"result\"}\n") {
+            StreamLineOutcome::Message(value) => {
+                assert_eq!(value.get("type").and_then(Value::as_str), Some("result"));
+            }
+            other => panic!("expected message, got {other:?}"),
+        }
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn skips_debug_noise_without_poisoning_the_stream() {
+        // #TASK-1605: ANTHROPIC_LOG=debug leaks SDK request logs onto the
+        // stream-json stdout. They must be skipped, and the NEXT protocol
+        // line must still parse.
+        let mut buffer = String::new();
+        match feed(&mut buffer, "[DEBUG] POST /v1/messages 200 in 843ms\n") {
+            StreamLineOutcome::SkippedNoise => {}
+            other => panic!("expected skip, got {other:?}"),
+        }
+        assert!(buffer.is_empty(), "noise must not enter the accumulator");
+        match feed(&mut buffer, "{\"type\":\"result\",\"is_error\":false}\n") {
+            StreamLineOutcome::Message(value) => {
+                assert_eq!(value.get("type").and_then(Value::as_str), Some("result"));
+            }
+            other => panic!("expected message after noise, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn still_accumulates_multi_line_json_documents() {
+        let mut buffer = String::new();
+        assert!(matches!(
+            feed(&mut buffer, "{\"type\":\n"),
+            StreamLineOutcome::Pending
+        ));
+        match feed(&mut buffer, "\"assistant\"}\n") {
+            StreamLineOutcome::Message(value) => {
+                assert_eq!(
+                    value.get("type").and_then(Value::as_str),
+                    Some("assistant")
+                );
+            }
+            other => panic!("expected accumulated message, got {other:?}"),
+        }
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn corrupt_prefix_self_heals_on_the_next_complete_line() {
+        // A '{'-prefixed noise line opens an accumulation that can never
+        // complete; the next complete protocol line must win.
+        let mut buffer = String::new();
+        assert!(matches!(
+            feed(&mut buffer, "{malformed debug blob\n"),
+            StreamLineOutcome::Pending
+        ));
+        match feed(&mut buffer, "{\"type\":\"result\"}\n") {
+            StreamLineOutcome::DroppedCorruptPrefix { dropped, value } => {
+                assert!(dropped.contains("malformed"));
+                assert_eq!(value.get("type").and_then(Value::as_str), Some("result"));
+            }
+            other => panic!("expected self-heal, got {other:?}"),
+        }
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn buffer_overflow_still_reports() {
+        let mut buffer = String::new();
+        assert!(matches!(
+            feed(&mut buffer, "{\"open\":\n"),
+            StreamLineOutcome::Pending
+        ));
+        match accept_stream_line(&mut buffer, "\"xxxxxxxxxxxxxxxx\n", 16) {
+            StreamLineOutcome::BufferOverflow { len } => assert!(len > 16),
+            other => panic!("expected overflow, got {other:?}"),
+        }
+        assert!(buffer.is_empty());
+    }
+}
