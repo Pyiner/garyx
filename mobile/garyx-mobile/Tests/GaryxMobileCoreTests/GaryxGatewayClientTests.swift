@@ -23,6 +23,16 @@ final class GaryxGatewayClientTests: XCTestCase {
         )
     }
 
+    func testHTTPStatusErrorExtractsNestedProviderAuthMessage() {
+        XCTAssertEqual(
+            GaryxGatewayError.httpStatus(
+                504,
+                #"{"error":{"code":"claude_auth_start_timeout","message":"Timed out waiting for Claude Code login URL."}}"#
+            ).errorDescription,
+            "Timed out waiting for Claude Code login URL."
+        )
+    }
+
     func testPathSegmentEncodingEscapesSlash() {
         XCTAssertEqual(
             GaryxGatewayClient.encodePathSegment("thread/with/slash"),
@@ -516,6 +526,143 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(result.deleted, true)
         XCTAssertEqual(result.threadId, "thread::archive/a")
         XCTAssertEqual(result.detachedEndpointKeys, ["telegram::main::1000000001"])
+    }
+
+    func testClaudeCodeAuthClientUsesProviderAuthRoutes() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        let requestCounter = GaryxAtomicCounter()
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        GaryxURLProtocolStub.requestHandler = { request in
+            let requestIndex = requestCounter.increment()
+            let components = try XCTUnwrap(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false))
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer gateway-token")
+
+            switch requestIndex {
+            case 1:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(components.percentEncodedPath, "/garyx/api/providers/claude_code/auth/start")
+                XCTAssertEqual(request.timeoutInterval, 35)
+                let body = try XCTUnwrap(garyxRequestBodyData(from: request))
+                let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(object["mode"] as? String, "console")
+                XCTAssertEqual(object["sso"] as? Bool, true)
+                XCTAssertEqual(object["email"] as? String, "bot@example.com")
+                let response = try XCTUnwrap(
+                    HTTPURLResponse(
+                        url: try XCTUnwrap(request.url),
+                        statusCode: 201,
+                        httpVersion: nil,
+                        headerFields: ["Content-Type": "application/json"]
+                    )
+                )
+                return (
+                    response,
+                    Data(
+                        """
+                        {
+                          "login_id": "login/with slash",
+                          "status": "waiting_for_code",
+                          "url": "https://claude.example.test/oauth"
+                        }
+                        """.utf8
+                    )
+                )
+            case 2:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(
+                    components.percentEncodedPath,
+                    "/garyx/api/providers/claude_code/auth/login%2Fwith%20slash/submit"
+                )
+                let body = try XCTUnwrap(garyxRequestBodyData(from: request))
+                let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(object["code"] as? String, "code-test")
+                let response = try XCTUnwrap(
+                    HTTPURLResponse(
+                        url: try XCTUnwrap(request.url),
+                        statusCode: 200,
+                        httpVersion: nil,
+                        headerFields: ["Content-Type": "application/json"]
+                    )
+                )
+                return (
+                    response,
+                    Data(
+                        """
+                        {
+                          "login_id": "login/with slash",
+                          "status": "submitted"
+                        }
+                        """.utf8
+                    )
+                )
+            case 3:
+                XCTAssertEqual(request.httpMethod, "GET")
+                XCTAssertEqual(
+                    components.percentEncodedPath,
+                    "/garyx/api/providers/claude_code/auth/login%2Fwith%20slash"
+                )
+                let response = try XCTUnwrap(
+                    HTTPURLResponse(
+                        url: try XCTUnwrap(request.url),
+                        statusCode: 200,
+                        httpVersion: nil,
+                        headerFields: ["Content-Type": "application/json"]
+                    )
+                )
+                return (
+                    response,
+                    Data(
+                        """
+                        {
+                          "login_id": "login/with slash",
+                          "status": "succeeded",
+                          "auth_status": {
+                            "loggedIn": true,
+                            "orgName": "Test Org",
+                            "subscriptionType": "team"
+                          }
+                        }
+                        """.utf8
+                    )
+                )
+            default:
+                XCTFail("unexpected request \(requestIndex)")
+                throw URLError(.badServerResponse)
+            }
+        }
+
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/garyx")),
+                authToken: "gateway-token"
+            ),
+            session: session,
+            retryPolicy: .disabled
+        )
+
+        let start = try await client.startClaudeCodeAuth(
+            GaryxClaudeCodeAuthStartRequest(
+                mode: .console,
+                sso: true,
+                email: " bot@example.com "
+            )
+        )
+        let submitted = try await client.submitClaudeCodeAuth(
+            loginId: start.loginId,
+            code: " code-test "
+        )
+        let status = try await client.claudeCodeAuth(loginId: start.loginId)
+
+        XCTAssertEqual(start.status, .waitingForCode)
+        XCTAssertEqual(submitted.status, .submitted)
+        XCTAssertEqual(status.status, .succeeded)
+        XCTAssertEqual(requestCounter.value(), 3)
     }
 
     func testListTasksEncodesSourceThreadFilter() async throws {
@@ -2479,6 +2626,32 @@ final class GaryxGatewayClientTests: XCTestCase {
             )
         )
     }
+}
+
+private func garyxRequestBodyData(from request: URLRequest) -> Data? {
+    if let body = request.httpBody {
+        return body
+    }
+    guard let stream = request.httpBodyStream else {
+        return nil
+    }
+    stream.open()
+    defer { stream.close() }
+
+    var data = Data()
+    let bufferSize = 4096
+    let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
+    defer { buffer.deallocate() }
+
+    while stream.hasBytesAvailable {
+        let count = stream.read(buffer, maxLength: bufferSize)
+        if count > 0 {
+            data.append(buffer, count: count)
+        } else {
+            break
+        }
+    }
+    return data
 }
 
 private final class GaryxURLProtocolStub: URLProtocol {

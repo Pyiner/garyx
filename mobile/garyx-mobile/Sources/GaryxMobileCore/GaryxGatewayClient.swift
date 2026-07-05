@@ -138,11 +138,24 @@ public enum GaryxGatewayError: Error, Equatable, LocalizedError {
         guard !trimmed.isEmpty else { return "" }
         guard let data = trimmed.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let error = object["error"] as? String,
-              !error.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+              let error = object["error"] else {
             return trimmed
         }
-        return error
+        if let message = error as? String,
+           !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return message
+        }
+        if let errorObject = error as? [String: Any] {
+            if let message = errorObject["message"] as? String,
+               !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return message
+            }
+            if let code = errorObject["code"] as? String,
+               !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return code
+            }
+        }
+        return trimmed
     }
 }
 
@@ -457,6 +470,30 @@ public final class GaryxGatewayClient {
 
     public func providerModels(providerType: String) async throws -> GaryxProviderModels {
         try await get("/api/provider-models/\(providerType.urlPathEncoded)")
+    }
+
+    public func startClaudeCodeAuth(
+        _ request: GaryxClaudeCodeAuthStartRequest = GaryxClaudeCodeAuthStartRequest()
+    ) async throws -> GaryxClaudeCodeAuthSession {
+        try await post(
+            "/api/providers/claude_code/auth/start",
+            body: request,
+            timeoutInterval: 35
+        )
+    }
+
+    public func submitClaudeCodeAuth(
+        loginId: String,
+        code: String
+    ) async throws -> GaryxClaudeCodeAuthSession {
+        try await post(
+            "/api/providers/claude_code/auth/\(loginId.urlPathEncoded)/submit",
+            body: GaryxClaudeCodeAuthSubmitRequest(code: code)
+        )
+    }
+
+    public func claudeCodeAuth(loginId: String) async throws -> GaryxClaudeCodeAuthSession {
+        try await get("/api/providers/claude_code/auth/\(loginId.urlPathEncoded)")
     }
 
     public func generateAvatar(prompt: String, timeoutSecs: Int = 600) async throws -> GaryxGeneratedAvatar {

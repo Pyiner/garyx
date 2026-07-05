@@ -94,6 +94,7 @@ extension GaryxMobileModel {
         cancelBackgroundCommittedRunReconcileLoop()
         stopSelectedThreadStream()
         cancelWorkflowRunPolling()
+        resetClaudeCodeAuthFlow()
         selectedThreadActivitySignatures = [:]
         clearActiveRunState()
         connectRefreshRequestId = nil

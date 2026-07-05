@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UIKit
 import WidgetKit
 
 // Model-provider settings surfaces: the provider list (topped by the Quota
@@ -386,11 +387,16 @@ private struct GaryxProviderUsageInlineBlock: View {
 
 struct GaryxModelProviderDefaultsSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
     @EnvironmentObject private var model: GaryxMobileModel
     let provider: GaryxModelProviderDefault
     @State private var modelName = ""
     @State private var reasoningEffort = ""
     @State private var serviceTier = ""
+    @State private var claudeAuthMode = GaryxClaudeCodeAuthMode.claudeai
+    @State private var claudeAuthUsesSSO = false
+    @State private var claudeAuthEmail = ""
+    @State private var claudeAuthCode = ""
     @State private var authSource = ""
     @State private var baseUrl = ""
     @State private var apiKey = ""
@@ -404,6 +410,7 @@ struct GaryxModelProviderDefaultsSheet: View {
         GaryxFormSheet(
             title: "\(providerPresentation.displayName) Defaults",
             canSave: isHydrated && !isSaving,
+            onCancel: closeSheet,
             onSave: saveDefaults
         ) {
             VStack(alignment: .leading, spacing: 22) {
@@ -474,6 +481,14 @@ struct GaryxModelProviderDefaultsSheet: View {
             }
         }
         .task { await hydrate() }
+        .onDisappear {
+            if provider.providerType == "claude_code" {
+                model.resetClaudeCodeAuthFlow()
+            }
+        }
+        .onChange(of: model.claudeCodeAuthSession?.loginId) { _, _ in
+            claudeAuthCode = ""
+        }
         .onChange(of: modelName) { _, _ in
             reasoningEffort = GaryxThreadModelOverridePresentation.sanitizedReasoningEffort(
                 providerModels: catalog,
@@ -487,7 +502,18 @@ struct GaryxModelProviderDefaultsSheet: View {
 
     @ViewBuilder
     private var authenticationSection: some View {
-        if provider.isNative {
+        if provider.providerType == "claude_code" {
+            GaryxClaudeCodeAuthSection(
+                presentation: claudeCodeAuthPresentation,
+                mode: $claudeAuthMode,
+                usesSSO: $claudeAuthUsesSSO,
+                email: $claudeAuthEmail,
+                authorizationCode: $claudeAuthCode,
+                onPrimaryAction: performClaudeCodeAuthPrimaryAction,
+                onPasteCode: pasteClaudeAuthCode,
+                onSubmitCode: submitClaudeAuthCode
+            )
+        } else if provider.isNative {
             VStack(alignment: .leading, spacing: 6) {
                 GaryxFormGroupedSection(title: "Authentication") {
                     // Every native provider gets the auth-source row (D1). Only
@@ -596,6 +622,14 @@ struct GaryxModelProviderDefaultsSheet: View {
         catalog?.serviceTiers ?? []
     }
 
+    private var claudeCodeAuthPresentation: GaryxClaudeCodeAuthPresentation {
+        GaryxClaudeCodeAuthPresentation.make(
+            session: model.claudeCodeAuthSession,
+            usage: GaryxModelProviderDefaults.usage(in: model.codingUsage, provider: provider),
+            authorizationCode: claudeAuthCode
+        )
+    }
+
     private var effectiveAuthSource: String {
         let trimmed = authSource.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty
@@ -682,6 +716,162 @@ struct GaryxModelProviderDefaultsSheet: View {
                     dismiss()
                 }
             }
+        }
+    }
+
+    private func closeSheet() {
+        if provider.providerType == "claude_code" {
+            model.resetClaudeCodeAuthFlow()
+        }
+        dismiss()
+    }
+
+    private func performClaudeCodeAuthPrimaryAction() {
+        switch claudeCodeAuthPresentation.primaryAction {
+        case .start:
+            Task {
+                if let url = await model.startClaudeCodeAuth(
+                    mode: claudeAuthMode,
+                    sso: claudeAuthUsesSSO,
+                    email: claudeAuthEmail
+                ) {
+                    openURL(url)
+                }
+            }
+        case .openAuthorizationURL:
+            if let url = model.claudeCodeAuthSession?.authorizationURL {
+                openURL(url)
+            }
+        case .none:
+            break
+        }
+    }
+
+    private func pasteClaudeAuthCode() {
+        claudeAuthCode = UIPasteboard.general.string ?? ""
+    }
+
+    private func submitClaudeAuthCode() {
+        Task {
+            await model.submitClaudeCodeAuth(code: claudeAuthCode)
+        }
+    }
+}
+
+private struct GaryxClaudeCodeAuthSection: View {
+    let presentation: GaryxClaudeCodeAuthPresentation
+    @Binding var mode: GaryxClaudeCodeAuthMode
+    @Binding var usesSSO: Bool
+    @Binding var email: String
+    @Binding var authorizationCode: String
+    let onPrimaryAction: () -> Void
+    let onPasteCode: () -> Void
+    let onSubmitCode: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            GaryxFormGroupedSection(title: "Authentication") {
+                GaryxFormRow(title: "Status") {
+                    GaryxStatusPill(
+                        text: presentation.statusText,
+                        tone: presentation.tone.garyxStatusPillTone
+                    )
+                }
+                Divider().padding(.leading, 16)
+                GaryxFormReadOnlyRow(title: "Account", value: accountValue)
+                Divider().padding(.leading, 16)
+                GaryxFormRow(title: "Action") {
+                    Button(presentation.primaryActionTitle, action: onPrimaryAction)
+                        .buttonStyle(.bordered)
+                        .disabled(!presentation.primaryActionEnabled)
+                }
+                if presentation.showsLoginOptions {
+                    Divider().padding(.leading, 16)
+                    GaryxFormMenuRow(title: "Login method", value: mode.displayName) {
+                        ForEach(GaryxClaudeCodeAuthMode.allCases) { option in
+                            Button(option.displayName) {
+                                mode = option
+                            }
+                        }
+                    }
+                    Divider().padding(.leading, 16)
+                    GaryxFormRow(title: "Use SSO") {
+                        Toggle("", isOn: $usesSSO)
+                            .labelsHidden()
+                    }
+                    Divider().padding(.leading, 16)
+                    GaryxFormTextFieldRow(
+                        title: "Email",
+                        text: $email,
+                        placeholder: "Optional",
+                        keyboardType: .emailAddress,
+                        textContentType: .emailAddress,
+                        autocapitalization: .never,
+                        autocorrectionDisabled: true
+                    )
+                }
+                if presentation.showsCodeField {
+                    Divider().padding(.leading, 16)
+                    authorizationCodeRow
+                    Divider().padding(.leading, 16)
+                    GaryxFormRow(title: "Submit") {
+                        Button("Submit code", action: onSubmitCode)
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!presentation.submitEnabled)
+                    }
+                }
+            }
+            if let detail = presentation.detailText {
+                Text(detail)
+                    .font(GaryxFont.caption())
+                    .foregroundStyle(presentation.tone == .danger ? GaryxTheme.danger : .secondary)
+                    .padding(.horizontal, 14)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let accountDetail = presentation.accountDetailText {
+                Text(accountDetail)
+                    .font(GaryxFont.caption())
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 14)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var authorizationCodeRow: some View {
+        GaryxFormRow(title: "Authorization code") {
+            HStack(spacing: 8) {
+                TextField("Paste code", text: $authorizationCode)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled(true)
+                    .keyboardType(.asciiCapable)
+                    .lineLimit(1)
+                Button("Paste", action: onPasteCode)
+                    .font(GaryxFont.callout(weight: .medium))
+                    .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    private var accountValue: String {
+        if let account = presentation.accountText {
+            return account
+        }
+        return presentation.statusText == "Signed in" ? "Gateway host" : "Not signed in"
+    }
+}
+
+private extension GaryxClaudeCodeAuthPresentationTone {
+    var garyxStatusPillTone: GaryxStatusPill.Tone {
+        switch self {
+        case .good:
+            return .good
+        case .warning:
+            return .warning
+        case .danger:
+            return .danger
+        case .muted:
+            return .muted
         }
     }
 }
