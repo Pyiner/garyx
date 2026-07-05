@@ -43,7 +43,6 @@ import {
   type DesktopWorkspaceMode,
   type MessageFileAttachment,
   type MessageImageAttachment,
-  type RenderState,
   type SlashCommand,
   type ThreadRuntimeInfo,
   type TranscriptMessage,
@@ -223,7 +222,6 @@ import {
   transcriptHasAutomationResponse,
   transcriptMessageMatchesIntent,
   useTranscriptController,
-  type ThreadHistoryPaginationState,
 } from "./useTranscriptController";
 import { useWorkspaceController } from "./useWorkspaceController";
 import {
@@ -719,24 +717,6 @@ export function AppShell() {
   const historyPaginationByThread = transcriptMaps.historyPaginationByThread;
   const pendingRemoteInputsByThread =
     transcriptMaps.pendingRemoteInputsByThread as PendingThreadInputMap;
-  // The transcript controller keeps its legacy write chain (refs + these
-  // setters) as the parity-probe reference until batch 6; the setters are
-  // no-ops because re-renders now come from the mirror subscription above.
-  const noopSetMessagesByThread: React.Dispatch<
-    React.SetStateAction<MessageMap>
-  > = useCallback(() => {}, []);
-  const noopSetRenderStateByThread: React.Dispatch<
-    React.SetStateAction<Record<string, RenderState>>
-  > = useCallback(() => {}, []);
-  const noopSetThreadInfoByThread: React.Dispatch<
-    React.SetStateAction<Record<string, ThreadRuntimeInfo | null>>
-  > = useCallback(() => {}, []);
-  const noopSetHistoryPaginationByThread: React.Dispatch<
-    React.SetStateAction<Record<string, ThreadHistoryPaginationState>>
-  > = useCallback(() => {}, []);
-  const noopSetPendingRemoteInputsByThread: React.Dispatch<
-    React.SetStateAction<PendingThreadInputMap>
-  > = useCallback(() => {}, []);
   // Batch 3a: the mirror's dispatch-machine module owns machine-state
   // storage; React reads it through useSyncExternalStore (same bail-out
   // semantics as the previous useReducer — an identical reference neither
@@ -1419,16 +1399,13 @@ export function AppShell() {
     forceReleaseThreadRuntime,
     getLiveStreamState,
     hasPendingHistoryIntents,
-    historyPaginationByThreadRef,
     intentForId,
     loadOlderThreadHistoryPage,
     messagesByThreadRef,
-    renderStateByThreadRef,
     replaceLiveStreamThreadId,
     setThreadRuntimeState,
     startCommittedThreadStream,
     threadTitleOverridesRef,
-    transcriptSnapshotByThreadRef,
     updateLiveStreamState,
     updateMessagesByThread,
   } = useTranscriptController({
@@ -1455,78 +1432,24 @@ export function AppShell() {
     setDesktopState,
     setError,
     setHistoryLoading,
-    setHistoryPaginationByThread: noopSetHistoryPaginationByThread,
-    setMessagesByThread: noopSetMessagesByThread,
     setPendingAutomationRun,
-    setPendingRemoteInputsByThread: noopSetPendingRemoteInputsByThread,
-    setRenderStateByThread: noopSetRenderStateByThread,
-    setThreadInfoByThread: noopSetThreadInfoByThread,
     settingsDraft,
     syncThreadTitleDraft: (nextTitle: string) => {
       conversationTitleRef.current?.syncTitle(nextTitle);
     },
   });
-  // Batch 2b dev-only parity probe (removed with the dual-write scaffolding
-  // in batch 6): `__garyxMirrorParity(threadId)` in the DevTools console
-  // compares the mirror's thread snapshot against the legacy compute
-  // chain. Since batch 3d the render path reads the mirror, so the legacy
-  // side comes from the transcript controller's internal refs (the last
-  // legacy-computed copies): messages/renderState/pagination refs plus the
-  // remembered resolved transcript for threadInfo/pendingInputs.
-  // `loadingBefore` is excluded (both sides now track it, but the legacy
-  // write and the mirror bridge are not atomic).
+  // Dev-only mirror handle for CDP walkthroughs (the batch-2b parity probe
+  // was deleted with the legacy dual-write in batch 6a).
   useEffect(() => {
     if (!import.meta.env.DEV) {
       return undefined;
     }
     const probeWindow = window as typeof window & {
       __garyxGatewayMirror?: GatewayMirror;
-      __garyxMirrorParity?: (threadId: string) => unknown;
     };
     probeWindow.__garyxGatewayMirror = gatewayMirror;
-    probeWindow.__garyxMirrorParity = (threadId: string) => {
-      const snapshot = gatewayMirror.getThreadSnapshot(threadId);
-      const json = (value: unknown) => JSON.stringify(value ?? null);
-      const legacyMessages: readonly UiTranscriptMessage[] =
-        messagesByThreadRef.current[threadId] || [];
-      const legacySnapshot =
-        transcriptSnapshotByThreadRef.current[threadId] || null;
-      const mirrorMessages = snapshot.messages;
-      const stripLoading = (
-        state: ThreadHistoryPaginationState | null | undefined,
-      ) => (state ? { ...state, loadingBefore: false } : null);
-      const equal = {
-        messages: json(legacyMessages) === json(mirrorMessages),
-        renderState:
-          json(renderStateByThreadRef.current[threadId] ?? null) ===
-          json(snapshot.renderState),
-        pagination:
-          json(
-            stripLoading(historyPaginationByThreadRef.current[threadId]),
-          ) === json(stripLoading(snapshot.historyPagination)),
-        threadInfo:
-          json(legacySnapshot?.threadInfo ?? null) ===
-          json(snapshot.threadInfo),
-        pendingInputs:
-          json(legacySnapshot?.pendingInputs ?? []) ===
-          json(snapshot.pendingRemoteInputs),
-      };
-      return {
-        threadId,
-        parity: Object.values(equal).every(Boolean),
-        equal,
-        counts: {
-          legacyMessages: legacyMessages.length,
-          mirrorMessages: mirrorMessages.length,
-          localRows: legacyMessages.filter(
-            (entry) => entry.localState !== "remote_final",
-          ).length,
-        },
-      };
-    };
     return () => {
       delete probeWindow.__garyxGatewayMirror;
-      delete probeWindow.__garyxMirrorParity;
     };
   }, [gatewayMirror]);
   const activeThreadWorktree =

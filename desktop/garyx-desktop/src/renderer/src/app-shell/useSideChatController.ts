@@ -152,7 +152,8 @@ type UseSideChatControllerArgs = {
   messageStateRef: React.MutableRefObject<MessageMachineState>;
   messageTailSignature: (messages: UiTranscriptMessage[]) => string;
   messagesByThread: MessageMap;
-  messagesByThreadRef: React.MutableRefObject<MessageMap>;
+  // Mirror-backed reader (batch 6a): read-only `{ current }` shape.
+  messagesByThreadRef: { readonly current: MessageMap };
   pendingAgentId: string;
   pendingInputOriginRefsForThread: (
     intentsById: Record<string, MessageIntent>,

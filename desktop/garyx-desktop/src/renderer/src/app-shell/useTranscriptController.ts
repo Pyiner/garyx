@@ -1,4 +1,4 @@
-import { startTransition, useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type {
   ConnectionStatus,
@@ -6,9 +6,6 @@ import type {
   DesktopSettings,
   DesktopState,
   DesktopThreadSummary,
-  PendingThreadInput,
-  RenderState,
-  ThreadRuntimeInfo,
   ThreadTranscript,
   TranscriptMessage,
 } from "@shared/contracts";
@@ -54,7 +51,6 @@ import type {
   LiveStreamState,
   MessageMap,
   PendingAutomationRun,
-  PendingThreadInputMap,
   UiTranscriptMessage,
 } from "./types";
 
@@ -79,15 +75,10 @@ import {
   chatStreamEventHasRunLifecycle,
   committedMessageForwardPage,
   messagesNearEarlierUserTurnBoundary,
-  mergeRemotePaginationState,
-  mergeRemoteTranscriptWithLocal,
-  paginationStateFromTranscript,
   transcriptHasAutomationResponse,
   reconcileAssistantEntriesForGatewayRecovery,
   resolveIntentHistoryMatch,
-  userMessageIdForOrigin,
   isMissingThreadTranscript,
-  materializeRemoteTranscript,
   visibleTranscriptMessages,
   THREAD_HISTORY_PAGE_SIZE,
   THREAD_HISTORY_USER_QUERY_LIMIT,
@@ -136,23 +127,10 @@ type UseTranscriptControllerArgs = {
   setDesktopState: React.Dispatch<React.SetStateAction<DesktopState | null>>;
   setError: React.Dispatch<React.SetStateAction<string | null>>;
   setHistoryLoading: React.Dispatch<React.SetStateAction<boolean>>;
-  setHistoryPaginationByThread: React.Dispatch<
-    React.SetStateAction<Record<string, ThreadHistoryPaginationState>>
-  >;
-  setMessagesByThread: React.Dispatch<React.SetStateAction<MessageMap>>;
   setPendingAutomationRun: (
     threadId: string,
     run: PendingAutomationRun | null,
   ) => void;
-  setPendingRemoteInputsByThread: React.Dispatch<
-    React.SetStateAction<PendingThreadInputMap>
-  >;
-  setRenderStateByThread: React.Dispatch<
-    React.SetStateAction<Record<string, RenderState>>
-  >;
-  setThreadInfoByThread: React.Dispatch<
-    React.SetStateAction<Record<string, ThreadRuntimeInfo | null>>
-  >;
   /**
    * Batch 5b: remote title sync into the colocated title root — the root
    * applies its own not-editing guard.
@@ -185,26 +163,24 @@ export function useTranscriptController({
   setDesktopState,
   setError,
   setHistoryLoading,
-  setHistoryPaginationByThread,
-  setMessagesByThread,
   setPendingAutomationRun,
-  setPendingRemoteInputsByThread,
-  setRenderStateByThread,
-  setThreadInfoByThread,
   syncThreadTitleDraft,
   settingsDraft,
 }: UseTranscriptControllerArgs) {
-  const messagesByThreadRef = useRef<MessageMap>({});
-  const renderStateByThreadRef = useRef<Record<string, RenderState>>({});
+  // Batch 6a: the mirror is the single store for the render-side transcript
+  // maps. This stable reader keeps the legacy `{ current }` shape for the
+  // dispatch-orchestrator deps and the side-chat controller.
+  const [messagesByThreadRef] = useState(() => ({
+    get current(): MessageMap {
+      return mirror.getTranscriptMapsSnapshot().messagesByThread as MessageMap;
+    },
+  }));
   const transcriptSnapshotByThreadRef = useRef<Record<string, ThreadTranscript>>(
     {},
   );
   const transcriptRunStateByThreadRef = useRef<Record<string, TranscriptRunState>>(
     {},
   );
-  const historyPaginationByThreadRef = useRef<
-    Record<string, ThreadHistoryPaginationState>
-  >({});
   const threadTitleOverridesRef = useRef<Record<string, string>>({});
   const streamEventHandlerRef = useRef<(event: DesktopChatStreamEvent) => void>(
     () => {},
@@ -214,27 +190,12 @@ export function useTranscriptController({
     streamEventHandlerRef.current = handleChatStreamEvent;
   });
 
-  /**
-   * Batch 2b dual-write scaffolding (deleted with the legacy path in batch
-   * 6): every transcript input is fed to the GatewayMirror alongside the
-   * legacy React state so the two stay converged while the legacy path
-   * still renders. Mirror convergence must never break the legacy render
-   * path — divergence is surfaced by the dev parity probe, not by throwing.
-   */
-  function mirrorDualWrite(operation: () => void) {
-    try {
-      operation();
-    } catch (mirrorError) {
-      console.error("[gateway-mirror] dual-write failed", mirrorError);
-    }
-  }
-
   useEffect(() => {
     const listener = (event: DesktopChatStreamEvent) => {
-      // Batch 2b dual-feed: the mirror is a first-class consumer of the
-      // chat stream (frames commit atomically inside ingest). The legacy
-      // handler keeps owning machine/live-stream/error side effects.
-      mirrorDualWrite(() => mirror.ingest(event));
+      // The mirror is the transcript store: frames commit atomically inside
+      // ingest. The handler below keeps owning machine/live-stream/error
+      // side effects.
+      mirror.ingest(event);
       if (chatStreamEventHasRunLifecycle(event)) {
         scheduleDesktopStateRefresh();
       }
@@ -430,63 +391,33 @@ export function useTranscriptController({
     return liveStreamStateRef.current[threadId] || null;
   }
 
+  /**
+   * Batch 6a: the mirror's message cache is the single message store.
+   * Local optimistic/recovery writes still run through this legacy-shaped
+   * updater; per-thread diffs commit into the mirror, which notifies the
+   * read side. Remote applies never come through here — the mirror
+   * computes those itself (applyRemote/applyAuthoritative/applyOlderPage).
+   */
   function updateMessagesByThread(
     updater: (current: MessageMap) => MessageMap,
-    options?: {
-      /**
-       * Batch 3b: set by the remote-apply paths, whose message merges the
-       * mirror computes independently (applyRemote/applyAuthoritative/
-       * applyOlderPage). Local optimistic/recovery writes leave this unset
-       * so the legacy result bridges into the mirror's message cache.
-       */
-      skipMirrorSync?: boolean;
-    },
   ): MessageMap {
     const previous = messagesByThreadRef.current;
     const next = updater(previous);
-    messagesByThreadRef.current = next;
-    setMessagesByThread(next);
-    if (!options?.skipMirrorSync && next !== previous) {
+    if (next !== previous) {
       for (const threadId of Object.keys(next)) {
         if (next[threadId] !== previous[threadId]) {
-          mirrorDualWrite(() =>
-            mirror.syncThreadUiMessages(threadId, next[threadId]),
-          );
+          mirror.syncThreadUiMessages(threadId, next[threadId]);
         }
       }
       // Deleted keys (e.g. the new-thread draft promoted to a real thread)
-      // bridge as an empty array so the mirror does not keep stale rows
-      // for a thread the legacy map no longer tracks (3b review follow-up).
+      // sync as an empty array so the mirror drops the stale rows too.
       for (const threadId of Object.keys(previous)) {
         if (!(threadId in next)) {
-          mirrorDualWrite(() => mirror.syncThreadUiMessages(threadId, []));
+          mirror.syncThreadUiMessages(threadId, []);
         }
       }
     }
     return next;
-  }
-
-  function updateRenderStateByThread(
-    updater: (
-      current: Record<string, RenderState>,
-    ) => Record<string, RenderState>,
-  ): void {
-    const next = updater(renderStateByThreadRef.current);
-    renderStateByThreadRef.current = next;
-    setRenderStateByThread(next);
-  }
-
-  function applyThreadRenderState(threadId: string, renderState: RenderState) {
-    const existing = renderStateByThreadRef.current[threadId];
-    // Monotonic guard: drop late frames from a reconnect race so the rendered
-    // snapshot never moves backward.
-    if (existing && renderState.based_on_seq < existing.based_on_seq) {
-      return;
-    }
-    updateRenderStateByThread((current) => ({
-      ...current,
-      [threadId]: renderState,
-    }));
   }
 
   function applyThreadTitleUpdate(threadId: string, title: string) {
@@ -524,21 +455,6 @@ export function useTranscriptController({
     }
   }
 
-  function setRemotePendingInputs(
-    threadId: string,
-    pendingInputs: PendingThreadInput[],
-  ) {
-    setPendingRemoteInputsByThread((current) => {
-      const next = { ...current };
-      if (pendingInputs.length > 0) {
-        next[threadId] = pendingInputs;
-      } else {
-        delete next[threadId];
-      }
-      return next;
-    });
-  }
-
   function rememberTranscriptSnapshot(
     threadId: string,
     transcript: ThreadTranscript,
@@ -559,7 +475,8 @@ export function useTranscriptController({
         // next cold/offline open can render folded history before a live frame.
         void window.garyxDesktop.saveThreadTranscriptCache(
           cacheTranscript,
-          renderStateByThreadRef.current[threadId] ?? null,
+          mirror.getTranscriptMapsSnapshot().renderStateByThread[threadId] ??
+            null,
         );
       }
     }
@@ -570,9 +487,11 @@ export function useTranscriptController({
     transcript: ThreadTranscript,
     options?: { syncRunState?: boolean },
   ) {
-    mirrorDualWrite(() =>
-      mirror.applyAuthoritativeTranscript(threadId, transcript),
-    );
+    // The mirror computes messages/renderState/pagination/threadInfo/
+    // pendingInputs from the transcript itself (batch 6a single store);
+    // this hook keeps the transport snapshot, run-state sync, cache
+    // persistence, and intent marking.
+    mirror.applyAuthoritativeTranscript(threadId, transcript);
     const resolvedTranscript = transcriptWithResolvedActiveRun(transcript);
     rememberTranscriptSnapshot(
       threadId,
@@ -580,39 +499,21 @@ export function useTranscriptController({
       true,
       options?.syncRunState ?? true,
     );
-    setThreadInfoByThread((current) => ({
-      ...current,
-      [threadId]: resolvedTranscript.threadInfo ?? null,
-    }));
-    const visibleMessages = visibleTranscriptMessages(resolvedTranscript.messages);
-    setRemotePendingInputs(threadId, resolvedTranscript.pendingInputs);
-    startTransition(() => {
-      updateMessagesByThread(
-        (current) => {
-          const existing = current[threadId] || [];
-          return {
-            ...current,
-            [threadId]: materializeRemoteTranscript(
-              visibleMessages,
-              existing,
-            ),
-          };
-        },
-        { skipMirrorSync: true },
-      );
-    });
-    markIntentsFromHistory(threadId, visibleMessages);
+    markIntentsFromHistory(
+      threadId,
+      visibleTranscriptMessages(resolvedTranscript.messages),
+    );
   }
 
   function handleChatStreamEvent(event: DesktopChatStreamEvent) {
     const threadId = event.threadId;
     if (event.type === "thread_render_frame") {
-      // One atomic frame: apply the contiguous committed events through the
-      // existing transport/ack path, then replace the render snapshot.
+      // The mirror.ingest call at the stream listener already committed the
+      // frame (events + render snapshot, monotonic guard included). This
+      // pass keeps the per-event machine/run-state/ack side effects.
       for (const committed of event.events) {
         applyCommittedThreadMessage(committed);
       }
-      applyThreadRenderState(threadId, event.renderState);
       return;
     }
     if (event.type !== "error") {
@@ -790,24 +691,6 @@ export function useTranscriptController({
     }
   }
 
-  function updateThreadHistoryPagination(
-    threadId: string,
-    updater: (
-      current: ThreadHistoryPaginationState | null,
-    ) => ThreadHistoryPaginationState | null,
-  ) {
-    const previous = historyPaginationByThreadRef.current[threadId] || null;
-    const nextValue = updater(previous);
-    const next = { ...historyPaginationByThreadRef.current };
-    if (nextValue) {
-      next[threadId] = nextValue;
-    } else {
-      delete next[threadId];
-    }
-    historyPaginationByThreadRef.current = next;
-    setHistoryPaginationByThread(next);
-  }
-
   function threadSummaryFromTranscript(
     threadId: string,
     transcript: ThreadTranscript,
@@ -879,15 +762,19 @@ export function useTranscriptController({
       persist?: boolean;
       syncRunState?: boolean;
       /**
-       * Batch 2b: set by the committed-stream path, whose events already
-       * reached the mirror through ingest — dual-writing the folded
-       * transcript again would apply the same data twice per event.
+       * Set by the committed-stream path, whose events already reached the
+       * mirror through ingest — applying the folded transcript again would
+       * apply the same data twice per event.
        */
-      skipMirrorDualWrite?: boolean;
+      mirrorAlreadyApplied?: boolean;
     },
   ) {
-    if (!options?.skipMirrorDualWrite) {
-      mirrorDualWrite(() => mirror.applyRemoteTranscript(threadId, transcript));
+    // The mirror computes messages/renderState/pagination/threadInfo/
+    // pendingInputs itself (batch 6a single store); this hook keeps the
+    // transport snapshot, run-state sync, cache persistence, desktopState
+    // propagation, and intent marking.
+    if (!options?.mirrorAlreadyApplied) {
+      mirror.applyRemoteTranscript(threadId, transcript);
     }
     const resolvedTranscript = transcriptWithResolvedActiveRun(transcript);
     rememberTranscriptSnapshot(
@@ -897,48 +784,6 @@ export function useTranscriptController({
       options?.syncRunState ?? true,
     );
     cacheOpenableTranscriptThread(threadId, resolvedTranscript);
-    updateThreadHistoryPagination(threadId, (current) =>
-      mergeRemotePaginationState(
-        current,
-        paginationStateFromTranscript(resolvedTranscript),
-        messagesByThreadRef.current[threadId] || [],
-      ),
-    );
-    setThreadInfoByThread((current) => ({
-      ...current,
-      [threadId]: resolvedTranscript.threadInfo ?? null,
-    }));
-    const visibleMessages = visibleTranscriptMessages(resolvedTranscript.messages);
-    setRemotePendingInputs(threadId, resolvedTranscript.pendingInputs);
-    startTransition(() => {
-      updateMessagesByThread(
-        (current) => {
-          const existing = current[threadId] || [];
-          const merged = mergeRemoteTranscriptWithLocal(
-            visibleMessages,
-            existing,
-            {
-              activeRunLiveRows: Boolean(resolvedTranscript.threadInfo?.activeRun),
-              preserveRemoteBeforeIndex:
-                resolvedTranscript.pageInfo?.startIndex ?? null,
-              threadRunActive: Boolean(resolvedTranscript.threadInfo?.activeRun),
-              intentForId,
-            },
-          );
-          if (
-            merged.length === existing.length &&
-            merged.every((entry, index) => entry === existing[index])
-          ) {
-            return current;
-          }
-          return {
-            ...current,
-            [threadId]: merged,
-          };
-        },
-        { skipMirrorSync: true },
-      );
-    });
     // Propagate the transcript's `team` block into `desktopState.threads[i]`
     // so team-bound threads render the team badge + sub-agent peek tabs as
     // soon as the thread metadata endpoint has confirmed the binding. Without
@@ -975,84 +820,33 @@ export function useTranscriptController({
         return { ...current, threads: nextThreads, sessions: nextSessions };
       });
     }
-    markIntentsFromHistory(threadId, visibleMessages);
-  }
-
-  function applyOlderRemoteTranscriptPage(
-    threadId: string,
-    transcript: ThreadTranscript,
-  ) {
-    mirrorDualWrite(() => mirror.applyOlderHistoryPage(threadId, transcript));
-    updateThreadHistoryPagination(threadId, () =>
-      paginationStateFromTranscript(transcript),
-    );
-    const visibleMessages = visibleTranscriptMessages(transcript.messages);
-    if (visibleMessages.length === 0) {
-      return;
-    }
-
-    updateMessagesByThread(
-      (current) => {
-        const existing = current[threadId] || [];
-        const existingIds = new Set(existing.map((entry) => entry.id));
-        const olderEntries = materializeRemoteTranscript(
-          visibleMessages,
-          [],
-        ).filter((entry) => !existingIds.has(entry.id));
-        if (olderEntries.length === 0) {
-          return current;
-        }
-        return {
-          ...current,
-          [threadId]: [...olderEntries, ...existing],
-        };
-      },
-      { skipMirrorSync: true },
+    markIntentsFromHistory(
+      threadId,
+      visibleTranscriptMessages(resolvedTranscript.messages),
     );
   }
 
   async function loadOlderThreadHistoryPage(threadId: string) {
-    const pagination = historyPaginationByThreadRef.current[threadId] || null;
-    if (
-      !pagination?.hasMoreBefore ||
-      pagination.loadingBefore ||
-      pagination.nextBeforeIndex === null
-    ) {
-      return;
-    }
-
-    updateThreadHistoryPagination(threadId, (current) => ({
-      hasMoreBefore: Boolean(current?.hasMoreBefore),
-      nextBeforeIndex: current?.nextBeforeIndex ?? null,
-      loadingBefore: true,
-    }));
-    // Batch 3d: the read side renders the mirror's pagination, so the
-    // legacy fetch's loadingBefore lifecycle must reach it too (the guard
-    // above still reads the legacy ref — single in-flight fetch holds).
-    mirrorDualWrite(() =>
-      mirror.setThreadHistoryLoadingBefore(threadId, true),
-    );
-
+    // Batch 6a: the mirror owns the older-page fetch (pagination guard,
+    // loadingBefore lifecycle, page apply). The hook keeps the UI-owned
+    // scroll-anchor capture between fetch and apply, and error surfacing.
     try {
-      const transcript = await window.garyxDesktop.getThreadHistory({
-        threadId,
-        beforeIndex: pagination.nextBeforeIndex,
-        limit: THREAD_HISTORY_PAGE_SIZE,
-        userQueryLimit: THREAD_HISTORY_USER_QUERY_LIMIT,
+      await mirror.loadOlderThreadHistoryPage(threadId, {
+        onPageFetched: (transcript) => {
+          const node = messagesRef.current;
+          if (
+            transcript.messages.length > 0 &&
+            node &&
+            selectedThreadIdRef.current === threadId
+          ) {
+            pendingMessagesPrependAnchorRef.current = {
+              threadId,
+              scrollHeight: node.scrollHeight,
+              scrollTop: node.scrollTop,
+            };
+          }
+        },
       });
-      const node = messagesRef.current;
-      if (
-        transcript.messages.length > 0 &&
-        node &&
-        selectedThreadIdRef.current === threadId
-      ) {
-        pendingMessagesPrependAnchorRef.current = {
-          threadId,
-          scrollHeight: node.scrollHeight,
-          scrollTop: node.scrollTop,
-        };
-      }
-      applyOlderRemoteTranscriptPage(threadId, transcript);
     } catch (historyError) {
       pendingMessagesPrependAnchorRef.current = null;
       setError(
@@ -1064,12 +858,6 @@ export function useTranscriptController({
       if (selectedThreadIdRef.current !== threadId) {
         pendingMessagesPrependAnchorRef.current = null;
       }
-      updateThreadHistoryPagination(threadId, (current) =>
-        current ? { ...current, loadingBefore: false } : current,
-      );
-      mirrorDualWrite(() =>
-        mirror.setThreadHistoryLoadingBefore(threadId, false),
-      );
     }
   }
 
@@ -1212,22 +1000,17 @@ export function useTranscriptController({
         latestTranscript = cached.transcript;
         applyRemoteTranscript(threadId, cached.transcript, { persist: false });
         // Restore the offline render snapshot so folded history renders before
-        // the live stream's first frame arrives.
+        // the live stream's first frame arrives. The mirror's render snapshot
+        // only advances through ingested frames, so replay the cached snapshot
+        // as a synthesized snapshot-only frame (same wire semantics; the
+        // monotonic guard applies).
         if (cached.renderState) {
-          applyThreadRenderState(threadId, cached.renderState);
-          // Batch 2b dual-write: the mirror's render snapshot only advances
-          // through ingested frames, so replay the cached snapshot as a
-          // synthesized snapshot-only frame (same wire semantics; the
-          // monotonic guard applies on both sides).
-          const cachedRenderState = cached.renderState;
-          mirrorDualWrite(() =>
-            mirror.ingest({
-              type: "thread_render_frame",
-              threadId,
-              events: [],
-              renderState: cachedRenderState,
-            }),
-          );
+          mirror.ingest({
+            type: "thread_render_frame",
+            threadId,
+            events: [],
+            renderState: cached.renderState,
+          });
         }
         // Start the committed stream from the cached cursor right away: its
         // replay plus first render frame is what shows turns committed while
@@ -1258,8 +1041,9 @@ export function useTranscriptController({
       // AUTHORITATIVE fetch result, so a stale persisted cache for a
       // deleted thread lands here too: the cached fast path above already
       // applied it and started the stream, so roll both back — stop the
-      // stream, drop the persisted cache, and clear the applied state from
-      // the legacy chain and the mirror.
+      // stream, drop the persisted cache, and clear the applied state
+      // (mirror.clearThreadTranscript resets all five transcript maps plus
+      // the committed records/frontier in one commit).
       if (
         fetched.authoritative &&
         isMissingThreadTranscript(fetched.transcript)
@@ -1274,33 +1058,7 @@ export function useTranscriptController({
         if (latestTranscript) {
           void window.garyxDesktop.clearThreadTranscriptCache(threadId);
           delete transcriptSnapshotByThreadRef.current[threadId];
-          updateMessagesByThread((current) => {
-            if (!(threadId in current)) {
-              return current;
-            }
-            const next = { ...current };
-            delete next[threadId];
-            return next;
-          });
-          updateRenderStateByThread((current) => {
-            if (!(threadId in current)) {
-              return current;
-            }
-            const next = { ...current };
-            delete next[threadId];
-            return next;
-          });
-          updateThreadHistoryPagination(threadId, () => null);
-          setThreadInfoByThread((current) => {
-            if (!(threadId in current)) {
-              return current;
-            }
-            const next = { ...current };
-            delete next[threadId];
-            return next;
-          });
-          setRemotePendingInputs(threadId, []);
-          mirrorDualWrite(() => mirror.clearThreadTranscript(threadId));
+          mirror.clearThreadTranscript(threadId);
           latestTranscript = null;
         }
         setError(`Thread not found: ${threadId}`);
@@ -1368,7 +1126,7 @@ export function useTranscriptController({
     }
     applyRemoteTranscript(threadId, merged, {
       syncRunState: false,
-      skipMirrorDualWrite: true,
+      mirrorAlreadyApplied: true,
     });
     const controlKind = transcriptControlKind(event.message);
     if (controlKind === "user_ack") {
@@ -1476,19 +1234,15 @@ export function useTranscriptController({
     forceReleaseThreadRuntime,
     getLiveStreamState,
     hasPendingHistoryIntents,
-    // Batch 3d: legacy-side per-thread refs exposed for the dev parity
-    // probe only (the render path reads the mirror; these are the last
-    // legacy-computed copies until batch 6 deletes the dual-write).
-    historyPaginationByThreadRef,
     intentForId,
     loadOlderThreadHistoryPage,
+    // Mirror-backed `{ current }` reader (batch 6a) for the dispatch
+    // orchestrator deps and the side-chat controller.
     messagesByThreadRef,
-    renderStateByThreadRef,
     replaceLiveStreamThreadId,
     setThreadRuntimeState,
     startCommittedThreadStream,
     threadTitleOverridesRef,
-    transcriptSnapshotByThreadRef,
     updateLiveStreamState,
     updateMessagesByThread,
   };
