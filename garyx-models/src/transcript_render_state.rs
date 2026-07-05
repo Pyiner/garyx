@@ -241,7 +241,7 @@ pub fn reduce_transcript_render_state_with_run_state<'a>(
         let reference = message_ref(seq, &role, message);
         if is_control_message(message) {
             if let Some(mark) = capsule_mark_from_message(seq, message) {
-                current_tool_group.flush_into(&mut blocks);
+                current_tool_group.flush_boundary_into(&mut blocks);
                 capsule_marks.push(mark);
             }
             continue;
@@ -250,7 +250,7 @@ pub fn reduce_transcript_render_state_with_run_state<'a>(
         let kind = resolve_message_kind_for_object(&role, message, tool_related);
         match kind {
             "user_input" | "assistant_reply" => {
-                current_tool_group.flush_into(&mut blocks);
+                current_tool_group.flush_boundary_into(&mut blocks);
                 if kind == "assistant_reply" && is_empty_streaming_assistant(message) {
                     filtered_placeholders.push(RenderFilteredPlaceholder {
                         message: reference,
@@ -277,7 +277,7 @@ pub fn reduce_transcript_render_state_with_run_state<'a>(
                 });
             }
             _ => {
-                current_tool_group.flush_into(&mut blocks);
+                current_tool_group.flush_boundary_into(&mut blocks);
             }
         }
     }
@@ -484,6 +484,20 @@ impl ToolGroupBuilder {
         }
 
         self.entries.push(ToolEntryDraft::from_result(message));
+    }
+
+    /// Narrative-boundary flush (#TASK-1603): assistant text, user input,
+    /// or a control mark between a tool_use and its tool_result must NOT
+    /// split the call into two groups — the early flush used to strand the
+    /// pending use in one group and the late result in a SECOND group with
+    /// the same tool_use_id-derived id (duplicate React keys downstream).
+    /// A group with any pending call survives the boundary intact; the
+    /// end-of-records flush still emits it (as the active/tail group).
+    fn flush_boundary_into(&mut self, blocks: &mut Vec<RenderBlock>) {
+        if self.entries.iter().any(ToolEntryDraft::is_pending) {
+            return;
+        }
+        self.flush_into(blocks);
     }
 
     fn flush_into(&mut self, blocks: &mut Vec<RenderBlock>) {
@@ -1264,6 +1278,64 @@ mod tests {
             let actual = serde_json::to_value(actual).expect("serialize render snapshot");
             assert_eq!(actual, case.expected, "{}", case.name);
         }
+    }
+
+    #[test]
+    fn tool_group_ids_stay_unique_when_text_interleaves_use_and_result() {
+        // #TASK-1603: an assistant text record between a tool_use and its
+        // tool_result used to flush the open group early; the late result
+        // then opened a SECOND group with the same tool_use_id-derived id,
+        // and React warned about duplicate `tool_group:call_*` keys.
+        let records = vec![
+            control_record(1, "run_start"),
+            user_record(2, "Run a tool", "00000000-0000-0000-0000-000000000001"),
+            message_record(
+                3,
+                json!({
+                    "role": "tool_use",
+                    "tool_use_id": "call_a",
+                    "text": "",
+                    "timestamp": "2026-01-01T00:00:03Z"
+                }),
+            ),
+            assistant_record(4, "Narrating between use and result"),
+            message_record(
+                5,
+                json!({
+                    "role": "tool_result",
+                    "tool_use_id": "call_a",
+                    "text": "done",
+                    "timestamp": "2026-01-01T00:00:05Z"
+                }),
+            ),
+            assistant_record(6, "Final answer"),
+        ];
+
+        let snapshot = reduce_transcript_render_state(&records);
+        let mut group_ids = Vec::new();
+        for row in &snapshot.rows {
+            let RenderRow::UserTurn(turn) = row else {
+                continue;
+            };
+            for activity in &turn.activity {
+                let RenderActivityRow::Step(step) = activity else {
+                    continue;
+                };
+                for item in &step.steps {
+                    if let RenderStepItem::ToolGroup(group) = item {
+                        group_ids.push(group.id.clone());
+                    }
+                }
+            }
+        }
+        let mut deduped = group_ids.clone();
+        deduped.sort();
+        deduped.dedup();
+        assert_eq!(
+            deduped.len(),
+            group_ids.len(),
+            "tool_group ids must be unique per snapshot, got {group_ids:?}"
+        );
     }
 
     #[test]
