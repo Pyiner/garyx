@@ -643,11 +643,8 @@ export function AppShell() {
   >(null);
   const [selectedWorkflowTask, setSelectedWorkflowTask] =
     useState<DesktopTaskSummary | null>(null);
-  const [selectedWorkflowTaskId, setSelectedWorkflowTaskId] = useState<
-    string | null
-  >(() =>
-    initialRouteValue.kind === "workflow-task" ? initialRouteValue.taskId : null,
-  );
+  // Batch 6c-2c: the workflow task id is a selector over the committed
+  // route (declared below the route snapshot).
   const [selectedWorkflowRunId, setSelectedWorkflowRunId] = useState<
     string | null
   >(null);
@@ -754,6 +751,10 @@ export function AppShell() {
   const capsulePreviewId =
     routeSnapshot.route.kind === "capsule"
       ? routeSnapshot.route.capsuleId
+      : null;
+  const selectedWorkflowTaskId =
+    routeSnapshot.route.kind === "workflow-task"
+      ? routeSnapshot.route.taskId
       : null;
   // Settings tab: route-selected with last-active stickiness — plain
   // #/settings shows the previously active tab (design contract:
@@ -2520,7 +2521,6 @@ export function AppShell() {
     setSelectedThreadId,
     setSelectedWorkflowRunId,
     setSelectedWorkflowTask,
-    setSelectedWorkflowTaskId,
     settingsActiveTab,
   });
 

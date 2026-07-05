@@ -111,7 +111,6 @@ type RouteEffectBridgeArgs = {
   setSelectedWorkflowTask: React.Dispatch<
     React.SetStateAction<DesktopTaskSummary | null>
   >;
-  setSelectedWorkflowTaskId: React.Dispatch<React.SetStateAction<string | null>>;
   settingsActiveTab: SettingsTabId;
 };
 
@@ -151,7 +150,6 @@ export function useRouteEffectBridge({
   setSelectedThreadId,
   setSelectedWorkflowRunId,
   setSelectedWorkflowTask,
-  setSelectedWorkflowTaskId,
   settingsActiveTab,
 }: RouteEffectBridgeArgs): void {
   const deepLinkEventHandlerRef = useRef<(event: DesktopDeepLinkEvent) => void>(
@@ -236,11 +234,9 @@ export function useRouteEffectBridge({
             (taskHint.taskId || `#TASK-${taskHint.number}`) === route.taskId
           ) {
             setSelectedWorkflowTask(taskHint);
-            setSelectedWorkflowTaskId(route.taskId);
             setSelectedWorkflowRunId(taskHint.threadId || null);
           } else {
             setSelectedWorkflowTask(null);
-            setSelectedWorkflowTaskId(route.taskId);
             setSelectedWorkflowRunId(null);
           }
           return;
@@ -290,7 +286,12 @@ export function useRouteEffectBridge({
           return;
         }
         setSelectedWorkflowTask(task);
-        setSelectedWorkflowTaskId(task.taskId || taskId);
+        // Sync the route to the server-confirmed task id (normalization,
+        // 6c-2c) — the id itself is a route selector now.
+        desktopRouteStore.syncRoute({
+          kind: "workflow-task",
+          taskId: task.taskId || taskId,
+        });
         if (task.executor?.type !== "workflow") {
           setError(`Task is not workflow-backed: ${task.taskId || taskId}`);
           return;
