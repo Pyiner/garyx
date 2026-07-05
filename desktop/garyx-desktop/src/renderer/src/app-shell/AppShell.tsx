@@ -3146,6 +3146,37 @@ export function AppShell() {
     });
   }
 
+  /**
+   * Draft-route sync for in-draft mutations (6c-2c): agent/workflow/
+   * workspace picks change the folded new-thread route, so sync it
+   * directly (overrides carry the just-picked values; the rest folds from
+   * the current render). Guarded by the same predicate the fold uses for
+   * the new-thread shape — outside the draft these pendings do not drive
+   * the hash. Equal-route syncs are no-ops while the fold still runs.
+   */
+  function syncDraftRoute(overrides: {
+    workspacePath?: string | null;
+    agentId?: string | null;
+    workflowId?: string | null;
+  }) {
+    if (!newThreadDraftActive || selectedThreadId) {
+      return;
+    }
+    desktopRouteStore.syncRoute({
+      kind: "new-thread",
+      workspacePath:
+        overrides.workspacePath !== undefined
+          ? overrides.workspacePath
+          : pendingWorkspacePath,
+      agentId:
+        overrides.agentId !== undefined ? overrides.agentId : pendingAgentId,
+      workflowId:
+        overrides.workflowId !== undefined
+          ? overrides.workflowId
+          : pendingWorkflowId,
+    });
+  }
+
   function handleStartDraftForAgent(agentId: string) {
     const nextWorkspace = pickPreferredWorkspace(
       selectableNewThreadWorkspaces,
@@ -3277,6 +3308,12 @@ export function AppShell() {
         setPendingWorkspacePath(workspace.path);
         setPendingWorkspaceMode("local");
         requestComposerFocus();
+        desktopRouteStore.syncRoute({
+          kind: "new-thread",
+          workspacePath: workspace.path,
+          agentId: pendingAgentId,
+          workflowId: pendingWorkflowId,
+        });
       }
       closeAddWorkspaceDialog(workspace);
     }
@@ -4113,6 +4150,7 @@ export function AppShell() {
         onSelectNewThreadAgent={(agentId) => {
           setPendingAgentId(agentId);
           setPendingWorkflowId(null);
+          syncDraftRoute({ agentId, workflowId: null });
         }}
         onSelectNewThreadModel={setPendingModel}
         onSelectNewThreadReasoningEffort={setPendingModelReasoningEffort}
@@ -4133,6 +4171,7 @@ export function AppShell() {
         onSelectNewThreadWorkflow={(workflowId) => {
           setPendingWorkflowId(workflowId);
           setPendingAgentId("claude");
+          syncDraftRoute({ agentId: "claude", workflowId });
         }}
         onSelectNewThreadWorkspaceMode={setPendingWorkspaceMode}
         onResumeProviderSession={handleResumeProviderSession}
