@@ -552,7 +552,7 @@ final class GaryxGatewayClientTests: XCTestCase {
                 let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
                 XCTAssertEqual(object["mode"] as? String, "console")
                 XCTAssertEqual(object["sso"] as? Bool, true)
-                XCTAssertEqual(object["email"] as? String, "bot@example.com")
+                XCTAssertNil(object["email"], "iOS must never send an email in the start request")
                 let response = try XCTUnwrap(
                     HTTPURLResponse(
                         url: try XCTUnwrap(request.url),
@@ -649,8 +649,7 @@ final class GaryxGatewayClientTests: XCTestCase {
         let start = try await client.startClaudeCodeAuth(
             GaryxClaudeCodeAuthStartRequest(
                 mode: .console,
-                sso: true,
-                email: " bot@example.com "
+                sso: true
             )
         )
         let submitted = try await client.submitClaudeCodeAuth(

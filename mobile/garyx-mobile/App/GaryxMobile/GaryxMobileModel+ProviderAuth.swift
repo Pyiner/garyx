@@ -2,30 +2,23 @@ import Foundation
 import WidgetKit
 
 extension GaryxMobileModel {
-    func startClaudeCodeAuth(
-        mode: GaryxClaudeCodeAuthMode,
-        sso: Bool,
-        email: String
-    ) async -> URL? {
+    /// Begins a Claude Code sign-in with the chosen advanced options. Never
+    /// sends an email (the field was removed from the request). The guided login
+    /// sheet reacts to `claudeCodeAuthSession` and opens the authorization URL on
+    /// the Authorize screen, so this no longer auto-opens the browser.
+    func startClaudeCodeAuth(options: GaryxClaudeCodeLoginOptions) async {
         cancelClaudeCodeAuthPolling()
         let runtimeGeneration = gatewayRuntimeGeneration
         claudeCodeAuthSession = GaryxClaudeCodeAuthSession(loginId: "", status: .starting)
         do {
-            let session = try await client().startClaudeCodeAuth(
-                GaryxClaudeCodeAuthStartRequest(
-                    mode: mode,
-                    sso: sso,
-                    email: email
-                )
-            )
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
+            let session = try await client().startClaudeCodeAuth(options.startRequest)
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             claudeCodeAuthSession = session
             if session.status == .succeeded {
                 await refreshClaudeCodeAuthSuccessState(runtimeGeneration: runtimeGeneration)
             }
-            return session.authorizationURL
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             let message = displayMessage(for: error)
             claudeCodeAuthSession = GaryxClaudeCodeAuthSession(
                 loginId: "",
@@ -33,7 +26,6 @@ extension GaryxMobileModel {
                 error: message
             )
             lastError = message
-            return nil
         }
     }
 
@@ -74,7 +66,7 @@ extension GaryxMobileModel {
         } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             if isClaudeCodeAuthSessionMissing(error) {
-                resetClaudeCodeAuthFlow()
+                markClaudeCodeAuthSessionExpired()
                 return
             }
             let message = displayMessage(for: error)
@@ -91,6 +83,20 @@ extension GaryxMobileModel {
     func resetClaudeCodeAuthFlow() {
         cancelClaudeCodeAuthPolling()
         claudeCodeAuthSession = nil
+    }
+
+    /// A 404 means the gateway no longer knows this login session — it lives in
+    /// an in-memory map with no TTL and is dropped on gateway restart. Surface it
+    /// as a terminal failure so the sheet shows an explicit "session expired"
+    /// screen (Try Again / Start Over) instead of silently snapping back to the
+    /// intro. The UI must not imply the remote login was cancelled.
+    private func markClaudeCodeAuthSessionExpired() {
+        cancelClaudeCodeAuthPolling()
+        claudeCodeAuthSession = GaryxClaudeCodeAuthSession(
+            loginId: "",
+            status: .failed,
+            error: "Your Claude sign-in session expired. Start over to sign in again."
+        )
     }
 
     private func startClaudeCodeAuthPolling(
@@ -149,7 +155,7 @@ extension GaryxMobileModel {
                     return
                 }
                 if isClaudeCodeAuthSessionMissing(error) {
-                    resetClaudeCodeAuthFlow()
+                    markClaudeCodeAuthSessionExpired()
                     return
                 }
                 let message = displayMessage(for: error)

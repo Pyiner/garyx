@@ -1,17 +1,35 @@
 import Foundation
 
+// Claude Code sign-in models. The gateway HTTP contract (start / submit / get)
+// is unchanged; iOS drives it through a dedicated guided login sheet. The email
+// field was removed from the start request entirely so iOS can never send it —
+// gateway still accepts it, we simply omit it (default body `{"mode":"claudeai"}`).
+// `console` and `sso` remain available as advanced-only options via the existing
+// wire fields.
+
 public enum GaryxClaudeCodeAuthMode: String, Codable, CaseIterable, Identifiable, Sendable {
     case claudeai
     case console
 
     public var id: String { rawValue }
 
+    /// Short label used in the advanced login-method control.
     public var displayName: String {
         switch self {
         case .claudeai:
             return "Claude.ai"
         case .console:
             return "Console"
+        }
+    }
+
+    /// One-line explanation shown under the advanced login-method control.
+    public var advancedDescription: String {
+        switch self {
+        case .claudeai:
+            return "Sign in with your Claude.ai subscription."
+        case .console:
+            return "Sign in with Anthropic Console (API billing)."
         }
     }
 }
@@ -31,31 +49,28 @@ public enum GaryxClaudeCodeAuthStatus: String, Codable, Equatable, Sendable {
 public struct GaryxClaudeCodeAuthStartRequest: Encodable, Equatable, Sendable {
     public var mode: GaryxClaudeCodeAuthMode
     public var sso: Bool
-    public var email: String?
 
     public init(
         mode: GaryxClaudeCodeAuthMode = .claudeai,
-        sso: Bool = false,
-        email: String? = nil
+        sso: Bool = false
     ) {
         self.mode = mode
         self.sso = sso
-        self.email = email?.trimmingCharacters(in: .whitespacesAndNewlines).garyxGatewayTrimmedNilIfEmpty
     }
 
     enum CodingKeys: String, CodingKey {
         case mode
         case sso
-        case email
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(mode, forKey: .mode)
+        // Only send `sso` when enabled; the default flow is a bare
+        // `{"mode":"claudeai"}` with no email and no sso key.
         if sso {
             try container.encode(sso, forKey: .sso)
         }
-        try container.encodeIfPresent(email, forKey: .email)
     }
 }
 
@@ -64,6 +79,32 @@ public struct GaryxClaudeCodeAuthSubmitRequest: Encodable, Equatable, Sendable {
 
     public init(code: String) {
         self.code = code.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+/// The advanced options a user can adjust before starting sign-in. Defaults to a
+/// one-tap Claude.ai login; `console` / `sso` are opt-in via Advanced Options.
+public struct GaryxClaudeCodeLoginOptions: Equatable, Sendable {
+    public var mode: GaryxClaudeCodeAuthMode
+    public var useSSO: Bool
+
+    public init(
+        mode: GaryxClaudeCodeAuthMode = .claudeai,
+        useSSO: Bool = false
+    ) {
+        self.mode = mode
+        self.useSSO = useSSO
+    }
+
+    /// True when nothing is customized (default Claude.ai, no SSO). Used by the
+    /// UI to keep the Advanced Options disclosure collapsed by default.
+    public var isDefault: Bool {
+        mode == .claudeai && !useSSO
+    }
+
+    /// The wire request for these options. Never carries an email.
+    public var startRequest: GaryxClaudeCodeAuthStartRequest {
+        GaryxClaudeCodeAuthStartRequest(mode: mode, sso: useSSO)
     }
 }
 
@@ -190,173 +231,301 @@ public enum GaryxClaudeCodeAuthPresentationTone: Equatable, Sendable {
     case muted
 }
 
-public enum GaryxClaudeCodeAuthPrimaryAction: Equatable, Sendable {
-    case start
-    case openAuthorizationURL
-    case none
-}
+// MARK: - Provider section entry
 
-public struct GaryxClaudeCodeAuthPresentation: Equatable, Sendable {
+/// The slim entry shown inside the provider detail's Authentication section: a
+/// status pill, an optional account summary, and one full-width button that
+/// presents the guided login sheet. All step-by-step fields moved to the sheet.
+public struct GaryxClaudeCodeAuthEntry: Equatable, Sendable {
     public var statusText: String
-    public var detailText: String?
     public var tone: GaryxClaudeCodeAuthPresentationTone
+    public var isSignedIn: Bool
     public var accountText: String?
     public var accountDetailText: String?
-    public var primaryActionTitle: String
-    public var primaryAction: GaryxClaudeCodeAuthPrimaryAction
-    public var primaryActionEnabled: Bool
-    public var showsLoginOptions: Bool
-    public var showsAuthorizationControls: Bool
-    public var showsCodeField: Bool
-    public var submitEnabled: Bool
+    public var actionTitle: String
+    public var actionSymbolName: String
+    /// A short helper line shown when signed out (e.g. a usage error).
+    public var footnote: String?
 
     public init(
         statusText: String,
-        detailText: String? = nil,
         tone: GaryxClaudeCodeAuthPresentationTone,
+        isSignedIn: Bool,
         accountText: String? = nil,
         accountDetailText: String? = nil,
-        primaryActionTitle: String,
-        primaryAction: GaryxClaudeCodeAuthPrimaryAction,
-        primaryActionEnabled: Bool,
-        showsLoginOptions: Bool,
-        showsAuthorizationControls: Bool,
-        showsCodeField: Bool,
-        submitEnabled: Bool
+        actionTitle: String,
+        actionSymbolName: String,
+        footnote: String? = nil
     ) {
         self.statusText = statusText
-        self.detailText = detailText?.trimmingCharacters(in: .whitespacesAndNewlines).garyxGatewayTrimmedNilIfEmpty
         self.tone = tone
+        self.isSignedIn = isSignedIn
         self.accountText = accountText?.trimmingCharacters(in: .whitespacesAndNewlines).garyxGatewayTrimmedNilIfEmpty
         self.accountDetailText = accountDetailText?.trimmingCharacters(in: .whitespacesAndNewlines).garyxGatewayTrimmedNilIfEmpty
-        self.primaryActionTitle = primaryActionTitle
-        self.primaryAction = primaryAction
-        self.primaryActionEnabled = primaryActionEnabled
-        self.showsLoginOptions = showsLoginOptions
-        self.showsAuthorizationControls = showsAuthorizationControls
+        self.actionTitle = actionTitle
+        self.actionSymbolName = actionSymbolName
+        self.footnote = footnote?.trimmingCharacters(in: .whitespacesAndNewlines).garyxGatewayTrimmedNilIfEmpty
+    }
+
+    public static func make(
+        session: GaryxClaudeCodeAuthSession?,
+        usage: GaryxProviderUsage?
+    ) -> GaryxClaudeCodeAuthEntry {
+        let account = GaryxClaudeCodeAuthAccount.make(authStatus: session?.authStatus, usage: usage)
+        if account.loggedIn {
+            return GaryxClaudeCodeAuthEntry(
+                statusText: "Signed in",
+                tone: .good,
+                isSignedIn: true,
+                accountText: account.displayName,
+                accountDetailText: account.detailText,
+                actionTitle: "Re-authenticate",
+                actionSymbolName: "arrow.triangle.2.circlepath",
+                footnote: nil
+            )
+        }
+        return GaryxClaudeCodeAuthEntry(
+            statusText: "Not signed in",
+            tone: .muted,
+            isSignedIn: false,
+            accountText: nil,
+            accountDetailText: nil,
+            actionTitle: "Sign in with Claude",
+            actionSymbolName: "sparkles",
+            footnote: usage?.error
+        )
+    }
+}
+
+// MARK: - Guided login sheet
+
+/// One screen of the guided login sheet. `waiting_for_code` is split into two
+/// client-only steps (`.authorize` / `.enterCode`) here in Core so the app never
+/// re-derives the sub-step; the gateway state machine is unchanged.
+public enum GaryxClaudeCodeLoginStep: Equatable, Sendable {
+    case intro
+    case authorize
+    case enterCode
+    case submitting
+    case success
+    case failure
+}
+
+public enum GaryxClaudeCodeLoginActionKind: Equatable, Sendable {
+    /// Begin (or restart) a login: POST auth/start with the chosen options.
+    case start
+    /// Open the authorization URL in the browser and advance to code entry.
+    case openAuthorizationURL
+    /// Advance to code entry without opening the browser ("I already have a code").
+    case enterCode
+    /// Submit the pasted authorization code.
+    case submitCode
+    /// Dismiss the sheet after a successful sign-in.
+    case done
+    /// Discard the current login session and return to the intro screen.
+    case startOver
+}
+
+public struct GaryxClaudeCodeLoginAction: Equatable, Sendable {
+    public var kind: GaryxClaudeCodeLoginActionKind
+    public var title: String
+    public var isEnabled: Bool
+
+    public init(
+        _ kind: GaryxClaudeCodeLoginActionKind,
+        title: String,
+        isEnabled: Bool = true
+    ) {
+        self.kind = kind
+        self.title = title
+        self.isEnabled = isEnabled
+    }
+}
+
+/// A labelled account attribute shown on the success screen.
+public struct GaryxClaudeCodeLoginDetailRow: Equatable, Sendable, Identifiable {
+    public var label: String
+    public var value: String
+
+    public init(label: String, value: String) {
+        self.label = label
+        self.value = value
+    }
+
+    public var id: String { label }
+}
+
+public struct GaryxClaudeCodeLoginPresentation: Equatable, Sendable {
+    public var step: GaryxClaudeCodeLoginStep
+    public var symbolName: String
+    public var title: String
+    public var message: String?
+    public var tone: GaryxClaudeCodeAuthPresentationTone
+    public var showsProgress: Bool
+    public var showsCodeField: Bool
+    public var detailRows: [GaryxClaudeCodeLoginDetailRow]
+    public var primaryAction: GaryxClaudeCodeLoginAction?
+    public var secondaryAction: GaryxClaudeCodeLoginAction?
+
+    public init(
+        step: GaryxClaudeCodeLoginStep,
+        symbolName: String,
+        title: String,
+        message: String? = nil,
+        tone: GaryxClaudeCodeAuthPresentationTone,
+        showsProgress: Bool = false,
+        showsCodeField: Bool = false,
+        detailRows: [GaryxClaudeCodeLoginDetailRow] = [],
+        primaryAction: GaryxClaudeCodeLoginAction? = nil,
+        secondaryAction: GaryxClaudeCodeLoginAction? = nil
+    ) {
+        self.step = step
+        self.symbolName = symbolName
+        self.title = title
+        self.message = message?.trimmingCharacters(in: .whitespacesAndNewlines).garyxGatewayTrimmedNilIfEmpty
+        self.tone = tone
+        self.showsProgress = showsProgress
         self.showsCodeField = showsCodeField
-        self.submitEnabled = submitEnabled
+        self.detailRows = detailRows
+        self.primaryAction = primaryAction
+        self.secondaryAction = secondaryAction
+    }
+
+    /// Derives the current login step. `waiting_for_code` resolves to `.authorize`
+    /// until the client reports it has opened (or skipped to) code entry, then
+    /// `.enterCode`. This is the single source of the sub-step split (design §
+    /// state-machine mapping).
+    public static func step(
+        for status: GaryxClaudeCodeAuthStatus?,
+        hasOpenedAuthorizationURL: Bool
+    ) -> GaryxClaudeCodeLoginStep {
+        switch status {
+        case .none:
+            return .intro
+        case .starting:
+            return .authorize
+        case .waitingForCode:
+            return hasOpenedAuthorizationURL ? .enterCode : .authorize
+        case .submitted:
+            return .submitting
+        case .succeeded:
+            return .success
+        case .failed:
+            return .failure
+        }
     }
 
     public static func make(
         session: GaryxClaudeCodeAuthSession?,
         usage: GaryxProviderUsage?,
-        authorizationCode: String = ""
-    ) -> GaryxClaudeCodeAuthPresentation {
-        let account = GaryxClaudeCodeAuthAccount.make(
-            authStatus: session?.authStatus,
-            usage: usage
-        )
+        authorizationCode: String = "",
+        hasOpenedAuthorizationURL: Bool = false
+    ) -> GaryxClaudeCodeLoginPresentation {
         let hasCode = !authorizationCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let urlReady = session?.authorizationURL != nil
+        let step = step(for: session?.status, hasOpenedAuthorizationURL: hasOpenedAuthorizationURL)
 
-        switch session?.status {
-        case .starting:
-            return GaryxClaudeCodeAuthPresentation(
-                statusText: "Starting",
-                detailText: "Waiting for the gateway to return an authorization URL.",
-                tone: .warning,
-                accountText: account.displayName,
-                accountDetailText: account.detailText,
-                primaryActionTitle: "Starting",
-                primaryAction: .none,
-                primaryActionEnabled: false,
-                showsLoginOptions: false,
-                showsAuthorizationControls: false,
-                showsCodeField: false,
-                submitEnabled: false
-            )
-        case .waitingForCode:
-            return GaryxClaudeCodeAuthPresentation(
-                statusText: "Waiting for code",
-                detailText: session?.error,
-                tone: .warning,
-                accountText: account.displayName,
-                accountDetailText: account.detailText,
-                primaryActionTitle: "Open authorization page",
-                primaryAction: .openAuthorizationURL,
-                primaryActionEnabled: session?.authorizationURL != nil,
-                showsLoginOptions: false,
-                showsAuthorizationControls: session?.authorizationURL != nil,
-                showsCodeField: true,
-                submitEnabled: hasCode
-            )
-        case .submitted:
-            return GaryxClaudeCodeAuthPresentation(
-                statusText: "Submitted",
-                detailText: "Waiting for Claude Code to finish sign-in on the gateway.",
-                tone: .warning,
-                accountText: account.displayName,
-                accountDetailText: account.detailText,
-                primaryActionTitle: "Submitted",
-                primaryAction: .none,
-                primaryActionEnabled: false,
-                showsLoginOptions: false,
-                showsAuthorizationControls: session?.authorizationURL != nil,
-                showsCodeField: true,
-                submitEnabled: false
-            )
-        case .succeeded:
-            return signedInPresentation(
-                account: account,
-                primaryActionTitle: "Re-authenticate"
-            )
-        case .failed:
-            return GaryxClaudeCodeAuthPresentation(
-                statusText: "Login failed",
-                detailText: session?.error ?? "Claude Code login failed.",
-                tone: .danger,
-                accountText: account.displayName,
-                accountDetailText: account.detailText,
-                primaryActionTitle: "Retry sign in",
-                primaryAction: .start,
-                primaryActionEnabled: true,
-                showsLoginOptions: true,
-                showsAuthorizationControls: false,
-                showsCodeField: false,
-                submitEnabled: false
-            )
-        case .none:
-            if account.loggedIn {
-                return signedInPresentation(
-                    account: account,
-                    primaryActionTitle: "Re-authenticate"
-                )
-            }
-            return GaryxClaudeCodeAuthPresentation(
-                statusText: "Needs login",
-                detailText: usage?.error,
+        switch step {
+        case .intro:
+            return GaryxClaudeCodeLoginPresentation(
+                step: .intro,
+                symbolName: "sparkles",
+                title: "Sign in to Claude Code",
+                message: "Authorize Garyx in your browser, then paste the code back here to finish signing in.",
                 tone: .muted,
-                accountText: account.displayName,
-                accountDetailText: account.detailText,
-                primaryActionTitle: "Sign in with Claude",
-                primaryAction: .start,
-                primaryActionEnabled: true,
-                showsLoginOptions: true,
-                showsAuthorizationControls: false,
-                showsCodeField: false,
-                submitEnabled: false
+                primaryAction: GaryxClaudeCodeLoginAction(.start, title: "Sign in with Claude")
+            )
+
+        case .authorize:
+            let preparing = session?.status == .starting || !urlReady
+            return GaryxClaudeCodeLoginPresentation(
+                step: .authorize,
+                symbolName: "globe",
+                title: "Authorize in Browser",
+                message: preparing
+                    ? "Preparing your secure authorization link…"
+                    : "Open the Claude authorization page, approve access, then come back with your code.",
+                tone: .muted,
+                showsProgress: preparing,
+                primaryAction: GaryxClaudeCodeLoginAction(
+                    .openAuthorizationURL,
+                    title: preparing ? "Preparing…" : "Open Claude",
+                    isEnabled: urlReady
+                ),
+                secondaryAction: urlReady
+                    ? GaryxClaudeCodeLoginAction(.enterCode, title: "I already have a code")
+                    : nil
+            )
+
+        case .enterCode:
+            return GaryxClaudeCodeLoginPresentation(
+                step: .enterCode,
+                symbolName: "doc.on.clipboard",
+                title: "Enter Authorization Code",
+                message: "Paste the code Claude gave you after you approved access.",
+                tone: .muted,
+                showsCodeField: true,
+                primaryAction: GaryxClaudeCodeLoginAction(.submitCode, title: "Submit Code", isEnabled: hasCode),
+                secondaryAction: GaryxClaudeCodeLoginAction(
+                    .openAuthorizationURL,
+                    title: "Open Claude Again",
+                    isEnabled: urlReady
+                )
+            )
+
+        case .submitting:
+            return GaryxClaudeCodeLoginPresentation(
+                step: .submitting,
+                symbolName: "hourglass",
+                title: "Finishing Sign-In",
+                message: "Completing sign-in on your gateway host…",
+                tone: .warning,
+                showsProgress: true
+            )
+
+        case .success:
+            let account = GaryxClaudeCodeAuthAccount.make(authStatus: session?.authStatus, usage: usage)
+            return GaryxClaudeCodeLoginPresentation(
+                step: .success,
+                symbolName: "checkmark.circle.fill",
+                title: "Signed In",
+                message: "You're signed in and ready to use Claude Code.",
+                tone: .good,
+                detailRows: successRows(account: account),
+                primaryAction: GaryxClaudeCodeLoginAction(.done, title: "Done")
+            )
+
+        case .failure:
+            return GaryxClaudeCodeLoginPresentation(
+                step: .failure,
+                symbolName: "exclamationmark.triangle.fill",
+                title: "Sign-In Failed",
+                message: session?.error ?? "Claude Code sign-in didn't complete. Please try again.",
+                tone: .danger,
+                primaryAction: GaryxClaudeCodeLoginAction(.start, title: "Try Again"),
+                secondaryAction: GaryxClaudeCodeLoginAction(.startOver, title: "Start Over")
             )
         }
     }
 
-    private static func signedInPresentation(
-        account: GaryxClaudeCodeAuthAccount,
-        primaryActionTitle: String
-    ) -> GaryxClaudeCodeAuthPresentation {
-        GaryxClaudeCodeAuthPresentation(
-            statusText: "Signed in",
-            detailText: nil,
-            tone: .good,
-            accountText: account.displayName,
-            accountDetailText: account.detailText,
-            primaryActionTitle: primaryActionTitle,
-            primaryAction: .start,
-            primaryActionEnabled: true,
-            showsLoginOptions: true,
-            showsAuthorizationControls: false,
-            showsCodeField: false,
-            submitEnabled: false
+    private static func successRows(account: GaryxClaudeCodeAuthAccount) -> [GaryxClaudeCodeLoginDetailRow] {
+        var rows: [GaryxClaudeCodeLoginDetailRow] = []
+        rows.append(
+            GaryxClaudeCodeLoginDetailRow(
+                label: "Account",
+                value: account.orgName ?? account.email ?? "Claude account"
+            )
         )
+        if let plan = account.plan {
+            rows.append(GaryxClaudeCodeLoginDetailRow(label: "Plan", value: plan))
+        }
+        if let authMethod = account.authMethod {
+            rows.append(GaryxClaudeCodeLoginDetailRow(label: "Method", value: authMethod))
+        }
+        if let apiProvider = account.apiProvider {
+            rows.append(GaryxClaudeCodeLoginDetailRow(label: "API", value: apiProvider))
+        }
+        return rows
     }
 }
 

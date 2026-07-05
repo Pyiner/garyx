@@ -87,60 +87,202 @@ final class GaryxClaudeCodeAuthTests: XCTestCase {
         XCTAssertEqual(account.displayName, "pro")
     }
 
-    func testPresentationStatesFollowAuthFlow() {
-        let idle = GaryxClaudeCodeAuthPresentation.make(session: nil, usage: nil)
-        XCTAssertEqual(idle.statusText, "Needs login")
-        XCTAssertEqual(idle.primaryAction, .start)
-        XCTAssertTrue(idle.showsLoginOptions)
+    // MARK: Simplified start request (email removed)
 
-        let waiting = GaryxClaudeCodeAuthPresentation.make(
+    func testDefaultStartRequestEncodesModeOnlyAndNeverEmail() throws {
+        let data = try JSONEncoder().encode(GaryxClaudeCodeLoginOptions().startRequest)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        XCTAssertEqual(object["mode"] as? String, "claudeai")
+        XCTAssertNil(object["email"], "iOS must never send an email in the start request")
+        XCTAssertNil(object["sso"], "sso is omitted unless explicitly enabled")
+        XCTAssertEqual(object.count, 1)
+        XCTAssertTrue(GaryxClaudeCodeLoginOptions().isDefault)
+    }
+
+    func testAdvancedConsoleWithSSOEncodesModeAndSSOButNeverEmail() throws {
+        let options = GaryxClaudeCodeLoginOptions(mode: .console, useSSO: true)
+        let data = try JSONEncoder().encode(options.startRequest)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        XCTAssertEqual(object["mode"] as? String, "console")
+        XCTAssertEqual(object["sso"] as? Bool, true)
+        XCTAssertNil(object["email"])
+        XCTAssertFalse(options.isDefault)
+    }
+
+    // MARK: Guided login step machine
+
+    func testLoginStepMapsEveryGatewayStatusToOneScreen() {
+        typealias Present = GaryxClaudeCodeLoginPresentation
+        XCTAssertEqual(Present.step(for: nil, hasOpenedAuthorizationURL: false), .intro)
+        XCTAssertEqual(Present.step(for: .starting, hasOpenedAuthorizationURL: false), .authorize)
+        // waiting_for_code splits on the client-only opened flag.
+        XCTAssertEqual(Present.step(for: .waitingForCode, hasOpenedAuthorizationURL: false), .authorize)
+        XCTAssertEqual(Present.step(for: .waitingForCode, hasOpenedAuthorizationURL: true), .enterCode)
+        XCTAssertEqual(Present.step(for: .submitted, hasOpenedAuthorizationURL: false), .submitting)
+        XCTAssertEqual(Present.step(for: .succeeded, hasOpenedAuthorizationURL: false), .success)
+        XCTAssertEqual(Present.step(for: .failed, hasOpenedAuthorizationURL: false), .failure)
+    }
+
+    func testLoginPresentationIntroOffersSignInOnly() {
+        let intro = GaryxClaudeCodeLoginPresentation.make(session: nil, usage: nil)
+        XCTAssertEqual(intro.step, .intro)
+        XCTAssertEqual(intro.symbolName, "sparkles")
+        XCTAssertEqual(intro.primaryAction?.kind, .start)
+        XCTAssertEqual(intro.primaryAction?.title, "Sign in with Claude")
+        XCTAssertNil(intro.secondaryAction)
+        XCTAssertFalse(intro.showsCodeField)
+        XCTAssertFalse(intro.showsProgress)
+    }
+
+    func testLoginPresentationAuthorizePreparingVersusReady() {
+        let preparing = GaryxClaudeCodeLoginPresentation.make(
+            session: GaryxClaudeCodeAuthSession(loginId: "l", status: .starting),
+            usage: nil
+        )
+        XCTAssertEqual(preparing.step, .authorize)
+        XCTAssertTrue(preparing.showsProgress)
+        XCTAssertEqual(preparing.primaryAction?.kind, .openAuthorizationURL)
+        XCTAssertEqual(preparing.primaryAction?.isEnabled, false)
+        XCTAssertNil(preparing.secondaryAction)
+
+        let ready = GaryxClaudeCodeLoginPresentation.make(
             session: GaryxClaudeCodeAuthSession(
-                loginId: "login-test",
+                loginId: "l",
                 status: .waitingForCode,
                 url: "https://claude.example.test/oauth"
             ),
             usage: nil,
-            authorizationCode: "code-test"
+            hasOpenedAuthorizationURL: false
         )
-        XCTAssertEqual(waiting.statusText, "Waiting for code")
-        XCTAssertEqual(waiting.primaryAction, .openAuthorizationURL)
-        XCTAssertTrue(waiting.showsCodeField)
-        XCTAssertTrue(waiting.submitEnabled)
+        XCTAssertEqual(ready.step, .authorize)
+        XCTAssertFalse(ready.showsProgress)
+        XCTAssertEqual(ready.primaryAction?.kind, .openAuthorizationURL)
+        XCTAssertEqual(ready.primaryAction?.isEnabled, true)
+        XCTAssertEqual(ready.secondaryAction?.kind, .enterCode)
+    }
 
-        let submitted = GaryxClaudeCodeAuthPresentation.make(
-            session: GaryxClaudeCodeAuthSession(loginId: "login-test", status: .submitted),
+    func testLoginPresentationEnterCodeGatesSubmitOnCode() {
+        let session = GaryxClaudeCodeAuthSession(
+            loginId: "l",
+            status: .waitingForCode,
+            url: "https://claude.example.test/oauth"
+        )
+        let empty = GaryxClaudeCodeLoginPresentation.make(
+            session: session,
             usage: nil,
-            authorizationCode: "code-test"
+            authorizationCode: "   ",
+            hasOpenedAuthorizationURL: true
         )
-        XCTAssertEqual(submitted.statusText, "Submitted")
-        XCTAssertFalse(submitted.submitEnabled)
+        XCTAssertEqual(empty.step, .enterCode)
+        XCTAssertTrue(empty.showsCodeField)
+        XCTAssertEqual(empty.primaryAction?.kind, .submitCode)
+        XCTAssertEqual(empty.primaryAction?.isEnabled, false)
+        XCTAssertEqual(empty.secondaryAction?.kind, .openAuthorizationURL)
 
-        let succeeded = GaryxClaudeCodeAuthPresentation.make(
+        let filled = GaryxClaudeCodeLoginPresentation.make(
+            session: session,
+            usage: nil,
+            authorizationCode: "code-123",
+            hasOpenedAuthorizationURL: true
+        )
+        XCTAssertEqual(filled.primaryAction?.isEnabled, true)
+    }
+
+    func testLoginPresentationSubmittingHasNoButtons() {
+        let submitting = GaryxClaudeCodeLoginPresentation.make(
+            session: GaryxClaudeCodeAuthSession(loginId: "l", status: .submitted),
+            usage: nil
+        )
+        XCTAssertEqual(submitting.step, .submitting)
+        XCTAssertTrue(submitting.showsProgress)
+        XCTAssertNil(submitting.primaryAction)
+        XCTAssertNil(submitting.secondaryAction)
+    }
+
+    func testLoginPresentationSuccessListsAccountDetails() {
+        let success = GaryxClaudeCodeLoginPresentation.make(
             session: GaryxClaudeCodeAuthSession(
-                loginId: "login-test",
+                loginId: "l",
                 status: .succeeded,
                 authStatus: .object([
                     "loggedIn": .bool(true),
                     "orgName": .string("Test Org"),
+                    "subscriptionType": .string("max"),
+                    "authMethod": .string("claudeai"),
                 ])
             ),
             usage: nil
         )
-        XCTAssertEqual(succeeded.statusText, "Signed in")
-        XCTAssertEqual(succeeded.accountText, "Test Org")
-        XCTAssertEqual(succeeded.primaryActionTitle, "Re-authenticate")
+        XCTAssertEqual(success.step, .success)
+        XCTAssertEqual(success.symbolName, "checkmark.circle.fill")
+        XCTAssertEqual(success.tone, .good)
+        XCTAssertEqual(success.primaryAction?.kind, .done)
+        XCTAssertNil(success.secondaryAction)
+        XCTAssertEqual(success.detailRows.first(where: { $0.label == "Account" })?.value, "Test Org")
+        XCTAssertEqual(success.detailRows.first(where: { $0.label == "Plan" })?.value, "max")
+        XCTAssertEqual(success.detailRows.first(where: { $0.label == "Method" })?.value, "claudeai")
+    }
 
-        let failed = GaryxClaudeCodeAuthPresentation.make(
+    func testLoginPresentationFailureOffersRetryAndStartOver() {
+        let failure = GaryxClaudeCodeLoginPresentation.make(
             session: GaryxClaudeCodeAuthSession(
-                loginId: "login-test",
+                loginId: "",
                 status: .failed,
                 error: "Timed out waiting for Claude Code login URL."
             ),
             usage: nil
         )
-        XCTAssertEqual(failed.statusText, "Login failed")
-        XCTAssertEqual(failed.tone, .danger)
-        XCTAssertEqual(failed.primaryActionTitle, "Retry sign in")
+        XCTAssertEqual(failure.step, .failure)
+        XCTAssertEqual(failure.tone, .danger)
+        XCTAssertEqual(failure.symbolName, "exclamationmark.triangle.fill")
+        XCTAssertEqual(failure.message, "Timed out waiting for Claude Code login URL.")
+        XCTAssertEqual(failure.primaryAction?.kind, .start)
+        XCTAssertEqual(failure.primaryAction?.title, "Try Again")
+        XCTAssertEqual(failure.secondaryAction?.kind, .startOver)
+    }
+
+    // MARK: Provider section entry
+
+    func testEntryReflectsSignedOutState() {
+        let entry = GaryxClaudeCodeAuthEntry.make(
+            session: nil,
+            usage: GaryxProviderUsage(
+                id: "claude_code",
+                name: "Claude Code",
+                available: false,
+                error: "Sign in required"
+            )
+        )
+        XCTAssertFalse(entry.isSignedIn)
+        XCTAssertEqual(entry.statusText, "Not signed in")
+        XCTAssertEqual(entry.tone, .muted)
+        XCTAssertEqual(entry.actionTitle, "Sign in with Claude")
+        XCTAssertEqual(entry.actionSymbolName, "sparkles")
+        XCTAssertNil(entry.accountText)
+        XCTAssertEqual(entry.footnote, "Sign in required")
+    }
+
+    func testEntryReflectsSignedInState() {
+        let entry = GaryxClaudeCodeAuthEntry.make(
+            session: GaryxClaudeCodeAuthSession(
+                loginId: "l",
+                status: .succeeded,
+                authStatus: .object([
+                    "loggedIn": .bool(true),
+                    "orgName": .string("Test Org"),
+                    "subscriptionType": .string("max"),
+                ])
+            ),
+            usage: nil
+        )
+        XCTAssertTrue(entry.isSignedIn)
+        XCTAssertEqual(entry.statusText, "Signed in")
+        XCTAssertEqual(entry.tone, .good)
+        XCTAssertEqual(entry.actionTitle, "Re-authenticate")
+        XCTAssertEqual(entry.actionSymbolName, "arrow.triangle.2.circlepath")
+        XCTAssertEqual(entry.accountText, "Test Org")
     }
 
     func testClaudeCodeProviderDefaultsNeverWriteAuthSourceOrTokenSettings() throws {
