@@ -903,6 +903,7 @@ export function AppShell() {
     setSettingsDraft,
     settingsDraft,
   } = useSettingsController({
+    contentView,
     desktopState,
     setConnection,
     setDesktopState,
@@ -2572,6 +2573,9 @@ export function AppShell() {
     );
     if (pendingWorkspacePath && !workspacePaths.has(pendingWorkspacePath)) {
       setPendingWorkspacePath(null);
+      // A removed workspace clears the draft's workspace param too
+      // (review #TASK-1627: raw pending writes must carry their sync).
+      syncDraftRoute({ workspacePath: null });
     }
     if (workspaceMenuOpenPath && !workspacePaths.has(workspaceMenuOpenPath)) {
       setWorkspaceMenuOpenPath(null);
@@ -3173,7 +3177,11 @@ export function AppShell() {
     agentId?: string | null;
     workflowId?: string | null;
   }) {
-    if (!newThreadDraftActive || selectedThreadId) {
+    // Base on the committed route, not render closures: the guard (route
+    // IS the draft) and the untouched params stay correct even when the
+    // caller is an async background correction (review #TASK-1627).
+    const route = desktopRouteStore.getSnapshot().route;
+    if (route.kind !== "new-thread") {
       return;
     }
     desktopRouteStore.syncRoute({
@@ -3181,13 +3189,15 @@ export function AppShell() {
       workspacePath:
         overrides.workspacePath !== undefined
           ? overrides.workspacePath
-          : pendingWorkspacePath,
+          : (route.workspacePath ?? null),
       agentId:
-        overrides.agentId !== undefined ? overrides.agentId : pendingAgentId,
+        overrides.agentId !== undefined
+          ? overrides.agentId
+          : (route.agentId ?? null),
       workflowId:
         overrides.workflowId !== undefined
           ? overrides.workflowId
-          : pendingWorkflowId,
+          : (route.workflowId ?? null),
     });
   }
 
@@ -3243,7 +3253,13 @@ export function AppShell() {
         // stale closure value back (review #TASK-1621).
         enterNewThreadDraft({ workspacePath, botId });
       },
-      setPendingWorkspacePath,
+      // Background workspace correction for an already-open bot draft: the
+      // sync helper's route-based guard makes this async-safe (review
+      // #TASK-1627) — a draft the user already left is a no-op.
+      setPendingWorkspacePath: (value) => {
+        setPendingWorkspacePath(value);
+        syncDraftRoute({ workspacePath: value });
+      },
       syncComposerPhase,
     });
   }

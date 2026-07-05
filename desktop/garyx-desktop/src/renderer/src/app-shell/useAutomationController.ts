@@ -272,10 +272,14 @@ export function useAutomationController({
           });
       setDesktopState(result.state);
       setAutomationDialog(null);
-      // Equal-route dedupe makes this free when saving from the
-      // automation view; from elsewhere it enters the view via the
-      // automation application (6c-2a).
-      navigateRoute({ kind: 'automation', automationId: selectedAutomationId });
+      // Navigate to the SERVER-confirmed selection (create selects the
+      // new automation, update selects the edited one — review
+      // #TASK-1627); a pre-save closure id would go stale here. Equal-
+      // route dedupe makes this free when already on that route.
+      navigateRoute({
+        kind: 'automation',
+        automationId: result.state.selectedAutomationId ?? null,
+      });
     } catch (automationError) {
       setError(
         automationError instanceof Error
@@ -331,6 +335,11 @@ export function useAutomationController({
       });
       if (selectedThreadId === automation.threadId || selectedThreadId === automation.targetThreadId) {
         setSelectedThreadId(nextState.threads[0]?.id || null);
+      }
+      // Deleting the selected automation changes the server selection
+      // (possibly to null); follow it in the hash (review #TASK-1627).
+      if (isAutomationView) {
+        syncAutomationRoute(nextState.selectedAutomationId ?? null);
       }
     } catch (automationError) {
       setError(

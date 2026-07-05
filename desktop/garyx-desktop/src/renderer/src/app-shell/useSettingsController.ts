@@ -102,6 +102,8 @@ function restoreRecordPatch(
 
 type UseSettingsControllerArgs = {
   desktopState: DesktopState | null;
+  /** Current view (route selector) — drives declarative tab-resource loading. */
+  contentView: string;
   /** Route-selected tab value (6c-2c selector, owned by AppShell). */
   settingsActiveTab: SettingsTabId;
   setDesktopState: React.Dispatch<React.SetStateAction<DesktopState | null>>;
@@ -116,6 +118,7 @@ export type GatewaySettingsSaveOptions = {
 
 export function useSettingsController({
   desktopState,
+  contentView,
   settingsActiveTab,
   setDesktopState,
   setConnection,
@@ -723,6 +726,20 @@ export function useSettingsController({
     void refreshSettingsTabResources(settingsActiveTab);
   }
 
+  // Declarative tab-resource loading (review #TASK-1627): whenever the
+  // settings view shows a gateway-backed tab — including a cold start
+  // directly on #/settings/<tab>, where no select handler ever runs —
+  // refresh that tab's resources. Entering the view and switching tabs
+  // both land here; the select handler keeps only the flush and the
+  // same-tab manual-refresh semantics.
+  useEffect(() => {
+    if (contentView !== 'settings' || isLocalSettingsTab(settingsActiveTab)) {
+      return;
+    }
+    void refreshSettingsTabResources(settingsActiveTab);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contentView, settingsActiveTab]);
+
   async function handleSelectSettingsTab(nextTab: SettingsTabId): Promise<boolean> {
     const normalizedNextTab: SettingsTabId = nextTab === 'connection' ? 'gateway' : nextTab;
     const nextTabIsLocal = isLocalSettingsTab(normalizedNextTab);
@@ -741,13 +758,11 @@ export function useSettingsController({
       await flushGatewayAutoSave();
     }
 
-    // The tab itself flips through the committed settings route (6c-2c);
-    // this application only runs the side effects. `settingsActiveTab`
-    // (args, pre-commit render closure) is the OLD tab here, which is
-    // exactly what the flush/same-tab checks above need.
-    if (!nextTabIsLocal) {
-      await refreshSettingsTabResources(normalizedNextTab);
-    } else {
+    // The tab itself flips through the committed settings route (6c-2c)
+    // and the loading effect above refreshes the new tab's resources;
+    // this application keeps the flush (old tab, pre-commit closure) and
+    // the local-tab status reset.
+    if (nextTabIsLocal) {
       setGatewaySettingsStatus(null);
     }
     return true;
