@@ -30,8 +30,10 @@ hook to a thin binding.
 - **Fetch/stream lifecycle:** loadSelectedThreadTranscriptFromSingleSource,
   fetchSelectedThreadIncrementalTranscript, startCommittedThreadStream,
   loadOlderThreadHistoryPage (already delegating), handleChatStreamEvent
-  (error/recovery orchestration) + the two effects (chat-stream listener,
-  selected-thread loader).
+  (error/recovery orchestration) + the three React touchpoints
+  (chat-stream listener effect, selected-thread loader effect, and the
+  older-page auto-load effect — plus the AppShell main/side scroll
+  handlers calling loadOlderThreadHistoryPage directly).
 
 ## End state
 
@@ -146,11 +148,15 @@ to mirror calls and the hook deletes.
    action trace, live-stream transition trace, and terminal states are
    deep-equal (the 3c-2 recorded-ack recipe; side effects land in stub
    deps that append to traces).
-2. **6b-2b — apply chain.** applyCanonical/applyRemote/applyCommitted
-   ride-alongs (persist, session cache, title, team, intent marking) move
-   into the module; the mirror's applyAuthoritative/applyRemote facades
-   run them so every caller (dispatch orchestrator included) gets one
-   entry point. updateMessagesByThread moves as the local-write entry.
+2. **6b-2b — apply chain.** The ride-alongs (persist, session cache,
+   title, team, intent marking) move into the module behind the NEW
+   high-level entries — `acceptAuthoritativeTranscript` /
+   `acceptRemoteTranscript` / the committed side-effect step — which run
+   them and call the pure apply facades internally; the pure
+   `applyAuthoritativeTranscript` / `applyRemoteTranscript` remain
+   cache-only (their contract and mirror-contract assertions unchanged).
+   Every caller (dispatch orchestrator included) moves to the accept*
+   entries. updateMessagesByThread moves as the local-write entry.
 3. **6b-2c — fetch/stream lifecycle.**
    `loadSelectedThreadTranscript` absorbs the single-source loader +
    incremental fetch + startCommittedThreadStream + the missing-thread
