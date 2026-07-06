@@ -13,8 +13,9 @@ Use this skill to inspect Garyx runtime diagnostics from the terminal.
   `garyx thread history <thread_id>`
 - By bot:
   `garyx bot status <bot_id>`
-- Repo-local helper script:
-  `garyx-gateway/builtin-skills/garyx-inspector/scripts/gary-thread-history.sh <thread_id>`
+- Bundled helper script (works without a repo checkout):
+  `~/.garyx/skills/garyx-inspector/scripts/gary-thread-history.sh <thread_id>`
+  (repo source: `garyx-gateway/builtin-skills/garyx-inspector/scripts/gary-thread-history.sh`)
 
 Examples:
 
