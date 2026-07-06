@@ -255,6 +255,43 @@ final class GaryxThreadResidencyTrackerTests: XCTestCase {
     }
 }
 
+// MARK: - P4 unsettled-local-rows pin predicate
+
+final class GaryxThreadResidencyPolicyTests: XCTestCase {
+    private func message(_ id: String, role: GaryxMobileMessage.Role, local: GaryxTranscriptEntryState?) -> GaryxMobileMessage {
+        GaryxMobileMessage(id: id, role: role, text: "t", isStreaming: false, localState: local)
+    }
+
+    func testRemoteFinalOnlyRowsAreSettled() {
+        let messages = [
+            message("a", role: .user, local: .remoteFinal),
+            message("b", role: .assistant, local: .remoteFinal),
+            message("c", role: .assistant, local: nil), // synthetic fixture, no local state
+        ]
+        XCTAssertFalse(GaryxThreadResidencyPolicy.hasUnsettledLocalRows(messages),
+                       "remote-final / no-local-state rows are durable — safe to evict")
+    }
+
+    func testOptimisticRowIsUnsettled() {
+        let messages = [
+            message("a", role: .user, local: .remoteFinal),
+            message("pending", role: .user, local: .optimistic),
+        ]
+        XCTAssertTrue(GaryxThreadResidencyPolicy.hasUnsettledLocalRows(messages),
+                      "an optimistic (not-yet-acked) send must pin the thread against eviction")
+    }
+
+    func testRemotePartialRowIsUnsettled() {
+        let messages = [message("streaming", role: .assistant, local: .remotePartial)]
+        XCTAssertTrue(GaryxThreadResidencyPolicy.hasUnsettledLocalRows(messages),
+                      "a streaming/pending partial row is not durable yet")
+    }
+
+    func testEmptyIsSettled() {
+        XCTAssertFalse(GaryxThreadResidencyPolicy.hasUnsettledLocalRows([]))
+    }
+}
+
 // MARK: - P1 cold-open restore policy
 
 final class GaryxColdOpenRestorePolicyTests: XCTestCase {
