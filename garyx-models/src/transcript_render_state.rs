@@ -268,13 +268,17 @@ pub fn reduce_transcript_render_state_with_run_state<'a>(
             }
             "tool_trace" => {
                 visible_message_ids.push(reference.id.clone());
-                current_tool_group.push_tool_message(ToolMessage {
-                    reference,
-                    timestamp: message_timestamp(record, message),
-                    tool_use_id: tool_call_id(message),
-                    is_result: is_tool_result_trace(&role, message),
-                    is_error: message_bool(message, "is_error") || message_bool(message, "isError"),
-                });
+                current_tool_group.push_tool_message(
+                    ToolMessage {
+                        reference,
+                        timestamp: message_timestamp(record, message),
+                        tool_use_id: tool_call_id(message),
+                        is_result: is_tool_result_trace(&role, message),
+                        is_error: message_bool(message, "is_error")
+                            || message_bool(message, "isError"),
+                    },
+                    &mut blocks,
+                );
             }
             _ => {
                 current_tool_group.flush_boundary_into(&mut blocks);
@@ -427,12 +431,19 @@ struct ToolGroupBuilder {
     entries: Vec<ToolEntryDraft>,
     pending_by_id: BTreeMap<String, usize>,
     anonymous_pending: VecDeque<usize>,
+    /// Pending calls that were already flushed at a narrative boundary,
+    /// addressed as (block index, entry index) into the emitted blocks. A
+    /// late tool_result repairs the flushed entry in place instead of
+    /// opening a second group (#TASK-1603) — and the boundary flush itself
+    /// stays unconditional, so an orphan call can never hold the group
+    /// open and pool every later tool at the end of the thread.
+    flushed_pending_by_id: BTreeMap<String, (usize, usize)>,
 }
 
 impl ToolGroupBuilder {
-    fn push_tool_message(&mut self, message: ToolMessage) {
+    fn push_tool_message(&mut self, message: ToolMessage, blocks: &mut Vec<RenderBlock>) {
         if message.is_result {
-            self.push_tool_result(message);
+            self.push_tool_result(message, blocks);
         } else {
             self.push_tool_use(message);
         }
@@ -450,12 +461,29 @@ impl ToolGroupBuilder {
         }
     }
 
-    fn push_tool_result(&mut self, message: ToolMessage) {
+    fn push_tool_result(&mut self, message: ToolMessage, blocks: &mut Vec<RenderBlock>) {
         if let Some(tool_use_id) = message.tool_use_id.as_deref()
             && let Some(idx) = self.pending_by_id.remove(tool_use_id)
             && let Some(entry) = self.entries.get_mut(idx)
         {
             entry.absorb_result(message);
+            return;
+        }
+
+        if let Some(tool_use_id) = message.tool_use_id.as_deref()
+            && let Some((block_idx, entry_idx)) = self.flushed_pending_by_id.remove(tool_use_id)
+            && let Some(RenderBlock::ToolGroup(group)) = blocks.get_mut(block_idx)
+            && let Some(entry) = group.entries.get_mut(entry_idx)
+        {
+            entry.tool_result = Some(message.reference);
+            entry.status = if message.is_error {
+                RenderToolEntryStatus::Failed
+            } else {
+                RenderToolEntryStatus::Completed
+            };
+            if message.timestamp.is_some() {
+                group.finished_at = message.timestamp;
+            }
             return;
         }
 
@@ -486,17 +514,14 @@ impl ToolGroupBuilder {
         self.entries.push(ToolEntryDraft::from_result(message));
     }
 
-    /// Narrative-boundary flush (#TASK-1603): assistant text, user input,
-    /// or a control mark between a tool_use and its tool_result must NOT
-    /// split the call into two groups — the early flush used to strand the
-    /// pending use in one group and the late result in a SECOND group with
-    /// the same tool_use_id-derived id (duplicate React keys downstream).
-    /// A group with any pending call survives the boundary intact; the
-    /// end-of-records flush still emits it (as the active/tail group).
+    /// Narrative-boundary flush (#TASK-1603 follow-up): the group flushes
+    /// unconditionally so tool rows stay at their actual position in the
+    /// narration. Calls still waiting for a result are flushed too and
+    /// registered in `flushed_pending_by_id`; a late tool_result repairs
+    /// the emitted entry in place (see `push_tool_result`), which keeps
+    /// group ids unique without letting one orphan call hold the group
+    /// open and pool every later tool at the end of the thread.
     fn flush_boundary_into(&mut self, blocks: &mut Vec<RenderBlock>) {
-        if self.entries.iter().any(ToolEntryDraft::is_pending) {
-            return;
-        }
         self.flush_into(blocks);
     }
 
@@ -523,21 +548,31 @@ impl ToolGroupBuilder {
             .iter()
             .rev()
             .find_map(|entry| entry.last_timestamp.clone());
-        let entries = self
+        let mut pending_ids = Vec::new();
+        let entries: Vec<RenderToolEntry> = self
             .entries
             .drain(..)
-            .map(|entry| RenderToolEntry {
-                id: entry.id,
-                tool_use_id: entry.tool_use_id,
-                status: if entry.is_error {
-                    RenderToolEntryStatus::Failed
-                } else {
-                    RenderToolEntryStatus::Completed
-                },
-                tool_use: entry.tool_use,
-                tool_result: entry.tool_result,
+            .enumerate()
+            .map(|(entry_idx, entry)| {
+                if entry.is_pending()
+                    && let Some(tool_use_id) = entry.tool_use_id.clone()
+                {
+                    pending_ids.push((tool_use_id, entry_idx));
+                }
+                RenderToolEntry {
+                    id: entry.id,
+                    tool_use_id: entry.tool_use_id,
+                    status: if entry.is_error {
+                        RenderToolEntryStatus::Failed
+                    } else {
+                        RenderToolEntryStatus::Completed
+                    },
+                    tool_use: entry.tool_use,
+                    tool_result: entry.tool_result,
+                }
             })
             .collect();
+        let block_idx = blocks.len();
         blocks.push(RenderBlock::ToolGroup(RenderToolGroup {
             id: tool_group_id(first_tool_use_id.as_deref(), first_seq),
             status: RenderToolGroupStatus::Completed,
@@ -545,6 +580,10 @@ impl ToolGroupBuilder {
             started_at,
             finished_at,
         }));
+        for (tool_use_id, entry_idx) in pending_ids {
+            self.flushed_pending_by_id
+                .insert(tool_use_id, (block_idx, entry_idx));
+        }
         self.pending_by_id.clear();
         self.anonymous_pending.clear();
     }
@@ -1336,6 +1375,108 @@ mod tests {
             group_ids.len(),
             "tool_group ids must be unique per snapshot, got {group_ids:?}"
         );
+    }
+
+    #[test]
+    fn orphan_tool_use_does_not_drag_later_tools_to_the_tail() {
+        // User report (Mac + iOS): a tool_use that never receives a result
+        // (cancelled / steered call) kept the boundary flush suppressed
+        // forever, so every later tool call was absorbed into that one open
+        // group, which only flushed at end-of-records — ALL tool rows
+        // rendered pooled at the bottom of the thread instead of
+        // interleaved with the narration at their actual positions.
+        let records = vec![
+            control_record(1, "run_start"),
+            user_record(2, "Do things", "00000000-0000-0000-0000-000000000002"),
+            tool_use_record(3, "call_orphan", "Bash"), // never gets a result
+            assistant_record(4, "First narration"),
+            tool_use_record(5, "call_b", "Read"),
+            tool_result_record(6, "call_b", false),
+            assistant_record(7, "Second narration"),
+            tool_use_record(8, "call_c", "Bash"),
+            tool_result_record(9, "call_c", false),
+            assistant_record(10, "Final answer"),
+        ];
+
+        let snapshot = reduce_transcript_render_state(&records);
+        let mut sequence = Vec::new();
+        for row in &snapshot.rows {
+            let RenderRow::UserTurn(turn) = row else {
+                continue;
+            };
+            for activity in &turn.activity {
+                match activity {
+                    RenderActivityRow::AssistantReply(_) => sequence.push("reply".to_owned()),
+                    RenderActivityRow::Step(step) => {
+                        for item in &step.steps {
+                            match item {
+                                RenderStepItem::AssistantMessage(_) => {
+                                    sequence.push("text".to_owned());
+                                }
+                                RenderStepItem::ToolGroup(group) => {
+                                    sequence.push(format!("tools({})", group.entries.len()));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // run_start with no run_end keeps the run busy, so the trailing
+        // assistant text stays a step (final-answer placement defers).
+        assert_eq!(
+            sequence,
+            vec![
+                "tools(1)", // orphan call stays at its own position
+                "text",
+                "tools(1)", // call_b right where it happened
+                "text",
+                "tools(1)", // call_c right where it happened
+                "text",
+            ],
+            "tool groups must interleave with narration, got {sequence:?}",
+        );
+    }
+
+    #[test]
+    fn late_tool_result_backfills_the_already_flushed_group() {
+        // #TASK-1603 follow-up: with boundary flushes restored, a result
+        // arriving after narration must repair the entry inside the group
+        // that already flushed (same id, no duplicate group) instead of
+        // opening a second group or pooling at the tail.
+        let records = vec![
+            control_record(1, "run_start"),
+            user_record(2, "Run a tool", "00000000-0000-0000-0000-000000000003"),
+            tool_use_record(3, "call_late", "Bash"),
+            assistant_record(4, "Narrating between use and result"),
+            tool_result_record(5, "call_late", false),
+            assistant_record(6, "Final answer"),
+        ];
+
+        let snapshot = reduce_transcript_render_state(&records);
+        let mut groups = Vec::new();
+        for row in &snapshot.rows {
+            let RenderRow::UserTurn(turn) = row else {
+                continue;
+            };
+            for activity in &turn.activity {
+                let RenderActivityRow::Step(step) = activity else {
+                    continue;
+                };
+                for item in &step.steps {
+                    if let RenderStepItem::ToolGroup(group) = item {
+                        groups.push(group.clone());
+                    }
+                }
+            }
+        }
+        assert_eq!(groups.len(), 1, "exactly one group, got {}", groups.len());
+        assert_eq!(groups[0].entries.len(), 1);
+        assert!(
+            groups[0].entries[0].tool_result.is_some(),
+            "late result must be backfilled into the flushed entry",
+        );
+        assert_eq!(groups[0].entries[0].status, RenderToolEntryStatus::Completed);
     }
 
     #[test]
