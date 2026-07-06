@@ -98,7 +98,7 @@ final class GaryxHomeThreadListPagerTests: XCTestCase {
         XCTAssertTrue(pager.isLoadingMore)
 
         // Server answers the overlapped request: offset 25, 30 rows.
-        XCTAssertTrue(pager.completeLoadMore(ticket, pageOffset: 25, pageCount: 30, hasMore: true))
+        XCTAssertEqual(pager.completeLoadMore(ticket, pageOffset: 25, pageCount: 30, hasMore: true), .apply)
         XCTAssertEqual(pager.nextOffset, 55, "cursor advances from server offset+count, not the raw request")
         XCTAssertEqual(pager.gate, .ready)
         XCTAssertFalse(pager.isLoadingMore)
@@ -343,7 +343,10 @@ final class GaryxHomeThreadListPagerTests: XCTestCase {
         )
         XCTAssertEqual(pager, afterReset, "stale completion is a no-op on every field")
 
-        XCTAssertFalse(pager.completeLoadMore(loadMoreTicket, pageOffset: 25, pageCount: 30, hasMore: true))
+        XCTAssertEqual(
+            pager.completeLoadMore(loadMoreTicket, pageOffset: 25, pageCount: 30, hasMore: true),
+            .abandonedStaleEpoch
+        )
         XCTAssertEqual(pager, afterReset)
 
         pager.failLoadMore(loadMoreTicket)
@@ -557,15 +560,46 @@ final class GaryxHomeThreadListPagerTests: XCTestCase {
         )
     }
 
-    func testLocalMutationDoesNotAbandonLoadMore() throws {
-        // Load-more has no post-await snapshots: its page is filtered and
-        // appended right after its only await, and a removed row cannot be
-        // resurrected by an append. Pin the asymmetry.
+    /// Review #TASK-1804 round 4: an overlapped load-more page fetched
+    /// before a local removal contains the removed row; dedup-append
+    /// against the post-surgery list (which no longer has the id) would
+    /// resurrect it as a "new" row. Load-more therefore abandons on local
+    /// mutation exactly like refresh.
+    func testLocalMutationAbandonsInFlightLoadMore() throws {
         var pager = primedPager(cursor: 30)
+        let before = pager
         let ticket = try XCTUnwrap(pager.requestLoadMore(trigger: .footer))
+
         pager.noteLocalMutation()
-        XCTAssertTrue(pager.completeLoadMore(ticket, pageOffset: 25, pageCount: 30, hasMore: true))
+
+        XCTAssertEqual(
+            pager.completeLoadMore(ticket, pageOffset: 25, pageCount: 30, hasMore: true),
+            .abandonedLocalMutation,
+            "a page fetched before the surgery must not be appended"
+        )
+        XCTAssertFalse(pager.isLoadingMore, "the track is released for the follow-up")
+        XCTAssertEqual(pager.nextOffset, before.nextOffset, "the cursor did not advance")
+        XCTAssertEqual(pager.gate, before.gate, "abandonment leaves the gate untouched")
+
+        // The follow-up re-requests the same window with a fresh sequence.
+        let followUp = try XCTUnwrap(pager.requestLoadMore(trigger: .footer))
+        XCTAssertEqual(followUp.offset, ticket.offset, "same window: the cursor never moved")
+        XCTAssertEqual(
+            pager.completeLoadMore(followUp, pageOffset: 25, pageCount: 30, hasMore: true),
+            .apply
+        )
         XCTAssertEqual(pager.nextOffset, 55)
+    }
+
+    func testLocalMutationBeforeIssueDoesNotAbandonLoadMore() throws {
+        var pager = primedPager(cursor: 30)
+        pager.noteLocalMutation()
+        let ticket = try XCTUnwrap(pager.requestLoadMore(trigger: .footer))
+        XCTAssertEqual(
+            pager.completeLoadMore(ticket, pageOffset: 25, pageCount: 30, hasMore: true),
+            .apply,
+            "surgery that pre-dates the ticket is already reflected in its page"
+        )
     }
 
     func testResetClearsLocalMutationSequence() {

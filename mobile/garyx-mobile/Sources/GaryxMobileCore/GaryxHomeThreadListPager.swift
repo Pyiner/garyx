@@ -79,6 +79,10 @@ public struct GaryxThreadListRefreshTicket: Equatable, Sendable {
 /// caller must perform.
 public struct GaryxThreadListLoadMoreTicket: Equatable, Sendable {
     public let epoch: Int
+    /// Same staleness rule as refresh tickets: a page fetched before local
+    /// list surgery must not commit — dedup-append against the
+    /// post-surgery list would resurrect the removed row as a "new" id.
+    public let observedLocalMutationSequence: Int
     /// Overlapped offset: `max(0, nextOffset - overlap)`. The re-fetched
     /// seen rows dedup away; removal drift up to `overlap` rows is
     /// absorbed (mitigation, not a full fix — see design §4).
@@ -106,6 +110,18 @@ public enum GaryxThreadListRefreshCompletion: Equatable, Sendable {
     /// was in flight: its pre-await snapshots are stale even though the
     /// gateway call succeeded. Drop the page and run a follow-up refresh
     /// to pick up fresh pages.
+    case abandonedLocalMutation
+}
+
+/// Outcome of `completeLoadMore` — same staleness taxonomy as refresh.
+public enum GaryxThreadListLoadMoreCompletion: Equatable, Sendable {
+    /// The page is current: append it (cursor and gate were advanced).
+    case apply
+    /// The ticket pre-dates a `reset()`: drop the page silently.
+    case abandonedStaleEpoch
+    /// Local list surgery raced this page: dedup-append against the
+    /// post-surgery list would resurrect removed rows as "new" ids. The
+    /// cursor and gate are untouched; the caller re-requests the page.
     case abandonedLocalMutation
 }
 
@@ -187,6 +203,7 @@ public struct GaryxHomeThreadListPager: Equatable, Sendable {
         isLoadingMore = true
         return GaryxThreadListLoadMoreTicket(
             epoch: epoch,
+            observedLocalMutationSequence: localMutationSequence,
             offset: max(0, nextOffset - overlap),
             limit: pageLimit
         )
@@ -247,19 +264,24 @@ public struct GaryxHomeThreadListPager: Equatable, Sendable {
         // about load-more; presentation is the caller's policy concern.
     }
 
-    /// Returns false for a stale ticket whose page must be dropped.
+    /// Resolves a finished load-more into apply-or-abandon. Both abandon
+    /// cases leave the cursor and gate untouched; `.abandonedLocalMutation`
+    /// expects the caller to re-request the page.
     @discardableResult
     public mutating func completeLoadMore(
         _ ticket: GaryxThreadListLoadMoreTicket,
         pageOffset: Int,
         pageCount: Int,
         hasMore: Bool
-    ) -> Bool {
-        guard ticket.epoch == epoch else { return false }
+    ) -> GaryxThreadListLoadMoreCompletion {
+        guard ticket.epoch == epoch else { return .abandonedStaleEpoch }
         isLoadingMore = false
+        guard ticket.observedLocalMutationSequence == localMutationSequence else {
+            return .abandonedLocalMutation
+        }
         nextOffset = pageOffset + pageCount
         gate = hasMore ? .ready : .exhausted
-        return true
+        return .apply
     }
 
     public mutating func failLoadMore(_ ticket: GaryxThreadListLoadMoreTicket) {

@@ -307,28 +307,55 @@ extension GaryxMobileModel {
     private func performLoadMoreThreads(ticket: GaryxThreadListLoadMoreTicket) async {
         do {
             let page = try await client().listRecentThreads(limit: ticket.limit, offset: ticket.offset)
-            // false = stale ticket (pager reset mid-flight): drop the page.
-            guard threadListPager.completeLoadMore(
+            switch threadListPager.completeLoadMore(
                 ticket,
                 pageOffset: page.offset,
                 pageCount: page.count,
                 hasMore: page.hasMore
-            ) else { return }
-            let pageThreads = pendingThreadArchives.visibleThreads(page.threads)
-            let appended = GaryxThreadListPageMerge.appendPage(
-                pageIds: pageThreads.map(\.id),
-                existingIds: recentThreadIds
-            )
-            if recentThreadIds != appended {
-                recentThreadIds = appended
+            ) {
+            case .abandonedStaleEpoch:
+                // Pager reset mid-flight: the page belongs to the previous
+                // gateway and is dropped silently.
+                return
+            case .abandonedLocalMutation:
+                // Archive/delete/pin surgery raced this page (review
+                // #TASK-1804 round 4): dedup-append against the
+                // post-surgery list would resurrect the removed row as a
+                // "new" id. The cursor did not advance; re-request the same
+                // window with fresh filters.
+                scheduleLoadMoreFollowUpAfterLocalMutation()
+                return
+            case .apply:
+                let pageThreads = pendingThreadArchives.visibleThreads(page.threads)
+                let appended = GaryxThreadListPageMerge.appendPage(
+                    pageIds: pageThreads.map(\.id),
+                    existingIds: recentThreadIds
+                )
+                if recentThreadIds != appended {
+                    recentThreadIds = appended
+                }
+                threads = Self.mergedThreadSummaries(threads + pageThreads.map(summaryWithCommittedRunState))
+                persistRecentThreadsWidgetSnapshot()
             }
-            threads = Self.mergedThreadSummaries(threads + pageThreads.map(summaryWithCommittedRunState))
-            persistRecentThreadsWidgetSnapshot()
         } catch {
             // No global toast: the footer's failed state is the feedback,
             // and the pager's failed gate blocks automatic re-fires
             // (TASK-1802 R5).
             threadListPager.failLoadMore(ticket)
+        }
+    }
+
+    /// Re-issues an abandoned load-more. Goes through the normal gate; when
+    /// the abandoned request was an explicit retry (gate still `.failed`),
+    /// the follow-up continues that user intent via `retryLoadMore`.
+    private func scheduleLoadMoreFollowUpAfterLocalMutation() {
+        Task { [weak self] in
+            guard let self else { return }
+            guard let ticket = threadListPager.requestLoadMore(trigger: .footer)
+                ?? threadListPager.retryLoadMore() else {
+                return
+            }
+            await performLoadMoreThreads(ticket: ticket)
         }
     }
 
