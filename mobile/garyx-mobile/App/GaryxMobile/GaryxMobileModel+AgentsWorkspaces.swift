@@ -850,7 +850,7 @@ extension GaryxMobileModel {
         let nextTeamId = teamId.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextDisplayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextLeader = leaderAgentId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let nextMembers = Self.normalizedTeamMemberIds(memberAgentIds, leaderAgentId: nextLeader)
+        let nextMembers = GaryxTeamMembershipDraft.normalizedMemberIds(from: memberAgentIds, leaderAgentId: nextLeader)
         let nextWorkflow = workflowText.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextAvatarDataUrl = avatarDataUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !nextTeamId.isEmpty, !nextDisplayName.isEmpty, !nextLeader.isEmpty else { return nil }
@@ -1006,7 +1006,7 @@ extension GaryxMobileModel {
         let teamId = teamId.trimmingCharacters(in: .whitespacesAndNewlines)
         let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         let leader = leaderAgentId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let members = Self.normalizedTeamMemberIds(memberAgentIds, leaderAgentId: leader)
+        let members = GaryxTeamMembershipDraft.normalizedMemberIds(from: memberAgentIds, leaderAgentId: leader)
         let workflow = workflowText.trimmingCharacters(in: .whitespacesAndNewlines)
         let avatarDataUrl = avatarDataUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !teamId.isEmpty, !name.isEmpty, !leader.isEmpty else { return false }
@@ -1461,17 +1461,5 @@ extension GaryxMobileModel {
         guard identity.isUsable else { return }
         await avatarStore.remove(identity)
         avatarImageProvider.invalidate(identity: identity)
-    }
-
-    static func normalizedTeamMemberIds(_ rawValue: String, leaderAgentId: String) -> [String] {
-        let leader = leaderAgentId.trimmingCharacters(in: .whitespacesAndNewlines)
-        var ids: [String] = leader.isEmpty ? [] : [leader]
-        for token in rawValue.split(whereSeparator: { $0 == "," || $0 == "\n" || $0 == " " }) {
-            let id = String(token).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !id.isEmpty, !ids.contains(id) {
-                ids.append(id)
-            }
-        }
-        return ids
     }
 }

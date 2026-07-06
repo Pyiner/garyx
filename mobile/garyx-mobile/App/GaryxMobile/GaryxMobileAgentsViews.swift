@@ -325,7 +325,7 @@ private struct GaryxAgentFormContent: View {
                         reasoningEffort: $modelReasoningEffort
                     )
                 } else {
-                    GaryxFormReadOnlyRow(title: "Provider", value: garyxAgentProviderLabel(for: providerType))
+                    GaryxFormReadOnlyRow(title: "Provider", value: GaryxAgentProviderPickerPresentation.label(for: providerType))
                     Divider().padding(.leading, 16)
                     GaryxFormReadOnlyRow(title: "Model", value: modelDisplayValue)
                     if !modelReasoningEffort.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -616,16 +616,11 @@ private struct GaryxTeamFormContent: View {
     }
 
     private var memberLabels: String {
-        let ids = garyxTeamMemberIds(from: memberAgentIds)
-        guard !ids.isEmpty else { return "" }
-        return ids.map { agentLabel(for: $0) }.joined(separator: "\n")
+        GaryxTeamFormPresentation.memberDetailLabels(memberAgentIds: memberAgentIds, agents: agents)
     }
 
     private func agentLabel(for agentId: String) -> String {
-        let trimmed = agentId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "" }
-        guard let agent = agents.first(where: { $0.id == trimmed }) else { return trimmed }
-        return agent.displayName.isEmpty ? agent.id : "\(agent.displayName) (\(agent.id))"
+        GaryxTeamFormPresentation.memberDetailLabel(agentId: agentId, agents: agents)
     }
 }
 
@@ -1476,21 +1471,6 @@ struct GaryxTeamCard: View {
     }
 }
 
-private struct GaryxAgentProviderOption: Identifiable, Equatable {
-    let id: String
-    let label: String
-}
-
-private let garyxAgentProviderOptions: [GaryxAgentProviderOption] = [
-    GaryxAgentProviderOption(id: "claude_code", label: "Claude Code"),
-    GaryxAgentProviderOption(id: "codex_app_server", label: "Codex"),
-    GaryxAgentProviderOption(id: "traex", label: "Traex"),
-    GaryxAgentProviderOption(id: "gemini_cli", label: "Gemini CLI"),
-    GaryxAgentProviderOption(id: "gpt", label: "OpenAI"),
-    GaryxAgentProviderOption(id: "anthropic", label: "Anthropic"),
-    GaryxAgentProviderOption(id: "google", label: "Google")
-]
-
 private struct GaryxAgentProviderSelectionRow: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @Binding var providerType: String
@@ -1523,17 +1503,11 @@ private struct GaryxAgentProviderSelectionRow: View {
     }
 
     private var providerLabel: String {
-        garyxAgentProviderLabel(for: normalizedProvider)
+        GaryxAgentProviderPickerPresentation.label(for: normalizedProvider)
     }
 
-    private var providerOptionsIncludingCurrent: [GaryxAgentProviderOption] {
-        guard !normalizedProvider.isEmpty,
-              !garyxAgentProviderOptions.contains(where: { $0.id == normalizedProvider }) else {
-            return garyxAgentProviderOptions
-        }
-        return [
-            GaryxAgentProviderOption(id: normalizedProvider, label: garyxAgentProviderLabel(for: normalizedProvider))
-        ] + garyxAgentProviderOptions
+    private var providerOptionsIncludingCurrent: [GaryxAgentProviderPickerOption] {
+        GaryxAgentProviderPickerPresentation.options(includingCurrent: providerType)
     }
 
     private func selectProvider(_ nextProvider: String) {
@@ -1753,7 +1727,7 @@ private struct GaryxAgentReasoningEffortSelectionSheet: View {
 private struct GaryxAgentProviderSelectionSheet: View {
     @Environment(\.dismiss) private var dismiss
     let selectedProvider: String
-    let options: [GaryxAgentProviderOption]
+    let options: [GaryxAgentProviderPickerOption]
     let onSelect: (String) -> Void
 
     var body: some View {
@@ -2048,21 +2022,18 @@ private struct GaryxTeamLeaderSelectionRow: View {
     }
 
     private var agentOptionsIncludingCurrent: [GaryxAgentSummary] {
-        garyxTeamAgentOptions(agents, preserving: [normalizedLeader])
+        GaryxTeamFormPresentation.agentOptions(agents, preserving: [normalizedLeader])
     }
 
     private var leaderLabel: String {
-        guard !normalizedLeader.isEmpty else { return "Choose leader" }
-        return agentOptionsIncludingCurrent.first(where: { $0.id == normalizedLeader })?.displayName ?? normalizedLeader
+        GaryxTeamFormPresentation.leaderLabel(leaderAgentId: leaderAgentId, options: agentOptionsIncludingCurrent)
     }
 
     private func selectLeader(_ agentId: String) {
-        leaderAgentId = agentId
-        var members = garyxTeamMemberIds(from: memberAgentIds)
-        if !members.contains(agentId) {
-            members.insert(agentId, at: 0)
-        }
-        memberAgentIds = garyxTeamMemberIdsString(members)
+        var draft = GaryxTeamMembershipDraft(leaderAgentId: leaderAgentId, memberAgentIds: memberAgentIds)
+        draft.selectLeader(agentId)
+        leaderAgentId = draft.leaderAgentId
+        memberAgentIds = draft.memberAgentIds
     }
 }
 
@@ -2090,7 +2061,10 @@ private struct GaryxTeamMembersSelectionRow: View {
     }
 
     private var membersLabel: String {
-        garyxTeamMembersLabel(memberIds: garyxTeamMemberIds(from: memberAgentIds), agents: agents)
+        GaryxTeamFormPresentation.membersLabel(
+            memberIds: GaryxTeamMembershipDraft.memberIds(from: memberAgentIds),
+            agents: agents
+        )
     }
 }
 
@@ -2162,11 +2136,11 @@ private struct GaryxTeamMembersSelectionSheet: View {
     }
 
     private var selectedIds: [String] {
-        garyxTeamMemberIds(from: memberAgentIds)
+        GaryxTeamMembershipDraft.memberIds(from: memberAgentIds)
     }
 
     private var agentOptionsIncludingCurrent: [GaryxAgentSummary] {
-        garyxTeamAgentOptions(agents, preserving: selectedIds + [normalizedLeader])
+        GaryxTeamFormPresentation.agentOptions(agents, preserving: selectedIds + [normalizedLeader])
     }
 
     private func teamMemberRow(_ agent: GaryxAgentSummary) -> some View {
@@ -2211,10 +2185,7 @@ private struct GaryxTeamMembersSelectionSheet: View {
 
             if selected {
                 Button {
-                    leaderAgentId = agent.id
-                    if !selectedIds.contains(agent.id) {
-                        memberAgentIds = garyxTeamMemberIdsString([agent.id] + selectedIds)
-                    }
+                    selectLeader(agent.id)
                 } label: {
                     Text(isLeader ? "Lead" : "Set TL")
                         .font(GaryxFont.caption(weight: .semibold))
@@ -2246,84 +2217,17 @@ private struct GaryxTeamMembersSelectionSheet: View {
         .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
     }
 
+    private func selectLeader(_ agentId: String) {
+        var draft = GaryxTeamMembershipDraft(leaderAgentId: leaderAgentId, memberAgentIds: memberAgentIds)
+        draft.selectLeader(agentId)
+        leaderAgentId = draft.leaderAgentId
+        memberAgentIds = draft.memberAgentIds
+    }
+
     private func toggleMember(_ agentId: String) {
-        var nextIds = selectedIds
-        if nextIds.contains(agentId) {
-            nextIds.removeAll { $0 == agentId }
-            if normalizedLeader == agentId {
-                leaderAgentId = nextIds.first ?? ""
-            }
-        } else {
-            nextIds.append(agentId)
-            if normalizedLeader.isEmpty {
-                leaderAgentId = agentId
-            }
-        }
-        memberAgentIds = garyxTeamMemberIdsString(nextIds)
+        var draft = GaryxTeamMembershipDraft(leaderAgentId: leaderAgentId, memberAgentIds: memberAgentIds)
+        draft.toggleMember(agentId)
+        leaderAgentId = draft.leaderAgentId
+        memberAgentIds = draft.memberAgentIds
     }
-}
-
-private func garyxAgentProviderLabel(for providerType: String) -> String {
-    let normalized = providerType.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !normalized.isEmpty else { return "Choose provider" }
-    return garyxAgentProviderOptions.first(where: { $0.id == normalized })?.label
-        ?? GaryxProviderPresentation.displayName(for: normalized)
-}
-
-private func garyxTeamAgentOptions(
-    _ agents: [GaryxAgentSummary],
-    preserving ids: [String]
-) -> [GaryxAgentSummary] {
-    var seen = Set<String>()
-    var result = agents
-        .filter(\.standalone)
-        .sorted { left, right in
-            if left.builtIn != right.builtIn {
-                return left.builtIn && !right.builtIn
-            }
-            return left.displayName.localizedCaseInsensitiveCompare(right.displayName) == .orderedAscending
-        }
-        .filter { seen.insert($0.id).inserted }
-    for id in ids {
-        let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !seen.contains(trimmed) else { continue }
-        result.insert(
-            GaryxAgentSummary(
-                id: trimmed,
-                displayName: trimmed,
-                providerType: "",
-                model: "",
-                builtIn: false,
-                standalone: true
-            ),
-            at: 0
-        )
-        seen.insert(trimmed)
-    }
-    return result
-}
-
-private func garyxTeamMemberIds(from value: String) -> [String] {
-    var seen = Set<String>()
-    return value
-        .split { $0 == "," || $0 == "\n" || $0 == " " }
-        .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-        .filter { !$0.isEmpty && seen.insert($0).inserted }
-}
-
-private func garyxTeamMemberIdsString(_ ids: [String]) -> String {
-    ids
-        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-        .filter { !$0.isEmpty }
-        .joined(separator: ", ")
-}
-
-private func garyxTeamMembersLabel(memberIds: [String], agents: [GaryxAgentSummary]) -> String {
-    guard !memberIds.isEmpty else { return "" }
-    let namesById = Dictionary(uniqueKeysWithValues: agents.map { ($0.id, $0.displayName) })
-    let names = memberIds.map { namesById[$0] ?? $0 }
-    if names.count <= 2 {
-        return names.joined(separator: ", ")
-    }
-    return "\(names[0]), \(names[1]) +\(names.count - 2)"
 }
