@@ -117,9 +117,11 @@ sees today's behavior.
 ### Why server-side (vs. client planners choosing initial more often)
 
 The client cannot cheaply know its lag (thread summaries carry no tail
-seq), and every client would need the same heuristic. The server knows
-the exact span with one cheap count and fixes every client — including
-bare `after_seq=0` connections — in one place.
+seq), and every client would need the same heuristic. The server
+centralizes the byte-budget decision — it accounts the serialized
+replay as it builds it — for every client that advertises
+`windowed_resume=1`, so no per-client lag heuristics are needed.
+Clients that do not opt in keep today's verbatim replay until they do.
 
 ## Validation plan
 
