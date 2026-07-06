@@ -89,7 +89,18 @@ pub(super) fn gateway_send_error(
     gateway: &GatewayEndpoint,
     error: &reqwest::Error,
 ) -> GatewayCliError {
-    if error.is_connect() || error.is_timeout() {
+    if error.is_timeout() {
+        // Distinct from connect-refused: the gateway is up but slow (e.g. a
+        // provider bridge reload after an agent/team mutation). "Is it
+        // running?" would mislead here.
+        GatewayCliError {
+            kind: GatewayErrorKind::Unreachable,
+            message: format!(
+                "gateway at {} did not respond in time — it may be busy; retry, or check `garyx status` / `garyx logs tail`",
+                gateway.base_url
+            ),
+        }
+    } else if error.is_connect() {
         GatewayCliError {
             kind: GatewayErrorKind::Unreachable,
             message: format!(

@@ -197,6 +197,28 @@ async fn fetch_existing_agent(
     }
 }
 
+/// An explicitly passed flag must not be blank: blank is neither a valid
+/// value nor "omit" (omit = don't pass the flag). Silently preserving the
+/// stored value would make scripts believe their write took effect.
+fn reject_blank_flag(
+    value: Option<String>,
+    flag: &str,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    match value {
+        Some(value) => {
+            let trimmed = value.trim().to_owned();
+            if trimmed.is_empty() {
+                return Err(format!(
+                    "{flag} cannot be blank — omit the flag to keep the current value"
+                )
+                .into());
+            }
+            Ok(Some(trimmed))
+        }
+        None => Ok(None),
+    }
+}
+
 /// Resolve the identity fields of an agent mutation, preserving the stored
 /// values when the flags are omitted. The gateway upsert payload requires
 /// `display_name` and `provider_type`, so an update/upsert that omits them must
@@ -206,9 +228,7 @@ fn merge_agent_identity(
     display_name: Option<String>,
     provider: Option<String>,
 ) -> Result<(String, String), Box<dyn std::error::Error>> {
-    let display_name = display_name
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
+    let display_name = reject_blank_flag(display_name, "--display-name")?
         .or_else(|| {
             existing.and_then(|agent| {
                 agent["display_name"]
@@ -219,9 +239,7 @@ fn merge_agent_identity(
             })
         })
         .ok_or("--display-name is required when creating a new agent")?;
-    let provider = provider
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
+    let provider = reject_blank_flag(provider, "--provider")?
         .or_else(|| {
             existing.and_then(|agent| {
                 agent["provider_type"]
@@ -658,17 +676,16 @@ pub(crate) async fn cmd_agent_team_create(
     Ok(())
 }
 
-/// Resolve an updated team field: use the flag value when given, otherwise
-/// preserve the stored value from the existing team.
+/// Resolve an updated team field: use the flag value when given (blank is an
+/// error, see [`reject_blank_flag`]), otherwise preserve the stored value from
+/// the existing team.
 fn merge_team_field(
     existing: &Value,
     field: &str,
     flag_value: Option<String>,
     flag_name: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    flag_value
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
+    reject_blank_flag(flag_value, flag_name)?
         .or_else(|| {
             existing[field]
                 .as_str()
@@ -706,21 +723,29 @@ pub(crate) async fn cmd_agent_team_update(
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| team_id.clone());
-    let display_name = merge_team_field(&existing, "display_name", display_name, "display_name")?;
+    let display_name = merge_team_field(&existing, "display_name", display_name, "--display-name")?;
     let leader_agent_id = merge_team_field(
         &existing,
         "leader_agent_id",
         leader_agent_id,
-        "leader_agent_id",
+        "--leader-agent-id",
     )?;
     let workflow_text =
-        merge_team_field(&existing, "workflow_text", workflow_text, "workflow_text")?;
+        merge_team_field(&existing, "workflow_text", workflow_text, "--workflow-text")?;
+    let member_flag_passed = !member_agent_ids.is_empty();
     let mut member_agent_ids = member_agent_ids
         .into_iter()
         .map(|item| item.trim().to_owned())
         .filter(|item| !item.is_empty())
         .collect::<Vec<_>>();
     if member_agent_ids.is_empty() {
+        if member_flag_passed {
+            // Explicit blank members are an error, not a silent preserve.
+            return Err(
+                "--member-agent-id cannot be blank — omit the flag to keep the current members"
+                    .into(),
+            );
+        }
         member_agent_ids = existing["member_agent_ids"]
             .as_array()
             .cloned()
@@ -1696,6 +1721,39 @@ mod tests {
             records.iter().all(|record| record.method != "PUT"),
             "must not PUT after a failed read (would risk dropping existing env)"
         );
+    }
+
+    #[test]
+    fn merge_agent_identity_rejects_blank_explicit_values() {
+        let existing = json!({
+            "display_name": "Existing Agent",
+            "provider_type": "codex_app_server",
+        });
+        // Blank display name: error, not silent preserve.
+        let blank_name = merge_agent_identity(Some(&existing), Some("   ".to_owned()), None);
+        assert!(blank_name.is_err(), "blank --display-name must fail");
+        // Blank provider: error, not silent preserve.
+        let blank_provider = merge_agent_identity(Some(&existing), None, Some(String::new()));
+        assert!(blank_provider.is_err(), "blank --provider must fail");
+        // Omitted flags still preserve stored values.
+        let (name, provider) = merge_agent_identity(Some(&existing), None, None).expect("merge");
+        assert_eq!(name, "Existing Agent");
+        assert_eq!(provider, "codex_app_server");
+    }
+
+    #[test]
+    fn merge_team_field_rejects_blank_explicit_value() {
+        let existing = json!({ "workflow_text": "Existing workflow" });
+        let blank = merge_team_field(
+            &existing,
+            "workflow_text",
+            Some("  ".to_owned()),
+            "--workflow-text",
+        );
+        assert!(blank.is_err(), "blank --workflow-text must fail");
+        let preserved =
+            merge_team_field(&existing, "workflow_text", None, "--workflow-text").expect("merge");
+        assert_eq!(preserved, "Existing workflow");
     }
 
     fn agent_value(agent_id: &str, built_in: bool) -> Value {

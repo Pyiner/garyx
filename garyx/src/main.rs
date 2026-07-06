@@ -284,12 +284,30 @@ fn report_cli_failure(error: &(dyn std::error::Error + 'static)) -> std::process
     std::process::ExitCode::from(exit_code)
 }
 
-/// Whether this invocation passed `--json`. Checked from argv because command
-/// failures bubble up as plain errors without carrying the parsed flag; a bare
-/// `--json` token can only be the boolean output flag (clap rejects it on
-/// commands that lack one before any command code runs).
+/// Whether this invocation asked for JSON output, resolved from the parsed
+/// clap matches (never from raw argv: a positional value that happens to be
+/// the literal `--json`, e.g. `thread send <target> -- --json`, must not flip
+/// the failure format). Recorded once after parsing; `false` for failures that
+/// occur before parsing completes.
+static JSON_OUTPUT_REQUESTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
 fn invocation_wants_json_output() -> bool {
-    std::env::args().skip(1).any(|arg| arg == "--json")
+    JSON_OUTPUT_REQUESTED.get().copied().unwrap_or(false)
+}
+
+/// Walk the matched command path and report whether any level set a `json`
+/// output flag. Command failures bubble up as plain errors without carrying
+/// the parsed flag, so the failure reporter reads this recorded intent.
+fn arg_matches_request_json(matches: &clap::ArgMatches) -> bool {
+    let here = matches
+        .try_get_one::<bool>("json")
+        .ok()
+        .flatten()
+        .copied()
+        .unwrap_or(false);
+    here || matches
+        .subcommand()
+        .is_some_and(|(_, sub)| arg_matches_request_json(sub))
 }
 
 async fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
@@ -311,7 +329,12 @@ async fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("failed to migrate legacy state into ~/.garyx: {error}");
     }
 
-    let cli = Cli::parse();
+    // Parse via matches (not `Cli::parse`) so the JSON-output intent can be
+    // read from the actual parse result before dispatch. Parse errors keep
+    // clap's own rendering and exit code 2.
+    let matches = <Cli as CommandFactory>::command().get_matches();
+    let _ = JSON_OUTPUT_REQUESTED.set(arg_matches_request_json(&matches));
+    let cli = <Cli as clap::FromArgMatches>::from_arg_matches(&matches)?;
 
     // Initialize tracing (only for gateway, keep quiet for utility commands).
     let init_tracing = || {

@@ -1268,6 +1268,36 @@ fn parse_team_update() {
 }
 
 #[test]
+fn json_failure_envelope_intent_follows_parsed_matches_not_argv() {
+    // A real --json output flag anywhere on the matched command path.
+    let matches = <Cli as CommandFactory>::command()
+        .try_get_matches_from(["garyx", "agent", "get", "spec-review", "--json"])
+        .expect("parse");
+    assert!(crate::arg_matches_request_json(&matches));
+
+    // A positional message that happens to be the literal `--json` (after --)
+    // must NOT flip the failure format.
+    let matches = <Cli as CommandFactory>::command()
+        .try_get_matches_from([
+            "garyx",
+            "thread",
+            "send",
+            "thread",
+            "thread::abc",
+            "--",
+            "--json",
+        ])
+        .expect("parse");
+    assert!(!crate::arg_matches_request_json(&matches));
+
+    // No --json at all.
+    let matches = <Cli as CommandFactory>::command()
+        .try_get_matches_from(["garyx", "status"])
+        .expect("parse");
+    assert!(!crate::arg_matches_request_json(&matches));
+}
+
+#[test]
 fn parse_thread_create_with_agent() {
     let cli = Cli::parse_from([
         "garyx",
