@@ -18,6 +18,12 @@ revision-scoped (`loadMoreFailureRevision` + ticket-observed revision), so
 the final gate is completion-order-commutative; the ordering matrix
 asserts identical (gate, cursor, hasMore) for both completion orders.
 
+Design v4 — addresses re-review 2: `.failed(attempts:)` counter removed
+(no consumer; a current-gate-derived counter breaks order commutativity).
+Gate is a three-value enum; failure freshness lives solely in
+`loadMoreFailureRevision`, and the matrix asserts the full
+(gate, revision, cursor, hasMore) tuple.
+
 ## Current architecture (for orientation)
 
 - `GaryxMobileModel` (MainActor) owns list state: `threads`,
@@ -201,8 +207,13 @@ public struct GaryxHomeThreadListPager: Equatable, Sendable {
     public enum LoadMoreGate: Equatable, Sendable {
         case ready
         case exhausted                       // server said has_more == false
-        case failed(attempts: Int)           // last load-more failed
+        case failed                          // last load-more failed
     }
+    // No attempt counter: nothing consumes it (the footer shows a retry
+    // affordance regardless of count, and there is deliberately no
+    // automatic backoff — §5). Failure freshness lives in
+    // loadMoreFailureRevision, which is order-commutative; a counter
+    // derived from "current gate + 1" is not (re-review round 2).
 
     public private(set) var epoch: Int              // bumped by reset()
     public private(set) var isRefreshingHead: Bool
@@ -305,8 +316,9 @@ Gate rules (all unit-tested):
   refresh (`.failed` at issue time, revisions equal), the refresh
   re-arms `.ready` in either order — the intended "gateway is back"
   recovery. Pinned by the ordering-matrix tests (test plan §3).
-- `failLoadMore` → `.failed(attempts + 1)` + revision bump; the pager
-  never re-arms itself without new evidence (retry tap or a head
+- `failLoadMore` → `.failed` + revision bump (idempotent in shape — no
+  counter, so the write commutes with any interleaved forgiveness); the
+  pager never re-arms itself without new evidence (retry tap or a head
   refresh issued after the failure).
 - Any `complete*/fail*` whose `ticket.epoch != epoch` is a no-op — an
   in-flight response from before a gateway switch cannot corrupt the new
@@ -511,31 +523,33 @@ shape matters):
 2. Load-more happy path: ticket offset at `nextOffset - overlap`, floor
    at 0; `completeLoadMore` advances cursor from server-returned
    `offset+count` (not the overlapped request), `hasMore` applied.
-3. **Concurrency ordering matrix** (review F1 + re-review): with both
-   tracks in flight — refresh-start → loadMore-start, then each
+3. **Concurrency ordering matrix** (review F1 + both re-reviews): with
+   both tracks in flight — refresh-start → loadMore-start, then each
    completion order (`completeRefresh` first / `completeLoadMore`
    first), and each of the four success/failure combinations — assert
    both in-flight flags resolve independently and **the final
-   (gate, cursor, hasMore) triple is identical for both completion
-   orders of every combination**. In particular: load-more fails +
-   refresh succeeds ⇒ `.failed` in both orders (revision-scoped
-   forgiveness — the refresh was issued before the failure, so it
-   cannot forgive it). Separately: gate already `.failed` when the
-   refresh is *issued* (revisions equal) ⇒ refresh success re-arms
-   `.ready` whether a concurrent retry is in flight or not, and a
-   subsequent retry failure re-enters `.failed` — again identical in
-   both orders.
+   (gate, loadMoreFailureRevision, cursor, hasMore) tuple is identical
+   for both completion orders of every combination**. In particular:
+   load-more fails + refresh succeeds ⇒ `.failed` in both orders
+   (revision-scoped forgiveness — the refresh was issued before the
+   failure, so it cannot forgive it). Separately, the re-review-2
+   counterexample pinned: gate already `.failed` when a refresh and a
+   retry are both issued (revisions equal at issue time) —
+   retry-fails-first (revision bumps; the refresh's observed revision is
+   stale, no forgiveness) and refresh-succeeds-first (re-arms `.ready`;
+   the retry failure then re-enters `.failed`) both end at
+   `(.failed, revision + 1)` — identical in both orders.
 4. Self-coalescing: second `requestLoadMore` while `isLoadingMore` → nil
    (no double fire); second `requestRefresh` while `isRefreshingHead` →
    nil; a refresh in flight does **not** block `requestLoadMore` and a
    load-more in flight does not block `requestRefresh`; after completion
    the next request is granted (no lost trigger).
-5. Failure ladder: `failLoadMore` → `.failed(1)` + revision bump;
+5. Failure ladder: `failLoadMore` → `.failed` + revision bump;
    automatic triggers (`.nearTail`, `.footer`) rejected; `retryLoadMore`
-   granted → `.failed(2)` on second failure; a head refresh issued
-   *after* the failure re-arms `.ready` and preserves the cursor; a
-   refresh issued *before* the failure does not (stale observed
-   revision).
+   granted → still `.failed` and revision bumps again on second failure;
+   a head refresh issued *after* the failure re-arms `.ready` and
+   preserves the cursor; a refresh issued *before* the failure does not
+   (stale observed revision).
 6. Exhaustion: `hasMore == false` → `.exhausted`; triggers rejected;
    footer state `.hidden`; preserved across beyond-head refreshes (the
    `nextOffset > returnedEnd` path does not resurrect `hasMore`).
