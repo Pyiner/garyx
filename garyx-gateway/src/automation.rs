@@ -38,7 +38,10 @@ const DEFAULT_ACTIVITY_LIMIT: usize = 20;
 const MAX_ACTIVITY_LIMIT: usize = 100;
 const DEFAULT_AUTOMATION_THREADS_LIMIT: usize = 50;
 const MAX_AUTOMATION_THREADS_LIMIT: usize = 100;
-const MAX_INTERVAL_HOURS: u64 = (i64::MAX as u64) / 3600;
+/// Upper bound on interval schedules, in hours (100 years). Mirrors the cron
+/// layer's `MAX_INTERVAL_SECS` so an over-large interval is rejected cleanly
+/// here instead of overflowing chrono's `DateTime` math downstream.
+const MAX_INTERVAL_HOURS: u64 = 100 * 365 * 24;
 const WEEKDAY_CODES: [(&str, &str); 7] = [
     ("MON", "mo"),
     ("TUE", "tu"),

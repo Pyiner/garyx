@@ -251,6 +251,37 @@ async fn test_add_rejects_too_large_interval_schedule() {
 }
 
 #[tokio::test]
+async fn test_add_rejects_interval_that_would_overflow_timeline() {
+    // ~3e9 hours: fits in i64 and passed the old (i64::MAX) cap, but adding it
+    // to `now` overflows chrono's DateTime and used to panic inside
+    // compute_next_run -- crashing the create request and, on the update path,
+    // eventually the whole scheduler task.
+    let tmp = TempDir::new().unwrap();
+    let svc = CronService::new(tmp.path().to_path_buf());
+
+    let error = svc
+        .add(make_job_config("overflow", 3_000_000_000 * 3600))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(error.to_string().contains("exceeds max interval_secs"));
+}
+
+#[test]
+fn from_config_parks_overflow_interval_far_in_future_without_panicking() {
+    // Defense in depth: even if an overflow-sized interval reaches
+    // compute_next_run (e.g. a legacy persisted job that bypassed validation),
+    // it must not panic. The run is parked far in the future instead of killing
+    // the scheduler task.
+    let job = CronJob::from_config(&make_job_config("overflow", 3_000_000_000 * 3600));
+    assert!(job.next_run > Utc::now() + chrono::Duration::days(3650));
+
+    // The interval that also overflows chrono's Duration constructor itself.
+    let job = CronJob::from_config(&make_job_config("huge", i64::MAX as u64));
+    assert!(job.next_run > Utc::now() + chrono::Duration::days(3650));
+}
+
+#[tokio::test]
 async fn test_add_rejects_invalid_once_timestamp() {
     let tmp = TempDir::new().unwrap();
     let svc = CronService::new(tmp.path().to_path_buf());

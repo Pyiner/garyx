@@ -35,7 +35,11 @@ use crate::managed_mcp_metadata::inject_managed_mcp_servers;
 use crate::server::AppState;
 use crate::skills::sync_default_external_user_skills;
 
-const MAX_INTERVAL_SECS: u64 = i64::MAX as u64;
+/// Upper bound on interval schedules, in seconds (100 years). Kept far below
+/// the point where `DateTime<Utc> + Duration` overflows chrono's representable
+/// range, so an over-large interval is rejected with a clean error instead of
+/// panicking in `compute_next_run`. No real automation cadence approaches this.
+const MAX_INTERVAL_SECS: u64 = 100 * 365 * 24 * 60 * 60;
 
 // ---------------------------------------------------------------------------
 // Persisted job state
@@ -164,16 +168,25 @@ impl CronJob {
     /// Compute the next run time from a schedule relative to `after`.
     fn compute_next_run(schedule: &CronSchedule, after: DateTime<Utc>) -> DateTime<Utc> {
         match schedule {
-            CronSchedule::Interval { interval_secs } => match i64::try_from(*interval_secs) {
-                Ok(secs) => after + chrono::Duration::seconds(secs),
-                Err(_) => {
+            CronSchedule::Interval { interval_secs } => i64::try_from(*interval_secs)
+                .ok()
+                .and_then(chrono::Duration::try_seconds)
+                .and_then(|delta| after.checked_add_signed(delta))
+                .unwrap_or_else(|| {
+                    // The interval is so large that representing `after + interval`
+                    // would overflow chrono's timeline (or the Duration itself).
+                    // Park the run far in the future rather than panicking -- a
+                    // panic here would crash the create request and, via
+                    // `advance`, the whole scheduler task. Legitimate intervals
+                    // are bounded well below this by `MAX_INTERVAL_SECS`.
                     tracing::warn!(
                         interval_secs = *interval_secs,
-                        "interval schedule exceeds i64 range, using 1h fallback"
+                        "interval schedule overflows the representable timeline; parking next_run far in the future"
                     );
-                    after + chrono::Duration::hours(1)
-                }
-            },
+                    after
+                        .checked_add_signed(chrono::Duration::days(365 * 100))
+                        .unwrap_or(after)
+                }),
             CronSchedule::Once { at } => parse_once_timestamp(at).unwrap_or(after),
             CronSchedule::Cron { expr, timezone } => {
                 if let Some(schedule) = parse_cron_schedule(expr) {
