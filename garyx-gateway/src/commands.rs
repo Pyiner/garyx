@@ -14,7 +14,7 @@ use garyx_models::config::SlashCommand;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::mcp_config::persist_and_apply_config;
+use crate::mcp_config::{ConfigMutateError, mutate_config};
 use crate::server::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -149,25 +149,29 @@ pub async fn create_shortcut(
         Err(error) => return error.into_response(),
     };
 
-    let mut config = (*state.config_snapshot()).clone();
-    if config
-        .commands
-        .iter()
-        .any(|existing| normalize_shortcut_command_name(&existing.name) == command.name)
-    {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({
-                "error": format!("command '/{}' already exists", command.name),
-            })),
-        )
-            .into_response();
-    }
+    let result = mutate_config(&state, move |config| {
+        if config
+            .commands
+            .iter()
+            .any(|existing| normalize_shortcut_command_name(&existing.name) == command.name)
+        {
+            return Err((
+                StatusCode::CONFLICT,
+                format!("command '/{}' already exists", command.name),
+            ));
+        }
+        let value = shortcut_value(&command);
+        config.commands.push(command);
+        Ok(value)
+    })
+    .await;
 
-    config.commands.push(command.clone());
-    match persist_and_apply_config(&state, &config).await {
-        Ok(()) => (StatusCode::CREATED, Json(shortcut_value(&command))).into_response(),
-        Err(error) => (
+    match result {
+        Ok(value) => (StatusCode::CREATED, Json(value)).into_response(),
+        Err(ConfigMutateError::Rejected((status, message))) => {
+            (status, Json(json!({ "error": message }))).into_response()
+        }
+        Err(ConfigMutateError::Apply(error)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": error })),
         )
@@ -186,40 +190,43 @@ pub async fn update_shortcut(
     };
 
     let current_name = normalize_shortcut_command_name(&current_name);
-    let mut config = (*state.config_snapshot()).clone();
-    let Some(index) = config
-        .commands
-        .iter()
-        .position(|existing| normalize_shortcut_command_name(&existing.name) == current_name)
-    else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({
-                "error": format!("command '/{}' not found", current_name),
-            })),
-        )
-            .into_response();
-    };
 
-    if command.name != current_name
-        && config
+    let result = mutate_config(&state, move |config| {
+        let Some(index) = config
             .commands
             .iter()
-            .any(|existing| normalize_shortcut_command_name(&existing.name) == command.name)
-    {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({
-                "error": format!("command '/{}' already exists", command.name),
-            })),
-        )
-            .into_response();
-    }
+            .position(|existing| normalize_shortcut_command_name(&existing.name) == current_name)
+        else {
+            return Err((
+                StatusCode::NOT_FOUND,
+                format!("command '/{current_name}' not found"),
+            ));
+        };
 
-    config.commands[index] = command.clone();
-    match persist_and_apply_config(&state, &config).await {
-        Ok(()) => (StatusCode::OK, Json(shortcut_value(&command))).into_response(),
-        Err(error) => (
+        if command.name != current_name
+            && config
+                .commands
+                .iter()
+                .any(|existing| normalize_shortcut_command_name(&existing.name) == command.name)
+        {
+            return Err((
+                StatusCode::CONFLICT,
+                format!("command '/{}' already exists", command.name),
+            ));
+        }
+
+        let value = shortcut_value(&command);
+        config.commands[index] = command;
+        Ok(value)
+    })
+    .await;
+
+    match result {
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+        Err(ConfigMutateError::Rejected((status, message))) => {
+            (status, Json(json!({ "error": message }))).into_response()
+        }
+        Err(ConfigMutateError::Apply(error)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": error })),
         )
@@ -232,32 +239,33 @@ pub async fn delete_shortcut(
     AxumPath(name): AxumPath<String>,
 ) -> impl IntoResponse {
     let name = normalize_shortcut_command_name(&name);
-    let mut config = (*state.config_snapshot()).clone();
-    let Some(index) = config
-        .commands
-        .iter()
-        .position(|command| normalize_shortcut_command_name(&command.name) == name)
-    else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({
-                "error": format!("command '/{}' not found", name),
-            })),
-        )
-            .into_response();
-    };
 
-    config.commands.remove(index);
-    match persist_and_apply_config(&state, &config).await {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(json!({
-                "deleted": true,
-                "name": name,
-            })),
-        )
-            .into_response(),
-        Err(error) => (
+    let result = mutate_config(&state, move |config| {
+        let Some(index) = config
+            .commands
+            .iter()
+            .position(|command| normalize_shortcut_command_name(&command.name) == name)
+        else {
+            return Err((
+                StatusCode::NOT_FOUND,
+                format!("command '/{name}' not found"),
+            ));
+        };
+
+        config.commands.remove(index);
+        Ok(json!({
+            "deleted": true,
+            "name": name,
+        }))
+    })
+    .await;
+
+    match result {
+        Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+        Err(ConfigMutateError::Rejected((status, message))) => {
+            (status, Json(json!({ "error": message }))).into_response()
+        }
+        Err(ConfigMutateError::Apply(error)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": error })),
         )

@@ -5,7 +5,8 @@ use garyx_router::{
     is_hidden_thread_value, is_thread_key, workspace_dir_from_value,
 };
 use serde_json::Value;
-use std::sync::{Arc, Weak};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex as StdMutex, Weak};
 use tracing::warn;
 
 use crate::garyx_db::{GaryxDbService, RecentThreadDraft};
@@ -87,6 +88,10 @@ pub(crate) struct RecentThreadProjectingStore {
     garyx_db: Arc<GaryxDbService>,
     transcript_store: Arc<ThreadTranscriptStore>,
     active_run_probe: Arc<dyn ActiveRunProbe>,
+    /// Per-thread locks serializing the canonical write + projection derive +
+    /// projection write so two concurrent writes to the same thread cannot
+    /// interleave and clobber the projection with a stale `active_run_id`.
+    thread_locks: StdMutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl RecentThreadProjectingStore {
@@ -101,7 +106,20 @@ impl RecentThreadProjectingStore {
             garyx_db,
             transcript_store,
             active_run_probe,
+            thread_locks: StdMutex::new(HashMap::new()),
         }
+    }
+
+    /// Acquire (or create) the per-thread serialization lock. Mirrors the
+    /// router's `task_thread_lock`: a short std guard just to clone the
+    /// per-thread async mutex, which the caller then awaits.
+    fn thread_lock(&self, thread_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.thread_locks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .entry(thread_id.to_owned())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
     }
 
     async fn project_thread(&self, thread_id: &str, data: &Value) {
@@ -362,6 +380,8 @@ impl ThreadStore for RecentThreadProjectingStore {
     }
 
     async fn set(&self, thread_id: &str, data: Value) {
+        let lock = self.thread_lock(thread_id);
+        let _guard = lock.lock().await;
         if self.reject_archived_thread_write(thread_id).await {
             return;
         }
@@ -370,6 +390,8 @@ impl ThreadStore for RecentThreadProjectingStore {
     }
 
     async fn delete(&self, thread_id: &str) -> bool {
+        let lock = self.thread_lock(thread_id);
+        let _guard = lock.lock().await;
         let deleted = self.inner.delete(thread_id).await;
         if deleted
             && is_thread_key(thread_id)
@@ -401,6 +423,8 @@ impl ThreadStore for RecentThreadProjectingStore {
     }
 
     async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
+        let lock = self.thread_lock(thread_id);
+        let _guard = lock.lock().await;
         if self.reject_archived_thread_write(thread_id).await {
             return Err(ThreadStoreError::NotFound(thread_id.to_owned()));
         }
@@ -769,6 +793,91 @@ mod tests {
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].active_run_id.as_deref(), Some(run_id));
         assert_eq!(records[0].run_state, "running");
+    }
+
+    #[tokio::test]
+    async fn same_thread_writes_serialize_and_do_not_overlap() {
+        // Regression: the projecting store must serialize the whole per-thread
+        // sequence (inner write -> resolve active run -> write projection). If
+        // two writes to the same thread overlap, the later-committed canonical
+        // write can have its projection clobbered by the other writer resolving
+        // a now-stale active_run_id, pinning a finished run as "running" until
+        // the next write or a restart. This asserts the critical sections for a
+        // single thread never overlap.
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        struct OverlapDetectingStore {
+            inner: InMemoryThreadStore,
+            in_flight: AtomicUsize,
+            overlapped: AtomicBool,
+        }
+
+        #[async_trait]
+        impl ThreadStore for OverlapDetectingStore {
+            async fn get(&self, thread_id: &str) -> Option<Value> {
+                self.inner.get(thread_id).await
+            }
+            async fn set(&self, thread_id: &str, data: Value) {
+                if self.in_flight.fetch_add(1, Ordering::SeqCst) != 0 {
+                    self.overlapped.store(true, Ordering::SeqCst);
+                }
+                // Widen the window so an unserialized second writer interleaves
+                // deterministically under a single-threaded runtime.
+                tokio::task::yield_now().await;
+                self.inner.set(thread_id, data).await;
+                self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            }
+            async fn delete(&self, thread_id: &str) -> bool {
+                self.inner.delete(thread_id).await
+            }
+            async fn list_keys(&self, prefix: Option<&str>) -> Vec<String> {
+                self.inner.list_keys(prefix).await
+            }
+            async fn exists(&self, thread_id: &str) -> bool {
+                self.inner.exists(thread_id).await
+            }
+            async fn update(
+                &self,
+                thread_id: &str,
+                updates: Value,
+            ) -> Result<(), ThreadStoreError> {
+                self.inner.update(thread_id, updates).await
+            }
+        }
+
+        let detector = Arc::new(OverlapDetectingStore {
+            inner: InMemoryThreadStore::new(),
+            in_flight: AtomicUsize::new(0),
+            overlapped: AtomicBool::new(false),
+        });
+        let garyx_db = Arc::new(GaryxDbService::memory().expect("memory db"));
+        let transcript_store = Arc::new(ThreadTranscriptStore::memory());
+        let probe: Arc<dyn ActiveRunProbe> = Arc::new(FakeActiveRunProbe { active: true });
+        let store = RecentThreadProjectingStore::new(
+            detector.clone(),
+            garyx_db.clone(),
+            transcript_store,
+            probe,
+        );
+
+        let thread_id = "thread::race";
+        let payload = |label: &str| {
+            json!({
+                "label": label,
+                "updated_at": "2026-01-01T00:00:00Z",
+                "messages": [{"role": "user", "content": "hi"}]
+            })
+        };
+        tokio::join!(
+            store.set(thread_id, payload("A")),
+            store.set(thread_id, payload("B")),
+        );
+
+        assert!(
+            !detector.overlapped.load(Ordering::SeqCst),
+            "two writes to the same thread overlapped in the projecting store; \
+             a concurrent write can clobber the projection with a stale active_run_id"
+        );
     }
 
     #[tokio::test]

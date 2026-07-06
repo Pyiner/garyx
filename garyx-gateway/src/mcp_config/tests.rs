@@ -125,6 +125,78 @@ async fn rolls_back_runtime_and_disk_when_external_sync_fails() {
 }
 
 #[tokio::test]
+async fn concurrent_config_writes_do_not_lose_updates() {
+    // Regression: every config-mutating handler does a whole-document
+    // read-modify-write (clone snapshot -> edit -> apply+persist). If those
+    // writes are not serialized, concurrent writers all read the same base
+    // snapshot and the last one to persist silently clobbers the others.
+    //
+    // On the buggy (unserialized) path every request still returns CREATED —
+    // the loss is silent — but only one server survives in the committed
+    // config. Under a serialized mutator all N survive.
+    let temp = tempdir().unwrap();
+    let config_path = temp.path().join("gary.json");
+    let initial = GaryxConfig::default();
+    persist_config_file(config_path.clone(), &initial)
+        .await
+        .unwrap();
+
+    let state = AppStateBuilder::new(initial)
+        .with_config_path(config_path.clone())
+        .build();
+
+    const N: usize = 16;
+    let barrier = Arc::new(tokio::sync::Barrier::new(N));
+    let mut handles = Vec::with_capacity(N);
+    for i in 0..N {
+        let state = state.clone();
+        let barrier = barrier.clone();
+        handles.push(tokio::spawn(async move {
+            let body: UpsertMcpServerBody = serde_json::from_value(json!({
+                "name": format!("server-{i}"),
+                "transport": "stdio",
+                "command": "npx",
+                "args": [format!("pkg-{i}")],
+            }))
+            .expect("body deserializes");
+            // Line all writers up so their read-modify-write windows overlap.
+            barrier.wait().await;
+            create_mcp_server(State(state), Json(body))
+                .await
+                .into_response()
+                .status()
+        }));
+    }
+
+    let mut created = 0usize;
+    for handle in handles {
+        if handle.await.unwrap() == StatusCode::CREATED {
+            created += 1;
+        }
+    }
+    assert_eq!(created, N, "every create request should report success");
+
+    let live = state.config_snapshot();
+    let survived: Vec<usize> = (0..N)
+        .filter(|i| live.mcp_servers.contains_key(&format!("server-{i}")))
+        .collect();
+    assert_eq!(
+        survived.len(),
+        N,
+        "concurrent creates lost updates: only {} of {N} servers survived in live config: {survived:?}",
+        survived.len(),
+    );
+
+    let persisted: GaryxConfig = serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
+    assert_eq!(
+        persisted.mcp_servers.len(),
+        N,
+        "concurrent creates lost updates on disk: {} of {N} servers persisted",
+        persisted.mcp_servers.len(),
+    );
+}
+
+#[tokio::test]
 async fn rolls_back_runtime_when_persisting_config_fails() {
     let temp = tempdir().unwrap();
     let config_path = temp.path().join("gary.json");
