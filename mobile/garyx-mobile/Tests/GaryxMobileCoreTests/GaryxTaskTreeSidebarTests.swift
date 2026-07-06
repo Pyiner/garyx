@@ -350,15 +350,6 @@ final class GaryxTaskTreeSidebarTests: XCTestCase {
         XCTAssertFalse(GaryxTaskTreeSidebarPresentation.isSidebarAvailable(page: threadOnly))
     }
 
-    func testPollPolicyStopsOnKnownEmptyTrees() throws {
-        XCTAssertTrue(GaryxTaskTreeSidebarPresentation.shouldContinuePolling(page: nil))
-        XCTAssertFalse(
-            GaryxTaskTreeSidebarPresentation.shouldContinuePolling(page: GaryxTaskForestPage())
-        )
-        let page = try decodedFixturePage()
-        XCTAssertTrue(GaryxTaskTreeSidebarPresentation.shouldContinuePolling(page: page))
-    }
-
     func testRequestGateRejectsStaleGenerationsAnchorsAndGateways() {
         var gate = GaryxTaskTreeRequestGate()
         let first = gate.begin(gatewayKey: "gw-1", anchorThreadId: "thread::a")

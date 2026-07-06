@@ -37,9 +37,13 @@
   thread; `Use` owns default agent selection.
 - The navigation drawer shows Automation and Agents entries with Bots and
   Workspaces expanded inline as flat children, the gateway identity control as
-  the drawer header, and a floating Settings pill at the drawer bottom; Tasks
-  and Skills live under Settings. A thread-mode automation's
+  the drawer header, and a floating Settings pill at the drawer bottom; Skills
+  live under Settings. A thread-mode automation's
   triggered threads open from that automation's row actions.
+- Mobile has no Tasks management surface: the conversation task-tree sidebar
+  (right-edge swipe on a thread page) is the only task display. Do not re-add
+  a task list panel, task detail/create forms, or a View-tasks thread menu
+  item.
 - Keep workspace and bot conversations inside drilldown layers rather than
   dumping raw sessions inline.
 - Mobile widgets are static snapshots: do not use `ScrollView`; start directly
@@ -69,7 +73,7 @@
 - Keep app-target files focused on SwiftUI composition, bindings, platform
   adapters, and side-effect orchestration.
 - Mobile low-frequency catalog data such as agents, teams, workspaces, bots,
-  skills, automations, tasks, slash commands, and MCP servers should use
+  skills, automations, slash commands, and MCP servers should use
   gateway-scoped stale-while-refresh caching.
 - Restored rows are display projections only; edit paths that preserve hidden
   gateway fields must fetch authoritative data before saving.

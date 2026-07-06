@@ -134,8 +134,6 @@ extension GaryxMobileModel {
         conversationCapsulePreview = nil
         capsules = []
         capsuleHTMLCache = [:]
-        tasks = []
-        tasksPanelState.clearSourceFilter()
         automations = []
         slashCommands = []
         mcpServers = []
@@ -163,7 +161,6 @@ extension GaryxMobileModel {
         skillFileLoadRequestId = nil
         selectedSkillEditor = nil
         selectedSkillDocument = nil
-        selectedTaskDetail = nil
         selectedAutomationEditor = nil
         selectedAgentDetail = nil
         selectedTeamDetail = nil
@@ -542,7 +539,6 @@ extension GaryxMobileModel {
             async let teamsResult = garyxCaptureCatalog { try await gateway.listTeams() }
             async let skillsResult = garyxCaptureCatalog { try await gateway.listSkills() }
             async let capsulesResult = garyxCaptureCatalog { try await gateway.listCapsules() }
-            async let tasksResult = garyxCaptureCatalog { try await gateway.listTasks(includeDone: true, limit: 120) }
             async let dreamsResult: GaryxDreamsPage? = try? gateway.listDreams(sinceHours: 24, limit: 80)
             async let gatewaySettingsResult: [String: GaryxJSONValue]? = try? gateway.gatewaySettings()
             async let automationsResult = garyxCaptureCatalog { try await gateway.listAutomations() }
@@ -577,7 +573,6 @@ extension GaryxMobileModel {
 
             let nextSkills = await skillsResult
             let nextCapsules = await capsulesResult
-            let nextTasksPage = await tasksResult
             let nextDreamsPage = await dreamsResult
             let nextGatewaySettings = await gatewaySettingsResult
             let nextAutomations = await automationsResult
@@ -594,7 +589,6 @@ extension GaryxMobileModel {
                 .init(nextTeams),
                 .init(nextSkills),
                 .init(nextCapsules),
-                .init(nextTasksPage),
                 .init(nextAutomations),
                 .init(nextSlashCommands),
                 .init(nextMcpServers),
@@ -611,9 +605,6 @@ extension GaryxMobileModel {
             }
             if case let .success(value) = nextCapsules {
                 capsules = value
-            }
-            if case let .success(page) = nextTasksPage {
-                tasks = page.tasks
             }
             if let page = nextDreamsPage {
                 dreams = page.dreams

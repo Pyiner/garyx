@@ -116,7 +116,6 @@ struct GaryxSettingsOverviewContent: View {
     private var managementPanels: [GaryxMobilePanel] {
         [
             model.dreamsAutoScanEnabled ? .dreams : nil,
-            .tasks,
             .skills,
         ].compactMap { $0 }
     }
@@ -215,8 +214,6 @@ struct GaryxSettingsPanelLinkRow: View {
             "\(model.userWorkspacePaths.count) workspaces"
         case .dreams:
             "\(model.dreams.count) topics"
-        case .tasks:
-            "\(model.activeTaskCount) active / \(model.tasks.count) total"
         case .workspaceBots:
             "\(model.mobileBotGroups.count) bots / \(visibleWorkspaceCount) workspaces"
         case .agents:

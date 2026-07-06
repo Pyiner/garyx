@@ -79,13 +79,6 @@ public enum GaryxTaskTreeSidebarPresentation {
         page.rootThreadIds.first ?? anchorThreadId
     }
 
-    /// Known-empty trees stop the 5s poll until the anchor changes or a local
-    /// task mutation invalidates the snapshot; an unknown tree keeps polling.
-    public static func shouldContinuePolling(page: GaryxTaskForestPage?) -> Bool {
-        guard let page else { return true }
-        return isSidebarAvailable(page: page)
-    }
-
     private static func row(
         for node: GaryxTaskForestNode,
         depth: Int,

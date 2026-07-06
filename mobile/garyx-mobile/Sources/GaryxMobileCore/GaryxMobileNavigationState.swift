@@ -24,7 +24,6 @@ public enum GaryxMobileConnectionState: Equatable, Sendable {
 public enum GaryxMobilePanel: String, CaseIterable, Identifiable, Sendable {
     case chat
     case dreams
-    case tasks
     case workspaces
     case automations
     case capsules
@@ -44,8 +43,6 @@ public enum GaryxMobilePanel: String, CaseIterable, Identifiable, Sendable {
             "Chat"
         case .dreams:
             "Dreams"
-        case .tasks:
-            "Tasks"
         case .workspaces:
             "Workspaces"
         case .automations:
@@ -75,8 +72,6 @@ public enum GaryxMobilePanel: String, CaseIterable, Identifiable, Sendable {
             "bubble.left.and.text.bubble.right.fill"
         case .dreams:
             "moon.stars.fill"
-        case .tasks:
-            "checklist.checked"
         case .workspaces:
             "folder"
         case .automations:

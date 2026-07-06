@@ -5,7 +5,6 @@ public enum GaryxMobileRoute: Equatable, Sendable {
     case thread(String)
     case settings(GaryxMobileSettingsTab)
     case panel(GaryxMobilePanel)
-    case task(String)
     case automation(String)
     case automationThreads(String)
     case capsule(String)
@@ -34,9 +33,6 @@ public enum GaryxMobileRouteLink {
             components.path = tab == .manage ? "/settings" : "/settings/\(tab.rawValue)"
         case let .panel(panel):
             components.path = "/\(pathComponent(for: panel))"
-        case let .task(id):
-            components.path = "/task"
-            components.queryItems = [URLQueryItem(name: "id", value: normalized(id))]
         case let .automation(id):
             components.path = "/automation"
             components.queryItems = [URLQueryItem(name: "id", value: normalized(id))]
@@ -118,10 +114,6 @@ public enum GaryxMobileRouteLink {
                 return .settings(tab)
             }
             return .settings(.manage)
-        case "tasks":
-            return .panel(.tasks)
-        case "task":
-            return queryValue(components, "id", "taskId", "task_id").map(GaryxMobileRoute.task)
         case "automations", "automation-list":
             return .panel(.automations)
         case "capsules":
@@ -210,8 +202,6 @@ public enum GaryxMobileRouteLink {
             "chat"
         case .dreams:
             "dreams"
-        case .tasks:
-            "tasks"
         case .workspaces, .workspaceBots, .bots:
             "workspace-bots"
         case .automations:

@@ -102,9 +102,6 @@ extension GaryxMobileModel {
         var nextState = navigationState
         nextState.setActivePanel(panel)
         navigationState = nextState
-        if panel == .tasks {
-            clearTaskSourceThreadFilter()
-        }
     }
 
     func openConversation(
@@ -129,9 +126,6 @@ extension GaryxMobileModel {
         var nextState = navigationState
         nextState.openPanel(panel, dreamsAutoScanEnabled: dreamsAutoScanEnabled, source: source)
         navigationState = nextState
-        if panel == .tasks {
-            clearTaskSourceThreadFilter()
-        }
         setSidebarVisible(false)
     }
 
@@ -214,8 +208,6 @@ extension GaryxMobileModel {
             openSettings(tab: tab, source: source)
         case let .panel(panel):
             openPanel(panel, source: source)
-        case let .task(id):
-            await openTaskRoute(id, source: source)
         case let .automation(id):
             await openAutomationRoute(id, source: source)
         case let .automationThreads(id):
@@ -240,18 +232,6 @@ extension GaryxMobileModel {
                 source: source
             )
         }
-    }
-
-    private func openTaskRoute(_ id: String, source: GaryxMobilePanelOpenSource) async {
-        let taskId = id.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !taskId.isEmpty else { return }
-        openPanel(.tasks, source: source)
-        await refreshRemoteState()
-        guard let task = tasks.first(where: { $0.id == taskId }) else {
-            showRouteNotFound(kind: "Task", id: taskId)
-            return
-        }
-        selectedTaskDetail = task
     }
 
     private func openAutomationRoute(_ id: String, source: GaryxMobilePanelOpenSource) async {
@@ -370,7 +350,6 @@ extension GaryxMobileModel {
     }
 
     private func clearRouteDrivenDetailState() {
-        selectedTaskDetail = nil
         selectedAutomationEditor = nil
         selectedAgentDetail = nil
         selectedTeamDetail = nil
@@ -776,47 +755,6 @@ extension GaryxMobileModel {
           }
         ]
         """) ?? []
-        tasks = Self.decodeDebugFixture(GaryxTasksPage.self, from: """
-        {
-          "tasks": [
-            {
-              "task_id": "task-markdown",
-              "thread_id": "thread-history",
-              "number": 34,
-              "title": "Fix markdown spacing and code blocks",
-              "status": "in_progress",
-              "assignee": { "kind": "agent", "agent_id": "codex" },
-              "runtime_agent_id": "codex",
-              "reply_count": 5,
-              "updated_at": "2026-05-19T08:25:00Z"
-            },
-            {
-              "task_id": "task-sidebar",
-              "thread_id": "thread-history",
-              "number": 35,
-              "title": "Restore sidebar hierarchy",
-              "status": "todo",
-              "assignee": { "kind": "agent", "agent_id": "reviewer" },
-              "runtime_agent_id": "reviewer",
-              "reply_count": 2,
-              "updated_at": "2026-05-19T08:10:00Z"
-            },
-            {
-              "task_id": "task-shots",
-              "thread_id": "thread-task-board",
-              "number": 36,
-              "title": "Capture every page",
-              "status": "done",
-              "assignee": { "kind": "agent", "agent_id": "codex" },
-              "runtime_agent_id": "codex",
-              "reply_count": 9,
-              "updated_at": "2026-05-19T07:40:00Z"
-            }
-          ],
-          "total": 3,
-          "has_more": false
-        }
-        """)?.tasks ?? []
         automations = Self.decodeDebugFixture(GaryxAutomationsPage.self, from: """
         {
           "automations": [

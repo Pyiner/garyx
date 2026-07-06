@@ -248,8 +248,6 @@ final class GaryxMobileModel: ObservableObject {
     let capsuleThumbnailStore = GaryxCapsuleThumbnailDiskStore()
     let capsuleThumbnailRenderer = GaryxCapsuleThumbnailRenderer()
     let capsuleThumbnailMemory = GaryxCapsuleThumbnailMemoryCache()
-    @Published var tasks: [GaryxTaskSummary] = []
-    @Published var tasksPanelState = GaryxMobileTasksPanelState()
     /// Conversation task-tree sidebar: the trailing push-in panel on the chat
     /// surface. `taskTreeForestPage` is the anchored forest snapshot for the
     /// currently selected thread. Because the origin-rooted forest is
@@ -266,9 +264,6 @@ final class GaryxMobileModel: ObservableObject {
     var taskTreeSnapshotsByOrigin: [String: GaryxTaskForestPage] = [:]
     /// Insertion order of `taskTreeSnapshotsByOrigin` keys for FIFO eviction.
     var taskTreeSnapshotOriginOrder: [String] = []
-    /// Set when the selected thread's tree is known-empty: the 5s sidebar poll
-    /// pauses until the thread changes or a local task mutation occurs.
-    var taskTreePollSuspendedThreadId: String?
     @Published var workflowRunPanelState = GaryxWorkflowRunPanelState()
     @Published var selectedWorkflowRunThread: GaryxThreadSummary?
     @Published var automations: [GaryxAutomationSummary] = [] {
@@ -286,8 +281,6 @@ final class GaryxMobileModel: ObservableObject {
     @Published var workspaceCatalogState = GaryxMobileResourceState(value: [String]()) {
         didSet { refreshNavigationDrawerSnapshot() }
     }
-    @Published var draftTaskTitle = ""
-    @Published var draftTaskBody = ""
     @Published var lastAutomationRun: GaryxAutomationActivityEntry?
     @Published var selectedWorkspacePath = ""
     @Published var selectedWorkspaceDirectory = ""
@@ -335,7 +328,6 @@ final class GaryxMobileModel: ObservableObject {
     @Published var claudeCodeAuthSession: GaryxClaudeCodeAuthSession?
     @Published var selectedSkillEditor: GaryxSkillEditorState?
     @Published var selectedSkillDocument: GaryxSkillFileDocument?
-    @Published var selectedTaskDetail: GaryxTaskSummary?
     @Published var selectedAutomationEditor: GaryxAutomationSummary?
     @Published var selectedAgentDetail: GaryxAgentSummary?
     @Published var selectedTeamDetail: GaryxTeamSummary?

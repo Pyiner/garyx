@@ -20,35 +20,11 @@ private enum GaryxTaskTreeSidebarMetrics {
     static let axisDecisionRatio: CGFloat = 1.5
     static let leadingCornerRadius: CGFloat = 28
     static let indentStep: CGFloat = 12
+    /// The tree icon shared by the panel header and empty state.
+    static let treeGlyph = "arrow.triangle.branch"
 
     static func panelWidth(containerWidth: CGFloat) -> CGFloat {
         min(max(containerWidth * 0.55, 300), 420)
-    }
-}
-
-/// Clip whose bounds are outset through the surrounding safe areas so the
-/// panel's glass reaches the physical top/bottom/trailing edges while content
-/// keeps safe-area layout; only the leading corners are rounded (the panel
-/// hangs off the trailing edge).
-private struct GaryxTaskTreePanelClipShape: Shape {
-    var leadingCornerRadius: CGFloat
-    var safeAreaOutsets: EdgeInsets
-
-    func path(in rect: CGRect) -> Path {
-        let expanded = CGRect(
-            x: rect.minX - safeAreaOutsets.leading,
-            y: rect.minY - safeAreaOutsets.top,
-            width: rect.width + safeAreaOutsets.leading + safeAreaOutsets.trailing,
-            height: rect.height + safeAreaOutsets.top + safeAreaOutsets.bottom
-        )
-        return UnevenRoundedRectangle(
-            topLeadingRadius: leadingCornerRadius,
-            bottomLeadingRadius: leadingCornerRadius,
-            bottomTrailingRadius: 0,
-            topTrailingRadius: 0,
-            style: .continuous
-        )
-        .path(in: expanded)
     }
 }
 
@@ -131,18 +107,16 @@ struct GaryxTaskTreeSidebarSurface: ViewModifier {
                 }
                 .task(id: model.selectedThread?.id) {
                     model.syncTaskTreeSidebarAnchor()
+                    guard model.selectedThread != nil else { return }
                     await model.refreshSelectedThreadTaskForest()
-                }
-                .task(id: "\(model.isTaskTreeSidebarOpen)|\(model.selectedThread?.id ?? "")") {
-                    // 5s silent refresh while the panel is open (desktop
-                    // REFRESH_MS parity); a known-empty tree suspends the loop
-                    // until the thread changes or a local task mutation calls
-                    // noteTaskTreeLocalMutation.
-                    guard model.isTaskTreeSidebarOpen else { return }
-                    while !Task.isCancelled, model.isTaskTreeSidebarOpen {
+                    // 5s silent refresh for the whole anchored conversation
+                    // (desktop popover REFRESH_MS parity), independent of
+                    // panel visibility and tree emptiness: a thread whose
+                    // first task is spawned mid-conversation must re-enable
+                    // the edge gesture without leaving the thread.
+                    while !Task.isCancelled {
                         try? await Task.sleep(nanoseconds: 5_000_000_000)
-                        guard !Task.isCancelled, model.isTaskTreeSidebarOpen else { return }
-                        guard model.shouldContinueTaskTreePolling else { continue }
+                        guard !Task.isCancelled else { return }
                         await model.refreshSelectedThreadTaskForest()
                     }
                 }
@@ -155,15 +129,16 @@ struct GaryxTaskTreeSidebarSurface: ViewModifier {
         progress: CGFloat,
         safeAreaInsets: EdgeInsets
     ) -> some View {
-        let clipOutsets = EdgeInsets(
-            top: safeAreaInsets.top,
-            leading: 0,
-            bottom: safeAreaInsets.bottom,
-            trailing: safeAreaInsets.trailing
-        )
         let dragActive = dragAxis == .horizontal
 
+        // Full-bleed panel: `ignoresSafeArea` at the end of the chain lets the
+        // glass background and clip reach the physical top/bottom edges, while
+        // the content pads itself back inside the safe area. (The previous
+        // outset-clip approach exposed regions the material never painted,
+        // which showed as mismatched safe-area strips.)
         return GaryxTaskTreeSidebarPanel(onClose: { closePanel() })
+            .padding(.top, safeAreaInsets.top)
+            .padding(.bottom, safeAreaInsets.bottom)
             .frame(width: panelWidth)
             .frame(maxHeight: .infinity)
             .garyxAdaptiveGlass(
@@ -173,9 +148,12 @@ struct GaryxTaskTreeSidebarSurface: ViewModifier {
                 in: Rectangle()
             )
             .clipShape(
-                GaryxTaskTreePanelClipShape(
-                    leadingCornerRadius: GaryxTaskTreeSidebarMetrics.leadingCornerRadius * progress,
-                    safeAreaOutsets: clipOutsets
+                UnevenRoundedRectangle(
+                    topLeadingRadius: GaryxTaskTreeSidebarMetrics.leadingCornerRadius * progress,
+                    bottomLeadingRadius: GaryxTaskTreeSidebarMetrics.leadingCornerRadius * progress,
+                    bottomTrailingRadius: 0,
+                    topTrailingRadius: 0,
+                    style: .continuous
                 )
             )
             // Pre-baked gradient strip instead of `.shadow`: animated shadow
@@ -192,7 +170,6 @@ struct GaryxTaskTreeSidebarSurface: ViewModifier {
                     endPoint: .leading
                 )
                 .frame(width: 40)
-                .padding(.vertical, -safeAreaInsets.top - safeAreaInsets.bottom)
                 .offset(x: -40)
                 .opacity(Double(progress))
                 .allowsHitTesting(false)
@@ -203,6 +180,7 @@ struct GaryxTaskTreeSidebarSurface: ViewModifier {
             .offset(x: reduceMotion ? 0 : panelWidth - reveal)
             .disabled(dragActive)
             .simultaneousGesture(closingGesture(panelWidth: panelWidth))
+            .ignoresSafeArea(edges: [.top, .bottom])
             .accessibilityAddTraits(.isModal)
             .accessibilityAction(.escape) { closePanel() }
     }
@@ -351,7 +329,7 @@ private struct GaryxTaskTreeSidebarPanel: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: "list.bullet.indent")
+            Image(systemName: GaryxTaskTreeSidebarMetrics.treeGlyph)
                 .font(GaryxFont.system(size: 14, weight: .semibold))
                 .foregroundStyle(.secondary)
             Text("Task tree")
@@ -392,6 +370,8 @@ private struct GaryxTaskTreeSidebarPanel: View {
                 emptyState
             }
         } else {
+            // The task tree scrolls without showing a scroll bar (same product
+            // rule as the Mac popover).
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     ForEach(rows) { row in
@@ -402,6 +382,7 @@ private struct GaryxTaskTreeSidebarPanel: View {
                 .padding(.top, 6)
                 .padding(.bottom, 16)
             }
+            .scrollIndicators(.hidden)
         }
     }
 
@@ -430,7 +411,7 @@ private struct GaryxTaskTreeSidebarPanel: View {
 
     private var emptyState: some View {
         VStack(spacing: 8) {
-            Image(systemName: "checklist")
+            Image(systemName: GaryxTaskTreeSidebarMetrics.treeGlyph)
                 .font(GaryxFont.system(size: 22, weight: .medium))
                 .foregroundStyle(.tertiary)
             Text("No tasks from this thread yet.")
@@ -563,38 +544,34 @@ private struct GaryxTaskTreeSidebarRowView: View {
     }
 }
 
-// MARK: - Header entry point
+// MARK: - Status presentation
 
-/// Tree-shaped header button shown while the current thread's task tree is
-/// non-empty; carries the active-count badge and makes the invisible edge
-/// gesture discoverable.
-struct GaryxTaskTreeHeaderButton: View {
-    @EnvironmentObject private var model: GaryxMobileModel
+/// Status pill text/tone for task-tree rows (previously shared with the
+/// removed Tasks management panel).
+extension GaryxTaskStatus {
+    var label: String {
+        switch self {
+        case .todo:
+            "Todo"
+        case .inProgress:
+            "In Progress"
+        case .inReview:
+            "In Review"
+        case .done:
+            "Done"
+        }
+    }
 
-    var body: some View {
-        if model.isTaskTreeSidebarAvailable {
-            Button {
-                model.toggleTaskTreeSidebar()
-            } label: {
-                GaryxToolbarIcon(systemName: "list.bullet.indent")
-                    .overlay(alignment: .topTrailing) {
-                        if model.taskTreeActiveBadgeCount > 0 {
-                            Text("\(min(model.taskTreeActiveBadgeCount, 99))")
-                                .font(GaryxFont.system(size: 10, weight: .bold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1.5)
-                                .background(GaryxTheme.accent, in: Capsule())
-                                .offset(x: 4, y: -2)
-                        }
-                    }
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(
-                model.taskTreeActiveBadgeCount > 0
-                    ? "Task tree, \(model.taskTreeActiveBadgeCount) active tasks"
-                    : "Task tree"
-            )
+    var tone: GaryxStatusPill.Tone {
+        switch self {
+        case .todo:
+            .muted
+        case .inProgress:
+            .warning
+        case .inReview:
+            .danger
+        case .done:
+            .good
         }
     }
 }

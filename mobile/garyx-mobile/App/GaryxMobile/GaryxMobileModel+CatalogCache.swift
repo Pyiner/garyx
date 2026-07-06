@@ -48,7 +48,6 @@ extension GaryxMobileModel {
         GaryxEquatableAssignment.assignIfChanged(current: teams, next: cachedTeams) { teams = $0 }
         skills = snapshot.skills.map(\.model)
         capsules = snapshot.capsules.map(\.model)
-        tasks = snapshot.tasks.map(\.model)
         let cachedAutomations = snapshot.automations.map(\.model)
         GaryxEquatableAssignment.assignIfChanged(current: automations, next: cachedAutomations) { automations = $0 }
         slashCommands = snapshot.slashCommands.map(\.model)
@@ -78,7 +77,6 @@ extension GaryxMobileModel {
             teams: teams,
             workspacePaths: userWorkspacePaths,
             skills: skills,
-            tasks: tasks,
             capsules: capsules,
             automations: automations,
             slashCommands: slashCommands,

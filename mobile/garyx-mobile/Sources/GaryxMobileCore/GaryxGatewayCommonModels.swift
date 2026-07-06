@@ -118,11 +118,6 @@ public struct GaryxEmptyResponse: Decodable, Equatable, Sendable {
 }
 
 
-public struct GaryxTaskEnvelope: Decodable, Equatable, Sendable {
-    public var task: GaryxTaskSummary?
-}
-
-
 public struct GaryxEmptyBody: Encodable, Equatable, Sendable {
     public init() {}
 }

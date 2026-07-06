@@ -185,29 +185,4 @@ extension GaryxMobileModel {
         }
     }
 
-    func openTaskThread(_ task: GaryxTaskSummary, source: GaryxMobilePanelOpenSource = .current) async {
-        let taskId = task.id.trimmingCharacters(in: .whitespacesAndNewlines)
-        let cachedThreadId = task.threadId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cachedThreadId.isEmpty || !taskId.isEmpty else { return }
-
-        if task.executor?.isWorkflow == true, !taskId.isEmpty {
-            let runtimeGeneration = gatewayRuntimeGeneration
-            do {
-                let refreshed = try await client().getTask(taskId: taskId)
-                guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-                upsertTask(refreshed)
-                let workflowThreadId = refreshed.threadId.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !workflowThreadId.isEmpty else { return }
-                await openThread(id: workflowThreadId, source: source)
-                return
-            } catch {
-                guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-                lastError = displayMessage(for: error)
-            }
-        }
-
-        if !cachedThreadId.isEmpty {
-            await openThread(id: cachedThreadId, source: source)
-        }
-    }
 }
