@@ -345,7 +345,7 @@ function MessageFileAttachmentCard({
   );
 }
 
-function MessageImageAttachmentFrame({
+export function MessageImageAttachmentFrame({
   compact,
   segment,
 }: {

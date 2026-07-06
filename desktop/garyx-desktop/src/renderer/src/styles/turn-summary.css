@@ -546,6 +546,16 @@
   border-left: 0;
 }
 
+/* Thumbnails extracted from a tool result (image blocks), always visible
+   below the tool line like the iOS thumbnail strip; each frame opens the
+   shared image lightbox on click. */
+.tool-trace-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 0 2px;
+}
+
 .tool-trace-section {
   display: grid;
   gap: 3px;

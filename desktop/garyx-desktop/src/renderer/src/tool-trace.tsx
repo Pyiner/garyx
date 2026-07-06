@@ -7,6 +7,7 @@ import {
   type MergedToolTrace,
   type ToolTraceMessage,
 } from './tool-trace-registry';
+import { MessageImageAttachmentFrame } from './message-rich-content';
 import { useI18n, type AppLocale, type Translate } from './i18n';
 
 type ToolTraceEntry = {
@@ -382,6 +383,13 @@ export function ToolTraceLine({
           >
             Open thread &rarr;
           </button>
+        </div>
+      ) : null}
+      {merged.resultImages.length > 0 ? (
+        <div className="tool-trace-images">
+          {merged.resultImages.map((segment) => (
+            <MessageImageAttachmentFrame compact key={segment.key} segment={segment} />
+          ))}
         </div>
       ) : null}
       {expanded && hasDetails ? (

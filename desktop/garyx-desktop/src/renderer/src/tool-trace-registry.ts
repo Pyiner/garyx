@@ -1,6 +1,13 @@
 import type { TranscriptMessage } from '@shared/contracts';
 
+import {
+  collectTranscriptSegments,
+  type TranscriptSegment,
+} from './message-rich-content-core';
+
 type ToolRole = 'tool_use' | 'tool_result';
+
+export type ToolResultImageSegment = Extract<TranscriptSegment, { kind: 'image' }>;
 
 export type ToolTraceMessage = Pick<
   TranscriptMessage,
@@ -64,6 +71,8 @@ export type MergedToolTrace = {
   inputLabel?: string;
   resultDetail?: string;
   resultLabel?: string;
+  /** Image blocks extracted from the tool result, rendered as thumbnails. */
+  resultImages: ToolResultImageSegment[];
   icon: string;
   isError: boolean;
 };
@@ -1300,12 +1309,90 @@ function resolveToolTraceSide(trace: ParsedToolTrace): ToolTraceSide {
   return presentFallback(trace);
 }
 
+/**
+ * Extract renderable image segments from a tool-result payload. Reuses the
+ * shared structured-content walker, so base64 blocks, data/remote URLs, and
+ * image file refs all resolve the same way they do in message bubbles.
+ */
+function collectToolResultImageSegments(value: unknown): ToolResultImageSegment[] {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  return collectTranscriptSegments(value, 'Tool result').filter(
+    (segment): segment is ToolResultImageSegment => segment.kind === 'image',
+  );
+}
+
+/**
+ * Remove image blocks from a tool-result payload before it is stringified
+ * into the expandable detail. Mirrors the iOS presentation rule: the image
+ * preview replaces the raw (base64) output instead of accompanying it.
+ * Returns undefined when nothing meaningful remains.
+ */
+function stripImageBlocks(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    const remaining = value
+      .map((entry) => stripImageBlocks(entry))
+      .filter((entry) => entry !== undefined);
+    return remaining.length ? remaining : undefined;
+  }
+  const record = asRecord(value);
+  if (!record) {
+    return value;
+  }
+  const type = typeof record.type === 'string' ? record.type.trim().toLowerCase() : '';
+  if (type === 'image') {
+    return undefined;
+  }
+  let changed = false;
+  const next: Record<string, unknown> = { ...record };
+  for (const key of ['result', 'content', 'output']) {
+    if (key in next) {
+      const stripped = stripImageBlocks(next[key]);
+      if (stripped !== next[key]) {
+        changed = true;
+        if (stripped === undefined) {
+          delete next[key];
+        } else {
+          next[key] = stripped;
+        }
+      }
+    }
+  }
+  if (!changed) {
+    return value;
+  }
+  const meaningful = Object.entries(next).some(([, entry]) => {
+    if (entry === undefined || entry === null) {
+      return false;
+    }
+    if (typeof entry === 'string') {
+      return entry.trim() !== '';
+    }
+    if (Array.isArray(entry)) {
+      return entry.length > 0;
+    }
+    return true;
+  });
+  return meaningful ? next : undefined;
+}
+
 export function resolveMergedToolTrace(
   toolUse?: ToolTraceMessage,
   toolResult?: ToolTraceMessage,
 ): MergedToolTrace {
   const parsedUse = toolUse ? parseToolTraceMessage(toolUse) : null;
   const parsedResult = toolResult ? parseToolTraceMessage(toolResult) : null;
+  // Image blocks are lifted out of the result BEFORE presenters run, so no
+  // presenter (including the stringify fallbacks) ever serializes base64
+  // image data into the detail text.
+  const resultImages = parsedResult
+    ? collectToolResultImageSegments(parsedResult.result ?? parsedResult.payload)
+    : [];
+  if (parsedResult && resultImages.length) {
+    parsedResult.result = stripImageBlocks(parsedResult.result);
+    parsedResult.payload = stripImageBlocks(parsedResult.payload);
+  }
   const useSide = parsedUse ? resolveToolTraceSide(parsedUse) : null;
   const resultSide = parsedResult ? resolveToolTraceSide(parsedResult) : null;
   const resolvedStatus = parsedResult ? resultSide?.status : resultSide?.status || useSide?.status;
@@ -1321,6 +1408,7 @@ export function resolveMergedToolTrace(
     inputLabel: useSide?.detailLabel,
     resultDetail: resultSide?.detail || (parsedResult?.result ? truncateDetail(stringifyUnknown(parsedResult.result)) : undefined),
     resultLabel: resultSide?.detailLabel || (resultSide?.detail || parsedResult?.result ? 'Result' : undefined),
+    resultImages,
     icon: useSide?.icon || resultSide?.icon || '·',
     isError: Boolean(parsedUse?.isError || parsedResult?.isError),
   };
