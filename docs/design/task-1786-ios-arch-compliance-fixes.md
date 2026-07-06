@@ -48,8 +48,8 @@ the shared path.
 openThreadDestination(thread, requestId, invalidates, source):
   .chat        → clearWorkflowRunSurface(); await selectThread(...)
   .workflowRun → await openWorkflowRun(...)
-  .unresolved  → false (caller resolves by id: resolving surface +
-                 refreshThreads + getThread)
+  .unresolved  → false (caller resolves by id: refreshThreads + getThread;
+                 showResolvingWorkflowThread is a no-op for direct opens — D5)
 
 selectThread(thread, invalidates, source):                    // +ThreadLifecycle.swift:10
   reopening = isHomeVisible && selectedThread?.id == thread.id
@@ -57,6 +57,13 @@ selectThread(thread, invalidates, source):                    // +ThreadLifecycl
   await loadSelectedThreadHistory()
   if reopening { ensureSelectedThreadStreamForVisibleConversation() }
 ```
+
+The `reopening` deferral (suppress the stream at show; connect only after the
+history refresh) was introduced by the M3 gateway-stream-actor commit
+(`3abfead5`, 2026-06-22) — the same commit that made `popToHome()` stop the
+selected-thread stream — and **postdates** row taps' `openThreadImmediately`
+(`55aee675`, 2026-06-20). It has therefore only ever applied to the id-based
+entries, never to the home-list baseline.
 
 **Immediate path** (`openThreadImmediately(_ thread:source:)`,
 `+AgentsWorkspaces.swift:129`), row taps only:
@@ -68,9 +75,16 @@ switch destination:
                  Task { await loadSelectedThreadHistory() }              // detached
   .workflowRun → Task { await openWorkflowRun(..., invalidates: true, source) }
   .unresolved  → openThreadImmediately(id:) → beginDirectThreadOpen()
-                 + showResolvingWorkflowThread(...) (sync)
+                 + showResolvingWorkflowThread(...)   // no-op for direct opens (D5)
                  + Task { await openThread(id:requestId:source:) }
 ```
+
+Stream-start machinery fact used throughout: `startSelectedThreadStream`
+(`+ThreadStream.swift:44-51`) early-returns when `streamOwnedThreadId ==
+threadId && selectedThreadStreamTask != nil` — the `selectedThread` didSet's
+`.start` action is *ensure* semantics (start only when dead), never a live
+teardown. At home the stream is always dead (`popToHome` →
+`stopSelectedThreadStreamForHome`, `+Navigation.swift:59`).
 
 `openThread(_ thread: GaryxThreadSummary)` (summary variant,
 `+AgentsWorkspaces.swift:91`) exists but has **zero callers** and silently
@@ -111,13 +125,61 @@ func openThread(
 - Row-tap call sites become `Task { await model.openThread(thread, source:
   …) }` (the established sibling pattern: `onOpenBotGroup` at
   `GaryxMobileViews.swift:66`). Closure signatures stay synchronous.
-- `openThreadDestination` / `selectThread` / `showSelectedThread` are
-  **untouched**.
+- `openThreadDestination` is untouched.
+
+**Converged `selectThread` semantics = the home-list baseline (design-review
+v1, finding F1).** Routing row taps through the v1 `selectThread` would have
+adopted the M3 reopen deferral for them: on a same-thread home reopen of a
+*running* thread with a slow history response, the old row tap attaches the
+live stream immediately at show, while the deferral delays live output by a
+full history roundtrip — a visible regression, and backwards per the
+mobile-ui rule (*home-list behavior is the baseline*). The deferral is
+therefore **removed** rather than propagated:
+
+```swift
+func selectThread(_ thread:, invalidatesPendingThreadOpen: = true, source: = .replace) async {
+    showSelectedThread(thread, invalidatesPendingThreadOpen:, source:)
+    await loadSelectedThreadHistory()
+    // Recovery net, not the primary start: no-op while the stream is owned
+    // and alive; picks the stream up when the show-time start was skipped
+    // (connection not yet ready at show).
+    ensureSelectedThreadStreamForVisibleConversation()
+}
+```
+
+- `showSelectedThread` loses the `startsSelectedThreadStream` parameter and
+  its `suppressesSelectedThreadStreamPolicy` toggle; `openConversation`
+  loses the parameter (no other non-default caller exists —
+  `+WorkflowRuns.swift:64/:107` use the default); the
+  `suppressesSelectedThreadStreamPolicy` stored flag and the `selectedThread`
+  didSet guard (`GaryxMobileModel.swift:105`) are deleted outright. The
+  deferral was the flag's only producer; killing the flag removes the switch
+  future code could use to re-diverge.
+- Safety: the didSet `.start` is ensure-semantics (idempotency guard above),
+  so removing suppression can never tear down a live stream; at home the
+  stream is always dead, so the same-id reopen becomes a plain fresh start —
+  byte-identical to what the home row tap does today.
+- Effect on id-based entries (widget link / deep link / task / automation /
+  bot) for the **same-thread home reopen** sub-case only: the live stream now
+  attaches at show time instead of after the history roundtrip (strictly
+  earlier live output; content freshness unchanged — the bounded history
+  refresh still runs and the stream resumes from the held committed cursor).
+  Different-thread opens already started the stream at show in both paths
+  (`reopening == false`), so they are unchanged.
+- The trailing `ensureSelectedThreadStreamForVisibleConversation()` becomes
+  unconditional (previously reopen-only): a pure recovery net that no-ops
+  when the stream is alive (`GaryxVisibleConversationStreamPolicy.shouldStart`
+  requires `owned != selected || !hasStreamTask`) and re-reads the *current*
+  `selectedThread`, so a mid-load thread switch can never start a wrong-thread
+  stream. Id-based entries keep their post-history recovery; row taps and
+  different-thread opens gain it (invisible when healthy).
 
 After this, every open funnels through `openThreadDestination → selectThread →
-showSelectedThread`; the only other `showSelectedThread` caller is
-`showPendingThreadLink` (`+AgentsWorkspaces.swift:377`), the pending-link
-resolving overlay inside the same shared flow.
+showSelectedThread` with **one** stream-start rule: ensure at show (didSet
+`.start` + `openConversation`'s ensure), recover after history. The only other
+`showSelectedThread` caller is `showPendingThreadLink`
+(`+AgentsWorkspaces.swift:377`), the pending-link resolving overlay inside the
+same shared flow.
 
 ### Interaction with #TASK-1751 (required analysis)
 
@@ -152,56 +214,52 @@ observes enqueue order. Cold-open loading presentation
 (`isAwaitingInitialHistory`) is produced by `showSelectedThread` itself,
 unchanged.
 
+The F1 deferral removal is 1751-orthogonal: a same-thread reopen keeps
+`previousThreadId == thread.id`, so `showSelectedThread` skips the entire
+id-change block — no cold-open generation bump, no turn-rows window reset, no
+restore spawn (`+ThreadLifecycle.swift:48/:86`). The cold-open machinery only
+runs for different-thread opens, whose stream-at-show + history + restore
+triple race is precisely what every home row tap already executes today; live
+stream mirror writes bump the 1751 transcript-mirror generation
+(`applyStreamedCommittedMessages`/`applyThreadRenderSnapshot`), which is the
+condition the restore policy uses to yield to them.
+
 ### Semantic deltas, enumerated (row taps: immediate → shared)
 
 | # | Aspect | Before (immediate) | After (shared) | Visible? |
 |---|---|---|---|---|
 | D1 | Main-actor hops to `showSelectedThread` (navigation push) | 0 — sync in the tap action | 1 — `Task` hop, then sync | No; sub-frame hop, push animation unchanged. `.workflowRun`/`.unresolved` already paid 1 hop before, and still do (hop moves from after to before the destination switch) |
 | D2 | `.chat` history load | detached `Task` enqueued after show | awaited inline after show (same actor, same `loadSelectedThreadHistory` with per-request-id + selected-thread guards) | No; starts marginally earlier, same guards, same loading flags |
-| D3 | Same-thread reopen from home (tap the selected thread's row on the home list) | `selectedThread` didSet always fires `.start` → stream (re)starts at show; history races in parallel | `startsSelectedThreadStream: false` + stream ensured **after** history load (`selectThread` reopen rule) | Not visually. Warm reopen (messages retained; P4 pins the selected thread), so no loading state either way; live stream attaches after one history roundtrip instead of concurrently — the established semantics every widget/deep-link/task reopen already has |
+| D3 | Same-thread reopen from home | Row tap: didSet `.start` → fresh stream at show (dead at home); history races in parallel | **Identical for row taps** — deferral removed (F1), stream starts at show for every entry; trailing ensure is a no-op | No for row taps (byte-identical sequence: didSet `.start` → `openConversation` ensure no-op → history). Id-based entries change in the *other* direction: live output attaches one history roundtrip **earlier** (see design above) |
 | D4 | `.workflowRun` | `Task { openWorkflowRun }` — body starts at hop 1 | `await openWorkflowRun` inside the tap task — starts at hop 1 | No; identical hop count and arguments |
 | D5 | `.unresolved` | `beginDirectThreadOpen()` + `showResolvingWorkflowThread` at hop 0, resolution task at hop 1 | same pair inside `openThread(id:)` at hop 1 | No. `showResolvingWorkflowThread` is a **no-op for direct opens in both paths**: `beginDirectOpen()` sets `pendingThreadId = nil` (`GaryxMobileNavigationState.swift:280-286`) and `markShown` requires `pendingThreadId == threadId` (`:300-307`), so the resolving surface only ever presents for URL-queued pending links. Both paths resolve silently via `refreshThreads`/`getThread` → `openThreadDestination` |
 | D6 | Workflow-surface clearing | conditional (`isWorkflowRunSurfaceActive`) inside `showSelectedThread` | unconditional `clearWorkflowRunSurface()` in `openThreadDestination` first | No; `clearWorkflowRunSurface` is idempotent (cancel + clear + nil) |
 | D7 | Rapid successive taps | last sync call wins; detached history loads race, request-id guarded | tasks interleave at suspension points; same request-id guards converge | No |
 
-D3 is the one deliberate semantic convergence: it removes the row-tap-only
-divergence (row taps restarted the stream even on a same-thread home reopen,
-bypassing the reopen rule every other entry point gets). Content freshness is
-unaffected — the awaited history fetch returns the newest window and the
-stream resumes from the held committed cursor.
+The one deliberate semantic change is confined to id-based same-thread home
+reopens (D3, earlier live attach); row-tap visible behavior is conserved
+exactly, per the hard constraint.
 
-### Core sink (testable decision logic)
+### Decision-logic inventory (Core sinking)
 
-The reopen rule — the exact sub-case where the two old paths diverged — is
-inline in `selectThread` today. Sink it as a pure predicate next to the
-existing stream policies (no new file):
+The F1 resolution *removes* a decision branch instead of adding one, so there
+is no new decision logic to sink. Every rule the unified path decides with is
+already a Core-tested pure policy:
 
-```swift
-// Sources/GaryxMobileCore/GaryxSelectedThreadStreamPolicy.swift
-public enum GaryxSelectedThreadReopenPolicy {
-    /// True when opening `openingThreadId` re-opens the already-selected
-    /// thread from the home list. Such an open must not tear down / restart
-    /// the selected-thread stream at show time; the caller ensures the stream
-    /// after the history refresh.
-    public static func reopensSelectedThreadFromHome(
-        isHomeVisible: Bool,
-        selectedThreadId: String?,
-        openingThreadId: String
-    ) -> Bool {
-        isHomeVisible && selectedThreadId == openingThreadId
-    }
-}
-```
+- destination selection — `GaryxWorkflowRunDestination.destination`
+  (`GaryxWorkflowRunPanelState.swift:3-31`);
+- didSet stream action — `GaryxSelectedThreadStreamPolicy.action`;
+- ensure gate — `GaryxVisibleConversationStreamPolicy.shouldStart`
+  (`owned != selected || !hasStreamTask` — this is the exact predicate that
+  makes the converged "ensure at show, recover after history" rule safe, and
+  it already has SwiftPM tests);
+- cold-open restore freshness — `GaryxColdOpenRestorePolicy`;
+- pending-open request state — `GaryxMobileThreadOpenState`
+  (direct-open/markShown semantics locked by
+  `GaryxMobileThreadOpenStateTests.swift:68`).
 
-`selectThread` adopts it (raw equality preserved — no trimming added, byte-for
--byte the current predicate). Tests in the existing
-`GaryxSelectedThreadStreamPolicyTests.swift`: nil selected ⇒ false; different
-id ⇒ false; same id while conversation presented ⇒ false; same id + home ⇒
-true. The destination switch, stream policies, and cold-open policy are
-already Core-tested (`GaryxWorkflowRunDestination`,
-`GaryxSelectedThreadStreamPolicy`, `GaryxVisibleConversationStreamPolicy`,
-`GaryxColdOpenRestorePolicy`); the remaining diff is thin orchestration in the
-App layer, per the mobile-ui layering rule. No new files ⇒ no xcodegen needed.
+The remaining diff is thin orchestration in the App layer, per the mobile-ui
+layering rule. No new files ⇒ no xcodegen needed.
 
 ## 2 — Coding Usage widget: container-level `widgetURL` (P2)
 
@@ -325,12 +383,13 @@ Visual-equivalence argument (no full-screen special case needed):
 
 ## Out of scope
 
-- Any change to `showSelectedThread` / cold-open restore / turn-rows window /
-  residency (TASK-1751 surface) beyond routing row taps into the existing
-  shared entry.
-- The pre-existing shared-path behavior that selecting the same thread while
-  the conversation is presented restarts the stream (`selectedThread` didSet →
-  `.start`) — identical before/after for row taps.
+- Any change to the TASK-1751 surface (cold-open restore, turn-rows window,
+  residency): `showSelectedThread` only loses the M3
+  `startsSelectedThreadStream` plumbing; its id-change block, cold-open spawn,
+  and warm-open floor lock are untouched.
+- The stream-start idempotency/ensure semantics themselves
+  (`startSelectedThreadStream` early-return, didSet `.start`,
+  `GaryxVisibleConversationStreamPolicy`) — relied on, not modified.
 - Sweeping non-page-background `ignoresSafeArea` uses (previewers, panels).
 - Recent-threads widget (already compliant).
 
@@ -342,9 +401,11 @@ Visual-equivalence argument (no full-screen special case needed):
    widget extension).
 3. rg proofs of zero residue:
    - `rg openThreadImmediately mobile/` → empty;
+   - `rg "startsSelectedThreadStream|suppressesSelectedThreadStreamPolicy|reopeningSelectedThreadFromHome" mobile/`
+     → empty (deferral fully removed, no re-divergence switch left);
    - `rg -n "widgetURL" mobile/garyx-mobile/Widget/` → only the
      family-gated `systemSmall` branch in `GaryxCodingUsageWidget.swift`;
    - `rg -n "GaryxTheme.background.ignoresSafeArea" mobile/…/App/` → only the
      `garyxPageBackground()` helper definition.
-4. No new files (Core predicate + tests land in existing files) ⇒ no
-   xcodegen/pbxproj churn; verify `git status` stays clean of project files.
+4. No new files ⇒ no xcodegen/pbxproj churn; verify `git status` stays clean
+   of project files.
