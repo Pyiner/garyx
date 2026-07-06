@@ -1,0 +1,76 @@
+/* Glue for the shadcn chat components (message-scroller, message, bubble,
+   attachment, marker).
+
+   The component files under components/ui reference a few utilities that the
+   upstream shadcn registry theme normally provides but Tailwind 4.2 itself
+   does not. Define them here so the components render as designed. */
+
+/* shadcn components use the bare `border` utility and rely on the standard
+   shadcn base rule that repoints the preflight default border color from
+   currentColor to the theme border token. */
+@layer base {
+  *,
+  ::after,
+  ::before {
+    border-color: var(--border);
+  }
+}
+
+@utility scrollbar-thin {
+  scrollbar-width: thin;
+}
+
+@utility scrollbar-none {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@utility scrollbar-gutter-stable {
+  scrollbar-gutter: stable;
+}
+
+@utility scroll-fade-x {
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    black 16px,
+    black calc(100% - 16px),
+    transparent
+  );
+}
+
+@utility scroll-fade-b {
+  mask-image: linear-gradient(to bottom, black calc(100% - 24px), transparent);
+}
+
+/* Text shimmer for uploading/processing attachment titles. */
+@utility shimmer {
+  color: transparent;
+  background-image: linear-gradient(
+    90deg,
+    var(--muted-foreground) 35%,
+    var(--foreground) 50%,
+    var(--muted-foreground) 65%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  animation: garyx-text-shimmer 1.6s linear infinite;
+}
+
+@keyframes garyx-text-shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* Attachment cards inside transcript bubbles. */
+.message-attachment-card {
+  width: min(100%, 320px);
+}
+
+.message-attachment-bubble .message-attachment-card {
+  width: 100%;
+}

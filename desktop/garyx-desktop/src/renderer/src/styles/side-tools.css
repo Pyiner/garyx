@@ -814,8 +814,11 @@
   gap: 0;
 }
 
-.side-tool-chat-thread .messages {
+.side-tool-chat-thread .messages-scroller {
   width: 100%;
+}
+
+.side-tool-chat-thread .messages {
   padding: 10px 10px
     calc(var(--composer-scroll-clip-height) + var(--composer-message-clearance))
     10px;

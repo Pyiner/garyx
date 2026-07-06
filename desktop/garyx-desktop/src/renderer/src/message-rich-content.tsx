@@ -14,6 +14,14 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import {
+  Attachment,
+  AttachmentContent,
+  AttachmentDescription,
+  AttachmentMedia,
+  AttachmentTitle,
+  AttachmentTrigger,
+} from "@/components/ui/attachment";
+import {
   RichMessageText,
   type LocalFileLinkHandler,
 } from "./message-rich-text";
@@ -305,43 +313,28 @@ function MessageFileAttachmentCard({
   const label = segment.label === "Attached file" || segment.label === "Attached image"
     ? t(segment.label)
     : segment.label;
-  const body = (
-    <>
-      <span aria-hidden="true" className="message-file-card-icon">
-        <FileText size={18} strokeWidth={1.8} />
-      </span>
-      <span className="message-file-card-copy">
-        <span className="message-file-card-name" title={label}>
-          {label}
-        </span>
-        <span className="message-file-card-meta">
-          {formatFileSegmentMeta(segment, t)}
-        </span>
-      </span>
-    </>
-  );
-
-  if (!canPreview || !previewPath || !onLocalFileLinkClick) {
-    return (
-      <div
-        className="message-file-card"
-        title={segment.path || label}
-      >
-        {body}
-      </div>
-    );
-  }
-
   return (
-    <button
-      aria-label={t('Preview attached file {name}', { name: label })}
-      className="message-file-card message-file-card-clickable"
-      onClick={() => onLocalFileLinkClick(previewPath)}
-      title={previewPath}
-      type="button"
+    <Attachment
+      className="message-attachment-card"
+      title={segment.path || label}
     >
-      {body}
-    </button>
+      <AttachmentMedia>
+        <FileText aria-hidden size={18} strokeWidth={1.8} />
+      </AttachmentMedia>
+      <AttachmentContent>
+        <AttachmentTitle title={label}>{label}</AttachmentTitle>
+        <AttachmentDescription>
+          {formatFileSegmentMeta(segment, t)}
+        </AttachmentDescription>
+      </AttachmentContent>
+      {canPreview && previewPath && onLocalFileLinkClick ? (
+        <AttachmentTrigger
+          aria-label={t('Preview attached file {name}', { name: label })}
+          onClick={() => onLocalFileLinkClick(previewPath)}
+          title={previewPath}
+        />
+      ) : null}
+    </Attachment>
   );
 }
 

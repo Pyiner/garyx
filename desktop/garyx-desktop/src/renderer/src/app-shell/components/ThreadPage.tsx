@@ -8,7 +8,24 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { CircleAlert, GitBranch } from 'lucide-react';
+import { ArrowDown, CircleAlert, GitBranch, Repeat2 } from 'lucide-react';
+
+import { Bubble, BubbleContent } from "@/components/ui/bubble";
+import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker";
+import {
+  Message,
+  MessageAvatar,
+  MessageContent,
+  MessageHeader,
+} from "@/components/ui/message";
+import {
+  MessageScroller,
+  MessageScrollerButton,
+  MessageScrollerContent,
+  MessageScrollerItem,
+  MessageScrollerProvider,
+  MessageScrollerViewport,
+} from "@/components/ui/message-scroller";
 
 import type {
   DesktopApiProviderType,
@@ -31,6 +48,7 @@ import type {
 import type { MessageIntent } from "../../message-machine";
 import type { ThreadHistoryPaginationState } from "../../gateway-mirror/transcript-materialize";
 import {
+  TranscriptScrollBridge,
   useThreadTranscriptScroll,
   type TranscriptScrollIntent,
 } from "./thread-transcript-scroll";
@@ -220,19 +238,39 @@ function renderUserMessageBubbleParts({
           : parseRestartNoticeText(part.text) !== null
             ? "restart-notice-message "
             : "";
+    if (cardPartClass) {
+      return (
+        <article
+          className={`message-bubble ${cardPartClass}user ${pending ? "pending" : ""} ${error ? "error" : ""}`}
+          key={`${keyPrefix}:${part.key}`}
+          {...userTurnMarker}
+        >
+          <RichMessageContent
+            altPrefix="user"
+            content={part.content}
+            onLocalFileLinkClick={onLocalFileLinkClick}
+            text={part.text}
+          />
+        </article>
+      );
+    }
     return (
-      <article
-        className={`message-bubble ${cardPartClass}user ${pending ? "pending" : ""} ${error ? "error" : ""}`}
+      <Bubble
+        align="end"
+        className={`max-w-[77%] ${pending ? "opacity-80" : ""}`}
         key={`${keyPrefix}:${part.key}`}
+        variant="muted"
         {...userTurnMarker}
       >
-        <RichMessageContent
-          altPrefix="user"
-          content={part.content}
-          onLocalFileLinkClick={onLocalFileLinkClick}
-          text={part.text}
-        />
-      </article>
+        <BubbleContent className="rounded-[20px]">
+          <RichMessageContent
+            altPrefix="user"
+            content={part.content}
+            onLocalFileLinkClick={onLocalFileLinkClick}
+            text={part.text}
+          />
+        </BubbleContent>
+      </Bubble>
     );
   });
 
@@ -667,21 +705,29 @@ export function ThreadPage({
         ) : null}
 
         {!hasWorkflowRunContent ? (
-          <div
+          <MessageScrollerProvider autoScroll>
+          <MessageScroller className="messages-scroller">
+          <MessageScrollerViewport
             className="messages"
             onPointerDown={handleMessagesUserScrollIntent}
             onScroll={handleMessagesScroll}
             onTouchStart={handleMessagesUserScrollIntent}
             onWheel={handleMessagesUserScrollIntent}
+            preserveScrollOnPrepend
             ref={messagesRef}
           >
+          <MessageScrollerContent className="messages-content">
           {historyLoadingEarlier ? (
-            <div
+            <Marker
               aria-label={t("Loading earlier messages")}
-              className="message-history-page-loader"
+              className="min-h-7 py-0.5"
+              role="status"
+              variant="separator"
             >
-              <span aria-hidden="true" className="message-history-page-spinner" />
-            </div>
+              <MarkerIcon>
+                <span aria-hidden="true" className="message-history-page-spinner" />
+              </MarkerIcon>
+            </Marker>
           ) : null}
 
           {!activeMessages.length &&
@@ -713,45 +759,62 @@ export function ThreadPage({
           ) : null}
 
           {showHistoryLoadingPlaceholder ? (
-            <article className="message-bubble assistant pending">
-              <div
-                aria-label={t("Loading thread history")}
-                className="message-loading"
-              >
-                <p className="message-loading-label">{t("Loading thread history…")}</p>
-                <span aria-hidden="true" className="message-loading-dots">
-                  <span />
-                  <span />
-                  <span />
-                </span>
-              </div>
-            </article>
+            <Bubble
+              className="w-fit max-w-[min(100%,680px)] self-start text-[color:var(--color-token-text-tertiary,var(--color-token-description-foreground))]"
+              variant="ghost"
+            >
+              <BubbleContent>
+                <div
+                  aria-label={t("Loading thread history")}
+                  className="message-loading"
+                >
+                  <p className="message-loading-label">{t("Loading thread history…")}</p>
+                  <span aria-hidden="true" className="message-loading-dots">
+                    <span />
+                    <span />
+                    <span />
+                  </span>
+                </div>
+              </BubbleContent>
+            </Bubble>
           ) : null}
 
           {showAutomationRunInitialPlaceholder && activePendingAutomationRun ? (
             <>
-              <article className="message-bubble user" data-user-turn-start="true">
-                <RichMessageContent
-                  altPrefix="user"
-                  content={buildOptimisticTranscriptContent(
-                    activePendingAutomationRun.prompt,
-                    [],
-                    [],
-                  )}
-                  onLocalFileLinkClick={onLocalWorkspaceFileLinkClick}
-                  text={activePendingAutomationRun.prompt}
-                />
-              </article>
-              <article className="message-bubble assistant pending">
-                <div
-                  aria-label={t("Garyx is working")}
-                  className="message-loading"
-                >
-                  <p className="message-loading-label message-loading-label--thinking">
-                    {t(RUN_LOADING_LABEL)}
-                  </p>
-                </div>
-              </article>
+              <Bubble
+                align="end"
+                className="max-w-[77%]"
+                data-user-turn-start="true"
+                variant="muted"
+              >
+                <BubbleContent className="rounded-[20px]">
+                  <RichMessageContent
+                    altPrefix="user"
+                    content={buildOptimisticTranscriptContent(
+                      activePendingAutomationRun.prompt,
+                      [],
+                      [],
+                    )}
+                    onLocalFileLinkClick={onLocalWorkspaceFileLinkClick}
+                    text={activePendingAutomationRun.prompt}
+                  />
+                </BubbleContent>
+              </Bubble>
+              <Bubble
+                className="w-fit max-w-[min(100%,680px)] self-start text-[color:var(--color-token-text-tertiary,var(--color-token-description-foreground))]"
+                variant="ghost"
+              >
+                <BubbleContent>
+                  <div
+                    aria-label={t("Garyx is working")}
+                    className="message-loading"
+                  >
+                    <p className="message-loading-label message-loading-label--thinking">
+                      {t(RUN_LOADING_LABEL)}
+                    </p>
+                  </div>
+                </BubbleContent>
+              </Bubble>
             </>
           ) : null}
 
@@ -827,18 +890,52 @@ export function ThreadPage({
                   markUserTurnStart: options.markUserTurnStart !== false,
                 });
               }
+              if (loopContinuation) {
+                return (
+                  <Marker
+                    className="my-0.5"
+                    key={`${block.key}:body`}
+                    variant="separator"
+                  >
+                    <MarkerIcon>
+                      <Repeat2 aria-hidden size={14} strokeWidth={1.8} />
+                    </MarkerIcon>
+                    <MarkerContent>{LOOP_CONTINUATION_SUMMARY}</MarkerContent>
+                  </Marker>
+                );
+              }
+              if (entry.message.role === "assistant" || entry.message.error) {
+                return (
+                  <Bubble
+                    className={
+                      entry.message.error
+                        ? "max-w-[min(77%,680px)] self-start"
+                        : `w-[min(100%,680px)] self-start ${entry.message.pending ? "text-[color:var(--color-token-text-tertiary,var(--color-token-description-foreground))]" : ""}`
+                    }
+                    key={`${block.key}:body`}
+                    variant={entry.message.error ? "destructive" : "ghost"}
+                  >
+                    <BubbleContent
+                      className={entry.message.error ? "rounded-[20px]" : ""}
+                    >
+                      <RichMessageContent
+                        altPrefix={entry.message.role}
+                        content={entry.message.content}
+                        onLocalFileLinkClick={onLocalWorkspaceFileLinkClick}
+                        text={displayText}
+                      />
+                    </BubbleContent>
+                  </Bubble>
+                );
+              }
               return (
                 <article
                   key={`${block.key}:body`}
-                  className={`message-bubble ${entry.message.role} ${entry.message.pending ? "pending" : ""} ${entry.message.error ? "error" : ""} ${loopContinuation ? "loop-continuation" : ""}`}
+                  className={`message-bubble ${entry.message.role} ${entry.message.pending ? "pending" : ""} ${entry.message.error ? "error" : ""}`}
                 >
                   <RichMessageContent
                     altPrefix={entry.message.role}
-                    content={
-                      loopContinuation
-                        ? LOOP_CONTINUATION_SUMMARY
-                        : entry.message.content
-                    }
+                    content={entry.message.content}
                     onLocalFileLinkClick={onLocalWorkspaceFileLinkClick}
                     text={displayText}
                   />
@@ -862,54 +959,84 @@ export function ThreadPage({
                   speaker!.agentId !== previousSpeaker?.agentId;
                 const blockBody = renderBlockBody(block);
                 if (!speaker) {
-                  return blockBody;
+                  return (
+                    <MessageScrollerItem
+                      className="messages-item"
+                      key={block.key}
+                      messageId={block.key}
+                    >
+                      {blockBody}
+                    </MessageScrollerItem>
+                  );
                 }
-                const speakerHeader = showSpeakerHeader ? (
-                  speaker.threadId ? (
-                    <button
-                      className="team-agent-speaker"
-                      key={`${block.key}:speaker`}
-                      onClick={() => onOpenThreadById(speaker.threadId!)}
-                      title={t("Open {name} thread", {
-                        name: speaker.displayName,
-                      })}
-                      type="button"
-                    >
-                      <AgentAvatar
-                        agentId={speaker.agentId}
-                        displayName={speaker.displayName}
-                        role={speaker.role}
-                        size={28}
-                      />
-                      <span className="team-agent-speaker-name">
-                        {speaker.displayName}
-                      </span>
-                    </button>
-                  ) : (
-                    <div
-                      className="team-agent-speaker"
-                      key={`${block.key}:speaker`}
-                    >
-                      <AgentAvatar
-                        agentId={speaker.agentId}
-                        displayName={speaker.displayName}
-                        role={speaker.role}
-                        size={28}
-                      />
-                      <span className="team-agent-speaker-name">
-                        {speaker.displayName}
-                      </span>
-                    </div>
-                  )
-                ) : null;
+                const avatar = (
+                  <AgentAvatar
+                    agentId={speaker.agentId}
+                    displayName={speaker.displayName}
+                    role={speaker.role}
+                    size={28}
+                  />
+                );
                 return (
-                  <div
+                  <MessageScrollerItem
+                    className="messages-item"
                     key={block.key}
-                    className={`team-agent-block ${showSpeakerHeader ? "with-speaker-header" : "continued-speaker"}`}
+                    messageId={block.key}
                   >
-                    {speakerHeader}
-                    <div className="team-agent-block-body">{blockBody}</div>
-                  </div>
+                  <Message
+                    className={`w-[min(100%,760px)] self-stretch ${showSpeakerHeader ? "with-speaker-header" : "continued-speaker"}`}
+                  >
+                    <MessageAvatar
+                      aria-hidden={!showSpeakerHeader}
+                      className="min-w-7 self-start bg-transparent"
+                    >
+                      {showSpeakerHeader ? (
+                        speaker.threadId ? (
+                          <button
+                            aria-label={t("Open {name} thread", {
+                              name: speaker.displayName,
+                            })}
+                            className="team-agent-speaker"
+                            onClick={() => onOpenThreadById(speaker.threadId!)}
+                            title={t("Open {name} thread", {
+                              name: speaker.displayName,
+                            })}
+                            type="button"
+                          >
+                            {avatar}
+                          </button>
+                        ) : (
+                          avatar
+                        )
+                      ) : null}
+                    </MessageAvatar>
+                    <MessageContent className="min-w-0 gap-2">
+                      {showSpeakerHeader ? (
+                        <MessageHeader className="px-0 pt-1.5">
+                          {speaker.threadId ? (
+                            <button
+                              className="team-agent-speaker"
+                              onClick={() => onOpenThreadById(speaker.threadId!)}
+                              title={t("Open {name} thread", {
+                                name: speaker.displayName,
+                              })}
+                              type="button"
+                            >
+                              <span className="team-agent-speaker-name">
+                                {speaker.displayName}
+                              </span>
+                            </button>
+                          ) : (
+                            <span className="team-agent-speaker-name">
+                              {speaker.displayName}
+                            </span>
+                          )}
+                        </MessageHeader>
+                      ) : null}
+                      {blockBody}
+                    </MessageContent>
+                  </Message>
+                  </MessageScrollerItem>
                 );
               });
             }
@@ -942,30 +1069,28 @@ export function ThreadPage({
               );
             };
 
-            return turnRows.map((row) => {
+            // Each transcript row rides its own MessageScrollerItem so
+            // off-screen turns skip layout via content-visibility while
+            // the primitive tracks them for prepend anchoring.
+            const renderTurnRowBody = (
+              row: (typeof turnRows)[number],
+            ): ReactNode => {
               if (row.kind === "flat") {
-                return (
-                  <Fragment key={row.key}>
-                    {renderBlockBody(row.block)}
-                  </Fragment>
-                );
+                return renderBlockBody(row.block);
               }
               if (row.kind === "turn") {
-                return (
-                  <Fragment key={row.key}>{renderActivityRow(row)}</Fragment>
-                );
+                return renderActivityRow(row);
               }
               if (row.kind === "capsule_only") {
                 return (
                   <CapsuleChatCardList
                     cards={row.capsuleCards}
-                    key={row.key}
                     onOpenCapsule={onOpenCapsule}
                   />
                 );
               }
               return (
-                <Fragment key={row.key}>
+                <>
                   {renderBlockBody(row.userBlock, {
                     markUserTurnStart: true,
                   })}
@@ -978,9 +1103,19 @@ export function ThreadPage({
                       onOpenCapsule={onOpenCapsule}
                     />
                   ) : null}
-                </Fragment>
+                </>
               );
-            });
+            };
+
+            return turnRows.map((row) => (
+              <MessageScrollerItem
+                className="messages-item"
+                key={row.key}
+                messageId={row.key}
+              >
+                {renderTurnRowBody(row)}
+              </MessageScrollerItem>
+            ));
           })()}
 
           {activePendingAckIntents.map((intent) =>
@@ -1006,20 +1141,38 @@ export function ThreadPage({
           )}
 
           {showTailThinking ? (
-            <article className="message-bubble assistant pending">
-              <div
-                aria-label={t("Garyx is working")}
-                className="message-loading"
-              >
-                <p className="message-loading-label message-loading-label--thinking">
-                  {t(RUN_LOADING_LABEL)}
-                </p>
-              </div>
-            </article>
+            <Bubble
+              className="w-fit max-w-[min(100%,680px)] self-start text-[color:var(--color-token-text-tertiary,var(--color-token-description-foreground))]"
+              variant="ghost"
+            >
+              <BubbleContent>
+                <div
+                  aria-label={t("Garyx is working")}
+                  className="message-loading"
+                >
+                  <p className="message-loading-label message-loading-label--thinking">
+                    {t(RUN_LOADING_LABEL)}
+                  </p>
+                </div>
+              </BubbleContent>
+            </Bubble>
           ) : null}
 
           <RateLimitBanner rateLimit={rateLimit} />
-          </div>
+          </MessageScrollerContent>
+          </MessageScrollerViewport>
+          <MessageScrollerButton behavior="smooth">
+            <ArrowDown aria-hidden size={16} strokeWidth={2} />
+            <span className="sr-only">{t("Scroll to latest")}</span>
+          </MessageScrollerButton>
+          <TranscriptScrollBridge
+            activeMessages={activeMessages}
+            activeThreadMessageKey={activeThreadMessageKey}
+            historyLoading={historyLoading}
+            scrollIntent={scrollIntent}
+          />
+          </MessageScroller>
+          </MessageScrollerProvider>
         ) : null}
 
         {!hasWorkflowRunContent ? (

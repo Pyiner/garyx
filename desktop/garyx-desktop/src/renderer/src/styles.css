@@ -2,6 +2,7 @@
 @import "streamdown/styles.css";
 
 @import "./styles/theme.css";
+@import "./styles/shadcn-chat.css";
 @import "./styles/base.css";
 @import "./styles/gateway-setup.css";
 @import "./styles/sidebar.css";

@@ -1221,8 +1221,11 @@
   background: var(--color-token-bg-primary);
 }
 
-.thread-main.new-thread-centered .messages {
+.thread-main.new-thread-centered .messages-scroller {
   height: 100%;
+}
+
+.thread-main.new-thread-centered .messages {
   padding-bottom: 0;
 }
 

@@ -29,6 +29,16 @@ import type {
 } from '@shared/contracts';
 
 import {
+  Attachment,
+  AttachmentAction,
+  AttachmentActions,
+  AttachmentContent,
+  AttachmentDescription,
+  AttachmentGroup,
+  AttachmentMedia,
+  AttachmentTitle,
+} from '@/components/ui/attachment';
+import {
   DropdownMenu,
   DropdownMenuGroup,
   DropdownMenuSeparator,
@@ -1159,91 +1169,90 @@ export function ComposerForm({
         type="file"
       />
       {composerBrowserAnnotations.length || composerImages.length || composerFiles.length ? (
-        <div className="composer-attachment-strip">
+        <AttachmentGroup className="composer-attachments px-3 pt-1">
           {composerBrowserAnnotations.map((annotation) => {
             const label = browserAnnotationChipLabel(annotation, t);
             const meta = browserAnnotationChipMeta(annotation);
             return (
-              <div
+              <Attachment
                 key={annotation.id}
-                className="composer-attachment-chip composer-browser-annotation-chip"
+                size="sm"
                 title={[label, meta].filter(Boolean).join('\n')}
               >
-                <span className="composer-file-chip-icon composer-browser-annotation-chip-icon">
+                <AttachmentMedia>
                   <MessageCircle aria-hidden size={14} strokeWidth={1.8} />
-                </span>
-                <span className="composer-browser-annotation-chip-copy">
-                  <span className="composer-browser-annotation-chip-label">
-                    {label}
-                  </span>
+                </AttachmentMedia>
+                <AttachmentContent>
+                  <AttachmentTitle>{label}</AttachmentTitle>
                   {meta ? (
-                    <span className="composer-browser-annotation-chip-meta">
-                      {meta}
-                    </span>
+                    <AttachmentDescription>{meta}</AttachmentDescription>
                   ) : null}
-                </span>
-                <button
-                  aria-label={t("Remove browser comment")}
-                  className="composer-attachment-remove composer-browser-annotation-chip-remove"
-                  onClick={() => {
-                    onRemoveComposerBrowserAnnotation(annotation.id);
-                  }}
-                  type="button"
-                >
-                  <X aria-hidden size={12} strokeWidth={2.2} />
-                  <span className="sr-only">{t("Remove browser comment")}</span>
-                </button>
-              </div>
+                </AttachmentContent>
+                <AttachmentActions>
+                  <AttachmentAction
+                    aria-label={t("Remove browser comment")}
+                    onClick={() => {
+                      onRemoveComposerBrowserAnnotation(annotation.id);
+                    }}
+                  >
+                    <X aria-hidden size={12} strokeWidth={2.2} />
+                    <span className="sr-only">{t("Remove browser comment")}</span>
+                  </AttachmentAction>
+                </AttachmentActions>
+              </Attachment>
             );
           })}
           {composerImages.map((image) => (
-            <div
+            <Attachment
               key={image.id}
-              className="composer-attachment-chip composer-image-chip"
+              orientation="vertical"
+              title={image.name}
             >
-              <img
-                alt={image.name}
-                className="composer-image-chip-preview"
-                title={image.name}
-                src={buildMessageImageDataUrl(image.mediaType, image.data || '')}
-              />
-              <button
-                aria-label={t("Remove image attachment")}
-                className="composer-attachment-remove composer-image-chip-remove"
-                onClick={() => {
-                  onRemoveComposerImage(image.id);
-                }}
-                type="button"
-              >
-                <X aria-hidden size={12} strokeWidth={2.2} />
-                <span className="sr-only">{t("Remove image attachment")}</span>
-              </button>
-            </div>
+              <AttachmentMedia variant="image">
+                <img
+                  alt={image.name}
+                  src={buildMessageImageDataUrl(image.mediaType, image.data || '')}
+                />
+              </AttachmentMedia>
+              <AttachmentActions>
+                <AttachmentAction
+                  aria-label={t("Remove image attachment")}
+                  className="bg-background/80 shadow-sm backdrop-blur-sm hover:bg-background"
+                  onClick={() => {
+                    onRemoveComposerImage(image.id);
+                  }}
+                >
+                  <X aria-hidden size={12} strokeWidth={2.2} />
+                  <span className="sr-only">{t("Remove image attachment")}</span>
+                </AttachmentAction>
+              </AttachmentActions>
+            </Attachment>
           ))}
           {composerFiles.map((file) => (
-            <div
-              key={file.id}
-              className="composer-attachment-chip composer-file-chip"
-              title={file.name}
-            >
-              <span className="composer-file-chip-icon">
+            <Attachment key={file.id} size="sm" title={file.name}>
+              <AttachmentMedia>
                 <FileText aria-hidden size={14} strokeWidth={1.8} />
-              </span>
-              <span className="composer-file-chip-label">{file.name}</span>
-              <button
-                aria-label={t("Remove file attachment")}
-                className="composer-attachment-remove composer-file-chip-remove"
-                onClick={() => {
-                  onRemoveComposerFile(file.id);
-                }}
-                type="button"
-              >
-                <X aria-hidden size={12} strokeWidth={2.2} />
-                <span className="sr-only">{t("Remove file attachment")}</span>
-              </button>
-            </div>
+              </AttachmentMedia>
+              <AttachmentContent>
+                <AttachmentTitle>{file.name}</AttachmentTitle>
+                {file.mediaType ? (
+                  <AttachmentDescription>{file.mediaType}</AttachmentDescription>
+                ) : null}
+              </AttachmentContent>
+              <AttachmentActions>
+                <AttachmentAction
+                  aria-label={t("Remove file attachment")}
+                  onClick={() => {
+                    onRemoveComposerFile(file.id);
+                  }}
+                >
+                  <X aria-hidden size={12} strokeWidth={2.2} />
+                  <span className="sr-only">{t("Remove file attachment")}</span>
+                </AttachmentAction>
+              </AttachmentActions>
+            </Attachment>
           ))}
-        </div>
+        </AttachmentGroup>
       ) : null}
       <textarea
         className="composer-editor"

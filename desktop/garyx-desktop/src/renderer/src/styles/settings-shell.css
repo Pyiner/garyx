@@ -286,20 +286,28 @@
   color: var(--color-token-text-primary);
 }
 
-.messages {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+/* Transcript scroller (shadcn MessageScroller): `.messages-scroller` is
+   the Root that owns sizing/placement, `.messages` stays the scrolling
+   viewport node (existing scrollbar/media rules keep applying), and
+   `.messages-content` / `.messages-item` carry the column layout that
+   used to live on `.messages` itself. */
+.messages-scroller {
   height: calc(100% - var(--composer-scroll-clip-height));
+  min-height: 0;
+  width: min(var(--container-2xl), 100%);
+  max-width: 100%;
+  margin: 0 auto;
+  background: var(--color-token-bg-primary);
+}
+
+.messages {
   min-height: 0;
   overflow: auto;
   overflow-x: hidden;
   -ms-overflow-style: none;
   scrollbar-width: none;
-  width: min(var(--container-2xl), 100%);
   max-width: 100%;
   box-sizing: border-box;
-  margin: 0 auto;
   padding: 8px 2px
     calc(var(--composer-scroll-clip-height) + var(--composer-message-clearance))
     0;
@@ -307,7 +315,21 @@
     var(--composer-scroll-clip-height) + var(--composer-message-clearance)
   );
   overscroll-behavior: contain;
-  background: var(--color-token-bg-primary);
+}
+
+.messages-content,
+.messages-item {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+/* The composer overlays the bottom of thread-main and intrudes into the
+   scroller root by exactly --composer-scroll-clip-height; float the
+   scroll-to-latest button 12px above the composer's top edge. */
+.messages-scroller [data-slot="message-scroller-button"][data-direction="end"] {
+  bottom: calc(var(--composer-scroll-clip-height, 72px) + 12px);
 }
 
 .workflow-thread-content {
@@ -325,13 +347,6 @@
   height: 100%;
   min-height: 0;
   width: 100%;
-}
-
-.message-history-page-loader {
-  display: flex;
-  justify-content: center;
-  min-height: 28px;
-  padding: 4px 0 2px;
 }
 
 .message-history-page-spinner {

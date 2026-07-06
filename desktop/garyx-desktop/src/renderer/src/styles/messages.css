@@ -722,81 +722,7 @@ button.message-image-frame:focus-visible {
   box-shadow: none;
 }
 
-.message-file-card {
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
-  width: min(100%, 320px);
-  min-height: 50px;
-  padding: 8px 10px;
-  border: 1px solid color-mix(in oklab, var(--color-token-border) 86%, white);
-  border-radius: 12px;
-  background: color-mix(in oklab, var(--color-token-bg-primary) 88%, white);
-  color: var(--color-token-text-primary);
-  font-family: -apple-system, "system-ui", "Segoe UI", sans-serif;
-  text-align: left;
-  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.03);
-}
-
-button.message-file-card {
-  cursor: pointer;
-  appearance: none;
-}
-
-.message-file-card-clickable:hover,
-.message-file-card-clickable:focus-visible {
-  border-color: color-mix(
-    in srgb,
-    var(--color-accent-foreground) 30%,
-    var(--color-token-border)
-  );
-  background: color-mix(in oklab, var(--color-token-bg-primary) 94%, white);
-}
-
-.message-file-card-clickable:focus-visible {
-  outline: 2px solid
-    color-mix(in srgb, var(--color-accent-foreground) 34%, transparent);
-  outline-offset: 2px;
-}
-
-.message-file-card-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
-  background: color-mix(in oklab, var(--color-token-foreground) 7%, transparent);
-  color: var(--color-token-text-secondary);
-}
-
-.message-file-card-copy {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.message-file-card-name {
-  overflow: hidden;
-  color: var(--color-token-text-primary);
-  font-size: var(--text-sm);
-  font-weight: var(--font-weight-semibold);
-  line-height: 1.25;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.message-file-card-meta {
-  overflow: hidden;
-  color: var(--color-token-text-secondary);
-  font-size: var(--text-xs-plus);
-  line-height: 1.25;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.task-notification-card {
+button.task-notification-card {
   display: grid;
   gap: 11px;
   width: min(100%, 680px);
@@ -963,18 +889,6 @@ button.message-file-card {
   color: var(--color-token-text-secondary);
 }
 
-.message-bubble.system.loop-continuation {
-  align-self: flex-start;
-  width: fit-content;
-  max-width: min(100%, 520px);
-  padding: 10px 14px;
-  border: 1px solid rgba(13, 13, 13, 0.07);
-  border-radius: 16px;
-  background: color-mix(in srgb, var(--color-token-bg-secondary) 90%, var(--color-token-bg-primary) 10%);
-  color: var(--color-token-text-secondary);
-  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.04);
-}
-
 /* ── Agent Message Card (cross-agent messages) ── */
 .message-bubble.agent-peer-message {
   align-self: flex-end;
@@ -1055,17 +969,6 @@ button.message-file-card {
   text-decoration-color: var(--color-token-text-secondary);
 }
 
-.message-bubble.system.loop-continuation .message-rich > :last-child {
-  margin-bottom: 0;
-}
-
-.message-bubble.system.loop-continuation .message-rich p {
-  margin: 0;
-  font-size: var(--text-base);
-  font-weight: var(--font-weight-medium);
-  line-height: 1.45;
-}
-
 .message-bubble.assistant p {
   padding: 0;
 }
@@ -1115,16 +1018,6 @@ button.message-file-card {
   transform: none;
 }
 
-.team-agent-block {
-  display: grid;
-  gap: 8px;
-  align-self: stretch;
-  width: min(100%, 760px);
-  box-sizing: border-box;
-  padding-left: 2px;
-  overflow: visible;
-}
-
 .team-agent-speaker {
   display: inline-flex;
   align-items: center;
@@ -1167,8 +1060,3 @@ button.team-agent-speaker:focus-visible {
   color: var(--color-token-text-secondary);
 }
 
-.team-agent-block-body {
-  padding-left: 38px;
-  position: relative;
-  z-index: 0;
-}

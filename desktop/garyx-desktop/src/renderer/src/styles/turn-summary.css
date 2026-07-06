@@ -736,10 +736,6 @@
   width: auto;
 }
 
-.message-attachment-bubble .message-file-card {
-  width: 100%;
-}
-
 .message-attachment-bubble-image .message-image-frame {
   width: auto;
   max-width: min(100%, 300px);
@@ -755,27 +751,6 @@
   max-height: 260px;
   border-radius: 16px;
   object-fit: contain;
-}
-
-.message-bubble.user.user-with-media {
-  gap: 8px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-  justify-items: end;
-}
-
-.message-bubble.user.user-with-media .message-rich-body {
-  padding: 8px 12px;
-  border: 0;
-  border-radius: 20px;
-  background: color-mix(
-    in oklab,
-    var(--color-token-foreground) 5%,
-    transparent
-  );
-  box-shadow: none;
 }
 
 .message-bubble.error {
