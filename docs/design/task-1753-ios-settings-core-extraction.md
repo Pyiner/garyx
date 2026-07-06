@@ -304,6 +304,11 @@ View changes (`GaryxMobileBotSettingsViews.swift`):
   trimmed, empty optional removed, empty required kept as "";
   keys not declared in fields preserved verbatim; absent value falls back to
   schema default before coercion.
+- enum-valued number field (schema `type: number`/`integer` with `enum`, a
+  reachable combination): the picker writes `.string(option)` into the
+  editor draft, and save-time `normalized` coerces it to
+  `.number(Double(option) ?? 0)` — pinned explicitly as a characterization
+  test (editor state stays string, save normalizes as number).
 - `defaultAccountId`: "Telegram" → "telegram-main"; slugging collapses
   non-alphanumerics (" My_Channel! " → "my-channel-main"); empty slug →
   "bot-main"; collision walk -2…-99; exhaustion → "-new".
@@ -327,7 +332,10 @@ View changes (`GaryxMobileBotSettingsViews.swift`):
   would change formatting edge cases. Follow-up candidate, not this task.
 - Number editors coerce unparseable text to `0` on each keystroke;
   save-time `normalized` re-coerces — unchanged.
-- Enum-valued number fields save `.string(option)` (picker path) — unchanged.
+- Enum pickers write `.string(option)` into the editor draft regardless of
+  field kind; for number-kind enum fields the saved payload is then
+  `.number(Double(option) ?? 0)` via `normalized` — both halves unchanged
+  and pinned by the characterization test above.
 - Bot form field-required error copy, display-name echo rule, and agent
   default selection stay in the view/model exactly as today (not part of the
   audited findings).
