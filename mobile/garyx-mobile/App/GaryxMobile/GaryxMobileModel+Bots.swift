@@ -301,6 +301,9 @@ extension GaryxMobileModel {
             pinnedThreadIds = previousPinnedThreadIds
             recentThreadIds = previousRecentThreadIds
             threads = previousThreads
+            // Rollback is list surgery too: invalidate any refresh that
+            // captured its pages while the archive was pending.
+            threadListPager.noteLocalMutation()
             restorePersistedLastOpenedThreadId(previousLastOpenedThreadId)
             persistRecentThreadsWidgetSnapshot()
             lastError = displayMessage(for: error)

@@ -80,7 +80,7 @@ final class GaryxHomeThreadListPagerTests: XCTestCase {
             pageCount: page.count,
             hasMore: page.hasMore
         )
-        XCTAssertEqual(application, .replaceHead)
+        XCTAssertEqual(application, .apply(.replaceHead))
         XCTAssertEqual(pager.nextOffset, 3)
         XCTAssertEqual(pager.gate, .ready)
         XCTAssertTrue(pager.hasMoreThreadSummaries)
@@ -315,7 +315,7 @@ final class GaryxHomeThreadListPagerTests: XCTestCase {
         // A beyond-head refresh must not resurrect hasMore.
         let refresh = try XCTUnwrap(pager.requestRefresh())
         let application = pager.completeRefresh(refresh, pageOffset: 0, pageCount: 30, hasMore: true)
-        XCTAssertEqual(application, .mergeBeyondHead)
+        XCTAssertEqual(application, .apply(.mergeBeyondHead))
         XCTAssertEqual(pager.gate, .exhausted, "beyond-head refresh keeps pagination untouched")
         XCTAssertEqual(pager.nextOffset, 55)
     }
@@ -336,9 +336,10 @@ final class GaryxHomeThreadListPagerTests: XCTestCase {
         XCTAssertEqual(pager.loadMoreFailureRevision, 0)
 
         let afterReset = pager
-        XCTAssertNil(
+        XCTAssertEqual(
             pager.completeRefresh(refreshTicket, pageOffset: 0, pageCount: 30, hasMore: true),
-            "stale refresh completion returns nil so the caller drops the page"
+            .abandonedStaleEpoch,
+            "stale refresh completion tells the caller to drop the page"
         )
         XCTAssertEqual(pager, afterReset, "stale completion is a no-op on every field")
 
@@ -361,7 +362,7 @@ final class GaryxHomeThreadListPagerTests: XCTestCase {
         let refresh1 = try XCTUnwrap(singlePage.requestRefresh())
         XCTAssertEqual(
             singlePage.completeRefresh(refresh1, pageOffset: 0, pageCount: 30, hasMore: true),
-            .replaceHead,
+            .apply(.replaceHead),
             "no load-more yet ⇒ the head page owns the list"
         )
         XCTAssertEqual(singlePage.nextOffset, 30)
@@ -374,7 +375,7 @@ final class GaryxHomeThreadListPagerTests: XCTestCase {
         let refresh2 = try XCTUnwrap(multiPage.requestRefresh())
         XCTAssertEqual(
             multiPage.completeRefresh(refresh2, pageOffset: 0, pageCount: 30, hasMore: false),
-            .mergeBeyondHead
+            .apply(.mergeBeyondHead)
         )
         XCTAssertEqual(multiPage.nextOffset, 55, "cursor preserved beyond head")
         XCTAssertEqual(multiPage.gate, .ready, "head page hasMore does not touch pagination beyond head")
@@ -510,6 +511,70 @@ final class GaryxHomeThreadListPagerTests: XCTestCase {
         pager = primedPager(cursor: 30)
         _ = pager.requestRefresh()
         XCTAssertEqual(pager.footerState, .idle)
+    }
+
+    // MARK: 14. Local mutation invalidation (review #TASK-1804 round 3)
+
+    /// The reviewer's interleaving: archive succeeds and resolves its
+    /// tombstone while a refresh is suspended; commit-point tombstone
+    /// filtering can no longer catch it, so the pager must abandon the
+    /// stale refresh outright — its surgery marker outlives the tombstone.
+    func testLocalMutationAbandonsInFlightRefreshCommit() throws {
+        var pager = primedPager(cursor: 30)
+        let before = pager
+        let ticket = try XCTUnwrap(pager.requestRefresh())
+
+        // Archive (or delete / pin edit) lands while the refresh is out.
+        pager.noteLocalMutation()
+
+        XCTAssertEqual(
+            pager.completeRefresh(ticket, pageOffset: 0, pageCount: 30, hasMore: false),
+            .abandonedLocalMutation,
+            "pre-surgery snapshots must not commit even though the gateway call succeeded"
+        )
+        XCTAssertFalse(pager.isRefreshingHead, "the gate is released for the follow-up")
+        XCTAssertEqual(pager.gate, before.gate, "abandonment leaves the gate untouched")
+        XCTAssertEqual(pager.nextOffset, before.nextOffset, "abandonment leaves the cursor untouched")
+        XCTAssertEqual(pager.loadMoreFailureRevision, before.loadMoreFailureRevision)
+        XCTAssertEqual(pager.hasMoreThreadSummaries, before.hasMoreThreadSummaries)
+
+        // The follow-up refresh observes the surgery and commits normally.
+        let followUp = try XCTUnwrap(pager.requestRefresh())
+        XCTAssertEqual(
+            pager.completeRefresh(followUp, pageOffset: 0, pageCount: 30, hasMore: true),
+            .apply(.replaceHead)
+        )
+    }
+
+    func testLocalMutationBeforeIssueDoesNotAbandonRefresh() throws {
+        var pager = primedPager(cursor: 30)
+        pager.noteLocalMutation()
+        let ticket = try XCTUnwrap(pager.requestRefresh())
+        XCTAssertEqual(
+            pager.completeRefresh(ticket, pageOffset: 0, pageCount: 30, hasMore: true),
+            .apply(.replaceHead),
+            "surgery that pre-dates the ticket is already reflected in its pages"
+        )
+    }
+
+    func testLocalMutationDoesNotAbandonLoadMore() throws {
+        // Load-more has no post-await snapshots: its page is filtered and
+        // appended right after its only await, and a removed row cannot be
+        // resurrected by an append. Pin the asymmetry.
+        var pager = primedPager(cursor: 30)
+        let ticket = try XCTUnwrap(pager.requestLoadMore(trigger: .footer))
+        pager.noteLocalMutation()
+        XCTAssertTrue(pager.completeLoadMore(ticket, pageOffset: 25, pageCount: 30, hasMore: true))
+        XCTAssertEqual(pager.nextOffset, 55)
+    }
+
+    func testResetClearsLocalMutationSequence() {
+        var pager = primedPager(cursor: 30)
+        pager.noteLocalMutation()
+        pager.noteLocalMutation()
+        XCTAssertEqual(pager.localMutationSequence, 2)
+        pager.reset()
+        XCTAssertEqual(pager.localMutationSequence, 0)
     }
 
     // MARK: 13. Refresh policy

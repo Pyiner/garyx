@@ -292,6 +292,22 @@ Gate rules (all unit-tested):
   the gate mid-transaction, letting a second refresh land newer state
   that the first, still-suspended refresh then overwrites with its
   older page on resume. Same rule for load-more tickets.
+- **Local surgery invalidates in-flight refresh commits** (code-review
+  #TASK-1804 rounds 2–3): the pager carries `localMutationSequence`,
+  bumped via `noteLocalMutation()` whenever the model performs local
+  list surgery (archive/delete local removals, pin edits and their
+  rollbacks). Refresh tickets record the observed value;
+  `completeRefresh` returns `.abandonedLocalMutation` (gate/cursor/
+  revisions untouched, in-flight flag released) when they differ, and
+  the model responds by dropping the page and running a follow-up
+  refresh. Commit-point re-filtering against `pendingThreadArchives`
+  alone is insufficient: an archive that *succeeds* resolves its
+  tombstone before its own follow-up refresh — which the stale
+  in-flight refresh coalesced away — so the surgery marker must
+  outlive the tombstone. Load-more needs no such marker: its page is
+  filtered and appended right after its only await (no post-await
+  snapshots), and appends cannot resurrect removed rows — pinned by a
+  test.
 - `completeRefresh` cursor semantics replace today's two-condition
   `hasLoadedBeyondHead` (`nextThreadListOffset > returnedEnd ||
   recentThreadIds.count > pageIds.count`,

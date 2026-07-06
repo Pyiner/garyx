@@ -65,12 +65,14 @@ public enum GaryxThreadListLoadMoreTrigger: Equatable, Sendable {
     case footer
 }
 
-/// Issued by `requestRefresh`. Records the failure revision observed at
-/// issue time: a successful refresh may only forgive failures it already
-/// knew about (see `completeRefresh`).
+/// Issued by `requestRefresh`. Records the failure revision and local
+/// mutation sequence observed at issue time: a successful refresh may only
+/// forgive failures it already knew about, and may only commit if no local
+/// list surgery happened while it was in flight (see `completeRefresh`).
 public struct GaryxThreadListRefreshTicket: Equatable, Sendable {
     public let epoch: Int
     public let observedLoadMoreFailureRevision: Int
+    public let observedLocalMutationSequence: Int
 }
 
 /// Issued by `requestLoadMore`/`retryLoadMore`; carries the request the
@@ -93,6 +95,20 @@ public enum GaryxThreadListRefreshApplication: Equatable, Sendable {
     case mergeBeyondHead
 }
 
+/// Outcome of `completeRefresh`.
+public enum GaryxThreadListRefreshCompletion: Equatable, Sendable {
+    /// The page is current: commit it with the given application.
+    case apply(GaryxThreadListRefreshApplication)
+    /// The ticket pre-dates a `reset()` (gateway switch): drop the page
+    /// silently — it belongs to the previous gateway.
+    case abandonedStaleEpoch
+    /// Local list surgery (archive/delete/pin) happened while this refresh
+    /// was in flight: its pre-await snapshots are stale even though the
+    /// gateway call succeeded. Drop the page and run a follow-up refresh
+    /// to pick up fresh pages.
+    case abandonedLocalMutation
+}
+
 public struct GaryxHomeThreadListPager: Equatable, Sendable {
     public enum LoadMoreGate: Equatable, Sendable {
         case ready
@@ -112,6 +128,12 @@ public struct GaryxHomeThreadListPager: Equatable, Sendable {
     /// Bumped by every `failLoadMore`; refresh tickets record the value
     /// they observed so forgiveness is revision-scoped.
     public private(set) var loadMoreFailureRevision: Int = 0
+    /// Bumped by `noteLocalMutation()` whenever the model performs local
+    /// list surgery (archive tombstone flips, local removals, pin edits).
+    /// A refresh whose ticket observed an older value must not commit its
+    /// pre-await snapshots — regardless of whether the surgery's own
+    /// tombstone still exists at commit time.
+    public private(set) var localMutationSequence: Int = 0
     /// Server cursor: end of the last adopted page. 0 = not primed (no
     /// head page yet), so load-more is meaningless.
     public private(set) var nextOffset: Int = 0
@@ -125,6 +147,13 @@ public struct GaryxHomeThreadListPager: Equatable, Sendable {
 
     // MARK: Decisions
 
+    /// Marks local list surgery (archive/delete/pin edits). In-flight
+    /// refresh tickets become stale: their completion returns
+    /// `.abandonedLocalMutation` instead of applying pre-surgery snapshots.
+    public mutating func noteLocalMutation() {
+        localMutationSequence &+= 1
+    }
+
     /// nil → a refresh is already in flight (concurrent entry points
     /// coalesce). A load-more in flight does not block refresh.
     public mutating func requestRefresh() -> GaryxThreadListRefreshTicket? {
@@ -132,7 +161,8 @@ public struct GaryxHomeThreadListPager: Equatable, Sendable {
         isRefreshingHead = true
         return GaryxThreadListRefreshTicket(
             epoch: epoch,
-            observedLoadMoreFailureRevision: loadMoreFailureRevision
+            observedLoadMoreFailureRevision: loadMoreFailureRevision,
+            observedLocalMutationSequence: localMutationSequence
         )
     }
 
@@ -164,18 +194,22 @@ public struct GaryxHomeThreadListPager: Equatable, Sendable {
 
     // MARK: Results
 
-    /// Returns how the caller should apply the page ids, or nil for a
-    /// stale ticket (issued before a `reset()`) whose page must be
-    /// dropped entirely.
+    /// Resolves a finished refresh into apply-or-abandon (see
+    /// `GaryxThreadListRefreshCompletion`). Both abandon cases leave gate,
+    /// cursor, and revisions untouched; `.abandonedLocalMutation` expects
+    /// the caller to run a follow-up refresh with fresh pages.
     @discardableResult
     public mutating func completeRefresh(
         _ ticket: GaryxThreadListRefreshTicket,
         pageOffset: Int,
         pageCount: Int,
         hasMore: Bool
-    ) -> GaryxThreadListRefreshApplication? {
-        guard ticket.epoch == epoch else { return nil }
+    ) -> GaryxThreadListRefreshCompletion {
+        guard ticket.epoch == epoch else { return .abandonedStaleEpoch }
         isRefreshingHead = false
+        guard ticket.observedLocalMutationSequence == localMutationSequence else {
+            return .abandonedLocalMutation
+        }
 
         let returnedEnd = pageOffset + pageCount
         let isBeyondHead = nextOffset > returnedEnd
@@ -203,7 +237,7 @@ public struct GaryxHomeThreadListPager: Equatable, Sendable {
         if !isBeyondHead {
             nextOffset = returnedEnd
         }
-        return isBeyondHead ? .mergeBeyondHead : .replaceHead
+        return .apply(isBeyondHead ? .mergeBeyondHead : .replaceHead)
     }
 
     public mutating func failRefresh(_ ticket: GaryxThreadListRefreshTicket) {
@@ -243,6 +277,7 @@ public struct GaryxHomeThreadListPager: Equatable, Sendable {
         isLoadingMore = false
         gate = .ready
         loadMoreFailureRevision = 0
+        localMutationSequence = 0
         nextOffset = 0
     }
 

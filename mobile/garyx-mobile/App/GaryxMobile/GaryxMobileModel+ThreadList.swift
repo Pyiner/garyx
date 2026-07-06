@@ -56,25 +56,40 @@ extension GaryxMobileModel {
             // App-layer refresh — a second refresh cannot interleave between
             // this page landing and its state writes and then be overwritten
             // by this (older) page when we resume (review #TASK-1804).
-            //
-            // nil application = stale ticket (pager was reset mid-flight):
-            // the page belongs to the previous gateway and must be dropped.
-            guard let application = threadListPager.completeRefresh(
+            switch threadListPager.completeRefresh(
                 ticket,
                 pageOffset: page.offset,
                 pageCount: page.count,
                 hasMore: page.hasMore
-            ) else { return }
-            commitRefreshedRecentThreadsPage(
-                page: page,
-                pinsPageThreadIds: pinsPage.threadIds,
-                application: application,
-                fetchedThreads: fetchedThreads,
-                previousThreadSummaries: previousThreadSummaries,
-                previouslyRemoteBusyThreadIds: previouslyRemoteBusyThreadIds,
-                selectionIdForThisRefresh: selectionIdForThisRefresh,
-                runtimeGeneration: runtimeGeneration
-            )
+            ) {
+            case .abandonedStaleEpoch:
+                // The pager was reset mid-flight: the page belongs to the
+                // previous gateway and is dropped silently.
+                return
+            case .abandonedLocalMutation:
+                // Archive/delete/pin surgery raced this refresh
+                // (review #TASK-1804 round 3): every pre-await snapshot is
+                // stale — the surgery's tombstone may already be resolved,
+                // so commit-point re-filtering cannot save them. Drop the
+                // page and follow up with a fresh refresh, which also
+                // replaces the surgery-triggered refresh this one coalesced
+                // away.
+                Task { [weak self] in
+                    await self?.refreshThreads(source: source)
+                }
+                return
+            case .apply(let application):
+                commitRefreshedRecentThreadsPage(
+                    page: page,
+                    pinsPageThreadIds: pinsPage.threadIds,
+                    application: application,
+                    fetchedThreads: fetchedThreads,
+                    previousThreadSummaries: previousThreadSummaries,
+                    previouslyRemoteBusyThreadIds: previouslyRemoteBusyThreadIds,
+                    selectionIdForThisRefresh: selectionIdForThisRefresh,
+                    runtimeGeneration: runtimeGeneration
+                )
+            }
         } catch {
             threadListPager.failRefresh(ticket)
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }

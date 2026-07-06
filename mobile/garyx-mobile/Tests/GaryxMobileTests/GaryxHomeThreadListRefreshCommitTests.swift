@@ -80,6 +80,31 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         XCTAssertEqual(model.threads.map(\.id).sorted(), [pinned.id, recent.id].sorted())
     }
 
+    /// The archive-resolved interleaving (review #TASK-1804 round 3) is
+    /// gated in Core (`abandonedLocalMutation`); what the app must
+    /// guarantee is that local list surgery actually marks the pager.
+    func testLocalListSurgeryMarksThePagerMutationSequence() {
+        let model = makeModel()
+        let thread = makeThread(id: "thread-surgery", title: "Doomed")
+        model.threads = [thread]
+        model.pinnedThreadIds = [thread.id]
+        model.recentThreadIds = [thread.id]
+
+        let base = model.threadListPager.localMutationSequence
+        model.removeArchivedThreadLocally(thread.id)
+        XCTAssertGreaterThan(
+            model.threadListPager.localMutationSequence, base,
+            "archive/delete local removal must invalidate in-flight refresh commits"
+        )
+
+        let afterRemove = model.threadListPager.localMutationSequence
+        model.removePinnedThreadIdLocally(thread.id)
+        XCTAssertGreaterThan(
+            model.threadListPager.localMutationSequence, afterRemove,
+            "pin removal must invalidate in-flight refresh commits"
+        )
+    }
+
     private func makeModel() -> GaryxMobileModel {
         let suiteName = "GaryxHomeThreadListRefreshCommitTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
