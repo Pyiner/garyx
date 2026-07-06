@@ -8,11 +8,14 @@ use claude_agent_sdk::{
     ClaudeSDKError, ContentBlock, McpServerConfig, Message, OutboundUserMessage, PermissionMode,
     SystemMessage, TextBlock, UserInput, run_streaming as sdk_run_streaming,
 };
-use garyx_models::provider::{
-    ClaudeCodeConfig, ImagePayload, PromptAttachment, ProviderMessage, ProviderRunOptions,
-    ProviderRunResult, ProviderType, QueuedUserInput, SDK_SESSION_FORK_METADATA_KEY,
-    StreamBoundaryKind, StreamEvent, attachments_from_metadata,
-    build_prompt_message_with_attachments, default_claude_cli_mode,
+use garyx_models::{
+    is_builtin_provider_agent_id,
+    provider::{
+        ClaudeCodeConfig, ImagePayload, PromptAttachment, ProviderMessage, ProviderRunOptions,
+        ProviderRunResult, ProviderType, QueuedUserInput, SDK_SESSION_FORK_METADATA_KEY,
+        StreamBoundaryKind, StreamEvent, attachments_from_metadata,
+        build_prompt_message_with_attachments, default_claude_cli_mode,
+    },
 };
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -343,6 +346,18 @@ fn non_empty_session_id(value: Option<&str>) -> Option<String> {
 
 fn metadata_bool(metadata: &HashMap<String, Value>, key: &str) -> bool {
     metadata.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+fn custom_standalone_agent_id(metadata: &HashMap<String, Value>) -> Option<&str> {
+    if metadata.get("agent_team_id").is_some() {
+        return None;
+    }
+    metadata
+        .get("agent_id")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .filter(|value| !is_builtin_provider_agent_id(value))
 }
 
 // ---------------------------------------------------------------------------
@@ -1024,18 +1039,15 @@ impl ClaudeCliProvider {
         // is mapped to the Claude CLI `--effort` flag.
         let requested_effort = resolve_requested_effort(&effective_config, &options.metadata);
 
-        let runtime_system_prompt = options
+        let metadata_system_prompt = options
             .metadata
             .get("system_prompt")
             .and_then(|v| v.as_str())
-            .or(self.config.system_prompt.as_deref());
-
-        let session_agent_id = options
-            .metadata
-            .get("agent_id")
-            .and_then(|v| v.as_str())
             .map(str::trim)
             .filter(|value| !value.is_empty());
+        let runtime_system_prompt = metadata_system_prompt.or(self.config.system_prompt.as_deref());
+
+        let session_agent_id = custom_standalone_agent_id(&options.metadata);
         let session_agent_name = options
             .metadata
             .get("agent_display_name")
@@ -1049,20 +1061,23 @@ impl ClaudeCliProvider {
                 // Custom agent: use the agent's own system_prompt directly
                 // as the --agents prompt. Task state is rendered into user
                 // messages so system prompts stay stable for cache reuse.
-                let agent_prompt = runtime_system_prompt.unwrap_or("").to_owned();
-                let description = format!("Garyx custom agent: {session_agent_name}");
-                (
-                    Some(agent_id.to_owned()),
-                    HashMap::from([(
-                        agent_id.to_owned(),
-                        ClaudeAgentDefinition {
-                            description,
-                            prompt: agent_prompt,
-                        },
-                    )]),
-                    None,
-                    None,
-                )
+                if let Some(agent_prompt) = metadata_system_prompt {
+                    let description = format!("Garyx custom agent: {session_agent_name}");
+                    (
+                        Some(agent_id.to_owned()),
+                        HashMap::from([(
+                            agent_id.to_owned(),
+                            ClaudeAgentDefinition {
+                                description,
+                                prompt: agent_prompt.to_owned(),
+                            },
+                        )]),
+                        None,
+                        None,
+                    )
+                } else {
+                    (None, HashMap::new(), None, None)
+                }
             } else {
                 // Default Garyx: compose full instructions with --system-prompt
                 let merged_instructions = compose_gary_instructions(

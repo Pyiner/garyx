@@ -42,7 +42,12 @@ pub struct UpsertCustomAgentRequest {
     pub default_workspace_dir: Option<String>,
     #[serde(default, alias = "avatarDataUrl")]
     pub avatar_data_url: Option<String>,
-    pub system_prompt: String,
+    #[serde(default, alias = "systemPrompt")]
+    pub system_prompt: Option<String>,
+}
+
+fn normalize_system_prompt(value: &str) -> String {
+    value.trim().to_owned()
 }
 
 #[derive(Debug, Default)]
@@ -157,7 +162,9 @@ impl CustomAgentStore {
         let auth_source = request.auth_source.map(|value| value.trim().to_owned());
         let base_url = request.base_url.map(|value| value.trim().to_owned());
         let codex_home = request.codex_home.map(|value| value.trim().to_owned());
-        let system_prompt = request.system_prompt.trim();
+        let requested_system_prompt = request
+            .system_prompt
+            .map(|value| normalize_system_prompt(&value));
         let requested_default_workspace_dir = request
             .default_workspace_dir
             .map(|value| value.trim().to_owned());
@@ -168,9 +175,6 @@ impl CustomAgentStore {
         }
         if display_name.is_empty() {
             return Err("display_name is required".to_owned());
-        }
-        if system_prompt.is_empty() {
-            return Err("system_prompt is required".to_owned());
         }
         let now = Utc::now().to_rfc3339();
         let mut inner = self.inner.write().await;
@@ -220,6 +224,9 @@ impl CustomAgentStore {
         let codex_home = codex_home
             .or_else(|| existing.map(|profile| profile.codex_home.clone()))
             .unwrap_or_default();
+        let system_prompt = requested_system_prompt
+            .or_else(|| existing.map(|profile| profile.system_prompt.clone()))
+            .unwrap_or_default();
         let max_tool_iterations = request
             .max_tool_iterations
             .or_else(|| existing.map(|profile| profile.max_tool_iterations))
@@ -243,7 +250,7 @@ impl CustomAgentStore {
             request_timeout_seconds,
             default_workspace_dir,
             avatar_data_url,
-            system_prompt: system_prompt.to_owned(),
+            system_prompt,
             built_in: false,
             standalone: true,
             created_at,

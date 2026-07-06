@@ -279,7 +279,7 @@ mod tests {
                 request_timeout_seconds: None,
                 default_workspace_dir: Some("/tmp/agent-default".to_owned()),
                 avatar_data_url: None,
-                system_prompt: "Review carefully.".to_owned(),
+                system_prompt: Some("Review carefully.".to_owned()),
             })
             .await
             .expect("custom agent");

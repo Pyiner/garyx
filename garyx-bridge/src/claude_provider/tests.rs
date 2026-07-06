@@ -683,6 +683,83 @@ fn test_build_sdk_options_uses_claude_session_agent_for_custom_agent() {
 }
 
 #[test]
+fn test_build_sdk_options_custom_agent_without_prompt_uses_provider_default() {
+    let provider = ClaudeCliProvider::new(ClaudeCodeConfig {
+        system_prompt: Some("Provider-level override must not apply.".to_owned()),
+        ..ClaudeCodeConfig::default()
+    });
+    let opts = ProviderRunOptions {
+        thread_id: "thread::agent".to_owned(),
+        message: "hello".to_owned(),
+        workspace_dir: None,
+        images: None,
+        metadata: HashMap::from([
+            (
+                "agent_id".to_owned(),
+                Value::String("spec-review".to_owned()),
+            ),
+            (
+                "agent_display_name".to_owned(),
+                Value::String("Spec Review".to_owned()),
+            ),
+        ]),
+    };
+
+    let sdk_opts = provider.build_sdk_options(&opts, None, "run-1");
+
+    assert!(sdk_opts.agent.is_none());
+    assert!(sdk_opts.agents.is_empty());
+    assert!(sdk_opts.system_prompt.is_none());
+    assert!(sdk_opts.append_system_prompt.is_none());
+}
+
+#[test]
+fn test_build_sdk_options_custom_agent_blank_prompt_uses_provider_default() {
+    let provider = make_provider();
+    let opts = ProviderRunOptions {
+        thread_id: "thread::agent".to_owned(),
+        message: "hello".to_owned(),
+        workspace_dir: None,
+        images: None,
+        metadata: HashMap::from([
+            (
+                "agent_id".to_owned(),
+                Value::String("spec-review".to_owned()),
+            ),
+            ("system_prompt".to_owned(), Value::String("   ".to_owned())),
+        ]),
+    };
+
+    let sdk_opts = provider.build_sdk_options(&opts, None, "run-1");
+
+    assert!(sdk_opts.agent.is_none());
+    assert!(sdk_opts.agents.is_empty());
+    assert!(sdk_opts.system_prompt.is_none());
+    assert!(sdk_opts.append_system_prompt.is_none());
+}
+
+#[test]
+fn test_build_sdk_options_builtin_claude_agent_uses_garyx_default_path() {
+    let provider = make_provider();
+    let opts = ProviderRunOptions {
+        thread_id: "thread::agent".to_owned(),
+        message: "hello".to_owned(),
+        workspace_dir: None,
+        images: None,
+        metadata: HashMap::from([("agent_id".to_owned(), Value::String("claude".to_owned()))]),
+    };
+
+    let sdk_opts = provider.build_sdk_options(&opts, None, "run-1");
+    let system_prompt = sdk_opts.system_prompt.unwrap_or_default();
+
+    assert!(sdk_opts.agent.is_none());
+    assert!(sdk_opts.agents.is_empty());
+    assert!(sdk_opts.append_system_prompt.is_none());
+    assert!(system_prompt.starts_with(GARY_BASE_INSTRUCTIONS.trim_end()));
+    assert!(system_prompt.contains("Garyx runtime guidance:"));
+}
+
+#[test]
 fn test_build_sdk_options_builtin_garyx_overrides_runtime_entry() {
     let provider = make_provider();
     let opts = ProviderRunOptions {

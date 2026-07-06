@@ -291,7 +291,7 @@ async fn test_dispatch_internal_message_to_thread_expands_bound_agent_runtime_me
             request_timeout_seconds: None,
             default_workspace_dir: None,
             avatar_data_url: None,
-            system_prompt: "Review carefully.".to_owned(),
+            system_prompt: Some("Review carefully.".to_owned()),
         })
         .await
         .expect("custom agent");

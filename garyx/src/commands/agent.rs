@@ -235,7 +235,7 @@ fn build_agent_mutation_body(
     api_key_present: bool,
     provider_env: Option<Value>,
     default_workspace_dir: Option<String>,
-    system_prompt: String,
+    system_prompt: Option<String>,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let agent_id = agent_id.trim().to_owned();
     if agent_id.is_empty() {
@@ -245,8 +245,10 @@ fn build_agent_mutation_body(
         "agent_id": agent_id,
         "display_name": display_name.trim(),
         "provider_type": provider.trim(),
-        "system_prompt": system_prompt,
     });
+    if let Some(system_prompt) = system_prompt.as_deref().map(str::trim) {
+        body["system_prompt"] = Value::String(system_prompt.to_owned());
+    }
     if clear_model {
         body["model"] = Value::String(String::new());
     } else if let Some(model) = model.as_deref().map(str::trim) {
@@ -296,7 +298,7 @@ pub(crate) async fn cmd_agent_create(
     unset_env: Vec<String>,
     env_clear: bool,
     default_workspace_dir: Option<String>,
-    system_prompt: String,
+    system_prompt: Option<String>,
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let gateway = gateway_endpoint(config_path)?;
@@ -348,7 +350,7 @@ pub(crate) async fn cmd_agent_update(
     unset_env: Vec<String>,
     env_clear: bool,
     default_workspace_dir: Option<String>,
-    system_prompt: String,
+    system_prompt: Option<String>,
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let gateway = gateway_endpoint(config_path)?;
@@ -410,7 +412,7 @@ pub(crate) async fn cmd_agent_upsert(
     unset_env: Vec<String>,
     env_clear: bool,
     default_workspace_dir: Option<String>,
-    system_prompt: String,
+    system_prompt: Option<String>,
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let gateway = gateway_endpoint(config_path)?;
@@ -524,7 +526,9 @@ fn print_agent_summary(a: &Value) {
             println!("  {key}={value}");
         }
     }
-    if let Some(prompt) = a["system_prompt"].as_str() {
+    if let Some(prompt) = a["system_prompt"].as_str()
+        && !prompt.trim().is_empty()
+    {
         let preview: String = prompt.chars().take(120).collect();
         let ellipsis = if prompt.len() > 120 { "…" } else { "" };
         println!("Prompt: {preview}{ellipsis}");
@@ -949,7 +953,7 @@ mod tests {
             Vec::new(),
             false,
             Some("/tmp/spec-review".to_owned()),
-            "Review specs carefully.".to_owned(),
+            Some("Review specs carefully.".to_owned()),
             false,
         )
         .await
@@ -966,6 +970,43 @@ mod tests {
         assert_eq!(records[0].body["model_reasoning_effort"], "high");
         assert_eq!(records[0].body["model_service_tier"], "priority");
         assert_eq!(records[0].body["default_workspace_dir"], "/tmp/spec-review");
+        assert_eq!(records[0].body["system_prompt"], "Review specs carefully.");
+    }
+
+    #[tokio::test]
+    async fn cmd_agent_create_omits_system_prompt_when_omitted() {
+        let requests = StdArc::new(Mutex::new(Vec::new()));
+        let (base_url, handle) =
+            spawn_agent_http_test_server(requests.clone(), StatusCode::OK).await;
+        let dir = tempdir().expect("tempdir");
+        let config_path = write_test_gateway_config(&dir, &base_url);
+
+        cmd_agent_create(
+            config_path.to_str().expect("config path"),
+            "plain-claude".to_owned(),
+            "Plain Claude".to_owned(),
+            "claude_code".to_owned(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+            false,
+            None,
+            None,
+            false,
+        )
+        .await
+        .expect("agent create should succeed");
+
+        handle.abort();
+
+        let records = requests.lock().expect("request lock");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].method, "POST");
+        assert!(records[0].body.get("system_prompt").is_none());
     }
 
     #[tokio::test]
@@ -991,7 +1032,7 @@ mod tests {
             Vec::new(),
             false,
             None,
-            "Review specs carefully.".to_owned(),
+            None,
             false,
         )
         .await
@@ -1006,6 +1047,7 @@ mod tests {
         assert!(records[0].body.get("model").is_none());
         assert!(records[0].body.get("model_reasoning_effort").is_none());
         assert!(records[0].body.get("model_service_tier").is_none());
+        assert!(records[0].body.get("system_prompt").is_none());
     }
 
     #[tokio::test]
@@ -1031,7 +1073,7 @@ mod tests {
             Vec::new(),
             false,
             None,
-            "Review specs carefully.".to_owned(),
+            Some("Review specs carefully.".to_owned()),
             false,
         )
         .await
@@ -1046,6 +1088,43 @@ mod tests {
         assert_eq!(records[0].body["model"], "");
         assert!(records[0].body.get("model_reasoning_effort").is_none());
         assert!(records[0].body.get("model_service_tier").is_none());
+    }
+
+    #[tokio::test]
+    async fn cmd_agent_update_sends_empty_system_prompt_when_explicitly_blank() {
+        let requests = StdArc::new(Mutex::new(Vec::new()));
+        let (base_url, handle) =
+            spawn_agent_http_test_server(requests.clone(), StatusCode::OK).await;
+        let dir = tempdir().expect("tempdir");
+        let config_path = write_test_gateway_config(&dir, &base_url);
+
+        cmd_agent_update(
+            config_path.to_str().expect("config path"),
+            "spec-review".to_owned(),
+            "Spec Review".to_owned(),
+            "codex_app_server".to_owned(),
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+            false,
+            None,
+            Some("  ".to_owned()),
+            false,
+        )
+        .await
+        .expect("agent update should succeed");
+
+        handle.abort();
+
+        let records = requests.lock().expect("request lock");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].method, "PUT");
+        assert_eq!(records[0].body["system_prompt"], "");
     }
 
     #[tokio::test]
@@ -1071,7 +1150,7 @@ mod tests {
             Vec::new(),
             false,
             None,
-            "Review specs carefully.".to_owned(),
+            Some("Review specs carefully.".to_owned()),
             false,
         )
         .await
@@ -1110,7 +1189,7 @@ mod tests {
             Vec::new(),
             false,
             None,
-            "Use GPT.".to_owned(),
+            Some("Use GPT.".to_owned()),
             false,
         )
         .await
@@ -1227,7 +1306,7 @@ mod tests {
             Vec::new(),
             false,
             None,
-            "Prompt.".to_owned(),
+            Some("Prompt.".to_owned()),
             false,
         )
         .await
@@ -1264,7 +1343,7 @@ mod tests {
             Vec::new(),
             false,
             None,
-            "Prompt.".to_owned(),
+            Some("Prompt.".to_owned()),
             false,
         )
         .await
@@ -1307,7 +1386,7 @@ mod tests {
             Vec::new(),
             false,
             None,
-            "Prompt.".to_owned(),
+            Some("Prompt.".to_owned()),
             false,
         )
         .await
@@ -1349,7 +1428,7 @@ mod tests {
             Vec::new(),
             false,
             None,
-            "Prompt.".to_owned(),
+            Some("Prompt.".to_owned()),
             false,
         )
         .await
@@ -1398,7 +1477,7 @@ mod tests {
             Vec::new(),
             false,
             None,
-            "Prompt.".to_owned(),
+            Some("Prompt.".to_owned()),
             false,
         )
         .await;

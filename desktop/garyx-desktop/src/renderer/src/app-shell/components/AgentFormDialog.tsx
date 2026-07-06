@@ -221,11 +221,9 @@ export function AgentFormDialog({
       ? t('Name is required.')
       : !agentDraft.agentId.trim()
         ? t('Agent ID is required.')
-        : !agentDraft.systemPrompt.trim()
-          ? t('System prompt is required.')
-          : envRowsHaveInvalidKey(agentDraft.env)
-            ? t('Environment variable names must match [A-Za-z_][A-Za-z0-9_]*.')
-            : null;
+        : envRowsHaveInvalidKey(agentDraft.env)
+          ? t('Environment variable names must match [A-Za-z_][A-Za-z0-9_]*.')
+          : null;
 
   return (
     <Dialog
@@ -795,7 +793,7 @@ export function AgentFormDialog({
               <div className="agents-hub-detail-block">
                 <div className="agents-hub-detail-label">{t('System Prompt')}</div>
                 <div className="agents-hub-detail-body mono agents-hub-detail-prompt">
-                  {selectedAgent?.systemPrompt || t('(empty)')}
+                  {selectedAgent?.systemPrompt || t('Provider default')}
                 </div>
               </div>
             </div>

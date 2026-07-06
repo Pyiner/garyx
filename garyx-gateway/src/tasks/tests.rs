@@ -99,7 +99,7 @@ async fn state_with_agent_default_workspace() -> Arc<AppState> {
             request_timeout_seconds: None,
             default_workspace_dir: Some("/tmp/agent-task-default".to_owned()),
             avatar_data_url: None,
-            system_prompt: "Review carefully.".to_owned(),
+            system_prompt: Some("Review carefully.".to_owned()),
         })
         .await
         .expect("custom agent");
@@ -130,7 +130,7 @@ async fn state_with_task_executors() -> Arc<AppState> {
                 request_timeout_seconds: None,
                 default_workspace_dir: None,
                 avatar_data_url: None,
-                system_prompt: "Run the task.".to_owned(),
+                system_prompt: Some("Run the task.".to_owned()),
             })
             .await
             .expect("custom agent");

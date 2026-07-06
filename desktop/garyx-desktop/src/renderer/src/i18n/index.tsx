@@ -1041,7 +1041,6 @@ const zhCN: Record<string, string> = {
   'Summarize Sentry issues that need action.': '总结需要处理的 Sentry 问题。',
   'Summarize the key points of our conversation.': '请总结我们的对话要点。',
   'System Prompt': '系统提示词',
-  'System prompt is required.': '系统提示词必填。',
   'Team': '团队',
   'Team ID': 'Team ID',
   'Team ID is required.': 'Team ID 必填。',

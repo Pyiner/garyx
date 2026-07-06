@@ -32,7 +32,7 @@ async fn test_dispatcher() -> GatewaySubAgentDispatcher {
             request_timeout_seconds: None,
             default_workspace_dir: None,
             avatar_data_url: None,
-            system_prompt: "Plan work.".to_owned(),
+            system_prompt: Some("Plan work.".to_owned()),
         })
         .await
         .expect("planner agent");
@@ -52,7 +52,7 @@ async fn test_dispatcher() -> GatewaySubAgentDispatcher {
             request_timeout_seconds: None,
             default_workspace_dir: None,
             avatar_data_url: None,
-            system_prompt: "Review work.".to_owned(),
+            system_prompt: Some("Review work.".to_owned()),
         })
         .await
         .expect("reviewer agent");

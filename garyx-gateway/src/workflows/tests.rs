@@ -1873,7 +1873,7 @@ async fn structured_child_with_native_provider_fails_before_launch() {
             request_timeout_seconds: None,
             default_workspace_dir: None,
             avatar_data_url: None,
-            system_prompt: "Native structured test agent".to_owned(),
+            system_prompt: Some("Native structured test agent".to_owned()),
         })
         .await
         .expect("custom native agent");

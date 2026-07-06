@@ -363,7 +363,7 @@ private struct GaryxAgentFormContent: View {
                     GaryxFormReadOnlyMultilineRow(
                         title: "System Prompt",
                         value: systemPrompt,
-                        placeholder: "None",
+                        placeholder: "Provider default",
                         minHeight: 132,
                         valuePlacement: .below
                     )

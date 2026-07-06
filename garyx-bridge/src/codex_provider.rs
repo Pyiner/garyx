@@ -17,11 +17,14 @@ use codex_sdk::{
     CodexClient, CodexClientConfig, CodexError, InputItem, JsonRpcNotification, ThreadForkParams,
     ThreadResumeParams, ThreadStartParams, TurnStartOptions,
 };
-use garyx_models::provider::{
-    CodexAppServerConfig, ImagePayload, PromptAttachment, ProviderMessage, ProviderMessageRole,
-    ProviderRateLimit, ProviderRunOptions, ProviderRunResult, ProviderType, QueuedUserInput,
-    SDK_SESSION_FORK_METADATA_KEY, SDK_SESSION_ID_METADATA_KEY, StreamBoundaryKind, StreamEvent,
-    attachments_from_metadata, build_prompt_message_with_attachments,
+use garyx_models::{
+    is_builtin_provider_agent_id,
+    provider::{
+        CodexAppServerConfig, ImagePayload, PromptAttachment, ProviderMessage, ProviderMessageRole,
+        ProviderRateLimit, ProviderRunOptions, ProviderRunResult, ProviderType, QueuedUserInput,
+        SDK_SESSION_FORK_METADATA_KEY, SDK_SESSION_ID_METADATA_KEY, StreamBoundaryKind,
+        StreamEvent, attachments_from_metadata, build_prompt_message_with_attachments,
+    },
 };
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -328,6 +331,18 @@ fn metadata_bool(metadata: &HashMap<String, Value>, key: &str) -> bool {
     metadata.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
+fn is_custom_standalone_agent(metadata: &HashMap<String, Value>) -> bool {
+    if metadata.get("agent_team_id").is_some() {
+        return false;
+    }
+    metadata
+        .get("agent_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some_and(|value| !is_builtin_provider_agent_id(value))
+}
+
 fn default_codex_config_path() -> Option<PathBuf> {
     if let Some(home) = std::env::var_os("CODEX_HOME").filter(|value| !value.is_empty()) {
         return Some(PathBuf::from(home).join("config.toml"));
@@ -563,17 +578,20 @@ fn build_codex_thread_config(
 ) -> Option<Value> {
     let mut thread_config = serde_json::Map::new();
 
-    let runtime_instructions = metadata
-        .get("developer_instructions")
-        .and_then(|v| v.as_str())
-        .or_else(|| metadata.get("system_prompt").and_then(|v| v.as_str()));
+    let runtime_instructions = metadata_string(metadata, "developer_instructions")
+        .or_else(|| metadata_string(metadata, "system_prompt"));
     let automation_id = metadata.get("automation_id").and_then(|v| v.as_str());
-    let instructions =
-        compose_gary_instructions(runtime_instructions, workspace_dir, automation_id);
-    thread_config.insert(
-        "developer_instructions".to_owned(),
-        Value::String(instructions),
-    );
+    if runtime_instructions.is_some() || !is_custom_standalone_agent(metadata) {
+        let instructions = compose_gary_instructions(
+            runtime_instructions.as_deref(),
+            workspace_dir,
+            automation_id,
+        );
+        thread_config.insert(
+            "developer_instructions".to_owned(),
+            Value::String(instructions),
+        );
+    }
 
     let mut mcp_servers = match normalize_codex_mcp_servers(metadata) {
         Some(Value::Object(obj)) => obj,

@@ -21,7 +21,7 @@ fn model_contract_request(
         request_timeout_seconds: None,
         default_workspace_dir: None,
         avatar_data_url: None,
-        system_prompt: "Review carefully.".to_owned(),
+        system_prompt: Some("Review carefully.".to_owned()),
     }
 }
 
@@ -64,7 +64,7 @@ async fn rejects_builtin_agent_modification() {
             request_timeout_seconds: None,
             default_workspace_dir: None,
             avatar_data_url: None,
-            system_prompt: "Override".to_owned(),
+            system_prompt: Some("Override".to_owned()),
         })
         .await
         .expect_err("built-in upsert should fail");
@@ -164,6 +164,73 @@ async fn upsert_create_without_model_fields_stores_provider_default_settings() {
 }
 
 #[tokio::test]
+async fn upsert_create_without_system_prompt_stores_unset_prompt() {
+    let store = CustomAgentStore::new();
+    let mut request = model_contract_request("reviewer", None, None, None);
+    request.system_prompt = None;
+
+    let created = store.upsert_agent(request).await.expect("create agent");
+
+    assert_eq!(created.system_prompt, "");
+}
+
+#[tokio::test]
+async fn upsert_create_with_blank_system_prompt_stores_unset_prompt() {
+    let store = CustomAgentStore::new();
+    let mut request = model_contract_request("reviewer", None, None, None);
+    request.system_prompt = Some("   \n\t ".to_owned());
+
+    let created = store.upsert_agent(request).await.expect("create agent");
+
+    assert_eq!(created.system_prompt, "");
+}
+
+#[tokio::test]
+async fn upsert_without_system_prompt_preserves_existing_prompt() {
+    let store = CustomAgentStore::new();
+    store
+        .upsert_agent(model_contract_request("reviewer", None, None, None))
+        .await
+        .expect("create agent");
+    let mut request = model_contract_request("reviewer", None, None, None);
+    request.system_prompt = None;
+
+    let updated = store.upsert_agent(request).await.expect("update agent");
+
+    assert_eq!(updated.system_prompt, "Review carefully.");
+}
+
+#[tokio::test]
+async fn upsert_with_blank_system_prompt_clears_existing_prompt() {
+    let store = CustomAgentStore::new();
+    store
+        .upsert_agent(model_contract_request("reviewer", None, None, None))
+        .await
+        .expect("create agent");
+    let mut request = model_contract_request("reviewer", None, None, None);
+    request.system_prompt = Some("   ".to_owned());
+
+    let updated = store.upsert_agent(request).await.expect("update agent");
+
+    assert_eq!(updated.system_prompt, "");
+}
+
+#[tokio::test]
+async fn upsert_with_system_prompt_replaces_existing_prompt() {
+    let store = CustomAgentStore::new();
+    store
+        .upsert_agent(model_contract_request("reviewer", None, None, None))
+        .await
+        .expect("create agent");
+    let mut request = model_contract_request("reviewer", None, None, None);
+    request.system_prompt = Some("  Review tersely.  ".to_owned());
+
+    let updated = store.upsert_agent(request).await.expect("update agent");
+
+    assert_eq!(updated.system_prompt, "Review tersely.");
+}
+
+#[tokio::test]
 async fn upsert_preserves_and_clears_default_workspace_dir() {
     let store = CustomAgentStore::new();
     let created = store
@@ -182,7 +249,7 @@ async fn upsert_preserves_and_clears_default_workspace_dir() {
             request_timeout_seconds: None,
             default_workspace_dir: Some("  /tmp/reviewer  ".to_owned()),
             avatar_data_url: None,
-            system_prompt: "Review carefully.".to_owned(),
+            system_prompt: Some("Review carefully.".to_owned()),
         })
         .await
         .expect("create agent");
@@ -209,7 +276,7 @@ async fn upsert_preserves_and_clears_default_workspace_dir() {
             request_timeout_seconds: None,
             default_workspace_dir: None,
             avatar_data_url: None,
-            system_prompt: "Review carefully.".to_owned(),
+            system_prompt: Some("Review carefully.".to_owned()),
         })
         .await
         .expect("update agent");
@@ -234,7 +301,7 @@ async fn upsert_preserves_and_clears_default_workspace_dir() {
             request_timeout_seconds: None,
             default_workspace_dir: Some("  ".to_owned()),
             avatar_data_url: None,
-            system_prompt: "Review carefully.".to_owned(),
+            system_prompt: Some("Review carefully.".to_owned()),
         })
         .await
         .expect("clear agent workspace");
@@ -260,7 +327,7 @@ async fn upsert_preserves_and_clears_avatar_data_url() {
             request_timeout_seconds: None,
             default_workspace_dir: None,
             avatar_data_url: Some("  data:image/png;base64,dGVzdA==  ".to_owned()),
-            system_prompt: "Design carefully.".to_owned(),
+            system_prompt: Some("Design carefully.".to_owned()),
         })
         .await
         .expect("create agent");
@@ -285,7 +352,7 @@ async fn upsert_preserves_and_clears_avatar_data_url() {
             request_timeout_seconds: None,
             default_workspace_dir: None,
             avatar_data_url: None,
-            system_prompt: "Design carefully.".to_owned(),
+            system_prompt: Some("Design carefully.".to_owned()),
         })
         .await
         .expect("update agent");
@@ -310,7 +377,7 @@ async fn upsert_preserves_and_clears_avatar_data_url() {
             request_timeout_seconds: None,
             default_workspace_dir: None,
             avatar_data_url: Some("  ".to_owned()),
-            system_prompt: "Design carefully.".to_owned(),
+            system_prompt: Some("Design carefully.".to_owned()),
         })
         .await
         .expect("clear agent avatar");
@@ -339,7 +406,7 @@ async fn upsert_persists_and_preserves_provider_auth_config() {
             request_timeout_seconds: Some(120),
             default_workspace_dir: None,
             avatar_data_url: None,
-            system_prompt: "Use GPT.".to_owned(),
+            system_prompt: Some("Use GPT.".to_owned()),
         })
         .await
         .expect("create native agent");
@@ -372,7 +439,7 @@ async fn upsert_persists_and_preserves_provider_auth_config() {
             request_timeout_seconds: None,
             default_workspace_dir: None,
             avatar_data_url: None,
-            system_prompt: "Use GPT.".to_owned(),
+            system_prompt: Some("Use GPT.".to_owned()),
         })
         .await
         .expect("update native agent");

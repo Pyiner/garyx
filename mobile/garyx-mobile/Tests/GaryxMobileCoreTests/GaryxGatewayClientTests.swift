@@ -192,6 +192,19 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(object?["model_service_tier"] as? String, "")
     }
 
+    func testCustomAgentRequestEncodesEmptySystemPromptAsPresentValue() throws {
+        let request = GaryxCustomAgentRequest(
+            agentId: "agent-test",
+            displayName: "Agent Test",
+            providerType: "claude_code",
+            systemPrompt: ""
+        )
+
+        let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any]
+
+        XCTAssertEqual(object?["system_prompt"] as? String, "")
+    }
+
     func testStartChatRequestEncodesGatewayShape() throws {
         let request = GaryxStartChatRequest(
             threadId: "thread::test",

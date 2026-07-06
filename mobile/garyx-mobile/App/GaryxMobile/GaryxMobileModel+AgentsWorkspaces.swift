@@ -773,9 +773,6 @@ extension GaryxMobileModel {
                 baseAgent = latestAgent
             }
             let nextSystemPrompt = systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-            let preservedSystemPrompt = agent.systemPrompt.isEmpty
-                && nextSystemPrompt.isEmpty
-                && !baseAgent.systemPrompt.isEmpty
             // nil keeps the stored thinking level; an explicit value (or "") replaces it.
             let nextReasoningEffort = modelReasoningEffort?.trimmingCharacters(in: .whitespacesAndNewlines)
                 ?? baseAgent.modelReasoningEffort
@@ -815,7 +812,7 @@ extension GaryxMobileModel {
                     requestTimeoutSeconds: baseAgent.requestTimeoutSeconds,
                     defaultWorkspaceDir: nextWorkspace.isEmpty ? nil : nextWorkspace,
                     avatarDataUrl: requestAvatarDataUrl,
-                    systemPrompt: preservedSystemPrompt ? baseAgent.systemPrompt : systemPrompt
+                    systemPrompt: nextSystemPrompt
                 )
             )
             guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }

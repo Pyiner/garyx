@@ -394,9 +394,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
       ? t('Name is required.')
       : !draft.agentId.trim()
         ? t('Agent ID is required.')
-        : !draft.systemPrompt.trim()
-          ? t('System prompt is required.')
-          : null;
+        : null;
 
   const showingEditor = editorMode === 'create' || (editorMode === 'edit' && selectedAgent && !selectedAgent.builtIn);
 
@@ -802,7 +800,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
               <div style={{ padding: '12px 16px' }}>
                 <div className="codex-list-row-name" style={{ marginBottom: 8 }}>{t('System Prompt')}</div>
                 <div style={{ whiteSpace: 'pre-wrap', fontSize: 13, lineHeight: 1.6, color: 'var(--color-token-text-secondary)', fontFamily: 'var(--font-mono)' }}>
-                  {selectedAgent.systemPrompt || t('(empty)')}
+                  {selectedAgent.systemPrompt || t('Provider default')}
                 </div>
               </div>
             </div>

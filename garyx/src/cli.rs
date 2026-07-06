@@ -1167,9 +1167,9 @@ pub(crate) enum AgentAction {
         /// Optional default workspace directory for new task/bot threads using this agent.
         #[arg(long)]
         default_workspace_dir: Option<String>,
-        /// System prompt
+        /// Optional system prompt. Omit to use the provider default.
         #[arg(long)]
-        system_prompt: String,
+        system_prompt: Option<String>,
         /// Set an agent environment variable as KEY=VALUE (repeatable). Merged onto existing env.
         #[arg(long = "env", value_name = "KEY=VALUE")]
         env: Vec<String>,
@@ -1216,9 +1216,9 @@ pub(crate) enum AgentAction {
         /// Optional default workspace directory for new task/bot threads using this agent. Pass an empty string to clear it.
         #[arg(long)]
         default_workspace_dir: Option<String>,
-        /// System prompt
+        /// Optional system prompt. Omit to preserve the existing value; pass an empty string to clear it.
         #[arg(long)]
-        system_prompt: String,
+        system_prompt: Option<String>,
         /// Set an agent environment variable as KEY=VALUE (repeatable). Merged onto existing env.
         #[arg(long = "env", value_name = "KEY=VALUE")]
         env: Vec<String>,
@@ -1265,9 +1265,9 @@ pub(crate) enum AgentAction {
         /// Optional default workspace directory for new task/bot threads using this agent. Pass an empty string to clear it.
         #[arg(long)]
         default_workspace_dir: Option<String>,
-        /// System prompt
+        /// Optional system prompt. Omit to preserve an existing value, or use the provider default on create. Pass an empty string to clear it.
         #[arg(long)]
-        system_prompt: String,
+        system_prompt: Option<String>,
         /// Set an agent environment variable as KEY=VALUE (repeatable). Merged onto existing env.
         #[arg(long = "env", value_name = "KEY=VALUE")]
         env: Vec<String>,

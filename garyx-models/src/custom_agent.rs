@@ -75,6 +75,7 @@ pub struct CustomAgentProfile {
         skip_serializing_if = "Option::is_none"
     )]
     pub avatar_data_url: Option<String>,
+    #[serde(default)]
     pub system_prompt: String,
     pub built_in: bool,
     #[serde(default = "crate::config::default_true")]

@@ -1671,8 +1671,41 @@ fn parse_agent_create() {
             assert_eq!(provider_auth_source, None);
             assert_eq!(provider_api_key, None);
             assert_eq!(default_workspace_dir.as_deref(), Some("/tmp/spec-review"));
-            assert_eq!(system_prompt, "Review specs carefully.");
+            assert_eq!(system_prompt.as_deref(), Some("Review specs carefully."));
             assert!(json);
+        }
+        _ => panic!("expected Agent::Create"),
+    }
+}
+
+#[test]
+fn parse_agent_create_without_system_prompt() {
+    let cli = Cli::parse_from([
+        "garyx",
+        "agent",
+        "create",
+        "--agent-id",
+        "plain-claude",
+        "--display-name",
+        "Plain Claude",
+        "--provider",
+        "claude_code",
+    ]);
+    match cli.command {
+        Some(Commands::Agent {
+            action:
+                AgentAction::Create {
+                    agent_id,
+                    display_name,
+                    provider,
+                    system_prompt,
+                    ..
+                },
+        }) => {
+            assert_eq!(agent_id, "plain-claude");
+            assert_eq!(display_name, "Plain Claude");
+            assert_eq!(provider, "claude_code");
+            assert_eq!(system_prompt, None);
         }
         _ => panic!("expected Agent::Create"),
     }
@@ -1807,7 +1840,7 @@ fn parse_agent_update_without_model() {
             assert_eq!(provider_auth_source, None);
             assert_eq!(provider_api_key, None);
             assert_eq!(default_workspace_dir, None);
-            assert_eq!(system_prompt, "Review specs carefully.");
+            assert_eq!(system_prompt.as_deref(), Some("Review specs carefully."));
             assert!(!json);
         }
         _ => panic!("expected Agent::Update"),
@@ -1961,7 +1994,7 @@ fn parse_agent_upsert() {
             assert_eq!(provider_auth_source, None);
             assert_eq!(provider_api_key, None);
             assert_eq!(default_workspace_dir.as_deref(), Some("/tmp/spec-review"));
-            assert_eq!(system_prompt, "Review specs carefully.");
+            assert_eq!(system_prompt.as_deref(), Some("Review specs carefully."));
             assert!(json);
         }
         _ => panic!("expected Agent::Upsert"),

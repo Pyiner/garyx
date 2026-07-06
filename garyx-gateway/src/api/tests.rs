@@ -735,6 +735,76 @@ async fn test_create_custom_agent_allows_omitted_model() {
 }
 
 #[tokio::test]
+async fn test_create_custom_agent_allows_omitted_system_prompt() {
+    let state = test_state();
+    let router = api_router(state);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/custom-agents")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "agent_id": "plain-claude",
+                "display_name": "Plain Claude",
+                "provider_type": "claude_code"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["system_prompt"], "");
+}
+
+#[tokio::test]
+async fn test_update_custom_agent_blank_system_prompt_clears_prompt() {
+    let state = test_state();
+    let router = api_router(state);
+    let create = Request::builder()
+        .method("POST")
+        .uri("/api/custom-agents")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "agent_id": "plain-claude",
+                "display_name": "Plain Claude",
+                "provider_type": "claude_code",
+                "system_prompt": "Work normally."
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = router.clone().oneshot(create).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let update = Request::builder()
+        .method("PUT")
+        .uri("/api/custom-agents/plain-claude")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "agent_id": "plain-claude",
+                "display_name": "Plain Claude",
+                "provider_type": "claude_code",
+                "system_prompt": "  "
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = router.oneshot(update).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["system_prompt"], "");
+}
+
+#[tokio::test]
 async fn test_provider_models_reports_claude_code_catalog() {
     let state = test_state();
     let router = api_router(state);

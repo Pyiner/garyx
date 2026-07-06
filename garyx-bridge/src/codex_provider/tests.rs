@@ -1410,6 +1410,62 @@ fn test_build_thread_start_params_merges_runtime_system_prompt() {
 }
 
 #[test]
+fn test_build_thread_start_params_custom_agent_without_prompt_omits_developer_instructions() {
+    let config = CodexAppServerConfig {
+        mcp_base_url: String::new(),
+        ..Default::default()
+    };
+    let params = build_thread_start_params(
+        &config,
+        None,
+        "thread::test",
+        "run-1",
+        &HashMap::from([("agent_id".to_owned(), Value::String("reviewer".to_owned()))]),
+    );
+
+    assert!(params.config.is_none());
+}
+
+#[test]
+fn test_build_thread_start_params_custom_agent_blank_prompt_omits_developer_instructions() {
+    let config = CodexAppServerConfig {
+        mcp_base_url: String::new(),
+        ..Default::default()
+    };
+    let params = build_thread_start_params(
+        &config,
+        None,
+        "thread::test",
+        "run-1",
+        &HashMap::from([
+            ("agent_id".to_owned(), Value::String("reviewer".to_owned())),
+            ("system_prompt".to_owned(), Value::String("   ".to_owned())),
+        ]),
+    );
+
+    assert!(params.config.is_none());
+}
+
+#[test]
+fn test_build_thread_start_params_custom_agent_without_prompt_keeps_mcp_config() {
+    let config = CodexAppServerConfig {
+        mcp_base_url: "http://127.0.0.1:31337".to_owned(),
+        ..Default::default()
+    };
+    let params = build_thread_start_params(
+        &config,
+        None,
+        "thread::test",
+        "run-1",
+        &HashMap::from([("agent_id".to_owned(), Value::String("reviewer".to_owned()))]),
+    );
+    let config = params.config.expect("mcp config should exist");
+
+    assert!(config.get("developer_instructions").is_none());
+    assert!(config.get("mcp_servers").is_some());
+}
+
+#[test]
 fn test_build_thread_start_params_keeps_runtime_context_out_of_developer_instructions() {
     let config = CodexAppServerConfig {
         mcp_base_url: String::new(),

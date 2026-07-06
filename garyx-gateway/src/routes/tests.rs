@@ -3428,7 +3428,7 @@ async fn thread_history_runtime_prefers_thread_snapshot_over_current_agent_profi
             request_timeout_seconds: None,
             default_workspace_dir: None,
             avatar_data_url: None,
-            system_prompt: "Synthetic test agent.".to_owned(),
+            system_prompt: Some("Synthetic test agent.".to_owned()),
         })
         .await
         .expect("custom agent");
@@ -6551,7 +6551,7 @@ async fn task_create_with_agent_assignee_queues_agent_dispatch() {
             request_timeout_seconds: None,
             default_workspace_dir: Some("/tmp/agent-route-default".to_owned()),
             avatar_data_url: None,
-            system_prompt: "Review the assigned task.".to_owned(),
+            system_prompt: Some("Review the assigned task.".to_owned()),
         })
         .await
         .expect("custom agent");
@@ -6872,7 +6872,7 @@ async fn task_assign_queues_dispatch_with_original_body() {
             request_timeout_seconds: None,
             default_workspace_dir: Some("/tmp/agent-route-default".to_owned()),
             avatar_data_url: None,
-            system_prompt: "Review the assigned task.".to_owned(),
+            system_prompt: Some("Review the assigned task.".to_owned()),
         })
         .await
         .expect("custom agent");
@@ -7111,7 +7111,7 @@ async fn task_create_unassigned_todo_can_be_assigned_to_first_agent() {
             request_timeout_seconds: None,
             default_workspace_dir: Some("/tmp/late-gemini-default".to_owned()),
             avatar_data_url: None,
-            system_prompt: "Work normally.".to_owned(),
+            system_prompt: Some("Work normally.".to_owned()),
         })
         .await
         .expect("custom agent");

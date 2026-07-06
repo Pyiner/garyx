@@ -332,7 +332,8 @@ pub struct CustomAgentUpsertPayload {
     pub default_workspace_dir: Option<String>,
     #[serde(default, alias = "avatarDataUrl")]
     pub avatar_data_url: Option<String>,
-    pub system_prompt: String,
+    #[serde(default, alias = "systemPrompt")]
+    pub system_prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

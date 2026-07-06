@@ -177,7 +177,7 @@ async fn prepare_chat_request_resolves_provider_and_system_prompt_from_thread_ag
             request_timeout_seconds: None,
             default_workspace_dir: None,
             avatar_data_url: None,
-            system_prompt: "Review specs carefully.".to_owned(),
+            system_prompt: Some("Review specs carefully.".to_owned()),
         })
         .await
         .expect("custom agent saved");
@@ -310,7 +310,7 @@ async fn prepare_chat_request_prefers_thread_snapshot_before_agent_runtime_metad
             request_timeout_seconds: None,
             default_workspace_dir: None,
             avatar_data_url: None,
-            system_prompt: "Use the agent persona.".to_owned(),
+            system_prompt: Some("Use the agent persona.".to_owned()),
         })
         .await
         .expect("custom agent saved");
