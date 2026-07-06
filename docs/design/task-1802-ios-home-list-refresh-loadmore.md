@@ -284,6 +284,14 @@ Gate rules (all unit-tested):
   server-returned `offset + count`. The ordering matrix
   (refresh-start → loadMore-start → either completion order, and each
   with either/both failing) is pinned in tests — see test plan §3.
+- **Ticket completion is the transaction end** (code-review
+  #TASK-1804): the model calls `completeRefresh`/`failRefresh` only
+  after its *last* await — the in-flight flag must span the whole
+  App-layer refresh (page fetch **and** the pinned/selected summary
+  backfill), not just the page request. Completing early would re-open
+  the gate mid-transaction, letting a second refresh land newer state
+  that the first, still-suspended refresh then overwrites with its
+  older page on resume. Same rule for load-more tickets.
 - `completeRefresh` cursor semantics replace today's two-condition
   `hasLoadedBeyondHead` (`nextThreadListOffset > returnedEnd ||
   recentThreadIds.count > pageIds.count`,

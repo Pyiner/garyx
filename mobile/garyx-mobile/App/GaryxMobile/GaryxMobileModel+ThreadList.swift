@@ -35,6 +35,28 @@ extension GaryxMobileModel {
                 threadListPager.failRefresh(ticket)
                 return
             }
+            var nextThreads = pendingThreadArchives.visibleThreads(page.threads)
+            let selectionIdForThisRefresh = selectedThread?.id
+            let visiblePinnedThreadIds = pendingThreadArchives.visibleThreadIds(pinsPage.threadIds)
+            let requiredThreadIds = normalizedThreadIds(visiblePinnedThreadIds + [selectionIdForThisRefresh])
+            nextThreads += await fetchMissingThreadSummaries(
+                using: gatewayClient,
+                requiredThreadIds: requiredThreadIds,
+                existingThreadIds: Set(nextThreads.map(\.id))
+            )
+            guard runtimeGeneration == gatewayRuntimeGeneration else {
+                // Release the refresh gate: this transaction is abandoned
+                // (no-op if a pager reset already bumped the epoch).
+                threadListPager.failRefresh(ticket)
+                return
+            }
+            // Transaction commit point: the ticket completes only after the
+            // LAST await, so the pager's refresh gate spans the entire
+            // App-layer refresh — a second refresh cannot interleave between
+            // this page landing and its state writes and then be overwritten
+            // by this (older) page when we resume (review #TASK-1804).
+            // Everything below is synchronous on the MainActor.
+            //
             // nil application = stale ticket (pager was reset mid-flight):
             // the page belongs to the previous gateway and must be dropped.
             guard let application = threadListPager.completeRefresh(
@@ -43,18 +65,8 @@ extension GaryxMobileModel {
                 pageCount: page.count,
                 hasMore: page.hasMore
             ) else { return }
-            let visiblePinnedThreadIds = pendingThreadArchives.visibleThreadIds(pinsPage.threadIds)
             applyPinnedThreadIds(visiblePinnedThreadIds)
             applyRecentThreadsHeadPage(page, application: application)
-            var nextThreads = pendingThreadArchives.visibleThreads(page.threads)
-            let selectionIdForThisRefresh = selectedThread?.id
-            let requiredThreadIds = normalizedThreadIds(visiblePinnedThreadIds + [selectionIdForThisRefresh])
-            nextThreads += await fetchMissingThreadSummaries(
-                using: gatewayClient,
-                requiredThreadIds: requiredThreadIds,
-                existingThreadIds: Set(nextThreads.map(\.id))
-            )
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             // Loaded tail summaries always survive a head refresh; which
             // rows are visible is recentThreadIds' concern.
             let existingThreads = pendingThreadArchives.visibleThreads(threads)
