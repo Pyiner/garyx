@@ -14,7 +14,7 @@ import Foundation
 enum GaryxColdOpenRestorePolicy {
     /// Inputs captured at apply time (main actor). All must clear for the
     /// restore to apply; any newer path (thread switch, history apply, stream
-    /// snapshot, messages present) suppresses it.
+    /// snapshot, committed-row mirror write, messages present) suppresses it.
     struct State: Equatable {
         /// The thread the restore task decoded for.
         var restoredThreadId: String
@@ -24,6 +24,12 @@ enum GaryxColdOpenRestorePolicy {
         var capturedGeneration: UInt64
         /// Current cold-open generation (bumped on every thread switch).
         var currentGeneration: UInt64
+        /// Transcript-mirror generation captured when the task spawned.
+        var capturedMirrorGeneration: UInt64
+        /// Current transcript-mirror generation (bumped by every live write to
+        /// `cachedTranscriptSnapshots`, including a stream `.applyCommittedMessages`
+        /// that touches nothing else — the design-review v2 finding-1 gap).
+        var currentMirrorGeneration: UInt64
         /// Whether the network history apply has already run for this thread
         /// (`markThreadHistoryLoaded`, called even for an empty transcript).
         var threadHistoryLoaded: Bool
@@ -34,12 +40,13 @@ enum GaryxColdOpenRestorePolicy {
         var hasMessages: Bool
     }
 
-    /// Apply the restored output only when the thread is unchanged, no
-    /// thread-switch churn occurred, and no newer content path has populated
-    /// history / render snapshot / messages.
+    /// Apply the restored output only when the thread is unchanged, neither the
+    /// cold-open nor the transcript-mirror generation moved since spawn, and no
+    /// newer content path populated history / render snapshot / messages.
     static func shouldApply(_ state: State) -> Bool {
         state.selectedThreadId == state.restoredThreadId
             && state.capturedGeneration == state.currentGeneration
+            && state.capturedMirrorGeneration == state.currentMirrorGeneration
             && !state.threadHistoryLoaded
             && !state.hasRenderSnapshot
             && !state.hasMessages
@@ -50,11 +57,13 @@ enum GaryxColdOpenRestorePolicy {
     /// `shouldApply` — it does not require empty messages / unloaded history,
     /// because seeding the mirror only advances the forward cursor and never
     /// changes visible rows — but it must still not clobber a fresher live
-    /// window: gated on same thread, no switch churn, and no live render
-    /// snapshot already present.
+    /// window: gated on same thread, no switch churn, mirror generation
+    /// unchanged (a live committed/render write already advanced it), and no
+    /// live render snapshot already present.
     static func shouldSeedMirror(_ state: State) -> Bool {
         state.selectedThreadId == state.restoredThreadId
             && state.capturedGeneration == state.currentGeneration
+            && state.capturedMirrorGeneration == state.currentMirrorGeneration
             && !state.hasRenderSnapshot
     }
 }

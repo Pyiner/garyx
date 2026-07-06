@@ -53,13 +53,15 @@ Evidence call chains (verified in source):
 - Miss → `messages = []` (the existing `isSelectedThreadLoadingInitialHistory`
   presentation shows the loading state: with no live/cached render snapshot and
   `historyLoaded == false`, `isAwaitingInitialHistory` is true) and spawn a
-  **cold-open restore task**: `transcriptSnapshotAsync` (already exists; loads
-  + decodes on the persistence-queue actor off the main thread) → map
-  `mobileMessages` in `Task.detached` (same pattern as
-  `updateTranscriptCache`) → back on the main actor, apply render snapshot +
-  restored messages **only if** the guard below passes.
+  **cold-open restore task**: load the persisted window **without seeding the
+  mirror** (new `loadTranscriptSnapshotFromDiskAsync` — see below; the existing
+  `transcriptSnapshotAsync` cannot be reused because it *unconditionally* seeds
+  `cachedTranscriptSnapshots`, defeating the freshness gate) → map
+  `mobileMessages` in `Task.detached` (same pattern as `updateTranscriptCache`)
+  → back on the main actor, apply render snapshot + restored messages + seed
+  the mirror **only if** the guards below pass.
 
-Race guard (pure logic, Core:`GaryxColdOpenRestorePolicy.shouldApply`).
+Race guard (pure logic, Core:`GaryxColdOpenRestorePolicy`).
 
 > **Design-review v1 correction (finding 2).** `cachedMessages.isEmpty` alone
 > is not a sufficient freshness marker: a history fetch can legitimately
@@ -68,35 +70,53 @@ Race guard (pure logic, Core:`GaryxColdOpenRestorePolicy.shouldApply`).
 > message flush populates `messages`. The restore must abort if **any** newer
 > content path has run, not just if `messages` is non-empty.
 
-`shouldApply` returns true only when **all** hold at apply time (checked on the
-main actor, captured token compared):
+> **Design-review v2 correction (finding 1).** The five conditions below still
+> miss a reachable stream ordering. A stream frame's actions run
+> `.applyCommittedMessages` **then** `.applyRenderSnapshot`
+> (`GatewayStreamActor` action order). `.applyCommittedMessages` →
+> `applyStreamedCommittedMessages` writes `cachedTranscriptSnapshots[threadId]`
+> (fresh committed rows) but does **not** set `threadHistoryLoaded`, write
+> `renderSnapshotsByThread`, or flush `messages`. A restore that returns to the
+> main actor *between* those two actions still sees all five conditions true
+> and would apply a stale disk window / seed the mirror over the fresh
+> committed rows, after which `.applyRenderSnapshot` persists cache from a stale
+> base. The fix is a **per-thread mirror generation** (below), bumped by every
+> live write to `cachedTranscriptSnapshots`, captured at restore spawn and
+> compared at apply/seed. It closes the committed-before-render gap that the
+> content-signal conditions cannot see.
+
+The model keeps `var transcriptMirrorGeneration: [String: UInt64]`, bumped by a
+single setter `setTranscriptMirror(_:for:)` that **all** live mirror writes
+route through (`applyStreamedCommittedMessages`, `applyThreadRenderSnapshot`,
+`updateTranscriptCache`, `dropCommittedCacheBelow`, `transcriptSnapshotAsync`'s
+auto-seed, the fetch/full paths). The restore captures the generation at spawn.
+
+`shouldApply` returns true only when **all** hold at apply time (main actor,
+captured tokens compared):
 
 1. `selectedThreadId == restoredThreadId` — still the same open thread.
-2. `restoreGeneration == capturedGeneration` — no thread-switch churn since
-   the task was spawned. A new monotonic `selectedThreadColdOpenGeneration`
-   (UInt64) is bumped in `showSelectedThread` whenever the thread id changes;
-   the restore task captures it at spawn. This catches "switched away and back
-   to the same id" that a bare id compare would miss.
-3. `!threadHistoryLoaded` — the network history apply
-   (`markThreadHistoryLoaded`, called unconditionally by every apply path,
-   including an empty transcript) has **not** run. This is the arm finding 2
-   named: an empty-but-loaded transcript must suppress restore.
-4. `liveRenderSnapshot == nil` — no stream/render frame
-   (`renderSnapshotsByThread[threadId]`) has applied. This is the other
-   finding-2 arm: a stream snapshot that landed before its message flush must
-   suppress restore.
-5. `cachedMessages(for:).isEmpty` — no messages present yet.
+2. `capturedGeneration == currentGeneration` — no thread-switch churn since
+   spawn (`selectedThreadColdOpenGeneration`, UInt64, bumped in
+   `showSelectedThread` on thread-id change; catches switch-away-and-back).
+3. `capturedMirrorGeneration == currentMirrorGeneration` — **no live path wrote
+   the transcript mirror since spawn** (closes the finding-1
+   committed-before-render gap: `applyStreamedCommittedMessages` bumps this even
+   though it touches nothing else).
+4. `!threadHistoryLoaded` — the network history apply (`markThreadHistoryLoaded`,
+   called even for an empty transcript) has not run.
+5. `liveRenderSnapshot == nil` — no stream/render snapshot applied.
+6. `cachedMessages(for:).isEmpty` — no messages present yet.
 
-Any newer path (history apply, stream apply) sets (3) or (4) and restore
-discards its output; if restore lands first, the later fetch/stream overwrites
-it via the existing `setPreparedMessages`/`applyThreadRenderSnapshot` paths as
-today. The restore task also seeds the in-memory mirror
-(`cachedTranscriptSnapshots`) so the incremental fetch's
-`transcriptAfterCursorAsync` sees the cursor exactly as before (both paths
-serialize through `GaryxTranscriptCachePersistenceQueue`; a duplicate disk
-read in the race window is harmless — page-cache-hot). Mirror seeding is
-itself gated by (1)+(2)+(4) so a stale decode cannot clobber a fresher live
-window in the mirror.
+Any newer path sets (3), (4) or (5) and restore discards; if restore lands
+first, the later fetch/stream overwrites it via the existing
+`setPreparedMessages`/`applyThreadRenderSnapshot` paths. `shouldSeedMirror`
+(mirror seeding is looser than message apply — it only advances the forward
+cursor and never changes visible rows) requires (1)+(2)+(3)+(5): same thread,
+no switch churn, **mirror generation unchanged**, and no live render snapshot —
+so a stale decode can never clobber a fresher committed/live window in the
+mirror. Both the fetch's `transcriptAfterCursorAsync` (which seeds+bumps via
+`transcriptSnapshotAsync`) and any stream committed apply bump the generation,
+so whichever runs first wins and the loser (restore) aborts.
 
 Behavior change: on a cold open of a large cached thread the user sees the
 loading indicator for the decode duration (~130ms at 30MB on a Mac) instead
@@ -117,18 +137,22 @@ is deleted too, so the sync load is a cheap nil stat), and P4 pins
 `streamOwnedThreadId` against eviction so eviction can never chill the
 stream thread's mirror.
 
-Restore-vs-stream snapshot ordering: the restore task re-applies the
-disk snapshot's `renderSnapshot` only when `renderSnapshotsByThread[threadId]`
-is still nil — a live stream frame's snapshot is always newer than the disk
-copy and must not be clobbered.
+Restore-vs-stream snapshot ordering: the restore task re-applies the disk
+snapshot's `renderSnapshot` only when `shouldApply` passed (which already
+requires `liveRenderSnapshot == nil` and the mirror generation unchanged) — a
+live stream frame's snapshot is always newer than the disk copy and must not be
+clobbered.
 
 Tests:
 - Keep `testP1_coldOpenSyncRestoreCostExceedsFrameBudget` as the quantified
   justification (documents why sync restore is banned).
-- New: `GaryxColdOpenRestorePolicyTests` — the full 5-condition matrix:
-  thread changed ⇒ discard; generation bumped (switch-away-and-back) ⇒
+- `GaryxColdOpenRestorePolicyTests` — the full condition matrix: thread
+  changed ⇒ discard; cold-open generation bumped (switch-away-and-back) ⇒
+  discard; **mirror generation bumped (committed-before-render stream gap)** ⇒
   discard; history loaded (incl. empty transcript) ⇒ discard; render snapshot
-  present ⇒ discard; messages non-empty ⇒ discard; all-clear ⇒ apply.
+  present ⇒ discard; messages non-empty ⇒ discard; all-clear ⇒ apply. Plus
+  `shouldSeedMirror` matrix: tolerates loaded history + present messages, but
+  refuses on thread change, either generation bump, or a live render snapshot.
 
 ### P2 — memoize prepared turn rows keyed by input identity
 
@@ -141,7 +165,8 @@ mutating func rows(
     messages: [GaryxMobileMessage],
     transcriptMessages: [GaryxTranscriptMessage],
     build: () -> [GaryxMobileTurnRow]
-) -> GaryxPreparedTurnRows   // { rows, ids }
+) -> [GaryxMobileTurnRow]
+var cachedIds: [String]?   // for the .onChange observer without a rebuild
 ```
 
 It stores the last inputs + prepared output and returns the cached value when
@@ -152,10 +177,15 @@ guards), so between flushes the comparison is pointer-cheap; on a real input
 change the compare either fast-fails on count or costs one Equatable pass,
 which is far below one mapper rebuild (55–137ms).
 
-`GaryxMobileModel.selectedThreadTurnRows()` routes through a non-`@Published`
-`selectedTurnRowsCache`; `selectedThreadTurnRowIds()` exposes the cached ids
-for the `.onChange` observer, so a body evaluation performs **zero** mapper
-work when inputs are unchanged and exactly one rebuild when they changed.
+`GaryxMobileModel` computes the **full** prepared rows through a non-`@Published`
+`selectedTurnRowsCache` (this memo), then applies the P3 window (§P3) on top.
+`selectedThreadTurnRows()` (called by the view body + `.onChange`) returns the
+**windowed** rows; the window resolve is a cheap `firstIndex` + slice over the
+already-memoized full rows. So a body evaluation performs **zero** mapper work
+when inputs are unchanged and exactly one rebuild when they changed. The
+`.onChange` scroll observer watches the *windowed* rows' ids (that is what is
+rendered), so window expansion and streaming appends drive `renderRowsChanged`
+correctly (see §P3 anchoring).
 
 Cache correctness: the key covers *all* mapper inputs, so any change that can
 alter output (placeholder resolution state included — it is a function of
@@ -211,21 +241,64 @@ the end.
     monotonically non-shrinking within a thread session.
   - `isWindowExhausted(rows:state:) -> Bool`: floor index is 0 — every
     in-memory row is shown (gates network paging + the Load-earlier button).
-- Model: `@Published private(set) var selectedTurnRowsWindowState`; reset to
-  `.init(floorRowId: nil)` on thread switch (`showSelectedThread`,
-  `openNewThreadDraft`); `expandSelectedTurnRowsWindow()` calls `expand`.
-  `selectedThreadTurnRows()` returns the resolved `visible` slice and, as a
-  pure by-product, writes back the resolved `floorRowId` (idempotent — a plain
-  read with no floor change is a no-op, so it does not thrash `@Published`).
+- Model state — **plain (non-`@Published`) window state; the floor is only ever
+  written from explicit events, never from the body getter**:
+
+  > **Design-review v2 correction (finding 2).** The v1 draft had
+  > `selectedThreadTurnRows()` write back the resolved floor to an `@Published`
+  > `selectedTurnRowsWindowState` as a "by-product" of the body read. That is a
+  > real UI-stability bug: the *first* resolve writes `nil → floorId` (not a
+  > no-op) and, because the getter is called directly inside the SwiftUI body
+  > and `.onChange` value expression, it publishes an `ObservableObject` change
+  > *during* view update. Floor initialization/re-anchor must be event-driven or
+  > live in non-published internal state.
+
+  - `private var selectedTurnRowsWindowState = GaryxTurnRowsWindowState()` — a
+    plain var (mirrors the shipped `scrollStateBox` pattern: mutating a
+    non-published property is invisible to SwiftUI's update tracking, so it is
+    safe to touch during a body read).
+  - `@Published private(set) var selectedTurnRowsWindowRevision = 0` — bumped
+    **only** from event handlers (expand, reset, network-page floor extension)
+    to force a body re-eval. Never written during a body read.
+  - `selectedThreadTurnRows()` is a **pure read**: it resolves
+    `GaryxTurnRowsWindowPlanner.resolve(rows: fullRows, state:
+    selectedTurnRowsWindowState).visible` and does **not** write the state.
+    (`fullRows` comes from the P2 `GaryxTurnRowsCache`.)
+  - The floor is *locked* the first time rows appear, from the event-driven
+    message/render write funnels (`setMessages` / `setPreparedMessages` /
+    `setRenderSnapshot` for the selected thread):
+    `lockSelectedTurnRowsWindowFloorIfNeeded()` — if the floor is nil and
+    `fullRows` is non-empty, resolve once and store the resolved floor, then
+    bump the revision. Idempotent: once the floor is set, subsequent writes are
+    no-ops, so a streaming tail append keeps the same floor (no slide). All of
+    this runs in an event handler, not the body.
+  - Thread switch (`showSelectedThread` on id change, `openNewThreadDraft`):
+    reset state to `.init()`, invalidate the P2 cache, bump revision.
+  - `expandSelectedTurnRowsWindow()` (event): `planner.expand`, bump revision.
 - View wiring: `prefetchOlderHistoryIfNeeded()` (geometry-gated by the existing
   scroll-state machine: `isNearLoadedHistoryStart` +
   `isLargeEnoughForAutomaticHistoryPrefetch` + `hasMovedTowardOlderHistory`)
   becomes a two-stage boundary action — if the window is not exhausted, expand
-  it (pure state change, no network); only when exhausted fall through to
+  it (event, no network); only when exhausted fall through to
   `loadOlderSelectedThreadHistory()` as today. The "Load earlier" button shows
   when the window is not exhausted OR `selectedThreadHasMoreHistoryBefore`; its
   tap expands the window locally first (instant, no spinner) and performs the
   network page only once the window is exhausted.
+- **Network-older-fetch floor extension** (self-caught gap, not in v1/v2):
+  `loadOlderSelectedThreadHistory` only runs when the window is already
+  exhausted (floor at in-memory index 0). It prepends a network page to
+  `messages`, so the old floor row (previously index 0) is now at index P and a
+  plain resolve would hide the P newly-fetched older rows. The older-fetch path
+  therefore **extends the floor to the new oldest row**
+  (`selectedTurnRowsWindowState.floorRowId = fullRows.first?.id`) after the
+  prepend and bumps the revision — matching today's Load-earlier semantics
+  (the fetched page becomes visible). This is a deliberate deep-browse growth,
+  which the design already accepts; the entry (open) cost stays bounded to 60.
+- **Windowed-resume reset re-anchor**: `dropCommittedCacheBelow` (stream action)
+  prunes rows below the server floor and already reflows the transcript + resets
+  scroll. It clears `selectedTurnRowsWindowState` to `.init()` so the next
+  resolve re-anchors to the newest `initialLimit` (event-driven; not a body
+  read).
 
 **Anchoring compatibility argument** (the sensitive part):
 

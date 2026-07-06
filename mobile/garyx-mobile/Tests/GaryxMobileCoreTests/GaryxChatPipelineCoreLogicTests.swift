@@ -264,6 +264,8 @@ final class GaryxColdOpenRestorePolicyTests: XCTestCase {
             selectedThreadId: "t",
             capturedGeneration: 1,
             currentGeneration: 1,
+            capturedMirrorGeneration: 5,
+            currentMirrorGeneration: 5,
             threadHistoryLoaded: false,
             hasRenderSnapshot: false,
             hasMessages: false
@@ -283,6 +285,17 @@ final class GaryxColdOpenRestorePolicyTests: XCTestCase {
         // Switched away and back to the same id: generation advanced.
         var s = baseState(); s.currentGeneration = 2
         XCTAssertFalse(GaryxColdOpenRestorePolicy.shouldApply(s))
+    }
+
+    func testDiscardsWhenMirrorGenerationBumped() {
+        // The design-review v2 finding-1 gap: a stream `.applyCommittedMessages`
+        // wrote the transcript mirror (bumping its generation) between spawn and
+        // apply, touching nothing else. Restore must abort so it cannot clobber
+        // the fresh committed rows with the stale disk window.
+        var s = baseState(); s.currentMirrorGeneration = 6
+        XCTAssertFalse(GaryxColdOpenRestorePolicy.shouldApply(s))
+        XCTAssertFalse(GaryxColdOpenRestorePolicy.shouldSeedMirror(s),
+                       "mirror seed must also abort when a live path advanced the mirror")
     }
 
     func testDiscardsWhenHistoryLoadedEvenIfEmpty() {
@@ -306,7 +319,7 @@ final class GaryxColdOpenRestorePolicyTests: XCTestCase {
 
     func testMirrorSeedIsLooserThanApplyButStillGuarded() {
         // Mirror seeding tolerates loaded history + present messages (it only
-        // advances the cursor), but must still refuse on thread change,
+        // advances the cursor), but must still refuse on thread change, either
         // generation bump, or a live render snapshot.
         var s = baseState(); s.threadHistoryLoaded = true; s.hasMessages = true
         XCTAssertTrue(GaryxColdOpenRestorePolicy.shouldSeedMirror(s))
@@ -316,6 +329,9 @@ final class GaryxColdOpenRestorePolicyTests: XCTestCase {
 
         var bumped = s; bumped.currentGeneration = 9
         XCTAssertFalse(GaryxColdOpenRestorePolicy.shouldSeedMirror(bumped))
+
+        var mirrorBumped = s; mirrorBumped.currentMirrorGeneration = 99
+        XCTAssertFalse(GaryxColdOpenRestorePolicy.shouldSeedMirror(mirrorBumped))
 
         var snapshot = s; snapshot.hasRenderSnapshot = true
         XCTAssertFalse(GaryxColdOpenRestorePolicy.shouldSeedMirror(snapshot))

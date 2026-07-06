@@ -227,6 +227,22 @@ final class GaryxChatPipelineReproTests: XCTestCase {
 /// signal nor cleans up the temporary file, and the stale previous window
 /// stays on disk masquerading as current.
 final class GaryxTranscriptCachePersistFailureReproTests: XCTestCase {
+    /// Thread-safe recorder for the store's `@Sendable` diagnostics sink, so the
+    /// tests capture events without a Swift 6 data-race warning from capturing a
+    /// mutable `var` in a `@Sendable` closure.
+    final class DiagnosticsRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storage: [GaryxTranscriptCacheStoreEvent] = []
+        func record(_ event: GaryxTranscriptCacheStoreEvent) {
+            lock.lock(); defer { lock.unlock() }
+            storage.append(event)
+        }
+        var events: [GaryxTranscriptCacheStoreEvent] {
+            lock.lock(); defer { lock.unlock() }
+            return storage
+        }
+    }
+
     /// Injects a deterministic failure into the atomic-replace step — the
     /// exact failure mode `_ = try?` swallows in production (e.g. volume
     /// full, sandbox/permission churn, iCloud eviction races).
@@ -304,26 +320,22 @@ final class GaryxTranscriptCachePersistFailureReproTests: XCTestCase {
     func testP5_saveFailureEmitsWriteDiagnostics() throws {
         let directory = try makeStoreDirectory()
         let failingFileManager = ReplaceFailingFileManager()
-        var events: [GaryxTranscriptCacheStoreEvent] = []
-        let lock = NSLock()
+        let recorder = DiagnosticsRecorder()
         let store = GaryxTranscriptFileCacheStore(
             directory: directory,
             fileManager: failingFileManager,
-            diagnostics: { event in
-                lock.lock(); defer { lock.unlock() }
-                events.append(event)
-            }
+            diagnostics: { recorder.record($0) }
         )
         let threadId = "thread::persist-diagnostics"
 
         store.save(makeWindow(threadId: threadId, text: "old content"))
         // First save creates the file (moveItem branch, not replace) → no event.
-        XCTAssertTrue(events.isEmpty, "a successful write must not emit a failure event")
+        XCTAssertTrue(recorder.events.isEmpty, "a successful write must not emit a failure event")
 
         store.save(makeWindow(threadId: threadId, text: "new content"))
 
-        guard case let .saveWriteFailed(reportedThreadId, reason)? = events.first else {
-            return XCTFail("expected a saveWriteFailed event, got \(events)")
+        guard case let .saveWriteFailed(reportedThreadId, reason)? = recorder.events.first else {
+            return XCTFail("expected a saveWriteFailed event, got \(recorder.events)")
         }
         XCTAssertEqual(reportedThreadId, threadId)
         XCTAssertFalse(reason.isEmpty, "the failure reason must be carried for logging")
@@ -333,16 +345,16 @@ final class GaryxTranscriptCachePersistFailureReproTests: XCTestCase {
     /// diagnostics sink that fires on the happy path).
     func testP5_successfulSaveEmitsNoDiagnostics() throws {
         let directory = try makeStoreDirectory()
-        var events: [GaryxTranscriptCacheStoreEvent] = []
+        let recorder = DiagnosticsRecorder()
         let store = GaryxTranscriptFileCacheStore(
             directory: directory,
-            diagnostics: { events.append($0) }
+            diagnostics: { recorder.record($0) }
         )
         let threadId = "thread::persist-ok"
         store.save(makeWindow(threadId: threadId, text: "first"))
         store.save(makeWindow(threadId: threadId, text: "second (replace path)"))
         XCTAssertEqual(store.load(threadId: threadId)?.messages.first?.text, "second (replace path)")
-        XCTAssertTrue(events.isEmpty, "successful saves (create + atomic replace) must be silent")
+        XCTAssertTrue(recorder.events.isEmpty, "successful saves (create + atomic replace) must be silent")
     }
 
     /// Orphan `.json.tmp` residue (older version / crash between tmp write and
