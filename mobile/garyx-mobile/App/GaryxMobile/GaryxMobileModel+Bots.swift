@@ -292,7 +292,7 @@ extension GaryxMobileModel {
             messageSignaturesByThread[normalizedThreadId] = nil
             activeAssistantMessageIdsByThread[normalizedThreadId] = nil
             await refreshRemoteState()
-            await refreshThreads()
+            await refreshThreads(source: .userAction)
         } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             pendingThreadArchives.resolveArchive(threadId: normalizedThreadId)

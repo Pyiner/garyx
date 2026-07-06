@@ -300,7 +300,7 @@ extension GaryxMobileModel {
                 startBackgroundCommittedRunReconcileLoop()
                 startSelectedThreadReconcileLoop()
                 async let agentTargetsRefresh: Void = refreshAgentTargets()
-                await refreshThreads()
+                await refreshThreads(source: .userAction)
                 await agentTargetsRefresh
                 guard !Task.isCancelled else { return }
                 if plan.resyncOpenThread, let selectedThreadId, selectedThread?.id == selectedThreadId {
@@ -421,7 +421,7 @@ extension GaryxMobileModel {
                 return
             }
             async let agentTargetsRefresh: Void = refreshAgentTargets()
-            await refreshThreads()
+            await refreshThreads(source: .userAction)
             await agentTargetsRefresh
             await refreshRemoteState()
             guard isCurrentConnectRefresh(requestId, runtimeGeneration: runtimeGeneration, scopeId: gatewayScopeId) else {

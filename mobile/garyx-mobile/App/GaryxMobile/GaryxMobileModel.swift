@@ -48,6 +48,9 @@ final class GaryxRouteNotFoundStore: ObservableObject {
 @MainActor
 final class GaryxMobileModel: ObservableObject {
     static let threadListPageLimit = 30
+    /// Load-more requests back off by this many rows and rely on id dedup,
+    /// absorbing removal drift between offset pages (design §4).
+    static let threadListPageOverlap = 5
     static let threadHistoryPageLimit = 100
     // Open a thread by loading the most recent few user-query turns (with tool
     // messages) in a single request — no separate fast/no-tools pre-pass.
@@ -137,11 +140,19 @@ final class GaryxMobileModel: ObservableObject {
     @Published var isLoadingThreads = false {
         didSet { emitHomeProjectionSnapshot() }
     }
-    @Published var isLoadingMoreThreads = false {
-        didSet { refreshHomeObservationPaginationSnapshot() }
-    }
-    @Published var hasMoreThreadSummaries = false {
-        didSet { refreshHomeObservationPaginationSnapshot() }
+    /// Recent-list paging state machine (TASK-1802): head-refresh and
+    /// load-more in-flight tracks, load-more gate, server cursor, and the
+    /// footer projection. Pure Core state — every mutation republishes the
+    /// observation-store pagination snapshot.
+    var threadListPager = GaryxHomeThreadListPager(
+        pageLimit: GaryxMobileModel.threadListPageLimit,
+        overlap: GaryxMobileModel.threadListPageOverlap
+    ) {
+        didSet {
+            if oldValue != threadListPager {
+                refreshHomeObservationPaginationSnapshot()
+            }
+        }
     }
     /// Identity for the conversation scroll container (see
     /// GaryxMobileConversationViews). Refreshed on real selection changes,
@@ -443,7 +454,6 @@ final class GaryxMobileModel: ObservableObject {
     var agentTargetsRefreshRequestId: UUID?
     var agentTargetsStateRequestId: UUID?
     var workspaceRefreshRequestId: UUID?
-    var nextThreadListOffset = 0
     let rootNavigationPathStore = GaryxRootNavigationPathStore()
     let routeNotFoundStore = GaryxRouteNotFoundStore()
     let homeObservationStore = GaryxHomeObservationStore()

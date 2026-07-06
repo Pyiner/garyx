@@ -30,17 +30,20 @@ struct GaryxRootView: View {
                     },
                     applyRootNavigationPath: { model.applyRootNavigationPath($0) },
                     onRefreshAll: {
-                        await model.refreshThreads(silent: true)
-                        await model.refreshRemoteState()
+                        // Pull-to-refresh awaits only the thread list; the
+                        // catalog sweep refreshes in the background so the
+                        // spinner ends when the list is fresh (TASK-1802 R1).
+                        Task { await model.refreshRemoteState() }
+                        await model.refreshThreads(source: .userPullToRefresh)
                     },
-                    onRefreshSidebarThreads: { silent in
-                        await model.refreshThreads(silent: silent)
+                    onRefreshSidebarThreads: {
+                        await model.refreshThreads(source: .backgroundLoop)
                     },
-                    canRefreshSidebarThreads: {
-                        !model.isLoadingThreads && !model.isLoadingMoreThreads
+                    onLoadMoreThreads: { trigger in
+                        await model.loadMoreThreads(trigger: trigger)
                     },
-                    onLoadMoreThreads: {
-                        await model.loadMoreThreads()
+                    onRetryLoadMoreThreads: {
+                        await model.retryLoadMoreThreads()
                     },
                     onStartNewChat: {
                         model.openNewThreadDraft()
@@ -482,9 +485,9 @@ struct GaryxShellView: View, Equatable {
     let onPerformMainPanelLeadingEdgeAction: () -> Void
     let applyRootNavigationPath: ([GaryxMobileRootRoute]) -> Void
     let onRefreshAll: () async -> Void
-    let onRefreshSidebarThreads: (Bool) async -> Void
-    let canRefreshSidebarThreads: () -> Bool
-    let onLoadMoreThreads: () async -> Void
+    let onRefreshSidebarThreads: () async -> Void
+    let onLoadMoreThreads: (GaryxThreadListLoadMoreTrigger) async -> Void
+    let onRetryLoadMoreThreads: () async -> Void
     let onStartNewChat: () -> Void
     let onOpenThread: (GaryxThreadSummary) -> Void
     let onTogglePinnedThread: (String) -> Void
@@ -606,8 +609,8 @@ struct GaryxShellView: View, Equatable {
                     applyRootNavigationPath: applyRootNavigationPath,
                     onRefreshAll: onRefreshAll,
                     onRefreshSidebarThreads: onRefreshSidebarThreads,
-                    canRefreshSidebarThreads: canRefreshSidebarThreads,
                     onLoadMoreThreads: onLoadMoreThreads,
+                    onRetryLoadMoreThreads: onRetryLoadMoreThreads,
                     onStartNewChat: onStartNewChat,
                     onOpenThread: onOpenThread,
                     onTogglePinnedThread: onTogglePinnedThread,

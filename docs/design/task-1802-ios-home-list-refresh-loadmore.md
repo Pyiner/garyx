@@ -429,9 +429,14 @@ public enum GaryxHomeLoadMoreFooterState: Equatable, Sendable {
 
 ### 6. Near-tail prefetch (R3)
 
-`GaryxHomeThreadListSnapshot` gains `prefetchTriggerRowId` (derived in the
-projection from `recentIds` via `prefetchTriggerRowId(recentIds:
-prefetchDistance: 6)`). The recent-row `ForEach` adds:
+The sentinel row id is derived from the recent section via the Core pure
+function `prefetchTriggerRowId(recentIds:prefetchDistance: 6)`.
+Implementation note: it is computed in the list view's body (once per
+snapshot publish, O(n) over row ids) rather than added as a
+`GaryxHomeThreadListSnapshot` field — same Core-tested derivation and the
+same "UI only binds" split, without threading a new field through both
+the actor and legacy projection paths and their parity checkpoints. The
+recent-row `ForEach` adds:
 
 ```swift
 .onAppear {

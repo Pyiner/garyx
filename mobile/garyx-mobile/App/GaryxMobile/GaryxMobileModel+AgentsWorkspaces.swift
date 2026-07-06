@@ -128,7 +128,7 @@ extension GaryxMobileModel {
             return
         }
 
-        await refreshThreads()
+        await refreshThreads(source: .userAction)
         guard canContinueLastOpenedThreadRestore(threadId: threadId) else { return }
         if let thread = threads.first(where: { $0.id == threadId }),
            await restoreLastOpenedThread(thread, requestedThreadId: threadId) {
@@ -186,7 +186,7 @@ extension GaryxMobileModel {
         showResolvingWorkflowThread(threadId: threadId, requestId: requestId, source: source)
         guard isCurrentPendingThreadOpen(requestId) else { return }
 
-        await refreshThreads()
+        await refreshThreads(source: .userAction)
         guard isCurrentPendingThreadOpen(requestId) else { return }
         if let thread = threads.first(where: { $0.id == threadId }),
            await openThreadDestination(

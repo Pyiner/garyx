@@ -12,7 +12,8 @@ final class GaryxHomeObservationStoreTests: XCTestCase {
             showsSettings: false,
             lastError: nil,
             isLoadingMoreThreads: false,
-            hasMoreThreadSummaries: true
+            hasMoreThreadSummaries: true,
+            loadMoreFooterState: .idle
         )
         var invalidations = 0
 
@@ -21,7 +22,7 @@ final class GaryxHomeObservationStoreTests: XCTestCase {
         }
 
         XCTAssertFalse(store.applyConnection(isGatewayConfigured: true, connectionState: .ready(version: nil)))
-        XCTAssertFalse(store.applyPagination(isLoadingMoreThreads: false, hasMoreThreadSummaries: true))
+        XCTAssertFalse(store.applyPagination(isLoadingMoreThreads: false, hasMoreThreadSummaries: true, loadMoreFooterState: .idle))
         XCTAssertFalse(store.setDebugShowsGatewaySwitcher(false))
         XCTAssertFalse(store.setShowsSettings(false))
         XCTAssertFalse(store.setLastError(Optional<String>.none))
@@ -38,7 +39,7 @@ final class GaryxHomeObservationStoreTests: XCTestCase {
             invalidations += 1
         }
 
-        XCTAssertTrue(store.applyPagination(isLoadingMoreThreads: true, hasMoreThreadSummaries: false))
+        XCTAssertTrue(store.applyPagination(isLoadingMoreThreads: true, hasMoreThreadSummaries: false, loadMoreFooterState: .hidden))
 
         XCTAssertEqual(store.publishCount, 1)
         XCTAssertEqual(invalidations, 1)
@@ -56,6 +57,7 @@ final class GaryxHomeObservationStoreTests: XCTestCase {
             _ = store.lastError
             _ = store.isLoadingMoreThreads
             _ = store.hasMoreThreadSummaries
+            _ = store.loadMoreFooterState
         } onChange: {
             onChange()
         }

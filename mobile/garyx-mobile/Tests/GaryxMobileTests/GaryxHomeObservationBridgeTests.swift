@@ -40,7 +40,13 @@ final class GaryxHomeObservationBridgeTests: XCTestCase {
             homeInvalidations += 1
         }
 
-        model.isLoadingMoreThreads = true
+        // Drive a home pagination write through the real path: priming the
+        // pager flips hasMoreThreadSummaries/footer state, and the pager's
+        // didSet republishes the observation-store pagination snapshot.
+        var pager = model.threadListPager
+        let ticket = pager.requestRefresh()!
+        pager.completeRefresh(ticket, pageOffset: 0, pageCount: 30, hasMore: true)
+        model.threadListPager = pager
 
         XCTAssertEqual(homeInvalidations, 1)
     }

@@ -331,7 +331,7 @@ extension GaryxMobileModel {
             activeAssistantMessageIdsByThread[thread.id] = nil
             threadResidencyTracker.remove(thread.id)
             clearTranscriptCache(for: thread.id)
-            await refreshThreads()
+            await refreshThreads(source: .userAction)
         } catch {
             lastError = displayMessage(for: error)
         }

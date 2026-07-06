@@ -34,8 +34,9 @@ extension GaryxMobileModel {
 
     func refreshHomeObservationPaginationSnapshot() {
         homeObservationStore.applyPagination(
-            isLoadingMoreThreads: isLoadingMoreThreads,
-            hasMoreThreadSummaries: hasMoreThreadSummaries
+            isLoadingMoreThreads: threadListPager.isLoadingMore,
+            hasMoreThreadSummaries: threadListPager.hasMoreThreadSummaries,
+            loadMoreFooterState: threadListPager.footerState
         )
     }
 

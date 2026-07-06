@@ -188,7 +188,7 @@ extension GaryxMobileModel {
                 scheduleRecoveryIfSelected: false
             )
             if !threadRunActive {
-                await refreshThreads()
+                await refreshThreads(source: .userAction)
             }
         } catch {
             guard selectedThread?.id == threadId,
@@ -273,7 +273,7 @@ extension GaryxMobileModel {
                 scheduleRecoveryIfSelected: false
             )
             if !threadRunActive {
-                await refreshThreads()
+                await refreshThreads(source: .userAction)
             }
         } catch {
             guard selectedThread?.id == threadId else { return }

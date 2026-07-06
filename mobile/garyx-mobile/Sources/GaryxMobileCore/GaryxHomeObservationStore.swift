@@ -13,6 +13,7 @@ public final class GaryxHomeObservationStore {
     public private(set) var lastError: String?
     public private(set) var isLoadingMoreThreads: Bool
     public private(set) var hasMoreThreadSummaries: Bool
+    public private(set) var loadMoreFooterState: GaryxHomeLoadMoreFooterState
 
     public init(
         isGatewayConfigured: Bool = false,
@@ -21,7 +22,8 @@ public final class GaryxHomeObservationStore {
         showsSettings: Bool = false,
         lastError: String? = nil,
         isLoadingMoreThreads: Bool = false,
-        hasMoreThreadSummaries: Bool = false
+        hasMoreThreadSummaries: Bool = false,
+        loadMoreFooterState: GaryxHomeLoadMoreFooterState = .hidden
     ) {
         self.isGatewayConfigured = isGatewayConfigured
         self.connectionState = connectionState
@@ -30,6 +32,7 @@ public final class GaryxHomeObservationStore {
         self.lastError = lastError
         self.isLoadingMoreThreads = isLoadingMoreThreads
         self.hasMoreThreadSummaries = hasMoreThreadSummaries
+        self.loadMoreFooterState = loadMoreFooterState
     }
 
     @discardableResult
@@ -46,11 +49,13 @@ public final class GaryxHomeObservationStore {
     @discardableResult
     public func applyPagination(
         isLoadingMoreThreads: Bool,
-        hasMoreThreadSummaries: Bool
+        hasMoreThreadSummaries: Bool,
+        loadMoreFooterState: GaryxHomeLoadMoreFooterState
     ) -> Bool {
         var changed = false
         changed = set(\.isLoadingMoreThreads, to: isLoadingMoreThreads) || changed
         changed = set(\.hasMoreThreadSummaries, to: hasMoreThreadSummaries) || changed
+        changed = set(\.loadMoreFooterState, to: loadMoreFooterState) || changed
         return changed
     }
 

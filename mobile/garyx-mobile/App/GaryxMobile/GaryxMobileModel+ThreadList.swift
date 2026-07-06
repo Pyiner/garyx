@@ -4,18 +4,25 @@ import Foundation
 // projection, workspace/bot thread merging, completed-thread history
 // hydration, and the background committed-run reconcile loop.
 extension GaryxMobileModel {
-    func refreshThreads(silent: Bool = false) async {
+    func refreshThreads(source: GaryxThreadListRefreshSource) async {
         guard hasGatewaySettings else { return }
+        // Concurrent refresh entry points (pull-to-refresh, the 10s loop,
+        // the reconcile loop, action refreshes) coalesce into the ticket
+        // holder; refreshes never truncate loaded pages (TASK-1802 R2/R9).
+        guard let ticket = threadListPager.requestRefresh() else { return }
         let runtimeGeneration = gatewayRuntimeGeneration
         let previousThreadSummaries = Self.mergedThreadSummaries(threads + [selectedThread].compactMap { $0 })
         let previouslyRemoteBusyThreadIds = remoteBusyThreadIds
-        if !silent {
+        let showsSkeleton = GaryxThreadListRefreshPolicy.showsSkeleton(
+            listIsEmpty: pendingThreadArchives.visibleThreadIds(recentThreadIds).isEmpty
+        )
+        if showsSkeleton, !isLoadingThreads {
             isLoadingThreads = true
         }
         let transactionId = homeProjectionGateway.beginTransaction(label: "refreshThreads")
         defer { homeProjectionGateway.endTransaction(transactionId) }
         defer {
-            if !silent, runtimeGeneration == gatewayRuntimeGeneration {
+            if isLoadingThreads, runtimeGeneration == gatewayRuntimeGeneration {
                 isLoadingThreads = false
             }
         }
@@ -24,10 +31,21 @@ extension GaryxMobileModel {
             async let threadsPage = gatewayClient.listRecentThreads(limit: Self.threadListPageLimit)
             async let threadPinsPage = gatewayClient.listThreadPins()
             let (page, pinsPage) = try await (threadsPage, threadPinsPage)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRuntimeGeneration else {
+                threadListPager.failRefresh(ticket)
+                return
+            }
+            // nil application = stale ticket (pager was reset mid-flight):
+            // the page belongs to the previous gateway and must be dropped.
+            guard let application = threadListPager.completeRefresh(
+                ticket,
+                pageOffset: page.offset,
+                pageCount: page.count,
+                hasMore: page.hasMore
+            ) else { return }
             let visiblePinnedThreadIds = pendingThreadArchives.visibleThreadIds(pinsPage.threadIds)
             applyPinnedThreadIds(visiblePinnedThreadIds)
-            applyRecentThreadsPage(page, preservesLoadedPages: silent)
+            applyRecentThreadsHeadPage(page, application: application)
             var nextThreads = pendingThreadArchives.visibleThreads(page.threads)
             let selectionIdForThisRefresh = selectedThread?.id
             let requiredThreadIds = normalizedThreadIds(visiblePinnedThreadIds + [selectionIdForThisRefresh])
@@ -37,7 +55,9 @@ extension GaryxMobileModel {
                 existingThreadIds: Set(nextThreads.map(\.id))
             )
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            let existingThreads = silent ? pendingThreadArchives.visibleThreads(threads) : []
+            // Loaded tail summaries always survive a head refresh; which
+            // rows are visible is recentThreadIds' concern.
+            let existingThreads = pendingThreadArchives.visibleThreads(threads)
             let previousRuntimeByThreadId = Dictionary(
                 uniqueKeysWithValues: previousThreadSummaries.compactMap { thread -> (String, GaryxThreadRuntimeSummary)? in
                     guard let runtime = thread.threadRuntime else { return nil }
@@ -80,8 +100,18 @@ extension GaryxMobileModel {
                 }
             }
         } catch {
+            threadListPager.failRefresh(ticket)
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            presentThreadListRefreshFailure(source: source, error: error)
+        }
+    }
+
+    private func presentThreadListRefreshFailure(source: GaryxThreadListRefreshSource, error: Error) {
+        switch GaryxThreadListRefreshPolicy.failurePresentation(source: source) {
+        case .toast:
             lastError = displayMessage(for: error)
+        case .transientStatus:
+            gatewaySettingsStatus = "Waiting to sync with gateway"
         }
     }
 
@@ -107,30 +137,26 @@ extension GaryxMobileModel {
 
     private func refreshHomeThreadsRunStateIfConnected() async {
         guard hasGatewaySettings, case .ready = connectionState else { return }
-        await refreshThreads(silent: true)
+        await refreshThreads(source: .backgroundLoop)
     }
 
-    func applyRecentThreadsPage(_ page: GaryxRecentThreadsPage, preservesLoadedPages: Bool) {
+    func applyRecentThreadsHeadPage(
+        _ page: GaryxRecentThreadsPage,
+        application: GaryxThreadListRefreshApplication
+    ) {
         let pageIds = pendingThreadArchives.visibleThreads(page.threads).map(\.id)
-        let returnedEnd = page.offset + page.count
-        let hasLoadedBeyondHead = preservesLoadedPages
-            && (nextThreadListOffset > returnedEnd || recentThreadIds.count > pageIds.count)
-
-        if hasLoadedBeyondHead {
-            let pageIdSet = Set(pageIds)
-            let existingTail = pendingThreadArchives.visibleThreadIds(
-                recentThreadIds.filter { !pageIdSet.contains($0) }
+        let merged: [String]
+        switch application {
+        case .replaceHead:
+            merged = pageIds
+        case .mergeBeyondHead:
+            merged = GaryxThreadListPageMerge.mergeHead(
+                pageIds: pageIds,
+                existingIds: pendingThreadArchives.visibleThreadIds(recentThreadIds)
             )
-            let merged = pageIds + existingTail
-            if recentThreadIds != merged {
-                recentThreadIds = merged
-            }
-            return
         }
-
-        updateThreadListPagination(from: page)
-        if recentThreadIds != pageIds {
-            recentThreadIds = pageIds
+        if recentThreadIds != merged {
+            recentThreadIds = merged
         }
     }
 
@@ -203,52 +229,50 @@ extension GaryxMobileModel {
         return changed
     }
 
-    func loadMoreThreads() async {
+    func loadMoreThreads(trigger: GaryxThreadListLoadMoreTrigger) async {
         guard hasGatewaySettings,
-              hasMoreThreadSummaries,
-              !isLoadingThreads,
-              !isLoadingMoreThreads else {
+              let ticket = threadListPager.requestLoadMore(trigger: trigger) else {
+            // Rejected triggers are free: nothing is consumed, and the
+            // sentinel/footer re-evaluate from pager state (TASK-1802 R4).
             return
         }
-        let runtimeGeneration = gatewayRuntimeGeneration
-        let offset = nextThreadListOffset
-        guard offset > 0 else { return }
-        isLoadingMoreThreads = true
-        defer {
-            if runtimeGeneration == gatewayRuntimeGeneration {
-                isLoadingMoreThreads = false
-            }
+        await performLoadMoreThreads(ticket: ticket)
+    }
+
+    /// The explicit tap on the failed footer row.
+    func retryLoadMoreThreads() async {
+        guard hasGatewaySettings,
+              let ticket = threadListPager.retryLoadMore() else {
+            return
         }
+        await performLoadMoreThreads(ticket: ticket)
+    }
+
+    private func performLoadMoreThreads(ticket: GaryxThreadListLoadMoreTicket) async {
         do {
-            let page = try await client().listRecentThreads(limit: Self.threadListPageLimit, offset: offset)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            updateThreadListPagination(from: page)
+            let page = try await client().listRecentThreads(limit: ticket.limit, offset: ticket.offset)
+            // false = stale ticket (pager reset mid-flight): drop the page.
+            guard threadListPager.completeLoadMore(
+                ticket,
+                pageOffset: page.offset,
+                pageCount: page.count,
+                hasMore: page.hasMore
+            ) else { return }
             let pageThreads = pendingThreadArchives.visibleThreads(page.threads)
-            var seenRecentIds = Set(recentThreadIds)
-            recentThreadIds += pageThreads.compactMap { thread in
-                seenRecentIds.insert(thread.id).inserted ? thread.id : nil
+            let appended = GaryxThreadListPageMerge.appendPage(
+                pageIds: pageThreads.map(\.id),
+                existingIds: recentThreadIds
+            )
+            if recentThreadIds != appended {
+                recentThreadIds = appended
             }
             threads = Self.mergedThreadSummaries(threads + pageThreads.map(summaryWithCommittedRunState))
             persistRecentThreadsWidgetSnapshot()
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            lastError = displayMessage(for: error)
-        }
-    }
-
-    func updateThreadListPagination(from page: GaryxThreadsPage) {
-        let returnedEnd = page.offset + page.count
-        nextThreadListOffset = returnedEnd
-        let hasMore = returnedEnd < page.total
-        if hasMoreThreadSummaries != hasMore {
-            hasMoreThreadSummaries = hasMore
-        }
-    }
-
-    func updateThreadListPagination(from page: GaryxRecentThreadsPage) {
-        nextThreadListOffset = page.offset + page.count
-        if hasMoreThreadSummaries != page.hasMore {
-            hasMoreThreadSummaries = page.hasMore
+            // No global toast: the footer's failed state is the feedback,
+            // and the pager's failed gate blocks automatic re-fires
+            // (TASK-1802 R5).
+            threadListPager.failLoadMore(ticket)
         }
     }
 
@@ -406,7 +430,7 @@ extension GaryxMobileModel {
             candidateThreadIds: backgroundCommittedRunCandidateThreadIds()
         )
         if decision.refreshesThreads {
-            await refreshThreads(silent: true)
+            await refreshThreads(source: .backgroundLoop)
         }
         guard decision.hydratesCandidateThreads else { return }
 
@@ -424,7 +448,7 @@ extension GaryxMobileModel {
         }
         guard runtimeGeneration == gatewayRuntimeGeneration else { return }
         if observedCompletion {
-            await refreshThreads(silent: true)
+            await refreshThreads(source: .backgroundLoop)
         }
     }
 

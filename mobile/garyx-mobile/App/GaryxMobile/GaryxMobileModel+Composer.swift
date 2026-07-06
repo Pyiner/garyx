@@ -519,7 +519,7 @@ extension GaryxMobileModel {
         runTracker.interruptConfirmed(threadId: threadId)
         clearActiveRun(threadId: threadId)
         markStreamingAssistantComplete(for: threadId, removeEmpty: true)
-        await refreshThreads()
+        await refreshThreads(source: .userAction)
         if selectedThread?.id == threadId {
             await loadSelectedThreadHistory()
         }

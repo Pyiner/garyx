@@ -121,9 +121,7 @@ extension GaryxMobileModel {
     }
 
     func resetThreadListPagination() {
-        isLoadingMoreThreads = false
-        hasMoreThreadSummaries = false
-        nextThreadListOffset = 0
+        threadListPager.reset()
     }
 
     func syncVisibleMessages(for threadId: String) {

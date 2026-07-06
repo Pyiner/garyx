@@ -990,7 +990,7 @@ struct GaryxAutomationThreadPickerSheet: View {
     private func refreshThreadOptions() async {
         guard !isRefreshing else { return }
         isRefreshing = true
-        await model.refreshThreads(silent: true)
+        await model.refreshThreads(source: .userAction)
         isRefreshing = false
     }
 }

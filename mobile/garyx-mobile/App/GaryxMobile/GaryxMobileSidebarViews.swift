@@ -17,9 +17,9 @@ struct GaryxRootNavigationView: View, Equatable {
     let onOpenDrawer: () -> Void
     let applyRootNavigationPath: ([GaryxMobileRootRoute]) -> Void
     let onRefreshAll: () async -> Void
-    let onRefreshSidebarThreads: (Bool) async -> Void
-    let canRefreshSidebarThreads: () -> Bool
-    let onLoadMoreThreads: () async -> Void
+    let onRefreshSidebarThreads: () async -> Void
+    let onLoadMoreThreads: (GaryxThreadListLoadMoreTrigger) async -> Void
+    let onRetryLoadMoreThreads: () async -> Void
     let onStartNewChat: () -> Void
     let onOpenThread: (GaryxThreadSummary) -> Void
     let onTogglePinnedThread: (String) -> Void
@@ -44,8 +44,8 @@ struct GaryxRootNavigationView: View, Equatable {
                 onOpenDrawer: onOpenDrawer,
                 onRefreshAll: onRefreshAll,
                 onRefreshSidebarThreads: onRefreshSidebarThreads,
-                canRefreshSidebarThreads: canRefreshSidebarThreads,
                 onLoadMoreThreads: onLoadMoreThreads,
+                onRetryLoadMoreThreads: onRetryLoadMoreThreads,
                 onStartNewChat: onStartNewChat,
                 onOpenThread: onOpenThread,
                 onTogglePinnedThread: onTogglePinnedThread,
@@ -161,9 +161,9 @@ struct GaryxHomeThreadListView: View, Equatable {
     let isSidebarDragActive: Bool
     let onOpenDrawer: () -> Void
     let onRefreshAll: () async -> Void
-    let onRefreshSidebarThreads: (Bool) async -> Void
-    let canRefreshSidebarThreads: () -> Bool
-    let onLoadMoreThreads: () async -> Void
+    let onRefreshSidebarThreads: () async -> Void
+    let onLoadMoreThreads: (GaryxThreadListLoadMoreTrigger) async -> Void
+    let onRetryLoadMoreThreads: () async -> Void
     let onStartNewChat: () -> Void
     let onOpenThread: (GaryxThreadSummary) -> Void
     let onTogglePinnedThread: (String) -> Void
@@ -268,6 +268,12 @@ struct GaryxHomeThreadListView: View, Equatable {
         case .empty:
             GaryxSidebarEmptyRow(title: "No recent threads")
         case .none:
+            // Near-tail prefetch: the row K places from the end starts the
+            // next page before the user reaches the bottom. The trigger is
+            // gated by the pager, so repeat appearances are free.
+            let prefetchTriggerRowId = GaryxThreadListPageMerge.prefetchTriggerRowId(
+                recentIds: sections.recent.map(\.id)
+            )
             ForEach(sections.recent) { row in
                 GaryxHomeThreadButton(
                     row: row,
@@ -277,6 +283,11 @@ struct GaryxHomeThreadListView: View, Equatable {
                     onArchiveThread: onArchiveThread
                 )
                 .equatable()
+                .onAppear {
+                    if row.id == prefetchTriggerRowId {
+                        Task { await onLoadMoreThreads(.nearTail) }
+                    }
+                }
             }
         }
 
@@ -284,6 +295,7 @@ struct GaryxHomeThreadListView: View, Equatable {
 
         GaryxSidebarThreadAutoLoadFooter()
             .environment(\.garyxLoadMoreThreads, onLoadMoreThreads)
+            .environment(\.garyxRetryLoadMoreThreads, onRetryLoadMoreThreads)
     }
 
     private func refreshAll() async {
@@ -296,18 +308,18 @@ struct GaryxHomeThreadListView: View, Equatable {
         // response handling does not contend with the opening transition.
         try? await Task.sleep(nanoseconds: 300_000_000)
         guard !Task.isCancelled, shouldRefreshSidebarThreads else { return }
-        await refreshSidebarThreads(silent: true)
+        await refreshSidebarThreads()
         while !Task.isCancelled {
             try? await Task.sleep(nanoseconds: silentRefreshIntervalNanos)
             guard !Task.isCancelled, shouldRefreshSidebarThreads else { return }
-            await refreshSidebarThreads(silent: true)
+            await refreshSidebarThreads()
         }
     }
 
-    private func refreshSidebarThreads(silent: Bool = false) async {
+    private func refreshSidebarThreads() async {
         guard shouldRefreshSidebarThreads else { return }
-        guard canRefreshSidebarThreads() else { return }
-        await onRefreshSidebarThreads(silent)
+        // Concurrent refreshes coalesce inside the pager; no extra gate.
+        await onRefreshSidebarThreads()
     }
 
     private var shouldRefreshSidebarThreads: Bool {
@@ -766,32 +778,61 @@ private struct GaryxSidebarEmptyRow: View {
     }
 }
 
+/// Auto-load footer rendered from the pager's projected state. The row
+/// keeps a constant 44pt height across idle/loading/failed so page
+/// completions never shift bottom content; only exhaustion removes it.
 private struct GaryxSidebarThreadAutoLoadFooter: View {
     @Environment(GaryxHomeObservationStore.self) private var homeObservationStore
     @Environment(\.garyxLoadMoreThreads) private var loadMoreThreads
+    @Environment(\.garyxRetryLoadMoreThreads) private var retryLoadMoreThreads
 
     var body: some View {
-        Group {
-            if homeObservationStore.isLoadingMoreThreads {
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .scaleEffect(0.68)
-                    Text("Loading more")
-                        .font(GaryxFont.caption(weight: .medium))
-                }
-                .foregroundStyle(.tertiary)
-                .frame(maxWidth: .infinity)
-                .frame(minHeight: 44)
-            } else if homeObservationStore.hasMoreThreadSummaries {
-                Color.clear
-                    .frame(height: 1)
-                    .onAppear {
-                        Task { await loadMoreThreads() }
+        let state = homeObservationStore.loadMoreFooterState
+        if state != .hidden {
+            ZStack {
+                switch state {
+                case .idle:
+                    // Fallback trigger for short lists and fast flings; the
+                    // near-tail row prefetch usually fires first. Rejected
+                    // triggers cost nothing (pager-gated), and the row
+                    // re-arms on every state change because the branch
+                    // identity is keyed by `state`.
+                    Color.clear
+                        .onAppear {
+                            Task { await loadMoreThreads(.footer) }
+                        }
+                case .loading:
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .scaleEffect(0.68)
+                        Text("Loading more")
+                            .font(GaryxFont.caption(weight: .medium))
                     }
+                    .foregroundStyle(.tertiary)
+                case .failed:
+                    Button {
+                        Task { await retryLoadMoreThreads() }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 11, weight: .semibold))
+                            Text("Couldn't load more · Tap to retry")
+                                .font(GaryxFont.caption(weight: .medium))
+                        }
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                case .hidden:
+                    EmptyView()
+                }
             }
+            .frame(maxWidth: .infinity)
+            .frame(height: 44)
+            .padding(.horizontal, GaryxSidebarMetrics.rowOuterPadding)
+            .padding(.bottom, 10)
         }
-        .padding(.horizontal, GaryxSidebarMetrics.rowOuterPadding)
-        .padding(.bottom, 10)
     }
 }
 
