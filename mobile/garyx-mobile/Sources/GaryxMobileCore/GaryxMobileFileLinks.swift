@@ -195,9 +195,12 @@ public enum GaryxMobileFileLink {
                 continue
             }
             if part == ".." {
-                if !stack.isEmpty {
-                    stack.removeLast()
-                }
+                // Folding below the workspace root means the link escapes the
+                // workspace. The gateway rejects any `..` component, so treat
+                // the link as unresolvable instead of collapsing it onto a
+                // root-level file of the same name.
+                guard !stack.isEmpty else { return nil }
+                stack.removeLast()
                 continue
             }
             stack.append(part)

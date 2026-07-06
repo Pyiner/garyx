@@ -1015,54 +1015,28 @@ public final class GaryxGatewayClient {
     }
 
     private func send<Response: Decodable>(_ request: URLRequest, idempotent: Bool) async throws -> Response {
-        let maxAttempts = retryPolicy.maxAttempts
-        var attempt = 0
-        while true {
-            attempt += 1
-            do {
-                let (data, response) = try await session.data(for: request)
-                guard let http = response as? HTTPURLResponse else {
-                    throw GaryxGatewayError.invalidHTTPResponse
-                }
-                if (200..<300).contains(http.statusCode) {
-                    if data.isEmpty, Response.self == GaryxEmptyResponse.self {
-                        return GaryxEmptyResponse() as! Response
-                    }
-                    return try decoder.decode(Response.self, from: data)
-                }
-                let body = String(data: data, encoding: .utf8) ?? ""
-                let error = GaryxGatewayError.httpStatus(http.statusCode, body)
-                if attempt < maxAttempts,
-                   GaryxGatewayRetryClassifier.isRetryableStatus(http.statusCode, idempotent: idempotent) {
-                    try await sleepForRetry(after: error, attempt: attempt, response: http)
-                    continue
-                }
-                throw error
-            } catch let error as GaryxGatewayError {
-                throw error
-            } catch {
-                if GaryxGatewayRetryClassifier.isCancellation(error) {
-                    throw error
-                }
-                let shouldRetry: Bool
-                if GaryxGatewayRetryClassifier.isConnectionEstablishmentError(error) {
-                    shouldRetry = true
-                } else if idempotent, GaryxGatewayRetryClassifier.isAmbiguousNetworkError(error) {
-                    shouldRetry = true
-                } else {
-                    shouldRetry = false
-                }
-                if attempt < maxAttempts, shouldRetry {
-                    try await sleepForRetry(after: error, attempt: attempt, response: nil)
-                    continue
-                }
-                throw error
-            }
+        let data = try await sendRaw(request, idempotent: idempotent)
+        if data.isEmpty, Response.self == GaryxEmptyResponse.self {
+            return GaryxEmptyResponse() as! Response
         }
+        return try decoder.decode(Response.self, from: data)
     }
 
-
     private func sendText(_ request: URLRequest, idempotent: Bool) async throws -> String {
+        let data = try await sendRaw(request, idempotent: idempotent)
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw GaryxGatewayError.encodingFailed("The Garyx gateway returned non-UTF-8 text.")
+        }
+        return text
+    }
+
+    /// Shared request core for the JSON and text routes: executes the request
+    /// with the retry policy (status-code and transport-error classification,
+    /// Retry-After handling, cancellation propagation) and returns the raw
+    /// body of the first successful (2xx) response. Body decoding stays with
+    /// the callers — a 2xx response always terminates the retry loop, so
+    /// decode failures never re-enter it.
+    private func sendRaw(_ request: URLRequest, idempotent: Bool) async throws -> Data {
         let maxAttempts = retryPolicy.maxAttempts
         var attempt = 0
         while true {
@@ -1073,10 +1047,7 @@ public final class GaryxGatewayClient {
                     throw GaryxGatewayError.invalidHTTPResponse
                 }
                 if (200..<300).contains(http.statusCode) {
-                    guard let text = String(data: data, encoding: .utf8) else {
-                        throw GaryxGatewayError.encodingFailed("The Garyx gateway returned non-UTF-8 text.")
-                    }
-                    return text
+                    return data
                 }
                 let body = String(data: data, encoding: .utf8) ?? ""
                 let error = GaryxGatewayError.httpStatus(http.statusCode, body)
