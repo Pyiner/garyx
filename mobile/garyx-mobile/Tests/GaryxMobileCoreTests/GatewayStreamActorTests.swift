@@ -395,6 +395,38 @@ final class GatewayStreamActorTests: XCTestCase {
         let data = try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
         return String(data: data, encoding: .utf8)!
     }
+    func testWindowedReplayFrameResetsCursorOnResumeConnection() throws {
+        var processor = GatewayStreamFrameProcessor()
+        processor.resetConnection(afterSeq: 12, replayScope: .resume)
+
+        let payload = """
+        {"type":"thread_render_frame","thread_id":"thread::w","replay":"windowed","events":[        {"type":"committed_message","seq":4801,"message":{"role":"assistant","text":"win head"}},        {"type":"committed_message","seq":4802,"message":{"role":"assistant","text":"win tail"}}        ],"render_state":{"based_on_seq":4802,"rows":[],"window":{"floor_seq":4801,"has_more_above":true}}}
+        """
+        let result = processor.processPayload(payload, threadId: "thread::w")
+
+        XCTAssertNil(result.reconnect, "windowed frame must not trigger a gap reconnect")
+        let applied = result.actions.compactMap { action -> [GaryxTranscriptMessage]? in
+            if case .applyCommittedMessages(let messages) = action { return messages }
+            return nil
+        }.flatMap { $0 }
+        XCTAssertEqual(applied.count, 2, "window records must be applied")
+        XCTAssertEqual(processor.connectionLastSeq, 4802)
+
+        // An UNMARKED non-contiguous frame on the same connection still trips
+        // the contiguity guard.
+        var strict = GatewayStreamFrameProcessor()
+        strict.resetConnection(afterSeq: 12, replayScope: .resume)
+        let unmarked = """
+        {"type":"thread_render_frame","thread_id":"thread::w","events":[        {"type":"committed_message","seq":4801,"message":{"role":"assistant","text":"gap"}}        ],"render_state":{"based_on_seq":4801,"rows":[]}}
+        """
+        let gapResult = strict.processPayload(unmarked, threadId: "thread::w")
+        if case .gap = gapResult.reconnect {
+            // expected
+        } else {
+            XCTFail("unmarked non-contiguous frame must gap-reconnect, got \(String(describing: gapResult.reconnect))")
+        }
+    }
+
 }
 
 private struct GatewayStreamTestConnection: Sendable {

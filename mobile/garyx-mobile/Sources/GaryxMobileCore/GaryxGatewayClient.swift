@@ -976,6 +976,7 @@ public final class GaryxGatewayClient {
     ) throws -> URLRequest {
         var queryItems = [
             URLQueryItem(name: "after_seq", value: String(max(afterSeq, 0))),
+            URLQueryItem(name: "windowed_resume", value: "1"),
         ]
         if let replayScope {
             queryItems.append(URLQueryItem(name: "replay_scope", value: replayScope.rawValue))

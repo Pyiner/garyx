@@ -512,7 +512,7 @@ test("streamThreadEvents connects to per-thread stream with resume cursor", asyn
 
     assert.equal(
       urls[0],
-      "http://127.0.0.1:31337/api/threads/thread%3A%3Aper-thread/stream?after_seq=4",
+      "http://127.0.0.1:31337/api/threads/thread%3A%3Aper-thread/stream?after_seq=4&windowed_resume=1",
     );
     assert.equal(lastEventIds[0], "4");
     assert.equal(events.length, 1);
@@ -522,6 +522,74 @@ test("streamThreadEvents connects to per-thread stream with resume cursor", asyn
     assert.equal(events[0].events[0].message.id, "thread::per-thread:4");
     assert.equal(events[0].renderState.based_on_seq, 5);
     assert.deepEqual(committedSeqs, [5]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("streamThreadEvents accepts a windowed replay frame and keeps the marker", async () => {
+  // Server-degraded stale resume: the frame is marked replay:"windowed"
+  // and its first event (the window floor) is deliberately NOT contiguous
+  // with our cursor. The marker authorizes the discontinuity.
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    const payload = JSON.parse(
+      renderFramePayload(
+        "thread::windowed",
+        [
+          committedEvent("thread::windowed", 4801, "window head"),
+          committedEvent("thread::windowed", 4802, "window tail"),
+        ],
+        4802,
+      ),
+    );
+    payload.replay = "windowed";
+    payload.render_state.window = { floor_seq: 4801, has_more_above: true };
+    return sseResponse(`id: 4802\ndata: ${JSON.stringify(payload)}\n\n`);
+  };
+
+  try {
+    const events = [];
+    await streamThreadEvents(
+      { gatewayUrl: "http://127.0.0.1:31337", gatewayAuthToken: "" },
+      "thread::windowed",
+      (event) => events.push(event),
+      undefined,
+      { afterSeq: 12 },
+    );
+    assert.equal(events.length, 1);
+    assert.equal(events[0].type, "thread_render_frame");
+    assert.equal(events[0].replay, "windowed");
+    assert.equal(events[0].events.length, 2);
+    assert.equal(events[0].events[0].seq, 4801);
+    assert.equal(events[0].renderState.window.floor_seq, 4801);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("streamThreadEvents still gap-reconnects on unmarked non-contiguous frames", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    const payload = renderFramePayload(
+      "thread::gap",
+      [committedEvent("thread::gap", 4801, "far ahead")],
+      4801,
+    );
+    return sseResponse(`id: 4801\ndata: ${payload}\n\n`);
+  };
+
+  try {
+    await assert.rejects(
+      streamThreadEvents(
+        { gatewayUrl: "http://127.0.0.1:31337", gatewayAuthToken: "" },
+        "thread::gap",
+        () => {},
+        undefined,
+        { afterSeq: 12 },
+      ),
+      (error) => error instanceof ThreadStreamGapError,
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -139,6 +139,14 @@ public struct GatewayStreamFrameProcessor: Sendable {
             return GatewayStreamPayloadResult()
         }
         madeProgressOnConnection = true
+        if frame.replay == "windowed" {
+            // Server-degraded stale resume: the frame is a self-identifying
+            // window reset, so its first (floor) record is deliberately not
+            // contiguous with our cursor. Reset the connection cursor and
+            // accept the window; unmarked frames keep the contiguity guard.
+            connectionLastSeq = 0
+            allowsNonContiguousFirstSeq = true
+        }
 
         var actions: [GatewayStreamAction] = []
         var committedMessages: [GaryxTranscriptMessage] = []

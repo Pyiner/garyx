@@ -1560,3 +1560,65 @@ test("getThreadSnapshotTranscript tracks applies, committed folds, and clears (6
     "clear resets the transport snapshot",
   );
 });
+
+test("a windowed replay frame drops committed records below the window floor", () => {
+  // Server-degraded stale resume: the frame carries replay:"windowed" and
+  // a render_state.window.floor_seq; cached records below the floor are no
+  // longer contiguous with this connection and must be dropped, while the
+  // window records apply on top.
+  const mirror = new GatewayMirror();
+  const threadId = "thread::windowed-reset";
+  const staleEvents = [1, 2, 3].map((seq) => ({
+    type: "committed_message",
+    runId: "run-old",
+    threadId,
+    seq,
+    message: { role: "assistant", content: `old ${seq}`, text: `old ${seq}` },
+  }));
+  mirror.ingest({
+    type: "thread_render_frame",
+    threadId,
+    events: staleEvents,
+    renderState: {
+      based_on_seq: 3,
+      rows: [],
+      tailActivity: "none",
+      activeToolGroupId: null,
+      progress_locus: "none",
+      visibleMessageIds: [],
+      filtered_placeholders: [],
+    },
+  });
+  assert.equal(mirror.getThreadSnapshot(threadId).records.length, 3);
+
+  const windowEvents = [4801, 4802].map((seq) => ({
+    type: "committed_message",
+    runId: "run-window",
+    threadId,
+    seq,
+    message: { role: "assistant", content: `win ${seq}`, text: `win ${seq}` },
+  }));
+  mirror.ingest({
+    type: "thread_render_frame",
+    threadId,
+    events: windowEvents,
+    replay: "windowed",
+    renderState: {
+      based_on_seq: 4802,
+      rows: [],
+      tailActivity: "none",
+      activeToolGroupId: null,
+      progress_locus: "none",
+      visibleMessageIds: [],
+      filtered_placeholders: [],
+      window: { floor_seq: 4801, has_more_above: true },
+    },
+  });
+
+  const records = mirror.getThreadSnapshot(threadId).records;
+  assert.deepEqual(
+    records.map((record) => record.seq),
+    [4801, 4802],
+    "below-floor records must be dropped; window records applied",
+  );
+});

@@ -5,6 +5,10 @@ public struct GaryxThreadRenderFrame: Decodable, Equatable, Sendable {
     public var threadId: String
     public var events: [GaryxThreadRenderFrameEvent]
     public var renderState: GaryxRenderSnapshot
+    /// "windowed": the gateway degraded a stale opted-in resume to the
+    /// initial window; the frame's records start at the window floor and
+    /// the discontinuity is authorized by this marker.
+    public var replay: String?
 
     enum CodingKeys: String, CodingKey {
         case type
@@ -12,6 +16,7 @@ public struct GaryxThreadRenderFrame: Decodable, Equatable, Sendable {
         case threadIdSnake = "thread_id"
         case events
         case renderState = "render_state"
+        case replay
     }
 
     public init(from decoder: Decoder) throws {
@@ -20,6 +25,7 @@ public struct GaryxThreadRenderFrame: Decodable, Equatable, Sendable {
         threadId = try container.garyxDecodeFirstString(.threadIdSnake, .threadId) ?? ""
         events = try container.decodeIfPresent([GaryxThreadRenderFrameEvent].self, forKey: .events) ?? []
         renderState = try container.decode(GaryxRenderSnapshot.self, forKey: .renderState)
+        replay = try container.decodeIfPresent(String.self, forKey: .replay)
     }
 }
 

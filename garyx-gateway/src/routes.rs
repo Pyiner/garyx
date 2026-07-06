@@ -1829,6 +1829,10 @@ pub struct ThreadStreamParams {
     pub initial_user_turns: Option<usize>,
     #[serde(default)]
     pub render_floor: Option<u64>,
+    /// Capability opt-in: the client understands `replay:"windowed"`
+    /// frames, so a stale resume may be degraded to the initial window.
+    #[serde(default)]
+    pub windowed_resume: Option<u8>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -1843,7 +1847,16 @@ struct ThreadStreamReplayOptions {
     replay_scope: ThreadStreamReplayScope,
     initial_user_turns: Option<usize>,
     render_floor: u64,
+    windowed_resume: bool,
 }
+
+/// Serialized-replay byte budget for opted-in resume connections; over
+/// this, the resume degrades to the initial window (design:
+/// perf-thread-stream-replay-degrade.md).
+const THREAD_STREAM_RESUME_REPLAY_BYTE_BUDGET: usize = 1024 * 1024;
+/// User-turn window served for a degraded resume — same default the
+/// desktop and iOS cold-open planners use.
+const THREAD_STREAM_DEGRADED_RESUME_USER_TURNS: usize = 3;
 
 #[cfg(test)]
 impl ThreadStreamReplayOptions {
@@ -1852,6 +1865,7 @@ impl ThreadStreamReplayOptions {
             replay_scope: ThreadStreamReplayScope::Resume,
             initial_user_turns: None,
             render_floor,
+            windowed_resume: false,
         }
     }
 }
@@ -1879,6 +1893,7 @@ fn thread_stream_replay_options(
             replay_scope,
             initial_user_turns,
             render_floor: params.render_floor.unwrap_or(0),
+            windowed_resume: params.windowed_resume == Some(1),
         },
     )
 }
@@ -1991,6 +2006,7 @@ struct ThreadStreamReplayBuilder {
     event_payloads: Vec<Value>,
     max_seq: u64,
     sent_payloads: HashMap<u64, String>,
+    serialized_bytes: usize,
 }
 
 struct ThreadStreamEvent {
@@ -2050,14 +2066,30 @@ async fn build_thread_stream_replay(
         .first()
         .is_some_and(|record| record.seq > after_seq.saturating_add(1));
     if !tail_has_gap {
-        return thread_stream_replay_from_records(
-            state,
-            thread_id,
-            after_seq,
-            tail,
-            options.render_floor,
-        )
-        .await;
+        let mut replay = ThreadStreamReplayBuilder {
+            event_payloads: Vec::with_capacity(tail.len()),
+            max_seq: after_seq,
+            sent_payloads: HashMap::new(),
+            serialized_bytes: 0,
+        };
+        append_thread_stream_replay_records(&mut replay, thread_id, tail);
+        // Opted-in stale resume over the byte budget: abandon the span
+        // replay and serve the initial window instead (design:
+        // perf-thread-stream-replay-degrade.md). Clients that did not
+        // declare `windowed_resume=1` keep the verbatim replay.
+        if options.windowed_resume
+            && replay.serialized_bytes > THREAD_STREAM_RESUME_REPLAY_BYTE_BUDGET
+        {
+            return degraded_windowed_resume_replay(state, thread_id, after_seq).await;
+        }
+        return finalize_thread_stream_replay(state, thread_id, replay, options.render_floor, None)
+            .await;
+    }
+
+    if options.windowed_resume {
+        // The gap self-heal below would page in the ENTIRE span; an
+        // opted-in client gets the window instead of megabytes.
+        return degraded_windowed_resume_replay(state, thread_id, after_seq).await;
     }
 
     let mut cursor = after_seq;
@@ -2065,6 +2097,7 @@ async fn build_thread_stream_replay(
         event_payloads: Vec::new(),
         max_seq: after_seq,
         sent_payloads: HashMap::new(),
+        serialized_bytes: 0,
     };
     loop {
         let page = state
@@ -2084,7 +2117,48 @@ async fn build_thread_stream_replay(
         }
         cursor = replay.max_seq;
     }
-    finalize_thread_stream_replay(state, thread_id, replay, options.render_floor).await
+    finalize_thread_stream_replay(state, thread_id, replay, options.render_floor, None).await
+}
+
+/// Serve an opted-in stale resume as the initial window: same records a
+/// `replay_scope=initial` connection would get, marked
+/// `replay:"windowed"` so the client rebuilds from the window instead of
+/// appending.
+async fn degraded_windowed_resume_replay(
+    state: &Arc<AppState>,
+    thread_id: &str,
+    after_seq: u64,
+) -> ThreadStreamReplay {
+    let window = state
+        .threads
+        .history
+        .transcript_store()
+        .cold_open_user_turn_window(
+            thread_id,
+            THREAD_STREAM_DEGRADED_RESUME_USER_TURNS,
+            THREAD_TRANSCRIPT_REPLAY_CAP,
+        )
+        .await
+        .unwrap_or_else(|_| garyx_router::ThreadTranscriptWindow {
+            records: Vec::new(),
+            floor_seq: 0,
+            has_more_above: false,
+        });
+    let mut replay = ThreadStreamReplayBuilder {
+        event_payloads: Vec::with_capacity(window.records.len()),
+        max_seq: after_seq,
+        sent_payloads: HashMap::new(),
+        serialized_bytes: 0,
+    };
+    append_thread_stream_replay_records(&mut replay, thread_id, window.records);
+    finalize_thread_stream_replay(
+        state,
+        thread_id,
+        replay,
+        window.floor_seq,
+        Some("windowed"),
+    )
+    .await
 }
 
 async fn thread_stream_replay_from_records(
@@ -2098,9 +2172,10 @@ async fn thread_stream_replay_from_records(
         event_payloads: Vec::with_capacity(records.len()),
         max_seq: after_seq,
         sent_payloads: HashMap::new(),
+        serialized_bytes: 0,
     };
     append_thread_stream_replay_records(&mut replay, thread_id, records);
-    finalize_thread_stream_replay(state, thread_id, replay, render_floor).await
+    finalize_thread_stream_replay(state, thread_id, replay, render_floor, None).await
 }
 
 async fn finalize_thread_stream_replay(
@@ -2108,6 +2183,7 @@ async fn finalize_thread_stream_replay(
     thread_id: &str,
     replay: ThreadStreamReplayBuilder,
     render_floor: u64,
+    replay_kind: Option<&'static str>,
 ) -> ThreadStreamReplay {
     let mut events = Vec::new();
     let mut max_seq = replay.max_seq;
@@ -2118,13 +2194,19 @@ async fn finalize_thread_stream_replay(
             replay.max_seq,
             replay.event_payloads,
             render_floor,
+            replay_kind,
         )
         .await;
         events.push(event);
     } else {
-        let event =
-            thread_stream_snapshot_only_frame_event(state, thread_id, replay.max_seq, render_floor)
-                .await;
+        let event = thread_stream_snapshot_only_frame_event(
+            state,
+            thread_id,
+            replay.max_seq,
+            render_floor,
+            replay_kind,
+        )
+        .await;
         if let Ok(event) = &event {
             max_seq = event.id;
         }
@@ -2146,7 +2228,9 @@ fn append_thread_stream_replay_records(
     for record in records {
         replay.max_seq = replay.max_seq.max(record.seq);
         let payload = committed_thread_stream_replay_payload_value(thread_id, &record);
-        replay.sent_payloads.insert(record.seq, payload.to_string());
+        let serialized = payload.to_string();
+        replay.serialized_bytes += serialized.len();
+        replay.sent_payloads.insert(record.seq, serialized);
         replay.event_payloads.push(payload);
     }
 }
@@ -2197,7 +2281,7 @@ async fn committed_thread_stream_live_event(
     payload: Value,
     render_floor: u64,
 ) -> Result<ThreadStreamEvent, io::Error> {
-    thread_stream_frame_event(state, thread_id, seq, vec![payload], render_floor).await
+    thread_stream_frame_event(state, thread_id, seq, vec![payload], render_floor, None).await
 }
 
 async fn thread_stream_snapshot_only_frame_event(
@@ -2205,13 +2289,14 @@ async fn thread_stream_snapshot_only_frame_event(
     thread_id: &str,
     requested_seq: u64,
     render_floor: u64,
+    replay_kind: Option<&'static str>,
 ) -> Result<ThreadStreamEvent, io::Error> {
     let render_state =
         thread_render_snapshot_at_seq(state, thread_id, requested_seq, render_floor).await?;
     let id = render_state.based_on_seq;
     Ok(ThreadStreamEvent {
         id,
-        payload: thread_stream_frame_payload(thread_id, Vec::new(), &render_state),
+        payload: thread_stream_frame_payload(thread_id, Vec::new(), &render_state, replay_kind),
     })
 }
 
@@ -2221,6 +2306,7 @@ async fn thread_stream_frame_event(
     seq: u64,
     event_payloads: Vec<Value>,
     render_floor: u64,
+    replay_kind: Option<&'static str>,
 ) -> Result<ThreadStreamEvent, io::Error> {
     let render_state = thread_render_snapshot_at_seq(state, thread_id, seq, render_floor).await?;
     if render_state.based_on_seq != seq {
@@ -2230,7 +2316,7 @@ async fn thread_stream_frame_event(
     }
     Ok(ThreadStreamEvent {
         id: seq,
-        payload: thread_stream_frame_payload(thread_id, event_payloads, &render_state),
+        payload: thread_stream_frame_payload(thread_id, event_payloads, &render_state, replay_kind),
     })
 }
 
@@ -2255,14 +2341,18 @@ fn thread_stream_frame_payload(
     thread_id: &str,
     event_payloads: Vec<Value>,
     render_state: &RenderSnapshot,
+    replay_kind: Option<&'static str>,
 ) -> String {
-    json!({
+    let mut payload = json!({
         "type": "thread_render_frame",
         "thread_id": thread_id,
         "events": event_payloads,
         "render_state": render_state,
-    })
-    .to_string()
+    });
+    if let (Some(kind), Some(obj)) = (replay_kind, payload.as_object_mut()) {
+        obj.insert("replay".to_owned(), Value::String(kind.to_owned()));
+    }
+    payload.to_string()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

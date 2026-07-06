@@ -210,6 +210,26 @@ export class ThreadTranscriptCache {
    * seq carries the same record). Returns the newly applied events in input
    * order (empty when nothing changed).
    */
+  /**
+   * Windowed-resume reset: drop committed records below the window floor.
+   * They predate the server-served window and are no longer contiguous
+   * with the connection that delivered it. Returns true when anything
+   * was dropped.
+   */
+  dropCommittedBelow(floorSeq: number): boolean {
+    let dropped = false;
+    for (const seq of [...this.recordsBySeq.keys()]) {
+      if (seq < floorSeq) {
+        this.recordsBySeq.delete(seq);
+        dropped = true;
+      }
+    }
+    if (dropped) {
+      this.sortedCache = null;
+    }
+    return dropped;
+  }
+
   applyCommittedEvents(
     events: readonly CommittedMessageEvent[],
   ): CommittedMessageEvent[] {

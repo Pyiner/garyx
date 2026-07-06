@@ -283,6 +283,11 @@ function mapThreadRenderFrameEvent(
     return null;
   }
   const rawEvents = Array.isArray(payload.events) ? payload.events : [];
+  // A frame marked replay:"windowed" is a server-degraded stale resume:
+  // its records start at the window floor, deliberately NOT contiguous
+  // with our cursor. The marker (never seq arithmetic) authorizes the
+  // discontinuity; ordinary frames keep the per-event gap guard.
+  const windowedReplay = asString(payload.replay) === "windowed";
   let lastSeq = connectionLastSeq;
   const events: CommittedMessageEvent[] = [];
   for (const raw of rawEvents) {
@@ -290,21 +295,29 @@ function mapThreadRenderFrameEvent(
     if (!mapped || mapped.type !== "committed_message") {
       continue;
     }
-    const decision = decideStreamSeq({
-      incomingSeq: mapped.seq,
-      connectionLastSeq: lastSeq,
-    });
-    if (decision.type === "gap_reconnect") {
-      throw new ThreadStreamGapError(decision.resumeAfterSeq);
-    }
-    if (decision.type === "stale") {
-      continue;
+    if (!windowedReplay) {
+      const decision = decideStreamSeq({
+        incomingSeq: mapped.seq,
+        connectionLastSeq: lastSeq,
+      });
+      if (decision.type === "gap_reconnect") {
+        throw new ThreadStreamGapError(decision.resumeAfterSeq);
+      }
+      if (decision.type === "stale") {
+        continue;
+      }
     }
     events.push(mapped);
     lastSeq = Math.max(lastSeq, mapped.seq);
   }
   return {
-    event: { type: "thread_render_frame", threadId, events, renderState },
+    event: {
+      type: "thread_render_frame",
+      threadId,
+      events,
+      renderState,
+      ...(windowedReplay ? { replay: "windowed" as const } : {}),
+    },
     lastSeq,
   };
 }
@@ -328,7 +341,7 @@ export async function streamThreadEvents(
   const response = await gatewayFetch(
     buildUrl(
       settings,
-      `/api/threads/${encodeURIComponent(threadId)}/stream?after_seq=${afterSeq}`,
+      `/api/threads/${encodeURIComponent(threadId)}/stream?after_seq=${afterSeq}&windowed_resume=1`,
     ),
     {
       headers,

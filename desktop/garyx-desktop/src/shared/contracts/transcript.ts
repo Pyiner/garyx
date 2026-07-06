@@ -177,6 +177,11 @@ export interface RenderRateLimit {
   willAutoResend: boolean;
 }
 
+export interface RenderStateWindow {
+  floor_seq: number;
+  has_more_above: boolean;
+}
+
 export interface RenderState {
   based_on_seq: number;
   rows: RenderRow[];
@@ -186,6 +191,7 @@ export interface RenderState {
   visibleMessageIds: string[];
   filtered_placeholders: RenderFilteredPlaceholder[];
   rateLimit?: RenderRateLimit | null;
+  window?: RenderStateWindow | null;
 }
 
 export interface CommittedMessageEvent {
@@ -206,6 +212,13 @@ export type DesktopChatStreamEvent =
       threadId: string;
       events: CommittedMessageEvent[];
       renderState: RenderState;
+      /**
+       * "windowed": the gateway degraded a stale opted-in resume to the
+       * initial window; cached committed records below
+       * renderState.window.floor_seq are no longer contiguous with this
+       * connection and must be dropped, not appended to.
+       */
+      replay?: "windowed";
     }
   | {
       type: "error";

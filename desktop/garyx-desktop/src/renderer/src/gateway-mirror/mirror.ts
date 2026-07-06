@@ -913,7 +913,12 @@ export class GatewayMirror {
    */
   ingest(event: DesktopChatStreamEvent): void {
     if (event.type === "thread_render_frame") {
-      this.applyFrame(event.threadId, event.events, event.renderState);
+      this.applyFrame(
+        event.threadId,
+        event.events,
+        event.renderState,
+        event.replay === "windowed",
+      );
       return;
     }
     if (event.type === "committed_message") {
@@ -926,9 +931,19 @@ export class GatewayMirror {
     threadId: string,
     events: readonly CommittedMessageEvent[],
     renderState: RenderState | null,
+    windowedReplay = false,
   ): void {
     const entry = this.threadEntry(threadId);
     let changed = false;
+
+    if (windowedReplay) {
+      // Server-degraded stale resume: cached committed records below the
+      // window floor are no longer contiguous with this connection.
+      const floorSeq = renderState?.window?.floor_seq ?? 0;
+      if (floorSeq > 0 && entry.cache.dropCommittedBelow(floorSeq)) {
+        changed = true;
+      }
+    }
 
     const appliedEvents = entry.cache.applyCommittedEvents(events);
     if (appliedEvents.length > 0) {
