@@ -1161,7 +1161,7 @@ export function ThreadPage({
           <RateLimitBanner rateLimit={rateLimit} />
           </MessageScrollerContent>
           </MessageScrollerViewport>
-          <MessageScrollerButton behavior="smooth">
+          <MessageScrollerButton behavior="smooth" className="rounded-full shadow-sm">
             <ArrowDown aria-hidden size={16} strokeWidth={2} />
             <span className="sr-only">{t("Scroll to latest")}</span>
           </MessageScrollerButton>

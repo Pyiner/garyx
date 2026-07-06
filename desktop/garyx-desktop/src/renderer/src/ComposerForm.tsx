@@ -1170,7 +1170,7 @@ export function ComposerForm({
         type="file"
       />
       {composerBrowserAnnotations.length || composerImages.length || composerFiles.length ? (
-        <AttachmentGroup className="composer-attachments px-3 pt-1">
+        <AttachmentGroup className="composer-attachments px-3 pt-2">
           {composerBrowserAnnotations.map((annotation) => {
             const label = browserAnnotationChipLabel(annotation, t);
             const meta = browserAnnotationChipMeta(annotation);

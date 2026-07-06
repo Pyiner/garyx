@@ -67,13 +67,13 @@
 }
 
 /* Vertical (image) attachment chips: straddle the remove badge on the
-   thumbnail's top-right corner, iOS style. The media sits at the card's
-   8px padding with an 8px corner radius, so the visible corner is the
-   arc, not the box corner: with a 20px badge, a 0.5px inset puts the
-   badge center right on that border arc (badge half in, half out). */
+   card's top-right corner, iOS style — badge center ON the border line.
+   The card corner is a 12px arc centered 12px inside each edge, so the
+   45° point of the border sits ~3.5px inside the corner; with a 20px
+   badge that means a -6.5px offset (half the badge outside the card). */
 [data-slot="attachment"][data-orientation="vertical"] [data-slot="attachment-actions"] {
-  top: 0.5px;
-  right: 0.5px;
+  top: -6.5px;
+  right: -6.5px;
 }
 
 /* Attachment cards inside transcript bubbles. */
