@@ -721,6 +721,32 @@ function remoteErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error || 'Unknown error');
 }
 
+/**
+ * Failed-slice fallback: prefer the last successfully hydrated in-memory
+ * entities over the persisted disk snapshot. The disk snapshot is only
+ * written on UI mutations, so it can be stale or empty — falling back to
+ * it used to visibly regress (or blank) the UI on a transient network
+ * failure against a remote gateway. The in-memory snapshot is the newest
+ * state the user has already seen; a failed refresh must never downgrade
+ * it. Scoped to the current gateway so a real gateway switch still drops
+ * the previous gateway's entities.
+ */
+function lastGoodSlice<T>(
+  localState: DesktopState,
+  pick: (state: DesktopState) => T,
+): T | null {
+  const hydrated = latestHydratedDesktopState;
+  if (!hydrated) {
+    return null;
+  }
+  const hydratedGateway = (hydrated.settings.gatewayUrl || '').trim();
+  const currentGateway = (localState.settings.gatewayUrl || '').trim();
+  if (hydratedGateway !== currentGateway) {
+    return null;
+  }
+  return pick(hydrated);
+}
+
 async function fetchRemoteSlice<T>(
   source: RemoteFetchSource,
   label: string,
@@ -790,11 +816,31 @@ async function mergeRemoteDesktopState(
 ): Promise<DesktopState> {
   const [threadsResult, pinsResult, endpointsResult, workspacesResult, configuredBotsResult, botConsolesResult, automationsResult] =
     await Promise.all([
-      fetchRemoteSlice('threads', 'threads', localState.threads, () =>
-        fetchThreads(localState.settings, options?.threadLimit ? { limit: options.threadLimit } : undefined)),
-      fetchRemoteSlice('thread_pins', 'thread pins', localState.pinnedThreadIds, () => fetchThreadPins(localState.settings)),
-      fetchRemoteSlice('endpoints', 'endpoints', localState.endpoints, () => fetchChannelEndpoints(localState.settings)),
-      fetchRemoteSlice('workspaces', 'workspaces', [], () => fetchWorkspaces(localState.settings)),
+      fetchRemoteSlice(
+        'threads',
+        'threads',
+        lastGoodSlice(localState, (state) => state.threads) ?? localState.threads,
+        () =>
+          fetchThreads(localState.settings, options?.threadLimit ? { limit: options.threadLimit } : undefined),
+      ),
+      fetchRemoteSlice(
+        'thread_pins',
+        'thread pins',
+        lastGoodSlice(localState, (state) => state.pinnedThreadIds) ?? localState.pinnedThreadIds,
+        () => fetchThreadPins(localState.settings),
+      ),
+      fetchRemoteSlice(
+        'endpoints',
+        'endpoints',
+        lastGoodSlice(localState, (state) => state.endpoints) ?? localState.endpoints,
+        () => fetchChannelEndpoints(localState.settings),
+      ),
+      fetchRemoteSlice(
+        'workspaces',
+        'workspaces',
+        lastGoodSlice(localState, (state) => state.workspaces) ?? [],
+        () => fetchWorkspaces(localState.settings),
+      ),
       fetchRemoteSlice(
         'configured_bots',
         'configured bots',
@@ -804,14 +850,19 @@ async function mergeRemoteDesktopState(
       fetchRemoteSlice(
         'bot_consoles',
         'bot consoles',
-        localState.botConsoles,
+        lastGoodSlice(localState, (state) => state.botConsoles) ?? localState.botConsoles,
         () => fetchBotConsoles(localState.settings),
         {
           cacheTtlMs: BOT_CONSOLES_REMOTE_CACHE_TTL_MS,
           cacheScope: localState.settings.gatewayUrl || '',
         },
       ),
-      fetchRemoteSlice('automations', 'automations', localState.automations, () => fetchAutomations(localState.settings)),
+      fetchRemoteSlice(
+        'automations',
+        'automations',
+        lastGoodSlice(localState, (state) => state.automations) ?? localState.automations,
+        () => fetchAutomations(localState.settings),
+      ),
     ]);
   const remoteErrors = [
     threadsResult.error,
@@ -876,7 +927,7 @@ async function mergeRemoteDesktopState(
         defaultOpenEndpoint: bot.default_open_endpoint ? mapChannelEndpoint(bot.default_open_endpoint) : null,
         defaultOpenThreadId: bot.default_open_thread_id?.trim() || null,
       }))
-    : localState.configuredBots;
+    : lastGoodSlice(localState, (state) => state.configuredBots) ?? localState.configuredBots;
   const botConsoles: DesktopBotConsoleSummary[] = remoteBotConsoles.map((bot) => ({
     ...bot,
     workspaceDir: bot.workspaceDir?.trim() || null,
