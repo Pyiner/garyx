@@ -35,14 +35,15 @@ extension GaryxMobileModel {
                 threadListPager.failRefresh(ticket)
                 return
             }
-            var nextThreads = pendingThreadArchives.visibleThreads(page.threads)
+            var fetchedThreads = pendingThreadArchives.visibleThreads(page.threads)
             let selectionIdForThisRefresh = selectedThread?.id
-            let visiblePinnedThreadIds = pendingThreadArchives.visibleThreadIds(pinsPage.threadIds)
-            let requiredThreadIds = normalizedThreadIds(visiblePinnedThreadIds + [selectionIdForThisRefresh])
-            nextThreads += await fetchMissingThreadSummaries(
+            let requiredThreadIds = normalizedThreadIds(
+                pendingThreadArchives.visibleThreadIds(pinsPage.threadIds) + [selectionIdForThisRefresh]
+            )
+            fetchedThreads += await fetchMissingThreadSummaries(
                 using: gatewayClient,
                 requiredThreadIds: requiredThreadIds,
-                existingThreadIds: Set(nextThreads.map(\.id))
+                existingThreadIds: Set(fetchedThreads.map(\.id))
             )
             guard runtimeGeneration == gatewayRuntimeGeneration else {
                 // Release the refresh gate: this transaction is abandoned
@@ -55,7 +56,6 @@ extension GaryxMobileModel {
             // App-layer refresh — a second refresh cannot interleave between
             // this page landing and its state writes and then be overwritten
             // by this (older) page when we resume (review #TASK-1804).
-            // Everything below is synchronous on the MainActor.
             //
             // nil application = stale ticket (pager was reset mid-flight):
             // the page belongs to the previous gateway and must be dropped.
@@ -65,56 +65,85 @@ extension GaryxMobileModel {
                 pageCount: page.count,
                 hasMore: page.hasMore
             ) else { return }
-            applyPinnedThreadIds(visiblePinnedThreadIds)
-            applyRecentThreadsHeadPage(page, application: application)
-            // Loaded tail summaries always survive a head refresh; which
-            // rows are visible is recentThreadIds' concern.
-            let existingThreads = pendingThreadArchives.visibleThreads(threads)
-            let previousRuntimeByThreadId = Dictionary(
-                uniqueKeysWithValues: previousThreadSummaries.compactMap { thread -> (String, GaryxThreadRuntimeSummary)? in
-                    guard let runtime = thread.threadRuntime else { return nil }
-                    return (thread.id, runtime)
-                }
-            )
-            let refreshedGatewayThreads = Self.mergedThreadSummaries(nextThreads).map { thread in
-                var next = thread
-                if next.threadRuntime == nil {
-                    next.threadRuntime = previousRuntimeByThreadId[next.id]
-                }
-                return next
-            }
-            let refreshedThreads = refreshedGatewayThreads.map(summaryWithCommittedRunState)
-            let mergedThreads = Self.mergedThreadSummaries(existingThreads + refreshedThreads)
-            if threads != mergedThreads {
-                threads = mergedThreads
-            }
-            persistRecentThreadsWidgetSnapshot()
-            hydrateCompletedRecentThreadHistories(
-                previousThreads: previousThreadSummaries,
+            commitRefreshedRecentThreadsPage(
+                page: page,
+                pinsPageThreadIds: pinsPage.threadIds,
+                application: application,
+                fetchedThreads: fetchedThreads,
+                previousThreadSummaries: previousThreadSummaries,
                 previouslyRemoteBusyThreadIds: previouslyRemoteBusyThreadIds,
-                refreshedThreads: refreshedGatewayThreads,
+                selectionIdForThisRefresh: selectionIdForThisRefresh,
                 runtimeGeneration: runtimeGeneration
             )
-            let currentSelectedId = selectedThread?.id
-            if let selectionIdForThisRefresh,
-               currentSelectedId == selectionIdForThisRefresh,
-               let updatedSelection = threads.first(where: { $0.id == selectionIdForThisRefresh }) {
-                var nextSelection = updatedSelection
-                if nextSelection.threadRuntime == nil {
-                    nextSelection.threadRuntime = selectedThread?.threadRuntime
-                }
-                nextSelection = summaryWithCommittedRunState(nextSelection)
-                if selectedThread != nextSelection {
-                    selectedThread = nextSelection
-                }
-                if draftThreadTitle != nextSelection.title {
-                    draftThreadTitle = nextSelection.title
-                }
-            }
         } catch {
             threadListPager.failRefresh(ticket)
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             presentThreadListRefreshFailure(source: source, error: error)
+        }
+    }
+
+    /// Synchronous commit of a completed head-refresh transaction. Runs
+    /// entirely on the MainActor after the refresh's last await, so all
+    /// inputs captured before the backfill are re-filtered here against the
+    /// commit-point `pendingThreadArchives`: a thread archived while the
+    /// backfill was suspended must not be resurrected by pre-await
+    /// snapshots (review #TASK-1804 round 2).
+    func commitRefreshedRecentThreadsPage(
+        page: GaryxRecentThreadsPage,
+        pinsPageThreadIds: [String],
+        application: GaryxThreadListRefreshApplication,
+        fetchedThreads: [GaryxThreadSummary],
+        previousThreadSummaries: [GaryxThreadSummary],
+        previouslyRemoteBusyThreadIds: Set<String>,
+        selectionIdForThisRefresh: String?,
+        runtimeGeneration: UUID
+    ) {
+        applyPinnedThreadIds(pendingThreadArchives.visibleThreadIds(pinsPageThreadIds))
+        applyRecentThreadsHeadPage(page, application: application)
+        let visibleFetchedThreads = pendingThreadArchives.visibleThreads(fetchedThreads)
+        // Loaded tail summaries always survive a head refresh; which
+        // rows are visible is recentThreadIds' concern.
+        let existingThreads = pendingThreadArchives.visibleThreads(threads)
+        let previousRuntimeByThreadId = Dictionary(
+            uniqueKeysWithValues: previousThreadSummaries.compactMap { thread -> (String, GaryxThreadRuntimeSummary)? in
+                guard let runtime = thread.threadRuntime else { return nil }
+                return (thread.id, runtime)
+            }
+        )
+        let refreshedGatewayThreads = Self.mergedThreadSummaries(visibleFetchedThreads).map { thread in
+            var next = thread
+            if next.threadRuntime == nil {
+                next.threadRuntime = previousRuntimeByThreadId[next.id]
+            }
+            return next
+        }
+        let refreshedThreads = refreshedGatewayThreads.map(summaryWithCommittedRunState)
+        let mergedThreads = Self.mergedThreadSummaries(existingThreads + refreshedThreads)
+        if threads != mergedThreads {
+            threads = mergedThreads
+        }
+        persistRecentThreadsWidgetSnapshot()
+        hydrateCompletedRecentThreadHistories(
+            previousThreads: previousThreadSummaries,
+            previouslyRemoteBusyThreadIds: previouslyRemoteBusyThreadIds,
+            refreshedThreads: refreshedGatewayThreads,
+            runtimeGeneration: runtimeGeneration
+        )
+        let currentSelectedId = selectedThread?.id
+        if let selectionIdForThisRefresh,
+           currentSelectedId == selectionIdForThisRefresh,
+           let updatedSelection = threads.first(where: { $0.id == selectionIdForThisRefresh }) {
+            var nextSelection = updatedSelection
+            if nextSelection.threadRuntime == nil {
+                nextSelection.threadRuntime = selectedThread?.threadRuntime
+            }
+            nextSelection = summaryWithCommittedRunState(nextSelection)
+            if selectedThread != nextSelection {
+                selectedThread = nextSelection
+            }
+            if draftThreadTitle != nextSelection.title {
+                draftThreadTitle = nextSelection.title
+            }
         }
     }
 
