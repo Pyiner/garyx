@@ -73,6 +73,60 @@ final class GaryxTranscriptCacheTests: XCTestCase {
         XCTAssertEqual(untouched?.messages.count, cached.messages.count)
     }
 
+    func testWindowedResetFlushDoesNotReattachStalePrefix() {
+        // #TASK-1701 re-review scenario: screen shows rows 0..11, a stale
+        // resume degrades to window floor 4801 (indexes 4800..4801). After
+        // the reset prunes local rows, the prepared flush must NOT
+        // re-attach the stale prefix through preserveRemoteBeforeIndex.
+        let localRows = (0..<12).map { index -> GaryxMobileMessage in
+            var row = GaryxMobileMessage(
+                id: "history:\(index)",
+                role: .assistant,
+                text: "old \(index)",
+                isStreaming: false
+            )
+            row.historyIndex = index
+            return row
+        }
+        var optimistic = GaryxMobileMessage(
+            id: "local:pending",
+            role: .user,
+            text: "pending send",
+            isStreaming: false
+        )
+        optimistic.historyIndex = nil
+        let pruned = GaryxTranscriptCacheLogic.droppingLocalRowsBelow(
+            floorSeq: 4801,
+            in: localRows + [optimistic]
+        )
+        XCTAssertEqual(
+            pruned.compactMap(\.historyIndex),
+            [],
+            "all stale committed rows drop; only the optimistic row stays"
+        )
+        XCTAssertEqual(pruned.count, 1)
+
+        let window = GaryxCachedTranscript(
+            threadId: "thread::w",
+            savedAt: Date(timeIntervalSince1970: 0),
+            messages: [msg(4800, .assistant, "win head"), msg(4801, .assistant, "win tail")],
+            renderSnapshot: nil,
+            hasMoreBefore: true,
+            nextBeforeIndex: 4799
+        )
+        let prepared = GaryxPreparedSelectedThreadTranscriptUpdate.make(
+            from: window,
+            localMessages: pruned,
+            localRunTrackerBusy: false,
+            activeAssistantMessageId: nil
+        )
+        XCTAssertEqual(
+            prepared.messages.messages.compactMap(\.historyIndex),
+            [4800, 4801],
+            "flush shows the window only; no stale prefix"
+        )
+    }
+
     func testTranscriptMessageCodableRoundTripPreservesFieldsAndDerivesId() throws {
         let original = GaryxTranscriptMessage(
             index: 7,

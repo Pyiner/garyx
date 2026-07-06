@@ -65,6 +65,23 @@ public enum GaryxTranscriptCacheMergeDirection: Sendable {
 }
 
 public enum GaryxTranscriptCacheLogic {
+    /// Windowed-resume reset, UI side: drop on-screen rows whose durable
+    /// `historyIndex` is below the window floor. Rows without a
+    /// historyIndex (optimistic/pending local rows) are kept. Without this
+    /// the prepared-flush preserve step (preserveRemoteBeforeIndex =
+    /// window.firstIndex) re-attaches the stale prefix in front of the
+    /// window (#TASK-1701 re-review).
+    static func droppingLocalRowsBelow(
+        floorSeq: Int,
+        in messages: [GaryxMobileMessage]
+    ) -> [GaryxMobileMessage] {
+        let floorIndex = floorSeq - 1
+        return messages.filter { message in
+            guard let index = message.historyIndex else { return true }
+            return index >= floorIndex
+        }
+    }
+
     /// Windowed-resume reset: drop cached committed rows below the window
     /// floor (seq is 1-based; a row's durable `index` is seq - 1). They
     /// predate the server-served window and are no longer contiguous with

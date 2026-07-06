@@ -219,13 +219,22 @@ extension GaryxMobileModel {
     /// mirror's dropCommittedBelow).
     private func dropCommittedCacheBelow(floorSeq: Int, threadId: String) {
         guard selectedThread?.id == threadId else { return }
-        guard
-            let window = GaryxTranscriptCacheLogic.droppingCommittedBelow(
-                floorSeq: floorSeq,
-                in: transcriptSnapshot(for: threadId)
-            )
-        else { return }
-        cachedTranscriptSnapshots[threadId] = window
+        if let window = GaryxTranscriptCacheLogic.droppingCommittedBelow(
+            floorSeq: floorSeq,
+            in: transcriptSnapshot(for: threadId)
+        ) {
+            cachedTranscriptSnapshots[threadId] = window
+        }
+        // On-screen rows below the floor must go too: the prepared-flush
+        // preserve step (preserveRemoteBeforeIndex = window.firstIndex)
+        // would otherwise re-attach the stale prefix in front of the
+        // window (#TASK-1701 re-review). Optimistic rows (no historyIndex)
+        // are kept.
+        let pruned = GaryxTranscriptCacheLogic.droppingLocalRowsBelow(
+            floorSeq: floorSeq,
+            in: cachedMessages(for: threadId)
+        )
+        messagesByThread[threadId] = pruned
     }
 
     /// Merge one durable committed row into the S2 cache (in-memory, cheap — keeps the
