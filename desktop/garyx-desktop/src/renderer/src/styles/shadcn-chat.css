@@ -66,12 +66,14 @@
   }
 }
 
-/* Vertical (image) attachment chips: pin the remove action tight to the
-   thumbnail's top-right corner (media sits at the card's 8px padding, so a
-   10px inset puts the badge 2px inside the image corner). */
+/* Vertical (image) attachment chips: straddle the remove badge on the
+   thumbnail's top-right corner, iOS style. The media sits at the card's
+   8px padding with an 8px corner radius, so the visible corner is the
+   arc, not the box corner: with a 20px badge, a 0.5px inset puts the
+   badge center right on that border arc (badge half in, half out). */
 [data-slot="attachment"][data-orientation="vertical"] [data-slot="attachment-actions"] {
-  top: 10px;
-  right: 10px;
+  top: 0.5px;
+  right: 0.5px;
 }
 
 /* Attachment cards inside transcript bubbles. */

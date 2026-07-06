@@ -37,6 +37,7 @@ import {
   AttachmentGroup,
   AttachmentMedia,
   AttachmentTitle,
+  AttachmentTrigger,
 } from '@/components/ui/attachment';
 import {
   DropdownMenu,
@@ -69,7 +70,7 @@ export type ComposerWorkflowOption = {
 
 import { ChannelLogo } from './channel-logo';
 import { useChannelPluginCatalog } from './channel-plugins/useChannelPluginCatalog';
-import { buildMessageImageDataUrl } from './message-rich-content';
+import { buildMessageImageDataUrl, ImageZoomDialog } from './message-rich-content';
 import { useI18n, type Translate } from './i18n';
 
 type ComposerFormProps = {
@@ -1214,6 +1215,16 @@ export function ComposerForm({
                   src={buildMessageImageDataUrl(image.mediaType, image.data || '')}
                 />
               </AttachmentMedia>
+              <ImageZoomDialog
+                alt={image.name}
+                src={buildMessageImageDataUrl(image.mediaType, image.data || '')}
+                trigger={
+                  <AttachmentTrigger
+                    aria-label={t("Open image preview")}
+                    title={t("Open image preview")}
+                  />
+                }
+              />
               <AttachmentActions>
                 <AttachmentAction
                   aria-label={t("Remove image attachment")}

@@ -338,6 +338,35 @@ function MessageFileAttachmentCard({
   );
 }
 
+export function ImageZoomDialog({
+  alt,
+  src,
+  trigger,
+}: {
+  alt: string;
+  src: string;
+  trigger: ReactNode;
+}) {
+  const { t } = useI18n();
+  return (
+    <Dialog>
+      <DialogTrigger asChild>{trigger}</DialogTrigger>
+      <DialogContent
+        className="message-image-preview-dialog"
+        size="viewer"
+      >
+        <DialogTitle className="sr-only">{t("Image preview")}</DialogTitle>
+        <DialogDescription className="sr-only">
+          {t("Full-size image preview")}
+        </DialogDescription>
+        <div className="message-image-preview-stage">
+          <img alt={alt} className="message-image-preview" src={src} />
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function MessageImageAttachmentFrame({
   compact,
   segment,
@@ -351,8 +380,10 @@ export function MessageImageAttachmentFrame({
   }`;
 
   return (
-    <Dialog>
-      <DialogTrigger asChild>
+    <ImageZoomDialog
+      alt={segment.alt}
+      src={segment.src}
+      trigger={
         <button
           aria-label={t("Open image preview")}
           className={frameClassName}
@@ -366,24 +397,8 @@ export function MessageImageAttachmentFrame({
             src={segment.src}
           />
         </button>
-      </DialogTrigger>
-      <DialogContent
-        className="message-image-preview-dialog"
-        size="viewer"
-      >
-        <DialogTitle className="sr-only">{t("Image preview")}</DialogTitle>
-        <DialogDescription className="sr-only">
-          {t("Full-size image preview")}
-        </DialogDescription>
-        <div className="message-image-preview-stage">
-          <img
-            alt={segment.alt}
-            className="message-image-preview"
-            src={segment.src}
-          />
-        </div>
-      </DialogContent>
-    </Dialog>
+      }
+    />
   );
 }
 
