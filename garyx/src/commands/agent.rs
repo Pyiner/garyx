@@ -636,11 +636,7 @@ pub(crate) async fn cmd_agent_team_create(
     let display_name = display_name.trim().to_owned();
     let leader_agent_id = leader_agent_id.trim().to_owned();
     let workflow_text = workflow_text.trim().to_owned();
-    let member_agent_ids = member_agent_ids
-        .into_iter()
-        .map(|item| item.trim().to_owned())
-        .filter(|item| !item.is_empty())
-        .collect::<Vec<_>>();
+    let member_agent_ids = trim_member_agent_ids(member_agent_ids)?;
     if team_id.is_empty() {
         return Err("team_id cannot be empty".into());
     }
@@ -674,6 +670,26 @@ pub(crate) async fn cmd_agent_team_create(
     }
     print_agent_team_summary(&payload);
     Ok(())
+}
+
+/// Trim a `--member-agent-id` list, rejecting any explicitly blank entry.
+/// Filtering blanks out instead would silently shrink the roster the caller
+/// asked to write. An empty flag list (flag not passed) returns an empty vec
+/// so update paths can fall back to the stored members.
+fn trim_member_agent_ids(
+    member_agent_ids: Vec<String>,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let trimmed = member_agent_ids
+        .into_iter()
+        .map(|item| item.trim().to_owned())
+        .collect::<Vec<_>>();
+    if trimmed.iter().any(String::is_empty) {
+        return Err(
+            "--member-agent-id cannot be blank — pass only non-empty member ids (omit the flag entirely on update to keep the current members)"
+                .into(),
+        );
+    }
+    Ok(trimmed)
 }
 
 /// Resolve an updated team field: use the flag value when given (blank is an
@@ -732,20 +748,11 @@ pub(crate) async fn cmd_agent_team_update(
     )?;
     let workflow_text =
         merge_team_field(&existing, "workflow_text", workflow_text, "--workflow-text")?;
-    let member_flag_passed = !member_agent_ids.is_empty();
-    let mut member_agent_ids = member_agent_ids
-        .into_iter()
-        .map(|item| item.trim().to_owned())
-        .filter(|item| !item.is_empty())
-        .collect::<Vec<_>>();
+    // Every explicitly passed member must be non-blank. Filtering blanks out
+    // would silently PUT a truncated roster (e.g. `--member-agent-id planner
+    // --member-agent-id ''` must not rewrite the team to just [planner]).
+    let mut member_agent_ids = trim_member_agent_ids(member_agent_ids)?;
     if member_agent_ids.is_empty() {
-        if member_flag_passed {
-            // Explicit blank members are an error, not a silent preserve.
-            return Err(
-                "--member-agent-id cannot be blank — omit the flag to keep the current members"
-                    .into(),
-            );
-        }
         member_agent_ids = existing["member_agent_ids"]
             .as_array()
             .cloned()
@@ -1739,6 +1746,27 @@ mod tests {
         let (name, provider) = merge_agent_identity(Some(&existing), None, None).expect("merge");
         assert_eq!(name, "Existing Agent");
         assert_eq!(provider, "codex_app_server");
+    }
+
+    #[test]
+    fn trim_member_agent_ids_rejects_any_blank_entry() {
+        // Mixed blank must fail — filtering it out would PUT a truncated
+        // roster (reviewer counterexample on #TASK-1755).
+        let mixed = trim_member_agent_ids(vec!["planner".to_owned(), "  ".to_owned()]);
+        assert!(mixed.is_err(), "mixed blank member must fail");
+        let all_blank = trim_member_agent_ids(vec![String::new()]);
+        assert!(all_blank.is_err(), "all-blank member must fail");
+        // Flag not passed: empty vec passes through for preserve fallback.
+        assert_eq!(
+            trim_member_agent_ids(Vec::new()).expect("ok"),
+            Vec::<String>::new()
+        );
+        // Valid entries are trimmed.
+        assert_eq!(
+            trim_member_agent_ids(vec![" planner ".to_owned(), "generator".to_owned()])
+                .expect("ok"),
+            vec!["planner".to_owned(), "generator".to_owned()]
+        );
     }
 
     #[test]

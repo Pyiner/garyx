@@ -1,4 +1,4 @@
-use clap::{CommandFactory, Parser};
+use clap::CommandFactory;
 use garyx_models::local_paths::migrate_legacy_homes;
 use garyx_router::is_thread_key;
 use serde_json::json;
