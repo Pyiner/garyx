@@ -288,24 +288,39 @@ read+reduce **plus full-row serialization** per live frame — the worst path on
 the 188MB thread, and inconsistent with the narrowed rows the same connection
 was rendering before the reconnect.
 
-Change (desktop main process only):
+Change (desktop main process + one IPC field + renderer pass-through; rev3
+also covers the cache-reopen gap found in the #TASK-1722 re-review):
 
 - `stream.ts`: `StreamThreadEventsOptions` gains `renderFloor?: number`
   (appended as `&render_floor=` when > 0) and `onWindowFloor?: (floorSeq:
   number) => void`, invoked when a frame's `render_state.window.floor_seq` is
   a positive number (the wire shape is verbatim serde snake_case,
   `parseRenderState` at `stream.ts:254-266`).
-- `index.ts`: `ThreadStreamForwarder` tracks `lastFloor` next to `lastSeq`;
-  reconnects and `restartThreadEventForwarders` pass it back as `renderFloor`.
+- `index.ts`: `ThreadStreamForwarder` tracks `lastFloor` next to `lastSeq`,
+  seeded from the start input (`max(input.renderFloor ?? 0, existing?.lastFloor
+  ?? 0)`); reconnects and `restartThreadEventForwarders` pass it back as
+  `renderFloor`; `onWindowFloor` keeps it current when the server assigns a
+  new window.
+- `src/shared/contracts/thread.ts`: `StartThreadStreamInput` gains optional
+  `renderFloor` (`:186` today has only threadId/consumerId/afterSeq).
+- Renderer `transcript-lifecycle.ts startCommittedThreadStream` (`:1055`)
+  passes the floor of the transcript's current render window (live or restored
+  from the persisted transcript cache — `transcript-cache.ts:117` stores
+  `renderState`, and startup restores it before starting the stream,
+  `transcript-lifecycle.ts:1284`). This closes the reachable relaunch gap: a
+  cached windowed thread reopened after app restart starts its first stream
+  with the floor it is already rendering, instead of falling back to
+  `render_floor=0` → `render_snapshot_at_seq` (`routes.rs:1873,1936,2323`).
 
 Why this is safe and contract-compliant: `render_state.rows` narrowed by a
 client-declared `render_floor` is the documented contract (CLAUDE.md /
 repository-contracts); the mirror already dumb-renders narrowed rows on every
 frame of a degraded-open connection today, and pinning merely preserves the
-narrowing that same connection was already rendering. A later degraded replay
-that assigns a new window floor updates the pin (`onWindowFloor` fires on its
-frames). Small threads never receive a window → `lastFloor` stays 0 → requests
-are byte-identical to today. iOS is untouched (already pins its own floor).
+narrowing that same view was already rendering (in-session and across
+relaunch alike). A stale relaunch cursor still degrades server-side and the
+newly assigned floor updates the pin. Small threads never receive a window →
+floor stays 0 → requests are byte-identical to today. iOS is untouched
+(already pins its own floor).
 
 ### Contract compliance / non-regression argument
 
@@ -385,10 +400,12 @@ Knife 2 (garyx-router):
 - Tail-cap roll + LRU eviction correctness (tiny caps via test override).
 - Cold restart parity; concurrent multi-thread append/read smoke (timeout
   guarded); seq continuity under concurrency.
-- Desktop floor pinning unit tests in `src/main/gary-client.test.mjs` (already
-  in the `test:unit` list): stream URL carries `render_floor` only when
-  pinned; `onWindowFloor` fires from a frame with `render_state.window`;
-  forwarder reconnect/restart carries the pinned floor.
+- Desktop floor pinning unit tests: `src/main/gary-client.test.mjs` (stream
+  URL carries `render_floor` only when pinned; `onWindowFloor` fires from a
+  frame with `render_state.window`) and
+  `src/renderer/src/gateway-mirror/transcript-lifecycle.test.mjs`
+  (`startCommittedThreadStream` passes the restored window floor through
+  `startThreadStream`); both files are already in the `test:unit` list.
 - `cargo test -p garyx-router` (+ gateway stream tests `cargo test -p
   garyx-gateway`) green; `npm run test:unit` in `desktop/garyx-desktop` green.
 
@@ -399,9 +416,10 @@ End-to-end (after each knife, local gateway rebuilt via
   arrive and the thread returns to idle.
 - Knife 2: same 4-tier snapshot benchmark — 188MB warm frames ≥10x faster;
   append timing/log evidence of no full read; desktop/iOS open + live stream
-  sanity on a big thread; verify a desktop caught-up reconnect on the big
-  thread now requests `render_floor > 0` and its live frames ride the cached
-  window path (packaged app + gateway-side observation).
+  sanity on a big thread; verify with the packaged app + gateway-side
+  observation that `render_floor > 0` is requested on BOTH a caught-up
+  reconnect and a cached-window reopen after app relaunch, and that those live
+  frames ride the cached window path.
 
 Rollout: two independent commits (knife 1 then knife 2), each with its tests;
 codex design review before implementation; codex code review after; merge to
