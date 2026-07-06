@@ -167,10 +167,10 @@ Design: render only the **tail window** of prepared turn rows.
   becomes a two-stage boundary action — if the window hides in-memory rows,
   expand the window (pure state change, no network); only when the window is
   exhausted fall through to `loadOlderSelectedThreadHistory()` as today. The
-  "Load earlier" button shows only when the window is exhausted AND
-  `selectedThreadHasMoreHistoryBefore` (window-hidden rows surface via the
-  same button semantics — tapping it expands locally first, which is strictly
-  faster than today's network round-trip).
+  "Load earlier" button shows when the window hides in-memory rows OR
+  `selectedThreadHasMoreHistoryBefore`; its tap expands the window locally
+  first (instant, no spinner) and only performs the network page once the
+  window is exhausted — strictly faster than today's always-network button.
 
 **Anchoring compatibility argument** (the sensitive part):
 
@@ -241,6 +241,10 @@ Model wiring (`trimThreadResidency()` after the write paths:
   resetting it would make the actor reject subsequent saves — verified
   failure mode) and `selectedThreadRenderFloorByThread` (tiny; floor is
   re-derived on open). Both are O(bytes) per thread.
+- Eviction also removes the thread from `threadHistoryLoadedIds`: an evicted
+  thread is presentation-wise a cold thread again, so re-opening it must take
+  the `isAwaitingInitialHistory == true` (loading) path instead of flashing
+  the empty-conversation view for a frame while the async restore/fetch run.
 - Re-opening an evicted thread hits the disk cache through the P1 async
   restore path — data loss is impossible (evicted state is always
   re-derivable from disk + gateway).
