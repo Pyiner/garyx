@@ -66,6 +66,14 @@
   }
 }
 
+/* Vertical (image) attachment chips: pin the remove action tight to the
+   thumbnail's top-right corner (media sits at the card's 8px padding, so a
+   10px inset puts the badge 2px inside the image corner). */
+[data-slot="attachment"][data-orientation="vertical"] [data-slot="attachment-actions"] {
+  top: 10px;
+  right: 10px;
+}
+
 /* Attachment cards inside transcript bubbles. */
 .message-attachment-card {
   width: min(100%, 320px);

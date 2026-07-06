@@ -1217,12 +1217,12 @@ export function ComposerForm({
               <AttachmentActions>
                 <AttachmentAction
                   aria-label={t("Remove image attachment")}
-                  className="bg-background/80 shadow-sm backdrop-blur-sm hover:bg-background"
+                  className="size-5 rounded-full bg-foreground/55 text-background backdrop-blur-[2px] hover:bg-foreground/75 hover:text-background"
                   onClick={() => {
                     onRemoveComposerImage(image.id);
                   }}
                 >
-                  <X aria-hidden size={12} strokeWidth={2.2} />
+                  <X aria-hidden size={11} strokeWidth={2.4} />
                   <span className="sr-only">{t("Remove image attachment")}</span>
                 </AttachmentAction>
               </AttachmentActions>

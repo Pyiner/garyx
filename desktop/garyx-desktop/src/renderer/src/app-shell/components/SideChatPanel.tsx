@@ -79,6 +79,7 @@ import {
   type SideChatOpsContext,
 } from "../side-chat-ops";
 import {
+  messagesNearBottom,
   messageTailSignature,
   scrollMessagesToLatest,
 } from "./thread-transcript-scroll";
@@ -437,16 +438,24 @@ export function SideChatPanel({
   );
 
   const sideChatMessageTailSignature = messageTailSignature(sideChatMessages);
+  // Opening a side chat (or finishing its history load) always lands at the
+  // latest message.
   useLayoutEffect(() => {
     if (!sideChatThreadId || sideChatHistoryLoading) {
       return;
     }
     scrollMessagesToLatest(sideChatMessagesRef.current);
-  }, [
-    sideChatHistoryLoading,
-    sideChatThreadId,
-    sideChatMessageTailSignature,
-  ]);
+  }, [sideChatHistoryLoading, sideChatThreadId]);
+  // Tail growth only follows while the reader is already at the bottom —
+  // never yank someone who scrolled up mid-stream.
+  useLayoutEffect(() => {
+    if (!sideChatThreadId || sideChatHistoryLoading) {
+      return;
+    }
+    if (messagesNearBottom(sideChatMessagesRef.current)) {
+      scrollMessagesToLatest(sideChatMessagesRef.current);
+    }
+  }, [sideChatMessageTailSignature]);
 
   function updateSideComposerDraft(
     sourceThreadId: string,

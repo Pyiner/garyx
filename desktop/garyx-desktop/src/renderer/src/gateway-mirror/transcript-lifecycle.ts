@@ -515,7 +515,10 @@ export class TranscriptLifecycle {
         intentId: nextIntentId,
         responseText: acknowledgedIntent?.responseText,
       });
-      requestSelectedThreadMessagesBottomSnap(threadId, true);
+      // Queued-intent pickup is not a fresh user action: snap only while
+      // the viewport is already following the bottom, never yank a reader
+      // who scrolled up (they have the scroll-to-latest button instead).
+      requestSelectedThreadMessagesBottomSnap(threadId, false);
       this.setThreadRuntimeState(threadId, "running_remote", {
         activeIntentId: nextIntentId,
         remoteRunId: runId,
@@ -808,7 +811,9 @@ export class TranscriptLifecycle {
       return;
     }
     if (selectedThreadIdRef.current === threadId) {
-      requestSelectedThreadMessagesBottomSnap(threadId, true);
+      // Passive committed events must not yank a reader who scrolled up;
+      // a non-forced snap still keeps a bottom-following viewport pinned.
+      requestSelectedThreadMessagesBottomSnap(threadId, false);
     }
     this.acceptRemoteTranscript(threadId, merged, {
       syncRunState: false,
