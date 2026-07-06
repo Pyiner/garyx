@@ -8,6 +8,10 @@ public enum GatewayStreamFallbackReason: Equatable, Sendable {
 public enum GatewayStreamAction: Equatable, Sendable {
     case applyCommittedMessages([GaryxTranscriptMessage])
     case applyRenderSnapshot(GaryxRenderSnapshot)
+    /// Server degraded a stale resume to the initial window: cached
+    /// committed rows below the window floor are no longer contiguous with
+    /// this connection and must be dropped before the window applies.
+    case resetCommittedCacheBelow(floorSeq: Int)
     case refetchAfterControlRewrite
     case fallback(GatewayStreamFallbackReason)
 }
@@ -139,6 +143,7 @@ public struct GatewayStreamFrameProcessor: Sendable {
             return GatewayStreamPayloadResult()
         }
         madeProgressOnConnection = true
+        var windowedFloorSeq: Int?
         if frame.replay == "windowed" {
             // Server-degraded stale resume: the frame is a self-identifying
             // window reset, so its first (floor) record is deliberately not
@@ -146,9 +151,14 @@ public struct GatewayStreamFrameProcessor: Sendable {
             // accept the window; unmarked frames keep the contiguity guard.
             connectionLastSeq = 0
             allowsNonContiguousFirstSeq = true
+            windowedFloorSeq = frame.renderState.window?.floorSeq
+                ?? frame.events.compactMap(\.seq).min()
         }
 
         var actions: [GatewayStreamAction] = []
+        if let windowedFloorSeq {
+            actions.append(.resetCommittedCacheBelow(floorSeq: windowedFloorSeq))
+        }
         var committedMessages: [GaryxTranscriptMessage] = []
         for event in frame.events {
             guard event.type == "committed_message",

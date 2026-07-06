@@ -187,6 +187,9 @@ extension GaryxMobileModel {
         case .applyCommittedMessages(let messages):
             await applyStreamedCommittedMessages(messages, threadId: threadId)
             return .none
+        case .resetCommittedCacheBelow(let floorSeq):
+            dropCommittedCacheBelow(floorSeq: floorSeq, threadId: threadId)
+            return .none
         case .applyRenderSnapshot(let snapshot):
             applyThreadRenderSnapshot(snapshot, threadId: threadId)
             return .none
@@ -207,6 +210,22 @@ extension GaryxMobileModel {
         clearMessages(for: threadId)
         await loadSelectedThreadHistory()
         return await selectedThreadStreamCursor(for: threadId)
+    }
+
+    /// Windowed-resume reset (server degraded a stale resume): cached
+    /// committed rows below the window floor are no longer contiguous with
+    /// this connection. Drop them before the window's rows merge so the
+    /// cache keeps its contiguous invariant (parity with the desktop
+    /// mirror's dropCommittedBelow).
+    private func dropCommittedCacheBelow(floorSeq: Int, threadId: String) {
+        guard selectedThread?.id == threadId else { return }
+        guard
+            let window = GaryxTranscriptCacheLogic.droppingCommittedBelow(
+                floorSeq: floorSeq,
+                in: transcriptSnapshot(for: threadId)
+            )
+        else { return }
+        cachedTranscriptSnapshots[threadId] = window
     }
 
     /// Merge one durable committed row into the S2 cache (in-memory, cheap — keeps the

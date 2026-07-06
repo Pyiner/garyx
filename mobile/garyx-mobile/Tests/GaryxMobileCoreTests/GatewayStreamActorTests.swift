@@ -405,6 +405,10 @@ final class GatewayStreamActorTests: XCTestCase {
         let result = processor.processPayload(payload, threadId: "thread::w")
 
         XCTAssertNil(result.reconnect, "windowed frame must not trigger a gap reconnect")
+        guard case .resetCommittedCacheBelow(let floorSeq) = result.actions.first else {
+            return XCTFail("windowed frame must lead with the cache reset, got \(result.actions)")
+        }
+        XCTAssertEqual(floorSeq, 4801)
         let applied = result.actions.compactMap { action -> [GaryxTranscriptMessage]? in
             if case .applyCommittedMessages(let messages) = action { return messages }
             return nil
@@ -493,6 +497,8 @@ private actor GatewayStreamTestRecorder {
             switch action {
             case .applyCommittedMessages:
                 return "applyCommittedMessages"
+            case .resetCommittedCacheBelow(let floorSeq):
+                return "resetCommittedCacheBelow(\(floorSeq))"
             case .applyRenderSnapshot:
                 return "applyRenderSnapshot"
             case .refetchAfterControlRewrite:
@@ -542,6 +548,8 @@ private actor GatewayStreamFailureRecorder {
             switch action {
             case .applyCommittedMessages:
                 return "applyCommittedMessages"
+            case .resetCommittedCacheBelow(let floorSeq):
+                return "resetCommittedCacheBelow(\(floorSeq))"
             case .applyRenderSnapshot:
                 return "applyRenderSnapshot"
             case .refetchAfterControlRewrite:

@@ -45,6 +45,34 @@ final class GaryxTranscriptCacheTests: XCTestCase {
 
     // MARK: - GaryxTranscriptMessage Codable round-trip
 
+    func testDroppingCommittedBelowRemovesStalePrefixOnWindowedResume() {
+        // Windowed-resume regression (#TASK-1701): cache holds rows 1..12
+        // (indexes 0..11), a stale resume degrades to window floor 4801.
+        // The stale prefix must be dropped so the cache stays contiguous
+        // with the server-served window.
+        let cached = GaryxCachedTranscript(
+            threadId: "thread::w",
+            savedAt: Date(timeIntervalSince1970: 0),
+            messages: (0..<12).map { msg($0, .assistant, "old \($0)") }
+                + [msg(4800, .assistant, "win head"), msg(4801, .assistant, "win tail")],
+            renderSnapshot: nil,
+            hasMoreBefore: false,
+            nextBeforeIndex: nil
+        )
+        let window = GaryxTranscriptCacheLogic.droppingCommittedBelow(
+            floorSeq: 4801,
+            in: cached
+        )
+        XCTAssertEqual(window?.messages.map(\.index), [4800, 4801])
+
+        // No-op when nothing is below the floor: same instance content.
+        let untouched = GaryxTranscriptCacheLogic.droppingCommittedBelow(
+            floorSeq: 1,
+            in: cached
+        )
+        XCTAssertEqual(untouched?.messages.count, cached.messages.count)
+    }
+
     func testTranscriptMessageCodableRoundTripPreservesFieldsAndDerivesId() throws {
         let original = GaryxTranscriptMessage(
             index: 7,

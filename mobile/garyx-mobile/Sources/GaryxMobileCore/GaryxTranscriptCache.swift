@@ -65,6 +65,27 @@ public enum GaryxTranscriptCacheMergeDirection: Sendable {
 }
 
 public enum GaryxTranscriptCacheLogic {
+    /// Windowed-resume reset: drop cached committed rows below the window
+    /// floor (seq is 1-based; a row's durable `index` is seq - 1). They
+    /// predate the server-served window and are no longer contiguous with
+    /// the connection that delivered it.
+    public static func droppingCommittedBelow(
+        floorSeq: Int,
+        in window: GaryxCachedTranscript?
+    ) -> GaryxCachedTranscript? {
+        guard var window else { return nil }
+        let floorIndex = floorSeq - 1
+        let kept = window.messages.filter { message in
+            guard let index = message.index else { return false }
+            return index >= floorIndex
+        }
+        if kept.count == window.messages.count {
+            return window
+        }
+        window.messages = kept
+        return window
+    }
+
     /// Keep only durable committed rows (those with a stable `index`), dedup by
     /// `index` keeping the last occurrence, ascending by `index`. A run's terminal
     /// reconcile can rewrite a row's content at the same index, so the freshest
