@@ -71,6 +71,7 @@ export type ComposerWorkflowOption = {
 import { ChannelLogo } from './channel-logo';
 import { useChannelPluginCatalog } from './channel-plugins/useChannelPluginCatalog';
 import { buildMessageImageDataUrl, ImageZoomDialog } from './message-rich-content';
+import type { ComposerPendingUpload } from './app-shell/useMessageDispatchController';
 import { useI18n, type Translate } from './i18n';
 
 type ComposerFormProps = {
@@ -81,6 +82,7 @@ type ComposerFormProps = {
   composerFiles: MessageFileAttachment[];
   composerHasPayload: boolean;
   composerImages: MessageImageAttachment[];
+  composerPendingUploads?: ComposerPendingUpload[];
   composerEditingLocked: boolean;
   composerLocked: boolean;
   composerPlaceholder: string;
@@ -132,6 +134,7 @@ type ComposerFormProps = {
   onRemoveComposerBrowserAnnotation: (annotationId: string) => void;
   onRemoveComposerFile: (fileId: string) => void;
   onRemoveComposerImage: (imageId: string) => void;
+  onRemoveComposerPendingUpload?: (uploadId: string) => void;
   onSelectBotBinding?: (botId: string | null) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   slashPanelContainerRef: RefObject<HTMLDivElement | null>;
@@ -819,6 +822,7 @@ export function ComposerForm({
   composerFiles,
   composerHasPayload,
   composerImages,
+  composerPendingUploads = [],
   composerEditingLocked,
   composerLocked,
   composerPlaceholder,
@@ -866,6 +870,7 @@ export function ComposerForm({
   onRemoveComposerBrowserAnnotation,
   onRemoveComposerFile,
   onRemoveComposerImage,
+  onRemoveComposerPendingUpload,
   onSelectBotBinding,
   onSubmit,
   slashPanelContainerRef,
@@ -1169,7 +1174,10 @@ export function ComposerForm({
         tabIndex={-1}
         type="file"
       />
-      {composerBrowserAnnotations.length || composerImages.length || composerFiles.length ? (
+      {composerBrowserAnnotations.length ||
+      composerImages.length ||
+      composerFiles.length ||
+      composerPendingUploads.length ? (
         <AttachmentGroup className="composer-attachments px-3 pt-2">
           {composerBrowserAnnotations.map((annotation) => {
             const label = browserAnnotationChipLabel(annotation, t);
@@ -1263,6 +1271,80 @@ export function ComposerForm({
               </AttachmentActions>
             </Attachment>
           ))}
+          {composerPendingUploads.map((upload) =>
+            upload.kind === "image" ? (
+              <Attachment
+                key={upload.id}
+                orientation="vertical"
+                state={upload.status === "error" ? "error" : "uploading"}
+                title={upload.name}
+              >
+                <AttachmentMedia variant="image">
+                  {upload.previewUrl ? (
+                    <>
+                      <img
+                        alt={upload.name}
+                        className="composer-upload-img-base"
+                        src={upload.previewUrl}
+                      />
+                      {upload.status === "uploading" ? (
+                        <img
+                          alt=""
+                          aria-hidden
+                          className="composer-upload-img-reveal"
+                          src={upload.previewUrl}
+                        />
+                      ) : null}
+                    </>
+                  ) : (
+                    <FileText aria-hidden size={14} strokeWidth={1.8} />
+                  )}
+                </AttachmentMedia>
+                <AttachmentActions>
+                  <AttachmentAction
+                    aria-label={t("Remove image attachment")}
+                    className="size-5 rounded-full bg-foreground/55 text-background backdrop-blur-[2px] hover:bg-foreground/75 hover:text-background"
+                    onClick={() => {
+                      onRemoveComposerPendingUpload?.(upload.id);
+                    }}
+                  >
+                    <X aria-hidden size={11} strokeWidth={2.4} />
+                    <span className="sr-only">{t("Remove image attachment")}</span>
+                  </AttachmentAction>
+                </AttachmentActions>
+              </Attachment>
+            ) : (
+              <Attachment
+                key={upload.id}
+                size="sm"
+                state={upload.status === "error" ? "error" : "uploading"}
+                title={upload.name}
+              >
+                <AttachmentMedia>
+                  <FileText aria-hidden size={14} strokeWidth={1.8} />
+                </AttachmentMedia>
+                <AttachmentContent>
+                  <AttachmentTitle>{upload.name}</AttachmentTitle>
+                  <AttachmentDescription>
+                    {upload.status === "error"
+                      ? t("Upload failed")
+                      : t("Uploading…")}
+                  </AttachmentDescription>
+                </AttachmentContent>
+                <AttachmentActions>
+                  <AttachmentAction
+                    aria-label={t("Remove file attachment")}
+                    onClick={() => {
+                      onRemoveComposerPendingUpload?.(upload.id);
+                    }}
+                  >
+                    <X aria-hidden size={12} strokeWidth={2.2} />
+                    <span className="sr-only">{t("Remove file attachment")}</span>
+                  </AttachmentAction>
+                </AttachmentActions>
+              </Attachment>
+            ),
+          )}
         </AttachmentGroup>
       ) : null}
       <textarea

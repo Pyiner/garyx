@@ -2452,6 +2452,7 @@ export function AppShell() {
     composerHasPayloadRef,
     composerImages,
     composerLocked,
+    composerPendingUploads,
     composerResetKey,
     composerTextareaRef,
     handleAddBrowserAnnotationComment,
@@ -2465,6 +2466,7 @@ export function AppShell() {
     removeComposerBrowserAnnotation,
     removeComposerFile,
     removeComposerImage,
+    removeComposerPendingUpload,
     reorderQueuedIntent,
     requestComposerFocus,
     setComposerTextPresent,
@@ -4197,6 +4199,7 @@ export function AppShell() {
         composerFiles={composerFiles}
         composerHasPayload={composerHasPayload}
         composerImages={composerImages}
+        composerPendingUploads={composerPendingUploads}
         composerEditingLocked={composerEditingLocked}
         composerLocked={composerLocked}
         composerPlaceholder={composerPlaceholder}
@@ -4282,6 +4285,7 @@ export function AppShell() {
         activeThreadMessageKey={activeThreadMessageKey}
         onRemoveComposerFile={removeComposerFile}
         onRemoveComposerImage={removeComposerImage}
+        onRemoveComposerPendingUpload={removeComposerPendingUpload}
         onRemoveComposerBrowserAnnotation={removeComposerBrowserAnnotation}
         onReorderQueuedIntent={reorderQueuedIntent}
         onSelectNewThreadAgent={(agentId) => {

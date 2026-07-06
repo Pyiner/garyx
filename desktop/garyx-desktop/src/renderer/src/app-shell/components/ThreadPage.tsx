@@ -46,6 +46,7 @@ import type {
 } from "@shared/contracts";
 
 import type { MessageIntent } from "../../message-machine";
+import type { ComposerPendingUpload } from "../useMessageDispatchController";
 import type { ThreadHistoryPaginationState } from "../../gateway-mirror/transcript-materialize";
 import {
   TranscriptScrollBridge,
@@ -312,6 +313,7 @@ type ThreadPageProps = {
   composerFiles: MessageFileAttachment[];
   composerHasPayload: boolean;
   composerImages: MessageImageAttachment[];
+  composerPendingUploads?: ComposerPendingUpload[];
   composerEditingLocked: boolean;
   composerLocked: boolean;
   composerPlaceholder: string;
@@ -395,6 +397,7 @@ type ThreadPageProps = {
   onMarkIgnoreComposerSubmitWindow: () => void;
   onRemoveComposerFile: (fileId: string) => void;
   onRemoveComposerImage: (imageId: string) => void;
+  onRemoveComposerPendingUpload?: (uploadId: string) => void;
   onRemoveComposerBrowserAnnotation: (annotationId: string) => void;
   onReorderQueuedIntent: (
     threadId: string,
@@ -448,6 +451,7 @@ export function ThreadPage({
   composerFiles,
   composerHasPayload,
   composerImages,
+  composerPendingUploads,
   composerEditingLocked,
   composerLocked,
   composerPlaceholder,
@@ -504,6 +508,7 @@ export function ThreadPage({
   onMarkIgnoreComposerSubmitWindow,
   onRemoveComposerFile,
   onRemoveComposerImage,
+  onRemoveComposerPendingUpload,
   onRemoveComposerBrowserAnnotation,
   onReorderQueuedIntent,
   onSelectNewThreadAgent,
@@ -1202,6 +1207,7 @@ export function ThreadPage({
               composerFiles={composerFiles}
               composerHasPayload={composerHasPayload}
               composerImages={composerImages}
+              composerPendingUploads={composerPendingUploads}
               composerEditingLocked={composerEditingLocked}
               composerLocked={composerLocked}
               composerPlaceholder={composerPlaceholder}
@@ -1306,6 +1312,7 @@ export function ThreadPage({
               onInterrupt={onComposerInterrupt}
               onRemoveComposerFile={onRemoveComposerFile}
               onRemoveComposerImage={onRemoveComposerImage}
+              onRemoveComposerPendingUpload={onRemoveComposerPendingUpload}
               onRemoveComposerBrowserAnnotation={onRemoveComposerBrowserAnnotation}
               onSelectBotBinding={onSelectBotBinding}
               onSubmit={(event) => {

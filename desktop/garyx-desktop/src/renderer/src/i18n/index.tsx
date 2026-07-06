@@ -1097,6 +1097,8 @@ const zhCN: Record<string, string> = {
   'Updated': '更新时间',
   'Updates': '更新',
   'Upload avatar': '上传头像',
+  'Upload failed': '上传失败',
+  'Uploading…': '上传中…',
   'Use the main workspace by default': '默认沿用主工作区',
   'Used when a new bot or task thread has no explicit workspace.': '当新的 Bot 或 Task 线程没有显式工作区时使用。',
   "Uses this machine's local time.": '使用这台机器的本地时间。',

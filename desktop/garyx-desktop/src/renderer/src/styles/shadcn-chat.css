@@ -76,6 +76,33 @@
   right: -6.5px;
 }
 
+/* Optimistic upload chips: the thumbnail starts blurred and a soft front
+   sweeps top-to-bottom, progressively "developing" the clear image while
+   the gateway upload is in flight. */
+[data-state="uploading"] .composer-upload-img-base {
+  filter: blur(9px);
+  transform: scale(1.12);
+}
+
+.composer-upload-img-reveal {
+  position: absolute;
+  inset: 0;
+  mask-image: linear-gradient(to bottom, black 60%, transparent 80%);
+  mask-size: 100% 250%;
+  mask-repeat: no-repeat;
+  animation: garyx-upload-reveal 1.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@keyframes garyx-upload-reveal {
+  0% {
+    mask-position: 0 100%;
+  }
+  70%,
+  100% {
+    mask-position: 0 0%;
+  }
+}
+
 /* Attachment cards inside transcript bubbles. */
 .message-attachment-card {
   width: min(100%, 320px);

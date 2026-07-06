@@ -84,6 +84,20 @@ type PreparedLocalAttachmentUpload = {
   dataBase64: string;
 };
 
+/**
+ * Optimistic composer chip for an attachment whose gateway upload is
+ * still in flight (or failed). Images carry a local object URL so the
+ * thumbnail is on screen the moment the file is picked or pasted.
+ */
+export type ComposerPendingUpload = {
+  id: string;
+  kind: "image" | "file";
+  name: string;
+  mediaType: string;
+  previewUrl: string | null;
+  status: "uploading" | "error";
+};
+
 export async function prepareAttachmentUploads(
   files: File[],
 ): Promise<PreparedLocalAttachmentUpload[]> {
@@ -337,6 +351,37 @@ export function useMessageDispatchController({
   const [composerAttachmentUploadCount, setComposerAttachmentUploadCount] =
     useState(0);
   const composerAttachmentUploadPending = composerAttachmentUploadCount > 0;
+  const [composerPendingUploads, setComposerPendingUploads] = useState<
+    ComposerPendingUpload[]
+  >([]);
+  // Ref mirror so the async upload settle can tell which optimistic chips
+  // the user removed mid-flight.
+  const composerPendingUploadsRef = useRef<ComposerPendingUpload[]>([]);
+  function updateComposerPendingUploads(
+    updater: (current: ComposerPendingUpload[]) => ComposerPendingUpload[],
+  ) {
+    composerPendingUploadsRef.current = updater(
+      composerPendingUploadsRef.current,
+    );
+    setComposerPendingUploads(composerPendingUploadsRef.current);
+  }
+  function retireComposerPendingUploads(ids: string[]) {
+    if (!ids.length) {
+      return;
+    }
+    const removing = new Set(ids);
+    for (const upload of composerPendingUploadsRef.current) {
+      if (removing.has(upload.id) && upload.previewUrl) {
+        URL.revokeObjectURL(upload.previewUrl);
+      }
+    }
+    updateComposerPendingUploads((current) =>
+      current.filter((upload) => !removing.has(upload.id)),
+    );
+  }
+  function removeComposerPendingUpload(uploadId: string) {
+    retireComposerPendingUploads([uploadId]);
+  }
   const composerAttachmentInputRef = useRef<HTMLInputElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const composerHasPayloadRef = useRef(false);
@@ -380,6 +425,9 @@ export function useMessageDispatchController({
     setComposerImages([]);
     setComposerFiles([]);
     setComposerBrowserAnnotations([]);
+    retireComposerPendingUploads(
+      composerPendingUploadsRef.current.map((upload) => upload.id),
+    );
     resetComposerAttachmentPicker();
   }
 
@@ -408,51 +456,104 @@ export function useMessageDispatchController({
       return;
     }
 
+    // Optimistic chips: on screen the moment the file lands in the
+    // composer, with a local object-URL thumbnail for images. The gateway
+    // upload settles them into composerImages/composerFiles afterwards.
+    const pendingEntries: ComposerPendingUpload[] = files.map((file) => {
+      const kind: ComposerPendingUpload["kind"] = isImageFile(file)
+        ? "image"
+        : "file";
+      return {
+        id: `${kind}:${crypto.randomUUID()}`,
+        kind,
+        name: file.name || kind,
+        mediaType:
+          kind === "image" ? inferImageMediaType(file) : inferFileMediaType(file),
+        previewUrl: kind === "image" ? URL.createObjectURL(file) : null,
+        status: "uploading",
+      };
+    });
+    updateComposerPendingUploads((current) => [...current, ...pendingEntries]);
+
+    const markBatchFailed = () => {
+      const batchIds = new Set(pendingEntries.map((entry) => entry.id));
+      updateComposerPendingUploads((current) =>
+        current.map((upload) =>
+          batchIds.has(upload.id) && upload.status === "uploading"
+            ? { ...upload, status: "error" }
+            : upload,
+        ),
+      );
+    };
+
     setComposerAttachmentUploadCount((count) => count + 1);
     try {
-      const prepared = await prepareAttachmentUploads(files);
-      if (!prepared.length) {
+      const dataByEntry = await Promise.all(files.map(fileToBase64));
+      const uploadable: {
+        entry: ComposerPendingUpload;
+        dataBase64: string;
+      }[] = [];
+      const unreadableIds: string[] = [];
+      pendingEntries.forEach((entry, index) => {
+        const dataBase64 = dataByEntry[index] || "";
+        if (dataBase64.trim()) {
+          uploadable.push({ entry, dataBase64 });
+        } else {
+          unreadableIds.push(entry.id);
+        }
+      });
+      retireComposerPendingUploads(unreadableIds);
+      if (!uploadable.length) {
         setError("No attachments could be loaded.");
         return;
       }
       const uploaded = await window.garyxDesktop.uploadChatAttachments({
-        files: prepared.map((file) => ({
-          kind: file.kind,
-          name: file.name,
-          mediaType: file.mediaType,
-          dataBase64: file.dataBase64,
+        files: uploadable.map(({ entry, dataBase64 }) => ({
+          kind: entry.kind,
+          name: entry.name,
+          mediaType: entry.mediaType,
+          dataBase64,
         })),
       });
-      if (uploaded.files.length !== prepared.length) {
+      if (uploaded.files.length !== uploadable.length) {
         throw new Error("Gateway returned an incomplete attachment upload result.");
       }
 
+      // Respect chips the user removed while the upload was in flight.
+      const stillPending = new Set(
+        composerPendingUploadsRef.current.map((upload) => upload.id),
+      );
       const nextImages: MessageImageAttachment[] = [];
       const nextFiles: MessageFileAttachment[] = [];
-      prepared.forEach((file, index) => {
+      const settledIds: string[] = [];
+      uploadable.forEach(({ entry, dataBase64 }, index) => {
         const stored = uploaded.files[index];
         if (!stored?.path?.trim()) {
           return;
         }
-        if (file.kind === "image") {
+        settledIds.push(entry.id);
+        if (!stillPending.has(entry.id)) {
+          return;
+        }
+        if (entry.kind === "image") {
           nextImages.push({
-            id: file.id,
+            id: entry.id,
             name: stored.name,
-            mediaType: stored.mediaType || file.mediaType,
+            mediaType: stored.mediaType || entry.mediaType,
             path: stored.path,
-            data: file.dataBase64,
+            data: dataBase64,
           });
           return;
         }
         nextFiles.push({
-          id: file.id,
+          id: entry.id,
           name: stored.name,
-          mediaType: stored.mediaType || file.mediaType,
+          mediaType: stored.mediaType || entry.mediaType,
           path: stored.path,
         });
       });
 
-      if (!nextImages.length && !nextFiles.length) {
+      if (!settledIds.length) {
         throw new Error("Gateway did not return any uploaded attachments.");
       }
       if (nextImages.length) {
@@ -461,8 +562,11 @@ export function useMessageDispatchController({
       if (nextFiles.length) {
         setComposerFiles((current) => [...current, ...nextFiles]);
       }
+      retireComposerPendingUploads(settledIds);
+      markBatchFailed();
       setError(null);
     } catch (attachmentError) {
+      markBatchFailed();
       setError(
         attachmentError instanceof Error
           ? attachmentError.message
@@ -1057,6 +1161,7 @@ export function useMessageDispatchController({
     composerHasPayloadRef,
     composerImages,
     composerLocked,
+    composerPendingUploads,
     composerResetKey,
     composerTextareaRef,
     handleAddBrowserAnnotationComment,
@@ -1071,6 +1176,7 @@ export function useMessageDispatchController({
     removeComposerBrowserAnnotation,
     removeComposerFile,
     removeComposerImage,
+    removeComposerPendingUpload,
     reorderQueuedIntent,
     requestComposerFocus,
     setComposerTextPresent,
