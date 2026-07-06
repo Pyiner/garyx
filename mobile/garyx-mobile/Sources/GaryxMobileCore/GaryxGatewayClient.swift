@@ -605,31 +605,6 @@ public final class GaryxGatewayClient {
         )
     }
 
-    public func listTasks(includeDone: Bool = true, limit: Int = 100) async throws -> GaryxTasksPage {
-        try await listTasks(filter: GaryxTaskListFilter(includeDone: includeDone, limit: limit))
-    }
-
-    public func listTasks(filter: GaryxTaskListFilter) async throws -> GaryxTasksPage {
-        var queryItems = [
-            URLQueryItem(name: "include_done", value: filter.includeDone ? "true" : "false"),
-            URLQueryItem(name: "limit", value: String(filter.limit)),
-            URLQueryItem(name: "offset", value: String(filter.offset)),
-        ]
-        if let status = filter.status {
-            queryItems.append(URLQueryItem(name: "status", value: status.rawValue))
-        }
-        if let assignee = filter.assignee?.trimmingCharacters(in: .whitespacesAndNewlines), !assignee.isEmpty {
-            queryItems.append(URLQueryItem(name: "assignee", value: assignee))
-        }
-        if let sourceBotId = filter.sourceBotId?.trimmingCharacters(in: .whitespacesAndNewlines), !sourceBotId.isEmpty {
-            queryItems.append(URLQueryItem(name: "source_bot_id", value: sourceBotId))
-        }
-        if let sourceThreadId = filter.sourceThreadId?.trimmingCharacters(in: .whitespacesAndNewlines), !sourceThreadId.isEmpty {
-            queryItems.append(URLQueryItem(name: "source_thread_id", value: sourceThreadId))
-        }
-        return try await get("/api/tasks", queryItems: queryItems)
-    }
-
     /// Anchored task forest for the conversation task-tree sidebar. The
     /// gateway owns retention and layout; callers render the page as-is.
     public func listTaskForest(anchorThreadId: String) async throws -> GaryxTaskForestPage {
@@ -639,46 +614,8 @@ public final class GaryxGatewayClient {
         )
     }
 
-    public func createTask(_ request: GaryxTaskCreateRequest) async throws -> GaryxTaskSummary {
-        try await post("/api/tasks", body: request)
-    }
-
-    public func getTask(taskId: String) async throws -> GaryxTaskSummary {
-        try await get("/api/tasks/\(taskId.urlPathEncoded)")
-    }
-
     public func getWorkflowRun(workflowRunId: String) async throws -> GaryxWorkflowRunDrilldown {
         try await get("/api/workflows/\(workflowRunId.urlPathEncoded)")
-    }
-
-    public func updateTaskStatus(
-        taskId: String,
-        request: GaryxTaskUpdateStatusRequest
-    ) async throws -> GaryxTaskEnvelope {
-        try await patch("/api/tasks/\(taskId.urlPathEncoded)/status", body: request)
-    }
-
-    public func assignTask(taskId: String, request: GaryxTaskAssignRequest) async throws -> GaryxTaskEnvelope {
-        try await patch("/api/tasks/\(taskId.urlPathEncoded)/assign", body: request)
-    }
-
-    public func unassignTask(taskId: String) async throws -> GaryxTaskEnvelope {
-        try await delete("/api/tasks/\(taskId.urlPathEncoded)/assign")
-    }
-
-    public func updateTaskTitle(taskId: String, title: String) async throws -> GaryxTaskEnvelope {
-        try await patch(
-            "/api/tasks/\(taskId.urlPathEncoded)/title",
-            body: GaryxTaskUpdateTitleRequest(title: title)
-        )
-    }
-
-    public func stopTask(taskId: String) async throws -> GaryxTaskEnvelope {
-        try await post("/api/tasks/\(taskId.urlPathEncoded)/stop", body: GaryxEmptyBody())
-    }
-
-    public func deleteTask(taskId: String) async throws -> GaryxDeleteResult {
-        try await delete("/api/tasks/\(taskId.urlPathEncoded)")
     }
 
     public func listAutomations() async throws -> [GaryxAutomationSummary] {

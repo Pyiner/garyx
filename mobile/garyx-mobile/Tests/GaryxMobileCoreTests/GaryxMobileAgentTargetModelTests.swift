@@ -176,12 +176,12 @@ final class GaryxMobileNavigationStateTests: XCTestCase {
 
     func testCurrentPanelNavigationPushesPreviousPresentedRoute() {
         var state = GaryxMobileNavigationState()
-        state.openPanel(.tasks, dreamsAutoScanEnabled: true, source: .current)
+        state.openPanel(.skills, dreamsAutoScanEnabled: true, source: .current)
 
         state.openPanel(.automations, dreamsAutoScanEnabled: true, source: .current)
 
         XCTAssertEqual(state.activePanel, .automations)
-        XCTAssertEqual(state.mainPanelBackStack, [GaryxMobilePanelRoute(panel: .tasks, settingsTab: .manage)])
+        XCTAssertEqual(state.mainPanelBackStack, [GaryxMobilePanelRoute(panel: .skills, settingsTab: .manage)])
         XCTAssertEqual(state.leadingEdgeAction, .mainPanelBack)
     }
 
@@ -210,22 +210,22 @@ final class GaryxMobileNavigationStateTests: XCTestCase {
 
     func testConversationOpenedFromCurrentPanelReturnsToThatPanel() {
         var state = GaryxMobileNavigationState()
-        state.openPanel(.tasks, dreamsAutoScanEnabled: true, source: .current)
+        state.openPanel(.skills, dreamsAutoScanEnabled: true, source: .current)
 
         state.openConversation(source: .current)
 
         XCTAssertEqual(state.activePanel, .chat)
         XCTAssertEqual(state.rootNavigationPath, [.conversation])
-        XCTAssertEqual(state.mainPanelBackStack, [GaryxMobilePanelRoute(panel: .tasks, settingsTab: .manage)])
+        XCTAssertEqual(state.mainPanelBackStack, [GaryxMobilePanelRoute(panel: .skills, settingsTab: .manage)])
         XCTAssertEqual(state.leadingEdgeAction, .mainPanelBack)
         XCTAssertTrue(state.goBackInMainPanel())
-        XCTAssertEqual(state.activePanel, .tasks)
-        XCTAssertEqual(state.rootNavigationPath, [.panel(.tasks)])
+        XCTAssertEqual(state.activePanel, .skills)
+        XCTAssertEqual(state.rootNavigationPath, [.panel(.skills)])
     }
 
     func testSidebarNavigationClearsPreviousRouteStack() {
         var state = GaryxMobileNavigationState()
-        state.openPanel(.tasks, dreamsAutoScanEnabled: true, source: .current)
+        state.openPanel(.skills, dreamsAutoScanEnabled: true, source: .current)
 
         state.openPanel(.automations, dreamsAutoScanEnabled: true, source: .sidebar)
 

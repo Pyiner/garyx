@@ -199,28 +199,6 @@ final class GaryxWorkflowRunPanelStateTests: XCTestCase {
                     headerFields: ["Content-Type": "application/json"]
                 )
             )
-            if url.path.contains("/api/tasks/") {
-                return (
-                    response,
-                    Data(
-                        """
-                        {
-                          "thread_id": "thread::workflow-1001",
-                          "task_id": "#TASK-1001",
-                          "task": {
-                            "number": 1001,
-                            "title": "Run workflow",
-                            "status": "in_progress",
-                            "executor": {
-                              "type": "workflow",
-                              "workflow_id": "release-check"
-                            }
-                          }
-                        }
-                        """.utf8
-                    )
-                )
-            }
             return (response, try Self.workflowFixtureData())
         }
 
@@ -232,12 +210,10 @@ final class GaryxWorkflowRunPanelStateTests: XCTestCase {
             retryPolicy: .disabled
         )
 
-        let task = try await client.getTask(taskId: "#TASK-1001")
         let workflow = try await client.getWorkflowRun(workflowRunId: "thread::workflow-1001")
 
-        XCTAssertTrue(task.executor?.isWorkflow == true)
         XCTAssertEqual(workflow.presentation.workflowRunId, "thread::workflow-1001")
-        XCTAssertEqual(paths, ["/garyx/api/tasks/%23TASK-1001", "/garyx/api/workflows/thread%3A%3Aworkflow-1001"])
+        XCTAssertEqual(paths, ["/garyx/api/workflows/thread%3A%3Aworkflow-1001"])
     }
 
     private static func workflowFixture() throws -> GaryxWorkflowRunDrilldown {

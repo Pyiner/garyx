@@ -12,8 +12,6 @@ final class GaryxMobileRouteLinkTests: XCTestCase {
             .settings(.channels),
             .settings(.commands),
             .settings(.mcp),
-            .panel(.tasks),
-            .task("task-1"),
             .panel(.automations),
             .panel(.capsules),
             .capsule("01900000-0000-7000-8000-000000000001"),
@@ -62,10 +60,6 @@ final class GaryxMobileRouteLinkTests: XCTestCase {
     }
 
     func testDetailRouteQueryAliases() throws {
-        XCTAssertEqual(
-            GaryxMobileRouteLink.parse(try XCTUnwrap(URL(string: "garyx://mobile/task?task_id=task-1"))),
-            .task("task-1")
-        )
         XCTAssertEqual(
             GaryxMobileRouteLink.parse(try XCTUnwrap(URL(string: "garyx://mobile/skill-file?skill_id=skill-1&file_path=docs%2Ffile.md"))),
             .skillFile(skillId: "skill-1", path: "docs/file.md")

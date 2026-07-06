@@ -664,67 +664,6 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(requestCounter.value(), 3)
     }
 
-    func testListTasksEncodesSourceThreadFilter() async throws {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [GaryxURLProtocolStub.self]
-        let session = URLSession(configuration: configuration)
-        defer {
-            GaryxURLProtocolStub.requestHandler = nil
-            session.invalidateAndCancel()
-        }
-
-        GaryxURLProtocolStub.requestHandler = { request in
-            XCTAssertEqual(request.httpMethod, "GET")
-            XCTAssertEqual(
-                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.percentEncodedPath,
-                "/garyx/api/tasks"
-            )
-            let queryItems = URLComponents(
-                url: try XCTUnwrap(request.url),
-                resolvingAgainstBaseURL: false
-            )?.queryItems ?? []
-            XCTAssertEqual(queryItems.first(where: { $0.name == "include_done" })?.value, "false")
-            XCTAssertEqual(queryItems.first(where: { $0.name == "limit" })?.value, "42")
-            XCTAssertEqual(queryItems.first(where: { $0.name == "offset" })?.value, "3")
-            XCTAssertEqual(queryItems.first(where: { $0.name == "status" })?.value, "in_progress")
-            XCTAssertEqual(queryItems.first(where: { $0.name == "assignee" })?.value, "codex")
-            XCTAssertEqual(queryItems.first(where: { $0.name == "source_bot_id" })?.value, "bot-test")
-            XCTAssertEqual(queryItems.first(where: { $0.name == "source_thread_id" })?.value, "thread::source/a")
-            let response = try XCTUnwrap(
-                HTTPURLResponse(
-                    url: try XCTUnwrap(request.url),
-                    statusCode: 200,
-                    httpVersion: nil,
-                    headerFields: ["Content-Type": "application/json"]
-                )
-            )
-            return (
-                response,
-                Data(#"{"tasks":[],"total":0,"has_more":false}"#.utf8)
-            )
-        }
-
-        let client = GaryxGatewayClient(
-            configuration: GaryxGatewayConfiguration(
-                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/garyx/"))
-            ),
-            session: session,
-            retryPolicy: .disabled
-        )
-
-        _ = try await client.listTasks(
-            filter: GaryxTaskListFilter(
-                status: .inProgress,
-                assignee: " codex ",
-                sourceBotId: " bot-test ",
-                sourceThreadId: " thread::source/a ",
-                includeDone: false,
-                limit: 42,
-                offset: 3
-            )
-        )
-    }
-
     func testRecentThreadsPageDecodesLegacyPreviewAndPaginationDefaults() throws {
         let page = try JSONDecoder().decode(
             GaryxRecentThreadsPage.self,
@@ -854,39 +793,6 @@ final class GaryxGatewayClientTests: XCTestCase {
                 """.utf8
             )
         )
-        let tasks = try JSONDecoder().decode(
-            GaryxTasksPage.self,
-            from: Data(
-                """
-                {
-                  "tasks": [
-                    {
-                      "thread_id": "thread::task",
-                      "task_id": "task::1",
-                      "number": 1,
-                      "title": "Ship mobile parity",
-                      "status": "in_progress",
-                      "creator": { "kind": "human", "user_id": "test-user" },
-                      "assignee": { "kind": "agent", "agent_id": "codex" },
-                      "source": {
-                        "thread_id": "thread::source",
-                        "task_thread_id": "thread::task",
-                        "bot_id": "bot-test",
-                        "channel": "api",
-                        "account_id": "account-test"
-                      },
-                      "updated_at": "2026-03-01T09:30:00Z",
-                      "updated_by": { "kind": "agent", "agent_id": "codex" },
-                      "runtime_agent_id": "codex",
-                      "reply_count": 2
-                    }
-                  ],
-                  "total": 1,
-                  "has_more": false
-                }
-                """.utf8
-            )
-        )
         let automations = try JSONDecoder().decode(
             GaryxAutomationsPage.self,
             from: Data(
@@ -932,59 +838,12 @@ final class GaryxGatewayClientTests: XCTestCase {
 
         XCTAssertEqual(agents.agents.first?.id, "codex")
         XCTAssertEqual(teams.teams.first?.memberAgentIds, ["codex", "claude"])
-        XCTAssertEqual(tasks.tasks.first?.status, .inProgress)
-        XCTAssertEqual(tasks.tasks.first?.assigneeLabel, "codex")
-        XCTAssertEqual(tasks.tasks.first?.creator?.userId, "test-user")
-        XCTAssertEqual(tasks.tasks.first?.assignee?.agentId, "codex")
-        XCTAssertEqual(tasks.tasks.first?.source?.channel, "api")
-        XCTAssertEqual(tasks.tasks.first?.source?.accountId, "account-test")
-        XCTAssertEqual(tasks.tasks.first?.updatedAt, "2026-03-01T09:30:00Z")
-        XCTAssertEqual(tasks.tasks.first?.updatedBy?.agentId, "codex")
         XCTAssertEqual(automations.automations.first?.workspacePath, "/workspace/project")
         XCTAssertEqual(automations.automations.first?.targetThreadId, "thread::target")
         XCTAssertEqual(skills.skills.first?.name, "Mobile Skill")
     }
 
-    func testTaskCreateRequestEncodesGatewayShape() throws {
-        let request = GaryxTaskCreateRequest(
-            title: "Ship mobile parity",
-            body: "Synthetic task body.",
-            assignee: .agent("codex"),
-            start: true,
-            runtime: GaryxTaskRuntimeRequest(
-                agentId: "codex",
-                workspaceDir: "/workspace/project"
-            )
-        )
-
-        let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any]
-        let assignee = object?["assignee"] as? [String: Any]
-        let runtime = object?["runtime"] as? [String: Any]
-        let notificationTarget = object?["notification_target"] as? [String: Any]
-
-        XCTAssertEqual(object?["title"] as? String, "Ship mobile parity")
-        XCTAssertEqual(assignee?["kind"] as? String, "agent")
-        XCTAssertEqual(assignee?["agent_id"] as? String, "codex")
-        XCTAssertEqual(runtime?["agent_id"] as? String, "codex")
-        XCTAssertEqual(runtime?["workspace_dir"] as? String, "/workspace/project")
-        XCTAssertEqual(notificationTarget?["kind"] as? String, "none")
-    }
-
-    func testTaskCreateRequestEncodesBotNotificationTarget() throws {
-        let request = GaryxTaskCreateRequest(
-            title: "Notify bot",
-            notificationTarget: .bot(channel: "telegram", accountId: "test-bot")
-        )
-
-        let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any]
-        let notificationTarget = object?["notification_target"] as? [String: Any]
-
-        XCTAssertEqual(notificationTarget?["kind"] as? String, "bot")
-        XCTAssertEqual(notificationTarget?["channel"] as? String, "telegram")
-        XCTAssertEqual(notificationTarget?["account_id"] as? String, "test-bot")
-    }
-
-    func testTaskCreateResponseMergesEnvelopeAndNestedTask() throws {
+    func testTaskSummaryMergesEnvelopeAndNestedTask() throws {
         let data = Data(
             """
             {

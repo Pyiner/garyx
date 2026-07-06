@@ -107,8 +107,6 @@ private struct GaryxRootRouteContentView: View {
             } else {
                 GaryxConversationView()
             }
-        case .tasks:
-            GaryxTasksView()
         case .workspaces:
             GaryxWorkspacesView()
         case .automations:

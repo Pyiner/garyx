@@ -9,7 +9,6 @@ struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
     var teams: [GaryxCachedTeam]
     var workspacePaths: [String]
     var skills: [GaryxCachedSkill]
-    var tasks: [GaryxCachedTask]
     var capsules: [GaryxCachedCapsule]
     var automations: [GaryxCachedAutomation]
     var slashCommands: [GaryxCachedSlashCommand]
@@ -27,7 +26,6 @@ struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
         teams: [GaryxCachedTeam],
         workspacePaths: [String],
         skills: [GaryxCachedSkill],
-        tasks: [GaryxCachedTask],
         capsules: [GaryxCachedCapsule] = [],
         automations: [GaryxCachedAutomation],
         slashCommands: [GaryxCachedSlashCommand],
@@ -44,7 +42,6 @@ struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
         self.teams = teams
         self.workspacePaths = workspacePaths
         self.skills = skills
-        self.tasks = tasks
         self.capsules = capsules
         self.automations = automations
         self.slashCommands = slashCommands
@@ -61,7 +58,6 @@ struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
         teams: [GaryxTeamSummary],
         workspacePaths: [String],
         skills: [GaryxSkillSummary],
-        tasks: [GaryxTaskSummary],
         capsules: [GaryxCapsuleSummary] = [],
         automations: [GaryxAutomationSummary],
         slashCommands: [GaryxSlashCommand],
@@ -79,7 +75,6 @@ struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
             teams: teams.map(GaryxCachedTeam.init),
             workspacePaths: workspacePaths,
             skills: skills.map(GaryxCachedSkill.init),
-            tasks: tasks.map(GaryxCachedTask.init),
             capsules: capsules.map(GaryxCachedCapsule.init),
             automations: automations.map(GaryxCachedAutomation.init),
             slashCommands: slashCommands.map(GaryxCachedSlashCommand.init),
@@ -194,100 +189,6 @@ struct GaryxCachedSkill: Codable, Equatable {
             installed: installed,
             enabled: enabled,
             sourcePath: sourcePath
-        )
-    }
-}
-
-struct GaryxCachedTaskPrincipal: Codable, Equatable {
-    var kind: String
-    var agentId: String?
-    var userId: String?
-
-    init(_ principal: GaryxTaskPrincipal) {
-        kind = principal.kind
-        agentId = principal.agentId
-        userId = principal.userId
-    }
-
-    var model: GaryxTaskPrincipal {
-        GaryxTaskPrincipal(kind: kind, agentId: agentId, userId: userId)
-    }
-}
-
-struct GaryxCachedTaskSource: Codable, Equatable {
-    var threadId: String?
-    var taskId: String?
-    var taskThreadId: String?
-    var botId: String?
-    var channel: String?
-    var accountId: String?
-
-    init(_ source: GaryxTaskSource) {
-        threadId = source.threadId
-        taskId = source.taskId
-        taskThreadId = source.taskThreadId
-        botId = source.botId
-        channel = source.channel
-        accountId = source.accountId
-    }
-
-    var model: GaryxTaskSource {
-        GaryxTaskSource(
-            threadId: threadId,
-            taskId: taskId,
-            taskThreadId: taskThreadId,
-            botId: botId,
-            channel: channel,
-            accountId: accountId
-        )
-    }
-}
-
-struct GaryxCachedTask: Codable, Equatable {
-    var id: String
-    var threadId: String
-    var number: Int
-    var title: String
-    var status: GaryxTaskStatus
-    var creator: GaryxCachedTaskPrincipal?
-    var assignee: GaryxCachedTaskPrincipal?
-    var source: GaryxCachedTaskSource?
-    var updatedBy: GaryxCachedTaskPrincipal?
-    var runtimeAgentId: String
-    var replyCount: Int
-    var updatedAt: String?
-
-    init(_ task: GaryxTaskSummary) {
-        id = task.id
-        threadId = task.threadId
-        number = task.number
-        title = task.title
-        status = task.status
-        creator = task.creator.map(GaryxCachedTaskPrincipal.init)
-        assignee = task.assignee.map(GaryxCachedTaskPrincipal.init)
-        source = task.source.map(GaryxCachedTaskSource.init)
-        updatedBy = task.updatedBy.map(GaryxCachedTaskPrincipal.init)
-        runtimeAgentId = task.runtimeAgentId
-        replyCount = task.replyCount
-        updatedAt = task.updatedAt
-    }
-
-    var model: GaryxTaskSummary {
-        let assigneeModel = assignee?.model
-        return GaryxTaskSummary(
-            id: id,
-            threadId: threadId,
-            number: number,
-            title: title,
-            status: status,
-            creator: creator?.model,
-            assignee: assigneeModel,
-            assigneeLabel: assigneeModel?.label ?? "",
-            source: source?.model,
-            updatedBy: updatedBy?.model,
-            runtimeAgentId: runtimeAgentId,
-            replyCount: replyCount,
-            updatedAt: updatedAt
         )
     }
 }

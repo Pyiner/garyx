@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UIKit
 
 // Conversation task-tree sidebar state: anchored forest fetch/cache with
 // stale-response gating, open/close, row navigation, and the poll policy.
@@ -29,10 +30,6 @@ extension GaryxMobileModel {
     /// may still open the panel onto a loading state.
     var isTaskTreeFirstLoadInFlight: Bool {
         taskTreeForestPage == nil && taskTreeLoadPhase.isLoading
-    }
-
-    var shouldContinueTaskTreePolling: Bool {
-        GaryxTaskTreeSidebarPresentation.shouldContinuePolling(page: taskTreeForestPage)
     }
 
     /// Re-anchor the sidebar to the selected thread: restore the cached tree
@@ -79,8 +76,6 @@ extension GaryxMobileModel {
             taskTreeForestPage = page
             storeTaskTreeSnapshot(page, anchor: anchor)
             taskTreeLoadPhase = .loaded
-            taskTreePollSuspendedThreadId =
-                GaryxTaskTreeSidebarPresentation.isSidebarAvailable(page: page) ? nil : anchor
         } catch {
             guard taskTreeRequestGate.accepts(
                 token: token,
@@ -100,6 +95,9 @@ extension GaryxMobileModel {
     func openTaskTreeSidebar() {
         guard !isTaskTreeSidebarOpen else { return }
         dismissKeyboardForTaskTreeSidebar()
+        // A light tick on open and close so the panel state change is felt,
+        // matching the left navigation drawer.
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
         isTaskTreeSidebarOpen = true
         Task { [weak self] in
             await self?.refreshSelectedThreadTaskForest()
@@ -107,15 +105,9 @@ extension GaryxMobileModel {
     }
 
     func closeTaskTreeSidebar() {
+        guard isTaskTreeSidebarOpen else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
         isTaskTreeSidebarOpen = false
-    }
-
-    func toggleTaskTreeSidebar() {
-        if isTaskTreeSidebarOpen {
-            closeTaskTreeSidebar()
-        } else {
-            openTaskTreeSidebar()
-        }
     }
 
     /// Row tap: the current thread's row only closes the panel; any other row
@@ -142,13 +134,11 @@ extension GaryxMobileModel {
         await openThread(id: row.threadId, source: .replace)
     }
 
-    /// Local task mutations (create/status/title/assign/stop/delete) resume a
-    /// poll suspended on a known-empty tree, drop every cached tree snapshot
-    /// (any tree may have changed; the anchor→tree index stays, a wrong entry
-    /// only costs one refetch), and refresh the open conversation's snapshot
-    /// so the badge and sidebar catch the change immediately.
+    /// Drops every cached tree snapshot (any tree may have changed; the
+    /// anchor→tree index stays, a wrong entry only costs one refetch) and
+    /// refreshes the open conversation's snapshot so the badge and sidebar
+    /// catch the change immediately.
     func noteTaskTreeLocalMutation() {
-        taskTreePollSuspendedThreadId = nil
         taskTreeSnapshotsByOrigin.removeAll()
         taskTreeSnapshotOriginOrder.removeAll()
         guard selectedThread != nil else { return }

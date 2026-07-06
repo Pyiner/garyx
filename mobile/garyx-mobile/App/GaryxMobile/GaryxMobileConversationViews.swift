@@ -629,10 +629,6 @@ struct GaryxConversationHeader: View {
 
                 Spacer(minLength: 0)
 
-                if model.selectedThread != nil {
-                    GaryxTaskTreeHeaderButton()
-                }
-
                 if let selectedThread = model.selectedThread {
                     Menu {
                         Section("Bot") {
@@ -650,9 +646,6 @@ struct GaryxConversationHeader: View {
                             systemImage: model.isThreadPinned(selectedThread.id) ? "pin.slash" : "pin"
                         ) {
                             model.togglePinnedThread(selectedThread.id)
-                        }
-                        Button(model.selectedThreadTasksMenuTitle, systemImage: "checklist") {
-                            Task { await model.openSelectedThreadTasks() }
                         }
                         Button("Rename", systemImage: "pencil") {
                             openRenamePrompt()

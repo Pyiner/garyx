@@ -549,41 +549,6 @@ extension GaryxMobileModel {
         )
     }
 
-    var activeTaskCount: Int {
-        tasks.filter { $0.status != .done }.count
-    }
-
-    var selectedThreadTasks: [GaryxTaskSummary] {
-        guard let threadId = selectedThread?.id.trimmingCharacters(in: .whitespacesAndNewlines),
-              !threadId.isEmpty else {
-            return []
-        }
-        return GaryxMobileTasksPanelState.sourceThreadTasks(tasks, sourceThreadId: threadId)
-    }
-
-    var selectedThreadTasksMenuTitle: String {
-        GaryxMobileTasksPanelState.viewTasksMenuTitle(count: selectedThreadTasks.count)
-    }
-
-    var visibleTasks: [GaryxTaskSummary] {
-        tasksPanelState.visibleTasks(from: tasks)
-    }
-
-    var visibleTaskCount: Int {
-        visibleTasks.count
-    }
-
-    var visibleActiveTaskCount: Int {
-        visibleTasks.filter { $0.status != .done }.count
-    }
-
-    var tasksPanelSubtitle: String {
-        if tasksPanelState.isSourceThreadFilterActive {
-            return "\(visibleActiveTaskCount) active / \(visibleTaskCount) from thread"
-        }
-        return "\(activeTaskCount) active / \(tasks.count) total"
-    }
-
     var enabledAutomationCount: Int {
         automations.filter(\.enabled).count
     }
