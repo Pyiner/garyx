@@ -106,8 +106,7 @@ extension GaryxMobileModel {
 
     func openConversation(
         source: GaryxMobilePanelOpenSource = .replace,
-        invalidatesPendingThreadOpen: Bool = true,
-        startsSelectedThreadStream: Bool = true
+        invalidatesPendingThreadOpen: Bool = true
     ) {
         if invalidatesPendingThreadOpen {
             invalidatePendingThreadOpen()
@@ -115,9 +114,7 @@ extension GaryxMobileModel {
         var nextState = navigationState
         nextState.openConversation(source: source)
         navigationState = nextState
-        if startsSelectedThreadStream {
-            ensureSelectedThreadStreamForVisibleConversation()
-        }
+        ensureSelectedThreadStreamForVisibleConversation()
         setSidebarVisible(false)
     }
 

@@ -90,6 +90,32 @@ struct GaryxCodingUsageWidgetView: View {
     }
 
     var body: some View {
+        linkedContent
+            .containerBackground(for: .widget) {
+                ContainerRelativeShape().fill(.thinMaterial)
+            }
+    }
+
+    // One tap target, one destination (the provider settings page, whose top
+    // is the Quota hero), for content and empty state alike. Medium/large
+    // express it as an explicit whole-card Link element (widget rule: no
+    // container-level widgetURL where Link semantics exist). systemSmall is
+    // the platform exception: WidgetKit ignores Link controls there, so the
+    // small family keeps the equivalent family-scoped widgetURL — the only
+    // supported tap mechanism, with no per-element links it could steal.
+    @ViewBuilder
+    private var linkedContent: some View {
+        if widgetFamily == .systemSmall {
+            paddedContent.widgetURL(GaryxMobileProviderSettingsLink.make())
+        } else if let url = GaryxMobileProviderSettingsLink.make() {
+            Link(destination: url) { paddedContent }
+                .buttonStyle(.plain)
+        } else {
+            paddedContent
+        }
+    }
+
+    private var paddedContent: some View {
         Group {
             if models.isEmpty {
                 emptyState
@@ -124,14 +150,6 @@ struct GaryxCodingUsageWidgetView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(metrics.contentPadding)
-        .containerBackground(for: .widget) {
-            ContainerRelativeShape().fill(.thinMaterial)
-        }
-        // Whole-widget deep link into the provider settings page (whose top
-        // is the Quota hero), for every family and the empty state alike
-        // (design §8/D7). No per-gauge Links, so a root widgetURL cannot
-        // steal competing taps.
-        .widgetURL(GaryxMobileProviderSettingsLink.make())
     }
 
     private var emptyState: some View {

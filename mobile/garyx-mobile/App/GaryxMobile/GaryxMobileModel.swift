@@ -102,9 +102,7 @@ final class GaryxMobileModel: ObservableObject {
     }
     @Published var selectedThread: GaryxThreadSummary? {
         didSet {
-            if !suppressesSelectedThreadStreamPolicy {
-                applySelectedThreadStreamPolicy(previousThreadId: oldValue?.id, selectedThreadId: selectedThread?.id)
-            }
+            applySelectedThreadStreamPolicy(previousThreadId: oldValue?.id, selectedThreadId: selectedThread?.id)
             // Conversation identity: every real selection change resets the
             // scroll-container token, EXCEPT the draft-promotion write (the
             // just-created thread adopting the current draft) — the view's
@@ -371,7 +369,6 @@ final class GaryxMobileModel: ObservableObject {
     var selectedThreadStreamTask: Task<Void, Never>?
     var selectedThreadStreamGeneration: UUID?
     var streamOwnedThreadId: String?
-    var suppressesSelectedThreadStreamPolicy = false
     /// Leading-edge throttle for stream flushes: the gate decides (per settled
     /// render frame) whether to flush immediately, coalesce into the open
     /// window, or skip a no-op frame; the task is the armed window timer.

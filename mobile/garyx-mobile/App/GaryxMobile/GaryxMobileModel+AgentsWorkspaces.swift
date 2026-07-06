@@ -88,8 +88,27 @@ enum GaryxMobileAvatarImageNormalizer {
 
 extension GaryxMobileModel {
 
-    func openThread(_ thread: GaryxThreadSummary) async {
-        await openResolvedThread(thread, invalidatesPendingThreadOpen: true, source: .replace)
+    /// Single summary-based open entry (docs/agents/mobile-ui.md: row taps,
+    /// widget links, tasks, automations, bot conversations, and deep links
+    /// all route through the shared openThread path).
+    func openThread(
+        _ thread: GaryxThreadSummary,
+        source: GaryxMobilePanelOpenSource = .replace
+    ) async {
+        let resolvedThread = summaryWithCommittedRunState(thread)
+        threads = Self.mergedThreadSummaries(threads + [resolvedThread])
+        if await openThreadDestination(
+            resolvedThread,
+            requestId: nil,
+            invalidatesPendingThreadOpen: true,
+            source: source
+        ) {
+            return
+        }
+        // Unknown/missing threadType (e.g. bot-conversation fallback
+        // summaries): resolve by id through the shared resolving flow,
+        // exactly like id-based opens.
+        await openThread(id: resolvedThread.id, source: source)
     }
 
     func openThread(
@@ -123,45 +142,6 @@ extension GaryxMobileModel {
         } catch {
             guard canContinueLastOpenedThreadRestore(threadId: threadId) else { return }
             lastError = displayMessage(for: error)
-        }
-    }
-
-    func openThreadImmediately(
-        _ thread: GaryxThreadSummary,
-        source: GaryxMobilePanelOpenSource = .replace
-    ) {
-        let resolvedThread = summaryWithCommittedRunState(thread)
-        threads = Self.mergedThreadSummaries(threads + [resolvedThread])
-        switch GaryxWorkflowRunDestination.destination(for: resolvedThread) {
-        case .chat:
-            showSelectedThread(resolvedThread, invalidatesPendingThreadOpen: true, source: source)
-            Task { [weak self] in
-                await self?.loadSelectedThreadHistory()
-            }
-        case .workflowRun(let workflowRunId):
-            Task { [weak self] in
-                await self?.openWorkflowRun(
-                    workflowRunId: workflowRunId,
-                    thread: resolvedThread,
-                    invalidatesPendingThreadOpen: true,
-                    source: source
-                )
-            }
-        case .unresolved:
-            openThreadImmediately(id: thread.id, source: source)
-        }
-    }
-
-    func openThreadImmediately(
-        id: String,
-        source: GaryxMobilePanelOpenSource = .replace
-    ) {
-        let threadId = id.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !threadId.isEmpty else { return }
-        let requestId = beginDirectThreadOpen()
-        showResolvingWorkflowThread(threadId: threadId, requestId: requestId, source: source)
-        Task { [weak self] in
-            await self?.openThread(id: threadId, requestId: requestId, source: source)
         }
     }
 
@@ -233,21 +213,6 @@ extension GaryxMobileModel {
             guard isCurrentPendingThreadOpen(requestId) else { return }
             lastError = displayMessage(for: error)
         }
-    }
-
-    private func openResolvedThread(
-        _ thread: GaryxThreadSummary,
-        invalidatesPendingThreadOpen: Bool,
-        source: GaryxMobilePanelOpenSource
-    ) async {
-        let resolvedThread = summaryWithCommittedRunState(thread)
-        threads = Self.mergedThreadSummaries(threads + [resolvedThread])
-        _ = await openThreadDestination(
-            resolvedThread,
-            requestId: nil,
-            invalidatesPendingThreadOpen: invalidatesPendingThreadOpen,
-            source: source
-        )
     }
 
     private func canContinueLastOpenedThreadRestore(threadId: String) -> Bool {

@@ -15,8 +15,6 @@ struct GaryxRootView: View {
 
     var body: some View {
         ZStack {
-            GaryxTheme.background.ignoresSafeArea()
-
             if homeObservationStore.isGatewayConfigured, case .ready = homeObservationStore.connectionState {
                 GaryxShellView(
                     shellStore: model.shellChromeStore,
@@ -48,7 +46,7 @@ struct GaryxRootView: View {
                         model.openNewThreadDraft()
                     },
                     onOpenThread: { thread in
-                        model.openThreadImmediately(thread, source: .replace)
+                        Task { await model.openThread(thread, source: .replace) }
                     },
                     onTogglePinnedThread: { threadId in
                         model.togglePinnedThread(threadId)
@@ -90,6 +88,7 @@ struct GaryxRootView: View {
                 GaryxGatewaySetupView()
             }
         }
+        .garyxPageBackground()
         .overlay(alignment: .top) {
             GaryxGlobalErrorToastHost(
                 topOffset: 72,

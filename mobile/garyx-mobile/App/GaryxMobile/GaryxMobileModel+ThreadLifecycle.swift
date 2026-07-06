@@ -12,12 +12,17 @@ extension GaryxMobileModel {
         invalidatesPendingThreadOpen: Bool = true,
         source: GaryxMobilePanelOpenSource = .replace
     ) async {
-        let reopeningSelectedThreadFromHome = isHomeVisible && selectedThread?.id == thread.id
+        // Home-list baseline (docs/agents/mobile-ui.md): the stream is
+        // ensured at show time; the bounded history refresh races it. The
+        // M3-era same-thread home-reopen deferral (suppress the stream until
+        // the history refresh returned) is gone — it delayed live output by a
+        // full history roundtrip (TASK-1786), and starting at show can never
+        // tear down a live stream (startSelectedThreadStream early-returns
+        // for an owned, alive stream).
         showSelectedThread(
             thread,
             invalidatesPendingThreadOpen: invalidatesPendingThreadOpen,
-            source: source,
-            startsSelectedThreadStream: !reopeningSelectedThreadFromHome
+            source: source
         )
         // Bound the open to the newest ~threadHistoryUserQueryLimit user turns: always
         // refresh from the gateway, which returns the forward delta when the cached
@@ -27,16 +32,16 @@ extension GaryxMobileModel {
         // pages in on scroll-up. The stream supersedes the reconcile poll and falls
         // back to it (and the after_index HTTP path) on failure.
         await loadSelectedThreadHistory()
-        if reopeningSelectedThreadFromHome {
-            ensureSelectedThreadStreamForVisibleConversation()
-        }
+        // Recovery net, not the primary start: no-op while the stream is
+        // owned and alive; picks the stream up when the show-time start was
+        // skipped (e.g. connection not yet ready at show).
+        ensureSelectedThreadStreamForVisibleConversation()
     }
 
     func showSelectedThread(
         _ thread: GaryxThreadSummary,
         invalidatesPendingThreadOpen: Bool = true,
-        source: GaryxMobilePanelOpenSource = .replace,
-        startsSelectedThreadStream: Bool = true
+        source: GaryxMobilePanelOpenSource = .replace
     ) {
         if invalidatesPendingThreadOpen {
             invalidatePendingThreadOpen()
@@ -64,14 +69,7 @@ extension GaryxMobileModel {
             cancelSelectedThreadReconcileLoop()
             resetSelectedThreadHistoryPagination()
         }
-        let shouldSuppressStreamPolicy = !startsSelectedThreadStream
-        if shouldSuppressStreamPolicy {
-            suppressesSelectedThreadStreamPolicy = true
-        }
         selectedThread = thread
-        if shouldSuppressStreamPolicy {
-            suppressesSelectedThreadStreamPolicy = false
-        }
         if !thread.excludeFromRecent {
             persistOpenedThreadDestination(.chat(threadId: thread.id))
         }
@@ -80,8 +78,7 @@ extension GaryxMobileModel {
         draftThreadTitle = thread.title
         openConversation(
             source: source,
-            invalidatesPendingThreadOpen: false,
-            startsSelectedThreadStream: startsSelectedThreadStream
+            invalidatesPendingThreadOpen: false
         )
         if previousThreadId != thread.id {
             let inMemory = cachedMessages(for: thread.id)
