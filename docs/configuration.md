@@ -650,14 +650,14 @@ The CLI exposes the same path:
 
 ```bash
 garyx agent create \
-  --agent-id budget-gpt \
+  --agent budget-gpt \
   --display-name "Budget GPT" \
   --provider gpt \
   --auth-source codex \
   --system-prompt "Use GPT for this agent."
 
 garyx agent create \
-  --agent-id keyed-gpt \
+  --agent keyed-gpt \
   --display-name "Keyed GPT" \
   --provider gpt \
   --api-key "${OPENAI_API_KEY}" \
@@ -746,7 +746,7 @@ long-running work.
 
 Use a custom agent or an agent team by setting the same `agent_id` used in your
 Garyx agent/team configuration. The CLI account setup flow can also prompt for
-an agent when `--agent-id` is omitted.
+an agent when `--agent` is omitted.
 
 Custom agents can also store an optional `default_workspace_dir`. It is a path
 string, not a Workspace entity. New bot/channel threads use

@@ -23,12 +23,12 @@ The fastest path. You only need a bot token from [@BotFather](https://t.me/BotFa
    export TELEGRAM_BOT_TOKEN="TOKEN_FROM_BOTFATHER"
    garyx channels add telegram main \
      --token "$TELEGRAM_BOT_TOKEN" \
-     --agent-id claude
+     --agent claude
    garyx gateway restart --no-wake
    ```
 
 3. DM your bot. Garyx pulls updates with long-polling and routes them through
-   the agent you bound on `--agent-id`.
+   the agent you bound on `--agent`.
 
 ::: info Group chats
 By default the bot will only listen in DMs. To enable a group, edit the
@@ -56,7 +56,7 @@ garyx channels add feishu gary \
   --app-id cli_xxxxxxxx \
   --app-secret xxxxxxxxxxxx \
   --domain feishu \
-  --agent-id claude
+  --agent claude
 ```
 
 The gateway opens a Feishu WebSocket; @-mention the bot in any chat it has

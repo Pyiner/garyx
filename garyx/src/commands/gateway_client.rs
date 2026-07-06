@@ -44,21 +44,125 @@ pub(super) fn gateway_request(
     builder
 }
 
+/// Failure classes for gateway-backed CLI commands.
+///
+/// The class drives the process exit code (see `cli_error_exit_code` in
+/// `main.rs`) and the `error.kind` field of the `--json` failure envelope, so
+/// scripts and agents can react without parsing message text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GatewayErrorKind {
+    /// The gateway did not answer at all (connect refused / timeout).
+    Unreachable,
+    /// The gateway answered 404 for the addressed resource.
+    NotFound,
+    /// The gateway rejected the request with any other non-success status.
+    Rejected,
+}
+
+impl GatewayErrorKind {
+    pub(crate) fn slug(self) -> &'static str {
+        match self {
+            GatewayErrorKind::Unreachable => "gateway_unreachable",
+            GatewayErrorKind::NotFound => "not_found",
+            GatewayErrorKind::Rejected => "gateway_rejected",
+        }
+    }
+}
+
+/// Structured error for gateway-backed commands. `Display` is a single
+/// human-readable line (no nested Debug dumps, no double-encoded JSON).
+#[derive(Debug)]
+pub(crate) struct GatewayCliError {
+    pub(crate) kind: GatewayErrorKind,
+    pub(crate) message: String,
+}
+
+impl std::fmt::Display for GatewayCliError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for GatewayCliError {}
+
+pub(super) fn gateway_send_error(
+    gateway: &GatewayEndpoint,
+    error: &reqwest::Error,
+) -> GatewayCliError {
+    if error.is_connect() || error.is_timeout() {
+        GatewayCliError {
+            kind: GatewayErrorKind::Unreachable,
+            message: format!(
+                "gateway not reachable at {} — is it running? Check `garyx status`; start it with `garyx gateway start` (or `garyx gateway install` on first setup)",
+                gateway.base_url
+            ),
+        }
+    } else {
+        GatewayCliError {
+            kind: GatewayErrorKind::Rejected,
+            message: format!("gateway request failed: {error}"),
+        }
+    }
+}
+
+fn gateway_status_error(status: reqwest::StatusCode, body: &str) -> GatewayCliError {
+    // Prefer the gateway's own `{"error": "..."}` detail over echoing the raw
+    // JSON body, which double-encodes when the whole error is stringified.
+    let detail = serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("error")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| body.trim().to_owned());
+    let kind = if status == reqwest::StatusCode::NOT_FOUND {
+        GatewayErrorKind::NotFound
+    } else {
+        GatewayErrorKind::Rejected
+    };
+    let message = if detail.is_empty() {
+        format!("gateway request failed: {status}")
+    } else {
+        format!("gateway request failed: {status}: {detail}")
+    };
+    GatewayCliError { kind, message }
+}
+
+/// Send a prepared gateway request and decode the JSON response.
+///
+/// Single choke point for every gateway JSON helper below: classifies
+/// connect/timeout failures as `Unreachable`, non-2xx statuses as
+/// `NotFound`/`Rejected`, and treats an empty success body as `{}`.
+async fn execute_gateway_json(
+    builder: reqwest::RequestBuilder,
+    gateway: &GatewayEndpoint,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let response = gateway_request(builder, gateway)
+        .send()
+        .await
+        .map_err(|error| gateway_send_error(gateway, &error))?;
+    let status = response.status();
+    let body = response.text().await?;
+    if !status.is_success() {
+        return Err(gateway_status_error(status, &body).into());
+    }
+    if body.trim().is_empty() {
+        return Ok(json!({}));
+    }
+    Ok(serde_json::from_str(&body)?)
+}
+
 pub(super) async fn fetch_gateway_json(
     gateway: &GatewayEndpoint,
     path_and_query: &str,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let url = format!("{}{}", gateway.base_url, path_and_query);
-    let response = gateway_request(reqwest::Client::new().get(&url), gateway)
-        .timeout(std::time::Duration::from_secs(5))
-        .send()
-        .await?;
-    let status = response.status();
-    let body = response.text().await?;
-    if !status.is_success() {
-        return Err(format!("gateway request failed: {status} {body}").into());
-    }
-    Ok(serde_json::from_str(&body)?)
+    let builder = reqwest::Client::new()
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(5));
+    execute_gateway_json(builder, gateway).await
 }
 
 pub(super) fn print_pretty_json(value: &Value) -> Result<(), Box<dyn std::error::Error>> {
@@ -72,17 +176,11 @@ pub(super) async fn post_gateway_json(
     payload: &Value,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let url = format!("{}{}", gateway.base_url, path);
-    let response = gateway_request(reqwest::Client::new().post(&url), gateway)
+    let builder = reqwest::Client::new()
+        .post(&url)
         .json(payload)
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
-        .await?;
-    let status = response.status();
-    let body = response.text().await?;
-    if !status.is_success() {
-        return Err(format!("gateway request failed: {status} {body}").into());
-    }
-    Ok(serde_json::from_str(&body)?)
+        .timeout(std::time::Duration::from_secs(10));
+    execute_gateway_json(builder, gateway).await
 }
 
 pub(super) async fn post_gateway_json_with_timeout(
@@ -92,17 +190,11 @@ pub(super) async fn post_gateway_json_with_timeout(
     timeout_secs: u64,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let url = format!("{}{}", gateway.base_url, path);
-    let response = gateway_request(reqwest::Client::new().post(&url), gateway)
+    let builder = reqwest::Client::new()
+        .post(&url)
         .json(payload)
-        .timeout(std::time::Duration::from_secs(timeout_secs.max(1)))
-        .send()
-        .await?;
-    let status = response.status();
-    let body = response.text().await?;
-    if !status.is_success() {
-        return Err(format!("gateway request failed: {status} {body}").into());
-    }
-    Ok(serde_json::from_str(&body)?)
+        .timeout(std::time::Duration::from_secs(timeout_secs.max(1)));
+    execute_gateway_json(builder, gateway).await
 }
 
 pub(super) async fn post_gateway_json_as_cli_actor(
@@ -111,18 +203,12 @@ pub(super) async fn post_gateway_json_as_cli_actor(
     payload: &Value,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let url = format!("{}{}", gateway.base_url, path);
-    let response = gateway_request(reqwest::Client::new().post(&url), gateway)
+    let builder = reqwest::Client::new()
+        .post(&url)
         .header("X-Garyx-Actor", cli_actor_header_value())
         .json(payload)
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
-        .await?;
-    let status = response.status();
-    let body = response.text().await?;
-    if !status.is_success() {
-        return Err(format!("gateway request failed: {status} {body}").into());
-    }
-    Ok(serde_json::from_str(&body)?)
+        .timeout(std::time::Duration::from_secs(10));
+    execute_gateway_json(builder, gateway).await
 }
 
 pub(super) async fn patch_gateway_json(
@@ -131,17 +217,11 @@ pub(super) async fn patch_gateway_json(
     payload: &Value,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let url = format!("{}{}", gateway.base_url, path);
-    let response = gateway_request(reqwest::Client::new().patch(&url), gateway)
+    let builder = reqwest::Client::new()
+        .patch(&url)
         .json(payload)
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
-        .await?;
-    let status = response.status();
-    let body = response.text().await?;
-    if !status.is_success() {
-        return Err(format!("gateway request failed: {status} {body}").into());
-    }
-    Ok(serde_json::from_str(&body)?)
+        .timeout(std::time::Duration::from_secs(10));
+    execute_gateway_json(builder, gateway).await
 }
 
 pub(super) async fn patch_gateway_json_as_cli_actor(
@@ -150,18 +230,12 @@ pub(super) async fn patch_gateway_json_as_cli_actor(
     payload: &Value,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let url = format!("{}{}", gateway.base_url, path);
-    let response = gateway_request(reqwest::Client::new().patch(&url), gateway)
+    let builder = reqwest::Client::new()
+        .patch(&url)
         .header("X-Garyx-Actor", cli_actor_header_value())
         .json(payload)
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
-        .await?;
-    let status = response.status();
-    let body = response.text().await?;
-    if !status.is_success() {
-        return Err(format!("gateway request failed: {status} {body}").into());
-    }
-    Ok(serde_json::from_str(&body)?)
+        .timeout(std::time::Duration::from_secs(10));
+    execute_gateway_json(builder, gateway).await
 }
 
 pub(super) async fn put_gateway_json(
@@ -170,17 +244,11 @@ pub(super) async fn put_gateway_json(
     payload: &Value,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let url = format!("{}{}", gateway.base_url, path);
-    let response = gateway_request(reqwest::Client::new().put(&url), gateway)
+    let builder = reqwest::Client::new()
+        .put(&url)
         .json(payload)
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
-        .await?;
-    let status = response.status();
-    let body = response.text().await?;
-    if !status.is_success() {
-        return Err(format!("gateway request failed: {status} {body}").into());
-    }
-    Ok(serde_json::from_str(&body)?)
+        .timeout(std::time::Duration::from_secs(10));
+    execute_gateway_json(builder, gateway).await
 }
 
 pub(super) async fn delete_gateway_json_as_cli_actor(
@@ -188,17 +256,11 @@ pub(super) async fn delete_gateway_json_as_cli_actor(
     path: &str,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let url = format!("{}{}", gateway.base_url, path);
-    let response = gateway_request(reqwest::Client::new().delete(&url), gateway)
+    let builder = reqwest::Client::new()
+        .delete(&url)
         .header("X-Garyx-Actor", cli_actor_header_value())
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
-        .await?;
-    let status = response.status();
-    let body = response.text().await?;
-    if !status.is_success() {
-        return Err(format!("gateway request failed: {status} {body}").into());
-    }
-    Ok(serde_json::from_str(&body)?)
+        .timeout(std::time::Duration::from_secs(10));
+    execute_gateway_json(builder, gateway).await
 }
 
 pub(super) async fn delete_gateway_json(
@@ -206,19 +268,10 @@ pub(super) async fn delete_gateway_json(
     path: &str,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let url = format!("{}{}", gateway.base_url, path);
-    let response = gateway_request(reqwest::Client::new().delete(&url), gateway)
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
-        .await?;
-    let status = response.status();
-    let body = response.text().await?;
-    if !status.is_success() {
-        return Err(format!("gateway request failed: {status} {body}").into());
-    }
-    if body.trim().is_empty() {
-        return Ok(json!({}));
-    }
-    Ok(serde_json::from_str(&body)?)
+    let builder = reqwest::Client::new()
+        .delete(&url)
+        .timeout(std::time::Duration::from_secs(10));
+    execute_gateway_json(builder, gateway).await
 }
 
 pub(super) fn principal_payload(principal: &str) -> Result<Value, Box<dyn std::error::Error>> {

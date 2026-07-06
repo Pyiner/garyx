@@ -174,53 +174,73 @@ fn resolve_cli_provider_env(
     Ok(Some(Value::Object(map)))
 }
 
-/// Fetch an agent's current `provider_env` map for read-modify-write.
+/// Fetch the full current agent for a read-modify-write mutation.
 ///
-/// Returns `Ok(Some(map))` when the agent exists, `Ok(None)` on a 404 (so
-/// `upsert` can create from empty), and `Err` on any other failure (transient,
-/// 5xx, malformed body). Distinguishing these prevents a failed read from
-/// silently merging env flags onto an empty map and dropping existing env.
-async fn fetch_existing_provider_env(
+/// Returns `Ok(Some(agent))` when the agent exists, `Ok(None)` on a 404 (so
+/// `upsert` can fall through to create), and `Err` on any other failure
+/// (unreachable, 5xx, malformed body). Distinguishing these prevents a failed
+/// read from silently rebuilding the agent out of CLI-provided fields only.
+async fn fetch_existing_agent(
     gateway: &GatewayEndpoint,
     agent_id: &str,
-) -> Result<Option<Map<String, Value>>, Box<dyn std::error::Error>> {
-    let url = format!(
-        "{}/api/custom-agents/{}",
-        gateway.base_url,
+) -> Result<Option<Value>, Box<dyn std::error::Error>> {
+    let path = format!(
+        "/api/custom-agents/{}",
         urlencoding::encode(agent_id.trim())
     );
-    let response = gateway_request(reqwest::Client::new().get(&url), gateway)
-        .timeout(std::time::Duration::from_secs(5))
-        .send()
-        .await?;
-    let status = response.status();
-    if status == reqwest::StatusCode::NOT_FOUND {
-        return Ok(None);
+    match fetch_gateway_json(gateway, &path).await {
+        Ok(agent) => Ok(Some(agent)),
+        Err(error) => match error.downcast_ref::<GatewayCliError>() {
+            Some(gateway_error) if gateway_error.kind == GatewayErrorKind::NotFound => Ok(None),
+            _ => Err(error),
+        },
     }
-    let body = response.text().await?;
-    if !status.is_success() {
-        return Err(format!("failed to read agent env before merge: {status} {body}").into());
-    }
-    let agent: Value = serde_json::from_str(&body)?;
-    Ok(Some(
-        agent
-            .get("provider_env")
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default(),
-    ))
 }
 
-/// Whether the given env flags require fetching the agent's current env before
-/// building the mutation (a merge onto existing keys). `--env-clear` starts from
-/// an empty map, so it never needs the existing env.
-fn env_flags_need_existing(
-    env_sets: &[String],
-    unset_env: &[String],
-    env_clear: bool,
-    api_key_present: bool,
-) -> bool {
-    !env_clear && (!env_sets.is_empty() || !unset_env.is_empty() || api_key_present)
+/// Resolve the identity fields of an agent mutation, preserving the stored
+/// values when the flags are omitted. The gateway upsert payload requires
+/// `display_name` and `provider_type`, so an update/upsert that omits them must
+/// fill them from the existing agent instead of overwriting with defaults.
+fn merge_agent_identity(
+    existing: Option<&Value>,
+    display_name: Option<String>,
+    provider: Option<String>,
+) -> Result<(String, String), Box<dyn std::error::Error>> {
+    let display_name = display_name
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            existing.and_then(|agent| {
+                agent["display_name"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+            })
+        })
+        .ok_or("--display-name is required when creating a new agent")?;
+    let provider = provider
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            existing.and_then(|agent| {
+                agent["provider_type"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+            })
+        })
+        .unwrap_or_else(|| "claude_code".to_owned());
+    Ok((display_name, provider))
+}
+
+fn existing_provider_env(existing: Option<&Value>) -> Map<String, Value> {
+    existing
+        .and_then(|agent| agent.get("provider_env"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default()
 }
 
 fn build_agent_mutation_body(
@@ -338,8 +358,8 @@ pub(crate) async fn cmd_agent_create(
 pub(crate) async fn cmd_agent_update(
     config_path: &str,
     agent_id: String,
-    display_name: String,
-    provider: String,
+    display_name: Option<String>,
+    provider: Option<String>,
     model: Option<String>,
     clear_model: bool,
     model_reasoning_effort: Option<String>,
@@ -354,16 +374,24 @@ pub(crate) async fn cmd_agent_update(
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let gateway = gateway_endpoint(config_path)?;
+    // Read-modify-write: the gateway upsert payload requires identity fields,
+    // so update always starts from the stored agent and only overwrites what
+    // the invocation explicitly passed.
+    let existing = fetch_existing_agent(&gateway, &agent_id).await?.ok_or_else(|| {
+        // Keep the NotFound class so `--json` reports kind=not_found and the
+        // process exits 4, same as a direct 404.
+        GatewayCliError {
+            kind: GatewayErrorKind::NotFound,
+            message: format!(
+                "custom agent '{}' not found — list agents with `garyx agent list`, or create it with `garyx agent create` / `garyx agent upsert`",
+                agent_id.trim()
+            ),
+        }
+    })?;
+    let (display_name, provider) = merge_agent_identity(Some(&existing), display_name, provider)?;
     let api_key = resolve_api_key_env(&provider, provider_api_key.as_deref())?;
-    let existing = if env_flags_need_existing(&env, &unset_env, env_clear, api_key.is_some()) {
-        fetch_existing_provider_env(&gateway, &agent_id)
-            .await?
-            .unwrap_or_default()
-    } else {
-        Map::new()
-    };
     let provider_env = resolve_cli_provider_env(
-        &existing,
+        &existing_provider_env(Some(&existing)),
         &env,
         &unset_env,
         env_clear,
@@ -400,8 +428,8 @@ pub(crate) async fn cmd_agent_update(
 pub(crate) async fn cmd_agent_upsert(
     config_path: &str,
     agent_id: String,
-    display_name: String,
-    provider: String,
+    display_name: Option<String>,
+    provider: Option<String>,
     model: Option<String>,
     clear_model: bool,
     model_reasoning_effort: Option<String>,
@@ -416,16 +444,11 @@ pub(crate) async fn cmd_agent_upsert(
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let gateway = gateway_endpoint(config_path)?;
+    let existing = fetch_existing_agent(&gateway, &agent_id).await?;
+    let (display_name, provider) = merge_agent_identity(existing.as_ref(), display_name, provider)?;
     let api_key = resolve_api_key_env(&provider, provider_api_key.as_deref())?;
-    let existing = if env_flags_need_existing(&env, &unset_env, env_clear, api_key.is_some()) {
-        fetch_existing_provider_env(&gateway, &agent_id)
-            .await?
-            .unwrap_or_default()
-    } else {
-        Map::new()
-    };
     let provider_env = resolve_cli_provider_env(
-        &existing,
+        &existing_provider_env(existing.as_ref()),
         &env,
         &unset_env,
         env_clear,
@@ -447,13 +470,14 @@ pub(crate) async fn cmd_agent_upsert(
         default_workspace_dir,
         system_prompt,
     )?;
-    let url = format!(
-        "/api/custom-agents/{}",
-        urlencoding::encode(agent_id.trim())
-    );
-    let payload = match put_gateway_json(&gateway, &url, &body).await {
-        Ok(p) => p,
-        Err(_) => post_gateway_json(&gateway, "/api/custom-agents", &body).await?,
+    let payload = if existing.is_some() {
+        let url = format!(
+            "/api/custom-agents/{}",
+            urlencoding::encode(agent_id.trim())
+        );
+        put_gateway_json(&gateway, &url, &body).await?
+    } else {
+        post_gateway_json(&gateway, "/api/custom-agents", &body).await?
     };
     if json {
         return print_pretty_json(&payload);
@@ -634,45 +658,80 @@ pub(crate) async fn cmd_agent_team_create(
     Ok(())
 }
 
+/// Resolve an updated team field: use the flag value when given, otherwise
+/// preserve the stored value from the existing team.
+fn merge_team_field(
+    existing: &Value,
+    field: &str,
+    flag_value: Option<String>,
+    flag_name: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    flag_value
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            existing[field]
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .ok_or_else(|| format!("{flag_name} cannot be empty").into())
+}
+
 pub(crate) async fn cmd_agent_team_update(
     config_path: &str,
     team_id: String,
     new_team_id: Option<String>,
-    display_name: String,
-    leader_agent_id: String,
+    display_name: Option<String>,
+    leader_agent_id: Option<String>,
     member_agent_ids: Vec<String>,
-    workflow_text: String,
+    workflow_text: Option<String>,
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let team_id = team_id.trim().to_owned();
     if team_id.is_empty() {
         return Err("team_id cannot be empty".into());
     }
+    let gateway = gateway_endpoint(config_path)?;
+    // Read-modify-write: the gateway team payload requires every field, so an
+    // update that omits a flag must preserve the stored value instead of
+    // forcing callers to restate the whole team.
+    let existing = fetch_gateway_json(
+        &gateway,
+        &format!("/api/teams/{}", urlencoding::encode(&team_id)),
+    )
+    .await?;
     let next_team_id = new_team_id
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| team_id.clone());
-    let display_name = display_name.trim().to_owned();
-    let leader_agent_id = leader_agent_id.trim().to_owned();
-    let workflow_text = workflow_text.trim().to_owned();
-    let member_agent_ids = member_agent_ids
+    let display_name = merge_team_field(&existing, "display_name", display_name, "display_name")?;
+    let leader_agent_id = merge_team_field(
+        &existing,
+        "leader_agent_id",
+        leader_agent_id,
+        "leader_agent_id",
+    )?;
+    let workflow_text =
+        merge_team_field(&existing, "workflow_text", workflow_text, "workflow_text")?;
+    let mut member_agent_ids = member_agent_ids
         .into_iter()
         .map(|item| item.trim().to_owned())
         .filter(|item| !item.is_empty())
         .collect::<Vec<_>>();
-    if display_name.is_empty() {
-        return Err("display_name cannot be empty".into());
-    }
-    if leader_agent_id.is_empty() {
-        return Err("leader_agent_id cannot be empty".into());
-    }
-    if workflow_text.is_empty() {
-        return Err("workflow_text cannot be empty".into());
+    if member_agent_ids.is_empty() {
+        member_agent_ids = existing["member_agent_ids"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|item| item.as_str().map(ToOwned::to_owned))
+            .collect();
     }
     if member_agent_ids.is_empty() {
         return Err("member_agent_ids cannot be empty".into());
     }
-    let gateway = gateway_endpoint(config_path)?;
     let payload = put_gateway_json(
         &gateway,
         &format!("/api/teams/{}", urlencoding::encode(&team_id)),
@@ -736,15 +795,20 @@ mod tests {
         Json, Router,
         extract::Path as AxumPath,
         http::StatusCode,
-        routing::{get, post, put},
+        routing::{get, post},
     };
     use std::sync::{Arc as StdArc, Mutex};
     use tempfile::tempdir;
     use tokio::{net::TcpListener, task::JoinHandle};
 
+    /// Agent test server: records POST/PUT mutations into `requests` (GET
+    /// reads are not recorded). `get_status` controls whether the existing-
+    /// agent read succeeds (200 with a canned codex agent) or 404s, which is
+    /// how tests select the update (existing) vs create (missing) paths.
     async fn spawn_agent_http_test_server(
         requests: StdArc<Mutex<Vec<RecordedRequest>>>,
         put_status: StatusCode,
+        get_status: StatusCode,
     ) -> (String, JoinHandle<()>) {
         let post_requests = requests.clone();
         let put_requests = requests.clone();
@@ -778,7 +842,27 @@ mod tests {
             )
             .route(
                 "/api/custom-agents/{agent_id}",
-                put(
+                get(move |AxumPath(agent_id): AxumPath<String>| async move {
+                    if get_status.is_success() {
+                        (
+                            get_status,
+                            Json(json!({
+                                "agent_id": agent_id,
+                                "display_name": "Existing Agent",
+                                "provider_type": "codex_app_server",
+                                "model": "existing-model",
+                                "system_prompt": "Existing prompt.",
+                                "built_in": false,
+                            })),
+                        )
+                    } else {
+                        (
+                            get_status,
+                            Json(json!({ "error": "custom agent not found" })),
+                        )
+                    }
+                })
+                .put(
                     move |AxumPath(agent_id): AxumPath<String>, Json(payload): Json<Value>| {
                         let requests = put_requests.clone();
                         async move {
@@ -935,7 +1019,8 @@ mod tests {
     async fn cmd_agent_create_posts_model_payload() {
         let requests = StdArc::new(Mutex::new(Vec::new()));
         let (base_url, handle) =
-            spawn_agent_http_test_server(requests.clone(), StatusCode::OK).await;
+            spawn_agent_http_test_server(requests.clone(), StatusCode::OK, StatusCode::NOT_FOUND)
+                .await;
         let dir = tempdir().expect("tempdir");
         let config_path = write_test_gateway_config(&dir, &base_url);
 
@@ -977,7 +1062,8 @@ mod tests {
     async fn cmd_agent_create_omits_system_prompt_when_omitted() {
         let requests = StdArc::new(Mutex::new(Vec::new()));
         let (base_url, handle) =
-            spawn_agent_http_test_server(requests.clone(), StatusCode::OK).await;
+            spawn_agent_http_test_server(requests.clone(), StatusCode::OK, StatusCode::NOT_FOUND)
+                .await;
         let dir = tempdir().expect("tempdir");
         let config_path = write_test_gateway_config(&dir, &base_url);
 
@@ -1013,15 +1099,15 @@ mod tests {
     async fn cmd_agent_update_omits_model_fields_when_omitted() {
         let requests = StdArc::new(Mutex::new(Vec::new()));
         let (base_url, handle) =
-            spawn_agent_http_test_server(requests.clone(), StatusCode::OK).await;
+            spawn_agent_http_test_server(requests.clone(), StatusCode::OK, StatusCode::OK).await;
         let dir = tempdir().expect("tempdir");
         let config_path = write_test_gateway_config(&dir, &base_url);
 
         cmd_agent_update(
             config_path.to_str().expect("config path"),
             "spec-review".to_owned(),
-            "Spec Review".to_owned(),
-            "codex_app_server".to_owned(),
+            None,
+            None,
             None,
             false,
             None,
@@ -1044,6 +1130,11 @@ mod tests {
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].method, "PUT");
         assert_eq!(records[0].path, "/api/custom-agents/spec-review");
+        // Omitted identity fields are preserved from the stored agent instead
+        // of being overwritten with defaults (the old behavior silently reset
+        // provider_type to claude_code).
+        assert_eq!(records[0].body["display_name"], "Existing Agent");
+        assert_eq!(records[0].body["provider_type"], "codex_app_server");
         assert!(records[0].body.get("model").is_none());
         assert!(records[0].body.get("model_reasoning_effort").is_none());
         assert!(records[0].body.get("model_service_tier").is_none());
@@ -1054,15 +1145,15 @@ mod tests {
     async fn cmd_agent_update_sends_empty_model_when_clear_model_is_set() {
         let requests = StdArc::new(Mutex::new(Vec::new()));
         let (base_url, handle) =
-            spawn_agent_http_test_server(requests.clone(), StatusCode::OK).await;
+            spawn_agent_http_test_server(requests.clone(), StatusCode::OK, StatusCode::OK).await;
         let dir = tempdir().expect("tempdir");
         let config_path = write_test_gateway_config(&dir, &base_url);
 
         cmd_agent_update(
             config_path.to_str().expect("config path"),
             "spec-review".to_owned(),
-            "Spec Review".to_owned(),
-            "codex_app_server".to_owned(),
+            Some("Spec Review".to_owned()),
+            Some("codex_app_server".to_owned()),
             None,
             true,
             None,
@@ -1094,15 +1185,15 @@ mod tests {
     async fn cmd_agent_update_sends_empty_system_prompt_when_explicitly_blank() {
         let requests = StdArc::new(Mutex::new(Vec::new()));
         let (base_url, handle) =
-            spawn_agent_http_test_server(requests.clone(), StatusCode::OK).await;
+            spawn_agent_http_test_server(requests.clone(), StatusCode::OK, StatusCode::OK).await;
         let dir = tempdir().expect("tempdir");
         let config_path = write_test_gateway_config(&dir, &base_url);
 
         cmd_agent_update(
             config_path.to_str().expect("config path"),
             "spec-review".to_owned(),
-            "Spec Review".to_owned(),
-            "codex_app_server".to_owned(),
+            Some("Spec Review".to_owned()),
+            Some("codex_app_server".to_owned()),
             None,
             false,
             None,
@@ -1128,18 +1219,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cmd_agent_upsert_falls_back_to_post_after_put_failure() {
+    async fn cmd_agent_upsert_creates_via_post_when_agent_missing() {
         let requests = StdArc::new(Mutex::new(Vec::new()));
         let (base_url, handle) =
-            spawn_agent_http_test_server(requests.clone(), StatusCode::NOT_FOUND).await;
+            spawn_agent_http_test_server(requests.clone(), StatusCode::OK, StatusCode::NOT_FOUND)
+                .await;
         let dir = tempdir().expect("tempdir");
         let config_path = write_test_gateway_config(&dir, &base_url);
 
         cmd_agent_upsert(
             config_path.to_str().expect("config path"),
             "spec-review".to_owned(),
-            "Spec Review".to_owned(),
-            "gemini_cli".to_owned(),
+            Some("Spec Review".to_owned()),
+            Some("gemini_cli".to_owned()),
             Some("gemini-3.1-pro-preview".to_owned()),
             false,
             None,
@@ -1159,19 +1251,131 @@ mod tests {
         handle.abort();
 
         let records = requests.lock().expect("request lock");
-        assert_eq!(records.len(), 2);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].method, "POST");
+        assert_eq!(records[0].path, "/api/custom-agents");
+        assert_eq!(records[0].body["model"], "gemini-3.1-pro-preview");
+        assert_eq!(records[0].body["provider_type"], "gemini_cli");
+    }
+
+    #[tokio::test]
+    async fn cmd_agent_upsert_updates_existing_and_preserves_omitted_identity() {
+        let requests = StdArc::new(Mutex::new(Vec::new()));
+        let (base_url, handle) =
+            spawn_agent_http_test_server(requests.clone(), StatusCode::OK, StatusCode::OK).await;
+        let dir = tempdir().expect("tempdir");
+        let config_path = write_test_gateway_config(&dir, &base_url);
+
+        cmd_agent_upsert(
+            config_path.to_str().expect("config path"),
+            "spec-review".to_owned(),
+            None,
+            None,
+            Some("gpt-5".to_owned()),
+            false,
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+            false,
+            None,
+            None,
+            false,
+        )
+        .await
+        .expect("agent upsert should succeed");
+
+        handle.abort();
+
+        let records = requests.lock().expect("request lock");
+        assert_eq!(records.len(), 1);
         assert_eq!(records[0].method, "PUT");
-        assert_eq!(records[0].path, "/api/custom-agents/spec-review");
-        assert_eq!(records[1].method, "POST");
-        assert_eq!(records[1].path, "/api/custom-agents");
-        assert_eq!(records[1].body["model"], "gemini-3.1-pro-preview");
+        assert_eq!(records[0].body["display_name"], "Existing Agent");
+        assert_eq!(records[0].body["provider_type"], "codex_app_server");
+        assert_eq!(records[0].body["model"], "gpt-5");
+    }
+
+    #[tokio::test]
+    async fn cmd_agent_upsert_requires_display_name_when_creating() {
+        let requests = StdArc::new(Mutex::new(Vec::new()));
+        let (base_url, handle) =
+            spawn_agent_http_test_server(requests.clone(), StatusCode::OK, StatusCode::NOT_FOUND)
+                .await;
+        let dir = tempdir().expect("tempdir");
+        let config_path = write_test_gateway_config(&dir, &base_url);
+
+        let result = cmd_agent_upsert(
+            config_path.to_str().expect("config path"),
+            "brand-new".to_owned(),
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+            false,
+            None,
+            None,
+            false,
+        )
+        .await;
+
+        handle.abort();
+        assert!(
+            result.is_err(),
+            "creating a new agent without --display-name must fail"
+        );
+        let records = requests.lock().expect("request lock");
+        assert!(records.is_empty(), "no mutation may be sent: {records:?}");
+    }
+
+    #[tokio::test]
+    async fn cmd_agent_update_fails_when_agent_missing() {
+        let requests = StdArc::new(Mutex::new(Vec::new()));
+        let (base_url, handle) =
+            spawn_agent_http_test_server(requests.clone(), StatusCode::OK, StatusCode::NOT_FOUND)
+                .await;
+        let dir = tempdir().expect("tempdir");
+        let config_path = write_test_gateway_config(&dir, &base_url);
+
+        let result = cmd_agent_update(
+            config_path.to_str().expect("config path"),
+            "missing-agent".to_owned(),
+            Some("Name".to_owned()),
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+            false,
+            None,
+            None,
+            false,
+        )
+        .await;
+
+        handle.abort();
+        assert!(result.is_err(), "update of a missing agent must fail");
+        let records = requests.lock().expect("request lock");
+        assert!(records.is_empty(), "no mutation may be sent: {records:?}");
     }
 
     #[tokio::test]
     async fn cmd_agent_create_posts_native_provider_api_key_payload() {
         let requests = StdArc::new(Mutex::new(Vec::new()));
         let (base_url, handle) =
-            spawn_agent_http_test_server(requests.clone(), StatusCode::OK).await;
+            spawn_agent_http_test_server(requests.clone(), StatusCode::OK, StatusCode::NOT_FOUND)
+                .await;
         let dir = tempdir().expect("tempdir");
         let config_path = write_test_gateway_config(&dir, &base_url);
 
@@ -1288,7 +1492,8 @@ mod tests {
     async fn cmd_agent_create_sends_multiple_env_vars() {
         let requests = StdArc::new(Mutex::new(Vec::new()));
         let (base_url, handle) =
-            spawn_agent_http_test_server(requests.clone(), StatusCode::OK).await;
+            spawn_agent_http_test_server(requests.clone(), StatusCode::OK, StatusCode::NOT_FOUND)
+                .await;
         let dir = tempdir().expect("tempdir");
         let config_path = write_test_gateway_config(&dir, &base_url);
 
@@ -1324,15 +1529,15 @@ mod tests {
     async fn cmd_agent_update_without_env_flags_omits_provider_env() {
         let requests = StdArc::new(Mutex::new(Vec::new()));
         let (base_url, handle) =
-            spawn_agent_http_test_server(requests.clone(), StatusCode::OK).await;
+            spawn_agent_http_test_server(requests.clone(), StatusCode::OK, StatusCode::OK).await;
         let dir = tempdir().expect("tempdir");
         let config_path = write_test_gateway_config(&dir, &base_url);
 
         cmd_agent_update(
             config_path.to_str().expect("config path"),
             "spec-review".to_owned(),
-            "Spec Review".to_owned(),
-            "claude_code".to_owned(),
+            Some("Spec Review".to_owned()),
+            Some("claude_code".to_owned()),
             None,
             false,
             None,
@@ -1351,7 +1556,6 @@ mod tests {
 
         handle.abort();
         let records = requests.lock().expect("request lock");
-        // Only the PUT — no GET fetch happens when no env flag is given.
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].method, "PUT");
         assert!(
@@ -1374,8 +1578,8 @@ mod tests {
         cmd_agent_update(
             config_path.to_str().expect("config path"),
             "spec-review".to_owned(),
-            "Spec Review".to_owned(),
-            "claude_code".to_owned(),
+            Some("Spec Review".to_owned()),
+            Some("claude_code".to_owned()),
             None,
             false,
             None,
@@ -1416,8 +1620,8 @@ mod tests {
         cmd_agent_update(
             config_path.to_str().expect("config path"),
             "budget-gpt".to_owned(),
-            "Budget GPT".to_owned(),
-            "gpt".to_owned(),
+            Some("Budget GPT".to_owned()),
+            Some("gpt".to_owned()),
             None,
             false,
             None,
@@ -1451,8 +1655,8 @@ mod tests {
 
     #[tokio::test]
     async fn cmd_agent_update_fails_before_put_when_env_fetch_errors() {
-        // A failed existing-env read must abort the update, not merge env flags onto
-        // an empty map (which would drop the agent's stored env).
+        // A failed existing-agent read must abort the update, not merge env flags
+        // onto an empty map (which would drop the agent's stored env).
         let requests = StdArc::new(Mutex::new(Vec::new()));
         let (base_url, handle) = spawn_agent_http_test_server_get_status(
             requests.clone(),
@@ -1465,8 +1669,8 @@ mod tests {
         let result = cmd_agent_update(
             config_path.to_str().expect("config path"),
             "spec-review".to_owned(),
-            "Spec Review".to_owned(),
-            "claude_code".to_owned(),
+            Some("Spec Review".to_owned()),
+            Some("claude_code".to_owned()),
             None,
             false,
             None,

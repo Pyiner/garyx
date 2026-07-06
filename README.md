@@ -102,13 +102,13 @@ garyx plugins install ./path/to/garyx-plugin-example
 | Workflow | Command or surface |
 | --- | --- |
 | Chat with a workspace from the terminal | `garyx thread create --workspace-dir "$PWD"` then `garyx thread send ...` |
-| Route a channel bot to an agent | `garyx channels add <channel> <account_id> --agent-id <agent_id>` |
+| Route a channel bot to an agent | `garyx channels add <channel> <account_id> --agent <agent_id>` |
 | Continue a bot conversation from the CLI | `garyx thread history <thread_id>` and `garyx thread send thread <thread_id> ...` |
 | Promote work into a reviewable task | `garyx task create --title "..." --body "..." --notify current-thread` |
 | Schedule recurring agent work | `garyx automation create --label "Daily triage" --prompt "..." --every-hours 24` |
 | Inspect gateway issues | `garyx status`, `garyx doctor`, `garyx logs tail` |
 | Update the CLI | `garyx update` |
-| Update channel plugins | `garyx plugins update [<plugin_id>]` |
+| Manage channel plugins | `garyx plugins list` and `garyx plugins install <path>` (plugins self-update) |
 | Work on the mobile client | `cd mobile/garyx-mobile && swift test` |
 
 ## Architecture

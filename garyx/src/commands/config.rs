@@ -166,7 +166,7 @@ pub(crate) fn cmd_config_get(
     Ok(())
 }
 
-pub(crate) fn cmd_config_set(
+pub(crate) async fn cmd_config_set(
     config_path: &str,
     path: &str,
     value_text: &str,
@@ -182,10 +182,14 @@ pub(crate) fn cmd_config_set(
     }
     save_config_value(&prepared.active_path, &value)?;
     println!("Updated {path}");
+    // Keep a running gateway in sync with the file it just diverged from, the
+    // same way `channels`/`commands` writes do. Best-effort: silently skipped
+    // when no gateway is reachable.
+    notify_gateway_reload(&prepared.active_path).await;
     Ok(())
 }
 
-pub(crate) fn cmd_config_unset(
+pub(crate) async fn cmd_config_unset(
     config_path: &str,
     path: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -196,6 +200,7 @@ pub(crate) fn cmd_config_unset(
         Ok(true) => {
             save_config_value(&prepared.active_path, &value)?;
             println!("Removed {path}");
+            notify_gateway_reload(&prepared.active_path).await;
         }
         Ok(false) => {
             eprintln!("Path not found: {path}");

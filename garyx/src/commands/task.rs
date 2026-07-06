@@ -3,7 +3,6 @@ use super::*;
 pub(crate) async fn cmd_task_list(
     config_path: &str,
     status: Option<&str>,
-    assignee: Option<&str>,
     source_thread: Option<&str>,
     source_task: Option<&str>,
     source_bot: Option<&str>,
@@ -19,9 +18,6 @@ pub(crate) async fn cmd_task_list(
     ];
     if let Some(status) = status {
         params.push(("status".to_owned(), normalize_task_status(status)?));
-    }
-    if let Some(assignee) = assignee.map(str::trim).filter(|value| !value.is_empty()) {
-        params.push(("assignee".to_owned(), assignee.to_owned()));
     }
     if let Some(source_thread) = source_thread
         .map(str::trim)
@@ -442,28 +438,6 @@ pub(crate) async fn cmd_task_delete(
             .unwrap_or_else(|| "provider session".to_owned());
         println!("Stopped run: {aborted}");
     }
-    Ok(())
-}
-
-pub(crate) async fn cmd_task_assign(
-    config_path: &str,
-    task_id: &str,
-    principal: &str,
-    json_output: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let gateway = gateway_endpoint(config_path)?;
-    let payload = patch_gateway_json_as_cli_actor(
-        &gateway,
-        &format!("/api/tasks/{}/assign", encode_task_id(task_id)?),
-        &json!({
-            "to": principal_payload(principal)?,
-        }),
-    )
-    .await?;
-    if json_output {
-        return print_pretty_json(&payload);
-    }
-    print_task_summary(&payload);
     Ok(())
 }
 

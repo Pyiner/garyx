@@ -47,14 +47,13 @@ use commands::{
     cmd_endpoint_list, cmd_gateway_install, cmd_gateway_reload_config, cmd_gateway_restart,
     cmd_gateway_start, cmd_gateway_stop, cmd_gateway_token, cmd_gateway_uninstall, cmd_logs_clear,
     cmd_logs_path, cmd_logs_tail, cmd_onboard, cmd_provider_list, cmd_provider_set,
-    cmd_provider_show, cmd_send_message, cmd_status, cmd_task_assign, cmd_task_create,
-    cmd_task_delete, cmd_task_get, cmd_task_history, cmd_task_list, cmd_task_reopen,
-    cmd_task_set_title, cmd_task_stop, cmd_task_update, cmd_thread_create, cmd_thread_get,
-    cmd_thread_history, cmd_thread_list, cmd_thread_send, cmd_thread_send_to_bot,
-    cmd_thread_send_to_task, cmd_tool_image, cmd_tool_search, cmd_update, cmd_usage,
-    cmd_workflow_cancel, cmd_workflow_definition_get, cmd_workflow_definition_list,
-    cmd_workflow_definition_upsert, cmd_workflow_events, cmd_workflow_get, cmd_workflow_list,
-    run_gateway,
+    cmd_provider_show, cmd_send_message, cmd_status, cmd_task_create, cmd_task_delete,
+    cmd_task_get, cmd_task_history, cmd_task_list, cmd_task_reopen, cmd_task_set_title,
+    cmd_task_stop, cmd_task_update, cmd_thread_create, cmd_thread_get, cmd_thread_history,
+    cmd_thread_list, cmd_thread_send, cmd_thread_send_to_bot, cmd_thread_send_to_task,
+    cmd_tool_image, cmd_tool_search, cmd_update, cmd_usage, cmd_workflow_cancel,
+    cmd_workflow_definition_get, cmd_workflow_definition_list, cmd_workflow_definition_upsert,
+    cmd_workflow_events, cmd_workflow_get, cmd_workflow_list, run_gateway,
 };
 
 #[derive(Debug)]
@@ -249,7 +248,51 @@ fn is_root_version_token(first_arg: Option<&str>) -> bool {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> std::process::ExitCode {
+    match run_cli().await {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => report_cli_failure(error.as_ref()),
+    }
+}
+
+/// Final failure reporting for every command: one human-readable line on
+/// stderr (never a Debug dump), or a machine-readable envelope on stdout when
+/// the invocation asked for `--json`. The exit code encodes the failure class
+/// (see the root `--help` footer): 1 generic, 3 gateway unreachable, 4 not
+/// found. Clap keeps its own exit 2 for usage errors.
+fn report_cli_failure(error: &(dyn std::error::Error + 'static)) -> std::process::ExitCode {
+    let kind = error
+        .downcast_ref::<commands::GatewayCliError>()
+        .map(|gateway_error| gateway_error.kind);
+    let exit_code = match kind {
+        Some(commands::GatewayErrorKind::Unreachable) => 3,
+        Some(commands::GatewayErrorKind::NotFound) => 4,
+        Some(commands::GatewayErrorKind::Rejected) | None => 1,
+    };
+    if invocation_wants_json_output() {
+        let envelope = serde_json::json!({
+            "ok": false,
+            "error": {
+                "kind": kind.map_or("error", |kind| kind.slug()),
+                "message": error.to_string(),
+            },
+        });
+        println!("{envelope}");
+    } else {
+        eprintln!("Error: {error}");
+    }
+    std::process::ExitCode::from(exit_code)
+}
+
+/// Whether this invocation passed `--json`. Checked from argv because command
+/// failures bubble up as plain errors without carrying the parsed flag; a bare
+/// `--json` token can only be the boolean output flag (clap rejects it on
+/// commands that lack one before any command code runs).
+fn invocation_wants_json_output() -> bool {
+    std::env::args().skip(1).any(|arg| arg == "--json")
+}
+
+async fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
     // B0: side-effect-free `--version`. Must run before
     // `run_embedded_cctty_if_requested` / `migrate_legacy_homes()` so
     // the auto-update probe can interrogate a staged binary without
@@ -379,8 +422,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Commands::Config { action }) => match action {
             ConfigAction::Path => cmd_config_path(config_path),
             ConfigAction::Get { path } => cmd_config_get(config_path, &path),
-            ConfigAction::Set { path, value } => cmd_config_set(config_path, &path, &value),
-            ConfigAction::Unset { path } => cmd_config_unset(config_path, &path),
+            ConfigAction::Set { path, value } => cmd_config_set(config_path, &path, &value).await,
+            ConfigAction::Unset { path } => cmd_config_unset(config_path, &path).await,
             ConfigAction::ClaudeCli {
                 mode,
                 path,
@@ -1180,7 +1223,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Commands::Task { action }) => match action {
             TaskAction::List {
                 status,
-                assignee,
                 source_thread,
                 source_task,
                 source_bot,
@@ -1191,7 +1233,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 cmd_task_list(
                     config_path,
                     status.as_deref(),
-                    assignee.as_deref(),
                     source_thread.as_deref(),
                     source_task.as_deref(),
                     source_bot.as_deref(),
@@ -1233,11 +1274,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             TaskAction::Delete { task_id, json } => {
                 cmd_task_delete(config_path, &task_id, json).await
             }
-            TaskAction::Assign {
-                task_id,
-                principal,
-                json,
-            } => cmd_task_assign(config_path, &task_id, &principal, json).await,
             TaskAction::Update {
                 task_id,
                 status,

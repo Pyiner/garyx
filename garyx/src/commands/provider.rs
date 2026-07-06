@@ -557,30 +557,35 @@ fn provider_list_rows(settings: &Value, usage: Option<&Value>) -> Vec<Value> {
 }
 
 fn format_provider_list_table(settings: &Value, usage: Option<&Value>) -> String {
-    let rows = provider_list_rows(settings, usage);
-    let mut output = String::new();
-    writeln!(
-        output,
-        "{:<14}  {:<18}  {:<12}  {:<13}  {:<30}  {:<14}  STATUS",
-        "PROVIDER", "TYPE", "KEY", "AUTH", "DEFAULT MODEL", "USAGE"
+    let rows = provider_list_rows(settings, usage)
+        .iter()
+        .map(|row| {
+            [
+                "provider",
+                "type",
+                "key",
+                "auth",
+                "default_model",
+                "usage",
+                "status",
+            ]
+            .iter()
+            .map(|field| row[*field].as_str().unwrap_or("-").to_owned())
+            .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    render_text_table(
+        &[
+            "PROVIDER",
+            "TYPE",
+            "KEY",
+            "AUTH",
+            "DEFAULT MODEL",
+            "USAGE",
+            "STATUS",
+        ],
+        &rows,
     )
-    .expect("write string");
-    writeln!(output, "{}", "-".repeat(124)).expect("write string");
-    for row in rows {
-        let provider = table_cell(row["provider"].as_str().unwrap_or("-"), 14);
-        let provider_type = table_cell(row["type"].as_str().unwrap_or("-"), 18);
-        let key = table_cell(row["key"].as_str().unwrap_or("-"), 12);
-        let auth = table_cell(row["auth"].as_str().unwrap_or("-"), 13);
-        let default_model = table_cell(row["default_model"].as_str().unwrap_or("-"), 30);
-        let usage = table_cell(row["usage"].as_str().unwrap_or("-"), 14);
-        writeln!(
-            output,
-            "{provider:<14}  {provider_type:<18}  {key:<12}  {auth:<13}  {default_model:<30}  {usage:<14}  {}",
-            row["status"].as_str().unwrap_or("-")
-        )
-        .expect("write string");
-    }
-    output
 }
 
 fn format_provider_show_table(descriptor: &ProviderDescriptor, config: &Value) -> String {
@@ -681,18 +686,6 @@ fn format_provider_show_table(descriptor: &ProviderDescriptor, config: &Value) -
 
 fn display_or_default<'a>(value: &'a str, default: &'a str) -> &'a str {
     if value.is_empty() { default } else { value }
-}
-
-fn table_cell(value: &str, width: usize) -> String {
-    if value.chars().count() <= width {
-        return value.to_owned();
-    }
-    if width <= 3 {
-        return value.chars().take(width).collect();
-    }
-    let mut clipped = value.chars().take(width - 3).collect::<String>();
-    clipped.push_str("...");
-    clipped
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1056,16 +1049,10 @@ pub(crate) async fn cmd_usage(
         provider_descriptor_for_slug(provider)?;
     }
     let gateway = gateway_endpoint(config_path)?;
-    let payload = match fetch_gateway_json(&gateway, "/api/usage/coding").await {
-        Ok(payload) => payload,
-        Err(error) if json_output => {
-            return print_pretty_json(&json!({
-                "ok": false,
-                "error": error.to_string(),
-            }));
-        }
-        Err(error) => return Err(format!("failed to fetch coding usage: {error}").into()),
-    };
+    // Failures bubble to the shared CLI failure reporter, which prints the
+    // `{ok:false, error:{kind, message}}` envelope in --json mode and maps the
+    // error kind onto the exit code.
+    let payload = fetch_gateway_json(&gateway, "/api/usage/coding").await?;
     if json_output {
         return print_pretty_json(&payload);
     }

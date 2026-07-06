@@ -105,6 +105,7 @@ pub(crate) use doctor::*;
 pub(crate) use dream::*;
 pub(crate) use gateway::*;
 use gateway_client::*;
+pub(crate) use gateway_client::{GatewayCliError, GatewayErrorKind};
 pub(crate) use logs::*;
 pub(crate) use message::*;
 pub(crate) use onboard::*;

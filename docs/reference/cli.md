@@ -64,7 +64,7 @@ Common flags on `channels add`:
 - `--token "<bot token>"` — Telegram or Discord
 - `--app-id <id> --app-secret <secret> --domain feishu|lark` — Feishu / Lark
 - `--uin <uin> --base-url <url>` — WeChat
-- `--agent-id <id>` — bind the channel to a specific agent
+- `--agent <id>` — bind the channel to a specific agent (alias: `--agent-id`)
 
 ## Commands and shortcuts
 
@@ -84,7 +84,6 @@ Common flags on `channels add`:
 | `garyx plugins install <path>` | Install a subprocess channel plugin from a binary. |
 | `garyx plugins list` | List installed plugins. |
 | `garyx plugins uninstall <id>` | Remove a plugin. |
-| `garyx plugins update [<name>]` | Update one installed subprocess plugin (or all when `<name>` is omitted). Supports `--version`, `--from`, `--target`, `--check`, `--force`, `--json`. Built-in channels (`telegram`, `discord`, `feishu`, `weixin`) are rejected with a redirect to `garyx update`. |
 
 ## Threads
 
@@ -93,7 +92,7 @@ Common flags on `channels add`:
 | `garyx thread list` | List threads (paginated). |
 | `garyx thread get <thread_id>` | Fetch one thread record. |
 | `garyx thread history <thread_id>` | Show thread history, tool calls, and runtime records. |
-| `garyx thread create [--workspace-dir <path>] [--agent-id <id>] [--json]` | Create a new thread. |
+| `garyx thread create [--workspace-dir <path>] [--agent <id>] [--json]` | Create a new thread. |
 | `garyx thread send thread <thread_id> [message]` | Send a message into a thread and stream the response. Reads stdin when `message` is omitted. |
 | `garyx thread send task <task_ref> [message]` | Resolve a task to its backing thread, then send a message into that thread. |
 | `garyx thread send bot <selector> [message]` | Resolve a bot's bound main thread inside the gateway, then send with that channel context. |
@@ -124,7 +123,6 @@ requested window.
 | `garyx task update <task_ref> --status <status> [--note <note>]` | Move a task through its lifecycle. Garyx moves an in-progress task to review when its agent run stops; only mark `done` after explicit approval. |
 | `garyx task stop <task_ref>` | Interrupt the active run on the task's backing thread, if one exists, then release the task back to a non-running state. |
 | `garyx task delete <task_ref>` | Delete task metadata so it leaves task lists. The backing thread and transcript are retained for audit. |
-| `garyx task assign <task_ref> <principal>` | Hand a task to an agent or human (`agent:<id>`, `human:<id>`, or a bare agent id). Assigning an agent starts a run on the task. |
 | `garyx task set-title / reopen / history` | Rename, reopen, or inspect task history. |
 
 ## Agents and teams

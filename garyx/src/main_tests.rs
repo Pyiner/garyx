@@ -368,8 +368,7 @@ fn resolve_gateway_restart_wake_single_target_defaults_message() {
 #[test]
 fn resolve_gateway_restart_no_wake_returns_none() {
     // --no-wake opts out of the default wake-all.
-    let decision =
-        super::resolve_gateway_restart_wake_destination(vec![], None, true).unwrap();
+    let decision = super::resolve_gateway_restart_wake_destination(vec![], None, true).unwrap();
     assert!(decision.is_none());
 }
 
@@ -1261,7 +1260,7 @@ fn parse_team_update() {
         }) => {
             assert_eq!(team_id, "product-ship");
             assert_eq!(new_team_id.as_deref(), Some("product-ship-v2"));
-            assert_eq!(display_name, "Product Ship V2");
+            assert_eq!(display_name.as_deref(), Some("Product Ship V2"));
             assert_eq!(member_agent_ids, vec!["planner", "generator"]);
         }
         _ => panic!("expected Team::Update"),
@@ -1831,8 +1830,8 @@ fn parse_agent_update_without_model() {
                 },
         }) => {
             assert_eq!(agent_id, "spec-review");
-            assert_eq!(display_name, "Spec Review");
-            assert_eq!(provider, "codex_app_server");
+            assert_eq!(display_name.as_deref(), Some("Spec Review"));
+            assert_eq!(provider.as_deref(), Some("codex_app_server"));
             assert_eq!(model, None);
             assert!(!clear_model);
             assert_eq!(model_reasoning_effort, None);
@@ -1985,8 +1984,8 @@ fn parse_agent_upsert() {
                 },
         }) => {
             assert_eq!(agent_id, "spec-review");
-            assert_eq!(display_name, "Spec Review");
-            assert_eq!(provider, "codex_app_server");
+            assert_eq!(display_name.as_deref(), Some("Spec Review"));
+            assert_eq!(provider.as_deref(), Some("codex_app_server"));
             assert_eq!(model.as_deref(), Some("gpt-5"));
             assert!(!clear_model);
             assert_eq!(model_reasoning_effort.as_deref(), Some("xhigh"));

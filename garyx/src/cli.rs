@@ -7,7 +7,12 @@ use crate::config_support::default_config_path_string;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Parser)]
-#[command(name = "garyx", version = VERSION, about = "Garyx – AI chat gateway")]
+#[command(
+    name = "garyx",
+    version = VERSION,
+    about = "Garyx – AI chat gateway",
+    after_help = "Command groups:\n  Run the gateway     gateway, status, doctor, onboard, config, logs, update, auto-update, plugins\n  Manage assets       agent, team, provider, channels, commands, automation, workflow, db\n  Work with threads   task, thread, message, bot, usage, tool, dream\n\nExit codes:\n  0 success · 1 error · 2 usage error · 3 gateway unreachable · 4 not found"
+)]
 pub(crate) struct Cli {
     #[command(subcommand)]
     pub(crate) command: Option<Commands>,
@@ -33,24 +38,25 @@ pub(crate) struct Cli {
 #[derive(Subcommand)]
 pub(crate) enum Commands {
     /// Gateway management
-    #[command(alias = "gw")]
+    #[command(display_order = 1, alias = "gw")]
     Gateway {
         #[command(subcommand)]
         action: GatewayAction,
     },
     /// Configuration utilities
-    #[command(alias = "cfg")]
+    #[command(display_order = 5, alias = "cfg")]
     Config {
         #[command(subcommand)]
         action: ConfigAction,
     },
     /// Provider defaults and quota usage
-    #[command(name = "provider", alias = "providers")]
+    #[command(display_order = 22, name = "provider", alias = "providers")]
     Provider {
         #[command(subcommand)]
         action: ProviderAction,
     },
-    /// Coding-assistant quota usage
+    /// Coding-assistant quota usage (also shown in `garyx provider list`)
+    #[command(display_order = 44)]
     Usage {
         /// Optional provider filter: claude_code, codex, antigravity, gpt, anthropic, or google
         provider: Option<String>,
@@ -58,8 +64,9 @@ pub(crate) enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Command list and prompt shortcut management
+    /// Chat slash commands and prompt shortcuts (not CLI commands)
     #[command(
+        display_order = 24,
         name = "commands",
         visible_alias = "shortcuts",
         visible_alias = "shortcut"
@@ -69,21 +76,21 @@ pub(crate) enum Commands {
         action: CommandAction,
     },
     /// Show running status
-    #[command(alias = "ps")]
+    #[command(display_order = 2, alias = "ps")]
     Status {
         /// Output as JSON
         #[arg(long)]
         json: bool,
     },
     /// Run health checks
-    #[command(alias = "check")]
+    #[command(display_order = 3, alias = "check")]
     Doctor {
         /// Output as JSON
         #[arg(long)]
         json: bool,
     },
     /// Guided setup for a new config
-    #[command(alias = "setup")]
+    #[command(display_order = 4, alias = "setup")]
     Onboard {
         /// Overwrite existing config file
         #[arg(long)]
@@ -99,7 +106,7 @@ pub(crate) enum Commands {
         json: bool,
     },
     /// Download and replace the current garyx binary from GitHub Releases
-    #[command(visible_alias = "upgrade")]
+    #[command(display_order = 7, visible_alias = "upgrade")]
     Update {
         /// Specific version to install (defaults to latest release)
         #[arg(long)]
@@ -109,91 +116,101 @@ pub(crate) enum Commands {
         path: Option<PathBuf>,
     },
     /// Manage the gateway + plugin auto-update kill switches
-    #[command(name = "auto-update")]
+    #[command(display_order = 8, name = "auto-update")]
     AutoUpdate {
         #[command(subcommand)]
         action: AutoUpdateAction,
     },
     /// Channel account management
-    #[command(alias = "channel")]
+    #[command(display_order = 23, alias = "channel")]
     Channels {
         #[command(subcommand)]
         action: ChannelsAction,
     },
     /// Subprocess channel plugin management
-    #[command(alias = "plugin")]
+    #[command(display_order = 9, alias = "plugin")]
     Plugins {
         #[command(subcommand)]
         action: PluginsAction,
     },
     /// Local log file utilities
-    #[command(alias = "log")]
+    #[command(display_order = 6, alias = "log")]
     Logs {
         #[command(subcommand)]
         action: LogsAction,
     },
     /// Bot status and current binding utilities
-    #[command(name = "bot")]
+    #[command(display_order = 43, name = "bot")]
     Bot {
         #[command(subcommand)]
         action: BotAction,
     },
     /// Automation management
-    #[command(name = "automation")]
+    #[command(display_order = 25, name = "automation")]
     Automation {
         #[command(subcommand)]
         action: AutomationAction,
     },
     /// Dynamic workflow runs
-    #[command(name = "workflow", alias = "workflows")]
+    #[command(display_order = 26, name = "workflow", alias = "workflows")]
     Workflow {
         #[command(subcommand)]
         action: WorkflowAction,
     },
     /// Agent-friendly application database
-    #[command(name = "db", visible_alias = "database")]
+    #[command(display_order = 27, name = "db", visible_alias = "database")]
     Db {
         #[command(subcommand)]
         action: DbAction,
     },
     /// Custom agent management
-    #[command(name = "agent", alias = "agents", visible_alias = "custom-agent")]
+    #[command(
+        display_order = 20,
+        name = "agent",
+        alias = "agents",
+        visible_alias = "custom-agent"
+    )]
     Agent {
         #[command(subcommand)]
         action: AgentAction,
     },
     /// Provider-backed utility commands
-    #[command(name = "tool", visible_alias = "tools")]
+    #[command(display_order = 45, name = "tool", visible_alias = "tools")]
     Tool {
         #[command(subcommand)]
         action: ToolAction,
     },
     /// Team asset management
-    #[command(name = "team", alias = "teams")]
+    #[command(display_order = 21, name = "team", alias = "teams")]
     Team {
         #[command(subcommand)]
         action: TeamAction,
     },
     /// Thread utilities
-    #[command(alias = "threads")]
+    #[command(display_order = 41, alias = "threads")]
     Thread {
         #[command(subcommand)]
         action: ThreadAction,
     },
     /// Dream topic map across recent threads
-    #[command(alias = "dreams")]
+    #[command(display_order = 46, alias = "dreams")]
     Dream {
         #[command(subcommand)]
         action: DreamAction,
     },
     /// Task overlay utilities
-    #[command(alias = "tasks")]
+    #[command(display_order = 40, alias = "tasks")]
     Task {
         #[command(subcommand)]
         action: TaskAction,
     },
     /// Send an outbound channel message via a bot
-    #[command(alias = "send", alias = "msg")]
+    #[command(
+        display_order = 42,
+        alias = "send",
+        alias = "msg",
+        long_about = "Send an outbound channel message via a bot (to Telegram, Discord, Feishu, …).\n\nThis writes to the chat channel without running an agent. To message an internal Garyx thread and stream the agent response, use `garyx thread send`."
+    )]
     Message {
         /// Bot selector: `channel:account_id`, e.g. `telegram:main`
         #[arg(short, long)]
@@ -394,6 +411,7 @@ pub(crate) enum ProviderAction {
         json: bool,
     },
     /// Show one provider default configuration
+    #[command(visible_alias = "get")]
     Show {
         /// Provider type: claude_code, codex_app_server, traex, gemini_cli, antigravity, gpt, anthropic, or google
         provider: String,
@@ -401,7 +419,8 @@ pub(crate) enum ProviderAction {
         #[arg(long)]
         json: bool,
     },
-    /// Edit one provider's default configuration
+    /// Edit one provider's default configuration. Fields you omit keep their current values.
+    #[command(visible_alias = "update")]
     Set {
         /// Provider type: claude_code, codex_app_server, traex, gemini_cli, antigravity, gpt, anthropic, or google
         provider: String,
@@ -565,6 +584,7 @@ pub(crate) enum ChannelsAction {
         account: String,
     },
     /// Remove an existing account
+    #[command(visible_alias = "delete", visible_alias = "rm")]
     Remove {
         /// Channel type: telegram | discord | feishu | weixin | api | <plugin_id>
         channel: String,
@@ -572,6 +592,7 @@ pub(crate) enum ChannelsAction {
         account: String,
     },
     /// Add a new account
+    #[command(visible_alias = "create")]
     Add {
         /// Channel type: telegram | discord | feishu | weixin | api | <plugin_id>
         channel: Option<String>,
@@ -587,7 +608,7 @@ pub(crate) enum ChannelsAction {
         #[arg(long)]
         workspace_mode: Option<String>,
         /// Agent or team id to bind this channel account to
-        #[arg(long)]
+        #[arg(long = "agent", alias = "agent-id")]
         agent_id: Option<String>,
         /// Telegram or Discord bot token (for plugin-owned channels, prefer the
         /// desktop UI or `garyx plugins install` flow)
@@ -644,7 +665,7 @@ pub(crate) enum ChannelsAction {
         #[arg(long)]
         workspace_mode: Option<String>,
         /// Agent or team id to bind this channel account to
-        #[arg(long)]
+        #[arg(long = "agent", alias = "agent-id")]
         agent_id: Option<String>,
         /// Weixin UIN (optional; inherited from --reauthorize when omitted)
         #[arg(long)]
@@ -783,6 +804,7 @@ pub(crate) enum AutomationAction {
     },
     /// Get one scheduled automation
     Get {
+        /// Automation id
         automation_id: String,
         /// Output as JSON
         #[arg(long)]
@@ -798,7 +820,7 @@ pub(crate) enum AutomationAction {
         #[arg(long)]
         prompt: Option<String>,
         /// Agent or team id to run
-        #[arg(long)]
+        #[arg(long = "agent", alias = "agent-id")]
         agent_id: Option<String>,
         /// Workspace directory for the automation thread; defaults to the current directory
         #[arg(long)]
@@ -817,6 +839,7 @@ pub(crate) enum AutomationAction {
     },
     /// Update a scheduled automation
     Update {
+        /// Automation id
         automation_id: String,
         /// Human-readable automation name
         #[arg(long, alias = "name")]
@@ -825,7 +848,7 @@ pub(crate) enum AutomationAction {
         #[arg(long)]
         prompt: Option<String>,
         /// Agent or team id to run
-        #[arg(long)]
+        #[arg(long = "agent", alias = "agent-id")]
         agent_id: Option<String>,
         /// Workspace directory for the automation thread
         #[arg(long)]
@@ -848,6 +871,7 @@ pub(crate) enum AutomationAction {
     /// Delete a scheduled automation
     #[command(visible_alias = "remove", visible_alias = "rm")]
     Delete {
+        /// Automation id
         automation_id: String,
         /// Output as JSON
         #[arg(long)]
@@ -856,6 +880,7 @@ pub(crate) enum AutomationAction {
     /// Run a scheduled automation immediately
     #[command(visible_alias = "run-now")]
     Run {
+        /// Automation id
         automation_id: String,
         /// Output as JSON
         #[arg(long)]
@@ -863,6 +888,7 @@ pub(crate) enum AutomationAction {
     },
     /// Disable a scheduled automation
     Pause {
+        /// Automation id
         automation_id: String,
         /// Output as JSON
         #[arg(long)]
@@ -870,6 +896,7 @@ pub(crate) enum AutomationAction {
     },
     /// Enable a scheduled automation
     Resume {
+        /// Automation id
         automation_id: String,
         /// Output as JSON
         #[arg(long)]
@@ -877,6 +904,7 @@ pub(crate) enum AutomationAction {
     },
     /// Show recent automation runs
     Activity {
+        /// Automation id
         automation_id: String,
         /// Number of runs to fetch
         #[arg(long, default_value_t = 20)]
@@ -962,6 +990,7 @@ pub(crate) enum DbTableAction {
     },
     /// Create a dynamic table
     Create {
+        /// Table name (snake_case)
         table: String,
         /// Human display name; actual table name remains snake_case
         #[arg(long = "display-name")]
@@ -975,6 +1004,7 @@ pub(crate) enum DbTableAction {
     },
     /// Show table schema
     Schema {
+        /// Table name (snake_case)
         table: String,
         /// Output as JSON
         #[arg(long)]
@@ -982,6 +1012,7 @@ pub(crate) enum DbTableAction {
     },
     /// Drop a dynamic table
     Drop {
+        /// Table name (snake_case)
         table: String,
         /// Output as JSON
         #[arg(long)]
@@ -993,16 +1024,23 @@ pub(crate) enum DbTableAction {
 pub(crate) enum DbFieldAction {
     /// Add a field to an existing table
     Add {
+        /// Table to add the field to
         table: String,
+        /// New field name (snake_case)
         field: String,
+        /// Field type: TEXT, INTEGER, REAL, BLOB, or ANY
         #[arg(name = "type")]
         field_type: String,
+        /// Reject NULL values for this field
         #[arg(long)]
         not_null: bool,
+        /// Enforce unique values for this field
         #[arg(long)]
         unique: bool,
+        /// Create an index on this field
         #[arg(long)]
         index: bool,
+        /// Human display name; the field name itself stays snake_case
         #[arg(long = "display-name")]
         display_name: Option<String>,
         /// JSON default value
@@ -1014,7 +1052,9 @@ pub(crate) enum DbFieldAction {
     },
     /// Drop a field from an existing table
     Drop {
+        /// Table name (snake_case)
         table: String,
+        /// Field name
         field: String,
         /// Output as JSON
         #[arg(long)]
@@ -1026,6 +1066,7 @@ pub(crate) enum DbFieldAction {
 pub(crate) enum DbRecordAction {
     /// Insert a record from JSON object data
     Insert {
+        /// Table name (snake_case)
         table: String,
         /// JSON object, e.g. '{"name":"Test User"}'
         #[arg(long)]
@@ -1036,7 +1077,9 @@ pub(crate) enum DbRecordAction {
     },
     /// Get a record by id
     Get {
+        /// Table name (snake_case)
         table: String,
+        /// Record id
         id: String,
         /// Output as JSON
         #[arg(long)]
@@ -1044,7 +1087,9 @@ pub(crate) enum DbRecordAction {
     },
     /// Update a record from JSON object data
     Update {
+        /// Table name (snake_case)
         table: String,
+        /// Record id
         id: String,
         /// JSON object, e.g. '{"score":10}'
         #[arg(long)]
@@ -1055,7 +1100,9 @@ pub(crate) enum DbRecordAction {
     },
     /// Delete a record by id
     Delete {
+        /// Table name (snake_case)
         table: String,
+        /// Record id
         id: String,
         /// Output as JSON
         #[arg(long)]
@@ -1079,19 +1126,26 @@ pub(crate) enum AutomationDataTriggerAction {
     },
     /// Create a data trigger that creates a Garyx task
     Create {
+        /// Table whose events fire the trigger
         table: String,
+        /// Event type to match: record.created, record.updated, or record.deleted
         event_type: String,
         /// Human-readable trigger name
         #[arg(long)]
         label: String,
+        /// Title for the task created on each trigger firing
         #[arg(long)]
         title: String,
+        /// Body for the task created on each trigger firing
         #[arg(long)]
         body: String,
-        #[arg(long = "agent-id")]
+        /// Agent id that runs the created task
+        #[arg(long = "agent", alias = "agent-id")]
         agent_id: Option<String>,
+        /// Workspace directory for the created task
         #[arg(long = "workspace-dir")]
         workspace_dir: Option<String>,
+        /// Create the trigger disabled
         #[arg(long)]
         disabled: bool,
         /// Output as JSON
@@ -1100,6 +1154,7 @@ pub(crate) enum AutomationDataTriggerAction {
     },
     /// Enable a data trigger
     Enable {
+        /// Data trigger id
         trigger_id: String,
         /// Output as JSON
         #[arg(long)]
@@ -1107,6 +1162,7 @@ pub(crate) enum AutomationDataTriggerAction {
     },
     /// Disable a data trigger
     Disable {
+        /// Data trigger id
         trigger_id: String,
         /// Output as JSON
         #[arg(long)]
@@ -1114,6 +1170,7 @@ pub(crate) enum AutomationDataTriggerAction {
     },
     /// Delete a data trigger
     Delete {
+        /// Data trigger id
         trigger_id: String,
         /// Output as JSON
         #[arg(long)]
@@ -1183,18 +1240,18 @@ pub(crate) enum AgentAction {
         #[arg(long)]
         json: bool,
     },
-    /// Update a custom agent
+    /// Update a custom agent. Fields you omit keep their current values.
     #[command(arg_required_else_help = true)]
     Update {
         /// Agent id (slug, e.g. spec-review)
         #[arg(long)]
         agent_id: String,
-        /// Display name
+        /// Display name. Omit to keep the current value.
         #[arg(long, alias = "name")]
-        display_name: String,
-        /// Provider type: claude_code, codex_app_server, traex, gemini_cli, antigravity, gpt, anthropic, or google
-        #[arg(long, default_value = "claude_code")]
-        provider: String,
+        display_name: Option<String>,
+        /// Provider type: claude_code, codex_app_server, traex, gemini_cli, antigravity, gpt, anthropic, or google. Omit to keep the current value.
+        #[arg(long)]
+        provider: Option<String>,
         /// Optional model override. Omit to preserve the existing value.
         #[arg(long, conflicts_with = "clear_model")]
         model: Option<String>,
@@ -1232,18 +1289,18 @@ pub(crate) enum AgentAction {
         #[arg(long)]
         json: bool,
     },
-    /// Create or update a custom agent
+    /// Create or update a custom agent. On update, fields you omit keep their current values.
     #[command(arg_required_else_help = true)]
     Upsert {
         /// Agent id (slug, e.g. spec-review)
         #[arg(long)]
         agent_id: String,
-        /// Display name
+        /// Display name. Required when creating; omit on update to keep the current value.
         #[arg(long, alias = "name")]
-        display_name: String,
-        /// Provider type: claude_code, codex_app_server, traex, gemini_cli, antigravity, gpt, anthropic, or google
-        #[arg(long, default_value = "claude_code")]
-        provider: String,
+        display_name: Option<String>,
+        /// Provider type: claude_code, codex_app_server, traex, gemini_cli, antigravity, gpt, anthropic, or google. Omit to keep the current value (claude_code when creating).
+        #[arg(long)]
+        provider: Option<String>,
         /// Optional model override. Omit to preserve an existing value, or use the provider default on create.
         #[arg(long, conflicts_with = "clear_model")]
         model: Option<String>,
@@ -1282,6 +1339,7 @@ pub(crate) enum AgentAction {
         json: bool,
     },
     /// Delete a custom agent
+    #[command(visible_alias = "remove", visible_alias = "rm")]
     Delete {
         /// Agent id
         agent_id: String,
@@ -1309,38 +1367,50 @@ pub(crate) enum TeamAction {
     },
     /// Create a team
     Create {
+        /// Team id (slug, e.g. release-crew)
         #[arg(long)]
         team_id: String,
+        /// Display name
         #[arg(long, alias = "name")]
         display_name: String,
+        /// Agent id that leads the team
         #[arg(long)]
         leader_agent_id: String,
+        /// Member agent id. Repeat the flag to add multiple members.
         #[arg(long = "member-agent-id", required = true)]
         member_agent_ids: Vec<String>,
+        /// Team workflow description handed to the leader agent
         #[arg(long)]
         workflow_text: String,
         /// Output as JSON
         #[arg(long)]
         json: bool,
     },
-    /// Update a team
+    /// Update a team. Fields you omit keep their current values.
     Update {
+        /// Team id
         team_id: String,
+        /// Rename the team to this id
         #[arg(long)]
         new_team_id: Option<String>,
+        /// Display name. Omit to keep the current value.
         #[arg(long, alias = "name")]
-        display_name: String,
+        display_name: Option<String>,
+        /// Agent id that leads the team. Omit to keep the current value.
         #[arg(long)]
-        leader_agent_id: String,
-        #[arg(long = "member-agent-id", required = true)]
+        leader_agent_id: Option<String>,
+        /// Member agent id. Repeat to replace the member list; omit to keep the current members.
+        #[arg(long = "member-agent-id")]
         member_agent_ids: Vec<String>,
+        /// Team workflow description. Omit to keep the current value.
         #[arg(long)]
-        workflow_text: String,
+        workflow_text: Option<String>,
         /// Output as JSON
         #[arg(long)]
         json: bool,
     },
     /// Delete a team
+    #[command(visible_alias = "remove", visible_alias = "rm")]
     Delete {
         /// Team id
         team_id: String,
@@ -1369,6 +1439,7 @@ pub(crate) enum ThreadAction {
     },
     /// Get one thread
     Get {
+        /// Canonical thread id, e.g. thread::abc
         thread_id: String,
         /// Output as JSON
         #[arg(long)]
@@ -1388,7 +1459,7 @@ pub(crate) enum ThreadAction {
     /// Send a message into an internal thread and stream the response
     #[command(
         override_usage = "garyx thread send <thread|task|bot> <target> [message]...",
-        long_about = "Send a message into an internal Garyx thread and stream the agent response.\n\nTargets:\n  thread <thread_id>              Send to a canonical thread id\n  task <task_id>                  Resolve a task to its backing thread\n  bot <channel:account_id>        Resolve the bot's bound main thread inside the gateway\n\nExamples:\n  garyx thread send thread thread::abc \"hello\"\n  garyx thread send task '#TASK-1' \"status?\"\n  garyx thread send bot telegram:main \"continue\"\n\nFor compatibility, `garyx thread send <thread_id> [message]...` is still accepted."
+        long_about = "Send a message into an internal Garyx thread and stream the agent response.\n\nTargets:\n  thread <thread_id>              Send to a canonical thread id\n  task <task_id>                  Resolve a task to its backing thread\n  bot <channel:account_id>        Resolve the bot's bound main thread inside the gateway\n\nExamples:\n  garyx thread send thread thread::abc \"hello\"\n  garyx thread send task '#TASK-1' \"status?\"\n  garyx thread send bot telegram:main \"continue\"\n\nFor compatibility, `garyx thread send <thread_id> [message]...` is still accepted.\nTo send an outbound chat message to a channel without running an agent, use `garyx message`."
     )]
     Send {
         /// Destination kind: thread, task, or bot
@@ -1413,8 +1484,10 @@ pub(crate) enum ThreadAction {
     },
     /// Create a thread
     Create {
+        /// Thread title shown in thread lists
         #[arg(long)]
         title: Option<String>,
+        /// Workspace directory for the thread's agent
         #[arg(long)]
         workspace_dir: Option<String>,
         /// Create a managed git worktree for this thread. Requires workspace-dir to be a git repo root.
@@ -1424,7 +1497,7 @@ pub(crate) enum ThreadAction {
         /// agent ids share one namespace; passing a team id binds the thread to
         /// the whole team (meta-provider: `agent_team`). Omit for the default
         /// single-agent mode.
-        #[arg(long)]
+        #[arg(long = "agent", alias = "agent-id")]
         agent_id: Option<String>,
         /// Output as JSON
         #[arg(long)]
@@ -1450,6 +1523,7 @@ pub(crate) enum WorkflowAction {
     },
     /// Get a workflow run
     Get {
+        /// Workflow run id
         workflow_run_id: String,
         /// Output as JSON
         #[arg(long)]
@@ -1457,6 +1531,7 @@ pub(crate) enum WorkflowAction {
     },
     /// Show workflow events
     Events {
+        /// Workflow run id
         workflow_run_id: String,
         /// Event sequence cursor
         #[arg(long, default_value_t = 0)]
@@ -1467,6 +1542,7 @@ pub(crate) enum WorkflowAction {
     },
     /// Cancel a workflow run
     Cancel {
+        /// Workflow run id
         workflow_run_id: String,
         /// Output as JSON
         #[arg(long)]
@@ -1478,16 +1554,21 @@ pub(crate) enum WorkflowAction {
 pub(crate) enum WorkflowDefinitionAction {
     /// List workflow definitions
     List {
+        /// Maximum number of definitions to return
         #[arg(long, default_value_t = 50)]
         limit: usize,
+        /// Offset for pagination
         #[arg(long, default_value_t = 0)]
         offset: usize,
+        /// Output as JSON
         #[arg(long)]
         json: bool,
     },
     /// Get one workflow definition
     Get {
+        /// Workflow definition id, e.g. development-loop
         workflow_id: String,
+        /// Output as JSON
         #[arg(long)]
         json: bool,
     },
@@ -1496,6 +1577,7 @@ pub(crate) enum WorkflowDefinitionAction {
         /// Workflow package directory or garyx.workflow.json manifest path
         #[arg(long)]
         file: String,
+        /// Output as JSON
         #[arg(long)]
         json: bool,
     },
@@ -1553,6 +1635,7 @@ pub(crate) enum DreamAction {
         json: bool,
     },
     /// Show one dream topic and its thread spans
+    #[command(visible_alias = "get")]
     Show {
         /// Dream id
         dream_id: String,
@@ -1569,33 +1652,42 @@ pub(crate) enum TaskAction {
         /// Filter by status: todo, in_progress, in_review, or done
         #[arg(long)]
         status: Option<String>,
-        #[arg(long)]
-        assignee: Option<String>,
+        /// Filter by the thread that created the task
         #[arg(long)]
         source_thread: Option<String>,
+        /// Filter by the task that created the task
         #[arg(long)]
         source_task: Option<String>,
+        /// Filter by the bot that created the task, e.g. telegram:main
         #[arg(long)]
         source_bot: Option<String>,
+        /// Maximum number of tasks to return
         #[arg(long, default_value_t = 50)]
         limit: usize,
+        /// Offset for pagination
         #[arg(long, default_value_t = 0)]
         offset: usize,
+        /// Output as JSON
         #[arg(long)]
         json: bool,
     },
     /// Get one task by id
     Get {
+        /// Task id, e.g. '#TASK-1' (quote the leading #)
         task_id: String,
+        /// Output as JSON
         #[arg(long)]
         json: bool,
     },
     /// Create a new task thread
     Create {
+        /// Task title shown in task lists
         #[arg(long)]
         title: Option<String>,
+        /// Task body: the work description handed to the executor
         #[arg(long)]
         body: Option<String>,
+        /// Workspace directory for the backing thread; defaults to the current directory
         #[arg(long)]
         workspace_dir: Option<String>,
         /// Create the backing thread in a managed git worktree. Requires workspace-dir to be a git repo root.
@@ -1616,62 +1708,121 @@ pub(crate) enum TaskAction {
         /// Notification target when the task enters review. Defaults to the current thread (or `none` outside a thread). Override with `none`, `current-thread`, `thread <thread_id>`, or `bot <channel:account_id>`.
         #[arg(long, value_name = "TARGET", num_args = 1..=2)]
         notify: Vec<String>,
+        /// Output as JSON
         #[arg(long)]
         json: bool,
     },
     /// Stop a running task run and release the task
     Stop {
+        /// Task id, e.g. '#TASK-1' (quote the leading #)
         task_id: String,
+        /// Output as JSON
         #[arg(long)]
         json: bool,
     },
     /// Delete task metadata while retaining the backing thread transcript
+    #[command(visible_alias = "remove", visible_alias = "rm")]
     Delete {
+        /// Task id, e.g. '#TASK-1' (quote the leading #)
         task_id: String,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Assign a task
-    Assign {
-        task_id: String,
-        principal: String,
+        /// Output as JSON
         #[arg(long)]
         json: bool,
     },
     /// Update task status
     Update {
+        /// Task id, e.g. '#TASK-1' (quote the leading #)
         task_id: String,
         /// New status: todo, in_progress, in_review, or done
         #[arg(long)]
         status: String,
+        /// Note recorded in the task history for this transition
         #[arg(long)]
         note: Option<String>,
+        /// Bypass the in-review handoff guard for manual status corrections
         #[arg(long)]
         force: bool,
+        /// Output as JSON
         #[arg(long)]
         json: bool,
     },
     /// Reopen a done task
     Reopen {
+        /// Task id, e.g. '#TASK-1' (quote the leading #)
         task_id: String,
+        /// Output as JSON
         #[arg(long)]
         json: bool,
     },
     /// Set task title
     SetTitle {
+        /// Task id, e.g. '#TASK-1' (quote the leading #)
         task_id: String,
+        /// New task title
         title: String,
+        /// Output as JSON
         #[arg(long)]
         json: bool,
     },
     /// Show task history
     History {
+        /// Task id, e.g. '#TASK-1' (quote the leading #)
         task_id: String,
+        /// Maximum number of history entries to return
         #[arg(long, default_value_t = 50)]
         limit: usize,
+        /// Output as JSON
         #[arg(long)]
         json: bool,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// Every visible subcommand carries an about string and every visible
+    /// argument carries a help string. The CLI's primary consumers are agents
+    /// that learn a command from `--help` alone, so an undocumented flag is a
+    /// usability regression — this test turns that into a build failure.
+    fn assert_command_documented(command: &clap::Command, path: &str) {
+        for sub in command.get_subcommands() {
+            if sub.get_name() == "help" {
+                continue;
+            }
+            let sub_path = format!("{path} {}", sub.get_name());
+            assert!(
+                sub.get_about().is_some() || sub.get_long_about().is_some(),
+                "subcommand `{sub_path}` is missing an about string"
+            );
+            assert_command_documented(sub, &sub_path);
+        }
+        for arg in command.get_arguments() {
+            if arg.is_hide_set() {
+                continue;
+            }
+            let id = arg.get_id().as_str();
+            if id == "help" || id == "version" {
+                continue;
+            }
+            assert!(
+                arg.get_help().is_some() || arg.get_long_help().is_some(),
+                "argument `{id}` of `{path}` is missing a help string"
+            );
+        }
+    }
+
+    #[test]
+    fn every_visible_cli_argument_and_subcommand_is_documented() {
+        let command = Cli::command();
+        assert_command_documented(&command, "garyx");
+    }
+
+    #[test]
+    fn cli_definition_is_internally_consistent() {
+        Cli::command().debug_assert();
+    }
 }
 
 #[derive(Subcommand)]
@@ -1697,6 +1848,7 @@ pub(crate) enum PluginsAction {
         /// Install root override. Defaults to `~/.garyx/plugins/`.
         #[arg(long)]
         target: Option<PathBuf>,
+        /// Output as JSON
         #[arg(long)]
         json: bool,
     },

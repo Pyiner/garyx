@@ -93,7 +93,7 @@ garyx automation trigger data create contacts record.created \
   --label "Contact review" \
   --title "New contact: {record_id}" \
   --body "Review {table_name} record {record_id}" \
-  --agent-id codex
+  --agent codex
 ```
 
 The CLI is intentionally low-level. Agents are expected to inspect errors,
