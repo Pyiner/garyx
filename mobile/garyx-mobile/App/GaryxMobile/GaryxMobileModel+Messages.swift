@@ -9,27 +9,48 @@ extension GaryxMobileModel {
     }
 
     func renderSnapshot(for threadId: String) -> GaryxRenderSnapshot? {
-        renderSnapshotsByThread[threadId] ?? cachedTranscriptSnapshots[threadId]?.renderSnapshot
+        renderSnapshotsByThread[threadId] ?? transcriptMirror.snapshot(for: threadId)?.renderSnapshot
     }
 
     func setRenderSnapshot(_ snapshot: GaryxRenderSnapshot?, for threadId: String) {
         guard renderSnapshotsByThread[threadId] != snapshot else { return }
         renderSnapshotsByThread[threadId] = snapshot
+        if selectedThread?.id == threadId {
+            lockSelectedTurnRowsWindowFloorIfNeeded()
+        }
     }
 
-    func selectedThreadTurnRows() -> [GaryxMobileTurnRow] {
-        guard let threadId = selectedThread?.id else {
-            return GaryxMobileRenderStateMapper.rows(
-                snapshot: nil,
-                messages: messages,
-                transcriptMessages: []
+    /// The **full** prepared turn rows for the selected thread, memoized by
+    /// mapper input identity (TASK-1751 P2). The mapper stays a dumb pure
+    /// mapping; this only skips the redundant rebuild the view's body +
+    /// `.onChange` would otherwise each trigger.
+    func selectedThreadFullTurnRows() -> [GaryxMobileTurnRow] {
+        let threadId = selectedThread?.id
+        let snapshot = threadId.flatMap { renderSnapshot(for: $0) }
+        let transcriptMessages = threadId.flatMap { transcriptMirror.snapshot(for: $0)?.messages } ?? []
+        let localMessages = messages
+        return selectedTurnRowsCache.rows(
+            threadId: threadId,
+            snapshot: snapshot,
+            messages: localMessages,
+            transcriptMessages: transcriptMessages
+        ) {
+            GaryxMobileRenderStateMapper.rows(
+                snapshot: snapshot,
+                messages: localMessages,
+                transcriptMessages: transcriptMessages
             )
         }
-        return GaryxMobileRenderStateMapper.rows(
-            snapshot: renderSnapshot(for: threadId),
-            messages: messages,
-            transcriptMessages: cachedTranscriptSnapshots[threadId]?.messages ?? []
-        )
+    }
+
+    /// The **windowed** turn rows actually rendered (TASK-1751 P3): the
+    /// floor-anchored tail slice of the full rows. Pure read — never writes the
+    /// window state (the floor is locked from event handlers only).
+    func selectedThreadTurnRows() -> [GaryxMobileTurnRow] {
+        GaryxTurnRowsWindowPlanner.resolve(
+            rows: selectedThreadFullTurnRows(),
+            state: selectedTurnRowsWindowState
+        ).visible
     }
 
     func setMessages(
@@ -59,7 +80,9 @@ extension GaryxMobileModel {
         if selectedThread?.id == threadId {
             pendingSelectedMessagesSignature = nextSignature
             messages = nextMessages
+            lockSelectedTurnRowsWindowFloorIfNeeded()
         }
+        touchThreadResidency(threadId)
     }
 
     func setPreparedMessages(_ prepared: GaryxPreparedThreadMessages, for threadId: String) {
@@ -74,7 +97,9 @@ extension GaryxMobileModel {
         if selectedThread?.id == threadId {
             pendingSelectedMessagesSignature = prepared.signature
             messages = prepared.messages
+            lockSelectedTurnRowsWindowFloorIfNeeded()
         }
+        touchThreadResidency(threadId)
     }
 
     func clearMessages(for threadId: String) {

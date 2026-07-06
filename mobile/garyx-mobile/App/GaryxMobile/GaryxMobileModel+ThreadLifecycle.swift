@@ -47,6 +47,12 @@ extension GaryxMobileModel {
         let previousThreadId = selectedThread?.id
         if previousThreadId != thread.id {
             advanceSelectedThreadDraftGeneration()
+            // Bump the cold-open generation so any in-flight restore task for the
+            // previous thread (or a prior open of this one) aborts (TASK-1751 P1).
+            selectedThreadColdOpenGeneration &+= 1
+            // Reset the render window to the newest page for the new thread
+            // (TASK-1751 P3); event-driven, before any body eval.
+            resetSelectedTurnRowsWindow()
             switchComposerDraft(to: thread.id)
             selectedThreadRecoveryTask?.cancel()
             selectedThreadRecoveryTask = nil
@@ -80,23 +86,86 @@ extension GaryxMobileModel {
         if previousThreadId != thread.id {
             let inMemory = cachedMessages(for: thread.id)
             if inMemory.isEmpty {
-                // Cold start / first open this session: show the persisted committed
-                // window immediately instead of a blank screen, then refresh below.
-                let restored = restoredCachedMessages(for: thread.id)
-                if restored.isEmpty {
-                    messages = []
-                } else {
-                    setMessages(restored, for: thread.id)
-                }
+                // Cold start / first open this session. Do NOT decode the persisted
+                // window synchronously on the main actor — a large cache blocks the
+                // whole UI (TASK-1751 P1). Show the loading state (with no messages,
+                // no render snapshot and history not yet loaded,
+                // isAwaitingInitialHistory is true) and restore asynchronously; the
+                // network refresh below (loadSelectedThreadHistory) races and wins.
+                messages = []
+                spawnColdOpenTranscriptRestore(threadId: thread.id)
             } else {
                 messages = inMemory
+                // Warm open: lock the window floor for the already-present rows.
+                lockSelectedTurnRowsWindowFloorIfNeeded()
             }
         }
+    }
+
+    /// Asynchronously restore the persisted committed window for a cold open
+    /// without blocking the main actor. Loads + decodes + maps off-main, then
+    /// applies only if `GaryxColdOpenRestorePolicy` still says the result is
+    /// fresh (TASK-1751 P1).
+    private func spawnColdOpenTranscriptRestore(threadId: String) {
+        let capturedGeneration = selectedThreadColdOpenGeneration
+        let capturedMirrorGeneration = transcriptMirror.generation(for: threadId)
+        Task { [weak self] in
+            guard let self else { return }
+            guard let snapshot = await self.loadTranscriptSnapshotFromDiskAsync(for: threadId) else { return }
+            let mapped: [GaryxMobileMessage]
+            if snapshot.messages.isEmpty {
+                mapped = []
+            } else {
+                mapped = await Task.detached(priority: .utility) {
+                    GaryxMobileTranscriptMapper.mobileMessages(from: snapshot.messages, live: false)
+                }.value
+            }
+            self.applyColdOpenTranscriptRestore(
+                threadId: threadId,
+                snapshot: snapshot,
+                mapped: mapped,
+                capturedGeneration: capturedGeneration,
+                capturedMirrorGeneration: capturedMirrorGeneration
+            )
+        }
+    }
+
+    private func applyColdOpenTranscriptRestore(
+        threadId: String,
+        snapshot: GaryxCachedTranscript,
+        mapped: [GaryxMobileMessage],
+        capturedGeneration: UInt64,
+        capturedMirrorGeneration: UInt64
+    ) {
+        let state = GaryxColdOpenRestorePolicy.State(
+            restoredThreadId: threadId,
+            selectedThreadId: selectedThread?.id,
+            capturedGeneration: capturedGeneration,
+            currentGeneration: selectedThreadColdOpenGeneration,
+            capturedMirrorGeneration: capturedMirrorGeneration,
+            currentMirrorGeneration: transcriptMirror.generation(for: threadId),
+            threadHistoryLoaded: threadHistoryLoadedIds.contains(threadId),
+            hasRenderSnapshot: renderSnapshotsByThread[threadId] != nil,
+            hasMessages: !cachedMessages(for: threadId).isEmpty
+        )
+        // Seed the mirror (advances the forward cursor for the incremental fetch)
+        // when the looser mirror gate passes and the mirror is still absent.
+        if GaryxColdOpenRestorePolicy.shouldSeedMirror(state), !transcriptMirror.contains(threadId) {
+            setTranscriptMirror(snapshot, for: threadId)
+        }
+        guard GaryxColdOpenRestorePolicy.shouldApply(state) else { return }
+        if let renderSnapshot = snapshot.renderSnapshot {
+            setRenderSnapshot(renderSnapshot, for: threadId)
+        }
+        guard !mapped.isEmpty else { return }
+        setMessages(mapped, for: threadId)
     }
 
     func openNewThreadDraft(agentTargetOverride: String? = nil) {
         invalidatePendingThreadOpen()
         advanceSelectedThreadDraftGeneration()
+        selectedThreadColdOpenGeneration &+= 1
+        resetSelectedTurnRowsWindow()
         selectedThreadRecoveryTask?.cancel()
         selectedThreadRecoveryTask = nil
         selectedThreadRecoveryThreadId = nil
@@ -263,6 +332,7 @@ extension GaryxMobileModel {
             messagesByThread[thread.id] = nil
             messageSignaturesByThread[thread.id] = nil
             activeAssistantMessageIdsByThread[thread.id] = nil
+            threadResidencyTracker.remove(thread.id)
             clearTranscriptCache(for: thread.id)
             await refreshThreads()
         } catch {

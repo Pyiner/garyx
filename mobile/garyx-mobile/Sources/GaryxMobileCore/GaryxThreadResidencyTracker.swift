@@ -76,3 +76,15 @@ public struct GaryxThreadResidencyTracker: Equatable, Sendable {
         return victims
     }
 }
+
+/// Pure predicate for the P4 residency pin set: a thread holding unsettled local
+/// rows (optimistic sends / pending acks that are not yet durable) must never be
+/// evicted, or the in-flight local state would be lost.
+enum GaryxThreadResidencyPolicy {
+    static func hasUnsettledLocalRows(_ messages: [GaryxMobileMessage]) -> Bool {
+        messages.contains { message in
+            guard let localState = message.localState else { return false }
+            return localState != .remoteFinal
+        }
+    }
+}

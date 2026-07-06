@@ -219,7 +219,7 @@ extension GaryxMobileModel {
             floorSeq: floorSeq,
             in: transcriptSnapshot(for: threadId)
         ) {
-            cachedTranscriptSnapshots[threadId] = window
+            setTranscriptMirror(window, for: threadId)
         }
         // On-screen rows below the floor must go too: the prepared-flush
         // preserve step (preserveRemoteBeforeIndex = window.firstIndex)
@@ -231,6 +231,10 @@ extension GaryxMobileModel {
             in: cachedMessages(for: threadId)
         )
         messagesByThread[threadId] = pruned
+        // The window floor row may have just been pruned; this path already
+        // reflows the transcript and resets scroll, so re-anchor the render
+        // window to the newest page (TASK-1751 P3). Event-driven.
+        resetSelectedTurnRowsWindow()
         selectedThreadStreamFlushGate.recordVisibleChange()
     }
 
@@ -253,7 +257,7 @@ extension GaryxMobileModel {
             )
         }.value
         guard selectedThread?.id == threadId else { return }
-        cachedTranscriptSnapshots[threadId] = window
+        setTranscriptMirror(window, for: threadId)
         selectedThreadStreamFlushGate.recordVisibleChange()
     }
 
@@ -284,7 +288,7 @@ extension GaryxMobileModel {
             hasMoreBefore: windowHasMoreBefore,
             nextBeforeIndex: windowNextBeforeIndex
         )
-        cachedTranscriptSnapshots[threadId] = window
+        setTranscriptMirror(window, for: threadId)
         if !isThreadBusy(threadId) {
             persistTranscriptCacheWindowInBackground(window)
         }
@@ -372,7 +376,7 @@ extension GaryxMobileModel {
     ) async {
         guard !respectingTaskCancellation || !Task.isCancelled else { return }
         guard selectedThread?.id == threadId,
-              let window = cachedTranscriptSnapshots[threadId] else { return }
+              let window = transcriptMirror.snapshot(for: threadId) else { return }
         let prepared = await prepareSelectedThreadStreamWindowFlush(window, threadId: threadId)
         guard !respectingTaskCancellation || !Task.isCancelled else { return }
         // Abort only when the prepared output could differ (a no-op re-apply
@@ -381,7 +385,7 @@ extension GaryxMobileModel {
         // would cover it). A content change did settle/mark pending, so the
         // window-end flush re-renders after this abort.
         guard selectedThread?.id == threadId,
-              cachedTranscriptSnapshots[threadId]?.renderEquivalent(to: window) == true else { return }
+              transcriptMirror.snapshot(for: threadId)?.renderEquivalent(to: window) == true else { return }
         applyTranscriptRunState(prepared.runState, threadId: threadId)
         if !prepared.threadRunActive {
             persistTranscriptCacheWindowInBackground(window)

@@ -8,19 +8,31 @@ import Foundation
 extension GaryxMobileModel {
     /// The persisted committed window for a thread (in-memory mirror first, then
     /// disk), or nil when nothing is cached yet.
+    /// Single funnel for every in-memory mirror mutation — set (`window`) and
+    /// clear (`nil`). Bumps the per-thread mirror generation (via the store) and
+    /// marks the thread most-recently-used for the P4 residency cap. All
+    /// `cachedTranscriptSnapshots` writes route through here so a write can never
+    /// bypass the cold-open restore freshness gate (TASK-1751 P1/P4).
+    func setTranscriptMirror(_ window: GaryxCachedTranscript?, for threadId: String) {
+        transcriptMirror.set(window, for: threadId)
+        if window != nil {
+            touchThreadResidency(threadId)
+        }
+    }
+
     func transcriptSnapshot(for threadId: String) -> GaryxCachedTranscript? {
-        if let cached = cachedTranscriptSnapshots[threadId] {
+        if let cached = transcriptMirror.snapshot(for: threadId) {
             return cached
         }
         guard let loaded = transcriptCacheStore.load(threadId: threadId) else {
             return nil
         }
-        cachedTranscriptSnapshots[threadId] = loaded
+        setTranscriptMirror(loaded, for: threadId)
         return loaded
     }
 
     func transcriptSnapshotAsync(for threadId: String) async -> GaryxCachedTranscript? {
-        if let cached = cachedTranscriptSnapshots[threadId] {
+        if let cached = transcriptMirror.snapshot(for: threadId) {
             return cached
         }
         let store = transcriptCacheStore
@@ -30,8 +42,24 @@ extension GaryxMobileModel {
         ) else {
             return nil
         }
-        cachedTranscriptSnapshots[threadId] = loaded
+        setTranscriptMirror(loaded, for: threadId)
         return loaded
+    }
+
+    /// Load the persisted window from disk **without** seeding the in-memory
+    /// mirror — the cold-open restore path needs the decoded window but must not
+    /// touch (or bump) the mirror before its freshness policy decides
+    /// (TASK-1751 P1). The auto-seeding `transcriptSnapshotAsync` cannot be
+    /// reused here for exactly that reason.
+    func loadTranscriptSnapshotFromDiskAsync(for threadId: String) async -> GaryxCachedTranscript? {
+        if let cached = transcriptMirror.snapshot(for: threadId) {
+            return cached
+        }
+        let store = transcriptCacheStore
+        return await GaryxTranscriptCachePersistenceQueue.shared.load(
+            threadId: threadId,
+            store: store
+        )
     }
 
     /// Forward cursor for the next incremental open, or nil to do a full fetch.
@@ -41,19 +69,6 @@ extension GaryxMobileModel {
 
     func transcriptAfterCursorAsync(for threadId: String) async -> Int? {
         await transcriptSnapshotAsync(for: threadId)?.afterCursor
-    }
-
-    /// Rendered committed window for instant cold-start display before the network
-    /// fetch returns. Empty when nothing is cached.
-    func restoredCachedMessages(for threadId: String) -> [GaryxMobileMessage] {
-        guard let snapshot = transcriptSnapshot(for: threadId) else {
-            return []
-        }
-        if let renderSnapshot = snapshot.renderSnapshot {
-            setRenderSnapshot(renderSnapshot, for: threadId)
-        }
-        guard !snapshot.messages.isEmpty else { return [] }
-        return mobileMessages(from: snapshot.messages, live: false)
     }
 
     /// Merge a fetched page into the cached window. Persists to disk and advances
@@ -87,7 +102,7 @@ extension GaryxMobileModel {
         }.value
         let window = prepared.0
         if committedOnly || prepared.1 {
-            cachedTranscriptSnapshots[threadId] = window
+            setTranscriptMirror(window, for: threadId)
             persistTranscriptCacheWindowInBackground(window)
         }
         return window
@@ -205,7 +220,11 @@ extension GaryxMobileModel {
     }
 
     func clearTranscriptCache(for threadId: String) {
-        cachedTranscriptSnapshots[threadId] = nil
+        // A nil clear is a mirror mutation reachable mid-restore (stream
+        // control-rewrite recovery), so it must bump the mirror generation like
+        // any other write — otherwise an in-flight cold-open restore could
+        // resurrect the pre-clear window (TASK-1751 P1, design review v3).
+        setTranscriptMirror(nil, for: threadId)
         renderSnapshotsByThread[threadId] = nil
         selectedThreadRenderFloorByThread[threadId] = nil
         removeTranscriptCacheInBackground(threadId: threadId)

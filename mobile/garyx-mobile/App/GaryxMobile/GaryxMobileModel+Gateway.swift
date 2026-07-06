@@ -120,8 +120,10 @@ extension GaryxMobileModel {
         messageSignaturesByThread = [:]
         // The persisted transcript cache is keyed by thread id only, so drop it on
         // a gateway/profile switch to avoid showing another backend's cached thread
-        // (and to bound on-disk growth).
-        cachedTranscriptSnapshots = [:]
+        // (and to bound on-disk growth). clearAll bumps every present thread's
+        // mirror generation (monotonic) so an in-flight cold-open restore aborts.
+        transcriptMirror.clearAll()
+        threadResidencyTracker.removeAll()
         transcriptCacheStore.clearAll()
         activeAssistantMessageIdsByThread = [:]
         pendingDirectFollowUpsByThread = [:]

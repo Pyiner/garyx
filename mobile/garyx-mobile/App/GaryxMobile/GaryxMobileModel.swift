@@ -168,6 +168,12 @@ final class GaryxMobileModel: ObservableObject {
     /// visible transcript rows; committed messages remain only the data pool they
     /// reference.
     @Published var renderSnapshotsByThread: [String: GaryxRenderSnapshot] = [:]
+    /// Bumped when the selected thread's render window (TASK-1751 P3) changes
+    /// from an event handler (floor lock, expand, network-page extension, resume
+    /// reset). The conversation body reads the windowed rows and this revision so
+    /// a window change re-renders; the window state itself stays non-published so
+    /// the pure body getter never publishes during a view update.
+    @Published var selectedTurnRowsWindowRevision = 0
     /// Legacy-shaped read bridges over `runTracker`.
     var isSending: Bool { runTracker.hasLocalActiveRun }
     var activeRunThreadId: String? { runTracker.localActiveRunThreadId }
@@ -398,8 +404,26 @@ final class GaryxMobileModel: ObservableObject {
             }
         }
     )
-    var cachedTranscriptSnapshots: [String: GaryxCachedTranscript] = [:]
+    /// In-memory mirror of the on-disk committed window per thread. Wrapped so
+    /// every mutation (set AND clear) bumps a per-thread generation the cold-open
+    /// restore policy compares against — a write path can no longer bypass the
+    /// freshness gate (TASK-1751 P1).
+    var transcriptMirror = GaryxTranscriptMirrorStore()
     var transcriptCachePersistenceGenerations: [String: UInt64] = [:]
+    /// Monotonic per-thread cold-open generation, bumped in `showSelectedThread`
+    /// on a thread-id change; the async restore task captures it at spawn and
+    /// aborts if it moved (switch-away-and-back). TASK-1751 P1.
+    var selectedThreadColdOpenGeneration: UInt64 = 0
+    /// LRU residency cap over the per-thread projections (TASK-1751 P4).
+    var threadResidencyTracker = GaryxThreadResidencyTracker()
+    /// Memoized full prepared turn rows for the selected thread (TASK-1751 P2);
+    /// plain (non-published) — mutating it during a body read is invisible to
+    /// SwiftUI, matching the scroll-state box pattern.
+    var selectedTurnRowsCache = GaryxTurnRowsCache()
+    /// Floor-anchored render window state for the selected thread (TASK-1751 P3);
+    /// plain (non-published). The floor is only ever written from event handlers,
+    /// never from the body getter.
+    var selectedTurnRowsWindowState = GaryxTurnRowsWindowState()
     var selectedMessagesSignature = MessageListSignature(count: 0, fingerprint: 0, sampled: false)
     var pendingSelectedMessagesSignature: MessageListSignature?
     var activeAssistantMessageIdsByThread: [String: String] = [:]

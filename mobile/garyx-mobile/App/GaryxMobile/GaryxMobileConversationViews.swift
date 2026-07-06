@@ -282,10 +282,13 @@ struct GaryxConversationView: View {
                             .padding(.top, 96)
                     }
                 } else {
-                    if model.selectedThreadHasMoreHistoryBefore {
+                    if model.selectedThreadHasMoreRenderableHistory {
                         GaryxLoadEarlierHistoryButton(isLoading: model.isLoadingOlderThreadHistory) {
+                            // Two-stage: reveal window-hidden in-memory rows first
+                            // (instant), then fetch an older network page only when
+                            // the window is exhausted (TASK-1751 P3).
                             Task {
-                                await model.loadOlderSelectedThreadHistory()
+                                await model.advanceSelectedThreadHistoryBoundary()
                             }
                         }
                         .onAppear {
@@ -579,7 +582,11 @@ struct GaryxConversationView: View {
     private func prefetchOlderHistoryIfNeeded() {
         guard let threadId = model.selectedThread?.id,
               scrollStateBox.state.shouldPrefetchOlderHistory(
-                hasMoreHistoryBefore: model.selectedThreadHasMoreHistoryBefore,
+                // Reaching the top of the *rendered* content (the window floor)
+                // reveals window-hidden rows first, then pages the network — so
+                // the gate fires whenever more renderable history remains
+                // (TASK-1751 P3).
+                hasMoreHistoryBefore: model.selectedThreadHasMoreRenderableHistory,
                 isLoadingOlderHistory: model.isLoadingOlderThreadHistory,
                 hasPendingPrefetch: pendingHistoryPrefetchThreadId == threadId
               ) else {
@@ -587,7 +594,7 @@ struct GaryxConversationView: View {
         }
         pendingHistoryPrefetchThreadId = threadId
         Task {
-            await model.loadOlderSelectedThreadHistory()
+            await model.advanceSelectedThreadHistoryBoundary()
             await MainActor.run {
                 if pendingHistoryPrefetchThreadId == threadId {
                     pendingHistoryPrefetchThreadId = nil

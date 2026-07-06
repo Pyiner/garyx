@@ -256,7 +256,7 @@ extension GaryxMobileModel {
             threadId: threadId,
             historyLoaded: threadId.map { threadHistoryLoadedIds.contains($0) } ?? false,
             liveRenderSnapshot: threadId.flatMap { renderSnapshotsByThread[$0] },
-            cachedTranscript: threadId.flatMap { cachedTranscriptSnapshots[$0] },
+            cachedTranscript: threadId.flatMap { transcriptMirror.snapshot(for: $0) },
             resolvedMessageIds: Set(selectedThreadMessages.map(\.id)),
             resolvedHistoryIndexes: Set(selectedThreadMessages.compactMap(\.historyIndex)),
             hasRemoteFinalMessages: threadId.map { threadId in

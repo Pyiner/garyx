@@ -254,6 +254,13 @@ extension GaryxMobileModel {
                 mobileMessages(from: transcript.messages, live: false),
                 for: threadId
             )
+            // A network older page only fires when the render window was already
+            // exhausted (floor at index 0); extend the floor to the new oldest
+            // row so the fetched page is visible instead of hidden below the
+            // anchored floor (TASK-1751 P3). Event-driven.
+            if self.selectedThread?.id == threadId {
+                extendSelectedTurnRowsWindowToLoadedHistory()
+            }
             if self.selectedThread?.id == threadId {
                 stopSelectedThreadStream()
                 startSelectedThreadStream(for: threadId)
