@@ -282,6 +282,34 @@ fn from_config_parks_overflow_interval_far_in_future_without_panicking() {
 }
 
 #[tokio::test]
+async fn load_resets_stale_running_status_so_job_fires_again() {
+    // A job killed mid-run (Garyx restarts are non-graceful / SIGKILL and never
+    // settle the in-flight tick) leaves last_status = Running persisted on disk.
+    // On reload it must be reset, or claim_job_for_execution skips it forever
+    // (the guard rejects any job whose last_status == Running) and the schedule
+    // silently stops firing with no recovery via the UI.
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().to_path_buf();
+    ensure_dirs(&data_dir).await.unwrap();
+
+    // Simulate a crash mid-run: a job persisted while claimed as Running.
+    let mut job = CronJob::from_config(&make_job_config("wedged", 60));
+    job.last_status = JobRunStatus::Running;
+    persist_job(&data_dir, &job).await.unwrap();
+
+    // Reload as the gateway does on startup.
+    let svc = CronService::new(data_dir);
+    svc.load(&CronConfig::default()).await.unwrap();
+
+    let loaded = svc.get("wedged").await.expect("job present after load");
+    assert_ne!(
+        loaded.last_status,
+        JobRunStatus::Running,
+        "a stale Running left by a previous run must be reset on load or the job never fires again",
+    );
+}
+
+#[tokio::test]
 async fn test_add_rejects_invalid_once_timestamp() {
     let tmp = TempDir::new().unwrap();
     let svc = CronService::new(tmp.path().to_path_buf());

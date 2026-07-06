@@ -609,7 +609,7 @@ impl CronService {
         // Load from disk first.
         let disk_jobs = load_jobs(&self.data_dir).await?;
         let mut map = HashMap::new();
-        for job in disk_jobs {
+        for mut job in disk_jobs {
             if let Err(error) = validate_cron_schedule(&job.schedule) {
                 tracing::warn!(
                     job_id = %job.id,
@@ -618,6 +618,22 @@ impl CronService {
                 );
                 let _ = delete_job_file(&self.data_dir, &job.id).await;
                 continue;
+            }
+            // A `Running` status persisted across a restart is a stale claim:
+            // the run that set it was killed with the previous process (Garyx
+            // restarts are non-graceful / SIGKILL and never settle the in-flight
+            // tick). No run survives a restart, so treat it as an interrupted
+            // failure and make the job claimable again -- otherwise
+            // `claim_job_for_execution` skips it forever and the schedule
+            // silently stops firing with no recovery via the UI. This mirrors
+            // the startup reconciliation that repairs interrupted threads,
+            // tasks, and workflows.
+            if job.last_status == JobRunStatus::Running {
+                tracing::warn!(
+                    job_id = %job.id,
+                    "resetting stale `Running` cron job left by an interrupted run/restart"
+                );
+                job.last_status = JobRunStatus::Failed;
             }
             map.insert(job.id.clone(), job);
         }
