@@ -199,6 +199,18 @@ public protocol GaryxTranscriptCacheStore: Sendable {
     func clearAll()
 }
 
+/// Observable outcome of a persistent-cache write, so a failure is no longer
+/// swallowed silently (TASK-1751 P5). The app wires a sink to `os.Logger`;
+/// tests inject a recording closure. Persistence stays fire-and-forget for
+/// callers — the gateway remains the durable source of truth — but a failed
+/// write now emits a signal and never leaks its temporary file.
+public enum GaryxTranscriptCacheStoreEvent: Equatable, Sendable {
+    /// The snapshot could not be JSON-encoded; nothing was written.
+    case saveEncodeFailed(threadId: String)
+    /// The encoded snapshot could not be written/atomically replaced on disk.
+    case saveWriteFailed(threadId: String, reason: String)
+}
+
 /// File-backed cache: one JSON file per thread under `directory`, named by a
 /// reversible URL-safe base64 of the thread id (thread ids contain `::`). One
 /// file per thread keeps writes O(one thread) and avoids loading every thread's
@@ -212,6 +224,7 @@ public final class GaryxTranscriptFileCacheStore: GaryxTranscriptCacheStore, @un
     private let fileManager: FileManager
     private let ttl: TimeInterval?
     private let now: () -> Date
+    private let diagnostics: (@Sendable (GaryxTranscriptCacheStoreEvent) -> Void)?
     private let lock = NSLock()
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
@@ -220,12 +233,14 @@ public final class GaryxTranscriptFileCacheStore: GaryxTranscriptCacheStore, @un
         directory: URL,
         ttl: TimeInterval? = nil,
         now: @escaping () -> Date = { Date() },
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        diagnostics: (@Sendable (GaryxTranscriptCacheStoreEvent) -> Void)? = nil
     ) {
         self.directory = directory
         self.ttl = ttl
         self.now = now
         self.fileManager = fileManager
+        self.diagnostics = diagnostics
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         self.encoder = encoder
@@ -233,6 +248,12 @@ public final class GaryxTranscriptFileCacheStore: GaryxTranscriptCacheStore, @un
         decoder.dateDecodingStrategy = .iso8601
         self.decoder = decoder
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        // Sweep orphan temporary files left by an older app version or by a crash
+        // between `data.write(to: tmp)` and the atomic replace (TASK-1751 P5) —
+        // nothing else ever removes them, so they would accumulate forever. Safe
+        // at init: this instance owns the single-writer lock and no save can run
+        // before construction returns.
+        sweepOrphanTemporaryFiles()
         // Sweep entries already past their validity window on startup so the cache
         // never grows unbounded with stale threads.
         pruneExpired()
@@ -247,12 +268,15 @@ public final class GaryxTranscriptFileCacheStore: GaryxTranscriptCacheStore, @un
     }
 
     private func fileURL(threadId: String) -> URL {
-        let key = Data(threadId.utf8)
+        directory.appendingPathComponent("\(cacheKey(threadId: threadId)).json", isDirectory: false)
+    }
+
+    private func cacheKey(threadId: String) -> String {
+        Data(threadId.utf8)
             .base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
-        return directory.appendingPathComponent("\(key).json", isDirectory: false)
     }
 
     public func load(threadId: String) -> GaryxCachedTranscript? {
@@ -276,27 +300,44 @@ public final class GaryxTranscriptFileCacheStore: GaryxTranscriptCacheStore, @un
     public func save(_ snapshot: GaryxCachedTranscript) {
         lock.lock()
         defer { lock.unlock() }
-        guard let data = try? encoder.encode(snapshot) else { return }
-        let url = fileURL(threadId: snapshot.threadId)
+        let threadId = snapshot.threadId
+        guard let data = try? encoder.encode(snapshot) else {
+            // Encoding failure is a programmer/data error, not a disk fault:
+            // surface it instead of silently dropping the write.
+            diagnostics?(.saveEncodeFailed(threadId: threadId))
+            return
+        }
+        let url = fileURL(threadId: threadId)
         let tmp = url.appendingPathExtension("tmp")
         do {
             try data.write(to: tmp, options: .atomic)
             // Replace the live file atomically so a crash mid-write cannot leave a
-            // truncated cache that would mask real history on next open.
+            // truncated cache that would mask real history on next open. The
+            // replace joins the same do/catch as the write: a failing replace
+            // must clean up its temporary file and report, not swallow the error
+            // and leak a `.json.tmp` that nothing ever sweeps (TASK-1751 P5).
             if fileManager.fileExists(atPath: url.path) {
-                _ = try? fileManager.replaceItemAt(url, withItemAt: tmp)
+                _ = try fileManager.replaceItemAt(url, withItemAt: tmp)
             } else {
                 try fileManager.moveItem(at: tmp, to: url)
             }
         } catch {
             try? fileManager.removeItem(at: tmp)
+            diagnostics?(.saveWriteFailed(
+                threadId: threadId,
+                reason: (error as NSError).localizedDescription
+            ))
         }
     }
 
     public func remove(threadId: String) {
         lock.lock()
         defer { lock.unlock() }
-        try? fileManager.removeItem(at: fileURL(threadId: threadId))
+        let url = fileURL(threadId: threadId)
+        try? fileManager.removeItem(at: url)
+        // Drop the matching temporary sibling too, so a failed/interrupted save
+        // never leaves a `<key>.json.tmp` behind after the thread is removed.
+        try? fileManager.removeItem(at: url.appendingPathExtension("tmp"))
     }
 
     public func clearAll() {
@@ -306,17 +347,20 @@ public final class GaryxTranscriptFileCacheStore: GaryxTranscriptCacheStore, @un
             at: directory,
             includingPropertiesForKeys: nil
         ) else { return }
-        for entry in entries where entry.pathExtension == "json" {
+        // Remove both committed caches and any temporary residue.
+        for entry in entries where entry.pathExtension == "json" || entry.pathExtension == "tmp" {
             try? fileManager.removeItem(at: entry)
         }
     }
 
-    /// Remove entries past their validity window (`ttl`). No-op when no TTL is set.
-    /// Called on init; also reusable for an explicit sweep.
+    /// Remove entries past their validity window (`ttl`) and any orphan temporary
+    /// files. The tmp sweep runs regardless of TTL. Called on init; also reusable
+    /// for an explicit sweep.
     public func pruneExpired() {
-        guard let ttl else { return }
         lock.lock()
         defer { lock.unlock() }
+        sweepOrphanTemporaryFilesLocked()
+        guard let ttl else { return }
         let nowValue = now()
         guard let entries = try? fileManager.contentsOfDirectory(
             at: directory,
@@ -331,6 +375,26 @@ public final class GaryxTranscriptFileCacheStore: GaryxTranscriptCacheStore, @un
             if snapshot.isExpired(now: nowValue, ttl: ttl) {
                 try? fileManager.removeItem(at: entry)
             }
+        }
+    }
+
+    /// Remove every orphan `*.json.tmp` (leaked by an older version, a crash
+    /// between the tmp write and the atomic replace, or an interrupted save).
+    /// Acquires the store lock.
+    private func sweepOrphanTemporaryFiles() {
+        lock.lock()
+        defer { lock.unlock() }
+        sweepOrphanTemporaryFilesLocked()
+    }
+
+    /// Lock-held tmp sweep so callers already holding `lock` reuse it.
+    private func sweepOrphanTemporaryFilesLocked() {
+        guard let entries = try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil
+        ) else { return }
+        for entry in entries where entry.pathExtension == "tmp" {
+            try? fileManager.removeItem(at: entry)
         }
     }
 }

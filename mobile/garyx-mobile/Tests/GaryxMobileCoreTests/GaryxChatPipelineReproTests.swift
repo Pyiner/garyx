@@ -298,4 +298,97 @@ final class GaryxTranscriptCachePersistFailureReproTests: XCTestCase {
             "a failed replace must clean up its temporary file instead of leaking it next to the cache"
         )
     }
+
+    /// A write failure must surface a diagnostics event carrying the thread id
+    /// and a reason — the fix's observability contract.
+    func testP5_saveFailureEmitsWriteDiagnostics() throws {
+        let directory = try makeStoreDirectory()
+        let failingFileManager = ReplaceFailingFileManager()
+        var events: [GaryxTranscriptCacheStoreEvent] = []
+        let lock = NSLock()
+        let store = GaryxTranscriptFileCacheStore(
+            directory: directory,
+            fileManager: failingFileManager,
+            diagnostics: { event in
+                lock.lock(); defer { lock.unlock() }
+                events.append(event)
+            }
+        )
+        let threadId = "thread::persist-diagnostics"
+
+        store.save(makeWindow(threadId: threadId, text: "old content"))
+        // First save creates the file (moveItem branch, not replace) → no event.
+        XCTAssertTrue(events.isEmpty, "a successful write must not emit a failure event")
+
+        store.save(makeWindow(threadId: threadId, text: "new content"))
+
+        guard case let .saveWriteFailed(reportedThreadId, reason)? = events.first else {
+            return XCTFail("expected a saveWriteFailed event, got \(events)")
+        }
+        XCTAssertEqual(reportedThreadId, threadId)
+        XCTAssertFalse(reason.isEmpty, "the failure reason must be carried for logging")
+    }
+
+    /// A successful save must never emit a failure event (guards against a
+    /// diagnostics sink that fires on the happy path).
+    func testP5_successfulSaveEmitsNoDiagnostics() throws {
+        let directory = try makeStoreDirectory()
+        var events: [GaryxTranscriptCacheStoreEvent] = []
+        let store = GaryxTranscriptFileCacheStore(
+            directory: directory,
+            diagnostics: { events.append($0) }
+        )
+        let threadId = "thread::persist-ok"
+        store.save(makeWindow(threadId: threadId, text: "first"))
+        store.save(makeWindow(threadId: threadId, text: "second (replace path)"))
+        XCTAssertEqual(store.load(threadId: threadId)?.messages.first?.text, "second (replace path)")
+        XCTAssertTrue(events.isEmpty, "successful saves (create + atomic replace) must be silent")
+    }
+
+    /// Orphan `.json.tmp` residue (older version / crash between tmp write and
+    /// replace) is swept when a store is constructed over the directory.
+    func testP5_initSweepsOrphanTmpFiles() throws {
+        let directory = try makeStoreDirectory()
+        let orphanTmp = directory.appendingPathComponent("SGVsbG8.json.tmp")
+        let unrelated = directory.appendingPathComponent("keep.json")
+        try Data("stale tmp".utf8).write(to: orphanTmp)
+        try Data("{}".utf8).write(to: unrelated)
+
+        _ = GaryxTranscriptFileCacheStore(directory: directory)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: orphanTmp.path), "init must sweep orphan .json.tmp")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unrelated.path), "init must not touch .json files")
+    }
+
+    /// `remove(threadId:)` drops the thread's tmp sibling too.
+    func testP5_removeSweepsThreadTmp() throws {
+        let directory = try makeStoreDirectory()
+        let store = GaryxTranscriptFileCacheStore(directory: directory)
+        let threadId = "thread::remove-tmp"
+        store.save(makeWindow(threadId: threadId, text: "content"))
+        let url = cacheFileURL(directory: directory, threadId: threadId)
+        let tmp = url.appendingPathExtension("tmp")
+        try Data("leaked".utf8).write(to: tmp)
+
+        store.remove(threadId: threadId)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: tmp.path), "remove must drop the tmp sibling")
+    }
+
+    /// `clearAll()` removes tmp residue alongside committed caches.
+    func testP5_clearAllSweepsTmp() throws {
+        let directory = try makeStoreDirectory()
+        let store = GaryxTranscriptFileCacheStore(directory: directory)
+        store.save(makeWindow(threadId: "thread::a", text: "a"))
+        store.save(makeWindow(threadId: "thread::b", text: "b"))
+        let orphanTmp = directory.appendingPathComponent("Zm9v.json.tmp")
+        try Data("leaked".utf8).write(to: orphanTmp)
+
+        store.clearAll()
+
+        let remaining = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "json" || $0.pathExtension == "tmp" }
+        XCTAssertTrue(remaining.isEmpty, "clearAll must remove both .json and .json.tmp, got \(remaining)")
+    }
 }

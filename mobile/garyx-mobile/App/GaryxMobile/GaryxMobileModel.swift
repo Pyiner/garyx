@@ -1,7 +1,14 @@
 import Foundation
+import os
 import SwiftUI
 import UniformTypeIdentifiers
 import WidgetKit
+
+/// App-side logging sink for the Core transcript cache store's diagnostics
+/// (TASK-1751 P5). Kept here so `GaryxMobileCore` stays logging-free.
+enum GaryxTranscriptCacheLog {
+    static let logger = Logger(subsystem: "com.garyx.mobile", category: "transcript-cache")
+}
 
 struct GaryxPendingUploadPreview {
     var name: String
@@ -375,7 +382,21 @@ final class GaryxMobileModel: ObservableObject {
     /// without touching disk on every delta fetch.
     var transcriptCacheStore: GaryxTranscriptCacheStore = GaryxTranscriptFileCacheStore(
         directory: GaryxTranscriptFileCacheStore.defaultDirectory(),
-        ttl: GaryxTranscriptFileCacheStore.defaultTTL
+        ttl: GaryxTranscriptFileCacheStore.defaultTTL,
+        diagnostics: { event in
+            // TASK-1751 P5: surface persistent-cache write failures instead of
+            // swallowing them. Core stays logging-free; the app owns the sink.
+            switch event {
+            case let .saveEncodeFailed(threadId):
+                GaryxTranscriptCacheLog.logger.error(
+                    "transcript cache encode failed thread=\(threadId, privacy: .public)"
+                )
+            case let .saveWriteFailed(threadId, reason):
+                GaryxTranscriptCacheLog.logger.error(
+                    "transcript cache write failed thread=\(threadId, privacy: .public) reason=\(reason, privacy: .public)"
+                )
+            }
+        }
     )
     var cachedTranscriptSnapshots: [String: GaryxCachedTranscript] = [:]
     var transcriptCachePersistenceGenerations: [String: UInt64] = [:]

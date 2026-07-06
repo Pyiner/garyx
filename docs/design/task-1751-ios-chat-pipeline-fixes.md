@@ -59,18 +59,44 @@ Evidence call chains (verified in source):
   `updateTranscriptCache`) → back on the main actor, apply render snapshot +
   restored messages **only if** the guard below passes.
 
-Race guard (pure logic, Core:`GaryxColdOpenRestorePolicy`): apply restored
-messages only when (a) the restored thread is still `selectedThread`, and
-(b) nothing newer arrived while decoding — `cachedMessages(for:)` is still
-empty. The network fetch (`loadSelectedThreadHistory`, kicked off by
-`selectThread` immediately after) wins any race: if it lands first, restore
-output is discarded; if restore lands first, the fetch's
-`setMessages`/`applyThreadTranscriptToCache` overwrite it as today. The
-restore task also seeds the in-memory mirror (`cachedTranscriptSnapshots`),
-so the incremental fetch's `transcriptAfterCursorAsync` sees the cursor
-exactly as before (both paths already serialize through
-`GaryxTranscriptCachePersistenceQueue`; a duplicate disk read in the race
-window is possible and harmless — page-cache-hot).
+Race guard (pure logic, Core:`GaryxColdOpenRestorePolicy.shouldApply`).
+
+> **Design-review v1 correction (finding 2).** `cachedMessages.isEmpty` alone
+> is not a sufficient freshness marker: a history fetch can legitimately
+> complete with an *empty* transcript (still calls `markThreadHistoryLoaded`),
+> and a stream frame can apply a newer render snapshot before the throttled
+> message flush populates `messages`. The restore must abort if **any** newer
+> content path has run, not just if `messages` is non-empty.
+
+`shouldApply` returns true only when **all** hold at apply time (checked on the
+main actor, captured token compared):
+
+1. `selectedThreadId == restoredThreadId` — still the same open thread.
+2. `restoreGeneration == capturedGeneration` — no thread-switch churn since
+   the task was spawned. A new monotonic `selectedThreadColdOpenGeneration`
+   (UInt64) is bumped in `showSelectedThread` whenever the thread id changes;
+   the restore task captures it at spawn. This catches "switched away and back
+   to the same id" that a bare id compare would miss.
+3. `!threadHistoryLoaded` — the network history apply
+   (`markThreadHistoryLoaded`, called unconditionally by every apply path,
+   including an empty transcript) has **not** run. This is the arm finding 2
+   named: an empty-but-loaded transcript must suppress restore.
+4. `liveRenderSnapshot == nil` — no stream/render frame
+   (`renderSnapshotsByThread[threadId]`) has applied. This is the other
+   finding-2 arm: a stream snapshot that landed before its message flush must
+   suppress restore.
+5. `cachedMessages(for:).isEmpty` — no messages present yet.
+
+Any newer path (history apply, stream apply) sets (3) or (4) and restore
+discards its output; if restore lands first, the later fetch/stream overwrites
+it via the existing `setPreparedMessages`/`applyThreadRenderSnapshot` paths as
+today. The restore task also seeds the in-memory mirror
+(`cachedTranscriptSnapshots`) so the incremental fetch's
+`transcriptAfterCursorAsync` sees the cursor exactly as before (both paths
+serialize through `GaryxTranscriptCachePersistenceQueue`; a duplicate disk
+read in the race window is harmless — page-cache-hot). Mirror seeding is
+itself gated by (1)+(2)+(4) so a stale decode cannot clobber a fresher live
+window in the mirror.
 
 Behavior change: on a cold open of a large cached thread the user sees the
 loading indicator for the decode duration (~130ms at 30MB on a Mac) instead
@@ -99,8 +125,10 @@ copy and must not be clobbered.
 Tests:
 - Keep `testP1_coldOpenSyncRestoreCostExceedsFrameBudget` as the quantified
   justification (documents why sync restore is banned).
-- New: `GaryxColdOpenRestorePolicyTests` — apply/discard matrix (still
-  selected × messages still empty × restore empty/non-empty).
+- New: `GaryxColdOpenRestorePolicyTests` — the full 5-condition matrix:
+  thread changed ⇒ discard; generation bumped (switch-away-and-back) ⇒
+  discard; history loaded (incl. empty transcript) ⇒ discard; render snapshot
+  present ⇒ discard; messages non-empty ⇒ discard; all-clear ⇒ apply.
 
 ### P2 — memoize prepared turn rows keyed by input identity
 
@@ -141,7 +169,7 @@ inputs ⇒ 1 build; each changed input ⇒ rebuild; thread switch ⇒ rebuild;
 ids match rows). Plus a quantified after-test: cached call at P2 scale is
 ~0ms vs 55–137ms rebuild.
 
-### P3 — bounded render window over turn rows (keep the eager VStack)
+### P3 — floor-anchored render window over turn rows (keep the eager VStack)
 
 **Not** LazyVStack. The eager VStack is load-bearing: the in-code comment
 records that LazyVStack's estimated row heights put the synthetic bottom
@@ -149,72 +177,122 @@ anchor below the real content end, breaking scroll-to-tail (phantom space).
 Re-litigating that trade-off is out of scope and high-risk; instead we bound
 *how many rows exist*.
 
-Design: render only the **tail window** of prepared turn rows.
+> **Design-review v1 correction (finding 1).** The first draft defined the
+> window as a *tail-inclusive suffix keyed by a count from the end*
+> (`rows.suffix(limit)`). That is unsafe: once `total > limit`, every streamed
+> tail append advances the suffix start and **removes the oldest rendered
+> row** — if the reader is browsing inside the window, that removal shifts
+> content under the viewport with no scroll request, a jump regression. The
+> corrected design below anchors the window to an **absolute floor row
+> identity** that never moves on a tail append, so streaming can only grow the
+> window at the bottom, never remove from the top.
 
-- New Core planner `GaryxTurnRowsWindowPlanner`:
-  - `initialLimit = 60` turn rows (a turn row is a whole user-turn: user
-    bubble + activity), `expandStep = 60`.
-  - `windowedRows(rows, limit)` → suffix slice (tail-inclusive).
-  - `expandedLimit(current:total:)` → `min(current + expandStep, total)`.
-  - `isWindowExhausted(limit:total:)` → whether the window already shows all
-    in-memory rows (gates network paging and the Load-earlier button).
-- Model: `@Published private(set) var selectedTurnRowsWindowLimit`; reset to
-  `initialLimit` on thread switch (`showSelectedThread`,
-  `openNewThreadDraft`); `expandTurnRowsWindow()` bumps it.
-- View wiring: `prefetchOlderHistoryIfNeeded()` (geometry-gated by the
-  existing scroll-state machine: `isNearLoadedHistoryStart` +
+Design: render only the rows from an **anchored floor** to the tail. The floor
+is the *identity* (stable row id) of the oldest visible row, not a count from
+the end.
+
+- New Core planner `GaryxTurnRowsWindowPlanner` operating on
+  `[GaryxMobileTurnRow]` (already in ascending order) with state
+  `GaryxTurnRowsWindowState { var floorRowId: String? }`:
+  - `initialLimit = 60`, `expandStep = 60`.
+  - `resolve(rows:state:) -> (visible: [GaryxMobileTurnRow], state)`:
+    1. `rows` empty ⇒ visible `[]`, `floorRowId = nil`.
+    2. Determine the floor index:
+       - if `state.floorRowId` resolves to an index `f` in `rows` ⇒ `f`
+         (the anchor is **honored** — this is what makes a tail append a
+         no-op for the top of the window);
+       - else (uninitialized, or the anchored row was dropped by a
+         windowed-resume reset) ⇒ `max(0, rows.count - initialLimit)`
+         (re-anchor to the newest `initialLimit`).
+    3. visible = `rows[floorIndex...]`; new `floorRowId = rows[floorIndex].id`.
+  - `expand(rows:state:) -> state`: `newFloor = max(0, currentFloorIndex -
+    expandStep)`; `floorRowId = rows[newFloor].id`. The floor only ever moves
+    **up** (older); it is never pushed down by resolve, so the visible set is
+    monotonically non-shrinking within a thread session.
+  - `isWindowExhausted(rows:state:) -> Bool`: floor index is 0 — every
+    in-memory row is shown (gates network paging + the Load-earlier button).
+- Model: `@Published private(set) var selectedTurnRowsWindowState`; reset to
+  `.init(floorRowId: nil)` on thread switch (`showSelectedThread`,
+  `openNewThreadDraft`); `expandSelectedTurnRowsWindow()` calls `expand`.
+  `selectedThreadTurnRows()` returns the resolved `visible` slice and, as a
+  pure by-product, writes back the resolved `floorRowId` (idempotent — a plain
+  read with no floor change is a no-op, so it does not thrash `@Published`).
+- View wiring: `prefetchOlderHistoryIfNeeded()` (geometry-gated by the existing
+  scroll-state machine: `isNearLoadedHistoryStart` +
   `isLargeEnoughForAutomaticHistoryPrefetch` + `hasMovedTowardOlderHistory`)
-  becomes a two-stage boundary action — if the window hides in-memory rows,
-  expand the window (pure state change, no network); only when the window is
-  exhausted fall through to `loadOlderSelectedThreadHistory()` as today. The
-  "Load earlier" button shows when the window hides in-memory rows OR
-  `selectedThreadHasMoreHistoryBefore`; its tap expands the window locally
-  first (instant, no spinner) and only performs the network page once the
-  window is exhausted — strictly faster than today's always-network button.
+  becomes a two-stage boundary action — if the window is not exhausted, expand
+  it (pure state change, no network); only when exhausted fall through to
+  `loadOlderSelectedThreadHistory()` as today. The "Load earlier" button shows
+  when the window is not exhausted OR `selectedThreadHasMoreHistoryBefore`; its
+  tap expands the window locally first (instant, no spinner) and performs the
+  network page only once the window is exhausted.
 
 **Anchoring compatibility argument** (the sensitive part):
 
-1. *Streaming follow-tail*: the window is a tail-inclusive suffix. New rows
-   append inside the window; `contentChanged`/`renderRowsChanged` see the
-   same id-suffix relationships as today. Follow-tail and the bottom-anchor
-   metrics (`GaryxConversationBottomOffsetKey` on the real content end)
-   are untouched — the anchor stays glued to the actual rendered tail.
-2. *History prepend position-keeping*: expanding the window prepends rows at
-   the top of the ForEach — **exactly** the shape of today's
-   `loadOlderSelectedThreadHistory` prepend (100 committed rows at once).
-   That path is already handled: `preservesScrollForPrependedHistory`
+1. *Streaming while following tail*: new rows append after the floor;
+   `floorRowId` still resolves to the same row at (almost) the same index, so
+   the top of the window is unchanged and the window grows only at the bottom.
+   `contentChanged` sees a tail append (not a prepend, not a removal) exactly
+   as today; follow-tail and the bottom-anchor metrics
+   (`GaryxConversationBottomOffsetKey` on the real content end) are untouched.
+2. *Streaming while browsing off-tail* (the finding-1 case): identical
+   mechanics — the anchored floor does not move on a tail append, so **no row
+   is removed from the top or inside the viewport**. The appended rows land
+   below the viewport (off-screen, since the reader is up in history) and
+   `contentChanged(isFollowingTail == false)` returns nil (no programmatic
+   scroll). No jump. This is the case the suffix design broke and the anchor
+   design fixes.
+3. *History prepend / window expansion position-keeping*: expanding the window
+   lowers the floor, prepending rows at the top of the ForEach — **exactly**
+   the shape of today's `loadOlderSelectedThreadHistory` network prepend (100
+   committed rows). Already handled: `preservesScrollForPrependedHistory`
    detects "previous first id moved down", `renderRowsChanged` →
-   `contentChanged(isHistoryPrepend: true)` returns nil (no programmatic
-   scroll), and the view preserves reading position the same way it does for
-   network pages today. Window expansion introduces **no new scroll event
-   category** — it reuses the identical, shipped prepend path with identical
-   guards. Risk is bounded to "same as pressing Load earlier today".
-3. *Initial open*: `windowLimit=60` covers the newest window
-   (`threadHistoryUserQueryLimit = 3` user turns fetched on open, far fewer
-   than 60 rows), so short/normal threads render identically; `threadOpened`
-   still jumps to tail.
-4. *Trimming*: the window only ever grows within a thread session and resets
-   on thread switch. No mid-scroll shrink ⇒ no mid-scroll jump, and rows
-   above the viewport are never removed while the user is reading them.
-5. *Scroll-to-bottom / composer focus / keyboard*: operate on the bottom
-   anchor id, which is inside the window by construction.
+   `contentChanged(isHistoryPrepend: true)` returns nil, and the view
+   preserves reading position. Window expansion introduces **no new scroll
+   event category** — it reuses the identical shipped prepend path with
+   identical guards.
+4. *Initial open*: floor is uninitialized ⇒ resolves to the newest
+   `initialLimit` (60). The open fetch is `threadHistoryUserQueryLimit = 3`
+   user turns — far fewer than 60 rows — so short/normal threads render every
+   row identically to today; `threadOpened` still jumps to tail.
+5. *Re-anchor only on reset*: the floor re-anchors to tail **only** when its
+   row was dropped from `rows` (windowed-resume `dropCommittedCacheBelow`,
+   which already reflows the transcript and resets scroll) — never on a plain
+   append or a normal render. So the only "window shrinks" event coincides
+   with an existing transcript-reset event, not with steady-state reading.
+6. *Scroll-to-bottom / composer focus / keyboard*: operate on the bottom
+   anchor id, always inside the window by construction (the window is
+   tail-inclusive).
 
-Failure mode honestly stated: a reader who pages very deep in one session
-still accumulates rows (window grows monotonically). That bounds the *entry*
-cost (open + streaming on the newest window) without capping a deliberate
-deep browse; deep-browse trimming would require mid-scroll row removal —
-exactly the jump risk this task forbids. The audit's pain point (long
-threads with much prepended history are slow *by default*) is fixed because
-the default window is 60 rows regardless of how much history previous
-sessions had cached (today: every cached committed row is instantiated on
-open).
+Invariant that kills the regression, stated precisely and tested:
+**for any `rows' = rows + appended` (tail append) and an initialized
+`state.floorRowId` still present in `rows'`, `resolve(rows', state).visible`
+has the same prefix boundary — the same set of hidden head rows — as
+`resolve(rows, state).visible`.** i.e. a tail append never changes which rows
+are hidden at the top. (`GaryxTurnRowsWindowPlannerTests` asserts this
+directly.)
 
-Tests: `GaryxTurnRowsWindowPlannerTests` — suffix windowing, expansion
-monotonic + clamped, exhaustion gating, default covers initial fetch,
-window(60) of 3,000 rows leaves 60 (the after-metric vs 3,000 before), and
-an id-shape test asserting expansion produces exactly the
-`preservesScrollForPrependedHistory == true` prepend shape (locks the
-anchoring argument into a test).
+Failure mode honestly stated: within one session the window grows
+monotonically (deep browse + long live runs accumulate rows). That is
+deliberate — it bounds the *entry* cost (opening a thread with thousands of
+previously-cached history rows now instantiates 60, not all of them) without
+ever removing a row mid-scroll, which is the only way to avoid the jump the
+task forbids. P4 bounds the underlying per-thread message memory
+independently. Thread switch resets the window to 60.
+
+Tests: `GaryxTurnRowsWindowPlannerTests` —
+- resolve on uninitialized state shows newest `initialLimit`;
+- **tail-append invariant** (above): append rows with an initialized floor ⇒
+  identical hidden-head set (the anti-regression lock);
+- expand lowers the floor by `expandStep`, clamps at 0, monotonic
+  (never raises the floor);
+- resolve after expand keeps the lowered floor across a subsequent tail
+  append;
+- floor row dropped (reset) ⇒ re-anchors to newest `initialLimit`;
+- exhaustion true iff floor index 0;
+- expansion prepend produces `preservesScrollForPrependedHistory == true`
+  (locks the anchoring argument to the shipped prepend path);
+- after-metric: 3,000 rows ⇒ 60 visible on open (vs 3,000 before).
 
 ### P4 — LRU residency cap for per-thread memory
 
@@ -280,15 +358,41 @@ app wires `diagnostics` to an `os.Logger` (subsystem `com.garyx.mobile`,
 category `transcript-cache`) at the `GaryxMobileModel` store construction —
 Core stays logging-free, tests inject a recording closure.
 
+**tmp sweep (design-review v1 correction, finding 3).** Cleaning tmp only in
+the current-failure catch does not remove `.json.tmp` residue from *older app
+versions*, from a crash after `data.write(to: tmp)` but before the replace, or
+from a `.tmp` whose owning save was interrupted. Since the repro identifies
+leaked tmp files as accumulating forever (nothing sweeps them), the store
+sweeps orphan `.tmp` files at every existing directory-scan touchpoint:
+
+- `init` (before `pruneExpired`, which already scans the directory on every
+  launch) removes every `*.json.tmp`. A live save that races the sweep is
+  safe: `data.write(..., .atomic)` writes to `<tmp>` and the write+replace is
+  synchronized under the store's `NSLock`; the init sweep runs before any save
+  can be issued on this instance, and cross-process cache access does not
+  occur (one app process owns the caches dir). To be defensive the sweep
+  ignores a `.tmp` newer than a small threshold is unnecessary — the lock and
+  single-writer property already exclude an in-flight tmp at init time.
+- `clearAll()` removes `*.json.tmp` alongside `*.json`.
+- `remove(threadId:)` removes the thread's `<key>.json.tmp` alongside its
+  `.json`.
+- `pruneExpired()` (init + reusable sweep) drops orphan `*.json.tmp` in the
+  same pass it prunes expired `.json`.
+
+The tmp filename is deterministic (`<base64 key>.json.tmp`), so per-thread
+cleanup targets the exact sibling; the directory sweep catches everything
+else including keys no longer mapped to a live thread.
+
 Contract note: save remains fire-and-forget for callers (UI never blocks on
 cache persistence; the durable source of truth is the gateway). Observability
 + cleanup is the fix; retry policy is out of scope.
 
 Tests: the RED repro `testP5_saveReplaceFailureCleansUpTemporaryFile` turns
-GREEN; new `testP5_saveFailureEmitsDiagnostics` (replace-failure reason
-surfaces), `testP5_saveEncodeFailure…` if constructible, plus a
-read-only-directory write-failure case (`chmod 0500`) asserting the event
-fires and no tmp remains.
+GREEN; `testP5_saveFailureEmitsWriteDiagnostics` (reason surfaces),
+`testP5_successfulSaveEmitsNoDiagnostics` (happy path silent), and new tmp-sweep
+tests: `testP5_initSweepsOrphanTmpFiles` (a pre-seeded `.json.tmp` is gone
+after constructing a store), `testP5_removeSweepsThreadTmp`,
+`testP5_clearAllSweepsTmp`.
 
 ## Non-goals / explicitly out of scope
 
