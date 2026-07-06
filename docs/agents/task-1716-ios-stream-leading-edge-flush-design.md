@@ -1,5 +1,19 @@
 # TASK-1716 iOS Thread-Stream Leading-Edge Flush Design
 
+Revision history:
+
+- rev1: leading-edge gate driven per stream action — **rejected** by design
+  review #TASK-1719 (a frame's rows would trigger a leading flush before the
+  same frame's snapshot applied).
+- rev2: gate driven per frame at the frame-final snapshot apply — **rejected**
+  by design re-review #TASK-1721 (a no-op caught-up snapshot-only frame would
+  open the window and shield the next real update for the full 3s).
+- rev3 (this document): frame-settled gate with visible-change gating; a
+  frame drives the gate only when it changed render inputs. Also hardens the
+  in-flight flush guard against no-op cache re-applies (content equivalence
+  instead of object identity), closing a lost-render hazard found while
+  revising.
+
 ## Goal
 
 Fix the iOS per-thread stream batching bug confirmed by the #TASK-1710 latency
@@ -7,19 +21,19 @@ audit (`docs/agents/audit-message-pipeline-latency.md` §2.4, recommendation #2)
 the 3-second committed-row coalescing window is trailing-only, so even the
 first update after a quiet period waits the full 3 seconds before it renders.
 
-Target semantics (leading-edge throttle):
+Target semantics (leading-edge throttle over *visible changes*):
 
-- **Quiet edge (no window open):** the first update flushes to the UI
+- **Quiet edge:** the first frame that changes visible state flushes
   immediately — zero added latency.
-- **Within the window:** subsequent updates are absorbed (trailing
-  coalescing), exactly as today.
-- **Window end:** if updates arrived during the window, flush the accumulated
-  backlog once and re-arm the window; if nothing arrived, close the window so
-  the next update is again a leading edge.
-- **Sustained bursts** (catch-up replay) still collapse to one visible
-  update per window — the SwiftUI list-rebuild protection that motivated the
-  3s window is preserved. The window length itself (3s) does not change in
-  this task.
+- **Within the window:** subsequent changing frames are absorbed (trailing
+  coalescing).
+- **Window end:** if changing frames arrived during the window, flush the
+  backlog once and re-arm; otherwise close (the next change is a leading edge).
+- **No-op frames** (nothing visible changed — e.g. the caught-up
+  snapshot-only frame a (re)connect delivers) never flush, never open the
+  window, never mark backlog.
+- **Sustained bursts** (catch-up replay) still collapse to one visible update
+  per window. The window length (3s) does not change in this task.
 
 ## Current Behavior (the bug)
 
@@ -53,68 +67,17 @@ Constants: `GaryxStreamUpdateCadence.committedMessageBatchWindowNanos = 3s`
 
 ## Design
 
-### Core state machine (new, in `GaryxMobileCore`)
+### Frame anatomy (what the gate must model)
 
-Add `GaryxStreamFlushGate` to
-`Sources/GaryxMobileCore/GaryxTranscriptSyncPlanner.swift` (same file as
-`GaryxStreamUpdateCadence`; no new source file, so no pbxproj churn). It is a
-pure, clock-free value type: the app target owns the timer; the gate owns
-every decision.
-
-```swift
-/// Leading-edge throttle for selected-thread stream flushes.
-public struct GaryxStreamFlushGate: Equatable, Sendable {
-    public enum State: Equatable, Sendable {
-        case idle
-        case window(hasBacklog: Bool)
-    }
-    public enum UpdateAction: Equatable, Sendable {
-        case flushNowAndArmWindow   // quiet edge: render immediately, start window timer
-        case absorb                 // window open: coalesce; window end handles the backlog
-    }
-    public enum WindowAction: Equatable, Sendable {
-        case flushBacklogAndRearmWindow  // updates arrived during the window
-        case closeWindow                 // quiet window: next update is a leading edge
-    }
-
-    public private(set) var state: State = .idle
-    public init() {}
-
-    public mutating func recordUpdate() -> UpdateAction
-    public mutating func windowElapsed() -> WindowAction
-    public mutating func reset()
-}
-```
-
-Transition table:
-
-| State | Event | Action | Next state |
-|---|---|---|---|
-| `idle` | `recordUpdate` | `.flushNowAndArmWindow` | `.window(hasBacklog: false)` |
-| `.window(_)` | `recordUpdate` | `.absorb` | `.window(hasBacklog: true)` |
-| `.window(hasBacklog: true)` | `windowElapsed` | `.flushBacklogAndRearmWindow` | `.window(hasBacklog: false)` |
-| `.window(hasBacklog: false)` | `windowElapsed` | `.closeWindow` | `.idle` |
-| `idle` | `windowElapsed` (defensive; cancelled-timer race) | `.closeWindow` | `.idle` |
-| any | `reset` | — | `.idle` |
-
-Re-arming after a backlog flush (instead of closing) is what keeps a
-sustained burst at exactly one flush per window; a close-after-trailing
-variant would degrade to two adjacent flushes (trailing + next leading) per
-window under continuous traffic.
-
-### Drive point: the gate advances per *frame*, not per action
-
-(Revised after design review #TASK-1719, which found the original per-action
-drive point unsound.)
-
-The stream's real arrival unit is one `thread_render_frame`.
+The stream's arrival unit is one `thread_render_frame`.
 `GatewayStreamFrameProcessor.processRenderFrame`
 (`Sources/GaryxMobileCore/GatewayStreamActor.swift:137-207`) splits a frame
-into an ordered action list that the actor delivers one at a time (:361-368):
+into an ordered action list the actor delivers one at a time (:361-368):
 
 - normal frame: `[.applyCommittedMessages?, .applyRenderSnapshot]` — the
   snapshot is **always the frame's final action** (:202-206), including
-  snapshot-only caught-up frames;
+  snapshot-only caught-up frames (`events: []`, contract-guaranteed on every
+  caught-up (re)connect);
 - windowed reset frame: `[.resetCommittedCacheBelow, .applyCommittedMessages?,
   .applyRenderSnapshot]` — snapshot still final;
 - seq-gap frame (:174-181): committed rows only, **no snapshot**, followed by
@@ -123,29 +86,103 @@ into an ordered action list that the actor delivers one at a time (:361-368):
   snapshot; the refetch path re-renders via `loadSelectedThreadHistory`
   outside this gate.
 
-Driving the gate from `.applyCommittedMessages` (the original design) would
-fire the leading flush *between* a frame's rows and its snapshot: the flush
-would render the previous `render_state` — visible rows come exclusively from
-the server snapshot (repository contract) — and the same frame's own snapshot
-would then be absorbed and wait out the full window. The quiet-edge fix would
-be defeated for exactly the common case (one frame carrying both).
+Two review counterexamples pin the drive rules:
 
-Therefore the gate is driven **only from `applyThreadRenderSnapshot`**, i.e.
-at the frame's final action:
+1. **#TASK-1719 (rev1):** driving the gate from `.applyCommittedMessages`
+   fires the leading flush *between* a frame's rows and its snapshot — the
+   flush renders the previous `render_state` (visible rows come exclusively
+   from the server snapshot) and the frame's own snapshot then waits out the
+   window. ⇒ the gate must settle at the frame-final snapshot apply, with
+   rows never scheduling.
+2. **#TASK-1721 (rev2):** a caught-up snapshot-only frame whose snapshot
+   equals the applied one (the normal first frame of every (re)connect) must
+   not count as an update at all — otherwise it opens the window, its leading
+   flush repaints identical content, and the *next* frame (the user-visible
+   one, e.g. the reply that prompted opening the thread) gets absorbed for
+   the full 3s. ⇒ the gate must only be driven by frames that *changed*
+   render inputs.
 
-- `applyStreamedCommittedMessages` keeps merging rows into the cache
-  immediately (cursor advance, persistence inputs — unchanged) but no longer
-  calls the scheduler. Rows alone never change visible content, so this drops
-  a render-triggering path that could only repaint stale `render_state`.
-- `applyThreadRenderSnapshot` calls `scheduleSelectedThreadStreamFlush` as
-  today — one gate event per applied frame, after the whole frame (rows +
-  snapshot) is in the cache.
-- Seq-gap frames schedule nothing: their rows are invisible until a snapshot
-  arrives anyway, and the post-reconnect replay frame ends in a snapshot,
-  which becomes the (leading) flush. Today's behavior for this rare self-heal
-  path — arming a 3s timer to repaint old state — was strictly worse.
-- Control-rewrite frames schedule nothing: `refetchAfterControlRewrite`
-  cancels the window, resets the gate, and rebuilds via the history path.
+### Core state machine (new, in `GaryxMobileCore`)
+
+`GaryxStreamFlushGate` lives in
+`Sources/GaryxMobileCore/GaryxTranscriptSyncPlanner.swift` (same file as
+`GaryxStreamUpdateCadence`; no new source file, no pbxproj churn). Pure and
+clock-free: the app target owns the timer and side effects; the gate owns
+every decision.
+
+```swift
+public struct GaryxStreamFlushGate: Equatable, Sendable {
+    public enum State: Equatable, Sendable {
+        case idle
+        case window(hasBacklog: Bool)
+    }
+    public enum FrameAction: Equatable, Sendable {
+        case flushNowAndArmWindow   // quiet edge: render immediately, arm window timer
+        case absorb                 // window open: coalesce; window end drains backlog
+        case skip                   // no visible change: no flush, no window, no backlog
+    }
+    public enum WindowAction: Equatable, Sendable {
+        case flushBacklogAndRearmWindow
+        case closeWindow
+    }
+
+    public private(set) var state: State = .idle
+    private var hasPendingVisibleChange = false
+
+    /// What the app feeds the gate, not a decision: did this frame's snapshot
+    /// differ from the one already applied for the thread?
+    public static func snapshotChanged(
+        _ incoming: GaryxRenderSnapshot,
+        appliedBefore applied: GaryxRenderSnapshot?
+    ) -> Bool { incoming != applied }
+
+    /// Committed rows merged into the cache, or the cache floor was reset —
+    /// body-store changes that can alter how snapshot refs resolve (e.g. a
+    /// body-less placeholder upgrading once its row arrives), even when the
+    /// snapshot itself is unchanged. Accumulates until the next settle.
+    public mutating func recordVisibleChange()
+
+    /// Frame finished applying (the frame-final snapshot apply). Decides the
+    /// flush for everything accumulated since the last settle.
+    public mutating func settleFrame(snapshotChanged: Bool) -> FrameAction
+
+    /// Armed window timer fired.
+    public mutating func windowElapsed() -> WindowAction
+
+    /// Stream stopped / thread switched / cache refetched / home drain.
+    public mutating func reset()
+}
+```
+
+Transition table (`pending` = `hasPendingVisibleChange`, always cleared by
+`settleFrame`; `drives` = `pending || snapshotChanged`):
+
+| State | Event | Condition | Action | Next state |
+|---|---|---|---|---|
+| `idle` | `settleFrame` | `drives` | `.flushNowAndArmWindow` | `.window(false)` |
+| `idle` | `settleFrame` | `!drives` | `.skip` | `idle` |
+| `.window(b)` | `settleFrame` | `drives` | `.absorb` | `.window(true)` |
+| `.window(b)` | `settleFrame` | `!drives` | `.skip` | `.window(b)` |
+| any | `recordVisibleChange` | — | — (pending = true) | unchanged |
+| `.window(true)` | `windowElapsed` | — | `.flushBacklogAndRearmWindow` | `.window(false)` |
+| `.window(false)` | `windowElapsed` | — | `.closeWindow` | `idle` |
+| `idle` | `windowElapsed` (defensive; cancelled-timer race) | — | `.closeWindow` | `idle` |
+| any | `reset` | — | — (pending = false) | `idle` |
+
+Notes:
+
+- Re-arming after a backlog flush keeps a sustained burst at one flush per
+  window (a close-after-trailing variant would degrade to trailing + adjacent
+  leading double-flushes).
+- `.skip` inside a window does **not** mark backlog: a pure no-op frame must
+  not cause a window-end repaint, and a no-op heartbeat stream must not keep
+  the window re-arming forever.
+- `pending` survives a snapshot-less frame (seq-gap): the rows' change is
+  settled by the next frame that does carry a snapshot (the post-reconnect
+  replay frame), even if that snapshot happens to equal the applied one —
+  this is what renders body-less placeholder upgrades from replayed rows.
+- `windowElapsed` does not consume `pending` (there is nothing new to show
+  without a snapshot settle); the backlog flag alone decides the window end.
 
 ### App-target wiring (`GaryxMobileModel+ThreadStream.swift`)
 
@@ -156,18 +193,41 @@ New stored state on the model (next to `selectedThreadStreamFlushTask` in
 var selectedThreadStreamFlushGate = GaryxStreamFlushGate()
 ```
 
-`selectedThreadStreamFlushTask` keeps its single meaning "the armed window
-timer", but the timer no longer performs the leading flush itself.
+`selectedThreadStreamFlushTask` keeps a single meaning — "the armed window
+timer" — and no longer performs the leading flush itself.
+
+Ingest paths (the only callers, verified by rg: stream action dispatch
+:186-202 is the sole entry):
+
+- `applyStreamedCommittedMessages` (rows): merge into the cache exactly as
+  today, then `gate.recordVisibleChange()`. **No scheduling.**
+- `dropCommittedCacheBelow` (windowed floor reset): drop rows as today, then
+  `gate.recordVisibleChange()`.
+- `applyThreadRenderSnapshot` (frame-final): capture the applied snapshot
+  *before* storing the new one, apply everything exactly as today, then
+  settle:
 
 ```swift
-private func scheduleSelectedThreadStreamFlush(for threadId: String) {
-    switch selectedThreadStreamFlushGate.recordUpdate() {
+private func applyThreadRenderSnapshot(_ snapshot: GaryxRenderSnapshot, threadId: String) {
+    guard selectedThread?.id == threadId else { return }
+    let appliedBefore = renderSnapshotsByThread[threadId]
+        ?? transcriptSnapshot(for: threadId)?.renderSnapshot
+    // ... existing body unchanged (setRenderSnapshot, pagination, cache
+    //     window rebuild, conditional persist, markThreadHistoryLoaded) ...
+    settleSelectedThreadStreamFrame(
+        snapshotChanged: GaryxStreamFlushGate.snapshotChanged(snapshot, appliedBefore: appliedBefore),
+        for: threadId
+    )
+}
+
+private func settleSelectedThreadStreamFrame(snapshotChanged: Bool, for threadId: String) {
+    switch selectedThreadStreamFlushGate.settleFrame(snapshotChanged: snapshotChanged) {
     case .flushNowAndArmWindow:
         armSelectedThreadStreamFlushWindow(for: threadId)
         Task { [weak self] in
             await self?.flushSelectedThreadStreamWindow(for: threadId)
         }
-    case .absorb:
+    case .absorb, .skip:
         break
     }
 }
@@ -194,16 +254,53 @@ private func selectedThreadStreamFlushWindowDidElapse(for threadId: String) asyn
 }
 ```
 
-`flushSelectedThreadStreamWindow` drops its first two lines
-(`selectedThreadStreamFlushTask?.cancel(); … = nil` at :335-336): cancelling
-the window timer from inside the flush would destroy the window that the
-leading edge just armed. Timer lifecycle now lives exclusively in
-arm/elapse/cancel helpers. The rest of the flush body (thread guard, stale
-`window == cachedTranscriptSnapshots[threadId]` guard, prepare off-main,
-run-state apply, conditional persist) is unchanged.
+`scheduleSelectedThreadStreamFlush` (:314-326) is replaced by
+`settleSelectedThreadStreamFrame` — there is deliberately no
+"schedule-per-update" entry point anymore.
+
+### In-flight flush guard: content equivalence, not object identity
+
+`flushSelectedThreadStreamWindow` today aborts a prepared render when the
+cache window object changed during the off-main prepare
+(`cachedTranscriptSnapshots[threadId] == window`, :343). `GaryxCachedTranscript`
+is `Equatable` **including `savedAt`**, so a no-op re-apply (a caught-up
+snapshot-only frame rebuilds the window with a fresh `savedAt` and identical
+content) breaks object equality.
+
+Lost-render hazard (found in rev3, must be closed): quiet edge → changing
+frame settles → leading flush starts preparing → a no-op caught-up frame
+re-applies (new `savedAt`, `.skip`, no backlog) → the leading flush aborts on
+the stale guard → window end closes with no backlog → **the change never
+renders** until the next real frame. Today's code survives this only because
+every apply re-schedules the 3s timer; rev3's `.skip` removes that accident,
+so the guard must compare *render inputs*:
+
+```swift
+// GaryxMobileCore, next to GaryxCachedTranscript
+/// Render-input equivalence: ignores `savedAt` (refreshed by no-op
+/// re-applies) so an in-flight flush only aborts when the prepared output
+/// could actually differ.
+public func renderEquivalent(to other: GaryxCachedTranscript) -> Bool {
+    version == other.version
+        && threadId == other.threadId
+        && messages == other.messages
+        && renderSnapshot == other.renderSnapshot
+        && hasMoreBefore == other.hasMoreBefore
+        && nextBeforeIndex == other.nextBeforeIndex
+}
+```
+
+The flush guard becomes
+`cachedTranscriptSnapshots[threadId]?.renderEquivalent(to: window) == true`.
+A *content* change during prepare still aborts — and that frame settled
+`.absorb`/`pending`, so the window-end flush re-renders (unchanged self-heal,
+now guaranteed by the gate). Also drop the flush body's first two lines
+(:335-336, cancel/nil of the timer): timer lifecycle lives exclusively in
+arm/elapse/cancel helpers — a flush must not destroy the window the leading
+edge just armed.
 
 Every existing cancel site becomes one shared helper so the gate can never
-disagree with the timer (invariant I1 below):
+disagree with the timer (I1):
 
 ```swift
 private func cancelSelectedThreadStreamFlushWindow() {
@@ -213,125 +310,142 @@ private func cancelSelectedThreadStreamFlushWindow() {
 }
 ```
 
-Call sites converted to the helper (behavior per site unchanged apart from
-the added gate reset):
-
-- `stopSelectedThreadStream` (:81-82)
-- `stopSelectedThreadStreamForHome` (both branches, :94-95 and :101-102);
-  the home drain then calls `flushSelectedThreadStreamWindow` directly as a
-  terminal flush, outside the gate — same as today.
-- `refetchSelectedThreadAfterTranscriptRewrite` (:206-207) — the
-  control-rewrite path clears the cache and refetches history; the gate
-  resets so the first post-refetch stream frame is a leading edge again.
+Converted call sites (behavior per site unchanged apart from the gate reset):
+`stopSelectedThreadStream` (:81-82), `stopSelectedThreadStreamForHome` (both
+branches, :94-95 and :101-102; the home drain then calls
+`flushSelectedThreadStreamWindow` directly as a terminal flush outside the
+gate — same as today), `refetchSelectedThreadAfterTranscriptRewrite`
+(:206-207; the first post-refetch frame is a leading edge again).
 
 ### Invariants
 
 - **I1 — gate/timer coupling:** `selectedThreadStreamFlushTask != nil` iff
-  `gate.state == .window`. Maintained by construction: the only transitions
-  into `.window` (`flushNowAndArmWindow`, `flushBacklogAndRearmWindow`)
-  arm the timer at the same call site; the only ways out (`closeWindow`,
-  `reset`) nil/cancel it at the same call site.
-- **I2 — flush reads latest state:** a flush never carries payload; it
-  renders `cachedTranscriptSnapshots[threadId]` at flush time. A late flush
-  therefore cannot regress the UI to older data.
-- **I3 — no lost updates:** any update that arrives while a flush is
-  preparing (off-main `prepare`) has already gone through `recordUpdate()`,
-  so the gate holds `hasBacklog = true` and the window-end flush re-renders.
-  The existing stale-window guard (`cachedTranscriptSnapshots[threadId] ==
-  window`, :343) makes the superseded flush abort instead of rendering old
-  data; the trailing flush covers it. This is exactly today's
-  self-heal, now guaranteed by the gate rather than by the next 3s timer.
+  `gate.state == .window`. The only transitions into `.window`
+  (`flushNowAndArmWindow`, `flushBacklogAndRearmWindow`) arm the timer at the
+  same call site; the only ways out (`closeWindow`, `reset`) nil/cancel it at
+  the same call site. `.skip` and `.absorb` touch neither.
+- **I2 — flush reads latest state:** a flush carries no payload; it renders
+  `cachedTranscriptSnapshots[threadId]` at flush time, so a late flush cannot
+  regress the UI.
+- **I3 — no lost updates:** every render-input change is either settled
+  (`flushNow`/`absorb`→backlog) or pending (`recordVisibleChange` awaiting
+  its frame's snapshot). An in-flight flush aborts only on a *content*
+  change (renderEquivalent guard), and that content change itself settled
+  `.absorb` or is pending — the window-end flush covers it.
+- **I4 — no-op frames are inert:** a frame with an unchanged snapshot and no
+  row/floor changes produces `.skip`: no flush, no window state change, no
+  backlog, and (via renderEquivalent) no in-flight flush abort.
 
-### Race walkthrough (all on `@MainActor`, so transitions are serialized)
+### Race walkthrough (all gate/timer transitions on `@MainActor`)
 
 1. **Timer fires vs. concurrent stop/re-arm:** `arm…` always cancels the
-   previous timer before installing a new one, and
-   `…WindowDidElapse` re-checks `Task.isCancelled` on the MainActor before
-   touching the task handle or the gate. A cancelled stale timer that already
-   passed its post-sleep check therefore returns without nil-ing a newer
-   timer handle or double-driving the gate.
-2. **Thread switch mid-window:** `stopSelectedThreadStream` (called by
-   `startSelectedThreadStream` and by stream-policy stop) cancels the timer
-   and resets the gate; the first update of the next thread is a leading
-   edge. A leading-flush `Task` still in flight for the old thread is
-   defused by the existing `selectedThread?.id == threadId` guard.
+   previous timer first; `…WindowDidElapse` re-checks `Task.isCancelled` on
+   the MainActor before touching the handle or the gate, so a stale cancelled
+   timer that already passed its post-sleep check cannot nil a newer handle
+   or double-drive the gate.
+2. **Thread switch mid-window:** `stopSelectedThreadStream` cancels + resets;
+   the next thread's first changing frame is a leading edge. An in-flight
+   flush for the old thread is defused by the existing
+   `selectedThread?.id == threadId` guard.
 3. **Rows and snapshot of one frame:** the actor delivers a frame's actions
-   in order and `applyThreadRenderSnapshot` — the frame's final action — is
-   the only scheduler call site. By the time the gate can fire a leading
-   flush, the frame's rows *and* snapshot are both in the cache, so the flush
-   renders the complete frame; a mid-frame flush over a half-applied frame is
-   impossible by construction. Rows and run-state cannot skew: there is one
-   flush and it reads one cache snapshot.
-   The leading flush is still an unstructured `Task`, so it may interleave
-   with the *next* frame's apply — harmless in every order: the flush reads
-   the cache at flush time (never older data), a superseded prepare aborts on
-   the stale-window guard, and the next frame's own snapshot apply has
-   already marked the window dirty, so the window-end flush re-renders (I2 +
-   I3).
-4. **Home drain:** `stopSelectedThreadStreamForHome` cancels + resets, then
+   in order; rows only mark `pending`, and the frame-final snapshot apply is
+   the only settle point. A leading flush therefore always renders the
+   complete frame — a mid-frame flush over a half-applied frame is
+   structurally impossible. (#TASK-1719 closed.)
+4. **(Re)connect caught-up no-op frame:** snapshot equals applied, no rows ⇒
+   `.skip`, gate stays `idle`, no window opens. The next real frame flushes
+   immediately. (#TASK-1721 closed.)
+5. **No-op frame racing an in-flight leading flush:** the no-op re-apply
+   refreshes `savedAt` only; the renderEquivalent guard lets the in-flight
+   flush complete instead of aborting into a backlog-less window end. (rev3
+   lost-render hazard closed.)
+6. **Interleaving with the next frame:** the leading flush is an unstructured
+   `Task` and may interleave with the next frame's apply — harmless in every
+   order (I2 + I3): it renders newer-or-equal state; if prepare aborted, the
+   aborting change's own settle drives the window-end flush.
+7. **Home drain:** `stopSelectedThreadStreamForHome` cancels + resets, then
    drains once immediately (terminal flush, `respectingTaskCancellation:
-   true`) — unchanged semantics, now with a clean gate for the next open.
+   true`) — unchanged semantics, clean gate for the next open.
 
 ### What does not change
 
 - Window length (3s), `GaryxStreamUpdateCadence.committedMessageBatchWindowNanos`.
-- Data-layer merging: `applyStreamedCommittedMessages` still merges each row
-  into the cache immediately (cursor stays per-row current);
-  `applyThreadRenderSnapshot` still stores the snapshot immediately. Only
-  *render cadence* changes.
-- Persistence policy (persist on flush only when the run is idle), seq/gap
-  handling (`GaryxStreamSeqPlanner`), reconnect/fallback logic, desktop.
+- Data-layer merging and storage: rows still merge per-row into the cache
+  (cursor stays current); snapshots still store immediately; pagination,
+  `markThreadHistoryLoaded`, persist-when-idle all keep their positions.
+  Only *render cadence* changes.
+- Seq/gap handling (`GaryxStreamSeqPlanner`), reconnect/fallback logic,
+  desktop, gateway.
 - No render_state recomputation on the client (repository contract).
 
 ## Failure-mode analysis
 
 | Risk | Mitigation |
 |---|---|
-| Gate says window open but timer dead → updates absorbed forever | I1: single helper owns cancel+reset; arm sites pair action+timer; guard test for every transition |
-| First event after `reset()` not leading | `reset()` → `.idle` covered by unit test |
-| Burst degrades to per-event flush | transition table has no path that flushes on `recordUpdate` while `.window`; sustained-burst test asserts flush count == 1 leading + 1 per elapsed window |
-| Stale flush overwrites newer state | I2 + existing stale-window abort guard (unchanged) |
-| Trailing flush lost when prepare-abort happens | I3: the aborting update itself set `hasBacklog` |
-| Leading flush fires between a frame's rows and its snapshot, rendering the old `render_state` while the new one waits out the window (#TASK-1719 counterexample) | drive point moved to the frame-final `applyRenderSnapshot`; row apply never schedules; frame ordering pinned by processor tests |
+| Gate says window open but timer dead → changes absorbed forever | I1: single helper owns cancel+reset; arm sites pair action+timer; transition guard tests |
+| First change after `reset()` not leading | `reset()` → `idle` + pending cleared, unit-tested |
+| Burst degrades to per-frame flush | no transition flushes on `settleFrame` while `.window`; sustained-burst test asserts 1 leading + 1 per elapsed window |
+| Stale flush overwrites newer state | I2 + renderEquivalent abort guard |
+| Trailing flush lost on prepare-abort | I3: the aborting content change settled `.absorb` or is pending |
+| Leading flush fires between a frame's rows and snapshot, rendering old `render_state` (#TASK-1719) | rows never settle; the frame-final snapshot apply is the only settle point; frame ordering pinned by processor tests |
+| No-op caught-up frame opens the window and shields the next real update (#TASK-1721) | visible-change gating: `.skip` neither flushes nor opens/dirties the window |
+| No-op re-apply during prepare aborts the leading flush → change never renders (rev3 hazard) | renderEquivalent (ignores `savedAt`) replaces object-identity guard |
+| Replayed rows with an unchanged tail snapshot never render (placeholder upgrade) | rows mark `pending`; the next settle drives even with `snapshotChanged == false` |
 
 ## Test Plan (SwiftPM, `GaryxMobileCoreTests`)
 
-Reproduce-first: the gate lands first with a **status-quo faithful**
-`recordUpdate` (`idle → .absorb`, i.e. first update only opens the window —
-exactly what the app does today). The new test
-`testQuietFirstUpdateFlushesImmediately` then **fails (red)** against that
-implementation, reproducing "first row waits the full window" at the Core
-layer. Flipping `recordUpdate` to the leading-edge table turns it green. Both
-runs' actual `swift test` output are recorded in the task summary.
+Reproduce-first: the gate lands with a **status-quo faithful** `settleFrame`
+(any settle → open/keep window, `.absorb`, never immediate). The new tests
+below then fail **red** against it, reproducing "first frame waits the full
+window" and "no-op frames arm the window" at the Core layer; flipping to the
+rev3 table turns them green. Both `swift test` outputs are recorded in the
+task summary.
 
-Guard tests (all pure, clock-free — `windowElapsed()` *is* the timer edge):
+Gate tests (pure, clock-free — `windowElapsed()` *is* the timer edge):
 
-1. `testQuietFirstUpdateFlushesImmediately` — red→green core of the fix.
-2. `testUpdatesWithinWindowAreAbsorbed` — N follow-up updates → all `.absorb`.
-3. `testWindowEndFlushesBacklogAndRearms` — backlog → `.flushBacklogAndRearmWindow`, state back to `hasBacklog: false`.
-4. `testWindowEndWithoutBacklogCloses` — quiet window → `.closeWindow` → `.idle`.
-5. `testQuietAfterCloseFlushesImmediatelyAgain` — idle again → leading edge again.
-6. `testSustainedBurstFlushesOncePerWindow` — drive K windows of continuous updates; assert exactly 1 leading + K trailing flushes and never two flush actions without an intervening `windowElapsed`.
-7. `testResetReturnsToIdle` — mid-window reset → next update is leading (covers stop/refetch/home-drain wiring semantics).
-8. `testWindowElapsedWhenIdleIsBenign` — defensive transition is a no-op `.closeWindow`.
-9. Existing `testCommittedStreamBatchWindowIsThreeSeconds` stays (window length unchanged).
-10. Frame-ordering pins (`GatewayStreamFrameProcessor`): a frame with
-    committed rows emits `[.applyCommittedMessages, .applyRenderSnapshot]` in
-    that order; a snapshot-only frame emits `[.applyRenderSnapshot]`; a
-    windowed frame keeps the snapshot last after `.resetCommittedCacheBelow`;
-    a seq-gap frame emits rows without a snapshot plus a reconnect. (Some of
-    these exist in the actor tests today — extend to pin exactly the
-    snapshot-is-final property the wiring relies on.)
-11. `testFrameLevelGateDriveRendersWholeFrameOnQuietEdge` — mirror the wiring
-    rule in Core: replay processor-emitted action lists into a gate,
-    recording an update only on `.applyRenderSnapshot`. Assert one gate event
-    per frame, the first quiet frame is a leading edge, a frame's rows never
-    produce a flush before its snapshot applied, and gap frames drive
-    nothing.
+1. `testQuietFirstChangingFrameFlushesImmediately` — red→green core of the fix.
+2. `testChangingFramesWithinWindowAreAbsorbed`.
+3. `testWindowEndFlushesBacklogAndRearms`; `testWindowEndWithoutBacklogCloses`.
+4. `testQuietAfterCloseFlushesImmediatelyAgain`.
+5. `testSustainedBurstFlushesOncePerWindow` — K windows of continuous
+   changing frames ⇒ exactly 1 leading + K trailing flushes, never two flush
+   actions without an intervening `windowElapsed`.
+6. `testNoOpCaughtUpFrameDoesNotOpenWindow` (**#TASK-1721 regression**) —
+   idle + `settleFrame(snapshotChanged: false)` ⇒ `.skip`, still idle; the
+   next changing frame ⇒ `.flushNowAndArmWindow`.
+7. `testNoOpFrameInsideWindowLeavesBacklogAlone` — leading, then no-op settle
+   ⇒ `.skip`; `windowElapsed` ⇒ `.closeWindow` (no repaint, no re-arm loop).
+8. `testPendingRowsDriveSettleWithUnchangedSnapshot` — `recordVisibleChange()`
+   then `settleFrame(snapshotChanged: false)` ⇒ drives (leading when idle,
+   `.absorb`+backlog in window); covers replayed-row placeholder upgrades and
+   the seq-gap frame whose settle arrives with the post-reconnect frame.
+9. `testResetClearsPendingAndWindow` — mid-window + pending, `reset()` ⇒
+   idle; `settleFrame(false)` ⇒ `.skip`; changing frame ⇒ leading.
+10. `testWindowElapsedWhenIdleIsBenign` — defensive `.closeWindow`, idle.
+11. `testSnapshotChangedHelper` — equal snapshot ⇒ false; differing ⇒ true;
+    nil applied ⇒ true.
+12. Existing `testCommittedStreamBatchWindowIsThreeSeconds` stays.
 
-Path-parity note: rows cannot outrun or lag the snapshot cadence because row
-apply never schedules — the frame-final snapshot apply is the single gate
-input (tests 10/11 pin the frame ordering and the drive rule).
+Frame/wiring tests:
+
+13. `testFrameActionsAlwaysEndWithRenderSnapshot`
+    (`GatewayStreamFrameProcessor`, already landed green) — rows+snapshot,
+    snapshot-only, windowed (`reset` first, snapshot last), seq-gap (rows,
+    no snapshot, reconnect), control-rewrite (rows + refetch, no snapshot).
+14. `testFrameLevelGateDriveRendersWholeFrameOnQuietEdge` — mirror the wiring
+    rule over real processor output: rows → `recordVisibleChange`, snapshot
+    apply → `settleFrame(snapshotChanged: snapshot != applied)` tracking an
+    `applied` variable exactly like the app. Asserts: a no-op caught-up frame
+    ⇒ `.skip` and no window; a changing frame ⇒ one leading flush after the
+    whole frame applied (rows never drive mid-frame); a snapshot-less gap
+    frame ⇒ no settle, pending carries to the replay frame's settle.
+15. `testRenderEquivalentIgnoresSavedAtOnly` — same content + different
+    `savedAt` ⇒ equivalent; differing messages / renderSnapshot / pagination
+    fields ⇒ not equivalent.
+
+Path-parity note: rows cannot outrun or lag the snapshot cadence because rows
+never settle — the frame-final snapshot apply is the single settle point
+(tests 13/14 pin the ordering and the drive rule).
 
 ## Validation
 
