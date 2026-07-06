@@ -128,8 +128,12 @@
 }
 
 /* Thumbnail: fixed aspect, a cached PNG cover-cropped from the top (no live
-   iframe). The shell backing is the capsule-dark neutral the snapshot composites
-   over, so a still-loading or short capsule reads as intentional backing. */
+   iframe). Deliberately no shell backing: thumbnails are opaque PNGs and the
+   state divs paint their own. Chromium anti-aliases each paint separately
+   against the card's rounded clip, so any dark paint here (the old #0a0e16
+   neutral) bleeds α(1−α) through the corner arcs as mottled dark speckles under
+   the hairline border, and shows as a dark hairline row where the img's snapped
+   raster height undershoots the shell's fractional-pixel box. */
 .capsule-card-preview-shell {
   position: relative;
   display: block;
@@ -139,7 +143,6 @@
      an outer layout ever under-sizes the card again, overflow beats warping. */
   flex-shrink: 0;
   overflow: hidden;
-  background: #0a0e16;
   border-bottom: 0.5px solid color-mix(in oklab, var(--color-token-border) 72%, transparent);
   pointer-events: none;
 }
