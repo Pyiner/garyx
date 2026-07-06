@@ -122,11 +122,15 @@
   width: 330px;
   max-height: min(62vh, 560px);
   overflow-y: auto;
+  scrollbar-width: none;
   border: 1px solid var(--border, rgba(26, 28, 31, 0.1));
   border-radius: 13px;
   background: var(--bg-primary, var(--color-token-bg-primary));
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1), 0 2px 6px rgba(0, 0, 0, 0.05);
   padding: 6px;
+}
+.thread-subtask-pop::-webkit-scrollbar {
+  display: none;
 }
 /* Reserve the right rail for the popover: padding-right narrows in-flow
    message content while the absolute popover stays pinned to the border box.
