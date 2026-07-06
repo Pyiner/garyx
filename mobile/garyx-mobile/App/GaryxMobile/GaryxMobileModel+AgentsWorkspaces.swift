@@ -955,15 +955,10 @@ extension GaryxMobileModel {
 
     func updateModelProviderDefaults(
         provider: GaryxModelProviderDefault,
-        modelName: String,
-        reasoningEffort: String,
-        serviceTier: String? = nil,
-        authSource: String? = nil,
-        baseUrl: String? = nil,
-        apiKey: GaryxProviderApiKeyUpdate = .keep
+        request: GaryxProviderSettingsPresentation.SaveRequest
     ) async -> Bool {
-        let nextModel = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let nextReasoningEffort = reasoningEffort.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nextModel = request.modelName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nextReasoningEffort = request.reasoningEffort.trimmingCharacters(in: .whitespacesAndNewlines)
         let runtimeGeneration = gatewayRuntimeGeneration
         do {
             var patch: [String: GaryxJSONValue] = [:]
@@ -972,10 +967,10 @@ extension GaryxMobileModel {
                 provider: provider,
                 model: nextModel,
                 reasoningEffort: nextReasoningEffort,
-                serviceTier: serviceTier,
-                authSource: authSource,
-                baseUrl: baseUrl,
-                apiKey: apiKey
+                serviceTier: request.serviceTier,
+                authSource: request.authSource,
+                baseUrl: request.baseUrl,
+                apiKey: request.apiKey
             )
             _ = try await client().saveGatewaySettings(patch, merge: true)
             guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
@@ -984,10 +979,10 @@ extension GaryxMobileModel {
                 provider: provider,
                 model: nextModel,
                 reasoningEffort: nextReasoningEffort,
-                serviceTier: serviceTier,
-                authSource: authSource,
-                baseUrl: baseUrl,
-                apiKey: apiKey
+                serviceTier: request.serviceTier,
+                authSource: request.authSource,
+                baseUrl: request.baseUrl,
+                apiKey: request.apiKey
             )
             providerModelsByType.removeValue(forKey: provider.providerType)
             await loadProviderModels(providerType: provider.providerType, runtimeGeneration: runtimeGeneration)

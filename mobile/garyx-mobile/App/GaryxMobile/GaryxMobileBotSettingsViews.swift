@@ -378,41 +378,25 @@ struct GaryxBotAccountForm: View {
     }
 
     private func defaultAccountId(for channel: String) -> String {
-        let slug = channel
-            .lowercased()
-            .map { $0.isLetter || $0.isNumber ? String($0) : "-" }
-            .joined()
-            .split(separator: "-")
-            .joined(separator: "-")
-        let base = "\(slug.isEmpty ? "bot" : slug)-main"
-        let existing = Set(model.configuredBotAccountSettings.map(\.accountId))
-        if !existing.contains(base) {
-            return base
-        }
-        for index in 2...99 {
-            let candidate = "\(base)-\(index)"
-            if !existing.contains(candidate) {
-                return candidate
-            }
-        }
-        return "\(base)-new"
+        GaryxBotAccountIdDefaults.defaultAccountId(
+            channel: channel,
+            existingAccountIds: Set(model.configuredBotAccountSettings.map(\.accountId))
+        )
     }
 
     private func applySchemaDefaults(replacing: Bool) {
         guard let selectedPlugin else { return }
-        var next = replacing ? [:] : configValues
-        for field in schemaFields(for: selectedPlugin) {
-            if next[field.key] == nil, let defaultValue = field.defaultValue {
-                next[field.key] = defaultValue
-            }
-        }
-        configValues = next
+        configValues = GaryxBotConfigValues.applyingSchemaDefaults(
+            to: configValues,
+            fields: schemaFields(for: selectedPlugin),
+            replacing: replacing
+        )
     }
 
     private func binding(for field: GaryxBotSchemaField) -> Binding<GaryxJSONValue> {
         Binding(
             get: {
-                configValues[field.key] ?? field.defaultValue ?? (field.kind == .boolean ? .bool(false) : .string(""))
+                GaryxBotConfigValues.editorValue(for: field, config: configValues)
             },
             set: { next in
                 configValues[field.key] = next
@@ -433,7 +417,7 @@ struct GaryxBotAccountForm: View {
             return
         }
         let fields = selectedPlugin.map { schemaFields(for: $0) } ?? []
-        let normalizedConfig = normalizedConfigValues(fields: fields)
+        let normalizedConfig = GaryxBotConfigValues.normalized(config: configValues, fields: fields)
         let input = GaryxConfiguredBotAccountInput(
             channel: trimmedChannel,
             accountId: trimmedAccountId,
@@ -451,32 +435,6 @@ struct GaryxBotAccountForm: View {
         }
     }
 
-    private func normalizedConfigValues(fields: [GaryxBotSchemaField]) -> [String: GaryxJSONValue] {
-        var next = configValues
-        for field in fields {
-            let value = configValues[field.key] ?? field.defaultValue ?? .string("")
-            switch field.kind {
-            case .boolean:
-                next[field.key] = .bool(garyxBotBoolValue(value) ?? false)
-            case .number:
-                let text = garyxBotStringValue(value).trimmingCharacters(in: .whitespacesAndNewlines)
-                if text.isEmpty, !field.required {
-                    next.removeValue(forKey: field.key)
-                } else {
-                    next[field.key] = .number(Double(text) ?? 0)
-                }
-            case .string:
-                let text = garyxBotStringValue(value).trimmingCharacters(in: .whitespacesAndNewlines)
-                if text.isEmpty, !field.required {
-                    next.removeValue(forKey: field.key)
-                } else {
-                    next[field.key] = .string(text)
-                }
-            }
-        }
-        return next
-    }
-
     private func schemaFields(for plugin: GaryxChannelPluginCatalogEntry) -> [GaryxBotSchemaField] {
         GaryxBotSchemaField.fields(from: plugin.schema)
     }
@@ -490,15 +448,15 @@ private struct GaryxBotConfigFieldEditor: View {
         if field.kind == .boolean {
             GaryxFormRow(title: field.label) {
                 Toggle(field.label, isOn: Binding(
-                    get: { garyxBotBoolValue(value) ?? false },
+                    get: { GaryxBotConfigValues.boolValue(value) ?? false },
                     set: { value = .bool($0) }
                 ))
                 .labelsHidden()
             }
         } else if !field.enumValues.isEmpty {
-            GaryxFormMenuRow(title: field.label, value: garyxBotStringValue(value)) {
+            GaryxFormMenuRow(title: field.label, value: GaryxBotConfigValues.stringValue(value)) {
                 Picker(field.label, selection: Binding(
-                    get: { garyxBotStringValue(value) },
+                    get: { GaryxBotConfigValues.stringValue(value) },
                     set: { value = .string($0) }
                 )) {
                     ForEach(field.enumValues, id: \.self) { option in
@@ -539,8 +497,8 @@ private struct GaryxBotConfigFieldEditor: View {
     private var editor: some View {
         if field.secret {
             SecureField(field.placeholder, text: Binding(
-                get: { garyxBotStringValue(value) },
-                set: { value = field.kind == .number ? .number(Double($0) ?? 0) : .string($0) }
+                get: { GaryxBotConfigValues.stringValue(value) },
+                set: { value = GaryxBotConfigValues.fieldValue(fromEditorText: $0, kind: field.kind) }
             ))
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
@@ -548,8 +506,8 @@ private struct GaryxBotConfigFieldEditor: View {
             .lineLimit(1)
         } else {
             TextField(field.placeholder, text: Binding(
-                get: { garyxBotStringValue(value) },
-                set: { value = field.kind == .number ? .number(Double($0) ?? 0) : .string($0) }
+                get: { GaryxBotConfigValues.stringValue(value) },
+                set: { value = GaryxBotConfigValues.fieldValue(fromEditorText: $0, kind: field.kind) }
             ))
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
@@ -557,124 +515,6 @@ private struct GaryxBotConfigFieldEditor: View {
             .font(GaryxFont.body())
             .lineLimit(1)
         }
-    }
-}
-
-private struct GaryxBotSchemaField: Identifiable, Equatable {
-    enum Kind {
-        case string
-        case boolean
-        case number
-    }
-
-    var id: String { key }
-    var key: String
-    var label: String
-    var kind: Kind
-    var required: Bool
-    var secret: Bool
-    var enumValues: [String]
-    var defaultValue: GaryxJSONValue?
-    var description: String?
-    var placeholder: String
-
-    static func fields(from schema: [String: GaryxJSONValue]) -> [GaryxBotSchemaField] {
-        let properties = garyxBotObjectValue(schema["properties"]) ?? [:]
-        let required = Set((garyxBotArrayValue(schema["required"]) ?? []).compactMap(garyxBotStringValueIfPresent))
-        return properties
-            .compactMap { key, rawValue -> GaryxBotSchemaField? in
-                guard let object = garyxBotObjectValue(rawValue) else { return nil }
-                let type = garyxBotStringValueIfPresent(object["type"]) ?? "string"
-                let enumValues = (garyxBotArrayValue(object["enum"]) ?? []).compactMap(garyxBotStringValueIfPresent)
-                let kind: Kind
-                switch type {
-                case "boolean":
-                    kind = .boolean
-                case "number", "integer":
-                    kind = .number
-                default:
-                    kind = .string
-                }
-                let xGaryx = garyxBotObjectValue(object["x-garyx"]) ?? [:]
-                let secret = garyxBotBoolValue(xGaryx["secret"]) ?? false
-                return GaryxBotSchemaField(
-                    key: key,
-                    label: key
-                        .replacingOccurrences(of: "_", with: " ")
-                        .split(separator: " ")
-                        .map { $0.prefix(1).uppercased() + $0.dropFirst() }
-                        .joined(separator: " "),
-                    kind: kind,
-                    required: required.contains(key),
-                    secret: secret,
-                    enumValues: enumValues,
-                    defaultValue: object["default"],
-                    description: garyxBotStringValueIfPresent(object["description"]),
-                    placeholder: garyxBotStringValueIfPresent(object["placeholder"])
-                        ?? (required.contains(key) ? "Required" : "Optional")
-                )
-            }
-            .sorted { lhs, rhs in
-                if lhs.required != rhs.required {
-                    return lhs.required
-                }
-                return lhs.key.localizedCaseInsensitiveCompare(rhs.key) == .orderedAscending
-            }
-    }
-}
-
-private func garyxBotObjectValue(_ value: GaryxJSONValue?) -> [String: GaryxJSONValue]? {
-    guard case .object(let object) = value else { return nil }
-    return object
-}
-
-private func garyxBotArrayValue(_ value: GaryxJSONValue?) -> [GaryxJSONValue]? {
-    guard case .array(let values) = value else { return nil }
-    return values
-}
-
-private func garyxBotStringValueIfPresent(_ value: GaryxJSONValue?) -> String? {
-    let text = garyxBotStringValue(value).trimmingCharacters(in: .whitespacesAndNewlines)
-    return text.isEmpty ? nil : text
-}
-
-private func garyxBotStringValue(_ value: GaryxJSONValue?) -> String {
-    guard let value else { return "" }
-    switch value {
-    case .string(let text):
-        return text
-    case .number(let number):
-        if number.rounded() == number {
-            return String(Int(number))
-        }
-        return String(number)
-    case .bool(let flag):
-        return flag ? "true" : "false"
-    case .null:
-        return ""
-    case .array, .object:
-        return ""
-    }
-}
-
-private func garyxBotBoolValue(_ value: GaryxJSONValue?) -> Bool? {
-    guard let value else { return nil }
-    switch value {
-    case .bool(let flag):
-        return flag
-    case .string(let text):
-        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if ["true", "yes", "1"].contains(normalized) {
-            return true
-        }
-        if ["false", "no", "0"].contains(normalized) {
-            return false
-        }
-        return nil
-    case .number(let number):
-        return number != 0
-    case .null, .array, .object:
-        return nil
     }
 }
 

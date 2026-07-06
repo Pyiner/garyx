@@ -81,7 +81,7 @@ struct GaryxProviderModelsRow: View {
                         .font(GaryxFont.subheadline(weight: .semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
-                    Text(detail)
+                    Text(rowModel.detailText)
                         .font(GaryxFont.caption())
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -89,7 +89,7 @@ struct GaryxProviderModelsRow: View {
 
                 Spacer(minLength: 8)
 
-                GaryxStatusPill(text: statusText, tone: statusTone)
+                GaryxStatusPill(text: rowModel.statusText, tone: rowModel.statusTone.garyxPillTone)
                 Image(systemName: "chevron.right")
                     .font(GaryxFont.system(size: 11, weight: .semibold))
                     .foregroundStyle(.tertiary)
@@ -118,52 +118,23 @@ struct GaryxProviderModelsRow: View {
         GaryxProviderUsageDisplayModel.make(from: usage, refreshedAt: usageRefreshedAt)
     }
 
-    private var hasError: Bool {
-        let error = catalog?.error?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return !error.isEmpty
+    private var rowModel: GaryxProviderSettingsPresentation.RowModel {
+        .make(provider: provider, catalog: catalog, settings: settings)
     }
+}
 
-    private var statusText: String {
-        if hasError { return "Error" }
-        return catalog == nil ? "Loading" : "Ready"
-    }
-
-    private var statusTone: GaryxStatusPill.Tone {
-        if hasError { return .danger }
-        return catalog == nil ? .muted : .good
-    }
-
-    private var detail: String {
-        var parts: [String] = []
-        let configuredModel = GaryxModelProviderDefaults.configuredDefaultModel(in: settings, provider: provider)
-        let catalogDefault = catalog?.defaultModel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let fallbackModel = provider.fallbackDefaultModel.trimmingCharacters(in: .whitespacesAndNewlines)
-        let effectiveModel = configuredModel.isEmpty
-            ? (catalogDefault.isEmpty ? fallbackModel : catalogDefault)
-            : configuredModel
-        if !effectiveModel.isEmpty {
-            parts.append("Default \(effectiveModel)")
+private extension GaryxProviderSettingsPresentation.RowModel.Tone {
+    /// The single Core-tone → pill-tone mapping (the tone semantics live in
+    /// Core; the pill type is view-layer).
+    var garyxPillTone: GaryxStatusPill.Tone {
+        switch self {
+        case .good:
+            return .good
+        case .muted:
+            return .muted
+        case .danger:
+            return .danger
         }
-        let configuredReasoning = GaryxModelProviderDefaults.configuredReasoningEffort(in: settings, provider: provider)
-        if !configuredReasoning.isEmpty {
-            parts.append("Thinking \(configuredReasoning)")
-        }
-        if catalog?.supportsModelSelection == true {
-            parts.append("\(catalog?.models.count ?? 0) models")
-        }
-        if catalog?.supportsReasoningEffortSelection == true {
-            parts.append("\(catalog?.reasoningEfforts.count ?? 0) reasoning")
-        }
-        if catalog?.supportsServiceTierSelection == true {
-            parts.append("\(catalog?.serviceTiers.count ?? 0) tiers")
-        }
-        if parts.isEmpty {
-            if hasError {
-                return "Model metadata unavailable"
-            }
-            return catalog == nil ? "Loading metadata" : "Provider metadata"
-        }
-        return parts.joined(separator: " · ")
     }
 }
 
@@ -481,7 +452,7 @@ struct GaryxModelProviderDefaultsSheet: View {
             GaryxClaudeCodeLoginSheet()
         }
         .onDisappear {
-            if provider.providerType == "claude_code" {
+            if authSection == .claudeCode {
                 model.resetClaudeCodeAuthFlow()
             }
         }
@@ -498,11 +469,12 @@ struct GaryxModelProviderDefaultsSheet: View {
 
     @ViewBuilder
     private var authenticationSection: some View {
-        if provider.providerType == "claude_code" {
+        switch authSection {
+        case .claudeCode:
             GaryxClaudeCodeAuthEntryRow(entry: claudeCodeAuthEntry) {
                 showsClaudeLoginSheet = true
             }
-        } else if provider.isNative {
+        case .native:
             VStack(alignment: .leading, spacing: 6) {
                 GaryxFormGroupedSection(title: "Authentication") {
                     // Every native provider gets the auth-source row (D1). Only
@@ -510,7 +482,7 @@ struct GaryxModelProviderDefaultsSheet: View {
                     // Anthropic/Google expose their single API-key source so the
                     // saved auth_source is always visible, never written silently.
                     GaryxFormMenuRow(title: "Auth", value: authSourceLabel) {
-                        if provider.providerType == "gpt" {
+                        if GaryxProviderSettingsPresentation.offersGptTokenAuthSource(provider) {
                             Button("Use GPT token") { selectAuthSource("codex") }
                         }
                         Button("Use API key") { selectAuthSource("api_key") }
@@ -543,7 +515,7 @@ struct GaryxModelProviderDefaultsSheet: View {
                     .padding(.horizontal, 14)
                     .fixedSize(horizontal: false, vertical: true)
             }
-        } else {
+        case .managedOAuth:
             GaryxFormGroupedSection(title: "Authentication") {
                 GaryxFormReadOnlyRow(title: "OAuth", value: "Managed on the Mac app")
             }
@@ -603,8 +575,12 @@ struct GaryxModelProviderDefaultsSheet: View {
         )
     }
 
+    private var authSection: GaryxProviderSettingsPresentation.AuthSection {
+        GaryxProviderSettingsPresentation.authSection(for: provider)
+    }
+
     private var supportsServiceTier: Bool {
-        provider.providerType == "gpt" && catalog?.supportsServiceTierSelection == true
+        GaryxProviderSettingsPresentation.supportsServiceTier(provider: provider, catalog: catalog)
     }
 
     private var serviceTierOptions: [GaryxProviderModelOption] {
@@ -619,31 +595,23 @@ struct GaryxModelProviderDefaultsSheet: View {
     }
 
     private var effectiveAuthSource: String {
-        let trimmed = authSource.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty
-            ? GaryxModelProviderDefaults.defaultNativeAuthSource(forProviderType: provider.providerType)
-            : trimmed
+        GaryxProviderSettingsPresentation.effectiveAuthSource(provider: provider, draft: authSource)
     }
 
     private var authSourceLabel: String {
-        effectiveAuthSource == "codex" ? "Use GPT token" : "Use API key"
+        GaryxProviderSettingsPresentation.authSourceLabel(effectiveAuthSource: effectiveAuthSource)
     }
 
     private var showsApiKeyField: Bool {
-        guard provider.isNative else { return false }
-        return provider.providerType != "gpt" || effectiveAuthSource == "api_key"
+        GaryxProviderSettingsPresentation.showsApiKeyField(provider: provider, effectiveAuthSource: effectiveAuthSource)
     }
 
     private var apiKeyPlaceholder: String {
-        GaryxModelProviderDefaults.apiKeyEnvName(forProviderType: provider.providerType) ?? "API key"
+        GaryxProviderSettingsPresentation.apiKeyPlaceholder(for: provider)
     }
 
     private var defaultModelLabel: String {
-        let defaultModel = catalog?.defaultModel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !defaultModel.isEmpty { return "Provider default: \(defaultModel)" }
-        let fallback = provider.fallbackDefaultModel.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !fallback.isEmpty { return "Provider default: \(fallback)" }
-        return "Provider default"
+        GaryxProviderSettingsPresentation.defaultModelLabel(provider: provider, catalog: catalog)
     }
 
     /// Loads the authoritative settings document before echoing values (D1 /
@@ -666,21 +634,21 @@ struct GaryxModelProviderDefaultsSheet: View {
         authSource = source
         // Switching GPT back to the shared token clears the draft key, like Mac;
         // save then blanks a previously stored key.
-        if source == "codex" {
-            apiKey = ""
-        }
+        apiKey = GaryxProviderSettingsPresentation.apiKeyDraft(afterSelectingAuthSource: source, current: apiKey)
     }
 
     private func fillDraft() {
-        let settings = model.gatewaySettingsDocument
-        modelName = GaryxModelProviderDefaults.configuredDefaultModel(in: settings, provider: provider)
-        reasoningEffort = GaryxModelProviderDefaults.configuredReasoningEffort(in: settings, provider: provider)
-        serviceTier = GaryxModelProviderDefaults.configuredServiceTier(in: settings, provider: provider)
-        guard provider.isNative else { return }
-        authSource = GaryxModelProviderDefaults.configuredAuthSource(in: settings, provider: provider)
-        baseUrl = GaryxModelProviderDefaults.configuredBaseUrl(in: settings, provider: provider)
-        apiKey = GaryxModelProviderDefaults.configuredApiKey(in: settings, provider: provider)
-        originalApiKey = apiKey
+        let draft = GaryxProviderSettingsPresentation.Draft.make(
+            settings: model.gatewaySettingsDocument,
+            provider: provider
+        )
+        modelName = draft.modelName
+        reasoningEffort = draft.reasoningEffort
+        serviceTier = draft.serviceTier
+        authSource = draft.authSource
+        baseUrl = draft.baseUrl
+        apiKey = draft.apiKey
+        originalApiKey = draft.apiKey
     }
 
     private func saveDefaults() {
@@ -689,14 +657,17 @@ struct GaryxModelProviderDefaultsSheet: View {
         Task {
             let didSave = await model.updateModelProviderDefaults(
                 provider: provider,
-                modelName: modelName,
-                reasoningEffort: reasoningEffort,
-                serviceTier: supportsServiceTier ? serviceTier : nil,
-                authSource: provider.isNative ? effectiveAuthSource : nil,
-                baseUrl: provider.isNative ? baseUrl : nil,
-                apiKey: provider.isNative
-                    ? GaryxProviderApiKeyUpdate.make(draft: apiKey, existing: originalApiKey)
-                    : .keep
+                request: GaryxProviderSettingsPresentation.SaveRequest.make(
+                    provider: provider,
+                    catalog: catalog,
+                    modelName: modelName,
+                    reasoningEffort: reasoningEffort,
+                    serviceTier: serviceTier,
+                    authSourceDraft: authSource,
+                    baseUrl: baseUrl,
+                    apiKeyDraft: apiKey,
+                    originalApiKey: originalApiKey
+                )
             )
             await MainActor.run {
                 isSaving = false
@@ -708,7 +679,7 @@ struct GaryxModelProviderDefaultsSheet: View {
     }
 
     private func closeSheet() {
-        if provider.providerType == "claude_code" {
+        if authSection == .claudeCode {
             model.resetClaudeCodeAuthFlow()
         }
         dismiss()
