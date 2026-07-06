@@ -386,12 +386,17 @@ Model wiring (`trimThreadResidency()` after the write paths:
   `messagesByThread`, `messageSignaturesByThread` (must go with messages or
   the signature-skip in `setMessages` would refuse to rebuild),
   `activeAssistantMessageIdsByThread`, `renderSnapshotsByThread`,
-  `cachedTranscriptSnapshots`.
+  `cachedTranscriptSnapshots`. Clearing the mirror goes through the P1
+  `setTranscriptMirror(nil, for:)` setter so it bumps the transcript-mirror
+  generation like any other mirror write (harmless: the evicted thread is
+  never the pinned selected/stream thread a restore is in flight for).
 - NOT evicted: `transcriptCachePersistenceGenerations` (drives the
   monotonic write-ordering guard in `GaryxTranscriptCachePersistenceQueue`;
   resetting it would make the actor reject subsequent saves — verified
-  failure mode) and `selectedThreadRenderFloorByThread` (tiny; floor is
-  re-derived on open). Both are O(bytes) per thread.
+  failure mode); `transcriptMirrorGeneration` (P1 restore-freshness counter —
+  same monotonic reason; resetting it could let a stale restore mistake a
+  reused-low generation for "unchanged"); and `selectedThreadRenderFloorByThread`
+  (tiny; floor is re-derived on open). All O(bytes) per thread.
 - Eviction also removes the thread from `threadHistoryLoadedIds`: an evicted
   thread is presentation-wise a cold thread again, so re-opening it must take
   the `isAwaitingInitialHistory == true` (loading) path instead of flashing
