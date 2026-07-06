@@ -1455,6 +1455,7 @@ mod tests {
 
         let snapshot = reduce_transcript_render_state(&records);
         let mut groups = Vec::new();
+        let mut sequence = Vec::new();
         for row in &snapshot.rows {
             let RenderRow::UserTurn(turn) = row else {
                 continue;
@@ -1464,13 +1465,26 @@ mod tests {
                     continue;
                 };
                 for item in &step.steps {
-                    if let RenderStepItem::ToolGroup(group) = item {
-                        groups.push(group.clone());
+                    match item {
+                        RenderStepItem::AssistantMessage(_) => sequence.push("text"),
+                        RenderStepItem::ToolGroup(group) => {
+                            sequence.push("tools");
+                            groups.push(group.clone());
+                        }
                     }
                 }
             }
         }
         assert_eq!(groups.len(), 1, "exactly one group, got {}", groups.len());
+        // The group flushed at the narration boundary, so it must sit
+        // BEFORE the text (review #TASK-1680: without this position check
+        // the test also passed on the pre-backfill reducer, which held the
+        // group open and emitted it after the narration).
+        assert_eq!(
+            sequence.first().copied(),
+            Some("tools"),
+            "flushed group must precede the narration, got {sequence:?}",
+        );
         assert_eq!(groups[0].entries.len(), 1);
         assert!(
             groups[0].entries[0].tool_result.is_some(),
