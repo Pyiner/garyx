@@ -662,7 +662,14 @@ where
     Ok(())
 }
 
-pub(crate) async fn persist_and_apply_config(
+/// Apply a fully-formed config document to the runtime and persist it.
+///
+/// Deliberately private: the only supported way to mutate the config document
+/// is through [`mutate_config`], which serializes read-modify-write under
+/// `settings_mutex`. Keeping this private prevents any new code path from
+/// performing an unlocked whole-document write that would silently clobber a
+/// concurrent update.
+async fn persist_and_apply_config(
     state: &Arc<AppState>,
     config: &GaryxConfig,
 ) -> Result<(), String> {
@@ -670,6 +677,45 @@ pub(crate) async fn persist_and_apply_config(
         Box::pin(sync_external_configs_from_servers(servers))
     })
     .await
+}
+
+/// Failure of a serialized config mutation performed via [`mutate_config`].
+pub(crate) enum ConfigMutateError<E> {
+    /// The edit closure declined to change anything (e.g. a name conflict or a
+    /// missing entry). Carries the closure's rejection value so the caller can
+    /// map it to the appropriate response.
+    Rejected(E),
+    /// Applying the new config to the runtime or persisting it to disk failed.
+    Apply(String),
+}
+
+/// The single serialized entry point for read-modify-write of the whole
+/// [`GaryxConfig`] document.
+///
+/// Holds `settings_mutex` across the entire *read snapshot → edit → apply →
+/// persist* sequence, so concurrent writers cannot lose each other's updates:
+/// every writer observes the previously committed document before deriving its
+/// own change. The `edit` closure runs under the lock and mutates a private
+/// clone; it may reject the change (e.g. conflict / not found) by returning
+/// `Err`, in which case nothing is applied or persisted.
+///
+/// Every config-mutating handler must go through this. `PUT /api/settings`
+/// takes the same `settings_mutex` directly, so all config writers are mutually
+/// exclusive.
+pub(crate) async fn mutate_config<F, T, E>(
+    state: &Arc<AppState>,
+    edit: F,
+) -> Result<T, ConfigMutateError<E>>
+where
+    F: FnOnce(&mut GaryxConfig) -> Result<T, E>,
+{
+    let _settings_guard = state.ops.settings_mutex.lock().await;
+    let mut config = (*state.config_snapshot()).clone();
+    let output = edit(&mut config).map_err(ConfigMutateError::Rejected)?;
+    persist_and_apply_config(state, &config)
+        .await
+        .map_err(ConfigMutateError::Apply)?;
+    Ok(output)
 }
 
 pub async fn list_mcp_servers(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -691,21 +737,24 @@ pub async fn create_mcp_server(
         Err(error) => return error.into_response(),
     };
 
-    let mut config = (*state.config_snapshot()).clone();
-    if config.mcp_servers.contains_key(&name) {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({
-                "error": format!("MCP server '{name}' already exists"),
-            })),
-        )
-            .into_response();
-    }
+    let result = mutate_config(&state, move |config| {
+        if config.mcp_servers.contains_key(&name) {
+            return Err((
+                StatusCode::CONFLICT,
+                format!("MCP server '{name}' already exists"),
+            ));
+        }
+        config.mcp_servers.insert(name.clone(), server.clone());
+        Ok(mcp_server_entry(&name, &server))
+    })
+    .await;
 
-    config.mcp_servers.insert(name.clone(), server.clone());
-    match persist_and_apply_config(&state, &config).await {
-        Ok(()) => (StatusCode::CREATED, Json(mcp_server_entry(&name, &server))).into_response(),
-        Err(error) => (
+    match result {
+        Ok(entry) => (StatusCode::CREATED, Json(entry)).into_response(),
+        Err(ConfigMutateError::Rejected((status, message))) => {
+            (status, Json(json!({ "error": message }))).into_response()
+        }
+        Err(ConfigMutateError::Apply(error)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": error })),
         )
@@ -724,31 +773,32 @@ pub async fn update_mcp_server(
     };
 
     let current_name = current_name.trim().to_owned();
-    let mut config = (*state.config_snapshot()).clone();
-    if !config.mcp_servers.contains_key(&current_name) {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({
-                "error": format!("MCP server '{current_name}' not found"),
-            })),
-        )
-            .into_response();
-    }
-    if name != current_name && config.mcp_servers.contains_key(&name) {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({
-                "error": format!("MCP server '{name}' already exists"),
-            })),
-        )
-            .into_response();
-    }
 
-    config.mcp_servers.remove(&current_name);
-    config.mcp_servers.insert(name.clone(), server.clone());
-    match persist_and_apply_config(&state, &config).await {
-        Ok(()) => (StatusCode::OK, Json(mcp_server_entry(&name, &server))).into_response(),
-        Err(error) => (
+    let result = mutate_config(&state, move |config| {
+        if !config.mcp_servers.contains_key(&current_name) {
+            return Err((
+                StatusCode::NOT_FOUND,
+                format!("MCP server '{current_name}' not found"),
+            ));
+        }
+        if name != current_name && config.mcp_servers.contains_key(&name) {
+            return Err((
+                StatusCode::CONFLICT,
+                format!("MCP server '{name}' already exists"),
+            ));
+        }
+        config.mcp_servers.remove(&current_name);
+        config.mcp_servers.insert(name.clone(), server.clone());
+        Ok(mcp_server_entry(&name, &server))
+    })
+    .await;
+
+    match result {
+        Ok(entry) => (StatusCode::OK, Json(entry)).into_response(),
+        Err(ConfigMutateError::Rejected((status, message))) => {
+            (status, Json(json!({ "error": message }))).into_response()
+        }
+        Err(ConfigMutateError::Apply(error)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": error })),
         )
@@ -761,27 +811,27 @@ pub async fn delete_mcp_server(
     AxumPath(name): AxumPath<String>,
 ) -> impl IntoResponse {
     let name = name.trim().to_owned();
-    let mut config = (*state.config_snapshot()).clone();
-    if config.mcp_servers.remove(&name).is_none() {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({
-                "error": format!("MCP server '{name}' not found"),
-            })),
-        )
-            .into_response();
-    }
 
-    match persist_and_apply_config(&state, &config).await {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(json!({
-                "deleted": true,
-                "name": name,
-            })),
-        )
-            .into_response(),
-        Err(error) => (
+    let result = mutate_config(&state, move |config| {
+        if config.mcp_servers.remove(&name).is_none() {
+            return Err((
+                StatusCode::NOT_FOUND,
+                format!("MCP server '{name}' not found"),
+            ));
+        }
+        Ok(json!({
+            "deleted": true,
+            "name": name,
+        }))
+    })
+    .await;
+
+    match result {
+        Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+        Err(ConfigMutateError::Rejected((status, message))) => {
+            (status, Json(json!({ "error": message }))).into_response()
+        }
+        Err(ConfigMutateError::Apply(error)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": error })),
         )
@@ -795,22 +845,26 @@ pub async fn toggle_mcp_server(
     Json(body): Json<ToggleMcpServerBody>,
 ) -> impl IntoResponse {
     let name = name.trim().to_owned();
-    let mut config = (*state.config_snapshot()).clone();
-    let Some(server) = config.mcp_servers.get_mut(&name) else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({
-                "error": format!("MCP server '{name}' not found"),
-            })),
-        )
-            .into_response();
-    };
 
-    server.enabled = body.enabled;
-    let updated = server.clone();
-    match persist_and_apply_config(&state, &config).await {
-        Ok(()) => (StatusCode::OK, Json(mcp_server_entry(&name, &updated))).into_response(),
-        Err(error) => (
+    let result = mutate_config(&state, move |config| {
+        let Some(server) = config.mcp_servers.get_mut(&name) else {
+            return Err((
+                StatusCode::NOT_FOUND,
+                format!("MCP server '{name}' not found"),
+            ));
+        };
+        server.enabled = body.enabled;
+        let updated = server.clone();
+        Ok(mcp_server_entry(&name, &updated))
+    })
+    .await;
+
+    match result {
+        Ok(entry) => (StatusCode::OK, Json(entry)).into_response(),
+        Err(ConfigMutateError::Rejected((status, message))) => {
+            (status, Json(json!({ "error": message }))).into_response()
+        }
+        Err(ConfigMutateError::Apply(error)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": error })),
         )
