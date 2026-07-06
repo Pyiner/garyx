@@ -728,7 +728,7 @@ button.message-image-frame:focus-visible {
   box-shadow: none;
 }
 
-button.task-notification-card {
+.task-notification-card {
   display: grid;
   gap: 11px;
   width: min(100%, 680px);
