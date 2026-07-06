@@ -39,7 +39,7 @@ export function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function imageSourceFromUnknown(value: unknown): string | null {
+export function imageSourceFromUnknown(value: unknown): string | null {
   const record = asRecord(value);
   if (!record) {
     return null;

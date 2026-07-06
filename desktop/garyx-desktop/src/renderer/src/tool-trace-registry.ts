@@ -1,7 +1,7 @@
 import type { TranscriptMessage } from '@shared/contracts';
 
 import {
-  collectTranscriptSegments,
+  imageSourceFromUnknown,
   type TranscriptSegment,
 } from './message-rich-content-core';
 
@@ -1310,17 +1310,63 @@ function resolveToolTraceSide(trace: ParsedToolTrace): ToolTraceSide {
 }
 
 /**
- * Extract renderable image segments from a tool-result payload. Reuses the
- * shared structured-content walker, so base64 blocks, data/remote URLs, and
- * image file refs all resolve the same way they do in message bubbles.
+ * The single decision for "this record is an embedded image in a tool
+ * result": an explicit image block, or an untyped record carrying inline
+ * base64 (`source.data`). The extractor and the stripper share it, so
+ * every shape that becomes a thumbnail is also removed from the detail
+ * text (review #TASK-1677: an untyped `source.data` record used to be
+ * extracted but not stripped, leaking base64). Typed non-image blocks and
+ * url-only records (e.g. WebFetch results) are deliberately NOT images
+ * here even though message bubbles render them leniently.
+ */
+function isToolResultImageRecord(record: Record<string, unknown>): boolean {
+  const type = typeof record.type === 'string' ? record.type.trim().toLowerCase() : '';
+  if (type === 'image') {
+    return true;
+  }
+  if (type) {
+    return false;
+  }
+  const source = asRecord(record.source);
+  return Boolean(source && typeof source.data === 'string' && source.data.trim());
+}
+
+/**
+ * Extract renderable image segments from a tool-result payload, walking
+ * arrays and the result/content/output envelope keys (the same shape the
+ * stripper descends).
  */
 function collectToolResultImageSegments(value: unknown): ToolResultImageSegment[] {
-  if (value === undefined || value === null) {
-    return [];
-  }
-  return collectTranscriptSegments(value, 'Tool result').filter(
-    (segment): segment is ToolResultImageSegment => segment.kind === 'image',
-  );
+  const segments: ToolResultImageSegment[] = [];
+  const visit = (node: unknown, path: string) => {
+    if (Array.isArray(node)) {
+      node.forEach((entry, index) => visit(entry, `${path}:${index}`));
+      return;
+    }
+    const record = asRecord(node);
+    if (!record) {
+      return;
+    }
+    if (isToolResultImageRecord(record)) {
+      const src = imageSourceFromUnknown(record);
+      if (src) {
+        segments.push({
+          kind: 'image',
+          key: `${path}:image`,
+          src,
+          alt: 'Tool result image',
+        });
+      }
+      return;
+    }
+    for (const key of ['result', 'content', 'output']) {
+      if (key in record) {
+        visit(record[key], `${path}:${key}`);
+      }
+    }
+  };
+  visit(value, 'tool-result');
+  return segments;
 }
 
 /**
@@ -1340,8 +1386,7 @@ function stripImageBlocks(value: unknown): unknown {
   if (!record) {
     return value;
   }
-  const type = typeof record.type === 'string' ? record.type.trim().toLowerCase() : '';
-  if (type === 'image') {
+  if (isToolResultImageRecord(record)) {
     return undefined;
   }
   let changed = false;

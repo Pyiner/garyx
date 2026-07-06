@@ -71,6 +71,47 @@ test('mixed text and image result keeps text detail and extracts the image', () 
   assert.ok(!(merged.resultDetail || '').includes(FAKE_BASE64));
 });
 
+test('untyped source.data record is extracted AND stripped symmetrically', () => {
+  // Review #TASK-1677 blocker shape: no `type` field, image only via
+  // source.data. Extraction and stripping must agree, or base64 leaks.
+  const merged = resolveMergedToolTrace(
+    undefined,
+    {
+      role: 'tool_result',
+      content: {
+        result: [{ source: { type: 'base64', media_type: 'image/png', data: FAKE_BASE64 } }],
+        text: '',
+      },
+      toolUseId: 'tool:4',
+      toolName: 'someTool',
+    },
+  );
+
+  assert.equal(merged.resultImages.length, 1);
+  assert.ok(!(merged.resultDetail || '').includes(FAKE_BASE64), 'detail must not leak base64');
+});
+
+test('url-bearing non-image results are neither thumbnailed nor stripped', () => {
+  // WebFetch-style result: has a url field but is not an image block. The
+  // lenient message-bubble collector would treat it as an image; the tool
+  // strip must not.
+  const merged = resolveMergedToolTrace(
+    undefined,
+    {
+      role: 'tool_result',
+      content: {
+        result: { url: 'https://example.com/page', content: 'fetched body text' },
+        text: '',
+      },
+      toolUseId: 'tool:5',
+      toolName: 'WebFetch',
+    },
+  );
+
+  assert.equal(merged.resultImages.length, 0);
+  assert.ok((merged.resultDetail || '').includes('fetched body text'));
+});
+
 test('imageless tool results keep their existing detail behavior', () => {
   const merged = resolveMergedToolTrace(
     {
