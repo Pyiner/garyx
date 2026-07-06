@@ -1369,6 +1369,12 @@ async fn test_process_messages_streaming_emits_user_ack_boundaries() {
             StreamEvent::Delta {
                 text: "第二段".to_owned(),
             },
+            // The successful result finalizes the in-flight assistant tail
+            // immediately (result-time finalize, #TASK-1715).
+            StreamEvent::Boundary {
+                kind: StreamBoundaryKind::AssistantSegment,
+                pending_input_id: None,
+            },
         ]
     );
 
@@ -1843,6 +1849,11 @@ async fn test_process_messages_streaming_suppresses_claude_synthetic_no_response
             StreamEvent::Delta {
                 text: "真实回复".to_owned(),
             },
+            // Result-time finalize of the in-flight tail (#TASK-1715).
+            StreamEvent::Boundary {
+                kind: StreamBoundaryKind::AssistantSegment,
+                pending_input_id: None,
+            },
         ]
     );
 
@@ -1898,9 +1909,16 @@ async fn test_process_messages_streaming_preserves_non_synthetic_no_response_tex
     assert_eq!(response_text, "No response requested.");
     assert_eq!(
         chunks.lock().expect("chunks mutex poisoned").as_slice(),
-        &[StreamEvent::Delta {
-            text: "No response requested.".to_owned(),
-        }]
+        &[
+            StreamEvent::Delta {
+                text: "No response requested.".to_owned(),
+            },
+            // Result-time finalize of the in-flight tail (#TASK-1715).
+            StreamEvent::Boundary {
+                kind: StreamBoundaryKind::AssistantSegment,
+                pending_input_id: None,
+            },
+        ]
     );
     let result = result_data.expect("expected result message");
     assert_eq!(result.session_messages.len(), 1);
@@ -1975,7 +1993,7 @@ async fn test_process_messages_streaming_emits_assistant_segment_boundaries() {
 
     assert_eq!(response_text, "让我先看看。\n\n好了，现在开始修。");
     let emitted = chunks.lock().expect("chunks mutex poisoned").clone();
-    assert_eq!(emitted.len(), 4);
+    assert_eq!(emitted.len(), 5);
     assert!(matches!(
         &emitted[0],
         StreamEvent::Delta { text } if text == "让我先看看。"
@@ -1995,6 +2013,14 @@ async fn test_process_messages_streaming_emits_assistant_segment_boundaries() {
         &emitted[3],
         StreamEvent::Delta { text } if text == "好了，现在开始修。"
     ));
+    // Result-time finalize of the in-flight tail (#TASK-1715).
+    assert_eq!(
+        emitted[4],
+        StreamEvent::Boundary {
+            kind: StreamBoundaryKind::AssistantSegment,
+            pending_input_id: None,
+        }
+    );
 }
 
 #[tokio::test]
@@ -2217,7 +2243,7 @@ async fn test_process_messages_streaming_suppresses_subagent_text_but_keeps_tool
     assert_eq!(response_text, "最终只保留顶层回复");
 
     let emitted = chunks.lock().expect("chunks mutex poisoned").clone();
-    assert_eq!(emitted.len(), 3);
+    assert_eq!(emitted.len(), 4);
     assert!(
         matches!(&emitted[0], StreamEvent::ToolUse { message } if message.role_str() == "tool_use")
     );
@@ -2228,6 +2254,14 @@ async fn test_process_messages_streaming_suppresses_subagent_text_but_keeps_tool
         emitted[2],
         StreamEvent::Delta {
             text: "最终只保留顶层回复".to_owned()
+        }
+    );
+    // Result-time finalize of the in-flight tail (#TASK-1715).
+    assert_eq!(
+        emitted[3],
+        StreamEvent::Boundary {
+            kind: StreamBoundaryKind::AssistantSegment,
+            pending_input_id: None,
         }
     );
 
@@ -2243,6 +2277,185 @@ async fn test_process_messages_streaming_suppresses_subagent_text_but_keeps_tool
             .session_messages
             .iter()
             .all(|entry| entry.text.as_deref() != Some("子 Agent 内部文本，不应外发"))
+    );
+}
+
+fn result_message_with_error(session_id: &str, is_error: bool) -> ResultMessage {
+    ResultMessage {
+        subtype: if is_error { "error" } else { "success" }.to_owned(),
+        duration_ms: 1,
+        duration_api_ms: 1,
+        is_error,
+        num_turns: 1,
+        session_id: session_id.to_owned(),
+        total_cost_usd: Some(0.0),
+        usage: None,
+        result: None,
+        structured_output: None,
+    }
+}
+
+fn assistant_text_message(text: &str) -> AssistantMessage {
+    AssistantMessage {
+        content: vec![ContentBlock::Text(TextBlock {
+            text: text.to_owned(),
+        })],
+        model: "claude-test".to_owned(),
+        parent_tool_use_id: None,
+        error: None,
+    }
+}
+
+/// Error results must keep the old flow (no early finalize) so a
+/// fresh-session retry never commits the doomed attempt's tail (#TASK-1715).
+#[tokio::test]
+async fn test_process_messages_streaming_error_result_skips_finalize_boundary() {
+    let provider = make_provider();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+
+    tx.send(Ok(Message::Assistant(assistant_text_message(
+        "No conversation found",
+    ))))
+    .await
+    .unwrap();
+    tx.send(Ok(Message::Result(result_message_with_error(
+        "sdk-session-error",
+        true,
+    ))))
+    .await
+    .unwrap();
+    drop(tx);
+
+    let chunks = Arc::new(std::sync::Mutex::new(Vec::<StreamEvent>::new()));
+    let chunks_cb = chunks.clone();
+    let cb: StreamCallback = Box::new(move |event| {
+        chunks_cb.lock().expect("chunks mutex poisoned").push(event);
+    });
+
+    provider
+        .process_messages_streaming("run-error-result", "thread::test", &mut rx, &cb)
+        .await
+        .expect("stream should process");
+
+    assert_eq!(
+        chunks.lock().expect("chunks mutex poisoned").as_slice(),
+        &[StreamEvent::Delta {
+            text: "No conversation found".to_owned(),
+        }]
+    );
+}
+
+/// A turn that ends on a tool event has no in-flight assistant tail, so the
+/// result must not emit a redundant finalize boundary (#TASK-1715).
+#[tokio::test]
+async fn test_process_messages_streaming_tool_tail_result_skips_finalize_boundary() {
+    let provider = make_provider();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+
+    tx.send(Ok(Message::Assistant(AssistantMessage {
+        content: vec![
+            ContentBlock::Text(TextBlock {
+                text: "运行一下。".to_owned(),
+            }),
+            ContentBlock::ToolUse(ToolUseBlock {
+                id: "toolu_tail".to_owned(),
+                name: "Bash".to_owned(),
+                input: serde_json::json!({ "command": "true" }),
+            }),
+        ],
+        model: "claude-test".to_owned(),
+        parent_tool_use_id: None,
+        error: None,
+    })))
+    .await
+    .unwrap();
+    tx.send(Ok(Message::Result(result_message_with_error(
+        "sdk-session-tool-tail",
+        false,
+    ))))
+    .await
+    .unwrap();
+    drop(tx);
+
+    let chunks = Arc::new(std::sync::Mutex::new(Vec::<StreamEvent>::new()));
+    let chunks_cb = chunks.clone();
+    let cb: StreamCallback = Box::new(move |event| {
+        chunks_cb.lock().expect("chunks mutex poisoned").push(event);
+    });
+
+    provider
+        .process_messages_streaming("run-tool-tail", "thread::test", &mut rx, &cb)
+        .await
+        .expect("stream should process");
+
+    let emitted = chunks.lock().expect("chunks mutex poisoned").clone();
+    assert_eq!(emitted.len(), 2);
+    assert!(matches!(
+        &emitted[0],
+        StreamEvent::Delta { text } if text == "运行一下。"
+    ));
+    assert!(
+        matches!(&emitted[1], StreamEvent::ToolUse { message } if message.role_str() == "tool_use")
+    );
+}
+
+/// Every successful result finalizes its own turn's tail: a run continued by
+/// queued input gets one finalize boundary per turn, in order (#TASK-1715).
+#[tokio::test]
+async fn test_process_messages_streaming_finalizes_each_turn_result() {
+    let provider = make_provider();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(6);
+
+    tx.send(Ok(Message::Assistant(assistant_text_message("turn one"))))
+        .await
+        .unwrap();
+    tx.send(Ok(Message::Result(result_message_with_error(
+        "sdk-session-multi",
+        false,
+    ))))
+    .await
+    .unwrap();
+    tx.send(Ok(Message::Assistant(assistant_text_message("turn two"))))
+        .await
+        .unwrap();
+    tx.send(Ok(Message::Result(result_message_with_error(
+        "sdk-session-multi",
+        false,
+    ))))
+    .await
+    .unwrap();
+    drop(tx);
+
+    let chunks = Arc::new(std::sync::Mutex::new(Vec::<StreamEvent>::new()));
+    let chunks_cb = chunks.clone();
+    let cb: StreamCallback = Box::new(move |event| {
+        chunks_cb.lock().expect("chunks mutex poisoned").push(event);
+    });
+
+    provider
+        .process_messages_streaming("run-multi-result", "thread::test", &mut rx, &cb)
+        .await
+        .expect("stream should process");
+
+    let finalize = StreamEvent::Boundary {
+        kind: StreamBoundaryKind::AssistantSegment,
+        pending_input_id: None,
+    };
+    assert_eq!(
+        chunks.lock().expect("chunks mutex poisoned").as_slice(),
+        &[
+            StreamEvent::Delta {
+                text: "turn one".to_owned(),
+            },
+            finalize.clone(),
+            // Pre-existing segment-start boundary emitted before a new
+            // assistant segment when prior text exists.
+            finalize.clone(),
+            StreamEvent::Delta {
+                text: "turn two".to_owned(),
+            },
+            finalize,
+        ]
     );
 }
 

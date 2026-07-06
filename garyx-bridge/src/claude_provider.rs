@@ -605,6 +605,38 @@ fn assistant_blocks_start_with_newline(blocks: &[ContentBlock]) -> bool {
     }) == Some(true)
 }
 
+/// What `process_assistant_blocks_streaming` leaves as the trailing streamed
+/// event for this message: `Some(true)` when it ends with visible text (the
+/// assistant tail stays in flight downstream), `Some(false)` when it ends with
+/// a tool event (the tail is finalized), `None` when nothing is emitted.
+/// Mirrors that function's flush rules: text accumulates and flushes before a
+/// tool block or at the end, and text is suppressed for subagent messages
+/// (`parent_tool_use_id`).
+fn assistant_blocks_trailing_text_emission(
+    blocks: &[ContentBlock],
+    parent_tool_use_id: Option<&str>,
+) -> Option<bool> {
+    let suppress_text = has_parent_tool_use_id(parent_tool_use_id);
+    let mut trailing = None;
+    for block in blocks {
+        match block {
+            ContentBlock::Text(TextBlock { text }) => {
+                if !suppress_text && !text.is_empty() {
+                    trailing = Some(true);
+                }
+            }
+            ContentBlock::ToolUse(_) | ContentBlock::ToolResult(_) => {
+                trailing = Some(false);
+            }
+            ContentBlock::Image(_)
+            | ContentBlock::Document(_)
+            | ContentBlock::Thinking(_)
+            | ContentBlock::Unknown(_) => {}
+        }
+    }
+    trailing
+}
+
 fn append_assistant_segment_separator(response_text: &mut String) {
     if response_text.is_empty() || response_text.ends_with("\n\n") {
         return;
@@ -1469,6 +1501,12 @@ impl ClaudeCliProvider {
         let mut actual_model: Option<String> = None;
         let mut thread_title: Option<String> = None;
         let mut result_seen = false;
+        // Whether the last streamed event was assistant text, i.e. the
+        // persistence tail segment is still in flight and a ResultMessage
+        // should finalize it immediately instead of leaving it to Done
+        // (post-result drain + process teardown otherwise keep the final
+        // answer invisible for seconds).
+        let mut assistant_text_in_flight = false;
         let mut active_background_tasks = HashSet::new();
 
         let idle_timeout = Duration::from_secs(STREAM_IDLE_TIMEOUT_SECS);
@@ -1500,6 +1538,10 @@ impl ClaudeCliProvider {
                 Ok(None) => break, // stream closed normally
                 Ok(Some(msg_result)) => match msg_result {
                     Ok(Message::User(user_msg)) => {
+                        // Both branches below finalize the assistant tail
+                        // downstream (ToolResult events or the UserAck
+                        // boundary).
+                        assistant_text_in_flight = false;
                         if let claude_agent_sdk::UserContent::Blocks(ref blocks) = user_msg.content
                         {
                             extract_tool_session_messages(
@@ -1558,9 +1600,28 @@ impl ClaudeCliProvider {
                             on_chunk,
                             assistant_msg.parent_tool_use_id.as_deref(),
                         );
+                        if let Some(trailing_text) = assistant_blocks_trailing_text_emission(
+                            &assistant_msg.content,
+                            assistant_msg.parent_tool_use_id.as_deref(),
+                        ) {
+                            assistant_text_in_flight = trailing_text;
+                        }
                     }
                     Ok(Message::Result(result_msg)) => {
                         result_seen = true;
+                        // The turn's output is complete: finalize the trailing
+                        // assistant segment now so the final answer commits
+                        // (and reaches the per-thread stream) without waiting
+                        // for the post-result drain, CLI exit grace, and Done.
+                        // Error results keep the old flow so fresh-session
+                        // retries never commit a doomed attempt's tail early.
+                        if assistant_text_in_flight && !result_msg.is_error {
+                            assistant_text_in_flight = false;
+                            on_chunk(StreamEvent::Boundary {
+                                kind: StreamBoundaryKind::AssistantSegment,
+                                pending_input_id: None,
+                            });
+                        }
                         let (input_tokens, output_tokens) =
                             result_usage_tokens(result_msg.usage.as_ref());
                         result_data = Some(ProcessedResult {

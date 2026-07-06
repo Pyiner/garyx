@@ -686,6 +686,157 @@ async fn test_save_streaming_partial_commits_user_row_without_inflight_content_t
     assert_eq!(stored["history"]["message_count"], 1);
 }
 
+/// #TASK-1715 guard: a result-time `AssistantSegment` boundary finalizes and
+/// commits the in-flight answer immediately (before Done), and text arriving
+/// during the post-result drain window lands as a NEW committed row afterwards
+/// — nothing lost, duplicated, or reordered.
+#[tokio::test]
+async fn test_result_time_boundary_commits_answer_before_done_and_late_text_is_new_row() {
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let history = make_history(store.clone());
+    store.set("thread::result-finalize", json!({})).await;
+
+    let mut metadata = HashMap::new();
+    metadata.insert("bridge_run_id".to_owned(), json!("bridge-result"));
+    let run_started_at = "2026-03-01T00:00:10Z";
+    let mut transcript_controls = Vec::new();
+    let mut snapshot = StreamingRunSnapshot::default();
+    let mut appended = 0usize;
+
+    let flush = async |snapshot: &StreamingRunSnapshot,
+                       controls: &[RunControlRecord],
+                       finalized_len: usize,
+                       appended: usize| {
+        save_streaming_partial(
+            &store,
+            &history,
+            PersistedRun {
+                thread_id: "thread::result-finalize",
+                user_message: "ping",
+                user_timestamp: Some(run_started_at),
+                user_images: &[],
+                assistant_response: &snapshot.assistant_response,
+                sdk_session_id: None,
+                provider_key: "provider::claude",
+                provider_type: ProviderType::ClaudeCode,
+                session_messages: &snapshot.session_messages,
+                metadata: &metadata,
+            },
+            &[],
+            controls,
+            finalized_len,
+            appended,
+        )
+        .await
+    };
+
+    // Initial user flush, then the answer text arrives and stays in flight.
+    appended = flush(&snapshot, &transcript_controls, 0, appended).await.0;
+    snapshot.apply_stream_event(&StreamEvent::Delta {
+        text: "pong".to_owned(),
+    });
+    let (cursor, committed) = flush(
+        &snapshot,
+        &transcript_controls,
+        snapshot.finalized_len(),
+        appended,
+    )
+    .await;
+    appended = cursor;
+    assert!(
+        committed.is_empty(),
+        "in-flight tail must not commit before a boundary"
+    );
+
+    // Result-time finalize boundary: the answer commits NOW, before any Done.
+    snapshot.apply_stream_event(&StreamEvent::Boundary {
+        kind: garyx_models::provider::StreamBoundaryKind::AssistantSegment,
+        pending_input_id: None,
+    });
+    transcript_controls.push(RunControlRecord::new(
+        "assistant_boundary",
+        "thread::result-finalize",
+        "bridge-result",
+        run_started_at.to_owned(),
+        serde_json::Map::new(),
+        1 + snapshot.session_messages.len(),
+    ));
+    let (cursor, committed) = flush(
+        &snapshot,
+        &transcript_controls,
+        snapshot.finalized_len(),
+        appended,
+    )
+    .await;
+    appended = cursor;
+    let committed_answer: Vec<&Value> = committed
+        .iter()
+        .map(|(_, message)| message)
+        .filter(|message| message["role"] == "assistant")
+        .collect();
+    assert_eq!(committed_answer.len(), 1);
+    assert_eq!(committed_answer[0]["content"], "pong");
+
+    // Late text during the drain window opens a new segment; Done commits it
+    // as its own row without re-committing the answer.
+    snapshot.apply_stream_event(&StreamEvent::Delta {
+        text: "late follow-up".to_owned(),
+    });
+    snapshot.apply_stream_event(&StreamEvent::Done);
+    transcript_controls.push(RunControlRecord::new(
+        "done",
+        "thread::result-finalize",
+        "bridge-result",
+        run_started_at.to_owned(),
+        serde_json::Map::new(),
+        1 + snapshot.session_messages.len(),
+    ));
+    let (_, committed) = flush(
+        &snapshot,
+        &transcript_controls,
+        snapshot.session_messages.len(),
+        appended,
+    )
+    .await;
+    let late_rows: Vec<&Value> = committed
+        .iter()
+        .map(|(_, message)| message)
+        .filter(|message| message["role"] == "assistant")
+        .collect();
+    assert_eq!(late_rows.len(), 1);
+    assert_eq!(late_rows[0]["content"], "late follow-up");
+
+    let records = history
+        .transcript_store()
+        .records("thread::result-finalize")
+        .await
+        .expect("records should load");
+    let row_summary: Vec<(u64, String, String)> = records
+        .iter()
+        .map(|record| {
+            (
+                record.seq,
+                record.message["role"].as_str().unwrap_or("?").to_owned(),
+                record.message["content"]
+                    .as_str()
+                    .or_else(|| record.message["control"]["kind"].as_str())
+                    .unwrap_or("?")
+                    .to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        row_summary,
+        vec![
+            (1, "user".to_owned(), "ping".to_owned()),
+            (2, "assistant".to_owned(), "pong".to_owned()),
+            (3, "system".to_owned(), "assistant_boundary".to_owned()),
+            (4, "assistant".to_owned(), "late follow-up".to_owned()),
+            (5, "system".to_owned(), "done".to_owned()),
+        ]
+    );
+}
+
 #[tokio::test]
 async fn test_save_streaming_partial_clears_abandoned_pending_inputs_for_new_user_turn() {
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
