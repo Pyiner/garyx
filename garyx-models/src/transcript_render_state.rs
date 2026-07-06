@@ -229,6 +229,7 @@ pub fn reduce_transcript_render_state_with_run_state<'a>(
     let mut blocks = Vec::new();
     let mut capsule_marks = Vec::new();
     let mut current_tool_group = ToolGroupBuilder::default();
+    let mut latest_run_start_seq = 0u64;
 
     for record in records {
         let Some(seq) = record_seq(record) else {
@@ -240,6 +241,9 @@ pub fn reduce_transcript_render_state_with_run_state<'a>(
         let role = normalized_role(message);
         let reference = message_ref(seq, &role, message);
         if is_control_message(message) {
+            if control_kind(message) == Some("run_start") {
+                latest_run_start_seq = seq;
+            }
             if let Some(mark) = capsule_mark_from_message(seq, message) {
                 current_tool_group.flush_boundary_into(&mut blocks);
                 capsule_marks.push(mark);
@@ -290,7 +294,7 @@ pub fn reduce_transcript_render_state_with_run_state<'a>(
 
     let rows = build_rows(&blocks, &capsule_marks, &latest_capsules, run_state);
     let (tail_activity, active_tool_group_id, progress_locus) =
-        derive_tail_activity(blocks.last(), run_state);
+        derive_tail_activity(blocks.last(), run_state, latest_run_start_seq);
     let rate_limit = run_state.rate_limit.as_ref().map(|limit| RenderRateLimit {
         provider: limit.provider.clone(),
         reset_at: limit.reset_at.clone(),
@@ -617,6 +621,14 @@ fn latest_capsules_by_id<'a>(
     latest
 }
 
+fn control_kind(message: &Map<String, Value>) -> Option<&str> {
+    message
+        .get("control")
+        .and_then(Value::as_object)
+        .and_then(|control| control.get("kind"))
+        .and_then(Value::as_str)
+}
+
 fn capsule_mark_from_message(seq: u64, message: &Map<String, Value>) -> Option<CapsuleMark> {
     let control = message.get("control").and_then(Value::as_object)?;
     if control.get("kind").and_then(Value::as_str) != Some("capsule_attached") {
@@ -922,6 +934,7 @@ fn take_final_assistant(items: &mut Vec<RenderStepItem>) -> Option<RenderMessage
 fn derive_tail_activity(
     tail_block: Option<&RenderBlock>,
     run_state: &TranscriptRunState,
+    latest_run_start_seq: u64,
 ) -> (RenderTailActivity, Option<String>, RenderProgressLocus) {
     if !run_state.busy {
         return (RenderTailActivity::None, None, RenderProgressLocus::None);
@@ -933,13 +946,17 @@ fn derive_tail_activity(
             RenderProgressLocus::Tail,
         );
     }
-    if let Some(RenderBlock::ToolGroup(group)) = tail_block {
-        // Busy run with a tool group at the tail: stay anchored on the
-        // group even in the gap between a tool_result and the next call.
-        // Falling back to Thinking for that ~150ms gap made the indicator
-        // flicker on every consecutive tool call (user report); the group
-        // stays the progress locus until narration text lands (tail block
-        // becomes a message) or the run stops being busy.
+    if let Some(RenderBlock::ToolGroup(group)) = tail_block
+        && tool_group_first_seq(group).is_some_and(|first| first > latest_run_start_seq)
+    {
+        // Busy run with a CURRENT-run tool group at the tail: stay anchored
+        // on the group even in the gap between a tool_result and the next
+        // call. Falling back to Thinking for that ~150ms gap made the
+        // indicator flicker on every consecutive tool call (user report);
+        // the group stays the progress locus until narration text lands or
+        // the run stops being busy. A group from a PREVIOUS run (first seq
+        // before the latest run_start) must not light up when a fresh run
+        // begins before its first body row commits (review #TASK-1706).
         return (
             RenderTailActivity::ToolActive,
             Some(group.id.clone()),
@@ -951,6 +968,23 @@ fn derive_tail_activity(
         None,
         RenderProgressLocus::Tail,
     )
+}
+
+fn tool_group_first_seq(group: &RenderToolGroup) -> Option<u64> {
+    group
+        .entries
+        .iter()
+        .filter_map(|entry| {
+            let use_seq = entry.tool_use.as_ref().map(|reference| reference.seq);
+            let result_seq = entry.tool_result.as_ref().map(|reference| reference.seq);
+            match (use_seq, result_seq) {
+                (Some(u), Some(r)) => Some(u.min(r)),
+                (Some(u), None) => Some(u),
+                (None, Some(r)) => Some(r),
+                (None, None) => None,
+            }
+        })
+        .min()
 }
 
 fn apply_tool_group_statuses(blocks: &mut [RenderBlock], run_state: &TranscriptRunState) {
@@ -1410,6 +1444,31 @@ mod tests {
             snapshot.active_tool_group_id.is_some(),
             "the indicator stays anchored on the tail tool group",
         );
+    }
+
+    /// Review #TASK-1706: a FRESH run_start arriving before its first body
+    /// row commits must not reactivate the previous run's completed tail
+    /// tool group — the anchor only applies to groups born after the
+    /// latest run_start.
+    #[test]
+    fn fresh_run_start_does_not_reactivate_previous_runs_tool_group() {
+        let records = vec![
+            control_record(1, "run_start"),
+            user_record(2, "First ask", "00000000-0000-0000-0000-000000000005"),
+            tool_use_record(3, "call_old", "Bash"),
+            tool_result_record(4, "call_old", false),
+            control_record(5, "run_end"),
+            // New run begins; its user row has not committed yet.
+            control_record(6, "run_start"),
+        ];
+
+        let snapshot = reduce_transcript_render_state(&records);
+        assert_eq!(
+            snapshot.tail_activity,
+            RenderTailActivity::Thinking,
+            "a previous run's completed group must not light up on a fresh run",
+        );
+        assert_eq!(snapshot.active_tool_group_id, None);
     }
 
     #[test]
