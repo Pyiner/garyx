@@ -413,10 +413,10 @@
     },
     {
       "expected": {
-        "activeToolGroupId": null,
+        "activeToolGroupId": "tool_group:call_fixture_check",
         "based_on_seq": 6,
         "filtered_placeholders": [],
-        "progress_locus": "tail",
+        "progress_locus": "tool_group",
         "rows": [
           {
             "activity": [
@@ -476,7 +476,7 @@
             }
           }
         ],
-        "tailActivity": "thinking",
+        "tailActivity": "tool_active",
         "visibleMessageIds": [
           "seq:2",
           "seq:3",
@@ -596,10 +596,10 @@
     },
     {
       "expected": {
-        "activeToolGroupId": null,
+        "activeToolGroupId": "tool_group:call_fixture_list",
         "based_on_seq": 4,
         "filtered_placeholders": [],
-        "progress_locus": "tail",
+        "progress_locus": "tool_group",
         "rows": [
           {
             "activity": [
@@ -655,7 +655,7 @@
             "user": null
           }
         ],
-        "tailActivity": "thinking",
+        "tailActivity": "tool_active",
         "visibleMessageIds": [
           "seq:2",
           "seq:3",
@@ -770,10 +770,10 @@
     },
     {
       "expected": {
-        "activeToolGroupId": null,
+        "activeToolGroupId": "tool_group:call_fixture_list",
         "based_on_seq": 6,
         "filtered_placeholders": [],
-        "progress_locus": "tail",
+        "progress_locus": "tool_group",
         "rows": [
           {
             "activity": [
@@ -844,7 +844,7 @@
             "user": null
           }
         ],
-        "tailActivity": "thinking",
+        "tailActivity": "tool_active",
         "visibleMessageIds": [
           "seq:2",
           "seq:3",
@@ -1049,10 +1049,10 @@
     },
     {
       "expected": {
-        "activeToolGroupId": null,
+        "activeToolGroupId": "tool_group:call_fixture_a",
         "based_on_seq": 6,
         "filtered_placeholders": [],
-        "progress_locus": "tail",
+        "progress_locus": "tool_group",
         "rows": [
           {
             "activity": [
@@ -1123,7 +1123,7 @@
             "user": null
           }
         ],
-        "tailActivity": "thinking",
+        "tailActivity": "tool_active",
         "visibleMessageIds": [
           "seq:2",
           "seq:3",
@@ -1147,10 +1147,10 @@
     },
     {
       "expected": {
-        "activeToolGroupId": null,
+        "activeToolGroupId": "tool_group:call_fixture_list",
         "based_on_seq": 4,
         "filtered_placeholders": [],
-        "progress_locus": "tail",
+        "progress_locus": "tool_group",
         "rows": [
           {
             "activity": [
@@ -1196,7 +1196,7 @@
             "user": null
           }
         ],
-        "tailActivity": "thinking",
+        "tailActivity": "tool_active",
         "visibleMessageIds": [
           "seq:3",
           "seq:4"
@@ -1397,10 +1397,10 @@
     },
     {
       "expected": {
-        "activeToolGroupId": null,
+        "activeToolGroupId": "tool_group:call_fixture_failed",
         "based_on_seq": 4,
         "filtered_placeholders": [],
-        "progress_locus": "tail",
+        "progress_locus": "tool_group",
         "rows": [
           {
             "activity": [
@@ -1450,7 +1450,7 @@
             }
           }
         ],
-        "tailActivity": "thinking",
+        "tailActivity": "tool_active",
         "visibleMessageIds": [
           "seq:2",
           "seq:3",

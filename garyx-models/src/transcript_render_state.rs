@@ -933,9 +933,13 @@ fn derive_tail_activity(
             RenderProgressLocus::Tail,
         );
     }
-    if let Some(RenderBlock::ToolGroup(group)) = tail_block
-        && group.status == RenderToolGroupStatus::Active
-    {
+    if let Some(RenderBlock::ToolGroup(group)) = tail_block {
+        // Busy run with a tool group at the tail: stay anchored on the
+        // group even in the gap between a tool_result and the next call.
+        // Falling back to Thinking for that ~150ms gap made the indicator
+        // flicker on every consecutive tool call (user report); the group
+        // stays the progress locus until narration text lands (tail block
+        // becomes a message) or the run stops being busy.
         return (
             RenderTailActivity::ToolActive,
             Some(group.id.clone()),
@@ -1374,6 +1378,37 @@ mod tests {
             deduped.len(),
             group_ids.len(),
             "tool_group ids must be unique per snapshot, got {group_ids:?}"
+        );
+    }
+
+    /// Tail-activity stability (user report: the thinking indicator
+    /// flickers between tool calls). In a busy run whose latest activity
+    /// is still tool use, the ~150ms gap after a tool_result commits (tail
+    /// group complete, next tool_use not yet committed) must NOT flash
+    /// back to Thinking — the indicator stays on the tail tool group.
+    #[test]
+    fn completed_tail_tool_group_keeps_tool_active_between_calls() {
+        let records = vec![
+            control_record(1, "run_start"),
+            user_record(2, "Run tools", "00000000-0000-0000-0000-000000000004"),
+            tool_use_record(3, "call_gap", "Bash"),
+            tool_result_record(4, "call_gap", false),
+        ];
+        let run_state = reduce_transcript_run_state(&records);
+        assert!(run_state.busy, "run_start without run_end keeps the run busy");
+        // The run-state reducer legitimately reports Thinking after a
+        // tool_result; the render layer still anchors the tail on the tool
+        // group so the indicator does not flicker through the gap.
+        let snapshot =
+            reduce_transcript_render_state_with_run_state(records.iter(), &run_state);
+        assert_eq!(
+            snapshot.tail_activity,
+            RenderTailActivity::ToolActive,
+            "gap between tool calls must not flash thinking",
+        );
+        assert!(
+            snapshot.active_tool_group_id.is_some(),
+            "the indicator stays anchored on the tail tool group",
         );
     }
 
