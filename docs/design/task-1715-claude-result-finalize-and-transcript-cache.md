@@ -24,8 +24,9 @@ method):
 | 80KB / 9 records | 12.0 / 1.9 / 1.9 ms | 0.6-0.7ms (20KB) |
 
 Targets: tail gap < 0.5s (≥2 runs); 188MB per-frame derive down ≥10x
-steady-state; appends no longer read the whole file; codex tail behavior
-(~0.1-0.2s) unchanged.
+steady-state **on the paths real clients hit (iOS declared floor, desktop cold
+open and caught-up reconnect)**; appends no longer read the whole file; codex
+tail behavior (~0.1-0.2s) unchanged.
 
 ---
 
@@ -100,11 +101,21 @@ longer gates answer visibility.
   only after the commit (`run_management.rs:731-753`) — ordering identical to
   today's boundaries.
 - The event already exists in the stream vocabulary; claude emits it between
-  assistant segments today (`claude_provider.rs:1534-1537`). Downstream matches
-  (channels `dispatcher.rs:313`, `streaming_core.rs:45-49`, discord/weixin) all
-  treat it as "finalize the current outbound segment", which is precisely wanted
-  at result time: Telegram/Discord flush the final answer immediately instead of
-  at Done. `run_graph`/`graph_engine`/`plugin_tools` do not consume `Boundary`.
+  assistant segments today (`claude_provider.rs:1534-1537`), so every channel
+  already has an `AssistantSegment` handler and the extra turn-end boundary
+  changes no channel's policy. Effects per channel (verified against code,
+  design-review #TASK-1722 correction): the plugin dispatcher flushes buffered
+  segment text (`dispatcher.rs:313`), so Telegram's throttled policy
+  (`OnEveryDelta` + min interval) gains an earlier final flush point; Discord's
+  buffered policy (`discord.rs:856` `buffered_until_tool_or_done`,
+  `plugin_tools.rs:236` returns `Wait` for text) treats the boundary as
+  separator state only (`discord.rs:1325-1336`) and still sends the final
+  message at `Done` (`discord.rs:1349`) — **identical to today, no regression
+  and no improvement there by design** (the buffered policy is an intentional
+  contract, `docs/agents/repository-contracts.md`); weixin mirrors its existing
+  segment handling. Knife 1's latency target is the committed-record consumers
+  (per-thread SSE → Mac/iOS/API), not channel presentation policies.
+  `run_graph`/`graph_engine` do not consume `Boundary`.
 - The `assistant_boundary` control record is inert for rendering: kind
   `control` rows are not rendered, and the run-state reducer only recomputes
   the activity label (`garyx-models/src/transcript_run_state.rs:129-133`).
@@ -256,9 +267,45 @@ oracle-tested):
   when the cached tail covers the request (enough user-turn rows / limit ≤
   tail length; `message_count` from `total_records`); otherwise full read.
 - Unchanged paths (still direct file access, no cache interaction beyond the
-  shared slot lock on writes): `render_snapshot_at_seq` (floor=0 clients),
-  `records_after_seq` (+`_page`, `records_for_run_after_seq` — replay already
-  tail-scan optimized), `page_*`, `find_*`, `records()`, `exists`.
+  shared slot lock on writes): `render_snapshot_at_seq` (floor=0 clients —
+  after the desktop change below this is no longer any real client's
+  steady-state on large threads), `records_after_seq` (+`_page`,
+  `records_for_run_after_seq` — replay already tail-scan optimized), `page_*`,
+  `find_*`, `records()`, `exists`.
+
+**5. Desktop pins its render floor across reconnects** (design-review
+#TASK-1722 blocker fix — without this, the Mac hot path misses the cache).
+
+Today only iOS declares `render_floor`
+(`GaryxGatewayClient.swift:915-925`); desktop connects with
+`after_seq=…&windowed_resume=1` only (`desktop/src/main/gary-client/stream.ts:344`).
+So a desktop cold open on a large thread gets a server-assigned window floor
+via the degraded windowed replay (`routes.rs:2127-2162`), but every caught-up
+resume (reconnect after stream error/lag with `forwarder.lastSeq`,
+`desktop/src/main/index.ts:365-399`) lands back on `render_floor == 0`
+(`routes.rs:2330-2335`), i.e. the uncached `render_snapshot_at_seq` full
+read+reduce **plus full-row serialization** per live frame — the worst path on
+the 188MB thread, and inconsistent with the narrowed rows the same connection
+was rendering before the reconnect.
+
+Change (desktop main process only):
+
+- `stream.ts`: `StreamThreadEventsOptions` gains `renderFloor?: number`
+  (appended as `&render_floor=` when > 0) and `onWindowFloor?: (floorSeq:
+  number) => void`, invoked when a frame's `render_state.window.floor_seq` is
+  a positive number (the wire shape is verbatim serde snake_case,
+  `parseRenderState` at `stream.ts:254-266`).
+- `index.ts`: `ThreadStreamForwarder` tracks `lastFloor` next to `lastSeq`;
+  reconnects and `restartThreadEventForwarders` pass it back as `renderFloor`.
+
+Why this is safe and contract-compliant: `render_state.rows` narrowed by a
+client-declared `render_floor` is the documented contract (CLAUDE.md /
+repository-contracts); the mirror already dumb-renders narrowed rows on every
+frame of a degraded-open connection today, and pinning merely preserves the
+narrowing that same connection was already rendering. A later degraded replay
+that assigns a new window floor updates the pin (`onWindowFloor` fires on its
+frames). Small threads never receive a window → `lastFloor` stays 0 → requests
+are byte-identical to today. iOS is untouched (already pins its own floor).
 
 ### Contract compliance / non-regression argument
 
@@ -292,14 +339,18 @@ oracle-tested):
 - Steady-state frame derive on the 188MB thread: fold Δ + window slice +
   window reduce ≈ single-digit ms (≥10x below the 397-535ms baseline; first
   frame after restart still pays one rebuild).
+- Both real desktop paths ride the cached window path: cold open via the
+  degraded windowed floor (as today) and caught-up resumes via the pinned
+  floor (new). iOS already declares its floor on every connect.
 - Appends: O(new records) + one fstat, no full-file read (provable via a
   test-only full-read counter and by timing appends on a large fixture).
 - Cross-thread write blocking eliminated.
 
 ### Explicitly out of scope
 
-- Desktop not sending `render_floor` on caught-up resumes (falls into the
-  `render_snapshot_at_seq` full path; pre-existing gap, noted for follow-up).
+- Changing any channel presentation policy (Discord stays
+  buffered-until-tool-or-done per contract; its final message still arrives at
+  Done exactly as today).
 - Per-subscriber duplicate derivation (audit §2.3 routes note) — cache makes
   each derivation cheap; deduping frames across subscribers is not needed for
   the target.
@@ -334,8 +385,12 @@ Knife 2 (garyx-router):
 - Tail-cap roll + LRU eviction correctness (tiny caps via test override).
 - Cold restart parity; concurrent multi-thread append/read smoke (timeout
   guarded); seq continuity under concurrency.
+- Desktop floor pinning unit tests in `src/main/gary-client.test.mjs` (already
+  in the `test:unit` list): stream URL carries `render_floor` only when
+  pinned; `onWindowFloor` fires from a frame with `render_state.window`;
+  forwarder reconnect/restart carries the pinned floor.
 - `cargo test -p garyx-router` (+ gateway stream tests `cargo test -p
-  garyx-gateway`) green.
+  garyx-gateway`) green; `npm run test:unit` in `desktop/garyx-desktop` green.
 
 End-to-end (after each knife, local gateway rebuilt via
 `scripts/build-local-cli.sh`, single restart, then measure):
@@ -344,7 +399,9 @@ End-to-end (after each knife, local gateway rebuilt via
   arrive and the thread returns to idle.
 - Knife 2: same 4-tier snapshot benchmark — 188MB warm frames ≥10x faster;
   append timing/log evidence of no full read; desktop/iOS open + live stream
-  sanity on a big thread.
+  sanity on a big thread; verify a desktop caught-up reconnect on the big
+  thread now requests `render_floor > 0` and its live frames ride the cached
+  window path (packaged app + gateway-side observation).
 
 Rollout: two independent commits (knife 1 then knife 2), each with its tests;
 codex design review before implementation; codex code review after; merge to
