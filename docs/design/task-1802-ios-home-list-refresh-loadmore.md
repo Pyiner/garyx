@@ -7,6 +7,12 @@ single design that removes them as a group.
 
 Base: `origin/main` @ `3399f6ef`. All evidence re-verified against this tree.
 
+Design v2 — addresses design-review findings (#TASK-1803): F1 pager
+concurrency model (dual in-flight flags + epoch tickets, ordering matrix
+tested), F2 explicit `RefreshSource`/error-presentation policy as tested
+API, F3 R7 downgraded to "mitigated, not fixed" with the >overlap boundary
+pinned, F4 xcodegen/pbxproj acceptance gate.
+
 ## Current architecture (for orientation)
 
 - `GaryxMobileModel` (MainActor) owns list state: `threads`,
@@ -176,64 +182,108 @@ refreshes become non-destructive head-merges.
 Pure, synchronous, `Equatable` state + decision functions. No IO, no
 Combine, no timers — the model asks it for decisions and reports results.
 
+Head refresh and load-more are **two independent in-flight tracks**, not
+one `phase` (design-review F1): a refresh is a background-cadence event
+(10s loop) and must neither destroy a load-more in flight nor be starved
+by one, and vice versa — a single phase enum cannot represent "both in
+flight" without dropping one. Each track self-coalesces; they never block
+each other. Stale completions (after `reset()` on gateway switch) are
+rejected structurally via epoch-stamped tickets instead of caller-side
+generation guards.
+
 ```swift
 public struct GaryxHomeThreadListPager: Equatable, Sendable {
-    public enum LoadPhase: Equatable, Sendable {
-        case idle
-        case refreshing          // any head refresh in flight
-        case loadingMore
-    }
     public enum LoadMoreGate: Equatable, Sendable {
         case ready
         case exhausted                       // server said has_more == false
         case failed(attempts: Int)           // last load-more failed
     }
 
-    public private(set) var phase: LoadPhase
+    public private(set) var epoch: Int              // bumped by reset()
+    public private(set) var isRefreshingHead: Bool
+    public private(set) var isLoadingMore: Bool
     public private(set) var gate: LoadMoreGate
-    public private(set) var nextOffset: Int
-    public private(set) var pageLimit: Int
-    public private(set) var overlap: Int     // see §4
+    public private(set) var nextOffset: Int          // 0 = not primed (no head page yet)
+    public let pageLimit: Int
+    public let overlap: Int                          // see §4
 
     // Decisions
-    public mutating func requestRefresh() -> Bool            // false → coalesce into in-flight
-    public mutating func requestLoadMore(trigger: LoadMoreTrigger) -> LoadMoreRequest?
-    // Results
-    public mutating func completeRefresh(pageOffset: Int, pageCount: Int, hasMore: Bool, resetsCursor: Bool)
-    public mutating func failRefresh()
-    public mutating func completeLoadMore(pageOffset: Int, pageCount: Int, hasMore: Bool)
-    public mutating func failLoadMore()
-    public mutating func retryLoadMore() -> LoadMoreRequest?  // user tap on failed footer
-    public mutating func reset()                              // gateway switch
+    public mutating func requestRefresh() -> GaryxThreadListRefreshTicket?
+        // nil → refresh already in flight (concurrent entry points coalesce — R9)
+    public mutating func requestLoadMore(trigger: LoadMoreTrigger) -> GaryxThreadListLoadMoreTicket?
+        // nil → not primed (nextOffset == 0) / already loading more /
+        //        gate exhausted / gate failed (automatic triggers only)
+    public mutating func retryLoadMore() -> GaryxThreadListLoadMoreTicket?
+        // explicit user tap on the failed footer; bypasses only the .failed gate
+    // Results (ticket.epoch != epoch → no-op: stale completion after reset)
+    public mutating func completeRefresh(
+        _ ticket: GaryxThreadListRefreshTicket,
+        pageOffset: Int, pageCount: Int, hasMore: Bool
+    )
+    public mutating func failRefresh(_ ticket: GaryxThreadListRefreshTicket)
+    public mutating func completeLoadMore(
+        _ ticket: GaryxThreadListLoadMoreTicket,
+        pageOffset: Int, pageCount: Int, hasMore: Bool
+    )
+    public mutating func failLoadMore(_ ticket: GaryxThreadListLoadMoreTicket)
+    public mutating func reset()                     // gateway switch: epoch += 1, all state initial
 }
 
 public enum LoadMoreTrigger: Equatable, Sendable { case nearTail, footer }
-public struct LoadMoreRequest: Equatable, Sendable {
-    public var offset: Int   // max(0, nextOffset - overlap)
-    public var limit: Int
+public struct GaryxThreadListRefreshTicket: Equatable, Sendable { public let epoch: Int }
+public struct GaryxThreadListLoadMoreTicket: Equatable, Sendable {
+    public let epoch: Int
+    public let offset: Int   // max(0, nextOffset - overlap)
+    public let limit: Int
 }
 ```
 
 Gate rules (all unit-tested):
 
-- `requestLoadMore` returns `nil` while `phase != .idle`, while
-  `gate == .exhausted`, and while `gate == .failed` (automatic triggers
-  are rejected after a failure; only `retryLoadMore()` — the explicit
-  footer tap — or a completed refresh re-arms it). This kills the R5
-  retry storm by construction and makes R4's "rejected once = lost
-  forever" impossible: triggers are cheap and re-evaluated from state, so
-  a rejection is not a consumed opportunity.
-- `requestRefresh` returns `false` while `phase == .refreshing`
-  (concurrent entry points coalesce — R9); a refresh during
-  `.loadingMore` is allowed (both write disjoint regions: head-merge vs
-  append; MainActor serializes state writes).
-- `completeRefresh(hasMore:)` only applies `hasMore`/cursor when
-  `resetsCursor` (initial load, i.e. nothing loaded beyond head) —
-  preserving today's `hasLoadedBeyondHead` semantics — and always clears
-  `.failed` back to `.ready` (a successful head refresh is evidence the
-  gateway is reachable again).
-- `failLoadMore` → `.failed(attempts+1)`; the pager never re-arms itself
-  without new evidence (retry tap or successful refresh).
+- `requestLoadMore` returns `nil` while `isLoadingMore` (self-coalesce),
+  while `nextOffset == 0` (not primed — replaces today's `offset > 0`
+  guard), while `gate == .exhausted`, and while `gate == .failed`
+  (automatic triggers are rejected after a failure; only
+  `retryLoadMore()` — the explicit footer tap — or a completed head
+  refresh re-arms it). This kills the R5 retry storm by construction and
+  makes R4's "rejected once = lost forever" impossible: triggers are
+  cheap and re-evaluated from state, so a rejection is not a consumed
+  opportunity. A refresh in flight does **not** block load-more — that
+  is exactly the R4 drop scenario.
+- `requestRefresh` returns `nil` while `isRefreshingHead` (R9 coalesce).
+  A load-more in flight does not block refresh.
+- **Concurrent write safety** (both tracks in flight): all state writes
+  happen on the MainActor, so completions serialize; the two completion
+  paths write through the two merge functions below — refresh completion
+  head-merges ids and touches the cursor only in the reset case
+  (`nextOffset <= pageOffset + pageCount`, see next bullet), load-more
+  completion appends ids and always advances the cursor from the
+  server-returned `offset + count`. The ordering matrix
+  (refresh-start → loadMore-start → either completion order, and each
+  with either/both failing) is pinned in tests — see test plan §3.
+- `completeRefresh` cursor semantics replace today's two-condition
+  `hasLoadedBeyondHead` (`nextThreadListOffset > returnedEnd ||
+  recentThreadIds.count > pageIds.count`,
+  `GaryxMobileModel+ThreadList.swift:116-117`) with the single pager-own
+  condition `nextOffset > pageOffset + pageCount`:
+  - beyond head (`nextOffset > returnedEnd`) → keep cursor and `hasMore`
+    (head content merges, pagination untouched);
+  - not beyond head → adopt `offset + count` / `hasMore` from the page.
+  Deliberate micro-change: when only one page was ever loaded and a
+  drifted head page arrives (31 merged ids vs 30 page ids), today's
+  list-length condition keeps the dropped id; the new rule lets the
+  head page own the list (the dropped row returns via load-more). Both
+  are harmless; the new rule means "no load-more yet ⇒ list == server
+  head page", is decidable from pager state alone, and is pinned by a
+  test.
+  `completeRefresh` also always clears `.failed` back to `.ready` (a
+  successful head refresh is evidence the gateway is reachable again).
+- `failLoadMore` → `.failed(attempts + 1)`; the pager never re-arms
+  itself without new evidence (retry tap or successful head refresh).
+- Any `complete*/fail*` whose `ticket.epoch != epoch` is a no-op — an
+  in-flight response from before a gateway switch cannot corrupt the new
+  gateway's state (today this relies on caller-side `runtimeGeneration`
+  guards only).
 
 Also moved into Core as pure functions (currently inline in the model,
 untestable):
@@ -255,19 +305,19 @@ public enum GaryxThreadListPageMerge {
 ### 2. Refresh never truncates; `silent` loses its destructive meaning
 
 `refreshThreads` becomes head-merge-only (today's `silent: true` merge
-path is the only path). The `silent` parameter's remaining meaning —
-"set `isLoadingThreads`" — is renamed to what it actually is:
-`isInitialThreadListLoad`-style skeleton control, derived inside
-`refreshThreads` (`threads`/`recentThreadIds` empty → show skeleton) and
-no longer a caller decision. All parameterless call sites (R2 list) keep
-calling `refreshThreads()` and get the non-destructive behavior
-automatically. Full reset stays where it already lives:
-`resetThreadListPagination()` + `recentThreadIds = []` on gateway switch
+path is the only path). The `silent` parameter is deleted; callers pass a
+`GaryxThreadListRefreshSource` instead (§7), and the two things `silent`
+used to bundle get their own owners: skeleton visibility is derived from
+list emptiness (`GaryxThreadListRefreshPolicy.showsSkeleton`), failure
+presentation from the source. All current call sites (R2 list) map to
+`.userAction` and get the non-destructive behavior automatically. Full
+reset stays where it already lives: `resetThreadListPagination()` +
+`recentThreadIds = []` on gateway switch
 (`GaryxMobileModel+Messages.swift:123-127`,
 `GaryxMobileModel+Gateway.swift:109`) — now also calling `pager.reset()`.
 
 `isLoadingThreads` consequently stops blocking load-more (the pager's
-`phase` is the only mutex), removing R4's guard-drop.
+own in-flight flags are the only mutex), removing R4's guard-drop.
 
 Memory note: with truncation gone, `threads` grows monotonically within a
 gateway session (summaries are small; hundreds of rows ≈ a few hundred
@@ -278,29 +328,37 @@ it; no extra cap is added now.
 
 ```swift
 onRefreshAll: {
-    async let catalogs: Void = model.refreshRemoteState()   // fire, don't gate
-    await model.refreshThreads()
-    _ = await catalogs  // structured concurrency: keep, but see below
+    Task { await model.refreshRemoteState() }        // kick catalogs, don't gate
+    await model.refreshThreads(source: .userPullToRefresh)
 }
 ```
 
-Actually gating on `catalogs` would keep the spinner down (same R1), so
-the design is: `refreshable` awaits `refreshThreads()` only;
-`refreshRemoteState()` is kicked as an unstructured `Task` (it has its
-own `requestId` supersede logic and is safe to overlap). The spinner ends
-when the list is fresh. Catalog data (avatars, agent names) lands moments
-later via its own published properties — same as every other surface that
-refreshes catalogs independently.
+`refreshable` awaits `refreshThreads()` only; `refreshRemoteState()` is
+kicked as an unstructured `Task` — awaiting it in any form (serial or
+`async let`) would keep the spinner down for the catalog sweep, which is
+R1 itself. It has its own `requestId` supersede logic and is safe to
+overlap. The spinner ends when the list is fresh. Catalog data (avatars,
+agent names) lands moments later via its own published properties — same
+as every other surface that refreshes catalogs independently.
 
-### 4. Drift-absorbing overlap window (R7)
+### 4. Drift-absorbing overlap window (R7 — mitigated, not fixed)
 
-`LoadMoreRequest.offset = max(0, nextOffset - overlap)` with
-`overlap = 5`. Removal-drift up to 5 rows between pages is absorbed: the
-re-fetched seen rows dedup away (existing `appendPage` behavior), and a
-row that slid left into the window is no longer skipped. `overlap` rides
-on the existing dedup, needs no gateway change, and costs 5 rows per
-page. Cursor (`before`-style) pagination on the gateway is the complete
-fix but is out of scope here; noted as follow-up.
+`LoadMoreTicket.offset = max(0, nextOffset - overlap)` with
+`overlap = 5`. Removal-drift of **up to 5 rows** between two consecutive
+load-more requests is absorbed: the re-fetched seen rows dedup away
+(existing `appendPage` behavior), and a row that slid left into the
+window is no longer skipped. `overlap` rides on the existing dedup,
+needs no gateway change, and costs 5 rows per page.
+
+Scope statement (review F3): this **mitigates** R7, it does not remove
+it. More than `overlap` removals between two pages still skip rows; the
+residual is bounded, low-probability (requires 6+ archives/deletions
+between two consecutive page fetches), and self-heals when a skipped
+thread updates into the head window. The complete fix is recency-cursor
+(`before`-style) pagination on the gateway — a cross-surface API change
+explicitly out of scope for this iOS task; tracked as follow-up. The
+`> overlap` boundary (6 removals ⇒ exactly one skipped row) is pinned by
+a test so the residual is documented behavior, not an accident.
 
 ### 5. Footer: fixed-height, state-rendered, with an explicit failure affordance
 
@@ -347,14 +405,59 @@ through the pager gate makes duplicate fires free. Result: the next page
 is usually in before the user reaches the bottom; the footer spinner only
 shows on fast flings.
 
-### 7. Offline silent refresh stops toasting (R10)
+### 7. Explicit refresh source + error-presentation policy (R10, review F2)
 
-`refreshThreads` failure handling adopts the hydrate path's pattern: if
-`Self.isTransientGatewayErrorMessage(message)` and the refresh was a
-background one (10s loop / reconcile), set
-`gatewaySettingsStatus = "Waiting to sync with gateway"` instead of
-`lastError`. User-initiated pull-to-refresh failures still toast — the
-user asked and deserves the answer.
+Today one boolean (`silent`) conflates three orthogonal questions — does
+this refresh truncate, does it drive the skeleton, does its failure
+toast — and the call sites prove it: `silent: true` covers
+pull-to-refresh (`GaryxMobileViews.swift:32`), the 10s loop
+(`GaryxMobileSidebarViews.swift:293`), and the 15s reconcile
+(`GaryxMobileModel+ThreadList.swift:409,427`), which need *different*
+failure behavior. The `silent` parameter is deleted and replaced by an
+explicit source, and each question gets its own owner:
+
+```swift
+public enum GaryxThreadListRefreshSource: Equatable, Sendable {
+    case userPullToRefresh   // user dragged the list
+    case userAction          // run completion, archive, interrupt, foreground
+                             // sync, open-thread fallback, connect
+    case backgroundLoop      // 10s visible loop, 15s reconcile
+}
+
+public enum GaryxThreadListRefreshFailurePresentation: Equatable, Sendable {
+    case toast               // global error toast (lastError)
+    case transientStatus     // gatewaySettingsStatus = "Waiting to sync with gateway"
+}
+
+public enum GaryxThreadListRefreshPolicy {
+    public static func failurePresentation(
+        source: GaryxThreadListRefreshSource
+    ) -> GaryxThreadListRefreshFailurePresentation
+    public static func showsSkeleton(listIsEmpty: Bool) -> Bool
+}
+```
+
+Pinned policy table (Core-tested, exhaustive over the product):
+
+| source | failure presentation |
+|---|---|
+| `userPullToRefresh` | `.toast` — the user asked and deserves the answer |
+| `userAction` | `.toast` — an explicit action visibly failed |
+| `backgroundLoop` | `.transientStatus` — never toast from a timer: offline ⇒ one low-key status line ("Waiting to sync with gateway", same surface the hydrate path already uses, `GaryxMobileModel+ThreadList.swift:364-371`) instead of a toast per 10s cycle. Deliberately simpler than the hydrate path's transient-only check: a timer-initiated failure never toasts regardless of error kind — a non-transient error (e.g. auth) will surface as a toast on the user's next explicit action. |
+
+- Truncation: nobody — refresh never truncates (§2), so no source can
+  reintroduce R2.
+- Skeleton: `showsSkeleton = listIsEmpty` — a first-load presentation
+  concern derived from list content, independent of source (a background
+  refresh that races a cold start may legitimately drive the skeleton;
+  a pull-to-refresh on a populated list never does).
+- Load-more failures use neither: the footer is the feedback (§5).
+
+The model's signature becomes
+`refreshThreads(source: GaryxThreadListRefreshSource)`; every current
+call site maps 1:1 (`silent: true` pull path → `.userPullToRefresh`,
+loops → `.backgroundLoop`, parameterless action calls → `.userAction`),
+so review can verify the mapping mechanically.
 
 ### 8. What does NOT change
 
@@ -374,39 +477,65 @@ user asked and deserves the answer.
 shapes (30-id pages, real `GaryxRecentThreadsPage`-decoded fixtures where
 shape matters):
 
-1. Initial refresh: cursor `0→30`, `hasMore` mirrors payload; skeleton
-   input state (empty list) vs non-empty.
-2. Load-more happy path: request at `nextOffset - overlap`, floor at 0;
-   `completeLoadMore` advances cursor from server-returned
+1. Initial refresh: cursor `0→30`, `hasMore` mirrors payload; not-primed
+   gate — `requestLoadMore` returns nil before the first
+   `completeRefresh`.
+2. Load-more happy path: ticket offset at `nextOffset - overlap`, floor
+   at 0; `completeLoadMore` advances cursor from server-returned
    `offset+count` (not the overlapped request), `hasMore` applied.
-3. Re-entrancy: `requestLoadMore` during `.loadingMore` → nil (no double
-   fire); during `.refreshing` → nil; after completion → granted (no
-   lost trigger).
-4. Refresh coalescing: second `requestRefresh` while `.refreshing` →
-   false; completion returns pager to `.idle`.
+3. **Concurrency ordering matrix** (review F1): with both tracks in
+   flight — refresh-start → loadMore-start, then each completion order
+   (`completeRefresh` first / `completeLoadMore` first), and each of the
+   four success/failure combinations — assert both in-flight flags
+   resolve independently, the cursor ends identical regardless of
+   completion order, and a load-more failure during a successful refresh
+   still lands `.failed` (and vice versa).
+4. Self-coalescing: second `requestLoadMore` while `isLoadingMore` → nil
+   (no double fire); second `requestRefresh` while `isRefreshingHead` →
+   nil; a refresh in flight does **not** block `requestLoadMore` and a
+   load-more in flight does not block `requestRefresh`; after completion
+   the next request is granted (no lost trigger).
 5. Failure ladder: `failLoadMore` → `.failed(1)`; automatic triggers
    (`.nearTail`, `.footer`) rejected; `retryLoadMore` granted →
    `.failed(2)` on second failure; successful head refresh re-arms
-   `.ready` and preserves cursor.
+   `.ready` and preserves the cursor.
 6. Exhaustion: `hasMore == false` → `.exhausted`; triggers rejected;
-   footer state `.hidden`; preserved across head refreshes
-   (`resetsCursor == false` path does not resurrect `hasMore`).
-7. Reset: gateway switch → offsets/gate/phase back to initial.
-8. `mergeHead`: new head wins, tail order preserved, ids promoted into
+   footer state `.hidden`; preserved across beyond-head refreshes (the
+   `nextOffset > returnedEnd` path does not resurrect `hasMore`).
+7. Reset + stale tickets (review F1): `reset()` bumps `epoch` and
+   returns all state to initial; a `complete*/fail*` carrying a
+   pre-reset ticket is a no-op on every field.
+8. Cursor semantics change pinned: single-page list + drifted head page
+   (31 merged ids vs 30 page ids, `nextOffset == 30`) adopts the page
+   cursor (documented micro-change from today's list-length condition);
+   multi-page list (`nextOffset == 90`) keeps cursor and `hasMore`.
+9. `mergeHead`: new head wins, tail order preserved, ids promoted into
    head not duplicated in tail (pin today's `applyRecentThreadsPage`
-   merge behavior byte-for-byte on a captured id-list fixture).
-9. `appendPage`: dedup absorbs overlap and head-insert duplicates;
-   removal-drift scenario — seen `[t1..t60]`, server deletes `t10`,
-   next page fetched with overlap 5 → the row that slid into the raw
-   window is appended, nothing skipped.
-10. `prefetchTriggerRowId`: K-from-end id; `nil` under K rows; updates as
+   merge behavior on a captured id-list fixture).
+10. `appendPage` + drift: dedup absorbs overlap and head-insert
+    duplicates; removal-drift within budget — seen `[t1..t60]`, 5
+    removals, next page with overlap 5 → nothing skipped; **boundary
+    beyond budget** (review F3) — 6 removals → exactly one row skipped
+    (documented residual, asserted so the mitigation limit is pinned).
+11. `prefetchTriggerRowId`: K-from-end id; `nil` under K rows; updates as
     pages append.
-11. Footer state derivation: pager state × hasMore → footer enum,
-    exhaustive.
+12. Footer state derivation: pager state × gate → footer enum,
+    exhaustive over all reachable combinations.
+13. Refresh policy (review F2): `failurePresentation(source:)` full
+    table (all 3 sources); `showsSkeleton(listIsEmpty:)` both branches.
 
 App-target binding stays thin enough to eyeball in review (model calls
 pager decisions, footer renders the enum); `xcodebuild` simulator build
 verifies it compiles and wires.
+
+Acceptance gate for new files (review F4): this repo's Xcode project is
+generated — new Core/test Swift files require `xcodegen generate` in
+`mobile/garyx-mobile` and committing the regenerated
+`GaryxMobile.xcodeproj/project.pbxproj` (project.yml includes
+`Sources/GaryxMobileCore` in the app target; a green `swift test` alone
+can be a false pass). Verification order: `swift test` (SwiftPM) →
+`xcodegen generate` → `xcodebuild` iOS-Simulator build of the app
+target.
 
 ## Rollout / risk
 
