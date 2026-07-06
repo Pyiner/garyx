@@ -73,6 +73,185 @@ final class GaryxTranscriptSyncPlannerTests: XCTestCase {
         )
     }
 
+    // MARK: - Stream flush gate (leading-edge throttle, settled per frame)
+
+    // TASK-1716 reproduction: the 3s coalescing window must not delay the
+    // first changing frame after a quiet period. A quiet-edge changing frame
+    // flushes immediately and arms the window; it must not be absorbed into a
+    // not-yet-elapsed window.
+    func testQuietFirstChangingFrameFlushesImmediately() {
+        var gate = GaryxStreamFlushGate()
+        XCTAssertEqual(gate.state, .idle)
+        XCTAssertEqual(gate.settleFrame(snapshotChanged: true), .flushNowAndArmWindow)
+        XCTAssertEqual(gate.state, .window(hasBacklog: false))
+    }
+
+    func testChangingFramesWithinWindowAreAbsorbed() {
+        var gate = GaryxStreamFlushGate()
+        _ = gate.settleFrame(snapshotChanged: true)
+        for _ in 0..<5 {
+            XCTAssertEqual(gate.settleFrame(snapshotChanged: true), .absorb)
+        }
+        XCTAssertEqual(gate.state, .window(hasBacklog: true))
+    }
+
+    func testWindowEndFlushesBacklogAndRearms() {
+        var gate = GaryxStreamFlushGate()
+        _ = gate.settleFrame(snapshotChanged: true)
+        _ = gate.settleFrame(snapshotChanged: true)
+        XCTAssertEqual(gate.windowElapsed(), .flushBacklogAndRearmWindow)
+        // The re-armed window starts clean: only new changes re-dirty it.
+        XCTAssertEqual(gate.state, .window(hasBacklog: false))
+    }
+
+    func testWindowEndWithoutBacklogCloses() {
+        var gate = GaryxStreamFlushGate()
+        _ = gate.settleFrame(snapshotChanged: true)
+        XCTAssertEqual(gate.windowElapsed(), .closeWindow)
+        XCTAssertEqual(gate.state, .idle)
+    }
+
+    func testQuietAfterCloseFlushesImmediatelyAgain() {
+        var gate = GaryxStreamFlushGate()
+        _ = gate.settleFrame(snapshotChanged: true)
+        _ = gate.windowElapsed()
+        XCTAssertEqual(gate.settleFrame(snapshotChanged: true), .flushNowAndArmWindow)
+    }
+
+    // Sustained catch-up burst: exactly one leading flush plus one backlog
+    // flush per elapsed window — never one flush per frame, and never a
+    // trailing flush immediately followed by an adjacent leading flush.
+    func testSustainedBurstFlushesOncePerWindow() {
+        var gate = GaryxStreamFlushGate()
+        var flushes = 0
+        var flushesSinceLastWindowEdge = 0
+        let windows = 4
+        let framesPerWindow = 25
+
+        for _ in 0..<windows {
+            for _ in 0..<framesPerWindow {
+                if gate.settleFrame(snapshotChanged: true) == .flushNowAndArmWindow {
+                    flushes += 1
+                    flushesSinceLastWindowEdge += 1
+                }
+                XCTAssertLessThanOrEqual(flushesSinceLastWindowEdge, 1)
+            }
+            if gate.windowElapsed() == .flushBacklogAndRearmWindow {
+                flushes += 1
+            }
+            flushesSinceLastWindowEdge = 0
+        }
+
+        // 1 leading edge + one backlog flush per elapsed window.
+        XCTAssertEqual(flushes, 1 + windows)
+        // The burst ended mid-window: the re-armed window is clean, so the
+        // next elapse closes without another flush and the gate goes quiet.
+        XCTAssertEqual(gate.windowElapsed(), .closeWindow)
+        XCTAssertEqual(gate.state, .idle)
+    }
+
+    // #TASK-1721 regression: every (re)connect first delivers a caught-up
+    // snapshot-only frame whose snapshot equals what is already applied. It
+    // must be inert — no flush, no window — so the next real frame (the
+    // reply the user opened the thread for) is a zero-delay leading edge.
+    func testNoOpCaughtUpFrameDoesNotOpenWindow() {
+        var gate = GaryxStreamFlushGate()
+        XCTAssertEqual(gate.settleFrame(snapshotChanged: false), .skip)
+        XCTAssertEqual(gate.state, .idle)
+        XCTAssertEqual(gate.settleFrame(snapshotChanged: true), .flushNowAndArmWindow)
+    }
+
+    // A no-op frame inside an open window must not mark backlog: no
+    // window-end repaint for identical content, and a stream of no-op frames
+    // must not keep the window re-arming forever.
+    func testNoOpFrameInsideWindowLeavesBacklogAlone() {
+        var gate = GaryxStreamFlushGate()
+        _ = gate.settleFrame(snapshotChanged: true)
+        XCTAssertEqual(gate.settleFrame(snapshotChanged: false), .skip)
+        XCTAssertEqual(gate.state, .window(hasBacklog: false))
+        XCTAssertEqual(gate.windowElapsed(), .closeWindow)
+    }
+
+    // Replayed rows can upgrade body-less placeholders without changing the
+    // tail snapshot (and a seq-gap frame carries rows with no snapshot at
+    // all): the pending row change must drive the next settle even when that
+    // settle's snapshot is unchanged.
+    func testPendingRowsDriveSettleWithUnchangedSnapshot() {
+        var gate = GaryxStreamFlushGate()
+        gate.recordVisibleChange()
+        XCTAssertEqual(gate.settleFrame(snapshotChanged: false), .flushNowAndArmWindow)
+
+        // Pending is consumed by the settle: the next unchanged frame skips.
+        XCTAssertEqual(gate.settleFrame(snapshotChanged: false), .skip)
+
+        // Inside the window the same pending change coalesces into backlog.
+        gate.recordVisibleChange()
+        XCTAssertEqual(gate.settleFrame(snapshotChanged: false), .absorb)
+        XCTAssertEqual(gate.state, .window(hasBacklog: true))
+    }
+
+    // Stop/refetch/home-drain wiring resets the gate; pending changes and the
+    // window are dropped, and the next changing frame is a leading edge.
+    func testResetClearsPendingAndWindow() {
+        var gate = GaryxStreamFlushGate()
+        _ = gate.settleFrame(snapshotChanged: true)
+        gate.recordVisibleChange()
+        gate.reset()
+        XCTAssertEqual(gate.state, .idle)
+        XCTAssertEqual(gate.settleFrame(snapshotChanged: false), .skip)
+        XCTAssertEqual(gate.settleFrame(snapshotChanged: true), .flushNowAndArmWindow)
+    }
+
+    // Defensive: a stale timer edge racing a reset must be a benign close.
+    func testWindowElapsedWhenIdleIsBenign() {
+        var gate = GaryxStreamFlushGate()
+        XCTAssertEqual(gate.windowElapsed(), .closeWindow)
+        XCTAssertEqual(gate.state, .idle)
+    }
+
+    // Fact-collection helper the app wiring feeds settleFrame with.
+    func testSnapshotChangedHelper() {
+        let s1 = GaryxRenderSnapshot(basedOnSeq: 10, rows: [])
+        let s1Copy = GaryxRenderSnapshot(basedOnSeq: 10, rows: [])
+        let s2 = GaryxRenderSnapshot(basedOnSeq: 11, rows: [])
+        XCTAssertFalse(GaryxStreamFlushGate.snapshotChanged(s1, appliedBefore: s1Copy))
+        XCTAssertTrue(GaryxStreamFlushGate.snapshotChanged(s2, appliedBefore: s1))
+        XCTAssertTrue(GaryxStreamFlushGate.snapshotChanged(s1, appliedBefore: nil))
+    }
+
+    // The in-flight flush abort guard must ignore savedAt: a no-op re-apply
+    // refreshes the timestamp without changing render inputs and must not
+    // abort a prepared flush (which would lose the render entirely now that
+    // no-op frames do not re-arm the window).
+    func testRenderEquivalentIgnoresSavedAtOnly() {
+        let base = GaryxCachedTranscript(
+            threadId: "thread::t",
+            savedAt: Date(timeIntervalSince1970: 100),
+            messages: [GaryxTranscriptMessage(index: 0, role: .user, text: "hi")],
+            renderSnapshot: GaryxRenderSnapshot(basedOnSeq: 1, rows: []),
+            hasMoreBefore: false,
+            nextBeforeIndex: nil
+        )
+
+        var touchedOnly = base
+        touchedOnly.savedAt = Date(timeIntervalSince1970: 200)
+        XCTAssertNotEqual(base, touchedOnly)
+        XCTAssertTrue(base.renderEquivalent(to: touchedOnly))
+
+        var newSnapshot = touchedOnly
+        newSnapshot.renderSnapshot = GaryxRenderSnapshot(basedOnSeq: 2, rows: [])
+        XCTAssertFalse(base.renderEquivalent(to: newSnapshot))
+
+        var newRows = touchedOnly
+        newRows.messages.append(GaryxTranscriptMessage(index: 1, role: .assistant, text: "yo"))
+        XCTAssertFalse(base.renderEquivalent(to: newRows))
+
+        var newPagination = touchedOnly
+        newPagination.hasMoreBefore = true
+        newPagination.nextBeforeIndex = 4
+        XCTAssertFalse(base.renderEquivalent(to: newPagination))
+    }
+
     // MARK: - Stream seq decision
 
     func testStreamSeqFirstRowApplies() {

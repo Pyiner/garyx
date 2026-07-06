@@ -78,8 +78,7 @@ extension GaryxMobileModel {
         selectedThreadStreamTask = nil
         selectedThreadStreamGeneration = nil
         streamOwnedThreadId = nil
-        selectedThreadStreamFlushTask?.cancel()
-        selectedThreadStreamFlushTask = nil
+        cancelSelectedThreadStreamFlushWindow()
         selectedThreadStreamDrainTask?.cancel()
         selectedThreadStreamDrainTask = nil
     }
@@ -91,15 +90,13 @@ extension GaryxMobileModel {
         selectedThreadStreamGeneration = nil
         streamOwnedThreadId = nil
         guard !threadId.isEmpty else {
-            selectedThreadStreamFlushTask?.cancel()
-            selectedThreadStreamFlushTask = nil
+            cancelSelectedThreadStreamFlushWindow()
             selectedThreadStreamDrainTask?.cancel()
             selectedThreadStreamDrainTask = nil
             return
         }
 
-        selectedThreadStreamFlushTask?.cancel()
-        selectedThreadStreamFlushTask = nil
+        cancelSelectedThreadStreamFlushWindow()
         selectedThreadStreamDrainTask?.cancel()
         selectedThreadStreamDrainTask = Task { [weak self] in
             await self?.drainSelectedThreadStreamWindowForHome(threadId: threadId)
@@ -203,8 +200,7 @@ extension GaryxMobileModel {
     }
 
     private func refetchSelectedThreadAfterTranscriptRewrite(threadId: String) async -> Int {
-        selectedThreadStreamFlushTask?.cancel()
-        selectedThreadStreamFlushTask = nil
+        cancelSelectedThreadStreamFlushWindow()
         clearTranscriptCache(for: threadId)
         resetSelectedThreadHistoryPagination()
         clearMessages(for: threadId)
@@ -235,13 +231,13 @@ extension GaryxMobileModel {
             in: cachedMessages(for: threadId)
         )
         messagesByThread[threadId] = pruned
+        selectedThreadStreamFlushGate.recordVisibleChange()
     }
 
-    /// Merge one durable committed row into the S2 cache (in-memory, cheap — keeps the
-    /// cursor current per row) and coalesce run-state, view render, and disk persist
-    /// into one flush per interval. A large catch-up replays many committed rows
-    /// back-to-back; publishing each row would rebuild the whole list and flicker the
-    /// page. The flush shows the accumulated window as one consolidated state.
+    /// Merge one durable committed row batch into the S2 cache (in-memory, cheap —
+    /// keeps the cursor current per row). Rows alone never change visible content
+    /// (rows render from the frame's snapshot), so this only marks a pending
+    /// visible change; the frame-final snapshot apply settles the flush gate.
     func applyStreamedCommittedMessages(_ messages: [GaryxTranscriptMessage], threadId: String) async {
         guard selectedThread?.id == threadId else { return }
         let base = transcriptSnapshot(for: threadId)
@@ -258,11 +254,13 @@ extension GaryxMobileModel {
         }.value
         guard selectedThread?.id == threadId else { return }
         cachedTranscriptSnapshots[threadId] = window
-        scheduleSelectedThreadStreamFlush(for: threadId)
+        selectedThreadStreamFlushGate.recordVisibleChange()
     }
 
     private func applyThreadRenderSnapshot(_ snapshot: GaryxRenderSnapshot, threadId: String) {
         guard selectedThread?.id == threadId else { return }
+        let appliedBefore = renderSnapshotsByThread[threadId]
+            ?? transcriptSnapshot(for: threadId)?.renderSnapshot
         setRenderSnapshot(snapshot, for: threadId)
         let pagination = applyRenderWindowPagination(snapshot.window, threadId: threadId)
         let base = transcriptSnapshot(for: threadId)
@@ -288,7 +286,10 @@ extension GaryxMobileModel {
             persistTranscriptCacheWindowInBackground(window)
         }
         markThreadHistoryLoaded(threadId)
-        scheduleSelectedThreadStreamFlush(for: threadId)
+        settleSelectedThreadStreamFrame(
+            snapshotChanged: GaryxStreamFlushGate.snapshotChanged(snapshot, appliedBefore: appliedBefore),
+            for: threadId
+        )
     }
 
     @discardableResult
@@ -311,18 +312,52 @@ extension GaryxMobileModel {
         return next
     }
 
-    /// Leading-throttle (mirrors scheduleAssistantDeltaFlush): the first row schedules
-    /// a flush; rows arriving within the interval are absorbed (the flush reads the
-    /// latest window), so a catch-up burst folds into one run-state update, render,
-    /// and persist. The final row always lands in a flush because the last scheduled
-    /// flush reads the latest in-memory window.
-    private func scheduleSelectedThreadStreamFlush(for threadId: String) {
-        guard selectedThreadStreamFlushTask == nil else { return }
+    /// Leading-edge flush cadence (`GaryxStreamFlushGate` owns the decisions):
+    /// a changing frame on the quiet edge renders immediately and arms the
+    /// window timer; changing frames inside the window coalesce (the window
+    /// end drains them); no-op frames are inert. Called once per applied
+    /// render frame from `applyThreadRenderSnapshot`.
+    private func settleSelectedThreadStreamFrame(snapshotChanged: Bool, for threadId: String) {
+        switch selectedThreadStreamFlushGate.settleFrame(snapshotChanged: snapshotChanged) {
+        case .flushNowAndArmWindow:
+            armSelectedThreadStreamFlushWindow(for: threadId)
+            Task { [weak self] in
+                await self?.flushSelectedThreadStreamWindow(for: threadId)
+            }
+        case .absorb, .skip:
+            break
+        }
+    }
+
+    private func armSelectedThreadStreamFlushWindow(for threadId: String) {
+        selectedThreadStreamFlushTask?.cancel()
         selectedThreadStreamFlushTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: Self.streamedCommittedFlushDelayNanos)
             guard !Task.isCancelled else { return }
-            await self?.flushSelectedThreadStreamWindow(for: threadId)
+            await self?.selectedThreadStreamFlushWindowDidElapse(for: threadId)
         }
+    }
+
+    private func selectedThreadStreamFlushWindowDidElapse(for threadId: String) async {
+        // Re-check on the MainActor: a timer cancelled after its post-sleep
+        // check must not nil a newer timer handle or double-drive the gate.
+        guard !Task.isCancelled else { return }
+        selectedThreadStreamFlushTask = nil
+        switch selectedThreadStreamFlushGate.windowElapsed() {
+        case .flushBacklogAndRearmWindow:
+            armSelectedThreadStreamFlushWindow(for: threadId)
+            await flushSelectedThreadStreamWindow(for: threadId)
+        case .closeWindow:
+            break
+        }
+    }
+
+    /// Timer lifecycle lives exclusively here and in arm/elapse so the gate
+    /// can never disagree with the timer (armed iff gate is in its window).
+    private func cancelSelectedThreadStreamFlushWindow() {
+        selectedThreadStreamFlushTask?.cancel()
+        selectedThreadStreamFlushTask = nil
+        selectedThreadStreamFlushGate.reset()
     }
 
     /// Render the accumulated committed window once and, when the run is idle, persist
@@ -332,15 +367,18 @@ extension GaryxMobileModel {
         for threadId: String,
         respectingTaskCancellation: Bool = false
     ) async {
-        selectedThreadStreamFlushTask?.cancel()
-        selectedThreadStreamFlushTask = nil
         guard !respectingTaskCancellation || !Task.isCancelled else { return }
         guard selectedThread?.id == threadId,
               let window = cachedTranscriptSnapshots[threadId] else { return }
         let prepared = await prepareSelectedThreadStreamWindowFlush(window, threadId: threadId)
         guard !respectingTaskCancellation || !Task.isCancelled else { return }
+        // Abort only when the prepared output could differ (a no-op re-apply
+        // refreshes savedAt without changing render inputs and must not kill
+        // the render — the no-op settled `.skip`, so no window-end flush
+        // would cover it). A content change did settle/mark pending, so the
+        // window-end flush re-renders after this abort.
         guard selectedThread?.id == threadId,
-              cachedTranscriptSnapshots[threadId] == window else { return }
+              cachedTranscriptSnapshots[threadId]?.renderEquivalent(to: window) == true else { return }
         applyTranscriptRunState(prepared.runState, threadId: threadId)
         if !prepared.threadRunActive {
             persistTranscriptCacheWindowInBackground(window)

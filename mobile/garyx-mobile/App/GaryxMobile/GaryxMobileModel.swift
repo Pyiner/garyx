@@ -359,9 +359,12 @@ final class GaryxMobileModel: ObservableObject {
     var selectedThreadStreamGeneration: UUID?
     var streamOwnedThreadId: String?
     var suppressesSelectedThreadStreamPolicy = false
-    /// Coalesces render + persist across a burst of streamed committed rows (a large
-    /// catch-up). Each row merges into the in-memory window immediately; this task
-    /// flushes the accumulated window to the view/disk once per interval.
+    /// Leading-edge throttle for stream flushes: the gate decides (per settled
+    /// render frame) whether to flush immediately, coalesce into the open
+    /// window, or skip a no-op frame; the task is the armed window timer.
+    /// Invariant: the timer runs iff the gate is in its window state — both
+    /// are driven together by settle/elapse/cancel helpers in ThreadStream.
+    var selectedThreadStreamFlushGate = GaryxStreamFlushGate()
     var selectedThreadStreamFlushTask: Task<Void, Never>?
     var selectedThreadStreamDrainTask: Task<Void, Never>?
     var messagesByThread: [String: [GaryxMobileMessage]] = [:]

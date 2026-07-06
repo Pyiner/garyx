@@ -52,6 +52,20 @@ public struct GaryxCachedTranscript: Codable, Equatable, Sendable {
     public func isExpired(now: Date, ttl: TimeInterval) -> Bool {
         now.timeIntervalSince(savedAt) > ttl
     }
+
+    /// Render-input equivalence: everything `Equatable` compares except
+    /// `savedAt`, which a no-op re-apply (e.g. a caught-up snapshot-only
+    /// stream frame) refreshes without changing rendered output. An in-flight
+    /// stream flush uses this instead of object equality so it only aborts
+    /// when the prepared output could actually differ.
+    public func renderEquivalent(to other: GaryxCachedTranscript) -> Bool {
+        version == other.version
+            && threadId == other.threadId
+            && messages == other.messages
+            && renderSnapshot == other.renderSnapshot
+            && hasMoreBefore == other.hasMoreBefore
+            && nextBeforeIndex == other.nextBeforeIndex
+    }
 }
 
 /// Which end of the cached window a freshly-fetched page extends.

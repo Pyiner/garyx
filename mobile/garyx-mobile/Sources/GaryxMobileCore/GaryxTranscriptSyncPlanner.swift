@@ -45,6 +45,105 @@ public enum GaryxStreamUpdateCadence {
     public static let committedMessageBatchWindowNanos: UInt64 = 3_000_000_000
 }
 
+/// Leading-edge throttle for selected-thread stream flushes, settled once per
+/// fully applied `thread_render_frame`: frames end with their render
+/// snapshot, so the frame-final snapshot apply is the single settle point.
+/// Committed-row merges and cache floor resets mark a pending visible change
+/// (they alter how snapshot refs resolve); a frame whose snapshot is
+/// unchanged and that carries no pending change is a no-op and must not
+/// flush, open the window, or mark backlog. The app target owns the window
+/// timer and the flush side effects; this gate owns every decision: a
+/// quiet-edge changing frame renders immediately, changing frames inside the
+/// window coalesce, and the window end flushes the backlog (re-arming) or
+/// closes back to idle.
+public struct GaryxStreamFlushGate: Equatable, Sendable {
+    public enum State: Equatable, Sendable {
+        /// No window armed: the next changing frame is a leading edge.
+        case idle
+        /// Window timer armed; `hasBacklog` means changing frames settled
+        /// after the flush that opened (or last drained) the window.
+        case window(hasBacklog: Bool)
+    }
+
+    public enum FrameAction: Equatable, Sendable {
+        /// Quiet edge: render the frame immediately and arm the window timer.
+        case flushNowAndArmWindow
+        /// Window open: coalesce; the window-elapsed edge drains the backlog.
+        case absorb
+        /// No visible change in this frame: no flush, no window transition.
+        case skip
+    }
+
+    public enum WindowAction: Equatable, Sendable {
+        /// Changing frames were absorbed during the window: flush the backlog
+        /// once and re-arm, so a sustained burst stays at one visible update
+        /// per window (never trailing + adjacent leading double-flush).
+        case flushBacklogAndRearmWindow
+        /// A quiet window: close it; the next changing frame is a leading
+        /// edge again.
+        case closeWindow
+    }
+
+    public private(set) var state: State = .idle
+    private var hasPendingVisibleChange = false
+
+    public init() {}
+
+    /// Fact collection for the app target, not a decision: did this frame's
+    /// snapshot differ from the one already applied for the thread?
+    public static func snapshotChanged(
+        _ incoming: GaryxRenderSnapshot,
+        appliedBefore applied: GaryxRenderSnapshot?
+    ) -> Bool {
+        incoming != applied
+    }
+
+    /// Committed rows merged into the cache, or the cache floor was reset —
+    /// body-store changes that can alter rendered output even under an
+    /// unchanged snapshot (e.g. a body-less placeholder upgrading once its
+    /// replayed row arrives). Accumulates until the next `settleFrame`.
+    public mutating func recordVisibleChange() {
+        hasPendingVisibleChange = true
+    }
+
+    /// The frame finished applying (its frame-final render snapshot apply).
+    /// Decides the flush for everything accumulated since the last settle.
+    public mutating func settleFrame(snapshotChanged: Bool) -> FrameAction {
+        let drives = hasPendingVisibleChange || snapshotChanged
+        hasPendingVisibleChange = false
+        guard drives else { return .skip }
+        switch state {
+        case .idle:
+            state = .window(hasBacklog: false)
+            return .flushNowAndArmWindow
+        case .window:
+            state = .window(hasBacklog: true)
+            return .absorb
+        }
+    }
+
+    /// The armed window timer fired. Also the defensive answer when a stale
+    /// cancelled timer races a reset: `idle` stays `idle` and closes.
+    public mutating func windowElapsed() -> WindowAction {
+        switch state {
+        case .window(hasBacklog: true):
+            state = .window(hasBacklog: false)
+            return .flushBacklogAndRearmWindow
+        case .window(hasBacklog: false), .idle:
+            state = .idle
+            return .closeWindow
+        }
+    }
+
+    /// Stream stopped, thread switched, cache refetched, or home drain took
+    /// over: drop the window and any pending change so the next changing
+    /// frame is a leading edge.
+    public mutating func reset() {
+        state = .idle
+        hasPendingVisibleChange = false
+    }
+}
+
 /// What to do with one streamed `committed_message` seq on the per-thread stream.
 public enum GaryxStreamSeqDecision: Equatable, Sendable {
     /// A mid-stream seq hole (a dropped broadcast event): reconnect from the last

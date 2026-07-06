@@ -316,6 +316,23 @@ final class GatewayStreamActorTests: XCTestCase {
         }
     }
 
+    private func actionKinds(in actions: [GatewayStreamAction]) -> [String] {
+        actions.map { action in
+            switch action {
+            case .applyCommittedMessages:
+                return "rows"
+            case .applyRenderSnapshot:
+                return "snapshot"
+            case .resetCommittedCacheBelow:
+                return "reset"
+            case .refetchAfterControlRewrite:
+                return "refetch"
+            case .fallback:
+                return "fallback"
+            }
+        }
+    }
+
     private func endpoint() -> GatewayStreamEndpoint {
         GatewayStreamEndpoint(
             configuration: GaryxGatewayConfiguration(
@@ -429,6 +446,158 @@ final class GatewayStreamActorTests: XCTestCase {
         } else {
             XCTFail("unmarked non-contiguous frame must gap-reconnect, got \(String(describing: gapResult.reconnect))")
         }
+    }
+
+    // TASK-1716: the flush gate is driven only from the frame-final render
+    // snapshot apply. These pins guarantee "snapshot is the frame's last
+    // action" for every frame shape that renders, and "no snapshot" exactly
+    // on the early-return frames whose re-render arrives via the reconnect
+    // replay or the history refetch instead.
+    func testFrameActionsAlwaysEndWithRenderSnapshot() {
+        var processor = GatewayStreamFrameProcessor()
+        let rowsFrame = processor.processPayload(
+            framePayload(threadId: "thread-order", basedOnSeq: 2, events: [
+                event(seq: 1, role: "user", text: "one"),
+                event(seq: 2, role: "assistant", text: "two"),
+            ]),
+            threadId: "thread-order"
+        )
+        XCTAssertEqual(actionKinds(in: rowsFrame.actions), ["rows", "snapshot"])
+
+        let renderOnly = processor.processPayload(
+            framePayload(threadId: "thread-order", basedOnSeq: 2, events: []),
+            threadId: "thread-order"
+        )
+        XCTAssertEqual(actionKinds(in: renderOnly.actions), ["snapshot"])
+
+        var windowed = GatewayStreamFrameProcessor()
+        windowed.resetConnection(afterSeq: 12, replayScope: .resume)
+        let windowedPayload = """
+        {"type":"thread_render_frame","thread_id":"thread-order","replay":"windowed","events":[{"type":"committed_message","seq":4801,"message":{"role":"assistant","text":"head"}}],"render_state":{"based_on_seq":4801,"rows":[],"window":{"floor_seq":4801,"has_more_above":true}}}
+        """
+        let windowedFrame = windowed.processPayload(windowedPayload, threadId: "thread-order")
+        XCTAssertEqual(actionKinds(in: windowedFrame.actions), ["reset", "rows", "snapshot"])
+
+        var gapped = GatewayStreamFrameProcessor()
+        gapped.resetConnection(afterSeq: 2, replayScope: .resume)
+        let gapFrame = gapped.processPayload(
+            framePayload(threadId: "thread-order", basedOnSeq: 5, events: [
+                event(seq: 3, role: "assistant", text: "contiguous"),
+                event(seq: 5, role: "assistant", text: "gap"),
+            ]),
+            threadId: "thread-order"
+        )
+        XCTAssertEqual(actionKinds(in: gapFrame.actions), ["rows"])
+        XCTAssertEqual(gapFrame.reconnect, .gap(resumeAfterSeq: 3))
+
+        var rewrite = GatewayStreamFrameProcessor()
+        rewrite.resetConnection(afterSeq: 10, replayScope: .resume)
+        let rewriteFrame = rewrite.processPayload(
+            framePayload(threadId: "thread-order", basedOnSeq: 12, events: [
+                event(seq: 11, role: "assistant", text: "before rewrite"),
+                controlEvent(seq: 12, kind: "range_rewrite"),
+            ]),
+            threadId: "thread-order"
+        )
+        XCTAssertEqual(actionKinds(in: rewriteFrame.actions), ["rows", "refetch"])
+        XCTAssertEqual(rewriteFrame.reconnect, .controlRewrite)
+    }
+
+    // TASK-1716: mirror the app wiring rule over real processor output —
+    // rows and floor resets mark a pending visible change, and only the
+    // frame-final `.applyRenderSnapshot` settles the gate, comparing against
+    // the applied snapshot exactly like the app does. Covers the #TASK-1719
+    // counterexample (rows must not flush mid-frame), the #TASK-1721
+    // counterexample (a caught-up no-op frame must not open the window), and
+    // pending rows driving a settle whose snapshot is unchanged.
+    func testFrameLevelGateDriveRendersWholeFrameOnQuietEdge() {
+        var processor = GatewayStreamFrameProcessor()
+        var gate = GaryxStreamFlushGate()
+        var applied: GaryxRenderSnapshot?
+
+        func drive(_ result: GatewayStreamPayloadResult) -> [GaryxStreamFlushGate.FrameAction] {
+            var settles: [GaryxStreamFlushGate.FrameAction] = []
+            for action in result.actions {
+                switch action {
+                case .applyCommittedMessages, .resetCommittedCacheBelow:
+                    XCTAssertTrue(
+                        settles.isEmpty,
+                        "rows/floor changes apply before the frame's snapshot and must not settle the gate"
+                    )
+                    gate.recordVisibleChange()
+                case .applyRenderSnapshot(let snapshot):
+                    let changed = GaryxStreamFlushGate.snapshotChanged(snapshot, appliedBefore: applied)
+                    applied = snapshot
+                    settles.append(gate.settleFrame(snapshotChanged: changed))
+                default:
+                    break
+                }
+            }
+            return settles
+        }
+
+        // Cold open: the first frame (rows already merged) flushes at once.
+        let cold = processor.processPayload(
+            framePayload(threadId: "thread-drive", basedOnSeq: 1, events: [
+                event(seq: 1, role: "assistant", text: "first"),
+            ]),
+            threadId: "thread-drive"
+        )
+        XCTAssertEqual(drive(cold), [.flushNowAndArmWindow])
+        XCTAssertEqual(gate.windowElapsed(), .closeWindow)
+
+        // #TASK-1721 regression: a reconnect's caught-up snapshot-only frame
+        // (identical snapshot) is inert — no flush, no window...
+        let caughtUp = processor.processPayload(
+            framePayload(threadId: "thread-drive", basedOnSeq: 1, events: []),
+            threadId: "thread-drive"
+        )
+        XCTAssertEqual(drive(caughtUp), [.skip])
+        XCTAssertEqual(gate.state, .idle)
+
+        // ...so the next real frame is still a zero-delay leading edge.
+        let reply = processor.processPayload(
+            framePayload(threadId: "thread-drive", basedOnSeq: 2, events: [
+                event(seq: 2, role: "assistant", text: "reply"),
+            ]),
+            threadId: "thread-drive"
+        )
+        XCTAssertEqual(drive(reply), [.flushNowAndArmWindow])
+        XCTAssertEqual(gate.windowElapsed(), .closeWindow)
+
+        // A seq-gap frame (contiguous prefix row, then a hole) carries no
+        // snapshot: its rows stay pending, nothing settles.
+        let gap = processor.processPayload(
+            framePayload(threadId: "thread-drive", basedOnSeq: 9, events: [
+                event(seq: 3, role: "assistant", text: "contiguous"),
+                event(seq: 9, role: "assistant", text: "hole"),
+            ]),
+            threadId: "thread-drive"
+        )
+        XCTAssertEqual(gap.reconnect, .gap(resumeAfterSeq: 3))
+        XCTAssertEqual(drive(gap), [])
+
+        // The reconnect replay settles the pending rows (leading edge), and a
+        // follow-up replay frame whose tail snapshot equals the applied one
+        // still drives via its own rows (body upgrades must render).
+        processor.resetConnection(afterSeq: 3, replayScope: .resume)
+        let replayHead = processor.processPayload(
+            framePayload(threadId: "thread-drive", basedOnSeq: 9, events: [
+                event(seq: 4, role: "assistant", text: "replay head"),
+            ]),
+            threadId: "thread-drive"
+        )
+        XCTAssertEqual(drive(replayHead), [.flushNowAndArmWindow])
+
+        let replayTail = processor.processPayload(
+            framePayload(threadId: "thread-drive", basedOnSeq: 9, events: [
+                event(seq: 5, role: "assistant", text: "replay tail"),
+            ]),
+            threadId: "thread-drive"
+        )
+        XCTAssertEqual(drive(replayTail), [.absorb])
+        XCTAssertEqual(gate.state, .window(hasBacklog: true))
+        XCTAssertEqual(gate.windowElapsed(), .flushBacklogAndRearmWindow)
     }
 
 }
