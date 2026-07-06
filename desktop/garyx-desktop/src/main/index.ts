@@ -293,6 +293,10 @@ interface ThreadStreamForwarder {
   controller: AbortController;
   owners: Set<string>;
   lastSeq: number;
+  /** Render window floor this stream is rendering with; pinned across
+   * reconnects so a caught-up resume keeps the server's windowed derivation
+   * instead of falling back to the full-transcript path. */
+  lastFloor: number;
 }
 
 const threadStreamForwarders = new Map<string, ThreadStreamForwarder>();
@@ -370,6 +374,10 @@ function startThreadEventForwarder(
     controller,
     owners,
     lastSeq: afterSeq,
+    lastFloor: Math.max(
+      Math.max(0, Math.trunc(input.renderFloor ?? 0)),
+      existing?.lastFloor ?? 0,
+    ),
   };
   threadStreamForwarders.set(threadId, forwarder);
   const window = mainWindow;
@@ -391,9 +399,13 @@ function startThreadEventForwarder(
             controller.signal,
             {
               afterSeq: resumeAfterSeq,
+              renderFloor: forwarder.lastFloor,
               onCommittedSeq: (seq) => {
                 resumeAfterSeq = seq;
                 forwarder.lastSeq = seq;
+              },
+              onWindowFloor: (floorSeq) => {
+                forwarder.lastFloor = floorSeq;
               },
             },
           );
@@ -429,6 +441,7 @@ function restartThreadEventForwarders(): void {
     ([threadId, forwarder]) => ({
       threadId,
       afterSeq: forwarder.lastSeq,
+      renderFloor: forwarder.lastFloor,
       owners: new Set(forwarder.owners),
     }),
   );
@@ -438,7 +451,11 @@ function restartThreadEventForwarders(): void {
   threadStreamForwarders.clear();
   for (const item of active) {
     startThreadEventForwarder(
-      { threadId: item.threadId, afterSeq: item.afterSeq },
+      {
+        threadId: item.threadId,
+        afterSeq: item.afterSeq,
+        renderFloor: item.renderFloor,
+      },
       item.owners,
     );
   }

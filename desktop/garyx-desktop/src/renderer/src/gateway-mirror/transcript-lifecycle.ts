@@ -1062,6 +1062,13 @@ export class TranscriptLifecycle {
     transcript: ThreadTranscript,
     consumerId: string,
   ): Promise<void> {
+    // Pin the render window floor this thread is already rendering with
+    // (live frames or a cache-restored snapshot ingested just before this
+    // call), so the stream keeps the gateway's windowed derivation instead
+    // of falling back to the full-transcript path on a caught-up resume.
+    const renderFloor =
+      this.port.getTranscriptMapsSnapshot().renderStateByThread[threadId]
+        ?.window?.floor_seq ?? 0;
     await this.port.startThreadStream({
       threadId,
       consumerId,
@@ -1069,6 +1076,7 @@ export class TranscriptLifecycle {
         afterCursor: transcriptCommittedAfterCursor(transcript),
         fallbackMaxIndex: null,
       }),
+      ...(renderFloor > 0 ? { renderFloor } : {}),
     });
   }
 

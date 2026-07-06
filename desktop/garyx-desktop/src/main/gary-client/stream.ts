@@ -126,8 +126,14 @@ export class ThreadStreamGapError extends Error {
 
 interface StreamThreadEventsOptions {
   afterSeq?: number;
+  /** Pin the server's windowed render derivation to this floor
+   * (`render_floor` query param); 0/absent keeps today's behavior. */
+  renderFloor?: number;
   onConnected?: () => void;
   onCommittedSeq?: (seq: number) => void;
+  /** Fires whenever a frame carries `render_state.window.floor_seq > 0` —
+   * the floor this connection is now rendering with. */
+  onWindowFloor?: (floorSeq: number) => void;
 }
 
 function textFromCommittedMessage(message: Record<string, unknown>): string {
@@ -330,6 +336,7 @@ export async function streamThreadEvents(
   options?: StreamThreadEventsOptions,
 ): Promise<void> {
   const afterSeq = Math.max(0, Math.trunc(options?.afterSeq ?? 0));
+  const renderFloor = Math.max(0, Math.trunc(options?.renderFloor ?? 0));
   const headers = applyGatewayAuthHeader(
     applyGatewayCustomHeaders(
       new Headers({ Accept: "text/event-stream" }),
@@ -338,10 +345,11 @@ export async function streamThreadEvents(
     settings.gatewayAuthToken,
   );
   headers.set("Last-Event-ID", String(afterSeq));
+  const renderFloorParam = renderFloor > 0 ? `&render_floor=${renderFloor}` : "";
   const response = await gatewayFetch(
     buildUrl(
       settings,
-      `/api/threads/${encodeURIComponent(threadId)}/stream?after_seq=${afterSeq}&windowed_resume=1`,
+      `/api/threads/${encodeURIComponent(threadId)}/stream?after_seq=${afterSeq}&windowed_resume=1${renderFloorParam}`,
     ),
     {
       headers,
@@ -382,6 +390,13 @@ export async function streamThreadEvents(
     onEvent(frame.event);
     connectionLastSeq = frame.lastSeq;
     options?.onCommittedSeq?.(connectionLastSeq);
+    const windowFloor =
+      frame.event.type === "thread_render_frame"
+        ? (frame.event.renderState.window?.floor_seq ?? 0)
+        : 0;
+    if (windowFloor > 0) {
+      options?.onWindowFloor?.(windowFloor);
+    }
   };
   const processLine = (line: string) => {
     if (line === "") {

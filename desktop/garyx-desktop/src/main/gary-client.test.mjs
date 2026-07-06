@@ -568,6 +568,62 @@ test("streamThreadEvents accepts a windowed replay frame and keeps the marker", 
   }
 });
 
+test("streamThreadEvents pins render_floor and reports window floors (#TASK-1715)", async () => {
+  const urls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    urls.push(String(url));
+    const payload = JSON.parse(
+      renderFramePayload(
+        "thread::floor",
+        [committedEvent("thread::floor", 4802, "tail")],
+        4802,
+      ),
+    );
+    payload.render_state.window = { floor_seq: 4711, has_more_above: true };
+    return sseResponse(`id: 4802\ndata: ${JSON.stringify(payload)}\n\n`);
+  };
+
+  try {
+    const floors = [];
+    await streamThreadEvents(
+      { gatewayUrl: "http://127.0.0.1:31337", gatewayAuthToken: "" },
+      "thread::floor",
+      () => {},
+      undefined,
+      {
+        afterSeq: 4801,
+        renderFloor: 4700,
+        onWindowFloor: (floorSeq) => floors.push(floorSeq),
+      },
+    );
+    assert.equal(
+      urls[0],
+      "http://127.0.0.1:31337/api/threads/thread%3A%3Afloor/stream?after_seq=4801&windowed_resume=1&render_floor=4700",
+    );
+    assert.deepEqual(
+      floors,
+      [4711],
+      "a frame carrying a render window must report its floor",
+    );
+
+    // Without a pinned floor the request stays byte-identical to today.
+    await streamThreadEvents(
+      { gatewayUrl: "http://127.0.0.1:31337", gatewayAuthToken: "" },
+      "thread::floor",
+      () => {},
+      undefined,
+      { afterSeq: 4801 },
+    );
+    assert.equal(
+      urls[1],
+      "http://127.0.0.1:31337/api/threads/thread%3A%3Afloor/stream?after_seq=4801&windowed_resume=1",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("streamThreadEvents still gap-reconnects on unmarked non-contiguous frames", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => {

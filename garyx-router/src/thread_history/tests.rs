@@ -1413,3 +1413,526 @@ async fn rewrite_from_messages_uses_same_seq_overwrite_marker_for_changed_prefix
     );
     assert!(records[3].run_id.is_none());
 }
+
+// ---------------------------------------------------------------------------
+// #TASK-1715 knife 2: transcript cache guard tests. The oracle for every
+// cached read is the ORIGINAL uncached derivation, recomputed here from a raw
+// `records()` full read; `full_file_reads` proves the hot paths actually hit
+// the cache instead of silently falling back.
+// ---------------------------------------------------------------------------
+
+use std::sync::atomic::Ordering as CacheTestOrdering;
+
+fn oracle_render_in_window(
+    records: &[ThreadTranscriptRecord],
+    floor_seq: u64,
+    based_on_seq: u64,
+) -> garyx_models::RenderSnapshot {
+    let prefix = records
+        .iter()
+        .filter(|record| record.seq <= based_on_seq)
+        .collect::<Vec<_>>();
+    let actual_based_on_seq = prefix.iter().map(|record| record.seq).max().unwrap_or(0);
+    let full_values = prefix
+        .iter()
+        .filter_map(|record| serde_json::to_value(record).ok())
+        .collect::<Vec<_>>();
+    let run_state = garyx_models::reduce_transcript_run_state(&full_values);
+    let window_values = prefix
+        .iter()
+        .filter(|record| record.seq >= floor_seq)
+        .filter_map(|record| serde_json::to_value(record).ok())
+        .collect::<Vec<_>>();
+    let mut snapshot =
+        garyx_models::reduce_transcript_render_state_with_run_state(&window_values, &run_state);
+    if snapshot.based_on_seq == 0 {
+        snapshot.based_on_seq = actual_based_on_seq;
+    }
+    snapshot.window = Some(garyx_models::RenderWindow {
+        floor_seq,
+        has_more_above: prefix.iter().any(|record| record.seq < floor_seq),
+    });
+    snapshot
+}
+
+fn oracle_run_state(records: &[ThreadTranscriptRecord]) -> garyx_models::TranscriptRunState {
+    let values = records
+        .iter()
+        .filter_map(|record| serde_json::to_value(record).ok())
+        .collect::<Vec<_>>();
+    garyx_models::reduce_transcript_run_state(&values)
+}
+
+fn oracle_cold_open(
+    records: &[ThreadTranscriptRecord],
+    user_turns: usize,
+    cap: usize,
+) -> ThreadTranscriptWindow {
+    let total = records.len();
+    if total == 0 {
+        return ThreadTranscriptWindow {
+            records: Vec::new(),
+            floor_seq: 0,
+            has_more_above: false,
+        };
+    }
+    let target = user_turns.max(1);
+    let mut start = total;
+    let mut user_queries = 0usize;
+    while start > 0 && user_queries < target {
+        start -= 1;
+        if is_user_query_message(&records[start].message) {
+            user_queries += 1;
+        }
+    }
+    if user_queries == 0 {
+        start = total.saturating_sub(cap.max(1));
+    }
+    if total.saturating_sub(start) > cap {
+        start = total.saturating_sub(cap);
+    }
+    let window = records[start..].to_vec();
+    let floor_seq = window.first().map(|record| record.seq).unwrap_or(0);
+    ThreadTranscriptWindow {
+        records: window,
+        floor_seq,
+        has_more_above: start > 0,
+    }
+}
+
+/// Compare every cache-eligible read of `store` against the uncached oracle
+/// derivation for `thread_id`.
+async fn assert_reads_match_oracle(store: &ThreadTranscriptStore, thread_id: &str, label: &str) {
+    let records = store.records(thread_id).await.unwrap();
+    let last_seq = records.last().map(|record| record.seq).unwrap_or(0);
+    let mid_seq = records
+        .get(records.len() / 2)
+        .map(|record| record.seq)
+        .unwrap_or(0);
+
+    assert_eq!(
+        store.message_count(thread_id).await.unwrap(),
+        records.len(),
+        "{label}: message_count"
+    );
+    for limit in [1usize, 3, records.len().max(1), records.len() + 5] {
+        let expected: Vec<Value> = records
+            .iter()
+            .skip(records.len().saturating_sub(limit))
+            .map(|record| record.message.clone())
+            .collect();
+        assert_eq!(
+            store.tail(thread_id, limit).await.unwrap(),
+            expected,
+            "{label}: tail({limit})"
+        );
+    }
+    assert_eq!(
+        store.run_state(thread_id).await.unwrap(),
+        oracle_run_state(&records),
+        "{label}: run_state"
+    );
+    for (user_turns, cap) in [(1usize, 100usize), (2, 100), (3, 4), (1, 1)] {
+        assert_eq!(
+            store
+                .cold_open_user_turn_window(thread_id, user_turns, cap)
+                .await
+                .unwrap(),
+            oracle_cold_open(&records, user_turns, cap),
+            "{label}: cold_open({user_turns},{cap})"
+        );
+    }
+    let mut floors = vec![1u64, mid_seq.max(1), last_seq.max(1), last_seq + 5];
+    if let Some(window_floor) = records
+        .iter()
+        .rev()
+        .find(|record| is_user_query_message(&record.message))
+        .map(|record| record.seq)
+    {
+        floors.push(window_floor);
+    }
+    for floor in floors {
+        for based_on in [last_seq, mid_seq.max(1), last_seq + 100] {
+            assert_eq!(
+                store
+                    .render_snapshot_in_window(thread_id, floor, based_on)
+                    .await
+                    .unwrap(),
+                oracle_render_in_window(&records, floor, based_on),
+                "{label}: render_snapshot_in_window({floor},{based_on})"
+            );
+        }
+    }
+}
+
+fn oracle_test_message(index: usize, kind: usize) -> Value {
+    match kind % 4 {
+        0 => json!({"role": "user", "content": format!("user message {index}")}),
+        1 => json!({"role": "assistant", "content": format!("assistant reply {index}")}),
+        2 => json!({
+            "role": "system",
+            "kind": "control",
+            "internal": true,
+            "control": {"kind": if index % 2 == 0 { "run_start" } else { "run_complete" },
+                         "run_id": format!("run-{}", index / 3)}
+        }),
+        _ => json!({
+            "role": "tool_use",
+            "kind": "tool_trace",
+            "content": {"tool": "Bash", "input": {"command": format!("echo {index}")}},
+            "tool_use_id": format!("tu-{index}")
+        }),
+    }
+}
+
+#[tokio::test]
+async fn transcript_cache_matches_uncached_oracle_across_write_paths() {
+    let dir = tempdir().unwrap();
+    let store = ThreadTranscriptStore::file(dir.path()).await.unwrap();
+    let thread_id = "thread::oracle";
+
+    // Deterministic mixed op sequence: appends of both kinds, reconciles
+    // hitting no-op / suffix-grow / same-seq-overwrite / divergent-rewrite /
+    // shrink, and a full rewrite_from_messages.
+    let mut state = 0x9e3779b97f4a7c15u64;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+
+    let mut index = 0usize;
+    for round in 0..12usize {
+        let run_id = format!("run-{round}");
+        let batch = 1 + (next() as usize % 4);
+        let mut drafts = Vec::new();
+        for _ in 0..batch {
+            drafts.push(RunTranscriptRecordDraft::with_timestamp(
+                oracle_test_message(index, next() as usize),
+                format!("2026-03-01T00:{:02}:{:02}Z", round, index % 60),
+            ));
+            index += 1;
+        }
+        store
+            .append_run_records(thread_id, Some(&run_id), &drafts)
+            .await
+            .unwrap();
+        assert_reads_match_oracle(&store, thread_id, &format!("after append round {round}")).await;
+
+        match next() % 5 {
+            // Terminal reconcile no-op: authoritative equals what streamed.
+            0 => {
+                store
+                    .reconcile_run_records_tail(thread_id, &run_id, &drafts)
+                    .await
+                    .unwrap();
+            }
+            // Suffix growth: terminal saw one more trailing record.
+            1 => {
+                let mut grown = drafts.clone();
+                grown.push(RunTranscriptRecordDraft::with_timestamp(
+                    oracle_test_message(index, 1),
+                    format!("2026-03-01T00:{:02}:59Z", round),
+                ));
+                index += 1;
+                store
+                    .reconcile_run_records_tail(thread_id, &run_id, &grown)
+                    .await
+                    .unwrap();
+            }
+            // Same-seq overwrite: identical identity, changed timestamps.
+            2 => {
+                let changed: Vec<RunTranscriptRecordDraft> = drafts
+                    .iter()
+                    .map(|draft| {
+                        RunTranscriptRecordDraft::with_timestamp(
+                            draft.message.clone(),
+                            format!("2026-03-02T11:{:02}:00Z", round),
+                        )
+                    })
+                    .collect();
+                store
+                    .reconcile_run_records_tail(thread_id, &run_id, &changed)
+                    .await
+                    .unwrap();
+            }
+            // Divergent rewrite: retry re-streamed different content.
+            3 => {
+                let divergent = vec![RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": format!("retry answer {round}")}),
+                    format!("2026-03-03T00:{:02}:00Z", round),
+                )];
+                store
+                    .reconcile_run_records_tail(thread_id, &run_id, &divergent)
+                    .await
+                    .unwrap();
+            }
+            // Value-based reconcile no-op/suffix via reconcile_run_tail.
+            _ => {
+                let mut messages: Vec<Value> =
+                    drafts.iter().map(|draft| draft.message.clone()).collect();
+                if next() % 2 == 0 {
+                    messages.push(oracle_test_message(index, 0));
+                    index += 1;
+                }
+                store
+                    .reconcile_run_tail(thread_id, &run_id, &messages)
+                    .await
+                    .unwrap();
+            }
+        }
+        assert_reads_match_oracle(&store, thread_id, &format!("after reconcile round {round}"))
+            .await;
+    }
+
+    // Full rewrite path keeps the cache coherent too.
+    let messages: Vec<Value> = (0..6).map(|i| oracle_test_message(i, i)).collect();
+    store
+        .rewrite_from_messages(thread_id, &messages)
+        .await
+        .unwrap();
+    assert_reads_match_oracle(&store, thread_id, "after rewrite_from_messages").await;
+}
+
+#[tokio::test]
+async fn transcript_cache_hot_paths_do_not_reread_file() {
+    let dir = tempdir().unwrap();
+    let store = ThreadTranscriptStore::file(dir.path()).await.unwrap();
+    let thread_id = "thread::hot";
+    let run_id = "run-hot";
+
+    let mut drafts = Vec::new();
+    for index in 0..8usize {
+        drafts.push(RunTranscriptRecordDraft::from_message(oracle_test_message(
+            index, index,
+        )));
+    }
+    store
+        .append_run_records(thread_id, Some(run_id), &drafts)
+        .await
+        .unwrap();
+
+    // Warm the cache (this may cost one build read), then the steady-state
+    // loop below must never re-read the whole file.
+    let last_seq = store.records(thread_id).await.unwrap().last().unwrap().seq;
+    store
+        .render_snapshot_in_window(thread_id, last_seq, last_seq)
+        .await
+        .unwrap();
+
+    let baseline = store.full_file_reads.load(CacheTestOrdering::Relaxed);
+    for step in 0..10u64 {
+        let appended = store
+            .append_run_records(
+                thread_id,
+                Some(run_id),
+                &[RunTranscriptRecordDraft::from_message(json!({
+                    "role": "assistant",
+                    "content": format!("hot step {step}")
+                }))],
+            )
+            .await
+            .unwrap();
+        let seq = appended.appended_records[0].seq;
+        store
+            .render_snapshot_in_window(thread_id, last_seq, seq)
+            .await
+            .unwrap();
+        store.run_state(thread_id).await.unwrap();
+        store.message_count(thread_id).await.unwrap();
+        store.tail(thread_id, 3).await.unwrap();
+        // Steady-state terminal reconcile: no-op decided from the cached tail.
+        let authoritative: Vec<RunTranscriptRecordDraft> = store
+            .records(thread_id)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|record| record.run_id.as_deref() == Some(run_id))
+            .map(|record| RunTranscriptRecordDraft::with_timestamp(record.message, record.timestamp))
+            .collect();
+        store
+            .reconcile_run_records_tail(thread_id, run_id, &authoritative)
+            .await
+            .unwrap();
+    }
+    // records() full-reads are the oracle's cost (one per loop step above);
+    // subtract them: everything else must have been served from the cache.
+    let reads = store.full_file_reads.load(CacheTestOrdering::Relaxed) - baseline;
+    assert_eq!(
+        reads, 10,
+        "hot appends/renders/reconciles must not re-read the transcript (only the 10 records() oracle reads may)"
+    );
+
+    // Seq continuity across cached appends.
+    let records = store.records(thread_id).await.unwrap();
+    let seqs: Vec<u64> = records.iter().map(|record| record.seq).collect();
+    let expected: Vec<u64> = (1..=records.len() as u64).collect();
+    assert_eq!(seqs, expected);
+}
+
+#[tokio::test]
+async fn transcript_cache_survives_tail_roll_and_eviction() {
+    let dir = tempdir().unwrap();
+    // Tiny budgets: tail rolls constantly, global budget evicts other threads.
+    let store = ThreadTranscriptStore::file_for_tests(dir.path(), 512, 3, 1024)
+        .await
+        .unwrap();
+
+    for thread in 0..3usize {
+        let thread_id = format!("thread::roll-{thread}");
+        for index in 0..12usize {
+            store
+                .append_run_records(
+                    &thread_id,
+                    Some("run-roll"),
+                    &[RunTranscriptRecordDraft::from_message(oracle_test_message(
+                        index, index,
+                    ))],
+                )
+                .await
+                .unwrap();
+        }
+    }
+    for thread in 0..3usize {
+        let thread_id = format!("thread::roll-{thread}");
+        assert_reads_match_oracle(&store, &thread_id, &format!("rolled thread {thread}")).await;
+    }
+}
+
+#[tokio::test]
+async fn transcript_cache_cold_restart_matches_previous_instance() {
+    let dir = tempdir().unwrap();
+    let thread_id = "thread::restart";
+    {
+        let store = ThreadTranscriptStore::file(dir.path()).await.unwrap();
+        for index in 0..7usize {
+            store
+                .append_run_records(
+                    thread_id,
+                    Some("run-a"),
+                    &[RunTranscriptRecordDraft::from_message(oracle_test_message(
+                        index, index,
+                    ))],
+                )
+                .await
+                .unwrap();
+        }
+    }
+    let reopened = ThreadTranscriptStore::file(dir.path()).await.unwrap();
+    assert_reads_match_oracle(&reopened, thread_id, "reopened store").await;
+    // Appends continue the seq chain after a cold rebuild.
+    let appended = reopened
+        .append_run_records(
+            thread_id,
+            Some("run-b"),
+            &[RunTranscriptRecordDraft::from_message(
+                json!({"role": "user", "content": "after restart"}),
+            )],
+        )
+        .await
+        .unwrap();
+    assert_eq!(appended.appended_records[0].seq, 8);
+    assert_reads_match_oracle(&reopened, thread_id, "reopened store after append").await;
+}
+
+#[tokio::test]
+async fn transcript_cache_detects_out_of_band_file_change() {
+    let dir = tempdir().unwrap();
+    let store = ThreadTranscriptStore::file(dir.path()).await.unwrap();
+    let thread_id = "thread::oob";
+    store
+        .append_run_records(
+            thread_id,
+            Some("run-oob"),
+            &[
+                RunTranscriptRecordDraft::from_message(json!({"role": "user", "content": "hi"})),
+                RunTranscriptRecordDraft::from_message(
+                    json!({"role": "assistant", "content": "hello"}),
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+    // Warm the cache.
+    store.run_state(thread_id).await.unwrap();
+
+    // Out-of-band writer appends a record directly to the jsonl.
+    let path = store.transcript_path(thread_id).unwrap();
+    let line = serde_json::to_string(&TranscriptLine::Message {
+        seq: 3,
+        thread_id: thread_id.to_owned(),
+        run_id: Some("run-oob".to_owned()),
+        timestamp: "2026-03-01T00:00:30Z".to_owned(),
+        message: json!({"role": "assistant", "content": "sneaky"}),
+    })
+    .unwrap();
+    let mut raw = std::fs::read_to_string(&path).unwrap();
+    raw.push_str(&line);
+    raw.push('\n');
+    std::fs::write(&path, raw).unwrap();
+
+    // The fstat guard must drop the stale entry: reads see the new record and
+    // the next append continues after it instead of duplicating seq 3.
+    assert_eq!(store.message_count(thread_id).await.unwrap(), 3);
+    assert_reads_match_oracle(&store, thread_id, "after out-of-band append").await;
+    let appended = store
+        .append_run_records(
+            thread_id,
+            Some("run-oob"),
+            &[RunTranscriptRecordDraft::from_message(
+                json!({"role": "user", "content": "next"}),
+            )],
+        )
+        .await
+        .unwrap();
+    assert_eq!(appended.appended_records[0].seq, 4);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn transcript_cache_concurrent_threads_do_not_block_or_corrupt() {
+    let dir = tempdir().unwrap();
+    let store = std::sync::Arc::new(ThreadTranscriptStore::file(dir.path()).await.unwrap());
+
+    let mut handles = Vec::new();
+    for thread in 0..4usize {
+        let store = store.clone();
+        handles.push(tokio::spawn(async move {
+            let thread_id = format!("thread::conc-{thread}");
+            for index in 0..25usize {
+                store
+                    .append_run_records(
+                        &thread_id,
+                        Some("run-conc"),
+                        &[RunTranscriptRecordDraft::from_message(oracle_test_message(
+                            index, index,
+                        ))],
+                    )
+                    .await
+                    .unwrap();
+                if index % 5 == 0 {
+                    let _ = store
+                        .render_snapshot_in_window(&thread_id, 1 + index as u64, 60)
+                        .await;
+                    let _ = store.run_state(&thread_id).await;
+                }
+            }
+        }));
+    }
+    for handle in handles {
+        tokio::time::timeout(std::time::Duration::from_secs(30), handle)
+            .await
+            .expect("concurrent transcript ops deadlocked")
+            .unwrap();
+    }
+
+    for thread in 0..4usize {
+        let thread_id = format!("thread::conc-{thread}");
+        let records = store.records(&thread_id).await.unwrap();
+        let seqs: Vec<u64> = records.iter().map(|record| record.seq).collect();
+        let expected: Vec<u64> = (1..=25u64).collect();
+        assert_eq!(seqs, expected, "thread {thread} seq chain broken");
+        assert_reads_match_oracle(&store, &thread_id, &format!("concurrent thread {thread}"))
+            .await;
+    }
+}

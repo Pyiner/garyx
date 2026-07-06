@@ -593,6 +593,9 @@ function makeLegacyBindings(h) {
 
   // ---- 2c fetch/stream lifecycle (verbatim pre-slice hook + AppShell) ----
   function startCommittedThreadStream(threadId, transcript, consumerId) {
+    const renderFloor =
+      h.port.getTranscriptMapsSnapshot().renderStateByThread[threadId]?.window
+        ?.floor_seq ?? 0;
     return h.port.startThreadStream({
       threadId,
       consumerId,
@@ -600,6 +603,7 @@ function makeLegacyBindings(h) {
         afterCursor: transcriptCommittedAfterCursor(transcript),
         fallbackMaxIndex: null,
       }),
+      ...(renderFloor > 0 ? { renderFloor } : {}),
     });
   }
   async function refetchAuthoritativeTranscriptAfterRewrite(threadId) {
@@ -1314,6 +1318,66 @@ test("dual-run: lifecycle matches the legacy fetch/stream lifecycle (6b-2c)", as
       ([name, value]) => name === "setError" && value === "provider exploded",
     ),
     "the terminal error must surface through setError",
+  );
+});
+
+test("2c: cache-restored windowed snapshot pins render_floor on the committed stream (#TASK-1715)", async () => {
+  lifecycleModule = await import("./transcript-lifecycle.ts");
+  const h = makeHarness();
+  const bindings = makeLifecycleBindings(h);
+  const transcript = {
+    threadId: THREAD,
+    messages: [userMessage(0, "hello")],
+    pendingInputs: [],
+    threadInfo: { agentId: "agent-1" },
+  };
+  h.cachedTranscriptByThread[THREAD] = {
+    transcript,
+    renderState: {
+      based_on_seq: 42,
+      rows: [],
+      tailActivity: "none",
+      activeToolGroupId: null,
+      progress_locus: "none",
+      visibleMessageIds: [],
+      filtered_placeholders: [],
+      window: { floor_seq: 37, has_more_above: true },
+    },
+  };
+  h.remoteTranscriptByThread[THREAD] = transcript;
+
+  await bindings.loadSelectedThreadTranscript(THREAD);
+  await flushAsync();
+
+  const start = h.ipcTrace.find(([name]) => name === "startThreadStream");
+  assert.ok(start, "cache-restored reopen must start the committed stream");
+  assert.equal(start[1].threadId, THREAD);
+  assert.equal(
+    start[1].renderFloor,
+    37,
+    "the restored window floor must ride the stream start IPC",
+  );
+});
+
+test("2c: stream start without a render window sends no renderFloor (#TASK-1715)", async () => {
+  lifecycleModule = await import("./transcript-lifecycle.ts");
+  const h = makeHarness();
+  const bindings = makeLifecycleBindings(h);
+  h.remoteTranscriptByThread[THREAD] = {
+    threadId: THREAD,
+    messages: [userMessage(0, "hello")],
+    pendingInputs: [],
+    threadInfo: { agentId: "agent-1" },
+  };
+
+  await bindings.loadSelectedThreadTranscript(THREAD);
+  await flushAsync();
+
+  const start = h.ipcTrace.find(([name]) => name === "startThreadStream");
+  assert.ok(start, "load must start the committed stream");
+  assert.ok(
+    !("renderFloor" in start[1]),
+    "no window floor -> the stream start input stays byte-identical to today",
   );
 });
 

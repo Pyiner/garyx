@@ -187,6 +187,11 @@ export interface StartThreadStreamInput {
   threadId: string;
   afterSeq?: number | null;
   consumerId?: string | null;
+  /** Render window floor the client is already rendering with
+   * (`render_state.window.floor_seq`). Pins the gateway's windowed render
+   * derivation across reconnects and cache-restored reopens instead of
+   * falling back to the full-transcript path. */
+  renderFloor?: number | null;
 }
 
 export interface StopThreadStreamInput {

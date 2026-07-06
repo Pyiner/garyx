@@ -1,12 +1,636 @@
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
 use super::*;
 
 const TAIL_SCAN_CHUNK_BYTES: u64 = 64 * 1024;
+
+/// Per-thread budget for the parsed transcript tail kept in memory.
+const TRANSCRIPT_CACHE_TAIL_MAX_BYTES: usize = 8 * 1024 * 1024;
+const TRANSCRIPT_CACHE_TAIL_MAX_RECORDS: usize = 4096;
+/// Store-wide cache budget; least-recently-used thread entries are dropped
+/// once the sum of cached tail bytes exceeds it.
+const TRANSCRIPT_CACHE_TOTAL_MAX_BYTES: usize = 64 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy)]
+struct TranscriptCacheBudget {
+    tail_max_bytes: usize,
+    tail_max_records: usize,
+    total_max_bytes: usize,
+}
+
+impl Default for TranscriptCacheBudget {
+    fn default() -> Self {
+        Self {
+            tail_max_bytes: TRANSCRIPT_CACHE_TAIL_MAX_BYTES,
+            tail_max_records: TRANSCRIPT_CACHE_TAIL_MAX_RECORDS,
+            total_max_bytes: TRANSCRIPT_CACHE_TOTAL_MAX_BYTES,
+        }
+    }
+}
+
+/// Per-thread I/O + cache slot. `state` is the thread's write lock — every
+/// file mutation for the thread runs its whole read-modify-write under it —
+/// and owns the thread's cache entry. The atomics mirror the entry's size and
+/// last-use time so the store-wide eviction pass can account for and pick
+/// victims without locking other threads' slots. Slots are never removed from
+/// the registry (the `Arc` identity IS the per-thread lock identity); eviction
+/// only clears the cache content.
+#[derive(Debug, Default)]
+struct ThreadSlot {
+    state: Mutex<Option<ThreadCache>>,
+    cached_bytes: AtomicUsize,
+    last_used_ms: AtomicU64,
+}
+
+#[derive(Debug)]
+struct CachedTranscriptRecord {
+    record: ThreadTranscriptRecord,
+    /// Serialized jsonl line length — the record's memory estimate.
+    bytes: usize,
+}
+
+/// Parsed tail + run-state checkpoint for one thread's transcript.
+/// Invariants (maintained under the slot lock; seqs are monotonic + gapless,
+/// which `records_after_seq`'s tail scan and the persistence layer's
+/// "last K records are seqs total-K+1..=total" already rely on):
+/// - `checkpoint` equals the run-state fold of every record with
+///   `seq <= base_seq`;
+/// - `tail` holds exactly the records with `base_seq < seq <= last_seq`;
+/// - `min_seq`/`last_seq`/`total_records` describe the whole file
+///   (`min_seq == 0` only when the transcript is empty);
+/// - `file_len` is the on-disk length after our last verified read/write, so
+///   any out-of-band mutation is caught by one fstat and drops the entry.
+#[derive(Debug)]
+struct ThreadCache {
+    checkpoint: TranscriptRunState,
+    base_seq: u64,
+    tail: Vec<CachedTranscriptRecord>,
+    tail_bytes: usize,
+    min_seq: u64,
+    last_seq: u64,
+    total_records: usize,
+    file_len: u64,
+}
+
+impl ThreadCache {
+    fn from_records(records: Vec<CachedTranscriptRecord>, file_len: u64) -> Self {
+        let min_seq = records.first().map(|c| c.record.seq).unwrap_or(0);
+        let last_seq = records.last().map(|c| c.record.seq).unwrap_or(0);
+        let total_records = records.len();
+        Self {
+            checkpoint: TranscriptRunState::default(),
+            base_seq: min_seq.saturating_sub(1),
+            tail: records,
+            tail_bytes: 0,
+            min_seq,
+            last_seq,
+            total_records,
+            file_len,
+        }
+        .with_recomputed_tail_bytes()
+    }
+
+    fn with_recomputed_tail_bytes(mut self) -> Self {
+        self.tail_bytes = self.tail.iter().map(|c| c.bytes).sum();
+        self
+    }
+
+    fn tail_start_seq(&self) -> u64 {
+        self.base_seq + 1
+    }
+
+    fn covers_whole_file(&self) -> bool {
+        self.total_records == self.tail.len()
+    }
+
+    fn last_message_at(&self) -> Option<String> {
+        self.tail.last().map(|c| c.record.timestamp.clone())
+    }
+
+    fn fold_record(state: &mut TranscriptRunState, record: &ThreadTranscriptRecord) {
+        if let Ok(value) = serde_json::to_value(record) {
+            apply_transcript_record(state, &value);
+        }
+    }
+
+    /// Fold the oldest tail records into the checkpoint until the tail fits
+    /// the per-thread budget again. Always keeps at least one record so the
+    /// tail stays anchored at the file's end.
+    fn roll_tail(&mut self, budget: &TranscriptCacheBudget) {
+        let mut drained = 0usize;
+        while self.tail.len() - drained > 1
+            && (self.tail.len() - drained > budget.tail_max_records
+                || self.tail_bytes > budget.tail_max_bytes)
+        {
+            let cached = &self.tail[drained];
+            Self::fold_record(&mut self.checkpoint, &cached.record);
+            self.base_seq = cached.record.seq;
+            self.tail_bytes -= cached.bytes;
+            drained += 1;
+        }
+        if drained > 0 {
+            self.tail.drain(..drained);
+        }
+    }
+
+    fn push_appended(
+        &mut self,
+        appended: &[ThreadTranscriptRecord],
+        line_sizes: &[usize],
+        file_len: u64,
+        budget: &TranscriptCacheBudget,
+    ) {
+        for (record, bytes) in appended.iter().zip(line_sizes.iter().copied()) {
+            if self.min_seq == 0 {
+                self.min_seq = record.seq;
+            }
+            self.last_seq = record.seq;
+            self.total_records += 1;
+            self.tail_bytes += bytes;
+            self.tail.push(CachedTranscriptRecord {
+                record: record.clone(),
+                bytes,
+            });
+        }
+        self.file_len = file_len;
+        self.roll_tail(budget);
+    }
+
+    /// The trailing block of records tagged `run_id`, when the cache can
+    /// PROVE it holds the whole block: either a record with a different
+    /// run_id precedes it inside the tail, or the tail covers the whole file.
+    fn trailing_run_block(&self, trimmed_run_id: &str) -> Option<&[CachedTranscriptRecord]> {
+        let mut start = self.tail.len();
+        while start > 0
+            && self.tail[start - 1].record.run_id.as_deref().map(str::trim)
+                == Some(trimmed_run_id)
+        {
+            start -= 1;
+        }
+        (start > 0 || self.covers_whole_file()).then(|| &self.tail[start..])
+    }
+
+    fn run_state_at(&self, based_on_seq: u64) -> TranscriptRunState {
+        let mut state = self.checkpoint.clone();
+        for cached in &self.tail {
+            if cached.record.seq > based_on_seq {
+                break;
+            }
+            Self::fold_record(&mut state, &cached.record);
+        }
+        state
+    }
+
+    /// Serve `render_snapshot_in_window` when the cached tail covers the
+    /// requested window. Returns `None` (caller falls back to the full read)
+    /// when the floor or based_on bound reaches below the cached tail.
+    fn render_snapshot_in_window(&self, floor_seq: u64, based_on_seq: u64) -> Option<RenderSnapshot> {
+        if floor_seq == 0 {
+            return None;
+        }
+        if self.total_records > 0
+            && (based_on_seq < self.tail_start_seq() || floor_seq < self.tail_start_seq())
+        {
+            return None;
+        }
+        let run_state = self.run_state_at(based_on_seq);
+        let window_values: Vec<Value> = self
+            .tail
+            .iter()
+            .filter(|c| c.record.seq >= floor_seq && c.record.seq <= based_on_seq)
+            .filter_map(|c| serde_json::to_value(&c.record).ok())
+            .collect();
+        let mut snapshot =
+            reduce_transcript_render_state_with_run_state(window_values.iter(), &run_state);
+        if snapshot.based_on_seq == 0 {
+            snapshot.based_on_seq = based_on_seq.min(self.last_seq);
+        }
+        snapshot.window = Some(RenderWindow {
+            floor_seq,
+            has_more_above: self.total_records > 0 && self.min_seq < floor_seq,
+        });
+        Some(snapshot)
+    }
+
+    fn tail_messages(&self, limit: usize) -> Option<Vec<Value>> {
+        if limit >= self.total_records {
+            if !self.covers_whole_file() {
+                return None;
+            }
+            return Some(self.tail.iter().map(|c| c.record.message.clone()).collect());
+        }
+        if limit > self.tail.len() {
+            return None;
+        }
+        let start = self.tail.len() - limit;
+        Some(
+            self.tail[start..]
+                .iter()
+                .map(|c| c.record.message.clone())
+                .collect(),
+        )
+    }
+
+    /// Serve `cold_open_user_turn_window` when the whole window provably lies
+    /// inside the cached tail; `None` falls back to the full read.
+    fn cold_open_window(&self, user_turns: usize, cap: usize) -> Option<ThreadTranscriptWindow> {
+        let total = self.total_records;
+        if total == 0 {
+            return Some(ThreadTranscriptWindow {
+                records: Vec::new(),
+                floor_seq: 0,
+                has_more_above: false,
+            });
+        }
+
+        let tail_global_start = total - self.tail.len();
+        let target_user_turns = user_turns.max(1);
+        let mut start = total;
+        let mut user_queries = 0usize;
+        while start > tail_global_start && user_queries < target_user_turns {
+            start -= 1;
+            if is_user_query_message(&self.tail[start - tail_global_start].record.message) {
+                user_queries += 1;
+            }
+        }
+        if user_queries < target_user_turns && !self.covers_whole_file() {
+            // The scan would have to continue below the cached tail.
+            return None;
+        }
+
+        if user_queries == 0 {
+            start = total.saturating_sub(cap.max(1));
+        }
+        if total.saturating_sub(start) > cap {
+            start = total.saturating_sub(cap);
+        }
+        if start < tail_global_start {
+            return None;
+        }
+
+        let window: Vec<ThreadTranscriptRecord> = self.tail[start - tail_global_start..]
+            .iter()
+            .map(|c| c.record.clone())
+            .collect();
+        let floor_seq = window.first().map(|record| record.seq).unwrap_or(0);
+        Some(ThreadTranscriptWindow {
+            records: window,
+            floor_seq,
+            has_more_above: start > 0,
+        })
+    }
+}
+
+/// How a run-tail reconcile is applied to the transcript. Extracted as a pure
+/// plan over pre-read records so the file path (under the per-thread slot
+/// lock) and the memory path execute identical decisions.
+#[derive(Debug)]
+enum MessagesReconcilePlan {
+    NoOp,
+    /// Append `authoritative[skip..]`.
+    AppendSuffix { skip: usize },
+    Rewrite { rebuilt: Vec<ThreadTranscriptRecord> },
+}
+
+fn plan_reconcile_run_tail(
+    thread_id: &str,
+    records: &[ThreadTranscriptRecord],
+    trimmed_run_id: &str,
+    authoritative: &[Value],
+) -> MessagesReconcilePlan {
+    let mut split = records.len();
+    while split > 0 && records[split - 1].run_id.as_deref().map(str::trim) == Some(trimmed_run_id) {
+        split -= 1;
+    }
+    let existing_tail: Vec<Value> = records[split..]
+        .iter()
+        .map(|record| record.message.clone())
+        .collect();
+    // Compare on a normalized identity that ignores cosmetic, flush-time
+    // varying fields (the SDK session id is bound mid-run, so the user row
+    // committed by the first flush carries `None` while the terminal rebuild
+    // carries `Some`; timestamps can be backfilled). Without this the user
+    // row always "diverges" and every terminal commit falls to the O(file)
+    // rewrite below instead of the cheap no-op / suffix-append.
+    let existing_identity: Vec<Value> = existing_tail.iter().map(message_identity).collect();
+    let authoritative_identity: Vec<Value> = authoritative.iter().map(message_identity).collect();
+    if existing_identity == authoritative_identity {
+        return MessagesReconcilePlan::NoOp;
+    }
+    // Fast path: the run only grew (the already-committed tail is a prefix of
+    // `authoritative`). This is the steady-state terminal case — the worker
+    // streamed every finalized row during the run, and the terminal just needs
+    // to append the trailing segment that was still in flight at the last
+    // flush. Append the suffix instead of rewriting the whole file, which on a
+    // large transcript would be an O(file) rewrite to add one message.
+    if authoritative_identity.len() > existing_identity.len()
+        && authoritative_identity[..existing_identity.len()] == existing_identity[..]
+    {
+        return MessagesReconcilePlan::AppendSuffix {
+            skip: existing_tail.len(),
+        };
+    }
+    // Divergent (a retry re-streamed different content, or the run shrank):
+    // rewrite this run's tail so we keep only the final authoritative set.
+    let mut rebuilt: Vec<ThreadTranscriptRecord> = records[..split].to_vec();
+    let next_seq = rebuilt.last().map(|record| record.seq + 1).unwrap_or(1);
+    let run_id_value = (!trimmed_run_id.is_empty()).then(|| trimmed_run_id.to_owned());
+    for (seq, message) in (next_seq..).zip(authoritative.iter()) {
+        rebuilt.push(ThreadTranscriptRecord {
+            seq,
+            thread_id: thread_id.to_owned(),
+            run_id: run_id_value.clone(),
+            timestamp: message_timestamp(message)
+                .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+            message: message.clone(),
+        });
+    }
+    MessagesReconcilePlan::Rewrite { rebuilt }
+}
+
+#[derive(Debug)]
+enum RecordsReconcilePlan {
+    NoOp,
+    /// Append `authoritative[skip..]`.
+    AppendSuffix { skip: usize },
+    Rewrite {
+        rebuilt: Vec<ThreadTranscriptRecord>,
+        changed: Vec<ThreadTranscriptRecord>,
+    },
+}
+
+fn plan_reconcile_run_records_tail(
+    thread_id: &str,
+    records: &[ThreadTranscriptRecord],
+    trimmed_run_id: &str,
+    authoritative: &[RunTranscriptRecordDraft],
+) -> RecordsReconcilePlan {
+    let mut split = records.len();
+    while split > 0 && records[split - 1].run_id.as_deref().map(str::trim) == Some(trimmed_run_id) {
+        split -= 1;
+    }
+    let existing_tail = &records[split..];
+    if existing_tail.is_empty() {
+        return RecordsReconcilePlan::AppendSuffix { skip: 0 };
+    }
+
+    let existing_identity: Vec<Value> = existing_tail
+        .iter()
+        .map(|record| message_identity(&record.message))
+        .collect();
+    let authoritative_identity: Vec<Value> = authoritative
+        .iter()
+        .map(|draft| message_identity(&draft.message))
+        .collect();
+
+    if existing_identity == authoritative_identity {
+        let mut changed = Vec::new();
+        let mut changed_same_seqs = Vec::new();
+        let mut rebuilt = records.to_vec();
+        for (offset, draft) in authoritative.iter().enumerate() {
+            let existing = &existing_tail[offset];
+            let replacement = record_from_draft_replacing(
+                thread_id,
+                Some(trimmed_run_id),
+                existing.seq,
+                draft,
+                existing,
+            );
+            if replacement.timestamp != existing.timestamp
+                || replacement.message != existing.message
+            {
+                rebuilt[split + offset] = replacement.clone();
+                changed_same_seqs.push(replacement.seq);
+                changed.push(replacement);
+            }
+        }
+        if changed.is_empty() {
+            return RecordsReconcilePlan::NoOp;
+        }
+        append_range_rewrite_marker(
+            &mut rebuilt,
+            &mut changed,
+            thread_id,
+            Some(trimmed_run_id),
+            changed_same_seqs.iter().copied().min().unwrap_or(1),
+            changed_same_seqs.iter().copied().max().unwrap_or(1),
+            authoritative.len(),
+            existing_tail.len(),
+            "same_seq_overwrite",
+        );
+        return RecordsReconcilePlan::Rewrite { rebuilt, changed };
+    }
+
+    if authoritative_identity.len() > existing_identity.len()
+        && authoritative_identity[..existing_identity.len()] == existing_identity[..]
+    {
+        let prefix_changed = authoritative
+            .iter()
+            .zip(existing_tail.iter())
+            .any(|(draft, existing)| {
+                let replacement = record_from_draft_replacing(
+                    thread_id,
+                    Some(trimmed_run_id),
+                    existing.seq,
+                    draft,
+                    existing,
+                );
+                replacement.timestamp != existing.timestamp
+                    || replacement.message != existing.message
+            });
+        if !prefix_changed {
+            return RecordsReconcilePlan::AppendSuffix {
+                skip: existing_tail.len(),
+            };
+        }
+    }
+
+    if authoritative.len() >= existing_tail.len() {
+        let mut changed = Vec::new();
+        let mut changed_same_seqs = Vec::new();
+        let mut rebuilt = records[..split].to_vec();
+        let mut next_seq = existing_tail
+            .first()
+            .map(|record| record.seq)
+            .unwrap_or_else(|| rebuilt.last().map(|record| record.seq + 1).unwrap_or(1));
+        for (offset, draft) in authoritative.iter().enumerate() {
+            let seq = if offset < existing_tail.len() {
+                existing_tail[offset].seq
+            } else {
+                next_seq
+            };
+            let replacement = record_from_draft(thread_id, Some(trimmed_run_id), seq, draft);
+            let replacement = if let Some(existing) = existing_tail.get(offset) {
+                record_from_draft_replacing(thread_id, Some(trimmed_run_id), seq, draft, existing)
+            } else {
+                replacement
+            };
+            let is_changed = existing_tail
+                .get(offset)
+                .map(|existing| {
+                    existing.timestamp != replacement.timestamp
+                        || existing.message != replacement.message
+                })
+                .unwrap_or(true);
+            if is_changed {
+                if offset < existing_tail.len() {
+                    changed_same_seqs.push(replacement.seq);
+                }
+                changed.push(replacement.clone());
+            }
+            rebuilt.push(replacement);
+            next_seq = seq + 1;
+        }
+        if let (Some(start_seq), Some(end_seq)) = (
+            changed_same_seqs.iter().copied().min(),
+            changed_same_seqs.iter().copied().max(),
+        ) {
+            append_range_rewrite_marker(
+                &mut rebuilt,
+                &mut changed,
+                thread_id,
+                Some(trimmed_run_id),
+                start_seq,
+                end_seq,
+                authoritative.len(),
+                existing_tail.len(),
+                "same_seq_overwrite",
+            );
+        }
+        return RecordsReconcilePlan::Rewrite { rebuilt, changed };
+    }
+
+    if authoritative_identity.len() <= existing_identity.len()
+        && existing_identity[..authoritative_identity.len()] == authoritative_identity[..]
+        && existing_tail[authoritative.len()..]
+            .iter()
+            .all(|record| is_range_rewrite_control(&record.message))
+    {
+        let mut changed = Vec::new();
+        let mut changed_same_seqs = Vec::new();
+        let mut rebuilt = records.to_vec();
+        for (offset, draft) in authoritative.iter().enumerate() {
+            let existing = &existing_tail[offset];
+            let replacement = record_from_draft_replacing(
+                thread_id,
+                Some(trimmed_run_id),
+                existing.seq,
+                draft,
+                existing,
+            );
+            if replacement.timestamp != existing.timestamp
+                || replacement.message != existing.message
+            {
+                rebuilt[split + offset] = replacement.clone();
+                changed_same_seqs.push(replacement.seq);
+                changed.push(replacement.clone());
+            }
+        }
+        if changed.is_empty() {
+            return RecordsReconcilePlan::NoOp;
+        }
+        if let (Some(start_seq), Some(end_seq)) = (
+            changed_same_seqs.iter().copied().min(),
+            changed_same_seqs.iter().copied().max(),
+        ) {
+            append_range_rewrite_marker(
+                &mut rebuilt,
+                &mut changed,
+                thread_id,
+                Some(trimmed_run_id),
+                start_seq,
+                end_seq,
+                authoritative.len(),
+                existing_tail.len(),
+                "same_seq_overwrite",
+            );
+        }
+        return RecordsReconcilePlan::Rewrite { rebuilt, changed };
+    }
+
+    let mut changed = Vec::new();
+    let mut changed_same_seqs = Vec::new();
+    let mut rebuilt = records[..split].to_vec();
+    let first_rewritten_seq = existing_tail
+        .get(authoritative.len())
+        .map(|record| record.seq)
+        .unwrap_or_else(|| existing_tail.first().map(|record| record.seq).unwrap_or(1));
+    let last_rewritten_seq = existing_tail
+        .last()
+        .map(|record| record.seq)
+        .unwrap_or(first_rewritten_seq);
+    let rewrite_at = chrono::Utc::now().to_rfc3339();
+    for (offset, existing) in existing_tail.iter().enumerate() {
+        if let Some(draft) = authoritative.get(offset) {
+            let replacement = record_from_draft_replacing(
+                thread_id,
+                Some(trimmed_run_id),
+                existing.seq,
+                draft,
+                existing,
+            );
+            if replacement.timestamp != existing.timestamp
+                || replacement.message != existing.message
+            {
+                changed_same_seqs.push(replacement.seq);
+                changed.push(replacement.clone());
+            }
+            rebuilt.push(replacement);
+        } else {
+            let rewrite = build_range_rewrite_record(
+                thread_id,
+                Some(trimmed_run_id),
+                existing.seq,
+                first_rewritten_seq,
+                last_rewritten_seq,
+                authoritative.len(),
+                existing_tail.len(),
+                true,
+                "run_tail_shrink",
+                &rewrite_at,
+            );
+            if rewrite.timestamp != existing.timestamp || rewrite.message != existing.message {
+                changed_same_seqs.push(rewrite.seq);
+                changed.push(rewrite.clone());
+            }
+            rebuilt.push(rewrite);
+        }
+    }
+
+    let first_rewritten_seq = changed_same_seqs
+        .iter()
+        .copied()
+        .min()
+        .unwrap_or(first_rewritten_seq);
+    let last_rewritten_seq = changed_same_seqs
+        .iter()
+        .copied()
+        .max()
+        .unwrap_or(last_rewritten_seq);
+    let rewrite = build_range_rewrite_record(
+        thread_id,
+        Some(trimmed_run_id),
+        rebuilt.last().map(|record| record.seq + 1).unwrap_or(1),
+        first_rewritten_seq,
+        last_rewritten_seq,
+        authoritative.len(),
+        existing_tail.len(),
+        false,
+        "run_tail_shrink",
+        &rewrite_at,
+    );
+    changed.push(rewrite.clone());
+    rebuilt.push(rewrite);
+    RecordsReconcilePlan::Rewrite { rebuilt, changed }
+}
 
 #[derive(Debug)]
 enum TranscriptStoreMode {
     File {
         root_dir: PathBuf,
-        io_lock: Mutex<()>,
+        slots: std::sync::Mutex<HashMap<String, Arc<ThreadSlot>>>,
+        budget: TranscriptCacheBudget,
+        created_at: std::time::Instant,
     },
     Memory {
         records: Mutex<HashMap<String, Vec<ThreadTranscriptRecord>>>,
@@ -16,6 +640,10 @@ enum TranscriptStoreMode {
 #[derive(Debug)]
 pub struct ThreadTranscriptStore {
     mode: TranscriptStoreMode,
+    /// Counts whole-file transcript reads so tests can prove the hot paths
+    /// actually hit the cache instead of silently falling back.
+    #[cfg(test)]
+    pub(super) full_file_reads: AtomicUsize,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -38,13 +666,42 @@ pub(super) enum TranscriptLine {
 
 impl ThreadTranscriptStore {
     pub async fn file(root_dir: impl AsRef<Path>) -> std::io::Result<Self> {
+        Self::file_with_budget(root_dir, TranscriptCacheBudget::default()).await
+    }
+
+    async fn file_with_budget(
+        root_dir: impl AsRef<Path>,
+        budget: TranscriptCacheBudget,
+    ) -> std::io::Result<Self> {
         tokio::fs::create_dir_all(root_dir.as_ref()).await?;
         Ok(Self {
             mode: TranscriptStoreMode::File {
                 root_dir: root_dir.as_ref().to_path_buf(),
-                io_lock: Mutex::new(()),
+                slots: std::sync::Mutex::new(HashMap::new()),
+                budget,
+                created_at: std::time::Instant::now(),
             },
+            #[cfg(test)]
+            full_file_reads: AtomicUsize::new(0),
         })
+    }
+
+    #[cfg(test)]
+    pub(super) async fn file_for_tests(
+        root_dir: impl AsRef<Path>,
+        tail_max_bytes: usize,
+        tail_max_records: usize,
+        total_max_bytes: usize,
+    ) -> std::io::Result<Self> {
+        Self::file_with_budget(
+            root_dir,
+            TranscriptCacheBudget {
+                tail_max_bytes,
+                tail_max_records,
+                total_max_bytes,
+            },
+        )
+        .await
     }
 
     pub fn memory() -> Self {
@@ -52,6 +709,8 @@ impl ThreadTranscriptStore {
             mode: TranscriptStoreMode::Memory {
                 records: Mutex::new(HashMap::new()),
             },
+            #[cfg(test)]
+            full_file_reads: AtomicUsize::new(0),
         }
     }
 
@@ -77,6 +736,140 @@ impl ThreadTranscriptStore {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Per-thread slot + cache plumbing (File mode)
+    // -----------------------------------------------------------------------
+
+    fn file_slot(&self, thread_id: &str) -> Option<Arc<ThreadSlot>> {
+        match &self.mode {
+            TranscriptStoreMode::File { slots, .. } => {
+                let mut slots = slots.lock().expect("transcript slot registry poisoned");
+                Some(
+                    slots
+                        .entry(thread_id.to_owned())
+                        .or_insert_with(|| Arc::new(ThreadSlot::default()))
+                        .clone(),
+                )
+            }
+            TranscriptStoreMode::Memory { .. } => None,
+        }
+    }
+
+    fn cache_budget(&self) -> TranscriptCacheBudget {
+        match &self.mode {
+            TranscriptStoreMode::File { budget, .. } => *budget,
+            TranscriptStoreMode::Memory { .. } => TranscriptCacheBudget::default(),
+        }
+    }
+
+    fn store_now_ms(&self) -> u64 {
+        match &self.mode {
+            TranscriptStoreMode::File { created_at, .. } => {
+                created_at.elapsed().as_millis() as u64
+            }
+            TranscriptStoreMode::Memory { .. } => 0,
+        }
+    }
+
+    /// Mirror the slot's cache size/recency into its atomics (read by the
+    /// eviction pass without taking the slot lock).
+    fn sync_slot_accounting(&self, slot: &ThreadSlot, cache: &Option<ThreadCache>) {
+        slot.cached_bytes.store(
+            cache.as_ref().map(|entry| entry.tail_bytes).unwrap_or(0),
+            Ordering::Relaxed,
+        );
+        slot.last_used_ms.store(self.store_now_ms(), Ordering::Relaxed);
+    }
+
+    /// Drop least-recently-used cache entries until the store-wide budget
+    /// holds again. Never blocks: victims are `try_lock`ed and skipped when
+    /// busy (busy means recently used anyway), and no other lock is held
+    /// while this runs.
+    fn evict_over_budget(&self, current_thread_id: &str) {
+        let TranscriptStoreMode::File { slots, budget, .. } = &self.mode else {
+            return;
+        };
+        let entries: Vec<(String, Arc<ThreadSlot>)> = {
+            let slots = slots.lock().expect("transcript slot registry poisoned");
+            slots
+                .iter()
+                .map(|(thread_id, slot)| (thread_id.clone(), slot.clone()))
+                .collect()
+        };
+        let mut total: usize = entries
+            .iter()
+            .map(|(_, slot)| slot.cached_bytes.load(Ordering::Relaxed))
+            .sum();
+        if total <= budget.total_max_bytes {
+            return;
+        }
+        let mut candidates: Vec<&(String, Arc<ThreadSlot>)> = entries
+            .iter()
+            .filter(|(thread_id, slot)| {
+                thread_id != current_thread_id && slot.cached_bytes.load(Ordering::Relaxed) > 0
+            })
+            .collect();
+        candidates.sort_by_key(|(_, slot)| slot.last_used_ms.load(Ordering::Relaxed));
+        for (_, slot) in candidates {
+            if total <= budget.total_max_bytes {
+                break;
+            }
+            if let Ok(mut state) = slot.state.try_lock()
+                && let Some(entry) = state.take()
+            {
+                total = total.saturating_sub(entry.tail_bytes);
+                slot.cached_bytes.store(0, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Validate a cached entry against the file (one fstat); drop it when the
+    /// on-disk length diverged (out-of-band writer, deleted file, …).
+    async fn verify_cache(&self, cache: &mut Option<ThreadCache>, path: &Path) {
+        let Some(entry) = cache.as_ref() else {
+            return;
+        };
+        let disk_len = tokio::fs::metadata(path)
+            .await
+            .map(|meta| meta.len())
+            .unwrap_or(0);
+        if disk_len != entry.file_len {
+            *cache = None;
+        }
+    }
+
+    /// Verify-or-build the thread's cache entry (one full read + fold when
+    /// absent). `Err` means the transcript could not be read/parsed — the
+    /// same error the uncached path would surface.
+    async fn ensure_cache(
+        &self,
+        cache: &mut Option<ThreadCache>,
+        thread_id: &str,
+        path: &Path,
+    ) -> Result<(), ThreadHistoryError> {
+        self.verify_cache(cache, path).await;
+        if cache.is_some() {
+            return Ok(());
+        }
+        let file_len = tokio::fs::metadata(path)
+            .await
+            .map(|meta| meta.len())
+            .unwrap_or(0);
+        let records = if path.exists() {
+            self.read_records_sized_from_path(thread_id, path).await?
+        } else {
+            Vec::new()
+        };
+        let mut entry = ThreadCache::from_records(records, file_len);
+        entry.roll_tail(&self.cache_budget());
+        *cache = Some(entry);
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Appends
+    // -----------------------------------------------------------------------
+
     pub async fn append_committed_messages(
         &self,
         thread_id: &str,
@@ -84,112 +877,19 @@ impl ThreadTranscriptStore {
         messages: &[Value],
     ) -> Result<TranscriptAppendResult, ThreadHistoryError> {
         match &self.mode {
-            TranscriptStoreMode::File { io_lock, .. } => {
-                let _guard = io_lock.lock().await;
-                let path = self.transcript_path(thread_id).ok_or_else(|| {
-                    ThreadHistoryError::TranscriptIo {
-                        thread_id: thread_id.to_owned(),
-                        message: "missing transcript path".to_owned(),
-                    }
-                })?;
-                let mut existing = self.read_records_from_path(thread_id, &path).await?;
-                let next_seq = existing.last().map(|record| record.seq + 1).unwrap_or(1);
-                let trimmed_run_id = trim_non_empty(run_id);
-                let mut appended = Vec::with_capacity(messages.len());
-                for (seq, message) in (next_seq..).zip(messages.iter()) {
-                    let record = ThreadTranscriptRecord {
-                        seq,
-                        thread_id: thread_id.to_owned(),
-                        run_id: trimmed_run_id.clone(),
-                        timestamp: message_timestamp(message)
-                            .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
-                        message: message.clone(),
-                    };
-                    appended.push(record.clone());
-                    existing.push(record);
+            TranscriptStoreMode::File { .. } => {
+                let slot = self.file_slot(thread_id).expect("file mode has slots");
+                let mut cache = slot.state.lock().await;
+                let result = self
+                    .append_committed_messages_file(&mut cache, thread_id, run_id, messages)
+                    .await;
+                if result.is_err() {
+                    *cache = None;
                 }
-
-                if appended.is_empty() && path.exists() {
-                    return Ok(TranscriptAppendResult {
-                        total_messages: existing.len(),
-                        last_message_at: existing.last().map(|record| record.timestamp.clone()),
-                        transcript_file: Some(path),
-                    });
-                }
-
-                let mut file = tokio::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&path)
-                    .await
-                    .map_err(|error| ThreadHistoryError::TranscriptIo {
-                        thread_id: thread_id.to_owned(),
-                        message: error.to_string(),
-                    })?;
-
-                if !path.exists()
-                    || tokio::fs::metadata(&path)
-                        .await
-                        .map(|meta| meta.len())
-                        .unwrap_or(0)
-                        == 0
-                {
-                    let header = serde_json::to_string(&TranscriptLine::Session {
-                        version: 1,
-                        thread_id: thread_id.to_owned(),
-                        created_at: chrono::Utc::now().to_rfc3339(),
-                    })
-                    .map_err(|error| {
-                        ThreadHistoryError::InvalidTranscript {
-                            thread_id: thread_id.to_owned(),
-                            message: error.to_string(),
-                        }
-                    })?;
-                    file.write_all(header.as_bytes()).await.map_err(|error| {
-                        ThreadHistoryError::TranscriptIo {
-                            thread_id: thread_id.to_owned(),
-                            message: error.to_string(),
-                        }
-                    })?;
-                    file.write_all(b"\n").await.map_err(|error| {
-                        ThreadHistoryError::TranscriptIo {
-                            thread_id: thread_id.to_owned(),
-                            message: error.to_string(),
-                        }
-                    })?;
-                }
-
-                for record in &appended {
-                    let line = serde_json::to_string(&TranscriptLine::from(record.clone()))
-                        .map_err(|error| ThreadHistoryError::InvalidTranscript {
-                            thread_id: thread_id.to_owned(),
-                            message: error.to_string(),
-                        })?;
-                    file.write_all(line.as_bytes()).await.map_err(|error| {
-                        ThreadHistoryError::TranscriptIo {
-                            thread_id: thread_id.to_owned(),
-                            message: error.to_string(),
-                        }
-                    })?;
-                    file.write_all(b"\n").await.map_err(|error| {
-                        ThreadHistoryError::TranscriptIo {
-                            thread_id: thread_id.to_owned(),
-                            message: error.to_string(),
-                        }
-                    })?;
-                }
-                file.flush()
-                    .await
-                    .map_err(|error| ThreadHistoryError::TranscriptIo {
-                        thread_id: thread_id.to_owned(),
-                        message: error.to_string(),
-                    })?;
-
-                Ok(TranscriptAppendResult {
-                    total_messages: existing.len(),
-                    last_message_at: existing.last().map(|record| record.timestamp.clone()),
-                    transcript_file: Some(path),
-                })
+                self.sync_slot_accounting(&slot, &cache);
+                drop(cache);
+                self.evict_over_budget(thread_id);
+                result
             }
             TranscriptStoreMode::Memory { records } => {
                 let trimmed_run_id = trim_non_empty(run_id);
@@ -215,6 +915,59 @@ impl ThreadTranscriptStore {
         }
     }
 
+    async fn append_committed_messages_file(
+        &self,
+        cache: &mut Option<ThreadCache>,
+        thread_id: &str,
+        run_id: Option<&str>,
+        messages: &[Value],
+    ) -> Result<TranscriptAppendResult, ThreadHistoryError> {
+        let path = self
+            .transcript_path(thread_id)
+            .ok_or_else(|| ThreadHistoryError::TranscriptIo {
+                thread_id: thread_id.to_owned(),
+                message: "missing transcript path".to_owned(),
+            })?;
+        self.ensure_cache(cache, thread_id, &path).await?;
+        let entry = cache.as_ref().expect("cache ensured above");
+        let next_seq = entry.last_seq + 1;
+        let trimmed_run_id = trim_non_empty(run_id);
+        let mut appended = Vec::with_capacity(messages.len());
+        for (seq, message) in (next_seq..).zip(messages.iter()) {
+            appended.push(ThreadTranscriptRecord {
+                seq,
+                thread_id: thread_id.to_owned(),
+                run_id: trimmed_run_id.clone(),
+                timestamp: message_timestamp(message)
+                    .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+                message: message.clone(),
+            });
+        }
+
+        if appended.is_empty() && path.exists() {
+            return Ok(TranscriptAppendResult {
+                total_messages: entry.total_records,
+                last_message_at: entry.last_message_at(),
+                transcript_file: Some(path),
+            });
+        }
+
+        let line_sizes = self
+            .append_record_lines(thread_id, &path, &appended)
+            .await?;
+        let entry = cache.as_mut().expect("cache ensured above");
+        let file_len = tokio::fs::metadata(&path)
+            .await
+            .map(|meta| meta.len())
+            .unwrap_or(0);
+        entry.push_appended(&appended, &line_sizes, file_len, &self.cache_budget());
+        Ok(TranscriptAppendResult {
+            total_messages: entry.total_records,
+            last_message_at: entry.last_message_at(),
+            transcript_file: Some(path),
+        })
+    }
+
     pub async fn append_run_records(
         &self,
         thread_id: &str,
@@ -222,119 +975,19 @@ impl ThreadTranscriptStore {
         records: &[RunTranscriptRecordDraft],
     ) -> Result<TranscriptAppendRecordsResult, ThreadHistoryError> {
         match &self.mode {
-            TranscriptStoreMode::File { io_lock, .. } => {
-                let _guard = io_lock.lock().await;
-                let path = self.transcript_path(thread_id).ok_or_else(|| {
-                    ThreadHistoryError::TranscriptIo {
-                        thread_id: thread_id.to_owned(),
-                        message: "missing transcript path".to_owned(),
-                    }
-                })?;
-                let mut existing = self.read_records_from_path(thread_id, &path).await?;
-                let next_seq = existing.last().map(|record| record.seq + 1).unwrap_or(1);
-                let trimmed_run_id = trim_non_empty(run_id);
-                let mut appended_records = Vec::with_capacity(records.len());
-                for (seq, draft) in (next_seq..).zip(records.iter()) {
-                    let record = ThreadTranscriptRecord {
-                        seq,
-                        thread_id: thread_id.to_owned(),
-                        run_id: trimmed_run_id.clone(),
-                        timestamp: draft
-                            .timestamp
-                            .as_deref()
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty())
-                            .map(ToOwned::to_owned)
-                            .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
-                        message: draft.message.clone(),
-                    };
-                    appended_records.push(record.clone());
-                    existing.push(record);
+            TranscriptStoreMode::File { .. } => {
+                let slot = self.file_slot(thread_id).expect("file mode has slots");
+                let mut cache = slot.state.lock().await;
+                let result = self
+                    .append_run_records_file(&mut cache, thread_id, run_id, records)
+                    .await;
+                if result.is_err() {
+                    *cache = None;
                 }
-
-                if appended_records.is_empty() && path.exists() {
-                    return Ok(TranscriptAppendRecordsResult {
-                        total_messages: existing.len(),
-                        last_message_at: existing.last().map(|record| record.timestamp.clone()),
-                        transcript_file: Some(path),
-                        appended_records,
-                    });
-                }
-
-                let mut file = tokio::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&path)
-                    .await
-                    .map_err(|error| ThreadHistoryError::TranscriptIo {
-                        thread_id: thread_id.to_owned(),
-                        message: error.to_string(),
-                    })?;
-
-                if !path.exists()
-                    || tokio::fs::metadata(&path)
-                        .await
-                        .map(|meta| meta.len())
-                        .unwrap_or(0)
-                        == 0
-                {
-                    let header = serde_json::to_string(&TranscriptLine::Session {
-                        version: 1,
-                        thread_id: thread_id.to_owned(),
-                        created_at: chrono::Utc::now().to_rfc3339(),
-                    })
-                    .map_err(|error| {
-                        ThreadHistoryError::InvalidTranscript {
-                            thread_id: thread_id.to_owned(),
-                            message: error.to_string(),
-                        }
-                    })?;
-                    file.write_all(header.as_bytes()).await.map_err(|error| {
-                        ThreadHistoryError::TranscriptIo {
-                            thread_id: thread_id.to_owned(),
-                            message: error.to_string(),
-                        }
-                    })?;
-                    file.write_all(b"\n").await.map_err(|error| {
-                        ThreadHistoryError::TranscriptIo {
-                            thread_id: thread_id.to_owned(),
-                            message: error.to_string(),
-                        }
-                    })?;
-                }
-
-                for record in &appended_records {
-                    let line = serde_json::to_string(&TranscriptLine::from(record.clone()))
-                        .map_err(|error| ThreadHistoryError::InvalidTranscript {
-                            thread_id: thread_id.to_owned(),
-                            message: error.to_string(),
-                        })?;
-                    file.write_all(line.as_bytes()).await.map_err(|error| {
-                        ThreadHistoryError::TranscriptIo {
-                            thread_id: thread_id.to_owned(),
-                            message: error.to_string(),
-                        }
-                    })?;
-                    file.write_all(b"\n").await.map_err(|error| {
-                        ThreadHistoryError::TranscriptIo {
-                            thread_id: thread_id.to_owned(),
-                            message: error.to_string(),
-                        }
-                    })?;
-                }
-                file.flush()
-                    .await
-                    .map_err(|error| ThreadHistoryError::TranscriptIo {
-                        thread_id: thread_id.to_owned(),
-                        message: error.to_string(),
-                    })?;
-
-                Ok(TranscriptAppendRecordsResult {
-                    total_messages: existing.len(),
-                    last_message_at: existing.last().map(|record| record.timestamp.clone()),
-                    transcript_file: Some(path),
-                    appended_records,
-                })
+                self.sync_slot_accounting(&slot, &cache);
+                drop(cache);
+                self.evict_over_budget(thread_id);
+                result
             }
             TranscriptStoreMode::Memory { records: store } => {
                 let trimmed_run_id = trim_non_empty(run_id);
@@ -369,68 +1022,169 @@ impl ThreadTranscriptStore {
         }
     }
 
+    async fn append_run_records_file(
+        &self,
+        cache: &mut Option<ThreadCache>,
+        thread_id: &str,
+        run_id: Option<&str>,
+        records: &[RunTranscriptRecordDraft],
+    ) -> Result<TranscriptAppendRecordsResult, ThreadHistoryError> {
+        let path = self
+            .transcript_path(thread_id)
+            .ok_or_else(|| ThreadHistoryError::TranscriptIo {
+                thread_id: thread_id.to_owned(),
+                message: "missing transcript path".to_owned(),
+            })?;
+        self.ensure_cache(cache, thread_id, &path).await?;
+        let entry = cache.as_ref().expect("cache ensured above");
+        let next_seq = entry.last_seq + 1;
+        let trimmed_run_id = trim_non_empty(run_id);
+        let mut appended_records = Vec::with_capacity(records.len());
+        for (seq, draft) in (next_seq..).zip(records.iter()) {
+            appended_records.push(ThreadTranscriptRecord {
+                seq,
+                thread_id: thread_id.to_owned(),
+                run_id: trimmed_run_id.clone(),
+                timestamp: draft
+                    .timestamp
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+                message: draft.message.clone(),
+            });
+        }
+
+        if appended_records.is_empty() && path.exists() {
+            return Ok(TranscriptAppendRecordsResult {
+                total_messages: entry.total_records,
+                last_message_at: entry.last_message_at(),
+                transcript_file: Some(path),
+                appended_records,
+            });
+        }
+
+        let line_sizes = self
+            .append_record_lines(thread_id, &path, &appended_records)
+            .await?;
+        let entry = cache.as_mut().expect("cache ensured above");
+        let file_len = tokio::fs::metadata(&path)
+            .await
+            .map(|meta| meta.len())
+            .unwrap_or(0);
+        entry.push_appended(&appended_records, &line_sizes, file_len, &self.cache_budget());
+        Ok(TranscriptAppendRecordsResult {
+            total_messages: entry.total_records,
+            last_message_at: entry.last_message_at(),
+            transcript_file: Some(path),
+            appended_records,
+        })
+    }
+
+    /// Shared file-append tail: open in append mode, write the session header
+    /// when the file is new/empty, then write one jsonl line per record.
+    /// Returns each written line's length (the cache's byte estimate).
+    async fn append_record_lines(
+        &self,
+        thread_id: &str,
+        path: &Path,
+        appended: &[ThreadTranscriptRecord],
+    ) -> Result<Vec<usize>, ThreadHistoryError> {
+        let mut file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .await
+            .map_err(|error| ThreadHistoryError::TranscriptIo {
+                thread_id: thread_id.to_owned(),
+                message: error.to_string(),
+            })?;
+
+        if !path.exists()
+            || tokio::fs::metadata(path)
+                .await
+                .map(|meta| meta.len())
+                .unwrap_or(0)
+                == 0
+        {
+            let header = serde_json::to_string(&TranscriptLine::Session {
+                version: 1,
+                thread_id: thread_id.to_owned(),
+                created_at: chrono::Utc::now().to_rfc3339(),
+            })
+            .map_err(|error| ThreadHistoryError::InvalidTranscript {
+                thread_id: thread_id.to_owned(),
+                message: error.to_string(),
+            })?;
+            file.write_all(header.as_bytes()).await.map_err(|error| {
+                ThreadHistoryError::TranscriptIo {
+                    thread_id: thread_id.to_owned(),
+                    message: error.to_string(),
+                }
+            })?;
+            file.write_all(b"\n").await.map_err(|error| {
+                ThreadHistoryError::TranscriptIo {
+                    thread_id: thread_id.to_owned(),
+                    message: error.to_string(),
+                }
+            })?;
+        }
+
+        let mut line_sizes = Vec::with_capacity(appended.len());
+        for record in appended {
+            let line = serde_json::to_string(&TranscriptLine::from(record.clone())).map_err(
+                |error| ThreadHistoryError::InvalidTranscript {
+                    thread_id: thread_id.to_owned(),
+                    message: error.to_string(),
+                },
+            )?;
+            file.write_all(line.as_bytes()).await.map_err(|error| {
+                ThreadHistoryError::TranscriptIo {
+                    thread_id: thread_id.to_owned(),
+                    message: error.to_string(),
+                }
+            })?;
+            file.write_all(b"\n").await.map_err(|error| {
+                ThreadHistoryError::TranscriptIo {
+                    thread_id: thread_id.to_owned(),
+                    message: error.to_string(),
+                }
+            })?;
+            line_sizes.push(line.len());
+        }
+        file.flush()
+            .await
+            .map_err(|error| ThreadHistoryError::TranscriptIo {
+                thread_id: thread_id.to_owned(),
+                message: error.to_string(),
+            })?;
+        Ok(line_sizes)
+    }
+
+    // -----------------------------------------------------------------------
+    // Rewrites
+    // -----------------------------------------------------------------------
+
     pub async fn rewrite_from_messages(
         &self,
         thread_id: &str,
         messages: &[Value],
     ) -> Result<TranscriptAppendResult, ThreadHistoryError> {
         match &self.mode {
-            TranscriptStoreMode::File { io_lock, .. } => {
-                let _guard = io_lock.lock().await;
-                let path = self.transcript_path(thread_id).ok_or_else(|| {
-                    ThreadHistoryError::TranscriptIo {
-                        thread_id: thread_id.to_owned(),
-                        message: "missing transcript path".to_owned(),
-                    }
-                })?;
-                let existing = self.read_records_from_path(thread_id, &path).await?;
-                let records = reconcile_rewrite_records(thread_id, &existing, messages);
-                if records == existing {
-                    return Ok(TranscriptAppendResult {
-                        total_messages: existing.len(),
-                        last_message_at: existing.last().map(|record| record.timestamp.clone()),
-                        transcript_file: Some(path),
-                    });
+            TranscriptStoreMode::File { .. } => {
+                let slot = self.file_slot(thread_id).expect("file mode has slots");
+                let mut cache = slot.state.lock().await;
+                let result = self
+                    .rewrite_from_messages_file(&mut cache, thread_id, messages)
+                    .await;
+                if result.is_err() {
+                    *cache = None;
                 }
-
-                let mut lines = Vec::with_capacity(records.len() + 1);
-                lines.push(
-                    serde_json::to_string(&TranscriptLine::Session {
-                        version: 1,
-                        thread_id: thread_id.to_owned(),
-                        created_at: chrono::Utc::now().to_rfc3339(),
-                    })
-                    .map_err(|error| {
-                        ThreadHistoryError::InvalidTranscript {
-                            thread_id: thread_id.to_owned(),
-                            message: error.to_string(),
-                        }
-                    })?,
-                );
-                let mut last_message_at = None;
-                for record in &records {
-                    last_message_at = Some(record.timestamp.clone());
-                    lines.push(
-                        serde_json::to_string(&TranscriptLine::from(record.clone())).map_err(
-                            |error| ThreadHistoryError::InvalidTranscript {
-                                thread_id: thread_id.to_owned(),
-                                message: error.to_string(),
-                            },
-                        )?,
-                    );
-                }
-                let payload = format!("{}\n", lines.join("\n"));
-                tokio::fs::write(&path, payload).await.map_err(|error| {
-                    ThreadHistoryError::TranscriptIo {
-                        thread_id: thread_id.to_owned(),
-                        message: error.to_string(),
-                    }
-                })?;
-                Ok(TranscriptAppendResult {
-                    total_messages: records.len(),
-                    last_message_at,
-                    transcript_file: Some(path),
-                })
+                self.sync_slot_accounting(&slot, &cache);
+                drop(cache);
+                self.evict_over_budget(thread_id);
+                result
             }
             TranscriptStoreMode::Memory { records } => {
                 let mut guard = records.lock().await;
@@ -445,79 +1199,166 @@ impl ThreadTranscriptStore {
         }
     }
 
-    /// Overwrite the whole transcript with `records`, preserving each record's
-    /// `seq`/`run_id`/`timestamp`. Internal helper for tail reconciliation.
-    async fn write_records(
+    async fn rewrite_from_messages_file(
         &self,
+        cache: &mut Option<ThreadCache>,
+        thread_id: &str,
+        messages: &[Value],
+    ) -> Result<TranscriptAppendResult, ThreadHistoryError> {
+        let path = self
+            .transcript_path(thread_id)
+            .ok_or_else(|| ThreadHistoryError::TranscriptIo {
+                thread_id: thread_id.to_owned(),
+                message: "missing transcript path".to_owned(),
+            })?;
+        let existing = self.read_records_from_path(thread_id, &path).await?;
+        let records = reconcile_rewrite_records(thread_id, &existing, messages);
+        if records == existing {
+            let file_len = tokio::fs::metadata(&path)
+                .await
+                .map(|meta| meta.len())
+                .unwrap_or(0);
+            self.rebuild_cache_from_records(cache, &existing, file_len);
+            return Ok(TranscriptAppendResult {
+                total_messages: existing.len(),
+                last_message_at: existing.last().map(|record| record.timestamp.clone()),
+                transcript_file: Some(path),
+            });
+        }
+
+        let mut lines = Vec::with_capacity(records.len() + 1);
+        lines.push(
+            serde_json::to_string(&TranscriptLine::Session {
+                version: 1,
+                thread_id: thread_id.to_owned(),
+                created_at: chrono::Utc::now().to_rfc3339(),
+            })
+            .map_err(|error| ThreadHistoryError::InvalidTranscript {
+                thread_id: thread_id.to_owned(),
+                message: error.to_string(),
+            })?,
+        );
+        let mut last_message_at = None;
+        for record in &records {
+            last_message_at = Some(record.timestamp.clone());
+            lines.push(
+                serde_json::to_string(&TranscriptLine::from(record.clone())).map_err(|error| {
+                    ThreadHistoryError::InvalidTranscript {
+                        thread_id: thread_id.to_owned(),
+                        message: error.to_string(),
+                    }
+                })?,
+            );
+        }
+        let payload = format!("{}\n", lines.join("\n"));
+        tokio::fs::write(&path, payload).await.map_err(|error| {
+            ThreadHistoryError::TranscriptIo {
+                thread_id: thread_id.to_owned(),
+                message: error.to_string(),
+            }
+        })?;
+        let file_len = tokio::fs::metadata(&path)
+            .await
+            .map(|meta| meta.len())
+            .unwrap_or(0);
+        self.rebuild_cache_from_records(cache, &records, file_len);
+        Ok(TranscriptAppendResult {
+            total_messages: records.len(),
+            last_message_at,
+            transcript_file: Some(path),
+        })
+    }
+
+    /// Overwrite the whole transcript with `records`, preserving each record's
+    /// `seq`/`run_id`/`timestamp`. Internal helper for tail reconciliation;
+    /// callers already hold the thread's slot lock.
+    async fn write_records_file(
+        &self,
+        cache: &mut Option<ThreadCache>,
         thread_id: &str,
         records: &[ThreadTranscriptRecord],
     ) -> Result<TranscriptAppendResult, ThreadHistoryError> {
-        match &self.mode {
-            TranscriptStoreMode::File { io_lock, .. } => {
-                let _guard = io_lock.lock().await;
-                let path = self.transcript_path(thread_id).ok_or_else(|| {
-                    ThreadHistoryError::TranscriptIo {
-                        thread_id: thread_id.to_owned(),
-                        message: "missing transcript path".to_owned(),
-                    }
-                })?;
-                let mut lines = Vec::with_capacity(records.len() + 1);
-                lines.push(
-                    serde_json::to_string(&TranscriptLine::Session {
-                        version: 1,
-                        thread_id: thread_id.to_owned(),
-                        created_at: chrono::Utc::now().to_rfc3339(),
-                    })
-                    .map_err(|error| {
-                        ThreadHistoryError::InvalidTranscript {
-                            thread_id: thread_id.to_owned(),
-                            message: error.to_string(),
-                        }
-                    })?,
-                );
-                for record in records {
-                    lines.push(
-                        serde_json::to_string(&TranscriptLine::from(record.clone())).map_err(
-                            |error| ThreadHistoryError::InvalidTranscript {
-                                thread_id: thread_id.to_owned(),
-                                message: error.to_string(),
-                            },
-                        )?,
-                    );
-                }
-                let payload = format!("{}\n", lines.join("\n"));
-                // Atomic replace: write to a temp file then rename, so a crash
-                // mid-write can never truncate the committed transcript.
-                let tmp = path.with_extension("jsonl.tmp");
-                tokio::fs::write(&tmp, payload).await.map_err(|error| {
-                    ThreadHistoryError::TranscriptIo {
+        let path = self
+            .transcript_path(thread_id)
+            .ok_or_else(|| ThreadHistoryError::TranscriptIo {
+                thread_id: thread_id.to_owned(),
+                message: "missing transcript path".to_owned(),
+            })?;
+        let mut lines = Vec::with_capacity(records.len() + 1);
+        lines.push(
+            serde_json::to_string(&TranscriptLine::Session {
+                version: 1,
+                thread_id: thread_id.to_owned(),
+                created_at: chrono::Utc::now().to_rfc3339(),
+            })
+            .map_err(|error| ThreadHistoryError::InvalidTranscript {
+                thread_id: thread_id.to_owned(),
+                message: error.to_string(),
+            })?,
+        );
+        for record in records {
+            lines.push(
+                serde_json::to_string(&TranscriptLine::from(record.clone())).map_err(|error| {
+                    ThreadHistoryError::InvalidTranscript {
                         thread_id: thread_id.to_owned(),
                         message: error.to_string(),
                     }
-                })?;
-                tokio::fs::rename(&tmp, &path).await.map_err(|error| {
-                    ThreadHistoryError::TranscriptIo {
-                        thread_id: thread_id.to_owned(),
-                        message: error.to_string(),
-                    }
-                })?;
-                Ok(TranscriptAppendResult {
-                    total_messages: records.len(),
-                    last_message_at: records.last().map(|record| record.timestamp.clone()),
-                    transcript_file: Some(path),
-                })
-            }
-            TranscriptStoreMode::Memory { records: store } => {
-                let mut guard = store.lock().await;
-                guard.insert(thread_id.to_owned(), records.to_vec());
-                Ok(TranscriptAppendResult {
-                    total_messages: records.len(),
-                    last_message_at: records.last().map(|record| record.timestamp.clone()),
-                    transcript_file: None,
-                })
-            }
+                })?,
+            );
         }
+        let payload = format!("{}\n", lines.join("\n"));
+        // Atomic replace: write to a temp file then rename, so a crash
+        // mid-write can never truncate the committed transcript.
+        let tmp = path.with_extension("jsonl.tmp");
+        tokio::fs::write(&tmp, payload).await.map_err(|error| {
+            ThreadHistoryError::TranscriptIo {
+                thread_id: thread_id.to_owned(),
+                message: error.to_string(),
+            }
+        })?;
+        tokio::fs::rename(&tmp, &path).await.map_err(|error| {
+            ThreadHistoryError::TranscriptIo {
+                thread_id: thread_id.to_owned(),
+                message: error.to_string(),
+            }
+        })?;
+        let file_len = tokio::fs::metadata(&path)
+            .await
+            .map(|meta| meta.len())
+            .unwrap_or(0);
+        self.rebuild_cache_from_records(cache, records, file_len);
+        Ok(TranscriptAppendResult {
+            total_messages: records.len(),
+            last_message_at: records.last().map(|record| record.timestamp.clone()),
+            transcript_file: Some(path),
+        })
     }
+
+    /// Rebuild a thread's cache entry from a full record set already in
+    /// memory (rewrite paths) — no extra disk read.
+    fn rebuild_cache_from_records(
+        &self,
+        cache: &mut Option<ThreadCache>,
+        records: &[ThreadTranscriptRecord],
+        file_len: u64,
+    ) {
+        let sized: Vec<CachedTranscriptRecord> = records
+            .iter()
+            .map(|record| CachedTranscriptRecord {
+                bytes: serde_json::to_string(&TranscriptLine::from(record.clone()))
+                    .map(|line| line.len())
+                    .unwrap_or(0),
+                record: record.clone(),
+            })
+            .collect();
+        let mut entry = ThreadCache::from_records(sized, file_len);
+        entry.roll_tail(&self.cache_budget());
+        *cache = Some(entry);
+    }
+
+    // -----------------------------------------------------------------------
+    // Reconciles
+    // -----------------------------------------------------------------------
 
     /// Ensure the trailing block of records tagged with `run_id` exactly equals
     /// `authoritative`. No-op when they already match (the common path once a run
@@ -532,7 +1373,6 @@ impl ThreadTranscriptStore {
         authoritative: &[Value],
     ) -> Result<TranscriptAppendResult, ThreadHistoryError> {
         let trimmed_run_id = run_id.trim();
-        let records = self.read_records(thread_id).await?;
         // Without a run_id we cannot identify which trailing records belong to
         // this run, so we cannot tell the worker's already-appended rows apart
         // from earlier runs. Reconciling blindly would re-append the whole run
@@ -545,68 +1385,134 @@ impl ThreadTranscriptStore {
                     "reconcile_run_tail called without a run_id; skipping tail reconcile"
                 );
             }
+            let records = self.read_records(thread_id).await?;
             return Ok(TranscriptAppendResult {
                 total_messages: records.len(),
                 last_message_at: records.last().map(|record| record.timestamp.clone()),
                 transcript_file: self.transcript_path(thread_id),
             });
         }
-        let mut split = records.len();
-        while split > 0
-            && records[split - 1].run_id.as_deref().map(str::trim) == Some(trimmed_run_id)
-        {
-            split -= 1;
+
+        match &self.mode {
+            TranscriptStoreMode::File { .. } => {
+                let slot = self.file_slot(thread_id).expect("file mode has slots");
+                let mut cache = slot.state.lock().await;
+                let result = self
+                    .reconcile_run_tail_file(&mut cache, thread_id, trimmed_run_id, authoritative)
+                    .await;
+                if result.is_err() {
+                    *cache = None;
+                }
+                self.sync_slot_accounting(&slot, &cache);
+                drop(cache);
+                self.evict_over_budget(thread_id);
+                result
+            }
+            TranscriptStoreMode::Memory { .. } => {
+                let records = self.read_records(thread_id).await?;
+                match plan_reconcile_run_tail(thread_id, &records, trimmed_run_id, authoritative) {
+                    MessagesReconcilePlan::NoOp => Ok(TranscriptAppendResult {
+                        total_messages: records.len(),
+                        last_message_at: records.last().map(|record| record.timestamp.clone()),
+                        transcript_file: self.transcript_path(thread_id),
+                    }),
+                    MessagesReconcilePlan::AppendSuffix { skip } => {
+                        self.append_committed_messages(
+                            thread_id,
+                            Some(trimmed_run_id),
+                            &authoritative[skip..],
+                        )
+                        .await
+                    }
+                    MessagesReconcilePlan::Rewrite { rebuilt } => {
+                        self.write_records_memory(thread_id, &rebuilt).await
+                    }
+                }
+            }
         }
-        let existing_tail: Vec<Value> = records[split..]
-            .iter()
-            .map(|record| record.message.clone())
-            .collect();
-        // Compare on a normalized identity that ignores cosmetic, flush-time
-        // varying fields (the SDK session id is bound mid-run, so the user row
-        // committed by the first flush carries `None` while the terminal rebuild
-        // carries `Some`; timestamps can be backfilled). Without this the user
-        // row always "diverges" and every terminal commit falls to the O(file)
-        // rewrite below instead of the cheap no-op / suffix-append.
-        let existing_identity: Vec<Value> = existing_tail.iter().map(message_identity).collect();
-        let authoritative_identity: Vec<Value> =
-            authoritative.iter().map(message_identity).collect();
-        if existing_identity == authoritative_identity {
-            return Ok(TranscriptAppendResult {
-                total_messages: records.len(),
-                last_message_at: records.last().map(|record| record.timestamp.clone()),
-                transcript_file: self.transcript_path(thread_id),
-            });
-        }
-        // Fast path: the run only grew (the already-committed tail is a prefix of
-        // `authoritative`). This is the steady-state terminal case — the worker
-        // streamed every finalized row during the run, and the terminal just needs
-        // to append the trailing segment that was still in flight at the last
-        // flush. Append the suffix instead of rewriting the whole file, which on a
-        // large transcript would be an O(file) rewrite to add one message.
-        if authoritative_identity.len() > existing_identity.len()
-            && authoritative_identity[..existing_identity.len()] == existing_identity[..]
-        {
-            let suffix = &authoritative[existing_tail.len()..];
-            return self
-                .append_committed_messages(thread_id, Some(trimmed_run_id), suffix)
-                .await;
-        }
-        // Divergent (a retry re-streamed different content, or the run shrank):
-        // rewrite this run's tail so we keep only the final authoritative set.
-        let mut rebuilt: Vec<ThreadTranscriptRecord> = records[..split].to_vec();
-        let next_seq = rebuilt.last().map(|record| record.seq + 1).unwrap_or(1);
-        let run_id_value = (!trimmed_run_id.is_empty()).then(|| trimmed_run_id.to_owned());
-        for (seq, message) in (next_seq..).zip(authoritative.iter()) {
-            rebuilt.push(ThreadTranscriptRecord {
-                seq,
+    }
+
+    async fn reconcile_run_tail_file(
+        &self,
+        cache: &mut Option<ThreadCache>,
+        thread_id: &str,
+        trimmed_run_id: &str,
+        authoritative: &[Value],
+    ) -> Result<TranscriptAppendResult, ThreadHistoryError> {
+        let path = self
+            .transcript_path(thread_id)
+            .ok_or_else(|| ThreadHistoryError::TranscriptIo {
                 thread_id: thread_id.to_owned(),
-                run_id: run_id_value.clone(),
-                timestamp: message_timestamp(message)
-                    .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
-                message: message.clone(),
-            });
+                message: "missing transcript path".to_owned(),
+            })?;
+        self.verify_cache(cache, &path).await;
+
+        // Fast path off the cached tail: the steady-state terminal reconcile
+        // is a no-op or a pure suffix append, decidable from the trailing run
+        // block alone — skip the O(file) read entirely.
+        if let Some(entry) = cache.as_ref()
+            && let Some(block) = entry.trailing_run_block(trimmed_run_id)
+        {
+            let existing_identity: Vec<Value> = block
+                .iter()
+                .map(|c| message_identity(&c.record.message))
+                .collect();
+            let authoritative_identity: Vec<Value> =
+                authoritative.iter().map(message_identity).collect();
+            if existing_identity == authoritative_identity {
+                return Ok(TranscriptAppendResult {
+                    total_messages: entry.total_records,
+                    last_message_at: entry.last_message_at(),
+                    transcript_file: Some(path),
+                });
+            }
+            if authoritative_identity.len() > existing_identity.len()
+                && authoritative_identity[..existing_identity.len()] == existing_identity[..]
+            {
+                let skip = block.len();
+                return self
+                    .append_committed_messages_file(
+                        cache,
+                        thread_id,
+                        Some(trimmed_run_id),
+                        &authoritative[skip..],
+                    )
+                    .await;
+            }
         }
-        self.write_records(thread_id, &rebuilt).await
+
+        let records = self.read_records_from_path(thread_id, &path).await?;
+        match plan_reconcile_run_tail(thread_id, &records, trimmed_run_id, authoritative) {
+            MessagesReconcilePlan::NoOp => {
+                let file_len = tokio::fs::metadata(&path)
+                    .await
+                    .map(|meta| meta.len())
+                    .unwrap_or(0);
+                self.rebuild_cache_from_records(cache, &records, file_len);
+                Ok(TranscriptAppendResult {
+                    total_messages: records.len(),
+                    last_message_at: records.last().map(|record| record.timestamp.clone()),
+                    transcript_file: Some(path),
+                })
+            }
+            MessagesReconcilePlan::AppendSuffix { skip } => {
+                let file_len = tokio::fs::metadata(&path)
+                    .await
+                    .map(|meta| meta.len())
+                    .unwrap_or(0);
+                self.rebuild_cache_from_records(cache, &records, file_len);
+                self.append_committed_messages_file(
+                    cache,
+                    thread_id,
+                    Some(trimmed_run_id),
+                    &authoritative[skip..],
+                )
+                .await
+            }
+            MessagesReconcilePlan::Rewrite { rebuilt } => {
+                self.write_records_file(cache, thread_id, &rebuilt).await
+            }
+        }
     }
 
     pub async fn reconcile_run_records_tail(
@@ -616,7 +1522,6 @@ impl ThreadTranscriptStore {
         authoritative: &[RunTranscriptRecordDraft],
     ) -> Result<TranscriptAppendRecordsResult, ThreadHistoryError> {
         let trimmed_run_id = run_id.trim();
-        let records = self.read_records(thread_id).await?;
         if trimmed_run_id.is_empty() {
             if !authoritative.is_empty() {
                 tracing::warn!(
@@ -624,6 +1529,7 @@ impl ThreadTranscriptStore {
                     "reconcile_run_records_tail called without a run_id; skipping tail reconcile"
                 );
             }
+            let records = self.read_records(thread_id).await?;
             return Ok(TranscriptAppendRecordsResult {
                 total_messages: records.len(),
                 last_message_at: records.last().map(|record| record.timestamp.clone()),
@@ -632,312 +1538,232 @@ impl ThreadTranscriptStore {
             });
         }
 
-        let mut split = records.len();
-        while split > 0
-            && records[split - 1].run_id.as_deref().map(str::trim) == Some(trimmed_run_id)
-        {
-            split -= 1;
-        }
-        let existing_tail = &records[split..];
-        if existing_tail.is_empty() {
-            return self
-                .append_run_records(thread_id, Some(trimmed_run_id), authoritative)
-                .await;
-        }
-
-        let existing_identity: Vec<Value> = existing_tail
-            .iter()
-            .map(|record| message_identity(&record.message))
-            .collect();
-        let authoritative_identity: Vec<Value> = authoritative
-            .iter()
-            .map(|draft| message_identity(&draft.message))
-            .collect();
-
-        if existing_identity == authoritative_identity {
-            let mut changed = Vec::new();
-            let mut changed_same_seqs = Vec::new();
-            let mut rebuilt = records.clone();
-            for (offset, draft) in authoritative.iter().enumerate() {
-                let existing = &existing_tail[offset];
-                let replacement = record_from_draft_replacing(
-                    thread_id,
-                    Some(trimmed_run_id),
-                    existing.seq,
-                    draft,
-                    existing,
-                );
-                if replacement.timestamp != existing.timestamp
-                    || replacement.message != existing.message
-                {
-                    rebuilt[split + offset] = replacement.clone();
-                    changed_same_seqs.push(replacement.seq);
-                    changed.push(replacement);
-                }
-            }
-            if changed.is_empty() {
-                return Ok(TranscriptAppendRecordsResult {
-                    total_messages: records.len(),
-                    last_message_at: records.last().map(|record| record.timestamp.clone()),
-                    transcript_file: self.transcript_path(thread_id),
-                    appended_records: Vec::new(),
-                });
-            }
-            append_range_rewrite_marker(
-                &mut rebuilt,
-                &mut changed,
-                thread_id,
-                Some(trimmed_run_id),
-                changed_same_seqs.iter().copied().min().unwrap_or(1),
-                changed_same_seqs.iter().copied().max().unwrap_or(1),
-                authoritative.len(),
-                existing_tail.len(),
-                "same_seq_overwrite",
-            );
-            let summary = self.write_records(thread_id, &rebuilt).await?;
-            return Ok(TranscriptAppendRecordsResult {
-                total_messages: summary.total_messages,
-                last_message_at: summary.last_message_at,
-                transcript_file: summary.transcript_file,
-                appended_records: changed,
-            });
-        }
-
-        if authoritative_identity.len() > existing_identity.len()
-            && authoritative_identity[..existing_identity.len()] == existing_identity[..]
-        {
-            let prefix_changed =
-                authoritative
-                    .iter()
-                    .zip(existing_tail.iter())
-                    .any(|(draft, existing)| {
-                        let replacement = record_from_draft_replacing(
-                            thread_id,
-                            Some(trimmed_run_id),
-                            existing.seq,
-                            draft,
-                            existing,
-                        );
-                        replacement.timestamp != existing.timestamp
-                            || replacement.message != existing.message
-                    });
-            if !prefix_changed {
-                return self
-                    .append_run_records(
+        match &self.mode {
+            TranscriptStoreMode::File { .. } => {
+                let slot = self.file_slot(thread_id).expect("file mode has slots");
+                let mut cache = slot.state.lock().await;
+                let result = self
+                    .reconcile_run_records_tail_file(
+                        &mut cache,
                         thread_id,
-                        Some(trimmed_run_id),
-                        &authoritative[existing_tail.len()..],
+                        trimmed_run_id,
+                        authoritative,
                     )
                     .await;
+                if result.is_err() {
+                    *cache = None;
+                }
+                self.sync_slot_accounting(&slot, &cache);
+                drop(cache);
+                self.evict_over_budget(thread_id);
+                result
+            }
+            TranscriptStoreMode::Memory { .. } => {
+                let records = self.read_records(thread_id).await?;
+                match plan_reconcile_run_records_tail(
+                    thread_id,
+                    &records,
+                    trimmed_run_id,
+                    authoritative,
+                ) {
+                    RecordsReconcilePlan::NoOp => Ok(TranscriptAppendRecordsResult {
+                        total_messages: records.len(),
+                        last_message_at: records.last().map(|record| record.timestamp.clone()),
+                        transcript_file: self.transcript_path(thread_id),
+                        appended_records: Vec::new(),
+                    }),
+                    RecordsReconcilePlan::AppendSuffix { skip } => {
+                        self.append_run_records(
+                            thread_id,
+                            Some(trimmed_run_id),
+                            &authoritative[skip..],
+                        )
+                        .await
+                    }
+                    RecordsReconcilePlan::Rewrite { rebuilt, changed } => {
+                        let summary = self.write_records_memory(thread_id, &rebuilt).await?;
+                        Ok(TranscriptAppendRecordsResult {
+                            total_messages: summary.total_messages,
+                            last_message_at: summary.last_message_at,
+                            transcript_file: summary.transcript_file,
+                            appended_records: changed,
+                        })
+                    }
+                }
             }
         }
+    }
 
-        if authoritative.len() >= existing_tail.len() {
-            let mut changed = Vec::new();
-            let mut changed_same_seqs = Vec::new();
-            let mut rebuilt = records[..split].to_vec();
-            let mut next_seq = existing_tail
-                .first()
-                .map(|record| record.seq)
-                .unwrap_or_else(|| rebuilt.last().map(|record| record.seq + 1).unwrap_or(1));
-            for (offset, draft) in authoritative.iter().enumerate() {
-                let seq = if offset < existing_tail.len() {
-                    existing_tail[offset].seq
-                } else {
-                    next_seq
-                };
-                let replacement = record_from_draft(thread_id, Some(trimmed_run_id), seq, draft);
-                let replacement = if let Some(existing) = existing_tail.get(offset) {
-                    record_from_draft_replacing(
+    async fn reconcile_run_records_tail_file(
+        &self,
+        cache: &mut Option<ThreadCache>,
+        thread_id: &str,
+        trimmed_run_id: &str,
+        authoritative: &[RunTranscriptRecordDraft],
+    ) -> Result<TranscriptAppendRecordsResult, ThreadHistoryError> {
+        let path = self
+            .transcript_path(thread_id)
+            .ok_or_else(|| ThreadHistoryError::TranscriptIo {
+                thread_id: thread_id.to_owned(),
+                message: "missing transcript path".to_owned(),
+            })?;
+        self.verify_cache(cache, &path).await;
+
+        // Fast path off the cached tail: no-op and pure-suffix-append are
+        // decidable from the trailing run block; everything else needs the
+        // full record set for the rewrite.
+        if let Some(entry) = cache.as_ref()
+            && let Some(block) = entry.trailing_run_block(trimmed_run_id)
+        {
+            if block.is_empty() {
+                return self
+                    .append_run_records_file(cache, thread_id, Some(trimmed_run_id), authoritative)
+                    .await;
+            }
+            let existing_identity: Vec<Value> = block
+                .iter()
+                .map(|c| message_identity(&c.record.message))
+                .collect();
+            let authoritative_identity: Vec<Value> = authoritative
+                .iter()
+                .map(|draft| message_identity(&draft.message))
+                .collect();
+            if existing_identity == authoritative_identity {
+                let unchanged = authoritative.iter().enumerate().all(|(offset, draft)| {
+                    let existing = &block[offset].record;
+                    let replacement = record_from_draft_replacing(
                         thread_id,
                         Some(trimmed_run_id),
-                        seq,
+                        existing.seq,
                         draft,
                         existing,
-                    )
-                } else {
-                    replacement
-                };
-                let is_changed = existing_tail
-                    .get(offset)
-                    .map(|existing| {
-                        existing.timestamp != replacement.timestamp
-                            || existing.message != replacement.message
-                    })
-                    .unwrap_or(true);
-                if is_changed {
-                    if offset < existing_tail.len() {
-                        changed_same_seqs.push(replacement.seq);
-                    }
-                    changed.push(replacement.clone());
+                    );
+                    replacement.timestamp == existing.timestamp
+                        && replacement.message == existing.message
+                });
+                if unchanged {
+                    return Ok(TranscriptAppendRecordsResult {
+                        total_messages: entry.total_records,
+                        last_message_at: entry.last_message_at(),
+                        transcript_file: Some(path),
+                        appended_records: Vec::new(),
+                    });
                 }
-                rebuilt.push(replacement);
-                next_seq = seq + 1;
+            } else if authoritative_identity.len() > existing_identity.len()
+                && authoritative_identity[..existing_identity.len()] == existing_identity[..]
+            {
+                let prefix_changed =
+                    authoritative
+                        .iter()
+                        .zip(block.iter())
+                        .any(|(draft, existing)| {
+                            let replacement = record_from_draft_replacing(
+                                thread_id,
+                                Some(trimmed_run_id),
+                                existing.record.seq,
+                                draft,
+                                &existing.record,
+                            );
+                            replacement.timestamp != existing.record.timestamp
+                                || replacement.message != existing.record.message
+                        });
+                if !prefix_changed {
+                    let skip = block.len();
+                    return self
+                        .append_run_records_file(
+                            cache,
+                            thread_id,
+                            Some(trimmed_run_id),
+                            &authoritative[skip..],
+                        )
+                        .await;
+                }
             }
-            if let (Some(start_seq), Some(end_seq)) = (
-                changed_same_seqs.iter().copied().min(),
-                changed_same_seqs.iter().copied().max(),
-            ) {
-                append_range_rewrite_marker(
-                    &mut rebuilt,
-                    &mut changed,
-                    thread_id,
-                    Some(trimmed_run_id),
-                    start_seq,
-                    end_seq,
-                    authoritative.len(),
-                    existing_tail.len(),
-                    "same_seq_overwrite",
-                );
-            }
-            let summary = self.write_records(thread_id, &rebuilt).await?;
-            return Ok(TranscriptAppendRecordsResult {
-                total_messages: summary.total_messages,
-                last_message_at: summary.last_message_at,
-                transcript_file: summary.transcript_file,
-                appended_records: changed,
-            });
         }
 
-        if authoritative_identity.len() <= existing_identity.len()
-            && existing_identity[..authoritative_identity.len()] == authoritative_identity[..]
-            && existing_tail[authoritative.len()..]
-                .iter()
-                .all(|record| is_range_rewrite_control(&record.message))
-        {
-            let mut changed = Vec::new();
-            let mut changed_same_seqs = Vec::new();
-            let mut rebuilt = records.clone();
-            for (offset, draft) in authoritative.iter().enumerate() {
-                let existing = &existing_tail[offset];
-                let replacement = record_from_draft_replacing(
-                    thread_id,
-                    Some(trimmed_run_id),
-                    existing.seq,
-                    draft,
-                    existing,
-                );
-                if replacement.timestamp != existing.timestamp
-                    || replacement.message != existing.message
-                {
-                    rebuilt[split + offset] = replacement.clone();
-                    changed_same_seqs.push(replacement.seq);
-                    changed.push(replacement.clone());
-                }
-            }
-            if changed.is_empty() {
-                return Ok(TranscriptAppendRecordsResult {
+        let records = self.read_records_from_path(thread_id, &path).await?;
+        match plan_reconcile_run_records_tail(thread_id, &records, trimmed_run_id, authoritative) {
+            RecordsReconcilePlan::NoOp => {
+                let file_len = tokio::fs::metadata(&path)
+                    .await
+                    .map(|meta| meta.len())
+                    .unwrap_or(0);
+                self.rebuild_cache_from_records(cache, &records, file_len);
+                Ok(TranscriptAppendRecordsResult {
                     total_messages: records.len(),
                     last_message_at: records.last().map(|record| record.timestamp.clone()),
-                    transcript_file: self.transcript_path(thread_id),
+                    transcript_file: Some(path),
                     appended_records: Vec::new(),
-                });
+                })
             }
-            if let (Some(start_seq), Some(end_seq)) = (
-                changed_same_seqs.iter().copied().min(),
-                changed_same_seqs.iter().copied().max(),
-            ) {
-                append_range_rewrite_marker(
-                    &mut rebuilt,
-                    &mut changed,
+            RecordsReconcilePlan::AppendSuffix { skip } => {
+                let file_len = tokio::fs::metadata(&path)
+                    .await
+                    .map(|meta| meta.len())
+                    .unwrap_or(0);
+                self.rebuild_cache_from_records(cache, &records, file_len);
+                self.append_run_records_file(
+                    cache,
                     thread_id,
                     Some(trimmed_run_id),
-                    start_seq,
-                    end_seq,
-                    authoritative.len(),
-                    existing_tail.len(),
-                    "same_seq_overwrite",
-                );
+                    &authoritative[skip..],
+                )
+                .await
             }
-            let summary = self.write_records(thread_id, &rebuilt).await?;
-            return Ok(TranscriptAppendRecordsResult {
-                total_messages: summary.total_messages,
-                last_message_at: summary.last_message_at,
-                transcript_file: summary.transcript_file,
-                appended_records: changed,
+            RecordsReconcilePlan::Rewrite { rebuilt, changed } => {
+                let summary = self.write_records_file(cache, thread_id, &rebuilt).await?;
+                Ok(TranscriptAppendRecordsResult {
+                    total_messages: summary.total_messages,
+                    last_message_at: summary.last_message_at,
+                    transcript_file: summary.transcript_file,
+                    appended_records: changed,
+                })
+            }
+        }
+    }
+
+    async fn write_records_memory(
+        &self,
+        thread_id: &str,
+        records: &[ThreadTranscriptRecord],
+    ) -> Result<TranscriptAppendResult, ThreadHistoryError> {
+        let TranscriptStoreMode::Memory { records: store } = &self.mode else {
+            return Err(ThreadHistoryError::TranscriptIo {
+                thread_id: thread_id.to_owned(),
+                message: "memory write on file store".to_owned(),
             });
-        }
-
-        let mut changed = Vec::new();
-        let mut changed_same_seqs = Vec::new();
-        let mut rebuilt = records[..split].to_vec();
-        let first_rewritten_seq = existing_tail
-            .get(authoritative.len())
-            .map(|record| record.seq)
-            .unwrap_or_else(|| existing_tail.first().map(|record| record.seq).unwrap_or(1));
-        let last_rewritten_seq = existing_tail
-            .last()
-            .map(|record| record.seq)
-            .unwrap_or(first_rewritten_seq);
-        let rewrite_at = chrono::Utc::now().to_rfc3339();
-        for (offset, existing) in existing_tail.iter().enumerate() {
-            if let Some(draft) = authoritative.get(offset) {
-                let replacement = record_from_draft_replacing(
-                    thread_id,
-                    Some(trimmed_run_id),
-                    existing.seq,
-                    draft,
-                    existing,
-                );
-                if replacement.timestamp != existing.timestamp
-                    || replacement.message != existing.message
-                {
-                    changed_same_seqs.push(replacement.seq);
-                    changed.push(replacement.clone());
-                }
-                rebuilt.push(replacement);
-            } else {
-                let rewrite = build_range_rewrite_record(
-                    thread_id,
-                    Some(trimmed_run_id),
-                    existing.seq,
-                    first_rewritten_seq,
-                    last_rewritten_seq,
-                    authoritative.len(),
-                    existing_tail.len(),
-                    true,
-                    "run_tail_shrink",
-                    &rewrite_at,
-                );
-                if rewrite.timestamp != existing.timestamp || rewrite.message != existing.message {
-                    changed_same_seqs.push(rewrite.seq);
-                    changed.push(rewrite.clone());
-                }
-                rebuilt.push(rewrite);
-            }
-        }
-
-        let first_rewritten_seq = changed_same_seqs
-            .iter()
-            .copied()
-            .min()
-            .unwrap_or(first_rewritten_seq);
-        let last_rewritten_seq = changed_same_seqs
-            .iter()
-            .copied()
-            .max()
-            .unwrap_or(last_rewritten_seq);
-        let rewrite = build_range_rewrite_record(
-            thread_id,
-            Some(trimmed_run_id),
-            rebuilt.last().map(|record| record.seq + 1).unwrap_or(1),
-            first_rewritten_seq,
-            last_rewritten_seq,
-            authoritative.len(),
-            existing_tail.len(),
-            false,
-            "run_tail_shrink",
-            &rewrite_at,
-        );
-        changed.push(rewrite.clone());
-        rebuilt.push(rewrite);
-        let summary = self.write_records(thread_id, &rebuilt).await?;
-        Ok(TranscriptAppendRecordsResult {
-            total_messages: summary.total_messages,
-            last_message_at: summary.last_message_at,
-            transcript_file: summary.transcript_file,
-            appended_records: changed,
+        };
+        let mut guard = store.lock().await;
+        guard.insert(thread_id.to_owned(), records.to_vec());
+        Ok(TranscriptAppendResult {
+            total_messages: records.len(),
+            last_message_at: records.last().map(|record| record.timestamp.clone()),
+            transcript_file: None,
         })
+    }
+
+    // -----------------------------------------------------------------------
+    // Reads
+    // -----------------------------------------------------------------------
+
+    /// Serve a read from the thread's cache when it is already built and
+    /// covers the request. Never builds the cache (one-off reads must not pay
+    /// a build or occupy budget); hot paths that build are
+    /// `render_snapshot_in_window`, `run_state`, and the write paths.
+    async fn with_built_cache<T>(
+        &self,
+        thread_id: &str,
+        serve: impl FnOnce(&ThreadCache) -> Option<T>,
+    ) -> Option<T> {
+        let slot = self.file_slot(thread_id)?;
+        let mut cache = slot.state.lock().await;
+        let path = self.transcript_path(thread_id)?;
+        self.verify_cache(&mut cache, &path).await;
+        let served = cache.as_ref().and_then(serve);
+        if served.is_some() {
+            self.sync_slot_accounting(&slot, &cache);
+        }
+        served
     }
 
     pub async fn tail(
@@ -945,6 +1771,12 @@ impl ThreadTranscriptStore {
         thread_id: &str,
         limit: usize,
     ) -> Result<Vec<Value>, ThreadHistoryError> {
+        if let Some(messages) = self
+            .with_built_cache(thread_id, |entry| entry.tail_messages(limit))
+            .await
+        {
+            return Ok(messages);
+        }
         let records = self.read_records(thread_id).await?;
         let start = records.len().saturating_sub(limit);
         Ok(records[start..]
@@ -1028,6 +1860,12 @@ impl ThreadTranscriptStore {
         user_turns: usize,
         cap: usize,
     ) -> Result<ThreadTranscriptWindow, ThreadHistoryError> {
+        if let Some(window) = self
+            .with_built_cache(thread_id, |entry| entry.cold_open_window(user_turns, cap))
+            .await
+        {
+            return Ok(window);
+        }
         let records = self.read_records(thread_id).await?;
         let total = records.len();
         if total == 0 {
@@ -1065,6 +1903,12 @@ impl ThreadTranscriptStore {
     }
 
     pub async fn message_count(&self, thread_id: &str) -> Result<usize, ThreadHistoryError> {
+        if let Some(total) = self
+            .with_built_cache(thread_id, |entry| Some(entry.total_records))
+            .await
+        {
+            return Ok(total);
+        }
         Ok(self.read_records(thread_id).await?.len())
     }
 
@@ -1079,12 +1923,32 @@ impl ThreadTranscriptStore {
         &self,
         thread_id: &str,
     ) -> Result<TranscriptRunState, ThreadHistoryError> {
-        let records = self.read_records(thread_id).await?;
-        let values = records
-            .iter()
-            .filter_map(|record| serde_json::to_value(record).ok())
-            .collect::<Vec<_>>();
-        Ok(reduce_transcript_run_state(&values))
+        match &self.mode {
+            TranscriptStoreMode::File { .. } => {
+                let slot = self.file_slot(thread_id).expect("file mode has slots");
+                let path = self.transcript_path(thread_id).expect("file mode has path");
+                let mut cache = slot.state.lock().await;
+                let result = self.ensure_cache(&mut cache, thread_id, &path).await;
+                if result.is_err() {
+                    *cache = None;
+                }
+                self.sync_slot_accounting(&slot, &cache);
+                result?;
+                let entry = cache.as_ref().expect("cache ensured above");
+                let state = entry.run_state_at(entry.last_seq);
+                drop(cache);
+                self.evict_over_budget(thread_id);
+                Ok(state)
+            }
+            TranscriptStoreMode::Memory { .. } => {
+                let records = self.read_records(thread_id).await?;
+                let values = records
+                    .iter()
+                    .filter_map(|record| serde_json::to_value(record).ok())
+                    .collect::<Vec<_>>();
+                Ok(reduce_transcript_run_state(&values))
+            }
+        }
     }
 
     pub async fn render_snapshot_at_seq(
@@ -1107,6 +1971,31 @@ impl ThreadTranscriptStore {
         floor_seq: u64,
         based_on_seq: u64,
     ) -> Result<RenderSnapshot, ThreadHistoryError> {
+        if let TranscriptStoreMode::File { .. } = &self.mode {
+            let slot = self.file_slot(thread_id).expect("file mode has slots");
+            let path = self.transcript_path(thread_id).expect("file mode has path");
+            let mut cache = slot.state.lock().await;
+            let ensured = self.ensure_cache(&mut cache, thread_id, &path).await;
+            if ensured.is_err() {
+                *cache = None;
+            }
+            self.sync_slot_accounting(&slot, &cache);
+            ensured?;
+            let served = cache
+                .as_ref()
+                .and_then(|entry| entry.render_snapshot_in_window(floor_seq, based_on_seq));
+            drop(cache);
+            self.evict_over_budget(thread_id);
+            if let Some(snapshot) = served {
+                return Ok(snapshot);
+            }
+            tracing::debug!(
+                thread_id = %thread_id,
+                floor_seq,
+                based_on_seq,
+                "render window below cached tail; deriving from full transcript read"
+            );
+        }
         let records = self.read_records(thread_id).await?;
         let prefix = records
             .iter()
@@ -1320,8 +2209,11 @@ impl ThreadTranscriptStore {
 
     pub async fn delete(&self, thread_id: &str) -> Result<(), ThreadHistoryError> {
         match &self.mode {
-            TranscriptStoreMode::File { io_lock, .. } => {
-                let _guard = io_lock.lock().await;
+            TranscriptStoreMode::File { .. } => {
+                let slot = self.file_slot(thread_id).expect("file mode has slots");
+                let mut cache = slot.state.lock().await;
+                *cache = None;
+                self.sync_slot_accounting(&slot, &cache);
                 let Some(path) = self.transcript_path(thread_id) else {
                     return Ok(());
                 };
@@ -1366,9 +2258,24 @@ impl ThreadTranscriptStore {
         thread_id: &str,
         path: &Path,
     ) -> Result<Vec<ThreadTranscriptRecord>, ThreadHistoryError> {
+        Ok(self
+            .read_records_sized_from_path(thread_id, path)
+            .await?
+            .into_iter()
+            .map(|cached| cached.record)
+            .collect())
+    }
+
+    async fn read_records_sized_from_path(
+        &self,
+        thread_id: &str,
+        path: &Path,
+    ) -> Result<Vec<CachedTranscriptRecord>, ThreadHistoryError> {
         if !path.exists() {
             return Ok(Vec::new());
         }
+        #[cfg(test)]
+        self.full_file_reads.fetch_add(1, Ordering::Relaxed);
         let raw = tokio::fs::read_to_string(path).await.map_err(|error| {
             ThreadHistoryError::TranscriptIo {
                 thread_id: thread_id.to_owned(),
@@ -1394,12 +2301,15 @@ impl ThreadTranscriptStore {
                 message,
             } = parsed
             {
-                records.push(ThreadTranscriptRecord {
-                    seq,
-                    thread_id,
-                    run_id,
-                    timestamp,
-                    message,
+                records.push(CachedTranscriptRecord {
+                    bytes: line.len(),
+                    record: ThreadTranscriptRecord {
+                        seq,
+                        thread_id,
+                        run_id,
+                        timestamp,
+                        message,
+                    },
                 });
             }
         }
