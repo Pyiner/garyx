@@ -12,6 +12,7 @@ use garyx_models::{
 };
 use serde_json::{Value, json};
 
+use crate::garyx_db::ThreadMetaRecord;
 use crate::server::AppState;
 
 fn provider_type_from_value(value: &Value) -> Option<ProviderType> {
@@ -125,6 +126,62 @@ pub(crate) async fn build_thread_runtime_summary(
     build_thread_runtime_summary_with_catalog(state, thread_value, &catalog)
 }
 
+/// The thread-owned inputs of a runtime summary. Extracted from the full
+/// thread record on the slow path, or read back from the `thread_meta`
+/// projection columns on the list fast path — both must resolve the same
+/// values, so the extraction lives here next to the summary builder.
+pub(crate) struct ThreadRuntimeSelection {
+    pub provider_type: Option<ProviderType>,
+    pub agent_id: Option<String>,
+    pub selected_model: Option<String>,
+    pub selected_reasoning_effort: Option<String>,
+    pub selected_service_tier: Option<String>,
+    pub sdk_session_id: Option<String>,
+}
+
+/// Single-cell selection: coalesce(legacy `*_override` key, `metadata.*`
+/// cell) for model / reasoning effort / service tier. Shared by the live
+/// summary path and the thread_meta projection writer.
+pub(crate) fn selected_model_cells_from_thread_value(
+    thread_value: &Value,
+) -> (Option<String>, Option<String>, Option<String>) {
+    let legacy_model_override = thread_metadata_string(thread_value, MODEL_OVERRIDE_METADATA_KEY);
+    let legacy_reasoning_effort_override =
+        thread_metadata_string(thread_value, MODEL_REASONING_EFFORT_OVERRIDE_METADATA_KEY);
+    let legacy_service_tier_override =
+        thread_metadata_string(thread_value, MODEL_SERVICE_TIER_OVERRIDE_METADATA_KEY);
+    let cell_model = thread_metadata_string(thread_value, MODEL_METADATA_KEY);
+    let cell_reasoning_effort =
+        thread_metadata_string(thread_value, MODEL_REASONING_EFFORT_METADATA_KEY);
+    let cell_service_tier = thread_metadata_string(thread_value, MODEL_SERVICE_TIER_METADATA_KEY);
+    (
+        legacy_model_override.or(cell_model),
+        legacy_reasoning_effort_override.or(cell_reasoning_effort),
+        legacy_service_tier_override.or(cell_service_tier),
+    )
+}
+
+pub(crate) fn thread_runtime_selection_from_thread_value(
+    thread_value: &Value,
+) -> ThreadRuntimeSelection {
+    let provider_type = provider_type_value(thread_value).or_else(|| {
+        thread_value
+            .get("provider_key")
+            .and_then(Value::as_str)
+            .and_then(provider_type_from_key)
+    });
+    let (selected_model, selected_reasoning_effort, selected_service_tier) =
+        selected_model_cells_from_thread_value(thread_value);
+    ThreadRuntimeSelection {
+        provider_type,
+        agent_id: trimmed_json_string(thread_value.get("agent_id")),
+        selected_model,
+        selected_reasoning_effort,
+        selected_service_tier,
+        sdk_session_id: trimmed_json_string(thread_value.get("sdk_session_id")),
+    }
+}
+
 pub(crate) fn build_thread_runtime_summary_with_catalog(
     state: &Arc<AppState>,
     thread_value: Option<&Value>,
@@ -133,14 +190,59 @@ pub(crate) fn build_thread_runtime_summary_with_catalog(
     let Some(thread_value) = thread_value else {
         return Value::Null;
     };
+    build_thread_runtime_summary_from_selection(
+        state,
+        thread_runtime_selection_from_thread_value(thread_value),
+        catalog,
+    )
+}
 
-    let provider_type = provider_type_value(thread_value).or_else(|| {
-        thread_value
-            .get("provider_key")
-            .and_then(Value::as_str)
-            .and_then(provider_type_from_key)
-    });
-    let agent_id = trimmed_json_string(thread_value.get("agent_id"));
+/// List fast path: build the runtime summary from the `thread_meta`
+/// projection row alone — no per-row thread_store read. The projection
+/// writer persists the same selection the live path extracts, so both
+/// paths resolve identical summaries (guarded by a parity test).
+pub(crate) fn build_thread_runtime_summary_from_meta(
+    state: &Arc<AppState>,
+    record: &ThreadMetaRecord,
+    catalog: &AgentCatalogSnapshot,
+) -> Value {
+    let provider_type = record
+        .provider_type
+        .as_deref()
+        .and_then(ProviderType::from_slug)
+        .or_else(|| {
+            record
+                .provider_key
+                .as_deref()
+                .and_then(provider_type_from_key)
+        });
+    build_thread_runtime_summary_from_selection(
+        state,
+        ThreadRuntimeSelection {
+            provider_type,
+            agent_id: record.agent_id.clone(),
+            selected_model: record.selected_model.clone(),
+            selected_reasoning_effort: record.selected_model_reasoning_effort.clone(),
+            selected_service_tier: record.selected_model_service_tier.clone(),
+            sdk_session_id: record.sdk_session_id.clone(),
+        },
+        catalog,
+    )
+}
+
+pub(crate) fn build_thread_runtime_summary_from_selection(
+    state: &Arc<AppState>,
+    selection: ThreadRuntimeSelection,
+    catalog: &AgentCatalogSnapshot,
+) -> Value {
+    let ThreadRuntimeSelection {
+        provider_type,
+        agent_id,
+        selected_model,
+        selected_reasoning_effort,
+        selected_service_tier,
+        sdk_session_id,
+    } = selection;
     let agent_metadata = match agent_id.as_deref() {
         Some(agent_id) => catalog.agent_runtime_metadata(agent_id),
         None => HashMap::new(),
@@ -175,27 +277,15 @@ pub(crate) fn build_thread_runtime_summary_with_catalog(
         .clone()
         .map(crate::provider_models::builtin_provider_catalog_default)
         .unwrap_or_default();
-    // Single-cell semantics: `metadata.model` (plus effort / tier) is the
-    // thread's one model cell — "what this thread actually runs". Legacy
-    // stored threads may still carry the old dual-track `*_override` keys;
-    // reads coalesce(legacy override, cell) until write paths migrate them.
-    let legacy_model_override = thread_metadata_string(thread_value, MODEL_OVERRIDE_METADATA_KEY);
-    let legacy_reasoning_effort_override =
-        thread_metadata_string(thread_value, MODEL_REASONING_EFFORT_OVERRIDE_METADATA_KEY);
-    let legacy_service_tier_override =
-        thread_metadata_string(thread_value, MODEL_SERVICE_TIER_OVERRIDE_METADATA_KEY);
-    let cell_model = thread_metadata_string(thread_value, MODEL_METADATA_KEY);
-    let cell_reasoning_effort =
-        thread_metadata_string(thread_value, MODEL_REASONING_EFFORT_METADATA_KEY);
-    let cell_service_tier = thread_metadata_string(thread_value, MODEL_SERVICE_TIER_METADATA_KEY);
+    // Single-cell semantics: `selected_*` already carries
+    // coalesce(legacy override, metadata cell) — computed by
+    // selected_model_cells_from_thread_value on the live path or read back
+    // from the thread_meta projection columns on the list path.
     let agent_model = trimmed_json_string(agent_metadata.get(MODEL_METADATA_KEY));
     let agent_reasoning_effort =
         trimmed_json_string(agent_metadata.get(MODEL_REASONING_EFFORT_METADATA_KEY));
     let agent_service_tier =
         trimmed_json_string(agent_metadata.get(MODEL_SERVICE_TIER_METADATA_KEY));
-    let selected_model = legacy_model_override.or(cell_model);
-    let selected_reasoning_effort = legacy_reasoning_effort_override.or(cell_reasoning_effort);
-    let selected_service_tier = legacy_service_tier_override.or(cell_service_tier);
     let model = selected_model
         .clone()
         .or(agent_model)
@@ -211,7 +301,6 @@ pub(crate) fn build_thread_runtime_summary_with_catalog(
         .or(agent_service_tier)
         .or(provider_default_service_tier)
         .or(provider_catalog_default.service_tier);
-    let sdk_session_id = trimmed_json_string(thread_value.get("sdk_session_id"));
     json!({
         "agent_id": agent_id,
         "provider_type": provider_type.as_ref().and_then(|value| serde_json::to_value(value).ok()).unwrap_or(Value::Null),
@@ -246,6 +335,107 @@ mod tests {
     ///
     /// Target priority: cell (`metadata.model`, legacy `model_override`
     /// coalesced in front) > agent model > provider `default_model` > catalog.
+    /// Parity oracle: the projection fast path (thread_meta columns ->
+    /// build_thread_runtime_summary_from_meta) must resolve the exact same
+    /// summary JSON as the live path (full thread record ->
+    /// build_thread_runtime_summary_with_catalog) for every field shape the
+    /// selection carries: metadata cells, legacy overrides, provider_key
+    /// fallback, sdk_session_id, and agent-metadata provider fallback.
+    #[tokio::test]
+    async fn projection_summary_matches_thread_value_summary() {
+        let mut config = GaryxConfig::default();
+        config.agents.insert(
+            "claude".to_owned(),
+            json!({
+                "provider_type": "claude_code",
+                "default_model": "claude-fable-5",
+                "model_reasoning_effort": "high"
+            }),
+        );
+        let state = AppStateBuilder::new(crate::test_support::with_gateway_auth(config)).build();
+        let catalog = AgentCatalogSnapshot::load(&state).await;
+
+        let cases = vec![
+            json!({
+                "thread_id": "thread::parity-cell",
+                "agent_id": "claude",
+                "provider_type": "claude_code",
+                "sdk_session_id": "sess-1",
+                "metadata": {
+                    "model": "claude-opus-4-8",
+                    "model_reasoning_effort": "low",
+                    "model_service_tier": "flex"
+                }
+            }),
+            json!({
+                "thread_id": "thread::parity-legacy-override",
+                "agent_id": "claude",
+                "metadata": {
+                    "model": "cell-model",
+                    "model_override": "legacy-wins",
+                    "model_reasoning_effort_override": "legacy-effort"
+                }
+            }),
+            json!({
+                "thread_id": "thread::parity-provider-key",
+                "provider_key": "codex:main",
+            }),
+            json!({
+                "thread_id": "thread::parity-agent-fallback",
+                "agent_id": "claude",
+            }),
+            json!({
+                "thread_id": "thread::parity-empty",
+            }),
+        ];
+
+        for thread_value in cases {
+            let live =
+                build_thread_runtime_summary_with_catalog(&state, Some(&thread_value), &catalog);
+            let thread_id = thread_value["thread_id"].as_str().unwrap_or("thread::x");
+            let draft = crate::thread_meta_projection::
+                thread_meta_projection_from_thread_data_with_active_run(
+                    thread_id,
+                    &thread_value,
+                    None,
+                )
+                .expect("projection draft")
+                .thread_meta;
+            let record = ThreadMetaRecord {
+                thread_id: draft.thread_id,
+                workspace_dir: draft.workspace_dir,
+                thread_type: draft.thread_type,
+                thread_label: draft.thread_label,
+                agent_id: draft.agent_id,
+                provider_type: draft.provider_type,
+                provider_key: draft.provider_key,
+                selected_model: draft.selected_model,
+                selected_model_reasoning_effort: draft.selected_model_reasoning_effort,
+                selected_model_service_tier: draft.selected_model_service_tier,
+                sdk_session_id: draft.sdk_session_id,
+                created_at: draft.created_at,
+                updated_at: draft.updated_at,
+                message_count: draft.message_count,
+                last_user_message: draft.last_user_message,
+                last_assistant_message: draft.last_assistant_message,
+                last_message_preview: draft.last_message_preview,
+                recent_run_id: draft.recent_run_id,
+                active_run_id: draft.active_run_id,
+                worktree_json: draft.worktree_json,
+                last_delivery_context_json: draft.last_delivery_context_json,
+                last_delivery_updated_at: draft.last_delivery_updated_at,
+                default_list_hidden: draft.default_list_hidden,
+                projection_version: 4,
+                projected_at: "2026-01-01T00:00:00Z".to_owned(),
+            };
+            let projected = build_thread_runtime_summary_from_meta(&state, &record, &catalog);
+            assert_eq!(
+                live, projected,
+                "projection summary must match live summary for {thread_id}",
+            );
+        }
+    }
+
     #[tokio::test]
     async fn thread_runtime_summary_pins_thread_to_model_cell_over_provider_default() {
         let mut config = GaryxConfig::default();

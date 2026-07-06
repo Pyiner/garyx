@@ -49,7 +49,8 @@ use crate::server::AppState;
 use crate::skills::SkillStoreError;
 use crate::thread_meta_projection::backfill_thread_meta_projection_if_incomplete;
 use crate::thread_runtime::{
-    AgentCatalogSnapshot, build_thread_runtime_summary, build_thread_runtime_summary_with_catalog,
+    AgentCatalogSnapshot, build_thread_runtime_summary, build_thread_runtime_summary_from_meta,
+    build_thread_runtime_summary_with_catalog,
 };
 use crate::thread_type::thread_summary_type_from_record;
 use crate::workspace_mode::{
@@ -1645,13 +1646,12 @@ pub async fn list_threads(
             let mut page = Vec::with_capacity(records.len());
             for record in &records {
                 let mut summary = thread_summary_from_meta(record);
-                attach_thread_runtime_summary_with_catalog(
-                    &state,
-                    &record.thread_id,
-                    &mut summary,
-                    &catalog,
-                )
-                .await;
+                if let Some(obj) = summary.as_object_mut() {
+                    obj.insert(
+                        "thread_runtime".to_owned(),
+                        build_thread_runtime_summary_from_meta(&state, record, &catalog),
+                    );
+                }
                 page.push(summary);
             }
             page

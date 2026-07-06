@@ -17,7 +17,7 @@ pub use task_forest::{
     TaskForestScope, TaskProjectionDraft,
 };
 
-const CURRENT_THREAD_META_PROJECTION_VERSION: i64 = 3;
+const CURRENT_THREAD_META_PROJECTION_VERSION: i64 = 4;
 
 #[derive(Debug, thiserror::Error)]
 pub enum GaryxDbError {
@@ -103,6 +103,11 @@ pub struct ThreadMetaRecord {
     pub thread_label: Option<String>,
     pub agent_id: Option<String>,
     pub provider_type: Option<String>,
+    pub provider_key: Option<String>,
+    pub selected_model: Option<String>,
+    pub selected_model_reasoning_effort: Option<String>,
+    pub selected_model_service_tier: Option<String>,
+    pub sdk_session_id: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
     pub message_count: u32,
@@ -127,6 +132,11 @@ pub struct ThreadMetaDraft {
     pub thread_label: Option<String>,
     pub agent_id: Option<String>,
     pub provider_type: Option<String>,
+    pub provider_key: Option<String>,
+    pub selected_model: Option<String>,
+    pub selected_model_reasoning_effort: Option<String>,
+    pub selected_model_service_tier: Option<String>,
+    pub sdk_session_id: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
     pub message_count: u32,
@@ -1285,7 +1295,9 @@ impl GaryxDbService {
                           last_user_message, last_assistant_message, last_message_preview,
                           recent_run_id, active_run_id, worktree_json,
                           last_delivery_context_json, last_delivery_updated_at,
-                          default_list_hidden, projection_version, projected_at
+                          default_list_hidden, provider_key, selected_model,
+                          selected_model_reasoning_effort, selected_model_service_tier,
+                          sdk_session_id, projection_version, projected_at
                    FROM thread_meta";
         let order = " ORDER BY COALESCE(updated_at, projected_at) DESC, thread_id ASC
                       LIMIT ?1 OFFSET ?2";
@@ -1339,7 +1351,9 @@ impl GaryxDbService {
                     last_user_message, last_assistant_message, last_message_preview,
                     recent_run_id, active_run_id, worktree_json,
                     last_delivery_context_json, last_delivery_updated_at,
-                    default_list_hidden, projection_version, projected_at
+                    default_list_hidden, provider_key, selected_model,
+                    selected_model_reasoning_effort, selected_model_service_tier,
+                    sdk_session_id, projection_version, projected_at
              FROM thread_meta
              ORDER BY thread_id ASC",
         )?;
@@ -3100,7 +3114,12 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             last_delivery_context_json TEXT,
             last_delivery_updated_at TEXT,
             default_list_hidden INTEGER NOT NULL DEFAULT 0,
-            projection_version INTEGER NOT NULL DEFAULT 3,
+            provider_key TEXT,
+            selected_model TEXT,
+            selected_model_reasoning_effort TEXT,
+            selected_model_service_tier TEXT,
+            sdk_session_id TEXT,
+            projection_version INTEGER NOT NULL DEFAULT 4,
             projected_at TEXT NOT NULL
         ) STRICT;
 
@@ -3419,8 +3438,13 @@ fn thread_meta_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Thre
         last_delivery_context_json: row.get(15)?,
         last_delivery_updated_at: row.get(16)?,
         default_list_hidden: row.get::<_, i64>(17)? != 0,
-        projection_version: row.get(18)?,
-        projected_at: row.get(19)?,
+        provider_key: row.get(18)?,
+        selected_model: row.get(19)?,
+        selected_model_reasoning_effort: row.get(20)?,
+        selected_model_service_tier: row.get(21)?,
+        sdk_session_id: row.get(22)?,
+        projection_version: row.get(23)?,
+        projected_at: row.get(24)?,
     })
 }
 
@@ -3465,6 +3489,13 @@ fn upsert_thread_meta(
     let last_delivery_context_json = normalize_optional(meta.last_delivery_context_json.as_deref());
     let last_delivery_updated_at = normalize_optional(meta.last_delivery_updated_at.as_deref());
     let default_list_hidden = if meta.default_list_hidden { 1 } else { 0 };
+    let provider_key = normalize_optional(meta.provider_key.as_deref());
+    let selected_model = normalize_optional(meta.selected_model.as_deref());
+    let selected_model_reasoning_effort =
+        normalize_optional(meta.selected_model_reasoning_effort.as_deref());
+    let selected_model_service_tier =
+        normalize_optional(meta.selected_model_service_tier.as_deref());
+    let sdk_session_id = normalize_optional(meta.sdk_session_id.as_deref());
 
     tx.execute(
         "INSERT INTO thread_meta (
@@ -3472,15 +3503,22 @@ fn upsert_thread_meta(
             created_at, updated_at, message_count, last_user_message, last_assistant_message,
             last_message_preview, recent_run_id, active_run_id, worktree_json,
             last_delivery_context_json, last_delivery_updated_at, default_list_hidden,
+            provider_key, selected_model, selected_model_reasoning_effort,
+            selected_model_service_tier, sdk_session_id,
             projection_version, projected_at
          )
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
          ON CONFLICT(thread_id) DO UPDATE SET
             workspace_dir = excluded.workspace_dir,
             thread_type = excluded.thread_type,
             thread_label = excluded.thread_label,
             agent_id = excluded.agent_id,
             provider_type = excluded.provider_type,
+            provider_key = excluded.provider_key,
+            selected_model = excluded.selected_model,
+            selected_model_reasoning_effort = excluded.selected_model_reasoning_effort,
+            selected_model_service_tier = excluded.selected_model_service_tier,
+            sdk_session_id = excluded.sdk_session_id,
             created_at = excluded.created_at,
             updated_at = excluded.updated_at,
             message_count = excluded.message_count,
@@ -3514,6 +3552,11 @@ fn upsert_thread_meta(
             last_delivery_context_json,
             last_delivery_updated_at,
             default_list_hidden,
+            provider_key,
+            selected_model,
+            selected_model_reasoning_effort,
+            selected_model_service_tier,
+            sdk_session_id,
             CURRENT_THREAD_META_PROJECTION_VERSION,
             recorded_at,
         ],
@@ -3761,6 +3804,11 @@ fn ensure_thread_meta_projection_columns(conn: &Connection) -> GaryxDbResult<()>
         "recent_run_id",
         "active_run_id",
         "worktree_json",
+        "provider_key",
+        "selected_model",
+        "selected_model_reasoning_effort",
+        "selected_model_service_tier",
+        "sdk_session_id",
     ] {
         if !columns.contains(name) {
             conn.execute(
@@ -5137,6 +5185,11 @@ mod tests {
                 thread_label: Some("Workflow Run".to_owned()),
                 agent_id: Some("deep-research".to_owned()),
                 provider_type: Some("workflow".to_owned()),
+                provider_key: None,
+                selected_model: None,
+                selected_model_reasoning_effort: None,
+                selected_model_service_tier: None,
+                sdk_session_id: None,
                 created_at: Some("2026-06-03T07:59:00.000Z".to_owned()),
                 updated_at: Some("2026-06-03T08:00:00.000Z".to_owned()),
                 message_count: 2,

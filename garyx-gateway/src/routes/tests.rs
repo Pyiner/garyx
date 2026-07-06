@@ -2379,6 +2379,11 @@ async fn delete_thread_cleans_stale_projected_workflow_thread() {
                 last_delivery_context_json: None,
                 last_delivery_updated_at: None,
                 default_list_hidden: false,
+                provider_key: None,
+                selected_model: None,
+                selected_model_reasoning_effort: None,
+                selected_model_service_tier: None,
+                sdk_session_id: None,
             },
             channel_endpoints: vec![],
             message_routes: vec![],
@@ -3129,54 +3134,38 @@ async fn thread_history_runtime_reports_effective_model_overrides() {
 async fn thread_summary_routes_include_runtime_summary() {
     let (state, _logger, _dir) = test_state().await;
     let thread_id = "thread::runtime-summary-routes";
+    let thread_value = json!({
+        "thread_id": thread_id,
+        "label": "Runtime summary routes",
+        "agent_id": "codex",
+        "provider_type": "codex_app_server",
+        "metadata": {
+            "model_override": "gpt-5.5",
+            "model_reasoning_effort_override": "xhigh",
+        },
+        "sdk_session_id": "sdk-codex-123",
+        "created_at": "2026-06-13T10:00:00.000Z",
+        "updated_at": "2026-06-13T10:01:00.000Z",
+    });
     state
         .threads
         .thread_store
-        .set(
-            thread_id,
-            json!({
-                "thread_id": thread_id,
-                "label": "Runtime summary routes",
-                "agent_id": "codex",
-                "provider_type": "codex_app_server",
-                "metadata": {
-                    "model_override": "gpt-5.5",
-                    "model_reasoning_effort_override": "xhigh",
-                },
-                "sdk_session_id": "sdk-codex-123",
-                "created_at": "2026-06-13T10:00:00.000Z",
-                "updated_at": "2026-06-13T10:01:00.000Z",
-            }),
-        )
+        .set(thread_id, thread_value.clone())
         .await;
+    // Seed the projection through the production draft builder so this
+    // test guards the real write-path contract: `/api/threads` resolves
+    // its runtime summary from the projection columns alone.
+    let projection_draft =
+        crate::thread_meta_projection::thread_meta_projection_from_thread_data_with_active_run(
+            thread_id,
+            &thread_value,
+            None,
+        )
+        .expect("projection draft");
     state
         .ops
         .garyx_db
-        .replace_thread_meta_projection(ThreadMetaProjectionDraft {
-            thread_id: thread_id.to_owned(),
-            thread_meta: ThreadMetaDraft {
-                thread_id: thread_id.to_owned(),
-                workspace_dir: None,
-                thread_type: "chat".to_owned(),
-                thread_label: Some("Runtime summary routes".to_owned()),
-                agent_id: Some("codex".to_owned()),
-                provider_type: Some("codex_app_server".to_owned()),
-                created_at: Some("2026-06-13T10:00:00.000Z".to_owned()),
-                updated_at: Some("2026-06-13T10:01:00.000Z".to_owned()),
-                message_count: 1,
-                last_user_message: Some("hello".to_owned()),
-                last_assistant_message: Some("hi".to_owned()),
-                last_message_preview: Some("hi".to_owned()),
-                recent_run_id: None,
-                active_run_id: None,
-                worktree_json: None,
-                last_delivery_context_json: None,
-                last_delivery_updated_at: None,
-                default_list_hidden: false,
-            },
-            channel_endpoints: vec![],
-            message_routes: vec![],
-        })
+        .replace_thread_meta_projection(projection_draft)
         .expect("seed thread meta projection");
     state
         .ops

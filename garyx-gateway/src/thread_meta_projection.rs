@@ -15,6 +15,7 @@ use crate::garyx_db::{
     GaryxDbService, ThreadMessageRouteDraft, ThreadMetaDraft, ThreadMetaProjectionDraft,
     ThreadMetaProjectionSnapshot,
 };
+use crate::thread_runtime::selected_model_cells_from_thread_value;
 use crate::thread_type::thread_summary_type_from_record;
 use crate::transcript_run_projection::active_run_id_from_transcript_store;
 
@@ -172,6 +173,11 @@ pub(crate) fn thread_meta_projection_from_thread_data_with_active_run(
         .filter(|value| !value.is_null())
         .and_then(|value| serde_json::to_string(value).ok());
     let last_delivery = delivery_context_from_thread_data(data);
+    // Runtime-summary columns (list fast path): same extraction as the live
+    // summary builder so `/api/threads` no longer re-reads the full thread
+    // record per row.
+    let (selected_model, selected_model_reasoning_effort, selected_model_service_tier) =
+        selected_model_cells_from_thread_value(data);
     let thread_meta = ThreadMetaDraft {
         thread_id: thread_id.to_owned(),
         workspace_dir: workspace_dir.clone(),
@@ -179,6 +185,11 @@ pub(crate) fn thread_meta_projection_from_thread_data_with_active_run(
         thread_label: thread_label.clone(),
         agent_id: agent_id_from_value(data),
         provider_type: string_field(data, "provider_type"),
+        provider_key: string_field(data, "provider_key"),
+        selected_model,
+        selected_model_reasoning_effort,
+        selected_model_service_tier,
+        sdk_session_id: string_field(data, "sdk_session_id"),
         created_at,
         updated_at: thread_updated_at.clone(),
         message_count,
