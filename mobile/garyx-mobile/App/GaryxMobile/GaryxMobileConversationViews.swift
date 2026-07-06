@@ -553,7 +553,10 @@ struct GaryxConversationView: View {
     }
 
     private var conversationScrollIdentity: String {
-        model.selectedThread?.id ?? "garyx-draft-thread"
+        // Session token, not thread id: draft -> promoted-thread keeps one
+        // token so the transcript view survives the first send instead of
+        // being torn down and rebuilt (whole-list flash).
+        model.conversationSessionToken
     }
 
     private var conversationBottomAnchorId: String {

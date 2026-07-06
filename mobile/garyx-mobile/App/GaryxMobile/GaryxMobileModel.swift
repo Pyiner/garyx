@@ -98,6 +98,17 @@ final class GaryxMobileModel: ObservableObject {
             if !suppressesSelectedThreadStreamPolicy {
                 applySelectedThreadStreamPolicy(previousThreadId: oldValue?.id, selectedThreadId: selectedThread?.id)
             }
+            // Conversation identity: every real selection change resets the
+            // scroll-container token, EXCEPT the draft-promotion write (the
+            // just-created thread adopting the current draft) — the view's
+            // .id() must stay continuous there or SwiftUI tears down and
+            // rebuilds the whole transcript ("the list flashes" on the
+            // first message of a new conversation).
+            if adoptsDraftConversationToken {
+                adoptsDraftConversationToken = false
+            } else if oldValue?.id != selectedThread?.id {
+                conversationSessionToken = UUID().uuidString
+            }
             emitHomeProjectionSnapshot()
         }
     }
@@ -127,6 +138,13 @@ final class GaryxMobileModel: ObservableObject {
     @Published var hasMoreThreadSummaries = false {
         didSet { refreshHomeObservationPaginationSnapshot() }
     }
+    /// Identity for the conversation scroll container (see
+    /// GaryxMobileConversationViews). Refreshed on real selection changes,
+    /// preserved across draft promotion.
+    @Published var conversationSessionToken = UUID().uuidString
+    /// One-shot flag set by the draft-promotion write in ensureThread.
+    var adoptsDraftConversationToken = false
+
     @Published var isLoadingSelectedThreadHistory = false
     @Published var isLoadingOlderThreadHistory = false
     @Published var selectedThreadHasMoreHistoryBefore = false

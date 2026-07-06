@@ -576,6 +576,7 @@ extension GaryxMobileModel {
         let canAdoptSelection = !adoptIfDraftStillCurrent
             || (selectedThread == nil && selectedThreadDraftGeneration == draftGeneration)
         if canAdoptSelection {
+            adoptsDraftConversationToken = true
             selectedThread = thread
             draftThreadTitle = thread.title
             clearPendingNewThreadAgentTarget()
