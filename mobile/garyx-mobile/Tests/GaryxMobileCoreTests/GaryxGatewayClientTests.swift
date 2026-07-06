@@ -2497,6 +2497,417 @@ final class GaryxGatewayClientTests: XCTestCase {
             )
         )
     }
+
+    func testMobileFileLinkRejectsRelativeLinksEscapingWorkspaceRoot() {
+        // From docs/readme.md, ../../secret.txt climbs above the workspace root.
+        // The gateway rejects any `..` component, so a link that escapes must be
+        // rejected here instead of being silently collapsed onto a root-level
+        // file of the same name.
+        XCTAssertNil(
+            GaryxMobileFileLink.previewTarget(
+                fromLink: "../../secret.txt",
+                workspacePaths: ["/workspace/project"],
+                currentWorkspaceDir: "/workspace/project",
+                currentFilePath: "docs/readme.md"
+            )
+        )
+        // Escapes from a root-level file.
+        XCTAssertNil(
+            GaryxMobileFileLink.previewTarget(
+                fromLink: "../escape.md",
+                workspacePaths: ["/workspace/project"],
+                currentWorkspaceDir: "/workspace/project",
+                currentFilePath: "readme.md"
+            )
+        )
+        // Escapes with no current-file context.
+        XCTAssertNil(
+            GaryxMobileFileLink.previewTarget(
+                fromLink: "../sibling-project/file.md",
+                workspacePaths: ["/workspace/project"],
+                currentWorkspaceDir: "/workspace/project",
+                currentFilePath: nil
+            )
+        )
+        // Deep escapes are rejected as well.
+        XCTAssertNil(
+            GaryxMobileFileLink.previewTarget(
+                fromLink: "../../../etc/passwd",
+                workspacePaths: ["/workspace/project"],
+                currentWorkspaceDir: "/workspace/project",
+                currentFilePath: "docs/notes/readme.md"
+            )
+        )
+    }
+
+    func testMobileFileLinkKeepsInBoundsParentTraversalWorking() {
+        // A link that folds through `..` but stays inside the workspace is valid.
+        XCTAssertEqual(
+            GaryxMobileFileLink.previewTarget(
+                fromLink: "docs/../readme.md",
+                workspacePaths: ["/workspace/project"],
+                currentWorkspaceDir: "/workspace/project",
+                currentFilePath: nil
+            ),
+            GaryxMobileWorkspaceFileTarget(
+                workspaceDir: "/workspace/project",
+                path: "readme.md"
+            )
+        )
+        // Traversal up to exactly the workspace root stays in bounds.
+        XCTAssertEqual(
+            GaryxMobileFileLink.previewTarget(
+                fromLink: "../../index.html",
+                workspacePaths: ["/workspace/project"],
+                currentWorkspaceDir: "/workspace/project",
+                currentFilePath: "docs/notes/readme.md"
+            ),
+            GaryxMobileWorkspaceFileTarget(
+                workspaceDir: "/workspace/project",
+                path: "index.html"
+            )
+        )
+    }
+
+    // MARK: - Shared HTTP retry semantics (JSON + text routes)
+
+    func testGatewayClientTextRouteRetriesTransientServerErrors() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let attemptCount = GaryxAtomicCounter()
+        GaryxURLProtocolStub.requestHandler = { request in
+            let attempt = attemptCount.increment()
+            let statusCode = attempt < 3 ? 503 : 200
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: statusCode,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "text/html; charset=utf-8"]
+                )
+            )
+            let body = statusCode == 200 ? "<html>ok</html>" : "unavailable"
+            return (response, Data(body.utf8))
+        }
+
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/"))
+            ),
+            session: session,
+            retryPolicy: GaryxGatewayRetryPolicy(
+                maxAttempts: 3,
+                initialDelay: 0.01,
+                maxDelay: 0.01,
+                backoffMultiplier: 1.0,
+                jitter: 0
+            )
+        )
+
+        let html = try await client.capsuleHTML(id: "cap-1")
+        XCTAssertEqual(html, "<html>ok</html>")
+        XCTAssertEqual(attemptCount.value(), 3)
+    }
+
+    func testGatewayClientTextRouteDoesNotRetryClientErrors() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let attemptCount = GaryxAtomicCounter()
+        GaryxURLProtocolStub.requestHandler = { request in
+            _ = attemptCount.increment()
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 404,
+                    httpVersion: nil,
+                    headerFields: nil
+                )
+            )
+            return (response, Data("missing".utf8))
+        }
+
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/"))
+            ),
+            session: session,
+            retryPolicy: GaryxGatewayRetryPolicy(
+                maxAttempts: 3,
+                initialDelay: 0.01,
+                maxDelay: 0.01,
+                backoffMultiplier: 1.0,
+                jitter: 0
+            )
+        )
+
+        do {
+            _ = try await client.capsuleHTML(id: "cap-1")
+            XCTFail("Expected 404 to surface without retry")
+        } catch let error as GaryxGatewayError {
+            guard case .httpStatus(let code, _) = error else {
+                XCTFail("Expected httpStatus error, got \(error)")
+                return
+            }
+            XCTAssertEqual(code, 404)
+            XCTAssertEqual(attemptCount.value(), 1)
+        }
+    }
+
+    func testGatewayClientTextRouteSurfacesNonUTF8WithoutRetry() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let attemptCount = GaryxAtomicCounter()
+        GaryxURLProtocolStub.requestHandler = { request in
+            _ = attemptCount.increment()
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "text/html"]
+                )
+            )
+            return (response, Data([0xFF, 0xFE, 0xFD]))
+        }
+
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/"))
+            ),
+            session: session,
+            retryPolicy: GaryxGatewayRetryPolicy(
+                maxAttempts: 3,
+                initialDelay: 0.01,
+                maxDelay: 0.01,
+                backoffMultiplier: 1.0,
+                jitter: 0
+            )
+        )
+
+        do {
+            _ = try await client.capsuleHTML(id: "cap-1")
+            XCTFail("Expected non-UTF-8 body to surface encodingFailed without retry")
+        } catch let error as GaryxGatewayError {
+            guard case .encodingFailed = error else {
+                XCTFail("Expected encodingFailed error, got \(error)")
+                return
+            }
+            XCTAssertEqual(attemptCount.value(), 1)
+        }
+    }
+
+    func testGatewayClientTextRouteRetriesConnectionEstablishmentErrors() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let attemptCount = GaryxAtomicCounter()
+        GaryxURLProtocolStub.requestHandler = { request in
+            let attempt = attemptCount.increment()
+            if attempt == 1 {
+                throw URLError(.cannotConnectToHost)
+            }
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "text/html"]
+                )
+            )
+            return (response, Data("<html>ok</html>".utf8))
+        }
+
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/"))
+            ),
+            session: session,
+            retryPolicy: GaryxGatewayRetryPolicy(
+                maxAttempts: 3,
+                initialDelay: 0.01,
+                maxDelay: 0.01,
+                backoffMultiplier: 1.0,
+                jitter: 0
+            )
+        )
+
+        let html = try await client.capsuleHTML(id: "cap-1")
+        XCTAssertEqual(html, "<html>ok</html>")
+        XCTAssertEqual(attemptCount.value(), 2)
+    }
+
+    func testGatewayClientJSONRouteSurfacesDecodeFailureWithoutRetry() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let attemptCount = GaryxAtomicCounter()
+        GaryxURLProtocolStub.requestHandler = { request in
+            _ = attemptCount.increment()
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (response, Data("not json".utf8))
+        }
+
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/"))
+            ),
+            session: session,
+            retryPolicy: GaryxGatewayRetryPolicy(
+                maxAttempts: 3,
+                initialDelay: 0.01,
+                maxDelay: 0.01,
+                backoffMultiplier: 1.0,
+                jitter: 0
+            )
+        )
+
+        do {
+            _ = try await client.status()
+            XCTFail("Expected decode failure to surface without retry")
+        } catch is DecodingError {
+            XCTAssertEqual(attemptCount.value(), 1)
+        }
+    }
+
+    func testGatewayClientHonorsRetryAfterHeaderOnRetryableStatus() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let attemptCount = GaryxAtomicCounter()
+        GaryxURLProtocolStub.requestHandler = { request in
+            let attempt = attemptCount.increment()
+            let statusCode = attempt < 2 ? 429 : 200
+            var headers = ["Content-Type": "application/json"]
+            if statusCode == 429 {
+                headers["Retry-After"] = "0"
+            }
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: statusCode,
+                    httpVersion: nil,
+                    headerFields: headers
+                )
+            )
+            let body = statusCode == 200 ? #"{"status":"ok"}"# : #"{"error":"slow down"}"#
+            return (response, Data(body.utf8))
+        }
+
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/"))
+            ),
+            session: session,
+            retryPolicy: GaryxGatewayRetryPolicy(
+                maxAttempts: 3,
+                initialDelay: 0.01,
+                maxDelay: 0.01,
+                backoffMultiplier: 1.0,
+                jitter: 0
+            )
+        )
+
+        let status = try await client.status()
+        XCTAssertEqual(status.status, "ok")
+        XCTAssertEqual(attemptCount.value(), 2)
+    }
+
+    func testGatewayClientPropagatesCancellationDuringRetryDelay() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let attemptCount = GaryxAtomicCounter()
+        GaryxURLProtocolStub.requestHandler = { request in
+            _ = attemptCount.increment()
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 503,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (response, Data(#"{"error":"unavailable"}"#.utf8))
+        }
+
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/"))
+            ),
+            session: session,
+            retryPolicy: GaryxGatewayRetryPolicy(
+                maxAttempts: 3,
+                initialDelay: 5.0,
+                maxDelay: 5.0,
+                backoffMultiplier: 1.0,
+                jitter: 0
+            )
+        )
+
+        let task = Task { try await client.status() }
+        while attemptCount.value() < 1 {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        // Give the retry loop a beat to enter the retry delay, then cancel.
+        try await Task.sleep(nanoseconds: 20_000_000)
+        task.cancel()
+
+        do {
+            _ = try await task.value
+            XCTFail("Expected cancellation to propagate out of the retry delay")
+        } catch {
+            XCTAssertTrue(
+                error is CancellationError || GaryxGatewayRetryClassifier.isCancellation(error),
+                "Expected a cancellation error, got \(error)"
+            )
+            XCTAssertEqual(attemptCount.value(), 1)
+        }
+    }
 }
 
 private func garyxRequestBodyData(from request: URLRequest) -> Data? {
