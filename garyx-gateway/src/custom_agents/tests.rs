@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use super::*;
 
 fn model_contract_request(
@@ -452,4 +454,47 @@ async fn upsert_persists_and_preserves_provider_auth_config() {
             .map(String::as_str),
         Some("test-api-key")
     );
+}
+
+/// Regression guard for the 2026-07-06 gary incident: mutations used to
+/// release the write lock before `persist()` re-acquired a read lock for its
+/// snapshot, so writer A could serialize a pre-B snapshot and flush it to
+/// disk *after* B's newer snapshot landed — silently dropping B's agent from
+/// `custom-agents.json`. Persisting inside the mutation's critical section
+/// makes disk writes strictly ordered with mutations, so the reloaded file
+/// must always contain every concurrently upserted agent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn concurrent_writers_never_lose_each_others_agents() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("custom-agents.json");
+    let store = Arc::new(CustomAgentStore::file(&path).expect("file store"));
+
+    let mut handles = Vec::new();
+    for index in 0..32 {
+        let store = store.clone();
+        handles.push(tokio::spawn(async move {
+            store
+                .upsert_agent(model_contract_request(
+                    &format!("agent-{index}"),
+                    None,
+                    None,
+                    None,
+                ))
+                .await
+                .expect("upsert agent");
+        }));
+    }
+    for handle in handles {
+        handle.await.expect("join upsert task");
+    }
+
+    let reloaded = CustomAgentStore::file(&path).expect("reload persisted store");
+    let agents = reloaded.list_agents().await;
+    for index in 0..32 {
+        let agent_id = format!("agent-{index}");
+        assert!(
+            agents.iter().any(|agent| agent.agent_id == agent_id),
+            "{agent_id} was lost from the persisted file by a concurrent writer"
+        );
+    }
 }

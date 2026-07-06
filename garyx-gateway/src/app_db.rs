@@ -243,7 +243,8 @@ impl AppDbService {
         })
     }
 
-    #[cfg(test)]
+    /// Open an isolated in-memory database — the `AppStateBuilder` default,
+    /// keeping tests and ad-hoc states off the real on-disk app database.
     pub fn memory() -> AppDbResult<Self> {
         let conn = Connection::open_in_memory()?;
         initialize_connection(&conn)?;

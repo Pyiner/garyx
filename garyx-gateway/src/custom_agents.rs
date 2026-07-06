@@ -94,6 +94,12 @@ impl CustomAgentStore {
         })
     }
 
+    /// Where this store persists to, if anywhere. `None` means the store is
+    /// purely in-memory (the safe default for tests and ad-hoc states).
+    pub fn persistence_path(&self) -> Option<&Path> {
+        self.persistence_path.as_deref()
+    }
+
     pub async fn list_agents(&self) -> Vec<CustomAgentProfile> {
         let mut agents = self
             .inner
@@ -257,8 +263,7 @@ impl CustomAgentStore {
             updated_at: now,
         };
         inner.insert(agent_id.to_owned(), profile.clone());
-        drop(inner);
-        self.persist().await?;
+        self.persist_locked(&inner)?;
         Ok(profile)
     }
 
@@ -271,24 +276,24 @@ impl CustomAgentStore {
             return Err("built-in agents cannot be deleted".to_owned());
         }
         inner.remove(agent_id);
-        drop(inner);
-        self.persist().await
+        self.persist_locked(&inner)
     }
 
-    async fn persist(&self) -> Result<(), String> {
+    /// Persist while the caller still holds the write guard, so a mutation
+    /// and its disk write form one critical section. Writers are strictly
+    /// ordered and a stale snapshot can never land after a newer one — the
+    /// lost-update shape that erased a real agent definition on 2026-07-06.
+    fn persist_locked(&self, inner: &HashMap<String, CustomAgentProfile>) -> Result<(), String> {
         let Some(path) = &self.persistence_path else {
             return Ok(());
         };
-        let snapshot = self
-            .inner
-            .read()
-            .await
+        let snapshot = inner
             .iter()
             .filter(|(_, profile)| !profile.built_in)
             .map(|(agent_id, profile)| (agent_id.clone(), profile.clone()))
             .collect::<HashMap<_, _>>();
         let json = serde_json::to_string_pretty(&snapshot).map_err(|error| error.to_string())?;
-        std::fs::write(path, json).map_err(|error| error.to_string())
+        crate::atomic_write::write_json_atomic(path, &json)
     }
 }
 

@@ -58,6 +58,12 @@ impl WikiStore {
         })
     }
 
+    /// Where this store persists to, if anywhere. `None` means the store is
+    /// purely in-memory (the safe default for tests and ad-hoc states).
+    pub fn persistence_path(&self) -> Option<&Path> {
+        self.persistence_path.as_deref()
+    }
+
     pub async fn list_wikis(&self) -> Vec<WikiEntry> {
         let mut wikis = self
             .inner
@@ -117,8 +123,7 @@ impl WikiStore {
             updated_at: now,
         };
         inner.insert(wiki_id.to_owned(), entry.clone());
-        drop(inner);
-        self.persist().await?;
+        self.persist_locked(&inner)?;
         Ok(entry)
     }
 
@@ -131,8 +136,7 @@ impl WikiStore {
         entry.page_count = request.page_count;
         entry.updated_at = Utc::now().to_rfc3339();
         let result = entry.clone();
-        drop(inner);
-        self.persist().await?;
+        self.persist_locked(&inner)?;
         Ok(result)
     }
 
@@ -141,22 +145,17 @@ impl WikiStore {
         if inner.remove(wiki_id).is_none() {
             return Err("wiki not found".to_owned());
         }
-        drop(inner);
-        self.persist().await
+        self.persist_locked(&inner)
     }
 
-    async fn persist(&self) -> Result<(), String> {
+    /// Persist while the caller still holds the write guard, so a mutation
+    /// and its disk write form one critical section and a stale snapshot can
+    /// never land after a newer one (lost update).
+    fn persist_locked(&self, inner: &HashMap<String, WikiEntry>) -> Result<(), String> {
         let Some(path) = &self.persistence_path else {
             return Ok(());
         };
-        let snapshot = self
-            .inner
-            .read()
-            .await
-            .iter()
-            .map(|(wiki_id, entry)| (wiki_id.clone(), entry.clone()))
-            .collect::<HashMap<_, _>>();
-        let json = serde_json::to_string_pretty(&snapshot).map_err(|error| error.to_string())?;
-        std::fs::write(path, json).map_err(|error| error.to_string())
+        let json = serde_json::to_string_pretty(inner).map_err(|error| error.to_string())?;
+        crate::atomic_write::write_json_atomic(path, &json)
     }
 }

@@ -267,15 +267,16 @@ async fn test_dispatch_internal_message_to_thread_expands_bound_agent_runtime_me
     bridge.set_route("api", "main", "test-provider").await;
     bridge.set_default_provider_key("test-provider").await;
 
-    let state = crate::server::create_app_state_with_bridge(GaryxConfig::default(), bridge.clone());
-    bridge
-        .set_thread_store(state.threads.thread_store.clone())
-        .await;
-    bridge.set_event_tx(state.ops.events.sender()).await;
-
-    state
-        .ops
-        .custom_agents
+    // Seed the reviewer agent into the store *before* `build()`: the builder
+    // spawns an async task that pushes the boot-time catalog snapshot into
+    // the bridge's profile registry, so a post-build `upsert` +
+    // `replace_agent_profiles` races that task and can be silently
+    // overwritten by the (agent-less) boot snapshot. Seeding first makes the
+    // boot snapshot itself carry the agent — no ordering dependency, and no
+    // reliance on whatever agents exist in the developer's real
+    // `~/.garyx/data/custom-agents.json`.
+    let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
+    custom_agents
         .upsert_agent(crate::custom_agents::UpsertCustomAgentRequest {
             agent_id: "reviewer".to_owned(),
             display_name: "Reviewer".to_owned(),
@@ -295,6 +296,14 @@ async fn test_dispatch_internal_message_to_thread_expands_bound_agent_runtime_me
         })
         .await
         .expect("custom agent");
+    let state = crate::server::AppStateBuilder::new(GaryxConfig::default())
+        .with_custom_agent_store(custom_agents)
+        .with_bridge(bridge.clone())
+        .build();
+    bridge
+        .set_thread_store(state.threads.thread_store.clone())
+        .await;
+    bridge.set_event_tx(state.ops.events.sender()).await;
     // Production keeps the bridge's profile registry in sync on bootstrap and
     // on every agent write; the bridge chokepoint backfill reads from it.
     bridge

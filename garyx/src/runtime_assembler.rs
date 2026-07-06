@@ -105,6 +105,7 @@ impl RuntimeAssembler {
         let thread_logs = Arc::new(ThreadFileLogger::new(default_thread_log_dir()));
 
         let state = AppStateBuilder::new(self.config.clone())
+            .with_persistent_local_stores()
             .with_thread_store(thread_store.clone())
             .with_thread_history(thread_history.clone())
             .with_message_ledger(message_ledger)

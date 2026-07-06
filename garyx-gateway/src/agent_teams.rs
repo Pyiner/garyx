@@ -52,6 +52,12 @@ impl AgentTeamStore {
         })
     }
 
+    /// Where this store persists to, if anywhere. `None` means the store is
+    /// purely in-memory (the safe default for tests and ad-hoc states).
+    pub fn persistence_path(&self) -> Option<&Path> {
+        self.persistence_path.as_deref()
+    }
+
     pub async fn list_teams(&self) -> Vec<AgentTeamProfile> {
         let mut teams = self
             .inner
@@ -168,8 +174,7 @@ impl AgentTeamStore {
             updated_at: now,
         };
         inner.insert(team_id.to_owned(), team.clone());
-        drop(inner);
-        self.persist().await?;
+        self.persist_locked(&inner)?;
         Ok(team)
     }
 
@@ -178,17 +183,18 @@ impl AgentTeamStore {
         if inner.remove(team_id).is_none() {
             return Err("agent team not found".to_owned());
         }
-        drop(inner);
-        self.persist().await
+        self.persist_locked(&inner)
     }
 
-    async fn persist(&self) -> Result<(), String> {
+    /// Persist while the caller still holds the write guard, so a mutation
+    /// and its disk write form one critical section and a stale snapshot can
+    /// never land after a newer one (lost update).
+    fn persist_locked(&self, inner: &HashMap<String, AgentTeamProfile>) -> Result<(), String> {
         let Some(path) = &self.persistence_path else {
             return Ok(());
         };
-        let snapshot = self.inner.read().await.clone();
-        let json = serde_json::to_string_pretty(&snapshot).map_err(|error| error.to_string())?;
-        std::fs::write(path, json).map_err(|error| error.to_string())
+        let json = serde_json::to_string_pretty(inner).map_err(|error| error.to_string())?;
+        crate::atomic_write::write_json_atomic(path, &json)
     }
 }
 

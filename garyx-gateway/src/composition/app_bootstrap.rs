@@ -79,17 +79,6 @@ fn load_store_or_warn<T>(
     }
 }
 
-fn default_garyx_db_service() -> crate::garyx_db::GaryxDbResult<GaryxDbService> {
-    #[cfg(test)]
-    {
-        GaryxDbService::memory()
-    }
-    #[cfg(not(test))]
-    {
-        GaryxDbService::open(garyx_models::local_paths::default_garyx_database_path())
-    }
-}
-
 /// Builder that owns gateway dependency injection and emits a fully wired [`AppState`].
 pub struct AppStateBuilder {
     config: GaryxConfig,
@@ -143,12 +132,6 @@ impl AppStateBuilder {
             SkillsService::default_user_dir(),
             SkillsService::default_project_dir(),
         ));
-        if let Err(error) = skills.seed_builtin_skills() {
-            warn!(error = %error, "failed to seed built-in skills during startup");
-        }
-        if let Err(error) = skills.sync_external_user_skills() {
-            warn!(error = %error, "failed to sync external user skills during startup");
-        }
         Self {
             config,
             thread_store,
@@ -164,34 +147,65 @@ impl AppStateBuilder {
             channel_plugin_manager,
             thread_logs: Arc::new(NoopThreadLogSink),
             skills,
-            custom_agents: Arc::new(load_store_or_warn(
-                "custom_agents",
-                default_custom_agents_state_path(),
-                CustomAgentStore::file,
-                CustomAgentStore::new,
-            )),
-            agent_teams: Arc::new(load_store_or_warn(
-                "agent_teams",
-                default_agent_teams_state_path(),
-                AgentTeamStore::file,
-                AgentTeamStore::new,
-            )),
-            wikis: Arc::new(load_store_or_warn(
-                "wikis",
-                default_wikis_state_path(),
-                WikiStore::file,
-                WikiStore::new,
-            )),
+            custom_agents: Arc::new(CustomAgentStore::new()),
+            agent_teams: Arc::new(AgentTeamStore::new()),
+            wikis: Arc::new(WikiStore::new()),
             app_db: Arc::new(
-                AppDbService::open(default_app_database_path())
+                AppDbService::memory()
                     .unwrap_or_else(|error| panic!("failed to open app database: {error}")),
             ),
             garyx_db: Arc::new(
-                default_garyx_db_service()
+                GaryxDbService::memory()
                     .unwrap_or_else(|error| panic!("failed to open garyx database: {error}")),
             ),
             active_run_probe: None,
         }
+    }
+
+    /// Bind the real on-disk `~/.garyx` state: persistent custom-agent /
+    /// agent-team / wiki stores, the app and garyx databases, and built-in
+    /// skill seeding.
+    ///
+    /// This is the production boot path's explicit opt-in. `new()`
+    /// deliberately stays fully in-memory so that tests (unit *and*
+    /// integration, where `cfg(test)` gating on the library does not apply)
+    /// can never read or clobber live user data by default — a workflow
+    /// test's whole-file persist through these defaults is what erased a
+    /// real custom agent on 2026-07-06.
+    pub fn with_persistent_local_stores(mut self) -> Self {
+        if let Err(error) = self.skills.seed_builtin_skills() {
+            warn!(error = %error, "failed to seed built-in skills during startup");
+        }
+        if let Err(error) = self.skills.sync_external_user_skills() {
+            warn!(error = %error, "failed to sync external user skills during startup");
+        }
+        self.custom_agents = Arc::new(load_store_or_warn(
+            "custom_agents",
+            default_custom_agents_state_path(),
+            CustomAgentStore::file,
+            CustomAgentStore::new,
+        ));
+        self.agent_teams = Arc::new(load_store_or_warn(
+            "agent_teams",
+            default_agent_teams_state_path(),
+            AgentTeamStore::file,
+            AgentTeamStore::new,
+        ));
+        self.wikis = Arc::new(load_store_or_warn(
+            "wikis",
+            default_wikis_state_path(),
+            WikiStore::file,
+            WikiStore::new,
+        ));
+        self.app_db = Arc::new(
+            AppDbService::open(default_app_database_path())
+                .unwrap_or_else(|error| panic!("failed to open app database: {error}")),
+        );
+        self.garyx_db = Arc::new(
+            GaryxDbService::open(garyx_models::local_paths::default_garyx_database_path())
+                .unwrap_or_else(|error| panic!("failed to open garyx database: {error}")),
+        );
+        self
     }
 
     pub fn with_thread_store(mut self, thread_store: Arc<dyn ThreadStore>) -> Self {
@@ -527,4 +541,34 @@ pub fn create_app_state_with_bridge(
     bridge: Arc<MultiProviderBridge>,
 ) -> Arc<AppState> {
     AppStateBuilder::new(config).with_bridge(bridge).build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression guard for the 2026-07-06 gary incident: the builder used to
+    /// bind the real `~/.garyx` stores (custom agents / teams / wikis / app
+    /// db) by default, so every test constructing an `AppState` read and
+    /// *wrote* live user data — a workflow test's whole-file persist
+    /// overwrote `custom-agents.json` and vaporized a real agent definition.
+    ///
+    /// Defaults must be in-memory. Production opts into disk-backed stores
+    /// explicitly via `with_persistent_local_stores()`.
+    #[test]
+    fn builder_defaults_stay_off_real_user_state() {
+        let builder = AppStateBuilder::new(GaryxConfig::default());
+        assert!(
+            builder.custom_agents.persistence_path().is_none(),
+            "default custom-agent store must not persist to real user files"
+        );
+        assert!(
+            builder.agent_teams.persistence_path().is_none(),
+            "default agent-team store must not persist to real user files"
+        );
+        assert!(
+            builder.wikis.persistence_path().is_none(),
+            "default wiki store must not persist to real user files"
+        );
+    }
 }
