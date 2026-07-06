@@ -1933,6 +1933,15 @@ pub async fn thread_stream(
     // the overlap idempotent.
     let rx = state.ops.events.subscribe();
 
+    tracing::info!(
+        thread_id = %thread_id,
+        after_seq,
+        render_floor = replay_options.render_floor,
+        windowed_resume = replay_options.windowed_resume,
+        replay_scope = ?replay_options.replay_scope,
+        "per-thread stream connected"
+    );
+
     let replay = build_thread_stream_replay(&state, &thread_id, after_seq, replay_options).await;
     let render_floor_for_live = replay.render_floor;
     let replay_events = replay
