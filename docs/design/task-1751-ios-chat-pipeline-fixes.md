@@ -86,10 +86,32 @@ Race guard (pure logic, Core:`GaryxColdOpenRestorePolicy`).
 > content-signal conditions cannot see.
 
 The model keeps `var transcriptMirrorGeneration: [String: UInt64]`, bumped by a
-single setter `setTranscriptMirror(_:for:)` that **all** live mirror writes
-route through (`applyStreamedCommittedMessages`, `applyThreadRenderSnapshot`,
+single setter `setTranscriptMirror(_:for:)` that **all** mirror mutations —
+writes *and clears* — route through. `setTranscriptMirror(_ window:
+GaryxCachedTranscript?, for:)` takes an optional: a non-nil window sets the
+mirror, `nil` clears it; either bumps the generation. Every current
+`cachedTranscriptSnapshots[threadId] = …`/`= nil` site is converted:
+`applyStreamedCommittedMessages`, `applyThreadRenderSnapshot`,
 `updateTranscriptCache`, `dropCommittedCacheBelow`, `transcriptSnapshotAsync`'s
-auto-seed, the fetch/full paths). The restore captures the generation at spawn.
+auto-seed, the fetch/full paths, **and — design-review v3 finding —
+`clearTranscriptCache(for:)`**. The restore captures the generation at spawn.
+
+> **Design-review v3 correction.** `clearTranscriptCache(for:)` sets the mirror
+> to `nil` and is reachable *mid-restore* from live stream recovery:
+> `refetchAfterControlRewrite` (a stream control-rewrite frame) does
+> `clearTranscriptCache` + `clearMessages` + `loadSelectedThreadHistory`. If the
+> clear did not bump the generation, a cold restore that decoded the *pre-rewrite*
+> disk window could still pass all six `shouldApply` conditions after the clear
+> (same thread, same generations, history unloaded, no render snapshot, messages
+> empty) and **resurrect the stale window + seed a stale cursor** before the
+> authoritative refetch runs. Routing the clear through the generation-bumping
+> setter makes the in-flight restore observe the bump and abort (apply *and*
+> seed). Whole-mirror resets that can also race a restore —
+> `resetForGatewaySwitch` (`cachedTranscriptSnapshots = [:]`) — set
+> `selectedThread = nil` (so the restore's thread check already fails) but are
+> additionally made safe by bumping: the reset iterates the mirror keys through
+> `setTranscriptMirror(nil, for:)` (or bumps a monotonic epoch) so no reused-low
+> generation can masquerade as unchanged.
 
 `shouldApply` returns true only when **all** hold at apply time (main actor,
 captured tokens compared):
@@ -153,6 +175,13 @@ Tests:
   present ⇒ discard; messages non-empty ⇒ discard; all-clear ⇒ apply. Plus
   `shouldSeedMirror` matrix: tolerates loaded history + present messages, but
   refuses on thread change, either generation bump, or a live render snapshot.
+- **Wiring test (design-review v3): "clear after control rewrite beats
+  restore."** A model-level test drives the killer timing: seed a persisted
+  window, cold-open the thread (spawn restore), invoke `clearTranscriptCache`
+  (as `refetchAfterControlRewrite` does) *before* the restore applies, then run
+  the restore's apply step — assert it neither applies messages nor seeds the
+  mirror (the clear bumped the generation, so both gates fail). This proves the
+  wiring, not just the pure policy.
 
 ### P2 — memoize prepared turn rows keyed by input identity
 
