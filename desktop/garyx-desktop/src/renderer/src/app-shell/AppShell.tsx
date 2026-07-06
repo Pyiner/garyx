@@ -5114,6 +5114,7 @@ export function AppShell() {
                   });
                 }}
                 onStartThread={handleStartDraftForAgent}
+                onRefreshAgentTargets={refreshAgentTargets}
                 onToast={pushToast}
               />
             ) : isTeamsView ? (
@@ -5129,6 +5130,7 @@ export function AppShell() {
                   });
                 }}
                 onStartThread={handleStartDraftForAgent}
+                onRefreshAgentTargets={refreshAgentTargets}
                 onToast={pushToast}
               />
             ) : isSkillsView ? (

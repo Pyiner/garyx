@@ -21,6 +21,14 @@ import { MoreDotsIcon } from '../icons';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '../../components/ui/dialog';
+import {
   Table,
   TableBody,
   TableCell,
@@ -31,6 +39,11 @@ import {
 import { Input } from '../../components/ui/input';
 import { useI18n } from '../../i18n';
 import { AgentAvatarEditor, AvatarStyleDialog } from './AgentAvatarEditor';
+import {
+  customAgentDeleteConfirmationFor,
+  runCustomAgentDeleteConfirmation,
+  type CustomAgentDeleteConfirmation,
+} from './agents-hub-delete-model';
 import { AgentFormDialog } from './AgentFormDialog';
 import { TeamFormDialog } from './TeamFormDialog';
 import { WorkflowViewDialog } from './WorkflowViewDialog';
@@ -67,6 +80,7 @@ type AgentsHubPanelProps = {
   initialTab?: HubTab;
   workspaces?: DesktopWorkspace[];
   onAddWorkspace?: (path: string) => Promise<DesktopWorkspace | null>;
+  onRefreshAgentTargets?: () => Promise<void>;
   onStartThread?: (agentOrTeamId: string) => void;
   onOpenMemory?: (agent: DesktopCustomAgent) => void;
   onToast?: (message: string, tone?: 'success' | 'error' | 'info', durationMs?: number) => void;
@@ -76,6 +90,7 @@ export function AgentsHubPanel({
   initialTab = 'agents',
   workspaces = [],
   onAddWorkspace,
+  onRefreshAgentTargets,
   onStartThread,
   onOpenMemory,
   onToast,
@@ -92,6 +107,8 @@ export function AgentsHubPanel({
 
   const [agentDialogMode, setAgentDialogMode] = useState<AgentDialogMode>(null);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [agentDeleteConfirmation, setAgentDeleteConfirmation] =
+    useState<CustomAgentDeleteConfirmation | null>(null);
   const [agentDraft, setAgentDraft] = useState<AgentDraft>(() => emptyAgentDraft());
   const [envViewMode, setEnvViewMode] = useState<'form' | 'text'>('form');
   const [envText, setEnvText] = useState('');
@@ -604,16 +621,30 @@ export function AgentsHubPanel({
     }
   }
 
-  async function handleDeleteAgent(agent: DesktopCustomAgent) {
-    if (agent.builtIn) {
+  function openAgentDeleteConfirmation(agent: DesktopCustomAgent) {
+    const confirmation = customAgentDeleteConfirmationFor(agent);
+    if (!confirmation) {
+      return;
+    }
+    closeAgentDialog();
+    setAgentDeleteConfirmation(confirmation);
+  }
+
+  async function handleConfirmDeleteAgent() {
+    if (!agentDeleteConfirmation) {
       return;
     }
     setSaving(true);
     try {
-      await window.garyxDesktop.deleteCustomAgent({ agentId: agent.agentId });
+      await runCustomAgentDeleteConfirmation({
+        confirmation: agentDeleteConfirmation,
+        deleteCustomAgent: (input) => window.garyxDesktop.deleteCustomAgent(input),
+        closeConfirmation: () => setAgentDeleteConfirmation(null),
+        closeAgentDialog,
+        loadData,
+        refreshAgentTargets: onRefreshAgentTargets,
+      });
       onToast?.(t('Custom agent deleted'), 'success');
-      closeAgentDialog();
-      await loadData();
     } catch (error) {
       onToast?.(error instanceof Error ? error.message : t('Failed to delete custom agent'), 'error');
     } finally {
@@ -628,6 +659,7 @@ export function AgentsHubPanel({
       onToast?.(t('Agent team deleted'), 'success');
       closeTeamDialog();
       await loadData();
+      await onRefreshAgentTargets?.();
     } catch (error) {
       onToast?.(error instanceof Error ? error.message : t('Failed to delete team'), 'error');
     } finally {
@@ -820,7 +852,13 @@ export function AgentsHubPanel({
                             <DropdownMenuContent align="end" sideOffset={4}>
                               <DropdownMenuItem
                                 disabled={saving}
-                                onSelect={() => { void handleDeleteAgent(agent); }}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                }}
+                                onSelect={(event) => {
+                                  event.stopPropagation();
+                                  openAgentDeleteConfirmation(agent);
+                                }}
                                 variant="destructive"
                               >
                                 <Trash aria-hidden />
@@ -985,6 +1023,49 @@ export function AgentsHubPanel({
           </TableBody>
         </Table>
       )}
+
+      <Dialog
+        open={Boolean(agentDeleteConfirmation)}
+        onOpenChange={(open) => {
+          if (!open && !saving) {
+            setAgentDeleteConfirmation(null);
+          }
+        }}
+      >
+        <DialogContent
+          aria-describedby="agent-delete-confirmation-description"
+          role="alertdialog"
+          showCloseButton={false}
+          size="compact"
+        >
+          <DialogHeader>
+            <DialogTitle>
+              {t('Delete "{name}"?', { name: agentDeleteConfirmation?.displayName || '' })}
+            </DialogTitle>
+            <DialogDescription id="agent-delete-confirmation-description">
+              {t('This permanently deletes this custom agent. This action cannot be undone.')}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              disabled={saving}
+              onClick={() => setAgentDeleteConfirmation(null)}
+              type="button"
+              variant="outline"
+            >
+              {t('Cancel')}
+            </Button>
+            <Button
+              disabled={saving}
+              onClick={() => { void handleConfirmDeleteAgent(); }}
+              type="button"
+              variant="destructive"
+            >
+              {saving ? t('Deleting') : t('Delete agent')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <AgentFormDialog
         agentDialogMode={agentDialogMode}
