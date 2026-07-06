@@ -259,8 +259,11 @@ extension GaryxMobileModel {
 
     private func applyThreadRenderSnapshot(_ snapshot: GaryxRenderSnapshot, threadId: String) {
         guard selectedThread?.id == threadId else { return }
-        let appliedBefore = renderSnapshotsByThread[threadId]
-            ?? transcriptSnapshot(for: threadId)?.renderSnapshot
+        // The no-op judgement must compare against what the UI actually
+        // renders from (the in-memory accessor the mapper reads), not the
+        // disk-lazy transcriptSnapshot: an unrendered on-disk window equal to
+        // the incoming frame must still count as a change.
+        let appliedBefore = renderSnapshot(for: threadId)
         setRenderSnapshot(snapshot, for: threadId)
         let pagination = applyRenderWindowPagination(snapshot.window, threadId: threadId)
         let base = transcriptSnapshot(for: threadId)

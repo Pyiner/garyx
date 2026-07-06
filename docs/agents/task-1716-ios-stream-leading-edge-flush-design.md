@@ -210,8 +210,10 @@ Ingest paths (the only callers, verified by rg: stream action dispatch
 ```swift
 private func applyThreadRenderSnapshot(_ snapshot: GaryxRenderSnapshot, threadId: String) {
     guard selectedThread?.id == threadId else { return }
-    let appliedBefore = renderSnapshotsByThread[threadId]
-        ?? transcriptSnapshot(for: threadId)?.renderSnapshot
+    // renderSnapshot(for:) is the in-memory accessor the row mapper renders
+    // from (never the disk-lazy transcriptSnapshot): an unrendered on-disk
+    // window equal to the incoming frame must still count as a change.
+    let appliedBefore = renderSnapshot(for: threadId)
     // ... existing body unchanged (setRenderSnapshot, pagination, cache
     //     window rebuild, conditional persist, markThreadHistoryLoaded) ...
     settleSelectedThreadStreamFrame(
