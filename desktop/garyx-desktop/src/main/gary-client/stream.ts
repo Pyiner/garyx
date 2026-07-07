@@ -130,7 +130,24 @@ interface StreamThreadEventsOptions {
   /** Fires whenever a frame carries `render_state.window.floor_seq > 0` —
    * the floor this connection is now rendering with. */
   onWindowFloor?: (floorSeq: number) => void;
+  /** Test override for {@link STREAM_HEADER_TIMEOUT_MS}. */
+  headerTimeoutMs?: number;
+  /** Test override for {@link STREAM_IDLE_TIMEOUT_MS}. */
+  idleTimeoutMs?: number;
 }
+
+/** Response headers must arrive within this window. A gateway that accepts
+ * the TCP connection but never answers (control-plane saturation, a crash
+ * mid-accept, a half-open tunnel) would otherwise pin one of Chromium's six
+ * per-host connection slots indefinitely — enough stalled streams starve
+ * every other gateway request into its own AbortSignal timeout (#TASK-1840). */
+const STREAM_HEADER_TIMEOUT_MS = 20_000;
+
+/** The gateway emits an SSE keep-alive ping every 30s (`routes.rs`). Two
+ * missed pings plus margin means the connection is dead even though TCP
+ * never noticed (typical for remote gateways behind VPN/proxy tunnels);
+ * recycle it so the caller's reconnect loop resumes from its cursor. */
+const STREAM_IDLE_TIMEOUT_MS = 90_000;
 
 function textFromCommittedMessage(message: Record<string, unknown>): string {
   const explicitText = asString(message.text);
@@ -333,6 +350,14 @@ export async function streamThreadEvents(
 ): Promise<void> {
   const afterSeq = Math.max(0, Math.trunc(options?.afterSeq ?? 0));
   const renderFloor = Math.max(0, Math.trunc(options?.renderFloor ?? 0));
+  const headerTimeoutMs = Math.max(
+    1,
+    Math.trunc(options?.headerTimeoutMs ?? STREAM_HEADER_TIMEOUT_MS),
+  );
+  const idleTimeoutMs = Math.max(
+    1,
+    Math.trunc(options?.idleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS),
+  );
   const headers = applyGatewayAuthHeader(
     applyGatewayCustomHeaders(
       new Headers({ Accept: "text/event-stream" }),
@@ -342,25 +367,100 @@ export async function streamThreadEvents(
   );
   headers.set("Last-Event-ID", String(afterSeq));
   const renderFloorParam = renderFloor > 0 ? `&render_floor=${renderFloor}` : "";
-  const response = await gatewayFetch(
-    buildUrl(
-      settings,
-      `/api/threads/${encodeURIComponent(threadId)}/stream?after_seq=${afterSeq}&windowed_resume=1${renderFloorParam}`,
-    ),
-    {
-      headers,
-      signal,
-    },
-  );
-  if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
-  }
-  if (!response.body) {
-    throw new Error("Thread event stream returned no body");
-  }
-  options?.onConnected?.();
 
-  const reader = response.body.getReader();
+  // Watchdog: aborts the underlying fetch when response headers or stream
+  // bytes stop arriving, so a silently dead connection cannot hold one of
+  // Chromium's per-host slots forever. External aborts propagate into it;
+  // watchdog aborts surface as ordinary errors so the caller's reconnect
+  // loop resumes from its committed cursor.
+  const watchdog = new AbortController();
+  let stalledPhase: "headers" | "stream" | null = null;
+  let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  const armWatchdog = (phase: "headers" | "stream", timeoutMs: number) => {
+    if (watchdogTimer) {
+      clearTimeout(watchdogTimer);
+    }
+    watchdogTimer = setTimeout(() => {
+      stalledPhase = phase;
+      watchdog.abort();
+    }, timeoutMs);
+  };
+  const disarmWatchdog = () => {
+    if (watchdogTimer) {
+      clearTimeout(watchdogTimer);
+      watchdogTimer = null;
+    }
+  };
+  const propagateExternalAbort = () => watchdog.abort();
+  if (signal?.aborted) {
+    watchdog.abort();
+  } else {
+    signal?.addEventListener("abort", propagateExternalAbort, { once: true });
+  }
+  const stalledError = () =>
+    stalledPhase === "headers"
+      ? new Error(
+          `Thread event stream stalled: no response headers within ${headerTimeoutMs}ms`,
+        )
+      : new Error(
+          `Thread event stream stalled: no bytes within ${idleTimeoutMs}ms (missed keep-alives)`,
+        );
+
+  try {
+    armWatchdog("headers", headerTimeoutMs);
+    let response: Response;
+    try {
+      response = await gatewayFetch(
+        buildUrl(
+          settings,
+          `/api/threads/${encodeURIComponent(threadId)}/stream?after_seq=${afterSeq}&windowed_resume=1${renderFloorParam}`,
+        ),
+        {
+          headers,
+          signal: watchdog.signal,
+        },
+      );
+    } catch (error) {
+      if (stalledPhase) {
+        throw stalledError();
+      }
+      throw error;
+    } finally {
+      disarmWatchdog();
+    }
+    if (!response.ok) {
+      throw new Error(`${response.status} ${response.statusText}`);
+    }
+    if (!response.body) {
+      throw new Error("Thread event stream returned no body");
+    }
+    options?.onConnected?.();
+    await forwardThreadStreamBody(response.body, afterSeq, onEvent, options, {
+      armIdle: () => armWatchdog("stream", idleTimeoutMs),
+      disarmIdle: disarmWatchdog,
+      stalled: () => (stalledPhase ? stalledError() : null),
+    });
+  } finally {
+    disarmWatchdog();
+    signal?.removeEventListener("abort", propagateExternalAbort);
+  }
+}
+
+interface ThreadStreamWatchdogHooks {
+  armIdle: () => void;
+  disarmIdle: () => void;
+  /** Non-null when the watchdog (not an external abort) killed the fetch. */
+  stalled: () => Error | null;
+}
+
+async function forwardThreadStreamBody(
+  body: ReadableStream<Uint8Array>,
+  afterSeq: number,
+  onEvent: (event: DesktopChatStreamEvent) => void,
+  options: StreamThreadEventsOptions | undefined,
+  watchdog: ThreadStreamWatchdogHooks,
+): Promise<void> {
+  const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   let dataLines: string[] = [];
@@ -419,7 +519,20 @@ export async function streamThreadEvents(
 
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      watchdog.armIdle();
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try {
+        chunk = await reader.read();
+      } catch (error) {
+        const stalled = watchdog.stalled();
+        if (stalled) {
+          throw stalled;
+        }
+        throw error;
+      } finally {
+        watchdog.disarmIdle();
+      }
+      const { done, value } = chunk;
       if (done) {
         break;
       }

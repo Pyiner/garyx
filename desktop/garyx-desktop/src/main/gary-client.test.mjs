@@ -774,6 +774,162 @@ test("streamThreadEvents ignores non-render per-thread frames", async () => {
   }
 });
 
+test("streamThreadEvents aborts a fetch whose headers never arrive (#TASK-1840)", async () => {
+  // A gateway that accepts the TCP connection but never answers (saturation,
+  // crash mid-accept) must not pin a Chromium connection slot forever.
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (_url, init = {}) =>
+    new Promise((_resolve, reject) => {
+      init.signal?.addEventListener(
+        "abort",
+        () => reject(new DOMException("aborted", "AbortError")),
+        { once: true },
+      );
+    });
+
+  try {
+    await assert.rejects(
+      streamThreadEvents(
+        { gatewayUrl: "http://127.0.0.1:31337", gatewayAuthToken: "" },
+        "thread::stalled-headers",
+        () => {},
+        undefined,
+        { headerTimeoutMs: 40 },
+      ),
+      (error) => {
+        assert.match(String(error), /stalled: no response headers within 40ms/);
+        return true;
+      },
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("streamThreadEvents recycles a silent stream after the idle timeout (#TASK-1840)", async () => {
+  // Zombie SSE: the response connected and delivered one frame, then the
+  // connection went half-open (no bytes, no keep-alive pings). The idle
+  // watchdog must abort it so the caller's reconnect loop can resume from
+  // the committed cursor instead of holding the slot forever.
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (_url, init = {}) => {
+    const payload = renderFramePayload(
+      "thread::stalled-idle",
+      [committedEvent("thread::stalled-idle", 5, "before the silence")],
+      5,
+    );
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode(`id: 5\ndata: ${payload}\n\n`),
+        );
+        // Never close; the manual stream mirrors fetch-abort semantics so
+        // the pending read rejects when the watchdog fires.
+        init.signal?.addEventListener(
+          "abort",
+          () => controller.error(new DOMException("aborted", "AbortError")),
+          { once: true },
+        );
+      },
+    });
+    return Promise.resolve(new Response(body, { status: 200, statusText: "OK" }));
+  };
+
+  try {
+    const events = [];
+    const committedSeqs = [];
+    await assert.rejects(
+      streamThreadEvents(
+        { gatewayUrl: "http://127.0.0.1:31337", gatewayAuthToken: "" },
+        "thread::stalled-idle",
+        (event) => events.push(event),
+        undefined,
+        {
+          afterSeq: 4,
+          idleTimeoutMs: 40,
+          onCommittedSeq: (seq) => committedSeqs.push(seq),
+        },
+      ),
+      (error) => {
+        assert.match(String(error), /stalled: no bytes within 40ms/);
+        return true;
+      },
+    );
+    // The frame that arrived before the silence was delivered and advanced
+    // the cursor, so the reconnect resumes after seq 5 with no replay gap.
+    assert.equal(events.length, 1);
+    assert.deepEqual(committedSeqs, [5]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("streamThreadEvents keeps external aborts distinct from watchdog stalls", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (_url, init = {}) =>
+    new Promise((_resolve, reject) => {
+      // Real fetch rejects immediately on an already-aborted signal.
+      if (init.signal?.aborted) {
+        reject(new DOMException("aborted", "AbortError"));
+        return;
+      }
+      init.signal?.addEventListener(
+        "abort",
+        () => reject(new DOMException("aborted", "AbortError")),
+        { once: true },
+      );
+    });
+
+  try {
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(
+      streamThreadEvents(
+        { gatewayUrl: "http://127.0.0.1:31337", gatewayAuthToken: "" },
+        "thread::external-abort",
+        () => {},
+        controller.signal,
+        { headerTimeoutMs: 5_000 },
+      ),
+      (error) => {
+        // An external abort surfaces as the fetch's AbortError, never as a
+        // watchdog stall message.
+        assert.equal(/stalled/.test(String(error)), false);
+        return true;
+      },
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("streamThreadEvents leaves fast healthy streams untouched by watchdog timeouts", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    const payload = renderFramePayload(
+      "thread::healthy",
+      [committedEvent("thread::healthy", 2, "quick")],
+      2,
+    );
+    return sseResponse(`id: 2\ndata: ${payload}\n\n`);
+  };
+
+  try {
+    const events = [];
+    await streamThreadEvents(
+      { gatewayUrl: "http://127.0.0.1:31337", gatewayAuthToken: "" },
+      "thread::healthy",
+      (event) => events.push(event),
+      undefined,
+      { afterSeq: 1, headerTimeoutMs: 5_000, idleTimeoutMs: 5_000 },
+    );
+    assert.equal(events.length, 1);
+    assert.equal(events[0].renderState.based_on_seq, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("updateCustomAgent and updateTeam carry the optimistic concurrency token", async () => {
   const bodies = [];
   setGatewayFetch(async (url, init) => {
