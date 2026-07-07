@@ -674,6 +674,102 @@ mod tests {
         assert_eq!(connections.load(Ordering::SeqCst), 1);
     }
 
+    /// Bind a port, drop the listener (subsequent connects are refused —
+    /// the gateway restart window), then bring a real listener back on the
+    /// same port after `revive_after_ms`.
+    async fn spawn_refused_then_ok_server(revive_after_ms: u64) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind probe listener");
+        let addr = listener.local_addr().expect("listener addr");
+        drop(listener);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(revive_after_ms)).await;
+            let listener = tokio::net::TcpListener::bind(addr)
+                .await
+                .expect("rebind revived listener");
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 2048];
+                    let _ = stream.read(&mut buf).await;
+                    let body = "{\"ok\":true}";
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn idempotent_request_rides_out_a_restart_window() {
+        // Connection refused (no listener), gateway comes back before the
+        // retry budget runs out: the GET must succeed via retry.
+        let base_url = spawn_refused_then_ok_server(100).await;
+        let gateway = test_endpoint(base_url);
+        let builder = shared_http_client()
+            .get(format!("{}/api/tasks", gateway.base_url))
+            .timeout(GATEWAY_GET_TIMEOUT);
+
+        let value = execute_gateway_json(builder, &gateway, GatewayRetryPolicy::Idempotent)
+            .await
+            .expect("retry rides out the restart window");
+
+        assert_eq!(value, json!({ "ok": true }));
+    }
+
+    #[tokio::test]
+    async fn mutation_rides_out_a_restart_window() {
+        // A refused connection never reached a listener, so retrying a
+        // mutation is safe — this is the restart-window case the retry
+        // exists for.
+        let base_url = spawn_refused_then_ok_server(100).await;
+        let gateway = test_endpoint(base_url);
+        let builder = shared_http_client()
+            .post(format!("{}/api/tasks", gateway.base_url))
+            .json(&json!({ "title": "t" }))
+            .timeout(GATEWAY_MUTATION_TIMEOUT);
+
+        let value = execute_gateway_json(builder, &gateway, GatewayRetryPolicy::ConnectOnly)
+            .await
+            .expect("mutation retries a refused connection");
+
+        assert_eq!(value, json!({ "ok": true }));
+    }
+
+    #[tokio::test]
+    async fn persistent_refusal_exhausts_connect_attempts() {
+        // Gateway never comes back: three connect attempts, then the
+        // familiar "not reachable" failure.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind probe listener");
+        let addr = listener.local_addr().expect("listener addr");
+        drop(listener);
+        let gateway = test_endpoint(format!("http://{addr}"));
+
+        let error = fetch_gateway_json(&gateway, "/api/tasks")
+            .await
+            .expect_err("dead gateway fails after retries");
+
+        let cli_error = error
+            .downcast_ref::<GatewayCliError>()
+            .expect("gateway cli error");
+        assert_eq!(cli_error.kind, GatewayErrorKind::Unreachable);
+        assert!(
+            cli_error.message.contains("not reachable"),
+            "refused connections keep the reachability text: {}",
+            cli_error.message
+        );
+    }
+
     #[tokio::test]
     async fn non_success_status_is_never_retried() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
