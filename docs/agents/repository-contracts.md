@@ -17,6 +17,24 @@ reinterpreted in feature code.
 - Channel/plugin stream presentation policy, buffering, and tool-call display
   helpers: `garyx-channels/src/plugin_tools.rs`.
 
+## Thread Queries Never Enumerate Record Files
+
+- In steady state the thread-record filesystem serves exactly two shapes:
+  point reads/writes of a single known `thread_id`, and transcript
+  append/range access. Every "find threads by condition" query — by channel
+  binding, team, task number, recency, or a bare count — must be answered by
+  a SQLite projection maintained from the write path.
+- Do not add code that calls `list_keys` and then `get`s record bodies to
+  filter them. Thread records carry their full legacy `messages` history
+  (multi-MB for busy threads); enumerating them materializes gigabytes and
+  was the root of the gateway's 5.5GB startup memory peaks. If a projection
+  lacks the column a query needs, add the column and its write-path update —
+  do not fall back to scanning files.
+- The only legitimate full walk over record files is a projection
+  repair/migration (startup reconciliation after a projection version bump
+  or loss), and even that path should avoid materializing `messages` when it
+  only needs metadata.
+
 ## Recent Threads And Active Runs
 
 - Mobile recent-thread lists read the gateway SQLite `recent_threads`
