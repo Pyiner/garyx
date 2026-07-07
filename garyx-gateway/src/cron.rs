@@ -416,8 +416,10 @@ fn next_cron_run_in_timezone<Z: TimeZone>(
 
 /// Resolve the timezone a bare cron expression (no explicit `timezone`)
 /// should be interpreted in, as an IANA zone: the `TZ` environment variable
-/// wins when it names a valid IANA zone (POSIX specs like `EST5EDT` fail to
-/// parse and fall through), otherwise the machine's configured system zone.
+/// wins when it names a TZDB zone (legacy names like `EST5EDT` are real TZDB
+/// zones and parse; full POSIX transition specs like `EST5EDT,M3.2.0/2`
+/// fail to parse and fall through), otherwise the machine's configured
+/// system zone.
 ///
 /// Pure so tests can pin the precedence without touching process env.
 fn resolve_bare_cron_timezone(tz_env: Option<&str>, system_zone: Option<&str>) -> Option<Tz> {
