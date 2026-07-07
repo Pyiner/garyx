@@ -1850,7 +1850,14 @@ impl ThreadTranscriptStore {
         if cache.is_none() {
             match self.build_cache_streaming(thread_id, &path).await {
                 Ok(entry) => *cache = Some(entry),
-                Err(_) => return None,
+                Err(_) => {
+                    // verify_cache may have just dropped a stale entry;
+                    // sync the slot's accounting before bailing so the
+                    // store-wide eviction budget stops counting bytes for
+                    // a cache that no longer exists.
+                    self.sync_slot_accounting(&slot, &cache);
+                    return None;
+                }
             }
         }
         let served = cache.as_ref().and_then(serve);
@@ -2814,6 +2821,37 @@ mod streaming_build_tests {
             file_len,
             entry.total_records,
             entry.tail.len(),
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_streaming_build_resets_slot_accounting() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ThreadTranscriptStore::file_for_tests(dir.path(), 1 << 20, 4096, 1 << 24)
+            .await
+            .unwrap();
+        let thread_id = "thread::failed-build-accounting";
+        store
+            .append_committed_messages(thread_id, Some("run-1"), &[fixture_message(0)])
+            .await
+            .unwrap();
+        // Warm the cache through a read.
+        assert_eq!(store.message_count(thread_id).await.unwrap(), 1);
+        let slot = store.file_slot(thread_id).unwrap();
+        assert!(slot.cached_bytes.load(Ordering::Relaxed) > 0);
+
+        // Out-of-band corruption drops the warm entry on the next verify and
+        // makes the streaming rebuild fail.
+        let path = store.transcript_path(thread_id).unwrap();
+        tokio::fs::write(&path, b"not-json\n").await.unwrap();
+
+        // The read surfaces the parse error via the fallback path...
+        assert!(store.message_count(thread_id).await.is_err());
+        // ...and the slot no longer claims bytes for the dropped cache.
+        assert_eq!(
+            slot.cached_bytes.load(Ordering::Relaxed),
+            0,
+            "failed rebuild must sync slot accounting for the dropped entry"
         );
     }
 
