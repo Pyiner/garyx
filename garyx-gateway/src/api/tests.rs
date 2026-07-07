@@ -878,6 +878,111 @@ async fn test_custom_agent_optimistic_concurrency_contract() {
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
+/// A racing team PUT and DELETE must serialize with their side effects: the
+/// terminal state is always "team gone + bound thread carries the deletion
+/// markers", regardless of which handler wins the race. Without the store's
+/// mutation guard the PUT could clear the markers the DELETE just wrote
+/// (#TASK-1811 finding 1).
+/// Rounds are few because every handler pass triggers a real bridge
+/// `reload_from_config` (provider CLI spawns) — one round already exercises
+/// the guard; three cover both orderings with margin.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_team_update_delete_race_never_loses_deletion_markers() {
+    for round in 0..3 {
+        let state = test_state();
+        let team_id = format!("race-team-{round}");
+        let seeded = {
+            use crate::agent_teams::UpsertAgentTeamRequest;
+            state
+                .ops
+                .agent_teams
+                .upsert_team_for_test(UpsertAgentTeamRequest {
+                    team_id: team_id.clone(),
+                    display_name: "Race Team".to_owned(),
+                    leader_agent_id: "planner".to_owned(),
+                    member_agent_ids: vec!["planner".to_owned()],
+                    workflow_text: "ship".to_owned(),
+                    avatar_data_url: None,
+                })
+                .await
+                .expect("seed team")
+        };
+        let thread_id = format!("thread::race-{round}");
+        state
+            .threads
+            .thread_store
+            .set(
+                &thread_id,
+                json!({
+                    "thread_id": thread_id,
+                    "agent_id": team_id,
+                    "provider_type": "agent_team",
+                }),
+            )
+            .await;
+
+        let router = api_router(state.clone());
+        let update_router = router.clone();
+        let update_team_id = team_id.clone();
+        let update_token = seeded.updated_at.clone();
+        let update = tokio::spawn(async move {
+            let req = Request::builder()
+                .method("PUT")
+                .uri(format!("/api/teams/{update_team_id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "team_id": update_team_id,
+                        "display_name": "Race Team Renamed",
+                        "leader_agent_id": "planner",
+                        "member_agent_ids": ["planner"],
+                        "workflow_text": "ship",
+                        "expected_updated_at": update_token,
+                    })
+                    .to_string(),
+                ))
+                .unwrap();
+            update_router.oneshot(req).await.unwrap().status()
+        });
+        let delete_router = router.clone();
+        let delete_team_id = team_id.clone();
+        let delete = tokio::spawn(async move {
+            let req = Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/teams/{delete_team_id}"))
+                .body(Body::empty())
+                .unwrap();
+            delete_router.oneshot(req).await.unwrap().status()
+        });
+        let update_status = update.await.expect("update task");
+        let delete_status = delete.await.expect("delete task");
+
+        // The delete always lands. The update either won the guard first
+        // (200, then deleted) or ran after the delete (404/409).
+        assert_eq!(delete_status, StatusCode::NO_CONTENT, "round {round}");
+        assert!(
+            [StatusCode::OK, StatusCode::NOT_FOUND, StatusCode::CONFLICT].contains(&update_status),
+            "round {round}: unexpected update status {update_status}"
+        );
+
+        assert!(
+            state.ops.agent_teams.get_team(&team_id).await.is_none(),
+            "round {round}: team must be gone"
+        );
+        let thread = state
+            .threads
+            .thread_store
+            .get(&thread_id)
+            .await
+            .expect("thread survives");
+        assert_eq!(
+            thread.get("team_deleted"),
+            Some(&Value::Bool(true)),
+            "round {round}: deletion marker must survive the race"
+        );
+    }
+}
+
 #[tokio::test]
 async fn test_agent_team_optimistic_concurrency_contract() {
     let state = test_state();

@@ -1814,6 +1814,102 @@ mod tests {
         assert_eq!(preserved, "Existing workflow");
     }
 
+    /// Team test server: GET returns a canned team (with updated_at), PUT is
+    /// recorded and echoed back.
+    async fn spawn_team_http_test_server(
+        requests: StdArc<Mutex<Vec<RecordedRequest>>>,
+    ) -> (String, JoinHandle<()>) {
+        let put_requests = requests.clone();
+        let app = Router::new().route(
+            "/api/teams/{team_id}",
+            get(move |AxumPath(team_id): AxumPath<String>| async move {
+                (
+                    StatusCode::OK,
+                    Json(json!({
+                        "team_id": team_id,
+                        "display_name": "Existing Team",
+                        "leader_agent_id": "planner",
+                        "member_agent_ids": ["planner", "coder"],
+                        "workflow_text": "Existing workflow",
+                        "updated_at": "2026-01-01T00:00:00Z",
+                    })),
+                )
+            })
+            .put(
+                move |AxumPath(team_id): AxumPath<String>, Json(payload): Json<Value>| {
+                    let requests = put_requests.clone();
+                    async move {
+                        requests
+                            .lock()
+                            .expect("request lock")
+                            .push(RecordedRequest {
+                                method: "PUT".to_owned(),
+                                path: format!("/api/teams/{team_id}"),
+                                body: payload.clone(),
+                            });
+                        (
+                            StatusCode::OK,
+                            Json(json!({
+                                "team_id": team_id,
+                                "display_name": payload["displayName"],
+                                "leader_agent_id": payload["leaderAgentId"],
+                                "member_agent_ids": payload["memberAgentIds"],
+                                "workflow_text": payload["workflowText"],
+                            })),
+                        )
+                    }
+                },
+            ),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve test router");
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    #[tokio::test]
+    async fn cmd_agent_team_update_preserves_omitted_fields_and_sends_token() {
+        let requests = StdArc::new(Mutex::new(Vec::new()));
+        let (base_url, handle) = spawn_team_http_test_server(requests.clone()).await;
+        let dir = tempdir().expect("tempdir");
+        let config_path = write_test_gateway_config(&dir, &base_url);
+
+        cmd_agent_team_update(
+            config_path.to_str().expect("config path"),
+            "product-ship".to_owned(),
+            None,
+            Some("Renamed Team".to_owned()),
+            None,
+            Vec::new(),
+            None,
+            false,
+        )
+        .await
+        .expect("team update should succeed");
+
+        handle.abort();
+        let records = requests.lock().expect("request lock");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].method, "PUT");
+        // Explicit field applied; omitted fields preserved from the fetched team.
+        assert_eq!(records[0].body["displayName"], "Renamed Team");
+        assert_eq!(records[0].body["leaderAgentId"], "planner");
+        assert_eq!(
+            records[0].body["memberAgentIds"],
+            json!(["planner", "coder"])
+        );
+        assert_eq!(records[0].body["workflowText"], "Existing workflow");
+        // The conditional-update token from the fetched team rides along.
+        assert_eq!(
+            records[0].body["expected_updated_at"],
+            "2026-01-01T00:00:00Z"
+        );
+    }
+
     fn agent_value(agent_id: &str, built_in: bool) -> Value {
         json!({
             "agent_id": agent_id,

@@ -247,8 +247,9 @@ def test_team_crud():
         check("Get team -> 200", status == 200, f"got {status}")
         check("Get team display_name matches", body and body.get("display_name") == "Smoke Test Team")
 
-        # UPDATE
+        # UPDATE (conditional: PUT requires the expected_updated_at token)
         payload["display_name"] = "Updated Smoke Team"
+        payload["expected_updated_at"] = (body or {}).get("updated_at")
         status, body = _req("PUT", f"/api/teams/{tid}", payload)
         check("Update team -> 200", status == 200, f"got {status}")
         check("Update team name reflected", body and body.get("display_name") == "Updated Smoke Team")

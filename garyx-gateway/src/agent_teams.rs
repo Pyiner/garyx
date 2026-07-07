@@ -25,6 +25,13 @@ pub struct UpsertAgentTeamRequest {
 pub struct AgentTeamStore {
     inner: RwLock<HashMap<String, AgentTeamProfile>>,
     persistence_path: Option<PathBuf>,
+    /// Serializes whole team mutations *including their handler-level side
+    /// effects* (deleted-marker clearing, group-state reconciliation, thread
+    /// tombstoning). The store's own write lock only covers the profile map,
+    /// so without this a PUT that succeeded could interleave with a DELETE
+    /// and clear the deletion markers the delete just wrote. Team management
+    /// is low-frequency, so one store-wide mutex is fine.
+    mutation_serial: tokio::sync::Mutex<()>,
 }
 
 impl AgentTeamStore {
@@ -32,6 +39,7 @@ impl AgentTeamStore {
         Self {
             inner: RwLock::new(HashMap::new()),
             persistence_path: None,
+            mutation_serial: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -51,6 +59,7 @@ impl AgentTeamStore {
         Ok(Self {
             inner: RwLock::new(teams),
             persistence_path: Some(path),
+            mutation_serial: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -93,6 +102,13 @@ impl AgentTeamStore {
                 .then_with(|| left.team_id.cmp(&right.team_id))
         });
         teams
+    }
+
+    /// Take the mutation-serialization guard. Handlers must hold this across
+    /// the store write *and* every side effect that must not interleave with
+    /// a concurrent create/update/delete of any team.
+    pub async fn lock_mutations(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.mutation_serial.lock().await
     }
 
     pub async fn get_team(&self, team_id: &str) -> Option<AgentTeamProfile> {

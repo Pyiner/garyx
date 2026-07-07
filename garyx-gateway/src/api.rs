@@ -3203,6 +3203,9 @@ pub async fn create_agent_team(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<AgentTeamUpsertPayload>,
 ) -> impl IntoResponse {
+    // Hold the mutation guard across the write and its side effects so a
+    // concurrent delete cannot interleave (see AgentTeamStore::lock_mutations).
+    let _mutations = state.ops.agent_teams.lock_mutations().await;
     match state
         .ops
         .agent_teams
@@ -3256,6 +3259,9 @@ pub async fn update_agent_team(
         Ok(expectation) => expectation,
         Err(response) => return response,
     };
+    // Hold the mutation guard across the write and its side effects so a
+    // concurrent delete cannot interleave (see AgentTeamStore::lock_mutations).
+    let _mutations = state.ops.agent_teams.lock_mutations().await;
     match state
         .ops
         .agent_teams
@@ -3304,6 +3310,9 @@ pub async fn delete_agent_team(
     State(state): State<Arc<AppState>>,
     Path(team_id): Path<String>,
 ) -> impl IntoResponse {
+    // Hold the mutation guard across the delete and its thread tombstoning so
+    // a concurrent update cannot clear the markers this delete writes.
+    let _mutations = state.ops.agent_teams.lock_mutations().await;
     match state.ops.agent_teams.delete_team(&team_id).await {
         Ok(()) => {
             if let Err(error) = mark_deleted_team_threads(&state, &team_id).await {
