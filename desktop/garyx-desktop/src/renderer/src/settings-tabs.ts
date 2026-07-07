@@ -29,7 +29,7 @@ export const SETTINGS_TABS: Array<{
     id: 'provider',
     label: 'Provider',
     eyebrow: 'Providers',
-    description: 'Desktop-side Claude env overrides and Codex auth.',
+    description: 'Model provider status, defaults, and usage.',
   },
   {
     id: 'channels',

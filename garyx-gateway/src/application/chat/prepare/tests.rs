@@ -388,6 +388,69 @@ async fn prepare_chat_request_prefers_thread_snapshot_before_agent_runtime_metad
     );
 }
 
+/// External chat boundary guard: `provider_env` is reserved for server-side
+/// runtime resolution. A chat request that smuggles it through `metadata`
+/// must have it stripped in prepare — otherwise the bridge's existing-wins
+/// backfill would let the client value silently block the agent/thread
+/// snapshot env (the same failure class as the removed `providerMetadata`
+/// channel, through the front door).
+#[tokio::test]
+async fn prepare_chat_request_strips_reserved_provider_env_from_request_metadata() {
+    let state = test_state();
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::reserved-env",
+            json!({
+                "thread_id": "thread::reserved-env",
+                "channel": "api",
+                "account_id": "main",
+                "from_id": "api-user",
+                "messages": [],
+            }),
+        )
+        .await;
+
+    let mut metadata = HashMap::new();
+    metadata.insert(
+        "provider_env".to_owned(),
+        json!({ "ANTHROPIC_BASE_URL": "http://127.0.0.1:19999" }),
+    );
+    metadata.insert("client_note".to_owned(), json!("kept"));
+
+    let prepared = prepare_chat_request(
+        &state,
+        ChatRequest {
+            thread_id: Some("thread::reserved-env".to_owned()),
+            message: "hello".to_owned(),
+            attachments: Vec::new(),
+            images: Vec::new(),
+            files: Vec::new(),
+            client_intent_id: None,
+            from_id: "api-user".to_owned(),
+            account_id: "main".to_owned(),
+            bot: None,
+            wait_for_response: true,
+            workspace_path: None,
+            provider_type: Some(ProviderType::ClaudeCode),
+            metadata,
+        },
+    )
+    .await
+    .expect("prepare chat request");
+
+    assert!(
+        !prepared.metadata.contains_key("provider_env"),
+        "client-supplied provider_env must be stripped at the chat boundary"
+    );
+    assert_eq!(
+        prepared.metadata.get("client_note").and_then(Value::as_str),
+        Some("kept"),
+        "non-reserved client metadata must pass through"
+    );
+}
+
 #[test]
 fn merge_thread_model_cells_applies_legacy_override_keys() {
     let thread_data = json!({

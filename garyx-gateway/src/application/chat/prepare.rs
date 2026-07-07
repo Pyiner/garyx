@@ -96,10 +96,22 @@ async fn persist_thread_provider_type_if_missing(
     true
 }
 
+/// Request-metadata keys reserved for server-side runtime resolution. Chat
+/// clients (HTTP `/api/chat/start`, WS `start`) must not be able to occupy
+/// them: the bridge backfill is existing-wins, so a client-supplied value
+/// would silently block the agent/thread runtime snapshot (`provider_env`
+/// is resolved exclusively from the thread snapshot). Internal dispatch
+/// builds `AgentRunRequest` metadata directly and keeps explicit override
+/// power; this guard only applies to the external chat boundary.
+const RESERVED_RUNTIME_METADATA_KEYS: &[&str] = &["provider_env"];
+
 pub(crate) async fn prepare_chat_request(
     state: &Arc<AppState>,
     mut req: ChatRequest,
 ) -> Result<PreparedChatRequest, ChatPreparationError> {
+    for key in RESERVED_RUNTIME_METADATA_KEYS {
+        req.metadata.remove(*key);
+    }
     let config = state.config_snapshot();
     let resolved_message = resolve_chat_message(&config, &mut req);
     let ResolvedChatTarget {

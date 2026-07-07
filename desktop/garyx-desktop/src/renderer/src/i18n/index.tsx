@@ -509,7 +509,7 @@ const zhCN: Record<string, string> = {
   'Desktop Settings': '客户端设置',
   'Desktop app behavior, updates, and experimental surfaces.': '客户端行为、更新和实验功能。',
   'Desktop-side saved endpoint for the Garyx gateway.': '保存在客户端本地的 Garyx 网关地址。',
-  'Desktop-side Claude env overrides and Codex auth.': '客户端侧 Claude 环境变量覆盖和 Codex 认证。',
+  'Model provider status, defaults, and usage.': '模型 Provider 状态、默认模型与用量。',
   'Desktop-only key, stored in macOS Keychain.': '仅客户端使用的 key，存储在 macOS Keychain。',
   'Disabled': '已禁用',
   'Editing live gateway settings over the API.': '正在通过 API 编辑运行中的网关配置。',
