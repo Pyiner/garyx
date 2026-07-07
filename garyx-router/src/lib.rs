@@ -1,4 +1,5 @@
 pub mod file_store;
+pub mod group_transcript;
 pub mod memory_store;
 pub mod message_ledger;
 pub mod message_routing;
@@ -59,6 +60,10 @@ pub mod threading {
 }
 
 pub use file_store::FileThreadStore;
+pub use group_transcript::{
+    GROUP_TRANSCRIPT_SNAPSHOT_LIMIT, build_group_transcript_snapshot,
+    build_group_transcript_snapshot_from_history, group_transcript_snapshot_from_messages,
+};
 pub use memory_store::InMemoryThreadStore;
 pub use message_ledger::{MessageLedgerError, MessageLedgerStore, SharedMessageLedgerStore};
 pub use message_routing::{MessageRoutingIndex, MessageRoutingStats, OutboundMessageRecord};

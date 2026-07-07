@@ -15,7 +15,7 @@ use garyx_router::{
 use serde_json::{Value, json};
 
 use crate::agent_identity::{
-    agent_runtime_metadata, build_group_transcript_snapshot, resolve_agent_reference_from_stores,
+    agent_runtime_metadata, resolve_agent_reference_from_stores,
 };
 use crate::application::chat::contracts::ChatRequest;
 use crate::chat_shared::record_api_thread_log;
@@ -177,10 +177,16 @@ pub(crate) async fn prepare_chat_request(
         }
         if reference.team().is_some()
             && let Some(thread_data) = thread_data.as_ref()
+            && !req.metadata.contains_key("group_transcript_snapshot")
         {
+            let snapshot = garyx_router::build_group_transcript_snapshot_from_history(
+                state.threads.history.as_ref(),
+                &thread_id,
+                thread_data,
+            )
+            .await;
             req.metadata
-                .entry("group_transcript_snapshot".to_owned())
-                .or_insert_with(|| build_group_transcript_snapshot(thread_data));
+                .insert("group_transcript_snapshot".to_owned(), snapshot);
         }
     }
     req.provider_type = thread_provider_type.or_else(|| {
