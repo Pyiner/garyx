@@ -53,7 +53,7 @@ fn render_launch_agent_plist_uses_expected_label_and_program() {
     assert!(plist.contains("dscl . -read /Users/$(id -un) UserShell"));
     assert!(plist.contains("-lic"));
     assert!(plist.contains(
-        "exec \\&quot;/opt/homebrew/bin/garyx\\&quot; gateway run --host 0.0.0.0 --port 31337"
+        "exec \\&quot;/opt/homebrew/bin/garyx\\&quot; gateway run --host \\&quot;0.0.0.0\\&quot; --port 31337"
     ));
     assert!(!plist.contains("<key>WorkingDirectory</key>"));
     assert!(!plist.contains("GARYX_WORKSPACE_ROOT"));
@@ -72,6 +72,23 @@ fn render_launch_agent_plist_uses_expected_label_and_program() {
     // loading in the per-user domain that SSH / headless logins must use.
     assert!(!plist.contains("LimitLoadToSessionType"));
     assert!(!plist.contains("Aqua"));
+}
+
+#[test]
+fn render_launch_agent_plist_quotes_bracketed_ipv6_host() {
+    // `[::]` unquoted is a glob pattern inside the nested `-lic "..."`
+    // command; interactive zsh (`nomatch`) exits 1 on it and the agent
+    // crash-loops. The host must render inside escaped double quotes.
+    let plist = render_launch_agent_plist(
+        Path::new("/opt/homebrew/bin/garyx"),
+        "[::]",
+        31337,
+        Path::new("/tmp/stdout.log"),
+        Path::new("/tmp/stderr.log"),
+        None,
+    );
+    assert!(plist.contains("gateway run --host \\&quot;[::]\\&quot; --port 31337"));
+    assert!(!plist.contains("--host [::]"));
 }
 
 #[test]

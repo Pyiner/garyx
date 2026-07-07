@@ -12,7 +12,7 @@ fn render_unit_file_contains_exec_start_and_logs() {
     );
     assert!(unit.contains("Description=Garyx AI Gateway"));
     assert!(unit.contains(
-        "ExecStart=/bin/sh -c 'exec \"$(getent passwd %u | cut -d: -f7)\" -lic \"exec \\\"/usr/local/bin/garyx\\\" gateway run --host 0.0.0.0 --port 31337\"'"
+        "ExecStart=/bin/sh -c 'exec \"$(getent passwd %u | cut -d: -f7)\" -lic \"exec \\\"/usr/local/bin/garyx\\\" gateway run --host \\\"0.0.0.0\\\" --port 31337\"'"
     ));
     assert!(unit.contains("append:/home/alice/.garyx/logs/stdout.log"));
     assert!(unit.contains("append:/home/alice/.garyx/logs/stderr.log"));
@@ -28,6 +28,22 @@ fn render_unit_file_contains_exec_start_and_logs() {
     // The unit MUST use `Restart=always` to make exit-code-0 trigger a restart.
     assert!(unit.contains("Restart=always"));
     assert!(!unit.contains("Restart=on-failure"));
+}
+
+#[test]
+fn render_unit_file_quotes_bracketed_ipv6_host() {
+    // Unquoted `[::]` is a glob inside the nested `-lic "..."` command and
+    // crashes login shells with `nomatch` semantics (interactive zsh).
+    let unit = render_unit_file(
+        Path::new("/usr/local/bin/garyx"),
+        "[::]",
+        31337,
+        Path::new("/home/alice/.garyx/logs"),
+        None,
+        Path::new("/home/alice/.garyx/env"),
+    );
+    assert!(unit.contains("gateway run --host \\\"[::]\\\" --port 31337"));
+    assert!(!unit.contains("--host [::]"));
 }
 
 #[test]

@@ -111,8 +111,17 @@ pub(crate) fn port_is_open(port: u16) -> bool {
 /// Quote a path so it can be embedded as one argument inside a shell command
 /// that is itself wrapped in double quotes.
 pub(crate) fn shell_double_quoted_arg_for_nested_command(path: &Path) -> String {
+    shell_double_quoted_nested_arg(&path.display().to_string())
+}
+
+/// Quote a value as a `\"...\"` argument inside the service templates'
+/// nested `-lic "..."` command string. The double quotes keep the login
+/// shell from globbing or word-splitting the value — an unquoted `[::]` is
+/// a glob pattern, and interactive zsh (`nomatch`) exits 1 on it, which
+/// crash-loops the launch agent.
+pub(crate) fn shell_double_quoted_nested_arg(value: &str) -> String {
     let mut escaped = String::new();
-    for ch in path.display().to_string().chars() {
+    for ch in value.chars() {
         match ch {
             '\\' => escaped.push_str("\\\\"),
             '"' => escaped.push_str("\\\""),

@@ -262,6 +262,7 @@ fn render_unit_file(
         .map(|root| format!("Environment=GARYX_WORKSPACE_ROOT={}\n", root.display()))
         .unwrap_or_default();
     let binary_arg = super::shell_double_quoted_arg_for_nested_command(binary_path);
+    let host_arg = super::shell_double_quoted_nested_arg(host);
     format!(
         "[Unit]
 Description=Garyx AI Gateway
@@ -270,7 +271,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/bin/sh -c 'exec \"$(getent passwd %u | cut -d: -f7)\" -lic \"exec {binary_arg} gateway run --host {host} --port {port}\"'
+ExecStart=/bin/sh -c 'exec \"$(getent passwd %u | cut -d: -f7)\" -lic \"exec {binary_arg} gateway run --host {host_arg} --port {port}\"'
 Restart=always
 RestartSec=5
 TimeoutStopSec=10
@@ -282,7 +283,7 @@ StandardError=append:{log_dir}/stderr.log
 WantedBy=default.target
 ",
         binary_arg = binary_arg,
-        host = host,
+        host_arg = host_arg,
         port = port,
         workspace_line = workspace_line,
         env_file = env_file.display(),

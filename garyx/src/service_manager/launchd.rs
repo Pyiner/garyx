@@ -325,10 +325,11 @@ fn render_launch_agent_plist(
     // `exec` chains keep the parent chain clean (garyx <- launchd, no sh/zsh
     // shims).
     let binary_arg = super::shell_double_quoted_arg_for_nested_command(binary_path);
+    let host_arg = super::shell_double_quoted_nested_arg(host);
     let command = format!(
-        r#"exec "$(dscl . -read /Users/$(id -un) UserShell | awk '/^UserShell:/ {{print $NF}}')" -lic "exec {binary_arg} gateway run --host {host} --port {port}""#,
+        r#"exec "$(dscl . -read /Users/$(id -un) UserShell | awk '/^UserShell:/ {{print $NF}}')" -lic "exec {binary_arg} gateway run --host {host_arg} --port {port}""#,
         binary_arg = binary_arg,
-        host = host,
+        host_arg = host_arg,
         port = port,
     );
     let workspace_entry = workspace_root.map(|root| {
