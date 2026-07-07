@@ -1467,6 +1467,99 @@ async fn test_cron_expression_respects_timezone() {
 }
 
 #[tokio::test]
+async fn test_cron_dst_fall_back_fires_at_first_occurrence_instead_of_skipping_the_day() {
+    use chrono::TimeZone;
+
+    // America/New_York falls back on 2026-11-01: 01:30 local occurs twice
+    // (05:30Z as EDT, 06:30Z as EST). The cron crate's own timezone iterator
+    // drops the ambiguous wall-clock time and skips the whole day; the
+    // schedule must instead fire at the first occurrence.
+    let schedule = CronSchedule::Cron {
+        expr: "0 30 1 * * *".to_owned(),
+        timezone: Some("America/New_York".to_owned()),
+    };
+
+    let after = Utc.with_ymd_and_hms(2026, 11, 1, 4, 55, 0).unwrap(); // 00:55 EDT
+    let next = CronJob::compute_next_run(&schedule, after);
+    assert_eq!(next, Utc.with_ymd_and_hms(2026, 11, 1, 5, 30, 0).unwrap());
+
+    // Re-arming right after that firing lands on the next day: the 01:30
+    // wall-clock event already fired once on the fall-back day.
+    let rearmed = CronJob::compute_next_run(&schedule, next);
+    assert_eq!(rearmed, Utc.with_ymd_and_hms(2026, 11, 2, 6, 30, 0).unwrap());
+}
+
+#[tokio::test]
+async fn test_cron_dst_spring_forward_skips_nonexistent_wall_clock_time() {
+    use chrono::TimeZone;
+
+    // America/New_York springs forward on 2026-03-08: 02:30 local never
+    // occurs that day, so the next firing is the following day's 02:30 EDT.
+    let schedule = CronSchedule::Cron {
+        expr: "0 30 2 * * *".to_owned(),
+        timezone: Some("America/New_York".to_owned()),
+    };
+
+    let after = Utc.with_ymd_and_hms(2026, 3, 8, 6, 55, 0).unwrap(); // 01:55 EST
+    let next = CronJob::compute_next_run(&schedule, after);
+    assert_eq!(next, Utc.with_ymd_and_hms(2026, 3, 9, 6, 30, 0).unwrap());
+}
+
+#[test]
+fn resolve_bare_cron_timezone_prefers_valid_tz_env_over_system_zone() {
+    // A valid IANA TZ env wins.
+    assert_eq!(
+        resolve_bare_cron_timezone(Some("America/New_York"), Some("Asia/Shanghai")),
+        Some(Tz::America__New_York)
+    );
+    // Legacy TZDB names like EST5EDT parse as real zones (with DST rules),
+    // matching how chrono::Local would honor the same TZ value.
+    assert_eq!(
+        resolve_bare_cron_timezone(Some("EST5EDT"), Some("Asia/Shanghai")),
+        Some(Tz::EST5EDT)
+    );
+    // Full POSIX transition specs are not TZDB names: fall through to the
+    // system zone.
+    assert_eq!(
+        resolve_bare_cron_timezone(Some("EST5EDT,M3.2.0/2,M11.1.0/2"), Some("Asia/Shanghai")),
+        Some(Tz::Asia__Shanghai)
+    );
+    // Blank env falls through; missing both resolves to None (caller then
+    // falls back to chrono::Local).
+    assert_eq!(
+        resolve_bare_cron_timezone(Some("  "), Some("Asia/Shanghai")),
+        Some(Tz::Asia__Shanghai)
+    );
+    assert_eq!(resolve_bare_cron_timezone(None, None), None);
+    assert_eq!(resolve_bare_cron_timezone(Some("garbage"), None), None);
+}
+
+#[tokio::test]
+async fn test_bare_cron_dst_fall_back_fires_first_occurrence_under_tz_env() {
+    use chrono::TimeZone;
+
+    // Guards the bare-cron (timezone: None) machine-timezone path across a
+    // DST fall-back. Only meaningful when the whole process runs under
+    // TZ=America/New_York (the review repro:
+    // `TZ=America/New_York cargo test -p garyx-gateway --lib cron`);
+    // in-test env mutation would race parallel tests, so skip otherwise.
+    if std::env::var("TZ").as_deref() != Ok("America/New_York") {
+        return;
+    }
+
+    let schedule = CronSchedule::Cron {
+        expr: "0 30 1 * * *".to_owned(),
+        timezone: None,
+    };
+    let after = Utc.with_ymd_and_hms(2026, 11, 1, 4, 55, 0).unwrap(); // 00:55 EDT
+    let next = CronJob::compute_next_run(&schedule, after);
+    assert_eq!(next, Utc.with_ymd_and_hms(2026, 11, 1, 5, 30, 0).unwrap());
+
+    let rearmed = CronJob::compute_next_run(&schedule, next);
+    assert_eq!(rearmed, Utc.with_ymd_and_hms(2026, 11, 2, 6, 30, 0).unwrap());
+}
+
+#[tokio::test]
 async fn test_config_merge_preserves_runtime_state() {
     let tmp = TempDir::new().unwrap();
     let svc = CronService::new(tmp.path().to_path_buf());

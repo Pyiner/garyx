@@ -26,6 +26,7 @@ axum = { workspace = true, features = ["ws"] }
 tracing = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = "0.10"
+iana-time-zone = { workspace = true }
 uuid = { workspace = true }
 reqwest = { workspace = true }
 cron = "0.12"

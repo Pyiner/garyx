@@ -196,9 +196,8 @@ impl CronJob {
                         timezone.as_deref().map(str::trim).filter(|s| !s.is_empty())
                     {
                         if let Ok(tz) = tz_name.parse::<Tz>() {
-                            let start_local = start.with_timezone(&tz);
-                            if let Some(next_local) = schedule.after(&start_local).next() {
-                                return next_local.with_timezone(&Utc);
+                            if let Some(next) = next_cron_run_in_timezone(&schedule, start, &tz) {
+                                return next;
                             }
                         } else {
                             tracing::warn!(
@@ -209,11 +208,21 @@ impl CronJob {
                     }
 
                     // No (valid) explicit timezone: interpret the cron
-                    // expression in the gateway machine's local timezone
-                    // rather than UTC, so a bare "0 9 * * *" means 9am local.
-                    let start_local = start.with_timezone(&Local);
-                    if let Some(next) = schedule.after(&start_local).next() {
-                        return next.with_timezone(&Utc);
+                    // expression in the gateway machine's timezone rather
+                    // than UTC, so a bare "0 9 * * *" means 9am local.
+                    // Prefer resolving the machine zone to an IANA `Tz`
+                    // (TZ env first, then the system setting) so DST
+                    // transitions get chrono-tz's well-defined ambiguity
+                    // semantics; `chrono::Local`'s platform resolver is a
+                    // last-resort fallback because its fall-back handling
+                    // is platform-dependent.
+                    if let Some(tz) = machine_cron_timezone() {
+                        if let Some(next) = next_cron_run_in_timezone(&schedule, start, &tz) {
+                            return next;
+                        }
+                    } else if let Some(next) = next_cron_run_in_timezone(&schedule, start, &Local)
+                    {
+                        return next;
                     }
                 }
                 // Fallback: avoid hot-looping invalid cron expressions.
@@ -345,6 +354,74 @@ fn parse_cron_schedule(expr: &str) -> Option<Schedule> {
     }
 
     None
+}
+
+/// Resolve the next cron firing after `start`, with the expression's fields
+/// interpreted as wall-clock time in `tz`.
+///
+/// The cron crate's own timezone-aware iterator resolves every candidate via
+/// `TimeZone::from_local_datetime(..).single()`, so on a DST fall-back day an
+/// ambiguous wall-clock time (one that occurs twice) yields `None` and the
+/// schedule silently skips the whole day. To match croniter semantics
+/// instead, enumerate candidates on the naive wall clock (pretending it is
+/// UTC so the cron crate performs no timezone resolution of its own), then
+/// map each candidate back to a real instant: ambiguous times fire at their
+/// first occurrence, and times inside a spring-forward gap skip to the next
+/// candidate.
+fn next_cron_run_in_timezone<Z: TimeZone>(
+    schedule: &Schedule,
+    start: DateTime<Utc>,
+    tz: &Z,
+) -> Option<DateTime<Utc>> {
+    // Upper bound on consecutive gap-skipped candidates: a second-precision
+    // expression has 3600 candidates inside a one-hour DST gap. Anything
+    // beyond this bound means a pathological zone jump; returning `None`
+    // there falls back to the hourly retry in `compute_next_run`, which
+    // self-heals as `after` advances past the gap.
+    const MAX_GAP_CANDIDATES: usize = 10_000;
+
+    let start_wall = Utc.from_utc_datetime(&start.with_timezone(tz).naive_local());
+    for candidate in schedule.after(&start_wall).take(MAX_GAP_CANDIDATES) {
+        match tz.from_local_datetime(&candidate.naive_utc()) {
+            LocalResult::Single(instant) => return Some(instant.with_timezone(&Utc)),
+            // Fall-back transition: the wall-clock time occurs twice; fire
+            // at the earlier instant instead of dropping the day. Do not
+            // trust the tuple order — `chrono::Local`'s platform-backed
+            // resolver has been observed returning the pair swapped
+            // (review #TASK-1817), unlike chrono-tz.
+            LocalResult::Ambiguous(first, second) => {
+                let earliest = if first <= second { first } else { second };
+                return Some(earliest.with_timezone(&Utc));
+            }
+            // Spring-forward gap: this wall-clock time never occurs.
+            LocalResult::None => continue,
+        }
+    }
+    None
+}
+
+/// Resolve the timezone a bare cron expression (no explicit `timezone`)
+/// should be interpreted in, as an IANA zone: the `TZ` environment variable
+/// wins when it names a valid IANA zone (POSIX specs like `EST5EDT` fail to
+/// parse and fall through), otherwise the machine's configured system zone.
+///
+/// Pure so tests can pin the precedence without touching process env.
+fn resolve_bare_cron_timezone(tz_env: Option<&str>, system_zone: Option<&str>) -> Option<Tz> {
+    let parse = |value: Option<&str>| {
+        value
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .and_then(|value| value.parse::<Tz>().ok())
+    };
+    parse(tz_env).or_else(|| parse(system_zone))
+}
+
+/// [`resolve_bare_cron_timezone`] fed from the live process environment,
+/// mirroring how `chrono::Local` itself honors `TZ` before the system zone.
+fn machine_cron_timezone() -> Option<Tz> {
+    let tz_env = std::env::var("TZ").ok();
+    let system_zone = iana_time_zone::get_timezone().ok();
+    resolve_bare_cron_timezone(tz_env.as_deref(), system_zone.as_deref())
 }
 
 fn has_non_empty_cron_text(value: Option<&str>) -> bool {

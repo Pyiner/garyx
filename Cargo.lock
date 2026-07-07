@@ -986,6 +986,7 @@ dependencies = [
  "garyx-core",
  "garyx-models",
  "garyx-router",
+ "iana-time-zone",
  "regex",
  "reqwest 0.12.28",
  "rmcp",
