@@ -369,7 +369,7 @@ pub(crate) async fn cmd_thread_history(
         let active_provider_type = active_run["provider_type"].as_str();
         let active_provider_label = provider_type_display(active_provider_type);
         let pending_user_input_count = active_run["pending_user_input_count"].as_u64().unwrap_or(0);
-        let updated_at = format_local_thread_timestamp(active_run["updated_at"].as_str());
+        let updated_at = format_local_timestamp(active_run["updated_at"].as_str());
         println!(
             "Active run: {run_id}  provider={active_provider_label} ({})  pending_inputs={pending_user_input_count}  updated={updated_at}",
             active_provider_type.unwrap_or("-"),
@@ -382,27 +382,12 @@ pub(crate) async fn cmd_thread_history(
         for record in ledger_records.iter().rev().take(10).rev() {
             let status = record["status"].as_str().unwrap_or("unknown");
             let reason = record["terminal_reason"].as_str().unwrap_or("-");
-            let updated_at = format_local_thread_timestamp(record["updated_at"].as_str());
+            let updated_at = format_local_timestamp(record["updated_at"].as_str());
             let excerpt = record["text_excerpt"].as_str().unwrap_or("");
             println!("  - {updated_at}  {status}  reason={reason}  {excerpt}");
         }
     }
     Ok(())
-}
-
-fn format_local_thread_timestamp(value: Option<&str>) -> String {
-    let raw = value.unwrap_or("-").trim();
-    if raw.is_empty() || raw == "-" {
-        return "-".to_owned();
-    }
-
-    match DateTime::parse_from_rfc3339(raw) {
-        Ok(parsed) => parsed
-            .with_timezone(&Local)
-            .format("%Y-%m-%d %H:%M:%S %Z")
-            .to_string(),
-        Err(_) => raw.to_owned(),
-    }
 }
 
 fn provider_type_display(value: Option<&str>) -> &'static str {

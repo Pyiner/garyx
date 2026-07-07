@@ -201,12 +201,19 @@ impl CronJob {
                                 return next_local.with_timezone(&Utc);
                             }
                         } else {
-                            tracing::warn!(timezone = tz_name, "invalid cron timezone, using UTC");
+                            tracing::warn!(
+                                timezone = tz_name,
+                                "invalid cron timezone, using machine local timezone"
+                            );
                         }
                     }
 
-                    if let Some(next) = schedule.after(&start).next() {
-                        return next;
+                    // No (valid) explicit timezone: interpret the cron
+                    // expression in the gateway machine's local timezone
+                    // rather than UTC, so a bare "0 9 * * *" means 9am local.
+                    let start_local = start.with_timezone(&Local);
+                    if let Some(next) = schedule.after(&start_local).next() {
+                        return next.with_timezone(&Utc);
                     }
                 }
                 // Fallback: avoid hot-looping invalid cron expressions.
@@ -371,11 +378,17 @@ pub(crate) fn build_followup_body(
     let mut lines = Vec::with_capacity(8);
     lines.push("<garyx_followup_metadata>".to_owned());
     lines.push(format!("schedule_id: {schedule_id}"));
+    // Agent-facing timestamps: render in the gateway machine's local
+    // timezone (offset preserved) so the resumed agent reasons about the
+    // delay in the user's wall-clock time.
     lines.push(format!(
         "scheduled_at: {}",
-        payload.scheduled_at.to_rfc3339()
+        payload.scheduled_at.with_timezone(&Local).to_rfc3339()
     ));
-    lines.push(format!("scheduled_for: {}", scheduled_for.to_rfc3339()));
+    lines.push(format!(
+        "scheduled_for: {}",
+        scheduled_for.with_timezone(&Local).to_rfc3339()
+    ));
     lines.push(format!(
         "delay_seconds_requested: {}",
         payload.delay_seconds_requested

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::Utc;
+use chrono::Local;
 use garyx_models::thread_logs::{
     ThreadLogChunk, ThreadLogEvent, ThreadLogSink, is_canonical_thread_id,
 };
@@ -62,7 +62,10 @@ impl ThreadFileLogger {
     }
 
     fn render_event(event: ThreadLogEvent) -> String {
-        let timestamp = event.timestamp.unwrap_or_else(|| Utc::now().to_rfc3339());
+        // Thread log lines are read verbatim by users (Log dock, log files),
+        // so stamp them in the machine's local timezone with the UTC offset
+        // preserved rather than UTC.
+        let timestamp = event.timestamp.unwrap_or_else(|| Local::now().to_rfc3339());
         let mut line = format!(
             "{} {} [{}]",
             sanitize_line(&timestamp),

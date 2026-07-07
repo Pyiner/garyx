@@ -864,7 +864,7 @@ fn append_task_workflow_run(output: &mut String, workflow_run_payload: Option<&V
 fn turn_timestamp_label(turn: &TaskProgressTurn) -> String {
     turn.user_timestamp
         .as_deref()
-        .map(|timestamp| format!(" {timestamp}"))
+        .map(|timestamp| format!(" {}", format_local_timestamp(Some(timestamp))))
         .unwrap_or_default()
 }
 

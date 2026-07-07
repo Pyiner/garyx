@@ -1436,7 +1436,7 @@ async fn test_cron_expression_respects_timezone() {
     let after = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
     let expr = "0 0 9 * * *".to_owned();
 
-    let utc_schedule = CronSchedule::Cron {
+    let bare_schedule = CronSchedule::Cron {
         expr: expr.clone(),
         timezone: None,
     };
@@ -1445,10 +1445,21 @@ async fn test_cron_expression_respects_timezone() {
         timezone: Some("Asia/Shanghai".to_owned()),
     };
 
-    let next_utc = CronJob::compute_next_run(&utc_schedule, after);
+    let next_bare = CronJob::compute_next_run(&bare_schedule, after);
     let next_shanghai = CronJob::compute_next_run(&shanghai_schedule, after);
 
-    assert_eq!(next_utc, Utc.with_ymd_and_hms(2026, 1, 1, 9, 0, 0).unwrap());
+    // A bare cron expression (no timezone) is interpreted in the gateway
+    // machine's local timezone: the next run lands at 09:00 local wall-clock
+    // time regardless of where the test machine is.
+    let next_bare_local = next_bare.with_timezone(&Local);
+    assert_eq!(
+        next_bare_local.format("%H:%M:%S").to_string(),
+        "09:00:00",
+        "bare cron must fire at 09:00 machine-local time, got {next_bare_local}"
+    );
+    assert!(next_bare > after);
+
+    // An explicit timezone always wins over the machine's local timezone.
     assert_eq!(
         next_shanghai,
         Utc.with_ymd_and_hms(2026, 1, 1, 1, 0, 0).unwrap()
@@ -1879,7 +1890,16 @@ fn test_build_followup_body_contains_metadata_block() {
     assert!(body.starts_with("<garyx_followup_metadata>"));
     assert!(body.contains("schedule_id: followup_deadbeefdeadbeef"));
     assert!(body.contains("delay_seconds_requested: 300"));
-    assert!(body.contains("scheduled_for: 2026-05-26T07:30:00+00:00"));
+    // Agent-facing timestamps render in the machine's local timezone with
+    // the UTC offset preserved (same instant, local wall-clock).
+    assert!(body.contains(&format!(
+        "scheduled_at: {}",
+        scheduled_at.with_timezone(&Local).to_rfc3339()
+    )));
+    assert!(body.contains(&format!(
+        "scheduled_for: {}",
+        scheduled_for.with_timezone(&Local).to_rfc3339()
+    )));
     assert!(body.contains("reason: background job completed"));
     assert!(body.contains("originating_run_id: run-xyz"));
     assert!(body.contains("</garyx_followup_metadata>"));

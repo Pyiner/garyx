@@ -63,7 +63,7 @@ fn automation_schedule_from_cli_args(
     if let Some(time) = args.daily_time.as_deref() {
         let time = trim_required_cli(time, "--daily-time")?;
         let timezone =
-            trim_optional_cli(args.timezone.clone()).unwrap_or_else(|| "Asia/Shanghai".to_owned());
+            trim_optional_cli(args.timezone.clone()).unwrap_or_else(default_machine_timezone);
         let weekdays = args
             .weekdays
             .iter()
@@ -88,6 +88,13 @@ fn automation_schedule_from_cli_args(
     }
 
     unreachable!("selected_count guarded all schedule variants")
+}
+
+/// Default timezone for `--daily-time` when `--timezone` is not given: the
+/// machine's IANA timezone (matching the desktop form default), falling back
+/// to UTC only when it cannot be determined.
+fn default_machine_timezone() -> String {
+    iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".to_owned())
 }
 
 fn format_automation_schedule(schedule: &Value) -> String {
@@ -146,12 +153,15 @@ fn print_automation_summary(value: &Value) {
         "Schedule: {}",
         format_automation_schedule(&value["schedule"])
     );
-    println!("Next run: {}", value["nextRun"].as_str().unwrap_or("-"));
+    println!(
+        "Next run: {}",
+        format_local_timestamp(value["nextRun"].as_str())
+    );
     if let Some(thread_id) = value["threadId"].as_str() {
         println!("Thread: {thread_id}");
     }
     if let Some(last_run_at) = value["lastRunAt"].as_str() {
-        println!("Last run: {last_run_at}");
+        println!("Last run: {}", format_local_timestamp(Some(last_run_at)));
     }
     let prompt = value["prompt"].as_str().unwrap_or_default();
     if !prompt.trim().is_empty() {
@@ -162,13 +172,13 @@ fn print_automation_summary(value: &Value) {
 fn print_automation_activity_entry(value: &Value) {
     let run_id = value["runId"].as_str().unwrap_or("-");
     let status = value["status"].as_str().unwrap_or("-");
-    let started_at = value["startedAt"].as_str().unwrap_or("-");
+    let started_at = format_local_timestamp(value["startedAt"].as_str());
     let thread_id = value["threadId"].as_str().unwrap_or("-");
     println!("Run: {run_id}");
     println!("Status: {status}");
     println!("Started: {started_at}");
     if let Some(finished_at) = value["finishedAt"].as_str() {
-        println!("Finished: {finished_at}");
+        println!("Finished: {}", format_local_timestamp(Some(finished_at)));
     }
     if let Some(duration_ms) = value["durationMs"].as_u64() {
         println!("Duration: {duration_ms}ms");
@@ -197,7 +207,7 @@ pub(crate) async fn cmd_automation_list(
         return Ok(());
     }
     println!(
-        "{:<42}  {:<7}  {:<28}  {:<25}  NAME",
+        "{:<42}  {:<7}  {:<28}  {:<26}  NAME",
         "ID", "ENABLED", "SCHEDULE", "NEXT RUN"
     );
     println!("{}", "-".repeat(120));
@@ -209,9 +219,9 @@ pub(crate) async fn cmd_automation_list(
             "no"
         };
         let schedule = format_automation_schedule(&item["schedule"]);
-        let next_run = item["nextRun"].as_str().unwrap_or("-");
+        let next_run = format_local_timestamp(item["nextRun"].as_str());
         let label = item["label"].as_str().unwrap_or("-");
-        println!("{id:<42}  {enabled:<7}  {schedule:<28}  {next_run:<25}  {label}");
+        println!("{id:<42}  {enabled:<7}  {schedule:<28}  {next_run:<26}  {label}");
     }
     Ok(())
 }
@@ -457,20 +467,20 @@ pub(crate) async fn cmd_automation_activity(
         return Ok(());
     }
     println!(
-        "{:<38}  {:<8}  {:<25}  {:<38}  EXCERPT",
+        "{:<38}  {:<8}  {:<26}  {:<38}  EXCERPT",
         "RUN ID", "STATUS", "STARTED", "THREAD"
     );
     println!("{}", "-".repeat(130));
     for item in &items {
         let run_id = item["runId"].as_str().unwrap_or("-");
         let status = item["status"].as_str().unwrap_or("-");
-        let started = item["startedAt"].as_str().unwrap_or("-");
+        let started = format_local_timestamp(item["startedAt"].as_str());
         let thread_id = item["threadId"].as_str().unwrap_or("-");
         let excerpt = item["excerpt"]
             .as_str()
             .map(|text| command_prompt_preview(text, 48))
             .unwrap_or_else(|| "-".to_owned());
-        println!("{run_id:<38}  {status:<8}  {started:<25}  {thread_id:<38}  {excerpt}");
+        println!("{run_id:<38}  {status:<8}  {started:<26}  {thread_id:<38}  {excerpt}");
     }
     Ok(())
 }
@@ -979,6 +989,29 @@ mod tests {
                 weekdays: vec!["mon".to_owned(), "fri".to_owned()],
                 timezone: "Asia/Shanghai".to_owned(),
             }
+        );
+    }
+
+    #[test]
+    fn automation_schedule_args_default_timezone_is_machine_timezone() {
+        let args = crate::cli::AutomationScheduleArgs {
+            daily_time: Some("08:30".to_owned()),
+            ..Default::default()
+        };
+
+        let schedule = automation_schedule_from_cli_args(&args, true)
+            .expect("schedule parse")
+            .expect("schedule");
+
+        let AutomationScheduleView::Daily { timezone, .. } = schedule else {
+            panic!("expected daily schedule");
+        };
+        assert_eq!(timezone, default_machine_timezone());
+        // The default must be the machine's IANA timezone, never a
+        // hard-coded region.
+        assert_eq!(
+            default_machine_timezone(),
+            iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".to_owned())
         );
     }
 

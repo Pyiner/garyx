@@ -69,7 +69,9 @@ function formatSchedule(schedule?: CronJob['schedule']): string {
     return `every ${schedule.interval_secs}s`;
   }
   if (schedule.at) {
-    return `at: ${schedule.at}`;
+    // schedule.at is an RFC3339 timestamp (UTC from the raw cron API);
+    // render it as local wall-clock time like every other timestamp column.
+    return `at: ${formatTime(schedule.at)}`;
   }
   return '--';
 }

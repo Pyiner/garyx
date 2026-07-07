@@ -153,6 +153,27 @@ fn prepend_initial_context_to_user_message_combines_runtime_metadata_and_memory_
 }
 
 #[test]
+fn runtime_metadata_includes_local_current_time() {
+    let metadata = HashMap::from([(
+        "runtime_context".to_owned(),
+        json!({ "thread_id": "thread::abc" }),
+    )]);
+    let rendered = prepend_runtime_metadata_to_user_message("hi", &metadata);
+
+    let line = rendered
+        .lines()
+        .find(|line| line.starts_with("current_time: "))
+        .expect("metadata block includes a current_time line");
+    // Shape: `current_time: 2026-07-07T23:30:00+08:00 (Asia/Shanghai)` — a
+    // local-timezone RFC3339 stamp followed by the IANA zone name.
+    let value = line.strip_prefix("current_time: ").unwrap();
+    let (stamp, zone) = value.split_once(' ').expect("timestamp and zone label");
+    let parsed = chrono::DateTime::parse_from_rfc3339(stamp).expect("rfc3339 local timestamp");
+    assert_eq!(parsed.offset(), chrono::Local::now().offset());
+    assert!(zone.starts_with('(') && zone.ends_with(')'));
+}
+
+#[test]
 fn task_cli_env_exports_current_agent_and_task_identity() {
     let metadata = HashMap::from([
         ("agent_id".to_owned(), json!("reviewer")),

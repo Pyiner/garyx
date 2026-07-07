@@ -111,17 +111,17 @@ fn db_print_events(payload: &Value) {
         return;
     }
     println!(
-        "{:<34}  {:<15}  {:<24}  {:<24}  RECORD",
+        "{:<34}  {:<15}  {:<24}  {:<26}  RECORD",
         "EVENT", "TYPE", "TABLE", "CREATED"
     );
-    println!("{}", "-".repeat(118));
+    println!("{}", "-".repeat(120));
     for event in events {
         println!(
-            "{:<34}  {:<15}  {:<24}  {:<24}  {}",
+            "{:<34}  {:<15}  {:<24}  {:<26}  {}",
             event["id"].as_str().unwrap_or("-"),
             event["event_type"].as_str().unwrap_or("-"),
             event["table_name"].as_str().unwrap_or("-"),
-            event["created_at"].as_str().unwrap_or("-"),
+            format_local_timestamp(event["created_at"].as_str()),
             event["record_id"].as_str().unwrap_or("-"),
         );
     }

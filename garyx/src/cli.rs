@@ -783,7 +783,7 @@ pub(crate) struct AutomationScheduleArgs {
     /// Weekday for daily schedules: mon, tue, wed, thu, fri, sat, sun. Repeat to select multiple days. Omit for every day.
     #[arg(long = "weekday")]
     pub(crate) weekdays: Vec<String>,
-    /// Timezone for daily schedules. Defaults to Asia/Shanghai when --daily-time is used.
+    /// Timezone for daily schedules. Defaults to this machine's timezone when --daily-time is used.
     #[arg(long)]
     pub(crate) timezone: Option<String>,
     /// Run once at YYYY-MM-DDTHH:MM, RFC3339, or ONCE:YYYY-MM-DD HH:MM

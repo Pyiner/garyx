@@ -226,15 +226,16 @@ private func garyxAutomationScheduleSummary(_ schedule: GaryxAutomationSchedule)
         return "Every \(max(1, schedule.hours ?? 24)) hours"
     case .daily:
         let time = nonEmpty(schedule.time) ?? "09:00"
-        let timezone = nonEmpty(schedule.timezone) ?? "UTC"
+        // A missing timezone must not be mislabeled as UTC — omit the suffix.
+        let timeLabel = nonEmpty(schedule.timezone).map { "\(time) \($0)" } ?? time
         if schedule.weekdays.isEmpty {
-            return "Daily at \(time) \(timezone)"
+            return "Daily at \(timeLabel)"
         }
-        return "\(schedule.weekdays.map { $0.uppercased() }.joined(separator: ", ")) at \(time) \(timezone)"
+        return "\(schedule.weekdays.map { $0.uppercased() }.joined(separator: ", ")) at \(timeLabel)"
     case .monthly:
         let time = nonEmpty(schedule.time) ?? "09:00"
-        let timezone = nonEmpty(schedule.timezone) ?? "UTC"
-        return "Monthly on day \(min(max(schedule.day ?? 1, 1), 31)) at \(time) \(timezone)"
+        let timeLabel = nonEmpty(schedule.timezone).map { "\(time) \($0)" } ?? time
+        return "Monthly on day \(min(max(schedule.day ?? 1, 1), 31)) at \(timeLabel)"
     case .once:
         return "Once at \(nonEmpty(schedule.at) ?? "scheduled time")"
     }

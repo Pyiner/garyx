@@ -118,3 +118,21 @@ reinterpreted in feature code.
   a dynamic `submit_result` tool for the current thread with direct schema-field
   arguments. Do not route structured results through workflow-only tokens or a
   generic `{ payload: ... }` wrapper.
+
+## Time And Timezone
+
+- Storage, HTTP API contracts, and scheduling baselines are UTC: RFC3339 with
+  trailing `Z` (`Utc::now().to_rfc3339()`) or epoch values. Do not localize
+  persisted or wire timestamps; clients localize at render time.
+- Human-readable sinks render in the gateway machine's local timezone with the
+  UTC offset preserved: the tracing log timer (`main.rs` `ChronoLocal`),
+  thread-log line stamps, CLI list/detail timestamps
+  (`commands/shared.rs::format_local_timestamp`), and agent-facing ISO strings
+  (`schedule_followup` responses, followup metadata, and the
+  `current_time` line in `<garyx_thread_metadata>`). Machine-facing `unix_ts`
+  fields stay timezone-neutral.
+- Bare cron expressions without an explicit timezone are interpreted in the
+  gateway machine's local timezone, not UTC. Product automation schedules
+  (Daily/Monthly) always carry an explicit IANA timezone; the CLI
+  `--daily-time` default is the machine's IANA timezone via `iana-time-zone`,
+  never a hard-coded region.

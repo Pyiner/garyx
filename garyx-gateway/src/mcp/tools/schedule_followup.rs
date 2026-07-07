@@ -13,7 +13,7 @@
 //! `replaced_previous` so the agent can see whether it just bumped its own
 //! earlier schedule.
 
-use chrono::Utc;
+use chrono::{Local, Utc};
 use garyx_models::config::{
     CronAction, CronJobConfig, CronJobKind, CronSchedule, InternalDispatchJobPayload,
 };
@@ -60,7 +60,9 @@ pub(crate) fn followup_job_id(thread_id: &str, run_id: &str) -> String {
 
 /// Render the public-facing summary of a replaced previous schedule.
 fn previous_payload_json(previous: &crate::cron::CronJob) -> serde_json::Value {
-    let scheduled_for = previous.next_run.to_rfc3339();
+    // Agent-facing ISO strings use the machine's local timezone (offset
+    // preserved); the unix_ts fields stay timezone-neutral.
+    let scheduled_for = previous.next_run.with_timezone(&Local).to_rfc3339();
     let payload = match &previous.kind {
         CronJobKind::InternalDispatch { payload } => Some(payload),
         CronJobKind::AutomationPrompt => None,
@@ -72,7 +74,7 @@ fn previous_payload_json(previous: &crate::cron::CronJob) -> serde_json::Value {
         "delay_seconds_requested": payload.map(|p| p.delay_seconds_requested),
         "reason": payload.and_then(|p| p.reason.clone()),
         "originating_run_id": payload.and_then(|p| p.originating_run_id.clone()),
-        "scheduled_at": payload.map(|p| p.scheduled_at.to_rfc3339()),
+        "scheduled_at": payload.map(|p| p.scheduled_at.with_timezone(&Local).to_rfc3339()),
     })
 }
 
@@ -189,7 +191,7 @@ async fn run_inner(
         "tool": "schedule_followup",
         "status": "ok",
         "schedule_id": new_job.id,
-        "scheduled_for_iso": new_job.next_run.to_rfc3339(),
+        "scheduled_for_iso": new_job.next_run.with_timezone(&Local).to_rfc3339(),
         "scheduled_for_unix_ts": new_job.next_run.timestamp(),
         "thread_id": thread_id,
         "originating_run_id": originating_run_id,

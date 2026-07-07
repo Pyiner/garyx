@@ -98,6 +98,26 @@ async fn record_event_redacts_sensitive_fields() {
 }
 
 #[tokio::test]
+async fn record_event_stamps_missing_timestamp_in_local_timezone() {
+    let dir = tempdir().unwrap();
+    let logger = ThreadFileLogger::new(dir.path());
+    logger
+        .record_event(ThreadLogEvent::info("thread::tz", "run", "hello"))
+        .await;
+
+    let chunk = logger.read_chunk("thread::tz", None).await.unwrap();
+    let stamp = chunk
+        .text
+        .split_whitespace()
+        .next()
+        .expect("log line starts with a timestamp");
+    let parsed = chrono::DateTime::parse_from_rfc3339(stamp).expect("rfc3339 timestamp");
+    // The fallback timestamp is stamped in the machine's local timezone
+    // (offset preserved), not UTC.
+    assert_eq!(parsed.offset(), Local::now().offset());
+}
+
+#[tokio::test]
 async fn compact_if_needed_trims_oversized_file() {
     let dir = tempdir().unwrap();
     let logger = ThreadFileLogger::new(dir.path());
