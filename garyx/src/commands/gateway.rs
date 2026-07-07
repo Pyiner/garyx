@@ -93,6 +93,78 @@ async fn rebuild_channel_plugins(
     Ok(())
 }
 
+async fn initialize_bridge_runtime(
+    state: &Arc<AppState>,
+    bridge: &Arc<MultiProviderBridge>,
+    config: &GaryxConfig,
+) -> Result<(), String> {
+    bridge
+        .replace_agent_profiles(state.ops.custom_agents.list_agents().await)
+        .await;
+    bridge
+        .replace_team_profiles(state.ops.agent_teams.list_teams().await)
+        .await;
+    bridge
+        .reload_from_config(config)
+        .await
+        .map_err(|error| error.to_string())?;
+    tracing::info!("MultiProviderBridge initialized");
+    Ok(())
+}
+
+fn spawn_deferred_gateway_startup(
+    state: Arc<AppState>,
+    bridge: Arc<MultiProviderBridge>,
+    plugin_manager: std::sync::Arc<tokio::sync::Mutex<ChannelPluginManager>>,
+    config: GaryxConfig,
+    no_channels: bool,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let started = std::time::Instant::now();
+        tracing::info!("deferred gateway startup started");
+
+        if let Err(error) = initialize_bridge_runtime(&state, &bridge, &config).await {
+            tracing::warn!(
+                error = %error,
+                "Bridge init failed during deferred startup; continuing with current provider pool"
+            );
+        }
+
+        if let Err(error) =
+            rebuild_channel_plugins(&plugin_manager, &config, &state, &bridge, no_channels).await
+        {
+            tracing::warn!(
+                error = %error,
+                "Failed to initialize channel plugins during deferred startup"
+            );
+        }
+
+        garyx_gateway::restart_wake::drain_pending_restart_wakes(state.clone()).await;
+
+        // Architecture C: host no longer runs a periodic plugin
+        // update loop. Each plugin owns its own timer + advertised-
+        // version source and sends `request_self_replace` reverse
+        // RPCs when it decides to upgrade; the host responds with
+        // the safe-swap pipeline (idle gate + atomic rename +
+        // respawn) inside `plugin_self_replace::handle`. The
+        // `plugins.auto_update` config flag now controls whether
+        // those RPCs are accepted at all, gated per-call rather
+        // than at spawn-time.
+
+        // Spawn the gateway self-updater after the listener is up; update
+        // checks are integration work, not control-plane readiness work.
+        let _gateway_auto_update_handle = crate::gateway_auto_update::spawn(
+            plugin_manager.clone(),
+            config.gateway.auto_update.clone(),
+        );
+
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "deferred gateway startup completed"
+        );
+    })
+}
+
 pub(crate) async fn run_gateway(
     config_path: &str,
     port_override: Option<u16>,
@@ -181,48 +253,33 @@ pub(crate) async fn run_gateway(
         reloader
     };
 
-    // 4. Discover and start channel plugins (if not disabled).
+    // 4. Start the HTTP control plane first. Provider reconciliation,
+    // channel/plugin startup, restart-wake drain, and update checks are kicked
+    // off only after the listener is bound so slow external integrations cannot
+    // make the gateway appear dead during cold start.
+    let deferred_startup = Arc::new(std::sync::Mutex::new(None));
     let run_result: Result<(), Box<dyn std::error::Error>> = async {
-        rebuild_channel_plugins(&plugin_manager, &config, &state, &bridge, no_channels)
-            .await
-            .map_err(std::io::Error::other)?;
-        {
-            let wake_state = state.clone();
-            tokio::spawn(async move {
-                garyx_gateway::restart_wake::drain_pending_restart_wakes(wake_state).await;
-            });
-        }
-
-        // Architecture C: host no longer runs a periodic plugin
-        // update loop. Each plugin owns its own timer + advertised-
-        // version source and sends `request_self_replace` reverse
-        // RPCs when it decides to upgrade; the host responds with
-        // the safe-swap pipeline (idle gate + atomic rename +
-        // respawn) inside `plugin_self_replace::handle`. The
-        // `plugins.auto_update` config flag now controls whether
-        // those RPCs are accepted at all, gated per-call rather
-        // than at spawn-time.
-
-        // Spawn the gateway self-updater. Separate loop from the
-        // plugin one because the two have independent kill switches
-        // (`gateway.auto_update.enabled` vs `plugins.auto_update`)
-        // and target different release sources. We keep the handle
-        // alive but don't track it in `auto_update_handle` — that
-        // one is plugin-specific (e.g. hot-reload may want to cycle
-        // it). Gateway self-update is intentionally fire-and-forget;
-        // there's no scenario where we restart this loop without
-        // also restarting the gateway, so a hot-reload doesn't need
-        // to manage it.
-        let _gateway_auto_update_handle = crate::gateway_auto_update::spawn(
-            plugin_manager.clone(),
-            config.gateway.auto_update.clone(),
-        );
-
-        // Runtime services are started and wired by RuntimeAssembler.
         let gateway = Gateway::new(state);
         let addr: SocketAddr = format!("{}:{}", host, port).parse()?;
-        tracing::info!("Gateway listening on {}", addr);
-        gateway.serve(addr).await?;
+        let startup_slot = deferred_startup.clone();
+        let startup_state = gateway.state().clone();
+        let startup_bridge = bridge.clone();
+        let startup_plugin_manager = plugin_manager.clone();
+        let startup_config = config.clone();
+        gateway
+            .serve_with_listening_hook(addr, move || {
+                let handle = spawn_deferred_gateway_startup(
+                    startup_state,
+                    startup_bridge,
+                    startup_plugin_manager,
+                    startup_config,
+                    no_channels,
+                );
+                *startup_slot
+                    .lock()
+                    .expect("deferred startup handle lock poisoned") = Some(handle);
+            })
+            .await?;
         Ok(())
     }
     .await;
@@ -236,6 +293,17 @@ pub(crate) async fn run_gateway(
         "config hot-reload metrics"
     );
     drop(hot_reloader);
+
+    let deferred_startup_handle = deferred_startup
+        .lock()
+        .expect("deferred startup handle lock poisoned")
+        .take();
+    if let Some(handle) = deferred_startup_handle
+        && !handle.is_finished()
+    {
+        handle.abort();
+        let _ = handle.await;
+    }
 
     // Always run shutdown sequence, even when startup/serve fails.
     //

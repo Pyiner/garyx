@@ -30,10 +30,22 @@ impl Gateway {
 
     /// Serve the gateway, blocking until `shutdown_signal` fires.
     pub async fn serve(self, addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
+        self.serve_with_listening_hook(addr, || {}).await
+    }
+
+    /// Serve the gateway and invoke `on_listening` immediately after the TCP
+    /// listener is bound. This lets the CLI boot path keep non-critical
+    /// provider/channel/plugin startup out of the port-listening critical path.
+    pub async fn serve_with_listening_hook(
+        self,
+        addr: SocketAddr,
+        on_listening: impl FnOnce() + Send + 'static,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         start_gateway_runtime(self.state.clone());
         let listener = tokio::net::TcpListener::bind(addr).await?;
         self.state.spawn_gateway_sync_cache_warmup();
         tracing::info!("Gateway listening on {}", addr);
+        on_listening();
 
         let shutdown_state = self.state.clone();
         axum::serve(

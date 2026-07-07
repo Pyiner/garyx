@@ -50,6 +50,40 @@ async fn test_health_endpoint() {
 }
 
 #[tokio::test]
+async fn serve_with_listening_hook_runs_after_port_bind() {
+    let state = test_state();
+    let gw = Gateway::new(state);
+    let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = probe.local_addr().unwrap();
+    drop(probe);
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let serve_task = tokio::spawn(async move {
+        let _ = gw
+            .serve_with_listening_hook(addr, move || {
+                let _ = tx.send(());
+            })
+            .await;
+    });
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), rx)
+        .await
+        .expect("listener hook should fire")
+        .expect("listener hook sender should stay alive");
+
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        tokio::net::TcpStream::connect(addr),
+    )
+    .await
+    .expect("bound listener should accept TCP promptly")
+    .expect("listener should be reachable after hook");
+
+    serve_task.abort();
+    let _ = serve_task.await;
+}
+
+#[tokio::test]
 async fn test_health_detailed_endpoint() {
     let state = test_state();
     let gw = Gateway::new(state);

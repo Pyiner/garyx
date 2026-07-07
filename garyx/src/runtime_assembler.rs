@@ -67,15 +67,6 @@ impl RuntimeAssembler {
         ));
 
         let bridge = Arc::new(MultiProviderBridge::new());
-        match bridge.initialize_from_config(&self.config).await {
-            Ok(()) => tracing::info!("MultiProviderBridge initialized"),
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    "Bridge init failed, starting with empty provider pool"
-                );
-            }
-        }
 
         let (event_tx, _) = tokio::sync::broadcast::channel(128);
 
@@ -116,19 +107,6 @@ impl RuntimeAssembler {
             .with_restart_tokens(restart_tokens)
             .with_thread_log_sink(thread_logs.clone())
             .build();
-
-        bridge
-            .replace_agent_profiles(state.ops.custom_agents.list_agents().await)
-            .await;
-        bridge
-            .replace_team_profiles(state.ops.agent_teams.list_teams().await)
-            .await;
-        if let Err(error) = bridge.reload_from_config(&self.config).await {
-            tracing::warn!(
-                error = %error,
-                "Bridge reload after agent-profile sync failed"
-            );
-        }
 
         // AppStateBuilder wraps the raw file store in the recent-thread
         // projecting store. Bind the bridge to that final store so provider
