@@ -429,8 +429,14 @@
   line-height: 18.5714px;
 }
 
-.pinned-thread-row-shell:hover .pinned-thread-time {
+.pinned-thread-row-shell:hover .pinned-thread-time,
+.pinned-thread-row-shell:focus-within .pinned-thread-time {
   opacity: 0;
+  /* The unpin + archive buttons are absolutely positioned over the row's right
+     edge (right: 4px and right: 30px). Reserve their combined width on the
+     faded time column so the title truncates before the buttons instead of
+     sliding underneath them. */
+  min-width: 50px;
 }
 
 /* Hover-revealed row-end unpin button. It mirrors the right archive chip
