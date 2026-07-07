@@ -4,6 +4,7 @@ import { Archive, Pin } from 'lucide-react';
 import type { DesktopThreadSummary } from '@shared/contracts';
 
 import { AgentOptionAvatar } from './app-shell/components/AgentOptionAvatar';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './components/ui/tooltip';
 import { useI18n } from './i18n';
 import type { ThreadAvatarIdentity } from './thread-avatar';
 
@@ -52,6 +53,7 @@ export function PinnedThreadsSidebar({
   }
 
   return (
+    <TooltipProvider>
     <div className="sidebar-thread-block pinned-thread-block">
       <div className="panel-header sidebar-section-header pinned-thread-header">
         <span className="sidebar-section-title">{t('Pinned')}</span>
@@ -102,53 +104,58 @@ export function PinnedThreadsSidebar({
                 <span className="pinned-thread-title">{thread.title}</span>
                 <span className="pinned-thread-time">{timeLabel}</span>
               </button>
-              <button
-                aria-label={t('Unpin {title}', { title: thread.title })}
-                className="pinned-thread-unpin"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onUnpinThread(thread.id);
-                }}
-                title={t('Unpin thread')}
-                type="button"
-              >
-                <Pin aria-hidden className="pinned-thread-icon" size={15} strokeWidth={1.55} />
-              </button>
-              <button
-                aria-label={
-                  isConfirming
-                    ? t('Confirm archive {name}', { name: thread.title })
-                    : t('Archive {title}', { title: thread.title })
-                }
-                className={`pinned-thread-archive ${isConfirming ? 'confirm thread-delete-button' : ''}`.trim()}
-                disabled={isBusy}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  if (!isConfirming) {
-                    setConfirmThreadId(thread.id);
-                    return;
-                  }
-                  setConfirmThreadId(null);
-                  onArchiveThread(thread.id);
-                }}
-                style={
-                  isConfirming
-                    ? { opacity: 1, pointerEvents: 'auto' }
-                    : undefined
-                }
-                title={
-                  isConfirming
-                    ? t('Confirm archive {name}', { name: thread.title })
-                    : t('Archive thread')
-                }
-                type="button"
-              >
-                {isConfirming ? t('Confirm') : <Archive aria-hidden size={13} strokeWidth={1.55} />}
-              </button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    aria-label={t('Unpin {title}', { title: thread.title })}
+                    className="pinned-thread-unpin"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onUnpinThread(thread.id);
+                    }}
+                    type="button"
+                  >
+                    <Pin aria-hidden className="pinned-thread-icon" size={15} strokeWidth={1.55} />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>{t('Unpin thread')}</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    aria-label={
+                      isConfirming
+                        ? t('Confirm archive {name}', { name: thread.title })
+                        : t('Archive {title}', { title: thread.title })
+                    }
+                    className={`pinned-thread-archive ${isConfirming ? 'confirm thread-delete-button' : ''}`.trim()}
+                    disabled={isBusy}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (!isConfirming) {
+                        setConfirmThreadId(thread.id);
+                        return;
+                      }
+                      setConfirmThreadId(null);
+                      onArchiveThread(thread.id);
+                    }}
+                    style={
+                      isConfirming
+                        ? { opacity: 1, pointerEvents: 'auto' }
+                        : undefined
+                    }
+                    type="button"
+                  >
+                    {isConfirming ? t('Confirm') : <Archive aria-hidden size={13} strokeWidth={1.55} />}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>{t('Archive thread')}</TooltipContent>
+              </Tooltip>
             </div>
           );
         })}
       </div>
     </div>
+    </TooltipProvider>
   );
 }
