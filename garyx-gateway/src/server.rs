@@ -30,18 +30,46 @@ impl Gateway {
 
     /// Serve the gateway, blocking until `shutdown_signal` fires.
     pub async fn serve(self, addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
+        self.serve_with_lifecycle_hooks(addr, || {}, || {}).await
+    }
+
+    /// Serve the gateway and invoke `on_listening` immediately after the TCP
+    /// listener is bound. This lets the CLI boot path keep non-critical
+    /// provider/channel/plugin startup out of the port-listening critical path.
+    pub async fn serve_with_listening_hook(
+        self,
+        addr: SocketAddr,
+        on_listening: impl FnOnce() + Send + 'static,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.serve_with_lifecycle_hooks(addr, on_listening, || {})
+            .await
+    }
+
+    /// Serve the gateway with hooks for the two process lifecycle boundaries
+    /// the CLI needs to coordinate with deferred startup work.
+    pub async fn serve_with_lifecycle_hooks(
+        self,
+        addr: SocketAddr,
+        on_listening: impl FnOnce() + Send + 'static,
+        on_shutdown_started: impl FnOnce() + Send + 'static,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         start_gateway_runtime(self.state.clone());
         let listener = tokio::net::TcpListener::bind(addr).await?;
         self.state.spawn_gateway_sync_cache_warmup();
         tracing::info!("Gateway listening on {}", addr);
+        on_listening();
 
         let shutdown_state = self.state.clone();
+        let shutdown = async move {
+            shutdown_signal().await;
+            on_shutdown_started();
+        };
         axum::serve(
             listener,
             self.router
                 .into_make_service_with_connect_info::<SocketAddr>(),
         )
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(shutdown)
         .await?;
 
         // On graceful shutdown, abort in-flight runs so a restart does not leave

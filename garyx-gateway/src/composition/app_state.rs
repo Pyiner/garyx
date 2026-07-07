@@ -13,8 +13,10 @@ use garyx_router::{
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
+use tokio::sync::Notify;
 #[cfg(test)]
 use tokio::sync::broadcast;
 use tracing::{debug, warn};
@@ -46,6 +48,8 @@ pub struct RuntimeState {
     pub start_time: Instant,
     pub health_checker: HealthChecker,
     pub live_config: Arc<LiveConfigCell>,
+    pub provider_runtime_ready: Arc<AtomicBool>,
+    pub provider_runtime_ready_notify: Arc<Notify>,
 }
 
 pub struct ThreadState {
@@ -131,6 +135,40 @@ impl AppState {
 
     pub fn replace_config(&self, config: GaryxConfig) {
         self.runtime.live_config.replace(config);
+    }
+
+    pub fn provider_runtime_ready(&self) -> bool {
+        self.runtime.provider_runtime_ready.load(Ordering::Acquire)
+    }
+
+    pub fn mark_provider_runtime_ready(&self) {
+        self.runtime
+            .provider_runtime_ready
+            .store(true, Ordering::Release);
+        self.runtime.provider_runtime_ready_notify.notify_waiters();
+    }
+
+    pub async fn wait_for_provider_runtime_ready(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if self.provider_runtime_ready() {
+                return true;
+            }
+
+            let notified = self.runtime.provider_runtime_ready_notify.notified();
+            if self.provider_runtime_ready() {
+                return true;
+            }
+
+            let now = Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            let remaining = deadline.saturating_duration_since(now);
+            if tokio::time::timeout(remaining, notified).await.is_err() {
+                return self.provider_runtime_ready();
+            }
+        }
     }
 
     pub fn channel_dispatcher(&self) -> Arc<dyn ChannelDispatcher> {
@@ -423,6 +461,7 @@ impl AppState {
                 )
                 .await;
         }
+        self.mark_provider_runtime_ready();
         Ok(())
     }
 
@@ -445,6 +484,8 @@ impl AppState {
                 start_time: self.runtime.start_time,
                 health_checker: HealthChecker::new(self.runtime.start_time),
                 live_config: self.runtime.live_config.clone(),
+                provider_runtime_ready: self.runtime.provider_runtime_ready.clone(),
+                provider_runtime_ready_notify: self.runtime.provider_runtime_ready_notify.clone(),
             },
             threads: ThreadState {
                 thread_store: self.threads.thread_store.clone(),

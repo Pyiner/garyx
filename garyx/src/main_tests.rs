@@ -2967,6 +2967,25 @@ async fn startup_runtime_wiring_enables_operational_handlers() {
         std::env::remove_var("GARYX_RESTART_TOKENS");
     }
 
+    assert!(
+        state
+            .integration
+            .bridge
+            .default_provider_key()
+            .await
+            .is_none(),
+        "RuntimeAssembler must leave provider reconciliation to deferred startup"
+    );
+    let provider_keys = state.integration.bridge.provider_keys().await;
+    assert!(
+        !provider_keys.iter().any(|key| key == "claude_code"),
+        "default Claude provider should not be registered before HTTP bind"
+    );
+    assert!(
+        !state.provider_runtime_ready(),
+        "provider-backed dispatch must stay gated until deferred startup reconciles providers"
+    );
+
     let resp = api::cron_jobs(State(state.clone())).await.into_response();
     assert_eq!(resp.status(), 200);
     let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)

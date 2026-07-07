@@ -990,6 +990,21 @@ impl CronService {
 
     /// Execute a specific job immediately.
     pub async fn run_now(&self, id: &str) -> Option<RunRecord> {
+        if !Self::provider_runtime_ready_for_job(
+            &self.jobs,
+            &self.dispatch_runtime,
+            &self.app_state_weak,
+            id,
+        )
+        .await
+        {
+            tracing::info!(
+                job_id = %id,
+                "cron run_now skipped: provider runtime is still starting"
+            );
+            return None;
+        }
+
         let job = match Self::claim_job_for_execution(
             &self.data_dir,
             &self.jobs,
@@ -1090,6 +1105,33 @@ impl CronService {
             guard.pop_front();
         }
         persist_runs(data_dir, &guard).await
+    }
+
+    async fn provider_runtime_ready_for_job(
+        jobs: &Arc<RwLock<HashMap<String, CronJob>>>,
+        dispatch_runtime: &Arc<RwLock<Option<CronDispatchRuntime>>>,
+        app_state_weak: &Arc<OnceLock<Weak<AppState>>>,
+        id: &str,
+    ) -> bool {
+        let requires_provider_runtime = {
+            let map = jobs.read().await;
+            let Some(job) = map.get(id) else {
+                return true;
+            };
+            match &job.kind {
+                CronJobKind::InternalDispatch { .. } => true,
+                CronJobKind::AutomationPrompt => {
+                    matches!(job.action, CronAction::SystemEvent | CronAction::AgentTurn)
+                }
+            }
+        };
+        if !requires_provider_runtime {
+            return true;
+        }
+        if let Some(state) = app_state_weak.get().and_then(Weak::upgrade) {
+            return state.provider_runtime_ready();
+        }
+        dispatch_runtime.read().await.is_some()
     }
 
     async fn claim_job_for_execution(
@@ -1355,6 +1397,16 @@ impl CronService {
         };
 
         for id in due_ids {
+            if !Self::provider_runtime_ready_for_job(jobs, dispatch_runtime, app_state_weak, &id)
+                .await
+            {
+                tracing::debug!(
+                    job_id = %id,
+                    "cron tick skipped due job while provider runtime is starting"
+                );
+                continue;
+            }
+
             let Some(job) = Self::claim_job_for_execution(
                 data_dir,
                 jobs,

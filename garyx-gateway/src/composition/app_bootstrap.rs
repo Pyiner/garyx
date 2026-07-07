@@ -22,8 +22,9 @@ use garyx_router::{
 };
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Instant;
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::{Mutex, Notify, broadcast};
 use tracing::warn;
 
 use crate::agent_identity::GatewayThreadCreator;
@@ -104,6 +105,7 @@ pub struct AppStateBuilder {
     /// and `build` wires a bridge-backed probe; tests inject a fake to control
     /// which runs count as live.
     active_run_probe: Option<Arc<dyn ActiveRunProbe>>,
+    provider_runtime_ready: bool,
 }
 
 impl AppStateBuilder {
@@ -159,6 +161,7 @@ impl AppStateBuilder {
                     .unwrap_or_else(|error| panic!("failed to open garyx database: {error}")),
             ),
             active_run_probe: None,
+            provider_runtime_ready: true,
         }
     }
 
@@ -229,6 +232,11 @@ impl AppStateBuilder {
 
     pub fn with_bridge(mut self, bridge: Arc<MultiProviderBridge>) -> Self {
         self.bridge = bridge;
+        self
+    }
+
+    pub fn with_provider_runtime_ready(mut self, ready: bool) -> Self {
+        self.provider_runtime_ready = ready;
         self
     }
 
@@ -481,6 +489,8 @@ impl AppStateBuilder {
                 start_time,
                 health_checker: HealthChecker::new(start_time),
                 live_config,
+                provider_runtime_ready: Arc::new(AtomicBool::new(self.provider_runtime_ready)),
+                provider_runtime_ready_notify: Arc::new(Notify::new()),
             },
             threads: ThreadState {
                 thread_store,
