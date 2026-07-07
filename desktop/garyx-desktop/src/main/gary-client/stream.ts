@@ -442,6 +442,12 @@ export async function streamThreadEvents(
     });
   } finally {
     disarmWatchdog();
+    // Release the underlying connection on EVERY exit path. A gap error (or
+    // any parse throw) leaves the response body unconsumed; without this
+    // abort the socket stays checked out of Chromium's per-host pool — one
+    // zombie ESTABLISHED connection per gap (#TASK-1840). Aborting after a
+    // normally-completed stream is a no-op.
+    watchdog.abort();
     signal?.removeEventListener("abort", propagateExternalAbort);
   }
 }

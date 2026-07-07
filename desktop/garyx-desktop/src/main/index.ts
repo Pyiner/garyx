@@ -170,8 +170,6 @@ import {
   saveGatewaySettings,
   saveSkillFile,
   sendStreamingInput,
-  streamThreadEvents,
-  ThreadStreamGapError,
   scanDreams,
   stopTask,
   toggleMcpServer,
@@ -190,6 +188,7 @@ import {
   updateRemoteThread,
   setGatewayFetch,
 } from "./gary-client";
+import { createThreadStreamHub } from "./thread-stream-hub";
 import {
   clearThreadTranscriptCache,
   loadThreadTranscriptCache,
@@ -289,176 +288,26 @@ setGatewayFetch((input, init) => net.fetch(input, init));
 const deepLinkSubscribers = new Set<Electron.WebContents>();
 const pendingDeepLinks: DesktopDeepLinkEvent[] = [];
 
-interface ThreadStreamForwarder {
-  controller: AbortController;
-  owners: Set<string>;
-  lastSeq: number;
-  /** Render window floor this stream is rendering with; pinned across
-   * reconnects so a caught-up resume keeps the server's windowed derivation
-   * instead of falling back to the full-transcript path. */
-  lastFloor: number;
-}
-
-const threadStreamForwarders = new Map<string, ThreadStreamForwarder>();
-
-function threadStreamConsumerId(input?: {
-  consumerId?: string | null;
-} | null): string {
-  return input?.consumerId?.trim() || "default";
-}
+const threadStreamHub = createThreadStreamHub({
+  resolveSettings: () => resolveSettings(),
+  isSinkAlive: () => Boolean(mainWindow && !mainWindow.isDestroyed()),
+  sendEvent: (payload) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("garyx:chat-stream", payload);
+    }
+  },
+});
 
 function stopThreadEventForwarder(input?: StopThreadStreamInput | null): void {
-  const normalizedThreadId = input?.threadId?.trim() || null;
-  const consumerId = input?.consumerId?.trim() || null;
-  if (!normalizedThreadId) {
-    for (const forwarder of threadStreamForwarders.values()) {
-      forwarder.controller.abort();
-    }
-    threadStreamForwarders.clear();
-    return;
-  }
-  const forwarder = threadStreamForwarders.get(normalizedThreadId);
-  if (!forwarder) {
-    return;
-  }
-  if (consumerId) {
-    forwarder.owners.delete(consumerId);
-    if (forwarder.owners.size > 0) {
-      return;
-    }
-  }
-  forwarder.controller.abort();
-  threadStreamForwarders.delete(normalizedThreadId);
+  threadStreamHub.stop(input);
 }
 
-function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) {
-      resolve();
-      return;
-    }
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
-    );
-  });
-}
-
-function startThreadEventForwarder(
-  input: StartThreadStreamInput,
-  ownerIds?: Iterable<string>,
-): void {
-  const threadId = input.threadId.trim();
-  if (!threadId || !mainWindow || mainWindow.isDestroyed()) {
-    return;
-  }
-  const owners = new Set(ownerIds ?? [threadStreamConsumerId(input)]);
-  const existing = threadStreamForwarders.get(threadId);
-  if (existing) {
-    for (const owner of existing.owners) {
-      owners.add(owner);
-    }
-    existing.controller.abort();
-  }
-  const controller = new AbortController();
-  const afterSeq = Math.max(
-    Math.max(0, Math.trunc(input.afterSeq ?? 0)),
-    existing?.lastSeq ?? 0,
-  );
-  const forwarder: ThreadStreamForwarder = {
-    controller,
-    owners,
-    lastSeq: afterSeq,
-    lastFloor: Math.max(
-      Math.max(0, Math.trunc(input.renderFloor ?? 0)),
-      existing?.lastFloor ?? 0,
-    ),
-  };
-  threadStreamForwarders.set(threadId, forwarder);
-  const window = mainWindow;
-  void (async () => {
-    try {
-      let retryDelayMs = 500;
-      let resumeAfterSeq = forwarder.lastSeq;
-      while (!controller.signal.aborted && !window.isDestroyed()) {
-        try {
-          const settings = await resolveSettings();
-          await streamThreadEvents(
-            settings,
-            threadId,
-            (payload) => {
-              if (!window.isDestroyed()) {
-                window.webContents.send("garyx:chat-stream", payload);
-              }
-            },
-            controller.signal,
-            {
-              afterSeq: resumeAfterSeq,
-              renderFloor: forwarder.lastFloor,
-              onCommittedSeq: (seq) => {
-                resumeAfterSeq = seq;
-                forwarder.lastSeq = seq;
-              },
-              onWindowFloor: (floorSeq) => {
-                forwarder.lastFloor = floorSeq;
-              },
-            },
-          );
-          retryDelayMs = 500;
-        } catch (error) {
-          if (controller.signal.aborted || window.isDestroyed()) {
-            break;
-          }
-          if (error instanceof ThreadStreamGapError) {
-            window.webContents.send("garyx:chat-stream", {
-              type: "error",
-              runId: "thread-stream-gap",
-              threadId,
-              sessionId: threadId,
-              error: `Thread stream seq gap after ${error.resumeAfterSeq}; authoritative refetch required`,
-            });
-            break;
-          }
-        }
-        await sleepWithAbort(retryDelayMs, controller.signal);
-        retryDelayMs = Math.min(Math.max(retryDelayMs * 2, 500), 10_000);
-      }
-    } finally {
-      if (threadStreamForwarders.get(threadId)?.controller === controller) {
-        threadStreamForwarders.delete(threadId);
-      }
-    }
-  })();
+function startThreadEventForwarder(input: StartThreadStreamInput): void {
+  threadStreamHub.start(input);
 }
 
 function restartThreadEventForwarders(): void {
-  const active = Array.from(threadStreamForwarders.entries()).map(
-    ([threadId, forwarder]) => ({
-      threadId,
-      afterSeq: forwarder.lastSeq,
-      renderFloor: forwarder.lastFloor,
-      owners: new Set(forwarder.owners),
-    }),
-  );
-  for (const forwarder of threadStreamForwarders.values()) {
-    forwarder.controller.abort();
-  }
-  threadStreamForwarders.clear();
-  for (const item of active) {
-    startThreadEventForwarder(
-      {
-        threadId: item.threadId,
-        afterSeq: item.afterSeq,
-        renderFloor: item.renderFloor,
-      },
-      item.owners,
-    );
-  }
+  threadStreamHub.restartAll();
 }
 const recentDeepLinkTimestamps = new Map<string, number>();
 const startupDeepLinkUrls = extractProtocolUrls(process.argv);
