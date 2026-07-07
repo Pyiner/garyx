@@ -344,8 +344,6 @@ pub(crate) async fn cmd_thread_history(
         .as_array()
         .cloned()
         .unwrap_or_default();
-    let local_timezone = Local::now().format("%Z").to_string();
-
     println!("Thread: {thread_id}");
     println!("Bindings: {binding_count}");
     if let Some(path) = payload["transcript_path"].as_str() {
@@ -375,7 +373,7 @@ pub(crate) async fn cmd_thread_history(
             active_provider_type.unwrap_or("-"),
         );
     }
-    println!("Ledger ({local_timezone}):");
+    println!("Ledger:");
     if ledger_records.is_empty() {
         println!("  (no records)");
     } else {

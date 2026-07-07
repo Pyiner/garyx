@@ -108,14 +108,15 @@ fn build_runtime_metadata_user_message(metadata: &HashMap<String, Value>) -> Opt
     if lines.is_empty() {
         return None;
     }
-    // Stamp the gateway machine's local wall-clock time (offset + IANA zone)
-    // so the agent can reason about "now" in the user's timezone. Placed
-    // first so it reads as session context rather than thread identity.
+    // Stamp the gateway machine's local wall-clock time, with the IANA zone
+    // as one-off context, so the agent can reason about "now" in the user's
+    // timezone. Placed first so it reads as session context rather than
+    // thread identity.
     lines.insert(
         0,
         format!(
             "current_time: {} ({})",
-            chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z"),
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
             iana_time_zone::get_timezone().unwrap_or_else(|_| "unknown-timezone".to_owned())
         ),
     );

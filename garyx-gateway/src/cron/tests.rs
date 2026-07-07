@@ -2008,15 +2008,15 @@ fn test_build_followup_body_contains_metadata_block() {
     assert!(body.starts_with("<garyx_followup_metadata>"));
     assert!(body.contains("schedule_id: followup_deadbeefdeadbeef"));
     assert!(body.contains("delay_seconds_requested: 300"));
-    // Agent-facing timestamps render in the machine's local timezone with
-    // the UTC offset preserved (same instant, local wall-clock).
+    // Agent-facing timestamps render as machine-local wall-clock time
+    // (`YYYY-MM-DD HH:MM:SS`, timezone implicit).
     assert!(body.contains(&format!(
         "scheduled_at: {}",
-        scheduled_at.with_timezone(&Local).to_rfc3339()
+        scheduled_at.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S")
     )));
     assert!(body.contains(&format!(
         "scheduled_for: {}",
-        scheduled_for.with_timezone(&Local).to_rfc3339()
+        scheduled_for.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S")
     )));
     assert!(body.contains("reason: background job completed"));
     assert!(body.contains("originating_run_id: run-xyz"));

@@ -106,15 +106,19 @@ async fn record_event_stamps_missing_timestamp_in_local_timezone() {
         .await;
 
     let chunk = logger.read_chunk("thread::tz", None).await.unwrap();
-    let stamp = chunk
-        .text
-        .split_whitespace()
-        .next()
-        .expect("log line starts with a timestamp");
-    let parsed = chrono::DateTime::parse_from_rfc3339(stamp).expect("rfc3339 timestamp");
-    // The fallback timestamp is stamped in the machine's local timezone
-    // (offset preserved), not UTC.
-    assert_eq!(parsed.offset(), Local::now().offset());
+    let mut parts = chunk.text.split_whitespace();
+    let stamp = format!(
+        "{} {}",
+        parts.next().expect("date part"),
+        parts.next().expect("time part")
+    );
+    let parsed = chrono::NaiveDateTime::parse_from_str(&stamp, "%Y-%m-%d %H:%M:%S%.3f")
+        .expect("wall-clock timestamp");
+    // Pin the *local* semantics, not just the shape: the fallback stamp must
+    // be the machine's local wall clock (a UTC stamp in the same shape would
+    // drift by the UTC offset).
+    let drift = (parsed - Local::now().naive_local()).num_seconds().abs();
+    assert!(drift < 300, "thread-log stamp must be local wall-clock, drift {drift}s");
 }
 
 #[tokio::test]

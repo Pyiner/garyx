@@ -471,16 +471,19 @@ pub(crate) fn build_followup_body(
     let mut lines = Vec::with_capacity(8);
     lines.push("<garyx_followup_metadata>".to_owned());
     lines.push(format!("schedule_id: {schedule_id}"));
-    // Agent-facing timestamps: render in the gateway machine's local
-    // timezone (offset preserved) so the resumed agent reasons about the
-    // delay in the user's wall-clock time.
+    // Agent-facing timestamps: gateway-machine local wall-clock time
+    // (`YYYY-MM-DD HH:MM:SS`, timezone implicit) so the resumed agent
+    // reasons about the delay in the user's wall-clock time.
     lines.push(format!(
         "scheduled_at: {}",
-        payload.scheduled_at.with_timezone(&Local).to_rfc3339()
+        payload
+            .scheduled_at
+            .with_timezone(&Local)
+            .format("%Y-%m-%d %H:%M:%S")
     ));
     lines.push(format!(
         "scheduled_for: {}",
-        scheduled_for.with_timezone(&Local).to_rfc3339()
+        scheduled_for.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S")
     ));
     lines.push(format!(
         "delay_seconds_requested: {}",

@@ -63,9 +63,11 @@ impl ThreadFileLogger {
 
     fn render_event(event: ThreadLogEvent) -> String {
         // Thread log lines are read verbatim by users (Log dock, log files),
-        // so stamp them in the machine's local timezone with the UTC offset
-        // preserved rather than UTC.
-        let timestamp = event.timestamp.unwrap_or_else(|| Local::now().to_rfc3339());
+        // so stamp them as local wall-clock time (`YYYY-MM-DD HH:MM:SS.fff`,
+        // machine timezone implicit) rather than UTC.
+        let timestamp = event
+            .timestamp
+            .unwrap_or_else(|| Local::now().format("%Y-%m-%d %H:%M:%S%.3f").to_string());
         let mut line = format!(
             "{} {} [{}]",
             sanitize_line(&timestamp),

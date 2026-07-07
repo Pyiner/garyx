@@ -18,8 +18,9 @@ pub(super) fn trim_optional_cli(value: Option<String>) -> Option<String> {
 }
 
 /// Format an RFC3339 timestamp (usually UTC from the gateway API) as local
-/// wall-clock time for human-readable CLI output. Non-RFC3339 input is
-/// returned verbatim; empty/missing input renders as "-".
+/// wall-clock time (`YYYY-MM-DD HH:MM:SS`, machine timezone implicit) for
+/// human-readable CLI output. Non-RFC3339 input is returned verbatim;
+/// empty/missing input renders as "-".
 pub(super) fn format_local_timestamp(value: Option<&str>) -> String {
     let raw = value.unwrap_or("-").trim();
     if raw.is_empty() || raw == "-" {
@@ -29,7 +30,7 @@ pub(super) fn format_local_timestamp(value: Option<&str>) -> String {
     match chrono::DateTime::parse_from_rfc3339(raw) {
         Ok(parsed) => parsed
             .with_timezone(&chrono::Local)
-            .format("%Y-%m-%d %H:%M:%S %Z")
+            .format("%Y-%m-%d %H:%M:%S")
             .to_string(),
         Err(_) => raw.to_owned(),
     }

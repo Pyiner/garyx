@@ -126,7 +126,12 @@ fn format_automation_schedule(schedule: &Value) -> String {
                 format!("{weekdays} {time} {timezone}")
             }
         }
-        "once" => format!("once {}", schedule["at"].as_str().unwrap_or("?")),
+        // `at` is a naive local `YYYY-MM-DDTHH:MM` (datetime-local contract);
+        // display it in the unified `YYYY-MM-DD HH:MM` wall-clock style.
+        "once" => format!(
+            "once {}",
+            schedule["at"].as_str().unwrap_or("?").replacen('T', " ", 1)
+        ),
         _ => "-".to_owned(),
     }
 }

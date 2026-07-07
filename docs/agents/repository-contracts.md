@@ -124,13 +124,15 @@ reinterpreted in feature code.
 - Storage, HTTP API contracts, and scheduling baselines are UTC: RFC3339 with
   trailing `Z` (`Utc::now().to_rfc3339()`) or epoch values. Do not localize
   persisted or wire timestamps; clients localize at render time.
-- Human-readable sinks render in the gateway machine's local timezone with the
-  UTC offset preserved: the tracing log timer (`main.rs` `ChronoLocal`),
-  thread-log line stamps, CLI list/detail timestamps
-  (`commands/shared.rs::format_local_timestamp`), and agent-facing ISO strings
-  (`schedule_followup` responses, followup metadata, and the
-  `current_time` line in `<garyx_thread_metadata>`). Machine-facing `unix_ts`
-  fields stay timezone-neutral.
+- Human-readable sinks render gateway-machine local wall-clock time in the
+  unified `YYYY-MM-DD HH:MM:SS` style — no `T` separator, no offset suffix,
+  the machine timezone is implicit (sub-second precision allowed for logs):
+  the tracing log timer (`main.rs` `ChronoLocal`), thread-log line stamps,
+  CLI list/detail timestamps (`commands/shared.rs::format_local_timestamp`),
+  and agent-facing strings (`schedule_followup` responses, followup metadata,
+  and the `current_time` line in `<garyx_thread_metadata>`, which carries the
+  IANA zone once as context). Machine-facing `unix_ts` fields stay
+  timezone-neutral.
 - Bare cron expressions without an explicit timezone are interpreted in the
   gateway machine's local timezone, not UTC. Product automation schedules
   (Daily/Monthly) always carry an explicit IANA timezone; the CLI

@@ -342,14 +342,15 @@ async fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
     let init_tracing = || {
         let env_filter =
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-        // Log timestamps in the gateway machine's local timezone (offset
-        // preserved) instead of the default UTC timer, so the log file and
-        // `garyx logs tail` read as local wall-clock time.
+        // Log timestamps as gateway-machine local wall-clock time
+        // (`YYYY-MM-DD HH:MM:SS.ffffff`, timezone implicit) instead of the
+        // default UTC timer, so the log file and `garyx logs tail` read as
+        // plain local time.
         let fmt_layer = tracing_subscriber::fmt::layer()
             .with_writer(std::io::stderr)
             .with_ansi(false)
             .with_timer(tracing_subscriber::fmt::time::ChronoLocal::new(
-                "%Y-%m-%dT%H:%M:%S%.6f%:z".to_owned(),
+                "%Y-%m-%d %H:%M:%S%.6f".to_owned(),
             ));
 
         tracing_subscriber::registry()

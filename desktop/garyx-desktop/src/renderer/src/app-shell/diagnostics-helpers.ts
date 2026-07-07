@@ -2,7 +2,9 @@ import type { ConnectionStatus } from '@shared/contracts';
 
 import type { GatewayIndicatorTone, ThreadLogLine } from './types';
 
-const THREAD_LOG_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\S+\s+/;
+// Matches both the current gateway stamp (`2026-07-07 17:06:37.123`, local
+// wall clock, space-separated) and older RFC3339 lines (`...T...+08:00`/`Z`).
+const THREAD_LOG_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}\S*\s+/;
 export const MAX_GATEWAY_THREAD_LOG_LINES = 100;
 export const THREAD_LOG_PANEL_MIN_WIDTH = 280;
 export const THREAD_LOG_PANEL_MAX_WIDTH = 760;
@@ -63,11 +65,8 @@ function formatThreadLogTimestamp(value: string): string | undefined {
   const hours = String(date.getHours()).padStart(2, '0');
   const minutes = String(date.getMinutes()).padStart(2, '0');
   const seconds = String(date.getSeconds()).padStart(2, '0');
-  const timezone = Intl.DateTimeFormat(undefined, { timeZoneName: 'short' })
-    .formatToParts(date)
-    .find((part) => part.type === 'timeZoneName')
-    ?.value;
-  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}${timezone ? ` ${timezone}` : ''}`;
+  // Unified human-readable style: local wall-clock time, timezone implicit.
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 }
 
 export function clampThreadLogsPanelWidth(

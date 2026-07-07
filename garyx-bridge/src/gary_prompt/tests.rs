@@ -164,13 +164,18 @@ fn runtime_metadata_includes_local_current_time() {
         .lines()
         .find(|line| line.starts_with("current_time: "))
         .expect("metadata block includes a current_time line");
-    // Shape: `current_time: 2026-07-07T23:30:00+08:00 (Asia/Shanghai)` — a
-    // local-timezone RFC3339 stamp followed by the IANA zone name.
+    // Shape: `current_time: 2026-07-07 23:30:00 (Asia/Shanghai)` — local
+    // wall-clock time (timezone implicit) followed by the IANA zone name.
     let value = line.strip_prefix("current_time: ").unwrap();
-    let (stamp, zone) = value.split_once(' ').expect("timestamp and zone label");
-    let parsed = chrono::DateTime::parse_from_rfc3339(stamp).expect("rfc3339 local timestamp");
-    assert_eq!(parsed.offset(), chrono::Local::now().offset());
-    assert!(zone.starts_with('(') && zone.ends_with(')'));
+    let (stamp, zone) = value.rsplit_once(" (").expect("timestamp and zone label");
+    let parsed = chrono::NaiveDateTime::parse_from_str(stamp, "%Y-%m-%d %H:%M:%S")
+        .expect("wall-clock timestamp");
+    // Pin the *local* semantics, not just the shape: the stamp must be the
+    // machine's local wall clock (a UTC stamp in the same shape would drift
+    // by the UTC offset).
+    let drift = (parsed - chrono::Local::now().naive_local()).num_seconds().abs();
+    assert!(drift < 300, "current_time must be local wall-clock, drift {drift}s");
+    assert!(zone.ends_with(')'));
 }
 
 #[test]
