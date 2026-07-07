@@ -1470,23 +1470,10 @@ fn task_body_for_dispatch(task_value: &Value) -> Option<String> {
 }
 
 fn task_body_from_record(record: &Value) -> Option<String> {
-    task_body_for_dispatch(record.get("task")?).or_else(|| {
-        record
-            .get("messages")
-            .and_then(Value::as_array)?
-            .iter()
-            .find_map(|message| {
-                if message.get("role").and_then(Value::as_str) != Some("user") {
-                    return None;
-                }
-                message
-                    .get("content")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(ToOwned::to_owned)
-            })
-    })
+    // The task body lives on the task record (#TASK-1864 batch 1). True
+    // legacy records that predate `task.body` get it backfilled from
+    // their seeded first user message by Batch 2's import.
+    task_body_for_dispatch(record.get("task")?)
 }
 
 fn normalized_nonempty(value: Option<String>) -> Option<String> {

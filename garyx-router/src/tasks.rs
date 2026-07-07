@@ -326,7 +326,7 @@ impl TaskService {
             obj.insert("message_count".to_owned(), Value::Number(1.into()));
         }
 
-        let title = derive_title(input.title.as_deref(), &record);
+        let title = derive_title(input.title.as_deref(), body.as_deref());
         let task = self
             .build_task(
                 title,
@@ -1235,7 +1235,10 @@ fn push_event(
     });
 }
 
-fn derive_title(input: Option<&str>, record: &Value) -> String {
+fn derive_title(input: Option<&str>, body: Option<&str>) -> String {
+    // Title fallback reads the task body directly (#TASK-1864 batch 1) —
+    // the former scan of the freshly created record's `messages` only ever
+    // found the seeded copy of this same body.
     if let Some(title) = input
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -1243,38 +1246,14 @@ fn derive_title(input: Option<&str>, record: &Value) -> String {
     {
         return title;
     }
-    let messages = record
-        .get("messages")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    for message in messages {
-        let role = message.get("role").and_then(Value::as_str).unwrap_or("");
-        if role != "user" {
-            continue;
-        }
-        if let Some(text) = message_text(&message) {
-            return truncate_title(&text);
-        }
+    if let Some(title) = body
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(truncate_title)
+    {
+        return title;
     }
     "Untitled task".to_owned()
-}
-
-fn message_text(message: &Value) -> Option<String> {
-    let content = message.get("content")?;
-    match content {
-        Value::String(text) => Some(text.clone()),
-        Value::Array(parts) => Some(
-            parts
-                .iter()
-                .filter_map(|part| part.get("text").and_then(Value::as_str))
-                .collect::<Vec<_>>()
-                .join(" "),
-        ),
-        _ => None,
-    }
-    .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
-    .filter(|text| !text.is_empty())
 }
 
 fn truncate_title(value: &str) -> String {

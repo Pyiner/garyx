@@ -750,7 +750,7 @@ fn format_task_progress(task_payload: &Value, history_payload: Option<&Value>) -
     output.push('\n');
     output.push_str("Progress:\n");
 
-    let messages = task_progress_messages(task_payload, history_payload);
+    let messages = task_progress_messages(history_payload);
     let turns = task_progress_turns(&messages);
     if turns.is_empty() {
         output.push_str("(no user messages recorded)\n");
@@ -868,10 +868,7 @@ fn turn_timestamp_label(turn: &TaskProgressTurn) -> String {
         .unwrap_or_default()
 }
 
-fn task_progress_messages(
-    task_payload: &Value,
-    history_payload: Option<&Value>,
-) -> Vec<TaskProgressMessage> {
+fn task_progress_messages(history_payload: Option<&Value>) -> Vec<TaskProgressMessage> {
     let mut messages = Vec::new();
     let mut seen = HashSet::new();
     let mut source_order = 0_usize;
@@ -882,19 +879,6 @@ fn task_progress_messages(
     {
         for message in history_messages {
             if let Some(entry) = task_progress_message_from_history(message, source_order) {
-                push_unique_task_progress_message(&mut messages, &mut seen, entry);
-                source_order += 1;
-            }
-        }
-    }
-
-    if let Some(thread_messages) = task_payload
-        .get("thread")
-        .and_then(|thread| thread.get("messages"))
-        .and_then(Value::as_array)
-    {
-        for message in thread_messages {
-            if let Some(entry) = task_progress_message_from_thread(message, source_order) {
                 push_unique_task_progress_message(&mut messages, &mut seen, entry);
                 source_order += 1;
             }
@@ -956,33 +940,6 @@ fn task_progress_message_from_history(
             .get("internal")
             .and_then(Value::as_bool)
             .or_else(|| value.pointer("/message/internal").and_then(Value::as_bool))
-            .unwrap_or(false),
-    })
-}
-
-fn task_progress_message_from_thread(
-    value: &Value,
-    source_order: usize,
-) -> Option<TaskProgressMessage> {
-    let role = value
-        .get("role")
-        .and_then(Value::as_str)?
-        .trim()
-        .to_ascii_lowercase();
-    let text = message_text_from_value(value).unwrap_or_default();
-    let timestamp = value
-        .get("timestamp")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    Some(TaskProgressMessage {
-        role,
-        text,
-        sort_time: timestamp.as_deref().and_then(parse_rfc3339_timestamp),
-        timestamp,
-        source_order,
-        internal: value
-            .get("internal")
-            .and_then(Value::as_bool)
             .unwrap_or(false),
     })
 }
@@ -1489,16 +1446,21 @@ mod tests {
         // helper so the assertions hold in any machine timezone.
         let local = |raw: &str| format_local_timestamp(Some(raw));
         assert!(rendered.contains("Task: #TASK-42"));
-        assert!(rendered.contains(&format!("[1] User {}", local("2026-05-03T00:00:00Z"))));
-        assert!(rendered.contains("original request"));
-        assert!(rendered.contains(&format!("[2] User {}", local("2026-05-03T00:00:01Z"))));
+        // The transcript history is the only progress source: the record
+        // `messages` supplement branch is gone (#TASK-1864 batch 1), so
+        // the API thread payload's messages are ignored.
+        assert!(
+            !rendered.contains("original request"),
+            "thread payload messages must not render: {rendered}"
+        );
+        assert!(rendered.contains(&format!("[1] User {}", local("2026-05-03T00:00:01Z"))));
         assert!(rendered.contains("please do it"));
         assert!(rendered.contains("final answer after tools"));
         assert!(
             !rendered.contains("first text before tools"),
             "only the last assistant text group after a user turn should render: {rendered}"
         );
-        assert!(rendered.contains(&format!("[3] User {}", local("2026-05-03T00:00:05Z"))));
+        assert!(rendered.contains(&format!("[2] User {}", local("2026-05-03T00:00:05Z"))));
         assert!(rendered.contains("(internal dispatch)"));
         assert!(rendered.contains(
             "Full thread with tool calls: garyx thread history thread::task-42 --limit 200 --json"
