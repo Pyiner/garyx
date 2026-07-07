@@ -366,8 +366,14 @@ fn parse_cron_schedule(expr: &str) -> Option<Schedule> {
 /// instead, enumerate candidates on the naive wall clock (pretending it is
 /// UTC so the cron crate performs no timezone resolution of its own), then
 /// map each candidate back to a real instant: ambiguous times fire at their
-/// first occurrence, and times inside a spring-forward gap skip to the next
-/// candidate.
+/// earliest still-future occurrence, and times inside a spring-forward gap
+/// skip to the next candidate.
+///
+/// Invariant: the returned instant is always `>= start`. Wall-clock
+/// candidates are strictly after `start`'s wall clock, but across a
+/// fall-back transition an ambiguous candidate's earlier instant can still
+/// precede `start` in real time; returning it would arm `next_run` in the
+/// past and storm-fire every scheduler tick until the transition passes.
 fn next_cron_run_in_timezone<Z: TimeZone>(
     schedule: &Schedule,
     start: DateTime<Utc>,
@@ -382,19 +388,27 @@ fn next_cron_run_in_timezone<Z: TimeZone>(
 
     let start_wall = Utc.from_utc_datetime(&start.with_timezone(tz).naive_local());
     for candidate in schedule.after(&start_wall).take(MAX_GAP_CANDIDATES) {
-        match tz.from_local_datetime(&candidate.naive_utc()) {
-            LocalResult::Single(instant) => return Some(instant.with_timezone(&Utc)),
-            // Fall-back transition: the wall-clock time occurs twice; fire
-            // at the earlier instant instead of dropping the day. Do not
-            // trust the tuple order — `chrono::Local`'s platform-backed
-            // resolver has been observed returning the pair swapped
-            // (review #TASK-1817), unlike chrono-tz.
-            LocalResult::Ambiguous(first, second) => {
-                let earliest = if first <= second { first } else { second };
-                return Some(earliest.with_timezone(&Utc));
+        let (first, second) = match tz.from_local_datetime(&candidate.naive_utc()) {
+            LocalResult::Single(instant) => (Some(instant), None),
+            // Fall-back transition: the wall-clock time occurs twice; order
+            // the pair by instant instead of trusting the tuple order —
+            // `chrono::Local`'s platform-backed resolver has been observed
+            // returning it swapped (review #TASK-1817), unlike chrono-tz.
+            LocalResult::Ambiguous(a, b) => {
+                if a <= b {
+                    (Some(a), Some(b))
+                } else {
+                    (Some(b), Some(a))
+                }
             }
             // Spring-forward gap: this wall-clock time never occurs.
-            LocalResult::None => continue,
+            LocalResult::None => (None, None),
+        };
+        for instant in [first, second].into_iter().flatten() {
+            let utc = instant.with_timezone(&Utc);
+            if utc >= start {
+                return Some(utc);
+            }
         }
     }
     None

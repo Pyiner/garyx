@@ -1490,6 +1490,31 @@ async fn test_cron_dst_fall_back_fires_at_first_occurrence_instead_of_skipping_t
 }
 
 #[tokio::test]
+async fn test_cron_dst_fall_back_never_returns_a_past_instant() {
+    use chrono::TimeZone;
+
+    // If `after` already sits inside the *second* pass of the repeated
+    // 01:00-02:00 hour (EST side), the ambiguous 01:30 candidate's earlier
+    // instant (05:30Z) lies in the past. Returning it would arm next_run in
+    // the past and storm-fire every tick; the schedule must pick the
+    // still-future second occurrence instead.
+    let schedule = CronSchedule::Cron {
+        expr: "0 30 1 * * *".to_owned(),
+        timezone: Some("America/New_York".to_owned()),
+    };
+
+    let after = Utc.with_ymd_and_hms(2026, 11, 1, 6, 10, 0).unwrap(); // 01:10 EST (second pass)
+    let next = CronJob::compute_next_run(&schedule, after);
+    assert!(next > after, "next_run must be in the future, got {next}");
+    assert_eq!(next, Utc.with_ymd_and_hms(2026, 11, 1, 6, 30, 0).unwrap());
+
+    // Once both occurrences have passed, the next firing is the next day.
+    let late = Utc.with_ymd_and_hms(2026, 11, 1, 6, 40, 0).unwrap(); // 01:40 EST
+    let next_day = CronJob::compute_next_run(&schedule, late);
+    assert_eq!(next_day, Utc.with_ymd_and_hms(2026, 11, 2, 6, 30, 0).unwrap());
+}
+
+#[tokio::test]
 async fn test_cron_dst_spring_forward_skips_nonexistent_wall_clock_time() {
     use chrono::TimeZone;
 
