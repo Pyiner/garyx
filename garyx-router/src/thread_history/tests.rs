@@ -1929,6 +1929,154 @@ async fn cold_start_small_tail_budget_serves_tail_window_without_full_read() {
 }
 
 #[tokio::test]
+async fn file_paging_matches_full_read_oracle_without_full_reads() {
+    // Small tail budget: pages near the head fall below the cached tail and
+    // must stream just their range; pages near the end serve from the cache.
+    let dir = tempdir().unwrap();
+    let thread_id = "thread::paging-stream";
+    let store = ThreadTranscriptStore::file_for_tests(dir.path(), 2048, 6, 1 << 20)
+        .await
+        .unwrap();
+    for index in 0..30usize {
+        store
+            .append_run_records(
+                thread_id,
+                Some("run-page"),
+                &[RunTranscriptRecordDraft::from_message(oracle_test_message(
+                    index, index,
+                ))],
+            )
+            .await
+            .unwrap();
+    }
+
+    // Oracle uses the full-read records() (counted separately below).
+    let records = store.records(thread_id).await.unwrap();
+    let total = records.len();
+    let oracle_slice = |start: usize, end: usize| -> Vec<Value> {
+        records[start..end]
+            .iter()
+            .map(|record| record.message.clone())
+            .collect()
+    };
+
+    let baseline = store.full_file_reads.load(CacheTestOrdering::Relaxed);
+
+    // Tail page (cache hit), deep page (streamed), forward page, tail-less
+    // boundary and out-of-range cursors.
+    let cases: Vec<(Option<usize>, usize)> =
+        vec![(None, 10), (Some(8), 5), (Some(30), 30), (Some(99), 4)];
+    for (before, limit) in cases {
+        let (messages, reported_total, start) = store
+            .page_before_index(thread_id, before, limit)
+            .await
+            .unwrap();
+        let end = before.unwrap_or(total).min(total);
+        let expected_start = end.saturating_sub(limit);
+        assert_eq!(reported_total, total, "total for before={before:?}");
+        assert_eq!(start, expected_start, "start for before={before:?}");
+        assert_eq!(
+            messages,
+            oracle_slice(expected_start, end),
+            "page_before_index({before:?}, {limit})"
+        );
+    }
+
+    for (after, limit) in [(0usize, 7usize), (12, 100), (29, 5), (99, 5)] {
+        let (messages, reported_total, start) =
+            store.page_after_index(thread_id, after, limit).await.unwrap();
+        let expected_start = after.saturating_add(1).min(total);
+        let expected_end = expected_start.saturating_add(limit).min(total);
+        assert_eq!(reported_total, total);
+        assert_eq!(start, expected_start);
+        assert_eq!(
+            messages,
+            oracle_slice(expected_start, expected_end),
+            "page_after_index({after}, {limit})"
+        );
+    }
+
+    for (before, queries, fallback) in [
+        (None, 3usize, 10usize),
+        (Some(20), 2, 10),
+        (Some(20), 50, 10), // more queries than exist -> window from head
+        (Some(3), 1, 2),
+    ] {
+        let (messages, reported_total, start) = store
+            .page_before_user_queries(thread_id, before, queries, fallback)
+            .await
+            .unwrap();
+        let end = before.unwrap_or(total).min(total);
+        let mut expected_start = end;
+        let mut seen = 0usize;
+        while expected_start > 0 && seen < queries.max(1) {
+            expected_start -= 1;
+            if is_user_query_message(&records[expected_start].message) {
+                seen += 1;
+            }
+        }
+        if seen == 0 {
+            expected_start = end.saturating_sub(fallback.max(1));
+        }
+        assert_eq!(reported_total, total);
+        assert_eq!(start, expected_start, "start for before={before:?} q={queries}");
+        assert_eq!(
+            messages,
+            oracle_slice(expected_start, end),
+            "page_before_user_queries({before:?}, {queries}, {fallback})"
+        );
+    }
+
+    let reads = store.full_file_reads.load(CacheTestOrdering::Relaxed) - baseline;
+    assert_eq!(
+        reads, 0,
+        "paging must stream ranges or hit the cache, never full-read the transcript"
+    );
+}
+
+#[tokio::test]
+async fn cold_start_deep_page_streams_without_full_read() {
+    // Post-restart shape: fresh store, client pages deep history (below the
+    // cached tail) on a thread whose transcript is large. Both the cache
+    // build and the page itself must avoid full-file reads.
+    let dir = tempdir().unwrap();
+    let thread_id = "thread::paging-cold";
+    {
+        let writer = ThreadTranscriptStore::file_for_tests(dir.path(), 512, 3, 1 << 20)
+            .await
+            .unwrap();
+        for index in 0..20usize {
+            writer
+                .append_run_records(
+                    thread_id,
+                    Some("run-cold-page"),
+                    &[RunTranscriptRecordDraft::from_message(oracle_test_message(
+                        index, index,
+                    ))],
+                )
+                .await
+                .unwrap();
+        }
+    }
+
+    let store = ThreadTranscriptStore::file_for_tests(dir.path(), 512, 3, 1 << 20)
+        .await
+        .unwrap();
+    let baseline = store.full_file_reads.load(CacheTestOrdering::Relaxed);
+
+    let (messages, total, start) = store
+        .page_before_index(thread_id, Some(6), 4)
+        .await
+        .unwrap();
+    assert_eq!(total, 20);
+    assert_eq!(start, 2);
+    assert_eq!(messages.len(), 4);
+
+    let reads = store.full_file_reads.load(CacheTestOrdering::Relaxed) - baseline;
+    assert_eq!(reads, 0, "cold deep page must stream, not full-read");
+}
+
+#[tokio::test]
 async fn transcript_cache_detects_out_of_band_file_change() {
     let dir = tempdir().unwrap();
     let store = ThreadTranscriptStore::file(dir.path()).await.unwrap();

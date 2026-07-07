@@ -233,6 +233,25 @@ impl ThreadCache {
         Some(snapshot)
     }
 
+    /// Serve messages with seq in `[start_seq, end_seq]` (inclusive) when the
+    /// whole range provably lies inside the cached tail; `None` sends the
+    /// caller to the streaming fallback.
+    fn messages_in_seq_range(&self, start_seq: u64, end_seq: u64) -> Option<Vec<Value>> {
+        if start_seq > end_seq {
+            return Some(Vec::new());
+        }
+        if start_seq < self.tail_start_seq() || end_seq > self.last_seq {
+            return None;
+        }
+        Some(
+            self.tail
+                .iter()
+                .filter(|cached| cached.record.seq >= start_seq && cached.record.seq <= end_seq)
+                .map(|cached| cached.record.message.clone())
+                .collect(),
+        )
+    }
+
     fn tail_messages(&self, limit: usize) -> Option<Vec<Value>> {
         if limit >= self.total_records {
             if !self.covers_whole_file() {
@@ -876,25 +895,19 @@ impl ThreadTranscriptStore {
         Ok(())
     }
 
-    /// Build a thread's cache entry by streaming the transcript jsonl once,
-    /// folding rolled-off records into the run-state checkpoint as the scan
-    /// advances. Peak memory stays near the tail budget instead of
-    /// materializing the whole file — large transcripts previously ballooned
-    /// to gigabytes on their first post-restart touch.
-    async fn build_cache_streaming(
+    /// Stream the transcript jsonl once, invoking `visit` for every message
+    /// record in file order. Bounded memory: each record is parsed and handed
+    /// over without materializing the file; `visit` returns `Break` to stop
+    /// the scan early.
+    async fn for_each_transcript_record(
         &self,
         thread_id: &str,
         path: &Path,
-    ) -> Result<ThreadCache, ThreadHistoryError> {
-        let file_len = tokio::fs::metadata(path)
-            .await
-            .map(|meta| meta.len())
-            .unwrap_or(0);
-        let mut entry = ThreadCache::from_records(Vec::new(), file_len);
+        mut visit: impl FnMut(CachedTranscriptRecord) -> std::ops::ControlFlow<()>,
+    ) -> Result<(), ThreadHistoryError> {
         if !path.exists() {
-            return Ok(entry);
+            return Ok(());
         }
-        let budget = self.cache_budget();
         let file = tokio::fs::File::open(path)
             .await
             .map_err(|error| transcript_io_error(thread_id, error))?;
@@ -932,22 +945,78 @@ impl ThreadTranscriptStore {
             else {
                 continue;
             };
-            entry.push_streamed(
-                CachedTranscriptRecord {
-                    bytes: stripped.len(),
-                    record: ThreadTranscriptRecord {
-                        seq,
-                        thread_id,
-                        run_id,
-                        timestamp,
-                        message,
-                    },
+            let cached = CachedTranscriptRecord {
+                bytes: stripped.len(),
+                record: ThreadTranscriptRecord {
+                    seq,
+                    thread_id,
+                    run_id,
+                    timestamp,
+                    message,
                 },
-                &budget,
-            );
+            };
+            if visit(cached).is_break() {
+                break;
+            }
         }
+        Ok(())
+    }
+
+    /// Build a thread's cache entry by streaming the transcript jsonl once,
+    /// folding rolled-off records into the run-state checkpoint as the scan
+    /// advances. Peak memory stays near the tail budget instead of
+    /// materializing the whole file — large transcripts previously ballooned
+    /// to gigabytes on their first post-restart touch.
+    async fn build_cache_streaming(
+        &self,
+        thread_id: &str,
+        path: &Path,
+    ) -> Result<ThreadCache, ThreadHistoryError> {
+        let file_len = tokio::fs::metadata(path)
+            .await
+            .map(|meta| meta.len())
+            .unwrap_or(0);
+        let mut entry = ThreadCache::from_records(Vec::new(), file_len);
+        if !path.exists() {
+            return Ok(entry);
+        }
+        let budget = self.cache_budget();
+        self.for_each_transcript_record(thread_id, path, |cached| {
+            entry.push_streamed(cached, &budget);
+            std::ops::ControlFlow::Continue(())
+        })
+        .await?;
         entry.roll_tail(&budget);
         Ok(entry)
+    }
+
+    /// Materialize only the messages whose seq falls in
+    /// `[start_seq, end_seq]` (both inclusive), streaming the file once and
+    /// stopping at the range's end. Memory is bounded by the page size —
+    /// this is the paging fallback for ranges below the cached tail, which
+    /// previously re-read whole multi-hundred-MB transcripts per page.
+    async fn stream_messages_in_seq_range(
+        &self,
+        thread_id: &str,
+        path: &Path,
+        start_seq: u64,
+        end_seq: u64,
+    ) -> Result<Vec<Value>, ThreadHistoryError> {
+        let mut messages = Vec::new();
+        if start_seq > end_seq {
+            return Ok(messages);
+        }
+        self.for_each_transcript_record(thread_id, path, |cached| {
+            if cached.record.seq > end_seq {
+                return std::ops::ControlFlow::Break(());
+            }
+            if cached.record.seq >= start_seq {
+                messages.push(cached.record.message);
+            }
+            std::ops::ControlFlow::Continue(())
+        })
+        .await?;
+        Ok(messages)
     }
 
     // -----------------------------------------------------------------------
@@ -1892,15 +1961,22 @@ impl ThreadTranscriptStore {
         before_index: Option<usize>,
         limit: usize,
     ) -> Result<(Vec<Value>, usize, usize), ThreadHistoryError> {
-        let records = self.read_records(thread_id).await?;
-        let total = records.len();
+        if matches!(&self.mode, TranscriptStoreMode::Memory { .. }) {
+            let records = self.read_records(thread_id).await?;
+            let total = records.len();
+            let end = before_index.unwrap_or(total).min(total);
+            let start = end.saturating_sub(limit);
+            let messages = records[start..end]
+                .iter()
+                .map(|record| record.message.clone())
+                .collect();
+            return Ok((messages, total, start));
+        }
+        let total = self.message_count(thread_id).await?;
         let end = before_index.unwrap_or(total).min(total);
         let start = end.saturating_sub(limit);
-        let messages = records[start..end]
-            .iter()
-            .map(|record| record.message.clone())
-            .collect();
-        Ok((messages, total, start))
+        self.page_messages_by_index(thread_id, start, end, total)
+            .await
     }
 
     /// Forward page: committed records with position strictly greater than
@@ -1912,15 +1988,22 @@ impl ThreadTranscriptStore {
         after_index: usize,
         limit: usize,
     ) -> Result<(Vec<Value>, usize, usize), ThreadHistoryError> {
-        let records = self.read_records(thread_id).await?;
-        let total = records.len();
+        if matches!(&self.mode, TranscriptStoreMode::Memory { .. }) {
+            let records = self.read_records(thread_id).await?;
+            let total = records.len();
+            let start = after_index.saturating_add(1).min(total);
+            let end = start.saturating_add(limit).min(total);
+            let messages = records[start..end]
+                .iter()
+                .map(|record| record.message.clone())
+                .collect();
+            return Ok((messages, total, start));
+        }
+        let total = self.message_count(thread_id).await?;
         let start = after_index.saturating_add(1).min(total);
         let end = start.saturating_add(limit).min(total);
-        let messages = records[start..end]
-            .iter()
-            .map(|record| record.message.clone())
-            .collect();
-        Ok((messages, total, start))
+        self.page_messages_by_index(thread_id, start, end, total)
+            .await
     }
 
     pub async fn page_before_user_queries(
@@ -1930,28 +2013,90 @@ impl ThreadTranscriptStore {
         user_query_limit: usize,
         fallback_message_limit: usize,
     ) -> Result<(Vec<Value>, usize, usize), ThreadHistoryError> {
-        let records = self.read_records(thread_id).await?;
-        let total = records.len();
+        if matches!(&self.mode, TranscriptStoreMode::Memory { .. }) {
+            let records = self.read_records(thread_id).await?;
+            let total = records.len();
+            let end = before_index.unwrap_or(total).min(total);
+            let start =
+                user_query_window_start(end, user_query_limit, fallback_message_limit, |index| {
+                    is_user_query_message(&records[index].message)
+                });
+            let messages = records[start..end]
+                .iter()
+                .map(|record| record.message.clone())
+                .collect();
+            return Ok((messages, total, start));
+        }
+        let total = self.message_count(thread_id).await?;
         let end = before_index.unwrap_or(total).min(total);
         let target_user_queries = user_query_limit.max(1);
-        let mut start = end;
-        let mut user_queries = 0usize;
 
-        while start > 0 && user_queries < target_user_queries {
-            start -= 1;
-            if is_user_query_message(&records[start].message) {
-                user_queries += 1;
+        // Streaming pass 1: collect the indexes of the last
+        // `target_user_queries` user queries below `end` (bounded memory),
+        // mirroring the backward scan of the in-memory variant.
+        let Some(path) = self.transcript_path(thread_id) else {
+            return Ok((Vec::new(), total, 0));
+        };
+        let mut recent_queries: std::collections::VecDeque<usize> =
+            std::collections::VecDeque::with_capacity(target_user_queries);
+        let mut index = 0usize;
+        self.for_each_transcript_record(thread_id, &path, |cached| {
+            if index >= end {
+                return std::ops::ControlFlow::Break(());
             }
-        }
+            if is_user_query_message(&cached.record.message) {
+                recent_queries.push_back(index);
+                if recent_queries.len() > target_user_queries {
+                    recent_queries.pop_front();
+                }
+            }
+            index += 1;
+            std::ops::ControlFlow::Continue(())
+        })
+        .await?;
+        let start = if recent_queries.is_empty() {
+            end.saturating_sub(fallback_message_limit.max(1))
+        } else if recent_queries.len() < target_user_queries {
+            // The backward scan of the old code walked to the file head when
+            // it ran out of user queries before reaching the target.
+            0
+        } else {
+            recent_queries.front().copied().unwrap_or(0)
+        };
+        self.page_messages_by_index(thread_id, start, end, total)
+            .await
+    }
 
-        if user_queries == 0 {
-            start = end.saturating_sub(fallback_message_limit.max(1));
+    /// Page `[start, end)` by record index against a File-mode transcript.
+    /// Seqs are gapless from 1 (see the `ThreadCache` invariants), so index
+    /// `i` holds seq `i + 1`: serve from the cached tail when it covers the
+    /// range, else stream just the range from disk.
+    async fn page_messages_by_index(
+        &self,
+        thread_id: &str,
+        start: usize,
+        end: usize,
+        total: usize,
+    ) -> Result<(Vec<Value>, usize, usize), ThreadHistoryError> {
+        if start >= end {
+            return Ok((Vec::new(), total, start));
         }
-
-        let messages = records[start..end]
-            .iter()
-            .map(|record| record.message.clone())
-            .collect();
+        let start_seq = start as u64 + 1;
+        let end_seq = end as u64;
+        if let Some(messages) = self
+            .with_built_cache(thread_id, |entry| {
+                entry.messages_in_seq_range(start_seq, end_seq)
+            })
+            .await
+        {
+            return Ok((messages, total, start));
+        }
+        let Some(path) = self.transcript_path(thread_id) else {
+            return Ok((Vec::new(), total, start));
+        };
+        let messages = self
+            .stream_messages_in_seq_range(thread_id, &path, start_seq, end_seq)
+            .await?;
         Ok((messages, total, start))
     }
 
@@ -2416,6 +2561,32 @@ impl ThreadTranscriptStore {
         }
         Ok(records)
     }
+}
+
+/// Backward window start for "the last K user queries before `end`": walk
+/// from `end` toward the head counting user queries; running short of the
+/// target stops at the head, zero matches falls back to a fixed message
+/// window. Shared between the in-memory scan and the streaming pass so both
+/// modes keep identical semantics.
+fn user_query_window_start(
+    end: usize,
+    user_query_limit: usize,
+    fallback_message_limit: usize,
+    is_user_query_at: impl Fn(usize) -> bool,
+) -> usize {
+    let target = user_query_limit.max(1);
+    let mut start = end;
+    let mut user_queries = 0usize;
+    while start > 0 && user_queries < target {
+        start -= 1;
+        if is_user_query_at(start) {
+            user_queries += 1;
+        }
+    }
+    if user_queries == 0 {
+        start = end.saturating_sub(fallback_message_limit.max(1));
+    }
+    start
 }
 
 fn transcript_io_error(thread_id: &str, error: impl std::fmt::Display) -> ThreadHistoryError {
