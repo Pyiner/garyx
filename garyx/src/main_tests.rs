@@ -2981,6 +2981,10 @@ async fn startup_runtime_wiring_enables_operational_handlers() {
         !provider_keys.iter().any(|key| key == "claude_code"),
         "default Claude provider should not be registered before HTTP bind"
     );
+    assert!(
+        !state.provider_runtime_ready(),
+        "provider-backed dispatch must stay gated until deferred startup reconciles providers"
+    );
 
     let resp = api::cron_jobs(State(state.clone())).await.into_response();
     assert_eq!(resp.status(), 200);

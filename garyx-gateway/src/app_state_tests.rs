@@ -21,6 +21,29 @@ fn test_state() -> Arc<AppState> {
     ))
 }
 
+#[tokio::test]
+async fn provider_runtime_ready_waiter_resolves_after_mark_ready() {
+    let state = AppStateBuilder::new(crate::test_support::with_gateway_auth(
+        GaryxConfig::default(),
+    ))
+    .with_provider_runtime_ready(false)
+    .build();
+    assert!(!state.provider_runtime_ready());
+
+    let waiter_state = state.clone();
+    let waiter = tokio::spawn(async move {
+        waiter_state
+            .wait_for_provider_runtime_ready(std::time::Duration::from_secs(1))
+            .await
+    });
+
+    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    state.mark_provider_runtime_ready();
+
+    assert!(waiter.await.unwrap());
+    assert!(state.provider_runtime_ready());
+}
+
 struct NeverActiveRunProbe;
 
 #[async_trait]

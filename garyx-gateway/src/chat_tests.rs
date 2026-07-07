@@ -348,6 +348,32 @@ fn test_state_no_bridge() -> Arc<AppState> {
     AppStateBuilder::new(GaryxConfig::default()).build()
 }
 
+async fn test_state_with_unready_provider_runtime() -> Arc<AppState> {
+    let mut config = GaryxConfig::default();
+    config.channels.api.accounts.insert(
+        "main".to_owned(),
+        ApiAccount {
+            enabled: true,
+            name: None,
+            agent_id: "claude".to_owned(),
+            workspace_dir: None,
+            workspace_mode: None,
+        },
+    );
+
+    let bridge = Arc::new(MultiProviderBridge::new());
+    bridge
+        .register_provider("ready-provider", Arc::new(ReadyProvider))
+        .await;
+    bridge.set_route("api", "main", "ready-provider").await;
+    bridge.set_default_provider_key("ready-provider").await;
+
+    AppStateBuilder::new(config)
+        .with_bridge(bridge)
+        .with_provider_runtime_ready(false)
+        .build()
+}
+
 fn test_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/chat/health", axum::routing::get(chat_health))
@@ -358,6 +384,40 @@ fn test_router(state: Arc<AppState>) -> Router {
             axum::routing::post(chat_stream_input),
         )
         .with_state(state)
+}
+
+#[tokio::test]
+async fn test_chat_start_http_returns_503_while_provider_runtime_starts() {
+    let state = test_state_with_unready_provider_runtime().await;
+    let router = test_router(state.clone());
+    let thread_id = "thread::chat-start-runtime-starting";
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/chat/start")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "threadId": thread_id,
+                "message": "hello",
+                "waitForResponse": false
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "gateway_provider_runtime_starting");
+    assert!(
+        state.threads.thread_store.get(thread_id).await.is_none(),
+        "startup rejection should not create or mutate a thread"
+    );
 }
 
 #[tokio::test]

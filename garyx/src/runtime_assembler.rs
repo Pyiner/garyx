@@ -101,6 +101,7 @@ impl RuntimeAssembler {
             .with_thread_history(thread_history.clone())
             .with_message_ledger(message_ledger)
             .with_bridge(bridge.clone())
+            .with_provider_runtime_ready(false)
             .with_event_tx(event_tx)
             .with_cron_service(cron_service.clone())
             .with_config_path(self.config_path)

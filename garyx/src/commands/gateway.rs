@@ -116,30 +116,48 @@ fn spawn_deferred_gateway_startup(
     state: Arc<AppState>,
     bridge: Arc<MultiProviderBridge>,
     plugin_manager: std::sync::Arc<tokio::sync::Mutex<ChannelPluginManager>>,
-    config: GaryxConfig,
     no_channels: bool,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let started = std::time::Instant::now();
         tracing::info!("deferred gateway startup started");
 
-        if let Err(error) = initialize_bridge_runtime(&state, &bridge, &config).await {
-            tracing::warn!(
-                error = %error,
-                "Bridge init failed during deferred startup; continuing with current provider pool"
-            );
-        }
+        let (gateway_auto_update, provider_ready) = {
+            let _settings_guard = state.ops.settings_mutex.lock().await;
+            let config = state.config_snapshot();
 
-        if let Err(error) =
-            rebuild_channel_plugins(&plugin_manager, &config, &state, &bridge, no_channels).await
-        {
-            tracing::warn!(
-                error = %error,
-                "Failed to initialize channel plugins during deferred startup"
-            );
-        }
+            let bridge_init_result = initialize_bridge_runtime(&state, &bridge, &config).await;
+            match bridge_init_result {
+                Ok(()) => state.mark_provider_runtime_ready(),
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        "Bridge init failed during deferred startup; continuing with current provider pool"
+                    );
+                }
+            }
 
-        garyx_gateway::restart_wake::drain_pending_restart_wakes(state.clone()).await;
+            if let Err(error) =
+                rebuild_channel_plugins(&plugin_manager, &config, &state, &bridge, no_channels)
+                    .await
+            {
+                tracing::warn!(
+                    error = %error,
+                    "Failed to initialize channel plugins during deferred startup"
+                );
+            }
+
+            (
+                config.gateway.auto_update.clone(),
+                state.provider_runtime_ready(),
+            )
+        };
+
+        if provider_ready {
+            garyx_gateway::restart_wake::drain_pending_restart_wakes(state.clone()).await;
+        } else {
+            tracing::warn!("skipping restart wake drain because provider runtime is not ready");
+        }
 
         // Architecture C: host no longer runs a periodic plugin
         // update loop. Each plugin owns its own timer + advertised-
@@ -153,10 +171,8 @@ fn spawn_deferred_gateway_startup(
 
         // Spawn the gateway self-updater after the listener is up; update
         // checks are integration work, not control-plane readiness work.
-        let _gateway_auto_update_handle = crate::gateway_auto_update::spawn(
-            plugin_manager.clone(),
-            config.gateway.auto_update.clone(),
-        );
+        let _gateway_auto_update_handle =
+            crate::gateway_auto_update::spawn(plugin_manager.clone(), gateway_auto_update);
 
         tracing::info!(
             elapsed_ms = started.elapsed().as_millis() as u64,
@@ -225,6 +241,7 @@ pub(crate) async fn run_gateway(
             let bridge = bridge_cb.clone();
             let plugin_manager = plugin_manager_cb.clone();
             tokio_handle.spawn(async move {
+                let _settings_guard = state.ops.settings_mutex.lock().await;
                 if let Err(error) = state.apply_runtime_config(new_config.clone()).await {
                     tracing::warn!(
                         error = %error,
@@ -265,20 +282,32 @@ pub(crate) async fn run_gateway(
         let startup_state = gateway.state().clone();
         let startup_bridge = bridge.clone();
         let startup_plugin_manager = plugin_manager.clone();
-        let startup_config = config.clone();
+        let shutdown_slot = deferred_startup.clone();
         gateway
-            .serve_with_listening_hook(addr, move || {
-                let handle = spawn_deferred_gateway_startup(
-                    startup_state,
-                    startup_bridge,
-                    startup_plugin_manager,
-                    startup_config,
-                    no_channels,
-                );
-                *startup_slot
-                    .lock()
-                    .expect("deferred startup handle lock poisoned") = Some(handle);
-            })
+            .serve_with_lifecycle_hooks(
+                addr,
+                move || {
+                    let handle = spawn_deferred_gateway_startup(
+                        startup_state,
+                        startup_bridge,
+                        startup_plugin_manager,
+                        no_channels,
+                    );
+                    *startup_slot
+                        .lock()
+                        .expect("deferred startup handle lock poisoned") = Some(handle);
+                },
+                move || {
+                    let guard = shutdown_slot
+                        .lock()
+                        .expect("deferred startup handle lock poisoned");
+                    if let Some(handle) = guard.as_ref()
+                        && !handle.is_finished()
+                    {
+                        handle.abort();
+                    }
+                },
+            )
             .await?;
         Ok(())
     }
@@ -298,10 +327,10 @@ pub(crate) async fn run_gateway(
         .lock()
         .expect("deferred startup handle lock poisoned")
         .take();
-    if let Some(handle) = deferred_startup_handle
-        && !handle.is_finished()
-    {
-        handle.abort();
+    if let Some(handle) = deferred_startup_handle {
+        if !handle.is_finished() {
+            handle.abort();
+        }
         let _ = handle.await;
     }
 

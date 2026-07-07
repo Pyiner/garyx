@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use garyx_models::MessageLifecycleStatus;
 use garyx_models::provider::ProviderType;
@@ -9,6 +10,8 @@ use serde_json::Value;
 
 use crate::chat_delivery::build_bound_response_callback;
 use crate::server::AppState;
+
+const INTERNAL_DISPATCH_PROVIDER_READY_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Default)]
 pub(crate) struct InternalDispatchOptions {
@@ -116,6 +119,13 @@ pub(crate) async fn dispatch_internal_message_to_thread(
         file_paths,
         requested_provider,
     } = options;
+    if !state
+        .wait_for_provider_runtime_ready(INTERNAL_DISPATCH_PROVIDER_READY_TIMEOUT)
+        .await
+    {
+        return Err("gateway provider runtime is still starting".to_owned());
+    }
+
     let thread_data = state
         .threads
         .thread_store

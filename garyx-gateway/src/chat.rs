@@ -300,6 +300,16 @@ async fn start_chat_run(
     request: ChatRequest,
     callback_builder: Option<ChatStreamCallbackBuilder>,
 ) -> Result<StartChatResponse, (StatusCode, Json<Value>)> {
+    if !state.provider_runtime_ready() {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "error": "gateway_provider_runtime_starting",
+                "message": "Gateway provider runtime is still starting; retry shortly."
+            })),
+        ));
+    }
+
     let prepared = match prepare_chat_request(state, request).await {
         Ok(prepared) => prepared,
         Err(ChatPreparationError::InvalidRequest(status, payload)) => {

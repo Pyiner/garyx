@@ -238,6 +238,75 @@ async fn test_add_accepts_zero_interval_schedule() {
 }
 
 #[tokio::test]
+async fn test_tick_does_not_claim_provider_job_before_runtime_ready() {
+    let tmp = TempDir::new().unwrap();
+    let cron = Arc::new(CronService::new(tmp.path().to_path_buf()));
+    let mut cfg = make_job_config("startup-agent", 0);
+    cfg.action = CronAction::AgentTurn;
+    cfg.target = Some("thread::startup-agent".to_owned());
+    cfg.message = Some("ping".to_owned());
+    cron.add(cfg).await.unwrap();
+
+    let _state = crate::composition::app_bootstrap::AppStateBuilder::new(
+        garyx_models::config::GaryxConfig::default(),
+    )
+    .with_cron_service(cron.clone())
+    .with_provider_runtime_ready(false)
+    .build();
+
+    CronService::tick(
+        &cron.jobs,
+        &cron.runs,
+        &cron.active_agent_runs,
+        tmp.path(),
+        &cron.dispatch_runtime,
+        &cron.app_state_weak,
+        &cron.garyx_db,
+    )
+    .await;
+
+    assert!(
+        cron.list_runs(10, 0).await.is_empty(),
+        "provider-backed cron jobs should not record a failed run during startup"
+    );
+    assert_eq!(
+        cron.get("startup-agent").await.unwrap().last_status,
+        JobRunStatus::NeverRun
+    );
+}
+
+#[tokio::test]
+async fn test_tick_does_not_claim_provider_job_before_app_state_is_installed() {
+    let tmp = TempDir::new().unwrap();
+    let cron = CronService::new(tmp.path().to_path_buf());
+    let mut cfg = make_job_config("pre-state-agent", 0);
+    cfg.action = CronAction::AgentTurn;
+    cfg.target = Some("thread::pre-state-agent".to_owned());
+    cfg.message = Some("ping".to_owned());
+    cron.add(cfg).await.unwrap();
+
+    CronService::tick(
+        &cron.jobs,
+        &cron.runs,
+        &cron.active_agent_runs,
+        tmp.path(),
+        &cron.dispatch_runtime,
+        &cron.app_state_weak,
+        &cron.garyx_db,
+    )
+    .await;
+
+    assert!(
+        cron.list_runs(10, 0).await.is_empty(),
+        "the first production scheduler tick must not record a startup failure before AppState is wired"
+    );
+    assert_eq!(
+        cron.get("pre-state-agent").await.unwrap().last_status,
+        JobRunStatus::NeverRun
+    );
+}
+
+#[tokio::test]
 async fn test_add_rejects_too_large_interval_schedule() {
     let tmp = TempDir::new().unwrap();
     let svc = CronService::new(tmp.path().to_path_buf());
@@ -666,7 +735,12 @@ async fn test_run_now_disables_once_job_after_success() {
 #[tokio::test]
 async fn test_tick_failure_does_not_advance_schedule() {
     let tmp = TempDir::new().unwrap();
-    let svc = CronService::new(tmp.path().to_path_buf());
+    let svc = Arc::new(CronService::new(tmp.path().to_path_buf()));
+    let _state = crate::composition::app_bootstrap::AppStateBuilder::new(
+        garyx_models::config::GaryxConfig::default(),
+    )
+    .with_cron_service(svc.clone())
+    .build();
     let _ = ensure_dirs(tmp.path()).await;
 
     svc.add(CronJobConfig {
