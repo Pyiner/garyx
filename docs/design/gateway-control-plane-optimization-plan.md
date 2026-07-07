@@ -14,11 +14,32 @@ are active, and stop the CLI from amplifying transient backend delays into
 
 Non-goals for this plan:
 
-- Reducing the token/memory cost of a single large resume (1.68M input tokens,
-  5.5GB peak footprint). That is a provider/resume-architecture topic and is
-  tracked separately (see Batch 6 notes).
+- Reducing the token cost of a single large resume (~1.68M input tokens is
+  the provider re-feeding conversation history; mostly cache reads). The
+  gateway-side memory half of that event — the 5.5GB footprint peak — turned
+  out to be the transcript store's cold cache build and is already fixed
+  (see "Landed" below), not a provider topic.
 - Splitting the gateway into separate processes. Phase-3-style separation is
   deferred until the in-process fixes below are measured.
+
+## Landed
+
+- `075be4dd` — transcript cache cold builds now stream the jsonl once and
+  fold roll-off into the run-state checkpoint instead of materializing the
+  whole file. Root cause of the 5.5GB peaks: `ensure_cache` and the
+  `with_built_cache` read path did a full `read_to_string` + full parse on
+  every post-restart first touch, and only then rolled the tail. 82MB
+  fixture: cold-build peak RSS 204MB → 78MB (now bounded by the cache budget
+  regardless of file size), build 423ms → 601ms. Guarded by field-level
+  equivalence tests against the old path and `full_file_reads == 0`
+  assertions on cold reads.
+- `93d0c8f2` — the launchd/systemd templates wrap the gateway command in the
+  user's login shell (`-lic`); an unquoted `--host [::]` is a glob there and
+  interactive zsh (`nomatch`) exits 1, crash-looping the agent (observed
+  live: 7 straight exit-1 runs). Hosts now render through the same nested
+  double-quote escaping as the binary path. Note: a crash-looping agent is a
+  third cause of CLI `gateway not reachable` besides restart windows and
+  saturation — see Batch 1.
 
 ## Verified Evidence Base
 
@@ -68,7 +89,9 @@ code-level claims:
   3.6ms and `GET /api/tasks` 70ms while `POST /api/tasks` timed out twice
   (>5s), concurrent with outbound network stalls (Telegram/minolab/Discord).
   The task-create write path appears to wait on outbound work (notification
-  and/or auto-dispatch) before responding.
+  and/or auto-dispatch) before responding. (A later `not reachable` failure
+  the same afternoon had a different cause entirely: the launch agent was
+  crash-looping on the unquoted `[::]` glob — see "Landed", `93d0c8f2`.)
 
 ## Batches
 
@@ -93,6 +116,10 @@ change).
     add a hint to re-check before retrying (e.g. `garyx task list`).
 - Keep the two error texts distinguishable (`not reachable` = connect failure,
   `did not respond in time` = timeout); they are diagnostic signals.
+- Scope note: connect-refused retries bridge restart windows (seconds), not a
+  crash-looping agent (launchd throttles respawn to 35s and the loop can run
+  indefinitely — see `93d0c8f2` in "Landed"). Keep the retry budget small and
+  let the failure surface; do not extend retries to mask a dead service.
 
 Acceptance:
 
@@ -216,17 +243,41 @@ Acceptance:
 Risk: medium — touches notification ordering; keep the existing "task created
 → auto-dispatch queued" observable behavior.
 
-### Batch 6 (optional, separate sign-off) — Restart-wake execution gate
+### Batch 6 (optional, likely unnecessary after `075be4dd`) — Restart-wake execution gate
 
 Scope: `garyx-gateway/src/restart_wake.rs`.
 
-- Dispatch is serial but the dispatched runs execute detached and concurrently.
-  Up to 16 wakes × multi-GB resumes could exceed machine memory. Add a small
-  execution-concurrency gate (semaphore of 2-4) for restart-wake-originated
-  runs only.
-- The larger lever — reducing single-resume cost (1.68M tokens / 5.5GB) — is
-  explicitly out of scope here; it belongs with the windowed-resume /
-  transcript-cache line of work and needs its own design.
+- Original motivation: up to 16 detached wakes × multi-GB gateway-side
+  resumes could exceed machine memory. The streaming cache build removed the
+  gateway-side multi-GB amplification (cold builds are now budget-bounded),
+  so what remains is 16 concurrent provider subprocesses plus their API
+  traffic. Measure post-`075be4dd` restart behavior first; only add the
+  semaphore (2-4) if provider-subprocess memory or rate limits still bite.
+
+### Batch 7 — Remaining full-file transcript reads (second knife)
+
+Scope: `garyx-router/src/thread_history/store.rs`.
+
+`075be4dd` fixed the cache-build paths, but three read paths still
+materialize the whole file when the request reaches below the cached tail:
+`render_snapshot_at_seq`, `page_before_index`, and the
+`cold_open_user_turn_window` / `render_snapshot_in_window` fallbacks. These
+fire on deep history scrolls and stale-cursor replays against large threads.
+
+- Serve below-tail ranges with bounded reads (extend the streamed scan with a
+  seq-range window, or grow the cached window backward on demand) instead of
+  `read_records`.
+- Skeletonize large tool results in the cached tail: `render_state`
+  derivation provably never reads tool-result content
+  (`transcript_render_state.rs:165` stores a `RenderMessageRef`; the reducer
+  reads only `is_error` and the tool_use_id pairing), so oversized result
+  bodies can be held as `(file_offset, len)` and pread on demand when
+  history/replay actually serves them. This shrinks the per-thread budget's
+  effective coverage cost with no client-contract change.
+
+Acceptance: deep-scroll and stale-replay requests on a large-thread fixture
+serve byte-identical responses with `full_file_reads == 0`; cached tail
+memory for a tool-heavy fixture drops measurably.
 
 ## Verification Harness
 
@@ -251,7 +302,9 @@ so runs are comparable.
 2. Batch 3 (two commits) — the main fix; measured with the harness.
 3. Batch 4 — hygiene knives; measured.
 4. Batch 5 — audit-then-fix; measured with egress-stall repro.
-5. Batch 6 — only with explicit sign-off, after 1-5 are measured.
+5. Batch 7 — remaining transcript full reads + tool-result skeletonization.
+6. Batch 6 — only if post-`075be4dd` restart measurements still show
+   pressure, with explicit sign-off.
 
 Each batch: implement → focused validation → commit (scoped `git commit --
 <paths>`) → codex review task (`--agent codex --notify current-thread`) →
