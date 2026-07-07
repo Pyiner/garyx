@@ -36,7 +36,18 @@ code-level claims:
     with synchronous methods called directly from async handlers; there is no
     `spawn_blocking` around any SQLite access in the workspace.
   - The tasks list route runs projection backfill on the request thread
-    (`garyx-gateway/src/tasks.rs:570-587`).
+    (`garyx-gateway/src/tasks.rs:570-587`). The router task paths do the
+    same through `TaskProjectionReader::ensure_current`
+    (`garyx-router/src/tasks.rs:391,731,829,959` →
+    `garyx-gateway/src/task_projection.rs:56`), so `GET /api/tasks/{id}` —
+    the exact lookup `garyx thread send task` issues — can absorb a full
+    thread-store rescan when the persisted projection is stale (projection
+    version bump, wipe, or missed writes).
+  - Neither database tunes SQLite at open: `initialize_connection` sets only
+    `foreign_keys ON` (`garyx_db/mod.rs:2998`, `app_db.rs:1027`). Default
+    DELETE journal + `synchronous=FULL` means every commit pays
+    journal-file create/fsync/delete cost while the connection mutex is
+    held, and there is no `busy_timeout`.
   - Thread-history inline images use synchronous `std::fs::read` + base64 on
     the request path (`garyx-gateway/src/api.rs:1386-1394`).
   - Workflow definition listing does a synchronous directory scan + manifest
@@ -119,6 +130,10 @@ Risk: low. This is the measurement baseline for Batches 3-5.
 Scope: `garyx-gateway/src/garyx_db/mod.rs`, `garyx-gateway/src/app_db.rs`, and
 their async call sites (`routes.rs`, `tasks.rs`, `api.rs`, projection paths).
 
+- Open both connections with `journal_mode=WAL`, `synchronous=NORMAL`, and
+  `busy_timeout=5000` (keep `foreign_keys=ON`). WAL removes the per-commit
+  journal create/fsync/delete cycle, directly shortening every mutex hold.
+  In-memory test databases treat the WAL pragma as a no-op.
 - Add async wrappers on the Arc-shared DB services:
   `pub async fn xxx(&self, ...)` = `tokio::task::spawn_blocking` around the
   existing synchronous method (services are already `Arc`, connections already
@@ -152,7 +167,12 @@ Scope: `tasks.rs`, `workflows/definitions.rs`, `api.rs`.
   (`tasks.rs:570-587`) into startup reconciliation, per the repository
   contract that read routes must not repair projections. First verify the
   `projection_states` version gate semantics so upgrade backfill still runs
-  exactly once at startup.
+  exactly once at startup. The router-side `ensure_current` fallback
+  (`find_task_by_number`, `list_tasks`, `ensure_task_index`,
+  `thread_task_has_running_subtasks`) stays as a correctness net for
+  mid-life projection loss, but after the startup warm-up the common flow —
+  including `GET /api/tasks/{id}` right after a version-bump restart — must
+  not rescan on the request path.
 - Cache workflow definition listing (`definitions.rs`): short-TTL (2-5s) or
   root-mtime-keyed in-memory cache so 3-4s-interval polling stops re-scanning
   the package directory and re-parsing manifests every call. File-backed
