@@ -1053,24 +1053,43 @@ mod tests {
         assert!(!temp.path().join("wake-race.failed.json").exists());
     }
 
-    async fn seed_task_thread(state: &Arc<AppState>, title: &str) -> (String, u64) {
-        let counter_dir = tempfile::tempdir().unwrap();
-        let service = garyx_router::tasks::TaskService::new(
-            state.threads.thread_store.clone(),
-            Arc::new(garyx_router::FileTaskCounterStore::new(
-                counter_dir.path(),
-            )),
-        );
-        let input: garyx_router::tasks::CreateTaskInput =
-            serde_json::from_value(json!({ "title": title })).unwrap();
-        let (thread_id, task) = service.create_task(input).await.expect("task creates");
-        (thread_id, task.number)
+    /// Seed a task thread record directly on disk. Deliberately NOT via
+    /// TaskService::create_task: creating a task also populates the
+    /// process-wide in-memory task index, which would mask the cold-restart
+    /// shape these tests need (task on disk, nothing warm in memory).
+    async fn seed_cold_task_thread(state: &Arc<AppState>, number: u64, title: &str) -> String {
+        let thread_id = format!("thread::wake-task-{number}");
+        state
+            .threads
+            .thread_store
+            .set(
+                &thread_id,
+                json!({
+                    "thread_id": thread_id,
+                    "channel": "api",
+                    "account_id": "main",
+                    "from_id": "loop",
+                    "messages": [],
+                    "task": {
+                        "number": number,
+                        "title": title,
+                        "status": "todo",
+                        "creator": {"kind": "agent", "agent_id": "test-agent"},
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "updated_at": "2026-01-01T00:00:00Z",
+                        "updated_by": {"kind": "agent", "agent_id": "test-agent"}
+                    }
+                }),
+            )
+            .await;
+        thread_id
     }
 
     #[tokio::test]
     async fn wake_task_target_resolves_through_projection() {
         let (state, _provider) = test_state(1, false).await;
-        let (thread_id, number) = seed_task_thread(&state, "Wake target").await;
+        let number = 61u64;
+        let thread_id = seed_cold_task_thread(&state, number, "Wake target").await;
         crate::task_projection::force_task_projection_backfill(
             &state.threads.thread_store,
             &state.ops.garyx_db,
@@ -1089,8 +1108,17 @@ mod tests {
         // disk (validation-driven removals, partial loss). The wake path must
         // repair the projection and still resolve — without reintroducing a
         // full-store body scan into restart_wake itself.
+        //
+        // Two tasks matter: with a single row removed the projection would be
+        // EMPTY, the ordinary needs-backfill gate would open, and the regular
+        // ensure_current path would repair it before the wake-side NotFound
+        // branch is ever exercised. Keeping a survivor row pins the exact
+        // incident shape: projection non-empty, marked current, missing the
+        // target.
         let (state, _provider) = test_state(1, false).await;
-        let (thread_id, number) = seed_task_thread(&state, "Lost row").await;
+        let _survivor_thread_id = seed_cold_task_thread(&state, 71, "Survivor row").await;
+        let number = 72u64;
+        let thread_id = seed_cold_task_thread(&state, number, "Lost row").await;
         crate::task_projection::force_task_projection_backfill(
             &state.threads.thread_store,
             &state.ops.garyx_db,
@@ -1103,6 +1131,15 @@ mod tests {
                 .remove_task_projection(&thread_id)
                 .expect("row removes"),
             "projection row should exist before the simulated loss"
+        );
+        assert!(
+            !state
+                .ops
+                .garyx_db
+                .task_projection_needs_backfill()
+                .expect("backfill check succeeds"),
+            "the ordinary backfill gate must stay closed (non-empty, current \
+             version) so only the wake-side repair branch can resolve this"
         );
 
         let resolved = resolve_task_thread_id(&state, &format!("#TASK-{number}"))
