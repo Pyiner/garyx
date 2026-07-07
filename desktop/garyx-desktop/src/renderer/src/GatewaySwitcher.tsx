@@ -8,6 +8,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover';
+import { IconTooltip, TooltipProvider } from '@/components/ui/tooltip';
 import { useI18n } from './i18n';
 
 type GatewaySwitcherTone = 'connected' | 'syncing' | 'offline';
@@ -178,6 +179,7 @@ export function GatewayIdentityBar({
   }
 
   return (
+    <TooltipProvider>
     <div className="gateway-identity-bar">
       <Popover
         open={open}
@@ -220,15 +222,17 @@ export function GatewayIdentityBar({
         </PopoverContent>
       </Popover>
 
-      <button
-        aria-label={t('Settings')}
-        className="gateway-identity-gear"
-        onClick={onOpenSettings}
-        title={t('Settings')}
-        type="button"
-      >
-        <SettingsIcon aria-hidden size={14} strokeWidth={1.9} />
-      </button>
+      <IconTooltip label={t('Settings')} side="bottom">
+        <button
+          aria-label={t('Settings')}
+          className="gateway-identity-gear"
+          onClick={onOpenSettings}
+          type="button"
+        >
+          <SettingsIcon aria-hidden size={14} strokeWidth={1.9} />
+        </button>
+      </IconTooltip>
     </div>
+    </TooltipProvider>
   );
 }

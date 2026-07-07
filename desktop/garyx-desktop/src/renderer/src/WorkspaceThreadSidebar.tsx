@@ -11,6 +11,7 @@ import type { DesktopWorkspace } from '@shared/contracts';
 import {
   type WorkspaceThreadGroup,
 } from './thread-model';
+import { IconTooltip, TooltipProvider } from './components/ui/tooltip';
 import { useI18n } from './i18n';
 
 type WorkspaceMutation = 'assign' | 'add' | 'relink' | 'remove' | null;
@@ -103,6 +104,7 @@ export function WorkspaceThreadSidebar({
   );
 
   return (
+    <TooltipProvider>
     <div className="sidebar-thread-block workspace-thread-block">
       <div className="panel-header sidebar-section-header sidebar-section-header-interactive">
         <button
@@ -119,18 +121,19 @@ export function WorkspaceThreadSidebar({
           />
         </button>
         <div className="sidebar-section-tools">
-          <button
-            aria-label={t('Add workspace…')}
-            className="sidebar-section-action sidebar-section-action-always"
-            disabled={workspaceMutation === 'add'}
-            onClick={onAddWorkspace}
-            title={t('Add workspace…')}
-            type="button"
-          >
-            <svg aria-hidden width="12" height="12" viewBox="0 0 15 15" fill="none" style={{ strokeWidth: 1.21 }}>
-              <path d="M0.5 7.5H14.5M7.5 0.5V14.5" stroke="currentColor" strokeLinecap="round"/>
-            </svg>
-          </button>
+          <IconTooltip label={t('Add workspace…')} side="bottom">
+            <button
+              aria-label={t('Add workspace…')}
+              className="sidebar-section-action sidebar-section-action-always"
+              disabled={workspaceMutation === 'add'}
+              onClick={onAddWorkspace}
+              type="button"
+            >
+              <svg aria-hidden width="12" height="12" viewBox="0 0 15 15" fill="none" style={{ strokeWidth: 1.21 }}>
+                <path d="M0.5 7.5H14.5M7.5 0.5V14.5" stroke="currentColor" strokeLinecap="round"/>
+              </svg>
+            </button>
+          </IconTooltip>
         </div>
       </div>
 
@@ -189,46 +192,50 @@ export function WorkspaceThreadSidebar({
 
                 <div className="workspace-actions">
                   <>
-                      <button
-                        aria-label={t('Create thread in {name}', { name: workspace.name })}
-                        className="workspace-action-icon-button"
-                        disabled={!workspace.available || workspaceMutation === 'assign'}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onCreateThreadForWorkspace(workspacePath);
-                        }}
-                        tabIndex={-1}
-                        title={
-                          workspaceMutation === 'assign'
-                            ? t('Creating thread…')
-                            : t('Create thread in {name}', { name: workspace.name })
-                        }
-                        type="button"
+                      <IconTooltip
+                        label={t('Create thread in {name}', { name: workspace.name })}
+                        side="bottom"
                       >
-                        <NewTabIcon />
-                      </button>
+                        <button
+                          aria-label={t('Create thread in {name}', { name: workspace.name })}
+                          className="workspace-action-icon-button"
+                          disabled={!workspace.available || workspaceMutation === 'assign'}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onCreateThreadForWorkspace(workspacePath);
+                          }}
+                          tabIndex={-1}
+                          type="button"
+                        >
+                          <NewTabIcon />
+                        </button>
+                      </IconTooltip>
                       {group.canManageWorkspace ? (
                         <div className="workspace-more-menu-shell">
-                          <button
-                            aria-expanded={isMenuOpen}
-                            aria-haspopup="menu"
-                            aria-label={t('More actions for {name}', { name: workspace.name })}
-                            className="workspace-action-icon-button"
-                            ref={(node) => {
-                              menuButtonRefs.current[workspacePath] = node;
-                            }}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              setWorkspaceMenuOpenPath((current) => {
-                                return current === workspacePath ? null : workspacePath;
-                              });
-                            }}
-                            tabIndex={-1}
-                            title={t('More actions for {name}', { name: workspace.name })}
-                            type="button"
+                          <IconTooltip
+                            label={t('More actions for {name}', { name: workspace.name })}
+                            side="bottom"
                           >
-                            <MoreDotsIcon size={16} />
-                          </button>
+                            <button
+                              aria-expanded={isMenuOpen}
+                              aria-haspopup="menu"
+                              aria-label={t('More actions for {name}', { name: workspace.name })}
+                              className="workspace-action-icon-button"
+                              ref={(node) => {
+                                menuButtonRefs.current[workspacePath] = node;
+                              }}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setWorkspaceMenuOpenPath((current) => {
+                                  return current === workspacePath ? null : workspacePath;
+                                });
+                              }}
+                              tabIndex={-1}
+                              type="button"
+                            >
+                              <MoreDotsIcon size={16} />
+                            </button>
+                          </IconTooltip>
                           {isMenuOpen && workspaceMenuStyle && typeof document !== 'undefined'
                             ? createPortal(
                               <div
@@ -283,5 +290,6 @@ export function WorkspaceThreadSidebar({
         </div>
       </div>
     </div>
+    </TooltipProvider>
   );
 }
