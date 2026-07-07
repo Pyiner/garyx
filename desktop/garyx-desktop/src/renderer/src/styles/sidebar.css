@@ -411,7 +411,8 @@
 }
 
 .pinned-thread-icon {
-  color: var(--sidebar-text-muted);
+  /* Inherit the button color so the pin matches the archive icon at rest and
+     only deepens on direct hover — no fixed, always-darker tint. */
   transform: rotate(-8deg);
 }
 
@@ -454,7 +455,7 @@
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--sidebar-text-muted);
+  color: var(--color-token-description-foreground);
   opacity: 0;
   pointer-events: none;
   cursor: pointer;
