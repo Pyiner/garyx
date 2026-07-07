@@ -178,9 +178,10 @@ fn workspace_response(
 fn workspace_error_response(error: GaryxDbError) -> (StatusCode, Json<serde_json::Value>) {
     let status = match error {
         GaryxDbError::BadRequest(_) => StatusCode::BAD_REQUEST,
-        GaryxDbError::LockPoisoned | GaryxDbError::Io(_) | GaryxDbError::Sqlite(_) => {
-            StatusCode::INTERNAL_SERVER_ERROR
-        }
+        GaryxDbError::LockPoisoned
+        | GaryxDbError::Join(_)
+        | GaryxDbError::Io(_)
+        | GaryxDbError::Sqlite(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (status, Json(json!({ "error": error.to_string() })))
 }

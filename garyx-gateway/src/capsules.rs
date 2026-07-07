@@ -84,9 +84,10 @@ impl From<GaryxDbError> for CapsuleError {
     fn from(error: GaryxDbError) -> Self {
         match error {
             GaryxDbError::BadRequest(message) => CapsuleError::bad_request(message),
-            GaryxDbError::LockPoisoned | GaryxDbError::Io(_) | GaryxDbError::Sqlite(_) => {
-                CapsuleError::internal(error.to_string())
-            }
+            GaryxDbError::LockPoisoned
+            | GaryxDbError::Join(_)
+            | GaryxDbError::Io(_)
+            | GaryxDbError::Sqlite(_) => CapsuleError::internal(error.to_string()),
         }
     }
 }

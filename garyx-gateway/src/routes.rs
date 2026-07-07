@@ -1506,9 +1506,10 @@ async fn recent_threads_payload(
 fn garyx_db_error_response(error: GaryxDbError) -> (StatusCode, Json<Value>) {
     let (status, code) = match &error {
         GaryxDbError::BadRequest(_) => (StatusCode::BAD_REQUEST, "BadRequest"),
-        GaryxDbError::LockPoisoned | GaryxDbError::Io(_) | GaryxDbError::Sqlite(_) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, "InternalError")
-        }
+        GaryxDbError::LockPoisoned
+        | GaryxDbError::Join(_)
+        | GaryxDbError::Io(_)
+        | GaryxDbError::Sqlite(_) => (StatusCode::INTERNAL_SERVER_ERROR, "InternalError"),
     };
     (
         status,

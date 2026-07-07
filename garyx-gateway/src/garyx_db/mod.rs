@@ -25,6 +25,8 @@ pub enum GaryxDbError {
     BadRequest(String),
     #[error("database lock poisoned")]
     LockPoisoned,
+    #[error("blocking database task failed: {0}")]
+    Join(String),
     #[error(transparent)]
     Io(#[from] io::Error),
     #[error(transparent)]
@@ -493,6 +495,24 @@ pub struct GaryxDbService {
     task_projection_backfill_active: Mutex<bool>,
 }
 
+const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(5_000);
+
+/// Durability/concurrency settings for the on-disk database: WAL journal
+/// (persistent, readers never block the single writer), NORMAL fsync
+/// (sub-ms commits, still crash-safe under WAL), and a busy timeout so
+/// cross-process contention retries instead of failing fast.
+fn configure_file_connection(conn: &Connection) -> GaryxDbResult<()> {
+    conn.busy_timeout(BUSY_TIMEOUT)?;
+    let journal_mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
+    if !journal_mode.eq_ignore_ascii_case("wal") {
+        return Err(GaryxDbError::BadRequest(format!(
+            "failed to enable WAL journal mode: got {journal_mode}"
+        )));
+    }
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+    Ok(())
+}
+
 impl GaryxDbService {
     pub fn open(path: impl AsRef<Path>) -> GaryxDbResult<Self> {
         let path = path.as_ref();
@@ -500,6 +520,7 @@ impl GaryxDbService {
             std::fs::create_dir_all(parent)?;
         }
         let conn = Connection::open(path)?;
+        configure_file_connection(&conn)?;
         initialize_connection(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -511,6 +532,7 @@ impl GaryxDbService {
 
     pub fn memory() -> GaryxDbResult<Self> {
         let conn = Connection::open_in_memory()?;
+        conn.busy_timeout(BUSY_TIMEOUT)?;
         initialize_connection(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -522,6 +544,23 @@ impl GaryxDbService {
 
     fn conn(&self) -> GaryxDbResult<MutexGuard<'_, Connection>> {
         self.conn.lock().map_err(|_| GaryxDbError::LockPoisoned)
+    }
+
+    /// Run `f` against this service on the blocking thread pool.
+    ///
+    /// New async call sites (the SQLite thread-store surgery, #TASK-1864)
+    /// must use this entry point so database IO never occupies a runtime
+    /// worker. Existing synchronous call sites migrate separately
+    /// (#TASK-1829).
+    pub async fn run_blocking<T, F>(self: &std::sync::Arc<Self>, f: F) -> GaryxDbResult<T>
+    where
+        F: FnOnce(&GaryxDbService) -> GaryxDbResult<T> + Send + 'static,
+        T: Send + 'static,
+    {
+        let db = std::sync::Arc::clone(self);
+        tokio::task::spawn_blocking(move || f(&db))
+            .await
+            .map_err(|err| GaryxDbError::Join(err.to_string()))?
     }
 
     pub fn list_pinned_threads(&self) -> GaryxDbResult<Vec<PinnedThreadRecord>> {
@@ -4213,6 +4252,65 @@ fn attach_dream_spans(conn: &Connection, topics: &mut [DreamTopicRecord]) -> Gar
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn open_configures_wal_normal_synchronous_and_busy_timeout() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+
+        let service = GaryxDbService::open(&path).expect("db opens");
+        {
+            let conn = service.conn().expect("conn");
+            let journal_mode: String = conn
+                .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+                .expect("journal_mode");
+            assert_eq!(journal_mode.to_ascii_lowercase(), "wal");
+            let synchronous: i64 = conn
+                .query_row("PRAGMA synchronous", [], |row| row.get(0))
+                .expect("synchronous");
+            assert_eq!(synchronous, 1, "synchronous should be NORMAL (1)");
+            let busy_timeout: i64 = conn
+                .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+                .expect("busy_timeout");
+            assert_eq!(busy_timeout, BUSY_TIMEOUT.as_millis() as i64);
+        }
+        drop(service);
+
+        // WAL is a persistent database property: a reopen must still be WAL.
+        let reopened = GaryxDbService::open(&path).expect("db reopens");
+        let conn = reopened.conn().expect("conn");
+        let journal_mode: String = conn
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .expect("journal_mode");
+        assert_eq!(journal_mode.to_ascii_lowercase(), "wal");
+    }
+
+    #[test]
+    fn memory_db_still_works_without_wal() {
+        let service = GaryxDbService::memory().expect("memory db");
+        service.pin_thread("thread::mem-check").expect("pin");
+        let pins = service.list_pinned_threads().expect("list");
+        assert_eq!(pins.len(), 1);
+        assert_eq!(pins[0].thread_id, "thread::mem-check");
+    }
+
+    #[tokio::test]
+    async fn run_blocking_round_trips_reads_and_writes() {
+        let service = std::sync::Arc::new(GaryxDbService::memory().expect("memory db"));
+
+        let pinned = service
+            .run_blocking(|db| db.pin_thread("thread::async-entry"))
+            .await
+            .expect("async pin");
+        assert_eq!(pinned.thread_id, "thread::async-entry");
+
+        let pins = service
+            .run_blocking(|db| db.list_pinned_threads())
+            .await
+            .expect("async list");
+        assert_eq!(pins.len(), 1);
+        assert_eq!(pins[0].thread_id, "thread::async-entry");
+    }
 
     #[test]
     fn opening_legacy_workflow_runs_db_adds_task_columns_before_indexes() {
